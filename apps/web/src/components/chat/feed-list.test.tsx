@@ -189,7 +189,9 @@ describe('the rows of a dialog', () => {
     details.open = true
     fireEvent(details, new Event('toggle'))
     expect(activityOf).toHaveBeenCalledWith(1)
-    expect(screen.getByRole('heading', { name: 'Ход работы' })).toBeTruthy()
+    // Straight on what the agent did: no heading «Ход работы», no stages (14.11.2026).
+    expect(screen.queryByRole('heading', { name: 'Ход работы' })).toBeNull()
+    expect(screen.queryByText('Работа над задачей')).toBeNull()
     expect(screen.getByText('Ход хода 1')).toBeTruthy()
   })
 
@@ -730,9 +732,11 @@ describe('the rows of a dialog', () => {
 // no buttons that only show it.
 describe('the browser of a task in the feed', () => {
   const help = { reason: 'login' as const, message: null }
+  // «Скопировать текст» of the messages stands under every one of them: not an action of the browser.
   const buttonsOf = (feed: HTMLElement) =>
     within(feed)
       .queryAllByRole('button')
+      .filter((button) => button.getAttribute('aria-label') !== 'Скопировать текст')
       .map((button) => text(button))
 
   it.each(['login', 'captcha', 'confirm', 'other'] as const)(
@@ -821,7 +825,7 @@ describe('the browser of a task in the feed', () => {
         browser={{ controlling: false, onResume: vi.fn(), busy: false }}
       />,
     )
-    expect(screen.getByRole('heading', { name: 'Агент работает' })).toBeTruthy()
+    expect(screen.getByRole('status', { name: 'Агент работает' })).toBeTruthy()
     expect(screen.queryAllByRole('button')).toEqual([])
     expect(text(document.body)).not.toContain('Смотреть, что делает агент')
   })
@@ -866,7 +870,7 @@ describe('the live block', () => {
     expect(text(document.body)).not.toMatch(/сайт|файл/iu)
   })
 
-  it('lists the stages of the turn at work', () => {
+  it('says what the agent is doing under its work, no stages and no heading (14.11.2026)', () => {
     const head = headOf({
       status: 'running',
       task: { turnNo: 1, runningSince: new Date().toISOString() },
@@ -876,11 +880,17 @@ describe('the live block', () => {
         withSite
         head={head}
         steps={[stepRow('2', 1) as never, stepRow('3', 1, 'save') as never]}
+        activity={<p>Команды агента</p>}
       />,
     )
-    expect(screen.getByRole('heading', { name: 'Агент работает' })).toBeTruthy()
-    expect(screen.getByText('Работа над задачей')).toBeTruthy()
-    expect(screen.getByText('Сохранение работы')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Агент работает' })).toBeNull()
+    expect(screen.queryByText('Работа над задачей')).toBeNull()
+    expect(screen.queryByText('Сохранение работы')).toBeNull()
+    const line = screen.getByRole('status', { name: 'Агент работает' })
+    expect(line.textContent).toMatch(/^[А-ЯЁ][а-яё ]+….*с$/)
+    // The phrase stands under what the agent does, not over it.
+    const work = screen.getByText('Команды агента')
+    expect(work.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('shows what the turn at work does in the feed itself, under its stages, unfolded', () => {

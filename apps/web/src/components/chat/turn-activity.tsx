@@ -261,7 +261,9 @@ export function TurnActivityView({
   if (!state.read) status = state.failed ? activityText.failed : activityText.loading
   else if (state.failed) status = activityText.failed
   else if (state.more) status = activityText.more
-  else if (count === 0) status = activityText.empty
+  // Nothing written yet says nothing (owner's request of 14.11.2026): the line under the work
+  // shows the agent is at it.
+  else if (count === 0 && !live) return null
   const lines = (
     <>
       {shown.map((event) => (

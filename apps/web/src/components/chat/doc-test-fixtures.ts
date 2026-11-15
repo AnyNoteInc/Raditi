@@ -54,7 +54,13 @@ export const sampleDoc = (
 
 type Call = (input: { docId: string }) => unknown
 
-export const trpcMock = (fns: { readDoc: Call; readPage?: Call; publishDoc?: Call }) => ({
+export const trpcMock = (fns: {
+  readDoc: Call
+  readPage?: Call
+  publishDoc?: Call
+  readVersions?: Call
+  readVersion?: Call
+}) => ({
   useTRPC: () => ({
     pages: {
       doc: {
@@ -68,6 +74,19 @@ export const trpcMock = (fns: { readDoc: Call; readPage?: Call; publishDoc?: Cal
         queryOptions: (input: { docId: string; version?: number }) => ({
           queryKey: ['pages', 'docPage', input.docId, input.version],
           queryFn: () => fns.readPage?.(input) ?? null,
+        }),
+      },
+      docVersions: {
+        queryKey: (input: { docId: string }) => ['pages', 'docVersions', input.docId],
+        queryOptions: (input: { docId: string }) => ({
+          queryKey: ['pages', 'docVersions', input.docId],
+          queryFn: () => fns.readVersions?.(input) ?? [],
+        }),
+      },
+      docVersion: {
+        queryOptions: (input: { docId: string; version: number }) => ({
+          queryKey: ['pages', 'docVersion', input.docId, input.version],
+          queryFn: () => fns.readVersion?.(input) ?? null,
         }),
       },
       publishDoc: {

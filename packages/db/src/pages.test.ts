@@ -12,6 +12,8 @@ import {
   clearStaleUncheckedSections,
   createChatDocument,
   currentDocMarkdown,
+  docVersionMarkdown,
+  docVersions,
   listWorkspacePages,
   moveDocSection,
   pendingPageReservations,
@@ -637,6 +639,29 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         markdown:
           '# Аудит скорости\n\n## Раздел summary\n\nТекст summary\n\n## Раздел sources\n\nТекст sources\n',
       })
+    })
+
+    it('keeps the text of every version, for the switch of versions (14.11.2026)', async () => {
+      const ids = await skeleton()
+      await write(ids, 'summary', 'Первый')
+      await write(ids, 'sources', 'Источники')
+      await requestDocFinish(db, { ...ids, turnNo: 1 })
+      await endOfTurn(ids.taskId, 1)
+      await write(ids, 'summary', 'Второй', 2)
+      await requestDocFinish(db, { ...ids, turnNo: 2 })
+      const [settled] = await endOfTurn(ids.taskId, 2)
+      expect(settled?.version).toBe(2)
+      const versions = await docVersions(db, ids)
+      expect(versions.map((version) => [version.no, version.kept])).toEqual([
+        [1, true],
+        [2, true],
+      ])
+      expect(await docVersionMarkdown(db, { ...ids, version: 1 })).toContain('Первый')
+      expect(await docVersionMarkdown(db, { ...ids, version: 2 })).toContain('Второй')
+      expect(await docVersionMarkdown(db, { ...ids, version: 3 })).toBeNull()
+      await expect(
+        docVersions(db, { workspaceId: uuidv7(), documentId: ids.documentId }),
+      ).rejects.toMatchObject({ code: 'DOC_NOT_FOUND' })
     })
 
     it('drops a doc_finish the scan broke, and makes no version', async () => {

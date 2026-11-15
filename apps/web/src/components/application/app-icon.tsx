@@ -15,6 +15,8 @@ const paths = {
   paneHide:
     'M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM15 4v16M8.5 9.5 11 12l-2.5 2.5',
   expand: 'm8 9 4-4 4 4M8 15l4 4 4-4',
+  /** «Результаты» beside the chat: show or hide its card (owner's request of 14.11.2026). */
+  results: 'M4 6h.01M4 12h.01M4 18h.01M8 6h12M8 12h12M8 18h8',
   logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M14 8l4 4-4 4M8 12h13',
   plus: 'M12 5v14M5 12h14',
   search: 'm21 21-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',

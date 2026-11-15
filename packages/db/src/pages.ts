@@ -979,6 +979,7 @@ export async function settleTurnSections(
               sha256: sha256(markdown),
               taskId: document.finishTaskId,
               turnNo: document.finishTurnNo,
+              markdown,
             },
           })
           await tx.chatDocumentContent.upsert({
@@ -1022,6 +1023,48 @@ export async function currentDocMarkdown(
   return document.content
     ? { version: document.content.versionNo, markdown: document.content.markdown }
     : null
+}
+
+/**
+ * The versions of a document, oldest first, and the text of one of them (owner's request of
+ * 14.11.2026): `markdown` is null for a version finished before its text was kept.
+ */
+export async function docVersions(
+  db: Pick<PrismaClient, 'chatDocument' | 'chatDocumentVersion'>,
+  input: { workspaceId: string; documentId: string },
+): Promise<{ no: number; createdAt: Date; kept: boolean }[]> {
+  const document = await db.chatDocument.findUnique({
+    where: { id: input.documentId },
+    select: { workspaceId: true },
+  })
+  if (!document || document.workspaceId !== input.workspaceId) throw docNotFound()
+  const versions = await db.chatDocumentVersion.findMany({
+    where: { documentId: input.documentId },
+    orderBy: { no: 'asc' },
+    select: { no: true, createdAt: true, markdown: true },
+  })
+  return versions.map((version) => ({
+    no: version.no,
+    createdAt: version.createdAt,
+    kept: version.markdown !== null,
+  }))
+}
+
+/** The text of one version of a document; null — no such version, or its text was not kept. */
+export async function docVersionMarkdown(
+  db: Pick<PrismaClient, 'chatDocument' | 'chatDocumentVersion'>,
+  input: { workspaceId: string; documentId: string; version: number },
+): Promise<string | null> {
+  const document = await db.chatDocument.findUnique({
+    where: { id: input.documentId },
+    select: { workspaceId: true },
+  })
+  if (!document || document.workspaceId !== input.workspaceId) throw docNotFound()
+  const version = await db.chatDocumentVersion.findUnique({
+    where: { documentId_no: { documentId: input.documentId, no: input.version } },
+    select: { markdown: true },
+  })
+  return version?.markdown ?? null
 }
 
 // ———————————————————————————————————————— the sweep

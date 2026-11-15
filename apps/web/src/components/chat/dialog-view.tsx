@@ -109,6 +109,7 @@ import { showsRefresh, type FeedHeadState } from './feed-state'
 import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
 import { AgentNotesDialog } from './agent-notes-dialog'
 import { ReleaseDialog } from './release-dialog'
+import { RESULTS_ROOM, ResultsCard, ResultsToggle, useResultsCard } from './results-card'
 import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
 import { ToolsPanel } from './tools-panel'
 import { TurnActivity } from './turn-activity'
@@ -217,6 +218,7 @@ function DialogHead({
   head,
   onRenamed,
   tools,
+  results = null,
 }: {
   project: ChatProject | null
   taskId: string
@@ -225,6 +227,8 @@ function DialogHead({
   onRenamed: () => void
   /** «+» of the tools while their panel is closed; null — it stands at the end of the tabs. */
   tools: ReactNode
+  /** The icon that hides and shows «Результаты»; null — the chat has none to show. */
+  results?: ReactNode
 }) {
   // «Отменить выпуск» is offered now: deleting the dialog takes it away too.
   const undoable =
@@ -338,6 +342,7 @@ function DialogHead({
           gap: 0.5,
         }}
       >
+        {results}
         {head !== null && !renaming ? (
           <DialogMenuButton
             title={title}
@@ -584,6 +589,9 @@ export function DialogView({
     dispatchTools({ type: 'documentArrived', opens: wide })
   })
   const documentCount = chatDocuments.length + agentDocs.length
+  // «Результаты» beside the chat (owner's request of 14.11.2026): from `lg`, while the area of the
+  // feed is wide enough and the client has not hidden it.
+  const results = useResultsCard(feedArea, wide && documentCount > 0)
   useBrowserLaunch(head, {
     taskId,
     enabled: withBrowser && browserStreamUrl !== null,
@@ -1499,6 +1507,9 @@ export function DialogView({
           head={head}
           onRenamed={refresh}
           tools={shown ? null : menu}
+          results={
+            results.fits ? <ResultsToggle shown={results.shown} onToggle={results.toggle} /> : null
+          }
         />
       </Box>
 
@@ -1523,10 +1534,48 @@ export function DialogView({
           position: { lg: 'relative' },
           mx: { lg: -4 },
           px: { lg: 4 },
+          // The feed keeps clear of «Результаты» on the right while it is shown.
+          ...(results.shown ? { pr: { lg: `${32 + RESULTS_ROOM}px` } } : {}),
           pt: { lg: 1 },
           mb: { lg: -3.5 },
         }}
       >
+        {results.shown ? (
+          // Pinned to the top of the area as the feed scrolls under it: no height of its own.
+          <Box
+            sx={{
+              position: 'sticky',
+              top: 0,
+              height: 0,
+              zIndex: 3,
+              mr: `-${RESULTS_ROOM}px`,
+              display: 'flex',
+              justifyContent: 'flex-end',
+            }}
+          >
+            <Box sx={{ pt: 1 }}>
+              <ResultsCard
+                agentDocs={agentDocs}
+                documents={chatDocuments}
+                shownAgentDoc={
+                  shown && tools.active === 'documents' && documentTarget
+                    ? agentDocOfEntry(documentTarget.name)
+                    : null
+                }
+                onOpenAgentDoc={(docId) => {
+                  openDocument(agentDocEntry(docId), null)
+                  openTool('documents', { by: 'menu' })
+                }}
+                onOpenFile={(fileId) => {
+                  const document = documentOfFile(chatDocuments, fileId)
+                  if (document === null) return
+                  openDocument(document.name, fileId)
+                  openTool('documents', { by: 'menu' })
+                }}
+              />
+            </Box>
+          </Box>
+        ) : null}
         <Box
           ref={feedContent}
           sx={{

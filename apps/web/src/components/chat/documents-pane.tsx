@@ -234,36 +234,17 @@ export function DocumentsPane({
           fullscreen={fullscreen}
           {...(onFullscreen ? { onFullscreen } : {})}
           lead={
-            <>
-              {wide ? null : (
-                <Button
-                  size="small"
-                  onClick={(event) => setListAnchor(event.currentTarget)}
-                  aria-haspopup="dialog"
-                  aria-expanded={listAnchor !== null}
-                  sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
-                >
-                  {documentText.all(documents.length + agentDocs.length)}
-                </Button>
-              )}
-            </>
-          }
-          aside={
-            wide ? (
-              <Box
-                component="nav"
-                aria-label={documentText.list}
-                sx={{
-                  width: 240,
-                  flexShrink: 0,
-                  borderRight: 1,
-                  borderColor: 'divider',
-                  overflowY: 'auto',
-                }}
-              >
-                {list}
-              </Box>
-            ) : null
+            // The documents of the chat behind a button, not in a column beside it (owner's
+            // request of 14.11.2026): the sheet takes the width.
+            <Button
+              size="small"
+              onClick={(event) => setListAnchor(event.currentTarget)}
+              aria-haspopup="dialog"
+              aria-expanded={listAnchor !== null}
+              sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
+            >
+              {documentText.all(documents.length + agentDocs.length)}
+            </Button>
           }
         />
         <Popover
@@ -305,17 +286,15 @@ export function DocumentsPane({
           minWidth: 0,
         }}
       >
-        {wide ? null : (
-          <Button
-            size="small"
-            onClick={(event) => setListAnchor(event.currentTarget)}
-            aria-haspopup="dialog"
-            aria-expanded={listAnchor !== null}
-            sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
-          >
-            {documentText.all(documents.length + agentDocs.length)}
-          </Button>
-        )}
+        <Button
+          size="small"
+          onClick={(event) => setListAnchor(event.currentTarget)}
+          aria-haspopup="dialog"
+          aria-expanded={listAnchor !== null}
+          sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
+        >
+          {documentText.all(documents.length + agentDocs.length)}
+        </Button>
         <Box
           role="textbox"
           aria-readonly="true"
@@ -426,21 +405,6 @@ export function DocumentsPane({
         </Box>
       ) : null}
       <Box sx={{ flex: '1 1 0', minHeight: 0, display: 'flex' }}>
-        {wide ? (
-          <Box
-            component="nav"
-            aria-label={documentText.list}
-            sx={{
-              width: 240,
-              flexShrink: 0,
-              borderRight: 1,
-              borderColor: 'divider',
-              overflowY: 'auto',
-            }}
-          >
-            {list}
-          </Box>
-        ) : null}
         <Box sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex' }}>
           {document.kind === 'page' ? (
             <PageFrame

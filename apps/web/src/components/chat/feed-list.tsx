@@ -44,7 +44,6 @@ import {
   feedRetryText,
   feedRowText,
   feedStateText,
-  feedStepLabel,
   feedUndoConfirmedText,
   feedUndoKeptText,
   feedUndoReasonText,
@@ -94,7 +93,9 @@ import {
   type QuestionRow,
   type StepRow,
 } from './feed-model'
+import { CopyButton } from './copy-button'
 import { FeedDocuments } from './feed-document'
+import { workingPhraseOf } from './working-phrases'
 import { DocRevisions, docRevisionsOf, FeedDoc } from './feed-doc'
 import { FeedFile } from './feed-file'
 import { FeedPage } from './feed-page'
@@ -182,10 +183,13 @@ function AgentMessage({
   title,
   children,
   actions,
+  copy,
 }: {
   title: string
   children?: ReactNode
   actions?: ReactNode
+  /** The words «Скопировать текст» copies (owner's request of 14.11.2026). */
+  copy?: string
 }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minWidth: 0 }}>
@@ -196,6 +200,11 @@ function AgentMessage({
       {children}
       {actions ? (
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>{actions}</Box>
+      ) : null}
+      {copy ? (
+        <Box sx={{ display: 'flex', ml: -1, mt: -0.5 }}>
+          <CopyButton text={copy} />
+        </Box>
       ) : null}
     </Box>
   )
@@ -291,25 +300,28 @@ function Bubble({
           {text}
         </Typography>
       </Box>
-      <Typography
-        component="time"
-        dateTime={at}
-        variant="caption"
-        color="text.secondary"
-        sx={{ fontSize: 12 }}
-      >
-        {feedTime(new Date(at), now)}
-      </Typography>
-      {onEdit ? (
-        <Button
-          size="small"
-          onClick={onEdit}
-          startIcon={<AppIcon name="pencil" size={16} />}
-          sx={{ minHeight: 44, color: 'text.secondary', fontSize: 13, mt: -1 }}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: -0.5 }}>
+        <Typography
+          component="time"
+          dateTime={at}
+          variant="caption"
+          color="text.secondary"
+          sx={{ fontSize: 12, mr: 0.5 }}
         >
-          {messageEditText.edit}
-        </Button>
-      ) : null}
+          {feedTime(new Date(at), now)}
+        </Typography>
+        <CopyButton text={text} />
+        {onEdit ? (
+          <Button
+            size="small"
+            onClick={onEdit}
+            startIcon={<AppIcon name="pencil" size={16} />}
+            sx={{ minHeight: 36, color: 'text.secondary', fontSize: 13 }}
+          >
+            {messageEditText.edit}
+          </Button>
+        ) : null}
+      </Box>
     </Box>
   )
 }
@@ -348,50 +360,6 @@ function Note({ text }: { text: string }) {
 function Sentences({ parts }: { parts: readonly (string | null | undefined)[] }) {
   const text = parts.filter((part): part is string => typeof part === 'string' && part !== '')
   return text.length === 0 ? null : <Paragraph>{nbsp(text.join(' '))}</Paragraph>
-}
-
-function StepList({ steps, running }: { steps: readonly StepRow[]; running: boolean }) {
-  return (
-    <Box component="ol" sx={{ m: 0, p: 0, listStyle: 'none', display: 'grid', gap: 0.75 }}>
-      {steps.map((step, index) => {
-        const current = running && index === steps.length - 1
-        return (
-          <Box
-            component="li"
-            key={step.id}
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1.25,
-              fontSize: 14,
-              color: current ? 'text.primary' : 'text.secondary',
-              ...riseIn,
-            }}
-          >
-            {current ? (
-              // The mark at the head of the block moves; the stage it is on is a quiet ring.
-              <Box
-                component="span"
-                aria-hidden="true"
-                sx={{
-                  width: 10,
-                  height: 10,
-                  mx: '3px',
-                  flex: 'none',
-                  borderRadius: '50%',
-                  border: 1.5,
-                  borderColor: 'text.primary',
-                }}
-              />
-            ) : (
-              <AppIcon name="check" size={16} />
-            )}
-            <span>{feedStepLabel[step.step]}</span>
-          </Box>
-        )
-      })}
-    </Box>
-  )
 }
 
 /** A line that opens what is under it: the turn's stages, «Ход работы». */
@@ -445,12 +413,10 @@ function Disclosure({
 }
 
 function Worked({
-  steps,
   seconds,
   activity,
   details,
 }: {
-  steps: readonly StepRow[]
   seconds: number
   /** «Ход работы» of the turn, drawn once the client opens the line. */
   activity?: () => ReactNode
@@ -458,6 +424,8 @@ function Worked({
   details: boolean
 }) {
   const [opened, setOpened] = useState(false)
+  // The line opens straight on what the agent did (owner's request of 14.11.2026): the stages and
+  // the heading «Ход работы» are the platform's words, not the client's.
   return (
     <Disclosure summary={feedWorkedText(seconds)} open={details} onOpen={() => setOpened(true)}>
       <Box
@@ -468,22 +436,12 @@ function Worked({
           borderLeft: 1,
           borderColor: 'divider',
           display: 'grid',
-          gap: 1.5,
+          gap: 0.75,
+          minWidth: 0,
         }}
-        aria-label={dialogText.stages}
+        aria-label={activityText.title}
       >
-        <StepList steps={steps} running={false} />
-        {(opened || details) && activity ? (
-          <Box sx={{ display: 'grid', gap: 0.75, minWidth: 0 }}>
-            <Typography
-              component="h3"
-              sx={{ fontSize: 13, fontWeight: 600, color: 'text.secondary' }}
-            >
-              {activityText.title}
-            </Typography>
-            {activity()}
-          </Box>
-        ) : null}
+        {(opened || details) && activity ? activity() : null}
       </Box>
     </Disclosure>
   )
@@ -924,6 +882,7 @@ function RowView({
       const { onSaveNotes } = actions
       return (
         <AgentMessage
+          copy={row.message}
           title={
             approval ? feedCardTitle.approval : open ? feedCardTitle.answer : feedCardTitle.result
           }
@@ -1129,16 +1088,9 @@ function RowView({
       )
     case 'feed.page_left':
       return <Note text={feedPageLeftText(row)} />
-    // A document the agent writes (docs/plan/69-pages.md, Ст22): its live card; a change of it is a
-    // signal the card keeps up with, nothing to show by itself.
+    // A document the agent writes (docs/plan/69-pages.md, Ст22): its card stands after the answer
+    // of the turn that wrote it (`feedEntries`), the rows themselves show nothing.
     case 'feed.doc':
-      return (
-        <FeedDoc
-          docId={row.docId}
-          open={actions.shownAgentDocument === row.docId}
-          {...(actions.onOpenAgentDocument ? { onOpen: actions.onOpenAgentDocument } : {})}
-        />
-      )
     case 'feed.doc_touch':
       return null
     case 'feed.doc_left':
@@ -1240,9 +1192,21 @@ export function FeedList({
                 documents={documents}
                 {...(actions.onOpenDocument ? { onOpen: actions.onOpenDocument } : {})}
               />
+            ) : entry.kind === 'agentDocs' ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                {entry.docIds.map((docId) => (
+                  <FeedDoc
+                    key={docId}
+                    docId={docId}
+                    open={actions.shownAgentDocument === docId}
+                    {...(actions.onOpenAgentDocument
+                      ? { onOpen: actions.onOpenAgentDocument }
+                      : {})}
+                  />
+                ))}
+              </Box>
             ) : entry.kind === 'worked' ? (
               <Worked
-                steps={entry.steps}
                 seconds={entry.seconds}
                 activity={activityOf ? () => activityOf(entry.turn) : undefined}
                 details={details}
@@ -1289,6 +1253,54 @@ export function lastMessageId(rows: readonly FeedRow[]): string | null {
 const noFiles = (ids: readonly string[]): SentFile[] =>
   ids.map((id) => ({ id, name: null, size: null, kind: 'document' as const }))
 
+/**
+ * The line under the work of the agent: a phrase of what it is doing that changes every few
+ * seconds, shimmering while it works, and the time. The live region announces the status, not
+ * the phrase: `label` is what is read aloud.
+ */
+function WorkingLine({ turn, seconds, label }: { turn: number; seconds: number; label: string }) {
+  return (
+    <Box
+      sx={{ display: 'flex', alignItems: 'baseline', gap: 1, minWidth: 0 }}
+      role="status"
+      aria-label={label}
+    >
+      <Typography
+        component="span"
+        aria-hidden="true"
+        sx={{
+          fontSize: 15,
+          fontWeight: 500,
+          lineHeight: 1.5,
+          color: 'text.secondary',
+          '@media (prefers-reduced-motion: no-preference)': {
+            backgroundImage:
+              'linear-gradient(90deg, var(--mui-palette-text-secondary) 0%, var(--mui-palette-text-secondary) 40%, var(--mui-palette-text-primary) 50%, var(--mui-palette-text-secondary) 60%, var(--mui-palette-text-secondary) 100%)',
+            backgroundSize: '250% 100%',
+            backgroundClip: 'text',
+            WebkitBackgroundClip: 'text',
+            color: 'transparent',
+            animation: 'raditi-working-shimmer 2.4s linear infinite',
+            '@keyframes raditi-working-shimmer': {
+              from: { backgroundPosition: '100% 0' },
+              to: { backgroundPosition: '-150% 0' },
+            },
+          },
+        }}
+      >
+        {workingPhraseOf(turn, seconds)}
+      </Typography>
+      <Typography
+        component="span"
+        aria-hidden="true"
+        sx={{ color: 'text.secondary', fontSize: 13, fontVariantNumeric: 'tabular-nums' }}
+      >
+        {feedDurationText(seconds)}
+      </Typography>
+    </Box>
+  )
+}
+
 /** Seconds since a moment, counted on the client while `on`. */
 function useSecondsSince(since: string | null, on: boolean): number {
   const [now, setNow] = useState(() => Date.now())
@@ -1309,14 +1321,14 @@ function useSecondsSince(since: string | null, on: boolean): number {
  */
 export function LiveBlock({
   head,
-  steps,
   stopping = false,
   withSite,
   browser,
   activity,
 }: {
   head: FeedHeadState
-  steps: readonly StepRow[]
+  /** The stages of the turn: no longer shown (owner's request of 14.11.2026). */
+  steps?: readonly StepRow[]
   stopping?: boolean
   /** false — a chat without a project: the block says nothing of a site. */
   withSite: boolean
@@ -1370,16 +1382,17 @@ export function LiveBlock({
             </Button>
           )
         } else {
-          // The status and its timer say it all; no standing words (owner, 26.10.2026).
-          text = null
-          body = (
-            <>
-              {steps.length > 0 ? <StepList steps={steps} running /> : null}
-              {/* What the agent does stands in the feed as it comes, no folding and no
-                  scrolling of its own (owner's request of 09.11.2026); the finished turn folds it
-                  under «Агент работал …». */}
-              {activity ? <Box sx={{ pt: 0.5 }}>{activity}</Box> : null}
-            </>
+          // What the agent does stands in the feed as it comes, no folding and no scrolling of its
+          // own (owner's request of 09.11.2026); under it a word of what it is doing and the time,
+          // in place of «Агент работает», the moving mark and the stages (owner, 14.11.2026). The
+          // finished turn folds it under «Агент работал …».
+          return (
+            <Box
+              sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0, ...riseIn }}
+            >
+              {activity ? <Box sx={{ minWidth: 0 }}>{activity}</Box> : null}
+              <WorkingLine turn={task.turnNo} seconds={seconds} label={title} />
+            </Box>
           )
         }
         break
