@@ -14,3 +14,16 @@ path "kv/metadata/sites/+/*" {
     "max_versions" = ["1"]
   }
 }
+
+# Variables of a workspace (docs/plan/83-remove-projects.md, БП4): written by web, never read
+# back; a removed one is overwritten by a version without a value.
+path "kv/data/workspaces/+/env/*" {
+  capabilities = ["create", "update"]
+}
+
+path "kv/metadata/workspaces/+/env/*" {
+  capabilities = ["create", "update", "read"]
+  allowed_parameters = {
+    "max_versions" = ["1"]
+  }
+}

@@ -36,30 +36,31 @@ model User {
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  sessions           Session[]
-  accounts           Account[]
-  consents           UserConsent[]
-  memberships        Member[]
-  channelIdentities  ChannelIdentity[]
-  telegramLinkCodes  TelegramLinkCode[]
-  workspacesCreated  Workspace[]
-  tasksCreated       Task[]
-  attachments        Attachment[]
-  orders             Order[]
-  siteCreationClaims SiteCreationClaim[]
-  previewTickets     PreviewTicket[]
-  previewSessions    PreviewSession[]
-  browserTickets     BrowserStreamTicket[]
-  releasesApproved   SiteRelease[]
-  undoPlansAsked     ReleaseUndoPlan[]
-  envVarsConsented   SiteEnvVar[]          @relation("SiteEnvVarConsent")
-  envVarsCreated     SiteEnvVar[]          @relation("SiteEnvVarCreator")
-  notificationSetting NotificationSetting?
-  pushSubscriptions  PushSubscription[]
-  taskPresence       TaskPresence[]
-  chatNotifications  ChatNotification[]
-  speechCalls        SpeechCall[]
-  agentInstructions  AgentInstructions?
+  sessions                Session[]
+  accounts                Account[]
+  consents                UserConsent[]
+  memberships             Member[]
+  channelIdentities       ChannelIdentity[]
+  telegramLinkCodes       TelegramLinkCode[]
+  workspacesCreated       Workspace[]
+  tasksCreated            Task[]
+  attachments             Attachment[]
+  orders                  Order[]
+  siteCreationClaims      SiteCreationClaim[]
+  previewTickets          PreviewTicket[]
+  previewSessions         PreviewSession[]
+  browserTickets          BrowserStreamTicket[]
+  releasesApproved        SiteRelease[]
+  undoPlansAsked          ReleaseUndoPlan[]
+  envVarsConsented        SiteEnvVar[]          @relation("SiteEnvVarConsent")
+  envVarsCreated          SiteEnvVar[]          @relation("SiteEnvVarCreator")
+  workspaceEnvVarsCreated WorkspaceEnvVar[]     @relation("WorkspaceEnvVarCreator")
+  notificationSetting     NotificationSetting?
+  pushSubscriptions       PushSubscription[]
+  taskPresence            TaskPresence[]
+  chatNotifications       ChatNotification[]
+  speechCalls             SpeechCall[]
+  agentInstructions       AgentInstructions?
 
   @@map("users")
 }
@@ -192,6 +193,7 @@ model Workspace {
   pageTrees       PageTree[]
   chatDocuments   ChatDocument[]
   usageWindows    WorkspaceUsageWindow[]
+  envVars         WorkspaceEnvVar[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -227,21 +229,21 @@ enum MemberRole {
 
 /// A user's account in a chat channel; Telegram is linked by signing in to the cabinet (spec §18).
 model ChannelIdentity {
-  id         String   @id @default(uuid(7)) @db.Uuid
-  userId     String   @map("user_id") @db.Uuid
-  channel    Channel
+  id            String   @id @default(uuid(7)) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  channel       Channel
   /// User id in the channel (Telegram or MAX user id as a string).
-  externalId String   @map("external_id") @db.VarChar(64)
+  externalId    String   @map("external_id") @db.VarChar(64)
   /// Display handle, e.g. the Telegram @username; informational only.
-  username   String?  @db.VarChar(255)
+  username      String?  @db.VarChar(255)
   /// The chat words without a topic go to (docs/plan/80-telegram.md, Т4); NULL — a new one.
   currentTaskId String?  @map("current_task_id") @db.Uuid
   /// `/new` was pressed: the next words start a new chat in `newChatSiteId` (NULL — without a
   /// project).
   newChat       Boolean  @default(false) @map("new_chat")
   newChatSiteId String?  @map("new_chat_site_id") @db.Uuid
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user        User  @relation(fields: [userId], references: [id], onDelete: Cascade)
   currentTask Task? @relation("ChannelCurrentTask", fields: [currentTaskId], references: [id], onDelete: SetNull)
@@ -351,7 +353,7 @@ model Site {
   initialVersion     SiteInitialVersion?
   attachments        Attachment[]
   browserSessions    BrowserSession[]
-  telegramNewChats   ChannelIdentity[]   @relation("ChannelNewChatSite")
+  telegramNewChats   ChannelIdentity[]       @relation("ChannelNewChatSite")
 
   @@unique([workspaceId, url], map: "sites_workspace_id_url_key", where: raw("deleted_at IS NULL"))
   @@index([installedReleaseId])
@@ -563,46 +565,46 @@ model ChatSession {
 /// One client request: one logical agent session and one task branch (spec §7). The status
 /// changes only by a conditional UPDATE in the same transaction as its credit_ledger entry.
 model Task {
-  id              String       @id @default(uuid(7)) @db.Uuid
-  workspaceId     String       @map("workspace_id") @db.Uuid
+  id              String          @id @default(uuid(7)) @db.Uuid
+  workspaceId     String          @map("workspace_id") @db.Uuid
   /// NULL — a chat without a project (docs/plan/61-chats-first.md): never a repository, its id a
   /// UUID of version 7 (CHECK tasks_chat_id_check). Fixed when the task is created, with the
   /// requirements (trigger tasks_requirements_fixed).
-  siteId          String?      @map("site_id") @db.Uuid
-  chatSessionId   String?      @map("chat_session_id") @db.Uuid
-  createdById     String?      @map("created_by_id") @db.Uuid
+  siteId          String?         @map("site_id") @db.Uuid
+  chatSessionId   String?         @map("chat_session_id") @db.Uuid
+  createdById     String?         @map("created_by_id") @db.Uuid
   /// «Отменить» of a done task: this task reverts that one and is never billed.
-  revertsTaskId   String?      @map("reverts_task_id") @db.Uuid
-  status          TaskStatus   @default(queued)
+  revertsTaskId   String?         @map("reverts_task_id") @db.Uuid
+  status          TaskStatus      @default(queued)
   /// From the turn result (turnResultSchema.change_type); NULL until the first turn ends.
-  changeType      ChangeType?  @map("change_type")
+  changeType      ChangeType?     @map("change_type")
   /// Class profile selected before queueing; selects the pricing rule.
-  modelClass      ModelClass?  @map("model_class")
+  modelClass      ModelClass?     @map("model_class")
   /// Summary of the latest turn result.
-  summary         String?      @db.VarChar(500)
+  summary         String?         @db.VarChar(500)
   /// Number of the latest turn; 0 before the first one.
-  turnNo          Int          @default(0) @map("turn_no")
+  turnNo          Int             @default(0) @map("turn_no")
   /// «Попробовать ещё» (failed → queued) starts a new attempt with a new hold.
-  attempt         Int          @default(1)
-  prNumber        Int?         @map("pr_number")
-  prUrl           String?      @map("pr_url") @db.VarChar(1024)
+  attempt         Int             @default(1)
+  prNumber        Int?            @map("pr_number")
+  prUrl           String?         @map("pr_url") @db.VarChar(1024)
   /// The deployment that shipped (or last tried to ship) this task.
-  deploymentId    String?      @unique @map("deployment_id") @db.Uuid
+  deploymentId    String?         @unique @map("deployment_id") @db.Uuid
   /// Pinned when queued on the pay-per-action plan (spec §17).
-  pricingRuleId   String?      @map("pricing_rule_id") @db.Uuid
+  pricingRuleId   String?         @map("pricing_rule_id") @db.Uuid
   /// Σ token_usage.cost_rub plus sandbox cost, full precision, never rounded.
-  costRub         Decimal      @default(0) @map("cost_rub") @db.Decimal(18, 10)
+  costRub         Decimal         @default(0) @map("cost_rub") @db.Decimal(18, 10)
   /// Charged to the wallet on done, rounded HALF_UP once; NULL on quota plans or until charged.
-  billedRub       Decimal?     @map("billed_rub") @db.Decimal(12, 2)
+  billedRub       Decimal?        @map("billed_rub") @db.Decimal(12, 2)
   /// false for «Отменить» and operator retries: no hold, no charge.
-  billable        Boolean      @default(true)
+  billable        Boolean         @default(true)
   /// The second label of the dialog's preview address (plan 53, Р17): six hex characters drawn
   /// by the database, unique within the site; an insert whose alias is taken draws again
   /// (trigger tasks_free_alias). CHECK tasks_alias_check.
-  alias           String       @default(dbgenerated("substr(md5((gen_random_uuid())::text), 1, 6)")) @db.VarChar(12)
+  alias           String          @default(dbgenerated("substr(md5((gen_random_uuid())::text), 1, 6)")) @db.VarChar(12)
   /// Set from the first request (feed design, «Ограничения в базе»); the client may rename the
   /// dialog (`task.rename`, owner's request of 26.10.2026).
-  title           String?      @db.VarChar(120)
+  title           String?         @db.VarChar(120)
   /// Who named the dialog: its first request, the agent on its first pass (owner's request of
   /// 15.11.2026, paid with the pass) or the client. The agent renames only a `request` title, so
   /// a name the client chose stays.
@@ -614,18 +616,18 @@ model Task {
   /// a site never the repository and possibly nothing (CHECK tasks_requirements_check). Fixed when
   /// the task is created (trigger tasks_requirements_fixed). TaskRequirements in @repo/domain;
   /// tasks older than the columns need the repository alone.
-  needsRepository Boolean      @default(true) @map("needs_repository")
-  needsBrowser    Boolean      @default(false) @map("needs_browser")
-  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
-  finishedAt      DateTime?    @map("finished_at") @db.Timestamptz(6)
+  needsRepository Boolean         @default(true) @map("needs_repository")
+  needsBrowser    Boolean         @default(false) @map("needs_browser")
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  finishedAt      DateTime?       @map("finished_at") @db.Timestamptz(6)
   /// «Удалить диалог» (`task.remove`, owner's request of 26.10.2026): the cabinet no longer finds
   /// the dialog; the row and everything that points at it stay.
-  deletedAt       DateTime?    @map("deleted_at") @db.Timestamptz(6)
+  deletedAt       DateTime?       @map("deleted_at") @db.Timestamptz(6)
   /// «Закрепить» (docs/plan/75-chat-input-output.md, ВВ21): the chat stands at the head of the list.
-  pinnedAt        DateTime?    @map("pinned_at") @db.Timestamptz(6)
+  pinnedAt        DateTime?       @map("pinned_at") @db.Timestamptz(6)
   /// «В архив»: the chat leaves the list for «Архив»; a new message brings it back.
-  archivedAt      DateTime?    @map("archived_at") @db.Timestamptz(6)
+  archivedAt      DateTime?       @map("archived_at") @db.Timestamptz(6)
 
   /// First bounded content access, including GET-only privacy maps.
   contentAccessedAt    DateTime? @map("content_accessed_at") @db.Timestamptz(6)
@@ -3282,4 +3284,24 @@ enum TaskTitleSource {
   request
   agent
   client
+}
+
+/// A variable of a workspace (docs/plan/83-remove-projects.md, БП4): its value in Vault
+/// `kv/workspaces/<workspaceId>/env/<NAME>`; every chat of the workspace gets it.
+model WorkspaceEnvVar {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  name        String   @db.VarChar(64)
+  /// KV v2 version the platform last wrote.
+  keyVersion  Int      @default(1) @map("key_version")
+  createdBy   String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  creator   User?     @relation("WorkspaceEnvVarCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, name])
+  @@index([createdBy])
+  @@map("workspace_env_vars")
 }
