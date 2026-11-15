@@ -32,7 +32,8 @@ export interface ChatFileRow {
   id: string
   type: string
   fileId?: string
-  name?: string
+  // Another row may name something else, or nothing: `feed.schedule_left` has a null name.
+  name?: string | null
   sizeBytes?: number
 }
 

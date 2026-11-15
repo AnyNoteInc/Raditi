@@ -112,6 +112,11 @@ export const browserActionRequestSchema = z.strictObject({
   taskId: z.uuid(),
   assignmentId: z.uuid(),
   action: browserActionSchema,
+  /**
+   * A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп27, Зп28):
+   * the worker refuses a save or a publish on the site (`BROWSER_READ_ONLY`). Absent — false.
+   */
+  readOnly: z.boolean().optional(),
 })
 export type BrowserActionRequest = z.infer<typeof browserActionRequestSchema>
 export const browserActionResponseSchema = z.discriminatedUnion('ok', [

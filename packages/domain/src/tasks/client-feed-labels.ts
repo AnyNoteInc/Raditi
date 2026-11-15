@@ -1,6 +1,7 @@
 import { pluralRu } from '../plural.ts'
 import type { PreviewUnavailableReason } from '../preview/preview-state.ts'
 import type { VersionBump } from '../release/semver.ts'
+import type { ScheduleChangeAction, ScheduleLeftReason } from '../schedule/feed.ts'
 import type {
   FeedRedoPayload,
   FeedRewindPayload,
@@ -291,6 +292,43 @@ export function feedPageChangeText(row: {
   if (row.change === 'restored') return `Агент вернул из корзины «${row.title}»${more}.`
   return `Агент изменил страницу «${row.title}».`
 }
+
+/**
+ * The title of the card of a scheduled task the agent changed at the end of its turn
+ * (`feed.schedule_change`, docs/plan/82-scheduled-tasks.md, Зп35).
+ */
+export const feedScheduleChangeTitle: Readonly<Record<ScheduleChangeAction, string>> =
+  Object.freeze({
+    created: 'Запланированная задача создана',
+    updated: 'Запланированная задача изменена',
+    paused: 'Запланированная задача приостановлена',
+    resumed: 'Запланированная задача возобновлена',
+    deleted: 'Запланированная задача удалена',
+  })
+
+/** The card in one line, for a note and a channel: «Запланированная задача создана: «Отчёт»». */
+export const feedScheduleChangeText = (row: {
+  action: ScheduleChangeAction
+  name: string
+}): string => `${feedScheduleChangeTitle[row.action]}: «${row.name}»`
+
+/**
+ * Why a change of a task did not come true (`feed.schedule_left`, Зп35). «20» is
+ * `scheduleLimits.activePerWorkspace`: this module imports types only, a test holds the two equal.
+ */
+export const feedScheduleLeftReasonText: Readonly<Record<ScheduleLeftReason, string>> =
+  Object.freeze({
+    forbidden: 'нет прав в этом рабочем пространстве',
+    limit: 'включено 20 задач — больше нельзя',
+    not_found: 'задачи уже нет',
+    text_refused: 'в инструкции нельзя оставлять пароли и ключи',
+    invalid: 'расписание не подходит',
+    failed: 'ответ агента оборвался',
+  })
+
+/** «Задачу не удалось сохранить: <причина>» — the card offers «Настроить вручную». */
+export const feedScheduleLeftText = (row: { reason: ScheduleLeftReason }): string =>
+  `Задачу не удалось сохранить: ${feedScheduleLeftReasonText[row.reason]}`
 
 /** A document the agent set up (`feed.doc`, Ст22), until the card of slice 69.9. */
 export const feedDocText = (): string => 'Агент пишет документ'

@@ -112,6 +112,15 @@ describe('API of the browser worker', () => {
     expect(browserActionRequestSchema.safeParse({ taskId, action: request.action }).success).toBe(
       false,
     )
+    // A pass of a scheduled run without its client reads only (plan 82, Зп28).
+    for (const readOnly of [true, false])
+      expect(browserActionRequestSchema.parse({ ...request, readOnly })).toEqual({
+        ...request,
+        readOnly,
+      })
+    expect(browserActionRequestSchema.safeParse({ ...request, readOnly: 'yes' }).success).toBe(
+      false,
+    )
     const ok = {
       ok: true,
       result: {
