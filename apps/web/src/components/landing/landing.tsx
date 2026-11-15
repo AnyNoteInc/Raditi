@@ -8,6 +8,7 @@ import { AnimatedBrandSymbol } from '@repo/ui/animated-brand-symbol'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
+import { CookieSettingsButton } from '@/components/public/cookie-banner'
 import { CHARGED_FOR_DONE_WORK } from '@/lib/credit-price'
 import { legalDocumentHref } from '@/lib/legal'
 import { nbsp } from '@/lib/nbsp'
@@ -325,6 +326,7 @@ export function Landing({
           ))}
           {/* For the search engines and for whoever looks for a page by its name. */}
           <a href="/sitemap.xml">Карта сайта</a>
+          <CookieSettingsButton />
         </nav>
         <div className={styles.footerBottom}>
           <span>© {new Date().getFullYear()} Радити</span>
