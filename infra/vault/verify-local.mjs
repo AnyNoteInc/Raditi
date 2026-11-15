@@ -389,38 +389,24 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
 }
 
 /**
- * Real rights of the content path and of the site import: the trusted writers, then the `mcp`
- * and `core` roles logged in through AppRole. Every status below is an answer of the server,
- * not of a policy parser.
+ * Real rights of the workspace (docs/plan/83-remove-projects.md, БП4, БП11): web makes the key
+ * of a workspace and writes its variables and the keys of its MCP servers, never reading them
+ * back; `core` reads the variables for the agent's commands and seals the snapshots of turns;
+ * `mcp` keeps the contact maps of chats, reads and renews the key of an MCP server and reads the
+ * key of the web search. Every status below is an answer of the server, not of a policy parser.
  */
 async function verifyContentAccess({ address, rootToken, scopedTokens, turn, expect }) {
   const root = { address, token: rootToken }
   const post = (body) => ({ method: 'POST', ...(body === undefined ? {} : { body }) })
   const write = (data, cas) => post({ options: { cas }, data })
-  const patch = (data, cas) => ({ method: 'PATCH', body: { options: { cas }, data } })
-  const siteId = randomUUID()
+  const workspaceId = randomUUID()
   const taskId = randomUUID()
   const key = `ws-${randomUUID()}`
   const foreignKey = `other-${randomBytes(6).toString('hex')}`
   const keyType = { type: 'aes256-gcm96' }
-  const access = (password) => ({
-    v: '1',
-    origin: 'https://synthetic-site.invalid',
-    username: 'synthetic-editor',
-    applicationPassword: password,
-  })
-  const wp = `sites/${siteId}/wp`
-  const ssh = `sites/${siteId}/ssh`
-  // The kinds a site is imported with and the current version of each: the database access is
-  // replaced once below.
-  const importVersions = { ftp: 1, ssh: 1, git: 1, db: 2 }
-  const importAccess = (kind, version) => ({ v: '1', password: `synthetic-${kind}-${version}` })
-  // A read of each of them: refused to every policy but the import one.
-  const importReads = Object.keys(importVersions).map((kind) => [
-    `kv/data/sites/${siteId}/${kind}`,
-    {},
-  ])
-  const mask = `content-masks/${siteId}/${taskId}`
+  const variable = `workspaces/${workspaceId}/env/PAYMENT_API_KEY`
+  const server = `workspaces/${workspaceId}/mcp/menu`
+  const mask = `content-masks/${taskId}/${taskId}`
   const sub = 'zai-coding/synthetic-content'
 
   // workspace-provisioner: a new workspace key and nothing else about it.
@@ -475,47 +461,64 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     [`transit/restore/${key}`, post({ backup: 'synthetic' })],
     [`transit/datakey/plaintext/${key}`, post({ bits: 256 })],
     [`transit/encrypt/${key}`, post({ plaintext: 'c3ludGhldGlj' })],
-    [`kv/data/${wp}`, {}],
-    ...importReads,
-    [`kv/data/${wp}`, write(access('synthetic-provisioner'), 0)],
+    [`kv/data/${variable}`, {}],
+    [`kv/data/${variable}`, write({ value: 'synthetic-provisioner' }, 0)],
   ]) {
     await expect(provisioner, path, 403, options)
   }
   // `+` leaves the name to the client (`transitEnsureKey` takes `ws-<uuid>` only): a key of
-  // another name can be made, and neither core nor mcp may use it (their refusals below).
+  // another name can be made, and core may not use it (its refusals below).
   await expect(provisioner, `transit/keys/${foreignKey}`, 200, post(keyType))
   const foreign = await expect(rootToken, `transit/keys/${foreignKey}`, 200)
   assert.equal(foreign?.data?.exportable, false, 'A key of another name is exportable')
 
-  // sites-writer: stores site access with CAS and cannot read it back.
-  const sitesWriter = scopedTokens['sites-writer']
-  await expect(sitesWriter, `kv/data/${wp}`, 200, write(access('synthetic-password-1'), 0))
-  for (const kind of Object.keys(importVersions)) {
-    const path = `kv/data/sites/${siteId}/${kind}`
-    await expect(sitesWriter, path, 200, write(importAccess(kind, 1), 0))
+  // web (sites-writer): a variable of a workspace and the key of an MCP server keep one version —
+  // set on the metadata before the first write — are written with CAS and removed by a version
+  // without a value; never read back, never deleted.
+  const writer = scopedTokens['sites-writer']
+  for (const path of [variable, server]) {
+    await expect(writer, `kv/metadata/${path}`, 204, post({ max_versions: '1' }))
+    await expect(writer, `kv/data/${path}`, 200, write({ value: 'synthetic-1' }, 0))
+    await expect(writer, `kv/data/${path}`, 400, write({ value: 'stale' }, 0))
+    const stored = await expect(writer, `kv/metadata/${path}`, 200)
+    assert.equal(stored?.data?.current_version, 1)
+    assert.equal(stored?.data?.max_versions, 1)
   }
-  await expect(sitesWriter, `kv/data/${wp}`, 403)
-  const stored = await expect(sitesWriter, `kv/metadata/${wp}`, 200)
-  assert.equal(stored?.data?.current_version, 1)
-  await expect(sitesWriter, `kv/data/${wp}`, 400, write(access('synthetic-stale'), 0))
-  await expect(sitesWriter, `kv/data/${wp}`, 200, write(access('synthetic-password-2'), 1))
-  await expect(sitesWriter, `kv/data/sites/${siteId}/db`, 200, write(importAccess('db', 2), 1))
+  await expect(writer, `kv/data/${variable}`, 200, write({ value: 'synthetic-2' }, 1))
+  const removed = new Date().toISOString()
+  const gone = `workspaces/${workspaceId}/env/GONE_KEY`
+  await expect(writer, `kv/metadata/${gone}`, 204, post({ max_versions: '1' }))
+  await expect(writer, `kv/data/${gone}`, 200, write({ value: 'synthetic-gone' }, 0))
+  await expect(writer, `kv/data/${gone}`, 200, write({ removed }, 1))
+  const erased = await expect(rootToken, `kv/metadata/${gone}`, 200)
+  assert.deepEqual(Object.keys(erased?.data?.versions ?? {}), ['2'], 'Removed variable history')
+  await expect(rootToken, `kv/data/${gone}?version=1`, 404)
   for (const [path, options] of [
-    ...importReads,
-    [`kv/metadata/sites/${siteId}`, { method: 'LIST' }],
-    [`kv/metadata/${wp}`, post({ max_versions: 1 })],
-    [`kv/metadata/${wp}`, { method: 'DELETE' }],
-    [`kv/data/${wp}`, { method: 'DELETE' }],
-    [`kv/destroy/${wp}`, post({ versions: [1] })],
+    [`kv/data/${variable}`, {}],
+    [`kv/data/${variable}?version=1`, {}],
+    [`kv/data/${server}`, {}],
+    [`kv/data/${variable}`, { method: 'DELETE' }],
+    [`kv/metadata/${variable}`, { method: 'DELETE' }],
+    [`kv/destroy/${variable}`, post({ versions: [1] })],
+    [`kv/metadata/${variable}`, post({ max_versions: '2' })],
+    // A number matches no value a policy lists: only the string "1" passes.
+    [`kv/metadata/${variable}`, post({ max_versions: 1 })],
+    [`kv/metadata/${variable}`, post({ max_versions: '1', cas_required: true })],
+    [`kv/metadata/${variable}`, post({ custom_metadata: { kept: 'yes' } })],
+    [`kv/metadata/workspaces/${workspaceId}/env`, { method: 'LIST' }],
+    // Nothing of the site era any more (plan 83): no access of a site, no variable of one.
+    [`kv/data/sites/${randomUUID()}/wp`, write({ password: 'synthetic' }, 0)],
+    [`kv/data/sites/${randomUUID()}/env/OLD_KEY`, write({ value: 'synthetic' }, 0)],
     [`kv/data/${mask}`, {}],
     [`kv/data/${mask}`, write({ entries: '[]' }, 0)],
-    [`kv/data/platform/app/mcp`, write({ value: 'synthetic' }, 0)],
+    ['kv/data/platform/app/mcp', write({ value: 'synthetic' }, 0)],
     [`turns/data/${turn}`, {}],
     [`subs/data/${sub}`, write({ token: 'synthetic' }, 0)],
     [`transit/keys/${key}`, {}],
     [`transit/datakey/plaintext/${key}`, post({ bits: 256 })],
+    ['sys/wrapping/wrap', post({ value: 'synthetic' })],
   ]) {
-    await expect(sitesWriter, path, 403, options)
+    await expect(writer, path, 403, options)
   }
 
   // The policies of other services open nothing here.
@@ -527,9 +530,9 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   ]) {
     for (const [path, options] of [
       [`transit/datakey/plaintext/${key}`, post({ bits: 256 })],
-      [`kv/data/${wp}`, {}],
-      ...importReads,
-      [`kv/data/${wp}`, write(access('synthetic-foreign'), 2)],
+      [`kv/data/${variable}`, {}],
+      [`kv/data/${server}`, {}],
+      [`kv/data/${variable}`, write({ value: 'synthetic-foreign' }, 2)],
       [`kv/data/${mask}`, {}],
     ]) {
       await expect(scopedTokens[policy], path, 403, options)
@@ -541,7 +544,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     mcp: { name: 'raditi-verify-mcp', policies: ['mcp-content'] },
     core: {
       name: 'raditi-verify-core',
-      policies: ['core-turns', 'core-transit', 'core-site-import', 'core-release'],
+      policies: ['core-turns', 'core-transit', 'core-workspace-env'],
     },
   }
   await expect(rootToken, 'sys/auth/approle', 204, post({ type: 'approle' }))
@@ -584,7 +587,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   }
   const { mcp, core } = tokens
 
-  // mcp: the contact map of a task — created, replaced and read with CAS, removed entirely.
+  // mcp: the contact map of a chat — created, replaced and read with CAS, removed entirely.
   await expect(mcp, `kv/data/${mask}`, 404)
   await expect(mcp, `kv/data/${mask}`, 200, write({ entries: '[]' }, 0))
   await expect(mcp, `kv/data/${mask}`, 400, write({ entries: '["synthetic-lost-race"]' }, 0))
@@ -599,7 +602,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   for (const [path, options] of [
     [`kv/metadata/${mask}`, {}],
     [`kv/metadata/${mask}`, post({ max_versions: 100 })],
-    [`kv/metadata/content-masks/${siteId}`, { method: 'LIST' }],
+    [`kv/metadata/content-masks/${taskId}`, { method: 'LIST' }],
     [`kv/data/${mask}`, { method: 'DELETE' }],
     [`kv/delete/${mask}`, post({ versions: [1] })],
     [`kv/undelete/${mask}`, post({ versions: [1] })],
@@ -614,37 +617,29 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   await expect(rootToken, `kv/metadata/${mask}`, 404)
   await expect(rootToken, `kv/data/${mask}?version=1`, 404)
 
-  // mcp: the WordPress access of a site is read-only; other kinds of access are closed.
-  const site = await expect(mcp, `kv/data/${wp}`, 200)
-  assert.equal(site?.data?.metadata?.version, 2)
-  assert.ok(
-    site?.data?.data?.applicationPassword === 'synthetic-password-2' &&
-      site.data.data.username === 'synthetic-editor',
-    'Site access differs',
-  )
-  // kv/ keeps history here as well: the access that was replaced stays readable, and its
-  // writer cannot remove it (refused above).
-  const replaced = await expect(mcp, `kv/data/${wp}?version=1`, 200)
-  assert.ok(
-    replaced?.data?.data?.applicationPassword === 'synthetic-password-1',
-    'Replaced site access differs',
-  )
+  // mcp: the key of an MCP server (docs/plan/81, per workspace since plan 83, БП11) — read, and
+  // renewed tokens written back by CAS; it creates no key and reads no variable.
+  const relayed = await expect(mcp, `kv/data/${server}`, 200)
+  assert.ok(relayed?.data?.data?.value === 'synthetic-1', 'MCP server secret differs')
+  assert.equal(relayed?.data?.metadata?.version, 1)
+  await expect(mcp, `kv/data/${server}`, 400, write({ accessToken: 'stale-renewal' }, 0))
+  await expect(mcp, `kv/data/${server}`, 200, write({ accessToken: 'synthetic-renewed' }, 1))
+  // mcp: the key of the web search, as the operator's writer left it — read-only.
+  const searchKey = await expect(mcp, 'subs/data/search/yandex', 200)
+  assert.equal(searchKey?.data?.metadata?.version, 2)
+  assert.ok(searchKey?.data?.data?.key === 'synthetic-search-v2', 'Search key differs')
+  const dataKey = { bits: 256 }
   for (const [path, options] of [
-    [`kv/data/${ssh}`, {}],
-    [`kv/data/sites/${siteId}/ftp`, {}],
-    // The database access would open the users and orders of the site to the content role.
-    [`kv/data/sites/${siteId}/db`, {}],
-    [`kv/data/sites/${siteId}/git`, {}],
-    [`kv/data/sites/${siteId}/browser`, {}],
-    [`kv/data/sites/${siteId}/wp/extra`, {}],
-    [`kv/data/sites/${siteId}`, {}],
-    [`kv/data/${wp}`, write(access('synthetic-mcp'), 2)],
-    [`kv/data/sites/${randomUUID()}/wp`, write(access('synthetic-mcp'), 0)],
-    [`kv/data/${wp}`, { method: 'DELETE' }],
-    [`kv/metadata/${wp}`, {}],
-    [`kv/metadata/${wp}`, { method: 'DELETE' }],
-    [`kv/metadata/sites/${siteId}`, { method: 'LIST' }],
-    ['kv/metadata/sites', { method: 'LIST' }],
+    [`kv/data/workspaces/${workspaceId}/mcp/other`, write({ value: 'created-by-mcp' }, 0)],
+    [`kv/data/${server}`, { method: 'DELETE' }],
+    [`kv/metadata/${server}`, {}],
+    [`kv/metadata/${server}`, { method: 'DELETE' }],
+    [`kv/metadata/workspaces/${workspaceId}/mcp`, { method: 'LIST' }],
+    [`kv/destroy/${server}`, post({ versions: [1] })],
+    [`kv/data/${variable}`, {}],
+    [`kv/data/sites/${randomUUID()}/wp`, {}],
+    [`kv/data/previews/${randomUUID()}/wp`, {}],
+    ['kv/metadata/workspaces', { method: 'LIST' }],
     ['kv/data/platform/app/mcp', {}],
     ['kv/config', {}],
     [`turns/data/${turn}`, {}],
@@ -658,69 +653,44 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     ['subs/metadata/search/yandex', {}],
     ['subs/data/search/other', {}],
     ['subs/metadata/search', { method: 'LIST' }],
+    // No snapshots of content any more (plan 83): no data key of a workspace for mcp.
+    [`transit/datakey/plaintext/${key}`, post(dataKey)],
+    [`transit/decrypt/${key}`, post({ ciphertext: 'vault:v1:c3ludGhldGlj' })],
+    [`transit/keys/${key}`, {}],
     ['ops/data/x', {}],
     ['sys/mounts', {}],
     ['auth/token/create', post({ policies: ['mcp-content'] })],
   ]) {
     await expect(mcp, path, 403, options)
   }
-  // mcp: the key of the web search, as the operator's writer left it — read-only.
-  const searchKey = await expect(mcp, 'subs/data/search/yandex', 200)
-  assert.equal(searchKey?.data?.metadata?.version, 2)
-  assert.ok(searchKey?.data?.data?.key === 'synthetic-search-v2', 'Search key differs')
 
-  // mcp: a data key for a content snapshot and its unwrapping — and no way to the key itself.
-  const dataKey = { bits: 256 }
-  const issued = await expect(mcp, `transit/datakey/plaintext/${key}`, 200, post(dataKey))
+  // core: data keys of turn snapshots next to its turn keys, and the variables of a workspace at
+  // the version web wrote; nothing it may change of them, no key of an MCP server, no maps.
+  const issued = await expect(core, `transit/datakey/plaintext/${key}`, 200, post(dataKey))
   const wrapped = issued?.data?.ciphertext
   assert.ok(typeof wrapped === 'string' && wrapped.startsWith('vault:v1:'), 'Wrapped key differs')
   assert.equal(Buffer.from(issued?.data?.plaintext ?? '', 'base64').length, 32)
-  const unwrapped = await expect(mcp, `transit/decrypt/${key}`, 200, post({ ciphertext: wrapped }))
+  const unwrapped = await expect(core, `transit/decrypt/${key}`, 200, post({ ciphertext: wrapped }))
   assert.ok(unwrapped?.data?.plaintext === issued.data.plaintext, 'Unwrapped data key differs')
-  for (const [path, options] of [
-    [`transit/keys/${key}`, {}],
-    [`transit/keys/${key}`, post(keyType)],
-    [`transit/keys/ws-${randomUUID()}`, post(keyType)],
-    [`transit/keys/${key}`, { method: 'DELETE' }],
-    [`transit/keys/${key}/config`, post({ deletion_allowed: true })],
-    [`transit/keys/${key}/rotate`, post()],
-    ['transit/keys', { method: 'LIST' }],
-    [`transit/export/encryption-key/${key}`, {}],
-    [`transit/backup/${key}`, {}],
-    [`transit/encrypt/${key}`, post({ plaintext: 'c3ludGhldGlj' })],
-    [`transit/rewrap/${key}`, post({ ciphertext: wrapped })],
-    [`transit/datakey/wrapped/${key}`, post(dataKey)],
-    [`transit/datakey/plaintext/${foreignKey}`, post(dataKey)],
-    [`transit/decrypt/${foreignKey}`, post({ ciphertext: wrapped })],
-  ]) {
-    await expect(mcp, path, 403, options)
-  }
-  // A workspace without a provisioned key gets an error, not a key created by the runtime.
-  const unprovisioned = `ws-${randomUUID()}`
-  await expect(mcp, `transit/datakey/plaintext/${unprovisioned}`, 400, post(dataKey))
-  await expect(rootToken, `transit/keys/${unprovisioned}`, 404)
-
-  // core: data keys of turn snapshots next to its turn keys, the access a site is imported with
-  // and the WordPress access a release writes with (core-release); no browser access, no maps.
-  const coreIssued = await expect(core, `transit/datakey/plaintext/${key}`, 200, post(dataKey))
-  const coreWrapped = coreIssued?.data?.ciphertext
-  assert.ok(typeof coreWrapped === 'string', 'Wrapped key differs')
-  const coreUnwrapped = await expect(
-    core,
-    `transit/decrypt/${key}`,
-    200,
-    post({ ciphertext: coreWrapped }),
-  )
-  assert.ok(coreUnwrapped?.data?.plaintext === coreIssued.data.plaintext, 'Data key differs')
   await expect(core, 'turns/data/t_synthetic_role_1_1', 200, write({ key: 'synthetic-turn' }, 0))
-  const released = await expect(core, `kv/data/${wp}`, 200)
-  assert.ok(released?.data?.data?.applicationPassword === 'synthetic-password-2', 'Access differs')
+  const value = await expect(core, `kv/data/${variable}?version=2`, 200)
+  assert.ok(value?.data?.data?.value === 'synthetic-2', 'Workspace variable differs')
+  // One version is kept: the first one is gone, for core as for root.
+  await expect(core, `kv/data/${variable}?version=1`, 404)
+  const tombstone = await expect(core, `kv/data/${gone}`, 200)
+  assert.ok(tombstone?.data?.data?.removed === removed, 'Removed variable differs')
   for (const [path, options] of [
-    [`kv/data/sites/${siteId}/browser`, {}],
-    [`kv/data/${wp}`, write(access('synthetic-core'), 2)],
+    [`kv/data/${variable}`, write({ value: 'synthetic-core' }, 2)],
+    [`kv/data/${variable}`, { method: 'DELETE' }],
+    [`kv/metadata/${variable}`, {}],
+    [`kv/metadata/workspaces/${workspaceId}/env`, { method: 'LIST' }],
+    [`kv/data/${server}`, {}],
+    [`kv/data/sites/${randomUUID()}/wp`, {}],
+    [`kv/data/sites/${randomUUID()}/db`, {}],
+    ['kv/data/platform/gitea-org-owner', {}],
+    [`kv/data/previews/${randomUUID()}/db`, write({ v: '1' }, 0)],
     [`kv/data/${mask}`, {}],
     [`kv/data/${mask}`, write({ entries: '[]' }, 0)],
-    [`kv/metadata/${mask}`, { method: 'DELETE' }],
     [`transit/keys/${key}`, {}],
     [`transit/keys/ws-${randomUUID()}`, post(keyType)],
     [`transit/keys/${key}`, { method: 'DELETE' }],
@@ -728,102 +698,31 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     [`transit/export/encryption-key/${key}`, {}],
     [`transit/encrypt/${key}`, post({ plaintext: 'c3ludGhldGlj' })],
     [`transit/datakey/plaintext/${foreignKey}`, post(dataKey)],
+    [`transit/decrypt/${foreignKey}`, post({ ciphertext: wrapped })],
     [`subs/data/${sub}`, {}],
+    ['sys/wrapping/wrap', post({ value: 'synthetic' })],
+    ['auth/token/revoke-accessor', post({ accessor: 'synthetic-accessor' })],
     ['ops/data/x', {}],
   ]) {
     await expect(core, path, 403, options)
   }
-
-  // core-site-import: the four kinds are read, a replaced version included, and nothing else
-  // about a site is within reach. The role and a token of the policy alone answer alike.
-  const importer = scopedTokens['core-site-import']
-  for (const token of [core, importer]) {
-    for (const [kind, version] of Object.entries(importVersions)) {
-      const read = await expect(token, `kv/data/sites/${siteId}/${kind}`, 200)
-      assert.equal(read?.data?.metadata?.version, version)
-      assert.ok(
-        read?.data?.data?.password === `synthetic-${kind}-${version}`,
-        'Import access differs',
-      )
-    }
-    // kv/ keeps history: the database access that was replaced stays readable to the import.
-    const replaced = await expect(token, `kv/data/sites/${siteId}/db?version=1`, 200)
-    assert.ok(replaced?.data?.data?.password === 'synthetic-db-1', 'Replaced access differs')
-    for (const [path, options] of [
-      // The role reads it under core-release (below); the import policy alone does not.
-      ...(token === importer ? [[`kv/data/${wp}`, {}]] : []),
-      [`kv/data/sites/${siteId}/browser`, {}],
-      [`kv/data/sites/${siteId}`, {}],
-      [`kv/data/sites/${siteId}/db/extra`, {}],
-      ...Object.entries(importVersions).flatMap(([kind, version]) => {
-        const path = `sites/${siteId}/${kind}`
-        return [
-          [`kv/data/${path}`, write(importAccess(kind, 3), version)],
-          [`kv/data/${path}`, patch(importAccess(kind, 3), version)],
-          [`kv/data/${path}`, { method: 'DELETE' }],
-          [`kv/subkeys/${path}`, {}],
-          [`kv/metadata/${path}`, {}],
-          [`kv/metadata/${path}`, post({ max_versions: 1 })],
-          [`kv/metadata/${path}`, { method: 'DELETE' }],
-          [`kv/metadata/${path}`, { method: 'LIST' }],
-          [`kv/delete/${path}`, post({ versions: [version] })],
-          [`kv/undelete/${path}`, post({ versions: [version] })],
-          [`kv/destroy/${path}`, post({ versions: [version] })],
-        ]
-      }),
-      [`kv/data/sites/${randomUUID()}/db`, write(importAccess('db', 1), 0)],
-      [`kv/metadata/sites/${siteId}`, { method: 'LIST' }],
-      ['kv/metadata/sites', { method: 'LIST' }],
-      ['kv/data/platform/app/core', {}],
-      ['kv/config', {}],
-    ]) {
-      await expect(token, path, 403, options)
-    }
-  }
-  for (const [path, options] of [
-    [`kv/data/${mask}`, {}],
-    [`turns/data/${turn}`, {}],
-    [`turns/data/${turn}`, write({ key: 'synthetic' }, 0)],
-    ['turns/metadata', { method: 'LIST' }],
-    [`subs/data/${sub}`, {}],
-    [`transit/datakey/plaintext/${key}`, post(dataKey)],
-    [`transit/decrypt/${key}`, post({ ciphertext: wrapped })],
-    [`transit/keys/${key}`, {}],
-    ['ops/data/x', {}],
-    ['sys/mounts', {}],
-    ['auth/token/create', post({ policies: ['core-site-import'] })],
-  ]) {
-    await expect(importer, path, 403, options)
-  }
-  // The workspace key is shared: either role unwraps what the other one wrapped. This is the
-  // state of the code the owner still has to confirm (spec §15, §20).
-  const crossed = await expect(
-    mcp,
-    `transit/decrypt/${key}`,
-    200,
-    post({ ciphertext: coreWrapped }),
-  )
-  assert.ok(crossed?.data?.plaintext === coreIssued.data.plaintext, 'Data key differs')
-  const crossedBack = await expect(
-    core,
-    `transit/decrypt/${key}`,
-    200,
-    post({ ciphertext: wrapped }),
-  )
-  assert.ok(crossedBack?.data?.plaintext === issued.data.plaintext, 'Data key differs')
+  // A workspace without a provisioned key gets an error, not a key created by the runtime.
+  const unprovisioned = `ws-${randomUUID()}`
+  await expect(core, `transit/datakey/plaintext/${unprovisioned}`, 400, post(dataKey))
+  await expect(rootToken, `transit/keys/${unprovisioned}`, 404)
 
   // A key an operator has switched off stays off for the provisioner: the undoing is refused, and
   // a repeated creation answers with the key as it is.
   await expect(rootToken, `transit/keys/${key}/soft-delete`, 200, { method: 'DELETE' })
-  await expect(mcp, `transit/datakey/plaintext/${key}`, 400, post(dataKey))
-  await expect(mcp, `transit/decrypt/${key}`, 400, post({ ciphertext: wrapped }))
+  await expect(core, `transit/datakey/plaintext/${key}`, 400, post(dataKey))
+  await expect(core, `transit/decrypt/${key}`, 400, post({ ciphertext: wrapped }))
   await expect(provisioner, `transit/keys/${key}/soft-delete-restore`, 403, post())
   await expect(provisioner, `transit/keys/${key}/rotate`, 403, post())
   await expect(provisioner, `transit/keys/${key}`, 200, post(keyType))
   const switchedOff = await expect(rootToken, `transit/keys/${key}`, 200)
   assert.equal(switchedOff?.data?.soft_deleted, true, 'A repeated creation restored the key')
   assert.equal(switchedOff?.data?.latest_version, 1, 'A repeated creation rotated the key')
-  await expect(mcp, `transit/datakey/plaintext/${key}`, 400, post(dataKey))
+  await expect(core, `transit/datakey/plaintext/${key}`, 400, post(dataKey))
   // The operator's rotation and undoing: earlier wrapped keys stay readable.
   await expect(rootToken, `transit/keys/${key}/soft-delete-restore`, 200, post())
   await expect(rootToken, `transit/keys/${key}/rotate`, 200, post())
@@ -834,296 +733,31 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   assert.equal(rotated?.data?.exportable, false)
   assert.equal(rotated?.data?.deletion_allowed, false)
   const afterRotation = await expect(
-    mcp,
+    core,
     `transit/decrypt/${key}`,
     200,
     post({ ciphertext: wrapped }),
   )
   assert.ok(afterRotation?.data?.plaintext === issued.data.plaintext, 'Rotation lost a data key')
-  const next = await expect(mcp, `transit/datakey/plaintext/${key}`, 200, post(dataKey))
+  const next = await expect(core, `transit/datakey/plaintext/${key}`, 200, post(dataKey))
   assert.ok(next?.data?.ciphertext?.startsWith('vault:v2:'), 'Rotation did not take effect')
 
-  const release = await verifyReleaseAccess({
-    rootToken,
-    scopedTokens,
-    expect,
-    siteId,
-    core,
-    mcp,
-  })
-
   return {
-    ...release,
     credentials,
     key,
-    siteId,
-    importVersions,
+    workspaceId,
+    variable: `kv/${variable}`,
+    server: `kv/${server}`,
+    removed,
     wrapped: { ciphertext: wrapped, plaintext: Buffer.from(issued.data.plaintext, 'base64') },
   }
-}
-
-/**
- * Real rights of releases and previews (docs/plan/53-chat-preview-release.md, Р13, Р21, Р24,
- * Р29, Р35): `core` wraps the credentials of a release attempt, sees whether they were opened
- * and revokes them, and creates no token or policy; web writes a variable of a site and never
- * reads it back; `mcp` reads the secrets of a preview and not the variables of a site.
- */
-async function verifyReleaseAccess({ rootToken, scopedTokens, expect, siteId, core, mcp }) {
-  const post = (body) => ({ method: 'POST', ...(body === undefined ? {} : { body }) })
-  const write = (data, cas) => post({ options: { cas }, data })
-  const previewId = randomUUID()
-  const variable = `sites/${siteId}/env/PAYMENT_API_KEY`
-  const preview = (kind) => `previews/${previewId}/${kind}`
-  const owner = 'platform/gitea-org-owner'
-  const releaser = scopedTokens['core-release']
-  const sitesWriter = scopedTokens['sites-writer']
-
-  // web (sites-writer): a variable of a site keeps one version — set on its metadata before the
-  // first write — and is written with CAS and removed by a tombstone; never read back, never
-  // deleted: the policy is not widened for it. The same one version, and nothing else of the
-  // metadata, on any key of a site (below, «Удалить проект»).
-  await expect(sitesWriter, `kv/metadata/${variable}`, 204, post({ max_versions: '1' }))
-  await expect(sitesWriter, `kv/data/${variable}`, 200, write({ value: 'synthetic-1' }, 0))
-  await expect(sitesWriter, `kv/data/${variable}`, 400, write({ value: 'stale' }, 0))
-  const stored = await expect(sitesWriter, `kv/metadata/${variable}`, 200)
-  assert.equal(stored?.data?.current_version, 1)
-  assert.equal(stored?.data?.max_versions, 1)
-  // Set again before each write: it changes nothing and needs no read of what is there.
-  await expect(sitesWriter, `kv/metadata/${variable}`, 204, post({ max_versions: '1' }))
-  const removed = new Date().toISOString()
-  await expect(sitesWriter, `kv/data/${variable}`, 200, write({ removed }, 1))
-  for (const [path, options] of [
-    // A longer history, or anything else of the metadata, of a variable or of site access.
-    [`kv/metadata/${variable}`, post({ max_versions: '2' })],
-    [`kv/metadata/${variable}`, post({ max_versions: '0' })],
-    // A number matches no value a policy lists: only the string "1" passes.
-    [`kv/metadata/${variable}`, post({ max_versions: 1 })],
-    [`kv/metadata/${variable}`, post({ max_versions: '1', cas_required: true })],
-    [`kv/metadata/${variable}`, post({ delete_version_after: '1h' })],
-    [`kv/metadata/${variable}`, post({ custom_metadata: { kept: 'yes' } })],
-    [`kv/metadata/${variable}`, { method: 'PATCH', body: { max_versions: '1' } }],
-    [`kv/metadata/sites/${siteId}/wp`, post({ max_versions: '2' })],
-    [`kv/metadata/sites/${siteId}/db`, post({ max_versions: 1 })],
-    [`kv/data/${variable}`, {}],
-    [`kv/data/${variable}?version=1`, {}],
-    [`kv/data/${variable}`, { method: 'DELETE' }],
-    [`kv/metadata/${variable}`, { method: 'DELETE' }],
-    [`kv/delete/${variable}`, post({ versions: [1] })],
-    [`kv/destroy/${variable}`, post({ versions: [1] })],
-    [`kv/metadata/sites/${siteId}/env`, { method: 'LIST' }],
-    [`kv/data/${preview('wp')}`, write({ v: '1', password: 'x' }, 0)],
-    [`kv/data/${owner}`, {}],
-    ['sys/wrapping/wrap', { ...post({ value: 'synthetic' }), wrapTtl: 60 }],
-  ]) {
-    await expect(sitesWriter, path, 403, options)
-  }
-
-  // «Удалить проект» (25.10.2026): web overwrites an access of a site with a version without a
-  // value that alone is kept — the older versions with the password are gone, for root as well.
-  const deleted = `sites/${randomUUID()}/ssh`
-  await expect(sitesWriter, `kv/data/${deleted}`, 200, write({ password: 'synthetic-1' }, 0))
-  await expect(sitesWriter, `kv/data/${deleted}`, 200, write({ password: 'synthetic-2' }, 1))
-  await expect(sitesWriter, `kv/metadata/${deleted}`, 204, post({ max_versions: '1' }))
-  await expect(sitesWriter, `kv/data/${deleted}`, 200, write({ removed }, 2))
-  const erased = await expect(rootToken, `kv/metadata/${deleted}`, 200)
-  assert.deepEqual(Object.keys(erased?.data?.versions ?? {}), ['3'], 'Deleted site history')
-  await expect(rootToken, `kv/data/${deleted}?version=2`, 404)
-  await expect(sitesWriter, `kv/data/${deleted}`, 403)
-
-  // The secret of an MCP server of a workspace's agent (docs/plan/81-mcp-server-credentials.md;
-  // plan 83, БП11):
-  // web writes it and never reads it; mcp reads it, writes renewed tokens by CAS, creates no key
-  // and reaches no other key of the workspace through it.
-  const space = randomUUID()
-  const server = `workspaces/${space}/mcp/menu`
-  await expect(sitesWriter, `kv/metadata/${server}`, 204, post({ max_versions: '1' }))
-  await expect(sitesWriter, `kv/data/${server}`, 200, write({ value: 'synthetic-header-1' }, 0))
-  await expect(sitesWriter, `kv/data/${server}`, 403)
-  const relayed = await expect(mcp, `kv/data/${server}`, 200)
-  assert.ok(relayed?.data?.data?.value === 'synthetic-header-1', 'MCP server secret differs')
-  assert.equal(relayed?.data?.metadata?.version, 1)
-  await expect(mcp, `kv/data/${server}`, 400, write({ accessToken: 'stale-renewal' }, 0))
-  await expect(mcp, `kv/data/${server}`, 200, write({ accessToken: 'synthetic-renewed' }, 1))
-  for (const [path, options] of [
-    [`kv/data/workspaces/${space}/mcp/other`, write({ value: 'created-by-mcp' }, 0)],
-    [`kv/data/${server}`, { method: 'DELETE' }],
-    [`kv/metadata/${server}`, {}],
-    [`kv/metadata/${server}`, { method: 'DELETE' }],
-    [`kv/metadata/workspaces/${space}/mcp`, { method: 'LIST' }],
-    [`kv/destroy/${server}`, post({ versions: [1] })],
-    [`kv/data/workspaces/${space}/mcp`, {}],
-    [`kv/data/${variable}`, {}],
-    [`kv/data/workspaces/${space}/env/MENU_KEY`, {}],
-  ]) {
-    await expect(mcp, path, 403, options)
-  }
-
-  // The operator stores the token of the Gitea organization owner; no service writes it.
-  await expect(rootToken, `kv/data/${owner}`, 200, write({ v: '1', token: 'synthetic-owner' }, 0))
-
-  // core: the secrets of a preview are its own — written, read, listed and removed.
-  for (const token of [core, releaser]) {
-    const id = token === core ? 'wp' : 'browser'
-    await expect(token, `kv/data/${preview(id)}`, 404)
-    await expect(token, `kv/data/${preview(id)}`, 200, write({ v: '1', secret: 'synthetic' }, 0))
-    await expect(token, `kv/data/${preview(id)}`, 200, write({ v: '1', secret: 'synthetic-2' }, 1))
-    const read = await expect(token, `kv/data/${preview(id)}`, 200)
-    assert.ok(read?.data?.data?.secret === 'synthetic-2', 'Preview secret differs')
-    const metadata = await expect(token, `kv/metadata/${preview(id)}`, 200)
-    assert.equal(metadata?.data?.current_version, 2)
-    // Recovery metadata of a write-once secret (kvCreateOnce); nothing that shortens history.
-    await expect(token, `kv/metadata/${preview(id)}`, 204, post({ custom_metadata: { id } }))
-    for (const body of [
-      { max_versions: 1 },
-      { max_versions: '1' },
-      { cas_required: true },
-      { delete_version_after: '1s' },
-    ])
-      await expect(token, `kv/metadata/${preview(id)}`, 403, post(body))
-  }
-  // The passwords of the preview's database (owner's answer of 19.10.2026): core's alone.
-  await expect(core, `kv/data/${preview('db')}`, 200, write({ v: '1', user: 'u', root: 'r' }, 0))
-  const passwords = await expect(core, `kv/data/${preview('db')}`, 200)
-  assert.ok(passwords?.data?.data?.user === 'u', 'Preview database secret differs')
-  const listed = await expect(core, `kv/metadata/previews/${previewId}`, 200, { method: 'LIST' })
-  assert.deepEqual([...(listed?.data?.keys ?? [])].sort(), ['browser', 'db', 'wp'])
-
-  // mcp: the secrets of a preview, read-only; nothing of a variable of a site, no wrapping.
-  for (const kind of ['wp', 'browser']) {
-    const read = await expect(mcp, `kv/data/${preview(kind)}`, 200)
-    assert.ok(read?.data?.data?.secret === 'synthetic-2', 'Preview secret differs')
-  }
-  for (const [path, options] of [
-    [`kv/data/${preview('db')}`, {}],
-    [`kv/data/${preview('wp')}`, write({ v: '1', secret: 'synthetic-mcp' }, 2)],
-    [`kv/data/${preview('wp')}`, { method: 'DELETE' }],
-    [`kv/metadata/${preview('wp')}`, {}],
-    [`kv/metadata/${preview('wp')}`, post({ custom_metadata: { id: 'mcp' } })],
-    [`kv/metadata/previews/${previewId}`, { method: 'LIST' }],
-    [`kv/data/${variable}`, {}],
-    [`kv/data/${owner}`, {}],
-    ['sys/wrapping/wrap', { ...post({ value: 'synthetic' }), wrapTtl: 60 }],
-    ['auth/token/revoke-accessor', post({ accessor: 'synthetic-accessor' })],
-  ]) {
-    await expect(mcp, path, 403, options)
-  }
-
-  // core and a token of core-release alone: what a release reads, and the wrapping of one
-  // release attempt — opened once by its own token, never by core's.
-  const attempt = { apiToken: 'synthetic-release-api-token', dataKey: 'synthetic-backup-key' }
-  for (const token of [core, releaser]) {
-    const env = await expect(token, `kv/data/${variable}`, 200)
-    assert.ok(env?.data?.data?.removed === removed, 'The tombstone of a variable differs')
-    // One version: the removed value is gone from Vault, for core as for everybody.
-    await expect(token, `kv/data/${variable}?version=1`, 404)
-    const gitea = await expect(token, `kv/data/${owner}`, 200)
-    assert.ok(gitea?.data?.data?.token === 'synthetic-owner', 'The owner token differs')
-    await expect(token, `kv/data/sites/${siteId}/wp`, 200)
-
-    await expect(token, 'sys/wrapping/wrap', 400, post(attempt))
-    const wrapped = await expect(token, 'sys/wrapping/wrap', 200, {
-      ...post(attempt),
-      wrapTtl: 1800,
-    })
-    const info = wrapped?.wrap_info
-    assert.ok(
-      typeof info?.token === 'string' &&
-        typeof info.accessor === 'string' &&
-        info.ttl === 1800 &&
-        info.creation_path === 'sys/wrapping/wrap' &&
-        wrapped.data === null,
-      'Wrapping differs',
-    )
-    const lookup = await expect(token, 'sys/wrapping/lookup', 200, post({ token: info.token }))
-    assert.equal(lookup?.data?.creation_ttl, 1800)
-    assert.equal(lookup?.data?.creation_path, 'sys/wrapping/wrap')
-    // A lookup leaves it unopened; core cannot open it with its own token.
-    await expect(token, 'sys/wrapping/unwrap', 403, post({ token: info.token }))
-    await expect(token, 'sys/wrapping/lookup', 200, post({ token: info.token }))
-    const opened = await expect(info.token, 'sys/wrapping/unwrap', 200, post())
-    assert.deepEqual(opened?.data, attempt)
-    await expect(info.token, 'sys/wrapping/unwrap', 400, post())
-    await expect(token, 'sys/wrapping/lookup', 400, post({ token: info.token }))
-    // A spent wrapping is answered 200 with a warning: revoking it changes nothing.
-    await expect(token, 'auth/token/revoke-accessor', 200, post({ accessor: info.accessor }))
-
-    const revoked = await expect(token, 'sys/wrapping/wrap', 200, {
-      ...post(attempt),
-      wrapTtl: 600,
-    })
-    await expect(
-      token,
-      'auth/token/revoke-accessor',
-      204,
-      post({ accessor: revoked.wrap_info.accessor }),
-    )
-    await expect(revoked.wrap_info.token, 'sys/wrapping/unwrap', 400, post())
-    await expect(token, 'sys/wrapping/lookup', 400, post({ token: revoked.wrap_info.token }))
-    // No rewrap either: a live wrapping stays as it was. (A dead one is answered 400 first.)
-    const live = await expect(token, 'sys/wrapping/wrap', 200, { ...post(attempt), wrapTtl: 60 })
-    await expect(token, 'sys/wrapping/rewrap', 403, post({ token: live.wrap_info.token }))
-    await expect(token, 'sys/wrapping/lookup', 200, post({ token: live.wrap_info.token }))
-    await expect(
-      token,
-      'auth/token/revoke-accessor',
-      204,
-      post({ accessor: live.wrap_info.accessor }),
-    )
-
-    for (const [path, options] of [
-      ['sys/policies/acl/site-synthetic-deploy', { method: 'PUT', body: { policy: '' } }],
-      ['sys/policies/acl/core-release', { method: 'PUT', body: { policy: '' } }],
-      ['sys/policies/acl', { method: 'LIST' }],
-      ['auth/token/create', post({ policies: ['core-release'] })],
-      ['auth/token/create-orphan', post({ policies: ['default'] })],
-      ['auth/token/revoke', post({ token: revoked.wrap_info.token })],
-      ['auth/token/lookup-accessor', post({ accessor: revoked.wrap_info.accessor })],
-      ['auth/token/lookup-self', {}],
-      ['sys/mounts', {}],
-      ['subs/data/zai-coding/synthetic-content', {}],
-      ['subs/metadata/zai-coding/synthetic-content', {}],
-      [`kv/data/sites/${siteId}/browser`, {}],
-      [`kv/data/sites/${siteId}/wp`, write({ v: '1', password: 'synthetic-core' }, 2)],
-      [`kv/data/${variable}`, write({ value: 'synthetic-core' }, 2)],
-      [`kv/metadata/${variable}`, {}],
-      [`kv/metadata/${variable}`, { method: 'DELETE' }],
-      [`kv/metadata/sites/${siteId}/env`, { method: 'LIST' }],
-      [`kv/data/${owner}`, write({ v: '1', token: 'synthetic-core' }, 1)],
-      [`kv/metadata/${owner}`, {}],
-      ['kv/data/platform/other', {}],
-      ['kv/metadata/platform', { method: 'LIST' }],
-    ]) {
-      await expect(token, path, 403, options)
-    }
-    // Which previews hold secrets: what a sweeper of destroyed previews walks.
-    const previews = await expect(token, 'kv/metadata/previews', 200, { method: 'LIST' })
-    assert.ok(previews?.data?.keys?.includes(`${previewId}/`), 'The preview is not listed')
-  }
-  // The metadata delete of core removes every version of a destroyed preview's secret.
-  await expect(core, `kv/metadata/${preview('browser')}`, 204, { method: 'DELETE' })
-  await expect(rootToken, `kv/data/${preview('browser')}?version=1`, 404)
-  await expect(mcp, `kv/data/${preview('browser')}`, 404)
-
-  // The other policies open nothing of it.
-  for (const policy of policyNames.filter((name) => name !== 'core-release')) {
-    for (const [path, options] of [
-      ['sys/wrapping/wrap', { ...post(attempt), wrapTtl: 60 }],
-      ['auth/token/revoke-accessor', post({ accessor: 'synthetic-accessor' })],
-      [`kv/data/${owner}`, {}],
-      ...(policy === 'mcp-content' ? [] : [[`kv/data/${preview('wp')}`, {}]]),
-      ...(policy === 'sites-writer' ? [] : [[`kv/data/${variable}`, {}]]),
-    ]) {
-      await expect(scopedTokens[policy], path, 403, options)
-    }
-  }
-  return { previewId, variable: `kv/${variable}`, removed }
 }
 
 async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
   const { createVaultSecretStore, createDevSubscriptionToken } =
     await import('../../packages/vault/src/index.ts')
-  const { siteEnvVarSecret, siteEnvVarTombstone, siteEnvVarValueOf } =
-    await import('../../packages/domain/src/release/env-vars.ts')
+  const { workspaceEnvVarSecret, workspaceEnvVarTombstone, workspaceEnvVarValueOf } =
+    await import('../../packages/domain/src/workspace-env/env-vars.ts')
   let checks = 0
   const checked = async (name, operation) => {
     try {
@@ -1411,100 +1045,9 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     )
     assert.equal(logins.core, 1)
   })
-  const accessPath = (kind) => `kv/sites/${content.siteId}/${kind}`
-  await checked('core role reads the import access of a site with the same login', async () => {
-    for (const [kind, version] of Object.entries(content.importVersions)) {
-      const access = await role.kvRead(accessPath(kind))
-      assert.ok(access?.version === version)
-      assert.ok(access.data.password === `synthetic-${kind}-${version}`)
-      assert.deepEqual(Object.keys(access.data).sort(), ['password', 'v'])
-    }
-    assert.equal(logins.core, 1)
-  })
-  const importer = createVaultSecretStore({
-    addr: address,
-    token: scopedTokens['core-site-import'],
-  })
-  await checked('the import policy alone reads an access and health still sees kv/', async () => {
-    const access = await importer.kvRead(accessPath('db'))
-    assert.ok(access?.version === 2 && access.data.password === 'synthetic-db-2')
-    // Its paths are `+` paths only; the mount lookup of health accepts the token all the same.
-    assert.equal((await importer.health()).sealed, false)
-  })
-  await expectRejected(
-    'the import policy is refused the WordPress access, not told that it is missing',
-    () => importer.kvRead(accessPath('wp')),
-    403,
-  )
-  await expectRejected(
-    'the import policy cannot read the versions of an access',
-    () => importer.kvMetadata(accessPath('db')),
-    403,
-  )
-  await expectRejected(
-    'the import policy cannot replace an access',
-    () => importer.kvWrite(accessPath('db'), { v: '1', password: 'synthetic-import' }, { cas: 2 }),
-    403,
-  )
-  await expectRejected(
-    'the import policy cannot remove an access',
-    () => importer.kvDestroyAll(accessPath('db')),
-    403,
-  )
-  // A core role that was set up before the import policy: bootstrap writes policies, not roles.
-  await checked('a core role without the import policy degrades until a new login', async () => {
-    const earlierRole = 'auth/approle/role/raditi-verify-core-earlier'
-    const grant = async (...policies) => {
-      const written = await localVaultRequest(root, earlierRole, {
-        method: 'POST',
-        body: {
-          token_policies: ['core-turns', 'core-transit', ...policies],
-          token_no_default_policy: true,
-          token_ttl: '15m',
-          token_max_ttl: '15m',
-          secret_id_ttl: '15m',
-        },
-      })
-      assert.equal(written.status, 204)
-    }
-    await grant()
-    const roleId = (await localVaultRequest(root, `${earlierRole}/role-id`)).body?.data?.role_id
-    const secretId = (await localVaultRequest(root, `${earlierRole}/secret-id`, { method: 'POST' }))
-      .body?.data?.secret_id
-    let entered = 0
-    const earlier = createVaultSecretStore({
-      addr: address,
-      appRole: { roleId, secretId },
-      fetch: (input, options) => {
-        if (new URL(input).pathname === '/v1/auth/approle/login') entered += 1
-        return fetch(input, options)
-      },
-    })
-    const turnKey = 'turns/t_client_earlier_1_1'
-    const refused = (error) => error.status === 403
-    const degraded = (error) =>
-      error.message === 'Vault KV mount kv/ is not available' && error.status === 403
-    assert.equal(await earlier.kvCreateOnce(turnKey, { key: 'synthetic-earlier' }, {}), 'created')
-    assert.equal((await earlier.health()).sealed, false)
-    await assert.rejects(earlier.kvRead(accessPath('ftp')), refused)
-    // The refused read made kv/ a mount of this process, and its token has no path there:
-    // turn keys keep working and health does not.
-    await assert.rejects(earlier.health(), degraded)
-    assert.equal((await earlier.kvRead(turnKey))?.version, 1)
-    assert.equal(entered, 2)
-    // The role gets the policy; the token issued before does not, and a refused probe of health
-    // keeps that token. One more refused read drops it, and the login after it has the policy.
-    await grant('core-site-import')
-    await assert.rejects(earlier.health(), degraded)
-    await assert.rejects(earlier.kvRead(accessPath('ftp')), refused)
-    assert.equal((await earlier.kvRead(accessPath('ftp')))?.version, content.importVersions.ftp)
-    assert.equal((await earlier.health()).sealed, false)
-    assert.equal(entered, 3)
-  })
-
   const rootStore = createVaultSecretStore({ addr: address, token: rootToken })
   await rootStore.kvList('turns/')
-  const maskPath = `kv/content-masks/${content.siteId}/${randomUUID()}`
+  const maskPath = `kv/content-masks/${randomUUID()}/${randomUUID()}`
   await checked('mcp role keeps a contact map with CAS and removes every version', async () => {
     assert.equal(await mcp.kvRead(maskPath), null)
     assert.deepEqual(await mcp.kvWrite(maskPath, { entries: '[]' }, { cas: 0 }), { version: 1 })
@@ -1524,35 +1067,33 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     await mcp.kvDestroyAll(maskPath)
     assert.equal(await mcp.kvRead(maskPath), null)
     assert.equal(await rootStore.kvMetadata(maskPath), null)
-    // The sweep comes to every task with a browser, those that never had a map among them.
+    // The sweep comes to every chat with a browser, those that never had a map among them.
     await mcp.kvDestroyAll(maskPath)
   })
-  await checked('mcp role reads the WordPress access of a site with its version', async () => {
-    const access = await mcp.kvRead(`kv/sites/${content.siteId}/wp`)
-    assert.ok(access?.version === 2 && access.data.username === 'synthetic-editor')
-    assert.deepEqual(Object.keys(access.data).sort(), [
-      'applicationPassword',
-      'origin',
-      'username',
-      'v',
-    ])
+  await checked('core role reads a variable of a workspace with the same login', async () => {
+    const value = await role.kvRead(content.variable)
+    assert.ok(value?.version === 2)
+    assert.equal(workspaceEnvVarValueOf(value.data), 'synthetic-2')
+    assert.equal(logins.core, 1)
   })
-  await checked('mcp role takes and unwraps a content snapshot data key', async () => {
-    const issued = await mcp.transitDataKey(content.key)
-    assert.ok(issued.plaintext.length === 32 && /^vault:v2:/.test(issued.ciphertext))
-    assert.ok(
-      sameBytes(await mcp.transitDecryptDataKey(content.key, issued.ciphertext), issued.plaintext),
-    )
-    assert.equal(logins.mcp, 1)
-  })
-  const live = [core, writer, llm, admin, role, mcp, importer, rootStore]
+  await checked(
+    'mcp role reads and renews the key of an MCP server with the same login',
+    async () => {
+      const secret = await mcp.kvRead(content.server)
+      assert.ok(secret?.version === 2 && secret.data.accessToken === 'synthetic-renewed')
+      assert.deepEqual(
+        await mcp.kvWrite(content.server, { accessToken: 'synthetic-renewed-2' }, { cas: 2 }),
+        { version: 3 },
+      )
+      assert.equal(logins.mcp, 1)
+    },
+  )
+  const live = [core, writer, llm, admin, role, mcp, rootStore]
   await checked('health probes the mounts each store works with', async () => {
     for (const store of live) {
       const health = await store.health()
       assert.ok(health.initialized && !health.sealed)
     }
-    // kv/ and transit/ are visible to the mcp policy through its `+` and prefix paths; kv/ is
-    // one more mount of the core role since it read a site access.
     assert.deepEqual(logins, { core: 1, mcp: 1 })
   })
   await checked('health reports a vanished KV mount and recovers after bootstrap', async () => {
@@ -1569,12 +1110,12 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
       assert.equal((await store.health()).sealed, false)
     assert.deepEqual((await bootstrapLocalVault(root)).created, ['subs'])
     for (const store of live) assert.equal((await store.health()).sealed, false)
-    // That run found kv/ and transit/ in use and left them alone: the site access keeps its
-    // version and the workspace key still unwraps what it wrapped before.
-    assert.equal((await mcp.kvRead(`kv/sites/${content.siteId}/wp`))?.version, 2)
+    // That run found kv/ and transit/ in use and left them alone: the variable keeps its version
+    // and the workspace key still unwraps what it wrapped before.
+    assert.equal((await role.kvRead(content.variable))?.version, 2)
     assert.ok(
       sameBytes(
-        await mcp.transitDecryptDataKey(content.key, content.wrapped.ciphertext),
+        await role.transitDecryptDataKey(content.key, content.wrapped.ciphertext),
         content.wrapped.plaintext,
       ),
     )
@@ -1582,24 +1123,24 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
   await checked('health reports a lost Transit right and recovers after bootstrap', async () => {
     // The mount is there and the role's policy no longer names it. The token is the same one:
     // a refused probe must not cost the role its single login.
-    const narrowed = await localVaultRequest(root, 'sys/policies/acl/mcp-content', {
+    const narrowed = await localVaultRequest(root, 'sys/policies/acl/core-transit', {
       method: 'PUT',
-      body: { policy: 'path "kv/data/content-masks/*" {\n  capabilities = ["read"]\n}\n' },
+      body: { policy: 'path "turns/data/*" {\n  capabilities = ["read"]\n}\n' },
     })
     assert.equal(narrowed.status, 204)
     await assert.rejects(
-      mcp.health(),
+      role.health(),
       (error) =>
         error.message === 'Vault Transit mount transit/ is not available' && error.status === 403,
     )
-    for (const store of [core, writer, llm, admin, role, rootStore])
+    for (const store of [core, writer, llm, admin, mcp, rootStore])
       assert.equal((await store.health()).sealed, false)
     // A repeated bootstrap writes every policy again: the right is back with nothing created.
     assert.deepEqual((await bootstrapLocalVault(root)).created, [])
-    assert.equal((await mcp.health()).sealed, false)
+    assert.equal((await role.health()).sealed, false)
     assert.ok(
       sameBytes(
-        await mcp.transitDecryptDataKey(content.key, content.wrapped.ciphertext),
+        await role.transitDecryptDataKey(content.key, content.wrapped.ciphertext),
         content.wrapped.plaintext,
       ),
     )
@@ -1608,109 +1149,27 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
   await checked('health reports a vanished Transit mount to the roles that use it', async () => {
     const disabled = await localVaultRequest(root, 'sys/mounts/transit', { method: 'DELETE' })
     assert.equal(disabled.status, 204)
-    for (const store of [role, mcp])
-      await assert.rejects(
-        store.health(),
-        (error) => error.message === 'Vault Transit mount transit/ is not available',
-      )
-    for (const store of [core, writer, llm, admin, rootStore])
+    await assert.rejects(
+      role.health(),
+      (error) => error.message === 'Vault Transit mount transit/ is not available',
+    )
+    for (const store of [core, writer, llm, admin, mcp, rootStore])
       assert.equal((await store.health()).sealed, false)
-    await assert.rejects(mcp.transitDataKey(content.key), (error) => error.status === 404)
+    await assert.rejects(role.transitDataKey(content.key), (error) => error.status === 404)
     assert.deepEqual((await bootstrapLocalVault(root)).created, ['transit'])
     for (const store of live) assert.equal((await store.health()).sealed, false)
     // The mount is back without its keys: health cannot see a key, the call itself fails.
-    await assert.rejects(mcp.transitDataKey(content.key), (error) => error.status === 400)
+    await assert.rejects(role.transitDataKey(content.key), (error) => error.status === 400)
     assert.deepEqual(logins, { core: 1, mcp: 1 })
   })
-  await checked('an access removed by the operator is gone with every version', async () => {
-    await rootStore.kvDestroyAll(accessPath('db'))
-    assert.equal(await importer.kvRead(accessPath('db')), null)
-    const replaced = await localVaultRequest(
-      { address, token: scopedTokens['core-site-import'] },
-      `kv/data/sites/${content.siteId}/db?version=1`,
-    )
-    assert.equal(replaced.status, 404)
-  })
-  // Releases and previews (plan 53, Р13, Р21, Р24, Р29, Р35) through the adapter.
-  const attempt = { apiToken: 'synthetic-release-api-token', dataKey: 'synthetic-backup-key' }
-  // The deploy job holds no Vault credential at all: the wrapping token is its own.
-  const job = createVaultSecretStore({ addr: address })
-  await checked('core role wraps a release attempt; the job opens it once', async () => {
-    const before = Date.now()
-    const wrapped = await role.wrap(attempt, 1800)
-    assert.ok(wrapped.expiresAt.getTime() >= before + 1_800_000)
-    const info = await role.lookupWrapping(wrapped.token)
-    assert.equal(info?.creationPath, 'sys/wrapping/wrap')
-    assert.equal(info.expiresAt.getTime() - info.createdAt.getTime(), 1_800_000)
-    assert.deepEqual(await job.unwrap(wrapped.token), attempt)
-    assert.equal(await job.unwrap(wrapped.token), null)
-    assert.equal(await role.lookupWrapping(wrapped.token), null)
-    // Spent: the revocation finds no token and still resolves.
-    await role.revokeAccessor(wrapped.accessor)
-    assert.equal(logins.core, 1)
-  })
-  await checked('core role revokes an unopened wrapping by its accessor', async () => {
-    const wrapped = await role.wrap(attempt, 600)
-    await role.revokeAccessor(wrapped.accessor)
-    assert.equal(await role.lookupWrapping(wrapped.token), null)
-    assert.equal(await job.unwrap(wrapped.token), null)
-    await role.revokeAccessor(wrapped.accessor)
-    assert.equal(logins.core, 1)
-  })
-  await checked('a wrapping nobody opened expires', async () => {
-    const wrapped = await role.wrap(attempt, 1)
-    await new Promise((resolve) => setTimeout(resolve, 2_500))
-    assert.equal(await role.lookupWrapping(wrapped.token), null)
-    assert.equal(await job.unwrap(wrapped.token), null)
-  })
-  const variable = content.variable
-  const previewSecret = (kind) => `kv/previews/${content.previewId}/${kind}`
-  await checked('mcp role reads the secrets of a preview with the same login', async () => {
-    const wp = await mcp.kvRead(previewSecret('wp'))
-    assert.ok(wp?.version === 2 && wp.data.secret === 'synthetic-2')
-    assert.equal(await mcp.kvRead(previewSecret('browser')), null)
-    assert.equal(logins.mcp, 1)
-  })
-  await checked('core role writes a secret of a preview once, with recovery metadata', async () => {
-    const browser = { v: '1', path: 'synthetic-browser-path' }
-    const custom = { previewId: content.previewId }
-    assert.equal(await role.kvCreateOnce(previewSecret('browser'), browser, custom), 'created')
-    assert.equal(await role.kvCreateOnce(previewSecret('browser'), browser, custom), 'exists')
-    assert.deepEqual((await role.kvMetadata(previewSecret('browser')))?.custom, custom)
-    assert.deepEqual((await mcp.kvRead(previewSecret('browser')))?.data, browser)
-    await role.kvDestroyAll(previewSecret('browser'))
-    assert.equal(await mcp.kvRead(previewSecret('browser')), null)
-    assert.equal(logins.core, 1)
-  })
-  await checked(
-    'core role reads what a release writes with, and keeps the secrets of a preview',
-    async () => {
-      const env = await role.kvRead(variable)
-      assert.ok(env?.version === 2 && env.data.removed === content.removed)
-      assert.equal(siteEnvVarValueOf(env.data), null)
-      const owner = await role.kvRead('kv/platform/gitea-org-owner')
-      assert.ok(owner?.data.token === 'synthetic-owner')
-      assert.equal((await role.kvRead(accessPath('wp')))?.version, 2)
-      assert.deepEqual(
-        await role.kvWrite(previewSecret('wp'), { v: '1', secret: 'synthetic-3' }, { cas: 2 }),
-        { version: 3 },
-      )
-      assert.equal((await role.kvMetadata(previewSecret('wp')))?.currentVersion, 3)
-      await role.kvDestroyAll(previewSecret('wp'))
-      assert.equal(await role.kvRead(previewSecret('wp')), null)
-      assert.equal(await mcp.kvRead(previewSecret('wp')), null)
-      assert.equal((await role.health()).sealed, false)
-      assert.equal(logins.core, 1)
-    },
-  )
   const web = createVaultSecretStore({ addr: address, token: scopedTokens['sites-writer'] })
-  const second = `kv/sites/${content.siteId}/env/SECOND_API_KEY`
+  const second = `kv/workspaces/${content.workspaceId}/env/SECOND_API_KEY`
   // A version of the variable as core would ask for it (`?version=N`), outside the adapter.
   const versionOf = async (version) =>
     (
       await localVaultRequest(
-        { address, token: scopedTokens['core-release'] },
-        `kv/data/sites/${content.siteId}/env/SECOND_API_KEY?version=${version}`,
+        { address, token: scopedTokens['core-workspace-env'] },
+        `kv/data/workspaces/${content.workspaceId}/env/SECOND_API_KEY?version=${version}`,
       )
     ).status
   await checked(
@@ -1718,18 +1177,24 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     async () => {
       const keep = { maxVersions: 1 }
       assert.deepEqual(
-        await web.kvWrite(second, siteEnvVarSecret('synthetic-second-1'), { cas: 0, ...keep }),
+        await web.kvWrite(second, workspaceEnvVarSecret('synthetic-second-1'), {
+          cas: 0,
+          ...keep,
+        }),
         { version: 1 },
       )
       assert.deepEqual(
-        await web.kvWrite(second, siteEnvVarSecret('synthetic-second-2'), { cas: 1, ...keep }),
+        await web.kvWrite(second, workspaceEnvVarSecret('synthetic-second-2'), {
+          cas: 1,
+          ...keep,
+        }),
         { version: 2 },
       )
-      assert.equal(siteEnvVarValueOf((await role.kvRead(second)).data), 'synthetic-second-2')
+      assert.equal(workspaceEnvVarValueOf((await role.kvRead(second)).data), 'synthetic-second-2')
       assert.equal(await versionOf(1), 404)
       const metadata = await web.kvMetadata(second)
       assert.equal(metadata?.currentVersion, 2)
-      const tombstone = siteEnvVarTombstone(new Date())
+      const tombstone = workspaceEnvVarTombstone(new Date())
       assert.deepEqual(
         await web.kvWrite(second, tombstone, { cas: metadata.currentVersion, ...keep }),
         { version: 3 },
@@ -1737,13 +1202,14 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
       const removed = await role.kvRead(second)
       assert.ok(removed?.version === 3)
       assert.deepEqual(removed.data, tombstone)
-      assert.equal(siteEnvVarValueOf(removed.data), null)
+      assert.equal(workspaceEnvVarValueOf(removed.data), null)
       assert.equal(await versionOf(2), 404)
     },
   )
   await expectRejected(
     'web cannot keep a longer history of a variable',
-    () => web.kvWrite(second, siteEnvVarSecret('synthetic-second-3'), { cas: 3, maxVersions: 2 }),
+    () =>
+      web.kvWrite(second, workspaceEnvVarSecret('synthetic-second-3'), { cas: 3, maxVersions: 2 }),
     403,
   )
   await expectRejected('web cannot read a variable back', () => web.kvRead(second), 403)
@@ -1846,36 +1312,29 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
 
   const contentOnly = createVaultSecretStore({ addr: address, token: scopedTokens['mcp-content'] })
   await expectRejected(
-    'the content policy is refused the variables of a site',
-    () => contentOnly.kvRead(variable),
+    'the content policy is refused the variables of a workspace',
+    () => contentOnly.kvRead(content.variable),
     403,
   )
-  const releaseOnly = createVaultSecretStore({ addr: address, token: scopedTokens['core-release'] })
-  await checked('the release policy alone wraps, looks up and revokes', async () => {
-    const wrapped = await releaseOnly.wrap(attempt, 60)
-    assert.equal(
-      (await releaseOnly.lookupWrapping(wrapped.token))?.creationPath,
-      'sys/wrapping/wrap',
-    )
-    await releaseOnly.revokeAccessor(wrapped.accessor)
-    assert.equal(await releaseOnly.lookupWrapping(wrapped.token), null)
-  })
   for (const [name, store] of [
-    ['the import policy', importer],
     ['the content policy', contentOnly],
-    ['the writer of site access', web],
+    ['the writer of variables', web],
   ])
-    await expectRejected(`${name} cannot wrap`, () => store.wrap(attempt, 60), 403)
+    await expectRejected(
+      `${name} cannot wrap`,
+      () => store.wrap({ synthetic: 'synthetic-wrapping' }, 60),
+      403,
+    )
 
   // Last: a refusal drops the cached AppRole token, and the SecretID is already spent.
   await expectRejected(
-    'mcp role is refused the SSH access of the same site, not told that it is missing',
-    () => mcp.kvRead(`kv/sites/${content.siteId}/ssh`),
+    'mcp role is refused a variable of the same workspace, not told that it is missing',
+    () => mcp.kvRead(content.variable),
     403,
   )
   await expectRejected(
-    'core role is refused the browser access of the same site, not told that it is missing',
-    () => role.kvRead(accessPath('browser')),
+    'core role is refused the key of an MCP server of the same workspace',
+    () => role.kvRead(content.server),
     403,
   )
   return checks

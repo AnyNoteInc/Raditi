@@ -83,20 +83,13 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'subs/metadata/*': ['read'],
     },
     'subscriptions-admin': { 'subs/metadata/*': ['delete'], 'subs/destroy/*': ['update'] },
-    // Only the WordPress kind of site access: no ssh, ftp, git, db or browser, no write and no
-    // key management.
+    // No access of a site, no secret of a preview, no data key: projects are gone (plan 83).
     'mcp-content': {
-      'kv/data/sites/+/wp': ['read'],
       // The secret of an MCP server of a workspace's agent: read, and renewed tokens of a sign-in
       // written by CAS (docs/plan/81-mcp-server-credentials.md; plan 83, БП11).
       'kv/data/workspaces/+/mcp/*': ['read', 'update'],
-      // The secrets of a preview, never the variables of a site (plan 53, Р21, Р24).
-      'kv/data/previews/+/wp': ['read'],
-      'kv/data/previews/+/browser': ['read'],
       'kv/data/content-masks/*': ['create', 'read', 'update'],
       'kv/metadata/content-masks/*': ['delete'],
-      'transit/datakey/plaintext/ws-*': ['update'],
-      'transit/decrypt/ws-*': ['update'],
       // The key of the agent's web search, beside the keys of the model (spec §20).
       'subs/data/search/yandex': ['read'],
     },
@@ -104,11 +97,9 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'transit/datakey/plaintext/ws-*': ['update'],
       'transit/decrypt/ws-*': ['update'],
     },
-    // Site access and the variables of a site; of the metadata only the version for CAS and
-    // the limit of one version (plan 53, Р13; «Удалить проект», 25.10.2026).
+    // The variables of a workspace and the keys of its MCP servers; of the metadata only the
+    // version for CAS and the limit of one version (plan 83, БП4, БП11).
     'sites-writer': {
-      'kv/data/sites/*': ['create', 'update'],
-      'kv/metadata/sites/+/*': ['create', 'update', 'read'],
       'kv/data/workspaces/+/env/*': ['create', 'update'],
       'kv/metadata/workspaces/+/env/*': ['create', 'update', 'read'],
       'kv/data/workspaces/+/mcp/*': ['create', 'update'],
@@ -116,26 +107,6 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     },
     // The key itself, never a path under it (rotate, config, trim, soft-delete-restore).
     'workspace-provisioner': { 'transit/keys/+': ['update'] },
-    // The kinds a site is imported with, read-only: no wp or browser, no write, no metadata.
-    'core-site-import': {
-      'kv/data/sites/+/ftp': ['read'],
-      'kv/data/sites/+/ssh': ['read'],
-      'kv/data/sites/+/git': ['read'],
-      'kv/data/sites/+/db': ['read'],
-    },
-    // Releases and previews (plan 53, Р29, Р35): reads of what a release writes with, the
-    // secrets of a preview, and the three calls of a single-use wrapping — nothing that
-    // creates a token or a policy.
-    'core-release': {
-      'kv/data/sites/+/wp': ['read'],
-      'kv/data/sites/+/env/*': ['read'],
-      'kv/data/platform/gitea-org-owner': ['read'],
-      'kv/data/previews/*': ['create', 'read', 'update', 'delete'],
-      'kv/metadata/previews/*': ['read', 'update', 'list', 'delete'],
-      'sys/wrapping/wrap': ['update'],
-      'sys/wrapping/lookup': ['update'],
-      'auth/token/revoke-accessor': ['update'],
-    },
     // Variables of a workspace, read-only (plan 83, БП4).
     'core-workspace-env': { 'kv/data/workspaces/+/env/*': ['read'] },
   }
@@ -145,18 +116,14 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     'llm-subscriptions': ['subs'],
     'subscriptions-writer': ['subs'],
     'subscriptions-admin': ['subs'],
-    'mcp-content': ['kv', 'transit', 'subs'],
+    'mcp-content': ['kv', 'subs'],
     'core-transit': ['transit'],
     'sites-writer': ['kv'],
     'workspace-provisioner': ['transit'],
-    'core-site-import': ['kv'],
-    'core-release': ['kv', 'sys', 'auth'],
     'core-workspace-env': ['kv'],
   }
   // The only system and auth endpoints a policy may name.
-  const systemPaths = {
-    'core-release': ['sys/wrapping/wrap', 'sys/wrapping/lookup', 'auth/token/revoke-accessor'],
-  }
+  const systemPaths = {}
   assert.deepEqual([...policyNames].sort(), Object.keys(expected).sort())
   assert.deepEqual(Object.keys(allowedMounts).sort(), Object.keys(expected).sort())
   for (const name of policyNames) {
@@ -194,21 +161,14 @@ test('every policy grants exactly its scoped privileges and only on its own moun
   )
   assert.match(provisioner, /allowed_parameters\s*=\s*{\s*"type"\s*=\s*\["aes256-gcm96"\]\s*}/)
   assert.equal([...provisioner.matchAll(/allowed_parameters/g)].length, 1)
-  // web may set one thing of the metadata of a key of a site: that it keeps one version. Any
-  // other value or parameter — a longer history, cas_required, a deletion delay — is refused.
+  // web may set one thing of the metadata of a key of a workspace: that it keeps one version.
+  // Any other value or parameter — a longer history, cas_required, a deletion delay — is refused.
   const writer = await readFile(new URL('./policies/sites-writer.hcl', import.meta.url), 'utf8')
   assert.match(
     writer,
-    /path "kv\/metadata\/sites\/\+\/\*" {\s*capabilities = \[[^\]]+\]\s*allowed_parameters\s*=\s*{\s*"max_versions"\s*=\s*\["1"\]\s*}/,
+    /path "kv\/metadata\/workspaces\/\+\/env\/\*" {\s*capabilities = \[[^\]]+\]\s*allowed_parameters\s*=\s*{\s*"max_versions"\s*=\s*\["1"\]\s*}/,
   )
-  assert.equal([...writer.matchAll(/allowed_parameters/g)].length, 3)
-  // core may attach recovery metadata to a secret of a preview, never weaken its retention.
-  const release = await readFile(new URL('./policies/core-release.hcl', import.meta.url), 'utf8')
-  assert.match(
-    release,
-    /path "kv\/metadata\/previews\/\*" {\s*capabilities = \[[^\]]+\]\s*allowed_parameters\s*=\s*{\s*"custom_metadata"\s*=\s*\[\]\s*}/,
-  )
-  assert.equal([...release.matchAll(/allowed_parameters/g)].length, 1)
+  assert.equal([...writer.matchAll(/allowed_parameters/g)].length, 2)
 })
 
 test('a new local bootstrap creates the four mounts and all the policies', async () => {
@@ -235,7 +195,7 @@ test('a new local bootstrap creates the four mounts and all the policies', async
     configWrites.map(({ path, body }) => [path, body]),
     Object.entries(mounts).map(([name, config]) => [`${name}/config`, config]),
   )
-  assert.equal(policyNames.length, 11)
+  assert.equal(policyNames.length, 9)
   assert.deepEqual(
     mock.calls.filter(({ path }) => path.startsWith('sys/policies/acl/')).map(({ path }) => path),
     policyNames.map((name) => `sys/policies/acl/${name}`),
@@ -405,7 +365,7 @@ test('a mount that failed to enable stops the run and is enabled by the next one
 test('the summary names the mounts, counts the policies and says what a new mount has lost', () => {
   const all = ['turns', 'subs', 'kv', 'transit']
   assert.deepEqual(bootstrapSummary({ mounts: all, policies: [...policyNames], created: [] }), [
-    'Local OpenBao ready: turns/, subs/, kv/, transit/; 11 policies',
+    'Local OpenBao ready: turns/, subs/, kv/, transit/; 9 policies',
   ])
   const [, fresh] = bootstrapSummary({ mounts: all, policies: [...policyNames], created: all })
   assert.match(fresh, /^Created now: turns\/, subs\/, kv\/, transit\/\. /)
