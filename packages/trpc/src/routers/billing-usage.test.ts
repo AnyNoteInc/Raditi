@@ -204,7 +204,7 @@ const plan = {
   creditsPerWeek: null,
   maxSites: 3,
 }
-const noPage: UsageHistoryPageDto = { items: [], nextCursor: null }
+const noPage: UsageHistoryPageDto = { items: [], nextCursor: null, total: 0 }
 const entry = (patch: Partial<UsageHistoryPageDto['items'][number]> = {}) => ({
   id: randomUUID(),
   at: new Date('2026-10-03T08:00:00.000Z'),
@@ -281,7 +281,7 @@ const onTariff = (): UsageSummaryDto => ({
   gift: { left: 0, held: 0, granted: false },
   pack: { left: 10, held: 0 },
   totalLeft: 55,
-  history: { items: [entry()], nextCursor: null },
+  history: { items: [entry()], nextCursor: null, total: 1 },
   spendable: 55,
   spendableNow: 11,
   setAside: 23,
@@ -622,7 +622,11 @@ describe('billing.usageHistory', () => {
 
   it('reads the page after the cursor from the personal workspace', async () => {
     const { prisma } = fakeDb()
-    const page: UsageHistoryPageDto = { items: [entry(), entry()], nextCursor: randomUUID() }
+    const page: UsageHistoryPageDto = {
+      items: [entry(), entry()],
+      nextCursor: randomUUID(),
+      total: 5,
+    }
     history.mockResolvedValueOnce(page)
 
     expect(await createCaller(context(prisma)).billing.usageHistory({ cursor })).toEqual(page)
@@ -637,6 +641,22 @@ describe('billing.usageHistory', () => {
     await createCaller(context(prisma)).billing.usageHistory({ cursor, limit: 50 })
 
     expect(history).toHaveBeenCalledExactlyOnceWith(prisma, WORKSPACE, { cursor, limit: 50 })
+  })
+
+  it('passes the days of Moscow the lines are bounded by', async () => {
+    const { prisma } = fakeDb()
+    history.mockResolvedValueOnce(noPage)
+
+    await createCaller(context(prisma)).billing.usageHistory({
+      from: '2026-10-01',
+      to: '2026-10-04',
+    })
+
+    expect(history).toHaveBeenCalledExactlyOnceWith(prisma, WORKSPACE, {
+      from: '2026-10-01',
+      to: '2026-10-04',
+      limit: 20,
+    })
   })
 
   it('gives an empty page to a user without a workspace and reads no further', async () => {
@@ -655,6 +675,8 @@ describe('billing.usageHistory', () => {
     { cursor, limit: 2.5 },
     { cursor, workspaceId: WORKSPACE },
     { cursor, userId: randomUUID() },
+    { from: '2026-10-05', to: '2026-10-04' },
+    { from: '04.10.2026' },
   ])(
     'rejects a query that is not a cursor and a size, or names whose history it is: %o',
     async (input) => {
@@ -670,7 +692,7 @@ describe('billing.usageHistory', () => {
   it('does not show a page its schema does not describe', async () => {
     const { prisma } = fakeDb()
     // A charged task that does not say what it was charged.
-    history.mockResolvedValueOnce({ items: [entry({ credits: null })], nextCursor: null })
+    history.mockResolvedValueOnce({ items: [entry({ credits: null })], nextCursor: null, total: 1 })
 
     await expect(
       createCaller(context(prisma)).billing.usageHistory({ cursor }),

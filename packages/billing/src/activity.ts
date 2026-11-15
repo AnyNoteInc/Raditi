@@ -15,11 +15,15 @@ import { z } from 'zod'
 
 export const ACTIVITY_TIME_ZONE = 'Europe/Moscow'
 
-/** The spans the page offers: a week and a month. */
-export const usageActivitySpans = [7, 30] as const
+/** The spans the page reads: a week and a month of credits, a year of actions. */
+export const usageActivitySpans = [7, 30, 365] as const
 
 export const usageActivityQuerySchema = z.strictObject({
-  days: z.union([z.literal(usageActivitySpans[0]), z.literal(usageActivitySpans[1])]),
+  days: z.union([
+    z.literal(usageActivitySpans[0]),
+    z.literal(usageActivitySpans[1]),
+    z.literal(usageActivitySpans[2]),
+  ]),
 })
 export type UsageActivityQuery = z.infer<typeof usageActivityQuerySchema>
 

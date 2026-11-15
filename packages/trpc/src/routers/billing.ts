@@ -170,7 +170,7 @@ const usageOutput = z.intersection(
   }),
 )
 
-const noHistory: UsageHistoryPageDto = { items: [], nextCursor: null }
+const noHistory: UsageHistoryPageDto = { items: [], nextCursor: null, total: 0 }
 
 /** The days of a span in Moscow, oldest first, with nothing on them. */
 function emptyActivity(days: number, now: Date) {

@@ -442,3 +442,8 @@ export function taskNote(outcome: UsageOutcome, status: string): string | null {
   if (status === 'rolled_back') return 'Вернули сайт как было'
   return null
 }
+
+/** «1–20 из 87»: which lines of the history the page shows. */
+export function historyRange(start: number, count: number, total: number): string {
+  return `${formatCount(start + 1)}–${formatCount(start + count)} из ${formatCount(total)}`
+}
