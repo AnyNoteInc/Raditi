@@ -59,6 +59,7 @@ vi.mock('@repo/trpc', async (importOriginal) => {
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => null }))
 vi.mock('@/server/chat-services', () => ({ chatServices: () => null }))
 vi.mock('@/server/site-connections', () => ({ siteConnections: () => null }))
+vi.mock('@/server/mcp-servers', () => ({ mcpServerServices: () => null }))
 
 const { POST } = await import('./route')
 

@@ -1,5 +1,5 @@
 import { prisma } from '@repo/db'
-import { handleTelegramUpdate } from '@repo/trpc'
+import { handleTelegramTopicGone, handleTelegramUpdate } from '@repo/trpc'
 
 import { env } from '@/env'
 import { chatServices } from '@/server/chat-services'
@@ -22,5 +22,6 @@ export function POST(request: Request): Promise<Response> {
         update,
       )
     },
+    topicGone: (place) => handleTelegramTopicGone({ db: prisma }, place),
   })
 }

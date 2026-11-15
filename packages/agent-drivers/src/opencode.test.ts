@@ -274,6 +274,47 @@ describe('OpenCode driver: prepared files and argv', () => {
     expect(file(run, 'run.mjs')).toContain('"internet":true')
   })
 
+  it('sends a server with authorization through the relay, with a pipe of the MCP token each', async () => {
+    const skills: TurnSkill[] = [
+      { name: 'menu', kind: 'relayed' },
+      { name: 'docs', kind: 'remote', url: 'https://docs.example.org/mcp' },
+      { name: 'crm', kind: 'relayed' },
+    ]
+    const run = await driver.prepare({
+      ...context,
+      egressProxy: 'http://sandbox-gw:3128',
+      internet: true,
+      skills,
+    })
+    const value = config(run)
+    const servers = value.mcp as Record<string, Record<string, unknown>>
+    // The relay's path of the role mcp on the gateway: where the server is and its key never
+    // reach the sandbox.
+    expect(servers.menu).toEqual({
+      type: 'remote',
+      url: 'http://sandbox-gw:8080/mcp/skill/menu',
+      enabled: true,
+      oauth: false,
+      timeout: 60_000,
+      headers: { Authorization: `Bearer {file:${SANDBOX_SECRETS_DIR}/mcp-skill.0}` },
+    })
+    expect(servers.crm?.headers).toEqual({
+      Authorization: `Bearer {file:${SANDBOX_SECRETS_DIR}/mcp-skill.1}`,
+    })
+    expect(servers.docs).not.toHaveProperty('headers')
+    expect(value.permission).toMatchObject({ 'menu_*': 'allow', 'crm_*': 'allow' })
+    expect(substitutions(file(run, '.config/opencode/opencode.json')).sort()).toEqual([
+      `{file:${SANDBOX_SECRETS_DIR}/llm}`,
+      `{file:${SANDBOX_SECRETS_DIR}/mcp-skill.0}`,
+      `{file:${SANDBOX_SECRETS_DIR}/mcp-skill.1}`,
+      `{file:${SANDBOX_SECRETS_DIR}/mcp}`,
+    ])
+    // The wrapper makes those pipes from the MCP token; the host stages no more files.
+    expect(file(run, 'run.mjs')).toContain(
+      `"mcpCopies":["${SANDBOX_SECRETS_DIR}/mcp-skill.0","${SANDBOX_SECRETS_DIR}/mcp-skill.1"]`,
+    )
+  })
+
   it('keeps the fetch tool and every skill off without the open internet', async () => {
     const value = config(
       await driver.prepare({ ...context, egressProxy: 'http://sandbox-gw:3128' }),
@@ -778,6 +819,7 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
       envValues?: Record<string, string>
       egressProxy?: string
       internet?: true
+      skills?: TurnSkill[]
       action?: 'compact'
     } = {},
     behaviour: Behaviour = {},
@@ -793,6 +835,7 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
       ...(turn.envValues ? { envValues: turn.envValues } : {}),
       ...(turn.egressProxy ? { egressProxy: turn.egressProxy } : {}),
       ...(turn.internet ? { internet: true as const } : {}),
+      ...(turn.skills ? { skills: turn.skills } : {}),
     })
     driver.command(run, {
       prompt: turn.prompt ?? input.prompt,
@@ -1131,6 +1174,44 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       .map((line) => (JSON.parse(line) as { text: string }).text)
     // Never a piece of the value at the end: core masks it only whole.
     expect(drafts).toEqual(['Ключ ', 'Ключ secretvalue-1234 задан.'])
+  })
+
+  it('hands the MCP token once more through a pipe of its own to each relayed server', async () => {
+    mcpAnswer = accept
+    const result = await launch(
+      {
+        egressProxy: 'http://sandbox-gw:3128',
+        internet: true,
+        skills: [
+          { name: 'menu', kind: 'relayed' },
+          { name: 'crm', kind: 'relayed' },
+        ],
+      },
+      { run: { readTwice: true } },
+    )
+    expect(result.code).toBe(0)
+    const [cli] = result.records as [CliRecord]
+    // shell-env.sh of the proxy stands there too; the pipes are what matter here.
+    const pipes = cli.secrets.filter((entry) => entry.fifo)
+    expect(pipes.toSorted((a, b) => a.name.localeCompare(b.name))).toEqual([
+      { name: 'llm', fifo: true },
+      { name: 'mcp', fifo: true },
+      { name: 'mcp-skill.0', fifo: true },
+      { name: 'mcp-skill.1', fifo: true },
+    ])
+    expect(cli.delivered).toEqual({
+      llm: context.llm.apiKey,
+      mcp: context.mcp.token,
+      'mcp-skill.0': context.mcp.token,
+      'mcp-skill.1': context.mcp.token,
+    })
+    expect(cli.again).toEqual({
+      llm: 'ERROR ENOENT',
+      mcp: 'ERROR ENOENT',
+      'mcp-skill.0': 'ERROR ENOENT',
+      'mcp-skill.1': 'ERROR ENOENT',
+    })
+    expect(result.left.secrets).toEqual([])
   })
 
   it('hands each credential to the CLI once, through a pipe, in an environment built from scratch', async () => {

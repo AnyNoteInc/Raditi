@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  agentSkillAuthKinds,
+  agentSkillAuthStates,
   attachmentStatuses,
   browserCheckpointStates,
   browserControllers,
@@ -34,6 +36,8 @@ import {
   versionBumps,
 } from '@repo/domain'
 import {
+  AgentSkillAuthKind,
+  AgentSkillAuthState,
   AttachmentStatus,
   BillingUnit,
   BrowserCheckpointState,
@@ -170,5 +174,10 @@ describe('database enums match the domain', () => {
     expect(Object.values(BrowserSessionStatus)).toEqual([...browserSessionStatuses])
     expect(Object.values(BrowserController)).toEqual([...browserControllers])
     expect(Object.values(BrowserCheckpointState)).toEqual([...browserCheckpointStates])
+  })
+
+  it('AgentSkillAuthKind and AgentSkillAuthState match the authorization of an MCP server', () => {
+    expect(Object.values(AgentSkillAuthKind)).toEqual([...agentSkillAuthKinds])
+    expect(Object.values(AgentSkillAuthState)).toEqual([...agentSkillAuthStates])
   })
 })

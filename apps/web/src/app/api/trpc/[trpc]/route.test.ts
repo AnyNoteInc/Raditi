@@ -15,6 +15,7 @@ const stand = vi.hoisted(() => ({
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => stand.shop }))
 vi.mock('@/server/chat-services', () => ({ chatServices: () => stand.chat }))
 vi.mock('@/server/site-connections', () => ({ siteConnections: () => stand.connections }))
+vi.mock('@/server/mcp-servers', () => ({ mcpServerServices: () => null }))
 vi.mock('@repo/trpc', async () => {
   const { initTRPC, TRPCError } = await import('@trpc/server')
   const t = initTRPC.create()
@@ -89,6 +90,7 @@ describe('tRPC route', () => {
         billing: stand.shop,
         chat: stand.chat,
         siteConnections: stand.connections,
+        mcpServers: null,
       },
     ])
     const [context] = stand.contexts as [
@@ -110,6 +112,7 @@ describe('tRPC route', () => {
         billing: null,
         chat: stand.chat,
         siteConnections: stand.connections,
+        mcpServers: null,
       },
     ])
   })
@@ -125,6 +128,7 @@ describe('tRPC route', () => {
         billing: stand.shop,
         chat: stand.chat,
         siteConnections: null,
+        mcpServers: null,
       },
     ])
   })

@@ -600,6 +600,10 @@ export async function verifyAgentContentTurns(ctx) {
     })
   }
 
+  // A server with a key (docs/plan/81-mcp-server-credentials.md): the CLI calls it through the
+  // relay of the role mcp, which adds the owner's header from Vault. No journal, no snapshot.
+  if (ctx.relayed) await relayedTurn(ctx.relayed)
+
   // One snapshot object per edit: neither the repeated write nor a refused call left another.
   setStage('snapshot objects in S3')
   const listed = await s3Client.send(
@@ -623,6 +627,65 @@ export async function verifyAgentContentTurns(ctx) {
     'Expected one journal row per edited page',
   )
   passed('S3 holds exactly one snapshot object and the journal one row per edit')
+
+  /**
+   * A turn with a server the owner added with a key: the CLI knows only the relay's path and its
+   * MCP token; the server gets the owner's header and never the token; the model gets the
+   * server's answer with the key taken out of it.
+   */
+  async function relayedTurn(relayed) {
+    const driver = CONTENT_DRIVERS[0]
+    const label = `${driver} relayed MCP server`
+    setStage(label)
+    const turn = await openTurn(driver, 'Read the synthetic menu through the relayed server.')
+    turn.plan = {
+      ...turn.plan,
+      context: {
+        ...turn.plan.context,
+        egressProxy: 'http://sandbox-gw:3128',
+        internet: true,
+        skills: [{ name: relayed.name, kind: 'relayed' }],
+      },
+    }
+    await control('zai', {
+      scenario: {
+        scenario: 'tools',
+        calls: [{ name: `${relayed.name}_get_menu`, arguments: {} }],
+        text: JSON.stringify(resultFor('Synthetic menu read through the relay.', 'none')),
+      },
+    })
+    const before = relayed.requests().length
+    const outcome = await runCli(turn)
+    assert.equal(outcome.code, 0, `${label}: the CLI failed`)
+    const seen = relayed.requests().slice(before)
+    assert.ok(
+      seen.some((request) => request.rpc === 'tools/call' && request.tool === 'get_menu'),
+      `${label}: the tool of the server was not called`,
+    )
+    assert.ok(
+      seen.length > 0 && seen.every((request) => request.key === relayed.secret),
+      `${label}: a request reached the server without the owner's key`,
+    )
+    assert.ok(
+      seen.every((request) => request.authorization === undefined),
+      `${label}: the turn's MCP token reached the server`,
+    )
+    const provider = JSON.stringify(outcome.provider)
+    assert.ok(
+      provider.includes(relayed.marker),
+      `${label}: the answer of the server never reached the model`,
+    )
+    for (const [name, text] of [
+      ['the provider', provider],
+      ['CLI events', outcome.stdout],
+    ])
+      assert.equal(text.includes(relayed.secret), false, `${label}: the key reached ${name}`)
+    assert.ok(provider.includes('[скрыто]'), `${label}: the key the server repeated was not masked`)
+    await closeTurn(turn)
+    passed(
+      `${label}: the CLI called /mcp/skill/${relayed.name} with its MCP token; the server got the owner's key from Vault and never the token; the model got the answer with the key masked`,
+    )
+  }
 
   /**
    * A call the platform must refuse. How many requests reach the role is the CLI's own: the

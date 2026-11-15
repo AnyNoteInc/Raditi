@@ -332,6 +332,46 @@ test('only literal allowlisted paths and methods reach upstream', async (t) => {
   assert.equal(received.length, 0)
 })
 
+test('the relay of an MCP server goes to the role mcp by one name and nothing more', async (t) => {
+  const received = []
+  const { port } = await fixture(t, (req, res) => {
+    received.push({ url: req.url, method: req.method, authorization: req.headers.authorization })
+    req.resume()
+    res.end('relayed')
+  })
+  for (const method of ['GET', 'POST', 'DELETE']) {
+    const body = '{"jsonrpc":"2.0"}'
+    const result = await call(port, '/mcp/skill/menu-1', {
+      method,
+      body,
+      headers: {
+        authorization: 'Bearer synthetic-mcp-token',
+        'content-length': String(Buffer.byteLength(body)),
+      },
+    })
+    assert.equal(result.status, 200, method)
+  }
+  assert.deepEqual(
+    received.map(({ url, method }) => `${method} ${url}`),
+    ['GET /mcp/skill/menu-1', 'POST /mcp/skill/menu-1', 'DELETE /mcp/skill/menu-1'],
+  )
+  assert.equal(received[0].authorization, 'Bearer synthetic-mcp-token')
+  for (const path of [
+    '/mcp/skill/',
+    '/mcp/skill/Menu',
+    '/mcp/skill/menu/tools',
+    '/mcp/skill/menu?x=1',
+    '/mcp/skill/../mcp',
+    '/mcp/skill/%6denu',
+    '/mcp/skill/-menu',
+    `/mcp/skill/${'a'.repeat(33)}`,
+    '/mcp/skills/menu',
+  ])
+    assert.equal((await call(port, path)).status, 403, path)
+  assert.equal((await call(port, '/mcp/skill/menu', { method: 'PUT' })).status, 403)
+  assert.equal(received.length, 3)
+})
+
 test('route groups remain isolated even when both origins are configured', async (t) => {
   for (const routes of [[], ['llm'], ['mcp']]) {
     await t.test(`routes=${routes.join(',') || 'none'}`, async (subtest) => {

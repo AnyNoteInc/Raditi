@@ -354,6 +354,10 @@ export const queueText = Object.freeze({
 /** «Изменить» under the client's last message (docs/plan/75-chat-input-output.md, ВВ25). */
 export const messageEditText = Object.freeze({
   edit: 'Изменить',
+  label: 'Изменить сообщение',
+  hint: 'Прежний ответ агента на это сообщение отменится, и агент ответит на новый текст.',
+  cancel: 'Отмена',
+  send: 'Отправить',
 })
 
 /** «Скопировать текст» of a message (owner's request of 14.11.2026). */

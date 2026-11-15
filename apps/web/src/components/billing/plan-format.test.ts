@@ -1258,12 +1258,12 @@ describe('the documents of the web app', () => {
     expect(design).toContain('Отменить правку')
   })
 
-  // The slider of the landing counts tasks, and the calculator turns them into credits itself:
-  // the figure above the slider is a count of tasks, the small line under the sum a price of
-  // one task. «Число кредитов» and «цена одного кредита» are that figure and that line as they
-  // were while the slider counted the unit; a count of credits the pages do show is named for
-  // what it is — «остаток кредитов», the limits of a tariff.
-  it('call the figure of the landing`s slider a count of tasks, in every place that names it', () => {
+  // The plan cards of the landing count tasks only as «в среднем около N задач» and name the price
+  // of a small edit in rubles; the landing's calculator, whose figure and line the documents once
+  // described, is gone. «Число кредитов» and «цена одного кредита» are the old names of what it
+  // showed while it counted the unit; a count of credits the pages do show is named for what it
+  // is — «остаток кредитов», the limits of a tariff.
+  it('never call what the tariff cards show a count of credits or a price of a credit', () => {
     const app = fileURLToPath(new URL('../../../', import.meta.url))
     const design = readFileSync(`${app}DESIGN.md`, 'utf8')
     const product = readFileSync(`${app}PRODUCT.md`, 'utf8')
@@ -1275,8 +1275,8 @@ describe('the documents of the web app', () => {
     )
 
     expect(ofCredits).toEqual([])
-    // And the check reads the file it means to: the figure and the line are still described.
-    expect(design).toMatch(/число задач над ползунком/)
-    expect(design).toMatch(/цена одной задачи/)
+    // And the check reads the files it means to: the cards are still described as they are.
+    expect(product).toContain('в среднем около N задач')
+    expect(design).toContain('метку «Для вас»')
   })
 })

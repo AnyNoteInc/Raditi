@@ -70,10 +70,14 @@ function pagesOf(data: Uint8Array): Page[] | null {
   return pages
 }
 
-/** A copy of the page with its sequence number, flags and checksum set. */
-function rewrite(page: Page, sequence: number, last: boolean): Uint8Array {
+/**
+ * A copy of the page with its sequence number, flags and checksum set; an audio page's granule
+ * position moved back by `offset`, so every piece starts at zero and lasts what it holds.
+ */
+function rewrite(page: Page, sequence: number, last: boolean, offset = 0n): Uint8Array {
   const out = new Uint8Array(page.bytes)
   const view = new DataView(out.buffer)
+  if (offset > 0n && page.granule > 0n) view.setBigInt64(6, page.granule - offset, true)
   out[5] = (page.headerType & ~0x06) | (last ? 0x04 : 0) | (sequence === 0 ? 0x02 : 0)
   view.setUint32(18, sequence, true)
   view.setUint32(22, crcOf(out), true)
@@ -115,9 +119,13 @@ export function splitOggOpus(data: Uint8Array, seconds = VOICE_PIECE_SECONDS): U
   }
   if (group.length > 0) groups.push(group)
 
-  return groups.map((pieces) => {
+  return groups.map((pieces, group) => {
     const all = [...headers, ...pieces]
-    const parts = all.map((page, index) => rewrite(page, index, index === all.length - 1))
+    // Where this piece starts: the end of the one before it.
+    const offset = group === 0 ? 0n : groups[group - 1]!.at(-1)!.granule
+    const parts = all.map((page, index) =>
+      rewrite(page, index, index === all.length - 1, index < headers.length ? 0n : offset),
+    )
     const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0))
     let at = 0
     for (const part of parts) {

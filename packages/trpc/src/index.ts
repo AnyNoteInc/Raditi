@@ -29,8 +29,15 @@ export { readSiteBackupDownload } from './services/site-history.ts'
 export { readChatNotification } from './services/notifications.ts'
 // The runs of scheduled tasks, handed by core to web (docs/plan/82-scheduled-tasks.md, §4.3).
 export { startScheduledRun } from './services/schedule/runs.ts'
+export type {
+  McpServerCheck,
+  McpServerProbe,
+  McpServerServices,
+} from './services/mcp-server-auth.ts'
+export { checkSkillSignIn, connectSignedInServer } from './services/site-agent-skills.ts'
 // The updates of the bot of the chat in Telegram, handed by core to web (docs/plan/80-telegram.md).
 export {
+  handleTelegramTopicGone,
   handleTelegramUpdate,
   type IntakeAnswer,
   type TelegramIntakeDeps,

@@ -732,6 +732,7 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     webPushPublicKey: null,
     // Nor published pages (docs/plan/69-pages.md) nor the pages of chats (docs/plan/67): off there.
     pageViews: null,
+    mcpServerProbe: { refusedSubnets: [], allowLoopback: false },
     pages: null,
     // Nor scheduled tasks (docs/plan/82-scheduled-tasks.md): core has no intake there.
     scheduleIntakeSecret: null,

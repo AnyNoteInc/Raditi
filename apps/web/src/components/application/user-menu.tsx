@@ -14,6 +14,7 @@ import Link from 'next/link'
 import { useId, useState, useTransition } from 'react'
 
 import { signOut } from '@/app/(protected)/app/actions'
+import { PLANS_PAGE, PlansDialog } from '@/components/billing/plans-dialog'
 import { hardNavigate } from '@/lib/hard-navigate'
 
 import { AppIcon } from './app-icon'
@@ -47,15 +48,25 @@ const menuPosition = {
 export function UserMenu({
   user,
   placement = 'toolbar',
+  landing = false,
 }: {
   user: ApplicationUser
   placement?: Placement
+  /**
+   * The menu of the landing's header. The landing has no rail, so the menu leads to the chats
+   * first; and no tRPC provider, so «Посмотреть тарифы» leads to the page
+   * «Тарифы» instead of opening the dialog.
+   */
+  landing?: boolean
 }) {
   const id = useId()
   const name = applicationUserName(user) || 'Мой аккаунт'
   const panel = placement === 'panel'
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [pending, startTransition] = useTransition()
+  const [plansOpen, setPlansOpen] = useState(false)
+  const [plansMounted, setPlansMounted] = useState(false)
+  if (plansOpen && !plansMounted) setPlansMounted(true)
   const close = () => setAnchor(null)
   const leave = () =>
     startTransition(async () => {
@@ -146,27 +157,26 @@ export function UserMenu({
           },
         }}
       >
-        <Box sx={{ px: 2, py: 1, maxWidth: 300 }}>
-          <Typography noWrap variant="body2" sx={{ fontWeight: 600 }}>
-            {name}
-          </Typography>
-          <Typography noWrap variant="caption" color="text.secondary">
-            {user.email}
-          </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 2, py: 1, maxWidth: 300 }}>
+          <UserAvatar user={user} size={36} />
+          <Box sx={{ minWidth: 0 }}>
+            <Typography noWrap variant="body2" sx={{ fontWeight: 600 }}>
+              {name}
+            </Typography>
+            <Typography noWrap variant="caption" color="text.secondary" component="p">
+              {user.email}
+            </Typography>
+          </Box>
         </Box>
         <Divider />
-        <MenuItem component={Link} href="/chats" onClick={close} sx={{ minHeight: 44 }}>
-          <ListItemIcon>
-            <AppIcon name="chat" size={18} />
-          </ListItemIcon>
-          <ListItemText>Чаты</ListItemText>
-        </MenuItem>
-        <MenuItem component={Link} href="/projects" onClick={close} sx={{ minHeight: 44 }}>
-          <ListItemIcon>
-            <AppIcon name="projects" size={18} />
-          </ListItemIcon>
-          <ListItemText>Проекты</ListItemText>
-        </MenuItem>
+        {landing ? (
+          <MenuItem component={Link} href="/chats" onClick={close} sx={{ minHeight: 44 }}>
+            <ListItemIcon>
+              <AppIcon name="chat" size={18} />
+            </ListItemIcon>
+            <ListItemText>Чаты</ListItemText>
+          </MenuItem>
+        ) : null}
         <MenuItem component={Link} href="/profile" onClick={close} sx={{ minHeight: 44 }}>
           <ListItemIcon>
             <AppIcon name="profile" size={18} />
@@ -179,6 +189,35 @@ export function UserMenu({
           </ListItemIcon>
           <ListItemText>Настройки</ListItemText>
         </MenuItem>
+        <MenuItem component={Link} href="/settings/usage" onClick={close} sx={{ minHeight: 44 }}>
+          <ListItemIcon>
+            <AppIcon name="usage" size={18} />
+          </ListItemIcon>
+          <ListItemText>Использование</ListItemText>
+        </MenuItem>
+        <Divider />
+        {!landing ? (
+          <MenuItem
+            onClick={() => {
+              close()
+              setPlansOpen(true)
+            }}
+            aria-haspopup="dialog"
+            sx={{ minHeight: 44 }}
+          >
+            <ListItemIcon>
+              <AppIcon name="plans" size={18} />
+            </ListItemIcon>
+            <ListItemText>Посмотреть тарифы</ListItemText>
+          </MenuItem>
+        ) : (
+          <MenuItem component={Link} href={PLANS_PAGE} onClick={close} sx={{ minHeight: 44 }}>
+            <ListItemIcon>
+              <AppIcon name="plans" size={18} />
+            </ListItemIcon>
+            <ListItemText>Посмотреть тарифы</ListItemText>
+          </MenuItem>
+        )}
         <Divider />
         <MenuItem onClick={leave} disabled={pending} sx={{ minHeight: 44 }}>
           <ListItemIcon>
@@ -191,6 +230,8 @@ export function UserMenu({
           <ListItemText>{pending ? 'Выходим…' : 'Выход'}</ListItemText>
         </MenuItem>
       </Menu>
+      {/* Mounted once opened: its queries need the tRPC provider of the cabinet. */}
+      {plansMounted ? <PlansDialog open={plansOpen} onClose={() => setPlansOpen(false)} /> : null}
     </>
   )
 }

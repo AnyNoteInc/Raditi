@@ -140,7 +140,9 @@ export async function readPassFacts(
           stack: true,
           url: true,
           agentNotes: true,
-          agentSkills: { select: { name: true, url: true, enabled: true } },
+          agentSkills: {
+            select: { name: true, url: true, enabled: true, authKind: true, authState: true },
+          },
         },
       },
     },

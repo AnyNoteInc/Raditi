@@ -18,7 +18,13 @@ import {
 } from '@repo/domain'
 import { ConfigError } from '@repo/app-bootstrap'
 import { browserWorkerOrigin } from '@repo/browser-link'
-import { isLoopbackAddress, isPrivateAddress, ipLiteral } from '@repo/ip-address'
+import {
+  isLoopbackAddress,
+  isPrivateAddress,
+  ipLiteral,
+  parseRefusedSubnets,
+  type RefusedSubnet,
+} from '@repo/ip-address'
 import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
 import { z } from 'zod'
@@ -127,6 +133,18 @@ export interface McpConfig {
    * the agent. null — no pages: the family `pages` is not offered.
    */
   pages: PagesAddress | null
+  /**
+   * The relay of MCP servers with authorization (docs/plan/81-mcp-server-credentials.md): the
+   * platform's subnets it never connects to besides the non-public ones, and — outside
+   * production, for tests and stands alone — whether a loopback server is taken. A configuration
+   * a stand builds by hand may leave it out: no extra subnets, no loopback.
+   */
+  skillRelay?: {
+    refusedSubnets: RefusedSubnet[]
+    allowLoopback: boolean
+    /** MCP_SKILL_RELAY_HOSTS: names of stands' servers on loopback, never in production. */
+    hosts?: Record<string, { address: string; port: number }>
+  }
 }
 
 /**
@@ -205,6 +223,42 @@ const ownEnvSchema = z.object({
   // Published pages (docs/plan/69-pages.md): the address the agent is given.
   PAGES_BASE_DOMAIN: envVar(z.string().optional()),
   PAGES_PUBLIC_PORT: envVar(z.coerce.number().int().min(1).max(65_535).optional()),
+  // The relay of MCP servers (plan 81): the platform's subnets, as the egress proxies read them.
+  SANDBOX_EGRESS_REFUSED_SUBNETS: envVar(
+    z
+      .string()
+      .refine(
+        (text) => parseRefusedSubnets(text) !== null,
+        'must be CIDR subnets separated by commas',
+      )
+      .optional(),
+  ),
+  MCP_SKILL_RELAY_LOOPBACK: envVar(
+    z.enum(['on', 'off'], { error: 'must be on or off' }).default('off'),
+  ),
+  // Stands alone: {"name": "127.0.0.1:port"} — a server of the stand without DNS.
+  MCP_SKILL_RELAY_HOSTS: envVar(
+    z
+      .string()
+      .transform((text, ctx) => {
+        try {
+          const parsed: unknown = JSON.parse(text)
+          const entries = Object.entries(parsed as Record<string, unknown>)
+          const hosts: Record<string, { address: string; port: number }> = {}
+          for (const [name, value] of entries) {
+            const match =
+              typeof value === 'string' ? /^(127\.0\.0\.1|\[::1\]):(\d{1,5})$/.exec(value) : null
+            if (!/^[a-z0-9.-]{1,253}$/.test(name) || !match) throw new Error('entry')
+            hosts[name] = { address: match[1]!.replace(/^\[(.*)\]$/, '$1'), port: Number(match[2]) }
+          }
+          return hosts
+        } catch {
+          ctx.addIssue({ code: 'custom', message: 'must be JSON of names to 127.0.0.1:<port>' })
+          return z.NEVER
+        }
+      })
+      .optional(),
+  ),
   BROWSER_SESSION_MAX_HOURS: envVar(
     z.coerce
       .number()
@@ -324,6 +378,22 @@ export function loadMcpConfig(env: Env): McpConfig {
         'BROWSER_WORKER_URL: plain http only to a private or loopback IP address in production (spec §19)',
       )
   }
+  // The relay of MCP servers must know the platform's own public addresses (plan 81): without
+  // them a server named by an owner could be the platform itself.
+  if (production && (own.SANDBOX_EGRESS_REFUSED_SUBNETS ?? '').trim() === '')
+    problems.push(
+      'SANDBOX_EGRESS_REFUSED_SUBNETS: required in production (the platform subnets the relay of MCP servers never reaches)',
+    )
+  // A loopback MCP server is a test's or a stand's: production relays to the internet alone.
+  if (production && own.MCP_SKILL_RELAY_LOOPBACK === 'on')
+    problems.push('MCP_SKILL_RELAY_LOOPBACK: only off is allowed in production')
+  if (
+    own.MCP_SKILL_RELAY_HOSTS !== undefined &&
+    (production || own.MCP_SKILL_RELAY_LOOPBACK !== 'on')
+  )
+    problems.push(
+      'MCP_SKILL_RELAY_HOSTS: only outside production, with MCP_SKILL_RELAY_LOOPBACK=on',
+    )
   if (problems.length > 0 || db === undefined || vault === undefined || allowedHosts === undefined)
     throw new ConfigError(problems, 'mcp')
 
@@ -352,5 +422,10 @@ export function loadMcpConfig(env: Env): McpConfig {
     previewUpstreamHost: own.PREVIEW_UPSTREAM_HOST,
     preview,
     pages,
+    skillRelay: {
+      refusedSubnets: parseRefusedSubnets(own.SANDBOX_EGRESS_REFUSED_SUBNETS ?? '') ?? [],
+      allowLoopback: own.MCP_SKILL_RELAY_LOOPBACK === 'on',
+      ...(own.MCP_SKILL_RELAY_HOSTS ? { hosts: own.MCP_SKILL_RELAY_HOSTS } : {}),
+    },
   }
 }

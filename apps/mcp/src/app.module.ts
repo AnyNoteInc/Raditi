@@ -15,6 +15,7 @@ import { ScheduleModule } from './schedule/schedule.module.ts'
 import { SearchModule } from './search/search.module.ts'
 import { ServerModule } from './server/server.module.ts'
 import { SiteInfoModule } from './site-info/site-info.module.ts'
+import { SkillRelayModule } from './skill-relay/skill-relay.module.ts'
 import { StorageModule } from './storage/storage.module.ts'
 import { WebModule } from './web/web.module.ts'
 
@@ -87,6 +88,7 @@ export class AppModule {
         ...(content || browser ? [StorageModule] : []),
         McpHealthModule,
         ServerModule,
+        SkillRelayModule,
         SiteInfoModule,
         ...(content
           ? [

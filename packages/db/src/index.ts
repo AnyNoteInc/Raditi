@@ -38,8 +38,10 @@ export {
 export { taskHasProductionWrites } from './task-production-writes.ts'
 export {
   enqueueTelegramDeliver,
+  enqueueTelegramProgress,
   enqueueTelegramSend,
   enqueueTelegramTopic,
+  forgetTelegramChat,
 } from './telegram-outbox.ts'
 export {
   browserClosedSiteStatuses,
@@ -294,6 +296,8 @@ export {
 
 export { Prisma, PrismaClient } from './generated/prisma/client.ts'
 export {
+  AgentSkillAuthKind,
+  AgentSkillAuthState,
   AttachmentStatus,
   AuditActorType,
   BillingUnit,

@@ -535,6 +535,21 @@ enum CredentialKind {
   llm_provider
   subscription
   db
+  mcp_server
+}
+
+/// Must equal agentSkillAuthKinds in @repo/domain.
+enum AgentSkillAuthKind {
+  none
+  header
+  oauth
+}
+
+/// Must equal agentSkillAuthStates in @repo/domain.
+enum AgentSkillAuthState {
+  ok
+  needs_login
+  failed
 }
 
 // ─── Chat and tasks (spec §7, §8, §11) ────────────────────────────────────────
@@ -550,6 +565,10 @@ model ChatSession {
   externalChatId  String?  @map("external_chat_id") @db.VarChar(64)
   /// Telegram forum topic (message_thread_id).
   telegramTopicId Int?     @map("telegram_topic_id")
+  /// The message of the work of the agent in Telegram while a pass goes on (docs/plan/80-telegram.md);
+  /// `telegramProgressChain` — the run that edits it: a newer run takes over, an older one stops.
+  telegramProgressId    Int?    @map("telegram_progress_id")
+  telegramProgressChain String? @map("telegram_progress_chain") @db.Uuid
   agentDriverId   String?  @map("agent_driver_id") @db.VarChar(32)
   lastTurnId      String?  @map("last_turn_id") @db.Uuid
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -2792,12 +2811,24 @@ model SiteEnvVar {
 /// address of a remote MCP server (`parseAgentSkillUrl`), nothing secret. CHECKs:
 /// site_agent_skills_name_check, site_agent_skills_url_check.
 model SiteAgentSkill {
-  siteId    String   @map("site_id") @db.Uuid
-  name      String   @db.VarChar(32)
-  url       String?  @db.VarChar(512)
-  enabled   Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  siteId        String              @map("site_id") @db.Uuid
+  name          String              @db.VarChar(32)
+  url           String?             @db.VarChar(512)
+  enabled       Boolean             @default(true)
+  /// Authorization of an added server (docs/plan/81-mcp-server-credentials.md); the secret is in
+  /// Vault at `kv/sites/<site>/mcp/<name>`, never here.
+  authKind      AgentSkillAuthKind  @default(none) @map("auth_kind")
+  /// The name of the owner's header, for `header`.
+  headerName    String?             @map("header_name") @db.VarChar(64)
+  authState     AgentSkillAuthState @default(ok) @map("auth_state")
+  /// When a check or a relayed call last found the authorization working or not.
+  authCheckedAt DateTime?           @map("auth_checked_at") @db.Timestamptz(6)
+  /// A code of why it does not work, never the server's own text.
+  authError     String?             @map("auth_error") @db.VarChar(64)
+  /// What of an OAuth sign-in is not secret: issuer, client id, token endpoint, scope, expiry.
+  oauth         Json?
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
 

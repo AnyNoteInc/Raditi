@@ -1,8 +1,17 @@
 import { clientIp } from '@repo/auth'
-import { agentSkillLimits } from '@repo/domain'
+import {
+  agentSkillAuthKinds,
+  agentSkillAuthStates,
+  agentSkillHeaderLimits,
+  agentSkillLimits,
+} from '@repo/domain'
 import { z } from 'zod'
 
-import { changeSiteAgentSkills, readSiteAgentSkills } from '../services/site-agent-skills.ts'
+import {
+  changeSiteAgentSkills,
+  checkSkillSignIn,
+  readSiteAgentSkills,
+} from '../services/site-agent-skills.ts'
 import { consentedProcedure, router } from '../trpc.ts'
 
 // «Навыки агента» of a site (services/site-agent-skills.ts): every member reads them, an owner
@@ -17,6 +26,12 @@ const skillsOutput = z.strictObject({
       builtin: z.boolean(),
       url: z.string().nullable(),
       enabled: z.boolean(),
+      auth: z.strictObject({
+        kind: z.enum(agentSkillAuthKinds),
+        headerName: z.string().nullable(),
+        state: z.enum(agentSkillAuthStates),
+        error: z.string().nullable(),
+      }),
     }),
   ),
   canManage: z.boolean(),
@@ -25,6 +40,11 @@ const skillsOutput = z.strictObject({
 
 const site = { siteId: z.uuid() }
 const name = z.string().max(agentSkillLimits.nameChars * 2)
+/** The owner's header and its key; the domain checks both in the service. */
+const header = z.strictObject({
+  headerName: z.string().max(agentSkillHeaderLimits.nameChars * 2),
+  value: z.string().max(agentSkillHeaderLimits.valueMaxChars * 2),
+})
 
 export const siteAgentSkillsRouter = router({
   list: consentedProcedure
@@ -45,26 +65,72 @@ export const siteAgentSkillsRouter = router({
     ),
 
   add: consentedProcedure
-    .input(z.strictObject({ ...site, name, url: z.string().max(agentSkillLimits.urlChars * 2) }))
+    .input(
+      z.strictObject({
+        ...site,
+        name,
+        url: z.string().max(agentSkillLimits.urlChars * 2),
+        header: header.optional(),
+      }),
+    )
     .output(skillsOutput)
     .mutation(({ ctx, input }) =>
-      changeSiteAgentSkills(ctx.prisma, {
-        siteId: input.siteId,
-        userId: ctx.user.id,
-        ip: clientIp(ctx.headers),
-        change: { kind: 'add', name: input.name, url: input.url },
-      }),
+      changeSiteAgentSkills(
+        ctx.prisma,
+        {
+          siteId: input.siteId,
+          userId: ctx.user.id,
+          ip: clientIp(ctx.headers),
+          change: {
+            kind: 'add',
+            name: input.name,
+            url: input.url,
+            ...(input.header ? { header: input.header } : {}),
+          },
+        },
+        ctx.mcpServers ?? null,
+      ),
+    ),
+
+  /**
+   * Whether this site may sign in to a server by this name (plan 81, §3.4): web asks it before it
+   * starts the sign-in, and connects the server after the owner comes back.
+   */
+  signInCheck: consentedProcedure
+    .input(z.strictObject({ ...site, name, url: z.string().max(agentSkillLimits.urlChars * 2) }))
+    .output(z.strictObject({ name: z.string(), url: z.string() }))
+    .query(({ ctx, input }) => checkSkillSignIn(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /** A new key of a server with a header: checked against the server, then written over the old. */
+  key: consentedProcedure
+    .input(z.strictObject({ ...site, name, header }))
+    .output(skillsOutput)
+    .mutation(({ ctx, input }) =>
+      changeSiteAgentSkills(
+        ctx.prisma,
+        {
+          siteId: input.siteId,
+          userId: ctx.user.id,
+          ip: clientIp(ctx.headers),
+          change: { kind: 'key', name: input.name, header: input.header },
+        },
+        ctx.mcpServers ?? null,
+      ),
     ),
 
   remove: consentedProcedure
     .input(z.strictObject({ ...site, name }))
     .output(skillsOutput)
     .mutation(({ ctx, input }) =>
-      changeSiteAgentSkills(ctx.prisma, {
-        siteId: input.siteId,
-        userId: ctx.user.id,
-        ip: clientIp(ctx.headers),
-        change: { kind: 'remove', name: input.name },
-      }),
+      changeSiteAgentSkills(
+        ctx.prisma,
+        {
+          siteId: input.siteId,
+          userId: ctx.user.id,
+          ip: clientIp(ctx.headers),
+          change: { kind: 'remove', name: input.name },
+        },
+        ctx.mcpServers ?? null,
+      ),
     ),
 })

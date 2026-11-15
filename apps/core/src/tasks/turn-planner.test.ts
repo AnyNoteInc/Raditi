@@ -370,6 +370,8 @@ describe('planTurn', () => {
     const skills: TurnSkill[] = [
       { name: 'context7', kind: 'remote', url: 'https://mcp.context7.com/mcp' },
       { name: 'playwright', kind: 'local' },
+      // A server with a key goes through the relay of the role mcp (plan 81): no address here.
+      { name: 'menu', kind: 'relayed' },
     ]
     const plan = await planTurn(
       facts({ skills, egress: ['api.example.ru:443'], variables: ['API_TOKEN'] }),
@@ -389,7 +391,7 @@ describe('planTurn', () => {
     })
     const { instructions } = plan.request.context
     expect(instructions).toContain('## The internet')
-    expect(instructions).toContain('context7, playwright')
+    expect(instructions).toContain('context7, playwright, menu')
     expect(instructions).toContain('Never send a secret')
     expect(instructions).toContain('Those commands reach the internet as the section below says.')
     expect(instructions).toContain('Send their values only to api.example.ru:443:')

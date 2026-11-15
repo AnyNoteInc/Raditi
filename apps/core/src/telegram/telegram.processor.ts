@@ -2,12 +2,16 @@ import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq'
 import { Inject, Logger } from '@nestjs/common'
 import {
   TELEGRAM_DELIVER_JOB,
+  TELEGRAM_FORGET_JOB,
+  TELEGRAM_PROGRESS_JOB,
   TELEGRAM_POLL_JOB,
   TELEGRAM_POLL_QUEUE,
   TELEGRAM_QUEUE,
   TELEGRAM_SEND_JOB,
   TELEGRAM_TOPIC_JOB,
   telegramDeliverJobSchema,
+  telegramForgetJobSchema,
+  telegramProgressJobSchema,
   telegramSendJobSchema,
   telegramTopicJobSchema,
 } from '@repo/domain'
@@ -33,10 +37,13 @@ function parsed<T>(schema: z.ZodType<T>, job: Job): T {
 @Processor(TELEGRAM_QUEUE, { concurrency: 1, limiter: { max: 25, duration: 1_000 } })
 export class TelegramProcessor extends WorkerHost {
   readonly #logger = new Logger(TelegramProcessor.name)
-  readonly #jobs: Pick<TelegramJobs, 'send' | 'deliver' | 'topic'>
+  readonly #jobs: Pick<TelegramJobs, 'send' | 'deliver' | 'topic' | 'progress' | 'forget'>
   readonly #warn = throttledLogger((line) => this.#logger.warn(line))
 
-  constructor(@Inject(TELEGRAM_JOBS) jobs: Pick<TelegramJobs, 'send' | 'deliver' | 'topic'>) {
+  constructor(
+    @Inject(TELEGRAM_JOBS)
+    jobs: Pick<TelegramJobs, 'send' | 'deliver' | 'topic' | 'progress' | 'forget'>,
+  ) {
     super()
     this.#jobs = jobs
   }
@@ -51,6 +58,12 @@ export class TelegramProcessor extends WorkerHost {
         return
       case TELEGRAM_TOPIC_JOB:
         await this.#jobs.topic(parsed(telegramTopicJobSchema, job))
+        return
+      case TELEGRAM_PROGRESS_JOB:
+        await this.#jobs.progress(parsed(telegramProgressJobSchema, job))
+        return
+      case TELEGRAM_FORGET_JOB:
+        await this.#jobs.forget(parsed(telegramForgetJobSchema, job))
         return
       default:
         throw new UnrecoverableError(`Unknown telegram job "${job.name}"`)

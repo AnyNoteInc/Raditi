@@ -137,6 +137,7 @@ describe('MCP request policy', () => {
       VAULT_ADDR: 'https://vault.example.test',
       VAULT_ROLE_ID: 'role',
       VAULT_SECRET_ID: 'secret',
+      SANDBOX_EGRESS_REFUSED_SUBNETS: '45.8.250.117/32',
     }
     expect(() => loadMcpConfig(env)).toThrow(/MCP_ALLOWED_HOSTS/)
     expect(loadMcpConfig({ ...env, MCP_ALLOWED_HOSTS: 'mcp' }).allowedHosts).toEqual(['mcp'])
