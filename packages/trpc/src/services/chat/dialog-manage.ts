@@ -65,7 +65,7 @@ export async function renameDialog(
   })
   if (task === null) throw taskNotFound()
   await db.$executeRaw`
-    UPDATE tasks SET title = ${title}
+    UPDATE tasks SET title = ${title}, title_source = 'client'
     WHERE id = ${task.id}::uuid AND deleted_at IS NULL`
   return { title }
 }

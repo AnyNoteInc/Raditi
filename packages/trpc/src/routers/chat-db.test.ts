@@ -2076,6 +2076,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const listed = await caller.task.list({ folder: site.id })
       expect(listed.items.find((item) => item.id === taskId)?.title).toBe('Телефон в шапке')
       expect(await updatedAt(taskId)).toBe(before)
+      // A name the client chose: the agent no longer renames the dialog (owner, 15.11.2026).
+      const named = await db.task.findUniqueOrThrow({
+        where: { id: taskId },
+        select: { titleSource: true },
+      })
+      expect(named.titleSource).toBe('client')
       for (const [title, code] of [
         [' \n ', 'TASK_TEXT_EMPTY'],
         ['ы'.repeat(121), 'TASK_TEXT_TOO_LONG'],

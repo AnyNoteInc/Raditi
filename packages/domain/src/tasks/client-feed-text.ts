@@ -333,3 +333,32 @@ export function notesLookLikeSecret(text: string): boolean {
         .some(readsAsValue),
   )
 }
+
+/** The longest name the agent gives a chat; `tasks.title` holds up to `feedLimits.title`. */
+export const AGENT_CHAT_TITLE_LIMIT = 60
+
+/**
+ * The name the agent gave a chat on its first pass (`chat_title`, owner's request of
+ * 15.11.2026), made fit for the list and the head: one line, quotes and a final period taken
+ * off, cut at a word to AGENT_CHAT_TITLE_LIMIT. null — nothing to read or something like a
+ * secret: the chat keeps the first words of the request.
+ */
+export function agentChatTitle(raw: string | undefined): string | null {
+  if (raw === undefined) return null
+  let line = raw
+    .replace(invisible, '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .replace(/^["'«»“”„\s]+|["'«»“”„.。\s]+$/gu, '')
+  if (line.length > AGENT_CHAT_TITLE_LIMIT) {
+    const cut = line.slice(0, AGENT_CHAT_TITLE_LIMIT + 1)
+    const space = cut.lastIndexOf(' ')
+    line = (
+      space > AGENT_CHAT_TITLE_LIMIT / 2
+        ? cut.slice(0, space)
+        : cut.slice(0, AGENT_CHAT_TITLE_LIMIT)
+    ).trim()
+  }
+  if (!hasVisibleText(line) || looksLikeSecret(line)) return null
+  return line
+}

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AGENT_CHAT_TITLE_LIMIT,
+  agentChatTitle,
   CONTACT_MARKER_SOURCE,
   contactMarkerPattern,
   FEED_REQUEST_TEXT_LIMIT,
@@ -747,5 +749,25 @@ describe('looksLikeSecret', () => {
     ])
       expect(looksLikeSecret(text), text.slice(0, 20)).toBe(true)
     expect(performance.now() - started).toBeLessThan(1000)
+  })
+})
+
+describe('agentChatTitle', () => {
+  it('keeps a short name as it is and takes off quotes and the final period', () => {
+    expect(agentChatTitle('Телефон в шапке сайта')).toBe('Телефон в шапке сайта')
+    expect(agentChatTitle('  «Список цен\n на ремонт».  ')).toBe('Список цен на ремонт')
+  })
+
+  it('cuts a long name at a word', () => {
+    const title = agentChatTitle(`${'Очень длинное название чата '.repeat(5)}конец`)
+    expect(title).not.toBeNull()
+    expect(title!.length).toBeLessThanOrEqual(AGENT_CHAT_TITLE_LIMIT)
+    expect(title!.endsWith(' ')).toBe(false)
+  })
+
+  it('gives nothing for no name, an empty one or one like a secret', () => {
+    expect(agentChatTitle(undefined)).toBeNull()
+    expect(agentChatTitle(' \n ')).toBeNull()
+    expect(agentChatTitle('пароль Qwerty12345')).toBeNull()
   })
 })

@@ -25,7 +25,12 @@ import {
   sampleProviderModelId,
   sampleRoutePath,
 } from '../testing/ids.ts'
-import { CONTINUE_PROMPT, INIT_ANSWER_MAX_CHARS, INIT_PROMPT } from './turn-instructions.ts'
+import {
+  CHAT_TITLE_SECTION,
+  CONTINUE_PROMPT,
+  INIT_ANSWER_MAX_CHARS,
+  INIT_PROMPT,
+} from './turn-instructions.ts'
 import {
   planTurn,
   promptOf,
@@ -427,6 +432,8 @@ describe('planTurn', () => {
       home,
     })
     expect(plan.request.input.prompt).toBe('+7 900 000-00-00')
+    // Only the first pass names the chat.
+    expect(plan.request.context.instructions).not.toContain('chat_title')
     // The driver session the turn ended with is what sessionState reads.
     expect(driver.sessionState).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -434,6 +441,17 @@ describe('planTurn', () => {
       }),
     )
     expect(env().mainHead).not.toHaveBeenCalled()
+  })
+
+  it('asks the first pass of a chat for its name, and no later pass', async () => {
+    // The owner's request of 15.11.2026: the model names the chat, paid with its first pass.
+    const first = await planTurn(
+      facts({ requests: [request(10, 'first', 'Поменяйте телефон в шапке', 0)] }),
+      env(),
+    )
+    if (first.kind !== 'turn') throw new Error(`expected a turn, got ${first.kind}`)
+    expect(first.request.context.instructions).toContain(CHAT_TITLE_SECTION)
+    expect(first.request.context.instructions).toContain('"chat_title"')
   })
 
   it('tells the agent the format the new words ask for, and none the older words asked for', async () => {
