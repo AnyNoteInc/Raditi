@@ -1339,12 +1339,12 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
 
       // The same chat bound to Telegram: its rows go there, the bot says nothing more of it.
       await db.outboxEvent.deleteMany({ where: { topic: 'telegram' } })
-      const { workspaceId, siteId } = await db.task.findUniqueOrThrow({
+      const { workspaceId } = await db.task.findUniqueOrThrow({
         where: { id: task.taskId },
-        select: { workspaceId: true, siteId: true },
+        select: { workspaceId: true },
       })
       const session = await db.chatSession.create({
-        data: { workspaceId, siteId, channel: 'telegram', externalChatId: '4242' },
+        data: { workspaceId, channel: 'telegram', externalChatId: '4242' },
       })
       await db.task.update({ where: { id: task.taskId }, data: { chatSessionId: session.id } })
       try {
