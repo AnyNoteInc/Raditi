@@ -3,7 +3,7 @@ import type { Metadata } from 'next'
 import { redirectIfSignedIn } from '@/lib/auth-redirect'
 import { safeRedirectTarget } from '@/lib/safe-redirect'
 
-import { yandexFailureText } from '@/components/auth/yandex-sign-in'
+import { yandexFailureText } from '@/components/auth/yandex-sign-in-failure'
 
 import { SignInForm } from './sign-in-form'
 
