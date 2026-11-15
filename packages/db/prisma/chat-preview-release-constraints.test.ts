@@ -321,7 +321,8 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
       }
       // The requirements of a task (20261022100000_browser_tasks) come later, with their defaults;
       // so does the mark of «Удалить диалог» (20261026150000_task_deleted_at), empty for them, and
-      // «Закрепить» and «В архив» (20261114120000_chat_pin_archive, docs/plan/75).
+      // «Закрепить» and «В архив» (20261114120000_chat_pin_archive, docs/plan/75), and who named
+      // the dialog (20261115100000_task_title_source), `request` for them.
       expect(
         tasks.map(
           ({
@@ -334,10 +335,12 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
             web_masks_purged_at,
             pinned_at,
             archived_at,
+            title_source,
             ...rest
           }) => ({
             ...rest,
             title,
+            titleSource: title_source,
             waiting,
             needs: [needs_repository, needs_browser],
             deleted: deleted_at,
@@ -349,6 +352,7 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
         before_.tasks.map((row) => ({
           ...row,
           title: null,
+          titleSource: 'request',
           waiting: null,
           needs: [true, false],
           deleted: null,

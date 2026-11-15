@@ -12,7 +12,7 @@ import { createMigratedSchema, schemaClient, type MigratedSchema } from './migra
 
 const databaseUrl = process.env.DATABASE_URL
 /** The last migration before sites. */
-const before = '20261115100000_page_trash'
+const before = '20261115200000_page_trash'
 const at = new Date('2026-11-14T09:00:00Z')
 type Values = Record<string, unknown>
 

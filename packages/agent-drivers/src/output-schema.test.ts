@@ -23,7 +23,10 @@ describe('result contract for a CLI without an output-schema flag', () => {
     const schema = JSON.parse(lines.at(-1)!) as Json
     expect(schema).toEqual(jsonSchema)
     expect(schema.additionalProperties).toBe(false)
-    expect(schema.required).toEqual(Object.keys(turnResultSchema.shape))
+    // chat_title is the one optional key: only the first pass of a chat is asked for it.
+    expect(schema.required).toEqual(
+      Object.keys(turnResultSchema.shape).filter((key) => key !== 'chat_title'),
+    )
   })
 
   it('says that the last message is the object alone, with nothing before or after it', () => {

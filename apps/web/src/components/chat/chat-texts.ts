@@ -289,6 +289,17 @@ export const cancelText = Object.freeze({
   keep: 'Не отменять',
 })
 
+/** The list of files `@` opens in the field (docs/plan/78-file-mentions.md). */
+export const mentionText = Object.freeze({
+  label: 'Файлы проекта',
+  preparing: 'Готовим список файлов…',
+  none: 'У проекта нет файлов в рабочей копии.',
+  nothing: 'Нет такого файла.',
+  folder: (path: string) => `Папка ${path}`,
+  /** Read when the list opens. */
+  opened: 'Файлы проекта. Стрелки — выбрать, Enter — вставить, Escape — закрыть.',
+})
+
 export const paletteText = Object.freeze({
   label: 'Команды',
   open: 'Команды',
@@ -395,7 +406,6 @@ export const listText = Object.freeze({
   archiveEmpty: 'В архиве пока нет чатов.',
   search: 'Найти чат',
   searchClear: 'Очистить поиск',
-  searchClose: 'Закрыть поиск',
   searchEmpty: 'Ничего не нашлось. Ищем по названиям чатов и по вашим сообщениям.',
   searchLoading: 'Ищем',
   /** A chat of the search that is in «Архив». */

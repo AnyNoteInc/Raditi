@@ -207,7 +207,7 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
       /Списаний пока нет\. Здесь появятся задачи и\sсколько кредитов ушло на\sкаждую\./,
     )
     await expect(history.getByRole('table')).toHaveCount(0)
-    await expect(history.getByRole('button', { name: 'Показать ещё' })).toHaveCount(0)
+    await expect(history.getByRole('button', { name: 'Вперёд' })).toHaveCount(0)
   })
 
   await test.step('more credits are offered: the dialog of the pack opens and closes', async () => {

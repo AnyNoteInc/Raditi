@@ -28,6 +28,7 @@ import {
   enqueueChatNotify,
 } from '@repo/db'
 import {
+  agentChatTitle,
   candidateFactsSchema,
   feedEndedSiteOf,
   feedLimits,
@@ -466,6 +467,26 @@ export class PassSettlement {
     }
   }
 
+  /**
+   * The name the agent gave the chat on its first pass (owner's request of 15.11.2026): it takes
+   * the place of the first words of the request, never of a name the client chose, and only
+   * once. A name the platform cannot show, or a failed write, leaves the title as it was: the
+   * pass settles either way.
+   */
+  async #nameChat(taskId: string, raw: string | undefined): Promise<void> {
+    const title = agentChatTitle(raw)
+    if (title === null) return
+    try {
+      await this.deps.db.$executeRaw`
+        UPDATE tasks SET title = ${title}, title_source = 'agent'
+        WHERE id = ${taskId}::uuid AND title_source = 'request' AND deleted_at IS NULL`
+    } catch (error) {
+      this.#logger.warn(
+        `Chat ${taskId}: the agent's title was not kept: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
   // --- Endings --------------------------------------------------------------------------------
 
   async #completed(
@@ -475,6 +496,7 @@ export class PassSettlement {
     options: SettleOptions,
   ): Promise<SettleAnswer> {
     const { result, turn } = ending
+    await this.#nameChat(pass.taskId, result.chat_title)
     // Without a repository there is no candidate: the site itself is what the pass changed.
     if (!context.requirements.repository)
       return this.#completedWithoutRepository(pass, context, ending)

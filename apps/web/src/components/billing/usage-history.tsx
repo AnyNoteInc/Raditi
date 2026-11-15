@@ -4,7 +4,10 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
 import Typography from '@mui/material/Typography'
-import { useInfiniteQuery } from '@tanstack/react-query'
+import Skeleton from '@mui/material/Skeleton'
+import TextField from '@mui/material/TextField'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { formatMoscowDate, formatMoscowDay } from '@/lib/moscow-date'
@@ -13,7 +16,7 @@ import { useTRPCClient } from '@/trpc/client'
 
 import { sectionHeading, sectionPadding } from './billing-surface'
 import type { BillingUsage, UsageEntry } from './billing-types'
-import { NO_PROJECT, outcomeText, taskNote } from './usage-format'
+import { historyRange, NO_PROJECT, outcomeText, taskNote } from './usage-format'
 
 const cell = { py: 1.75, pr: 2, borderBottom: 1, borderColor: 'divider', verticalAlign: 'top' }
 const lastCell = { '&:last-child': { pr: 0 } }
@@ -76,15 +79,19 @@ function HistoryRow({ entry, withYear }: { entry: UsageEntry; withYear: boolean 
   )
 }
 
+/** Lines on a page of the history. */
+export const HISTORY_PAGE = 20
+
 /**
- * «История списаний»: the tasks of the current period — of a customer without a tariff, all of
- * them — and how many credits each one took. The summary of the page brings the first lines;
- * «Показать ещё» asks for the next ones, a page at a time. `readAt` is when the summary was
- * read (`dataUpdatedAt` of its query).
+ * «История списаний»: newest first, twenty lines a page, with «Назад» and «Вперёд» and how many
+ * lines there are. Without dates — the tasks of the current period, of a customer without a
+ * tariff all of them; the summary of the page brings that first page. «С» and «По» bound the
+ * lines by days of Moscow instead of the period, so older charges can be found. `readAt` is when
+ * the summary was read (`dataUpdatedAt` of its query): the pages after it are read anew with it.
  *
- * `whole`: the history has no period — the customer has no tariff — and goes back as far as
- * their first task, so a date is printed with its year («5 октября 2026»). The lines of a
- * period, a month long and named above them with its year, keep the short form («5 октября»).
+ * `whole`: the history has no period — the customer has no tariff — so a date is printed with
+ * its year («5 октября 2026»); so it is when dates are chosen. The lines of a period keep the
+ * short form («5 октября»).
  */
 export function UsageHistory({
   first,
@@ -96,22 +103,39 @@ export function UsageHistory({
   whole?: boolean
 }) {
   const client = useTRPCClient()
-  // The pages after the first one. They hang on the reading of the summary that brought the
-  // first page: when the summary is read anew, the continuation starts anew as well. A line
-  // that has changed since — a task in work that is done now — is not left on the screen as it
-  // was, and nothing is skipped or repeated when the first page ends elsewhere. Nothing is
-  // asked until the customer asks.
-  const more = useInfiniteQuery({
-    queryKey: ['billing-usage-history', readAt, first.nextCursor],
-    queryFn: ({ pageParam }) => client.billing.usageHistory.query({ cursor: pageParam }),
-    initialPageParam: first.nextCursor ?? '',
-    getNextPageParam: (last) => last.nextCursor ?? undefined,
-    enabled: false,
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  // The cursor of every page opened so far: the first page has none.
+  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined])
+  const page = cursors.length - 1
+  const cursor = cursors[page]
+  const backwards = from !== '' && to !== '' && from > to
+  const bounded = from !== '' || to !== ''
+  const query = {
+    ...(cursor === undefined ? {} : { cursor }),
+    ...(from === '' ? {} : { from }),
+    ...(to === '' ? {} : { to }),
+  }
+  const isFirst = !bounded && cursor === undefined
+  const lines = useQuery({
+    queryKey: ['billing-usage-history', readAt, query],
+    queryFn: () => client.billing.usageHistory.query(query),
+    // The first page without dates is the one the summary brought.
+    ...(isFirst ? { initialData: first, initialDataUpdatedAt: readAt } : {}),
+    enabled: !backwards,
+    placeholderData: keepPreviousData,
     retry: false,
     staleTime: Infinity,
   })
-  const entries = [...first.items, ...(more.data?.pages.flatMap(({ items }) => items) ?? [])]
-  const hasMore = more.data ? more.hasNextPage : first.nextCursor !== null
+  const shown = lines.data ?? (isFirst ? first : null)
+  const entries = shown?.items ?? []
+  const total = shown?.total ?? 0
+  const start = page * HISTORY_PAGE
+
+  const setBound = (set: (value: string) => void) => (value: string) => {
+    set(value)
+    setCursors([undefined])
+  }
 
   return (
     <Box component="section" aria-labelledby="history-title" sx={{ p: sectionPadding }}>
@@ -123,80 +147,156 @@ export function UsageHistory({
           'Сколько кредитов ушло на каждую задачу. Списываем только за выполненные задачи; уточнения и «Изменить» считаются вместе с задачей. «Отменить» — бесплатно.',
         )}
       </Typography>
-      {entries.length === 0 ? (
+      <Box
+        role="group"
+        aria-label="Даты"
+        sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 1.5, mt: 2.5 }}
+      >
+        <TextField
+          type="date"
+          size="small"
+          label="С"
+          value={from}
+          onChange={(event) => setBound(setFrom)(event.target.value)}
+          slotProps={{ inputLabel: { shrink: true }, htmlInput: { max: to || undefined } }}
+          sx={{ width: 170 }}
+        />
+        <TextField
+          type="date"
+          size="small"
+          label="По"
+          value={to}
+          onChange={(event) => setBound(setTo)(event.target.value)}
+          error={backwards}
+          helperText={backwards ? nbsp('Раньше даты «С»') : undefined}
+          slotProps={{ inputLabel: { shrink: true }, htmlInput: { min: from || undefined } }}
+          sx={{ width: 170 }}
+        />
+        {bounded ? (
+          <Button
+            onClick={() => {
+              setFrom('')
+              setTo('')
+              setCursors([undefined])
+            }}
+            sx={{ mt: 0.25 }}
+          >
+            Сбросить
+          </Button>
+        ) : null}
+      </Box>
+      {lines.isError ? (
+        <Typography role="alert" variant="body2" color="error" sx={{ mt: 2.5 }}>
+          {nbsp('Не удалось загрузить историю. Попробуйте ещё раз.')}
+        </Typography>
+      ) : backwards ? null : shown === null ? (
+        <Box role="status" aria-label="Загрузка истории">
+          <Skeleton variant="rounded" height={120} sx={{ mt: 2.5, borderRadius: '12px' }} />
+        </Box>
+      ) : entries.length === 0 ? (
         <Typography variant="body2" sx={{ mt: 2.5 }}>
-          {nbsp('Списаний пока нет. Здесь появятся задачи и сколько кредитов ушло на каждую.')}
+          {nbsp(
+            bounded
+              ? 'За эти дни списаний нет.'
+              : 'Списаний пока нет. Здесь появятся задачи и сколько кредитов ушло на каждую.',
+          )}
         </Typography>
       ) : (
-        // A table wider than a phone scrolls inside its own frame, which the keyboard reaches.
-        <Box
-          role="group"
-          aria-labelledby="history-title"
-          tabIndex={0}
-          sx={{
-            mt: 2.5,
-            overflowX: 'auto',
-            '&:focus-visible': {
-              outline: '2px solid',
-              outlineColor: 'primary.main',
-              outlineOffset: 3,
-            },
-          }}
-        >
+        <>
+          {/* A table wider than a phone scrolls inside its own frame, which the keyboard reaches. */}
           <Box
-            component="table"
+            role="group"
             aria-labelledby="history-title"
+            tabIndex={0}
             sx={{
-              width: '100%',
-              minWidth: 600,
-              borderCollapse: 'collapse',
-              fontSize: 14,
-              lineHeight: 1.45,
-              '& th': {
-                py: 1.25,
-                pr: 2,
-                borderBottom: 1,
-                borderColor: 'divider',
-                color: 'text.secondary',
-                fontWeight: 500,
-                textAlign: 'left',
-                whiteSpace: 'nowrap',
-                ...lastCell,
+              mt: 2.5,
+              overflowX: 'auto',
+              opacity: lines.isPlaceholderData ? 0.6 : 1,
+              '&:focus-visible': {
+                outline: '2px solid',
+                outlineColor: 'primary.main',
+                outlineOffset: 3,
               },
             }}
           >
-            <thead>
-              <tr>
-                <th scope="col">Дата</th>
-                <th scope="col">Задача</th>
-                <th scope="col">Проект</th>
-                <th scope="col">Списано</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((entry) => (
-                <HistoryRow key={entry.id} entry={entry} withYear={whole} />
-              ))}
-            </tbody>
+            <Box
+              component="table"
+              aria-labelledby="history-title"
+              sx={{
+                width: '100%',
+                minWidth: 600,
+                borderCollapse: 'collapse',
+                fontSize: 14,
+                lineHeight: 1.45,
+                '& th': {
+                  py: 1.25,
+                  pr: 2,
+                  borderBottom: 1,
+                  borderColor: 'divider',
+                  color: 'text.secondary',
+                  fontWeight: 500,
+                  textAlign: 'left',
+                  whiteSpace: 'nowrap',
+                  ...lastCell,
+                },
+              }}
+            >
+              <thead>
+                <tr>
+                  <th scope="col">Дата</th>
+                  <th scope="col">Задача</th>
+                  <th scope="col">Проект</th>
+                  <th scope="col">Списано</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((entry) => (
+                  <HistoryRow key={entry.id} entry={entry} withYear={whole || bounded} />
+                ))}
+              </tbody>
+            </Box>
           </Box>
-        </Box>
-      )}
-      {more.isError ? (
-        <Typography role="alert" variant="body2" color="error" sx={{ mt: 2.5 }}>
-          {nbsp('Не удалось загрузить продолжение истории. Попробуйте ещё раз.')}
-        </Typography>
-      ) : null}
-      {hasMore ? (
-        <Box sx={{ mt: 2.5 }}>
-          <Button
-            variant="outlined"
-            loading={more.isFetching}
-            onClick={() => void more.fetchNextPage()}
+          <Box
+            component="nav"
+            aria-label="Страницы истории"
+            sx={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 1.5,
+              mt: 2,
+            }}
           >
-            Показать ещё
-          </Button>
-        </Box>
-      ) : null}
+            <Typography variant="body2" color="textSecondary" aria-live="polite">
+              {nbsp(historyRange(start, entries.length, total))}
+            </Typography>
+            {page > 0 || shown?.nextCursor ? (
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  disabled={page === 0}
+                  onClick={() => setCursors((opened) => opened.slice(0, -1))}
+                >
+                  Назад
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  disabled={!shown?.nextCursor || lines.isFetching}
+                  onClick={() => {
+                    const next = shown?.nextCursor
+                    if (next) setCursors((opened) => [...opened, next])
+                  }}
+                >
+                  Вперёд
+                </Button>
+              </Box>
+            ) : null}
+          </Box>
+        </>
+      )}
     </Box>
   )
 }

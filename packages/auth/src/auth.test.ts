@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createPrismaClient } from '@repo/db'
 import { betterAuth } from 'better-auth'
 import { memoryAdapter } from 'better-auth/adapters/memory'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuth, type AuthNotifier } from './auth.ts'
 import type { AuthConfig } from './config.ts'
@@ -15,6 +15,7 @@ const config: AuthConfig = {
   baseUrl: 'https://raditi.ru',
   secret: 'x'.repeat(32),
   captcha: null,
+  yandex: null,
 }
 
 // A real client that never connects: better-auth reads its data model, nothing more.
@@ -57,6 +58,20 @@ describe('createAuth', () => {
     expect(options.plugins.map((p) => p.id)).toEqual([
       'consents',
       'sign-up-profile',
+      'next-cookies',
+    ])
+  })
+
+  it('adds sign-in with Yandex ID only when its app is configured', () => {
+    const auth = createAuth({
+      config: { ...config, yandex: { clientId: 'id', clientSecret: 'secret' } },
+      prisma,
+      notifier: makeNotifier(),
+    })
+    expect(auth.options.plugins.map((p) => p.id)).toEqual([
+      'consents',
+      'sign-up-profile',
+      'generic-oauth',
       'next-cookies',
     ])
   })
@@ -331,5 +346,146 @@ describe('createAuth', () => {
       name: 'Анна',
       appUrl: 'https://raditi.ru',
     })
+  })
+})
+
+describe('sign-in with Yandex ID', () => {
+  const yandexConfig: AuthConfig = {
+    ...config,
+    yandex: { clientId: 'yandex-client', clientSecret: 'yandex-secret' },
+  }
+  const profile = {
+    id: '1130000012345678',
+    login: 'anna.ivanova',
+    display_name: 'Анна',
+    default_email: 'anna@yandex.ru',
+    is_avatar_empty: false,
+    default_avatar_id: '0/0-0',
+  }
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  function yandexAuth(users: Record<string, unknown>[] = []) {
+    const store: Record<string, Record<string, unknown>[]> = {
+      user: users,
+      account: [],
+      session: [],
+      verification: [],
+      rateLimit: [],
+    }
+    const options = createAuth({ config: yandexConfig, prisma, notifier: makeNotifier() }).options
+    const auth = betterAuth({
+      ...options,
+      database: memoryAdapter(store),
+      advanced: { ...options.advanced, database: { generateId: () => randomUUID() } },
+      logger: { disabled: true },
+    })
+    const tokenRequests: URLSearchParams[] = []
+    const realFetch = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.href === 'https://oauth.yandex.com/token') {
+        tokenRequests.push(new URLSearchParams(String(init?.body)))
+        return Response.json({
+          access_token: 'yandex-access-token',
+          refresh_token: 'yandex-refresh-token',
+          token_type: 'bearer',
+          expires_in: 3600,
+        })
+      }
+      if (url.origin === 'https://login.yandex.ru') return Response.json(profile)
+      return realFetch(input, init)
+    })
+    return { auth, store, tokenRequests }
+  }
+
+  /** The whole round trip: the button, Yandex's consent screen, the callback. */
+  async function signIn(auth: ReturnType<typeof yandexAuth>['auth']) {
+    const start = await auth.handler(
+      new Request('https://raditi.ru/api/auth/sign-in/social', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://raditi.ru' },
+        body: JSON.stringify({
+          provider: 'yandex',
+          callbackURL: '/chats',
+          errorCallbackURL: '/sign-in?yandex=failed',
+        }),
+      }),
+    )
+    const { url } = (await start.json()) as { url: string }
+    const authorize = new URL(url)
+    const cookie = start.headers
+      .getSetCookie()
+      .map((value) => value.split(';')[0])
+      .join('; ')
+    const callback = await auth.handler(
+      new Request(
+        `https://raditi.ru/api/auth/callback/yandex?code=yandex-code&state=${authorize.searchParams.get('state')}`,
+        { headers: { cookie } },
+      ),
+    )
+    return { authorize, callback }
+  }
+
+  it('asks for the registered scopes and returns to the registered callback', async () => {
+    const { auth, tokenRequests } = yandexAuth()
+    const { authorize, callback } = await signIn(auth)
+
+    expect(authorize.origin + authorize.pathname).toBe('https://oauth.yandex.com/authorize')
+    expect(authorize.searchParams.get('client_id')).toBe('yandex-client')
+    expect(authorize.searchParams.get('scope')).toBe('login:info login:email')
+    expect(authorize.searchParams.get('redirect_uri')).toBe(
+      'https://raditi.ru/api/auth/callback/yandex',
+    )
+    expect(tokenRequests[0]?.get('redirect_uri')).toBe('https://raditi.ru/api/auth/callback/yandex')
+    expect(callback.status).toBe(302)
+    expect(callback.headers.get('location')).toBe('/chats')
+    expect(callback.headers.getSetCookie().join(';')).toMatch(/session_token=/)
+  })
+
+  it('creates a verified user without the Yandex avatar and keeps no provider tokens', async () => {
+    const { auth, store } = yandexAuth()
+    await signIn(auth)
+
+    expect(store.user).toHaveLength(1)
+    expect(store.user![0]).toMatchObject({
+      email: 'anna@yandex.ru',
+      name: 'Анна',
+      emailVerified: true,
+    })
+    expect(store.user![0]!.image ?? null).toBeNull()
+    expect(store.account).toHaveLength(1)
+    expect(store.account![0]).toMatchObject({
+      providerId: 'yandex',
+      accountId: profile.id,
+      accessToken: null,
+      refreshToken: null,
+      idToken: null,
+    })
+    expect(JSON.stringify(store)).not.toMatch(/yandex-(access|refresh)-token/)
+  })
+
+  it('joins an account whose address was confirmed here', async () => {
+    const { auth, store } = yandexAuth([
+      { ...user, email: 'anna@yandex.ru', emailVerified: true, lastName: null, image: null },
+    ])
+    const { callback } = await signIn(auth)
+
+    expect(callback.headers.get('location')).toBe('/chats')
+    expect(store.user).toHaveLength(1)
+    expect(store.account).toEqual([
+      expect.objectContaining({ providerId: 'yandex', userId: user.id }),
+    ])
+  })
+
+  it('does not join an account whose address nobody confirmed', async () => {
+    const { auth, store } = yandexAuth([
+      { ...user, email: 'anna@yandex.ru', emailVerified: false, lastName: null, image: null },
+    ])
+    const { callback } = await signIn(auth)
+
+    expect(callback.headers.get('location')).toBe('/sign-in?yandex=failed&error=account_not_linked')
+    expect(store.account).toEqual([])
+    expect(store.session).toEqual([])
   })
 })

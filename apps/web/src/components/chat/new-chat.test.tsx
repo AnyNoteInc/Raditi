@@ -60,6 +60,10 @@ vi.mock('@/trpc/client', () => ({
     project: {
       list: { queryOptions: () => ({ queryKey: ['project.list'], queryFn: projectList }) },
     },
+    siteFiles: {
+      // `@` reads the files only when typed: these cases never type it.
+      list: { queryOptions: () => ({ queryKey: ['siteFiles.list'], queryFn: async () => null }) },
+    },
     billing: {
       usage: {
         queryKey: () => ['billing', 'usage'],
@@ -704,5 +708,13 @@ describe('«Добавить проект» from a new chat', () => {
     showChat()
     await waitFor(() => expect(sessionStorage.getItem('raditi-new-chat-draft')).toBeNull())
     expect(field().value).toBe('')
+  })
+})
+
+describe('the caret of a new chat (docs/plan/79, П4)', () => {
+  it('stands in the field as the screen opens', async () => {
+    showChat()
+    const area = await screen.findByRole('textbox', { name: 'Сообщение' })
+    await waitFor(() => expect(document.activeElement).toBe(area))
   })
 })

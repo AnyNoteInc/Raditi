@@ -231,6 +231,13 @@ interface HistoryRow extends ByAccount<'held'>, ByAccount<'paid'> {
   siteName: string | null
 }
 
+/** The count of the history under its bounds, and a line of the page — all null past the last. */
+type HistoryQueryRow = { total: number } & (HistoryRow | { [K in keyof HistoryRow]: null })
+type HistoryLineRow = HistoryRow & { total: number }
+
+/** Lines stand at days of Moscow, as the dates of the page are printed. */
+const HISTORY_TIME_ZONE = 'Europe/Moscow'
+
 const byAccount = (row: HistoryRow, prefix: 'held' | 'paid') => ({
   tariff: row[`${prefix}Tariff`],
   gift: row[`${prefix}Gift`],
@@ -248,6 +255,10 @@ function entryCredits(row: HistoryRow) {
  * One page of the history, newest first: one line per task that set credits aside — whatever
  * attempts it took and on whichever accounts —, and every undo, which takes no credit and so
  * has no reserve.
+ *
+ * `from` and `to` of the query, days of Moscow, bound the lines by the moment they stand at, and
+ * then the period does not: the dates are how the customer looks past it. `total` is the number
+ * of lines under the same bounds, whatever the cursor.
  *
  * `since` is the start of the period the page is of. A task belongs to the period of its first
  * reserve: the earliest stamp of its reserve rows (`credit_holds.created_at`) is not before
@@ -274,9 +285,11 @@ async function historyPage(
   since: Date | null,
   query: UsageHistoryQuery,
 ): Promise<UsageHistoryPageDto> {
-  const { cursor = null, limit } = usageHistoryQuerySchema.parse(query)
+  const { cursor = null, limit, from = null, to = null } = usageHistoryQuerySchema.parse(query)
+  // Dates bound the history instead of the period.
+  const periodStart = from === null && to === null ? since : null
   const { tariff, gift, pack } = creditAccountUnits
-  const rows = await db.$queryRaw<HistoryRow[]>`
+  const rows = await db.$queryRaw<HistoryQueryRow[]>`
     WITH entries AS (
       SELECT h.task_id AS id, MIN(h.placed_at) AS at, h.task_id,
         CASE
@@ -295,40 +308,55 @@ async function historyPage(
       WHERE a.workspace_id = ${workspaceId}::uuid
         AND a.unit = ANY(${CREDIT_UNITS}::"BillingUnit"[])
       GROUP BY h.task_id
-      HAVING ${since}::timestamptz IS NULL OR MIN(h.created_at) >= ${since}::timestamptz
+      HAVING ${periodStart}::timestamptz IS NULL OR MIN(h.created_at) >= ${periodStart}::timestamptz
       UNION ALL
       SELECT undo.id, undo.created_at, undo.id, 'free', 0, 0, 0
       FROM tasks undo
       WHERE undo.workspace_id = ${workspaceId}::uuid
         AND undo.reverts_task_id IS NOT NULL
-        AND (${since}::timestamptz IS NULL OR undo.created_at >= ${since}::timestamptz)
+        AND (${periodStart}::timestamptz IS NULL OR undo.created_at >= ${periodStart}::timestamptz)
         AND NOT EXISTS (SELECT 1 FROM credit_holds taken WHERE taken.task_id = undo.id)
+    ),
+    listed AS (
+      SELECT * FROM entries
+      WHERE (${from}::date IS NULL
+          OR at >= (${from}::date::timestamp AT TIME ZONE ${HISTORY_TIME_ZONE}))
+        AND (${to}::date IS NULL
+          OR at < ((${to}::date + 1)::timestamp AT TIME ZONE ${HISTORY_TIME_ZONE}))
     )
-    SELECT e.id, e.at, e.outcome, e."heldTariff", e."heldGift", e."heldPack",
-      paid."paidTariff", paid."paidGift", paid."paidPack", t.id AS "taskId",
-      NULLIF(btrim(t.summary), '') AS title, t.status::text AS status,
-      s.id AS "siteId", s.name AS "siteName"
-    FROM entries e
-    JOIN tasks t ON t.id = e.task_id
-    LEFT JOIN sites s ON s.id = t.site_id
-    CROSS JOIN LATERAL (
-      SELECT
-        COALESCE(-SUM(l.amount) FILTER (WHERE l.unit = ${tariff}::"BillingUnit"), 0)::int
-          AS "paidTariff",
-        COALESCE(-SUM(l.amount) FILTER (WHERE l.unit = ${gift}::"BillingUnit"), 0)::int
-          AS "paidGift",
-        COALESCE(-SUM(l.amount) FILTER (WHERE l.unit = ${pack}::"BillingUnit"), 0)::int
-          AS "paidPack"
-      FROM credit_ledger l
-      WHERE l.task_id = e.task_id AND l.kind = 'charge'
-    ) paid
-    WHERE ${cursor}::uuid IS NULL OR (e.at, e.id) < (
-      SELECT last.at, last.id FROM entries last WHERE last.id = ${cursor}::uuid
-    )
-    ORDER BY e.at DESC, e.id DESC
-    LIMIT ${limit + 1}::int
+    SELECT counted.total, page.*
+    FROM (SELECT count(*)::int AS total FROM listed) counted
+    LEFT JOIN LATERAL (
+      SELECT e.id, e.at, e.outcome, e."heldTariff", e."heldGift", e."heldPack",
+        paid."paidTariff", paid."paidGift", paid."paidPack", t.id AS "taskId",
+        NULLIF(btrim(t.summary), '') AS title, t.status::text AS status,
+        s.id AS "siteId", s.name AS "siteName"
+      FROM listed e
+      JOIN tasks t ON t.id = e.task_id
+      LEFT JOIN sites s ON s.id = t.site_id
+      CROSS JOIN LATERAL (
+        SELECT
+          COALESCE(-SUM(l.amount) FILTER (WHERE l.unit = ${tariff}::"BillingUnit"), 0)::int
+            AS "paidTariff",
+          COALESCE(-SUM(l.amount) FILTER (WHERE l.unit = ${gift}::"BillingUnit"), 0)::int
+            AS "paidGift",
+          COALESCE(-SUM(l.amount) FILTER (WHERE l.unit = ${pack}::"BillingUnit"), 0)::int
+            AS "paidPack"
+        FROM credit_ledger l
+        WHERE l.task_id = e.task_id AND l.kind = 'charge'
+      ) paid
+      WHERE ${cursor}::uuid IS NULL OR (e.at, e.id) < (
+        SELECT last.at, last.id FROM listed last WHERE last.id = ${cursor}::uuid
+      )
+      ORDER BY e.at DESC, e.id DESC
+      LIMIT ${limit + 1}::int
+    ) page ON true
+    ORDER BY page.at DESC, page.id DESC
   `
-  const items = rows.slice(0, limit)
+  // One row always comes: the count, and the line of the page beside it, if any.
+  const total = rows[0]?.total ?? 0
+  const lines = rows.filter((row): row is HistoryLineRow => row.id !== null)
+  const items = lines.slice(0, limit)
   return usageHistoryPageSchema.parse({
     items: items.map((row) => ({
       id: row.id,
@@ -338,7 +366,8 @@ async function historyPage(
       task: { id: row.taskId, title: row.title, status: row.status },
       site: row.siteId === null ? null : { id: row.siteId, name: row.siteName },
     })),
-    nextCursor: rows.length > limit ? (items.at(-1)?.id ?? null) : null,
+    nextCursor: lines.length > limit ? (items.at(-1)?.id ?? null) : null,
+    total,
   })
 }
 
@@ -454,7 +483,7 @@ export function promisedUsage(promised: CreditsOverviewDto): UsageSummaryDto {
     gift: { left: gift.available, held: gift.held, granted: gift.granted },
     pack: { left: pack.available, held: pack.held },
     totalLeft: totalAvailable,
-    history: { items: [], nextCursor: null },
+    history: { items: [], nextCursor: null, total: 0 },
     ...taskCreditsOf(promised),
   })
 }

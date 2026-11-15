@@ -292,6 +292,17 @@ export {
   subscriptionChangeAuditActions,
 } from './subscription-changes.ts'
 export {
+  getUsageActivity,
+  usageActivityDaySchema,
+  usageActivityQuerySchema,
+  usageActivitySchema,
+  usageActivitySpans,
+  type UsageActivityDayDto,
+  type UsageActivityDto,
+  type UsageActivityInput,
+  type UsageActivityQuery,
+} from './activity.ts'
+export {
   getUsageSummary,
   listUsageHistory,
   promisedUsage,

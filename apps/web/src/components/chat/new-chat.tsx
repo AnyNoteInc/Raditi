@@ -26,6 +26,7 @@ import { markNewDialog } from './new-dialog-hint'
 import { ProjectPicker, projectChoosable } from './project-picker'
 import { readPromptHistory, rememberPrompt } from './prompt-history'
 import { useAttachments } from './use-attachments'
+import { useMentionFiles } from './use-mention-files'
 import { uuidv7 } from './uuid'
 import { UsageWindowHint } from '@/components/billing/usage-window-hint'
 
@@ -70,6 +71,10 @@ export function NewChat({
   const wanted = held !== null ? held.siteId : chosen === undefined ? asked : chosen
   const found = projects.find((project) => project.id.toLowerCase() === wanted?.toLowerCase())
   const project = found !== undefined && (held !== null || projectChoosable(found)) ? found : null
+  // `@` names a file of the project the chat starts with (docs/plan/78-file-mentions.md).
+  const mentions = useMentionFiles(
+    project?.chat.requirements?.repository === true ? project.id : null,
+  )
   const siteId = held !== null ? held.siteId : (project?.id ?? null)
   // The level chosen last in this browser (owner's request of 09.11.2026).
   const [effort, setEffort] = useRememberedEffort()
@@ -102,6 +107,11 @@ export function NewChat({
     }, 0)
     return () => clearTimeout(later)
   }, [shown, userId])
+
+  // The field takes the caret as the screen opens (owner's request of 15.11.2026, docs/plan/79, П4).
+  useEffect(() => {
+    if (shown) field.current?.focus({ preventScroll: true })
+  }, [shown])
 
   async function start(text: string, attachmentIds: readonly string[]): Promise<boolean> {
     if (pending.current?.siteId !== siteId) pending.current = { siteId, id: uuidv7() }
@@ -193,6 +203,7 @@ export function NewChat({
         }}
         history={history}
         speech={speech}
+        mentions={mentions}
         project={
           <ProjectPicker
             projects={projects}

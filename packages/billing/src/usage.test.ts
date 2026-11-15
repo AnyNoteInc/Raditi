@@ -36,7 +36,7 @@ const PERIOD_END = new Date('2026-10-18T09:00:00.000Z')
 const NOW = new Date('2026-10-04T12:00:00.000Z')
 const minutesAfter = (minutes: number, from = NOW) => new Date(from.getTime() + minutes * MINUTE_MS)
 
-const noHistory = { items: [], nextCursor: null }
+const noHistory = { items: [], nextCursor: null, total: 0 }
 /** What a new task is told while nothing stands in its way. */
 const TAKEN = { allowed: true, reason: null }
 
@@ -870,6 +870,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
           },
         ],
         nextCursor: null,
+        total: 6,
       })
       expect(summary.pack).toEqual({ left: 100, held: 0 })
       expect(summary.totalLeft).toBe(350)
@@ -1861,7 +1862,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     ])
     expect(await listUsageHistory(db, workspaceId)).toEqual(ofPeriod)
     // An undo of another period is no cursor in this one.
-    expect(await listUsageHistory(db, workspaceId, { cursor: earlier.id })).toEqual(noHistory)
+    expect(await listUsageHistory(db, workspaceId, { cursor: earlier.id })).toEqual({
+      ...noHistory,
+      total: 2,
+    })
 
     // Once there is no period — the tariff has ended —, the history has no lower bound.
     await db.subscription.update({ where: { id: subscription!.id }, data: { status: 'cancelled' } })
@@ -1923,6 +1927,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
           ...(cursor === undefined ? {} : { cursor }),
         })
         sizes.push(page.items.length)
+        // Every page counts the whole history, whatever the cursor.
+        expect(page.total).toBe(newestFirst.length)
         seen.push(...page.items.map(({ id }) => id))
         if (page.nextCursor === null) break
         // The cursor is the last line of the page.
@@ -1969,10 +1975,33 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       expect(second.nextCursor).toBeNull()
     })
 
-    it('gives an empty page for a cursor that is no line of the period', async () => {
-      const { workspaceId } = await history()
+    it('gives an empty page for a cursor that is no line of the period, and still the count', async () => {
+      const { workspaceId, newestFirst } = await history()
 
-      expect(await listUsageHistory(db, workspaceId, { cursor: randomUUID() })).toEqual(noHistory)
+      expect(await listUsageHistory(db, workspaceId, { cursor: randomUUID() })).toEqual({
+        ...noHistory,
+        total: newestFirst.length,
+      })
+    })
+
+    it('bounds the history by days of Moscow instead of the period, both days included', async () => {
+      const { workspaceId } = await funded()
+      const blog = await site(workspaceId, 'Blog')
+      // 23:30 of 3 October in Moscow, 00:30 of 4 October, and the 5th.
+      const late = (await charged(workspaceId, blog.id, new Date('2026-10-03T20:30:00.000Z')))
+        .taskId
+      const early = (await charged(workspaceId, blog.id, new Date('2026-10-03T21:30:00.000Z')))
+        .taskId
+      const next = (await charged(workspaceId, blog.id, new Date('2026-10-05T09:00:00.000Z')))
+        .taskId
+
+      const day = await listUsageHistory(db, workspaceId, { from: '2026-10-04', to: '2026-10-04' })
+      expect(day.items.map(({ id }) => id)).toEqual([early])
+      expect(day.total).toBe(1)
+      const since = await listUsageHistory(db, workspaceId, { from: '2026-10-04' })
+      expect(since.items.map(({ id }) => id)).toEqual([next, early])
+      const until = await listUsageHistory(db, workspaceId, { to: '2026-10-03' })
+      expect(until.items.map(({ id }) => id)).toEqual([late])
     })
 
     it('gives the summary the first twenty lines and the cursor of the next page', async () => {
@@ -1993,6 +2022,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
       expect(firstPage.items.map(({ id }) => id)).toEqual(newestFirst.slice(0, 20))
       expect(firstPage.nextCursor).toBe(newestFirst[19])
+      expect(firstPage.total).toBe(22)
       // 22 reserves of 45 credits.
       expect(tariff?.credits).toEqual(
         scale({

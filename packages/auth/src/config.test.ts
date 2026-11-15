@@ -21,7 +21,23 @@ describe('authConfigFromEnv', () => {
       baseUrl: 'http://localhost:3000',
       secret: 'x'.repeat(32),
       captcha: null,
+      yandex: null,
     })
+  })
+
+  it('enables Yandex ID with both keys and refuses one of them', () => {
+    const config = authConfigFromEnv({
+      ...base,
+      YANDEX_CLIENT_ID: 'client-id',
+      YANDEX_CLIENT_SECRET: 'client-secret',
+    })
+    expect(config.yandex).toEqual({ clientId: 'client-id', clientSecret: 'client-secret' })
+    expect(
+      authConfigFromEnv({ ...base, YANDEX_CLIENT_ID: '', YANDEX_CLIENT_SECRET: ' ' }).yandex,
+    ).toBeNull()
+    expect(() => authConfigFromEnv({ ...base, YANDEX_CLIENT_ID: 'client-id' })).toThrow(
+      /YANDEX_CLIENT_SECRET.*both YANDEX_CLIENT_ID and YANDEX_CLIENT_SECRET or neither/s,
+    )
   })
 
   it('treats blank keys as unset, as in .env.example', () => {

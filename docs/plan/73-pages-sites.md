@@ -320,7 +320,7 @@
 
 Применённые миграции не правятся. Остановки (`RAISE EXCEPTION`) ставятся перед `BEGIN`.
 
-### 4.1 `20261115100000_page_trash` (срез 73.3)
+### 4.1 `20261115200000_page_trash` (срез 73.3)
 
 Только добавление, совместима со старым кодом.
 
@@ -338,7 +338,7 @@ CREATE INDEX pages_purge_idx ON pages (purge_after) WHERE purge_after IS NOT NUL
 
 Старый код в окне между `migrate` и `up` отдал бы удалённую страницу, но в этом окне удалённых ещё нет.
 
-### 4.2 `20261115110000_page_trees` (срез 73.6)
+### 4.2 `20261115210000_page_trees` (срез 73.6)
 
 Остановка перед `BEGIN`: если в `pages` есть строка без slug, миграция останавливается (по CHECK таких нет). Дальше в одной транзакции `BEGIN … COMMIT`:
 
@@ -372,7 +372,7 @@ CREATE INDEX pages_purge_idx ON pages (purge_after) WHERE purge_after IS NOT NUL
 
 **Совместимость при выкладке `deploy.sh`.** Старый код читает `pages.slug` и `pages.password_*` у прежних строк — они на месте. Пароль, сменённый старым web в окне между `migrate` и `up -d`, в `page_trees` не попадёт. Новая страница, созданная старым `core` в этом окне, получит отказ `NOT NULL` по `tree_id`, и ход напишет `feed.page_left`. Окно длится секунды, риск записан в §8. Прогон миграции на копии дампа production — ручной шаг перед выкладкой: число сайтов равно числу страниц, slug, пароль и снятие совпадают.
 
-### 4.3 `20261115120000_pages_drop_legacy` (срез 73.12)
+### 4.3 `20261116100000_pages_drop_legacy` (срез 73.12)
 
 Выкладывается следующим выпуском, после 73.6–73.8.
 
@@ -607,7 +607,7 @@ POST без пароля у сайта получает 405 `GET, HEAD`, как 
 
 **73.3 — Удаление с корзиной на нынешней модели (п. 1).**
 - Файлы:
-  - миграция `20261115100000_page_trash`, `schema.prisma`;
+  - миграция `20261115200000_page_trash`, `schema.prisma`;
   - `packages/db/src/pages.ts`: `deletePages`, `restoreDeletedPages`, `purgeDeletedPages`, `servedPage` → удалённая; аудит;
   - `packages/domain/src/pages/{errors,limits}.ts` (`trashDays`);
   - `packages/trpc/src/{routers,services}/pages.ts` (`delete`, `restoreDeleted`, `purge` через `managedWorkspace`), `errors.ts`;
@@ -631,7 +631,7 @@ POST без пароля у сайта получает 405 `GET, HEAD`, как 
   - тест окна;
   - `verify:db`, `test:site`.
 
-**73.5 — Домен пути и пределы** (с Дер36: предел сайтов читает `plans.page_sites`; миграция `20261115130000_plans_page_sites` — столбцы `page_sites` и `page_custom_names` с числами тарифов; сиды).
+**73.5 — Домен пути и пределы** (с Дер36: предел сайтов читает `plans.page_sites`; миграция `20261115220000_plans_page_sites` — столбцы `page_sites` и `page_custom_names` с числами тарифов; сиды).
 - Файлы в `packages/domain/src/pages/`:
   - `path.ts` (`pageSegmentSchema`, `pagePathSchema`, `pagePathOf`);
   - `slug.ts` и `address.ts` (путь в адресе);
@@ -644,7 +644,7 @@ POST без пароля у сайта получает 405 `GET, HEAD`, как 
 
 **73.6 — Миграция сайтов и хранилище.**
 - Файлы:
-  - миграция `20261115110000_page_trees`, `schema.prisma`;
+  - миграция `20261115210000_page_trees`, `schema.prisma`;
   - `packages/db/src/page-trees.ts`: `createPageTree`, `lockTree`, `pageTreeOf`, `servedPage(slug, path)`, `readPageContent`, `movePage` и `setSegment` с редиректами ветки, `setHome`, `setTreePassword`, `takeDownTree`, `restoreTree`, `listWorkspaceTrees`, удаление и восстановление поддерева, надгробие;
   - `pages.ts` — резервы с путём.
 - Проверки (`pnpm verify:db`):
@@ -724,7 +724,7 @@ POST без пароля у сайта получает 405 `GET, HEAD`, как 
 - Файлы:
   - `apps/core/src/pages/operator-cli.ts` (`pages:take-down <slug> [--path]`, `pages:restore-operator`);
   - метрики без id (`raditi_pages_trees`, `raditi_pages_trash_bytes`);
-  - миграция `20261115120000_pages_drop_legacy` (следующим выпуском);
+  - миграция `20261116100000_pages_drop_legacy` (следующим выпуском);
   - CLAUDE.md («Состояние», «Команды» — `verify:pages`), roadmap, «Результат» плана.
 - Проверки:
   - `pnpm gates` без кэша turbo, `pnpm verify:db`, `pnpm verify:pages` (A–D), `pnpm verify:mcp-content`, `pnpm verify:agent-content`, `pnpm verify:browser-task`, `pnpm verify:release`, `pnpm verify:images`, `pnpm --filter e2e test:site`, `/spec-check`;
@@ -735,11 +735,11 @@ POST без пароля у сайта получает 405 `GET, HEAD`, как 
 - Проверки: `pnpm --filter e2e test:billing`, `test:landing` (строки карточек на восьми ширинах), `pnpm verify:billing` (сверка страниц с базой), тесты предела под замком на одноразовой базе (`verify:db`).
 
 **73.14 — Читаемое имя сайта (Дер32, Дер33).**
-- Файлы: `packages/domain/src/pages/slug.ts` (`pageHostLabelSchema`, `RESERVED_PAGE_NAMES`), миграция `20261115140000_page_tree_names` (`page_trees.name UNIQUE`, `page_tree_names_retired (name, tree_id)` — старые имена с 308), `apps/preview/src/pages/pages-server.ts`, `infra/app/traefik/dynamic/pages.yml` и `infra/app/traefik.test.mjs`, `packages/domain/src/browser/open-web.ts`, `packages/browser-providers/src/cloud/page-rules.ts`, процедура `pages.setName` и окно «Адрес сайта…».
+- Файлы: `packages/domain/src/pages/slug.ts` (`pageHostLabelSchema`, `RESERVED_PAGE_NAMES`), миграция `20261115230000_page_tree_names` (`page_trees.name UNIQUE`, `page_tree_names_retired (name, tree_id)` — старые имена с 308), `apps/preview/src/pages/pages-server.ts`, `infra/app/traefik/dynamic/pages.yml` и `infra/app/traefik.test.mjs`, `packages/domain/src/browser/open-web.ts`, `packages/browser-providers/src/cloud/page-rules.ts`, процедура `pages.setName` и окно «Адрес сайта…».
 - Проверки: таблица разбора меток (длина 2/3/25/26/27, `--`, дефис по краям, заглавные, юникод, закрытые имена), `verify:pages` — имя, 308 со slug и со старого имени, отказ без тарифа; `verify:browser-task` — браузер агента открывает сайт по имени; `test:infra` — правило Traefik.
 
 **73.15 — Общие файлы сайта (Дер34, Дер35).**
-- Файлы: миграция `20261115150000_page_files`, `packages/domain/src/pages/files.ts` (пути, типы, сигнатуры, пределы), `packages/domain/src/pages/headers.ts` (CSP с `'self'`, заголовки файлов), `apps/preview/src/pages/pages-server.ts` и `page-cookie.ts` (`SameSite=None`), `apps/mcp/src/pages` (`page_file_put`, `page_file_delete`, `page_files`), `apps/core/src/tasks/page-publications.ts`, кабинет «Файлы сайта».
+- Файлы: миграция `20261115235000_page_files`, `packages/domain/src/pages/files.ts` (пути, типы, сигнатуры, пределы), `packages/domain/src/pages/headers.ts` (CSP с `'self'`, заголовки файлов), `apps/preview/src/pages/pages-server.ts` и `page-cookie.ts` (`SameSite=None`), `apps/mcp/src/pages` (`page_file_put`, `page_file_delete`, `page_files`), `apps/core/src/tasks/page-publications.ts`, кабинет «Файлы сайта».
 - Проверки: `verify:pages` сценарий E — CSS, картинка, шрифт и скрипт со своего хоста грузятся в Chromium и WebKit, с чужого хоста — нет, `fetch('/_files/x')` закрыт, HTML и подменённый тип не отдаются, SVG без скриптов, сайт под паролем: без cookie файл 404, с cookie грузится из песочницы; `checkPageContent` по CSS и JS.
 
 Срезы 73.2–73.4 можно выкатывать сразу.
@@ -846,7 +846,7 @@ POST без пароля у сайта получает 405 `GET, HEAD`, как 
   - `pagesPerWorkspace` 300, `publishesPerHour` 120 — действуют сразу;
   - `pagesPerTree`, `pageDepth`, `pagePathChars`, `treeBytes`, `fileBytes`, `redirectsPerTree`, `sitesWithoutTariff`.
 
-  Ошибки `PAGE_VERSION_CHANGED`, `PAGE_PATH_TAKEN`, `PAGE_HAS_CHILDREN`, `PAGE_FORBIDDEN`, `PAGE_SITE_LIMIT`. `pageSitesLimit` и `pageCustomNamesAllowed` (`sites.ts`). Миграция `20261115130000_plans_page_sites`:
+  Ошибки `PAGE_VERSION_CHANGED`, `PAGE_PATH_TAKEN`, `PAGE_HAS_CHILDREN`, `PAGE_FORBIDDEN`, `PAGE_SITE_LIMIT`. `pageSitesLimit` и `pageCustomNamesAllowed` (`sites.ts`). Миграция `20261115220000_plans_page_sites`:
   - `plans.page_sites`: 2, 10 и 20;
   - `plans.page_custom_names`: «Бизнес» и «Агентство»;
   - сиды несут те же числа; порядок — `pnpm db:deploy`, затем `pnpm db:seed`.
@@ -856,7 +856,7 @@ POST без пароля у сайта получает 405 `GET, HEAD`, как 
   - строки ленты `page_trashed` и `page_restored` — со срезом 73.9: их пишет только удаление агентом.
 - **Ревью 73.5 (14.11.2026)** по двум линзам: одно подтверждённое замечание — три теста прежних ценовых миграций сверяли тарифы с сидами без новых полей и упали бы в `verify:db`; исправлено.
 - **73.6 и 73.7 — сделаны 14.11.2026.**
-  - **Модель.** Миграция `20261115110000_page_trees`: сайт `page_trees`, узлы — `pages.tree_id`, `parent_id`, `segment`, `path` (`/` у главной), `position`. Переадресации — `page_redirects`, исходный Markdown — `page_contents.source`.
+  - **Модель.** Миграция `20261115210000_page_trees`: сайт `page_trees`, узлы — `pages.tree_id`, `parent_id`, `segment`, `path` (`/` у главной), `position`. Переадресации — `page_redirects`, исходный Markdown — `page_contents.source`.
   - **Перенос.** Каждая нынешняя страница стала сайтом из одной главной: id сайта равен id страницы, slug, пароль и эпоха скопированы, снятие хоста перешло на сайт.
   - **Отдача.** `servedPage(slug, path)` находит сайт, узел и переадресацию. Сервер страниц отвечает в таком порядке:
     1. снятый сайт или сайт в корзине — 410;
@@ -874,7 +874,7 @@ POST без пароля у сайта получает 405 `GET, HEAD`, как 
     - снятие поддержкой у главной — снятие хоста;
     - тест «`servedPage` — один запрос» не написан: Prisma строит выборку сама.
 - **73.8 — сделан.**
-  - **Резервы изменений.** Миграция `20261115115000_page_reservation_kinds` вводит виды резервов `edit | update | delete | restore` с `payload`.
+  - **Резервы изменений.** Миграция `20261115215000_page_reservation_kinds` вводит виды резервов `edit | update | delete | restore` с `payload`.
   - **Применение.** `PageChanges` в `core` применяет их после файлов хода. Правка проверяется как версия: содержимое и значения клиента; заголовок и сегмент — значениями клиента. Устаревшая версия даёт `feed.page_left` с причиной `changed`, сделанное — `feed.page_change`.
   - **Ссылки.** Предупреждения о битых и относительных ссылках (`page-links.ts`) попадают в `feed.page.warnings`. Ссылка на страницу того же хода не считается битой.
   - **doc-render.** `treeLinks` у `readingPage`.
@@ -892,11 +892,11 @@ POST без пароля у сайта получает 405 `GET, HEAD`, как 
 - **73.12 — сделан частично:** команды оператора `pages:take-down` и `pages:return` по адресу из жалобы (сайт или страница, запись в журнал аудита). 15.11.2026 — метрики без id: `raditi_pages_trees{state}` (сайты по состоянию главной: `live`, `pending`, `taken_down`, `deleted`, `purged` — надгробие адреса) и `raditi_pages_trash_bytes` (байты страниц в корзине). Их раз за проход считает сборщик `core` (`PageMetrics.refresh` после уборки страниц, `pageSiteStats` в `@repo/db`), а запрос `/metrics` отдаёт последний счёт и в базу не ходит. Миграция удаления `pages.slug` и `pages.password_*` — следующим выпуском, по договору: старый код ещё читает эти столбцы.
 - **73.13 — сделан.** `plans.page_sites` и `page_custom_names` видны на «Тарифах» и на главной рядом с кредитами. Строки тарифов в приложении 1 оферты дополнены, пункт 1.0 — без новой редакции; тест сидов сверяет оферту с тарифами. Текст отказа `PAGE_SITE_LIMIT` называет число сайтов.
 - **73.14 — сделан.**
-  - **База.** Миграция `20261115140000_page_tree_names`: `page_trees.name` и `page_tree_names` — все когда-либо выданные имена, поэтому имя не уходит другому пространству. Имя выдаёт `setTreeName` под замком имени, на тарифе с `page_custom_names`.
+  - **База.** Миграция `20261115230000_page_tree_names`: `page_trees.name` и `page_tree_names` — все когда-либо выданные имена, поэтому имя не уходит другому пространству. Имя выдаёт `setTreeName` под замком имени, на тарифе с `page_custom_names`.
   - **Отдача.** Slug и старое имя ведут 308 на текущее имя, адрес — без схемы. Правило Traefik и `PAGE_LABEL` браузера агента принимают метку от 3 до 26 знаков.
   - **Кабинет.** «Адрес сайта…»: на тарифе без имён — ссылка на «Тарифы».
 - **73.15 — сделан.**
-  - **База.** Миграция `20261115150000_page_files`: `page_files` и вид резерва `asset`.
+  - **База.** Миграция `20261115235000_page_files`: `page_files` и вид резерва `asset`.
   - **Агент.** `page_file_put` кладёт файл outbox по пути `/_files/…`. Конец хода проверяет тип по расширению и сигнатуре, текст — как страницу, и держит пределы: 5 МиБ на файл и 50 МиБ на сайт.
   - **Отдача.** У файла свои заголовки: `nosniff`, `CORP: cross-origin`, CSP с `sandbox`, PDF скачивается. У сайта под паролем без cookie — 404.
   - **Политика и cookie.** CSP опубликованных страниц получила `'self'`; кадр кабинета — без него. Cookie пароля стала `SameSite=None`.
@@ -914,13 +914,13 @@ POST без пароля у сайта получает 405 `GET, HEAD`, как 
   - **Возврат из корзины** ставит страницу под родителя там, где он сейчас: пути её ветки переносятся, а прежний путь ведёт на неё (308).
   - **Повторный `page_file_put`** того же файла с тем же путём — тот же резерв; с другим путём или как страница — `PAGE_RESERVED`.
   - **Поддержка.** Возврат снятого поддержкой возвращает клиенту его собственное прежнее снятие: в журнале аудита записано, кем сайт был снят до поддержки.
-  - **Сборщик** не удаляет сайт с общими файлами или с именем. Очистка последней страницы сайта удаляет и его файлы. Имена переживают удаление сайта (`page_tree_names.tree_id` → NULL), имя остаётся занятым навсегда. Миграция `20261115140000_page_tree_names` поправлена на месте: в общих базах её нет.
+  - **Сборщик** не удаляет сайт с общими файлами или с именем. Очистка последней страницы сайта удаляет и его файлы. Имена переживают удаление сайта (`page_tree_names.tree_id` → NULL), имя остаётся занятым навсегда. Миграция `20261115230000_page_tree_names` поправлена на месте: в общих базах её нет.
   - **Предел сайтов** не считает главную, которую ход оставил без версии.
-  - **Миграция `20261115110000_page_trees`** больше не делает снятые страницы `live`: прежний выпуск читает `pages.state` до своей остановки, поэтому снятое (и поддержкой тоже) отвечает 410 всю выкладку. «Вернуть» снимает оба признака. Миграция поправлена на месте по той же причине.
+  - **Миграция `20261115210000_page_trees`** больше не делает снятые страницы `live`: прежний выпуск читает `pages.state` до своей остановки, поэтому снятое (и поддержкой тоже) отвечает 410 всю выкладку. «Вернуть» снимает оба признака. Миграция поправлена на месте по той же причине.
   - **Лента.** Отказ общего файла и изменения называет то, что не удалось (`feed.page_left.of` — `file` или `change`), а не «Страницу не удалось опубликовать». Изменение, которое ничего не сделало (клиент удалил или вернул сам), строки не пишет. Хост в строках `feed.page` — имя сайта, если оно есть.
   - **Браузер чата.** Прокси сессии открывает сайт и по своему имени (`PAGE_LABEL` = правило `browserPageHost`, контракт сверяет оба).
   - **Агент** видит в `page_list` сайты в корзине (`deleted`) и возвращает их `page_restore` главной.
   - **Кабинет.** Карточка в чате берёт сайт страницы целиком: «Удалить сайт…», «Переместить…» с родителями. «Удалить навсегда…» называет вложенные страницы. «Выше» и «Ниже» перенумеровывают соседей. Отказ сервера звучит его словами (`messageOf`, только доменные ошибки), в том числе у «Вернуть» в карточке и в уведомлении.
   - **Не дефект.** Контракт образа `core` не видел `pages-*.mjs` только потому, что они ещё не в git.
-- **Слияние с `main` (15.11.2026).** В ветку влиты планы 74–77 (`main` до `158b1978`). Их миграции 20261114… уже применены в production, поэтому шесть миграций этого плана переименованы на 20261115… и идут после них: `page_trash`, `page_trees`, `page_reservation_kinds`, `plans_page_sites`, `page_tree_names`, `page_files`. Ни одна общая база их ещё не применяла. В `verify:browser-task` сценарий Q — страницы и документы агента плана 69 (#77), а сайт из страниц этого плана стал сценарием R. Правки D, F и P, которые #77 сделал под те же решения владельца, взяты из `main`: P открывает три браузера, предел восьми проверяет тест базы. Сценарий Q `main` отстал от двух более поздних изменений, и на самом `main` он бы упал: план 74 сделал обязательным `view` у `doc_create` (программа теперь передаёт `text` — «Скачать .md» отдаёт Markdown), а план 73 перенёс адрес на сайт (проверка читает `page_trees`, а не `pages.slug`, пустой у новых страниц). На дереве слияния: `pnpm gates` — код 0, `verify:db` — 798 проверок и восемь наборов, `verify:pages` — 73, `verify:browser-task` — 18 сценариев, 186 проверок и 1 `NOTE`, 790 с.
+- **Слияние с `main` (15.11.2026).** В ветку влиты планы 74–77 (`main` до `158b1978`). Их миграции 20261114… уже применены в production, поэтому шесть миграций этого плана переименованы на 20261115200000–20261115235000 и идут после них и после `20261115100000_task_title_source` (#90, второе слияние того же дня, `main` до `fc840223`): `page_trash`, `page_trees`, `page_reservation_kinds`, `plans_page_sites`, `page_tree_names`, `page_files`. Ни одна общая база их ещё не применяла. В `verify:browser-task` сценарий Q — страницы и документы агента плана 69 (#77), а сайт из страниц этого плана стал сценарием R. Правки D, F и P, которые #77 сделал под те же решения владельца, взяты из `main`: P открывает три браузера, предел восьми проверяет тест базы. Сценарий Q `main` отстал от двух более поздних изменений, и на самом `main` он бы упал: план 74 сделал обязательным `view` у `doc_create` (программа теперь передаёт `text` — «Скачать .md» отдаёт Markdown), а план 73 перенёс адрес на сайт (проверка читает `page_trees`, а не `pages.slug`, пустой у новых страниц). На дереве слияния: `pnpm gates` — код 0, `verify:db` — 798 проверок и восемь наборов, `verify:pages` — 73, `verify:browser-task` — 18 сценариев, 186 проверок и 1 `NOTE`, 790 с.
 - 73.1 — блок spec §20, строка и абзац CLAUDE.md, пометки плана 69, roadmap — 14.11.2026.

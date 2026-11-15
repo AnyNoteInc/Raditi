@@ -158,6 +158,19 @@ export function requestedFormatsSection(formats: RequestedFileFormats): string {
     : `\n## The format the client asked for\n${lines.join('\n')}\n- Make the document in that format, as «Files for the client» says.\n`
 }
 
+/**
+ * The first pass of a chat names it (owner's request of 15.11.2026, as ChatGPT names a chat, in
+ * place of the first words of the request): the agent adds `chat_title` to its result, and the
+ * platform shows it unless the client has renamed the chat. Its words are paid with the pass.
+ */
+export const CHAT_TITLE_SECTION = `
+## The name of this chat
+- This is the first message of the chat. Add the key "chat_title" to your result: a short name
+  of what the client asked, in Russian, 2 to 6 words, at most 60 characters, without quotes and
+  without a final period — for example "Телефон в шапке сайта" or "Список цен на ремонт".
+- Name the client's request, not your answer. Put no secret, password or contact into it.
+`
+
 /** The content tools of the preview: a chat with the browser is told of its two ways below. */
 const CONTENT_TOOLS = `- Content of the site (titles, texts and excerpts of published posts and pages) changes only
   through the platform MCP tools, never by editing files or the database directly.
@@ -406,6 +419,10 @@ function filesSection({ workingSet, addOnlyPaths = [], media }: WorkingCopyFacts
       'is lost with it. When the request needs one, do not make it: tell the client in ' +
       '`client_message`, plainly, that the platform cannot change this file of the site yet, ' +
       'and what you did instead, if anything.',
+    // docs/plan/78-file-mentions.md, У3: the field of the chat puts `@<path>` for a chosen file.
+    "- In the client's words `@` before a path names a file or a folder of the repository, the " +
+      'path from its root. Read it first; when it is outside the parts above, say so instead ' +
+      'of changing it.',
   ]
   if (addOnlyPaths.length && media) {
     const types = Object.keys(media.extensions).join(', ')

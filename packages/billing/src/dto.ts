@@ -390,11 +390,21 @@ export type UsageEntryDto = z.infer<typeof usageEntrySchema>
 /** How many lines a page of the usage history may hold. */
 export const MAX_USAGE_PAGE = 100
 
-export const usageHistoryQuerySchema = z.strictObject({
-  /** `nextCursor` of the previous page; absent for the first one. */
-  cursor: z.uuid().optional(),
-  limit: z.number().int().min(1).max(MAX_USAGE_PAGE).default(20),
-})
+export const usageHistoryQuerySchema = z
+  .strictObject({
+    /** `nextCursor` of the previous page; absent for the first one. */
+    cursor: z.uuid().optional(),
+    limit: z.number().int().min(1).max(MAX_USAGE_PAGE).default(20),
+    /**
+     * The first and the last day of Moscow the lines stand at, `YYYY-MM-DD`, both included.
+     * Either of them puts the history out of the period of the tariff: the dates bound it then.
+     */
+    from: z.iso.date().optional(),
+    to: z.iso.date().optional(),
+  })
+  .refine(({ from, to }) => from === undefined || to === undefined || from <= to, {
+    message: 'from is after to',
+  })
 export type UsageHistoryQuery = z.input<typeof usageHistoryQuerySchema>
 
 export const usageHistoryPageSchema = z.object({
@@ -402,6 +412,8 @@ export const usageHistoryPageSchema = z.object({
   items: z.array(usageEntrySchema),
   /** Pass it as `cursor` to get the next page; null on the last one. */
   nextCursor: z.uuid().nullable(),
+  /** How many lines the history has under the same bounds, on every page. */
+  total: z.number().int().nonnegative(),
 })
 export type UsageHistoryPageDto = z.infer<typeof usageHistoryPageSchema>
 

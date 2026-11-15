@@ -27,6 +27,7 @@ import { CHATS_HREF, NEW_CHAT_HREF, NEW_CHAT_SEGMENT } from './chat-address'
 import { PANE_DRAWN } from './pane-layout'
 import { chatsText, listText } from './chat-texts'
 import { rememberChatsGroup, type ChatsGroup } from './chats-group'
+import { SearchDialog } from './search-dialog'
 import { ArchiveButton, DialogList, useChatsKnownEmpty } from './dialog-list'
 
 /** The page draws the panel of the tools beside a chat: the list gives the chat its room. */
@@ -236,12 +237,12 @@ export function ChatsFrame({
           </Typography>
           {empty ? null : <GroupMenu value={shownGroup} onChange={changeGroup} />}
           {empty ? null : (
-            // The loupe left of «]» (owner's request of 15.11.2026, docs/plan/77, Р2).
+            // The loupe left of «]» opens «Поиск чатов» (docs/plan/77, Р2; docs/plan/79, П1).
             <IconButton
               aria-label={listText.search}
-              aria-pressed={searching}
-              onClick={() => setSearching(!searching)}
-              sx={{ width: 44, height: 44, color: searching ? 'text.primary' : 'text.secondary' }}
+              aria-haspopup="dialog"
+              onClick={() => setSearching(true)}
+              sx={{ width: 44, height: 44, color: 'text.secondary' }}
             >
               <AppIcon name="search" size={18} />
             </IconButton>
@@ -277,12 +278,7 @@ export function ChatsFrame({
             px: { md: 1.5 },
           }}
         >
-          <DialogList
-            grouped={shownGroup === 'projects'}
-            folder={folder}
-            searching={searching}
-            onSearchClose={() => setSearching(false)}
-          />
+          <DialogList grouped={shownGroup === 'projects'} folder={folder} />
         </Box>
         {/* «Архив» at the bottom of the card, whatever the length of the list (Р1). */}
         <Box
@@ -299,6 +295,7 @@ export function ChatsFrame({
           }}
         >
           <ArchiveButton />
+          <SearchDialog open={searching} onClose={() => setSearching(false)} />
         </Box>
       </Box>
 
@@ -347,8 +344,9 @@ export function ChatsFrame({
             {chatsText.back}
           </Box>
         )}
-        {panelOpen ? null : (
-          // The list is hidden: the way to bring it back stands over the content (Н3).
+        {panelOpen || collapsed ? null : (
+          // The list is hidden: the way to bring it back stands over the content (Н3). An open chat
+          // puts it in its own head, on one line with its name (`DialogHead`).
           <Box sx={{ display: { xs: 'none', md: 'flex' }, mt: -1.5, mb: 1, ml: -1.5 }}>
             <PanelToggle place="content" />
           </Box>

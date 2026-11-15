@@ -68,3 +68,8 @@ export type AutoRenewalCancel = Billing['cancelAutoRenew']
 export type AutoRenewalResume = Billing['resumeAutoRenew']
 /** The coming charge of auto-renewal, as the page that asks for the consent shows it. */
 export type ComingRenewal = NonNullable<Billing['autoRenewal']['renewal']>
+
+/** The charts of «Использование»: the days of the span, oldest first, today last. */
+export type UsageActivity = Billing['usageActivity']
+/** One day in Moscow: what the customer did in the chats and the tokens of the model. */
+export type UsageActivityDay = UsageActivity['days'][number]

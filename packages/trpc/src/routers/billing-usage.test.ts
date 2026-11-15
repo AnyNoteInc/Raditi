@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type * as BillingModule from '@repo/billing'
 import {
+  getUsageActivity,
   getUsageSummary,
   listUsageHistory,
   paymentLetterKey,
@@ -31,12 +32,14 @@ vi.mock('@repo/billing', async (importOriginal) => {
   const original = await importOriginal<typeof BillingModule>()
   return {
     ...original,
+    getUsageActivity: vi.fn(original.getUsageActivity),
     getUsageSummary: vi.fn(original.getUsageSummary),
     listUsageHistory: vi.fn(original.listUsageHistory),
   }
 })
 const summary = vi.mocked(getUsageSummary)
 const history = vi.mocked(listUsageHistory)
+const activity = vi.mocked(getUsageActivity)
 
 /** 15:00 in Moscow on 4 October 2026: the clock of every test here. */
 const NOW = new Date('2026-10-04T12:00:00.000Z')
@@ -201,7 +204,7 @@ const plan = {
   creditsPerWeek: null,
   maxSites: 3,
 }
-const noPage: UsageHistoryPageDto = { items: [], nextCursor: null }
+const noPage: UsageHistoryPageDto = { items: [], nextCursor: null, total: 0 }
 const entry = (patch: Partial<UsageHistoryPageDto['items'][number]> = {}) => ({
   id: randomUUID(),
   at: new Date('2026-10-03T08:00:00.000Z'),
@@ -278,7 +281,7 @@ const onTariff = (): UsageSummaryDto => ({
   gift: { left: 0, held: 0, granted: false },
   pack: { left: 10, held: 0 },
   totalLeft: 55,
-  history: { items: [entry()], nextCursor: null },
+  history: { items: [entry()], nextCursor: null, total: 1 },
   spendable: 55,
   spendableNow: 11,
   setAside: 23,
@@ -315,6 +318,47 @@ describe('usage access', () => {
     expect(db.workspace.findFirst).not.toHaveBeenCalled()
     expect(summary).not.toHaveBeenCalled()
     expect(history).not.toHaveBeenCalled()
+  })
+})
+
+describe('billing.usageActivity', () => {
+  it('reads the days of the personal workspace as of now', async () => {
+    const { prisma } = fakeDb()
+    const days = [{ date: '2026-10-04', actions: 3, credits: { tariff: 10, gift: 2, pack: 0 } }]
+    activity.mockResolvedValueOnce({ days })
+
+    expect(await createCaller(context(prisma)).billing.usageActivity({ days: 7 })).toEqual({ days })
+    expect(activity).toHaveBeenCalledExactlyOnceWith(prisma, {
+      workspaceId: WORKSPACE,
+      days: 7,
+      now: NOW,
+    })
+  })
+
+  it('answers days of zeros in Moscow for a user without a workspace', async () => {
+    const { prisma, db } = fakeDb()
+    db.workspace.findFirst.mockResolvedValue(null)
+    // 01:00 of 5 October in Moscow, still 4 October by UTC.
+    vi.setSystemTime(new Date('2026-10-04T22:00:00.000Z'))
+
+    const { days } = await createCaller(context(prisma)).billing.usageActivity({ days: 30 })
+    expect(days).toHaveLength(30)
+    expect(days[0]).toEqual({
+      date: '2026-09-06',
+      actions: 0,
+      credits: { tariff: 0, gift: 0, pack: 0 },
+    })
+    expect(days.at(-1)?.date).toBe('2026-10-05')
+    expect(activity).not.toHaveBeenCalled()
+  })
+
+  it('refuses a span the page does not offer', async () => {
+    const { prisma } = fakeDb()
+    const call = createCaller(context(prisma)).billing.usageActivity as (
+      input: unknown,
+    ) => Promise<unknown>
+    await expect(call({ days: 14 })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(activity).not.toHaveBeenCalled()
   })
 })
 
@@ -578,7 +622,11 @@ describe('billing.usageHistory', () => {
 
   it('reads the page after the cursor from the personal workspace', async () => {
     const { prisma } = fakeDb()
-    const page: UsageHistoryPageDto = { items: [entry(), entry()], nextCursor: randomUUID() }
+    const page: UsageHistoryPageDto = {
+      items: [entry(), entry()],
+      nextCursor: randomUUID(),
+      total: 5,
+    }
     history.mockResolvedValueOnce(page)
 
     expect(await createCaller(context(prisma)).billing.usageHistory({ cursor })).toEqual(page)
@@ -593,6 +641,22 @@ describe('billing.usageHistory', () => {
     await createCaller(context(prisma)).billing.usageHistory({ cursor, limit: 50 })
 
     expect(history).toHaveBeenCalledExactlyOnceWith(prisma, WORKSPACE, { cursor, limit: 50 })
+  })
+
+  it('passes the days of Moscow the lines are bounded by', async () => {
+    const { prisma } = fakeDb()
+    history.mockResolvedValueOnce(noPage)
+
+    await createCaller(context(prisma)).billing.usageHistory({
+      from: '2026-10-01',
+      to: '2026-10-04',
+    })
+
+    expect(history).toHaveBeenCalledExactlyOnceWith(prisma, WORKSPACE, {
+      from: '2026-10-01',
+      to: '2026-10-04',
+      limit: 20,
+    })
   })
 
   it('gives an empty page to a user without a workspace and reads no further', async () => {
@@ -611,6 +675,8 @@ describe('billing.usageHistory', () => {
     { cursor, limit: 2.5 },
     { cursor, workspaceId: WORKSPACE },
     { cursor, userId: randomUUID() },
+    { from: '2026-10-05', to: '2026-10-04' },
+    { from: '04.10.2026' },
   ])(
     'rejects a query that is not a cursor and a size, or names whose history it is: %o',
     async (input) => {
@@ -626,7 +692,7 @@ describe('billing.usageHistory', () => {
   it('does not show a page its schema does not describe', async () => {
     const { prisma } = fakeDb()
     // A charged task that does not say what it was charged.
-    history.mockResolvedValueOnce({ items: [entry({ credits: null })], nextCursor: null })
+    history.mockResolvedValueOnce({ items: [entry({ credits: null })], nextCursor: null, total: 1 })
 
     await expect(
       createCaller(context(prisma)).billing.usageHistory({ cursor }),

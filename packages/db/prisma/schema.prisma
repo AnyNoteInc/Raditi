@@ -562,6 +562,10 @@ model Task {
   /// Set from the first request (feed design, «Ограничения в базе»); the client may rename the
   /// dialog (`task.rename`, owner's request of 26.10.2026).
   title           String?      @db.VarChar(120)
+  /// Who named the dialog: its first request, the agent on its first pass (owner's request of
+  /// 15.11.2026, paid with the pass) or the client. The agent renames only a `request` title, so
+  /// a name the client chose stays.
+  titleSource     TaskTitleSource @default(request) @map("title_source")
   /// Why a queued task waits; cleared when it leaves `queued` (CHECK tasks_waiting_check).
   waiting         TaskWaiting?
   /// What the task's environment needs (docs/plan/57-browser-tasks.md, Б2): the site's
@@ -3227,4 +3231,11 @@ model LlmTurnCost {
   model LlmModel @relation(fields: [modelId], references: [id], onDelete: Cascade, map: "llm_turn_costs_model_fkey")
 
   @@map("llm_turn_costs")
+}
+
+/// Who named a dialog (`tasks.title_source`, owner's request of 15.11.2026).
+enum TaskTitleSource {
+  request
+  agent
+  client
 }

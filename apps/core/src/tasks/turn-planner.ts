@@ -43,6 +43,7 @@ import {
   browserTaskInstructions,
   CONTINUE_PROMPT,
   openTaskInstructions,
+  CHAT_TITLE_SECTION,
   requestedFormatsSection,
   turnInstructions,
   type PreviewFacts,
@@ -852,7 +853,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
                 inboxFacts,
                 browser?.guide ? { guide: browser.guide } : null,
               )
-      }${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}`,
+      }${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),

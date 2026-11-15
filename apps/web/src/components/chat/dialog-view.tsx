@@ -39,6 +39,7 @@ import {
 } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { PanelToggle } from '@/components/application/cabinet-panel'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
 import { siteHref } from '@/components/site/site-nav'
 import { SiteFiles } from '@/components/site/site-files'
@@ -132,6 +133,7 @@ import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
 import { requestHistoryOf } from './prompt-history'
 import { QueueCards, useChatQueue } from './queue-cards'
+import { useMentionFiles } from './use-mention-files'
 import { useWaitingTitle } from './use-waiting-title'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
@@ -253,7 +255,19 @@ function DialogHead({
         minWidth: 0,
       }}
     >
-      <Box sx={{ gridColumn: 1, gridRow: 1, minWidth: 0, display: 'flex' }}>
+      <Box sx={{ gridColumn: 1, gridRow: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+        {/* The list of chats is hidden: the way back to it starts the line of the name (Н3). */}
+        <Box
+          sx={{
+            flex: 'none',
+            ml: -1.5,
+            mr: 0.5,
+            display: { xs: 'none', md: 'flex' },
+            '&:empty': { display: 'none' },
+          }}
+        >
+          <PanelToggle place="content" />
+        </Box>
         {renaming ? (
           <RenameField
             taskId={taskId}
@@ -547,6 +561,8 @@ export function DialogView({
   // What the chat works with (docs/plan/61-chats-first.md, §5.6): the two do not exclude each other.
   const withRepository = head?.task.requirements.repository === true
   const withBrowser = head?.task.requirements.browser === true
+  // `@` names a file of the chat's working copy (docs/plan/78-file-mentions.md).
+  const mentions = useMentionFiles(withRepository ? siteId : null, taskId)
   const browserLive = withBrowser && sessionLive(head?.browser ?? null)
   // The stream goes while the tab of the browser is on the screen, beside the dialog or in its
   // place; a press of «Взять управление» or «Продолжить работу агента» opens it for that press alone
@@ -1356,6 +1372,7 @@ export function DialogView({
         onTextChange={fieldTextChanged}
         history={requestHistory}
         speech={speech}
+        mentions={mentions}
         {...(working
           ? {
               stop: {

@@ -19,6 +19,7 @@ import {
   listPayments,
   listPlans,
   packOfferFor,
+  getUsageActivity,
   listUsageHistory,
   orderSyncSchema,
   packSchema,
@@ -43,6 +44,8 @@ import {
   syncPaymentMethod,
   unlinkPaymentMethod,
   usageHistoryPageSchema,
+  usageActivityQuerySchema,
+  usageActivitySchema,
   usageHistoryQuerySchema,
   usageSummarySchema,
   type BillingDeps,
@@ -167,7 +170,18 @@ const usageOutput = z.intersection(
   }),
 )
 
-const noHistory: UsageHistoryPageDto = { items: [], nextCursor: null }
+const noHistory: UsageHistoryPageDto = { items: [], nextCursor: null, total: 0 }
+
+/** The days of a span in Moscow, oldest first, with nothing on them. */
+function emptyActivity(days: number, now: Date) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(now)
+  const base = Date.parse(`${today}T00:00:00.000Z`)
+  return Array.from({ length: days }, (_, index) => ({
+    date: new Date(base - (days - 1 - index) * 86_400_000).toISOString().slice(0, 10),
+    actions: 0,
+    credits: { tariff: 0, gift: 0, pack: 0 },
+  }))
+}
 
 const noPayments: PaymentsPageDto = { items: [], nextCursor: null }
 
@@ -379,6 +393,22 @@ export const billingRouter = router({
     .query(async ({ ctx, input }) => {
       const workspaceId = await personalWorkspaceId(ctx)
       return workspaceId === null ? noHistory : listUsageHistory(ctx.prisma, workspaceId, input)
+    }),
+
+  /**
+   * The charts of «Использование»: day by day over the last `days` days in Moscow, what the
+   * customer wrote or pressed in the chats of the workspace and the credits charged, by account. A user without a workspace reads days of zeros.
+   */
+  usageActivity: consentedProcedure
+    .input(usageActivityQuerySchema)
+    .output(usageActivitySchema)
+    .query(async ({ ctx, input }) => {
+      const workspaceId = await personalWorkspaceId(ctx)
+      const now = new Date()
+      if (workspaceId !== null) {
+        return getUsageActivity(ctx.prisma, { workspaceId, days: input.days, now })
+      }
+      return { days: emptyActivity(input.days, now) }
     }),
 
   /**
