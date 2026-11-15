@@ -11,8 +11,7 @@ const ADAPTERS =
 // A leaf: imports nothing of the repository. The apps import it; no tier rule of a package
 // allows it.
 const LEAVES = 'ip-address'
-const SERVICES =
-  'auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render'
+const SERVICES = 'auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render'
 // The frame and runtime of the apps (process start and stop, Nest wiring, health):
 // app-side code that lives in a package, so it may use observability, which no library package may.
 const RUNTIME = 'app-bootstrap|service-runtime'
@@ -422,8 +421,7 @@ module.exports = {
       },
       to: {
         path: '^apps/mcp/src/(web|search|pages)/',
-        pathNot:
-          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments)\\.ts$',
+        pathNot: '^apps/mcp/src/(search/search-arguments|pages/pages-arguments)\\.ts$',
       },
     },
     {

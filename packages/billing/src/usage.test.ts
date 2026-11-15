@@ -742,7 +742,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
     expect(summary.pack).toEqual({ left: 100, held: 0 })
     expect(summary.totalLeft).toBe(400)
-      expect(summary.tariff).toMatchObject({ credits: FULL })
+    expect(summary.tariff).toMatchObject({ credits: FULL })
     expect(summary.history).toEqual(noHistory)
   })
 

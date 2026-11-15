@@ -5,11 +5,7 @@ import type { BrowserSessionRuntimeSpec } from '@repo/domain'
 import type Docker from 'dockerode'
 import { describe, expect, it } from 'vitest'
 
-import {
-  BROWSER_READY_FILE,
-  BROWSER_SECRET_FILE,
-  FORWARD_READY_FILE,
-} from './kit.ts'
+import { BROWSER_READY_FILE, BROWSER_SECRET_FILE, FORWARD_READY_FILE } from './kit.ts'
 import type { DockerBrowserSessionConfig } from './config.ts'
 import { browserSessionBridge } from './resources.ts'
 import { createDockerBrowserSessionRuntime, localSiteRoute } from './runtime.ts'

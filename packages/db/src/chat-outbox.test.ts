@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import {
-  enqueueAgentTurn,
-  enqueueAgentWaitingPasses,
-  enqueueBrowserEnsure,
-} from './chat-outbox.ts'
+import { enqueueAgentTurn, enqueueAgentWaitingPasses, enqueueBrowserEnsure } from './chat-outbox.ts'
 import type { Prisma } from './generated/prisma/client.ts'
 import type { OutboxWriter } from './outbox.ts'
 

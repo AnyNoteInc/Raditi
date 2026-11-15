@@ -82,11 +82,7 @@ const nextConfig: NextConfig = {
   // Loaded by Node at runtime instead of being bundled: the pg driver and Prisma's runtime, and
   // the drivers the site connection wizard reaches a client's server with — ssh2 loads native
   // optional bindings, basic-ftp and mysql2 open their own sockets.
-  serverExternalPackages: [
-    'pg',
-    '@prisma/client',
-    '@prisma/adapter-pg',
-  ],
+  serverExternalPackages: ['pg', '@prisma/client', '@prisma/adapter-pg'],
   ...(workspaceRoot ? { outputFileTracingRoot: workspaceRoot } : {}),
   experimental: {
     // Next copies the body of every request that passes proxy.ts (every page) into memory and

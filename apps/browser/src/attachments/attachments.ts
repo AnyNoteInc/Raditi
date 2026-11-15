@@ -89,10 +89,7 @@ export class AttachmentFiles {
     this.#inbox = inbox
   }
 
-  async read(input: {
-    taskId: string
-    attachmentIds: readonly string[]
-  }): Promise<BrowserFile[]> {
+  async read(input: { taskId: string; attachmentIds: readonly string[] }): Promise<BrowserFile[]> {
     const unknown = () => browserTaskError('BROWSER_ATTACHMENT_UNKNOWN')
     if (input.attachmentIds.length > attachmentLimits.perMessage) throw unknown()
     const rows = []

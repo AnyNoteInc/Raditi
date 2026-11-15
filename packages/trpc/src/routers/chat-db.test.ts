@@ -1286,7 +1286,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         })
       })
 
-
       it('says when the driver has no compaction, and the command goes nowhere', async () => {
         const owner = await person()
         const caller = callerOf(owner)
@@ -1607,7 +1606,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         expect(await verdictOf(caller, taskId)).toBe('awaiting_answer')
       })
 
-
       describe('`/redo` (docs/plan/61-chats-first.md, §5.14)', () => {
         const redoVerdict = async (caller: ReturnType<typeof callerOf>, taskId: string) =>
           (await caller.task.commands({ taskId })).find((item) => item.id === 'turn_redo')?.refusal
@@ -1741,7 +1739,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           })
           expect(await redoVerdict(caller, taskId)).toBe('finished')
         })
-
       })
     })
 
@@ -1876,7 +1873,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       await asked(taskId, question)
       await caller.task.message({ taskId, requestId: randomUUID(), text: 'И ещё' })
       expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([3])
-
     })
 
     it('takes «Продолжить» after a charged pass, in a chain of its own', async () => {

@@ -123,10 +123,7 @@ export class BrowserSessions {
       if (session?.taskId !== taskId || session.status !== 'starting') return
       for (let retries = 0; ;) {
         try {
-          const state = await client.ensure(
-            { sessionId, taskId, takeControl: false },
-            { signal },
-          )
+          const state = await client.ensure({ sessionId, taskId, takeControl: false }, { signal })
           if (!isBrowserSessionLive(state.status))
             throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
           if (state.status === 'ready') await markBrowserSessionReady(db, { sessionId })

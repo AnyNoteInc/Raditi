@@ -87,10 +87,7 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         terminalTaskStatuses.includes(task.status)
       )
         throw conflict('Product task is not available for a turn')
-      if (
-        requirements.repository ||
-        task.needsBrowser !== requirements.browser
-      )
+      if (requirements.repository || task.needsBrowser !== requirements.browser)
         throw conflict('The turn plan does not meet the requirements of its task')
       if (turn !== task.turnNo + 1) return null
       if (await tx.turnAssignment.count({ where: { taskId: task.id, finishedAt: null } }))

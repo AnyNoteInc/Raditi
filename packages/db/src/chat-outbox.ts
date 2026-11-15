@@ -119,8 +119,6 @@ export async function enqueueAgentWaitingPasses(
   return put
 }
 
-
-
 /**
  * The start of a browser session (docs/plan/61-chats-first.md, К11). `window` is
  * `browserEnsureWindow` of the database's time: one job per session in each of them, so a session
@@ -143,4 +141,3 @@ export async function enqueueBrowserEnsure(
     dedupeKey: browserEnsureDedupeKey(payload, options.window),
   })
 }
-

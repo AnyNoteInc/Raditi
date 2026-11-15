@@ -13,9 +13,7 @@ import { authEnv, databaseUrl } from '../../fixtures/billing-stand.ts'
  * and no core run here: the window of the task is drawn from these rows alone. Everything goes
  * with the user (its workspace, tasks and their sessions).
  */
-export async function addBrowserTask(
-  userId: string,
-): Promise<{ taskId: string; title: string }> {
+export async function addBrowserTask(userId: string): Promise<{ taskId: string; title: string }> {
   const title = 'Новость о летней веранде'
   const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
   try {

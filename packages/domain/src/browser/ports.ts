@@ -76,7 +76,6 @@ export interface CloudBrowserObservation {
   tree: string
 }
 
-
 /** One JPEG of `page.screencast` of the shown page. */
 export interface CloudBrowserFrame {
   pageId: number

@@ -2083,9 +2083,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
       data: Partial<Prisma.OrderUncheckedCreateInput> = {},
     ) {
       const { workspaceId } = await fixtures.workspace()
-      const plan = await fixtures.plan(
-        kind === 'pack' ? { kind: 'pack', packCredits: 10 } : {},
-      )
+      const plan = await fixtures.plan(kind === 'pack' ? { kind: 'pack', packCredits: 10 } : {})
       return fixtures.order({
         workspaceId,
         planId: plan.id,

@@ -316,11 +316,7 @@ export async function schedulePlanChange(
   })
   // What a renewal could not charge for is not offered: a tariff without a price. The quota of a
   // quota plan is never null in the database; the types do not know it.
-  if (
-    plan === null ||
-    plan.creditsPerMonth === null ||
-    !plan.price.greaterThan(0)
-  ) {
+  if (plan === null || plan.creditsPerMonth === null || !plan.price.greaterThan(0)) {
     throw billingPlanNotFound()
   }
   const found = await liveSubscriptionOf(deps, userId)

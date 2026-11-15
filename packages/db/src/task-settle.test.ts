@@ -256,8 +256,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
         deadlineAt: new Date(Date.now() + 60_000),
       },
     })
-    expect(await rewindDialog(db, { taskId: assigned.id, turnNo: 1, to: 'awaiting_user' })).toBeNull()
-    expect((await db.taskTurn.findFirstOrThrow({ where: { taskId: assigned.id } })).undoneAt).toBeNull()
+    expect(
+      await rewindDialog(db, { taskId: assigned.id, turnNo: 1, to: 'awaiting_user' }),
+    ).toBeNull()
+    expect(
+      (await db.taskTurn.findFirstOrThrow({ where: { taskId: assigned.id } })).undoneAt,
+    ).toBeNull()
   })
 
   it('takes a completed turn back once, never one whose result was refused', async () => {

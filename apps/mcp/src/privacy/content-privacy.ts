@@ -1,11 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import {
-  badRequest,
-  contactMarkerPattern,
-  DomainError,
-  type SecretStore,
-} from '@repo/domain'
+import { badRequest, contactMarkerPattern, DomainError, type SecretStore } from '@repo/domain'
 import { z } from 'zod'
 
 import { findContacts } from './content-contacts.ts'
@@ -129,10 +124,9 @@ export class ContentPrivacy {
    * number reads as a phone depends on what stands around it: every restored contact must be
    * one the next read hides again, by the same search and the same map, or nothing is written.
    */
-  async rehydrate<Patch extends Readonly<Record<string, string>> = Readonly<Record<string, string>>>(
-    scope: { siteId: string; taskId: string },
-    patch: Patch,
-  ): Promise<Patch> {
+  async rehydrate<
+    Patch extends Readonly<Record<string, string>> = Readonly<Record<string, string>>,
+  >(scope: { siteId: string; taskId: string }, patch: Patch): Promise<Patch> {
     const values = Object.values(patch)
     if (!values.some((value) => value.includes('[[raditi:'))) return { ...patch }
     const { entries } = await this.#read(contentMaskPath(scope))

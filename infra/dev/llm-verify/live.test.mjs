@@ -1690,11 +1690,7 @@ test('a signal sent to the command of a stand reaches the stand: its package lin
 })
 
 test('no script of the stands and no document of theirs names the flags that never existed', async () => {
-  for (const file of [
-    stands.gateway,
-    'infra/dev/llm-verify/README.md',
-    'infra/egress/README.md',
-  ]) {
+  for (const file of [stands.gateway, 'infra/dev/llm-verify/README.md', 'infra/egress/README.md']) {
     const source = await readFile(join(repository, file), 'utf8')
     assert.equal(/--real\b|--record\b|--key-file\b/.test(source), false, file)
   }

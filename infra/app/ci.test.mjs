@@ -561,10 +561,7 @@ test('every test suite enabled by an environment variable is enabled by a workfl
 test('every suite switched on one by one is named in a step of a workflow', () => {
   // `test:db` takes its suites by a pattern. These variables switch on a suite only where a step
   // names its file: a variable set elsewhere leaves a suite no job ever runs.
-  const oneByOne = [
-    'RADITI_BROWSER_DOCKER_TESTS',
-    'RADITI_BROWSER_LOCAL_TESTS',
-  ]
+  const oneByOne = ['RADITI_BROWSER_DOCKER_TESTS', 'RADITI_BROWSER_LOCAL_TESTS']
   let checked = 0
   const missing = []
   for (const file of testFiles) {

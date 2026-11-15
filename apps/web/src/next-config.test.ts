@@ -84,12 +84,8 @@ describe('request bodies', () => {
 
 describe('packages', () => {
   it('transpiles no package of the sites that went with projects (plan 83)', () => {
-    expect(config.transpilePackages).not.toEqual(
-      expect.arrayContaining(['@repo/site-adapters']),
-    )
-    expect(config.transpilePackages).not.toEqual(
-      expect.arrayContaining(['@repo/site-connections']),
-    )
+    expect(config.transpilePackages).not.toEqual(expect.arrayContaining(['@repo/site-adapters']))
+    expect(config.transpilePackages).not.toEqual(expect.arrayContaining(['@repo/site-connections']))
   })
 
   it('leaves the database driver to Node instead of bundling it', () => {

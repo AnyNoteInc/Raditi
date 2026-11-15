@@ -98,10 +98,7 @@ export interface SessionContext {
   browsers: CloudBrowserFactory
   store: BrowserWorkerStore
   files: {
-    read(input: {
-      taskId: string
-      attachmentIds: readonly string[]
-    }): Promise<BrowserFile[]>
+    read(input: { taskId: string; attachmentIds: readonly string[] }): Promise<BrowserFile[]>
   }
   /**
    * Snapshots for the client (`web_screenshot`): the bytes into the inbox under the task, then

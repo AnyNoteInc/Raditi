@@ -661,9 +661,7 @@ describe('the refusals of a chat and of its variables', () => {
   it('says of a refused command what the list of commands says of it', () => {
     const text = (details: unknown) =>
       toTRPCError(new DomainError('CHAT_COMMAND_UNAVAILABLE', 'Refused', 409, details)).message
-    expect(text({ command: 'compact', refusal: 'nothing_to_compact' })).toBe(
-      'Сжимать пока нечего',
-    )
+    expect(text({ command: 'compact', refusal: 'nothing_to_compact' })).toBe('Сжимать пока нечего')
     expect(text({ command: 'turn_undo', refusal: 'busy' })).toBe('Подождите: агент ещё работает')
     // A refusal of a command of a site that went with projects says the general words.
     expect(text({ command: 'release', refusal: 'not_allowed' })).toBe(
@@ -682,9 +680,7 @@ describe('the refusals of a chat and of its variables', () => {
     const formatted = (code: string, details: unknown) =>
       formatError(shape, toTRPCError(new DomainError(code, 'Refused', 409, details)), false)
 
-    expect(
-      formatted('CHAT_COMMAND_UNAVAILABLE', { command: 'compact', refusal: 'busy' }),
-    ).toEqual({
+    expect(formatted('CHAT_COMMAND_UNAVAILABLE', { command: 'compact', refusal: 'busy' })).toEqual({
       ...shape,
       message: 'Подождите: агент ещё работает',
       data: {

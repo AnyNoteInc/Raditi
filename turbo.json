@@ -1,10 +1,7 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
-  "globalDependencies": [
-    ".env",
-    ".nvmrc"
-  ],
+  "globalDependencies": [".env", ".nvmrc"],
   "globalEnv": [
     "APP_ENV",
     "APP_URL",
@@ -146,52 +143,25 @@
   ],
   "tasks": {
     "db:generate": {
-      "dependsOn": [
-        "^db:generate"
-      ],
-      "inputs": [
-        "prisma/**",
-        "prisma.config.ts"
-      ],
-      "outputs": [
-        "src/generated/**"
-      ]
+      "dependsOn": ["^db:generate"],
+      "inputs": ["prisma/**", "prisma.config.ts"],
+      "outputs": ["src/generated/**"]
     },
     "build": {
-      "dependsOn": [
-        "^build",
-        "^db:generate",
-        "db:generate"
-      ],
-      "outputs": [
-        ".next/**",
-        "!.next/cache/**",
-        "dist/**"
-      ]
+      "dependsOn": ["^build", "^db:generate", "db:generate"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
     },
     "transit": {
-      "dependsOn": [
-        "^transit"
-      ]
+      "dependsOn": ["^transit"]
     },
     "typecheck": {
-      "dependsOn": [
-        "^db:generate",
-        "db:generate",
-        "transit"
-      ]
+      "dependsOn": ["^db:generate", "db:generate", "transit"]
     },
     "lint": {
-      "dependsOn": [
-        "transit"
-      ]
+      "dependsOn": ["transit"]
     },
     "test": {
-      "dependsOn": [
-        "^db:generate",
-        "db:generate",
-        "transit"
-      ],
+      "dependsOn": ["^db:generate", "db:generate", "transit"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/.env.example",
@@ -209,19 +179,11 @@
       ]
     },
     "dev": {
-      "dependsOn": [
-        "^build",
-        "^db:generate",
-        "db:generate"
-      ],
+      "dependsOn": ["^build", "^db:generate", "db:generate"],
       "cache": false,
       "persistent": true,
-      "passThroughEnv": [
-        "NODE_EXTRA_CA_CERTS"
-      ]
+      "passThroughEnv": ["NODE_EXTRA_CA_CERTS"]
     }
   },
-  "globalPassThroughEnv": [
-    "PATH"
-  ]
+  "globalPassThroughEnv": ["PATH"]
 }

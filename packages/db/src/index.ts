@@ -24,11 +24,7 @@ export {
   enqueueBrowserEnsure,
   enqueueAgentWaitingPasses,
 } from './chat-outbox.ts'
-export {
-  enqueueChatNotify,
-  enqueueQueueDrain,
-  enqueueTurnCancel,
-} from './task-commands-outbox.ts'
+export { enqueueChatNotify, enqueueQueueDrain, enqueueTurnCancel } from './task-commands-outbox.ts'
 export {
   enqueueTelegramDeliver,
   enqueueTelegramSend,
