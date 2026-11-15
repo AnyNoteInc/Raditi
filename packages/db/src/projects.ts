@@ -1,0 +1,392 @@
+import {
+  compareProjects,
+  projectArchived,
+  projectNotFound,
+  projectPurgeAfter,
+  taskProjectBusy,
+  type ProjectListSort,
+  type ProjectListView,
+} from '@repo/domain'
+
+import type { Prisma, TaskStatus } from './generated/prisma/client.ts'
+
+// The projects of a workspace (docs/plan/84-projects.md, ПР1, ПР2, ПР4, ПР20; slice 84.3). Only the
+// author of a project sees and changes it, while they are a member of its workspace: every
+// function here takes the user and answers PROJECT_NOT_FOUND for any project of someone else, one
+// that does not exist, and — but for the trash and «Вернуть» — one in the trash. Words are checked
+// by the domain (`projectNameOf`, `projectGoalOf`) before they come here.
+
+type Tx = Prisma.TransactionClient
+
+/** What a caller reads of a project it acts on. */
+export interface OwnedProject {
+  id: string
+  workspaceId: string
+  name: string
+  archivedAt: Date | null
+  deletedAt: Date | null
+  purgeAfter: Date | null
+}
+
+const owned = {
+  id: true,
+  workspaceId: true,
+  name: true,
+  archivedAt: true,
+  deletedAt: true,
+  purgeAfter: true,
+} as const
+
+/** The projects of `userId`: theirs, in a workspace they are a member of (ПР1). */
+const ofUser = (userId: string) =>
+  ({
+    createdById: userId,
+    workspace: { members: { some: { userId } } },
+  }) satisfies Prisma.ProjectWhereInput
+
+/**
+ * The project, when `userId` is its author and a member of its workspace; null otherwise. A project
+ * in the trash is found only with `deleted: true` — for «Вернуть» and the trash itself.
+ */
+export function projectOwnedBy(
+  db: Pick<Tx, 'project'>,
+  projectId: string,
+  userId: string,
+  options: { deleted?: boolean } = {},
+): Promise<OwnedProject | null> {
+  return db.project.findFirst({
+    where: { id: projectId, ...ofUser(userId), ...(options.deleted ? {} : { deletedAt: null }) },
+    select: owned,
+  })
+}
+
+/**
+ * The live project of `userId` a chat may start in, or go into (ПР2, ПР20, ПР30): PROJECT_NOT_FOUND
+ * for none, PROJECT_ARCHIVED for one in «Архив».
+ */
+export async function projectForChat(
+  db: Pick<Tx, 'project'>,
+  projectId: string,
+  userId: string,
+): Promise<OwnedProject> {
+  const project = await projectOwnedBy(db, projectId, userId)
+  if (project === null) throw projectNotFound()
+  if (project.archivedAt !== null) throw projectArchived()
+  return project
+}
+
+export interface ProjectCreation {
+  /** UUID v7 from the browser: a repeat returns the same project (ПР1). */
+  id: string
+  workspaceId: string
+  userId: string
+  name: string
+  goal: string | null
+  now: Date
+}
+
+/**
+ * A new project in a workspace of its author. A repeat with the same id by the same author returns
+ * `created: false`; an id taken by anything else — someone else's project, or one in the trash — is
+ * PROJECT_NOT_FOUND, and the caller learns nothing of it.
+ */
+export async function createProject(
+  tx: Tx,
+  input: ProjectCreation,
+): Promise<{ projectId: string; created: boolean }> {
+  const { count } = await tx.project.createMany({
+    data: [
+      {
+        id: input.id,
+        workspaceId: input.workspaceId,
+        createdById: input.userId,
+        name: input.name,
+        goal: input.goal,
+        activityAt: input.now,
+        createdAt: input.now,
+      },
+    ],
+    skipDuplicates: true,
+  })
+  if (count === 1) return { projectId: input.id, created: true }
+  const earlier = await tx.project.findUnique({
+    where: { id: input.id },
+    select: { createdById: true, deletedAt: true },
+  })
+  if (earlier === null || earlier.createdById !== input.userId || earlier.deletedAt !== null)
+    throw projectNotFound()
+  return { projectId: input.id, created: false }
+}
+
+/** A project as its page reads it. */
+export interface ProjectView {
+  id: string
+  workspaceId: string
+  name: string
+  goal: string | null
+  instructions: string | null
+  useAccountMemory: boolean
+  starred: boolean
+  archived: boolean
+  /** Its chats that are shown: not deleted. */
+  chats: number
+  activityAt: Date
+  createdAt: Date
+}
+
+/** The live project of `userId`; PROJECT_NOT_FOUND for any other. */
+export async function readProject(
+  db: Pick<Tx, 'project'>,
+  input: { projectId: string; userId: string },
+): Promise<ProjectView> {
+  const row = await db.project.findFirst({
+    where: { id: input.projectId, ...ofUser(input.userId), deletedAt: null },
+    select: {
+      id: true,
+      workspaceId: true,
+      name: true,
+      goal: true,
+      instructions: true,
+      useAccountMemory: true,
+      starredAt: true,
+      archivedAt: true,
+      activityAt: true,
+      createdAt: true,
+      _count: { select: { tasks: { where: { deletedAt: null } } } },
+    },
+  })
+  if (row === null) throw projectNotFound()
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    name: row.name,
+    goal: row.goal,
+    instructions: row.instructions,
+    useAccountMemory: row.useAccountMemory,
+    starred: row.starredAt !== null,
+    archived: row.archivedAt !== null,
+    chats: row._count.tasks,
+    activityAt: row.activityAt,
+    createdAt: row.createdAt,
+  }
+}
+
+/** A row of the list of projects (ПР4). */
+export interface ProjectListRow {
+  id: string
+  name: string
+  goal: string | null
+  starred: boolean
+  archived: boolean
+  chats: number
+  activityAt: Date
+  createdAt: Date
+  /** When a project of the trash is purged; null outside it. */
+  purgeAfter: Date | null
+}
+
+/** `%` and `_` of the client's words are letters, not patterns. */
+const containsWords = (words: string) => words.replace(/[\\%_]/g, (sign) => `\\${sign}`)
+
+/**
+ * The projects of `userId` in a tab of the list (ПР4): «Все» — the live ones out of «Архив»,
+ * «Избранное» — the starred among them, «Архив», «Корзина» (the trash, the soonest purged first).
+ * `query` finds the words in the name or the goal, in any case. The order is the domain's
+ * (`compareProjects`): the number of projects is not bounded (ПР21), but they are a person's own.
+ */
+export async function listProjects(
+  db: Pick<Tx, 'project'>,
+  input: { userId: string; view?: ProjectListView; sort?: ProjectListSort; query?: string },
+): Promise<ProjectListRow[]> {
+  const view = input.view ?? 'all'
+  const where: Prisma.ProjectWhereInput = {
+    ...ofUser(input.userId),
+    ...(view === 'trash'
+      ? { deletedAt: { not: null } }
+      : view === 'archive'
+        ? { deletedAt: null, archivedAt: { not: null } }
+        : view === 'starred'
+          ? { deletedAt: null, archivedAt: null, starredAt: { not: null } }
+          : { deletedAt: null, archivedAt: null }),
+  }
+  const words = input.query?.replace(/\s+/gu, ' ').trim() ?? ''
+  if (words !== '') {
+    const contains = containsWords(words)
+    where.OR = [
+      { name: { contains, mode: 'insensitive' } },
+      { goal: { contains, mode: 'insensitive' } },
+    ]
+  }
+  const rows = await db.project.findMany({
+    where,
+    select: {
+      id: true,
+      name: true,
+      goal: true,
+      starredAt: true,
+      archivedAt: true,
+      purgeAfter: true,
+      activityAt: true,
+      createdAt: true,
+      _count: { select: { tasks: { where: { deletedAt: null } } } },
+    },
+  })
+  const order = compareProjects(input.sort ?? 'recent')
+  rows.sort((a, b) =>
+    view === 'trash' && a.purgeAfter !== null && b.purgeAfter !== null
+      ? a.purgeAfter.getTime() - b.purgeAfter.getTime() || order(a, b)
+      : order(a, b),
+  )
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    goal: row.goal,
+    starred: row.starredAt !== null,
+    archived: row.archivedAt !== null,
+    chats: row._count.tasks,
+    activityAt: row.activityAt,
+    createdAt: row.createdAt,
+    purgeAfter: row.purgeAfter,
+  }))
+}
+
+/** The change of a live project of `userId`; PROJECT_NOT_FOUND for any other. */
+async function changeProject(
+  db: Pick<Tx, 'project'>,
+  input: { projectId: string; userId: string },
+  data: Prisma.ProjectUpdateManyMutationInput,
+): Promise<void> {
+  const { count } = await db.project.updateMany({
+    where: { id: input.projectId, ...ofUser(input.userId), deletedAt: null },
+    data,
+  })
+  if (count !== 1) throw projectNotFound()
+}
+
+/** «Переименовать», the goal and «Память аккаунта» (ПР5, ПР18): a change counts as activity. */
+export function updateProject(
+  db: Pick<Tx, 'project'>,
+  input: {
+    projectId: string
+    userId: string
+    name?: string
+    goal?: string | null
+    useAccountMemory?: boolean
+    now: Date
+  },
+): Promise<void> {
+  return changeProject(db, input, {
+    ...(input.name === undefined ? {} : { name: input.name }),
+    ...(input.goal === undefined ? {} : { goal: input.goal }),
+    ...(input.useAccountMemory === undefined ? {} : { useAccountMemory: input.useAccountMemory }),
+    activityAt: input.now,
+  })
+}
+
+/** The instructions of the project (ПР7); null takes them away. */
+export function setProjectInstructions(
+  db: Pick<Tx, 'project'>,
+  input: { projectId: string; userId: string; instructions: string | null; now: Date },
+): Promise<void> {
+  return changeProject(db, input, { instructions: input.instructions, activityAt: input.now })
+}
+
+/** «В избранное» / «Убрать из избранного». */
+export function starProject(
+  db: Pick<Tx, 'project'>,
+  input: { projectId: string; userId: string; starred: boolean; now: Date },
+): Promise<void> {
+  return changeProject(db, input, { starredAt: input.starred ? input.now : null })
+}
+
+/** «В архив» / «Из архива» (ПР20): the chats stay, a new chat does not start in it. */
+export function archiveProject(
+  db: Pick<Tx, 'project'>,
+  input: { projectId: string; userId: string; archived: boolean; now: Date },
+): Promise<void> {
+  return changeProject(db, input, { archivedAt: input.archived ? input.now : null })
+}
+
+/**
+ * «Удалить» (ПР20): the project goes into the trash for 30 days with its chats, which the cabinet
+ * no longer shows. A project already there keeps its day of purging. Stopping the passes of its
+ * chats is core's (slice 84.5).
+ */
+export async function trashProject(
+  db: Pick<Tx, 'project'>,
+  input: { projectId: string; userId: string; now: Date },
+): Promise<{ purgeAfter: Date }> {
+  const project = await projectOwnedBy(db, input.projectId, input.userId, { deleted: true })
+  if (project === null) throw projectNotFound()
+  if (project.purgeAfter !== null) return { purgeAfter: project.purgeAfter }
+  const purgeAfter = projectPurgeAfter(input.now)
+  const { count } = await db.project.updateMany({
+    where: { id: project.id, deletedAt: null },
+    data: { deletedAt: input.now, purgeAfter },
+  })
+  if (count === 1) return { purgeAfter }
+  // Deleted meanwhile by another request of the author: its day stands.
+  return trashProject(db, input)
+}
+
+/** «Вернуть» (ПР20): back from the trash, until the day it is purged. */
+export async function restoreProject(
+  db: Pick<Tx, 'project'>,
+  input: { projectId: string; userId: string; now: Date },
+): Promise<void> {
+  const project = await projectOwnedBy(db, input.projectId, input.userId, { deleted: true })
+  if (project === null) throw projectNotFound()
+  if (project.deletedAt === null) return
+  const { count } = await db.project.updateMany({
+    where: { id: project.id, deletedAt: { not: null }, purgeAfter: { gt: input.now } },
+    data: { deletedAt: null, purgeAfter: null, activityAt: input.now },
+  })
+  if (count !== 1) throw projectNotFound()
+}
+
+/** A new chat, the end of a pass: the project rises in «Недавние». */
+export async function touchProjectActivity(
+  db: Pick<Tx, 'project'>,
+  projectId: string,
+  now: Date,
+): Promise<void> {
+  await db.project.updateMany({
+    where: { id: projectId, activityAt: { lt: now } },
+    data: { activityAt: now },
+  })
+}
+
+/** The statuses in which a pass of a chat is queued or runs: its project does not change (ПР2). */
+export const projectBusyStatuses: readonly TaskStatus[] = ['queued', 'preparing', 'running']
+
+/**
+ * «Перенести в проект…» and «Убрать из проекта» (ПР2) of a chat the caller locked (the lock under
+ * which the next message queues it). TASK_PROJECT_BUSY while a pass of the chat is queued or runs:
+ * `mcp` reads the scope of a turn from the database on every call. The project must be a live one
+ * of the user, out of «Архив», in the chat's own workspace — a project of another workspace is
+ * PROJECT_NOT_FOUND here, and the trigger `tasks_project_workspace` refuses it below.
+ */
+export async function moveChatToProject(
+  tx: Tx,
+  input: {
+    task: { id: string; workspaceId: string; status: TaskStatus }
+    projectId: string | null
+    userId: string
+    now: Date
+  },
+): Promise<{ projectId: string | null; moved: boolean }> {
+  const { task, projectId } = input
+  const current = await tx.task.findUniqueOrThrow({
+    where: { id: task.id },
+    select: { projectId: true },
+  })
+  if (current.projectId === projectId) return { projectId, moved: false }
+  if (projectBusyStatuses.includes(task.status)) throw taskProjectBusy()
+  if (projectId !== null) {
+    const project = await projectForChat(tx, projectId, input.userId)
+    if (project.workspaceId !== task.workspaceId) throw projectNotFound()
+  }
+  await tx.task.update({ where: { id: task.id }, data: { projectId } })
+  if (projectId !== null) await touchProjectActivity(tx, projectId, input.now)
+  return { projectId, moved: true }
+}

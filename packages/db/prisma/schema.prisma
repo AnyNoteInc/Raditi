@@ -54,6 +54,7 @@ model User {
   chatNotifications       ChatNotification[]
   speechCalls             SpeechCall[]
   agentInstructions       AgentInstructions?
+  projectsCreated         Project[]             @relation("ProjectCreator")
 
   @@map("users")
 }
@@ -186,6 +187,7 @@ model Workspace {
   usageWindows    WorkspaceUsageWindow[]
   envVars         WorkspaceEnvVar[]
   agentSkills     WorkspaceAgentSkill[]
+  projects        Project[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -385,6 +387,38 @@ model ChatSession {
 
 /// One client request: one logical agent session and one task branch (spec §7). The status
 /// changes only by a conditional UPDATE in the same transaction as its credit_ledger entry.
+/// A project of a workspace (docs/plan/84-projects.md, ПР1): its chats, instructions and, in later
+/// slices, its context, memory and repository. Its id is a UUID of version 7 from the browser
+/// (CHECK projects_id_check); only its author sees and changes it. «Удалить» puts it into the trash
+/// for 30 days (ПР20): `deleted_at` and `purge_after` go together (CHECK projects_trash_check).
+model Project {
+  id               String    @id @db.Uuid
+  workspaceId      String    @map("workspace_id") @db.Uuid
+  createdById      String    @map("created_by_id") @db.Uuid
+  /// One line, 1–80 characters after trimming (CHECK projects_name_check).
+  name             String    @db.VarChar(80)
+  goal             String?   @db.VarChar(500)
+  /// Up to 8000 characters (CHECK projects_instructions_check), from slice 84.7.
+  instructions     String?
+  useAccountMemory Boolean   @default(true) @map("use_account_memory")
+  starredAt        DateTime? @map("starred_at") @db.Timestamptz(6)
+  archivedAt       DateTime? @map("archived_at") @db.Timestamptz(6)
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
+  purgeAfter       DateTime? @map("purge_after") @db.Timestamptz(6)
+  /// «Недавние»: a new chat, the end of a pass, a change of the project.
+  activityAt       DateTime  @default(now()) @map("activity_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  createdBy User      @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  tasks     Task[]
+
+  @@index([workspaceId, createdById, activityAt(sort: Desc)], map: "projects_owner_activity_idx", where: raw("deleted_at IS NULL"))
+  @@index([purgeAfter], map: "projects_purge_idx", where: raw("deleted_at IS NOT NULL"))
+  @@map("projects")
+}
+
 model Task {
   id            String          @id @default(uuid(7)) @db.Uuid
   workspaceId   String          @map("workspace_id") @db.Uuid
@@ -434,6 +468,9 @@ model Task {
   pinnedAt      DateTime?       @map("pinned_at") @db.Timestamptz(6)
   /// «В архив»: the chat leaves the list for «Архив»; a new message brings it back.
   archivedAt    DateTime?       @map("archived_at") @db.Timestamptz(6)
+  /// The project the chat is in (docs/plan/84-projects.md, ПР2); NULL — a chat without one. A
+  /// project of the chat's own workspace, not deleted (trigger tasks_project_workspace).
+  projectId     String?         @map("project_id") @db.Uuid
 
   /// First bounded content access, including GET-only privacy maps.
   contentAccessedAt    DateTime? @map("content_accessed_at") @db.Timestamptz(6)
@@ -447,6 +484,7 @@ model Task {
   chatSession        ChatSession?        @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
   createdBy          User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
   revertsTask        Task?               @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
+  project            Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
   revertedBy         Task[]              @relation("TaskReverts")
   telegramCurrentOf  ChannelIdentity[]   @relation("ChannelCurrentTask")
   pricingRule        PricingRule?        @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
@@ -478,6 +516,7 @@ model Task {
   @@index([createdById])
   @@index([revertsTaskId])
   @@index([pricingRuleId])
+  @@index([projectId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_project_updated_idx", where: raw("project_id IS NOT NULL AND deleted_at IS NULL"))
   @@map("tasks")
 }
 

@@ -155,6 +155,26 @@ export {
   personalWorkspaceDataClass,
   type PersonalWorkspaceOwner,
 } from './personal-workspace.ts'
+export {
+  archiveProject,
+  createProject,
+  listProjects,
+  moveChatToProject,
+  projectBusyStatuses,
+  projectForChat,
+  projectOwnedBy,
+  readProject,
+  restoreProject,
+  setProjectInstructions,
+  starProject,
+  touchProjectActivity,
+  trashProject,
+  updateProject,
+  type OwnedProject,
+  type ProjectCreation,
+  type ProjectListRow,
+  type ProjectView,
+} from './projects.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
 export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
@@ -234,6 +254,7 @@ export type {
   OutboxEvent,
   Plan,
   PricingRule,
+  Project,
   RateLimit,
   Session,
   SiteLease,
