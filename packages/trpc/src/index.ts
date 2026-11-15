@@ -27,6 +27,12 @@ export { readTaskScreenshot } from './services/chat/screenshots.ts'
 export { readSiteBackupDownload } from './services/site-history.ts'
 
 export { readChatNotification } from './services/notifications.ts'
+export type {
+  McpServerCheck,
+  McpServerProbe,
+  McpServerServices,
+} from './services/mcp-server-auth.ts'
+export { checkSkillSignIn, connectSignedInServer } from './services/site-agent-skills.ts'
 // The updates of the bot of the chat in Telegram, handed by core to web (docs/plan/80-telegram.md).
 export {
   handleTelegramTopicGone,

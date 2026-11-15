@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { ipLiteral, isLoopbackAddress, isPrivateAddress } from './ip-address.ts'
+import {
+  ipLiteral,
+  isLoopbackAddress,
+  isPrivateAddress,
+  parseRefusedSubnets,
+  publicAddressCheck,
+} from './ip-address.ts'
 
 describe('isPrivateAddress', () => {
   it.each([
@@ -71,4 +77,44 @@ describe('isLoopbackAddress', () => {
       expect(isLoopbackAddress(host)).toBe(false)
     },
   )
+})
+
+describe('publicAddressCheck', () => {
+  it('takes public unicast and refuses every non-public address and the refused subnets', () => {
+    const check = publicAddressCheck(parseRefusedSubnets('45.8.250.0/24, 2a02:6b8::/32') ?? [])
+    for (const good of ['93.184.216.34', '2606:4700::1111', '[2606:4700::1111]'])
+      expect(check(good), good).toBe(true)
+    for (const bad of [
+      '127.0.0.1',
+      '10.10.0.10',
+      '172.20.0.1',
+      '192.168.1.1',
+      '169.254.169.254',
+      '100.64.0.1',
+      '0.0.0.0',
+      '224.0.0.1',
+      '::1',
+      '::',
+      'fd00::1',
+      'fe80::1',
+      '::ffff:127.0.0.1',
+      '64:ff9b::7f00:1',
+      '2001:db8::1',
+      '2002:7f00:1::',
+      '45.8.250.117',
+      '2a02:6b8::1',
+      'example.com',
+    ])
+      expect(check(bad), bad).toBe(false)
+  })
+
+  it('reads the subnets of the configuration and refuses anything else', () => {
+    expect(parseRefusedSubnets('')).toEqual([])
+    expect(parseRefusedSubnets('10.0.0.0/8,fd00::/8')).toEqual([
+      { address: '10.0.0.0', prefix: 8, family: 4 },
+      { address: 'fd00::', prefix: 8, family: 6 },
+    ])
+    for (const bad of ['10.0.0.0', '10.0.0.0/33', 'fd00::/129', 'example.com/8', '10.0.0.0/8/1'])
+      expect(parseRefusedSubnets(bad), bad).toBeNull()
+  })
 })

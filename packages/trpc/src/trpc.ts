@@ -13,6 +13,7 @@ import superjson from 'superjson'
 
 import { CONSENT_REQUIRED, formatError, toTRPCError } from './errors.ts'
 import type { ChatContext } from './services/chat/context.ts'
+import type { McpServerServices } from './services/mcp-server-auth.ts'
 import { loadLatestConsents } from './services/consents.ts'
 
 /** What the billing procedures pay through. The app builds it once per process. */
@@ -57,6 +58,12 @@ export interface Context {
    * everything else works. The app builds it once per process.
    */
   siteConnections?: SiteConnectionServices | null
+  /**
+   * What an MCP server with a key is checked and written through (docs/plan/81-mcp-server-
+   * credentials.md): a check of the server and a Vault store that can only write. Absent or null:
+   * a server with a key cannot be added here; servers without one work as before.
+   */
+  mcpServers?: McpServerServices | null
 }
 
 export interface CreateContextOptions {
@@ -72,6 +79,8 @@ export interface CreateContextOptions {
   chat?: ChatContext | null
   /** Defaults to null: projects cannot be created. */
   siteConnections?: SiteConnectionServices | null
+  /** Defaults to null: servers with a key cannot be added. */
+  mcpServers?: McpServerServices | null
 }
 
 export async function createContext({
@@ -81,6 +90,7 @@ export async function createContext({
   billing = null,
   chat = null,
   siteConnections = null,
+  mcpServers = null,
 }: CreateContextOptions): Promise<Context> {
   const current = await getSessionFromHeaders(headers, auth)
   return {
@@ -91,6 +101,7 @@ export async function createContext({
     billing,
     chat,
     siteConnections,
+    mcpServers,
   }
 }
 

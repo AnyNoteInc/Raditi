@@ -125,7 +125,7 @@ async function inside() {
       { mode: file.mode ?? 0o600 },
     )
   }
-  const out = { llm: [], mcp: [], other: [], sink: [], problems: [] }
+  const out = { llm: [], mcp: [], relay: [], other: [], sink: [], problems: [] }
 
   // --- The site repository: one commit with a fixed date, so every container has the same one.
   const repo = '/workspace/repo'
@@ -446,6 +446,44 @@ async function inside() {
         .writeHead(status, { 'content-type': 'application/json', ...headers })
         .end(JSON.stringify(value))
     try {
+      // The relay of the role mcp for a server with a key (docs/plan/81-mcp-server-credentials.md):
+      // the CLI reaches it with the turn's MCP token from a pipe of the server's own.
+      const relayed = /^\/mcp\/skill\/([a-z0-9-]+)$/.exec(request.url ?? '')
+      if (relayed) {
+        const rpc = raw.length ? JSON.parse(raw.toString()) : null
+        out.relay.push({
+          name: relayed[1],
+          method: request.method,
+          rpc: rpc?.method ?? null,
+          tool: rpc?.params?.name ?? null,
+          authorized: request.headers.authorization === `Bearer ${settings.mcpKey}`,
+        })
+        if (request.method === 'GET')
+          return response.writeHead(405, { allow: 'POST, DELETE' }).end()
+        if (request.method === 'DELETE') return response.writeHead(204).end()
+        if (request.headers.authorization !== `Bearer ${settings.mcpKey}`)
+          return json(401, { error: 'unauthorized' })
+        if (rpc.id === undefined) return response.writeHead(202).end()
+        const result =
+          rpc.method === 'initialize'
+            ? {
+                protocolVersion: rpc.params.protocolVersion,
+                capabilities: { tools: {} },
+                serverInfo: { name: 'raditi-relayed-fake', version: '1' },
+              }
+            : rpc.method === 'tools/list'
+              ? {
+                  tools: [
+                    {
+                      name: 'get_menu',
+                      description: 'Returns the synthetic menu of the cafe.',
+                      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+                    },
+                  ],
+                }
+              : { content: [{ type: 'text', text: settings.relayAnswer }], isError: false }
+        return json(200, { jsonrpc: '2.0', id: rpc.id, result })
+      }
       if (request.url === '/mcp') {
         const rpc = raw.length ? JSON.parse(raw.toString()) : null
         const record = {
@@ -875,6 +913,7 @@ async function turn({
   timeoutMs = 150_000,
   envValues,
   egressProxy,
+  skills,
   action,
 }) {
   const keys = newKeys()
@@ -895,6 +934,7 @@ async function turn({
     ...(nativeSessionId ? { nativeSessionId } : {}),
     ...(envValues ? { envValues } : {}),
     ...(egressProxy ? { egressProxy } : {}),
+    ...(skills ? { skills, internet: true } : {}),
   }
   const prepared = preparedRunSchema.parse(await driver.prepare(context))
   const argv = driver.command(prepared, { prompt, attachments, ...(action ? { action } : {}) })
@@ -968,6 +1008,7 @@ async function turn({
         reasoning: REASONING,
         steps,
         mcp: { answer: `${MCP_OK}_${turnNo}`, ...mcp },
+        relayAnswer: `${MCP_OK}_relayed_${turnNo}`,
         markers: {
           platform: platformMarker(turnNo),
           literal: LITERAL,
@@ -1021,7 +1062,7 @@ async function turn({
 }
 
 /** What every provider request of a healthy turn looks like, whatever the scenario. */
-function expectRequests(run, count) {
+function expectRequests(run, count, tools = TOOLS) {
   const { output, describe } = run
   assert.equal(output.llm.length, count, describe())
   for (const [index, record] of output.llm.entries()) {
@@ -1037,7 +1078,7 @@ function expectRequests(run, count) {
     assert.equal(record.stream, true, at)
     assert.equal(record.usage, true, at)
     assert.ok(record.maxTokens >= 1 && record.maxTokens <= 32_000, `max_tokens: ${at}`)
-    assert.deepEqual(record.tools, TOOLS, `Declared tools: ${at}`)
+    assert.deepEqual(record.tools, tools, `Declared tools: ${at}`)
     assert.match(record.agent ?? '', new RegExp(`^opencode/${CLI_VERSION.replaceAll('.', '\\.')} `))
     assert.equal(record.system.platform, true, `Platform instructions of this turn: ${at}`)
     assert.equal(record.system.literal, true, `A reference in the instructions was replaced: ${at}`)
@@ -2218,6 +2259,53 @@ try {
     )
     pass(
       `compaction over hostile files — the repository's OpenCode files are hidden from the server, and over a file above the working copy or in the CLI's home no CLI process starts (left alone, the pinned server imports none of them on this path); the key's reference stands where the server reads it once (in its global configuration the second read fails); the client's variables reach no shell and a value in the summary is masked`,
+    )
+  }
+  {
+    // A server with a key goes through the relay of the role mcp (docs/plan/81-mcp-server-
+    // credentials.md): the CLI reads a pipe of its own for each such server and calls the relay's
+    // path with the turn's MCP token; the address and the key of the server are nowhere here.
+    const relayed = await turn({
+      label: 'a relayed MCP server',
+      egressProxy: 'http://sandbox-gw:3128',
+      skills: [{ name: 'menu', kind: 'relayed' }],
+      steps: [
+        { calls: [{ name: 'menu_get_menu', arguments: {} }] },
+        { text: JSON.stringify(result(PRIOR)) },
+      ],
+    })
+    // The open internet adds webfetch; the relayed server adds its own tool under its name.
+    expectRequests(relayed, 2, [...TOOLS, 'menu_get_menu', 'webfetch'].sort())
+    expectSuccess(relayed, result(PRIOR))
+    const { output, describe } = relayed
+    assert.ok(
+      output.relay.length > 0 && output.relay.every((record) => record.authorized),
+      describe(),
+    )
+    assert.ok(
+      output.relay.every((record) => record.name === 'menu'),
+      describe(),
+    )
+    assert.ok(
+      output.relay.some((record) => record.rpc === 'tools/list'),
+      describe(),
+    )
+    assert.deepEqual(
+      output.relay.filter((record) => record.rpc === 'tools/call').map((record) => record.tool),
+      ['get_menu'],
+      describe(),
+    )
+    assert.ok(
+      output.llm[1].toolOutputs.some((text) => text.includes(`${MCP_OK}_relayed_1`)),
+      describe(),
+    )
+    // The platform's own server keeps its token as before: the second pipe changed nothing there.
+    assert.ok(
+      output.mcp.every((record) => record.authorized),
+      describe(),
+    )
+    pass(
+      "a relayed MCP server — the CLI calls /mcp/skill/<name> with the turn's MCP token from a pipe of its own, lists and calls its tool, and the platform's server keeps its token",
     )
   }
   process.stdout.write(

@@ -290,6 +290,12 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   SITE_SKILL_LIMIT: 'Добавить больше навыков нельзя. Удалите ненужный и попробуйте снова',
   SITE_SKILL_NOT_FOUND: 'Такого навыка у сайта нет. Обновите страницу',
   SITE_SKILL_BUILTIN: 'Навык платформы нельзя удалить, его можно только выключить',
+  // MCP servers with a key (docs/plan/81-mcp-server-credentials.md).
+  SITE_SKILL_HEADER_INVALID:
+    'Имя заголовка — латинские буквы, цифры и дефис, а ключ — от 8 знаков, одной строкой, без русских букв. Исправьте и попробуйте снова',
+  SITE_SKILL_AUTH_UNAVAILABLE: 'Сейчас нельзя подключить сервер с ключом. Попробуйте немного позже',
+  SITE_SKILL_CHECK_FAILED: 'Сервер не ответил как сервер MCP. Проверьте адрес и попробуйте снова',
+  SITE_SKILL_KEYLESS: 'У этого сервера нет ключа, который можно заменить',
   SITE_ENV_NOT_ALLOWED: 'Переменные сайта могут видеть и менять только владелец и администраторы',
   SITE_ENV_NAME_INVALID:
     'Имя переменной может состоять только из заглавных латинских букв, цифр и знака подчёркивания и должно начинаться с буквы. Исправьте его и сохраните снова',
@@ -441,7 +447,20 @@ const detail = (details: unknown, field: string): string | null => {
   return typeof value === 'string' ? value : null
 }
 
+/** Why a check of an MCP server failed (plan 81), in words that say what to do. */
+const SKILL_CHECK_TEXT: Readonly<Record<string, string>> = {
+  unauthorized: 'Сервер не принял ключ. Проверьте имя заголовка и ключ и попробуйте снова',
+  needs_login:
+    'Сервер просит войти через свою страницу, а не ключ. Выберите «Вход через страницу сервера» и попробуйте снова',
+  unreachable: 'Сервер не отвечает по этому адресу. Проверьте адрес и попробуйте снова',
+  address_refused: 'Адрес ведёт во внутреннюю сеть. Укажите адрес сервера в интернете',
+  not_mcp: 'По этому адресу отвечает не сервер MCP. Проверьте полный адрес вместе с путём',
+}
+
 const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string>> = {
+  SITE_SKILL_CHECK_FAILED: (details) =>
+    SKILL_CHECK_TEXT[detail(details, 'reason') ?? ''] ??
+    MESSAGE_BY_DOMAIN_CODE.SITE_SKILL_CHECK_FAILED!,
   // A publication of the client (docs/plan/69-pages.md, Ст25, Ст32): why, in words that say
   // what to do — never the content itself.
   PAGE_CONTENT_REFUSED: (details) =>

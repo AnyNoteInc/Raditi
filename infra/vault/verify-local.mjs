@@ -930,6 +930,31 @@ async function verifyReleaseAccess({ rootToken, scopedTokens, expect, siteId, co
   await expect(rootToken, `kv/data/${deleted}?version=2`, 404)
   await expect(sitesWriter, `kv/data/${deleted}`, 403)
 
+  // The secret of an MCP server of the site's agent (docs/plan/81-mcp-server-credentials.md):
+  // web writes it and never reads it; mcp reads it, writes renewed tokens by CAS, creates no key
+  // and reaches no other key of the site through it.
+  const server = `sites/${siteId}/mcp/menu`
+  await expect(sitesWriter, `kv/metadata/${server}`, 204, post({ max_versions: '1' }))
+  await expect(sitesWriter, `kv/data/${server}`, 200, write({ value: 'synthetic-header-1' }, 0))
+  await expect(sitesWriter, `kv/data/${server}`, 403)
+  const relayed = await expect(mcp, `kv/data/${server}`, 200)
+  assert.ok(relayed?.data?.data?.value === 'synthetic-header-1', 'MCP server secret differs')
+  assert.equal(relayed?.data?.metadata?.version, 1)
+  await expect(mcp, `kv/data/${server}`, 400, write({ accessToken: 'stale-renewal' }, 0))
+  await expect(mcp, `kv/data/${server}`, 200, write({ accessToken: 'synthetic-renewed' }, 1))
+  for (const [path, options] of [
+    [`kv/data/sites/${siteId}/mcp/other`, write({ value: 'created-by-mcp' }, 0)],
+    [`kv/data/${server}`, { method: 'DELETE' }],
+    [`kv/metadata/${server}`, {}],
+    [`kv/metadata/${server}`, { method: 'DELETE' }],
+    [`kv/metadata/sites/${siteId}/mcp`, { method: 'LIST' }],
+    [`kv/destroy/${server}`, post({ versions: [1] })],
+    [`kv/data/sites/${siteId}/mcp`, {}],
+    [`kv/data/${variable}`, {}],
+  ]) {
+    await expect(mcp, path, 403, options)
+  }
+
   // The operator stores the token of the Gitea organization owner; no service writes it.
   await expect(rootToken, `kv/data/${owner}`, 200, write({ v: '1', token: 'synthetic-owner' }, 0))
 
