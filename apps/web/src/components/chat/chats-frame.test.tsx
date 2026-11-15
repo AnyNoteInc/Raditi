@@ -130,16 +130,16 @@ describe('the frame of «Чаты»', () => {
     content.remove()
   })
 
-  it('opens «Найти чат» by the loupe of the head and closes it by its cross (docs/plan/77, Р2)', async () => {
+  it('opens «Поиск чатов» by the loupe of the head and closes it (docs/plan/79, П1)', async () => {
     showFrame(null)
     const loupe = await screen.findByRole('button', { name: 'Найти чат' })
-    expect(screen.queryByRole('searchbox', { name: 'Найти чат' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Поиск чатов' })).toBeNull()
     fireEvent.click(loupe)
-    expect(screen.getByRole('searchbox', { name: 'Найти чат' })).toBeTruthy()
-    expect(loupe.getAttribute('aria-pressed')).toBe('true')
-    fireEvent.click(screen.getByRole('button', { name: 'Закрыть поиск' }))
-    expect(screen.queryByRole('searchbox', { name: 'Найти чат' })).toBeNull()
-    // «Архив» stands in the column whatever the list holds (Р1).
+    const window_ = await screen.findByRole('dialog', { name: 'Поиск чатов' })
+    expect(within(window_).getByRole('searchbox', { name: 'Найти чат' })).toBeTruthy()
+    fireEvent.click(within(window_).getByRole('button', { name: 'Закрыть' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Поиск чатов' })).toBeNull())
+    // «Архив» stands in the column whatever the list holds (docs/plan/77, Р1).
     expect(screen.getByRole('button', { name: 'Архив' })).toBeTruthy()
   })
 

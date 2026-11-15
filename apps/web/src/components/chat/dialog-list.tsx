@@ -5,14 +5,12 @@ import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import ButtonBase from '@mui/material/ButtonBase'
-import InputBase from '@mui/material/InputBase'
-import IconButton from '@mui/material/IconButton'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { useSelectedLayoutSegment } from 'next/navigation'
-import { useDeferredValue, useEffect, useId, useState, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPCClient } from '@/trpc/client'
@@ -43,7 +41,6 @@ const NO_PROJECT = 'none'
 const folderKey = (folder: ChatFolder) => folder.project?.id ?? NO_PROJECT
 
 /** How long the words of the search rest before they are asked (ВВ21). */
-const SEARCH_PAUSE_MS = 300
 
 /**
  * The pages of one list: every chat of the user, or of one folder; `archive` — «Архив»
@@ -645,103 +642,6 @@ export function ArchiveButton() {
 }
 
 /** The field «Найти чат» over the list (ВВ21). */
-function SearchField({
-  value,
-  onChange,
-  onClose,
-}: {
-  value: string
-  onChange: (value: string) => void
-  onClose: () => void
-}) {
-  return (
-    <Box
-      role="search"
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 1,
-        minHeight: 40,
-        px: 1.25,
-        mx: { md: -1.5 },
-        borderRadius: '10px',
-        bgcolor: 'action.hover',
-        color: 'text.secondary',
-        '&:focus-within': { outline: '2px solid', outlineColor: 'primary.main' },
-      }}
-    >
-      <AppIcon name="search" size={16} />
-      <InputBase
-        value={value}
-        onChange={(event) => onChange(event.target.value.slice(0, 100))}
-        placeholder={listText.search}
-        autoFocus
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') onClose()
-        }}
-        inputProps={{ 'aria-label': listText.search, type: 'search' }}
-        sx={{ flex: 1, fontSize: 14, color: 'text.primary' }}
-      />
-      {
-        <IconButton
-          aria-label={value === '' ? listText.searchClose : listText.searchClear}
-          onClick={() => (value === '' ? onClose() : onChange(''))}
-          sx={{ width: 36, height: 36, color: 'text.secondary' }}
-        >
-          <AppIcon name="close" size={16} />
-        </IconButton>
-      }
-    </Box>
-  )
-}
-
-/** What the search found: the chats of the list and of «Архив», the latest changed first. */
-function SearchResults({ query, currentId }: { query: string; currentId: string | null }) {
-  const client = useTRPCClient()
-  const labelId = useId()
-  const found = useQuery({
-    queryKey: [...dialogListKey, 'search', query],
-    queryFn: () => client.task.search.query({ query }),
-  })
-  if (found.isPending)
-    return (
-      <Box role="status" aria-label={listText.searchLoading}>
-        <ListLoading />
-      </Box>
-    )
-  if (found.isError)
-    return <ListFailed retrying={found.isFetching} onRetry={() => void found.refetch()} />
-  if (found.data.items.length === 0)
-    return (
-      <Typography role="status" variant="body2" color="text.secondary">
-        {listText.searchEmpty}
-      </Typography>
-    )
-  return (
-    <Box sx={{ mx: { md: -1.5 } }}>
-      <Box id={labelId} sx={offScreen}>
-        {listText.search}
-      </Box>
-      <DialogRows
-        items={found.data.items}
-        labelledBy={labelId}
-        currentId={currentId}
-        now={new Date()}
-      />
-    </Box>
-  )
-}
-
-/** The words of the search once they have rested: a word typed on does not ask each letter. */
-function useRestedWords(words: string): string {
-  const [rested, setRested] = useState(words)
-  useEffect(() => {
-    const later = window.setTimeout(() => setRested(words), SEARCH_PAUSE_MS)
-    return () => window.clearTimeout(later)
-  }, [words])
-  return useDeferredValue(rested)
-}
-
 /**
  * The chats of the user in the column of «Чаты», one list or folders of projects, each with its
  * status in a sign and a word and its time. The open chat is the current page. The list follows
@@ -750,46 +650,17 @@ function useRestedWords(words: string): string {
 export function DialogList({
   grouped = false,
   folder = null,
-  searching = false,
-  onSearchClose,
 }: {
   /** «По проектам»; otherwise one list. */
   grouped?: boolean
   /** The folder the address asks to open. */
   folder?: string | null
-  /**
-   * The loupe of the head of the column is pressed (owner's request of 15.11.2026,
-   * docs/plan/77-chat-list-dictation.md, Р2): the field «Найти чат» stands over the list.
-   */
-  searching?: boolean
-  /** The field was closed: Escape, or its cross over an empty field. */
-  onSearchClose?: () => void
 }) {
   const segment = useSelectedLayoutSegment()
   const currentId = segment === null ? null : segment.toLowerCase()
-  const [words, setWords] = useState('')
-  const query = useRestedWords(searching ? words : '')
-    .replace(/\s+/gu, ' ')
-    .trim()
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      {searching ? (
-        <SearchField
-          value={words}
-          onChange={setWords}
-          onClose={() => {
-            setWords('')
-            onSearchClose?.()
-          }}
-        />
-      ) : null}
-      {query !== '' ? (
-        <SearchResults query={query} currentId={currentId} />
-      ) : grouped ? (
-        <Folders asked={folder?.toLowerCase() ?? null} currentId={currentId} />
-      ) : (
-        <OneList currentId={currentId} />
-      )}
-    </Box>
+  return grouped ? (
+    <Folders asked={folder?.toLowerCase() ?? null} currentId={currentId} />
+  ) : (
+    <OneList currentId={currentId} />
   )
 }

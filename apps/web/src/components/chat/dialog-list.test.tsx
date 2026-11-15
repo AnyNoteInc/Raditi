@@ -7,6 +7,7 @@ import { plain } from '@/components/billing/testing'
 
 import type { DialogListItem, DialogListPage } from './chat-types'
 import { ArchiveButton, DialogList } from './dialog-list'
+import { SearchDialog } from './search-dialog'
 import { declared } from './testing'
 
 const { listPage, folders, chatGet, segment, rename, remove, pin, archive, search } = vi.hoisted(
@@ -75,7 +76,7 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
   }
 }
 
-function showList(props: { grouped?: boolean; folder?: string | null; searching?: boolean } = {}) {
+function showList(props: { grouped?: boolean; folder?: string | null } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const list = () => (
     <QueryClientProvider client={queryClient}>
@@ -519,17 +520,28 @@ describe('pinned, archived and found chats (docs/plan/75, ВВ21)', () => {
     expect(await within(window_).findByText('Чат вернулся в список.')).toBeTruthy()
   })
 
-  it('search by the words once they rest, and say when nothing is found', async () => {
+  it('«Поиск чатов» shows the latest chats, then searches by the words once they rest', async () => {
     listPage.mockResolvedValue({ pinned: [], items: [dialog('1')], nextCursor: null })
     search.mockResolvedValue({ items: [] })
-    // The loupe of the head opened the field (docs/plan/77, Р2).
-    showList({ searching: true })
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Найти чат' }), {
-      target: { value: 'капучино' },
-    })
+    const onClose = vi.fn()
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <SearchDialog open onClose={onClose} />
+      </QueryClientProvider>,
+    )
+    const window_ = await screen.findByRole('dialog', { name: 'Поиск чатов' })
+    expect(await within(window_).findByText('Поменять цену капучино')).toBeTruthy()
+    const field = within(window_).getByRole('searchbox', { name: 'Найти чат' })
+    // One cross of the field's own, and only over words (docs/plan/79, П2).
+    expect(within(window_).queryByRole('button', { name: 'Очистить поиск' })).toBeNull()
+    fireEvent.change(field, { target: { value: 'капучино' } })
     await waitFor(() => expect(search).toHaveBeenCalledWith({ query: 'капучино' }), {
       timeout: 2000,
     })
-    expect(await screen.findByText(/Ничего не нашлось/)).toBeTruthy()
+    expect(await within(window_).findByText(/Ничего не нашлось/)).toBeTruthy()
+    fireEvent.click(within(window_).getByRole('button', { name: 'Очистить поиск' }))
+    expect((field as HTMLInputElement).value).toBe('')
   })
 })
