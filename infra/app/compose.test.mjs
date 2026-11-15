@@ -587,11 +587,12 @@ test('every ACME resolver has exactly one challenge type', () => {
   assert.ok(challenges.has('le'))
   for (const [resolver, types] of challenges)
     assert.equal(types.size, 1, `${resolver}: ${[...types].join(', ') || 'no challenge'}`)
-  // The wildcard of previews: DNS-01 through Yandex Cloud DNS, never HTTP-01.
-  assert.deepEqual([...(challenges.get('preview') ?? [])], ['dns'])
+  // No resolver of previews (plan 83); the wildcard of pages: DNS-01, never HTTP-01.
+  assert.ok(!challenges.has('preview'))
+  assert.deepEqual([...(challenges.get('pages') ?? [])], ['dns'])
   assert.ok(
     services.traefik.command.includes(
-      '--certificatesresolvers.preview.acme.dnschallenge.provider=yandexcloud',
+      '--certificatesresolvers.pages.acme.dnschallenge.provider=yandexcloud',
     ),
   )
 })

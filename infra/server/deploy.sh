@@ -108,14 +108,9 @@ put() { # <name> <value>
     echo "$1=$2" >>"$app/.env"
   fi
 }
-grep -E '^([A-Z_]+_IMAGE|PREVIEW_SITE_IMAGES)=' "$images" | while IFS='=' read -r name value; do put "$name" "$value"; done
+grep -E '^[A-Z_]+_IMAGE=' "$images" | while IFS='=' read -r name value; do put "$name" "$value"; done
 put APP_REVISION "$revision"
 say "revision $revision"
-
-# The deploy runner: label `deploy` on this release's core image, over what it registered with
-core_image=$(sed -n 's/^CORE_IMAGE=//p' "$app/.env" | tail -n 1)
-install -d -m 0755 "$app/server/runner"
-sed "s|@CORE_IMAGE@|$core_image|" "$app/server/runner.yaml.in" >"$app/server/runner/runner.yaml"
 
 # 3. Pull with a throwaway registry login: the token never lands in /root/.docker
 config=$(mktemp -d -p /run)
@@ -125,11 +120,10 @@ rm -f "$token"
 profiles="$(sed -n 's/^COMPOSE_PROFILES=//p' "$app/.env" | tail -n 1),ops"
 COMPOSE_PROFILES=$profiles DOCKER_CONFIG=$config compose pull --quiet
 # The images the processes start themselves, never compose: the sandbox and its gateway and guard
-# (runner), the browser session (browser), the preview's sites, forwarder, browser and database
-# (core). Their Docker finds them only on this host: a missing one fails the turn before it starts.
+# (runner) and the browser session (browser). Their Docker finds them only on this host: a missing
+# one fails the turn before it starts.
 for name in SANDBOX_IMAGE SANDBOX_GATEWAY_IMAGE SANDBOX_NETWORK_GUARD_IMAGE BROWSER_IMAGE \
-  BROWSER_FORWARDER_IMAGE BROWSER_EGRESS_IMAGE PREVIEW_FORWARDER_IMAGE PREVIEW_BROWSER_IMAGE \
-  PREVIEW_DB_IMAGE PREVIEW_SITE_IMAGES; do
+  BROWSER_FORWARDER_IMAGE BROWSER_EGRESS_IMAGE; do
   sed -n "s/^$name=//p" "$app/.env" | tail -n 1 | tr ',' '\n' | sed 's/^[0-9.]*=//' | grep . |
     while read -r image; do DOCKER_CONFIG=$config docker pull --quiet "$image" >/dev/null; done
 done
@@ -157,10 +151,6 @@ if [ "$s3_before" != "$(sha256sum /run/raditi/s3/s3.json)" ]; then
   compose up -d --wait s3
   say "S3 identities updated"
 fi
-# The internal CA for the deploy jobs (runner.yaml.in: options and valid_volumes)
-docker volume create raditi-ci-ca >/dev/null
-docker run --rm --network none -v raditi-ci-ca:/ca -v /etc/raditi/ca/ca.pem:/src.pem:ro \
-  --entrypoint cp "$(sed -n 's/^REDIS_IMAGE=//p' "$app/.env" | tail -n 1)" /src.pem /ca/ca.pem
 COMPOSE_PROFILES=$profiles compose run --rm s3-buckets >/dev/null
 trap 'rm -rf "${config:-}" "$token"' EXIT
 rm -rf "$prev"
@@ -172,16 +162,38 @@ COMPOSE_PROFILES=$profiles compose run --rm seed || say "seed failed: web and co
 # reaches their app.env; the render replaces their SecretIDs, so both are recreated at once
 /usr/local/lib/raditi/platform-secrets.mjs render web core >/dev/null
 compose up -d --wait --no-deps --force-recreate web core
+# --remove-orphans: a service this release no longer has (gitea, gitea-runner since plan 83) is
+# stopped and removed with its container
 compose up -d --wait --remove-orphans
-compose restart gitea-runner >/dev/null
-
-# 7. platform/ci of this tag, the required source of the scoped workflows of every site
-NODE_EXTRA_CA_CERTS=/etc/raditi/ca/ca.pem /usr/bin/node "$app/server/gitea-setup.mjs" ci "$src/ci"
 echo "$tag" >"$app/.tag"
 say "running"
 
+# 7. Containers, networks and volumes nothing uses any more (owner's request of 15.11.2026, plan 83,
+# БП10). Only what is the platform's by name or label: the sandboxes, warm sandboxes and browser
+# sessions the processes run are never touched here.
+#   - stopped containers of this compose project (a one-off `compose run` left behind);
+#   - containers of previews of chats (label io.raditi.preview.owner=raditi): previews are gone;
+#   - networks of this compose project no container uses (preview-data, preview-out);
+#   - volumes of the removed services: Gitea and its deploy runner, the CA of the deploy jobs.
+project=$(sed -n 's/^name: *//p' "$app/docker-compose.yml" | head -n 1)
+project=${project:-raditi-app}
+removed=0
+for id in $(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter status=exited) \
+  $(docker ps -aq --filter "label=io.raditi.preview.owner=raditi"); do
+  docker rm -f "$id" >/dev/null 2>&1 && removed=$((removed + 1)) || true
+done
+docker network prune -f --filter "label=com.docker.compose.project=$project" >/dev/null 2>&1 || true
+docker network ls -q --filter "label=io.raditi.preview.owner=raditi" | xargs -r docker network rm >/dev/null 2>&1 || true
+prefix=$(sed -n 's/^VOLUME_PREFIX=//p' "$app/.env" | tail -n 1)
+for volume in "${prefix:-raditi-app}-gitea" "${prefix:-raditi-app}-gitea-config" \
+  "${prefix:-raditi-app}-gitea-runner" raditi-ci-ca; do
+  docker volume inspect "$volume" >/dev/null 2>&1 || continue
+  docker volume rm "$volume" >/dev/null 2>&1 && say "volume $volume removed" || say "volume $volume is in use, kept"
+done
+[ "$removed" -eq 0 ] || say "$removed unused containers removed"
+
 # 8. Images of the platform registry no longer named by .env or by the last record of the log
-# Every digest .env names (PREVIEW_SITE_IMAGES names eight) and the recent records of the log do
+# Every digest .env names and the recent records of the log do
 keep=$( (grep -E '^[A-Z_]+=' "$app/.env"; tail -n 60 "$log") | grep -ohE 'sha256:[0-9a-f]{64}' | sort -u)
 docker image ls --digests --format '{{.Repository}} {{.Digest}} {{.ID}}' |
   grep '^ghcr.io/' | while read -r _ digest id; do

@@ -57,17 +57,14 @@ services:
   traefik:
     environment:
       # traefik/dynamic/server.yml (deploy.sh copies it there from server/traefik): the dashboard
-      # with basic auth and the apex of previews. Not a bind mount of its own: Docker cannot make
+      # with basic auth. Not a bind mount of its own: Docker cannot make
       # its mount point inside the read-only bind of traefik/dynamic.
       DASHBOARD_HOST: ${DASHBOARD_HOST:?Set DASHBOARD_HOST}
-      PREVIEW_APEX_HOST: ${PREVIEW_APEX_HOST:-}
       # The root of the domain of pages, served by web (docs/plan/67-agent-documents.md, Д3); empty — no
       # router: it waits for the A record of the root (the wildcard of pages.yml does not cover it)
       PAGES_ROOT_HOST: ${PAGES_ROOT_HOST:-}
       BROWSER_STREAM_HOST: ${APP_DOMAIN}
-      # The wildcard of previews (traefik/dynamic/preview.yml): DNS-01 through the reg.ru API
-      PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
-      # The wildcard of published pages (traefik/dynamic/pages.yml): the same reg.ru account
+      # The wildcard of published pages (traefik/dynamic/pages.yml): DNS-01 through the reg.ru API
       PAGES_BASE_DOMAIN: ${PAGES_BASE_DOMAIN:?Set PAGES_BASE_DOMAIN}
       REGRU_USERNAME_FILE: /run/raditi/regru-username
       REGRU_PASSWORD_FILE: /run/raditi/regru-password
