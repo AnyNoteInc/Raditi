@@ -8,6 +8,8 @@ export interface TelegramConfig {
   botToken: string
   webhookSecret: string
   proxyUrl: string | undefined
+  /** TELEGRAM_BOT_USERNAME without `@`: the cabinet links `t.me/<bot>`; null — not named. */
+  botUsername: string | null
 }
 
 const envSchema = z
@@ -28,6 +30,12 @@ const envSchema = z
         .optional(),
     ),
     TELEGRAM_PROXY_URL: envVar(z.url({ protocol: /^https?$/ }).optional()),
+    TELEGRAM_BOT_USERNAME: envVar(
+      z
+        .string()
+        .regex(/^[A-Za-z][A-Za-z0-9_]{3,31}bot$/i, 'must be the username of a bot, without @')
+        .optional(),
+    ),
   })
   .superRefine((env, ctx) => {
     if (env.TELEGRAM_BOT_TOKEN !== undefined && env.TELEGRAM_WEBHOOK_SECRET === undefined) {
@@ -50,6 +58,7 @@ export function telegramConfigFromEnv(env: Env): TelegramConfig | null {
     botToken: e.TELEGRAM_BOT_TOKEN,
     webhookSecret: e.TELEGRAM_WEBHOOK_SECRET,
     proxyUrl: e.TELEGRAM_PROXY_URL,
+    botUsername: e.TELEGRAM_BOT_USERNAME ?? null,
   }
 }
 

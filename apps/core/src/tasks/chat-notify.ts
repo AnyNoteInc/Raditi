@@ -1,6 +1,11 @@
 import { Logger } from '@nestjs/common'
-import type { PrismaClient } from '@repo/db'
-import { isPushEndpoint, type ChatNotifyJob, type TaskStatus } from '@repo/domain'
+import { enqueueTelegramSend, type PrismaClient } from '@repo/db'
+import {
+  isPushEndpoint,
+  type ChatNotifyJob,
+  type ChatNotifyKind,
+  type TaskStatus,
+} from '@repo/domain'
 import { enqueueNotification } from '@repo/notifications'
 
 // A chat waits for its client after a pass (docs/plan/75-chat-input-output.md, ВВ6–ВВ11): the
@@ -40,6 +45,15 @@ export interface ChatNotifyDependencies {
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
+
+/** What the bot says of a chat of the cabinet (Т8). */
+export const CHAT_NOTIFY_TELEGRAM_TEXT: Readonly<Record<ChatNotifyKind, string>> = Object.freeze({
+  answered: 'Агент ответил',
+  question: 'Агент задал вопрос',
+  ready: 'Изменения готовы: посмотрите их и выпустите на сайт',
+  failed: 'В работе агента произошла ошибка',
+  limit: 'Кредиты закончились, агент остановился',
+})
 
 const WAITING: readonly TaskStatus[] = ['awaiting_user', 'awaiting_approval']
 
@@ -147,8 +161,38 @@ export class ChatNotify {
         emailed = true
       }
     }
+    const told = (settings?.telegram ?? true) && (await this.#telegram(job, userId, notice.id))
     await db.chatNotification.update({ where: { id: notice.id }, data: { pushed } })
-    return this.#log(job, pushed > 0 || emailed ? 'sent' : 'skipped')
+    return this.#log(job, pushed > 0 || emailed || told ? 'sent' : 'skipped')
+  }
+
+  /**
+   * The third channel (docs/plan/80-telegram.md, Т8): the bot tells a client who linked Telegram
+   * what happened in a chat of the cabinet. A chat bound to Telegram gets its rows there anyway.
+   */
+  async #telegram(job: ChatNotifyJob, userId: string, noticeId: string): Promise<boolean> {
+    const { db } = this.deps
+    const [identity, task] = await Promise.all([
+      db.channelIdentity.findUnique({
+        where: { userId_channel: { userId, channel: 'telegram' } },
+        select: { externalId: true },
+      }),
+      db.task.findUnique({
+        where: { id: job.taskId },
+        select: { title: true, chatSession: { select: { channel: true } } },
+      }),
+    ])
+    if (!identity || !task || task.chatSession?.channel === 'telegram') return false
+    const title = task.title?.trim() || 'Чат'
+    return enqueueTelegramSend(
+      db,
+      {
+        chatId: identity.externalId,
+        text: `${CHAT_NOTIFY_TELEGRAM_TEXT[job.kind]} — чат «${title}».`,
+        buttons: [[{ text: 'Открыть чат', url: `${this.deps.appUrl}/chats/${job.taskId}` }]],
+      },
+      `notify:${noticeId}`,
+    )
   }
 
   #log(job: ChatNotifyJob, answer: NotifyAnswer): NotifyAnswer {

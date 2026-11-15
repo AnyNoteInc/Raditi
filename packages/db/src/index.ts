@@ -37,6 +37,11 @@ export {
 } from './task-commands-outbox.ts'
 export { taskHasProductionWrites } from './task-production-writes.ts'
 export {
+  enqueueTelegramDeliver,
+  enqueueTelegramSend,
+  enqueueTelegramTopic,
+} from './telegram-outbox.ts'
+export {
   browserClosedSiteStatuses,
   clearBrowserHelp,
   closeBrowserSession,

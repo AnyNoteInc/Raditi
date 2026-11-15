@@ -22,7 +22,14 @@ const stand = vi.hoisted(() => ({
 }))
 
 vi.mock('@/env', () => ({
-  env: { web: stand.webEnv, auth: stand.authEnv, storage: stand.storageEnv, vault: stand.vaultEnv },
+  env: {
+    web: stand.webEnv,
+    auth: stand.authEnv,
+    storage: stand.storageEnv,
+    vault: stand.vaultEnv,
+    // The bot of the chat is off in these tests (docs/plan/80-telegram.md).
+    telegram: () => null,
+  },
 }))
 vi.mock('@repo/storage', async (importOriginal) => ({
   ...(await importOriginal<typeof StorageModule>()),

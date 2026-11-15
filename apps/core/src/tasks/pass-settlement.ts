@@ -26,6 +26,7 @@ import {
   workspaceWindowUsage,
   enqueueQueueDrain,
   enqueueChatNotify,
+  enqueueTelegramDeliver,
 } from '@repo/db'
 import {
   agentChatTitle,
@@ -424,12 +425,11 @@ export class PassSettlement {
   }
 
   /** The client is told the dialog waits, unless they look at it (docs/plan/75, ВВ6, ВВ7). */
-  #notify(tx: Prisma.TransactionClient, pass: PassRef, kind: ChatNotifyKind, now: Date) {
-    return enqueueChatNotify(
-      tx,
-      { taskId: pass.taskId, kind, attempt: pass.attempt, turnNo: pass.turnNo },
-      now,
-    )
+  async #notify(tx: Prisma.TransactionClient, pass: PassRef, kind: ChatNotifyKind, now: Date) {
+    const job = { taskId: pass.taskId, kind, attempt: pass.attempt, turnNo: pass.turnNo }
+    // A chat bound to Telegram gets the rows of the pass there at once (docs/plan/80-telegram.md).
+    await enqueueTelegramDeliver(tx, job)
+    return enqueueChatNotify(tx, job, now)
   }
 
   /** The queue of a dialog that waits goes now: «Отправить сейчас» found no pass to stop. */

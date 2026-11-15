@@ -27,3 +27,12 @@ export { readTaskScreenshot } from './services/chat/screenshots.ts'
 export { readSiteBackupDownload } from './services/site-history.ts'
 
 export { readChatNotification } from './services/notifications.ts'
+// The updates of the bot of the chat in Telegram, handed by core to web (docs/plan/80-telegram.md).
+export {
+  handleTelegramUpdate,
+  type IntakeAnswer,
+  type TelegramIntakeDeps,
+  type TelegramMedia,
+} from './services/telegram/intake.ts'
+export { startAttachmentForTelegram } from './services/chat/attachments.ts'
+export { toTRPCError } from './errors.ts'

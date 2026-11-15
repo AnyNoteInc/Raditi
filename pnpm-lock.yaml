@@ -1273,6 +1273,9 @@ importers:
       '@repo/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@repo/telegram':
+        specifier: workspace:*
+        version: link:../../packages/telegram
       '@repo/trpc':
         specifier: workspace:*
         version: link:../../packages/trpc
@@ -2342,6 +2345,9 @@ importers:
       '@repo/domain':
         specifier: workspace:*
         version: link:../domain
+      '@repo/telegram':
+        specifier: workspace:*
+        version: link:../telegram
       '@repo/yookassa':
         specifier: workspace:*
         version: link:../yookassa

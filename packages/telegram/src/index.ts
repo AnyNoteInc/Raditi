@@ -7,6 +7,7 @@ export type {
   TelegramBotApi,
   TelegramBotApiOptions,
   TelegramBotUser,
+  TelegramForumTopic,
   TelegramUpdate,
   TelegramWebhookInfo,
 } from './api.ts'
@@ -20,3 +21,11 @@ export {
   hashLinkCode,
   verifyWebhookSecret,
 } from './secret.ts'
+export {
+  escapeTelegramHtml,
+  markdownToTelegramParts,
+  plainTelegramParts,
+  TELEGRAM_PART_CHARS,
+} from './html.ts'
+export { messageCommand, messageWords, readTelegramUpdate } from './update.ts'
+export type { TelegramIncoming, TelegramMessage, TelegramPress } from './update.ts'

@@ -20,6 +20,7 @@ import { useTRPC } from '@/trpc/client'
 
 import { AgentInstructions } from './agent-instructions'
 import { NotificationSettings } from './notification-settings'
+import { TelegramSettings } from './telegram-settings'
 
 const MARKETING_SLUG = 'marketing-consent'
 const themeOptions = [
@@ -221,6 +222,8 @@ export function SettingsPanel({ email }: { email: string }) {
       <AgentInstructions />
 
       <NotificationSettings />
+
+      <TelegramSettings />
 
       <Box sx={{ p: { xs: 2.5, sm: 4 } }}>
         <Stack
