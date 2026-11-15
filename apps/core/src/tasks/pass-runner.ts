@@ -1,37 +1,24 @@
 import { Logger } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
-import {
-  claimQueuedPass,
-  enqueueAgentWaitingPasses,
-  enqueueSiteWaitingPasses,
-  type PrismaClient,
-} from '@repo/db'
+import { claimQueuedPass, enqueueAgentWaitingPasses, type PrismaClient } from '@repo/db'
 import {
   AGENT_TURN_JOB,
   AGENT_TURN_QUEUE,
   agentTurnRetryJobId,
-  CANDIDATE_REBASE_JOB,
-  candidateRebaseDedupeKey,
   isDomainError,
   poolWaitIsLimitsOut,
-  turnLeaseOf,
   readFeedRow,
   turnEvidenceSchema,
   type AgentTurnCancelJob,
   type AgentTurnJob,
   type JobQueue,
   type LlmBackend,
-  type PreviewAddress,
   type SandboxRuntime,
-  type SiteAdapter,
   type SiteLeaseStore,
-  type SiteStack,
 } from '@repo/domain'
 
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
-import { wakeStoppedPreview } from '../previews/preview-wake.ts'
 import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
-import type { CandidateGit } from './candidate-git.ts'
 import type { ChatFiles } from './chat-files.ts'
 import type { DocSections } from './doc-sections.ts'
 import type { PageChanges } from './page-changes.ts'
@@ -50,15 +37,13 @@ export const LIVE_DOC_CHECK_MS = 1_500
 export const LIVE_DOC_VALUES_MS = 15_000
 
 /**
- * Back to the queue: the retry of a busy site or pool waits at least this much and at most that.
- * A pass that waits for its site is woken when the holder lets it go (a turn of another dialog
- * ended, a release ended — `enqueueSiteWaitingPasses`); `site` is the latest it looks again
- * without a wake: a holder that died, a wake lost on the way.
+ * Back to the queue: the retry of a busy lease or pool waits at least this much and at most that.
+ * `site` is the latest a pass whose lease is held looks again: a holder that died.
  */
 const RETRY_DELAY_MS = Object.freeze({
   min: 10_000,
   site: 2 * 60_000,
-  /** A branch an `/update` is still moving, a pool that names no time: nothing wakes the pass. */
+  /** A pool that names no time, or a full workspace: nothing else wakes the pass. */
   update: 30_000,
   max: 10 * 60_000,
 })
@@ -83,22 +68,15 @@ export interface PassRunnerDependencies {
   /** null while no agent driver is enabled: no turn can run. */
   supervisor: TurnSupervisor | null
   /**
-   * null while git is not configured: a task with a repository is refused `unavailable` (spec §20
-   * «Транспорт git»), one without runs all the same (docs/plan/57-browser-tasks.md, Б7).
-   */
-  git: CandidateGit | null
-  /**
    * The cloud browser of tasks that need one (docs/plan/57, Б18); null while no worker is
    * configured: the planner refuses such a task `unavailable`.
    */
   browser?: Pick<BrowserSessions, 'reclaim' | 'verify'> | null
   drivers: AgentDriverRegistry
   backends: readonly LlmBackend[]
-  adapter: (stack: SiteStack) => SiteAdapter
   leases: Pick<SiteLeaseStore, 'inspect'>
   /** The runtime of turn sandboxes (SANDBOX_RUNTIME). */
   runtime: SandboxRuntime
-  previews: PreviewAddress | null
   settlement: PassSettlement
   live: LivePasses
   queue: JobQueue
@@ -136,8 +114,7 @@ interface Retry {
 }
 
 /**
- * One pass of the agent from the `agent-turns` queue (roadmap N11/N12; docs/plan/53-chat-
- * preview-release.md, R3): take the task, check its reserve, plan the turn, run it under the
+ * One pass of the agent from the `agent-turns` queue (roadmap N11/N12): take the task, check its reserve, plan the turn, run it under the
  * supervisor and end it with PassSettlement. A pass whose turn is still assigned when `run`
  * throws is left alone: recovery may finish it, and the sweep ends it from the journal (spec
  * §7, «назначение хода закрыто»). Logs carry ids only.
@@ -177,7 +154,6 @@ export class PassRunner {
     // should it ever, that pass ends the task, never a second one.
     if (!controller) return
     try {
-      await this.#wakePreview(job.taskId)
       await this.#pass(job, ref, claimed.billable, controller)
     } finally {
       this.deps.live.leave(job.taskId, controller)
@@ -324,7 +300,6 @@ export class PassRunner {
       await settlement.settle(ref, { kind: 'ceiling', question: plan.question })
       return 'ended'
     }
-    if (plan.kind === 'branch_moved') return this.#branchMoved(job, ref, plan.update)
     const browser = plan.requirements.browser
     if (await this.#cancelRequested(job)) controller.abort()
     if (controller.signal.aborted) {
@@ -354,14 +329,7 @@ export class PassRunner {
       })
       outbox = completed.outbox
       refusesText = completed.refusesText
-      const git = completed.manifest.git
-      ending = {
-        kind: 'completed',
-        turn: plan.turn,
-        result: completed.result,
-        // A turn without a repository published nothing (plan 57, Б4).
-        ...(git ? { headSha: git.headSha } : {}),
-      }
+      ending = { kind: 'completed', turn: plan.turn, result: completed.result }
     } catch (error) {
       cause = causeOf(error)
       const outcome = await this.#endingOf(error, ref, plan.turn, controller.signal)
@@ -412,7 +380,6 @@ export class PassRunner {
       if (retry) await this.#requeue(job, retry)
       return 'sent_back'
     }
-    await this.#wakeSite(job, turnNo)
     return 'ended'
   }
 
@@ -427,49 +394,9 @@ export class PassRunner {
     return this.deps.settlement.settle(ref, ending)
   }
 
-  /**
-   * The dialog's preview, stopped while no one used it (owner's answer of 26.10.2026), is built
-   * again for this pass: asked here, before the turn is planned, so the build runs beside the
-   * preparation of the sandbox. A wake that is not written leaves it to the sweep of previews.
-   */
-  async #wakePreview(taskId: string): Promise<void> {
-    try {
-      if (await wakeStoppedPreview(this.deps.db, taskId))
-        this.#logger.log(`pass_preview_woken task=${taskId}`)
-    } catch {
-      this.#logger.warn(`pass_preview_wake_failed task=${taskId}`)
-    }
-  }
-
-  /**
-   * The turn let the site go: the passes of other dialogs that waited for it go now, not at their
-   * retry (stand R12). A wake that is not written leaves them their retry.
-   */
-  async #wakeSite(job: AgentTurnJob, turnNo: number): Promise<void> {
-    try {
-      const task = await this.deps.db.task.findUnique({
-        where: { id: job.taskId },
-        select: { siteId: true },
-      })
-      // Nobody waits for a task without a site: its lease is its own.
-      if (!task?.siteId) return
-      await enqueueSiteWaitingPasses(this.deps.db, {
-        siteId: task.siteId,
-        tag: `turn-${job.taskId}-${turnNo}`,
-      })
-    } catch {
-      this.#logger.warn(`pass_wake_failed task=${job.taskId}`)
-    }
-  }
-
   async #plan(job: AgentTurnJob, ref: PassRef): Promise<PassPlan> {
     const facts = await readPassFacts(
-      {
-        db: this.deps.db,
-        adapter: this.deps.adapter,
-        backends: this.deps.backends,
-        previews: this.deps.previews,
-      },
+      { db: this.deps.db, backends: this.deps.backends },
       {
         taskId: job.taskId,
         attempt: job.attempt,
@@ -481,49 +408,12 @@ export class PassRunner {
     if (!facts) return { kind: 'refused', code: 'technical' }
     const [driver] = this.deps.drivers.list()
     if (!driver) return { kind: 'refused', code: 'unavailable' }
-    // Only a task with a repository needs git (plan 57, Б7).
-    const git = this.deps.git
-    if (facts.requirements.repository && !git) return { kind: 'refused', code: 'unavailable' }
-    const repo = facts.repo
     return planTurn(facts, {
       driver,
       backends: this.deps.backends,
       runtime: this.deps.runtime,
       browser: Boolean(this.deps.browser),
-      mainHead: () =>
-        repo && git
-          ? git.readBranchHead({ repo, branch: repo.defaultBranch })
-          : Promise.resolve(null),
-      branchHead: () =>
-        repo && git
-          ? git.readBranchHead({ repo, branch: `agent/${job.taskId}` })
-          : Promise.resolve(null),
     })
-  }
-
-  /**
-   * The task branch is not where the platform last left it. While an `/update` of the dialog
-   * may still be moving it, the pass waits in the queue and that update is put again — it
-   * finishes from the branch as it stands (CandidateRebase); otherwise nothing can publish, and
-   * the pass fails before a turn spends money.
-   */
-  async #branchMoved(job: AgentTurnJob, ref: PassRef, update: string | null): Promise<PassEnd> {
-    this.#logger.warn(`pass_branch_moved task=${job.taskId} update=${update ?? 'none'}`)
-    if (update === null) {
-      await this.deps.settlement.settle(ref, { kind: 'refused', code: 'technical' })
-      return 'ended'
-    }
-    const answer = await this.deps.settlement.settle(ref, { kind: 'busy', waiting: 'site' })
-    // Another end of the task came first (a cancel): nothing waits for this pass any more.
-    if (answer !== 'moved') return 'ended'
-    const rebase = { taskId: job.taskId, requestEventId: update }
-    await this.deps.queue
-      .enqueue(AGENT_TURN_QUEUE, CANDIDATE_REBASE_JOB, rebase, {
-        jobId: `${candidateRebaseDedupeKey(rebase)}:repair:${this.#now().getTime()}`,
-      })
-      .catch(() => this.#logger.warn(`pass_update_requeue_failed task=${job.taskId}`))
-    await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
-    return 'sent_back'
   }
 
   /**
@@ -660,27 +550,14 @@ export class PassRunner {
   }
 
   /**
-   * The site is busy: the pass looks again when its lease expires, and no later than in
-   * `RETRY_DELAY_MS.site`. A lease ends mostly much sooner — a turn that finished early, a
-   * deploy that kept its lease for half an hour and ended in a minute —, and then its holder
-   * wakes the pass (`enqueueSiteWaitingPasses`); this retry is for a wake that never came.
-   * Every retry moves the task `queued → preparing → queued`, so it is not more frequent.
+   * The lease of the chat is held (a turn of it a died core left, docs/plan/83-remove-projects.md,
+   * БП6): the pass looks again when that lease expires, and no later than in `RETRY_DELAY_MS.site`.
    */
   async #siteRetry(ref: PassRef): Promise<Retry> {
-    const task = await this.deps.db.task.findUnique({
-      where: { id: ref.taskId },
-      select: { siteId: true, needsRepository: true },
-    })
-    // The turn's own row: a chat with the code that waited for a release of its site finds it
-    // free, and the release wakes the pass when it ends.
-    const lease = task
-      ? await this.deps.leases.inspect(turnLeaseOf({ id: ref.taskId, ...task })).catch(() => null)
-      : null
+    const lease = await this.deps.leases.inspect(ref.taskId).catch(() => null)
     if (!lease?.expiresAt) return { delayMs: RETRY_DELAY_MS.site }
     const left = lease.expiresAt.getTime() - lease.serverNow.getTime()
-    // A release barrier outlives its lease (an attempt whose run still goes, a release held for
-    // the operator): the end of the lease says nothing, and the release wakes the pass itself.
-    if (lease.inflightReleaseId || left <= 0) return { delayMs: RETRY_DELAY_MS.site }
+    if (left <= 0) return { delayMs: RETRY_DELAY_MS.site }
     return { delayMs: Math.min(RETRY_DELAY_MS.site, clamp(left)) }
   }
 

@@ -53,7 +53,7 @@ import type { PresignedTransfer, SnapshotArchives } from '@repo/snapshots'
 import { memoryStorage, memoryTransit, tarZst } from '@repo/snapshots/testing'
 import { LocalTurnExecutor, type LocalTurnExecutorDependencies } from '@repo/local-turns'
 
-import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
+import { emptyUntrackedArchive } from '@repo/snapshots'
 import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
 import { RunnerHub } from '../runner-api/runner-hub.ts'
 import {

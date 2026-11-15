@@ -16,7 +16,6 @@ import { fetchPresignedTransfer, SandboxSnapshotTransport } from '@repo/snapshot
 import type { CoreConfig } from '../config/config.ts'
 import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { AGENT_DRIVERS } from '../drivers/drivers.tokens.ts'
-import { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
 import { OBJECT_STORAGE } from '../infra/infra.tokens.ts'
 import { SITE_LEASES, TURN_ASSIGNMENTS } from '../leases/leases.tokens.ts'
 import { TURN_CREDENTIALS } from '../llm/llm.tokens.ts'
@@ -24,7 +23,6 @@ import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
 import { SANDBOX_PROVIDER } from '../sandbox/sandbox.tokens.ts'
 import { SnapshotService } from '../sessions/snapshot.service.ts'
 import { LiveTurns } from './live-turns.ts'
-import { PreviewTurnRollback } from './preview-turn-rollback.ts'
 import { TurnExecRecovery } from './turn-exec-recovery.ts'
 import { TaskInboxFiles } from './turn-inbox.ts'
 import { TaskEventTurnJournal } from './turn-journal.ts'
@@ -66,8 +64,7 @@ export const localTurnExecutor: Provider = {
 /**
  * The turn supervisor and its recovery as the stands compose them (scripts/verify-runner-core.mjs)
  * over TURN_EXECUTOR, with the background side of turns (TurnRuntime). The supervisor is null
- * without a driver. Without git (CoreConfig.git) both still run turns without a repository — in
- * the cloud browser — and refuse the rest (docs/plan/57-browser-tasks.md, Б7).
+ * without a driver. Both run turns without a repository only (docs/plan/83-remove-projects.md).
  */
 export const turnEngineProviders: Provider[] = [
   // One per process, shared by the supervisor and recovery: a turn driven here is never taken over.
@@ -93,7 +90,6 @@ export const turnEngineProviders: Provider[] = [
   {
     provide: TurnSupervisor,
     useFactory: (
-      workspace: GitWorkspaceService | null,
       leases: SiteLeaseStore,
       assignments: TurnAssignmentStore,
       snapshots: SnapshotService,
@@ -110,19 +106,18 @@ export const turnEngineProviders: Provider[] = [
       return new TurnSupervisor({
         leases,
         assignments,
-        workspace,
+        // Turns run without a repository (docs/plan/83-remove-projects.md, БП2).
+        workspace: null,
         snapshots,
         journal,
         executor,
         driver,
         live,
         credentials,
-        contentRollback: new PreviewTurnRollback(prisma),
         inbox: new TaskInboxFiles(prisma, storage),
       })
     },
     inject: [
-      GitWorkspaceService,
       SITE_LEASES,
       TURN_ASSIGNMENTS,
       SnapshotService,
@@ -138,7 +133,6 @@ export const turnEngineProviders: Provider[] = [
   {
     provide: TurnExecRecovery,
     useFactory: (
-      workspace: GitWorkspaceService | null,
       leases: SiteLeaseStore,
       assignments: RecoveryAssignments,
       snapshots: SnapshotService,
@@ -154,13 +148,12 @@ export const turnEngineProviders: Provider[] = [
         executor,
         journal,
         driver: (id) => drivers.get(id),
-        workspace,
+        workspace: null,
         snapshots,
         credentials,
         live,
       }),
     inject: [
-      GitWorkspaceService,
       SITE_LEASES,
       TURN_ASSIGNMENTS,
       SnapshotService,

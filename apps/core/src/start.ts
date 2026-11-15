@@ -5,14 +5,13 @@ import { appLogger, listen, listenHost, SHUTDOWN_SIGNALS } from '@repo/app-boots
 
 import type { CoreConfig } from './config/config.ts'
 import { AppModule } from './app.module.ts'
-import { ReleaseApiServer } from './release-api/release-api.server.ts'
 import { RunnerApiServer } from './runner-api/runner-api.server.ts'
 
 const logger = new Logger('core')
 
 /**
  * Core (spec §5): /health and /metrics on CORE_PORT, never on the MCP port; with runner
- * VMs also the runner API on RUNNER_API_PORT, and the release API on RELEASE_API_PORT.
+ * VMs also the runner API on RUNNER_API_PORT.
  */
 export async function startCore(config: CoreConfig): Promise<INestApplication> {
   const app = await NestFactory.create<NestExpressApplication>(
@@ -28,18 +27,6 @@ export async function startCore(config: CoreConfig): Promise<INestApplication> {
       const host = listenHost(config.appEnv)
       const runnerApi = await app.get(RunnerApiServer).listen(config.runnerApi.port, host)
       logger.log(`runner API listening on ${host ?? '*'}:${runnerApi.port}`)
-    } catch (err) {
-      await app.close()
-      throw err
-    }
-  }
-  if (config.releaseApi) {
-    try {
-      // The address deploy jobs reach: set explicitly (RELEASE_API_HOST), loopback by default in dev.
-      const releaseApi = await app
-        .get(ReleaseApiServer)
-        .listen(config.releaseApi.port, config.releaseApi.host)
-      logger.log(`release API listening on ${config.releaseApi.host}:${releaseApi.port}`)
     } catch (err) {
       await app.close()
       throw err

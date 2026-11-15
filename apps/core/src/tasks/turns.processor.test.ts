@@ -17,20 +17,9 @@ const job = (name: string, data: unknown) => ({ name, data }) as Job
 
 function processor() {
   const passes = { run: vi.fn(async () => {}), cancel: vi.fn(async () => {}) }
-  const rebase = { run: vi.fn(async () => 'rebased' as const) }
-  const rewind = { run: vi.fn(async () => 'rewound' as const) }
-  const edit = { run: vi.fn(async () => 'saved' as const) }
   const queue = { run: vi.fn(async () => 'moved' as const) }
   const notify = { run: vi.fn(async () => 'sent' as const) }
-  return {
-    passes,
-    rebase,
-    rewind,
-    edit,
-    queue,
-    notify,
-    processor: new TurnsProcessor(passes, rebase, rewind, edit, queue, notify),
-  }
+  return { passes, queue, notify, processor: new TurnsProcessor(passes, queue, notify) }
 }
 
 describe('TurnsProcessor', () => {
@@ -47,21 +36,25 @@ describe('TurnsProcessor', () => {
     expect(queue.run).toHaveBeenCalledWith({ taskId: TASK, attempt: 2, turnNo: 3 })
   })
 
-  it('runs a pass, a cancel, an update, an undo and an edit by the name of the job', async () => {
-    const { passes, rebase, rewind, edit, processor: worker } = processor()
-    const EDIT = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61'
+  it('runs a pass and a cancel by the name of the job', async () => {
+    const { passes, processor: worker } = processor()
 
     await worker.process(job(AGENT_TURN_JOB, { taskId: TASK, attempt: 1, requestEventId: '7' }))
     await worker.process(job(AGENT_TURN_CANCEL_JOB, { taskId: TASK, requestEventId: '8' }))
-    await worker.process(job(CANDIDATE_REBASE_JOB, { taskId: TASK, requestEventId: '9' }))
-    await worker.process(job(CANDIDATE_REWIND_JOB, { taskId: TASK, requestEventId: '10' }))
-    await worker.process(job(CANDIDATE_EDIT_JOB, { taskId: TASK, editId: EDIT }))
 
     expect(passes.run).toHaveBeenCalledWith({ taskId: TASK, attempt: 1, requestEventId: '7' })
     expect(passes.cancel).toHaveBeenCalledWith({ taskId: TASK, requestEventId: '8' })
-    expect(rebase.run).toHaveBeenCalledWith({ taskId: TASK, requestEventId: '9' })
-    expect(rewind.run).toHaveBeenCalledWith({ taskId: TASK, requestEventId: '10' })
-    expect(edit.run).toHaveBeenCalledWith({ taskId: TASK, editId: EDIT })
+  })
+
+  it('never takes a job of a repository: projects are gone (docs/plan/83-remove-projects.md)', async () => {
+    const { processor: worker } = processor()
+    const EDIT = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61'
+    for (const [name, data] of [
+      [CANDIDATE_REBASE_JOB, { taskId: TASK, requestEventId: '9' }],
+      [CANDIDATE_REWIND_JOB, { taskId: TASK, requestEventId: '10' }],
+      [CANDIDATE_EDIT_JOB, { taskId: TASK, editId: EDIT }],
+    ] as const)
+      await expect(worker.process(job(name, data))).rejects.toBeInstanceOf(UnrecoverableError)
   })
 
   it('never retries a payload that fails its schema or a job it does not know', async () => {

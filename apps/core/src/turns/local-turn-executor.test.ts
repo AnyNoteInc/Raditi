@@ -23,7 +23,7 @@ import { openSnapshotParts } from '@repo/snapshots'
 import { memoryStorage, memoryTransit, tarZst } from '@repo/snapshots/testing'
 import { LocalTurnExecutor } from '@repo/local-turns'
 
-import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
+import { emptyUntrackedArchive } from '@repo/snapshots'
 import { SnapshotService } from '../sessions/snapshot.service.ts'
 import { sampleDriverId } from '../testing/ids.ts'
 

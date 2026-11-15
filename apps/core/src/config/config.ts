@@ -1,5 +1,3 @@
-import { isAbsolute } from 'node:path'
-
 import { agentDriverConfigFromEnv, type AgentDriverConfig } from '@repo/agent-drivers'
 import { ConfigError } from '@repo/app-bootstrap'
 import { browserWorkerOrigin } from '@repo/browser-link'
@@ -11,26 +9,11 @@ import {
   envVar,
   parseEnv,
   isProduction,
-  parsePreviewSiteImages,
-  previewDnsServersSchema,
-  previewAddressEnvShape,
-  previewAddressFromEnv,
-  previewAddressProblems,
-  previewDefaults,
-  previewExecutorKinds,
-  previewImageRoles,
-  previewImageSchema,
-  previewRuntimes,
   runnerIdSchema,
   sandboxRuntimes,
   turnExecutorKinds,
   type AppEnv,
   type Env,
-  type GitProviderKind,
-  type PreviewAddress,
-  type PreviewExecutorKind,
-  type PreviewImageRole,
-  type PreviewRuntimeKind,
   type SandboxRuntime,
   type TurnExecutorKind,
 } from '@repo/domain'
@@ -42,17 +25,12 @@ import {
   type TelegramConfig,
 } from '@repo/telegram'
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
-import {
-  egressRefusedSubnetsVar,
-  sandboxConfigFromEnv,
-  type SandboxConfig,
-} from '@repo/sandbox-providers'
+import { sandboxConfigFromEnv, type SandboxConfig } from '@repo/sandbox-providers'
 import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
 import { yookassaConfigFromEnv, type YookassaConfig } from '@repo/yookassa'
-import { getDomain } from 'tldts'
 import { z } from 'zod'
-import { ipLiteral, isLoopbackAddress, isPrivateAddress } from '@repo/ip-address'
+import { isLoopbackAddress, isPrivateAddress } from '@repo/ip-address'
 
 import { poolControlOrigin } from '../llm/pool-probe-client.ts'
 import {
@@ -66,12 +44,6 @@ export { ConfigError }
 export const DEFAULT_CORE_PORT = 8081
 /** Runner VMs reach only this port of core, on the private network (spec §19). */
 export const DEFAULT_RUNNER_API_PORT = 8083
-/** The release API of core: deploy jobs reach only this port (plan 53, Р32). */
-export const DEFAULT_RELEASE_API_PORT = previewDefaults.releaseApiPort
-/** The gateway of previews (apps/preview): core builds the relay of the agent's browser to its port. */
-export const DEFAULT_PREVIEW_GATEWAY_PORT = previewDefaults.gatewayPort
-/** The host Docker's `host-gateway` names for a container: the default of PREVIEW_RELAY_GATEWAY_HOST. */
-const RELAY_GATEWAY_NAME = 'host.docker.internal'
 /**
  * SANDBOX_IMAGE of .env.example: no registry serves it, and agent drivers refuse it in
  * production. Core reads no stack image before the supervisor plans turns (P12), so outside
@@ -129,27 +101,11 @@ export interface CoreConfig {
   /** The runner API listener; null with the local executor. */
   runnerApi: RunnerApiConfig | null
   /**
-   * Where site repositories live (spec §10). null — git is not configured: no turn can run,
-   * the rest of core does. Plain http is never a git transport (spec §19).
-   */
-  git: GitConfig | null
-  /**
-   * The token of the account that may create repositories in the `sites` organization, and
-   * nothing more (docs/plan/39-site-connection-wizard.md). null — unset, or git is not
-   * configured: the import of a connected site refuses, and the bot's token never stands in
-   * for it. Never log it.
-   */
-  siteRepositoryProvisionerToken: string | null
-  /**
    * The ЮKassa shop for renewal charges. null — payments are off (both credentials empty):
    * nothing is charged, the rest of core runs. Holds the shop key: never log it.
    */
   yookassa: YookassaConfig | null
   billing: BillingConfig
-  /** Previews of dialogs; null — PREVIEW_BASE_DOMAIN is unset and no preview is built. */
-  previews: PreviewsConfig | null
-  /** The release API listener; null — RELEASE_API_HOST is unset and releases are off here. */
-  releaseApi: ReleaseApiConfig | null
   /**
    * The browser worker of tasks in the cloud browser (docs/plan/57-browser-tasks.md, Б10, Б18);
    * null — BROWSER_WORKER_URL is unset: such tasks are refused `unavailable`, the rest runs.
@@ -165,63 +121,6 @@ export interface BrowserWorkerConfig {
   token: string
 }
 
-/** Where and how previews of dialogs run (docs/plan/53-chat-preview-release.md, Р17, Р18). */
-export interface PreviewsConfig {
-  address: PreviewAddress
-  /** PREVIEW_TTL_HOURS: the life of a waiting dialog's preview after its last view (Р8). */
-  ttlHours: number
-  /**
-   * PREVIEW_IDLE_MINUTES: a served preview stops after this long without a view or a turn of its
-   * dialog (owner's answer of 26.10.2026).
-   */
-  idleMinutes: number
-  /** core's own Docker (never in production until M10) or a runner VM. */
-  executor: PreviewExecutorKind
-  runtime: PreviewRuntimeKind
-  /**
-   * The image of a preview per runtime version (PREVIEW_SITE_IMAGES, docs/plan/58): its server,
-   * its database and its gateway in one container; empty — no preview can run.
-   */
-  siteImages: Readonly<Record<string, string>>
-  /** PREVIEW_*_IMAGE by role; null — not set, the part of a preview that needs it is off. */
-  images: Readonly<Record<PreviewImageRole, string | null>>
-  /** Where the gateways of previews publish their ports (PREVIEW_UPSTREAM_HOST). */
-  upstreamHost: string
-  /** PREVIEW_DNS_SERVERS: the resolvers of a preview's container (its internet is open). */
-  dnsServers: readonly string[]
-  /** PREVIEW_GATEWAY_PORT: where the relay of the agent's browser reaches the gateway (Р21). */
-  gatewayPort: number
-  /**
-   * PREVIEW_RELAY_GATEWAY_HOST: the host that relay sends to — `host.docker.internal`, this host as
-   * Docker's `host-gateway` names it, or an IPv4 when that name is another machine (a VM whose
-   * daemon points `host-gateway` at its own host, docs/plan/62-slices/e3.md, Э3.16) and, later,
-   * the runner executor (M10). Private only in production.
-   */
-  relayGatewayHost: string
-  /**
-   * SANDBOX_EGRESS_REFUSED_SUBNETS: the platform's own subnets the rules of a preview's bridge
-   * close besides every address that is not public (docs/plan/58), as the sandbox gateway's.
-   */
-  refusedSubnets: readonly string[]
-  /**
-   * core's own Docker for PREVIEW_EXECUTOR=local (R5c): its socket (SANDBOX_DOCKER_SOCKET) and
-   * the host firewall image (SANDBOX_NETWORK_GUARD_IMAGE) — under both runtimes: the rules of a
-   * preview's bridge come before its container (docs/plan/58). null with runner VMs.
-   */
-  docker: { socketPath: string; firewallImage: string | null } | null
-}
-
-/** The API deploy jobs call (plan 53, Р32): manifest, access, step reports, backup. */
-export interface ReleaseApiConfig {
-  /** The address it listens on; the containers of deploy jobs reach it. */
-  host: string
-  port: number
-  /** The origin deploy jobs are given, without a trailing slash. */
-  publicUrl: string
-  /** A job silent this long after the tag is revoked (Р31). */
-  startTimeoutMinutes: number
-}
-
 /** Renewal of tariffs by the scheduler of core (docs/plan/37-billing-plan.md, M5.11). */
 export interface BillingConfig {
   /** Public origin of the web app (APP_URL), no trailing slash: billing letters link to it. */
@@ -232,21 +131,6 @@ export interface BillingConfig {
   pastDueDays: number
   /** How often each renewal pass runs. */
   tickSeconds: number
-}
-
-/** Our Gitea over HTTPS. Holds the bot token: never log it. */
-export interface GitConfig {
-  kind: GitProviderKind
-  /** Web root without a trailing slash: the API and the only origin git clones from and pushes to. */
-  baseUrl: string
-  token: string
-  /** PEM bundle of the server's CA for git; the API client takes NODE_EXTRA_CA_CERTS. */
-  caFile: string | null
-  /**
-   * Where the bare mirrors of site repositories and the cache of base bundles live
-   * (GIT_MIRROR_DIR, plan 53, Р10); absent — under the OS temp directory.
-   */
-  mirrorDir?: string
 }
 
 export interface RunnerApiConfig {
@@ -302,59 +186,6 @@ const ownEnvSchema = z.object({
   ),
   LLM_CONTROL_URL: envVar(z.string().optional()),
   LLM_POOL_MIN_TURN_HEADROOM_PCT: envVar(z.coerce.number().gt(0).max(100).default(5)),
-  GITEA_URL: envVar(z.url({ protocol: /^https?$/, error: 'must be an http(s):// URL' }).optional()),
-  // Sent in an Authorization header, as a token and as a Basic password.
-  GITEA_TOKEN: envVar(
-    z
-      .string()
-      .regex(/^[\x21-\x7e]+$/, 'must be printable ASCII without whitespace')
-      .optional(),
-  ),
-  // The same header, another account: the one that creates site repositories.
-  GITEA_PROVISIONER_TOKEN: envVar(
-    z
-      .string()
-      .regex(/^[\x21-\x7e]+$/, 'must be printable ASCII without whitespace')
-      .optional(),
-  ),
-  GIT_CA_FILE: envVar(z.string().optional()),
-  GIT_MIRROR_DIR: envVar(z.string().optional()),
-  // Previews and releases (docs/plan/53-chat-preview-release.md, «Переменные окружения»).
-  ...previewAddressEnvShape,
-  PREVIEW_GATEWAY_PORT: port(DEFAULT_PREVIEW_GATEWAY_PORT),
-  PREVIEW_RELAY_GATEWAY_HOST: envVar(
-    z
-      .string()
-      .refine(
-        (host) => host === RELAY_GATEWAY_NAME || z.ipv4().safeParse(host).success,
-        `must be ${RELAY_GATEWAY_NAME} or an IPv4 address`,
-      )
-      .default(RELAY_GATEWAY_NAME),
-  ),
-  PREVIEW_TTL_HOURS: envVar(
-    z.coerce.number().int().min(1).max(720).default(previewDefaults.ttlHours),
-  ),
-  PREVIEW_IDLE_MINUTES: envVar(
-    z.coerce.number().int().min(1).max(1440).default(previewDefaults.idleMinutes),
-  ),
-  PREVIEW_EXECUTOR: envVar(z.enum(previewExecutorKinds).optional()),
-  // The whole platform on one machine (infra/server, owner's decision of 08.11.2026): core's
-  // Docker is that machine's, and production runs previews in it (PREVIEW_EXECUTOR=local)
-  SINGLE_SERVER: envVar(z.enum(['on', 'off'], { error: 'must be on or off' }).default('off')),
-  PREVIEW_RUNTIME: envVar(z.enum(previewRuntimes).optional()),
-  PREVIEW_SITE_IMAGES: envVar(z.string().optional()),
-  PREVIEW_DB_IMAGE: envVar(previewImageSchema.optional()),
-  PREVIEW_FORWARDER_IMAGE: envVar(previewImageSchema.optional()),
-  PREVIEW_BROWSER_IMAGE: envVar(previewImageSchema.optional()),
-  PREVIEW_DNS_SERVERS: envVar(previewDnsServersSchema.optional()),
-  PREVIEW_UPSTREAM_HOST: envVar(
-    z
-      .string()
-      .refine((host) => ipLiteral(host) === host, 'must be an IP address')
-      .default(previewDefaults.upstreamHost),
-  ),
-  // The platform's own subnets the egress proxy of a preview never connects to (R10, Р13).
-  SANDBOX_EGRESS_REFUSED_SUBNETS: egressRefusedSubnetsVar,
   // A waiting container is leased for its wait (docs/plan/70-turn-without-time-limit.md, ВР10).
   SANDBOX_WARM_MINUTES: envVar(z.coerce.number().int().min(0).max(10).default(10)),
   // How many passes of one workspace run at once (owner's requests of 06.11 and 12.11.2026,
@@ -364,19 +195,6 @@ const ownEnvSchema = z.object({
   // collects only those, so two trees or a stand on one Docker daemon never remove each other's
   // turns. It is the provider's runner label, so it takes the form of a runner id.
   SANDBOX_DEPLOYMENT: envVar(runnerIdSchema.default('local')),
-  RELEASE_API_PORT: port(DEFAULT_RELEASE_API_PORT),
-  RELEASE_API_HOST: envVar(
-    z
-      .string()
-      .refine((host) => ipLiteral(host) === host, 'must be an IP address')
-      .optional(),
-  ),
-  RELEASE_API_PUBLIC_URL: envVar(
-    z.url({ protocol: /^https?$/, error: 'must be an http(s):// URL' }).optional(),
-  ),
-  RELEASE_START_TIMEOUT_MINUTES: envVar(
-    z.coerce.number().int().min(1).max(60).default(previewDefaults.releaseStartTimeoutMinutes),
-  ),
   // The browser worker (docs/plan/57-browser-tasks.md, Б10): its internal origin and the bearer
   // token of its API, one visible ASCII word.
   BROWSER_WORKER_URL: envVar(
@@ -386,17 +204,6 @@ const ownEnvSchema = z.object({
   // token opens every session of the worker.
   BROWSER_WORKER_TOKEN: envVar(browserWorkerTokenSchema.optional()),
 })
-
-/** The PREVIEW_*_IMAGE variable of each image role. */
-const previewImageVariables = {
-  db: 'PREVIEW_DB_IMAGE',
-  forwarder: 'PREVIEW_FORWARDER_IMAGE',
-  browser: 'PREVIEW_BROWSER_IMAGE',
-} as const satisfies Record<PreviewImageRole, string>
-
-/** The registrable domain of a host by the Public Suffix List; null for an address or a local name. */
-const registrableDomain = (host: string): string | null =>
-  getDomain(host, { allowPrivateDomains: true })
 
 /** Builds the configuration once at startup; throws ConfigError listing every problem. */
 export function loadConfig(env: Env): CoreConfig {
@@ -418,42 +225,19 @@ export function loadConfig(env: Env): CoreConfig {
         'REDIS_URL',
         'LLM_CONTROL_URL',
         'LLM_POOL_MIN_TURN_HEADROOM_PCT',
-        'GITEA_URL',
-        'GITEA_TOKEN',
-        'GITEA_PROVISIONER_TOKEN',
-        'GIT_CA_FILE',
-        'GIT_MIRROR_DIR',
         'APP_URL',
         'BILLING_RENEWAL_NOTICE_DAYS',
         'BILLING_PAST_DUE_DAYS',
         'BILLING_TICK_SECONDS',
         'WEB_PUSH_VAPID_PUBLIC',
         'WEB_PUSH_PRIVATE_KEY',
-        'PREVIEW_TTL_HOURS',
-        'PREVIEW_IDLE_MINUTES',
-        'PREVIEW_GATEWAY_PORT',
-        'PREVIEW_RELAY_GATEWAY_HOST',
-        'PREVIEW_EXECUTOR',
-        'SINGLE_SERVER',
-        'PREVIEW_RUNTIME',
-        'PREVIEW_SITE_IMAGES',
-        'PREVIEW_DNS_SERVERS',
-        ...Object.values(previewImageVariables),
-        'SANDBOX_EGRESS_REFUSED_SUBNETS',
         'SANDBOX_WARM_MINUTES',
         'WORKSPACE_TURN_LIMIT',
-        'RELEASE_API_PORT',
-        'RELEASE_API_HOST',
-        'RELEASE_API_PUBLIC_URL',
-        'RELEASE_START_TIMEOUT_MINUTES',
         'BROWSER_WORKER_URL',
       ],
     ],
     // The token only with the worker it opens: the shared .env holds it for the worker too.
     [Boolean(env.BROWSER_WORKER_URL?.trim()), ['BROWSER_WORKER_TOKEN']],
-    // The address of a preview: core builds hostnames, the gateway routes by them.
-    [true, ['PREVIEW_BASE_DOMAIN', 'PREVIEW_SCHEME', 'PREVIEW_PUBLIC_PORT']],
-    [true, ['PREVIEW_UPSTREAM_HOST']],
     // core serves /metrics and calls the pool probe of llm with it.
     [true, ['METRICS_TOKEN']],
     [
@@ -563,165 +347,6 @@ export function loadConfig(env: Env): CoreConfig {
       }
     }
   }
-  let git: GitConfig | null = null
-  {
-    if (own.GIT_CA_FILE !== undefined && !isAbsolute(own.GIT_CA_FILE))
-      problems.push('GIT_CA_FILE: must be an absolute path')
-    if (own.GIT_MIRROR_DIR !== undefined && !isAbsolute(own.GIT_MIRROR_DIR))
-      problems.push('GIT_MIRROR_DIR: must be an absolute path')
-    if (own.GITEA_URL !== undefined) {
-      const url = new URL(own.GITEA_URL)
-      if (url.username || url.password || url.search || url.hash)
-        problems.push('GITEA_URL: expected an address without credentials, query or fragment')
-      else if (url.protocol !== 'https:') {
-        // Outside production the dev Gitea speaks plain http: core starts, turns do not.
-        if (production) problems.push('GITEA_URL: must use https in production (spec §19)')
-      } else if (own.GITEA_TOKEN === undefined)
-        problems.push('GITEA_TOKEN: required with an https GITEA_URL')
-      else
-        git = {
-          kind: 'gitea',
-          baseUrl: url.origin + url.pathname.replace(/\/+$/, ''),
-          token: own.GITEA_TOKEN,
-          caFile: own.GIT_CA_FILE ?? null,
-          ...(own.GIT_MIRROR_DIR === undefined ? {} : { mirrorDir: own.GIT_MIRROR_DIR }),
-        }
-    }
-  }
-  // Repositories are created in the Gitea that git is configured for: without git the token
-  // has nowhere to go.
-  const siteRepositoryProvisionerToken = git === null ? null : (own.GITEA_PROVISIONER_TOKEN ?? null)
-
-  // Previews and releases (docs/plan/53-chat-preview-release.md).
-  // The content of a preview goes to its upstream over plain http with an application password
-  // (Р24): in production only inside the host or the private network, never to a public address.
-  if (
-    production &&
-    !isPrivateAddress(own.PREVIEW_UPSTREAM_HOST) &&
-    !isLoopbackAddress(own.PREVIEW_UPSTREAM_HOST)
-  )
-    problems.push(
-      'PREVIEW_UPSTREAM_HOST: must be a private or loopback IP address in production (spec §19)',
-    )
-  // The relay of the agent's browser carries its traffic to the gateway of previews over plain
-  // http: in production only to the private network, as the upstream of a preview. A value set in
-  // production is a private address; unset, the default name stands, which no executor of
-  // production reads (PREVIEW_EXECUTOR=local is refused there) — the runner executor of M10 will
-  // require the address.
-  if (
-    production &&
-    (env.PREVIEW_RELAY_GATEWAY_HOST ?? '').trim() !== '' &&
-    !isPrivateAddress(own.PREVIEW_RELAY_GATEWAY_HOST)
-  )
-    problems.push(
-      'PREVIEW_RELAY_GATEWAY_HOST: must be a private IP address in production (spec §19)',
-    )
-  const previewAddress = previewAddressFromEnv(own, appEnv)
-  problems.push(
-    ...previewAddressProblems(
-      {
-        appEnv,
-        address: previewAddress,
-        appUrl: own.APP_URL ?? env.APP_URL ?? '',
-        giteaUrl: own.GITEA_URL ?? env.GITEA_URL,
-      },
-      registrableDomain,
-    ),
-  )
-  let previews: PreviewsConfig | null = null
-  let releaseApi: ReleaseApiConfig | null = null
-  {
-    const executor = own.PREVIEW_EXECUTOR ?? (production ? 'runner' : 'local')
-    // Core's own Docker never runs a preview in production, as it never runs a turn there —
-    // except on the single server, where it is the Docker of the sandboxes as well.
-    if (production && executor === 'local' && own.SINGLE_SERVER !== 'on')
-      problems.push('PREVIEW_EXECUTOR: production runs previews only on runner VMs (runner)')
-    // There the relay of the agent's browser needs the gateway's private address, never the
-    // default name host.docker.internal
-    if (
-      production &&
-      executor === 'local' &&
-      own.SINGLE_SERVER === 'on' &&
-      (env.PREVIEW_RELAY_GATEWAY_HOST ?? '').trim() === ''
-    )
-      problems.push(
-        'PREVIEW_RELAY_GATEWAY_HOST: required with PREVIEW_EXECUTOR=local in production (the gateway of previews)',
-      )
-    const runtime = own.PREVIEW_RUNTIME ?? (production ? 'runsc' : 'runc')
-    if (production && runtime !== 'runsc')
-      problems.push('PREVIEW_RUNTIME: production previews run under gVisor (runsc)')
-    const site = parsePreviewSiteImages(own.PREVIEW_SITE_IMAGES)
-    problems.push(...site.problems)
-    // The rules of a preview's bridge close every address that is not public (docs/plan/58): a
-    // private or loopback resolver would answer no name there, under either runtime.
-    for (const server of own.PREVIEW_DNS_SERVERS ?? [])
-      if (isPrivateAddress(server) || isLoopbackAddress(server))
-        problems.push(
-          `PREVIEW_DNS_SERVERS: ${server} is not a public address; the rules of a preview's bridge close it`,
-        )
-    if (previewAddress !== null)
-      previews = {
-        address: previewAddress,
-        ttlHours: own.PREVIEW_TTL_HOURS,
-        idleMinutes: own.PREVIEW_IDLE_MINUTES,
-        executor,
-        runtime,
-        siteImages: site.images,
-        images: Object.fromEntries(
-          previewImageRoles.map((role) => [role, own[previewImageVariables[role]] ?? null]),
-        ) as Record<PreviewImageRole, string | null>,
-        upstreamHost: own.PREVIEW_UPSTREAM_HOST,
-        dnsServers: own.PREVIEW_DNS_SERVERS ?? previewDefaults.dnsServers,
-        gatewayPort: own.PREVIEW_GATEWAY_PORT,
-        relayGatewayHost: own.PREVIEW_RELAY_GATEWAY_HOST,
-        refusedSubnets: own.SANDBOX_EGRESS_REFUSED_SUBNETS ?? [],
-        docker:
-          executor === 'local'
-            ? {
-                socketPath: env.SANDBOX_DOCKER_SOCKET?.trim() || '/var/run/docker.sock',
-                firewallImage: env.SANDBOX_NETWORK_GUARD_IMAGE?.trim() || null,
-              }
-            : null,
-      }
-
-    // Listens only where it is told (Р32): on the private network in production, on loopback
-    // or the runner's bridge in dev. Unset — no release API, and no port for stands to share.
-    const host = own.RELEASE_API_HOST
-    if (host !== undefined) {
-      if (production && !isPrivateAddress(host))
-        problems.push('RELEASE_API_HOST: must be a private IP address in production (spec §19)')
-      const otherPorts = [own.CORE_PORT, ...(runnerApi ? [runnerApi.port] : [])]
-      if (otherPorts.includes(own.RELEASE_API_PORT))
-        problems.push('RELEASE_API_PORT: must differ from the other ports of this process')
-      let publicUrl: string | undefined
-      if (own.RELEASE_API_PUBLIC_URL === undefined) {
-        if (production)
-          problems.push('RELEASE_API_PUBLIC_URL: required with RELEASE_API_HOST in production')
-        else publicUrl = `http://${host.includes(':') ? `[${host}]` : host}:${own.RELEASE_API_PORT}`
-      } else {
-        const url = new URL(own.RELEASE_API_PUBLIC_URL)
-        if (!isOrigin(url))
-          problems.push(
-            'RELEASE_API_PUBLIC_URL: expected an origin (no path, credentials or query)',
-          )
-        // Inside the perimeter plain http goes to a private address only (spec §19).
-        else if (production && url.protocol === 'http:' && !isPrivateAddress(url.hostname))
-          problems.push(
-            'RELEASE_API_PUBLIC_URL: plain http only to a private IP address in production (spec §19)',
-          )
-        publicUrl = url.origin
-      }
-      if (publicUrl !== undefined)
-        releaseApi = {
-          host,
-          port: own.RELEASE_API_PORT,
-          publicUrl,
-          startTimeoutMinutes: own.RELEASE_START_TIMEOUT_MINUTES,
-        }
-    } else if (own.RELEASE_API_PUBLIC_URL !== undefined)
-      problems.push('RELEASE_API_HOST: required with RELEASE_API_PUBLIC_URL')
-  }
-
   let browser: BrowserWorkerConfig | null = null
   if (own.BROWSER_WORKER_URL !== undefined) {
     let origin: string | null = null
@@ -775,8 +400,6 @@ export function loadConfig(env: Env): CoreConfig {
     workspaceTurnLimit: own.WORKSPACE_TURN_LIMIT,
     ...(runnerRuntime ? { runnerRuntime } : {}),
     runnerApi,
-    git,
-    siteRepositoryProvisionerToken,
     yookassa: present(yookassa),
     billing: {
       appUrl: present(own.APP_URL),
@@ -784,20 +407,9 @@ export function loadConfig(env: Env): CoreConfig {
       pastDueDays: own.BILLING_PAST_DUE_DAYS,
       tickSeconds: own.BILLING_TICK_SECONDS,
     },
-    previews,
-    releaseApi,
     browser,
   }
 }
-
-/** An origin; with `bucket`, optionally followed by one S3 bucket name as its path. */
-const isOrigin = (url: URL, { bucket = false } = {}) =>
-  !url.username &&
-  !url.password &&
-  (url.pathname === '/' ||
-    (bucket && /^\/[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]\/?$/.test(url.pathname))) &&
-  !url.search &&
-  !url.hash
 
 /** Every missing section was reported above, so this only narrows the type. */
 function present<T>(value: T | undefined): T {

@@ -27,7 +27,6 @@ const timers = vi.hoisted(() => ({
 vi.mock('node:timers/promises', () => timers)
 
 const TASK = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a60'
-const SITE = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61'
 const SESSION = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a63'
 const OTHER = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a64'
 const NOW = new Date('2026-10-23T10:00:00.000Z')
@@ -48,14 +47,10 @@ const state = (patch: Partial<BrowserSessionState> = {}): BrowserSessionState =>
   ...patch,
 })
 
-function given(
-  options: {
-    signIn?: (siteId: string) => Promise<{ login: string; password: string } | null>
-  } = {},
-) {
+function given() {
   const prisma = {
     task: {
-      findUnique: vi.fn(async (_query: object) => ({ siteId: SITE })),
+      findUnique: vi.fn(async (_query: object) => ({ id: TASK })),
       findMany: vi.fn(async () => [] as Array<{ id: string; status: string }>),
     },
     browserSession: {
@@ -80,7 +75,6 @@ function given(
   const sessions = new BrowserSessions({
     db: prisma as never,
     client: client as never,
-    ...options,
     logger,
     now: () => NOW,
   })
@@ -114,32 +108,18 @@ describe('BrowserSessions.start', () => {
   it('starts the session of the job for the agent, without taking the browser from anyone', async () => {
     const g = given()
     await g.sessions.start(job, running)
-    // Ids alone: the worker reads the site's address from the database, the agent gets the
-    // site's notes in the prompt of its turn.
+    // Ids alone, no site and no sign-in: a chat has neither (docs/plan/83-remove-projects.md).
     expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
       {
         sessionId: SESSION,
         taskId: TASK,
-        siteId: SITE,
+        siteId: null,
         takeControl: false,
       },
       { signal: running },
     )
     expect(db.markBrowserSessionReady).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
     expect(db.clearBrowserHelp).not.toHaveBeenCalled()
-    expect(db.closeBrowserSession).not.toHaveBeenCalled()
-  })
-
-  it('asks for the browser of a chat without a site, with no site and no sign-in', async () => {
-    const signIn = vi.fn(async () => null)
-    const g = given({ signIn })
-    g.prisma.task.findUnique.mockResolvedValue({ siteId: null } as never)
-    await g.sessions.start(job, running)
-    expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
-      { sessionId: SESSION, taskId: TASK, siteId: null, takeControl: false },
-      { signal: running },
-    )
-    expect(signIn).not.toHaveBeenCalled()
     expect(db.closeBrowserSession).not.toHaveBeenCalled()
   })
 
@@ -153,7 +133,7 @@ describe('BrowserSessions.start', () => {
 
   it.each([
     ['closed', { taskId: TASK, status: 'closed' }],
-    ['of another task', { taskId: SITE, status: 'starting' }],
+    ['of another task', { taskId: OTHER, status: 'starting' }],
     ['gone', null],
   ])('starts nothing for a session that is %s', async (_case, row) => {
     const g = given()
@@ -161,28 +141,6 @@ describe('BrowserSessions.start', () => {
     await g.sessions.start(job, running)
     expect(g.client.ensure).not.toHaveBeenCalled()
     expect(db.closeBrowserSession).not.toHaveBeenCalled()
-  })
-
-  it('gives the worker the site’s saved sign-in (Б36)', async () => {
-    const saved = { login: 'admin', password: 'Пароль-сайта-2026' }
-    const signIn = vi.fn(async (_siteId: string) => saved)
-    const g = given({ signIn })
-    await g.sessions.start(job, running)
-    expect(signIn).toHaveBeenCalledExactlyOnceWith(SITE)
-    expect(g.client.ensure.mock.calls[0]?.[0]).toMatchObject({ takeControl: false, signIn: saved })
-  })
-
-  it('leaves out a saved sign-in it cannot read: the client signs in by hand', async () => {
-    const g = given({
-      signIn: async () => {
-        throw new DomainError('UNAVAILABLE', 'vault sealed: Пароль-сайта-2026', 503)
-      },
-    })
-    await g.sessions.start(job, running)
-    expect(g.client.ensure.mock.calls[0]?.[0]).not.toHaveProperty('signIn')
-    expect(g.logger.warn).toHaveBeenCalledExactlyOnceWith(
-      `browser_sign_in_unread site=${SITE} cause=UNAVAILABLE`,
-    )
   })
 
   it('leaves a session still starting on the worker for the job that started it', async () => {
@@ -204,10 +162,6 @@ describe('BrowserSessions.start', () => {
     [
       'a session the worker no longer holds',
       (g: ReturnType<typeof given>) => g.client.ensure.mockResolvedValue(state({ status: 'lost' })),
-    ],
-    [
-      'a task that is gone',
-      (g: ReturnType<typeof given>) => g.prisma.task.findUnique.mockResolvedValue(null as never),
     ],
   ])('closes the session `failed` after %s, logging its code only', async (_case, fail) => {
     const g = given()
@@ -335,24 +289,10 @@ describe('BrowserSessions.reclaim', () => {
     const signal = new AbortController().signal
     await g.sessions.reclaim(TASK, signal)
     expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
-      { sessionId: SESSION, taskId: TASK, siteId: SITE, takeControl: true },
+      { sessionId: SESSION, taskId: TASK, siteId: null, takeControl: true },
       { signal },
     )
     expect(db.markBrowserSessionReady).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
-    expect(db.clearBrowserHelp).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
-  })
-
-  it('gives the browser of a chat without a site back with no site and no sign-in', async () => {
-    const signIn = vi.fn(async () => null)
-    const g = given({ signIn })
-    db.openBrowserSessionOfTask.mockResolvedValue({ id: SESSION, status: 'ready' })
-    g.prisma.task.findUnique.mockResolvedValue({ siteId: null } as never)
-    await g.sessions.reclaim(TASK, running)
-    expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
-      { sessionId: SESSION, taskId: TASK, siteId: null, takeControl: true },
-      { signal: running },
-    )
-    expect(signIn).not.toHaveBeenCalled()
     expect(db.clearBrowserHelp).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
   })
 
@@ -362,13 +302,6 @@ describe('BrowserSessions.reclaim', () => {
     await g.sessions.reclaim(TASK, new AbortController().signal)
     expect(g.client.ensure).not.toHaveBeenCalled()
     expect(db.clearBrowserHelp).not.toHaveBeenCalled()
-  })
-
-  it('gives the worker the site’s saved sign-in with every turn (Б36)', async () => {
-    const saved = { login: 'admin', password: 'Пароль-сайта-2026' }
-    const g = given({ signIn: async () => saved })
-    await g.sessions.reclaim(TASK, new AbortController().signal)
-    expect(g.client.ensure.mock.calls[0]?.[0]).toMatchObject({ takeControl: true, signIn: saved })
   })
 
   it('logs a failure by its code and lets the turn go on, the request for help answered', async () => {

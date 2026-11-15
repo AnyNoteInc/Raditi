@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { sealSnapshotPart } from '@repo/snapshots'
 import { memoryStorage, memoryTransit, tarZst } from '@repo/snapshots/testing'
 
-import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
+import { emptyUntrackedArchive } from '@repo/snapshots'
 import { SnapshotService } from '../sessions/snapshot.service.ts'
 import { sampleDriverId } from '../testing/ids.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'

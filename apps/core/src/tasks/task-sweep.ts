@@ -1,15 +1,13 @@
 import { Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
-import { chargeTask, expireTaskHolds, extendTaskHolds } from '@repo/billing'
+import { chargeTask, expireTaskHolds } from '@repo/billing'
 import {
   cancelWaitingTask,
   clearStaleUncheckedSections,
   dropAbandonedPages,
   insertFeedEvent,
   purgeExpiredPages,
-  requestPreviewSync,
   stalePageReservations,
-  taskHasProductionWrites,
   type PrismaClient,
   type waitingTaskStatuses,
 } from '@repo/db'
@@ -17,12 +15,8 @@ import {
   AGENT_TURN_JOB,
   AGENT_TURN_QUEUE,
   agentTurnRetryJobId,
-  CANDIDATE_REWIND_EVENT,
-  CANDIDATE_REWIND_JOB,
-  candidateRewindDedupeKey,
   feedEndedSiteOf,
   isDomainError,
-  requirementsOf,
   type FeedCreditsState,
   type JobQueue,
   type ObjectStorage,
@@ -52,8 +46,6 @@ import { savedPlanOf } from './turn-planner.ts'
 export const TASK_SWEEP_INTERVAL_MS = 60_000
 /** A pass claimed this long ago that opened no turn lost its handler (core died while planning). */
 export const ORPHAN_PREPARING_MS = 5 * 60_000
-/** After this a pass that cannot be ended — git, open usage — is ended anyway. */
-export const SETTLE_GIVE_UP_MS = 2 * 60 * 60_000
 /** A task back in the queue this long without a pass lost its retry job: it is put again. */
 export const LOST_RETRY_MS = 15 * 60_000
 /**
@@ -62,11 +54,6 @@ export const LOST_RETRY_MS = 15 * 60_000
  * still in the queue meanwhile only finds the task taken (claimQueuedTask).
  */
 export const LOST_TURN_JOB_MS = 5 * 60_000
-/**
- * An `/undo` left unanswered this long lost its job — a core that died at it, Redis, an outbox row
- * that failed: it is put again, once in such a span. A job still at work only finds the lease taken.
- */
-export const LOST_REWIND_MS = 2 * 60_000
 /** A pass that could not be ended yet (`later`) is not looked at again before this. */
 export const LATER_PAUSE_MS = 5 * 60_000
 /** A publication of a turn that no end of turn settled is failed this long after it was made. */
@@ -105,12 +92,10 @@ export interface TaskSweepDependencies {
 }
 
 /**
- * The sweep of dialogs (docs/plan/53-chat-preview-release.md, R3, Р8; feed-design.md
- * «Сверка»): every minute it ends the passes whose turn recovery closed or whose handler died,
- * keeps the reserves of dialogs that wait with a candidate while their preview lives, cancels
- * those whose reserve ran out — never one with a release in work —, puts again a pass whose
- * retry got lost or an `/undo` nobody answered, compares the browsers of tasks with the worker
- * and removes the files nobody sent. Every write is a conditional move in PostgreSQL, so a pass
+ * The sweep of chats (feed-design.md «Сверка»): every minute it ends the passes whose turn
+ * recovery closed or whose handler died, cancels the chats whose reserve ran out, puts again a
+ * pass whose retry got lost, compares the browsers of tasks with the worker and removes the files
+ * nobody sent. Every write is a conditional move in PostgreSQL, so a pass
  * is idempotent and may race the live handler.
  */
 export class TaskSweep {
@@ -130,10 +115,8 @@ export class TaskSweep {
     for (const [name, pass] of [
       ['orphans', () => this.settleOrphans()],
       ['charges', () => this.chargeLater()],
-      ['holds', () => this.extendHolds()],
       ['expiry', () => this.expireHolds()],
       ['retries', () => this.requeueLost()],
-      ['rewinds', () => this.rewinds()],
       ['browsers', () => this.sweepBrowsers()],
       ['attachments', () => this.collectAttachments()],
       ['pages', () => this.sweepPages()],
@@ -227,10 +210,9 @@ export class TaskSweep {
     }
     if (!assignment?.finishedAt) return null
     const ending = await this.#endingOf(assignment)
-    const giveUp = now.getTime() - assignment.finishedAt.getTime() >= SETTLE_GIVE_UP_MS
-    // As the live handler: what a task in the browser saved is read on the site first (Б23).
+    // As the live handler: what a task in the browser saved is read first (Б23).
     if (task.needs_browser) await this.deps.browser?.verify(task.id)
-    return this.deps.settlement.settle(ref, ending, { giveUp })
+    return this.deps.settlement.settle(ref, ending)
   }
 
   /** How a closed turn ended, from its journal; a journal that contradicts itself is technical. */
@@ -265,33 +247,26 @@ export class TaskSweep {
     } catch {
       return technical
     }
-    const head = await this.deps.db.taskTurn.findUnique({
-      where: { taskId_turnNo: { taskId: assignment.taskId, turnNo: turn } },
-      select: { headSha: true },
-    })
-    const headSha = head?.headSha ?? replayed.candidateHeadSha
     const plan = savedPlanOf(assignment.plan)
-    // A turn without a repository publishes no head (docs/plan/57-browser-tasks.md, Б4); a plan
-    // that no longer reads is taken for one with a repository, as every plan before it was.
-    const repository = plan ? requirementsOf(plan).repository : true
-    const published = repository ? (headSha ? { headSha } : null) : {}
+    // A plan with a repository is of a project, and projects are gone
+    // (docs/plan/83-remove-projects.md): such a turn ends as a technical failure.
+    if (plan?.workspace) return technical
     if (replayed.lastPhase === 'completed') {
       const result = entries.findLast((entry) => entry.phase === 'completed')?.result
-      if (!result || !published) return technical
-      return { kind: 'completed', turn, result, ...published }
+      if (!result) return technical
+      return { kind: 'completed', turn, result }
     }
-    // Recovery published the turn, or finished the checkpoint of one without a repository (Б6),
-    // but does not keep its result: it is read from the output.
-    const recovered = repository ? 'publication_recovered' : 'checkpoint_recovered'
-    if (replayed.lastPhase === recovered) {
-      if (!plan || !published || !this.deps.drivers.has(plan.driverId)) return technical
+    // Recovery finished the checkpoint of the turn (Б6), but does not keep its result: it is read
+    // from the output.
+    if (replayed.lastPhase === 'checkpoint_recovered') {
+      if (!plan || !this.deps.drivers.has(plan.driverId)) return technical
       try {
         const result = readTurnResult(
           this.deps.drivers.get(plan.driverId),
           replayed.events,
           plan.input.action,
         )
-        return { kind: 'completed', turn, result, ...published }
+        return { kind: 'completed', turn, result }
       } catch {
         return { kind: 'failed', turn, errorCode: 'TURN_OUTPUT_REJECTED' }
       }
@@ -341,52 +316,8 @@ export class TaskSweep {
   }
 
   /**
-   * A dialog that waits with a candidate keeps its reserve while its preview lives (Р8): the
-   * reserve rows are moved to the preview's expiry. A preview stopped while no one used it
-   * (`expired` before its expiry, owner's answer of 26.10.2026) still lives: its copy waits for a
-   * view, and so does the dialog.
-   */
-  async extendHolds(): Promise<number> {
-    const { db } = this.deps
-    const rows = await db.$queryRaw<Array<{ id: string; expires_at: Date }>>`
-      SELECT t.id, p.expires_at FROM tasks t
-      JOIN preview_environments p ON p.task_id = t.id
-      WHERE t.status IN ('awaiting_user', 'awaiting_approval') AND t.billable
-        AND p.status <> 'destroyed' AND p.expires_at > now()
-        AND EXISTS (SELECT 1 FROM task_candidates c
-          WHERE c.task_id = t.id AND c.status IN ('current', 'stale'))
-        AND EXISTS (SELECT 1 FROM credit_holds h
-          WHERE h.task_id = t.id AND h.status = 'active' AND h.expires_at < p.expires_at)
-      LIMIT ${BATCH}`
-    let extended = 0
-    for (const row of rows)
-      try {
-        const moved = await db.$transaction(
-          async (tx) => {
-            // The dialog may have left its wait since it was read — words, «Продолжить»,
-            // «Попробовать ещё» placed a new reserve with an expiry of its own: the row is held
-            // as it waits, before the accounts (the order every writer takes), or left alone.
-            const waiting = await tx.$queryRaw<Array<{ id: string }>>`
-              SELECT id FROM tasks
-              WHERE id = ${row.id}::uuid AND status IN ('awaiting_user', 'awaiting_approval')
-              FOR SHARE`
-            if (waiting.length === 0) return false
-            await extendTaskHolds(tx, { taskId: row.id, expiresAt: row.expires_at })
-            return true
-          },
-          { isolationLevel: 'ReadCommitted' },
-        )
-        if (moved) extended++
-      } catch (error) {
-        this.#warn(`task sweep hold task=${row.id}`, logged(error))
-      }
-    return extended
-  }
-
-  /**
    * A dialog whose every reserve row is past its expiry while it waits is cancelled and its
-   * reserve given back (`expireTaskHolds`). A dialog with a release that has not ended is never
-   * touched: deploying and verifying are not waiting statuses, and the move checks the release.
+   * reserve given back (`expireTaskHolds`).
    */
   async expireHolds(): Promise<number> {
     const { db } = this.deps
@@ -398,8 +329,6 @@ export class TaskSweep {
         AND EXISTS (SELECT 1 FROM credit_holds h WHERE h.task_id = t.id AND h.status = 'active')
         AND NOT EXISTS (SELECT 1 FROM credit_holds h
           WHERE h.task_id = t.id AND h.status = 'active' AND h.expires_at > now())
-        AND NOT EXISTS (SELECT 1 FROM site_releases r
-          WHERE r.task_id = t.id AND r.status NOT IN ('installed', 'rolled_back', 'failed'))
       LIMIT ${BATCH}`
     let cancelled = 0
     for (const row of rows) {
@@ -440,10 +369,12 @@ export class TaskSweep {
             ? 'expired'
             : 'returned'
           : null
-        const writes = await taskHasProductionWrites(tx, row.id)
+        // Anyone acted in the task's browser (Б28): nothing gives that back.
+        const writes =
+          (await tx.browserSession.count({ where: { taskId: row.id, wroteAt: { not: null } } })) > 0
         const task = await tx.task.findUniqueOrThrow({
           where: { id: row.id },
-          select: { turnNo: true, siteId: true },
+          select: { turnNo: true },
         })
         // What a task in the browser had saved, as last read there (Б24); its session is
         // closed by the browser pass of this tick.
@@ -457,14 +388,12 @@ export class TaskSweep {
               v: 1,
               turn: task.turnNo > 0 ? task.turnNo : null,
               by: row.status === 'queued' ? 'queue_timeout' : 'no_answer',
-              site: feedEndedSiteOf(task, writes),
+              site: feedEndedSiteOf({ siteId: null }, writes),
               credits,
               ...(objects.length ? { objects } : {}),
             },
           },
         })
-        // The dialog is closed: its preview is brought down by its manager.
-        await requestPreviewSync(tx, { taskId: row.id, revision: 0 })
         return true
       },
       { isolationLevel: 'ReadCommitted', timeout: 30_000 },
@@ -524,7 +453,7 @@ export class TaskSweep {
   }
 
   /**
-   * A queued pass whose job never came is put again: a delayed retry of a busy site or pool
+   * A queued pass whose job never came is put again: a delayed retry of a busy lease or pool
    * (LOST_RETRY_MS), or the `turn.run` of a task that waits for nothing (LOST_TURN_JOB_MS). The
    * job answers the request that queued the pass — the last words or «Продолжить», never a
    * command — and its id is the moment the task went back to the queue, so a stall is put once.
@@ -548,42 +477,6 @@ export class TaskSweep {
         this.#warn(`task sweep requeue task=${row.id}`, logged(error))
       }
     }
-    return put
-  }
-
-  /**
-   * An `/undo` or a `/redo` of a chat with the repository nobody answered (docs/plan/61-chats-first.md,
-   * §5.14) is put again: `agent-turns` runs a job once, and until a `candidate.rewind` row answers the press
-   * the chat takes nothing but `/cancel`. The job decides what is left of it — it finds an answer,
-   * goes on from a branch that moved, or gives the press up.
-   */
-  async rewinds(): Promise<number> {
-    const rows = await this.deps.db.$queryRaw<Array<{ id: string; press: bigint }>>`
-      SELECT t.id, p.id AS press FROM tasks t
-      CROSS JOIN LATERAL (
-        SELECT e.id, e.created_at FROM task_events e
-        WHERE e.task_id = t.id AND e.type = 'feed.request'
-          AND e.payload->>'kind' = 'command' AND e.payload->>'command' IN ('turn_undo', 'turn_redo')
-        ORDER BY e.id DESC LIMIT 1) p
-      WHERE t.status IN ('awaiting_user', 'awaiting_approval') AND t.needs_repository
-        AND p.created_at < now() - make_interval(secs => ${LOST_REWIND_MS / 1000})
-        AND NOT EXISTS (SELECT 1 FROM task_events a
-          WHERE a.task_id = t.id AND a.type = ${CANDIDATE_REWIND_EVENT}
-            AND a.payload->>'requestEventId' = p.id::text)
-      ORDER BY p.created_at LIMIT ${BATCH}`
-    const span = Math.floor(this.#now().getTime() / LOST_REWIND_MS)
-    let put = 0
-    for (const row of rows)
-      try {
-        const job = { taskId: row.id, requestEventId: row.press.toString() }
-        await this.deps.queue.enqueue(AGENT_TURN_QUEUE, CANDIDATE_REWIND_JOB, job, {
-          jobId: `${candidateRewindDedupeKey(job)}:sweep:${span}`,
-        })
-        put++
-      } catch (error) {
-        this.#warn(`task sweep rewind task=${row.id}`, logged(error))
-      }
-    if (put > 0) this.#logger.log(`task_sweep_rewinds count=${put}`)
     return put
   }
 

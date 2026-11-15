@@ -50,7 +50,7 @@ import {
   run,
 } from '../../../infra/dev/llm-verify/stack.mjs'
 import { startWorker } from '../../../infra/dev/llm-verify/workers.mjs'
-import { bridgeGatewayAddress, freePort } from './verify-agent-content-role.mjs'
+import { bridgeGatewayAddress, freePort } from './stand-net.mjs'
 import { OPENCODE_HOME, ZAI_OFFERS, zaiOriginOverrides } from './verify-llm-zai-setup.mjs'
 
 /** The exit code of a run that refused to start: nothing was started and nothing was sent. */

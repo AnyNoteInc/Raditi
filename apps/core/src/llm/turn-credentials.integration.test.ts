@@ -3,7 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
 import {
-  siteEnvVarPath,
+  workspaceEnvVarPath,
   type LlmBackendId,
   type SecretStore,
   type TurnCredentialGrant,
@@ -202,19 +202,12 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       await db.taskAccountBinding.deleteMany({ where: tasks })
       await db.turnAssignment.deleteMany({ where: { task: { workspaceId: row.workspaceId } } })
       await db.taskEvent.deleteMany({ where: tasks })
-      const sites = await db.site.findMany({
+      const chats = await db.task.findMany({
         where: { workspaceId: row.workspaceId },
         select: { id: true },
       })
-      const chats = await db.task.findMany({
-        where: { workspaceId: row.workspaceId, siteId: null },
-        select: { id: true },
-      })
-      await db.siteLease.deleteMany({
-        where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
-      })
+      await db.siteLease.deleteMany({ where: { siteId: { in: chats.map(({ id }) => id) } } })
       await db.task.deleteMany({ where: { workspaceId: row.workspaceId } })
-      await db.site.deleteMany({ where: { workspaceId: row.workspaceId } })
       const subscriptions = await db.subscription.findMany({
         where: { workspaceId: row.workspaceId },
         select: { planId: true },
@@ -303,33 +296,20 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
               sourceUrl: 'https://synthetic.invalid/rates',
             },
           })
-    /** `requirements`: what the task needs, over a repository alone (plan 57, Б2). */
-    async function task(
-      requirements: { needsRepository: boolean; needsBrowser: boolean } = {
-        needsRepository: true,
-        needsBrowser: false,
-      },
-    ) {
-      const site = await db.site.create({
-        data: {
-          workspaceId: workspace.id,
-          name: 'Synthetic',
-          url: `https://${randomUUID()}.invalid`,
-          stack: 'wordpress',
-        },
-      })
+    /** A chat under the lease of its own id (docs/plan/83-remove-projects.md, БП6). */
+    async function task({ needsBrowser = false }: { needsBrowser?: boolean } = {}) {
       const task = await db.task.create({
         data: {
           workspaceId: workspace.id,
-          siteId: site.id,
           status: 'running',
           modelClass: 'standard',
-          ...requirements,
+          needsRepository: false,
+          needsBrowser,
         },
       })
       await db.siteLease.create({
         data: {
-          siteId: site.id,
+          siteId: task.id,
           holderTaskId: task.id,
           epoch: 1,
           operation: 'turn',
@@ -337,7 +317,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
         },
       })
       const ref: TurnCredentialRef = { taskId: task.id, sessionId: randomUUID(), turn: 1, epoch: 1 }
-      return { task, site, ref }
+      return { task, ref }
     }
     /** A chat without a project, under the lease of its own id (plan 61, К14). */
     async function chat() {
@@ -457,33 +437,36 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     }
   }
 
-  it('gives the agent the values of the variables it may get, read at the versions of their rows (Р13)', async () => {
-    const f = await fixture()
-    const consented = { toAgent: true, agentConsentAt: new Date() }
-    await db.siteEnvVar.createMany({
+  it('gives the agent the values of the variables of its workspace, read at the versions of their rows (БП4)', async () => {
+    const f = await fixture({ slots: 2 })
+    await db.workspaceEnvVar.createMany({
       data: [
-        { siteId: f.site.id, name: 'PAYMENT_KEY', hosts: ['api.example.ru:443'], ...consented },
+        { workspaceId: f.workspace.id, name: 'PAYMENT_KEY' },
         // Vault holds version 1: a row naming version 2 is a write the turn does not take yet.
-        { siteId: f.site.id, name: 'LATER_KEY', hosts: [], keyVersion: 2, ...consented },
-        { siteId: f.site.id, name: 'PREVIEW_ONLY', hosts: [] },
+        { workspaceId: f.workspace.id, name: 'LATER_KEY', keyVersion: 2 },
       ],
     })
-    for (const name of ['PAYMENT_KEY', 'LATER_KEY', 'PREVIEW_ONLY'])
-      f.vault.entries.set(siteEnvVarPath(f.site.id, name), {
+    for (const name of ['PAYMENT_KEY', 'LATER_KEY'])
+      f.vault.entries.set(workspaceEnvVarPath(f.workspace.id, name), {
         data: { value: `${name.toLowerCase()}-value` },
         custom: {},
         deleted: false,
       })
     const issued = await f.credentials.issue(f.ref, f.grant)
     expect(issued.envValues).toEqual({ PAYMENT_KEY: 'payment_key-value' })
+    // Every chat of the workspace gets them, the one with the browser too.
+    const browser = await f.taskFixture({ needsBrowser: true })
+    expect((await f.credentials.issue(browser.ref, f.grant)).envValues).toEqual({
+      PAYMENT_KEY: 'payment_key-value',
+    })
     // The value changed meanwhile: the running turn keeps what its sandbox got.
-    f.vault.entries.get(siteEnvVarPath(f.site.id, 'PAYMENT_KEY'))!.data.value = 'changed-value-0002'
+    f.vault.entries.get(workspaceEnvVarPath(f.workspace.id, 'PAYMENT_KEY'))!.data.value =
+      'changed-value-0002'
     expect(await f.credentials.recover(f.ref)).toEqual(issued)
-    // What the candidate is refused for: every value of the site as Vault holds it now.
+    // What kept text is refused for: every value of the workspace as Vault holds it now.
     expect((await f.credentials.siteValues(f.ref)).sort()).toEqual([
       'changed-value-0002',
       'later_key-value',
-      'preview_only-value',
     ])
     // Nothing of a value in SQL.
     const rows = JSON.stringify(await db.llmKey.findMany({ where: { taskId: f.task.id } }))
@@ -492,10 +475,10 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     // A workspace of client data gives the agent nothing, whatever the rows say: here the gate
     // of 152-FZ refuses the key, and no value was even read before it.
     const client = await fixture({ client: true })
-    await db.siteEnvVar.create({
-      data: { siteId: client.site.id, name: 'PAYMENT_KEY', hosts: [], ...consented },
+    await db.workspaceEnvVar.create({
+      data: { workspaceId: client.workspace.id, name: 'PAYMENT_KEY' },
     })
-    client.vault.entries.set(siteEnvVarPath(client.site.id, 'PAYMENT_KEY'), {
+    client.vault.entries.set(workspaceEnvVarPath(client.workspace.id, 'PAYMENT_KEY'), {
       data: { value: 'client-value-0001' },
       custom: {},
       deleted: false,
@@ -504,77 +487,8 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       code: 'CROSS_BORDER_NOT_CLEARED',
     })
     expect(
-      client.vault.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
+      client.vault.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/workspaces/')),
     ).toEqual([])
-  })
-
-  it('gives a task in the browser no variable, while a repository task of the same workspace gets it (plan 57)', async () => {
-    const f = await fixture({ slots: 2 })
-    const consented = { toAgent: true, agentConsentAt: new Date() }
-    const browser = await f.taskFixture({ needsRepository: false, needsBrowser: true })
-    for (const site of [f.site, browser.site]) {
-      await db.siteEnvVar.create({
-        data: { siteId: site.id, name: 'MAIL_API_KEY', hosts: [], ...consented },
-      })
-      f.vault.entries.set(siteEnvVarPath(site.id, 'MAIL_API_KEY'), {
-        data: { value: `mail-key-${site.id.slice(0, 8)}` },
-        custom: {},
-        deleted: false,
-      })
-    }
-    expect((await f.credentials.issue(f.ref, f.grant)).envValues).toEqual({
-      MAIL_API_KEY: `mail-key-${f.site.id.slice(0, 8)}`,
-    })
-    // Its `web` tools write onto the live site, where no candidate or release refuses a value:
-    // the browser turn's commands get none, and its site's value is not even read.
-    f.vault.kvRead.mockClear()
-    const issued = await f.credentials.issue(browser.ref, f.grant)
-    expect(issued).not.toHaveProperty('envValues')
-    expect(
-      f.vault.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
-    ).toEqual([])
-    expect(f.vault.entries.get(turnCredentialPath(browser.ref))?.data).not.toHaveProperty('env')
-    expect(await f.credentials.recover(browser.ref)).toEqual(issued)
-  })
-
-  it('gives a chat with the code and the browser its variables without the file accesses (К21, 61.27)', async () => {
-    const f = await fixture({ slots: 2 })
-    const consented = { toAgent: true, agentConsentAt: new Date() }
-    const chat = await f.taskFixture({ needsRepository: true, needsBrowser: true })
-    const names = [
-      'FTP_PASSWORD',
-      'MAIL_API_KEY',
-      'SFTP_PASSWORD',
-      'SFTP_PRIVATE_KEY',
-      'SITE_DB_PASSWORD',
-      'SITE_GIT_TOKEN',
-    ]
-    for (const site of [f.site, chat.site])
-      for (const name of names) {
-        await db.siteEnvVar.create({ data: { siteId: site.id, name, hosts: [], ...consented } })
-        f.vault.entries.set(siteEnvVarPath(site.id, name), {
-          data: { value: `${name}-value` },
-          custom: {},
-          deleted: false,
-        })
-      }
-    // The code alone keeps them all, as it did.
-    expect(Object.keys((await f.credentials.issue(f.ref, f.grant)).envValues ?? {}).sort()).toEqual(
-      names,
-    )
-    f.vault.kvRead.mockClear()
-    const issued = await f.credentials.issue(chat.ref, f.grant)
-    // The database and git reach it like any variable (owner's answer of 06.11.2026).
-    expect(issued.envValues).toEqual({
-      MAIL_API_KEY: 'MAIL_API_KEY-value',
-      SITE_DB_PASSWORD: 'SITE_DB_PASSWORD-value',
-      SITE_GIT_TOKEN: 'SITE_GIT_TOKEN-value',
-    })
-    // An access to the files is not even read.
-    expect(f.vault.kvRead.mock.calls.filter(([path]) => /FTP_|SFTP_/.test(String(path)))).toEqual(
-      [],
-    )
-    expect(await f.credentials.recover(chat.ref)).toEqual(issued)
   })
 
   describe('a chat without a site (docs/plan/61-chats-first.md, К14)', () => {
@@ -586,7 +500,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       // No site, no variables: nothing of a site is even looked for.
       expect(issued).not.toHaveProperty('envValues')
       expect(
-        f.vault.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
+        f.vault.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/workspaces/')),
       ).toEqual([])
       expect(await f.credentials.issue(ref, f.grant)).toEqual(issued)
       expect(await f.credentials.recover(ref)).toEqual(issued)
@@ -802,140 +716,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(await db.llmKey.count({ where: { taskId: second.task.id } })).toBe(0)
   })
 
-  it('refuses a task whose workspace is not the workspace of its site, before any secret exists', async () => {
-    // The data sent to the provider belongs to the site: a synthetic workspace on the task row
-    // must not open the 152-FZ gate of a client site (rule 1). MCP admission refuses it too.
-    const f = await fixture()
-    const client = await db.workspace.create({
-      data: { name: 'Synthetic client workspace', dataClass: 'client' },
-    })
-    const site = await db.site.create({
-      data: {
-        workspaceId: client.id,
-        name: 'Synthetic client site',
-        url: `https://${randomUUID()}.invalid`,
-        stack: 'wordpress',
-      },
-    })
-    const task = await db.task.create({
-      data: {
-        workspaceId: f.workspace.id,
-        siteId: site.id,
-        status: 'running',
-        modelClass: 'standard',
-      },
-    })
-    try {
-      await db.siteLease.create({
-        data: {
-          siteId: site.id,
-          holderTaskId: task.id,
-          epoch: 1,
-          operation: 'turn',
-          expiresAt: new Date(Date.now() + 1_200_000),
-        },
-      })
-      const ref: TurnCredentialRef = { taskId: task.id, sessionId: randomUUID(), turn: 1, epoch: 1 }
-      await expect(f.credentials.issue(ref, f.grant)).rejects.toMatchObject({ code: 'LEASE_LOST' })
-      expect(await db.llmKey.count({ where: { taskId: task.id } })).toBe(0)
-      expect(await db.taskAccountBinding.count({ where: { taskId: task.id } })).toBe(0)
-      expect(f.vault.kvCreateOnce).not.toHaveBeenCalled()
-      expect(f.vault.entries.size).toBe(0)
-      // The same site under its own workspace reaches the gate and is refused by it.
-      await db.task.update({ where: { id: task.id }, data: { workspaceId: client.id } })
-      await expect(f.credentials.issue(ref, f.grant)).rejects.toMatchObject({
-        code: 'CROSS_BORDER_NOT_CLEARED',
-      })
-      expect(f.vault.kvCreateOnce).not.toHaveBeenCalled()
-    } finally {
-      await db.llmKey.deleteMany({ where: { taskId: task.id } })
-      await db.taskAccountBinding.deleteMany({ where: { taskId: task.id } })
-      await db.taskEvent.deleteMany({ where: { taskId: task.id } })
-      await db.siteLease.deleteMany({ where: { siteId: site.id } })
-      await db.task.delete({ where: { id: task.id } })
-      await db.site.delete({ where: { id: site.id } })
-      await db.workspace.delete({ where: { id: client.id } })
-    }
-  })
-
-  it('stops returning a key once the task row leaves the workspace of its site, and still revokes it', async () => {
-    const f = await fixture()
-    const issued = await f.credentials.issue(f.ref, f.grant)
-    const other = await db.workspace.create({
-      data: { name: 'Synthetic foreign workspace', dataClass: 'synthetic' },
-    })
-    try {
-      await db.task.update({ where: { id: f.task.id }, data: { workspaceId: other.id } })
-      // The retry of the same turn has the key in SQL and in Vault, and gets neither.
-      await expect(f.credentials.issue(f.ref, f.grant)).rejects.toMatchObject({
-        code: 'LEASE_LOST',
-      })
-      // Closing is never fenced by the task row: the key must not outlive such a turn.
-      await f.credentials.revoke(f.ref)
-      const key = await db.llmKey.findFirstOrThrow({ where: { taskId: f.task.id } })
-      expect(key.revokedAt).not.toBeNull()
-      expect(f.vault.entries.has(turnCredentialPath(f.ref))).toBe(false)
-      expect(await f.credentials.recover(f.ref)).toBeNull()
-      expect(await admissibleKey(db, sha256(issued.llmApiKey))).toBeNull()
-    } finally {
-      // afterEach removes the rows of the fixture's workspace: the task goes back to it first.
-      await db.task.update({ where: { id: f.task.id }, data: { workspaceId: f.workspace.id } })
-      await db.workspace.delete({ where: { id: other.id } })
-    }
-  })
-
-  it('writes no secret for a task that leaves the workspace of its site after its lease was read', async () => {
-    const f = await fixture()
-    const other = await db.workspace.create({
-      data: { name: 'Synthetic foreign workspace', dataClass: 'synthetic' },
-    })
-    let moves = 0
-    // The row changes inside the issuing transaction, after ownedTask has read it: only the
-    // fence that closes account selection can still refuse before the Vault write.
-    const moving = {
-      $transaction: (work: (tx: unknown) => Promise<unknown>, options?: object) =>
-        db.$transaction(
-          (tx) =>
-            work(
-              new Proxy(tx, {
-                get(target, property) {
-                  if (property !== 'llmModelPrice') return Reflect.get(target, property, target)
-                  return {
-                    findFirst: async (args: Parameters<typeof tx.llmModelPrice.findFirst>[0]) => {
-                      if (moves++ === 0)
-                        await db.task.update({
-                          where: { id: f.task.id },
-                          data: { workspaceId: other.id },
-                        })
-                      return tx.llmModelPrice.findFirst(args)
-                    },
-                  }
-                },
-              }),
-            ),
-          options,
-        ),
-    } as unknown as PrismaClient
-    const credentials = new GatewayTurnCredentials({
-      prisma: moving,
-      secrets: f.vault.port,
-      capacityOf,
-    })
-    try {
-      await expect(credentials.issue(f.ref, f.grant)).rejects.toMatchObject({ code: 'LEASE_LOST' })
-      expect(moves).toBe(1)
-      expect(f.vault.kvCreateOnce).not.toHaveBeenCalled()
-      expect(f.vault.entries.size).toBe(0)
-      expect(await db.llmKey.count({ where: { taskId: f.task.id } })).toBe(0)
-      expect(await db.taskAccountBinding.count({ where: { taskId: f.task.id } })).toBe(0)
-    } finally {
-      // afterEach removes the rows of the fixture's workspace: the task goes back to it first.
-      await db.task.update({ where: { id: f.task.id }, data: { workspaceId: f.workspace.id } })
-      await db.workspace.delete({ where: { id: other.id } })
-    }
-  })
-
-  it('two different site owners get keys side by side on one account under the pool lock', async () => {
+  it('two chats get keys side by side on one account under the pool lock', async () => {
     // An account runs any number of turns at once (docs/plan/70-turn-without-time-limit.md, ВР26).
     const f = await fixture()
     const second = await f.taskFixture()
@@ -994,7 +775,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
         operation: { operation: 'deploy' as const },
       }
       await db.siteLease.update({
-        where: { siteId: f.site.id },
+        where: { siteId: f.task.id },
         data: changes[reason as keyof typeof changes],
       })
       await expect(f.credentials.issue(f.ref, f.grant)).rejects.toMatchObject({
@@ -1645,7 +1426,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     const release = Promise.withResolvers<void>()
     const locking = db.$transaction(
       async (tx) => {
-        await tx.$queryRaw`SELECT site_id FROM site_leases WHERE site_id = ${f.site.id}::uuid FOR UPDATE`
+        await tx.$queryRaw`SELECT site_id FROM site_leases WHERE site_id = ${f.task.id}::uuid FOR UPDATE`
         held.resolve()
         await release.promise
       },
@@ -1669,12 +1450,12 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     const f = await fixture()
     await f.credentials.issue(f.ref, f.grant)
     await db.$executeRaw`UPDATE site_leases SET expires_at = clock_timestamp() + interval '400 milliseconds'
-      WHERE site_id = ${f.site.id}::uuid`
+      WHERE site_id = ${f.task.id}::uuid`
     const held = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
     const locking = db.$transaction(
       async (tx) => {
-        await tx.$queryRaw`SELECT site_id FROM site_leases WHERE site_id = ${f.site.id}::uuid FOR UPDATE`
+        await tx.$queryRaw`SELECT site_id FROM site_leases WHERE site_id = ${f.task.id}::uuid FOR UPDATE`
         held.resolve()
         await release.promise
       },
@@ -1802,7 +1583,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     const opened = await db.turnAssignment.create({
       data: {
         taskId: f.task.id,
-        siteId: f.site.id,
+        siteId: f.task.id,
         sessionId: f.ref.sessionId,
         turnNo: f.ref.turn,
         executor: 'runner',

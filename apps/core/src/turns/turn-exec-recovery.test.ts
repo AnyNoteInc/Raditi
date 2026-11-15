@@ -29,7 +29,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LocalTurnExecutor } from '@repo/local-turns'
 
-import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
+import { emptyUntrackedArchive } from '@repo/snapshots'
 import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
 import { RunnerHub } from '../runner-api/runner-hub.ts'
 import type { SealedElsewhere, SnapshotParts } from '../sessions/snapshot.service.ts'
