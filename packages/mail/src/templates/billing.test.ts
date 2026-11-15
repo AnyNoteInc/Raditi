@@ -435,11 +435,7 @@ describe('subscription-ended', () => {
       { packCreditsLeft: 40, giftCreditsLeft: 0 },
       'Кредиты из пакета, чаты и страницы сохраняются. Кредитов из пакета осталось: 40.',
     ],
-    [
-      'no credits',
-      { packCreditsLeft: 0, giftCreditsLeft: 0 },
-      'Чаты и страницы сохраняются.',
-    ],
+    ['no credits', { packCreditsLeft: 0, giftCreditsLeft: 0 }, 'Чаты и страницы сохраняются.'],
   ])('names what is kept after the tariff: %s', (_case, left, kept) => {
     const out = renderTemplate('subscription-ended', { ...subscriptionEnded, ...left })
 

@@ -1188,8 +1188,7 @@ describe('billing sources', () => {
     const sources = readdirSync(here).filter(
       (name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name),
     )
-    const theChange =
-      /Отмена правки|небольш(?:ая правка|ую правку|ие правки|их правок)/g
+    const theChange = /Отмена правки|небольш(?:ая правка|ую правку|ие правки|их правок)/g
     const counted = sources.flatMap((name) =>
       readFileSync(`${here}${name}`, 'utf8')
         .split('\n')

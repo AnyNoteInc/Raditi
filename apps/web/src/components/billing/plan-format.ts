@@ -282,7 +282,8 @@ export function endsWithPeriod(periodEnd: Date, left: CreditsLeft): string {
     left.tariff > 0
       ? `Тариф и ${creditsCount(left.tariff)} по тарифу доступны до ${until}.`
       : `Тариф действует до ${until}.`
-  const kept = left.pack > 0 ? `${creditsCount(left.pack)} из пакета, чаты и страницы` : 'Чаты и страницы'
+  const kept =
+    left.pack > 0 ? `${creditsCount(left.pack)} из пакета, чаты и страницы` : 'Чаты и страницы'
   const after = tasksOnGift(
     giftTakesTasks(left.gift + left.pack),
     'не принимаются, пока вы снова не выберете тариф',
@@ -476,7 +477,8 @@ function renewalCancelOutcome(input: RenewalCancel): string[] {
       'Способ оплаты, которым вы заплатите, мы не сохраним.',
     ]
   }
-  const kept = left.pack > 0 ? `${creditsCount(left.pack)} из пакета, чаты и страницы` : 'Чаты и страницы'
+  const kept =
+    left.pack > 0 ? `${creditsCount(left.pack)} из пакета, чаты и страницы` : 'Чаты и страницы'
   const after = `${kept} сохранятся.`
   const tasks = tasksOnGift(
     giftTakesTasks(left.gift + left.pack),
@@ -716,7 +718,8 @@ export function endedText(input: {
     not_paid: 'Оплата за следующий период не прошла, и тариф закончился. ',
     refunded: 'Мы вернули оплату за этот тариф, и он закончился. ',
   }[reason]
-  const kept = packCredits > 0 ? `${creditsCount(packCredits)} из пакета, чаты и страницы` : 'Чаты и страницы'
+  const kept =
+    packCredits > 0 ? `${creditsCount(packCredits)} из пакета, чаты и страницы` : 'Чаты и страницы'
   const tasks = tasksOnGift(tasksTaken, 'сейчас не принимаются', 'принимаются')
   return `${why}Новые задачи ${tasks}. ${kept} на месте.`
 }
