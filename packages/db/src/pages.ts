@@ -1673,6 +1673,8 @@ export async function applyPageChange(
       position?: number
       withChildren?: boolean
       pages?: number
+      /** A shared file of the site the deletion is of (Дер34); none — the page. */
+      file?: string
     }
     const actor: PageActor = { type: 'agent', taskId: input.taskId }
     let pages = 1
@@ -1690,6 +1692,22 @@ export async function applyPageChange(
         ...(payload.parentId !== undefined ? { parentId: payload.parentId } : {}),
         ...(payload.position !== undefined ? { position: payload.position } : {}),
       })
+    } else if (row.kind === 'delete' && typeof payload.file === 'string') {
+      // A shared file of the site, not a page (Дер34): gone at once, as the cabinet deletes it.
+      await tx.pageFile.deleteMany({ where: { treeId: page.treeId, path: payload.file } })
+      await tx.auditLog.create({
+        data: {
+          actorType: 'agent',
+          actorId: input.taskId,
+          workspaceId: input.workspaceId,
+          action: 'pages.file_delete',
+          targetType: 'page_tree',
+          targetId: page.treeId,
+          meta: { path: payload.file },
+        },
+      })
+      await closeChange(tx, row.id, 'done')
+      return { kind: 'file_delete', pageId: page.id, title: payload.file, pages: 0 }
     } else if (row.kind === 'delete') {
       // The branch the agent asked of, no bigger: pages added under it since stay (rule 4, Дер27).
       pages = (
@@ -2030,6 +2048,45 @@ async function reserveFileOnce(
         fileName: input.fileName,
         title: input.path,
         payload: { treeId: tree.id, path: input.path },
+      },
+    })
+    return { reservationId: reservation.id, slug: hostOf(tree), path: input.path }
+  })
+}
+
+/**
+ * `page_file_delete` (Дер34): a shared file of a site goes when the turn ends — a change of the
+ * kind `delete` that names the file, on the home page of its site. Only a chat whose author
+ * manages the workspace, as every change of its pages (Дер24); a file that is not there is
+ * not found now, not at the end of the turn.
+ */
+export async function reservePageFileDeletion(
+  db: Db,
+  input: { workspaceId: string; taskId: string; turnNo: number; treeId: string; path: string },
+): Promise<{ reservationId: string; slug: string; path: string }> {
+  return db.$transaction(async (tx) => {
+    await lockWorkspaceOfChat(tx, input.workspaceId, input.taskId, pageNotFound)
+    if (!(await authorManages(tx, input.taskId, input.workspaceId))) throw pageForbidden()
+    const tree = await lockTree(tx, input.treeId, input.workspaceId)
+    if (tree.takenDownBy === 'operator') throw pageNotFound()
+    const file = await tx.pageFile.findUnique({
+      where: { treeId_path: { treeId: tree.id, path: input.path } },
+      select: { path: true },
+    })
+    if (!file) throw new DomainError('PAGE_FILE_NOT_FOUND', 'No such file in this site', 404)
+    const home = await tx.page.findFirst({
+      where: { treeId: tree.id, parentId: null },
+      select: { id: true },
+    })
+    if (!home) throw pageNotFound()
+    const reservation = await tx.pageReservation.create({
+      data: {
+        pageId: home.id,
+        taskId: input.taskId,
+        turnNo: input.turnNo,
+        kind: 'delete',
+        title: input.path,
+        payload: { file: input.path, pages: 0 },
       },
     })
     return { reservationId: reservation.id, slug: hostOf(tree), path: input.path }

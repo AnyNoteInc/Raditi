@@ -9,7 +9,13 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import { markdownTitleOf, readingPage } from '@repo/doc-render'
-import { checkPageContent, editPageText, isDomainError, type PageLeftReason } from '@repo/domain'
+import {
+  checkPageContent,
+  editPageText,
+  isDomainError,
+  pageLeftObjectOf,
+  type PageLeftReason,
+} from '@repo/domain'
 
 import { pageLinkWarnings } from './page-links.ts'
 
@@ -210,7 +216,7 @@ export class PageChanges {
 
   /** A change closed undone, and told, by whoever closes it. */
   async #left(
-    change: { id: string; pageId: string },
+    change: { id: string; pageId: string; kind?: string; payload?: unknown },
     reason: PageLeftReason,
     where: { taskId: string; turnId: string | null },
   ): Promise<void> {
@@ -222,7 +228,15 @@ export class PageChanges {
         turnId: where.turnId,
         row: {
           type: 'feed.page_left',
-          payload: { v: 1, pageId: change.pageId, reason, of: 'change' },
+          payload: {
+            v: 1,
+            pageId: change.pageId,
+            reason,
+            of:
+              pageLeftObjectOf(change.kind ?? 'edit', change.payload) === 'file'
+                ? 'file'
+                : 'change',
+          },
         },
       })
     } catch {

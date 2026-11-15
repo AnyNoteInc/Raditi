@@ -3,7 +3,9 @@ import {
   pageDeleteArgumentsSchema,
   pageEditArgumentsSchema,
   pageFilePathSchema,
+  pageFileDeleteArgumentsSchema,
   pageFilePutArgumentsSchema,
+  pageFilesArgumentsSchema,
   pageListArgumentsSchema,
   pagePathSchema,
   pagePublishArgumentsSchema,
@@ -122,6 +124,18 @@ export const pageFilePutToolArgumentsSchema = z.strictObject({
   ),
 })
 
+export const pageFileDeleteToolArgumentsSchema = z.strictObject({
+  treeId: id.describe('A site of page_list'),
+  path: pageFilePathSchema.describe('A shared file of page_files, e.g. /_files/old.css'),
+  confirmedByClient: z
+    .literal(true)
+    .describe('The client asked in this chat, in their own words, to delete this file'),
+})
+
+export const pageFilesToolArgumentsSchema = z.strictObject({
+  treeId: id.describe('A site of page_list'),
+})
+
 export const pageRestoreToolArgumentsSchema = z.strictObject({
   pageIds: z.array(id).min(1).max(20),
 })
@@ -130,7 +144,9 @@ export const pageRestoreToolArgumentsSchema = z.strictObject({
 export {
   pageDeleteArgumentsSchema,
   pageEditArgumentsSchema,
+  pageFileDeleteArgumentsSchema,
   pageFilePutArgumentsSchema,
+  pageFilesArgumentsSchema,
   pageListArgumentsSchema,
   pageReadArgumentsSchema,
   pageRestoreArgumentsSchema,

@@ -511,6 +511,8 @@ describe('documents and pages (docs/plan/69-pages.md, Ст18, Ст20, Ст21)', 
         'page_update',
         'page_delete',
         'page_file_put',
+        'page_files',
+        'page_file_delete',
       ])
         expect(text).toContain(`\`raditi_${tool}\``)
       expect(text).toContain('Link its pages to each other from\n  the root: href="/uslugi"')

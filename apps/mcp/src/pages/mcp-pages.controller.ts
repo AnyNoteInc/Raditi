@@ -7,7 +7,9 @@ import { mcpCanonicalJson } from '../common/canonical-json.ts'
 import {
   pageDeleteToolArgumentsSchema,
   pageEditToolArgumentsSchema,
+  pageFileDeleteToolArgumentsSchema,
   pageFilePutToolArgumentsSchema,
+  pageFilesToolArgumentsSchema,
   pageListToolArgumentsSchema,
   pagePublishToolArgumentsSchema,
   pageReadToolArgumentsSchema,
@@ -170,6 +172,34 @@ export class McpPagesController {
     const scope = scopeOf(context)
     if (!scope) return unauthorized
     return answerOf(await this.pages.putFile(scope, args))
+  }
+
+  @ToolScopes(['pages'])
+  @Tool({
+    name: 'page_files',
+    description:
+      'The shared files of a site — CSS, scripts, pictures, fonts, PDFs at /_files/… — with their types, sizes and addresses.',
+    parameters: pageFilesToolArgumentsSchema,
+    annotations: reads,
+  })
+  async files(@Payload() args: unknown, @Ctx() context: McpContext) {
+    const scope = scopeOf(context)
+    if (!scope) return unauthorized
+    return answerOf(await this.pages.files(scope, args))
+  }
+
+  @ToolScopes(['pages'])
+  @Tool({
+    name: 'page_file_delete',
+    description:
+      'Delete a shared file of a site when this turn ends — only when the client asked in this chat, in their own words, to delete it; a page that loads it shows without it. It does not go to the trash. Only when the author of this chat is an owner or an administrator of the workspace.',
+    parameters: pageFileDeleteToolArgumentsSchema,
+    annotations: { ...writes, destructiveHint: true },
+  })
+  async deleteFile(@Payload() args: unknown, @Ctx() context: McpContext) {
+    const scope = scopeOf(context)
+    if (!scope) return unauthorized
+    return answerOf(await this.pages.deleteFile(scope, args))
   }
 
   @ToolScopes(['pages'])

@@ -64,7 +64,9 @@ const DOCUMENTS_AND_PAGES = `
 - Styles, scripts, pictures and fonts its pages share go to the site once with
   \`raditi_page_file_put\` (a file of ${SANDBOX_OUT}, at /_files/style.css or /_files/img/logo.png) and
   load from the root: <link rel="stylesheet" href="/_files/style.css">. No HTML there: a page is
-  published by \`raditi_page_publish\`.
+  published by \`raditi_page_publish\`. Only the look of the site goes there — no data: a file
+  of a site with a password can be loaded by another site too. \`raditi_page_files\` names the
+  files of a site; \`raditi_page_file_delete\` deletes one the client asked to delete.
 - Before you change a page, find it with \`raditi_page_list\` and \`raditi_page_tree\` and read it
   with \`raditi_page_read\`; then change it with \`raditi_page_edit\`, or write the whole file
   again and publish it with \`pageId\` and \`expectedVersion\`: the address stays the same. A
@@ -73,6 +75,8 @@ const DOCUMENTS_AND_PAGES = `
   to it. Delete only what the client asked in this chat, in their own words, to delete, with
   \`raditi_page_delete\`: it goes to the trash, and the client can return it for 30 days. The
   password of a site and taking a page down are the client's, in «Страницы» of the cabinet.
+- Put all the edits of one page into one \`raditi_page_edit\`. After \`raditi_page_publish\` of a page
+  in this turn, change it with the version that publication answered.
 - If a change comes back as PAGE_VERSION_CHANGED, the page changed meanwhile: read it again.
 - A page is public. Never put a secret, a value of a variable, a key, or a dump or a whole table
   of a database on it. Data of people (form entries, leads, orders, customers) only when the

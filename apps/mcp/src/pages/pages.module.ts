@@ -6,6 +6,7 @@ import {
   readPageSource,
   reservePageChange,
   reservePageFile,
+  reservePageFileDeletion,
   reservePagePublication,
   type PrismaClient,
 } from '@repo/db'
@@ -27,6 +28,7 @@ export function postgresPagesStore(db: PrismaClient): McpPagesStore {
     read: (input) => readPageSource(db, input),
     change: (input) => reservePageChange(db, input),
     putFile: (input) => reservePageFile(db, input),
+    deleteFile: (input) => reservePageFileDeletion(db, input),
     files: (input) => listTreeFiles(db, input),
   }
 }

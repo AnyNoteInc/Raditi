@@ -311,7 +311,7 @@ G0 → G1 ─┬→ G2 ─┬→ G4 → G5 ─┬→ G6 ─┬→ G8 → G9
   - [x] **73.5. Путь и пределы** (14.11.2026): домен пути, пределы, `plans.page_sites` и `page_custom_names` (миграция `20261114130000_plans_page_sites`).
   - [x] **73.6–73.7. Сайт из страниц** (14.11.2026): миграция `20261114110000_page_trees`, отдача по пути, переадресации, ETag, предел сайтов по тарифу, сценарий D `verify:pages`.
   - [x] **73.8. Изменения в конце хода** (14.11.2026): резервы `edit`, `update`, `delete`, `restore`, предупреждения о ссылках.
-  - [x] **73.9. MCP** (14.11.2026): `page_list`, `page_tree`, `page_read`, `page_edit`, `page_update`, `page_delete`, `page_restore`, `page_file_put`.
+  - [x] **73.9. MCP** (14.11.2026): `page_list`, `page_tree`, `page_read`, `page_edit`, `page_update`, `page_delete`, `page_restore`, `page_file_put`; 15.11.2026 — `page_files` и `page_file_delete`.
   - [~] **73.10. Инструкции и стенды**: раздел «Pages and sites» инструкций хода; сценарии в `verify:agent-content` и `verify:browser-task` — не дописаны.
   - [x] **73.11. Кабинет: дерево** (14.11.2026): сайты строками, вложенные страницы, переименование, адрес, перемещение, порядок.
   - [~] **73.12. Поддержка**: команды `pages:take-down` и `pages:return`; метрики и миграция удаления прежних столбцов — следующим выпуском.

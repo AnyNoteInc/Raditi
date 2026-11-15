@@ -119,6 +119,16 @@ export const pageFilePutArgumentsSchema = z.strictObject({
   path: pageFilePathSchema,
 })
 
+/** `page_file_delete`: a shared file of a site goes, only when the client asked (Дер34). */
+export const pageFileDeleteArgumentsSchema = z.strictObject({
+  treeId: id,
+  path: pageFilePathSchema,
+  confirmedByClient: z.literal(true),
+})
+
+/** `page_files`: the shared files of a site. */
+export const pageFilesArgumentsSchema = z.strictObject({ treeId: id })
+
 /** `page_restore`: pages back from the trash. */
 export const pageRestoreArgumentsSchema = z.strictObject({
   pageIds: z.array(id).min(1).max(20),
@@ -173,6 +183,8 @@ export const pagesToolNames = [
   'page_delete',
   'page_restore',
   'page_file_put',
+  'page_file_delete',
+  'page_files',
   'doc_create',
   'doc_section_write',
   'doc_section_remove',
@@ -192,6 +204,8 @@ export const pagesToolArgumentSchemas = {
   page_delete: pageDeleteArgumentsSchema,
   page_restore: pageRestoreArgumentsSchema,
   page_file_put: pageFilePutArgumentsSchema,
+  page_file_delete: pageFileDeleteArgumentsSchema,
+  page_files: pageFilesArgumentsSchema,
   doc_create: docCreateArgumentsSchema,
   doc_section_write: docSectionWriteArgumentsSchema,
   doc_section_remove: docSectionRemoveArgumentsSchema,

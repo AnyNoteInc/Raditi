@@ -5,7 +5,9 @@ import {
   pageAddressUrl,
   pageDeleteArgumentsSchema,
   pageEditArgumentsSchema,
+  pageFileDeleteArgumentsSchema,
   pageFilePutArgumentsSchema,
+  pageFilesArgumentsSchema,
   pageListArgumentsSchema,
   pagePublishArgumentsSchema,
   pageReadArgumentsSchema,
@@ -80,6 +82,13 @@ export interface McpPagesStore {
     workspaceId: string
     treeId: string
   }): Promise<{ path: string; type: string; sizeBytes: number }[]>
+  deleteFile(input: {
+    workspaceId: string
+    taskId: string
+    turnNo: number
+    treeId: string
+    path: string
+  }): Promise<{ reservationId: string; slug: string; path: string }>
   change(input: {
     workspaceId: string
     taskId: string
@@ -322,6 +331,60 @@ export class McpPagesService {
           warnings: [
             `Load it in the pages of the site by its path from the root, e.g. <link rel="stylesheet" href="${reserved.path}">.`,
           ],
+        },
+      }
+    } catch (error) {
+      return refusal(error)
+    }
+  }
+
+  /** The shared files of a site (Дер34): their paths, types and sizes. */
+  async files(scope: McpTurnAccess, args: unknown): Promise<McpPagesAnswer> {
+    const parsed = pageFilesArgumentsSchema.safeParse(args)
+    if (!parsed.success) return badRequest('Give treeId of page_list')
+    try {
+      const all = await this.#store.list(scope.workspaceId)
+      const home = all.find((page) => page.treeId === parsed.data.treeId && page.parentId === null)
+      if (!home)
+        return { ok: false, code: 'PAGE_NOT_FOUND', message: 'No such site in this workspace' }
+      const files = await this.#store.files({
+        workspaceId: scope.workspaceId,
+        treeId: parsed.data.treeId,
+      })
+      const root = this.#url(home).replace(/\/$/, '')
+      return {
+        ok: true,
+        value: {
+          treeId: parsed.data.treeId,
+          files: files.map((file) => ({ ...file, url: root + file.path })),
+        },
+      }
+    } catch (error) {
+      return refusal(error)
+    }
+  }
+
+  /** A shared file of a site goes when this turn ends, only when the client asked (Дер34). */
+  async deleteFile(scope: McpTurnAccess, args: unknown): Promise<McpPagesAnswer> {
+    const parsed = pageFileDeleteArgumentsSchema.safeParse(args)
+    if (!parsed.success)
+      return badRequest(
+        'Delete only a file the client asked to delete in this chat: treeId, path and confirmedByClient: true',
+      )
+    try {
+      const reserved = await this.#store.deleteFile({
+        workspaceId: scope.workspaceId,
+        taskId: scope.taskId,
+        turnNo: scope.turn,
+        treeId: parsed.data.treeId,
+        path: parsed.data.path,
+      })
+      return {
+        ok: true,
+        value: {
+          path: reserved.path,
+          live: later,
+          warnings: ['A page that loads this file shows without it once this turn ends.'],
         },
       }
     } catch (error) {

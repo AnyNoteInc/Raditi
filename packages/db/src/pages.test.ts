@@ -22,6 +22,7 @@ import {
   readPageSource,
   reservePageChange,
   reservePageFile,
+  reservePageFileDeletion,
   returnDeletedPage,
   currentDocMarkdown,
   listWorkspacePages,
@@ -1126,6 +1127,57 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
           target: { fileName: 'a.css' },
         }),
       ).rejects.toMatchObject({ code: 'PAGE_RESERVED' })
+    })
+
+    it('deletes a shared file at the end of the turn of a chat of an owner, and only one that is there (Дер34)', async () => {
+      for (const author of [undefined, 'member'] as const) {
+        const at = await chat(author ? { author } : {})
+        const { home } = await site(at)
+        await expect(
+          reservePageFileDeletion(db, {
+            ...at,
+            turnNo: 60,
+            treeId: home.treeId,
+            path: '/_files/a.css',
+          }),
+        ).rejects.toMatchObject({ code: 'PAGE_FORBIDDEN' })
+      }
+      const at = await chat({ author: 'owner' })
+      const { home } = await site(at)
+      await expect(
+        reservePageFileDeletion(db, {
+          ...at,
+          turnNo: 60,
+          treeId: home.treeId,
+          path: '/_files/a.css',
+        }),
+      ).rejects.toMatchObject({ code: 'PAGE_FILE_NOT_FOUND' })
+      const put = await reservePageFile(db, {
+        ...at,
+        turnNo: 60,
+        treeId: home.treeId,
+        fileName: 'a.css',
+        path: '/_files/a.css',
+      })
+      await applyPageFile(db, { reservationId: put.reservationId, bytes: html('a{}') })
+      const deletion = await reservePageFileDeletion(db, {
+        ...at,
+        turnNo: 61,
+        treeId: home.treeId,
+        path: '/_files/a.css',
+      })
+      // Still served until the end of the turn.
+      expect(await servedFile(db, home.treeId, '/_files/a.css')).not.toBeNull()
+      expect(await apply(at, deletion.reservationId)).toMatchObject({
+        kind: 'file_delete',
+        pages: 0,
+      })
+      expect(await servedFile(db, home.treeId, '/_files/a.css')).toBeNull()
+      expect(
+        await db.auditLog.count({
+          where: { workspaceId: at.workspaceId, action: 'pages.file_delete' },
+        }),
+      ).toBe(1)
     })
 
     it('counts a site a turn left without a version no more, and keeps a site with files or a name', async () => {

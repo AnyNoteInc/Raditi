@@ -37,7 +37,9 @@ import {
 import {
   pageDeleteArgumentsSchema,
   pageEditArgumentsSchema,
+  pageFileDeleteArgumentsSchema,
   pageFilePutArgumentsSchema,
+  pageFilesArgumentsSchema,
   pageListArgumentsSchema,
   pagePublishToolArgumentsSchema,
   pageReadArgumentsSchema,
@@ -126,6 +128,8 @@ const pagesCall = z.discriminatedUnion('name', [
   call('page_delete', pageDeleteArgumentsSchema),
   call('page_restore', pageRestoreArgumentsSchema),
   call('page_file_put', pageFilePutArgumentsSchema),
+  call('page_file_delete', pageFileDeleteArgumentsSchema),
+  call('page_files', pageFilesArgumentsSchema),
 ])
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),

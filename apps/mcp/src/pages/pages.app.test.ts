@@ -89,6 +89,11 @@ function fakeStore() {
       path: input.path,
     })),
     files: vi.fn(async () => [{ path: '/_files/style.css', type: 'text/css', sizeBytes: 3 }]),
+    deleteFile: vi.fn(async (input: { path: string }) => ({
+      reservationId: '01960000-0000-7000-8000-0000000000ef',
+      slug,
+      path: input.path,
+    })),
     change: vi.fn(async (input: { change: { pageId: string } }) => ({
       reservationId: '01960000-0000-7000-8000-0000000000ee',
       pageId: input.change.pageId,
@@ -367,13 +372,54 @@ describe('the pages of a workspace through the gateway (plan 69, Ст20)', () =>
     ])
   })
 
+  it('names the shared files of a site with their addresses, and deletes one only when the client asked (Дер34)', async () => {
+    const { server, store } = await start({ ...testMcpConfig(), pages: address })
+    const listed = await post(server, call('page_files', { treeId: pageId }))
+    expect(JSON.parse(listed.body.result.content[0].text)).toEqual({
+      treeId: pageId,
+      files: [
+        {
+          path: '/_files/style.css',
+          type: 'text/css',
+          sizeBytes: 3,
+          url: `http://${slug}.pages.localhost:8092/_files/style.css`,
+        },
+      ],
+    })
+    // Without the client's word the role refuses the body itself.
+    expect(
+      (await post(server, call('page_file_delete', { treeId: pageId, path: '/_files/style.css' })))
+        .status,
+    ).toBe(400)
+    const deleted = await post(
+      server,
+      call('page_file_delete', {
+        treeId: pageId,
+        path: '/_files/style.css',
+        confirmedByClient: true,
+      }),
+    )
+    expect(JSON.parse(deleted.body.result.content[0].text)).toMatchObject({
+      path: '/_files/style.css',
+      live: 'when this turn ends',
+    })
+    expect(store.deleteFile).toHaveBeenCalledWith({
+      workspaceId: scope.workspaceId,
+      taskId: scope.taskId,
+      turnNo: 4,
+      treeId: pageId,
+      path: '/_files/style.css',
+    })
+  })
+
   it('marks page_delete destructive and the readers read-only', async () => {
     const { server } = await start({ ...testMcpConfig(), pages: address })
     const tools = (await post(server, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).body.result
       .tools as { name: string; annotations: Record<string, boolean> }[]
     const of = (name: string) => tools.find((tool) => tool.name === name)!.annotations
     expect(of('page_delete').destructiveHint).toBe(true)
-    for (const name of ['page_list', 'page_tree', 'page_read'])
+    expect(of('page_file_delete').destructiveHint).toBe(true)
+    for (const name of ['page_list', 'page_tree', 'page_read', 'page_files'])
       expect(of(name).readOnlyHint).toBe(true)
     expect(tools.map((tool) => tool.name)).toEqual(
       expect.arrayContaining([
@@ -386,6 +432,8 @@ describe('the pages of a workspace through the gateway (plan 69, Ст20)', () =>
         'page_delete',
         'page_restore',
         'page_file_put',
+        'page_file_delete',
+        'page_files',
       ]),
     )
   })

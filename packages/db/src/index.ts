@@ -113,6 +113,7 @@ export {
   refusePageChange,
   reservePageChange,
   reservePageFile,
+  reservePageFileDeletion,
   purgeExpiredPages,
   requestDocFinish,
   reservePagePublication,

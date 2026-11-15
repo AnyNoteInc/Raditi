@@ -86,9 +86,17 @@ export type FeedPageChangePayload = z.infer<typeof feedPageChangePayloadSchema>
 export const pageLeftObjects = ['page', 'file', 'change'] as const
 export type PageLeftObject = (typeof pageLeftObjects)[number]
 
-/** The object of a reservation of its kind (`page_reservations.kind`). */
-export const pageLeftObjectOf = (kind: string): PageLeftObject =>
-  kind === 'asset' ? 'file' : kind === 'version' ? 'page' : 'change'
+/**
+ * The object of a reservation of its kind (`page_reservations.kind`): a deletion that names a
+ * shared file (`payload.file`, `page_file_delete`) is of the file.
+ */
+export const pageLeftObjectOf = (kind: string, payload?: unknown): PageLeftObject =>
+  kind === 'asset' ||
+  (kind === 'delete' && typeof (payload as { file?: unknown } | null)?.file === 'string')
+    ? 'file'
+    : kind === 'version'
+      ? 'page'
+      : 'change'
 
 /** `feed.page_left` v1 — the agent named the page, it did not get the version. */
 export const feedPageLeftPayloadSchema = z.strictObject({

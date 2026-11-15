@@ -275,9 +275,9 @@ export class PagePublications {
         // A shared file and a change are told as what they are, not as a page that did not come.
         const row = await tx.pageReservation.findUnique({
           where: { id: reservation.id },
-          select: { kind: true },
+          select: { kind: true, payload: true },
         })
-        const of = pageLeftObjectOf(row?.kind ?? 'version')
+        const of = pageLeftObjectOf(row?.kind ?? 'version', row?.payload)
         await insertFeedEvent(tx, {
           taskId: where.taskId,
           turnId: where.turnId,
