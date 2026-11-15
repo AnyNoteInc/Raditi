@@ -40,7 +40,8 @@ const DOCUMENTS_AND_PAGES = `
      whole document and never rebuild it from memory.
   4. Put the findings into the document, not into the chat.
   5. Fill «Источники» with the sources you used.
-  6. Read it whole with \`raditi_doc_read\`: check facts and figures against the sources, count the
+  6. Read it whole with \`raditi_doc_read\` (a long one comes in parts: while the answer has
+     \`more\`, read on from \`more.from\`): check facts and figures against the sources, count the
      arithmetic again, leave no placeholder. Then \`raditi_doc_finish\`.
   7. Tell the client in one or two lines of \`client_message\` what came of it; never retell it.
   8. Later changes go section by section with \`raditi_doc_section_write\`, then
@@ -97,6 +98,8 @@ const ANSWERING = `## Answering the client
   up to ${OUTBOX_NAME_ADVICE} characters (Russian letters are fine, no slashes) that the client will see:
   name the file for what it holds, in a few words. After your turn the platform attaches them to
   the chat; nothing else you write reaches the client as a file.
+- Scratch files of your scripts and commands go to /tmp/opencode (it is there at the start of
+  every turn, and /tmp is gone after it): never into ${SANDBOX_OUT}.
 - A document the client asked you to prepare as a file — a report, a price list, an article, a
   post, a description — is one of two kinds, and the client sees it at once in the panel beside
   the chat (a long text to read and check — an audit, a plan of work, a summary — is a long
