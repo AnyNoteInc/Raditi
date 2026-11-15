@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
 import { stand } from './tests/site-import/stand.ts'
+import { cookieChoiceMade } from './fixtures/cookie-choice.ts'
 
 // The browser half of `pnpm verify:site-import` (infra/dev/site-import-verify): the wizard of a
 // new project, the setup screen and «Изменить доступ» on real servers. The stand starts
@@ -22,6 +23,7 @@ export default defineConfig({
   fullyParallel: true,
   reporter: stand ? [['list'], ['json', { outputFile: stand.reportFile }]] : [['list']],
   use: {
+    storageState: cookieChoiceMade,
     ...(stand ? { baseURL: stand.origin } : {}),
     trace: 'off',
     screenshot: 'only-on-failure',
