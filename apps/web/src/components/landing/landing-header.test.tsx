@@ -59,7 +59,7 @@ describe('landing account navigation', () => {
     expect(SITE_PHONE.text.replace(/[^+\d]/g, '')).toBe(SITE_PHONE.tel)
   })
 
-  it('keeps only the account avatar in the authenticated header and puts chats and projects in its menu', () => {
+  it('keeps only the account avatar in the authenticated header and puts the chats in its menu', () => {
     render(<LandingHeader viewer={member} />)
 
     const account = screen.getByRole('button', { name: 'Меню пользователя' })
@@ -88,11 +88,9 @@ describe('landing account navigation', () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((item) => item.textContent),
-    ).toEqual(['Чаты', 'Проекты', 'Профиль', 'Настройки', 'Выход'])
-    expect(within(menu).getByRole('menuitem', { name: 'Проекты' })).toHaveAttribute(
-      'href',
-      '/projects',
-    )
+    ).toEqual(['Чаты', 'Профиль', 'Настройки', 'Использование', 'Посмотреть тарифы', 'Выход'])
+    expect(within(menu).getByRole('menuitem', { name: 'Чаты' })).toHaveAttribute('href', '/chats')
+    expect(within(menu).queryByRole('menuitem', { name: 'Проекты' })).not.toBeInTheDocument()
     expect(within(menu).getByRole('menuitem', { name: 'Профиль' })).toHaveAttribute(
       'href',
       '/profile',
