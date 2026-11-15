@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from '@repo/db'
+import { pauseSiteSchedules, type Prisma, type PrismaClient } from '@repo/db'
 import {
   DomainError,
   siteAccessKinds,
@@ -17,7 +17,7 @@ import { accessibleSite, siteNotFound } from './site-basics.ts'
 // of a workspace holds among the sites that are not deleted, so it may be added again. The
 // secrets of the site in Vault — its accesses and the values of its variables — are overwritten by
 // a version without a value that is the only one the key keeps. The repository of the site in
-// Gitea stays: web has no way to it.
+// Gitea stays: web has no way to it. Its scheduled tasks stop (`project_gone`, docs/plan/82).
 
 /** What Vault is reached with: write by CAS and read the versions — never read a value back. */
 export type SiteSecretEraser = Pick<SecretStore, 'kvWrite' | 'kvMetadata'>
@@ -180,6 +180,9 @@ export async function deleteSite(
         }
       }
       await tx.site.update({ where: { id: site.id }, data: { deletedAt: input.now } })
+      // Its scheduled tasks stop with it, without a notice (docs/plan/82-scheduled-tasks.md,
+      // Зп22): the window of the deletion named how many.
+      await pauseSiteSchedules(tx, site.id)
       await tx.auditLog.create({
         data: {
           actorType: 'user',

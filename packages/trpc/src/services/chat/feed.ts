@@ -14,12 +14,14 @@ import {
   type FeedTaskHead,
   type PreviewAddress,
   type PreviewStatus,
+  type ScheduledRunTrigger,
   type TaskStatus,
 } from '@repo/domain'
 
 import { accessibleTask, taskNotFound } from './access.ts'
 import { feedBrowser, type FeedBrowser } from './browser.ts'
 import { candidateCountsOf, dialogCommands, dialogFacts, type DialogFacts } from './dialog-facts.ts'
+import type { DialogSchedule } from './dialog-list.ts'
 import { dialogRetry, movingRequest } from './dialog-state.ts'
 import { siteClosed } from '../site-capabilities.ts'
 
@@ -287,6 +289,8 @@ export async function readDialogHead(
     alias: string
     createdAt: Date
     updatedAt: Date
+    /** The scheduled task the chat is a run of (docs/plan/82-scheduled-tasks.md, Зп43). */
+    schedule: DialogSchedule | null
   }
 > {
   return db.$transaction(
@@ -313,9 +317,28 @@ export async function readDialogHead(
       })
       if (task === null) throw taskNotFound()
       const head = await feedHead(tx, task)
+      const run = await tx.scheduledRun.findUnique({
+        where: { taskId: task.id },
+        select: {
+          trigger: true,
+          name: true,
+          scheduledTask: { select: { id: true, name: true, deletedAt: true } },
+        },
+      })
       const { site } = task
       return {
         ...head,
+        // The label «По расписанию · <name>»: a link while the task is there (Зп23, Зп43).
+        schedule:
+          run === null
+            ? null
+            : run.scheduledTask.deletedAt === null
+              ? {
+                  id: run.scheduledTask.id,
+                  name: run.scheduledTask.name,
+                  trigger: run.trigger as ScheduledRunTrigger,
+                }
+              : { id: null, name: run.name, trigger: run.trigger as ScheduledRunTrigger },
         siteId: task.siteId,
         project:
           site === null

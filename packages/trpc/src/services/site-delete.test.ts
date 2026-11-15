@@ -66,6 +66,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: «Удалить проект»', () 
       where: { workspaceId: { in: workspaces.map((workspace) => workspace.id) } },
     })
     await db.siteRelease.deleteMany({ where: { site: { workspace: owned } } })
+    await db.scheduledTask.deleteMany({ where: { workspace: owned } })
     await db.task.deleteMany({ where: { workspace: owned } })
     await db.siteEnvVar.deleteMany({ where: { site: { workspace: owned } } })
     await db.credentialRef.deleteMany({ where: { workspace: owned } })
@@ -157,6 +158,43 @@ describe.skipIf(!databaseUrl)('PostgreSQL: «Удалить проект»', () 
     await expect(deleteSite(db, () => vault.store, input(owner, siteId))).rejects.toMatchObject({
       code: 'NOT_FOUND',
     })
+  })
+
+  it('stops the scheduled tasks of the project in the same transaction (docs/plan/82, Зп22)', async () => {
+    const vault = fakeVault()
+    const { owner, workspaceId, siteId } = await siteWithSecrets(vault)
+    const task = (name: string, data: { enabled?: boolean; deletedAt?: Date } = {}) =>
+      db.scheduledTask.create({
+        data: {
+          workspaceId,
+          siteId,
+          createdById: owner,
+          name,
+          instructions: 'Проверьте сайт',
+          effort: 'low',
+          triggers: [{ kind: 'daily', time: '09:00' }],
+          timezone: 'Europe/Moscow',
+          enabled: data.enabled ?? true,
+          nextRunAt: data.enabled === false ? null : new Date(now.getTime() + 3_600_000),
+          createdVia: 'manual',
+          ...(data.deletedAt ? { deletedAt: data.deletedAt } : {}),
+        },
+      })
+    const on = await task('Включена')
+    const paused = await task('На паузе', { enabled: false })
+    const gone = await task('Удалена', { enabled: false, deletedAt: now })
+
+    await deleteSite(db, () => vault.store, input(owner, siteId))
+
+    for (const id of [on.id, paused.id])
+      expect(await db.scheduledTask.findUniqueOrThrow({ where: { id } })).toMatchObject({
+        enabled: false,
+        nextRunAt: null,
+        pausedReason: 'project_gone',
+      })
+    expect(
+      (await db.scheduledTask.findUniqueOrThrow({ where: { id: gone.id } })).pausedReason,
+    ).toBeNull()
   })
 
   it('lets only an owner or an admin delete, with the name typed exactly', async () => {

@@ -15,6 +15,7 @@ const user: User = {
   email: 'site-page-test@example.ru',
   emailVerified: true,
   image: null,
+  timezone: null,
   createdAt: now,
   updatedAt: now,
 }

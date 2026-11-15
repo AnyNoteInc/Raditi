@@ -1,8 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto'
 
 import {
+  demandStoppedPreview,
   enqueuePreviewSync,
   insertFeedEvent,
+  PREVIEW_DEMAND_SECONDS,
   requestPreviewSync,
   type Prisma,
   type PrismaClient,
@@ -62,6 +64,11 @@ export interface DialogPreviewInput {
   address: PreviewAddress
   /** PREVIEW_TTL_HOURS: an unviewed preview stops after this long. */
   ttlHours: number
+  /**
+   * Built at the first need, not now (docs/plan/82-scheduled-tasks.md, Зп18): the row is written
+   * stopped (`expired`, never built — `write_epoch` 0) and no job is queued.
+   */
+  onDemand?: boolean
   now: Date
 }
 
@@ -69,18 +76,21 @@ export interface DialogPreviewInput {
  * The preview of a new dialog, in the transaction of `task.create` (Р2, Р4, Р17): `pending`
  * with a copy of the database, built by core on `preview.sync`; without an access to the
  * database `unavailable` with `no_database` — said plainly, never drawn, and nothing is built.
- * Returns its id.
+ * `onDemand` — with a database it is written stopped and nothing is queued: core builds it when a
+ * candidate, the agent's tools or a look of the client need it (`demandStoppedPreview`), as it
+ * builds a preview stopped after its time (Зп18). Returns its id.
  */
 export async function insertDialogPreview(
   tx: Pick<Tx, 'previewEnvironment' | 'outboxEvent'>,
   input: DialogPreviewInput,
 ): Promise<string> {
   const { hasDatabase, now } = input
+  const onDemand = hasDatabase && input.onDemand === true
   const preview = await tx.previewEnvironment.create({
     data: {
       siteId: input.siteId,
       taskId: input.taskId,
-      status: hasDatabase ? 'pending' : 'unavailable',
+      status: onDemand ? 'expired' : hasDatabase ? 'pending' : 'unavailable',
       dbMode: hasDatabase ? 'copy' : 'none',
       unavailableReason: hasDatabase ? null : 'no_database',
       hostname: previewHostname(
@@ -92,7 +102,8 @@ export async function insertDialogPreview(
     select: { id: true },
   })
   // The row was just written with `enqueues` 1: the first job carries that counter.
-  if (hasDatabase) await enqueuePreviewSync(tx, { previewId: preview.id, revision: 0, seq: 1 })
+  if (hasDatabase && !onDemand)
+    await enqueuePreviewSync(tx, { previewId: preview.id, revision: 0, seq: 1 })
   return preview.id
 }
 
@@ -141,39 +152,7 @@ export interface OpenPreviewInput {
 const BUSY: readonly TaskStatus[] = ['preparing', 'running']
 
 /** A stopped preview is asked to be built again at most this often, however often it is opened. */
-export const REBUILD_REQUEST_SECONDS = 60
-
-/**
- * Asks core to build a stopped preview again (`preview.sync`), once while a request is fresh: an
- * open marks the row (`last_viewed_at` — the viewer wants it now, so its time to live counts
- * from here) and queues the job; an open within `REBUILD_REQUEST_SECONDS` of the mark finds it
- * and queues nothing, so a screen that asks again on PREVIEW_NOT_READY adds no jobs. Both times
- * are of the database's clock. Once core moves the row out of `expired`, nothing is asked.
- */
-async function rebuildStopped(
-  db: PrismaClient,
-  input: { previewId: string; revision: number },
-): Promise<void> {
-  await db.$transaction(
-    async (tx) => {
-      const marked = await tx.$queryRaw<Array<{ enqueues: number }>>`
-        UPDATE preview_environments
-        SET enqueues = enqueues + 1, last_viewed_at = now(), updated_at = now()
-        WHERE id = ${input.previewId}::uuid AND status = 'expired'
-          AND (last_viewed_at IS NULL
-            OR last_viewed_at < now() - ${REBUILD_REQUEST_SECONDS}::int * interval '1 second')
-        RETURNING enqueues`
-      const row = marked[0]
-      if (row === undefined) return
-      await enqueuePreviewSync(tx, {
-        previewId: input.previewId,
-        revision: input.revision,
-        seq: row.enqueues,
-      })
-    },
-    { isolationLevel: 'ReadCommitted' },
-  )
-}
+export const REBUILD_REQUEST_SECONDS = PREVIEW_DEMAND_SECONDS
 
 /**
  * The ticket URL of a dialog's preview for a member of its workspace (`preview.ticket`, and
@@ -204,7 +183,7 @@ export async function openPreview(
       id: true,
       hostname: true,
       status: true,
-      revision: true,
+      writeEpoch: true,
       task: { select: { id: true, workspaceId: true, siteId: true, status: true } },
     },
   })
@@ -222,9 +201,10 @@ export async function openPreview(
     // only a preview that still runs.
     if (preview.status !== 'expired' || terminalTaskStatuses.includes(task.status))
       throw commandUnavailable('preview', 'preview_unavailable')
-    // During a pass the preview follows the pass; core brings it back after it.
-    if (!BUSY.includes(task.status))
-      await rebuildStopped(db, { previewId: preview.id, revision: preview.revision })
+    // During a pass the preview follows the pass; core brings it back after it. One never built
+    // (of a chat of a scheduled task, Зп18) waits for a need, and the client's look is one.
+    if (!BUSY.includes(task.status) || preview.writeEpoch === 0)
+      await demandStoppedPreview(db, preview.id)
     throw previewNotReady()
   }
 

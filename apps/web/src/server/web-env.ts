@@ -58,6 +58,12 @@ export interface WebEnv {
    * chat are downloaded only.
    */
   pageViews: { origin: string; secret: string } | null
+  /**
+   * SCHEDULE_INTAKE_SECRET (docs/plan/82-scheduled-tasks.md, Зп19): core posts the runs of scheduled
+   * tasks to `/api/webhooks/scheduled-runs` with it. null — no runs are taken here: the route answers
+   * 404. The same value as core reads.
+   */
+  scheduleIntakeSecret: string | null
 }
 
 /** The secret of the pages outside production when none is set: never a secret of a server. */
@@ -109,6 +115,14 @@ const webEnvSchema = z
         .optional(),
     ),
     PAGES_SIGNING_SECRET: envVar(z.string().optional()),
+    // The secret of the runs of scheduled tasks core hands to web (docs/plan/82, Зп19): 32–4096
+    // visible ASCII characters, as core checks it.
+    SCHEDULE_INTAKE_SECRET: envVar(
+      z
+        .string()
+        .regex(/^[\x21-\x7e]{32,4096}$/, 'must be 32 to 4096 visible ASCII characters')
+        .optional(),
+    ),
     // Read for the check of the preview domain only.
     GITEA_URL: envVar(z.string().optional()),
     PAGES_BASE_DOMAIN: envVar(z.string().optional()),
@@ -214,6 +228,7 @@ export function webEnvFromEnv(env: Env): WebEnv {
     webPushPublicKey: e.WEB_PUSH_VAPID_PUBLIC ?? null,
     pages: pagesAddressFromEnv(e, isProduction(e.APP_ENV), []),
     pageViews: pageViewsOf(e),
+    scheduleIntakeSecret: e.SCHEDULE_INTAKE_SECRET ?? null,
   }
 }
 

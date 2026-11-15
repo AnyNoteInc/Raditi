@@ -64,6 +64,7 @@ const user: User = {
   email: 'payments-test@example.ru',
   emailVerified: true,
   image: null,
+  timezone: null,
   createdAt: NOW,
   updatedAt: NOW,
 }

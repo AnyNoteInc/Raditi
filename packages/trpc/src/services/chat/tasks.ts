@@ -22,8 +22,11 @@ import {
   assertTransition,
   conflict,
   feedEndedSiteOf,
+  feedLimits,
+  hasVisibleText,
   isProduction,
   llmBackendIds,
+  looksLikeSecret,
   maxTaskAttempts,
   modelClassOfEffort,
   siteIdOf,
@@ -84,6 +87,9 @@ import {
   taskNothingToRetry,
   taskRedoing,
   taskRewinding,
+  taskTextEmpty,
+  taskTextHasSecret,
+  taskTextTooLong,
   workspaceKeyUnavailable,
   type TaskNotAcceptedReason,
 } from './refusals.ts'
@@ -129,6 +135,19 @@ export interface CreateDialogInput {
   attachments?: readonly string[]
   /** How hard the model thinks (owner's request of 26.10.2026); absent — `high`, as before. */
   effort?: ReasoningEffort
+  /**
+   * The name of the chat, set by the client (`title_source = 'client'`): the agent never renames
+   * it. Absent — the first line of the words, which the agent may rename on its first pass. A run
+   * of a scheduled task names its chat by the task (docs/plan/82-scheduled-tasks.md, Зп17).
+   */
+  title?: string
+  /**
+   * When the preview of a chat of a project is built: `now` (the default) — at once, as the chat
+   * starts; `on_demand` — its row is there, stopped, and built at the first need — a candidate,
+   * the agent's browser or a content tool in it, a look of the client (Зп18): a run of a scheduled
+   * task would otherwise copy the site's database on every run.
+   */
+  preview?: 'now' | 'on_demand'
   now: Date
 }
 
@@ -267,6 +286,7 @@ export async function createDialog(
   const { userId, siteId, now } = input
   const taskId = input.taskId.toLowerCase()
   const text = requestText(input.text)
+  const title = input.title === undefined ? null : clientTitle(input.title)
   const attachments = input.attachments ?? []
   const payload = requestPayload({
     v: 1,
@@ -308,7 +328,9 @@ export async function createDialog(
           status: 'queued',
           modelClass,
           billable: true,
-          title: dialogTitle(text),
+          ...(title === null
+            ? { title: dialogTitle(text) }
+            : { title, titleSource: 'client' as const }),
           needsRepository: requirements.repository,
           needsBrowser: requirements.browser,
         },
@@ -350,11 +372,24 @@ export async function createDialog(
         hasDatabase,
         address: preview.address,
         ttlHours: preview.ttlHours,
+        onDemand: input.preview === 'on_demand',
         now,
       })
     }
     return { taskId, alias: task.alias, created: true }
   }, WRITE)
+}
+
+/**
+ * The name a caller gives a new chat, by the rules of a rename (`dialogName` of `task.rename`): one
+ * line, spaces collapsed, at most the length of a title, refused in the client's words.
+ */
+function clientTitle(name: string): string {
+  const line = name.replace(/\s+/gu, ' ').trim()
+  if (!hasVisibleText(line)) throw taskTextEmpty()
+  if (line.length > feedLimits.title) throw taskTextTooLong()
+  if (looksLikeSecret(line)) throw taskTextHasSecret()
+  return line
 }
 
 /**

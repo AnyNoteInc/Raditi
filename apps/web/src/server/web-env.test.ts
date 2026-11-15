@@ -33,6 +33,8 @@ describe('webEnvFromEnv', () => {
       webPushPublicKey: null,
       pages: null,
       pageViews: null,
+      // No runs of scheduled tasks are taken without their secret (docs/plan/82, Зп19).
+      scheduleIntakeSecret: null,
     })
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: ' ', REDIS_URL: '' })).toMatchObject({
       metricsToken: DEV_METRICS_TOKEN,
@@ -44,6 +46,21 @@ describe('webEnvFromEnv', () => {
     const key = 'B'.repeat(87)
     expect(webEnvFromEnv({ ...devEnv, WEB_PUSH_VAPID_PUBLIC: key }).webPushPublicKey).toBe(key)
     expect(() => webEnvFromEnv({ ...devEnv, WEB_PUSH_VAPID_PUBLIC: 'короткий' })).toThrow()
+  })
+
+  it('reads the secret of the runs of scheduled tasks and refuses one core would not take (docs/plan/82, Зп19)', () => {
+    const secret = 'S'.repeat(43)
+    expect(webEnvFromEnv({ ...devEnv, SCHEDULE_INTAKE_SECRET: secret }).scheduleIntakeSecret).toBe(
+      secret,
+    )
+    for (const blank of ['', ' ', undefined])
+      expect(
+        webEnvFromEnv({ ...devEnv, SCHEDULE_INTAKE_SECRET: blank }).scheduleIntakeSecret,
+      ).toBeNull()
+    for (const broken of ['s'.repeat(31), `${'s'.repeat(32)} x`, 'с'.repeat(40), 's'.repeat(4097)])
+      expect(() => webEnvFromEnv({ ...devEnv, SCHEDULE_INTAKE_SECRET: broken })).toThrow(
+        /^\[web\] invalid configuration: SCHEDULE_INTAKE_SECRET: must be 32 to 4096 visible ASCII characters$/,
+      )
   })
 
   it('reads the grace of an overdue tariff as the core role does: a week unless set', () => {

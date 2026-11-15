@@ -15,6 +15,7 @@ const user: User = {
   email: 'profile-test@example.ru',
   emailVerified: true,
   image: '/api/profile/avatar/example',
+  timezone: null,
   createdAt: now,
   updatedAt: now,
 }

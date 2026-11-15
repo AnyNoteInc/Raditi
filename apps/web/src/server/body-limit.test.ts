@@ -167,6 +167,12 @@ describe('API routes', () => {
     // An update of the bot of the chat, posted by core: telegram-intake.ts reads at most 256 KiB
     // after the secret (docs/plan/80-telegram.md).
     'webhooks/telegram': /handleTelegramIntake\(request,/,
+    // A run of a scheduled task, posted by core: schedule-intake.ts reads at most 1 KiB after the
+    // secret (docs/plan/82-scheduled-tasks.md, §4.3).
+    'webhooks/scheduled-runs': /handleScheduleIntake\(request,/,
+    // A new Web Push subscription of this browser from its service worker: 4 KiB after the origin
+    // (docs/plan/82-scheduled-tasks.md, Зп41).
+    'notifications/resubscribe': /handleResubscribe\(request,/,
     // attachment-upload.ts streams the file to the inbox after the session, the origin, the
     // consents and the announced size, never more than announced: 20 MiB at most.
     'attachments/[id]': /uploadAttachment\(request, await params, attachmentUploadDependencies\)/,

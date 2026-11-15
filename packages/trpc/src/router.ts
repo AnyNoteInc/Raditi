@@ -11,6 +11,7 @@ import { pagesRouter } from './routers/pages.ts'
 import { previewRouter } from './routers/preview.ts'
 import { projectRouter } from './routers/project.ts'
 import { releaseRouter } from './routers/release.ts'
+import { scheduleRouter } from './routers/schedule.ts'
 import { siteAgentSkillsRouter } from './routers/site-agent-skills.ts'
 import { siteDatabaseDumpRouter } from './routers/site-database-dump.ts'
 import { siteEnvRouter } from './routers/site-env.ts'
@@ -51,6 +52,8 @@ export const appRouter = router({
   document: documentRouter,
   // «Страницы»: the published pages of the user's workspaces (docs/plan/69-pages.md).
   pages: pagesRouter,
+  // «Расписание»: the scheduled tasks of the user (docs/plan/82-scheduled-tasks.md).
+  schedule: scheduleRouter,
 })
 
 export type AppRouter = typeof appRouter

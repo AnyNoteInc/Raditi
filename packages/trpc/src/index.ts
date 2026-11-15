@@ -27,6 +27,8 @@ export { readTaskScreenshot } from './services/chat/screenshots.ts'
 export { readSiteBackupDownload } from './services/site-history.ts'
 
 export { readChatNotification } from './services/notifications.ts'
+// The runs of scheduled tasks, handed by core to web (docs/plan/82-scheduled-tasks.md, §4.3).
+export { startScheduledRun } from './services/schedule/runs.ts'
 // The updates of the bot of the chat in Telegram, handed by core to web (docs/plan/80-telegram.md).
 export {
   handleTelegramUpdate,

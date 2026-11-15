@@ -938,3 +938,44 @@ describe('the refusals of a dialog, its preview and its release', () => {
     expect(formatted('release').data).toMatchObject({ refusal: 'release' })
   })
 })
+
+describe('the refusals of scheduled tasks (docs/plan/82-scheduled-tasks.md)', () => {
+  it('tells every code in the words of the client, without English', () => {
+    for (const [code, status] of [
+      ['SCHEDULE_NOT_FOUND', 404],
+      ['SCHEDULE_FORBIDDEN', 403],
+      ['SCHEDULE_LIMIT', 409],
+      ['SCHEDULE_CHANGE_LIMIT', 409],
+      ['SCHEDULE_TOO_OFTEN', 400],
+      ['SCHEDULE_IN_PAST', 400],
+      ['SCHEDULE_TEMPLATE_PLACEHOLDER', 400],
+      ['SCHEDULE_TEMPLATE_NEEDS_PROJECT', 400],
+      ['SCHEDULE_RUN_BUSY', 409],
+      ['SCHEDULE_RUN_REFUSED', 409],
+    ] as const) {
+      const error = toTRPCError(new DomainError(code, 'English text for the logs', status))
+      expect(error.message, code).not.toMatch(/[A-Za-z]/)
+      expect(error.message, code).not.toBe(INTERNAL_ERROR_MESSAGE)
+    }
+    expect(toTRPCError(new DomainError('SCHEDULE_RUN_BUSY', 'Busy', 409)).message).toBe(
+      'Задача уже выполняется',
+    )
+  })
+
+  it('names the number of the limit and why «Запустить сейчас» did not start', () => {
+    expect(
+      toTRPCError(new DomainError('SCHEDULE_LIMIT', 'Limit', 409, { limit: 21 })).message,
+    ).toBe('Включено 21 задача — больше нельзя. Приостановите или удалите одну')
+    expect(toTRPCError(new DomainError('SCHEDULE_LIMIT', 'Limit', 409)).message).toBe(
+      'Включено 20 задач — больше нельзя. Приостановите или удалите одну',
+    )
+    expect(
+      toTRPCError(
+        new DomainError('SCHEDULE_RUN_REFUSED', 'Refused', 409, { reason: 'project_gone' }),
+      ).message,
+    ).toBe('Задача не запустилась: проект удалён')
+    expect(
+      toTRPCError(new DomainError('SCHEDULE_RUN_REFUSED', 'Refused', 409, { reason: 'x' })).message,
+    ).toBe('Задача не запустилась. Попробуйте ещё раз немного позже')
+  })
+})

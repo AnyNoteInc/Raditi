@@ -47,6 +47,7 @@ const user: User = {
   email: 'site-connection-test@example.ru',
   emailVerified: true,
   image: null,
+  timezone: null,
   createdAt: now,
   updatedAt: now,
 }
