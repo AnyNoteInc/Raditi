@@ -33,6 +33,12 @@ import {
   pageTreeArgumentsSchema,
   pageUpdateArgumentsSchema,
 } from '../pages/pages-arguments.ts'
+import {
+  memoryForgetArgumentsSchema,
+  memoryListArgumentsSchema,
+  memorySaveArgumentsSchema,
+  memoryUpdateArgumentsSchema,
+} from '../memory/memory-arguments.ts'
 import { webSearchArgumentsSchema } from '../search/search-arguments.ts'
 import type { McpTurnAccess } from './mcp-access.ts'
 
@@ -89,6 +95,13 @@ const pagesCall = z.discriminatedUnion('name', [
   call('page_file_delete', pageFileDeleteArgumentsSchema),
   call('page_files', pageFilesArgumentsSchema),
 ])
+// The memory of the chat (docs/plan/84-projects.md, §4.4): each tool its own branch.
+const memoryCall = z.discriminatedUnion('name', [
+  call('memory_list', memoryListArgumentsSchema.optional()),
+  call('memory_save', memorySaveArgumentsSchema),
+  call('memory_update', memoryUpdateArgumentsSchema),
+  call('memory_forget', memoryForgetArgumentsSchema),
+])
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),
   id: rpcId.optional(),
@@ -132,6 +145,11 @@ export interface McpSecurity {
   pagesTools?: boolean
   /** The documents of a workspace (docs/plan/69-pages.md, Ст21): every turn, every composition. */
   docsTools?: boolean
+  /**
+   * The memory of a chat (docs/plan/84-projects.md, ПР18): every composition, a turn whose chat has
+   * its memory on.
+   */
+  memoryTools?: boolean
 }
 
 /** The security of the role's MCP endpoint, as the profiles of its configuration make it. */
@@ -143,6 +161,7 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
     ...(worker ? { webTools: true } : {}),
     searchTools: true,
     docsTools: true,
+    memoryTools: true,
     ...(config.pages ? { pagesTools: true } : {}),
   }
 }
@@ -153,7 +172,7 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
  * turn, while its key is in Vault; `docs` — the documents of the workspace, any turn
  * (docs/plan/69-pages.md, Ст21); `pages` — its pages, while the pages are configured (Ст20).
  */
-export const mcpToolFamilies = ['web', 'search', 'docs', 'pages'] as const
+export const mcpToolFamilies = ['web', 'search', 'docs', 'pages', 'memory'] as const
 export type McpToolFamily = (typeof mcpToolFamilies)[number]
 
 /** What a request of this scope is offered: `web` to a chat that needs a browser (Б20). */
@@ -163,6 +182,8 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
   if (security.searchTools) families.push('search')
   if (security.docsTools) families.push('docs')
   if (security.pagesTools) families.push('pages')
+  // The memory of the chat while it is on (docs/plan/84-projects.md, ПР18).
+  if (security.memoryTools && access.memory) families.push('memory')
   return families
 }
 
@@ -219,7 +240,8 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       (families.includes('web') && webCall.safeParse(request.params).success) ||
       (families.includes('search') && searchCall.safeParse(request.params).success) ||
       (families.includes('docs') && docsCall.safeParse(request.params).success) ||
-      (families.includes('pages') && pagesCall.safeParse(request.params).success)
+      (families.includes('pages') && pagesCall.safeParse(request.params).success) ||
+      (families.includes('memory') && memoryCall.safeParse(request.params).success)
     )
   return true
 }

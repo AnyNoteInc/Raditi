@@ -158,7 +158,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
   }
 
   /** A turn of a chat, under the lease of its own id (plan 61, К14). */
-  async function chatTurnOf(needsBrowser: boolean) {
+  async function chatTurnOf(needsBrowser: boolean, createdById?: string) {
     const suffix = randomBytes(8).toString('hex')
     const token = `mcp_${randomBytes(32).toString('hex')}`
     const task = await db.task.create({
@@ -166,6 +166,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
         workspaceId: fixture.workspaceId,
         status: 'running',
         needsBrowser,
+        ...(createdById ? { createdById } : {}),
       },
     })
     return { token, task, ...(await liveTurn(task.id, suffix, token)) }
@@ -215,12 +216,31 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
           firstEpoch: 1,
           epoch: 1,
           requirements: { repository: false, browser },
+          memory: null,
         })
       } finally {
         await turn.cleanup()
       }
     },
   )
+
+  it('admits the memory of the chat of its author while it is on (plan 84, ПР18)', async () => {
+    const user = await db.user.create({
+      data: { name: 'Автор', email: `memory-${randomBytes(6).toString('hex')}@example.test` },
+    })
+    const turn = await chatTurnOf(false, user.id)
+    try {
+      expect((await store.authenticate(turn.token))?.memory).toEqual({
+        userId: user.id,
+        projectId: null,
+      })
+      await db.user.update({ where: { id: user.id }, data: { agentMemory: false } })
+      expect((await store.authenticate(turn.token))?.memory).toBeNull()
+    } finally {
+      await turn.cleanup()
+      await db.user.delete({ where: { id: user.id } })
+    }
+  })
 
   it('admits two chats at once, each by its own lease', async () => {
     const one = await chatTurnOf(false)

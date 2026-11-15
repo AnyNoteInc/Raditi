@@ -1,5 +1,12 @@
 import { attemptCreditBudget } from '@repo/billing'
-import { classProfile, readyProjectFiles, taskAttachments, type PrismaClient } from '@repo/db'
+import {
+  chatMemory,
+  classProfile,
+  memoryEntriesOfPass,
+  readyProjectFiles,
+  taskAttachments,
+  type PrismaClient,
+} from '@repo/db'
 import {
   modelClassSchema,
   readFeedRow,
@@ -189,6 +196,9 @@ export async function readPassFacts(
     task.project && task.project.deletedAt === null
       ? await readyProjectFiles(deps.db, task.project.id)
       : []
+  // The memory of the chat (docs/plan/84-projects.md, ПР18): null — off for its author.
+  const memory = await chatMemory(deps.db, task.id)
+  const memoryEntries = memory ? await memoryEntriesOfPass(deps.db, memory) : null
   return {
     task: {
       id: task.id,
@@ -201,6 +211,7 @@ export async function readPassFacts(
     clientInstructions: task.createdBy?.agentInstructions?.text ?? null,
     project: projectFactsOf(task.project),
     ...(projectFiles.length ? { projectFiles } : {}),
+    memory: memoryEntries,
     ...(attachments.length ? { attachments } : {}),
     requests,
     committedAt: answered.createdAt,

@@ -1,6 +1,7 @@
 import type { AttemptCreditBudget } from '@repo/billing'
 import {
   BROWSER_ONLY,
+  memorySection,
   Money,
   PLAIN_CHAT,
   projectContextSection,
@@ -515,6 +516,62 @@ describe('the files of the project in a pass (docs/plan/84-projects.md, ПР8)',
     const bare = await planned(facts({ project }))
     expect((await planned(facts({ project, projectFiles: [] }))).request).toEqual(bare.request)
     expect(bare.request.input).not.toHaveProperty('projectFiles')
+  })
+})
+
+describe('the memory in a pass (docs/plan/84-projects.md, ПР18)', () => {
+  const project = { name: 'Пекарня', goal: null, instructions: null }
+  const files = [{ name: 'Прайс.xlsx', mediaType: 'application/x', sizeBytes: 2048 }]
+  const memory = [
+    {
+      id: '01960000-0000-7000-8000-0000000000e1',
+      kind: 'fact' as const,
+      text: 'Цены — только из прайса',
+      updatedAt: at(5),
+    },
+  ]
+
+  it('puts the notes last, after the files of the project', async () => {
+    const plan = await planned(facts({ project, projectFiles: files, memory }))
+    const instructions = plan.request.context.instructions
+    expect(
+      instructions.endsWith(
+        `${projectSection(project)}${projectContextSection(files)}${memorySection(memory)}`,
+      ),
+    ).toBe(true)
+    expect(instructions.indexOf('## Project files')).toBeLessThan(instructions.indexOf('## Memory'))
+    expect(instructions).toContain('- [01960000-0000-7000-8000-0000000000e1, fact, ')
+  })
+
+  it('has no section while the memory is off, and an empty one says so', async () => {
+    const off = await planned(facts({ project, memory: null }))
+    expect(off.request).toEqual((await planned(facts({ project }))).request)
+    expect(off.request.context.instructions).not.toContain('## Memory')
+    const empty = await planned(facts({ memory: [] }))
+    expect(empty.request.context.instructions).toContain('The memory is empty so far.')
+  })
+
+  it('reads «запомни» in the client’s words of this pass only', async () => {
+    expect(
+      (await planned(facts({ requests: [request(10, 'first', 'Запомни: цены из прайса', 0)] })))
+        .remember,
+    ).toBe(true)
+    expect((await planned(facts())).remember).toBe(false)
+    // Words before the last turn started were another pass's.
+    const later = facts({
+      task: { id: TASK, workspaceId: WORKSPACE, attempt: 1, turnNo: 1, modelClass: 'standard' },
+      requests: [
+        request(10, 'first', 'Запомни: цены из прайса', 0),
+        request(11, 'follow_up', 'Теперь поправьте шапку', 20),
+      ],
+      turns: new Map([[1, finished(1, 'completed')]]),
+    })
+    expect((await planned(later)).remember).toBe(false)
+    const asked = {
+      ...later,
+      requests: [...later.requests, request(12, 'follow_up', 'И запомните это', 30)],
+    }
+    expect((await planned(asked)).remember).toBe(true)
   })
 })
 

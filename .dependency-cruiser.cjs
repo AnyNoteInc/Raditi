@@ -404,9 +404,9 @@ module.exports = {
       comment:
         'The web tools of a chat (docs/plan/57-browser-tasks.md, Б20), the web search (spec §20, «Веб-поиск агента») and the pages of the workspace (docs/plan/69-pages.md, Ст20) are each its own module of the mcp app: no folder of them imports another (plan 56, §4.3).',
       severity: 'error',
-      from: { path: '^apps/mcp/src/(web|search|pages)/', pathNot: '\\.test\\.ts$' },
+      from: { path: '^apps/mcp/src/(web|search|pages|memory)/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^apps/mcp/src/(web|search|pages)/',
+        path: '^apps/mcp/src/(web|search|pages|memory)/',
         pathNot: '^apps/mcp/src/$1/',
       },
     },
@@ -420,8 +420,9 @@ module.exports = {
         pathNot: '\\.test\\.ts$',
       },
       to: {
-        path: '^apps/mcp/src/(web|search|pages)/',
-        pathNot: '^apps/mcp/src/(search/search-arguments|pages/pages-arguments)\\.ts$',
+        path: '^apps/mcp/src/(web|search|pages|memory)/',
+        pathNot:
+          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|memory/memory-arguments)\\.ts$',
       },
     },
     {
@@ -432,7 +433,7 @@ module.exports = {
       from: {
         path: [
           '^apps/mcp/src/common/',
-          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments)\\.ts$',
+          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|memory/memory-arguments)\\.ts$',
         ],
         pathNot: '\\.test\\.ts$',
       },

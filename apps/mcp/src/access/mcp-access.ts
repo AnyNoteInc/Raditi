@@ -19,6 +19,15 @@ export const mcpTurnAccessSchema = z.strictObject({
   epoch: z.number().int().positive(),
   /** Whether the chat has the cloud browser (`tasks.needs_browser`); never a repository. */
   requirements: taskRequirementsSchema.refine((value) => !value.repository),
+  /**
+   * The memory of the chat (docs/plan/84-projects.md, ПР18): its author's, of its project or — null
+   * projectId — of the account; null or absent — off (`users.agent_memory`), no author, or the
+   * project in the trash. The family `memory` is offered only with it.
+   */
+  memory: z
+    .strictObject({ userId: z.uuid(), projectId: z.uuid().nullable() })
+    .nullable()
+    .optional(),
 })
 export type McpTurnAccess = z.infer<typeof mcpTurnAccessSchema>
 
@@ -42,8 +51,12 @@ export class PostgresMcpAccess implements McpAccessStore {
     const rows = await this.prisma.$queryRaw<unknown[]>`
       SELECT k.id AS "keyId", t.id AS "taskId", t.workspace_id AS "workspaceId",
         k.session_id AS "sessionId", k.turn_no AS turn,
-        k.first_epoch AS "firstEpoch", a.lease_epoch AS epoch, t.needs_browser AS "needsBrowser"
+        k.first_epoch AS "firstEpoch", a.lease_epoch AS epoch, t.needs_browser AS "needsBrowser",
+        u.id AS "authorId", u.agent_memory AS "agentMemory", t.project_id AS "projectId",
+        (p.deleted_at IS NOT NULL) AS "projectGone"
       FROM llm_keys k JOIN tasks t ON t.id = k.task_id
+      LEFT JOIN users u ON u.id = t.created_by_id
+      LEFT JOIN projects p ON p.id = t.project_id
       JOIN turn_assignments a ON a.task_id = k.task_id AND a.turn_no = k.turn_no
         AND a.first_epoch = k.first_epoch AND a.session_id = k.session_id
         AND a.site_id = t.id
@@ -70,6 +83,13 @@ export class PostgresMcpAccess implements McpAccessStore {
 /** The admission row with the task's need of a browser folded into its requirements. */
 function accessOf(row: unknown): unknown {
   if (!row || typeof row !== 'object') return row
-  const { needsBrowser, ...access } = row as Record<string, unknown>
-  return { ...access, requirements: { repository: false, browser: needsBrowser } }
+  const { needsBrowser, authorId, agentMemory, projectId, projectGone, ...access } = row as Record<
+    string,
+    unknown
+  >
+  const memory =
+    typeof authorId === 'string' && agentMemory === true && projectGone !== true
+      ? { userId: authorId, projectId: projectId ?? null }
+      : null
+  return { ...access, requirements: { repository: false, browser: needsBrowser }, memory }
 }

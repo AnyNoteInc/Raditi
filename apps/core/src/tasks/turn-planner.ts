@@ -1,9 +1,12 @@
 import type { AttemptCreditBudget } from '@repo/billing'
 import {
+  askedToRemember,
   clientInstructionsSection,
+  memorySection,
   projectContextSection,
   projectSection,
   turnProjectPath,
+  type MemorySectionEntry,
   type ProjectContextFile,
   type ProjectSectionFacts,
 } from '@repo/domain'
@@ -151,6 +154,12 @@ export interface PassFacts {
    */
   projectFiles?: readonly ProjectContextFile[]
   /**
+   * The active notes of the chat's memory (docs/plan/84-projects.md, ПР18): of its project, with
+   * the account's when the project reads them, or the account's. Absent or null — the memory is
+   * off for the author of the chat: no section, and the agent has no tools of it.
+   */
+  memory?: readonly MemorySectionEntry[] | null
+  /**
    * The files bound to the chat, in the order they were sent: the latest go into the sandbox of
    * its turn (turnInboxOf). Absent or empty — none.
    */
@@ -189,6 +198,11 @@ export type PassPlan =
       turn: number
       /** The task's own: its browser comes back with the turn, or starts on `web_*` (К11). */
       requirements: TaskRequirements
+      /**
+       * The client's own words of the pass ask to remember (askedToRemember, ПР18): a note of the
+       * agent may be active at once only then.
+       */
+      remember: boolean
     }
   /** The key cannot cover a first call: the platform asks «Продолжить?» (Р8). */
   | { kind: 'ceiling'; question: Extract<FeedQuestionPayload, { kind: 'ceiling' }> }
@@ -376,6 +390,20 @@ function clientWordsOf(facts: PassFacts, since: Date | null): string {
 }
 
 /**
+ * The client's own words this pass answers (docs/plan/84-projects.md, ПР18): those written after
+ * the last turn of the chat started — all of them before its first — and never the words of the
+ * platform of a command. Whether they ask to remember is read from them alone.
+ */
+function passWordsOf(facts: PassFacts): string {
+  const since = facts.turns.get(facts.task.turnNo)?.startedAt ?? null
+  return requestsNotUndone(facts)
+    .filter((request) => request.kind !== 'agent_command' && request.text !== null)
+    .filter((request) => since === null || request.createdAt.getTime() > since.getTime())
+    .map((request) => request.text!)
+    .join('\n\n')
+}
+
+/**
  * The action of the pass, among the requests the session it restores has not seen. A retry or
  * «Продолжить» after a compaction that did not end repeats it, for they say nothing of their own.
  * Words among them, before or after the command, come first: no compaction would tell them to
@@ -507,7 +535,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         browser,
         inbox: inboxFacts,
         variables: facts.variables ?? [],
-      })}${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}`,
+      })}${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${memorySection(facts.memory)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),
@@ -545,7 +573,14 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     ttlMs: TURN_LEASE_TTL_MS,
     budgetRub,
   }
-  return { kind: 'turn', request, policy, turn, requirements: { ...requirements } }
+  return {
+    kind: 'turn',
+    request,
+    policy,
+    turn,
+    requirements: { ...requirements },
+    remember: !action && askedToRemember(passWordsOf(facts)),
+  }
 }
 
 /** A plan saved by an assignment, or null when it no longer passes its schema (history). */

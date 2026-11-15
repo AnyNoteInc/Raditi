@@ -34,6 +34,7 @@ import {
 import { collectExpiredAttachments, expiredAttachmentsIn } from './attachment-collector.ts'
 import type { LivePasses } from './live-passes.ts'
 import type { PageMetrics } from '../pages/page-metrics.ts'
+import type { MemoryChanges } from './memory-changes.ts'
 import type { ProjectTrash } from '../projects/project-trash.ts'
 import type { PagePublications } from './page-publications.ts'
 import {
@@ -93,6 +94,11 @@ export interface TaskSweepDependencies {
    * stopped, projects past their day purged. Absent — not swept.
    */
   projects?: Pick<ProjectTrash, 'sweep'> | null
+  /**
+   * The memory of chats (docs/plan/84-projects.md, ПР18): a change no end of a turn applied is
+   * closed failed a day on. Absent — not swept.
+   */
+  memory?: Pick<MemoryChanges, 'sweep'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -127,6 +133,7 @@ export class TaskSweep {
       ['attachments', () => this.collectAttachments()],
       ['pages', () => this.sweepPages()],
       ['projects', () => this.deps.projects?.sweep()],
+      ['memory', () => this.sweepMemory()],
     ] as const) {
       try {
         await pass()
@@ -460,6 +467,15 @@ export class TaskSweep {
     // The numbers of the sites are a reading, never a reason to stop the sweep.
     await this.deps.pageMetrics?.refresh().catch(() => this.#logger.warn('page_metrics_failed'))
     return stale.length
+  }
+
+  /** Changes of memory of turns that never ended, a day on (PAGE_SWEEP_AFTER_MS). */
+  async sweepMemory(): Promise<number> {
+    const { memory } = this.deps
+    if (!memory) return 0
+    const closed = await memory.sweep(new Date(this.#now().getTime() - PAGE_SWEEP_AFTER_MS))
+    if (closed > 0) this.#logger.log(`task_sweep_memory failed=${closed}`)
+    return closed
   }
 
   /**

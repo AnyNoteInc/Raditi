@@ -12,12 +12,14 @@ import {
   MAX_PRESIGN_TTL_MS,
   snapshotSaveWroteNothing,
   TURN_PUBLICATION_GRACE_MS,
+  memoryPassEvidence,
   turnSnapshotPrefix,
   withTimeout,
   type AgentDriver,
   type AgentEvent,
   type DestroyReason,
   type ExecExit,
+  type MemoryPassEvidence,
   type PreparedRun,
   type SiteLeaseGrant,
   type SiteLeaseStore,
@@ -90,6 +92,11 @@ export interface CompletedTurn {
    * sections wait unchecked for the next end of a turn.
    */
   refusesText: ((text: string) => 'turn_key' | 'client_value' | null) | null
+  /**
+   * What the turn took in from outside, by its events (docs/plan/84-projects.md, ПР18): whether a
+   * note of memory it reserved may be active at once. Absent — not known: counted as outside.
+   */
+  evidence?: MemoryPassEvidence
 }
 
 export interface TurnAttemptInit {
@@ -444,7 +451,13 @@ export class TurnAttempt {
       (values) => textRefusal(this.credentials, values),
       () => null,
     )
-    return { result, manifest, refusesText, ...(outbox ? { outbox } : {}) }
+    return {
+      result,
+      manifest,
+      refusesText,
+      evidence: memoryPassEvidence(events),
+      ...(outbox ? { outbox } : {}),
+    }
   }
 
   /**

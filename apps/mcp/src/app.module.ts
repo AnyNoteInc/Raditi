@@ -5,6 +5,7 @@ import { mcpProfilesOf, type McpConfig } from './config/config.ts'
 import { McpConfigModule } from './config/config.module.ts'
 import { McpHealthModule } from './health/health.module.ts'
 import { InfraModule } from './infra/infra.module.ts'
+import { MemoryModule } from './memory/memory.module.ts'
 import { assertMcpNestToolAuthorization } from './server/mcp-runtime.ts'
 import { DocsModule } from './pages/docs.module.ts'
 import { PagesModule } from './pages/pages.module.ts'
@@ -24,8 +25,9 @@ import { WebModule } from './web/web.module.ts'
  * (BROWSER_WORKER_URL). The web search (search_web, SearchModule) is offered while its access is
  * in Vault (`subs/search/yandex`). The pages of the workspace (page_*, PagesModule,
  * docs/plan/69-pages.md) — where PAGES_BASE_DOMAIN is set; its documents (doc_*, DocsModule) —
- * always. The modules come in this order — site_info, web, search, docs, pages — and so do their
- * tools.
+ * always. The memory of a chat (memory_*, MemoryModule, docs/plan/84-projects.md, ПР18) — always,
+ * offered to a turn whose chat has its memory on. The modules come in this order — site_info, web,
+ * search, docs, pages, memory — and so do their tools.
  */
 @Module({})
 export class AppModule {
@@ -48,6 +50,7 @@ export class AppModule {
         SearchModule,
         DocsModule,
         ...(config.pages ? [PagesModule] : []),
+        MemoryModule,
       ],
     }
   }

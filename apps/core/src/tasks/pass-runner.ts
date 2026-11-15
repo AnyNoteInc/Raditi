@@ -13,6 +13,7 @@ import {
   type AgentTurnJob,
   type JobQueue,
   type LlmBackend,
+  type MemoryPassEvidence,
   type SandboxRuntime,
   type SiteLeaseStore,
 } from '@repo/domain'
@@ -21,6 +22,7 @@ import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { ChatFiles } from './chat-files.ts'
 import type { DocSections } from './doc-sections.ts'
+import type { MemoryChanges } from './memory-changes.ts'
 import type { PageChanges } from './page-changes.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
@@ -90,6 +92,8 @@ export interface PassRunnerDependencies {
   docs?: Pick<DocSections, 'settle'> & Partial<Pick<DocSections, 'checkLive'>>
   /** What the turn asked of the pages besides versions (docs/plan/73-pages-sites.md, Дер23). */
   pageChanges?: Pick<PageChanges, 'apply'>
+  /** What the turn asked of the memory of its chat (docs/plan/84-projects.md, ПР18). */
+  memoryChanges?: Pick<MemoryChanges, 'apply' | 'fail'>
   /** WORKSPACE_TURN_LIMIT (plan 70, ВР13); DEFAULT_WORKSPACE_TURN_LIMIT when absent. */
   workspaceTurnLimit?: number
   /** The places for turns of the platform (plan 70, ВР17); absent — no bound but the pool's. */
@@ -323,12 +327,14 @@ export class PassRunner {
     let cause: string | null = null
     let outbox: Uint8Array | undefined
     let refusesText: ((text: string) => 'turn_key' | 'client_value' | null) | null = null
+    let evidence: MemoryPassEvidence | undefined
     try {
       const completed = await supervisor.run(plan.request, plan.policy, controller.signal, {
         onArmed: live.arm,
       })
       outbox = completed.outbox
       refusesText = completed.refusesText
+      evidence = completed.evidence
       ending = { kind: 'completed', turn: plan.turn, result: completed.result }
     } catch (error) {
       cause = causeOf(error)
@@ -360,8 +366,11 @@ export class PassRunner {
       (ending.kind === 'failed' || ending.kind === 'cancelled') &&
       answer === 'moved' &&
       ending.turn !== null
-    )
+    ) {
       await this.deps.chatFiles?.failPages(job.taskId, ending.turn)
+      // What it asked of the memory is never applied (§4.3, step 9).
+      await this.deps.memoryChanges?.fail(job.taskId, ending.turn)
+    }
     // After the answer of the turn, so that its files stand below it in the chat. A turn without
     // files still settles the pages it named (docs/plan/69-pages.md, Ст6).
     if (ending.kind === 'completed' && answer === 'moved')
@@ -374,6 +383,14 @@ export class PassRunner {
     // in the turn keeps the version the turn gave it (Дер23).
     if (ending.kind === 'completed' && answer === 'moved' && refusesText)
       await this.deps.pageChanges?.apply(job.taskId, ending.turn, refusesText)
+    // Last, the notes of memory (docs/plan/84-projects.md, §4.3, step 8): «Запомнено» stands after
+    // the answer. Without the values of the client they are closed failed, never applied unchecked.
+    if (ending.kind === 'completed' && answer === 'moved')
+      await this.deps.memoryChanges?.apply(job.taskId, ending.turn, refusesText, {
+        remember: plan.remember,
+        ...(evidence ? { evidence } : {}),
+        repository: plan.requirements.repository,
+      })
     if (ending.kind === 'busy') {
       // Another end of the task came first (a cancel, which wakes nobody): this one ended it.
       if (answer !== 'moved') return 'ended'

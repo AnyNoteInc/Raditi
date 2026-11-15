@@ -263,3 +263,25 @@ describe('the feed rows', () => {
     ).toBe(true)
   })
 })
+
+describe('the words of the feed rows', () => {
+  it('tells a note with its text and a refusal by its reason alone', async () => {
+    const { feedMemoryChangeText, feedMemoryLeftText } =
+      await import('../tasks/client-feed-labels.ts')
+    expect(feedMemoryChangeText({ action: 'saved', text: 'Цены из прайса' })).toBe(
+      'Запомнено: Цены из прайса',
+    )
+    expect(feedMemoryChangeText({ action: 'proposed', text: 'Цены из прайса' })).toBe(
+      'Агент предлагает запомнить: Цены из прайса',
+    )
+    expect(feedMemoryChangeText({ action: 'forget_proposed', text: 'А' })).toBe(
+      'Агент предлагает забыть: А',
+    )
+    expect(feedMemoryLeftText({ action: 'save', reason: 'secret' })).toBe(
+      'Не запомнено: похоже, в записи пароль, ключ или значение переменной.',
+    )
+    expect(feedMemoryLeftText({ action: 'forget', reason: 'version' })).toMatch(
+      /^Запись памяти не забыта: /,
+    )
+  })
+})

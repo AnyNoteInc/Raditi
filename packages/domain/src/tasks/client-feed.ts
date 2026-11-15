@@ -12,6 +12,13 @@ import {
   pageKinds,
   pageLeftReasons,
 } from '../pages/feed.ts'
+import {
+  feedMemoryChangePayloadSchema,
+  feedMemoryLeftPayloadSchema,
+  memoryChangeActions,
+  memoryLeftReasons,
+} from '../memory/feed.ts'
+import { memoryChangeKinds, memoryKinds } from '../memory/schemas.ts'
 import { pagePathSchema } from '../pages/path.ts'
 import { pageSlugSchema } from '../pages/slug.ts'
 
@@ -92,6 +99,10 @@ export const feedEventTypes = [
   'feed.doc',
   'feed.doc_touch',
   'feed.doc_left',
+  // What the end of a pass did with the notes of memory the agent reserved, and a note it did not
+  // keep (docs/plan/84-projects.md, ПР18).
+  'feed.memory_change',
+  'feed.memory_left',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -874,6 +885,8 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.doc': feedDocPayloadSchema,
   'feed.doc_touch': feedDocTouchPayloadSchema,
   'feed.doc_left': feedDocLeftPayloadSchema,
+  'feed.memory_change': feedMemoryChangePayloadSchema,
+  'feed.memory_left': feedMemoryLeftPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -914,6 +927,8 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.doc', feedDocPayloadSchema),
       row('feed.doc_touch', feedDocTouchPayloadSchema),
       row('feed.doc_left', feedDocLeftPayloadSchema),
+      row('feed.memory_change', feedMemoryChangePayloadSchema),
+      row('feed.memory_left', feedMemoryLeftPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1249,6 +1264,19 @@ const readDocLeft = z.object({
   reason: known(['refused'] as const, 'refused' as const),
 })
 
+// A note of memory (ПР18): an action this code does not know says the less — a proposal, which
+// does nothing until the client saves it; a reason it does not know, that the platform lost it.
+const readMemoryChange = z.object({
+  action: known(memoryChangeActions, 'proposed' as const),
+  entryId: z.uuid(),
+  kind: known(memoryKinds, 'fact' as const),
+  text: shownText(400),
+})
+const readMemoryLeft = z.object({
+  action: known(memoryChangeKinds, 'save' as const),
+  reason: known(memoryLeftReasons, 'failed' as const),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1311,6 +1339,8 @@ export type FeedEvent =
   | ({ type: 'feed.doc' } & z.infer<typeof readDoc>)
   | ({ type: 'feed.doc_touch' } & z.infer<typeof readDocTouch>)
   | ({ type: 'feed.doc_left' } & z.infer<typeof readDocLeft>)
+  | ({ type: 'feed.memory_change' } & z.infer<typeof readMemoryChange>)
+  | ({ type: 'feed.memory_left' } & z.infer<typeof readMemoryLeft>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1469,6 +1499,14 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   },
   'feed.doc_left': {
     1: (payload) => readWith(readDocLeft, payload, (data) => ({ type: 'feed.doc_left', ...data })),
+  },
+  'feed.memory_change': {
+    1: (payload) =>
+      readWith(readMemoryChange, payload, (data) => ({ type: 'feed.memory_change', ...data })),
+  },
+  'feed.memory_left': {
+    1: (payload) =>
+      readWith(readMemoryLeft, payload, (data) => ({ type: 'feed.memory_left', ...data })),
   },
 }
 

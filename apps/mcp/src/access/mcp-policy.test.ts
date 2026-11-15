@@ -300,5 +300,23 @@ describe('MCP request policy', () => {
     ).toBe(true)
     expect(mcpBodyAllowed(page('doc_section_move', { docId, id: 'a' }), ['docs'])).toBe(false)
     expect(mcpBodyAllowed(page('doc_delete', { docId }), ['docs'])).toBe(false)
+
+    // The memory of the chat (plan 84, ПР18): only while it is on; each call by its own schema.
+    const remembering = { ...chat, memory: { userId: access.taskId, projectId: null } }
+    expect(mcpToolFamiliesOf(chat, { ...base, memoryTools: true })).toEqual([])
+    expect(mcpToolFamiliesOf(remembering, { ...base, memoryTools: true })).toEqual(['memory'])
+    const id = access.taskId
+    expect(mcpBodyAllowed(page('memory_save', { kind: 'fact', text: 'а' }), ['memory'])).toBe(true)
+    expect(mcpBodyAllowed(page('memory_save', { kind: 'fact', text: 'а' }), ['docs'])).toBe(false)
+    expect(mcpBodyAllowed(page('memory_list', {}), ['memory'])).toBe(true)
+    expect(
+      mcpBodyAllowed(page('memory_update', { id, text: 'б', expectedVersion: 1 }), ['memory']),
+    ).toBe(true)
+    expect(
+      mcpBodyAllowed(page('memory_save', { kind: 'fact', text: 'а', projectId: id }), ['memory']),
+    ).toBe(false)
+    expect(mcpBodyAllowed(page('memory_forget', { id, expectedVersion: 0 }), ['memory'])).toBe(
+      false,
+    )
   })
 })

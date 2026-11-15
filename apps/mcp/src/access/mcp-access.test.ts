@@ -28,6 +28,7 @@ describe('MCP token access', () => {
     expect(await store.authenticate(token)).toEqual({
       ...base,
       requirements: { repository: false, browser: false },
+      memory: null,
     })
     expect(JSON.stringify($queryRaw.mock.calls)).not.toContain(token)
     expect(JSON.stringify($queryRaw.mock.calls)).toContain(
@@ -42,11 +43,36 @@ describe('MCP token access', () => {
     expect(await store.authenticate(token)).toEqual({
       ...base,
       requirements: { repository: false, browser: true },
+      memory: null,
     })
     $queryRaw.mockResolvedValueOnce([row(scope(), null)])
     await expect(store.authenticate(token)).rejects.toMatchObject({
       code: 'MCP_ACCESS_SCOPE_INVALID',
     })
+  })
+
+  it('carries the memory of the chat while its author has it on and its project is not in the trash (plan 84, ПР18)', async () => {
+    const base = scope()
+    const userId = randomUUID()
+    const projectId = randomUUID()
+    const memoryRow = (extra: Record<string, unknown>) => ({
+      ...row(base),
+      authorId: userId,
+      agentMemory: true,
+      projectId,
+      projectGone: false,
+      ...extra,
+    })
+    const $queryRaw = vi.fn()
+    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    $queryRaw.mockResolvedValueOnce([memoryRow({})])
+    expect((await store.authenticate(token))?.memory).toEqual({ userId, projectId })
+    $queryRaw.mockResolvedValueOnce([memoryRow({ projectId: null, projectGone: null })])
+    expect((await store.authenticate(token))?.memory).toEqual({ userId, projectId: null })
+    for (const off of [{ agentMemory: false }, { projectGone: true }, { authorId: null }]) {
+      $queryRaw.mockResolvedValueOnce([memoryRow(off)])
+      expect((await store.authenticate(token))?.memory, JSON.stringify(off)).toBeNull()
+    }
   })
 
   it('looks up the token its issuer generates, by the hash its issuer stores', async () => {

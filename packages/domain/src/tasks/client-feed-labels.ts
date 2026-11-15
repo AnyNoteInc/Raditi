@@ -291,6 +291,55 @@ export function feedPageChangeText(row: {
   return `Агент изменил страницу «${row.title}».`
 }
 
+/**
+ * What the end of a pass did with a note of memory (`feed.memory_change`, docs/plan/84-projects.md,
+ * ПР18, §4.4): «Запомнено: …», or a proposal the client saves or drops in the cabinet.
+ */
+export function feedMemoryChangeText(row: {
+  action: 'saved' | 'proposed' | 'updated' | 'update_proposed' | 'forgotten' | 'forget_proposed'
+  text: string
+}): string {
+  switch (row.action) {
+    case 'saved':
+      return `Запомнено: ${row.text}`
+    case 'proposed':
+      return `Агент предлагает запомнить: ${row.text}`
+    case 'updated':
+      return `Запись памяти изменена: ${row.text}`
+    case 'update_proposed':
+      return `Агент предлагает изменить запись: ${row.text}`
+    case 'forgotten':
+      return `Забыто: ${row.text}`
+    case 'forget_proposed':
+      return `Агент предлагает забыть: ${row.text}`
+  }
+}
+
+/**
+ * A note of memory the end of a pass did not keep (`feed.memory_left`, ПР18): never its text — it
+ * may be a secret.
+ */
+export function feedMemoryLeftText(row: {
+  action: 'save' | 'update' | 'forget'
+  reason: 'secret' | 'limit' | 'version' | 'not_found' | 'off' | 'failed'
+}): string {
+  const head =
+    row.action === 'save'
+      ? 'Не запомнено'
+      : row.action === 'update'
+        ? 'Запись памяти не изменена'
+        : 'Запись памяти не забыта'
+  const why = {
+    secret: 'похоже, в записи пароль, ключ или значение переменной',
+    limit: 'в памяти уже 40 записей — удалите ненужные',
+    version: 'запись уже изменили — попросите агента посмотреть память снова',
+    not_found: 'такой записи в памяти этого чата больше нет',
+    off: 'память агента выключена в настройках',
+    failed: 'попросите агента повторить',
+  }[row.reason]
+  return `${head}: ${why}.`
+}
+
 /** A document the agent set up (`feed.doc`, Ст22), until the card of slice 69.9. */
 export const feedDocText = (): string => 'Агент пишет документ'
 

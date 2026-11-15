@@ -138,6 +138,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     options: {
       browser?: { reclaim: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
       docs?: { settle: ReturnType<typeof vi.fn>; checkLive?: ReturnType<typeof vi.fn> }
+      memoryChanges?: { apply: ReturnType<typeof vi.fn>; fail: ReturnType<typeof vi.fn> }
       capacity?: TurnCapacity
     } = {},
   ) {
@@ -156,6 +157,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       supervisor,
       ...(options.browser !== undefined ? { browser: options.browser as never } : {}),
       ...(options.docs ? { docs: options.docs as never } : {}),
+      ...(options.memoryChanges ? { memoryChanges: options.memoryChanges as never } : {}),
       drivers,
       backends: llmBackends,
       leases: { inspect: vi.fn(inspect) as never },
@@ -480,6 +482,65 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       )
       await passes.run(dialog.job)
       expect(docs.settle).not.toHaveBeenCalled()
+    })
+
+    it('applies the notes of memory after the answer, with what the turn took in (plan 84, ПР18)', async () => {
+      await rate()
+      const dialog = await queued({ reserve: true })
+      const refusesText = () => null
+      const answered: boolean[] = []
+      const memoryChanges = {
+        apply: vi.fn(async (taskId: string) => {
+          // «Запомнено» stands after the answer of the pass.
+          answered.push(
+            (await db.taskEvent.count({ where: { taskId, type: 'feed.result' } })) === 1,
+          )
+        }),
+        fail: vi.fn(async () => {}),
+      }
+      const evidence = { outside: true, commands: false }
+      const { passes } = runner(
+        async () => {
+          await db.task.update({
+            where: { id: dialog.taskId },
+            data: { status: 'running', turnNo: 1 },
+          })
+          await db.taskTurn.create({
+            data: {
+              taskId: dialog.taskId,
+              turnNo: 1,
+              status: 'completed',
+              driverId: sampleDriverId,
+              image,
+            },
+          })
+          await worked(dialog.taskId)
+          return {
+            result: {
+              summary: 'Готово',
+              change_type: 'none',
+              client_message: 'Запомнил.',
+              files_changed: [],
+              questions: [],
+              needs_approval: false,
+              risk: 'low',
+            },
+            manifest: {} as SnapshotManifest,
+            refusesText,
+            evidence,
+          }
+        },
+        undefined,
+        { memoryChanges },
+      )
+      await passes.run(dialog.job)
+      expect(memoryChanges.apply).toHaveBeenCalledWith(dialog.taskId, 1, refusesText, {
+        remember: false,
+        evidence,
+        repository: false,
+      })
+      expect(answered).toEqual([true])
+      expect(memoryChanges.fail).not.toHaveBeenCalled()
     })
 
     it('plans the turn, runs it under the supervisor and ends the pass', async () => {

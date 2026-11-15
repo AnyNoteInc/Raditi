@@ -209,6 +209,25 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
     expect(read!.skills?.map((skill) => skill.name)).not.toContain('playwright')
   })
 
+  it('reads the active notes of the memory of the chat while its author has it on (ПР18)', async () => {
+    const { task, workspaceId, userId, facts } = await dialog()
+    // No author: no memory.
+    expect((await facts())?.memory).toBeNull()
+    await db.task.update({ where: { id: task.id }, data: { createdById: userId } })
+    expect((await facts())?.memory).toEqual([])
+    const note = (text: string, status: string) =>
+      db.memoryEntry.create({
+        data: { id: uuidv7(), workspaceId, userId, kind: 'fact', text, status, author: 'client' },
+      })
+    const active = await note('Цены — из прайса', 'active')
+    await note('Ждёт решения', 'proposed')
+    expect((await facts())?.memory).toEqual([
+      { id: active.id, kind: 'fact', text: 'Цены — из прайса', updatedAt: active.updatedAt },
+    ])
+    await db.user.update({ where: { id: userId }, data: { agentMemory: false } })
+    expect((await facts())?.memory).toBeNull()
+  })
+
   it('reads the project of the chat: its name, goal and instructions, none from the trash (ПР7, ПР20)', async () => {
     const { task, workspaceId, userId, facts } = await dialog()
     expect((await facts())?.project).toBeNull()

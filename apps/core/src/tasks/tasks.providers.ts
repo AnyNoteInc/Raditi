@@ -19,6 +19,7 @@ import { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import { TURN_EXECUTOR } from '../turns/turns.tokens.ts'
 import { ChatFiles } from './chat-files.ts'
 import { DocSections } from './doc-sections.ts'
+import { MemoryChanges } from './memory-changes.ts'
 import { PageChanges } from './page-changes.ts'
 import { PageMetrics } from '../pages/page-metrics.ts'
 import { ProjectTrash } from '../projects/project-trash.ts'
@@ -104,6 +105,8 @@ export const taskProviders: Provider[] = [
         }),
         // What a turn asked of its pages besides versions (docs/plan/73-pages-sites.md, Дер23).
         pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
+        // What a turn asked of the memory of its chat (docs/plan/84-projects.md, ПР18).
+        memoryChanges: new MemoryChanges({ db: prisma, logger: new Logger('MemoryChanges') }),
         // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
         workspaceTurnLimit: config.workspaceTurnLimit,
         capacity: new TurnCapacity(executor),
@@ -171,6 +174,7 @@ export const taskProviders: Provider[] = [
         pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         pageMetrics,
         projects: new ProjectTrash({ db: prisma, storage: inbox }),
+        memory: new MemoryChanges({ db: prisma, logger: new Logger('MemoryChanges') }),
       })
     },
     inject: [

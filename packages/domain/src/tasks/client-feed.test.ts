@@ -290,6 +290,23 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
   'feed.doc_left': [
     { v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', sections: 2, reason: 'refused' },
   ],
+  'feed.memory_change': [
+    {
+      v: 1,
+      action: 'saved',
+      entryId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd1',
+      kind: 'fact',
+      text: 'Цены — только из прайса',
+    },
+    {
+      v: 1,
+      action: 'forget_proposed',
+      entryId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd1',
+      kind: 'preference',
+      text: 'Отвечать коротко',
+    },
+  ],
+  'feed.memory_left': [{ v: 1, action: 'save', reason: 'secret' }],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -326,6 +343,8 @@ describe('feed vocabulary', () => {
       'feed.doc',
       'feed.doc_touch',
       'feed.doc_left',
+      'feed.memory_change',
+      'feed.memory_left',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -422,6 +441,8 @@ describe('free text is allowed in four fields, the agent words of a browser ques
       'feed.failure.objects[].title',
       // The name of a file the agent made, as it had it: shown, never read as markup.
       'feed.file.name',
+      // A note of memory (docs/plan/84-projects.md, ПР18): the client reads it, as text.
+      'feed.memory_change.text',
       // The title the agent gave its page: shown as text.
       'feed.page.title',
       // The title of a page the agent changed (docs/plan/73-pages-sites.md, Дер27): as text.
@@ -1275,6 +1296,17 @@ describe('reading stored rows', () => {
       'feed.doc': [{ v: 1, docId: 'документ' }],
       'feed.doc_touch': [{ v: 1, docId: 'документ', revision: 1 }],
       'feed.doc_left': [{ v: 1, docId: 'документ', sections: 1, reason: 'refused' }],
+      'feed.memory_change': [
+        { v: 1, action: 'saved', entryId: 'запись', kind: 'fact', text: 'а' },
+        {
+          v: 1,
+          action: 'saved',
+          entryId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd1',
+          kind: 'fact',
+          text: '   ',
+        },
+      ],
+      'feed.memory_left': [{ v: 1, action: 'save' }],
     }
     for (const type of feedEventTypes)
       for (const payload of broken[type])
