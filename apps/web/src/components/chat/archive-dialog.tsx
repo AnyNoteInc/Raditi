@@ -6,7 +6,6 @@ import Dialog from '@mui/material/Dialog'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import IconButton from '@mui/material/IconButton'
-import InputBase from '@mui/material/InputBase'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -18,6 +17,7 @@ import { useTRPC, useTRPCClient } from '@/trpc/client'
 
 import { chatHref } from './chat-address'
 import { listTime } from './chat-format'
+import { ChatSearchField } from './chat-search-field'
 import { listText } from './chat-texts'
 import type { DialogListItem } from './chat-types'
 import { dialogListKey } from './dialog-actions'
@@ -161,30 +161,7 @@ export function ArchiveDialog({ open, onClose }: { open: boolean; onClose: () =>
         </IconButton>
       </DialogTitle>
       <DialogContent>
-        <Box
-          role="search"
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            minHeight: 44,
-            px: 1.25,
-            borderRadius: '10px',
-            bgcolor: 'action.hover',
-            color: 'text.secondary',
-            '&:focus-within': { outline: '2px solid', outlineColor: 'primary.main' },
-          }}
-        >
-          <AppIcon name="search" size={16} />
-          <InputBase
-            autoFocus
-            value={words}
-            onChange={(event) => setWords(event.target.value.slice(0, 100))}
-            placeholder={archiveText.search}
-            inputProps={{ 'aria-label': archiveText.search, type: 'search' }}
-            sx={{ flex: 1, fontSize: 14, color: 'text.primary' }}
-          />
-        </Box>
+        <ChatSearchField value={words} onChange={setWords} label={archiveText.search} />
         {said ? (
           <Typography role="status" variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
             {said}

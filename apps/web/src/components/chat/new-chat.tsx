@@ -108,6 +108,11 @@ export function NewChat({
     return () => clearTimeout(later)
   }, [shown, userId])
 
+  // The field takes the caret as the screen opens (owner's request of 15.11.2026, docs/plan/79, П4).
+  useEffect(() => {
+    if (shown) field.current?.focus({ preventScroll: true })
+  }, [shown])
+
   async function start(text: string, attachmentIds: readonly string[]): Promise<boolean> {
     if (pending.current?.siteId !== siteId) pending.current = { siteId, id: uuidv7() }
     setError(null)
