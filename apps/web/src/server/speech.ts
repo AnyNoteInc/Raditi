@@ -13,8 +13,8 @@ export const SPEECH_BYTES_PER_SECOND = 32_000
 /** The longest dictation SpeechKit recognises synchronously, and the bytes of it. */
 export const SPEECH_MAX_SECONDS = 30
 export const SPEECH_MAX_BYTES = SPEECH_BYTES_PER_SECOND * SPEECH_MAX_SECONDS
-/** Recognitions per user and hour (ВВ19). */
-export const SPEECH_HOURLY_LIMIT = 60
+/** Pieces of dictation per user and hour (ВВ19; 120 since a recording is cut into pieces of 28 s, docs/plan/77, Р3). */
+export const SPEECH_HOURLY_LIMIT = 120
 
 export interface SpeechConfig {
   apiKey: string

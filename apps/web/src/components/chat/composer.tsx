@@ -278,11 +278,18 @@ export function Composer({
   const ownField = useRef<HTMLTextAreaElement>(null)
   const field = fieldRef ?? ownField
   // The words of a dictation go after what is written, a space between (ВВ16).
-  const dictation = useDictation((words) => {
-    setText((written) => (written.trim() === '' ? words : `${written.trimEnd()} ${words}`))
+  const dictation = useDictation()
+  const recording = dictation.state === 'recording'
+  const withWords = (written: string, words: string) =>
+    written.trim() === '' ? words : `${written.trimEnd()} ${words}`
+  /** «Стоп»: the words go into the field, for the client to read and send (docs/plan/77, Р4). */
+  async function stopDictation() {
+    const words = await dictation.finish()
+    if (words === null) return
+    setText((written) => withWords(written, words))
     setHistoryIndex(-1)
     field.current?.focus()
-  })
+  }
 
   // The field grows with its text, up to its own limit (`maxHeight`), then scrolls.
   useLayoutEffect(() => {
@@ -404,6 +411,21 @@ export function Composer({
   }
 
   async function send() {
+    // «Отправить» during a recording: its words are recognised, shown in the field, then sent (Р4).
+    if (recording) {
+      const words = await dictation.finish()
+      if (words === null) return
+      const whole = withWords(text, words)
+      setText(whole)
+      if (busy || disabled || filesWait !== null || whole.trim().length > FEED_REQUEST_TEXT_LIMIT)
+        return
+      if (await onSend(whole, attachments?.readyIds ?? [])) {
+        setText('')
+        setHistoryIndex(-1)
+        attachments?.clear()
+      }
+      return
+    }
     if (busy || disabled || tooLong || filesWait !== null || !hasVisibleText(text)) return
     // The words of a command are never sent: not to the agent, not as a message.
     const command = parseChatCommand(text)
@@ -497,10 +519,12 @@ export function Composer({
   const sendDescribedBy = [describedBy, filesWait !== null ? filesWaitId : null]
     .filter((id) => id !== null && id !== '')
     .join(' ')
-  const canSend = !busy && !disabled && !tooLong && filesWait === null && hasVisibleText(text)
+  const canSend =
+    !busy && !disabled && filesWait === null && (recording || (!tooLong && hasVisibleText(text)))
   // «Остановить» stands in place of «Отправить» while the field is empty; written words are sent
   // (to the queue of the chat while the agent works, docs/plan/75, ВВ1).
-  const stopping = stop !== undefined && (disabled || !hasVisibleText(text)) ? stop : null
+  const stopping =
+    stop !== undefined && !recording && (disabled || !hasVisibleText(text)) ? stop : null
   const current = options[activeIndex]
 
   return (
@@ -610,7 +634,7 @@ export function Composer({
               }
               aria-pressed={dictation.state === 'recording'}
               disabled={disabled || dictation.state === 'recognizing'}
-              onClick={dictation.toggle}
+              onClick={() => (recording ? void stopDictation() : void dictation.start())}
               sx={{
                 ...toolButton,
                 ...(dictation.state === 'recording' && {
@@ -619,7 +643,8 @@ export function Composer({
                 }),
               }}
             >
-              <AppIcon name="microphone" size={18} />
+              {/* While it records the microphone is «Стоп» (Р4). */}
+              <AppIcon name={recording ? 'square' : 'microphone'} size={18} />
             </IconButton>
           </Box>
         ) : null}

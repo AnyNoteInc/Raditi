@@ -615,21 +615,10 @@ function Folders({ asked, currentId }: { asked: string | null; currentId: string
  * «Архив» pinned at the very bottom of the list (owner's request of 14.11.2026,
  * docs/plan/76-agent-instructions.md, И9): it opens the window of the archive.
  */
-function ArchiveButton() {
+export function ArchiveButton() {
   const [open, setOpen] = useState(false)
   return (
-    <Box
-      sx={{
-        position: 'sticky',
-        bottom: 0,
-        mt: 'auto',
-        mx: { md: -1.5 },
-        pt: 1,
-        pb: 1,
-        bgcolor: 'var(--mui-palette-background-paper)',
-        zIndex: 1,
-      }}
-    >
+    <>
       <ButtonBase
         aria-haspopup="dialog"
         data-archive=""
@@ -651,12 +640,20 @@ function ArchiveButton() {
         {archiveText.open}
       </ButtonBase>
       <ArchiveDialog open={open} onClose={() => setOpen(false)} />
-    </Box>
+    </>
   )
 }
 
 /** The field «Найти чат» over the list (ВВ21). */
-function SearchField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function SearchField({
+  value,
+  onChange,
+  onClose,
+}: {
+  value: string
+  onChange: (value: string) => void
+  onClose: () => void
+}) {
   return (
     <Box
       role="search"
@@ -678,18 +675,22 @@ function SearchField({ value, onChange }: { value: string; onChange: (value: str
         value={value}
         onChange={(event) => onChange(event.target.value.slice(0, 100))}
         placeholder={listText.search}
+        autoFocus
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onClose()
+        }}
         inputProps={{ 'aria-label': listText.search, type: 'search' }}
         sx={{ flex: 1, fontSize: 14, color: 'text.primary' }}
       />
-      {value !== '' ? (
+      {
         <IconButton
-          aria-label={listText.searchClear}
-          onClick={() => onChange('')}
+          aria-label={value === '' ? listText.searchClose : listText.searchClear}
+          onClick={() => (value === '' ? onClose() : onChange(''))}
           sx={{ width: 36, height: 36, color: 'text.secondary' }}
         >
           <AppIcon name="close" size={16} />
         </IconButton>
-      ) : null}
+      }
     </Box>
   )
 }
@@ -749,31 +750,46 @@ function useRestedWords(words: string): string {
 export function DialogList({
   grouped = false,
   folder = null,
+  searching = false,
+  onSearchClose,
 }: {
   /** «По проектам»; otherwise one list. */
   grouped?: boolean
   /** The folder the address asks to open. */
   folder?: string | null
+  /**
+   * The loupe of the head of the column is pressed (owner's request of 15.11.2026,
+   * docs/plan/77-chat-list-dictation.md, Р2): the field «Найти чат» stands over the list.
+   */
+  searching?: boolean
+  /** The field was closed: Escape, or its cross over an empty field. */
+  onSearchClose?: () => void
 }) {
   const segment = useSelectedLayoutSegment()
   const currentId = segment === null ? null : segment.toLowerCase()
   const [words, setWords] = useState('')
-  const query = useRestedWords(words).replace(/\s+/gu, ' ').trim()
+  const query = useRestedWords(searching ? words : '')
+    .replace(/\s+/gu, ' ')
+    .trim()
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minHeight: '100%' }}>
-      <SearchField value={words} onChange={setWords} />
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      {searching ? (
+        <SearchField
+          value={words}
+          onChange={setWords}
+          onClose={() => {
+            setWords('')
+            onSearchClose?.()
+          }}
+        />
+      ) : null}
       {query !== '' ? (
         <SearchResults query={query} currentId={currentId} />
+      ) : grouped ? (
+        <Folders asked={folder?.toLowerCase() ?? null} currentId={currentId} />
       ) : (
-        <>
-          {grouped ? (
-            <Folders asked={folder?.toLowerCase() ?? null} currentId={currentId} />
-          ) : (
-            <OneList currentId={currentId} />
-          )}
-        </>
+        <OneList currentId={currentId} />
       )}
-      <ArchiveButton />
     </Box>
   )
 }
