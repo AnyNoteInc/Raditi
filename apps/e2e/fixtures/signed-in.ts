@@ -129,6 +129,8 @@ export const test = base.extend<{ signedInUser: SignedInUser }, { accounts: Acco
           await prisma.llmCall.deleteMany({ where: { key: { task: owned } } })
           await prisma.llmKey.deleteMany({ where: { task: owned } })
           await prisma.task.deleteMany({ where: owned })
+          // The projects a test made (tests/site/projects.spec.ts), after their chats.
+          await prisma.project.deleteMany({ where: owned })
           // A file nobody sent (tests/site/chats.spec.ts).
           await prisma.attachment.deleteMany({ where: owned })
           await prisma.credentialRef.deleteMany({ where: owned })

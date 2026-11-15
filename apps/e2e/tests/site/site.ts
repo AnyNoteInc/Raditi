@@ -151,6 +151,43 @@ export async function addLongChat(
 }
 
 /** The lease of a chat without a project takes its id, of version 7 only (`tasks_chat_id_check`). */
+/**
+ * A project of the signed-in user (docs/plan/84-projects.md, ПР1), written as `project.create`
+ * writes it: in the personal workspace, by its author. It goes with the user.
+ */
+export async function addProject(
+  userId: string,
+  {
+    name,
+    goal = null,
+    starred = false,
+    archived = false,
+  }: { name: string; goal?: string | null; starred?: boolean; archived?: boolean },
+): Promise<{ projectId: string }> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const workspace = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+    )
+    const now = new Date()
+    const project = await prisma.project.create({
+      data: {
+        id: chatId(),
+        workspaceId: workspace.id,
+        createdById: userId,
+        name,
+        goal,
+        starredAt: starred ? now : null,
+        archivedAt: archived ? now : null,
+      },
+      select: { id: true },
+    })
+    return { projectId: project.id }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
 function chatId(): string {
   const time = Date.now().toString(16).padStart(12, '0')
   return `${time.slice(0, 8)}-${time.slice(8)}-7${randomUUID().slice(15)}`

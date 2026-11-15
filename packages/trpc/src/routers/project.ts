@@ -194,7 +194,8 @@ export const projectRouter = router({
 
   /**
    * «Удалить» (ПР20): into the trash for 30 days with its chats, which the cabinet no longer shows.
-   * Stopping a pass that runs there is core's (slice 84.5).
+   * A pass queued or running there is stopped in the same transaction, and core purges the project
+   * after its day (slice 84.5).
    */
   remove: consentedProcedure
     .input(z.strictObject({ projectId: projectRef }))
