@@ -174,7 +174,7 @@ test('pages: exactly their hosts, one label — a slug or the own name of a site
     'x.abcdefghijklmnopqrstuvwxyz.pages.raditi.ru',
     'abcdefghijklmnopqrstuvwxyz.pages.raditi.ru.evil.ru',
     'abcdefghijklmnopqrstuvwxyzxpagesxraditi.ru',
-    'site-abcd1234-chat-ef5678.raditi-preview.ru',
+    'site-abcd1234-chat-ef5678.raditi-platform.example',
   ])
     assert.doesNotMatch(name, host, name)
 })

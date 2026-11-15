@@ -192,7 +192,7 @@ describe('loadMcpConfig — production', () => {
         MCP_BROWSER_PROFILE: 'local',
         SINGLE_SERVER: 'yes',
         PREVIEW_UPSTREAM_HOST: '8.8.8.8',
-        PREVIEW_BASE_DOMAIN: 'raditi-preview.ru',
+        PREVIEW_BASE_DOMAIN: 'raditi-platform.example',
         S3_ENDPOINT: 'not a url',
       }),
     )

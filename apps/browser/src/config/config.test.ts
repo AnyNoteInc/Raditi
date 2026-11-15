@@ -22,7 +22,7 @@ const prodEnv = (overrides: Env = {}): Env => ({
   BROWSER_EGRESS_IMAGE: DIGEST('egress'),
   SANDBOX_NETWORK_GUARD_IMAGE: DIGEST('guard'),
   SANDBOX_EGRESS_REFUSED_SUBNETS: '10.0.0.0/8,84.201.128.0/18',
-  BROWSER_PLATFORM_HOSTS: 'raditi.ru,raditi-preview.ru',
+  BROWSER_PLATFORM_HOSTS: 'raditi.ru,raditi-platform.example',
   ...overrides,
 })
 
@@ -69,10 +69,9 @@ describe('PAGES_BASE_DOMAIN (plan 69, Ст26)', () => {
 describe('BROWSER_PLATFORM_HOSTS (plan 61, К37)', () => {
   it('reads public names without a port, each once', () => {
     expect(
-      loadBrowserConfig(
-        devEnv({ BROWSER_PLATFORM_HOSTS: 'Raditi.ru, raditi-preview.ru,raditi.ru' }),
-      ).platformHosts,
-    ).toEqual(['raditi.ru', 'raditi-preview.ru'])
+      loadBrowserConfig(devEnv({ BROWSER_PLATFORM_HOSTS: 'Raditi.ru, raditi-platform.example,raditi.ru' }))
+        .platformHosts,
+    ).toEqual(['raditi.ru', 'raditi-platform.example'])
   })
 
   it('refuses a port, an address or a local name, and names no value', () => {

@@ -10,7 +10,7 @@ import {
 } from './open-web.ts'
 import { browserSessionLimits } from './session.ts'
 
-const PLATFORM = ['raditi.ru', 'raditi-preview.ru']
+const PLATFORM = ['raditi.ru', 'raditi-platform.example']
 const openWeb = {
   openWeb: true,
   allowedHosts: [],
@@ -92,7 +92,7 @@ describe('browserAddressOpens without a site', () => {
       'https://app.raditi.ru/',
       'https://www.raditi.ru/',
       'https://git.raditi.ru:8443/',
-      'https://site-a-chat-b.raditi-preview.ru/',
+      'https://site-a-chat-b.raditi-platform.example/',
       'https://xn--e1afmkfd.raditi.ru/',
     ])
       expect(browserAddressOpens(address, openWeb), address).toBe(false)
@@ -130,7 +130,7 @@ describe('browserPlatformHost', () => {
   it('reads a name in any case, with or without the root’s dot', () => {
     expect(browserPlatformHost('RADITI.RU', PLATFORM)).toBe(true)
     expect(browserPlatformHost('raditi.ru.', PLATFORM)).toBe(true)
-    expect(browserPlatformHost('a.b.raditi-preview.ru', PLATFORM)).toBe(true)
+    expect(browserPlatformHost('a.b.raditi-platform.example', PLATFORM)).toBe(true)
     expect(browserPlatformHost('raditi.ru', [])).toBe(false)
     expect(browserPlatformHost('xraditi.ru', PLATFORM)).toBe(false)
   })
@@ -174,7 +174,7 @@ describe('a published page of the agent (plan 69, Ст26)', () => {
       'a--b.pages.raditi.ru',
       '-shop.pages.raditi.ru',
       'abcdefghijklmnopqrstuvwxyz.pages.raditi.ru.evil.ru',
-      'abcdefghijklmnopqrstuvwxyz.raditi-preview.ru',
+      'abcdefghijklmnopqrstuvwxyz.raditi-platform.example',
     ])
       expect(browserPageHost(host, pages), host).toBe(false)
     expect(browserPageHost('abcdefghijklmnopqrstuvwxyz.pages.raditi.ru', null)).toBe(false)

@@ -15,19 +15,15 @@ export default defineConfig({
   ...billing,
   testDir: './tests/site',
   outputDir: './test-results/site',
-  // No previews and no cloud browser in this run: no core builds the one, no worker streams the
-  // other. The menu «+» of a dialog offers no preview then, the browser of a task says it cannot
-  // be shown, and a site that is not connected offers no way to work. Next loads the repository
-  // .env for every variable that is not exported, and .env.example sets
-  // PREVIEW_BASE_DOMAIN: blank counts as unset here.
+  // No cloud browser in this run: no worker streams it, so the browser of a chat says it cannot
+  // be shown. Next loads the repository .env for every variable that is not exported: blank
+  // counts as unset here.
   webServer: webServers.map((server) =>
     server.name === 'Web'
       ? {
           ...server,
           env: {
             ...server.env,
-            PREVIEW_BASE_DOMAIN: '',
-            PREVIEW_PUBLIC_PORT: '',
             BROWSER_STREAM_PUBLIC_URL: '',
             // «Страницы» (docs/plan/73-pages-sites.md): pages are set up, nothing serves them.
             PAGES_BASE_DOMAIN: 'pages.localhost',

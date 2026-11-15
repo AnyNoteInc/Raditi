@@ -1075,13 +1075,7 @@ test('publish-images.yml builds every app image of a release and names its diges
     matrix.map(({ image, variable }) => `${image}:${variable}`),
   )
   const deployed = read('infra/app/env.example')
-  for (const variable of [
-    'WEB_IMAGE',
-    'CORE_IMAGE',
-    'MIGRATE_IMAGE',
-    'LLM_IMAGE',
-    'PREVIEW_GATEWAY_IMAGE',
-  ]) {
+  for (const variable of ['WEB_IMAGE', 'CORE_IMAGE', 'MIGRATE_IMAGE', 'LLM_IMAGE']) {
     assert.ok(
       matrix.some((entry) => entry.variable === variable),
       `${variable} is not built`,

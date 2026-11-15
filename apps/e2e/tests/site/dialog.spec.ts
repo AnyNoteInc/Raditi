@@ -21,8 +21,8 @@ import {
 // client asks (owner's request of 29.10.2026, docs/plan/59-dialog-tools-panel.md): every dialog
 // starts with the chat alone, «+» in the corner of its head lists what the task has, and a tool
 // chosen there opens as a tab of the panel on the right — below `lg` in place of the dialog, with
-// «К чату» leading back. The run blanks PREVIEW_BASE_DOMAIN and BROWSER_STREAM_PUBLIC_URL
-// (playwright.site.config.ts): «+» offers no preview, and a browser cannot be shown here. What is
+// «К чату» leading back. The run blanks BROWSER_STREAM_PUBLIC_URL (playwright.site.config.ts):
+// a browser cannot be shown here. What is
 // not read before a tool opens — tickets, frames, the changes — is proven by the tests of
 // `DialogView` and by the stands, which have previews, candidates and a stream.
 
