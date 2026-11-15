@@ -21,6 +21,8 @@ const mutation = (fn: Answer) => ({
     mutationFn: fn,
   }),
 })
+const search = vi.hoisted(() => ({ value: '' }))
+vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams(search.value) }))
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
     siteAgentSkills: {
@@ -220,5 +222,76 @@ describe('«Навыки агента» of a site', () => {
       },
       expect.anything(),
     )
+  })
+
+  it("starts a sign-in on the server's page and says how the return went", async () => {
+    const assign = vi.fn()
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ authorizationUrl: 'https://auth.example.com/authorize?x=1' }),
+          {
+            status: 200,
+          },
+        ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const location = window.location
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...location, assign },
+    })
+    try {
+      show(view())
+      fireEvent.change(screen.getByLabelText(skillsText.name), { target: { value: 'menu' } })
+      fireEvent.change(screen.getByLabelText(skillsText.url), {
+        target: { value: 'https://mcp.example.com/mcp' },
+      })
+      fireEvent.click(screen.getByLabelText(skillsText.authSignIn))
+      expect(screen.getByText(skillsText.signInHelp)).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: skillsText.signIn }))
+      await waitFor(() =>
+        expect(assign).toHaveBeenCalledWith('https://auth.example.com/authorize?x=1'),
+      )
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/mcp-oauth/start',
+        expect.objectContaining({ method: 'POST' }),
+      )
+      expect(
+        JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string),
+      ).toEqual({
+        siteId: SITE_ID,
+        name: 'menu',
+        url: 'https://mcp.example.com/mcp',
+      })
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: location })
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('shows a server that needs a sign-in again with its button', () => {
+    const signed: SkillsView['skills'][number] = {
+      name: 'menu',
+      title: 'menu',
+      description: null,
+      builtin: false,
+      url: 'https://mcp.example.com/mcp',
+      enabled: true,
+      auth: { kind: 'oauth', headerName: null, state: 'needs_login', error: 'unauthorized' },
+    }
+    show(view({ skills: [...platform, signed] }))
+    expect(screen.getByText(skillsText.needsLogin)).toBeTruthy()
+    expect(screen.getByRole('button', { name: skillsText.signInAgain })).toBeTruthy()
+  })
+
+  it('says how the return from a sign-in went', () => {
+    search.value = 'mcp=signed-in&skill=menu'
+    try {
+      show(view())
+      expect(screen.getByRole('status').textContent).toBe(skillsText.outcome['signed-in']!('menu'))
+    } finally {
+      search.value = ''
+    }
   })
 })

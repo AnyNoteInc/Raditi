@@ -12,6 +12,7 @@ import { SkillRelay } from './skill-relay.ts'
 import { MCP_SKILL_RELAY } from './skill-relay.tokens.ts'
 import { SkillSecrets } from './skill-secrets.ts'
 import { PostgresSkillServers } from './skill-servers.ts'
+import { TokenRenewer } from './token-renewal.ts'
 import { upstreamResolver } from './upstream.ts'
 
 /**
@@ -32,17 +33,21 @@ import { upstreamResolver } from './upstream.ts'
         secrets: SecretStore,
         access: McpAccessStore,
         security: McpSecurity,
-      ) =>
-        new SkillRelay({
+      ) => {
+        const keys = new SkillSecrets(secrets)
+        const resolve = upstreamResolver({
+          refusedSubnets: config.skillRelay?.refusedSubnets ?? [],
+          allowLoopback: config.skillRelay?.allowLoopback ?? false,
+        })
+        return new SkillRelay({
           access,
           security,
           servers: new PostgresSkillServers(prisma),
-          secrets: new SkillSecrets(secrets),
-          resolve: upstreamResolver({
-            refusedSubnets: config.skillRelay?.refusedSubnets ?? [],
-            allowLoopback: config.skillRelay?.allowLoopback ?? false,
-          }),
-        }),
+          secrets: keys,
+          resolve,
+          renewer: new TokenRenewer({ prisma, secrets: keys, vault: secrets, resolve }),
+        })
+      },
     },
   ],
   exports: [MCP_SKILL_RELAY],

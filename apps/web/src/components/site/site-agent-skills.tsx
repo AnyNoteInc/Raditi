@@ -12,6 +12,7 @@ import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { fontFamilies } from '@repo/ui/theme/tokens'
 import { useMutation } from '@tanstack/react-query'
+import { useSearchParams } from 'next/navigation'
 import { useId, useState, type FormEvent } from 'react'
 
 import { callErrorText } from '@/components/chat/call-error'
@@ -44,6 +45,27 @@ export const skillsText = Object.freeze({
   auth: 'Авторизация',
   authNone: 'Нет',
   authHeader: 'Ключ в заголовке',
+  authSignIn: 'Вход через страницу сервера',
+  signInHelp:
+    'Откроется страница сервера: войдите там и разрешите доступ. Вход хранится в защищённом хранилище, агент его не видит',
+  signIn: 'Войти',
+  signedIn: 'Вход выполнен',
+  needsLogin: 'Нужно войти заново',
+  signInAgain: 'Войти заново',
+  outcome: {
+    'signed-in': (name: string) => `Сервер ${name} подключён.`,
+    refused: () => 'Вход не завершён: страница сервера не разрешила доступ. Попробуйте ещё раз.',
+    expired: () => 'Вход занял больше 10 минут. Начните заново.',
+    failed: () => 'Не получилось подключить сервер после входа. Попробуйте ещё раз.',
+    unavailable: () => 'Сейчас нельзя подключить сервер со входом. Попробуйте немного позже.',
+  } as Record<string, (name: string) => string>,
+  signInReason: {
+    no_sign_in: 'Сервер не называет страницу входа. Выберите «Нет» или «Ключ в заголовке».',
+    unsupported: 'Сервер входа не поддерживает способ входа, которым пользуется Радити.',
+    unreachable: 'Сервер не отвечает по этому адресу. Проверьте адрес и попробуйте снова.',
+    address_refused: 'Адрес ведёт во внутреннюю сеть. Укажите адрес сервера в интернете.',
+  } as Record<string, string>,
+  signInFailed: 'Не получилось начать вход. Попробуйте ещё раз.',
   headerName: 'Заголовок',
   headerNameHelp: 'Например Authorization или X-Api-Key',
   headerValue: 'Ключ',
@@ -92,7 +114,16 @@ export function SiteAgentSkills({ siteId, initial }: { siteId: string; initial: 
   const [view, setView] = useState(initial)
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
-  const [keyed, setKeyed] = useState(false)
+  const [auth, setAuth] = useState<'none' | 'header' | 'oauth'>('none')
+  const keyed = auth === 'header'
+  const [signingIn, setSigningIn] = useState(false)
+  // What the return from a server's sign-in said, from the address of the page.
+  const params = useSearchParams()
+  const said = params.get('mcp')
+  const outcomeText = said === null ? undefined : skillsText.outcome[said]
+  const outcome = outcomeText
+    ? { ok: said === 'signed-in', text: outcomeText(params.get('skill') ?? '') }
+    : null
   const [headerName, setHeaderName] = useState('Authorization')
   const [headerValue, setHeaderValue] = useState('')
   // The server whose key is being replaced, and the new one; nothing of the old key is known here.
@@ -104,7 +135,41 @@ export function SiteAgentSkills({ siteId, initial }: { siteId: string; initial: 
   const [problem, setProblem] = useState<string | null>(null)
   const formId = useId()
   const busy =
-    switchSkill.isPending || addSkill.isPending || removeSkill.isPending || replaceKey.isPending
+    signingIn ||
+    switchSkill.isPending ||
+    addSkill.isPending ||
+    removeSkill.isPending ||
+    replaceKey.isPending
+
+  /** Starts a sign-in: web finds the server's page of sign-in, and the browser goes there. */
+  const startSignIn = async (skill: string, address: string) => {
+    setProblem(null)
+    setSigningIn(true)
+    try {
+      const response = await fetch('/api/mcp-oauth/start', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ siteId, name: skill, url: address }),
+      })
+      const body = (await response.json().catch(() => ({}))) as {
+        authorizationUrl?: string
+        message?: string
+        reason?: string
+      }
+      if (response.ok && body.authorizationUrl) {
+        window.location.assign(body.authorizationUrl)
+        return
+      }
+      setProblem(
+        body.message ??
+          (body.reason ? skillsText.signInReason[body.reason] : undefined) ??
+          skillsText.signInFailed,
+      )
+    } catch {
+      setProblem(skillsText.signInFailed)
+    }
+    setSigningIn(false)
+  }
 
   const run = async (call: () => Promise<SkillsView>) => {
     setProblem(null)
@@ -127,6 +192,10 @@ export function SiteAgentSkills({ siteId, initial }: { siteId: string; initial: 
       setProblem(skillsText.urlInvalid)
       return
     }
+    if (auth === 'oauth') {
+      await startSignIn(cleanName, url.trim())
+      return
+    }
     if (keyed && (headerName.trim() === '' || headerValue.length < 8)) {
       setProblem(skillsText.keyInvalid)
       return
@@ -145,7 +214,7 @@ export function SiteAgentSkills({ siteId, initial }: { siteId: string; initial: 
       setName('')
       setUrl('')
       setHeaderValue('')
-      setKeyed(false)
+      setAuth('none')
     }
   }
   const saveKey = async (event: FormEvent) => {
@@ -219,11 +288,18 @@ export function SiteAgentSkills({ siteId, initial }: { siteId: string; initial: 
                   {skillsText.keyed(skill.auth.headerName)}
                 </Typography>
               ) : null}
+              {skill.auth.kind === 'oauth' && skill.auth.state === 'ok' ? (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+                  {skillsText.signedIn}
+                </Typography>
+              ) : null}
               {skill.auth.kind !== 'none' && skill.auth.state !== 'ok' ? (
                 <Typography variant="body2" color="error" sx={{ mt: 0.25 }}>
-                  {skill.auth.error === 'secret_missing'
-                    ? skillsText.keyMissing
-                    : skillsText.keyRefused}
+                  {skill.auth.kind === 'oauth'
+                    ? skillsText.needsLogin
+                    : skill.auth.error === 'secret_missing'
+                      ? skillsText.keyMissing
+                      : skillsText.keyRefused}
                 </Typography>
               ) : null}
               {replacing?.name === skill.name ? (
@@ -282,6 +358,16 @@ export function SiteAgentSkills({ siteId, initial }: { siteId: string; initial: 
                 }
               >
                 {skillsText.replaceKey}
+              </Button>
+            ) : null}
+            {skill.auth.kind === 'oauth' && skill.url && view.canManage ? (
+              <Button
+                size="small"
+                disabled={busy}
+                sx={{ minHeight: 44, flexShrink: 0 }}
+                onClick={() => void startSignIn(skill.name, skill.url ?? '')}
+              >
+                {skillsText.signInAgain}
               </Button>
             ) : null}
             {!skill.builtin && view.canManage ? (
@@ -363,12 +449,18 @@ export function SiteAgentSkills({ siteId, initial }: { siteId: string; initial: 
             <RadioGroup
               row
               aria-label={skillsText.auth}
-              value={keyed ? 'header' : 'none'}
-              onChange={(event) => setKeyed(event.target.value === 'header')}
+              value={auth}
+              onChange={(event) => setAuth(event.target.value as 'none' | 'header' | 'oauth')}
             >
               <FormControlLabel value="none" control={<Radio />} label={skillsText.authNone} />
               <FormControlLabel value="header" control={<Radio />} label={skillsText.authHeader} />
+              <FormControlLabel value="oauth" control={<Radio />} label={skillsText.authSignIn} />
             </RadioGroup>
+            {auth === 'oauth' ? (
+              <Typography variant="body2" color="text.secondary">
+                {skillsText.signInHelp}
+              </Typography>
+            ) : null}
             {keyed ? (
               <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 1.5 }}>
                 <TextField
@@ -394,11 +486,16 @@ export function SiteAgentSkills({ siteId, initial }: { siteId: string; initial: 
             ) : null}
             <Box>
               <Button type="submit" variant="contained" disabled={busy} sx={{ minHeight: 44 }}>
-                {skillsText.add}
+                {auth === 'oauth' ? skillsText.signIn : skillsText.add}
               </Button>
             </Box>
           </Box>
         )}
+        {outcome ? (
+          <Alert severity={outcome.ok ? 'success' : 'error'} role="status">
+            {outcome.text}
+          </Alert>
+        ) : null}
         {problem ? (
           <Alert severity="error" role="alert">
             {problem}

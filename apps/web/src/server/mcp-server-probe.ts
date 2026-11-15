@@ -1,51 +1,35 @@
 import 'server-only'
 
-import type { LookupAddress } from 'node:dns'
-import { lookup } from 'node:dns/promises'
-import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
-import { request as httpsRequest } from 'node:https'
-
-import {
-  ipLiteral,
-  isLoopbackAddress,
-  publicAddressCheck,
-  type RefusedSubnet,
-} from '@repo/ip-address'
 import type { McpServerCheck, McpServerProbe } from '@repo/trpc'
 
-// The check of an MCP server with a key, before the key is kept (docs/plan/80-mcp-server-
-// credentials.md, §3.4): `initialize` and `tools/list` with the owner's header. Connects only to
-// a public address the name resolved to, with the name as SNI and Host; follows no redirect; reads
-// at most a megabyte of each answer. The key goes nowhere but this one server.
+import {
+  PublicRequestRefused,
+  publicRequester,
+  type PublicAnswer,
+  type PublicRequestOptions,
+} from '@/server/public-request'
 
-const TIMEOUT_MS = 10_000
-const ANSWER_BYTES = 1024 * 1024
+// The check of an MCP server, before its key or its sign-in is kept (docs/plan/80-mcp-server-
+// credentials.md, §3.4): `initialize` and `tools/list` with the owner's header or the access token
+// of the sign-in, over a public request (public-request.ts). The key goes nowhere but this server.
+
 const PROTOCOL_VERSION = '2025-06-18'
 
-interface Answer {
-  status: number
-  headers: IncomingHttpHeaders
-  body: string
-}
+type Reason = Extract<McpServerCheck, { ok: false }>['reason']
 
 class Refused extends Error {
-  readonly reason: Extract<McpServerCheck, { ok: false }>['reason']
+  readonly reason: Reason
 
-  constructor(reason: Extract<McpServerCheck, { ok: false }>['reason']) {
+  constructor(reason: Reason) {
     super(reason)
     this.reason = reason
   }
 }
 
-export interface McpServerProbeOptions {
-  refusedSubnets: readonly RefusedSubnet[]
-  /** Outside production, for tests and stands: a loopback server, over plain http as well. */
-  allowLoopback: boolean
-  resolve?: (host: string) => Promise<readonly LookupAddress[]>
-}
+export type McpServerProbeOptions = PublicRequestOptions
 
-/** The JSON-RPC message of an answer: the body itself, or the first event of a stream. */
-function messageOf(answer: Answer, id: number): Record<string, unknown> | null {
+/** The JSON-RPC message of an answer: the body itself, or an event of a stream. */
+export function messageOf(answer: PublicAnswer, id: number): Record<string, unknown> | null {
   const type = String(answer.headers['content-type'] ?? '')
   const texts = type.includes('text/event-stream')
     ? answer.body
@@ -65,119 +49,45 @@ function messageOf(answer: Answer, id: number): Record<string, unknown> | null {
   return null
 }
 
+/** Why a server refused: a sign-in it names (RFC 9728), a key it does not take, or no server. */
+function refusedBy(answer: PublicAnswer): Refused | null {
+  if (answer.status === 401 || answer.status === 403)
+    return new Refused(
+      String(answer.headers['www-authenticate'] ?? '').includes('resource_metadata')
+        ? 'needs_login'
+        : 'unauthorized',
+    )
+  if (answer.status >= 300 && answer.status < 400) return new Refused('unreachable')
+  if (answer.status < 200 || answer.status >= 300) return new Refused('not_mcp')
+  return null
+}
+
 export function createMcpServerProbe(options: McpServerProbeOptions): McpServerProbe {
-  const isPublic = publicAddressCheck(options.refusedSubnets)
-  const allowed = (address: string) =>
-    isPublic(address) || (options.allowLoopback && isLoopbackAddress(address))
-  const resolve = options.resolve ?? ((host: string) => lookup(host, { all: true, verbatim: true }))
-
-  return async ({ url: text, header }) => {
-    const url = new URL(text)
-    const secure = url.protocol === 'https:'
-    if (!secure && !(options.allowLoopback && url.protocol === 'http:'))
-      return { ok: false, reason: 'unreachable' }
+  const request = publicRequester(options)
+  return async ({ url, header }) => {
+    const call = (body: string | null, extra: Record<string, string>, id: number | null) =>
+      request({
+        url,
+        method: body === null ? 'DELETE' : 'POST',
+        headers: {
+          accept: 'application/json, text/event-stream',
+          'user-agent': 'Raditi-MCP-Check/1',
+          ...extra,
+          ...(body === null ? {} : { 'content-type': 'application/json' }),
+          ...(header === null ? {} : { [header.name]: header.value }),
+        },
+        body,
+        // A stream may stay open after its answer: the answer is enough.
+        ...(id === null
+          ? {}
+          : {
+              enough: (answer: PublicAnswer) =>
+                String(answer.headers['content-type'] ?? '').includes('text/event-stream') &&
+                messageOf(answer, id) !== null,
+            }),
+      })
     try {
-      const host = url.hostname.replace(/^\[(.*)\]$/, '$1')
-      let addresses: readonly LookupAddress[]
-      if (ipLiteral(host) !== undefined)
-        addresses = [{ address: host, family: host.includes(':') ? 6 : 4 }]
-      else
-        addresses = await resolve(host).catch(() => {
-          throw new Refused('unreachable')
-        })
-      if (addresses.length === 0) throw new Refused('unreachable')
-      if (!addresses.every((entry) => allowed(entry.address))) throw new Refused('address_refused')
-      const target = addresses[0]!
-
-      const call = (
-        method: 'POST' | 'DELETE',
-        body: string | null,
-        extra: Record<string, string>,
-        /** The id of the answer awaited: a stream ends here once that message has come. */
-        id: number | null = null,
-      ): Promise<Answer> =>
-        new Promise((resolveAnswer, reject) => {
-          const headers: Record<string, string> = {
-            host: url.host,
-            accept: 'application/json, text/event-stream',
-            'user-agent': 'Raditi-MCP-Check/1',
-            ...extra,
-            ...(body === null ? {} : { 'content-type': 'application/json' }),
-            ...(header === null ? {} : { [header.name]: header.value }),
-          }
-          const req = (secure ? httpsRequest : httpRequest)(
-            {
-              host: target.address,
-              family: target.family === 6 ? 6 : 4,
-              port: url.port === '' ? (secure ? 443 : 80) : Number(url.port),
-              path: url.pathname,
-              method,
-              headers,
-              timeout: TIMEOUT_MS,
-              // The whole request, not only an idle socket: a stream that keeps itself open with
-              // pings ends here too.
-              signal: AbortSignal.timeout(TIMEOUT_MS),
-              ...(secure ? { servername: url.hostname } : {}),
-            },
-            (res) => {
-              const chunks: Buffer[] = []
-              let size = 0
-              res.on('data', (chunk: Buffer) => {
-                size += chunk.length
-                // A server of MCP answers a list in far less: more is not one.
-                if (size > ANSWER_BYTES) {
-                  req.destroy()
-                  reject(new Refused('not_mcp'))
-                  return
-                }
-                chunks.push(chunk)
-                // A stream may stay open after its answer: the answer is enough.
-                const answer = {
-                  status: res.statusCode ?? 0,
-                  headers: res.headers,
-                  body: Buffer.concat(chunks).toString('utf8'),
-                }
-                if (
-                  id !== null &&
-                  String(res.headers['content-type'] ?? '').includes('text/event-stream') &&
-                  messageOf(answer, id) !== null
-                ) {
-                  resolveAnswer(answer)
-                  req.destroy()
-                }
-              })
-              res.on('end', () =>
-                resolveAnswer({
-                  status: res.statusCode ?? 0,
-                  headers: res.headers,
-                  body: Buffer.concat(chunks).toString('utf8'),
-                }),
-              )
-              res.on('error', reject)
-            },
-          )
-          req.on('timeout', () => req.destroy(new Refused('unreachable')))
-          req.on('error', (error) =>
-            reject(error instanceof Refused ? error : new Refused('unreachable')),
-          )
-          req.end(body ?? undefined)
-        })
-
-      const refusedBy = (answer: Answer): Refused | null => {
-        if (answer.status === 401 || answer.status === 403)
-          // A server that names where to sign in wants OAuth, not a header (RFC 9728).
-          return new Refused(
-            String(answer.headers['www-authenticate'] ?? '').includes('resource_metadata')
-              ? 'needs_login'
-              : 'unauthorized',
-          )
-        if (answer.status >= 300 && answer.status < 400) return new Refused('unreachable')
-        if (answer.status < 200 || answer.status >= 300) return new Refused('not_mcp')
-        return null
-      }
-
       const initialized = await call(
-        'POST',
         JSON.stringify({
           jsonrpc: '2.0',
           id: 1,
@@ -201,12 +111,11 @@ export function createMcpServerProbe(options: McpServerProbeOptions): McpServerP
         ...(typeof session === 'string' ? { 'mcp-session-id': session } : {}),
       }
       await call(
-        'POST',
         JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
         follow,
+        null,
       )
       const listed = await call(
-        'POST',
         JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
         follow,
         2,
@@ -216,10 +125,21 @@ export function createMcpServerProbe(options: McpServerProbeOptions): McpServerP
       const tools = (messageOf(listed, 2)?.result as { tools?: unknown } | undefined)?.tools
       if (!Array.isArray(tools)) throw new Refused('not_mcp')
       // The session ends here; a server that keeps none says so, and nothing waits for it.
-      if (typeof session === 'string') await call('DELETE', null, follow).catch(() => undefined)
+      if (typeof session === 'string') await call(null, follow, null).catch(() => undefined)
       return { ok: true, tools: tools.length }
     } catch (error) {
-      return { ok: false, reason: error instanceof Refused ? error.reason : 'unreachable' }
+      if (error instanceof Refused) return { ok: false, reason: error.reason }
+      if (error instanceof PublicRequestRefused)
+        return {
+          ok: false,
+          reason:
+            error.reason === 'address_refused'
+              ? 'address_refused'
+              : error.reason === 'too_large'
+                ? 'not_mcp'
+                : 'unreachable',
+        }
+      return { ok: false, reason: 'unreachable' }
     }
   }
 }

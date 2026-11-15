@@ -32,3 +32,4 @@ export type {
   McpServerProbe,
   McpServerServices,
 } from './services/mcp-server-auth.ts'
+export { checkSkillSignIn, connectSignedInServer } from './services/site-agent-skills.ts'

@@ -7,7 +7,11 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
-import { changeSiteAgentSkills, readSiteAgentSkills } from '../services/site-agent-skills.ts'
+import {
+  changeSiteAgentSkills,
+  checkSkillSignIn,
+  readSiteAgentSkills,
+} from '../services/site-agent-skills.ts'
 import { consentedProcedure, router } from '../trpc.ts'
 
 // «Навыки агента» of a site (services/site-agent-skills.ts): every member reads them, an owner
@@ -87,6 +91,15 @@ export const siteAgentSkillsRouter = router({
         ctx.mcpServers ?? null,
       ),
     ),
+
+  /**
+   * Whether this site may sign in to a server by this name (plan 80, §3.4): web asks it before it
+   * starts the sign-in, and connects the server after the owner comes back.
+   */
+  signInCheck: consentedProcedure
+    .input(z.strictObject({ ...site, name, url: z.string().max(agentSkillLimits.urlChars * 2) }))
+    .output(z.strictObject({ name: z.string(), url: z.string() }))
+    .query(({ ctx, input }) => checkSkillSignIn(ctx.prisma, { ...input, userId: ctx.user.id })),
 
   /** A new key of a server with a header: checked against the server, then written over the old. */
   key: consentedProcedure

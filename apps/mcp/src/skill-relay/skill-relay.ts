@@ -5,7 +5,7 @@ import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
 import { Logger } from '@nestjs/common'
-import { SKILL_RELAY_PATH } from '@repo/domain'
+import { AGENT_SKILL_TOKEN_RENEW_MS, SKILL_RELAY_PATH } from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
 import { MCP_TOKEN_PATTERN } from '@repo/turn-keys'
 
@@ -15,6 +15,7 @@ import { mcpHeadersAllowed, type McpSecurity } from '../access/mcp-policy.ts'
 import { maskingStream } from './masking.ts'
 import type { SkillSecretRead, SkillSecrets } from './skill-secrets.ts'
 import type { RelayedServer, SkillServerStore } from './skill-servers.ts'
+import type { TokenRenewer } from './token-renewal.ts'
 import { RelayRefusal, type upstreamResolver } from './upstream.ts'
 
 // The relay of MCP servers with authorization (docs/plan/80-mcp-server-credentials.md, §3.2): the
@@ -55,6 +56,8 @@ export interface SkillRelayDeps {
   servers: SkillServerStore
   secrets: Pick<SkillSecrets, 'read' | 'forget'>
   resolve: Resolve
+  /** Renews the access token of a sign-in; absent — no server signs in (tests of the header). */
+  renewer?: Pick<TokenRenewer, 'renew'>
   now?: () => Date
 }
 
@@ -76,7 +79,7 @@ function failure(res: ServerResponse, status: number, message: string) {
 /** The texts the agent passes on to the client (rule 10): who must do what. */
 export const relayText = Object.freeze({
   refused: (name: string) =>
-    `MCP-сервер «${name}» не принял ключ. Владелец проекта может заменить ключ в настройках проекта, в «Навыках агента».`,
+    `MCP-сервер «${name}» не принял ключ или вход. Владелец проекта может заменить ключ или войти заново в настройках проекта, в «Навыках агента».`,
   missing: (name: string) =>
     `У MCP-сервера «${name}» нет ключа. Владелец проекта может задать его в настройках проекта, в «Навыках агента».`,
   replaced: (name: string) => `Ключ MCP-сервера «${name}» только что заменили. Повторите действие.`,
@@ -173,6 +176,21 @@ export class SkillRelay {
     let read: SkillSecretRead | null
     try {
       read = await this.deps.secrets.read(siteId, name)
+      // The access token of a sign-in about to run out is renewed before the request.
+      const expiresAt = server.oauth?.expiresAt
+      if (
+        read !== null &&
+        server.oauth !== null &&
+        expiresAt !== undefined &&
+        Date.parse(expiresAt) - this.#now().getTime() < AGENT_SKILL_TOKEN_RENEW_MS
+      ) {
+        const renewed = (await this.deps.renewer?.renew(siteId, name, server.oauth, read)) ?? null
+        if (renewed === null) {
+          await this.#record(siteId, name, 'needs_login', 'renewal_refused')
+          return failure(res, 502, relayText.refused(name))
+        }
+        read = renewed
+      }
     } catch (error) {
       this.#warn('MCP relay could not read a key', mcpErrorSummary(error))
       return failure(res, 503, 'MCP authorization is unavailable')
@@ -301,6 +319,13 @@ export class SkillRelay {
       this.#warn('MCP relay could not read a key', mcpErrorSummary(error))
     }
     if (current !== null && current.version !== version) return true
+    // A sign-in whose token the server stopped taking: one renewal, and the agent asks again.
+    if (server.oauth !== null && current !== null && this.deps.renewer !== undefined) {
+      const renewed = await this.deps.renewer
+        .renew(siteId, name, server.oauth, current)
+        .catch(() => null)
+      if (renewed !== null) return true
+    }
     await this.#record(
       siteId,
       name,
@@ -308,6 +333,10 @@ export class SkillRelay {
       'unauthorized',
     )
     return false
+  }
+
+  #now(): Date {
+    return (this.deps.now ?? (() => new Date()))()
   }
 
   async #record(

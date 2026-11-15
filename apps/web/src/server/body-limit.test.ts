@@ -170,6 +170,8 @@ describe('API routes', () => {
     // speech.ts reads the sound after the session, the origin, the consents and a declared length
     // of at most 30 seconds of PCM (docs/plan/75-chat-input-output.md, ВВ17).
     speech: /recognizeSpeech\(request, speechDependencies\)/,
+    // A site, a name and an address of an MCP server (docs/plan/80-mcp-server-credentials.md).
+    'mcp-oauth/start': /withBodyLimit\(MAX_MCP_SIGN_IN_BODY_BYTES,/,
   }
 
   // Every way a route file exports a method that carries a body.

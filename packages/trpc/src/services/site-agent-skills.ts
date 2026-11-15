@@ -4,13 +4,16 @@ import {
   agentSkillHeaderValueSchema,
   agentSkillLimits,
   agentSkillNameSchema,
+  agentSkillOAuthSchema,
   agentSkillSecretPath,
+  agentSkillSecretSchema,
   builtinAgentSkills,
   DomainError,
   isBuiltinAgentSkill,
   parseAgentSkillUrl,
   siteEnvVarTombstone,
   type AgentSkillAuthKind,
+  type AgentSkillOAuth,
   type AgentSkillAuthState,
 } from '@repo/domain'
 
@@ -333,4 +336,132 @@ export async function changeSiteAgentSkills(
     throw error
   }
   return readSiteAgentSkills(db, input)
+}
+
+/** What a server signed in with OAuth is connected with: its address, tokens and metadata. */
+export interface SkillSignInInput {
+  userId: string
+  siteId: string
+  name: string
+  url: string
+  ip: string | null
+  now?: Date
+}
+
+/**
+ * Whether an owner or an admin may sign this site in to a server by this name: a new server, or
+ * one already signed in that needs a sign-in again (plan 80, §3.4). Returns the kept name and
+ * address; web starts the sign-in only after it.
+ */
+export async function checkSkillSignIn(
+  db: PrismaClient,
+  input: Omit<SkillSignInInput, 'ip' | 'now'>,
+): Promise<{ name: string; url: string }> {
+  const site = await siteOf(db, input.userId, input.siteId)
+  if (!isManagerRole(await memberRole(db, site.workspaceId, input.userId)))
+    throw siteSkillNotAllowed()
+  const name = agentSkillNameSchema.safeParse(input.name.trim().toLowerCase())
+  if (!name.success || isBuiltinAgentSkill(name.data)) throw siteSkillNameInvalid()
+  const url = parseAgentSkillUrl(input.url.trim())
+  if (url === null) throw siteSkillUrlInvalid()
+  const row = site.agentSkills.find((skill) => skill.name === name.data)
+  if (row) {
+    // Signing in again keeps the server: the same address, a sign-in already.
+    if (row.authKind !== 'oauth' || row.url !== url) throw siteSkillExists()
+  } else {
+    const added = site.agentSkills.filter((skill) => !isBuiltinAgentSkill(skill.name)).length
+    if (added >= agentSkillLimits.added) throw siteSkillLimit()
+  }
+  return { name: name.data, url }
+}
+
+/**
+ * Connects a server the owner has signed in to (plan 80, §3.4): checks it with the access token,
+ * writes the tokens to Vault, then the row with what of the sign-in is not secret, its
+ * `credential_refs` entry and the audit, in one transaction. The tokens are in no row, log or audit.
+ */
+export async function connectSignedInServer(
+  db: PrismaClient,
+  services: McpServerServices,
+  input: SkillSignInInput & {
+    tokens: {
+      accessToken: string
+      refreshToken?: string
+      clientSecret?: string
+      expiresIn?: number
+    }
+    oauth: Omit<AgentSkillOAuth, 'expiresAt'>
+  },
+): Promise<void> {
+  const { name, url } = await checkSkillSignIn(db, input)
+  const site = await siteOf(db, input.userId, input.siteId)
+  const now = input.now ?? new Date()
+  const secret = agentSkillSecretSchema.safeParse({
+    accessToken: input.tokens.accessToken,
+    ...(input.tokens.refreshToken ? { refreshToken: input.tokens.refreshToken } : {}),
+    ...(input.tokens.clientSecret ? { clientSecret: input.tokens.clientSecret } : {}),
+  })
+  if (!secret.success || !('accessToken' in secret.data)) throw siteSkillCheckFailed('not_mcp')
+  const checked = await services.probe({
+    url,
+    header: { name: 'Authorization', value: `Bearer ${secret.data.accessToken}` },
+  })
+  if (!checked.ok) throw siteSkillCheckFailed(checked.reason)
+  const oauth = agentSkillOAuthSchema.parse({
+    ...input.oauth,
+    ...(input.tokens.expiresIn
+      ? { expiresAt: new Date(now.getTime() + input.tokens.expiresIn * 1000).toISOString() }
+      : {}),
+  })
+  const path = agentSkillSecretPath(site.id, name)
+  const metadata = await services.secrets.kvMetadata(path)
+  const { version } = await services.secrets.kvWrite(
+    path,
+    Object.fromEntries(Object.entries(secret.data).filter(([, value]) => value !== undefined)),
+    { cas: metadata?.currentVersion ?? 0, maxVersions: 1 },
+  )
+  try {
+    await db.$transaction(async (tx) => {
+      const fields = {
+        url,
+        authKind: 'oauth' as const,
+        headerName: null,
+        authState: 'ok' as const,
+        authError: null,
+        authCheckedAt: now,
+        oauth,
+      }
+      await tx.siteAgentSkill.upsert({
+        where: { siteId_name: { siteId: site.id, name } },
+        create: { siteId: site.id, name, ...fields },
+        update: fields,
+      })
+      await tx.credentialRef.upsert({
+        where: { vaultPath: path },
+        create: {
+          workspaceId: site.workspaceId,
+          siteId: site.id,
+          kind: 'mcp_server',
+          vaultPath: path,
+          keyVersion: version,
+        },
+        update: { keyVersion: version },
+      })
+      await tx.auditLog.create({
+        data: {
+          actorType: 'user',
+          actorId: input.userId,
+          workspaceId: site.workspaceId,
+          action: 'site.agent_skill.sign_in',
+          targetType: 'site',
+          targetId: site.id,
+          meta: { name, url, issuer: oauth.issuer },
+          ip: input.ip,
+        },
+      })
+    })
+  } catch (error) {
+    await eraseOwnVersion(services, path, version, now).catch(() => undefined)
+    throw error
+  }
 }

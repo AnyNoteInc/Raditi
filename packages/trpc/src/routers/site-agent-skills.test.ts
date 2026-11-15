@@ -5,6 +5,7 @@ import { legalDocuments } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { connectSignedInServer } from '../services/site-agent-skills.ts'
 import type { McpServerCheck, McpServerServices } from '../services/mcp-server-auth.ts'
 import type { Context } from '../trpc.ts'
 
@@ -414,5 +415,107 @@ describe('siteAgentSkills', () => {
       'delete',
       'credentialRef.deleteMany',
     ])
+  })
+
+  it('lets a sign-in start for a new name or a server that signs in again, never over another', async () => {
+    const url = 'https://mcp.example.org/mcp'
+    const { caller } = setup('owner', [
+      { name: 'signed', url, enabled: true, authKind: 'oauth' },
+      { name: 'keyed', url, enabled: true, authKind: 'header', headerName: 'X-Key' },
+    ])
+    expect(await caller.siteAgentSkills.signInCheck({ siteId, name: ' Menu ', url })).toEqual({
+      name: 'menu',
+      url,
+    })
+    expect(await caller.siteAgentSkills.signInCheck({ siteId, name: 'signed', url })).toEqual({
+      name: 'signed',
+      url,
+    })
+    await expect(
+      caller.siteAgentSkills.signInCheck({ siteId, name: 'keyed', url }),
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+    })
+    await expect(
+      caller.siteAgentSkills.signInCheck({
+        siteId,
+        name: 'signed',
+        url: 'https://other.example.org/mcp',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(
+      setup('member').caller.siteAgentSkills.signInCheck({ siteId, name: 'menu', url }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+  })
+
+  it('connects a signed-in server: checked with its token, tokens to Vault, the rest in the row', async () => {
+    const { services, vault } = mcpServers()
+    const { db, writes, audits } = setup('owner', [], services)
+    const url = 'https://mcp.example.org/mcp'
+    await connectSignedInServer(db as unknown as PrismaClient, services, {
+      userId: user.id,
+      siteId,
+      name: 'menu',
+      url,
+      ip: null,
+      now,
+      tokens: { accessToken: 'access-token-1', refreshToken: 'refresh-token-1', expiresIn: 3600 },
+      oauth: {
+        issuer: 'https://auth.example.org',
+        tokenEndpoint: 'https://auth.example.org/token',
+        clientId: 'client-1',
+        resource: url,
+      },
+    })
+    expect(services.probe).toHaveBeenCalledWith({
+      url,
+      header: { name: 'Authorization', value: 'Bearer access-token-1' },
+    })
+    expect(vault).toEqual([
+      {
+        path: `kv/sites/${siteId}/mcp/menu`,
+        data: { accessToken: 'access-token-1', refreshToken: 'refresh-token-1' },
+        cas: 0,
+      },
+    ])
+    expect(writes[0]).toEqual([
+      'upsert',
+      expect.objectContaining({
+        create: expect.objectContaining({
+          name: 'menu',
+          authKind: 'oauth',
+          oauth: {
+            issuer: 'https://auth.example.org',
+            tokenEndpoint: 'https://auth.example.org/token',
+            clientId: 'client-1',
+            resource: url,
+            expiresAt: '2026-10-26T10:00:00.000Z',
+          },
+        }),
+      }),
+    ])
+    expect(JSON.stringify([writes, audits])).not.toMatch(/access-token-1|refresh-token-1/)
+  })
+
+  it('keeps no token of a server that does not answer with it', async () => {
+    const { services, vault } = mcpServers({ ok: false, reason: 'unauthorized' })
+    const { db } = setup('owner', [], services)
+    await expect(
+      connectSignedInServer(db as unknown as PrismaClient, services, {
+        userId: user.id,
+        siteId,
+        name: 'menu',
+        url: 'https://mcp.example.org/mcp',
+        ip: null,
+        tokens: { accessToken: 'access-token-1' },
+        oauth: {
+          issuer: 'i',
+          tokenEndpoint: 'https://auth.example.org/token',
+          clientId: 'c',
+          resource: 'r',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'SITE_SKILL_CHECK_FAILED' })
+    expect(vault).toEqual([])
   })
 })

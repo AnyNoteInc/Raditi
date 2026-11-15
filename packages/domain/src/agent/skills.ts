@@ -275,3 +275,32 @@ export const agentSkillSecretSchema = z.union([
   }),
 ])
 export type AgentSkillSecret = z.infer<typeof agentSkillSecretSchema>
+
+// https in production: the request that uses it refuses plain http but to loopback, outside
+// production alone (tests and stands).
+const httpsAddress = z
+  .string()
+  .max(agentSkillLimits.urlChars)
+  .refine(
+    (text) => ['https:', 'http:'].includes(URL.parse(text)?.protocol ?? ''),
+    'expected an http(s) address',
+  )
+
+/**
+ * What of an OAuth sign-in to a server is not secret (`site_agent_skills.oauth`, plan 80, §3.4):
+ * where tokens are renewed, the client the platform registered there, the resource the tokens are
+ * for and when the access token runs out. The tokens themselves are in Vault.
+ */
+export const agentSkillOAuthSchema = z.strictObject({
+  issuer: z.string().min(1).max(agentSkillLimits.urlChars),
+  tokenEndpoint: httpsAddress,
+  clientId: z.string().min(1).max(512),
+  resource: z.string().min(1).max(agentSkillLimits.urlChars),
+  scope: z.string().max(1024).optional(),
+  /** ISO 8601; absent — the server named no expiry. */
+  expiresAt: z.iso.datetime().optional(),
+})
+export type AgentSkillOAuth = z.infer<typeof agentSkillOAuthSchema>
+
+/** How long before its expiry an access token is renewed. */
+export const AGENT_SKILL_TOKEN_RENEW_MS = 60_000

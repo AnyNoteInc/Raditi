@@ -1,8 +1,10 @@
 import type { PrismaClient } from '@repo/db'
 import {
   agentSkillHeaderNameSchema,
+  agentSkillOAuthSchema,
   parseAgentSkillUrl,
   type AgentSkillAuthState,
+  type AgentSkillOAuth,
 } from '@repo/domain'
 
 /** An added MCP server with authorization; the relay serves it while its state is `ok`. */
@@ -13,6 +15,8 @@ export interface RelayedServer {
   headerName: string | null
   state: AgentSkillAuthState
   error: string | null
+  /** What of the sign-in is not secret, for `oauth`: where and when its token is renewed. */
+  oauth: AgentSkillOAuth | null
 }
 
 /** What the relay learned of a server's authorization: its state and a code, never a text. */
@@ -46,6 +50,7 @@ export class PostgresSkillServers implements SkillServerStore {
         headerName: true,
         authState: true,
         authError: true,
+        oauth: true,
       },
     })
     if (row === null || !row.enabled || row.authKind === 'none') return null
@@ -57,12 +62,15 @@ export class PostgresSkillServers implements SkillServerStore {
       (row.headerName === null || !agentSkillHeaderNameSchema.safeParse(row.headerName).success)
     )
       return null
+    const oauth = row.authKind === 'oauth' ? agentSkillOAuthSchema.safeParse(row.oauth) : null
+    if (oauth !== null && !oauth.success) return null
     return {
       url: row.url,
       authKind: row.authKind,
       headerName: row.headerName,
       state: row.authState,
       error: row.authError,
+      oauth: oauth?.data ?? null,
     }
   }
 

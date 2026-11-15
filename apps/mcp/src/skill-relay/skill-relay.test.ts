@@ -43,6 +43,7 @@ async function stand(
     /** What Vault holds when the relay reads it again after a refusal. */
     secretAfter?: SkillSecretRead | null
     findFails?: boolean
+    renewed?: SkillSecretRead | null
     siteId?: string | null
     resolveTo?: string
   } = {},
@@ -84,6 +85,7 @@ async function stand(
             headerName: 'X-Api-Key',
             state: 'ok' as const,
             error: null,
+            oauth: null,
             ...options.server,
           }
     }),
@@ -119,6 +121,9 @@ async function stand(
         ),
       forget,
     },
+    ...(options.renewed === undefined
+      ? {}
+      : { renewer: { renew: vi.fn(async () => options.renewed ?? null) } }),
     resolve: upstreamResolver({
       refusedSubnets: [],
       allowLoopback: true,
@@ -325,5 +330,64 @@ describe('SkillRelay', () => {
     expect(failed.seen).toEqual([])
     const down = await stand({ findFails: true })
     expect((await down.call('/mcp/skill/menu')).status).toBe(503)
+  })
+
+  const signIn = {
+    issuer: 'https://auth.example.com',
+    tokenEndpoint: 'https://auth.example.com/token',
+    clientId: 'client-1',
+    resource: 'https://mcp.example.com/mcp',
+  }
+
+  it('renews a token about to run out before the request, and asks to sign in again when it cannot', async () => {
+    const renewing = await stand({
+      server: {
+        authKind: 'oauth',
+        headerName: null,
+        oauth: { ...signIn, expiresAt: '2020-01-01T00:00:00.000Z' },
+      },
+      secret: {
+        secret: { accessToken: 'old-access-token', refreshToken: 'refresh-token-1' },
+        version: 1,
+      },
+      renewed: {
+        secret: { accessToken: 'new-access-token', refreshToken: 'refresh-token-2' },
+        version: 2,
+      },
+    })
+    expect((await renewing.call('/mcp/skill/menu')).status).toBe(200)
+    expect(renewing.seen[0]!.headers.authorization).toBe('Bearer new-access-token')
+    const refused = await stand({
+      server: {
+        authKind: 'oauth',
+        headerName: null,
+        oauth: { ...signIn, expiresAt: '2020-01-01T00:00:00.000Z' },
+      },
+      secret: { secret: { accessToken: 'old-access-token' }, version: 1 },
+      renewed: null,
+    })
+    const result = await refused.call('/mcp/skill/menu')
+    expect(JSON.parse(result.body)).toMatchObject({ error: { message: relayText.refused('menu') } })
+    expect(refused.recorded).toEqual([
+      expect.objectContaining({ state: 'needs_login', error: 'renewal_refused' }),
+    ])
+    expect(refused.seen).toEqual([])
+  })
+
+  it('renews once after the server refused a token, and the agent asks again', async () => {
+    const { call, recorded } = await stand({
+      server: { authKind: 'oauth', headerName: null, oauth: signIn },
+      secret: {
+        secret: { accessToken: 'old-access-token', refreshToken: 'refresh-token-1' },
+        version: 1,
+      },
+      renewed: { secret: { accessToken: 'new-access-token' }, version: 2 },
+      answer: () => ({ status: 401, body: '' }),
+    })
+    const result = await call('/mcp/skill/menu')
+    expect(JSON.parse(result.body)).toMatchObject({
+      error: { message: relayText.replaced('menu') },
+    })
+    expect(recorded).toEqual([])
   })
 })
