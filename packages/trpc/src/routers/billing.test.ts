@@ -1473,6 +1473,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
       creditsPer5h: plan.creditsPer5h,
       creditsPerWeek: plan.creditsPerWeek,
       maxSites,
+      // The sites of pages by the tariff (docs/plan/73-pages-sites.md, Дер36, Дер37).
+      pageSites: plan.pageSites,
+      pageCustomNames: plan.pageCustomNames,
     }
     return { ...plan, maxSites, creditsPerMonth, dto }
   }

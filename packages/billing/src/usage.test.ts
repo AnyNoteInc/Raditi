@@ -672,6 +672,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
           creditsPer5h: null,
           creditsPerWeek: null,
           maxSites: 2,
+          pageSites: null,
+          pageCustomNames: false,
         },
         period: { start: PERIOD_START, end: PERIOD_END },
         autoRenewal: false,

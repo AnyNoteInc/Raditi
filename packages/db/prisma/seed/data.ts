@@ -42,6 +42,10 @@ export interface PlanSeed {
   creditsPerWeek: number | null
   packCredits: number | null
   maxSites: number | null
+  /** Sites of pages on the tariff (docs/plan/73-pages-sites.md, Дер36); NULL — none of its own. */
+  pageSites: number | null
+  /** The own name of a site of pages (Дер32): «Бизнес» and above. */
+  pageCustomNames: boolean
   sortOrder: number
 }
 
@@ -57,6 +61,8 @@ export const planSeeds = [
     creditsPerWeek: 73,
     packCredits: null,
     maxSites: 1,
+    pageSites: 2,
+    pageCustomNames: false,
     sortOrder: 10,
   },
   {
@@ -70,6 +76,8 @@ export const planSeeds = [
     creditsPerWeek: 350,
     packCredits: null,
     maxSites: 3,
+    pageSites: 10,
+    pageCustomNames: true,
     sortOrder: 20,
   },
   {
@@ -83,6 +91,8 @@ export const planSeeds = [
     creditsPerWeek: 700,
     packCredits: null,
     maxSites: 15,
+    pageSites: 20,
+    pageCustomNames: true,
     sortOrder: 30,
   },
   // The name says what the pack holds, in credits, and the slug carries no number; Appendix 1 of
@@ -99,6 +109,8 @@ export const planSeeds = [
     creditsPerWeek: null,
     packCredits: 100,
     maxSites: null,
+    pageSites: null,
+    pageCustomNames: false,
     sortOrder: 40,
   },
   // Placeholder limits: the site count and the wallet minimum for pay-per-action are still open
@@ -114,6 +126,8 @@ export const planSeeds = [
     creditsPerWeek: null,
     packCredits: null,
     maxSites: 1,
+    pageSites: null,
+    pageCustomNames: false,
     sortOrder: 50,
   },
 ] as const satisfies readonly PlanSeed[]

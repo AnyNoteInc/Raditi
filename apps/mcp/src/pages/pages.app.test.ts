@@ -42,23 +42,64 @@ afterEach(async () => {
   app = undefined
 })
 
-function fakeStore(): McpPagesStore & { reserve: ReturnType<typeof vi.fn> } {
+const listed = (extra: Record<string, unknown>) => ({
+  id: pageId,
+  slug,
+  treeId: pageId,
+  parentId: null,
+  path: '/',
+  position: 0,
+  title: 'Прайс',
+  kind: 'html',
+  state: 'live',
+  currentVersion: 1,
+  hasPassword: true,
+  deletedAt: null,
+  updatedAt: new Date('2026-11-14T10:00:00Z'),
+  ...extra,
+})
+
+const child = '01960000-0000-7000-8000-0000000000bb'
+
+function fakeStore() {
   return {
-    reserve: vi.fn(async () => ({ pageId, slug, version: 2 })),
+    reserve: vi.fn(async () => ({ pageId, slug, path: '/', treeId: pageId, version: 2 })),
     documentTitle: vi.fn(async () => 'Аудит скорости'),
     list: vi.fn(async () => [
-      {
-        id: pageId,
-        slug,
-        title: 'Прайс',
-        kind: 'html',
-        state: 'live',
-        currentVersion: 1,
-        taskId: scope.taskId,
-        hasPassword: true,
-      },
+      listed({}),
+      listed({ id: child, parentId: pageId, path: '/uslugi', title: 'Услуги', hasPassword: true }),
+      listed({
+        id: '01960000-0000-7000-8000-0000000000dd',
+        treeId: '01960000-0000-7000-8000-0000000000de',
+        title: 'В корзине',
+        deletedAt: new Date('2026-11-14T10:00:00Z'),
+      }),
     ]),
-  }
+    read: vi.fn(async () => ({
+      pageId,
+      kind: 'markdown',
+      version: 3,
+      documentId: null,
+      format: 'markdown' as const,
+      text: '# Прайс\n\n' + 'а'.repeat(40_000),
+    })),
+    putFile: vi.fn(async (input: { path: string }) => ({
+      reservationId: '01960000-0000-7000-8000-0000000000ef',
+      slug,
+      path: input.path,
+    })),
+    files: vi.fn(async () => [{ path: '/_files/style.css', type: 'text/css', sizeBytes: 3 }]),
+    deleteFile: vi.fn(async (input: { path: string }) => ({
+      reservationId: '01960000-0000-7000-8000-0000000000ef',
+      slug,
+      path: input.path,
+    })),
+    change: vi.fn(async (input: { change: { pageId: string } }) => ({
+      reservationId: '01960000-0000-7000-8000-0000000000ee',
+      pageId: input.change.pageId,
+      pages: 1,
+    })),
+  } satisfies McpPagesStore
 }
 
 async function start(config: McpConfig, store = fakeStore()) {
@@ -170,22 +211,230 @@ describe('the pages of a workspace through the gateway (plan 69, Ст20)', () =>
     expect(JSON.parse(res.body.result.content[0].text)).toMatchObject({ code: 'PAGE_LIMIT' })
   })
 
-  it('lists the pages of the workspace with their address and whether a password is set', async () => {
+  it('lists the sites of the workspace by their home pages, those in the trash after them (plan 73)', async () => {
     const { server } = await start({ ...testMcpConfig(), pages: address })
     const res = await post(server, call('page_list', {}))
     expect(JSON.parse(res.body.result.content[0].text)).toEqual({
-      pages: [
+      sites: [
         {
-          chat: 'this',
+          homePageId: pageId,
           kind: 'html',
-          pageId,
+          pages: 2,
           password: true,
           state: 'live',
           title: 'Прайс',
+          treeId: pageId,
           url: `http://${slug}.pages.localhost:8092/`,
           version: 1,
         },
+        // A site in the trash: page_restore of its home page returns it whole.
+        expect.objectContaining({
+          deleted: true,
+          homePageId: '01960000-0000-7000-8000-0000000000dd',
+          pages: 1,
+        }),
+      ],
+      total: 2,
+    })
+  })
+
+  it('names the pages of a site with their paths, and those of it in the trash', async () => {
+    const { server } = await start({ ...testMcpConfig(), pages: address })
+    const res = await post(server, call('page_tree', { treeId: pageId }))
+    const tree = JSON.parse(res.body.result.content[0].text)
+    expect(tree.pages.map((page: { path: string; url: string }) => [page.path, page.url])).toEqual([
+      ['/', `http://${slug}.pages.localhost:8092/`],
+      ['/uslugi', `http://${slug}.pages.localhost:8092/uslugi`],
+    ])
+    const missing = await post(server, call('page_tree', { treeId: child }))
+    expect(JSON.parse(missing.body.result.content[0].text)).toMatchObject({
+      code: 'PAGE_NOT_FOUND',
+    })
+  })
+
+  it('puts a file of the outbox as a shared file of a site, and names the files of a site (Дер34)', async () => {
+    const { server, store } = await start({ ...testMcpConfig(), pages: address })
+    const res = await post(
+      server,
+      call('page_file_put', { treeId: pageId, file: 'style.css', path: '/_files/style.css' }),
+    )
+    expect(JSON.parse(res.body.result.content[0].text)).toMatchObject({
+      url: `http://${slug}.pages.localhost:8092/_files/style.css`,
+      live: 'when this turn ends',
+    })
+    expect(store.putFile).toHaveBeenCalledWith({
+      workspaceId: scope.workspaceId,
+      taskId: scope.taskId,
+      turnNo: 4,
+      treeId: pageId,
+      fileName: 'style.css',
+      path: '/_files/style.css',
+    })
+    for (const path of ['/_files/index.html', '/style.css', '/_files/../x.css'])
+      expect(
+        (await post(server, call('page_file_put', { treeId: pageId, file: 'x.css', path }))).status,
+        path,
+      ).toBe(400)
+    const tree = await post(server, call('page_tree', { treeId: pageId }))
+    expect(JSON.parse(tree.body.result.content[0].text).files).toEqual([
+      { path: '/_files/style.css', type: 'text/css', sizeBytes: 3 },
+    ])
+  })
+
+  it('reads a page a piece at a time', async () => {
+    const { server } = await start({ ...testMcpConfig(), pages: address })
+    const res = await post(server, call('page_read', { pageId, limit: 100 }))
+    const read = JSON.parse(res.body.result.content[0].text)
+    expect(read).toMatchObject({ version: 3, format: 'markdown', truncated: true, nextOffset: 100 })
+    expect([...read.text]).toHaveLength(100)
+  })
+
+  it('reserves the changes of a turn for its end, from the admitted turn (Дер23)', async () => {
+    const { server, store } = await start({ ...testMcpConfig(), pages: address })
+    const edit = await post(
+      server,
+      call('page_edit', { pageId, expectedVersion: 3, edits: [{ old: 'Прайс', new: 'Цены' }] }),
+    )
+    expect(JSON.parse(edit.body.result.content[0].text)).toMatchObject({
+      live: 'when this turn ends',
+    })
+    expect(store.change).toHaveBeenCalledWith({
+      workspaceId: scope.workspaceId,
+      taskId: scope.taskId,
+      turnNo: 4,
+      change: { kind: 'edit', pageId, expectedVersion: 3, edits: [{ old: 'Прайс', new: 'Цены' }] },
+    })
+    await post(server, call('page_update', { pageId: child, expectedVersion: 1, segment: 'ceny' }))
+    await post(
+      server,
+      call('page_delete', { pageIds: [child], withChildren: true, confirmedByClient: true }),
+    )
+    await post(server, call('page_restore', { pageIds: [child] }))
+    expect(store.change.mock.calls.map((call) => call[0].change)).toEqual([
+      expect.objectContaining({ kind: 'edit' }),
+      { kind: 'update', pageId: child, expectedVersion: 1, segment: 'ceny' },
+      { kind: 'delete', pageId: child, withChildren: true },
+      { kind: 'restore', pageId: child },
+    ])
+  })
+
+  it('deletes nothing the client did not confirm, nor more than 20 pages a call', async () => {
+    const { server, store } = await start({ ...testMcpConfig(), pages: address })
+    for (const args of [
+      { pageIds: [child] },
+      { pageIds: [child], confirmedByClient: false },
+      { pageIds: Array.from({ length: 21 }, () => child), confirmedByClient: true },
+    ])
+      expect((await post(server, call('page_delete', args))).status, JSON.stringify(args)).toBe(400)
+    expect(store.change).not.toHaveBeenCalled()
+  })
+
+  it('tells a refusal of the store as a result the agent can go on from', async () => {
+    const store = fakeStore()
+    store.change.mockRejectedValueOnce(
+      new DomainError('PAGE_FORBIDDEN', 'Only the owner or an administrator', 403),
+    )
+    const { server } = await start({ ...testMcpConfig(), pages: address }, store)
+    const res = await post(server, call('page_restore', { pageIds: [child] }))
+    expect(res.body.result.isError).toBe(true)
+    expect(JSON.parse(res.body.result.content[0].text)).toMatchObject({ code: 'PAGE_FORBIDDEN' })
+  })
+
+  it('checks each old of page_edit against the page now, and reserves nothing on a miss', async () => {
+    const { server, store } = await start({ ...testMcpConfig(), pages: address })
+    const missed = await post(
+      server,
+      call('page_edit', { pageId, expectedVersion: 3, edits: [{ old: 'Цены', new: 'Прайс' }] }),
+    )
+    expect(JSON.parse(missed.body.result.content[0].text)).toMatchObject({
+      code: 'PAGE_EDIT_UNMATCHED',
+    })
+    const twice = await post(
+      server,
+      call('page_edit', { pageId, expectedVersion: 3, edits: [{ old: 'а', new: 'б' }] }),
+    )
+    expect(JSON.parse(twice.body.result.content[0].text).message).toMatch(/40001 times/)
+    expect(store.change).not.toHaveBeenCalled()
+  })
+
+  it('deletes a page asked with a page above it once, with the page above it', async () => {
+    const { server, store } = await start({ ...testMcpConfig(), pages: address })
+    await post(
+      server,
+      call('page_delete', {
+        pageIds: [child, pageId],
+        withChildren: true,
+        confirmedByClient: true,
+      }),
+    )
+    expect(store.change.mock.calls.map((call) => call[0].change)).toEqual([
+      { kind: 'delete', pageId, withChildren: true },
+    ])
+  })
+
+  it('names the shared files of a site with their addresses, and deletes one only when the client asked (Дер34)', async () => {
+    const { server, store } = await start({ ...testMcpConfig(), pages: address })
+    const listed = await post(server, call('page_files', { treeId: pageId }))
+    expect(JSON.parse(listed.body.result.content[0].text)).toEqual({
+      treeId: pageId,
+      files: [
+        {
+          path: '/_files/style.css',
+          type: 'text/css',
+          sizeBytes: 3,
+          url: `http://${slug}.pages.localhost:8092/_files/style.css`,
+        },
       ],
     })
+    // Without the client's word the role refuses the body itself.
+    expect(
+      (await post(server, call('page_file_delete', { treeId: pageId, path: '/_files/style.css' })))
+        .status,
+    ).toBe(400)
+    const deleted = await post(
+      server,
+      call('page_file_delete', {
+        treeId: pageId,
+        path: '/_files/style.css',
+        confirmedByClient: true,
+      }),
+    )
+    expect(JSON.parse(deleted.body.result.content[0].text)).toMatchObject({
+      path: '/_files/style.css',
+      live: 'when this turn ends',
+    })
+    expect(store.deleteFile).toHaveBeenCalledWith({
+      workspaceId: scope.workspaceId,
+      taskId: scope.taskId,
+      turnNo: 4,
+      treeId: pageId,
+      path: '/_files/style.css',
+    })
+  })
+
+  it('marks page_delete destructive and the readers read-only', async () => {
+    const { server } = await start({ ...testMcpConfig(), pages: address })
+    const tools = (await post(server, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).body.result
+      .tools as { name: string; annotations: Record<string, boolean> }[]
+    const of = (name: string) => tools.find((tool) => tool.name === name)!.annotations
+    expect(of('page_delete').destructiveHint).toBe(true)
+    expect(of('page_file_delete').destructiveHint).toBe(true)
+    for (const name of ['page_list', 'page_tree', 'page_read', 'page_files'])
+      expect(of(name).readOnlyHint).toBe(true)
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([
+        'page_publish',
+        'page_list',
+        'page_tree',
+        'page_read',
+        'page_edit',
+        'page_update',
+        'page_delete',
+        'page_restore',
+        'page_file_put',
+        'page_file_delete',
+        'page_files',
+      ]),
+    )
   })
 })

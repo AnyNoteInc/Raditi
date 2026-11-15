@@ -9,11 +9,14 @@
  * a page is the platform's form, never the page's.
  */
 
-/** What a published page loads: its own data and anything by `https:` (the leak Ст9 accepted). */
+/**
+ * What a published page loads: its own data, the shared files of its site from its own host
+ * (`'self'`, docs/plan/73-pages-sites.md, Дер34) and anything by `https:` (the leak Ст9 accepted).
+ */
 const PUBLISHED_RESOURCES = [
-  'img-src data: blob: https:',
-  'font-src data: blob: https:',
-  'media-src data: blob: https:',
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data: blob: https:",
+  "media-src 'self' data: blob: https:",
 ]
 
 /**
@@ -55,9 +58,15 @@ const PAGE_READING_SANDBOX = 'sandbox allow-popups allow-popups-to-escape-sandbo
 export function pagePolicy(kind: 'html' | 'reading', framedBy?: string): string {
   return [
     kind === 'html' ? PAGE_CSP_SANDBOX : PAGE_READING_SANDBOX,
-    kind === 'html' ? "script-src 'unsafe-inline'" : "script-src 'none'",
+    // A published page loads the scripts and styles of its site from its own host (Дер34); a page
+    // framed by the cabinet has no site, and loads none.
+    kind === 'html'
+      ? framedBy
+        ? "script-src 'unsafe-inline'"
+        : "script-src 'self' 'unsafe-inline'"
+      : "script-src 'none'",
     "default-src 'none'",
-    "style-src 'unsafe-inline'",
+    framedBy ? "style-src 'unsafe-inline'" : "style-src 'self' 'unsafe-inline'",
     ...(framedBy ? FRAMED_RESOURCES : PUBLISHED_RESOURCES),
     ...PAGE_POLICY_TAIL,
     `frame-ancestors ${framedBy ?? "'none'"}`,

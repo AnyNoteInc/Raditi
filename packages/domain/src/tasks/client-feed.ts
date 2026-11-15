@@ -4,11 +4,15 @@ import {
   feedDocLeftPayloadSchema,
   feedDocPayloadSchema,
   feedDocTouchPayloadSchema,
+  feedPageChangePayloadSchema,
   feedPageLeftPayloadSchema,
   feedPagePayloadSchema,
+  pageChanges,
+  pageLinkWarningSchema,
   pageKinds,
   pageLeftReasons,
 } from '../pages/feed.ts'
+import { pagePathSchema } from '../pages/path.ts'
 import { pageSlugSchema } from '../pages/slug.ts'
 
 import { attachmentLimits } from '../attachments/rules.ts'
@@ -82,6 +86,8 @@ export const feedEventTypes = [
   'feed.page',
   // A publication of the turn did not come true (docs/plan/69-pages.md, Ст6).
   'feed.page_left',
+  // The agent changed a page of a site: to the trash, back, renamed or moved (plan 73, Дер23).
+  'feed.page_change',
   // A document the agent set up, a change of it, sections the end of a turn sent back (Ст22, Ст19).
   'feed.doc',
   'feed.doc_touch',
@@ -879,6 +885,7 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.file_left': feedFileLeftPayloadSchema,
   'feed.page': feedPagePayloadSchema,
   'feed.page_left': feedPageLeftPayloadSchema,
+  'feed.page_change': feedPageChangePayloadSchema,
   'feed.doc': feedDocPayloadSchema,
   'feed.doc_touch': feedDocTouchPayloadSchema,
   'feed.doc_left': feedDocLeftPayloadSchema,
@@ -918,6 +925,7 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.file_left', feedFileLeftPayloadSchema),
       row('feed.page', feedPagePayloadSchema),
       row('feed.page_left', feedPageLeftPayloadSchema),
+      row('feed.page_change', feedPageChangePayloadSchema),
       row('feed.doc', feedDocPayloadSchema),
       row('feed.doc_touch', feedDocTouchPayloadSchema),
       row('feed.doc_left', feedDocLeftPayloadSchema),
@@ -1209,12 +1217,42 @@ const readPage = z.object({
   version: z.number().int().min(1),
   // A kind this code does not know is shown as a page.
   kind: known(pageKinds, 'html' as const),
+  path: z.unknown().optional(),
+  warnings: z.unknown().optional(),
+})
+
+/**
+ * The path of a page and the warnings of its links as a row may carry them (Дер15, Дер20): only
+ * what the writing schemas take is read — a row before sites has no path, the home page.
+ */
+function pageExtras(data: { path?: unknown; warnings?: unknown }) {
+  const path = pagePathSchema.safeParse(data.path)
+  const warnings = z.array(pageLinkWarningSchema).max(20).safeParse(data.warnings)
+  return {
+    ...(path.success ? { path: path.data } : {}),
+    ...(warnings.success && warnings.data.length > 0 ? { warnings: warnings.data } : {}),
+  }
+}
+
+const readPageChange = z.object({
+  pageId: z.uuid(),
+  title: z.string().min(1).max(500),
+  // A change this code does not know says the less: the page changed.
+  change: known(pageChanges, 'updated' as const),
+  pages: z.number().int().min(1),
 })
 
 const readPageLeft = z.object({
   pageId: z.uuid(),
   // A reason this code does not know says the less: the page did not come.
   reason: known(pageLeftReasons, 'failed' as const),
+  // An object this code does not know is told as a change: nothing of it was done.
+  of: z
+    .unknown()
+    .optional()
+    .transform((of) =>
+      of === undefined ? undefined : of === 'file' ? ('file' as const) : ('change' as const),
+    ),
 })
 
 const readDoc = z.object({ docId: z.uuid() })
@@ -1279,8 +1317,12 @@ export type FeedEvent =
   | ({ type: 'feed.edit' } & z.infer<typeof readEdit>)
   | ({ type: 'feed.file' } & z.infer<typeof readFile>)
   | ({ type: 'feed.file_left' } & z.infer<typeof readFileLeft>)
-  | ({ type: 'feed.page' } & z.infer<typeof readPage>)
+  | ({ type: 'feed.page' } & Omit<z.infer<typeof readPage>, 'path' | 'warnings'> & {
+        path?: string
+        warnings?: { href: string; problem: 'missing' | 'relative' }[]
+      })
   | ({ type: 'feed.page_left' } & z.infer<typeof readPageLeft>)
+  | ({ type: 'feed.page_change' } & z.infer<typeof readPageChange>)
   | ({ type: 'feed.doc' } & z.infer<typeof readDoc>)
   | ({ type: 'feed.doc_touch' } & z.infer<typeof readDocTouch>)
   | ({ type: 'feed.doc_left' } & z.infer<typeof readDocLeft>)
@@ -1418,11 +1460,20 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
       readWith(readFileLeft, payload, (data) => ({ type: 'feed.file_left', ...data })),
   },
   'feed.page': {
-    1: (payload) => readWith(readPage, payload, (data) => ({ type: 'feed.page', ...data })),
+    1: (payload) =>
+      readWith(readPage, payload, ({ path, warnings, ...data }) => ({
+        type: 'feed.page',
+        ...data,
+        ...pageExtras({ path, warnings }),
+      })),
   },
   'feed.page_left': {
     1: (payload) =>
       readWith(readPageLeft, payload, (data) => ({ type: 'feed.page_left', ...data })),
+  },
+  'feed.page_change': {
+    1: (payload) =>
+      readWith(readPageChange, payload, (data) => ({ type: 'feed.page_change', ...data })),
   },
   'feed.doc': {
     1: (payload) => readWith(readDoc, payload, (data) => ({ type: 'feed.doc', ...data })),

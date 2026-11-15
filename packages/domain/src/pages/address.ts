@@ -1,3 +1,4 @@
+import { pagePathSchema } from './path.ts'
 import { pagesBaseDomainSchema, pageUrlOf } from './slug.ts'
 
 /**
@@ -37,6 +38,9 @@ export function pagesAddressFromEnv(
   }
 }
 
-/** The one address of a page. */
-export const pageAddressUrl = (slug: string, address: PagesAddress): string =>
-  pageUrlOf(slug, address)
+/**
+ * The one address of a page: the host of its site and its path (docs/plan/73-pages-sites.md,
+ * Дер15) — `/` for the home page, the only page of a site of one.
+ */
+export const pageAddressUrl = (slug: string, address: PagesAddress, path = '/'): string =>
+  pageUrlOf(slug, address).replace(/\/$/, '') + pagePathSchema.parse(path)

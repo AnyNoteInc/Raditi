@@ -34,7 +34,10 @@ export interface BrowserReach {
 // The root's dot and letter case name the same host.
 const hostNameOf = (hostname: string) => hostname.toLowerCase().replace(/\.$/, '')
 
-const PAGE_LABEL = new RegExp(`^[a-z2-7]{${PAGE_SLUG_LENGTH}}$`)
+// A random slug, or the own name of a site (docs/plan/73-pages-sites.md, Дер33): 3 to 25 characters.
+const PAGE_LABEL = new RegExp(
+  `^(?:[a-z2-7]{${PAGE_SLUG_LENGTH}}|[a-z0-9](?:[a-z0-9]|-(?!-)){1,23}[a-z0-9])$`,
+)
 
 /** Whether a host name is a published page of the agent: one page label right under `pageDomain`. */
 export function browserPageHost(hostname: string, pageDomain: string | null): boolean {

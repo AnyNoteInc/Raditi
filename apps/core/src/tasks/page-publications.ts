@@ -1,6 +1,15 @@
-import { applyPageVersion, insertFeedEvent, type PrismaClient } from '@repo/db'
+import { applyPageFile, applyPageVersion, insertFeedEvent, type PrismaClient } from '@repo/db'
 import { markdownTitleOf, readingPage } from '@repo/doc-render'
-import { checkPageContent, isDomainError, type PageLeftReason } from '@repo/domain'
+import {
+  checkPageContent,
+  isDomainError,
+  pageFileIsText,
+  pageLeftObjectOf,
+  type PageLeftReason,
+  type PageLinkWarning,
+} from '@repo/domain'
+
+import { pageLinkWarnings } from './page-links.ts'
 
 // The pages a turn published (docs/plan/69-pages.md, Ст6, Ст8, Ст23): `page_publish` reserved
 // them during the turn; at its end each file of the outbox a reservation names becomes the next
@@ -13,15 +22,21 @@ import { checkPageContent, isDomainError, type PageLeftReason } from '@repo/doma
 // serves its bytes.
 
 export interface PagePublicationsDependencies {
-  db: Pick<PrismaClient, '$transaction' | 'chatDocument' | 'pageReservation' | 'taskEvent'>
+  db: Pick<PrismaClient, '$transaction' | 'chatDocument' | 'page' | 'pageReservation' | 'taskEvent'>
   logger?: { log(message: string): void; warn(message: string): void }
 }
 
 export interface FileReservation {
   id: string
   pageId: string
+  /** The host of its site (docs/plan/73-pages-sites.md, Дер11). */
   slug: string
+  /** Its path in the site: `/` for a home page. */
+  path: string
+  treeId: string
   kind: string
+  /** `asset` — a shared file of the site (docs/plan/73-pages-sites.md, Дер34); else a page's version. */
+  reservationKind?: string
   title: string
   fileName: string | null
   outcome: string | null
@@ -44,7 +59,18 @@ export class PagePublications {
   async filesOf(taskId: string, turn: number): Promise<Map<string, FileReservation>> {
     const rows = await this.#deps.db.pageReservation.findMany({
       where: { taskId, turnNo: turn, fileName: { not: null } },
-      include: { page: { select: { slug: true, kind: true } } },
+      // In the order the agent asked: the deliveries of the end of the turn follow it.
+      orderBy: { createdAt: 'asc' },
+      include: {
+        page: {
+          select: {
+            path: true,
+            treeId: true,
+            kind: true,
+            tree: { select: { slug: true, name: true } },
+          },
+        },
+      },
     })
     return new Map(
       rows.map((row) => [
@@ -52,8 +78,11 @@ export class PagePublications {
         {
           id: row.id,
           pageId: row.pageId,
-          slug: row.page.slug,
+          slug: row.page.tree.name ?? row.page.tree.slug,
+          path: row.page.path,
+          treeId: row.page.treeId,
           kind: row.page.kind,
+          reservationKind: row.kind,
           title: row.title,
           fileName: row.fileName!,
           outcome: row.outcome,
@@ -80,6 +109,7 @@ export class PagePublications {
       return true
     }
     if (reservation.outcome !== null) return true
+    if (reservation.reservationKind === 'asset') return this.#asset(reservation, bytes, context)
     // A file is HTML or Markdown; a page of a document gets no file.
     if (reservation.kind !== 'html' && reservation.kind !== 'markdown') {
       await this.left(reservation, 'failed', context)
@@ -114,6 +144,8 @@ export class PagePublications {
       ;({ version } = await applyPageVersion(db, {
         pageId: reservation.pageId,
         bytes: content,
+        // The Markdown a page was drawn from is what page_read gives the agent back (Дер26).
+        markdown: reservation.kind === 'markdown' ? bytes : null,
         source: 'outbox',
         title: reservation.title,
         taskId: context.taskId,
@@ -128,8 +160,9 @@ export class PagePublications {
       return true
     }
     logger?.log(`page_published task=${context.taskId} turn=${context.turn} version=${version}`)
+    const warnings = await this.linksOf(reservation.treeId, content)
     // The page is live: a row that fails now is written by the next delivery, never told as lost.
-    await this.#row(reservation, version, context).catch(() =>
+    await this.#row(reservation, version, context, warnings).catch(() =>
       logger?.warn(`page_row_failed task=${context.taskId} turn=${context.turn}`),
     )
     return true
@@ -152,13 +185,24 @@ export class PagePublications {
       const open = await db.pageReservation.findMany({
         where: { taskId, documentId: { not: null }, outcome: null },
         orderBy: { createdAt: 'asc' },
-        include: { page: { select: { slug: true, kind: true } } },
+        include: {
+          page: {
+            select: {
+              path: true,
+              treeId: true,
+              kind: true,
+              tree: { select: { slug: true, name: true } },
+            },
+          },
+        },
       })
       for (const row of open) {
         const reservation: FileReservation = {
           id: row.id,
           pageId: row.pageId,
-          slug: row.page.slug,
+          slug: row.page.tree.name ?? row.page.tree.slug,
+          path: row.page.path,
+          treeId: row.page.treeId,
           kind: row.page.kind,
           title: row.title,
           fileName: null,
@@ -188,6 +232,7 @@ export class PagePublications {
           ;({ version } = await applyPageVersion(db, {
             pageId: row.pageId,
             bytes,
+            markdown: new TextEncoder().encode(document.content.markdown),
             source: 'doc',
             title: row.title,
             taskId,
@@ -202,7 +247,8 @@ export class PagePublications {
           continue
         }
         logger?.log(`page_published task=${taskId} turn=${row.turnNo} version=${version}`)
-        await this.#row(reservation, version, where).catch(() =>
+        const warnings = await this.linksOf(reservation.treeId, bytes)
+        await this.#row(reservation, version, where, warnings).catch(() =>
           logger?.warn(`page_row_failed task=${taskId} turn=${row.turnNo}`),
         )
       }
@@ -228,10 +274,19 @@ export class PagePublications {
           data: { outcome: reason, settledAt: new Date() },
         })
         if (closed.count !== 1) return
+        // A shared file and a change are told as what they are, not as a page that did not come.
+        const row = await tx.pageReservation.findUnique({
+          where: { id: reservation.id },
+          select: { kind: true, payload: true },
+        })
+        const of = pageLeftObjectOf(row?.kind ?? 'version', row?.payload)
         await insertFeedEvent(tx, {
           taskId: where.taskId,
           turnId: where.turnId,
-          row: { type: 'feed.page_left', payload: { v: 1, pageId: reservation.pageId, reason } },
+          row: {
+            type: 'feed.page_left',
+            payload: { v: 1, pageId: reservation.pageId, reason, ...(of === 'page' ? {} : { of }) },
+          },
         })
       })
     } catch {
@@ -255,7 +310,58 @@ export class PagePublications {
     }
   }
 
-  async #row(reservation: FileReservation, version: number, where: Where): Promise<void> {
+  /**
+   * A shared file of a site the turn put (Дер34): its type and bytes checked, a text one as a page
+   * is, then written at its path. Never throws; a refusal is told as the page's is.
+   */
+  async #asset(
+    reservation: FileReservation,
+    bytes: Uint8Array,
+    context: Where & { turn: number },
+  ): Promise<boolean> {
+    const { db, logger } = this.#deps
+    if (pageFileIsText(reservation.title) && !checkPageContent(bytes).ok) {
+      logger?.warn(`page_file_refused task=${context.taskId} turn=${context.turn} reason=content`)
+      await this.left(reservation, 'refused', context)
+      return true
+    }
+    try {
+      await applyPageFile(db, { reservationId: reservation.id, bytes })
+      logger?.log(`page_file_written task=${context.taskId} turn=${context.turn}`)
+    } catch (error) {
+      const code = isDomainError(error) ? error.code : 'unknown'
+      logger?.warn(`page_file_refused task=${context.taskId} turn=${context.turn} reason=${code}`)
+      await this.left(reservation, code === 'unknown' ? 'failed' : 'refused', context)
+    }
+    return true
+  }
+
+  /**
+   * The links of a version to its own site that lead nowhere (docs/plan/73-pages-sites.md, Дер20):
+   * against every page of the site out of the trash — the pages this turn reserved are there,
+   * pending. Never throws: a warning that cannot be read is none.
+   */
+  async linksOf(treeId: string, content: Uint8Array): Promise<PageLinkWarning[]> {
+    try {
+      const pages = await this.#deps.db.page.findMany({
+        where: { treeId, deletedAt: null },
+        select: { path: true },
+      })
+      return pageLinkWarnings(
+        new TextDecoder().decode(content),
+        new Set(pages.map((page) => page.path)),
+      )
+    } catch {
+      return []
+    }
+  }
+
+  async #row(
+    reservation: FileReservation,
+    version: number,
+    where: Where,
+    warnings: readonly PageLinkWarning[] = [],
+  ): Promise<void> {
     const { db } = this.#deps
     const known = await db.taskEvent.findFirst({
       where: {
@@ -278,6 +384,8 @@ export class PagePublications {
           v: 1,
           pageId: reservation.pageId,
           slug: reservation.slug,
+          ...(reservation.path === '/' ? {} : { path: reservation.path }),
+          ...(warnings.length > 0 ? { warnings: [...warnings] } : {}),
           title: reservation.title,
           version,
           kind: reservation.kind as 'html' | 'markdown' | 'doc',

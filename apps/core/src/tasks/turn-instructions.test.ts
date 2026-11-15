@@ -502,6 +502,22 @@ describe('documents and pages (docs/plan/69-pages.md, Ст18, Ст20, Ст21)', 
       expect(text).toContain('When `raditi_page_publish` is among your tools')
       expect(text).toContain('close the page\n  with a password in the cabinet')
       expect(text).not.toMatch(/`doc_[a-z_]+`/)
+      // Sites of pages (docs/plan/73-pages-sites.md, §6): paths, links from the root, the trash.
+      expect(text).toContain('## Pages and sites')
+      for (const tool of [
+        'page_tree',
+        'page_read',
+        'page_edit',
+        'page_update',
+        'page_delete',
+        'page_file_put',
+        'page_files',
+        'page_file_delete',
+      ])
+        expect(text).toContain(`\`raditi_${tool}\``)
+      expect(text).toContain('Link its pages to each other from\n  the root: href="/uslugi"')
+      expect(text).toContain('Delete only what the client asked in this chat')
+      expect(text).not.toMatch(/`page_[a-z_]+`/)
     }
   })
 })

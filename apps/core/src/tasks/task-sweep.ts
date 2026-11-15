@@ -6,6 +6,7 @@ import {
   clearStaleUncheckedSections,
   dropAbandonedPages,
   insertFeedEvent,
+  purgeExpiredPages,
   requestPreviewSync,
   stalePageReservations,
   taskHasProductionWrites,
@@ -38,6 +39,7 @@ import {
 } from '../turns/turn-journal.ts'
 import { collectExpiredAttachments, expiredAttachmentsIn } from './attachment-collector.ts'
 import type { LivePasses } from './live-passes.ts'
+import type { PageMetrics } from '../pages/page-metrics.ts'
 import type { PagePublications } from './page-publications.ts'
 import {
   CHARGE_LATER_EVENT,
@@ -96,6 +98,8 @@ export interface TaskSweepDependencies {
    * to have failed, a page that never got a version is removed. Absent — not swept.
    */
   pages?: Pick<PagePublications, 'left'> | null
+  /** The metrics of the sites of pages, counted again after each sweep of them (73.12). */
+  pageMetrics?: Pick<PageMetrics, 'refresh'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -508,10 +512,14 @@ export class TaskSweep {
     const dropped = await dropAbandonedPages(db, before)
     // Text of documents no end of a turn checked: it may hold a value of the client (Ст19).
     const cleared = await clearStaleUncheckedSections(db, before)
-    if (stale.length > 0 || dropped > 0 || cleared > 0)
+    // Pages whose 30 days in the trash are over (docs/plan/73-pages-sites.md, Дер2).
+    const purged = await purgeExpiredPages(db, this.#now(), BATCH)
+    if (stale.length > 0 || dropped > 0 || cleared > 0 || purged > 0)
       this.#logger.log(
-        `task_sweep_pages failed=${stale.length} dropped=${dropped} sections_cleared=${cleared}`,
+        `task_sweep_pages failed=${stale.length} dropped=${dropped} sections_cleared=${cleared} purged=${purged}`,
       )
+    // The numbers of the sites are a reading, never a reason to stop the sweep.
+    await this.deps.pageMetrics?.refresh().catch(() => this.#logger.warn('page_metrics_failed'))
     return stale.length
   }
 

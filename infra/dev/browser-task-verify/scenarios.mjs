@@ -24,6 +24,7 @@ import { signUp, switchOnModel, uploadFile } from './setup.mjs'
 import { rawDocker } from './site.mjs'
 import {
   FAKE_JPEG,
+  PAGES_DOMAIN,
   PLATFORM_HOST,
   SITE_ORIGIN,
   SWITCH,
@@ -2512,6 +2513,195 @@ async function scenarioM(stand) {
   rt.end()
 }
 
+// ─── Sites of pages (docs/plan/73-pages-sites.md, scenario R) ───────────────────
+
+/** A path of a site of pages as a viewer asks the pages' listener: its status, where to, its text. */
+function pageAt(stand, slug, path) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: '127.0.0.1',
+        port: stand.ports.pages,
+        path,
+        method: 'GET',
+        headers: { host: `${slug}.${PAGES_DOMAIN}:${stand.ports.pages}` },
+      },
+      (res) => {
+        const chunks = []
+        res.on('data', (chunk) => chunks.push(chunk))
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode,
+            location: res.headers.location ?? null,
+            text: Buffer.concat(chunks).toString('utf8'),
+          }),
+        )
+      },
+    )
+    req.on('error', reject)
+    req.setTimeout(10_000, () => req.destroy(new Error(`the page ${path} did not answer`)))
+    req.end()
+  })
+}
+
+/**
+ * The rows of a kind a chat has, once there are `count` of them: the end of a turn writes its
+ * answer first, then its files and pages below it, then the changes of its pages (pass-runner.ts).
+ */
+async function rowsAtLeast(stand, taskId, type, count, what) {
+  return stand.rt.until(
+    what,
+    async () => {
+      const rows = await rowsOf(stand.db, taskId, type)
+      return rows.length >= count ? rows : null
+    },
+    { timeoutMs: 30_000, intervalMs: 500, service: stand.processes.core },
+  )
+}
+
+/** The client's words to a chat that answered, with the program of the next turn. */
+async function sayNext(stand, client, taskId, text, program, ctx = {}) {
+  stand.model.script(program, ctx)
+  await client.mutate('task.message', { taskId, requestId: randomUUID(), text })
+}
+
+/**
+ * Scenario R (docs/plan/73-pages-sites.md, slice 73.10): a site of pages by the agent on the real
+ * OpenCode — three pages of one site linked from the root, a rename that leaves its former
+ * addresses leading on, a deletion the client asked for, and «Вернуть» of the client — each read
+ * from outside: the pages' listener of the preview app, the feed, the cabinet's tRPC.
+ */
+async function scenarioR(stand) {
+  const { rt, db } = stand
+  rt.begin('R', 'сайт из страниц: три страницы со ссылками, переименование, удаление и «Вернуть»')
+  const client = await signUp(rt, {
+    webUrl: stand.webUrl,
+    db,
+    address: '198.51.100.41',
+    name: 'Ольга',
+    login: 'pages-site',
+  })
+  const word = `raditi-site-${randomUUID().slice(0, 8)}`
+  const taskId = await newChat(stand, client, {
+    text: 'Сделайте, пожалуйста, сайт из трёх страниц: главная, услуги и ремонт.',
+    program: 'publishSite',
+    ctx: { word },
+  })
+  await waitAnswered(stand, taskId, { what: 'the agent to publish the site' })
+  const published = stand.model.current().facts.published ?? []
+  const rows = await rowsAtLeast(stand, taskId, 'feed.page', 3, 'the three pages below the answer')
+  rt.check(
+    rows.length === 3 &&
+      rows.map((row) => row.path ?? '/').join(' ') === '/ /uslugi /uslugi/remont' &&
+      new Set(rows.map((row) => row.slug)).size === 1 &&
+      rows.every((row) => row.version === 1 && !row.warnings),
+    'three publications of one turn made one site: its home page, /uslugi and /uslugi/remont under it, v1 each, no link of theirs leads nowhere',
+    rows.map((row) => ({ path: row.path ?? '/', version: row.version, warnings: row.warnings })),
+  )
+  const slug = rows[0]?.slug
+  const tree = await db.pageTree.findMany({
+    where: {
+      workspaceId: (await db.task.findUniqueOrThrow({ where: { id: taskId } })).workspaceId,
+    },
+  })
+  rt.check(tree.length === 1, 'the workspace holds one site', { sites: tree.length })
+  const home = await pageAt(stand, slug, '/')
+  const uslugi = await pageAt(stand, slug, '/uslugi')
+  const remont = await pageAt(stand, slug, '/uslugi/remont')
+  const slash = await pageAt(stand, slug, '/uslugi/')
+  rt.check(
+    home.status === 200 &&
+      home.text.includes(word) &&
+      home.text.includes('href="/uslugi/remont"') &&
+      uslugi.status === 200 &&
+      uslugi.text.includes('<h1>Услуги</h1>') &&
+      remont.status === 200 &&
+      remont.text.includes('<h1>Ремонт</h1>') &&
+      slash.status === 308 &&
+      slash.location?.endsWith('/uslugi'),
+    'the pages listener serves each page of the site at its path under one host, the links of the agent from the root; a path with a slash at its end leads to its page',
+    {
+      home: home.status,
+      uslugi: uslugi.status,
+      remont: remont.status,
+      slash: [slash.status, slash.location],
+    },
+  )
+  rt.check(
+    published.length === 3 &&
+      published.every((page) => page.url?.includes(`${slug}.${PAGES_DOMAIN}`)),
+    'page_publish gave the agent the address of each page at once, on the host of its site',
+    published.map((page) => page.url),
+  )
+
+  // The second turn: «Услуги» becomes «Цены» at /ceny, the page below goes with it.
+  await sayNext(
+    stand,
+    client,
+    taskId,
+    'Переименуйте, пожалуйста, «Услуги» в «Цены», адрес — /ceny.',
+    'renameServices',
+  )
+  await waitAnswered(stand, taskId, { results: 1, what: 'the agent to rename the page' })
+  await rowsAtLeast(stand, taskId, 'feed.page_change', 1, 'the change of the rename')
+  const ceny = await pageAt(stand, slug, '/ceny')
+  const formerly = await pageAt(stand, slug, '/uslugi')
+  const below = await pageAt(stand, slug, '/uslugi/remont')
+  const moved = await pageAt(stand, slug, '/ceny/remont')
+  const changes = await rowsOf(db, taskId, 'feed.page_change')
+  rt.check(
+    ceny.status === 200 &&
+      formerly.status === 308 &&
+      formerly.location?.endsWith('/ceny') &&
+      below.status === 308 &&
+      below.location?.endsWith('/ceny/remont') &&
+      moved.status === 200 &&
+      changes.at(-1)?.change === 'updated' &&
+      changes.at(-1)?.title === 'Цены',
+    'page_update at the end of the turn: the page and the one below it serve at their new paths, their former addresses lead on (308), the feed says the agent changed «Цены»',
+    {
+      ceny: ceny.status,
+      formerly: [formerly.status, formerly.location],
+      below: [below.status, below.location],
+      moved: moved.status,
+      change: changes.at(-1),
+    },
+  )
+
+  // The third turn: the client asked to delete «Ремонт»; it goes to the trash.
+  await sayNext(stand, client, taskId, 'Удалите, пожалуйста, страницу «Ремонт».', 'deleteRepair')
+  await waitAnswered(stand, taskId, { results: 2, what: 'the agent to delete the page' })
+  const repairId = stand.model.current().facts.pageId
+  await rowsAtLeast(stand, taskId, 'feed.page_change', 2, 'the change of the deletion')
+  const deleted = await pageAt(stand, slug, '/ceny/remont')
+  const trashed = (await rowsOf(db, taskId, 'feed.page_change')).at(-1)
+  rt.check(
+    deleted.status === 410 &&
+      trashed?.change === 'trashed' &&
+      trashed?.pages === 1 &&
+      (await pageAt(stand, slug, '/ceny')).status === 200,
+    'page_delete with the client’s word: the page answers 410 «удалена», its parent serves, the feed says it went to the trash and can come back',
+    { deleted: deleted.status, change: trashed },
+  )
+
+  // «Вернуть» of the client in the cabinet: the page serves again at its path.
+  const listed = await client.call('query', 'pages.list', {})
+  const inTrash = listed.ok ? listed.data.pages.find((page) => page.pageId === repairId) : null
+  rt.check(
+    inTrash?.trash !== null && inTrash?.trash !== undefined && inTrash?.path === '/ceny/remont',
+    '«Страницы» shows the page in the trash at its path, the site of the chat beside it',
+    { listed: listed.ok, trash: inTrash?.trash ?? null },
+  )
+  const returned = await client.call('mutation', 'pages.returnDeleted', { pageId: repairId })
+  const back = await pageAt(stand, slug, '/ceny/remont')
+  rt.check(
+    returned.ok && back.status === 200 && back.text.includes('<h1>Ремонт</h1>'),
+    '«Вернуть» of the client: the page serves again at its path',
+    { returned: returned.ok, status: back.status },
+  )
+  rt.end()
+}
+
 // ─── The run ──────────────────────────────────────────────────────────────────
 
 // ─── Q: pages and documents of the agent ──────────────────────────────────────
@@ -2670,13 +2860,15 @@ async function scenarioQ(stand) {
   )
   const version = await db.chatDocument.findUniqueOrThrow({
     where: { id: docId },
-    include: { content: true, page: true },
+    // The host of a page is its site's since plan 73 (Дер11): `pages.slug` is left for the release
+    // before, a new page has none.
+    include: { content: true, page: { include: { tree: true } } },
   })
   rt.check(
     version.currentVersion === 1 &&
       version.page?.state === 'live' &&
       version.page.currentVersion === 1 &&
-      finished.url.includes(version.page.slug),
+      finished.url.includes(version.page.tree.name ?? version.page.tree.slug),
     'the end of the turn made version 1 of the document and drew it as version 1 of its page',
     { document: version.currentVersion, page: version.page?.currentVersion },
   )
@@ -2752,6 +2944,7 @@ const SCENARIOS = Object.freeze({
   O: scenarioO,
   P: scenarioP,
   Q: scenarioQ,
+  R: scenarioR,
   K: scenarioK,
   L: scenarioL,
   M: scenarioM,

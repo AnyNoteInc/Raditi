@@ -80,35 +80,52 @@ export class ChatFiles {
           await pages!.left(reservation, 'missing', { taskId, turnId })
         return 0
       }
+      // The files the pages named wait for the end of the archive: they are published in the
+      // order the agent asked for them, not the order of the archive — a site's home page before
+      // its pages, as the feed tells them (docs/plan/73-pages-sites.md, Дер12).
+      const forPages: { name: string; bytes: Uint8Array; sizeBytes: number }[] = []
+      const putFile = async (file: { name: string; bytes: Uint8Array; sizeBytes: number }) => {
+        const fileId = chatFileId(taskId, turn, file.name)
+        const known = await db.taskEvent.findFirst({
+          where: { taskId, type: 'feed.file', payload: { path: ['fileId'], equals: fileId } },
+          select: { id: true },
+        })
+        if (known) return
+        await storage.put('artifacts', chatFileKey(taskId, fileId), file.bytes, {
+          contentType: 'application/octet-stream',
+          sizeBytes: file.sizeBytes,
+        })
+        await insertFeedEvent(db, {
+          taskId,
+          turnId,
+          row: {
+            type: 'feed.file',
+            payload: { v: 1, fileId, name: file.name, sizeBytes: file.sizeBytes },
+          },
+        })
+        written += 1
+      }
       const contents = await readOutboxArchive(input.outbox, {
         onFile: async (file) => {
-          const reservation = reserved.get(file.name)
-          if (reservation && pages) {
+          if (reserved.has(file.name) && pages) {
             seen.add(file.name)
-            // A file the pages took is the page's; one they cannot draw yet goes on as a file.
-            if (await pages.publish(reservation, file.bytes, { taskId, turn, turnId })) return
+            // A copy: the archive reader may reuse the buffer of a file once its callback returns.
+            forPages.push({
+              name: file.name,
+              bytes: new Uint8Array(file.bytes),
+              sizeBytes: file.sizeBytes,
+            })
+            return
           }
-          const fileId = chatFileId(taskId, turn, file.name)
-          const known = await db.taskEvent.findFirst({
-            where: { taskId, type: 'feed.file', payload: { path: ['fileId'], equals: fileId } },
-            select: { id: true },
-          })
-          if (known) return
-          await storage.put('artifacts', chatFileKey(taskId, fileId), file.bytes, {
-            contentType: 'application/octet-stream',
-            sizeBytes: file.sizeBytes,
-          })
-          await insertFeedEvent(db, {
-            taskId,
-            turnId,
-            row: {
-              type: 'feed.file',
-              payload: { v: 1, fileId, name: file.name, sizeBytes: file.sizeBytes },
-            },
-          })
-          written += 1
+          await putFile(file)
         },
       })
+      const order = [...reserved.keys()]
+      forPages.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name))
+      for (const file of forPages)
+        // A file the pages took is the page's; one they cannot draw yet goes on as a file.
+        if (!(await pages!.publish(reserved.get(file.name)!, file.bytes, { taskId, turn, turnId })))
+          await putFile(file)
       if (written > 0)
         logger?.log(`chat_files_delivered task=${taskId} turn=${turn} files=${written}`)
       for (const [name, reservation] of reserved)
