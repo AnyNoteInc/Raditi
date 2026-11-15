@@ -30,13 +30,13 @@ export function smallEditRubles(price: string, credits: number): string | null {
 }
 
 /**
- * «Небольшая правка — около 50 ₽»: a price of `smallEditRubles` in words; with `from`,
- * «Небольшая правка из пакета — около 75 ₽». «около»: a small edit is usually charged the
+ * «Небольшая задача — около 50 ₽»: a price of `smallEditRubles` in words; with `from`,
+ * «Небольшая задача из пакета — около 75 ₽». «около»: a small task is usually charged the
  * minimum, and some take more.
  */
 export function smallEditSentence(rubles: string, from = ''): string {
   const source = from === '' ? '' : ` ${from}`
-  return `Небольшая правка${source} — около ${formatRubles(rubles)} ₽`
+  return `Небольшая задача${source} — около ${formatRubles(rubles)} ₽`
 }
 
 /**

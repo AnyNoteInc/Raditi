@@ -14,7 +14,7 @@ afterEach(() => {
 })
 
 describe('LandingLead', () => {
-  const site = () => screen.getByLabelText('Адрес сайта')
+  const site = () => screen.getByLabelText('Сайт компании')
   const contact = () => screen.getByLabelText('Телефон или Telegram')
   const fill = (phone = '+7 900 000-00-00') => {
     fireEvent.change(site(), { target: { value: 'kofeinya.ru' } })
@@ -33,26 +33,26 @@ describe('LandingLead', () => {
     return JSON.parse(String(init.body)) as unknown
   }
 
-  it('offers a signed-in visitor the free connection and no second gift', () => {
+  it('offers a signed-in visitor the free help and no second gift', () => {
     const { container } = render(<LandingLead isGuest={false} />)
     const text = plain(container.textContent)
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
-      /^0 ₽ за подключение\s*и настройку\.$/,
+      /^0 ₽ за помощь\s*с началом\.$/,
     )
     expect(text).not.toMatch(/подарок|кредитов/)
   })
 
-  it('says that connecting is free and the gift is 50 credits', () => {
+  it('says that the help is free and the gift is 50 credits', () => {
     const { container } = render(<LandingLead isGuest />)
     const text = plain(container.textContent)
-    expect(text).toContain('Подключение и настройка — бесплатно')
+    expect(text).toContain('Помощь с первыми задачами — бесплатно')
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
       /^50 кредитов в подарок\s*за заявку\.$/,
     )
     expect(signupGiftCredits).toBe(50)
   })
 
-  it('asks for two things only: the site and a phone or a Telegram name', () => {
+  it('asks for two things only: the site of the business and a phone or a Telegram name', () => {
     for (const isGuest of [true, false]) {
       const { container, unmount } = render(<LandingLead isGuest={isGuest} />)
 
@@ -75,7 +75,8 @@ describe('LandingLead', () => {
       const text = plain(container.textContent)
       expect(text).toContain('Оба поля обязательны')
       expect(text).toContain('Два поля, одна минута')
-      expect(text).toContain('Оставьте адрес сайта и телефон — мы сами подключим ваш сайт')
+      expect(text).toContain('Оставьте сайт компании и телефон — расскажем')
+      expect(text).not.toMatch(/подключ/i)
       unmount()
     }
   })
@@ -178,7 +179,7 @@ describe('LandingLead', () => {
     // The form asks no name, so the card thanks by none.
     expect(await screen.findByRole('heading', { name: /^Заявка у\s+нас\.$/ })).toHaveFocus()
     const status = screen.getByRole('status')
-    expect(status).toHaveTextContent(/подключим kofeinya\.ru/)
+    expect(status).toHaveTextContent(/Свяжемся с вами и поможем начать\./)
     expect(status).toHaveTextContent(/50\sкредитов придут, как только вы зарегистрируетесь/)
     expect(status).not.toHaveTextContent(/спасибо|,\s+[А-ЯЁ][а-яё]+\./i)
     // Only what the form asks: the site, the contact, the consent and the empty trap.
@@ -207,7 +208,7 @@ describe('LandingLead', () => {
 
       send()
 
-      expect(await screen.findByRole('status')).toHaveTextContent(/подключим kofeinya\.ru/)
+      expect(await screen.findByRole('status')).toHaveTextContent(/поможем начать/)
       // A signed-in visitor has had the gift: the card promises none.
       expect(screen.getByRole('status')).not.toHaveTextContent(/кредит|подар|зарегистр/i)
       expect(screen.queryByText(leadFieldErrors.phone)).not.toBeInTheDocument()

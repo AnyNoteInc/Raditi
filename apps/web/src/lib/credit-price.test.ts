@@ -60,21 +60,21 @@ describe('smallEditRubles', () => {
 
 describe('smallEditPrice', () => {
   it('says the price of a small edit of a tariff and of a pack', () => {
-    expect(smallEditPrice('1990.00', 150)).toBe('Небольшая правка — около 66 ₽')
-    expect(smallEditPrice('6990.00', 600)).toBe('Небольшая правка — около 58 ₽')
-    expect(smallEditPrice('19990.00', 2000)).toBe('Небольшая правка — около 50 ₽')
+    expect(smallEditPrice('1990.00', 150)).toBe('Небольшая задача — около 66 ₽')
+    expect(smallEditPrice('6990.00', 600)).toBe('Небольшая задача — около 58 ₽')
+    expect(smallEditPrice('19990.00', 2000)).toBe('Небольшая задача — около 50 ₽')
     expect(smallEditPrice('1490.00', 100, 'из пакета')).toBe(
-      'Небольшая правка из пакета — около 75 ₽',
+      'Небольшая задача из пакета — около 75 ₽',
     )
   })
 
   it('says a price counted elsewhere in the same words', () => {
-    expect(smallEditSentence('71.00')).toBe('Небольшая правка — около 71 ₽')
-    expect(smallEditSentence('75.00', 'из пакета')).toBe('Небольшая правка из пакета — около 75 ₽')
+    expect(smallEditSentence('71.00')).toBe('Небольшая задача — около 71 ₽')
+    expect(smallEditSentence('75.00', 'из пакета')).toBe('Небольшая задача из пакета — около 75 ₽')
   })
 
   it('groups the rubles of a large price with a space that does not break', () => {
-    expect(smallEditPrice('300000.00', 1)).toBe('Небольшая правка — около 1 500 000 ₽')
+    expect(smallEditPrice('300000.00', 1)).toBe('Небольшая задача — около 1 500 000 ₽')
   })
 })
 

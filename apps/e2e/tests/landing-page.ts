@@ -66,8 +66,8 @@ export const menuToggle = (page: Page) => page.locator('#top > header button[ari
 
 /** Applies the prepared change of the demo and waits until its window tells so. */
 export async function applyChange(demo: Locator): Promise<void> {
-  await demo.getByRole('button', { name: 'Применить правку' }).click()
-  await expect(demo.getByText('Изменено')).toBeVisible()
+  await demo.getByRole('button', { name: 'Сохранить' }).click()
+  await expect(demo.getByText('Сохранено')).toBeVisible()
 }
 
 /** The name of a keyframes rule or a class as the source writes it: a CSS module adds a hash to it. */

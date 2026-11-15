@@ -25,18 +25,18 @@ const ACCENT = 'rgb(255, 107, 36)'
 const ACCENT_TEXT = 'rgb(166, 61, 18)'
 const MARKER = 'rgb(255, 197, 71)'
 // The heading of the page, in the words people search by, and the slogan under it.
-const KEYWORD = 'ИИ-помощник для сайта на WordPress, Joomla, OpenCart, MODX и 1С-Битрикс'
-const SLOGAN = 'Напишите в чат. Сайт поправим.'
+const KEYWORD = 'ИИ-помощник на каждый день для вас и вашего бизнеса'
+const SLOGAN = 'Напишите в чат. Всё сделаем.'
 // The terms under the main action, as a guest reads them.
 const TERMS = [
-  '50 кредитов в подарок — около 10 небольших правок',
-  'Подключение бесплатно',
-  'Подключаем сами',
+  '50 кредитов в подарок — около 10 небольших задач',
+  'В браузере и в Telegram',
+  'Без установки',
 ]
 const QUESTIONS = [
-  'Нужно разбираться в сайтах?',
-  'Мой сайт подойдёт?',
-  'Сколько стоит одна правка?',
+  'Что умеет Радити?',
+  'Нужно что-то устанавливать?',
+  'Сколько стоит одна задача?',
   'А если результат не понравится?',
   'Где будут храниться данные?',
 ]
@@ -123,7 +123,7 @@ async function fillLead(
   { site, contact, consent = true }: { site: string; contact: string; consent?: boolean },
 ): Promise<void> {
   const form = page.locator('#lead form')
-  const first = form.getByLabel('Адрес сайта')
+  const first = form.getByLabel('Сайт компании')
   await hydrated(first)
   await first.fill(site)
   await form.getByLabel('Телефон или Telegram').fill(contact)
@@ -183,7 +183,7 @@ test.describe('first screen', () => {
       expect(read.text).toBe(SLOGAN)
       expect(read.displays).toEqual(['block', 'block'])
       expect(read.clips).toEqual(['none', 'none'])
-      // «Сайт поправим.» stays in one piece and inside the page down to the narrowest phone.
+      // «Всё сделаем.» stays in one piece and inside the page down to the narrowest phone.
       expect(read.secondLine).toBe(1)
       expect(read.left).toBeGreaterThanOrEqual(0)
       expect(read.right).toBeLessThanOrEqual(width)
@@ -201,11 +201,8 @@ test.describe('first screen', () => {
   }) => {
     await page.goto('/')
     const screen = firstScreen(page)
-    await expect(screen.getByRole('link')).toHaveText([
-      'Подключить сайт бесплатно',
-      'Посмотреть пример',
-    ])
-    await expect(heroAction(page)).toHaveText('Подключить сайт бесплатно')
+    await expect(screen.getByRole('link')).toHaveText(['Начать бесплатно', 'Посмотреть пример'])
+    await expect(heroAction(page)).toHaveText('Начать бесплатно')
     await expect(screen.getByRole('link', { name: 'Посмотреть пример' })).toHaveAttribute(
       'href',
       '#demo',
@@ -337,15 +334,15 @@ test.describe('hero lead', () => {
 })
 
 test.describe('description for search', () => {
-  test('names what the service does, the five systems and the free connection', async ({
-    page,
-  }) => {
+  test('names what the service does and the gift of the registration', async ({ page }) => {
     await page.goto('/')
     await expect(page.locator('meta[name="description"]')).toHaveAttribute(
       'content',
-      'Радити меняет сайт по сообщению в чате: цены, тексты, фото, акции. WordPress, Joomla, OpenCart, MODX, 1С-Битрикс. Подключим бесплатно, 50 кредитов в подарок.',
+      'Радити — ИИ-помощник на каждый день: найдёт и сравнит, напишет письмо или пост, соберёт таблицу, сделает страницу. 50 кредитов в подарок.',
     )
-    await expect(page).toHaveTitle('Радити — ИИ-помощник для сайта: напишите в чат, сайт поправим')
+    await expect(page).toHaveTitle(
+      'Радити — ИИ-помощник на каждый день: напишите в чат, Радити сделает',
+    )
   })
 
   // A search engine cuts a longer description in its snippet.
@@ -362,7 +359,7 @@ test.describe('description for search', () => {
     await page.goto('/sign-in')
     await expect(page.locator('meta[name="description"]')).toHaveAttribute(
       'content',
-      'Радити — поддержка сайтов для малого бизнеса: напишите в чат, что поменять на сайте. Сервис готовится к запуску.',
+      'Радити — ИИ-помощник на каждый день: напишите в чат, что нужно сделать. Сервис готовится к запуску.',
     )
   })
 })
@@ -389,7 +386,7 @@ test.describe('header', () => {
       const action = headerAction(page)
       if (width >= 1100) {
         await soft(action).toBeVisible()
-        await soft(action).toHaveText('Подключить сайт')
+        await soft(action).toHaveText('Начать')
         await soft(action).toHaveCSS('color', INK)
         soft((await action.boundingBox())?.height).toBeGreaterThanOrEqual(44)
       } else {
@@ -453,7 +450,7 @@ test.describe('layout', () => {
     const actions = [
       headerAction(page),
       heroAction(page),
-      page.locator('#site-demo').getByRole('button', { name: 'Применить правку' }),
+      page.locator('#site-demo').getByRole('button', { name: 'Сохранить' }),
       pricingAction(page),
     ]
     for (const action of actions) await expect(action).toHaveCSS('color', INK)
@@ -500,7 +497,7 @@ test.describe('hover and press', () => {
     test('answers a press with the look of the hover and without a move', async ({ page }) => {
       await page.goto('/')
       const demo = page.locator('#site-demo')
-      const apply = demo.getByRole('button', { name: 'Применить правку' })
+      const apply = demo.getByRole('button', { name: 'Сохранить' })
       await hydrated(apply)
 
       const filled = [heroAction(page), headerAction(page), pricingAction(page), apply]
@@ -521,7 +518,7 @@ test.describe('hover and press', () => {
       })
 
       // An outlined action that stays on the page: a darker surface and an ink outline.
-      const request = demo.getByRole('button', { name: 'График' })
+      const request = demo.getByRole('button', { name: 'Письмо' })
       await whilePressed(page, request, async () => {
         expect(await fillOf(request)).toBe(PAPER_2)
         await expect(request).toHaveCSS('border-top-color', INK)
@@ -558,7 +555,7 @@ test.describe('hover and press', () => {
     }) => {
       await page.goto('/')
       const demo = page.locator('#site-demo')
-      const apply = demo.getByRole('button', { name: 'Применить правку' })
+      const apply = demo.getByRole('button', { name: 'Сохранить' })
       await hydrated(apply)
       // `hover()` scrolls smoothly and points where the button will be: the pointer comes to rest
       // before it does, `:hover` stays false and the arrow goes back.
@@ -567,7 +564,7 @@ test.describe('hover and press', () => {
       await expect(apply.locator('svg')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 4, 0)')
       const pressed = [
         apply,
-        demo.getByRole('button', { name: 'График' }),
+        demo.getByRole('button', { name: 'Письмо' }),
         page.locator('#top > header a[href="/sign-in"]'),
         pricingAction(page),
       ]
@@ -575,7 +572,7 @@ test.describe('hover and press', () => {
         await whilePressed(page, action, () => expect(action).toHaveCSS('transform', PRESSED))
       }
       // The chosen request does nothing on a press and does not pretend to.
-      const chosen = demo.getByRole('button', { name: 'Цена' })
+      const chosen = demo.getByRole('button', { name: 'Цены' })
       await whilePressed(page, chosen, () => expect(chosen).toHaveCSS('transform', 'none'))
     })
   })
@@ -588,13 +585,13 @@ test.describe('hover and press', () => {
       expect(await page.evaluate(() => matchMedia('(hover: hover)').matches)).toBe(false)
       // A filled action keeps its fill after a tap: the hover of a pointer is not for a finger.
       const hero = heroAction(page)
-      await hydrated(page.locator('#site-demo').getByRole('button', { name: 'График' }))
+      await hydrated(page.locator('#site-demo').getByRole('button', { name: 'Письмо' }))
       await hero.tap()
       await expect(page).toHaveURL(/#lead$/)
       await expect(hero).toHaveCSS('background-color', ACCENT)
 
-      const request = page.locator('#site-demo').getByRole('button', { name: 'Цена' })
-      const other = page.locator('#site-demo').getByRole('button', { name: 'График' })
+      const request = page.locator('#site-demo').getByRole('button', { name: 'Цены' })
+      const other = page.locator('#site-demo').getByRole('button', { name: 'Письмо' })
       await other.tap()
       await expect(other).toHaveAttribute('aria-pressed', 'true')
       await expect(request).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
@@ -724,7 +721,7 @@ test.describe('type size', () => {
     // The states bring their own texts: the changed banner, the labels of the window, an open
     // answer, the messages of the form.
     const demo = page.locator('#site-demo')
-    await demo.getByRole('button', { name: 'Акция' }).click()
+    await demo.getByRole('button', { name: 'Меню' }).click()
     await applyChange(demo)
     await page.locator('#faq summary').first().click()
     // The form of a lead with its messages under the fields and the consent.
@@ -762,7 +759,7 @@ test.describe('section headings', () => {
       [
         'Попробуйте сами',
         'Что можно поручить',
-        'Без вашего «да» сайт не меняется',
+        'Вы видите, что делает Радити',
         'Тарифы',
         '50 кредитов в подарок за заявку.',
         'Вопросы',
@@ -779,7 +776,7 @@ test.describe('section headings', () => {
 
 test.describe('capabilities', () => {
   const REQUEST = 'Например, вы пишете'
-  const RESULT = 'Что изменится на сайте'
+  const RESULT = 'Что вы получите'
 
   /** The boxes of every row: the category, the two heads of the columns, the request, the result. */
   const rows = (page: Page) =>
@@ -999,10 +996,10 @@ test.describe('demo', () => {
     const demo = page.locator('#site-demo')
     const choice = demo.getByRole('group', { name: 'Выберите, что попросить:' })
     await hydrated(choice.getByRole('button').first())
-    for (const request of ['Цена', 'График', 'Акция']) {
+    for (const request of ['Цены', 'Письмо', 'Меню']) {
       const button = choice.getByRole('button', { name: request })
       if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click()
-      await expect(demo.getByRole('button', { name: 'Применить правку' })).toHaveAttribute(
+      await expect(demo.getByRole('button', { name: 'Сохранить' })).toHaveAttribute(
         'aria-disabled',
         'false',
       )
@@ -1108,8 +1105,8 @@ test.describe('demo', () => {
     }) => {
       await openAt(page, width)
       const demo = page.locator('#site-demo')
-      await demo.getByRole('button', { name: 'Акция' }).click()
-      const apply = demo.getByRole('button', { name: 'Применить правку' })
+      await demo.getByRole('button', { name: 'Меню' }).click()
+      const apply = demo.getByRole('button', { name: 'Сохранить' })
       await expect(apply).toBeVisible()
 
       const measure = () =>
@@ -1134,11 +1131,11 @@ test.describe('demo', () => {
 
       const before = await measure()
       await apply.click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
+      await expect(demo.getByText('Сохранено')).toBeVisible()
       const after = await measure()
 
-      expect(before.text).toBe('ХОРОШИЙ ДЕНЬ. ХОРОШИЙ КОФЕ.')
-      expect(after.text?.replaceAll('\u00a0', ' ')).toBe('ВТОРОЙ КОФЕ −50% · БЕРИТЕ ДРУГА')
+      expect(before.text?.replaceAll('\u00a0', ' ')).toBe('МЕНЮ — ТОЛЬКО В ЗАЛЕ')
+      expect(after.text?.replaceAll('\u00a0', ' ')).toBe('МЕНЮ ТЕПЕРЬ ПО ССЫЛКЕ')
       expect(after.size).toBe(before.size)
       expect(after.size).toBe(width <= 480 ? 11 : 12)
       expect({ ...after, text: '' }).toEqual({ ...before, text: '' })
@@ -1171,8 +1168,8 @@ test.describe('demo', () => {
       await expect(address.locator('svg')).toHaveCSS('stroke', INK)
       expect(await pair()).toBeGreaterThanOrEqual(4.5)
 
-      await demo.getByRole('button', { name: 'Отменить правку' }).click()
-      await expect(demo.getByText('Возвращено')).toBeVisible()
+      await demo.getByRole('button', { name: 'Отменить' }).click()
+      await expect(demo.getByText('Отменено')).toBeVisible()
       await expect(address).toHaveCSS('color', atRest)
       expect(await pair()).toBeGreaterThanOrEqual(4.5)
     })
@@ -1191,7 +1188,7 @@ test.describe('demo', () => {
       const row = await marked()
       expect(row).toEqual({ background: MARKER, color: INK })
 
-      await demo.getByRole('button', { name: 'Акция' }).click()
+      await demo.getByRole('button', { name: 'Меню' }).click()
       await applyChange(demo)
       expect(await marked()).toEqual(row)
     })
@@ -1202,7 +1199,7 @@ test.describe('demo', () => {
   test('does not cut the outline of the changed banner', async ({ page }) => {
     await page.goto('/')
     const demo = page.locator('#site-demo')
-    await demo.getByRole('button', { name: 'Акция' }).click()
+    await demo.getByRole('button', { name: 'Меню' }).click()
     await applyChange(demo)
     await settled(page)
     const banner = await demo.locator('[data-changed="true"]').evaluate((node) => {
@@ -1234,35 +1231,35 @@ test.describe('demo', () => {
     await action.focus()
     await page.keyboard.press('Enter')
     // Busy, not disabled: the button stays the stop of the keyboard and says what it is doing.
-    await expect(action).toHaveText('Применяю…')
+    await expect(action).toHaveText('Сохраняю…')
     await expect(action).toHaveAttribute('aria-disabled', 'true')
     await expect(action).toHaveJSProperty('disabled', false)
     await expect(action).toHaveCSS('cursor', 'wait')
     await expect(action).toBeFocused()
     // A key pressed during the pause neither finishes nor undoes the change.
     await page.keyboard.press('Enter')
-    await expect(demo.getByText('Изменено')).toBeVisible()
-    await expect(action).toHaveText('Отменить правку')
+    await expect(demo.getByText('Сохранено')).toBeVisible()
+    await expect(action).toHaveText('Отменить')
     await expect(action).toHaveAttribute('aria-disabled', 'false')
     await expect(action).toBeFocused()
     // The next key goes to the same button without looking for it again.
     await page.keyboard.press('Enter')
-    await expect(demo.getByText('Возвращено')).toBeVisible()
+    await expect(demo.getByText('Отменено')).toBeVisible()
     await expect(action).toBeFocused()
   })
 
   test('applies and undoes a change three times in a row', async ({ page }) => {
     await page.goto('/')
     const demo = page.locator('#site-demo')
-    await expect(demo.getByText('До правки')).toBeVisible()
+    await expect(demo.getByText('Черновик')).toBeVisible()
 
     for (let round = 0; round < 3; round++) {
-      await demo.getByRole('button', { name: /^Применить (правку|снова)$/ }).click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
-      await demo.getByRole('button', { name: 'Отменить правку' }).click()
-      await expect(demo.getByText('Возвращено')).toBeVisible()
+      await demo.getByRole('button', { name: /^Сохранить( снова)?$/ }).click()
+      await expect(demo.getByText('Сохранено')).toBeVisible()
+      await demo.getByRole('button', { name: 'Отменить' }).click()
+      await expect(demo.getByText('Отменено')).toBeVisible()
     }
-    await expect(demo.getByRole('button', { name: 'Применить снова' })).toBeEnabled()
+    await expect(demo.getByRole('button', { name: 'Сохранить снова' })).toBeEnabled()
   })
 })
 
@@ -1276,8 +1273,8 @@ test.describe('outlines of controls', () => {
   test('bound the undo of the chat at 3:1', async ({ page }) => {
     await page.goto('/')
     const demo = page.locator('#site-demo')
-    await demo.getByRole('button', { name: 'Применить правку' }).click()
-    const undo = demo.getByRole('button', { name: 'Отменить правку' })
+    await demo.getByRole('button', { name: 'Сохранить' }).click()
+    const undo = demo.getByRole('button', { name: 'Отменить' })
     await expect(undo).toBeVisible()
     await page.mouse.move(1, 1)
     expect(contrast(await outline(undo), INK)).toBeGreaterThanOrEqual(3)
@@ -1304,9 +1301,9 @@ test.describe('safety', () => {
     const facts = safety.getByRole('listitem')
     await expect(facts).toHaveCount(3)
     await expect(safety.getByRole('heading', { level: 3 })).toHaveText([
-      'Сначала черновик',
-      'Отмена за 7 дней',
-      'Опасное — только с подтверждением',
+      'Ход работы на виду',
+      'Остановить и вернуть',
+      'Без вашей просьбы — ничего лишнего',
     ])
     for (const [index, number] of ['01', '02', '03'].entries()) {
       const figure = facts.nth(index).locator('span').first()
@@ -1394,7 +1391,7 @@ test.describe('pricing', () => {
     await expect(plans.getByRole('link')).toHaveCount(0)
     await expect(pricing.getByRole('link')).toHaveCount(1)
     // The action of the page, by its whole name: it leads a guest to the form of a lead.
-    await expect(pricing.getByRole('link', { name: 'Подключить сайт бесплатно' })).toHaveAttribute(
+    await expect(pricing.getByRole('link', { name: 'Начать бесплатно' })).toHaveAttribute(
       'href',
       '#lead',
     )
@@ -1573,7 +1570,7 @@ test.describe('pricing', () => {
       await soft(page.locator('#pricing article')).toHaveCount(3)
       const note = pricingAction(page).locator('xpath=following-sibling::p')
       await soft(note).toHaveText(
-        'При регистрации — 50 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
+        'При регистрации — 50 кредитов в подарок: хватит на несколько небольших задач. Тариф выберете позже.',
       )
       const edges = await note.evaluate((paragraph) => {
         const action = paragraph.previousElementSibling?.getBoundingClientRect()
@@ -1721,7 +1718,7 @@ test.describe('navigation and questions', () => {
     const questions = page.locator('#faq details')
     await expect(questions.locator('summary')).toHaveText(QUESTIONS)
     const question = questions.filter({
-      has: page.locator('summary', { hasText: 'Сколько стоит одна правка?' }),
+      has: page.locator('summary', { hasText: 'Сколько стоит одна задача?' }),
     })
     await expect(question).toHaveCount(1)
     await hydrated(question.locator('summary'))
@@ -1729,7 +1726,7 @@ test.describe('navigation and questions', () => {
     await expect(question).toHaveAttribute('open', '')
     await expect(question.locator('p')).toBeVisible()
     await expect(question.locator('p')).toHaveText(
-      'Работу мы считаем в кредитах. Поменять цену, текст или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Сколько это в рублях, написано в карточке каждого тарифа. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
+      'Работу мы считаем в кредитах. Короткий ответ или небольшой текст — обычно 5 кредитов, документ, таблица или страница — 15–25. Сколько это в рублях, написано в карточке каждого тарифа. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
     )
     // The lead of the section with its «?» is gone: the heading alone stands over the questions.
     await expect(page.locator('#faq-title')).toHaveText('Вопросы')
@@ -1835,7 +1832,7 @@ test.describe('system dark theme', () => {
   test('gives the theme back on the way from the landing to the sign-in', async ({ page }) => {
     await page.goto('/')
     const signIn = page.locator('#top > header a[href="/sign-in"]')
-    await hydrated(page.getByRole('button', { name: 'Применить правку' }))
+    await hydrated(page.getByRole('button', { name: 'Сохранить' }))
     await signIn.click()
     await page.waitForURL('**/sign-in')
     // A client transition: the stylesheet of the landing stays, its page is gone.
@@ -2238,7 +2235,7 @@ test.describe('anchor of the address on a first load', () => {
       await expect(pricing.locator('article')).toHaveCount(3)
       // The mark of the middle plan is drawn by the server, not by a script.
       await expect(pricing.locator('article').nth(1)).toContainText('Для вас')
-      await expect(pricing.getByRole('link', { name: 'Подключить сайт бесплатно' })).toBeVisible()
+      await expect(pricing.getByRole('link', { name: 'Начать бесплатно' })).toBeVisible()
       await expect(pricing.getByRole('status')).toHaveCount(0)
       await expect(pricing).not.toContainText('Загружаем')
     })
@@ -2292,9 +2289,9 @@ test.describe('reduced motion', () => {
     // The busy phase is a pause to read the status, so it stays; a double click cannot apply
     // and undo the change at once.
     const demo = page.locator('#site-demo')
-    await demo.getByRole('button', { name: 'Применить правку' }).dblclick()
-    await expect(demo.getByText('Изменено')).toBeVisible()
-    await expect(demo.getByRole('button', { name: 'Отменить правку' })).toBeVisible()
+    await demo.getByRole('button', { name: 'Сохранить' }).dblclick()
+    await expect(demo.getByText('Сохранено')).toBeVisible()
+    await expect(demo.getByRole('button', { name: 'Отменить' })).toBeVisible()
   })
 
   /** How many animations and transitions the document runs or holds ready. */
@@ -2350,21 +2347,21 @@ test.describe('reduced motion', () => {
     const demo = page.locator('#site-demo')
     const stage = demo.locator('[data-phase]')
     await bringIntoWindow(page, demo)
-    await demo.getByRole('button', { name: 'График' }).click()
+    await demo.getByRole('button', { name: 'Письмо' }).click()
     await expect(stage).toHaveAttribute('data-phase', 'preparing')
     expect(await moving(page)).toBe(0)
     await expect(stage).toHaveAttribute('data-phase', 'review')
-    await demo.getByRole('button', { name: 'Применить правку' }).click()
+    await demo.getByRole('button', { name: 'Сохранить' }).click()
     await expect(stage).toHaveAttribute('data-phase', 'applying')
     expect(await moving(page)).toBe(0)
     await expect(stage).toHaveAttribute('data-phase', 'applied')
     expect(await moving(page)).toBe(0)
     // The window of the site is level at once, the highlight has its colour at once.
-    await expect(stage.getByRole('group', { name: 'Пример сайта кофейни' })).toHaveCSS(
+    await expect(stage.getByRole('group', { name: 'Пример документов кофейни' })).toHaveCSS(
       'transform',
       'matrix(1, 0, 0, 1, 0, 0)',
     )
-    await demo.getByRole('button', { name: 'Отменить правку' }).click()
+    await demo.getByRole('button', { name: 'Отменить' }).click()
     await expect(stage).toHaveAttribute('data-phase', 'undone')
     expect(await moving(page)).toBe(0)
     await expect(stage.locator('[data-selected="true"] strong')).toHaveCSS('transform', 'none')
@@ -2809,7 +2806,7 @@ test.describe('demo in motion', () => {
   async function openDemo(page: Page, width: number): Promise<Locator> {
     await openAt(page, width)
     const demo = page.locator('#site-demo')
-    await hydrated(demo.getByRole('button', { name: 'Применить правку' }))
+    await hydrated(demo.getByRole('button', { name: 'Сохранить' }))
     await settled(page)
     return demo
   }
@@ -2866,8 +2863,8 @@ test.describe('demo in motion', () => {
       expect(applied.label).toBe(before.label)
       expect(Math.abs(Number(applied.value) - Number(before.value))).toBeLessThanOrEqual(1)
 
-      await demo.getByRole('button', { name: 'Отменить правку' }).click()
-      await expect(demo.getByText('Возвращено')).toBeVisible()
+      await demo.getByRole('button', { name: 'Отменить' }).click()
+      await expect(demo.getByText('Отменено')).toBeVisible()
       await settled(page)
       const returned = await read()
       expect(returned).toEqual(before)
@@ -2890,7 +2887,7 @@ test.describe('demo in motion', () => {
       expect(await motionOf(field)).toEqual([])
 
       // A row: the outline belongs to its highlight layer.
-      await demo.getByRole('button', { name: 'График' }).click()
+      await demo.getByRole('button', { name: 'Письмо' }).click()
       await expect(stage).toHaveAttribute('data-phase', 'preparing')
       const located = {
         name: 'locate',
@@ -2922,7 +2919,7 @@ test.describe('demo in motion', () => {
       expect(await motionOf(field)).toEqual([])
 
       // The banner has its outline on itself.
-      await demo.getByRole('button', { name: 'Акция' }).click()
+      await demo.getByRole('button', { name: 'Меню' }).click()
       await expect(stage).toHaveAttribute('data-phase', 'preparing')
       expect(await motionOf(field)).toEqual([{ ...located, pseudo: null }])
     })
@@ -2936,7 +2933,7 @@ test.describe('demo in motion', () => {
     const value = stage.locator('[data-selected="true"] strong')
     expect(await motionOf(value)).toEqual([])
 
-    await demo.getByRole('button', { name: 'Применить правку' }).click()
+    await demo.getByRole('button', { name: 'Сохранить' }).click()
     await expect(stage).toHaveAttribute('data-phase', 'applied')
     const [changed] = await motionOf(value)
     expect(changed).toMatchObject({ name: 'changeValue', duration: 600, easing: EASE_OUT })
@@ -2945,7 +2942,7 @@ test.describe('demo in motion', () => {
 
     // The undo has no phase of waiting: the label of the window is there at once, and the value
     // comes back the other way, without a blur or a fade.
-    await demo.getByRole('button', { name: 'Отменить правку' }).click()
+    await demo.getByRole('button', { name: 'Отменить' }).click()
     await expect(stage).toHaveAttribute('data-phase', 'undone')
     expect(await motionOf(value)).toEqual([
       {
@@ -2959,12 +2956,12 @@ test.describe('demo in motion', () => {
         from: { transform: 'translateY(-6px)' },
       },
     ])
-    await expect(value).toHaveText('250 ₽')
+    await expect(value).toHaveText('Не сравнивали')
     await settled(page)
     expect(await motionOf(value)).toEqual([])
     await expect(value).toHaveCSS('transform', 'none')
     // The status has the sign of a turn back, for the eye only.
-    const status = demo.getByText('Вернул как было. Всё под контролем.')
+    const status = demo.getByText('Отменил. Всё как было.')
     await expect(status.locator('svg')).toHaveAttribute('aria-hidden', 'true')
     await expect(status.locator('svg')).toHaveCSS('color', MARKER)
   })
@@ -3007,7 +3004,7 @@ test.describe('demo in motion', () => {
         expect(dot.y).toBeLessThan(place.siteBottom + 60)
       }
 
-      await demo.getByRole('button', { name: 'Применить правку' }).click()
+      await demo.getByRole('button', { name: 'Сохранить' }).click()
       await expect(stage).toHaveAttribute('data-phase', 'applying')
       const phase = await stage.evaluate((node) =>
         parseFloat((node as HTMLElement).style.getPropertyValue('--demo-phase')),
@@ -3394,7 +3391,7 @@ test.describe('current section of the navigation', () => {
       'Возможности',
       'Тарифы',
       'Вопросы',
-      'Подключить сайт',
+      'Начать',
       PHONE.text,
     ])
     expect(links[0]).toEqual({
@@ -3417,7 +3414,7 @@ test.describe('example under the first screen', () => {
     await expect(page.locator('section:has(#hero-title) + section')).toHaveAttribute('id', 'demo')
     await expect(page.locator('#demo #site-demo')).toHaveCount(1)
     await expect(page.locator('#demo-title + p')).toHaveText(
-      'Сайт кофейни для примера. Выберите просьбу — и посмотрите, что изменится.',
+      'Кофейня для примера. Выберите просьбу — и посмотрите, что сделает Радити.',
     )
     await atWidths(page, [320, 390, 768, 1024, 1440, 1920], async (width, soft) => {
       const places = await page.evaluate(() => {
@@ -3482,11 +3479,11 @@ test.describe('form of a lead', () => {
     await page.goto('/')
     const lead = page.locator('#lead')
     const form = lead.locator('form')
-    await hydrated(form.getByLabel('Адрес сайта'))
+    await hydrated(form.getByLabel('Сайт компании'))
     // Two fields (the owner, 13.11.2026): the name, the mail and the task are asked later.
     const fields = form.getByRole('textbox')
     await expect(fields).toHaveCount(2)
-    await expect(form.getByLabel('Адрес сайта')).toHaveAttribute('name', 'site')
+    await expect(form.getByLabel('Сайт компании')).toHaveAttribute('name', 'site')
     await expect(form.getByLabel('Телефон или Telegram')).toHaveAttribute('name', 'phone')
     for (const field of await fields.all()) {
       await expect(field).toHaveAttribute('required', '')
@@ -3507,7 +3504,7 @@ test.describe('form of a lead', () => {
     await expect(trap).toHaveCount(1)
     await expect(trap).toHaveAttribute('tabindex', '-1')
     expect(await trap.evaluate((node) => node.closest('[aria-hidden="true"]') !== null)).toBe(true)
-    await form.getByLabel('Адрес сайта').focus()
+    await form.getByLabel('Сайт компании').focus()
     const stops: string[] = []
     for (let press = 0; press < 5; press++) {
       await page.keyboard.press('Tab')
@@ -3539,7 +3536,7 @@ test.describe('form of a lead', () => {
     await page.goto('/')
     const sent = await answerLeads(page)
     const form = page.locator('#lead form')
-    const site = form.getByLabel('Адрес сайта')
+    const site = form.getByLabel('Сайт компании')
     const contact = form.getByLabel('Телефон или Telegram')
     const consent = form.getByRole('checkbox')
     const send = form.getByRole('button', { name: 'Отправить заявку' })
@@ -3605,14 +3602,14 @@ test.describe('form of a lead', () => {
       const heading = done.getByRole('heading', { level: 3 })
       await expect(heading).toHaveText('Заявка у нас.')
       await expect(heading).toBeFocused()
-      await expect(done).toContainText('Свяжемся с вами и подключим kofeinya.ru.')
+      await expect(done).toContainText('Свяжемся с вами и поможем начать.')
       await expect(done).toContainText('50 кредитов придут, как только вы зарегистрируетесь.')
       await expect(lead.locator('form')).toHaveCount(0)
 
       // Another lead starts from an empty form.
       await done.getByRole('button', { name: 'Отправить ещё одну' }).click()
       const form = lead.locator('form')
-      await expect(form.getByLabel('Адрес сайта')).toHaveValue('')
+      await expect(form.getByLabel('Сайт компании')).toHaveValue('')
       await expect(form.getByLabel('Телефон или Telegram')).toHaveValue('')
       await expect(form.getByRole('checkbox')).not.toBeChecked()
       await expect(form.locator('[aria-invalid]')).toHaveCount(0)
@@ -3626,7 +3623,7 @@ test.describe('form of a lead', () => {
     const form = lead.locator('form')
     const send = form.getByRole('button', { name: 'Отправить заявку' })
     const typed = async () => {
-      await expect(form.getByLabel('Адрес сайта')).toHaveValue('kofeinya.ru')
+      await expect(form.getByLabel('Сайт компании')).toHaveValue('kofeinya.ru')
       await expect(form.getByLabel('Телефон или Telegram')).toHaveValue('+7 900 000-00-00')
       await expect(form.getByRole('checkbox')).toBeChecked()
       await expect(send).toBeEnabled()
@@ -3685,7 +3682,7 @@ test.describe('form of a lead', () => {
     page,
   }) => {
     await openAt(page, 320)
-    await hydrated(page.locator('#lead form').getByLabel('Адрес сайта'))
+    await hydrated(page.locator('#lead form').getByLabel('Сайт компании'))
     // With the messages shown: the tallest state of the form.
     await page.locator('#lead form').getByRole('button', { name: 'Отправить заявку' }).click()
     await atWidths(page, [320, 390, 768, 1024, 1440], async (width, soft) => {
@@ -3730,7 +3727,7 @@ test.describe('phone of the service', () => {
     await settled(page)
     const phone = menu.getByRole('link', { name: PHONE.text })
     await expect(phone).toHaveAttribute('href', PHONE.href)
-    const action = menu.getByRole('link', { name: 'Подключить сайт' })
+    const action = menu.getByRole('link', { name: 'Начать' })
     await expect(action).toHaveAttribute('href', '#lead')
     for (const link of [phone, action]) {
       expect((await link.boundingBox())?.height).toBeGreaterThanOrEqual(44)

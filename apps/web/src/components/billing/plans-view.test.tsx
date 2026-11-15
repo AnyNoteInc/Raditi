@@ -212,7 +212,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
       'В среднем около 91 задачи',
       // The windows of the work (plan 71, Л14).
       'До 350 кредитов в неделю',
-      'Небольшая правка — около 50 ₽',
+      'Небольшая задача — около 50 ₽',
     ])
     expect(
       within(await planCard('Старт'))
@@ -222,7 +222,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
       '200 кредитов в месяц',
       'В среднем около 18 задач',
       'До 73 кредитов в неделю',
-      'Небольшая правка — около 50 ₽',
+      'Небольшая задача — около 50 ₽',
     ])
     // A count of four digits is grouped, and a line never parts its groups.
     const largest = within(await planCard('Агентство')).getAllByRole('listitem')
@@ -230,7 +230,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
       '2 000 кредитов в месяц',
       'В среднем около 180 задач',
       'До 700 кредитов в неделю',
-      'Небольшая правка — около 50 ₽',
+      'Небольшая задача — около 50 ₽',
     ])
     expect(largest[0]?.textContent).toBe('2\u00a0000\u00a0кредитов в\u00a0месяц')
     // No tariff on sale has a daily limit: no card speaks of a day.
@@ -660,7 +660,7 @@ describe('buying a pack of credits', () => {
       'Пакет из 100 кредитов — 1 490 ₽',
     )
     expect(plain(row.textContent)).toContain(
-      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Небольшая правка из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
+      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Небольшая задача из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
     )
     expect(within(row).getByRole('button', { name: 'Купить пакет' })).toBeEnabled()
     // In the section of the tariffs, under their grid.

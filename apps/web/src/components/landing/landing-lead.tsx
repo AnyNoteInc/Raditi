@@ -20,11 +20,13 @@ type Values = Record<Exclude<LeadField, 'consent'>, string> & { consent: boolean
 const empty: Values = { site: '', phone: '', consent: false, check: '' }
 
 // Two fields (the owner, 13.11.2026): the fewer a form asks, the more people finish it. The name
-// and the task are asked when we get in touch.
+// and the task are asked when we get in touch. The first is still the site of the business —
+// `leadInputSchema` of the domain takes a host name — but the lead no longer connects it (plan 83):
+// it tells us who to call and what the business does.
 const fields = [
   {
     key: 'site',
-    label: 'Адрес сайта',
+    label: 'Сайт компании',
     type: 'text',
     autoComplete: 'url',
     inputMode: 'url',
@@ -59,8 +61,8 @@ function serverAnswer(body: unknown): {
 }
 
 /**
- * «50 кредитов в подарок»: a lead to connect a site, free of charge (docs/plan/65-landing-platforms-leads.md,
- * Л3). The fields are checked here with the schema the server uses; the lead goes to
+ * «Поможем начать»: a lead for help with the first tasks, free of charge (docs/plan/65-landing-platforms-leads.md,
+ * Л3; since docs/plan/83 no site is connected). The fields are checked here with the schema the server uses; the lead goes to
  * POST /api/leads with the SmartCaptcha token, and the server writes it before anything leaves for
  * Telegram. The gift is the one of the sign-up (Л4): the lead credits nothing by itself.
  */
@@ -155,7 +157,7 @@ export function LandingLead({
         <div className={styles.offer} data-reveal>
           <span className={styles.free}>
             <i aria-hidden="true" />
-            {nbsp('Подключение и настройка — бесплатно')}
+            {nbsp('Помощь с первыми задачами — бесплатно')}
           </span>
           <div className={styles.gift} aria-hidden="true">
             <span>{isGuest ? signupGiftCredits : '0\u00a0₽'}</span>
@@ -165,7 +167,7 @@ export function LandingLead({
             </svg>
           </div>
           {/* The gift is the one of the sign-up (Л4): a signed-in visitor has had it, so the
-              section offers them the free connection only. */}
+              section offers them the free help only. */}
           {isGuest ? (
             <h2 id="lead-title">
               <span className={styles.giftWords}>{signupGiftCredits} </span>
@@ -176,16 +178,16 @@ export function LandingLead({
           ) : (
             <h2 id="lead-title">
               <span className={styles.giftWords}>0&nbsp;₽ </span>
-              за&nbsp;подключение
+              за&nbsp;помощь
               <br />
-              и&nbsp;настройку.
+              с&nbsp;началом.
             </h2>
           )}
           <p className={styles.lede}>
             {nbsp(
               isGuest
-                ? `Оставьте адрес сайта и телефон — мы сами подключим ваш сайт, настроим Радити под вашу систему, а ${signupGiftCredits} кредитов на первые задачи придут вместе с регистрацией.`
-                : 'Оставьте адрес сайта и телефон — мы сами подключим ваш сайт и настроим Радити под вашу систему.',
+                ? `Оставьте сайт компании и телефон — расскажем, какие ежедневные дела можно поручить Радити, и поможем с первыми задачами, а ${signupGiftCredits} кредитов на них придут вместе с регистрацией.`
+                : 'Оставьте сайт компании и телефон — расскажем, какие ежедневные дела можно поручить Радити, и поможем с первыми задачами.',
             )}
           </p>
           <ol className={styles.steps} role="list">
@@ -196,8 +198,8 @@ export function LandingLead({
             </li>
             <li>
               <span>02</span>
-              <strong>Подключим</strong>
-              <p>{nbsp('Свяжемся и всё сделаем сами')}</p>
+              <strong>Созвонимся</strong>
+              <p>{nbsp('Подскажем, что поручить')}</p>
             </li>
             <li>
               <span>03</span>
@@ -234,8 +236,8 @@ export function LandingLead({
               <p>
                 {nbsp(
                   isGuest
-                    ? `Свяжемся с вами и подключим ${sent.site}. Подключение и настройка — бесплатно, а ${signupGiftCredits} кредитов придут, как только вы зарегистрируетесь.`
-                    : `Свяжемся с вами и подключим ${sent.site}. Подключение и настройка — бесплатно.`,
+                    ? `Свяжемся с вами и поможем начать. Это бесплатно, а ${signupGiftCredits} кредитов придут, как только вы зарегистрируетесь.`
+                    : 'Свяжемся с вами и поможем начать. Это бесплатно.',
                 )}
               </p>
               <button type="button" className={styles.again} onClick={() => setSent(null)}>
@@ -251,7 +253,7 @@ export function LandingLead({
               aria-labelledby={`${id}-title`}
             >
               <div className={styles.formHead}>
-                <h3 id={`${id}-title`}>Заявка на&nbsp;подключение</h3>
+                <h3 id={`${id}-title`}>Заявка</h3>
                 <span>Оба поля обязательны</span>
               </div>
               <div className={styles.pair}>
