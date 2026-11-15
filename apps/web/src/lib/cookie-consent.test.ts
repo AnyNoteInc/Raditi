@@ -24,7 +24,15 @@ describe('cookie consent', () => {
   })
 
   it('asks again when there is no choice, it is spoiled or of another version', () => {
-    for (const value of [undefined, '', 'accepted', 'v1.maybe.1', 'v1.all.', 'v2.all.1', 'v0.all.1']) {
+    for (const value of [
+      undefined,
+      '',
+      'accepted',
+      'v1.maybe.1',
+      'v1.all.',
+      'v2.all.1',
+      'v0.all.1',
+    ]) {
       expect(parseCookieConsent(value)).toBeNull()
     }
   })

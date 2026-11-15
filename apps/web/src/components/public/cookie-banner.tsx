@@ -72,9 +72,8 @@ export function CookieBanner({ initiallyOpen }: { initiallyOpen: boolean }) {
         <Box sx={{ flex: 1 }}>
           <Typography variant="body2" sx={{ lineHeight: 1.55 }}>
             Мы используем файлы cookie. Необходимые нужны, чтобы сайт и&nbsp;вход в&nbsp;кабинет
-            работали, — без них сайт не&nbsp;откроется. Аналитические помогают понять, как
-            сайтом пользуются, и&nbsp;ставятся только с&nbsp;вашего согласия. Подробнее —
-            в&nbsp;
+            работали, — без них сайт не&nbsp;откроется. Аналитические помогают понять, как сайтом
+            пользуются, и&nbsp;ставятся только с&nbsp;вашего согласия. Подробнее — в&nbsp;
             <Link href={legalDocumentHref('privacy-policy')} color="primary">
               Политике обработки персональных данных
             </Link>
