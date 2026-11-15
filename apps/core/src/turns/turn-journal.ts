@@ -98,15 +98,14 @@ export class TaskEventTurnJournal implements TurnJournal {
       SELECT task.id, turn.id, ${evidence.phase === 'output' ? 'turn.output' : 'turn.lifecycle'},
         ${payload}::jsonb, false
       FROM tasks task
-      JOIN owned_lease lease ON lease.site_id IN (task.id, task.site_id)
+      JOIN owned_lease lease ON lease.site_id = task.id
       LEFT JOIN task_turns turn ON turn.task_id = task.id AND turn.turn_no = ${evidence.turn}
-      WHERE task.id = ${fence.taskId}::uuid AND ${fence.siteId}::uuid IN (task.id, task.site_id)
+      WHERE task.id = ${fence.taskId}::uuid AND ${fence.siteId}::uuid = task.id
         AND (${recovery} OR (NOT lease.held_for_operator AND lease.expires_at > clock_timestamp()))
       RETURNING id, turn_id
       ), projected AS (
         UPDATE task_turns tt SET
           native_session_id = COALESCE(${nativeSessionId ?? null}::text, tt.native_session_id),
-          head_sha = COALESCE(${evidence.candidateHeadSha ?? null}::text, tt.head_sha),
           snapshot_prefix = COALESCE(${evidence.snapshotPrefix ?? null}::text, tt.snapshot_prefix),
           model_id = COALESCE(tt.model_id, (SELECT k.model_id FROM llm_keys k
             JOIN turn_assignments a ON a.task_id = k.task_id AND a.turn_no = k.turn_no
@@ -131,7 +130,7 @@ export class TaskEventTurnJournal implements TurnJournal {
         JOIN tasks task ON task.id = ${fence.taskId}::uuid
         CROSS JOIN unnest(${steps}::text[]) WITH ORDINALITY AS stage(step, ordinal)
         WHERE inserted.turn_id IS NOT NULL
-          AND (stage.step <> 'code' OR task.needs_repository)
+          AND stage.step <> 'code'
           AND NOT EXISTS (
             SELECT 1 FROM task_events e
             WHERE e.turn_id = inserted.turn_id AND e.type = 'feed.step'

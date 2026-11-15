@@ -10,14 +10,13 @@ const prismaWith = (ids: string[]) => {
 }
 
 describe('warm containers of core', () => {
-  it('keeps a container for a task that may still run a turn, without a site or on one not deleted', async () => {
+  it('keeps a container for a task that may still run a turn', async () => {
     const { prisma, findMany } = prismaWith(['task1'])
     expect(await openTasks(prisma, ['task1', 'task2'])).toEqual(new Set(['task1']))
     expect(findMany).toHaveBeenCalledWith({
       where: {
         id: { in: ['task1', 'task2'] },
         status: { in: ['queued', 'preparing', 'running', 'awaiting_user', 'awaiting_approval'] },
-        OR: [{ siteId: null }, { site: { deletedAt: null } }],
       },
       select: { id: true },
     })

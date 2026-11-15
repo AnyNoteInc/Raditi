@@ -8,7 +8,6 @@ import {
 } from '@repo/db'
 import {
   BROWSER_ONLY,
-  leaseScopeOf,
   notFound,
   PLAIN_CHAT,
   type SnapshotManifest,
@@ -44,17 +43,10 @@ describe.skipIf(!enabled)(
     afterEach(async () => {
       vi.restoreAllMocks()
       for (const workspaceId of workspaces.splice(0)) {
-        const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
-        const chats = await db.task.findMany({
-          where: { workspaceId, siteId: null },
-          select: { id: true },
-        })
-        await db.siteLease.deleteMany({
-          where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
-        })
+        const chats = await db.task.findMany({ where: { workspaceId }, select: { id: true } })
+        await db.siteLease.deleteMany({ where: { siteId: { in: chats.map(({ id }) => id) } } })
         await db.mcpCall.deleteMany({ where: { turn: { task: { workspaceId } } } })
         await db.task.deleteMany({ where: { workspaceId } })
-        await db.site.deleteMany({ where: { workspaceId } })
         await db.workspace.delete({ where: { id: workspaceId } })
       }
     })
@@ -65,27 +57,16 @@ describe.skipIf(!enabled)(
     /**
      * A product turn as its owner left it: a content write of the running agent got no answer
      * (McpJournal.markAmbiguous: the lease names its writer and is held), the owner journaled
-     * `failed{lease_lost}`, and neither its release nor its finish went through. `chat` — the
-     * same stop of a chat without a site, under the lease of its own id (plan 61, К14).
+     * `failed{lease_lost}`, and neither its release nor its finish went through: a chat, under
+     * the lease of its own id (plan 61, К14; docs/plan/83-remove-projects.md, БП6).
      */
-    async function endedBehindWrite({ chat = false }: { chat?: boolean } = {}) {
+    async function endedBehindWrite() {
       const workspace = await db.workspace.create({ data: { name: 'Synthetic turn recovery' } })
       workspaces.push(workspace.id)
-      const site = await db.site.create({
-        data: {
-          workspaceId: workspace.id,
-          name: 'Synthetic',
-          url: 'https://recovery.example.test',
-          stack: 'wordpress',
-        },
-      })
       const task = await db.task.create({
-        data: {
-          workspaceId: workspace.id,
-          ...(chat ? { needsRepository: false, needsBrowser: false } : { siteId: site.id }),
-        },
+        data: { workspaceId: workspace.id, needsRepository: false, needsBrowser: false },
       })
-      const scope = leaseScopeOf(task)
+      const scope = task.id
       const sessionId = randomUUID()
       const leases = new PostgresSiteLeaseStore(db)
       const assignments = new PostgresTaskTurnAssignmentStore(db)
@@ -125,16 +106,7 @@ describe.skipIf(!enabled)(
         input: { prompt: 'Synthetic', attachments: [] },
         driverId: sampleDriverId,
         driverVersion: '1.0.0',
-        ...(chat
-          ? { requirements: PLAIN_CHAT }
-          : {
-              workspace: {
-                repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
-                branch: `agent/${task.id}`,
-                expectedBaseSha: 'b'.repeat(40),
-                protectedPaths: [],
-              },
-            }),
+        requirements: PLAIN_CHAT,
         committedAt: '2026-10-01T00:00:00.000Z',
       }
       const assignment = (await assignments.open({
@@ -191,14 +163,13 @@ describe.skipIf(!enabled)(
         driver: () => {
           throw new Error('No driver in this test')
         },
-        workspace: {} as never,
+        workspace: null,
         snapshots: {} as never,
         credentials: { issue: vi.fn(), recover: vi.fn(), revoke },
         live: new LiveTurns(),
         logger,
       })
       return {
-        site,
         scope,
         task,
         workspace,
@@ -218,7 +189,7 @@ describe.skipIf(!enabled)(
     }
 
     it('journals and closes the turn of a chat without a site under the lease of its own id', async () => {
-      const f = await endedBehindWrite({ chat: true })
+      const f = await endedBehindWrite()
       expect(f.scope).toBe(f.task.id)
       await f.pass()
       expect((await f.assignment()).outcome).toBeNull()
@@ -257,7 +228,7 @@ describe.skipIf(!enabled)(
 
       // The content maintenance resolved the write: the writer goes, the hold stays.
       await db.siteLease.update({
-        where: { siteId: f.site.id },
+        where: { siteId: f.scope },
         data: { inflightMcpCallId: null },
       })
       await f.pass()
@@ -272,34 +243,6 @@ describe.skipIf(!enabled)(
       expect(f.replay).toHaveBeenCalledOnce()
       expect(f.revoke).toHaveBeenCalledOnce()
       expect(f.finish).toHaveBeenCalledTimes(2)
-    })
-
-    it('closes the parked turn once another task has the site', async () => {
-      const f = await endedBehindWrite()
-      await f.pass()
-      await f.pass()
-      expect(f.finish).toHaveBeenCalledOnce()
-      // An operator resolved the write and took the hold off; the lease ran out meanwhile.
-      await db.siteLease.update({
-        where: { siteId: f.site.id },
-        data: { inflightMcpCallId: null, heldForOperator: false, expiresAt: new Date(0) },
-      })
-      const other = await db.task.create({
-        data: { workspaceId: f.workspace.id, siteId: f.site.id },
-      })
-      const next = await f.leases.acquire({
-        siteId: f.site.id,
-        taskId: other.id,
-        operation: 'turn',
-        ttlMs: 60_000,
-      })
-      expect(next).toMatchObject({ epoch: 2 })
-      await f.pass()
-      expect(await f.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
-      // The newer owner keeps the site.
-      expect(await f.lease()).toMatchObject({ holderTaskId: other.id, epoch: 2 })
-      expect(f.replay).toHaveBeenCalledOnce()
-      expect(f.revoke).toHaveBeenCalledOnce()
     })
   },
 )
@@ -320,10 +263,9 @@ describe.skipIf(!enabled)(
     afterEach(async () => {
       vi.restoreAllMocks()
       for (const workspaceId of workspaces.splice(0)) {
-        const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
-        await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
+        const chats = await db.task.findMany({ where: { workspaceId }, select: { id: true } })
+        await db.siteLease.deleteMany({ where: { siteId: { in: chats.map(({ id }) => id) } } })
         await db.task.deleteMany({ where: { workspaceId } })
-        await db.site.deleteMany({ where: { workspaceId } })
         await db.workspace.delete({ where: { id: workspaceId } })
       }
     })
@@ -335,28 +277,15 @@ describe.skipIf(!enabled)(
     async function diedAt(last: 'checkpointing' | 'destroyed', manifest: SnapshotManifest | null) {
       const workspace = await db.workspace.create({ data: { name: 'Synthetic browser recovery' } })
       workspaces.push(workspace.id)
-      const site = await db.site.create({
-        data: {
-          workspaceId: workspace.id,
-          name: 'Synthetic',
-          url: 'https://browser-recovery.example.test',
-          stack: 'wordpress',
-        },
-      })
       const task = await db.task.create({
-        data: {
-          workspaceId: workspace.id,
-          siteId: site.id,
-          needsRepository: false,
-          needsBrowser: true,
-        },
+        data: { workspaceId: workspace.id, needsRepository: false, needsBrowser: true },
       })
       const sessionId = randomUUID()
       const leases = new PostgresSiteLeaseStore(db)
       const assignments = new PostgresTaskTurnAssignmentStore(db)
       const journal = new TaskEventTurnJournal(db)
       const fence = (await leases.acquire({
-        siteId: site.id,
+        siteId: task.id,
         taskId: task.id,
         operation: 'turn',
         ttlMs: 60_000,
@@ -366,7 +295,7 @@ describe.skipIf(!enabled)(
           image,
           labels: {
             workspaceId: workspace.id,
-            siteId: site.id,
+            siteId: task.id,
             taskId: task.id,
             sessionId,
             turn: 1,
@@ -457,7 +386,7 @@ describe.skipIf(!enabled)(
           await recovery.settled()
         },
         assignment: async () => (await assignments.get(assignment.id))!,
-        lease: () => db.siteLease.findUniqueOrThrow({ where: { siteId: site.id } }),
+        lease: () => db.siteLease.findUniqueOrThrow({ where: { siteId: task.id } }),
         taskTurn: () => db.taskTurn.findFirstOrThrow({ where: { taskId: task.id } }),
         phases: async () =>
           (

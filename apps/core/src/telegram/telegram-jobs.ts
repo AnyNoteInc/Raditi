@@ -277,13 +277,10 @@ export class TelegramJobs {
     const { prisma } = this.#deps
     const place = await this.#placeOf(job.taskId)
     if (place === null) return 'skipped'
-    const [task, turn] = await Promise.all([
-      prisma.task.findUniqueOrThrow({ where: { id: job.taskId }, select: { siteId: true } }),
-      prisma.taskTurn.findUnique({
-        where: { taskId_turnNo: { taskId: job.taskId, turnNo: job.turnNo } },
-        select: { id: true },
-      }),
-    ])
+    const turn = await prisma.taskTurn.findUnique({
+      where: { taskId_turnNo: { taskId: job.taskId, turnNo: job.turnNo } },
+      select: { id: true },
+    })
     const events = await prisma.taskEvent.findMany({
       where: {
         taskId: job.taskId,
@@ -302,7 +299,8 @@ export class TelegramJobs {
       at: event.createdAt.toISOString(),
     }))
     const markdown = rows
-      .map((row) => feedRowMarkdown(row, task.siteId !== null))
+      // A chat has no site (docs/plan/83-remove-projects.md).
+      .map((row) => feedRowMarkdown(row, false))
       .filter((block): block is string => block !== null)
       .join('\n\n')
     const parts = markdownToTelegramParts(markdown)
