@@ -83,16 +83,17 @@ describe('request bodies', () => {
 })
 
 describe('packages', () => {
-  it('transpiles the workspace packages of the site connection wizard', () => {
-    expect(config.transpilePackages).toEqual(
-      expect.arrayContaining(['@repo/site-adapters', '@repo/site-connections']),
+  it('transpiles no package of the sites that went with projects (plan 83)', () => {
+    expect(config.transpilePackages).not.toEqual(
+      expect.arrayContaining(['@repo/site-adapters']),
+    )
+    expect(config.transpilePackages).not.toEqual(
+      expect.arrayContaining(['@repo/site-connections']),
     )
   })
 
-  it('leaves the drivers that reach a client server to Node instead of bundling them', () => {
-    expect(config.serverExternalPackages).toEqual(
-      expect.arrayContaining(['pg', 'ssh2', 'basic-ftp', 'mysql2']),
-    )
+  it('leaves the database driver to Node instead of bundling it', () => {
+    expect(config.serverExternalPackages).toEqual(expect.arrayContaining(['pg']))
   })
 
   it('sends none of its headers on a page of the agent (docs/plan/67, Д3)', async () => {

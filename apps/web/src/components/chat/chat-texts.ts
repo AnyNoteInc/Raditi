@@ -1,5 +1,3 @@
-import type { CandidateCheckStatus, ReleaseStatus } from '@repo/domain'
-import { CLOSED_PROJECT_TEXT } from '@repo/domain/release/chat-commands'
 import { taskRewoundLabel } from '@repo/domain/tasks/client-feed-labels'
 
 import { plural } from '@/lib/plural'
@@ -129,13 +127,6 @@ const checkKindLabel: Readonly<Record<string, string>> = Object.freeze({
 /** The name of a check; a kind added later — «Проверка». */
 export const checkKindText = (kind: string): string => ownText(checkKindLabel, kind) ?? 'Проверка'
 
-export const checkStatusLabel: Readonly<Record<CandidateCheckStatus, string>> = Object.freeze({
-  pending: 'Идёт',
-  passed: 'Пройдена',
-  failed: 'Не пройдена',
-  stale: 'Устарела: изменения поменялись после неё',
-})
-
 export const checksText = Object.freeze({
   none: 'Проверок пока нет.',
   /** The screenshot the agent's browser took when it checked the changes (Р22). */
@@ -166,16 +157,6 @@ export function runtimeMatchText(match: {
 /** Where the cabinet reads the screenshot of a check (apps/web/src/app/api/tasks/…). */
 export const checkScreenshotUrl = (taskId: string, checkId: string): string =>
   `/api/tasks/${encodeURIComponent(taskId)}/checks/${encodeURIComponent(checkId)}/screenshot`
-
-/** The progress of a release while it is in work, by its status. */
-export const releaseStatusText: Readonly<Partial<Record<ReleaseStatus, string>>> = Object.freeze({
-  approved: 'Готовим выпуск',
-  publishing: 'Сохраняем новую версию',
-  published: 'Новая версия сохранена',
-  deploying: 'Устанавливаем на сайт',
-  verifying: 'Проверяем сайт',
-  rolling_back: 'Возвращаем сайт как было',
-})
 
 /** The step a release reports, in words; another step — none (read with `ownText`). */
 export const releaseStepText: Readonly<Record<string, string>> = Object.freeze({
@@ -390,7 +371,6 @@ export const chatsText = Object.freeze({
   /** Where the pill of the project stands locked: a file is bound to its site. */
   lockedProject: 'Чтобы сменить проект, уберите прикреплённые файлы.',
   openProject: (name: string) => `Открыть проект «${name}»`,
-  closedProject: CLOSED_PROJECT_TEXT,
   unavailableProject: 'Сейчас этот проект недоступен для чата. Попробуйте ещё раз немного позже.',
   importingProject: 'Файлы сайта ещё загружаются.',
   importFailedProject: 'Файлы сайта не загрузились.',

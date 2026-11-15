@@ -86,8 +86,6 @@ function onBusiness(
     tariff: {
       credits: tariffMeter({ charged: 600 - left, left }),
       today: credits.today,
-      sites: { count: 1, max: 3 },
-      bySite: [],
     },
     pack: { left: 100, held: 0 },
     totalLeft: left + 100,
@@ -189,8 +187,6 @@ function unpaid(): BillingUsage {
     tariff: {
       credits: tariffMeter({ charged: 395, left: 205 }),
       today: credits.today,
-      sites: { count: 1, max: 3 },
-      bySite: [],
     },
     totalLeft: 205,
     ...credits,

@@ -37,7 +37,6 @@ const startPlan = {
   creditsPerDay: start.creditsPerDay,
   creditsPer5h: null,
   creditsPerWeek: null,
-  maxSites: start.maxSites,
 }
 type Terms = typeof startPlan
 /**

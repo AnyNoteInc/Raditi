@@ -73,8 +73,6 @@ const nextConfig: NextConfig = {
     '@repo/mail',
     '@repo/notifications',
     '@repo/observability',
-    '@repo/site-adapters',
-    '@repo/site-connections',
     '@repo/storage',
     '@repo/trpc',
     '@repo/ui',
@@ -88,9 +86,6 @@ const nextConfig: NextConfig = {
     'pg',
     '@prisma/client',
     '@prisma/adapter-pg',
-    'ssh2',
-    'basic-ftp',
-    'mysql2',
   ],
   ...(workspaceRoot ? { outputFileTracingRoot: workspaceRoot } : {}),
   experimental: {

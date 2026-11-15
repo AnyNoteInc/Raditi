@@ -23,12 +23,10 @@ export function verdicts(
   refused: Partial<Record<CommandVerdict['id'], CommandVerdict['refusal']>> = {},
 ): CommandVerdict[] {
   const closed = { turn_undo: 'nothing_to_undo', turn_redo: 'nothing_to_redo', ...refused } as const
-  return serverCommandIds
-    .filter((id) => (id !== 'undo' && id !== 'retry') || id in refused)
-    .map((id) => {
-      const refusal = closed[id] ?? null
-      return { id, available: refusal === null, refusal }
-    })
+  return serverCommandIds.map((id) => {
+    const refusal = closed[id] ?? null
+    return { id, available: refusal === null, refusal }
+  })
 }
 
 export function taskHead(patch: Partial<FeedHead> = {}): FeedHead {
@@ -215,9 +213,7 @@ export function browserAnswer(
     status: 'running',
     commands: verdicts(
       Object.fromEntries(
-        serverCommandIds
-          .filter((id) => id !== 'cancel' && id !== 'undo' && id !== 'retry')
-          .map((id) => [id, 'not_allowed' as const]),
+        serverCommandIds.filter((id) => id !== 'cancel').map((id) => [id, 'busy' as const]),
       ),
     ),
     ...rest,

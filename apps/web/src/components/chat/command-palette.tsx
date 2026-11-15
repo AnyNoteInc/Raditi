@@ -31,24 +31,20 @@ export interface PaletteOption {
   reason: string | null
 }
 
-/** What only a chat that has something to undo or to retry can offer: no row on a new chat. */
-const AFTER_WORK: readonly ChatCommandId[] = ['undo', 'retry']
-
 /**
  * The commands for what is typed: every command when the list was opened by its button, otherwise
  * those whose name or other word starts with the letters after `/`. A command of the server stands
  * here by its verdict, and a chat lists the verdicts `DialogView` hands over and no others
  * (docs/plan/61-chats-first.md, К27). A command of the page needs none. A place with `closedReason`
  * has no chat yet: it lists the server's commands with that reason, and those of the page that take
- * a chat; `plain` — the chat that starts there has no repository, so what it will not have is not
- * listed, for the reason would not be true of it.
+ * a chat. `plain` is kept for the callers: since projects went every chat is plain (plan 83).
  */
 export function paletteOptions(
   typed: string | null,
   verdicts: readonly CommandVerdict[],
   /** Why a command cannot be run here, where no chat has given a verdict on it. */
   closedReason?: string,
-  plain = false,
+  _plain = false,
 ): PaletteOption[] {
   const ids = typed === null ? [...chatCommandIds] : matchChatCommands(typed)
   return ids.flatMap((id) => {
@@ -58,10 +54,7 @@ export function paletteOptions(
       return [{ id, available: !closed, reason: closed ? closedReason : null }]
     }
     const verdict = verdicts.find((item) => item.id === id)
-    const unknownHere =
-      closedReason === undefined ||
-      AFTER_WORK.includes(id) ||
-      (plain && command.needs === 'repository')
+    const unknownHere = closedReason === undefined
     if (verdict === undefined && unknownHere) return []
     const available = verdict?.available === true
     const refusal = verdict?.refusal ?? null
@@ -154,7 +147,7 @@ export function CommandList({
   options,
   active,
   focusable,
-  plain = false,
+  plain: _plain = false,
   onChoose,
   onHover,
   onKeyDown,
@@ -225,10 +218,7 @@ export function CommandList({
           {items.map(({ option, index }) => {
             const command = chatCommands[option.id]
             const selected = index === active
-            const description =
-              plain && command.descriptionPlain !== undefined
-                ? command.descriptionPlain
-                : command.description
+            const description = command.description
             return (
               <Box
                 key={option.id}

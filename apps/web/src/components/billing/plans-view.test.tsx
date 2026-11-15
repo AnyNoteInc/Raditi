@@ -323,7 +323,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
         credits: creditBalances(credits[0] ?? 0, credits[1] ?? 0),
       }),
     )
-    getOffers.mockResolvedValue(offers({ siteCount: 2, current: 'business' }))
+    getOffers.mockResolvedValue(offers({ current: 'business' }))
   }
 
   it('shows an active tariff with the next charge, the payment method and the credits', async () => {
@@ -334,7 +334,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
       await screen.findByRole('heading', { level: 2, name: 'Тариф «Бизнес»' })
     ).closest('section')
     if (!block) throw new Error('the tariff has no section')
-    expect(plain(block.textContent)).toContain('1 000 кредитов в месяц · до 3 сайтов на WordPress')
+    expect(plain(block.textContent)).toContain('1 000 кредитов в месяц')
     expect(plain(block.textContent)).toContain('9 990 ₽ в месяц')
     // The status is words and an icon, never a colour alone.
     const chip = within(block).getByText('Активен').closest('.MuiChip-root')
@@ -431,7 +431,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
   it('suggests no other tariff to a customer who has one', async () => {
     subscribed()
     // No sites: «Старт» would be the suggestion of a customer without a tariff.
-    getOffers.mockResolvedValue(offers({ siteCount: 0, current: 'business' }))
+    getOffers.mockResolvedValue(offers({ current: 'business' }))
     showPlans()
 
     expect(within(await planCard('Бизнес')).getByText('Ваш тариф')).toBeInTheDocument()
@@ -836,7 +836,7 @@ function onBusiness(
   getOverview.mockResolvedValue(
     overviewOf({ subscription, credits: creditBalances(45, 10), ...overview }),
   )
-  getOffers.mockResolvedValue(offers({ siteCount: 2, current: 'business' }))
+  getOffers.mockResolvedValue(offers({ current: 'business' }))
   return subscription
 }
 
@@ -1168,7 +1168,7 @@ describe('choosing another tariff for the next period', () => {
     expect(dialogText()).toContain(
       'Тариф изменится 18 октября 2026 — с началом нового периода. До этого дня действует «Бизнес». Неистраченные кредиты тарифа переходят на следующий месяц, один раз. Кредиты из пакета остаются.',
     )
-    expect(dialogText()).toContain('С 18 октября2 000 кредитов в месяц · до 15 сайтов на WordPress')
+    expect(dialogText()).toContain('С 18 октября2 000 кредитов в месяц')
     expect(dialogText()).toContain(
       'Спишем 18 октября19 990 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444',
     )
@@ -1204,7 +1204,7 @@ describe('choosing another tariff for the next period', () => {
     await waitFor(() => expect(said).toHaveFocus())
     const coming = screen.getByRole('group', { name: /^С.18.октября.— тариф «Агентство»$/ })
     expect(plain(coming.textContent)).toContain(
-      '2 000 кредитов в месяц · до 15 сайтов на WordPress. 18 октября спишем 19 990 ₽ сохранённым способом оплаты.',
+      '2 000 кредитов в месяц. 18 октября спишем 19 990 ₽ сохранённым способом оплаты.',
     )
     expect(within(coming).getByRole('button', { name: 'Отменить переход' })).toBeEnabled()
     // The card of the chosen tariff has its note instead of the button.
@@ -1245,7 +1245,7 @@ describe('choosing another tariff for the next period', () => {
 
   it('says which earlier choice the new one replaces', async () => {
     const current = onBusiness({ nextPlan: agencyPlan })
-    getOffers.mockResolvedValue(offers({ siteCount: 1, current: 'business' }))
+    getOffers.mockResolvedValue(offers({ current: 'business' }))
     schedulePlanChange.mockResolvedValue({ ...current, nextPlan: agencyPlan })
     showPlans()
 
@@ -1479,7 +1479,7 @@ describe('a tariff whose renewal charge failed', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Оплатить сейчас' }))
 
     await screen.findByRole('dialog', { name: 'Тариф «Агентство»' })
-    expect(dialogText()).toContain('2 000 кредитов в месяц · до 15 сайтов на WordPress')
+    expect(dialogText()).toContain('2 000 кредитов в месяц')
     expect(dialogText()).toContain('К оплате сегодня19 990 ₽')
   })
 
@@ -1653,7 +1653,7 @@ describe('a tariff whose renewal charge failed', () => {
 
     // The same dialog, now with what the payment will be started for.
     await waitFor(() => expect(dialog).toHaveAccessibleName('Тариф «Бизнес»'))
-    expect(dialogText()).toContain('1 000 кредитов в месяц · до 3 сайтов на WordPress')
+    expect(dialogText()).toContain('1 000 кредитов в месяц')
     expect(dialogText()).toContain('К оплате сегодня9 990 ₽')
     expect(dialogText()).toContain('каждый месяц будем списывать 9 990 ₽ тем же способом')
     expect(dialogText()).not.toMatch(/Агентство|19 990/)
@@ -2255,7 +2255,7 @@ describe('the gift of the registration on «Тарифы»', () => {
         ...overview,
       }),
     )
-    getOffers.mockResolvedValue(offers({ siteCount: 1, current: 'business' }))
+    getOffers.mockResolvedValue(offers({ current: 'business' }))
   }
 
   it('names the gift credits of a customer with a tariff in the row of balances', async () => {

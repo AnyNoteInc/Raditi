@@ -28,7 +28,6 @@ export interface PlanLimits {
   creditsPerMonth: number
   /** Tariff credits a Moscow day may take; null: the tariff has no daily limit. */
   creditsPerDay: number | null
-  maxSites: number
 }
 
 /** What new tasks may still take from each account of credits. */
@@ -126,11 +125,6 @@ export function planPageSites(pageSites: number | null): string | null {
 /** The own name of a site of pages (Дер32): «Бизнес» and above. */
 export const planCustomNames = 'Своё имя сайта: имя.pages.raditi.ru'
 
-export function planSites(maxSites: number): string {
-  if (maxSites === 1) return 'Один сайт на WordPress'
-  return `До ${maxSites} ${plural(maxSites, 'сайта', 'сайтов', 'сайтов')} на WordPress`
-}
-
 /** «до 50 кредитов в день», «до 21 кредита в день»: the daily limit of a tariff. */
 const upToADay = (creditsPerDay: number) =>
   `до ${formatCount(creditsPerDay)} ${creditsOf(creditsPerDay)} в день`
@@ -152,25 +146,10 @@ export function planDailyLimit(creditsPerDay: number | null): string | null {
 
 export { planWindowLimits } from '@/lib/plan-windows'
 
-/**
- * A tariff in one line: «800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на
- * WordPress».
- */
-export function planLimits({ creditsPerMonth, creditsPerDay, maxSites }: PlanLimits): string {
+/** A tariff in one line: «800 кредитов в месяц, до 100 кредитов в день». */
+export function planLimits({ creditsPerMonth, creditsPerDay }: PlanLimits): string {
   const perDay = creditsPerDay === null ? '' : `, ${upToADay(creditsPerDay)}`
-  const sites = planSites(maxSites)
-  return `${creditsCount(creditsPerMonth)} в месяц${perDay} · ${sites.charAt(0).toLocaleLowerCase('ru')}${sites.slice(1)}`
-}
-
-const SMALL_NUMBERS = ['один', 'два', 'три', 'четыре']
-
-/** A count as a sentence reads it: a word up to four, digits after that. */
-const inWords = (count: number) => SMALL_NUMBERS[count - 1] ?? String(count)
-
-/** Why a tariff cannot be chosen: «Не подойдёт: у вас два сайта, а тариф рассчитан на один.» */
-export function planTooSmall(siteCount: number, maxSites: number): string {
-  const sites = `${inWords(siteCount)} ${plural(siteCount, 'сайт', 'сайта', 'сайтов')}`
-  return `Не подойдёт: у вас ${sites}, а тариф рассчитан на ${inWords(maxSites)}.`
+  return `${creditsCount(creditsPerMonth)} в месяц${perDay}`
 }
 
 /** «45 по тарифу, 4 подарочных и 10 из пакета»: the parts of a list, the last one after «и». */

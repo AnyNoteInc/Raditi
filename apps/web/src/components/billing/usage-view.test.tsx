@@ -62,8 +62,6 @@ vi.mock('@/trpc/client', () => ({
 }))
 
 const ID = (n: number) => `018f0000-0000-7000-8000-${String(n).padStart(12, '0')}`
-const bakery = { id: ID(101), name: 'Пекарня «Добро»' }
-const cafe = { id: ID(102), name: 'Кофейня на Лесной' }
 const pack100 = {
   id: ID(4),
   slug: 'pack',
@@ -83,7 +81,6 @@ function entry(patch: Partial<UsageEntry> = {}): UsageEntry {
     credits: 5,
     from: { tariff: 5, gift: 0, pack: 0 },
     task: { id: ID(2000 + nextEntry), title: 'Заменил фото на главной', status: 'done' },
-    site: cafe,
     ...patch,
   }
 }
@@ -101,7 +98,6 @@ const mockupHistory = (): UsageEntry[] => [
     credits: 45,
     from: { tariff: 45, gift: 0, pack: 0 },
     task: { id: ID(11), title: 'Обновить цены в разделе «Торты на заказ»', status: 'running' },
-    site: bakery,
   }),
   entry({ task: { id: ID(12), title: 'Заменить фото на главной', status: 'done' } }),
   entry({
@@ -114,14 +110,12 @@ const mockupHistory = (): UsageEntry[] => [
     outcome: 'unpaid',
     ...nothing,
     task: { id: ID(14), title: 'Добавить страницу «Доставка»', status: 'failed' },
-    site: bakery,
   }),
   entry({
     at: new Date('2026-10-01T08:00:00Z'),
     credits: 17,
     from: { tariff: 5, gift: 0, pack: 12 },
     task: { id: ID(15), title: 'Поправить часы работы в контактах', status: 'done' },
-    site: bakery,
   }),
 ]
 const noHistory: HistoryPage = { items: [], nextCursor: null, total: 0 }
@@ -137,11 +131,6 @@ function tariffOf(patch: Partial<Omit<TariffUsage, 'today'>> = {}): TariffUsage 
   return {
     credits: meterOf({ charged: 34, held: 1, left: 965 }),
     today: null,
-    sites: { count: 2, max: 3 },
-    bySite: [
-      { siteId: bakery.id, name: bakery.name, credits: 21 },
-      { siteId: cafe.id, name: cafe.name, credits: 13 },
-    ],
     ...patch,
   }
 }
@@ -1036,7 +1025,7 @@ describe('the limits of the tariff', () => {
       usageOf(
         {
           subscription: daily,
-          tariff: tariffOf({ sites: { count: 4, max: 3 } }),
+          tariff: tariffOf(),
           pack: { left: 0, held: 0 },
         },
         { today: { charged: 100 } },
@@ -1231,7 +1220,7 @@ describe('the history of charges', () => {
   })
 
   it('says that nothing is charged yet instead of an empty table', async () => {
-    getUsage.mockResolvedValue(usageOf({ tariff: tariffOf({ bySite: [] }), history: noHistory }))
+    getUsage.mockResolvedValue(usageOf({ tariff: tariffOf(), history: noHistory }))
     showUsage()
 
     const history = await section('История списаний')

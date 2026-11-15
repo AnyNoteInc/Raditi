@@ -742,7 +742,7 @@ function showAnswers(...answers: (DialogFeed | Promise<DialogFeed>)[]) {
 
 describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => {
   const NEITHER = { repository: false, browser: false }
-  /** What a chat without the repository lists: no group «Сайт», no `/retry` (К27). */
+  /** What a chat lists: no group «Сайт», no `/retry` (plan 83). */
   const WITHOUT_REPOSITORY = [
     /^\/compactСжать переписку/u,
     /^\/undoОтменить последний запросНедоступна/u,
@@ -775,7 +775,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
     feedAnswer({
       status: 'awaiting_user',
       task: { turnNo: 1, requirements },
-      commands: verdicts({ retry: 'nothing_to_retry' }),
+      commands: verdicts(),
       events: [
         requestRow('1'),
         {

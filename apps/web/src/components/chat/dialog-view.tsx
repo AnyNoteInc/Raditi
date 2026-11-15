@@ -1,6 +1,6 @@
 'use client'
 
-import { chatCommands, type ChatCommandId } from '@repo/domain/release/chat-commands'
+import type { ChatCommandId } from '@repo/domain/release/chat-commands'
 import { feedFailureText } from '@repo/domain/tasks/client-feed-failures'
 import type { ReasoningEffort } from '@repo/domain/llm/model-class'
 import {
@@ -544,13 +544,8 @@ export function DialogView({
   // or presses meanwhile.
   const stopping =
     !terminal && (stopRequested(rows, status, withBrowser) || cancel.data?.state === 'stopping')
-  // A chat has no repository: none of the commands of a site (docs/plan/83-remove-projects.md, БП7).
-  const verdicts = (head?.commands ?? []).filter(
-    (command) =>
-      chatCommands[command.id].needs !== 'repository' &&
-      // A driver without the compaction: the command is not there, closed or not (§5.14).
-      command.refusal !== 'no_compaction',
-  )
+  // A driver without the compaction: the command is not there, closed or not (§5.14).
+  const verdicts = (head?.commands ?? []).filter((command) => command.refusal !== 'no_compaction')
   const commands = stopping
     ? verdicts.map((command) =>
         command.id === 'cancel'
@@ -884,15 +879,6 @@ export function DialogView({
   function runCommand(id: ChatCommandId): string | undefined {
     setFieldError(null)
     switch (id) {
-      // The commands of a site (docs/plan/83-remove-projects.md, БП7): a chat never offers them.
-      case 'release':
-      case 'preview':
-      case 'reset':
-      case 'update':
-      case 'init':
-      case 'retry':
-      case 'undo':
-        return
       case 'compact':
         void press('compact', compact.mutateAsync)
         return

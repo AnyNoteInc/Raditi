@@ -38,8 +38,6 @@ import {
   planChangeTerms,
   planDailyLimit,
   planLimits,
-  planSites,
-  planTooSmall,
   renewalOffWhileOverdue,
   renewalUnavailable,
   renewalWhileOverdue,
@@ -62,32 +60,30 @@ const periodEnd = new Date('2026-10-18T09:00:00Z')
 
 describe('the limits of a tariff', () => {
   it('puts a tariff into one line', () => {
-    expect(planLimits({ creditsPerMonth: 800, creditsPerDay: 100, maxSites: 3 })).toBe(
-      '800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 800, creditsPerDay: 100 })).toBe(
+      '800 кредитов в месяц, до 100 кредитов в день',
     )
-    expect(planLimits({ creditsPerMonth: 300, creditsPerDay: 50, maxSites: 1 })).toBe(
-      '300 кредитов в месяц, до 50 кредитов в день · один сайт на WordPress',
+    expect(planLimits({ creditsPerMonth: 300, creditsPerDay: 50 })).toBe(
+      '300 кредитов в месяц, до 50 кредитов в день',
     )
-    expect(planLimits({ creditsPerMonth: 21, creditsPerDay: 1, maxSites: 2 })).toBe(
-      '21 кредит в месяц, до 1 кредита в день · до 2 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 21, creditsPerDay: 1 })).toBe(
+      '21 кредит в месяц, до 1 кредита в день',
     )
   })
 
   // A count of four digits is grouped as an amount of money is, with a plain space: the
   // component binds it where it is shown.
   it('groups the digits of a count of four digits', () => {
-    expect(planLimits({ creditsPerMonth: 2500, creditsPerDay: 300, maxSites: 15 })).toBe(
-      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 2500, creditsPerDay: 300 })).toBe(
+      '2 500 кредитов в месяц, до 300 кредитов в день',
     )
-    expect(planLimits({ creditsPerMonth: 5000, creditsPerDay: 1200, maxSites: 15 })).toBe(
-      '5 000 кредитов в месяц, до 1 200 кредитов в день · до 15 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 5000, creditsPerDay: 1200 })).toBe(
+      '5 000 кредитов в месяц, до 1 200 кредитов в день',
     )
   })
 
   it('leaves the day out for a tariff without a daily limit', () => {
-    expect(planLimits({ creditsPerMonth: 21, creditsPerDay: null, maxSites: 2 })).toBe(
-      '21 кредит в месяц · до 2 сайтов на WordPress',
-    )
+    expect(planLimits({ creditsPerMonth: 21, creditsPerDay: null })).toBe('21 кредит в месяц')
     expect(planDailyLimit(null)).toBeNull()
   })
 
@@ -125,15 +121,6 @@ describe('the limits of a tariff', () => {
     expect(planAverageTasks(averageTaskCredits * 40)).toBe('В среднем около 40 задач')
     expect(planAverageTasks(5)).toBeNull()
     expect(planAverageTasks(0)).toBeNull()
-  })
-
-  it.each([
-    [1, 'Один сайт на WordPress'],
-    [3, 'До 3 сайтов на WordPress'],
-    [15, 'До 15 сайтов на WordPress'],
-    [21, 'До 21 сайта на WordPress'],
-  ])('names the sites of a tariff for %i', (count, text) => {
-    expect(planSites(count)).toBe(text)
   })
 
   // The noun is masculine: what there is and what is added or charged take the same form.
@@ -191,18 +178,6 @@ describe('what a task costs', () => {
 
   it('no longer says that a task is one credit', () => {
     expect(taskCostRule()).not.toMatch(/один кредит|тот же кредит/)
-  })
-})
-
-describe('a tariff that does not fit the sites', () => {
-  it('says how many sites the customer has and how many the tariff holds', () => {
-    expect(planTooSmall(2, 1)).toBe('Не подойдёт: у вас два сайта, а тариф рассчитан на один.')
-    expect(planTooSmall(4, 3)).toBe('Не подойдёт: у вас четыре сайта, а тариф рассчитан на три.')
-  })
-
-  it('writes larger numbers in digits', () => {
-    expect(planTooSmall(5, 3)).toBe('Не подойдёт: у вас 5 сайтов, а тариф рассчитан на три.')
-    expect(planTooSmall(21, 15)).toBe('Не подойдёт: у вас 21 сайт, а тариф рассчитан на 15.')
   })
 })
 
@@ -931,10 +906,10 @@ describe('managing the tariff', () => {
       })
     expect(plain(coming({}).title)).toBe('С 18 октября — тариф «Агентство»')
     expect(plain(coming({ charge: 'unanswered' }).text)).toBe(
-      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress. Списание за следующий период уже отправлялось в банк, ответа пока нет. Отменить переход можно будет после него.',
+      '2 500 кредитов в месяц, до 300 кредитов в день. Списание за следующий период уже отправлялось в банк, ответа пока нет. Отменить переход можно будет после него.',
     )
     expect(coming({ autoRenewal: false }).title).toBe('Выбран тариф «Агентство»')
-    const limits = '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress.'
+    const limits = '2 500 кредитов в месяц, до 300 кредитов в день.'
     const ends = `${limits} Автопродление отключено, поэтому 18 октября тариф закончится и переход не состоится.`
     expect(plain(coming({ autoRenewal: false }).text)).toBe(
       `${ends} Чтобы перейти, включите автопродление: 18 октября спишем 39 900 ₽.`,
@@ -944,7 +919,7 @@ describe('managing the tariff', () => {
     expect(coming({ canResume: false })).toEqual(coming({}))
     // An overdue tariff is paid by hand: nothing is said of auto-renewal or of a day.
     expect(plain(coming({ pastDue: true, autoRenewal: false }).text)).toBe(
-      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress. К оплате — 39 900 ₽: тариф сменится, как только оплата пройдёт.',
+      '2 500 кредитов в месяц, до 300 кредитов в день. К оплате — 39 900 ₽: тариф сменится, как только оплата пройдёт.',
     )
     expect(plain(scheduledPlanNote(periodEnd, true))).toBe('Начнёт действовать 18 октября.')
     expect(scheduledPlanNote(periodEnd, false)).toBe('Выбран на следующий период.')
