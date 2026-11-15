@@ -93,7 +93,7 @@ function typicalCredits({ from, to }: TypicalCredits, withWord: boolean): string
  */
 export function taskCostRule(): string {
   const { small, block } = typicalTaskCredits
-  return `Задача стоит столько кредитов, сколько работы она потребовала: небольшая правка текста, цены или фото — обычно ${typicalCredits(small, true)}, добавить блок или страницу — ${typicalCredits(block, false)}. ${CHARGED_FOR_DONE_WORK} Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.`
+  return `Задача стоит столько кредитов, сколько работы она потребовала: короткий ответ, письмо или поиск — обычно ${typicalCredits(small, true)}, документ, таблица или страница — ${typicalCredits(block, false)}. ${CHARGED_FOR_DONE_WORK} Уточнения — часть той же задачи: работа над ними добавляется к её стоимости.`
 }
 
 /**
@@ -111,7 +111,6 @@ export function planAverageTasks(creditsPerMonth: number): string | null {
   return about === null ? null : `В среднем ${about}`
 }
 
-/** «Один сайт на WordPress», «До 3 сайтов на WordPress». */
 /**
  * The sites of pages of a tariff, beside its credits (docs/plan/73-pages-sites.md, Дер37):
  * «До 2 сайтов из страниц»; null — the tariff gives none of its own.
@@ -240,15 +239,15 @@ const FEMININE_COUNTS = [
 const countWord = (count: number) => FEMININE_COUNTS[count - 1] ?? String(count)
 
 /**
- * «на семь небольших правок или на две-три задачи побольше»: what a number of gift credits is
+ * «на семь небольших задач или на две-три задачи побольше»: what a number of gift credits is
  * enough for, by the counts of the domain (`giftTaskCounts`). Without the larger tasks when the
- * credits hold none; null when they are not enough for one small edit. The welcome letter says
+ * credits hold none; null when they are not enough for one small task. The welcome letter says
  * the same with a copy of this function (`packages/mail/src/templates/billing-format.ts`).
  */
 export function giftIsEnoughFor(credits: number): string | null {
   const { small, larger } = giftTaskCounts(credits)
   if (small === 0) return null
-  const edits = `на ${countWord(small)} ${plural(small, 'небольшую правку', 'небольшие правки', 'небольших правок')}`
+  const edits = `на ${countWord(small)} ${plural(small, 'небольшую задачу', 'небольшие задачи', 'небольших задач')}`
   if (larger.from === 0) return edits
   const range =
     larger.from === larger.to

@@ -307,29 +307,6 @@ export function todayNote(input: {
   return day === null ? OUTSIDE_THE_DAY : `${day} ${OUTSIDE_THE_DAY}`
 }
 
-/** What a chat without a project is called where charges are told by project. */
-export const NO_PROJECT = 'Без проекта'
-
-const sitesWord = (count: number) => plural(count, 'сайт', 'сайта', 'сайтов')
-
-/** «из 3 сайтов»: the site limit after the number of sites. */
-export function ofSiteLimit(max: number): string {
-  return `из ${max} ${plural(max, 'сайта', 'сайтов', 'сайтов')}`
-}
-
-/** «Добавлено 2 сайта из 3»: the accessible name of the meter of sites. */
-export function sitesMeterLabel(count: number, max: number): string {
-  return `${plural(count, 'Добавлен', 'Добавлено', 'Добавлено')} ${count} ${sitesWord(count)} из ${max}`
-}
-
-/** How many more sites the tariff takes. */
-export function sitesNote(count: number, max: number): string {
-  if (count > max) return 'Сайтов больше, чем входит в тариф: новый добавить нельзя.'
-  if (count === max) return 'Больше сайтов на этом тарифе добавить нельзя.'
-  const room = max - count
-  return `Можно добавить ещё ${room === 1 ? 'один сайт' : `${room} ${sitesWord(room)}`}.`
-}
-
 /**
  * «У вас 100 кредитов из пакета. Они не сгорают и тратятся на задачи после подарочных.»:
  * the pack credits of a customer without a tariff.
@@ -435,11 +412,11 @@ export function outcomeText(entry: {
 
 /** The smaller line under the task of a history line; null when the outcome says it all. */
 export function taskNote(outcome: UsageOutcome, status: string): string | null {
-  if (outcome === 'free') return 'Отмена правки'
+  if (outcome === 'free') return 'Отмена запроса'
   if (outcome !== 'unpaid') return null
   if (status === 'failed') return 'Не получилось'
   if (status === 'cancelled') return 'Задача отменена'
-  if (status === 'rolled_back') return 'Вернули сайт как было'
+  if (status === 'rolled_back') return 'Вернули как было'
   return null
 }
 

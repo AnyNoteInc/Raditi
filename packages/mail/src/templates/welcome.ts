@@ -5,7 +5,7 @@ import { button, greeting, layout, p, textLayout } from './layout.ts'
 import type { MailData, RenderedEmail } from './schemas.ts'
 
 /**
- * «Мы дарим вам 50 кредитов, чтобы попробовать: их хватит на десять небольших правок или на
+ * «Мы дарим вам 50 кредитов, чтобы попробовать: их хватит на десять небольших задач или на
  * три-пять задач побольше.» The gift of the registration, by the constant of the domain: it is
  * granted with the personal workspace, which the first site makes.
  */
@@ -21,7 +21,7 @@ export function renderWelcome(data: MailData['welcome']): RenderedEmail {
   const subject = 'Добро пожаловать в Радити'
   const intro = 'Спасибо, что выбрали Радити.'
   const howItWorks =
-    'Подключите свой сайт и напишите в чате, что на нём поменять. Мы внесём правку и покажем результат.'
+    'Напишите в чате обычными словами, что нужно сделать: найти и сравнить, написать письмо, собрать таблицу или страницу. Радити сделает и покажет результат.'
   const gift = signupGiftLine()
 
   return {

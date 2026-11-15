@@ -150,7 +150,7 @@ test('a new user gets the gift with the first chat and spends it on tasks withou
     await expect(
       page.getByText(
         said(
-          'У вас 50 подарочных кредитов — их хватит на десять небольших правок или на три-пять задач побольше.',
+          'У вас 50 подарочных кредитов — их хватит на десять небольших задач или на три-пять задач побольше.',
         ),
       ),
     ).toBeVisible(SLOW)

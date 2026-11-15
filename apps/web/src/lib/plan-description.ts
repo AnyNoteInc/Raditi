@@ -1,7 +1,7 @@
 const descriptions: Readonly<Record<string, string>> = {
   start: 'Для своего дела',
   business: 'Когда задач становится больше',
-  agency: 'Для сайтов ваших клиентов',
+  agency: 'Для команды и ваших клиентов',
 }
 
 /**
@@ -10,7 +10,6 @@ const descriptions: Readonly<Record<string, string>> = {
  */
 export function planDescription(slug: string): string {
   return (
-    (Object.hasOwn(descriptions, slug) ? descriptions[slug] : undefined) ??
-    'Для регулярных задач на сайте'
+    (Object.hasOwn(descriptions, slug) ? descriptions[slug] : undefined) ?? 'Для регулярных задач'
   )
 }

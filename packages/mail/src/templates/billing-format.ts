@@ -88,7 +88,7 @@ const FEMININE_COUNTS = [
 const countWord = (count: number) => FEMININE_COUNTS[count - 1] ?? String(count)
 
 /**
- * «на семь небольших правок или на две-три задачи побольше»: what a number of gift credits is
+ * «на семь небольших задач или на две-три задачи побольше»: what a number of gift credits is
  * enough for, by the counts of the domain (`giftTaskCounts`). Without the larger tasks when the
  * credits hold none; null when they are not enough for one small edit. Mirrors `giftIsEnoughFor`
  * of the settings pages, so the letter and the page promise the same.
@@ -96,7 +96,7 @@ const countWord = (count: number) => FEMININE_COUNTS[count - 1] ?? String(count)
 export function giftIsEnoughFor(credits: number): string | null {
   const { small, larger } = giftTaskCounts(credits)
   if (small === 0) return null
-  const edits = `на ${countWord(small)} ${plural(small, 'небольшую правку', 'небольшие правки', 'небольших правок')}`
+  const edits = `на ${countWord(small)} ${plural(small, 'небольшую задачу', 'небольшие задачи', 'небольших задач')}`
   if (larger.from === 0) return edits
   const range =
     larger.from === larger.to

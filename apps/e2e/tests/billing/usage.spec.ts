@@ -94,7 +94,10 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     await expect(section(page, 'История списаний')).toContainText(
       /Списаний пока нет\. Здесь появятся задачи и\sсколько кредитов ушло на\sкаждую\./,
     )
-    await expect(page.getByRole('table')).toHaveCount(0)
+    // No table of charges; the chart of the days has its own table for screen readers.
+    await expect(
+      page.getByRole('table').filter({ hasNot: page.getByText('Расход кредитов по дням') }),
+    ).toHaveCount(0)
   })
 
   await test.step('the customer pays for «Бизнес»', async () => {
@@ -111,7 +114,7 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     await expect(definition).toBeHidden()
     await explainer.getByText('Как считаются кредиты').click()
     await expect(definition).toBeVisible()
-    await expect(explainer).toContainText(/небольшая правка обычно стоит 5\sкредитов/)
+    await expect(explainer).toContainText(/небольшая задача обычно стоит 5\sкредитов/)
     // Only credits bound a task (КР5–КР8): one credit starts it, every pass pays its work.
     await expect(explainer).toContainText(
       /Кредиты\sсписываются\sпосле\sкаждого\sответа\sагента\s—\sровно\sстолько,\sсколько\sушло\sна\sработу,\sс\sокруглением\sвверх\sдо\sцелого\sкредита\./,

@@ -69,8 +69,9 @@ describe('PAGES_BASE_DOMAIN (plan 69, Ст26)', () => {
 describe('BROWSER_PLATFORM_HOSTS (plan 61, К37)', () => {
   it('reads public names without a port, each once', () => {
     expect(
-      loadBrowserConfig(devEnv({ BROWSER_PLATFORM_HOSTS: 'Raditi.ru, raditi-platform.example,raditi.ru' }))
-        .platformHosts,
+      loadBrowserConfig(
+        devEnv({ BROWSER_PLATFORM_HOSTS: 'Raditi.ru, raditi-platform.example,raditi.ru' }),
+      ).platformHosts,
     ).toEqual(['raditi.ru', 'raditi-platform.example'])
   })
 
