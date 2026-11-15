@@ -259,9 +259,7 @@ export async function runLiveGateway(mode) {
       roleCalls = callsPerKey
       return llm
     }
-    await startLlm(
-      mode.measure ? 2 : (resultPlan?.[0].ceiling ?? TURN_CALLS),
-    )
+    await startLlm(mode.measure ? 2 : (resultPlan?.[0].ceiling ?? TURN_CALLS))
     core = await live.startCore({ stack, env: roleEnv(TURN_CALLS), rolePort })
     workers.push(core)
     const workspace = await db.workspace.create({

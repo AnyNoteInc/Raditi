@@ -108,10 +108,7 @@ function refusedCombination(mode) {
     [mode.results && !run, '--results without --live'],
     [mode.measure && mode.results, '--measure with --results'],
     [mode.compact && !run, '--compact without --live'],
-    [
-      mode.compact && (mode.measure || mode.results || mode.api),
-      '--compact with another run',
-    ],
+    [mode.compact && (mode.measure || mode.results || mode.api), '--compact with another run'],
     [mode.api && !run, '--api without --live'],
     // The measurements count the credits of the plan's windows: the API has none.
     [mode.api && (mode.measure || mode.results), '--api with a measurement'],
