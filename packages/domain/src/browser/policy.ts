@@ -36,3 +36,29 @@ export interface BrowserObjects {
   browserCommitAction(role: string, name: string, pageUrl?: string): BrowserCommitAction | null
   browserVerification(ref: BrowserCheckpointRef): BrowserVerificationPlan
 }
+
+/** Raised by a browser adapter for what the caller turns into a fixed code; never a page's message. */
+export const pageBrowserFailures = [
+  /** The element is not there, or the expectation did not come true in time. */
+  'timeout',
+  /** The page went to another origin, or the policy refused where it went. */
+  'denied',
+  /** The browser or its connection is gone. */
+  'closed',
+] as const
+export type PageBrowserFailure = (typeof pageBrowserFailures)[number]
+
+export class PageBrowserError extends Error {
+  readonly reason: PageBrowserFailure
+
+  constructor(reason: PageBrowserFailure) {
+    super(`Page browser: ${reason}`)
+    this.name = 'PageBrowserError'
+    this.reason = reason
+  }
+}
+
+/** Checks the name, not `instanceof`: works across duplicated module instances. */
+export function isPageBrowserError(error: unknown): error is PageBrowserError {
+  return error instanceof Error && error.name === 'PageBrowserError'
+}

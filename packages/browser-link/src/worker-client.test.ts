@@ -13,10 +13,9 @@ const TOKEN = 'worker-token-0123456789abcdef0123456789abcdef'
 
 const sessionId = '0196abcd-0000-7000-8000-000000000001'
 const taskId = '0196abcd-0000-7000-8000-000000000002'
-const siteId = '0196abcd-0000-7000-8000-000000000003'
 const assignmentId = '0196abcd-0000-7000-8000-000000000004'
 
-const ensureRequest = { sessionId, taskId, siteId, takeControl: true }
+const ensureRequest = { sessionId, taskId, takeControl: true }
 
 const state: BrowserSessionState = {
   session: sessionId,

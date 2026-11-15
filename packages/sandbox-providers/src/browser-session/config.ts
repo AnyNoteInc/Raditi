@@ -4,13 +4,11 @@ import {
   isProduction,
   pagesBaseDomainSchema,
   parseIpSubnet,
-  previewImageSchema,
-  previewRuntimes,
 } from '@repo/domain'
 import { z } from 'zod'
 
 import { isLocalSocket } from '../docker-api.ts'
-import { serviceLimits } from './kit.ts'
+import { serviceLimits, sessionImageSchema, sessionRuntimes } from './kit.ts'
 
 /**
  * The Docker runtime of the browser sessions of tasks (docs/plan/57-browser-tasks.md, Б10, Б11):
@@ -53,7 +51,7 @@ export const dockerBrowserSessionConfigSchema = z
      */
     appEnv: appEnvSchema,
     /** gVisor on Linux; runc where it is unavailable (outside production). */
-    runtime: z.enum(previewRuntimes),
+    runtime: z.enum(sessionRuntimes),
     /** A local Unix socket only, never DOCKER_HOST or TCP. */
     socketPath: z
       .string()
@@ -61,9 +59,9 @@ export const dockerBrowserSessionConfigSchema = z
       .default('/var/run/docker.sock'),
     /** Pinned by digest, never pulled: infra/preview `browser` and `tools`, infra/sandbox `client-egress`. */
     images: z.strictObject({
-      browser: previewImageSchema,
-      forwarder: previewImageSchema,
-      egress: previewImageSchema,
+      browser: sessionImageSchema,
+      forwarder: sessionImageSchema,
+      egress: sessionImageSchema,
     }),
     /**
      * runsc only: the image with infra/sandbox/host-firewall.mjs (SANDBOX_NETWORK_GUARD_IMAGE). It

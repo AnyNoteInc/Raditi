@@ -1,4 +1,8 @@
+import { createHash } from 'node:crypto'
+
+import { DIGEST_PINNED_IMAGE, sandboxRuntimes } from '@repo/domain'
 import type Docker from 'dockerode'
+import { z } from 'zod'
 
 import { commandError } from '../docker-api.ts'
 
@@ -19,6 +23,34 @@ export const BROWSER_SECRET_FILE = `${BROWSER_STATE_DIR}/ws-path`
 export const BROWSER_READY_FILE = `${BROWSER_STATE_DIR}/ready`
 export const FORWARD_READY_FILE = '/run/raditi-forward/ready'
 export const SERVICE_USER = '10001:10001'
+
+/** The runtimes of a session's containers: gVisor on Linux, runc where it is unavailable. */
+export const sessionRuntimes = sandboxRuntimes
+export type SessionRuntimeKind = (typeof sessionRuntimes)[number]
+
+/** One image: a repository pinned by digest, no tag. */
+export const sessionImageSchema = z
+  .string()
+  .max(512)
+  .regex(DIGEST_PINNED_IMAGE, 'expected an image pinned by digest (repository@sha256:…)')
+
+export const fixedAddress = (networkId: string, address: string): Docker.EndpointsConfig => ({
+  [networkId]: { IPAMConfig: { IPv4Address: address } },
+})
+
+/**
+ * A container's desired state as a label: an existing one with another value is replaced.
+ * `inputs` is what the container is given after its start and reads only then, so a change of
+ * them replaces it too.
+ */
+export function configHash(options: Docker.ContainerCreateOptions, inputs: unknown = null) {
+  const { Labels: _labels, ...rest } = options
+  return createHash('sha256')
+    .update(
+      JSON.stringify({ ...rest, Env: rest.Env ?? [], ...(inputs === null ? {} : { inputs }) }),
+    )
+    .digest('hex')
+}
 
 /** The limits of the containers of a session. */
 export const serviceLimits = Object.freeze({
@@ -53,7 +85,7 @@ interface Limits {
 export const RUNSC_MIN_PIDS = 128
 
 /** What every container of a session shares: no privilege, no writable root, bounded. */
-export function hardened(limits: Limits, runtime?: 'runc' | 'runsc'): Docker.HostConfig {
+export function hardened(limits: Limits, runtime?: SessionRuntimeKind): Docker.HostConfig {
   return {
     ...(runtime ? { Runtime: runtime } : {}),
     ReadonlyRootfs: true,
