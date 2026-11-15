@@ -15,6 +15,8 @@ function harness(options: {
   session?: { externalChatId: string | null; telegramTopicId: number | null } | null
   events?: { id: bigint; type: string; payload: unknown }[]
   topics?: boolean
+  /** The Telegram account of the chat was unlinked since. */
+  unlinked?: boolean
   web?: (update: Update) => number
   send?: (body: Record<string, unknown>) => {
     ok: boolean
@@ -62,6 +64,9 @@ function harness(options: {
           createdAt: new Date('2026-11-15T09:00:00Z'),
         })),
       ),
+    },
+    channelIdentity: {
+      findUnique: vi.fn(async () => (options.unlinked ? null : { userId: 'u1' })),
     },
     chatSession: {
       updateMany: vi.fn(async ({ data }: { data: { telegramTopicId: number } }) => {
@@ -151,20 +156,27 @@ describe('TelegramJobs.poll', () => {
     expect(h.posted).toEqual([11, 12])
   })
 
-  it('stops at an update web refuses, and gives it up only after its tries', async () => {
+  it('waits for web as long as it is away, and gives up only an update web cannot read', async () => {
+    let away = true
     const h = harness({
       updates: [{ update_id: 5 }, { update_id: 6 }],
-      web: (u) => (u.update_id === 5 ? 503 : 200),
+      web: () => (away ? 503 : 200),
     })
-    for (let i = 1; i < TELEGRAM_UPDATE_TRIES; i++) {
-      expect(await h.jobs.poll()).toBe(0)
-      expect(h.taken.has(5n)).toBe(false)
-    }
-    // The last try keeps the update as taken, so the next ones go on.
-    expect(await h.jobs.poll()).toBe(1)
-    expect(h.taken.has(5n)).toBe(true)
-    expect(h.posted.at(-1)).toBe(6)
-    expect(await h.jobs.poll()).toBe(0)
+    // A deploy or the database away: the words of the client wait, however many ticks it takes.
+    for (let i = 0; i < TELEGRAM_UPDATE_TRIES * 3; i++) expect(await h.jobs.poll()).toBe(0)
+    expect(h.taken.has(5n)).toBe(false)
+    away = false
+    expect(await h.jobs.poll()).toBe(2)
+
+    const broken = harness({
+      updates: [{ update_id: 7 }, { update_id: 8 }],
+      web: (u) => (u.update_id === 7 ? 400 : 200),
+    })
+    for (let i = 1; i < TELEGRAM_UPDATE_TRIES; i++) expect(await broken.jobs.poll()).toBe(0)
+    // The last answer keeps it as taken, so the next ones go on.
+    expect(await broken.jobs.poll()).toBe(1)
+    expect(broken.taken.has(7n)).toBe(true)
+    expect(broken.posted.at(-1)).toBe(8)
   })
 })
 
@@ -261,6 +273,12 @@ describe('TelegramJobs.deliver', () => {
       [{ text: 'Продолжить', callback_data: `go:${TASK}` }],
       [{ text: 'Открыть в кабинете', url: `https://raditi.example.ru/chats/${TASK}` }],
     ])
+    // A Telegram account unlinked since gets nothing of the chat (rule 1).
+    const unlinked = harness({ unlinked: true, events: [result] })
+    expect(
+      await unlinked.jobs.deliver({ taskId: TASK, kind: 'answered', attempt: 1, turnNo: 2 }),
+    ).toBe('skipped')
+    expect(unlinked.sent).toEqual([])
     const unbound = harness({ session: null, events: [result] })
     expect(
       await unbound.jobs.deliver({ taskId: TASK, kind: 'answered', attempt: 1, turnNo: 2 }),

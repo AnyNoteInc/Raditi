@@ -100,7 +100,15 @@ export async function takeTelegramLink(
         })
         return { linked: true, userId, again: true } as const
       }
-      // Another Telegram account of the same user is replaced by this one.
+      // Another Telegram account of the same user is replaced by this one, and its chats with it.
+      const earlier = await tx.channelIdentity.findMany({
+        where: { userId, channel: 'telegram' },
+        select: { externalId: true },
+      })
+      await unbindChats(
+        tx,
+        earlier.map(({ externalId }) => externalId),
+      )
       await tx.channelIdentity.deleteMany({ where: { userId, channel: 'telegram' } })
       await tx.channelIdentity.create({
         data: {
@@ -125,10 +133,32 @@ export async function unlinkTelegram(
   db: PrismaClient,
   where: { userId: string } | { externalId: string },
 ): Promise<boolean> {
-  const { count } = await db.channelIdentity.deleteMany({
-    where: { channel: 'telegram', ...where },
+  return db.$transaction(async (tx) => {
+    const gone = await tx.channelIdentity.findMany({
+      where: { channel: 'telegram', ...where },
+      select: { externalId: true },
+    })
+    await unbindChats(
+      tx,
+      gone.map(({ externalId }) => externalId),
+    )
+    const { count } = await tx.channelIdentity.deleteMany({
+      where: { channel: 'telegram', ...where },
+    })
+    return count > 0
   })
-  return count > 0
+}
+
+/**
+ * The chats bound to these Telegram accounts stop going there (rule 1): an unlinked account, or one
+ * now linked to someone else, gets nothing more of them. The chats stay in the cabinet.
+ */
+async function unbindChats(tx: Prisma.TransactionClient, externalIds: readonly string[]) {
+  if (externalIds.length === 0) return
+  await tx.chatSession.updateMany({
+    where: { channel: 'telegram', externalChatId: { in: [...externalIds] } },
+    data: { externalChatId: null, telegramTopicId: null },
+  })
 }
 
 export async function setTelegramNotifications(

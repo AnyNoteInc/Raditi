@@ -6,7 +6,7 @@ import { createTelegramBotApi } from '@repo/telegram'
 import type { CoreConfig } from '../config/config.ts'
 import { CORE_CONFIG } from '../config/config.tokens.ts'
 import { TelegramJobs } from './telegram-jobs.ts'
-import { TelegramProcessor } from './telegram.processor.ts'
+import { TelegramPollProcessor, TelegramProcessor } from './telegram.processor.ts'
 import { TelegramScheduler } from './telegram-scheduler.ts'
 import { TELEGRAM_JOBS } from './telegram.tokens.ts'
 
@@ -36,6 +36,7 @@ import { TELEGRAM_JOBS } from './telegram.tokens.ts'
       inject: [PRISMA, CORE_CONFIG],
     },
     TelegramProcessor,
+    TelegramPollProcessor,
     TelegramScheduler,
   ],
 })

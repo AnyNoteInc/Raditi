@@ -28,8 +28,15 @@ import { z } from 'zod'
 export const TELEGRAM_ALLOWED_UPDATES = ['message', 'callback_query'] as const
 /** Updates one poll takes at most. */
 export const TELEGRAM_POLL_BATCH = 50
-/** An update web refused this many times is given up, so the next ones are not held behind it. */
+/**
+ * An update web cannot read (400, 413) is given up after this many answers, so the next ones are
+ * not held behind it. Any other failure — web away, a deploy, the database, a secret being rotated —
+ * is tried again on every tick: Telegram keeps an update for a day, and a client's words are never
+ * dropped for an outage.
+ */
 export const TELEGRAM_UPDATE_TRIES = 5
+/** Web may take a voice of 11 pieces and a file of 20 MB: its slowest path, with room. */
+export const TELEGRAM_INTAKE_TIMEOUT_MS = 5 * 60_000
 /** How long `getMe` is trusted for whether the bot has topics in private chats. */
 export const TELEGRAM_BOT_INFO_MS = 10 * 60_000
 /** Kept rows of `telegram_updates`: the largest one always stays, as the next offset. */
@@ -41,7 +48,10 @@ export interface TelegramLogger {
 }
 
 export interface TelegramJobsDeps {
-  prisma: Pick<PrismaClient, 'telegramUpdate' | 'task' | 'taskTurn' | 'taskEvent' | 'chatSession'>
+  prisma: Pick<
+    PrismaClient,
+    'telegramUpdate' | 'task' | 'taskTurn' | 'taskEvent' | 'chatSession' | 'channelIdentity'
+  >
   bot: Pick<
     TelegramBotApi,
     'call' | 'getMe' | 'sendMessage' | 'answerCallbackQuery' | 'createForumTopic'
@@ -138,15 +148,17 @@ export class TelegramJobs {
     let taken = 0
     for (const update of got.result) {
       if (last && update.update_id <= Number(last.updateId)) continue
-      if (await this.#post(update)) {
+      const answer = await this.#post(update)
+      if (answer === 'taken') {
         this.#failures.delete(update.update_id)
         taken += 1
         continue
       }
+      if (answer === 'later') break
       const tries = (this.#failures.get(update.update_id) ?? 0) + 1
       this.#failures.set(update.update_id, tries)
       if (tries < TELEGRAM_UPDATE_TRIES) break
-      logger.warn(`Telegram update ${update.update_id} is given up after ${tries} refusals of web`)
+      logger.warn(`Telegram update ${update.update_id} is given up: web cannot read it`)
       this.#failures.delete(update.update_id)
       await prisma.telegramUpdate.createMany({
         data: [{ updateId: BigInt(update.update_id) }],
@@ -157,7 +169,8 @@ export class TelegramJobs {
     return taken
   }
 
-  async #post(update: unknown): Promise<boolean> {
+  /** `taken`; `unreadable` — web will never take it; `later` — web is away, try again. */
+  async #post(update: unknown): Promise<'taken' | 'unreadable' | 'later'> {
     const { intake, logger } = this.#deps
     try {
       const response = await (this.#deps.fetch ?? fetch)(intake.url, {
@@ -167,17 +180,17 @@ export class TelegramJobs {
           'x-telegram-bot-api-secret-token': intake.secret,
         },
         body: JSON.stringify(update),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(TELEGRAM_INTAKE_TIMEOUT_MS),
       })
       await response.body?.cancel().catch(() => undefined)
-      if (response.ok) return true
+      if (response.ok) return 'taken'
       logger.warn(`Web refused a Telegram update: HTTP ${response.status}`)
-      return false
+      return response.status === 400 || response.status === 413 ? 'unreadable' : 'later'
     } catch (error) {
       logger.warn(
         `Web did not take a Telegram update: ${error instanceof Error ? error.name : 'Error'}`,
       )
-      return false
+      return 'later'
     }
   }
 
@@ -209,6 +222,14 @@ export class TelegramJobs {
     const session = task?.chatSession
     if (!task || task.deletedAt !== null || session?.channel !== 'telegram') return null
     if (session.externalChatId === null) return null
+    // A Telegram account unlinked since gets nothing of the chat (rule 1).
+    const linked = await this.#deps.prisma.channelIdentity.findUnique({
+      where: {
+        channel_externalId: { channel: 'telegram', externalId: session.externalChatId },
+      },
+      select: { userId: true },
+    })
+    if (!linked) return null
     return { chatId: session.externalChatId, threadId: session.telegramTopicId ?? undefined }
   }
 

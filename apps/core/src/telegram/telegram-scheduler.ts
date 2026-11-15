@@ -10,7 +10,7 @@ import { errorMessage } from '@repo/observability'
 import type { Queue } from 'bullmq'
 
 import { BACKGROUND_JOBS } from '../config/config.tokens.ts'
-import { TELEGRAM_POLL_JOB, TELEGRAM_QUEUE } from '@repo/domain'
+import { TELEGRAM_POLL_JOB, TELEGRAM_POLL_QUEUE } from '@repo/domain'
 
 /** The id of the job scheduler of the poll: one for all core processes. */
 export const TELEGRAM_POLL_SCHEDULER_ID = 'telegram.poll'
@@ -33,7 +33,7 @@ export class TelegramScheduler implements OnApplicationBootstrap, OnModuleDestro
   #stopping = false
 
   constructor(
-    @InjectQueue(TELEGRAM_QUEUE) queue: Pick<Queue, 'upsertJobScheduler'>,
+    @InjectQueue(TELEGRAM_POLL_QUEUE) queue: Pick<Queue, 'upsertJobScheduler'>,
     @Inject(BACKGROUND_JOBS) background: boolean,
   ) {
     this.#queue = queue

@@ -22,6 +22,7 @@ export const queueNames = [
   'leads',
   // The bot of the chat in Telegram: its updates in, its messages out (docs/plan/80-telegram.md).
   'telegram',
+  'telegram-updates',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

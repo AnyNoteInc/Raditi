@@ -10,6 +10,8 @@ import { chatNotifyKinds } from '../tasks/agent-turn-job.ts'
  * Job data carries ids, and the words of a message only for `telegram.send`.
  */
 export const TELEGRAM_QUEUE = 'telegram'
+/** The poll of the updates has a queue of its own: a slow update never holds up the replies. */
+export const TELEGRAM_POLL_QUEUE = 'telegram-updates'
 export const TELEGRAM_POLL_JOB = 'telegram.poll'
 export const TELEGRAM_SEND_JOB = 'telegram.send'
 export const TELEGRAM_DELIVER_JOB = 'telegram.deliver'

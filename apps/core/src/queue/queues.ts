@@ -50,6 +50,8 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
     removeOnComplete: { age: DAY, count: 1_000 },
     removeOnFail: { age: 7 * DAY },
   },
+  // The poll of the bot's updates (docs/plan/80-telegram.md): one attempt, the next tick reads again.
+  'telegram-updates': lifecycleJobs,
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

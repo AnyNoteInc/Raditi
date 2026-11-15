@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto'
 
 import { enqueueTelegramSend, enqueueTelegramTopic, type PrismaClient } from '@repo/db'
 import {
+  feedInputText,
   isDomainError,
+  looksLikeSecret,
   missingRequiredConsents,
   type TelegramButton,
   type TelegramSendJob,
@@ -237,7 +239,13 @@ class Intake {
       return
     }
 
-    const target = await this.#targetOf(where, identity)
+    // An update handed again after a failure finds the chat it started: the same way again, which
+    // createDialog repeats safely — never the words a second time into that chat.
+    const started = await this.#deps.db.task.findUnique({
+      where: { id: updateUuid(`task:${this.#updateId}`, new Date(message.date * 1000)) },
+      select: { siteId: true },
+    })
+    const target = started ? { siteId: started.siteId } : await this.#targetOf(where, identity)
     const siteId =
       'siteId' in target
         ? target.siteId
@@ -297,6 +305,11 @@ class Intake {
       })
       if ('refused' in heard) {
         await this.#reply(where, heard.refused)
+        return null
+      }
+      // A password said aloud is refused as typed words are, and never repeated back (rule 2).
+      if (looksLikeSecret(heard.text)) {
+        await this.#reply(where, feedInputText.secret)
         return null
       }
       text = text === '' ? heard.text : `${text}\n\n${heard.text}`

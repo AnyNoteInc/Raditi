@@ -6909,6 +6909,44 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(task.siteId).toBe(site.id)
     })
 
+    it('starts a chat once when its update is handed again after a failure, and unlinking unbinds it', async () => {
+      const from = chatId()
+      const { owner, caller } = await linked(from)
+      const first = words(from, 'Поменяйте телефон в шапке')
+      // The first delivery started the chat and failed before the update was kept.
+      await deliver(first)
+      await db.telegramUpdate.deleteMany({ where: { updateId: BigInt(first.update_id) } })
+      await deliver(first)
+      const tasks = await db.task.findMany({
+        where: { createdById: owner.id },
+        select: { id: true, chatSessionId: true },
+      })
+      expect(tasks).toHaveLength(1)
+      taskIds.push(tasks[0]!.id)
+      expect(await db.taskQueuedMessage.count({ where: { taskId: tasks[0]!.id } })).toBe(0)
+      // Unlinking stops the chat going to this Telegram account (rule 1).
+      await caller.telegram.unlink()
+      expect(
+        await db.chatSession.findUniqueOrThrow({
+          where: { id: tasks[0]!.chatSessionId! },
+          select: { channel: true, externalChatId: true },
+        }),
+      ).toEqual({ channel: 'telegram', externalChatId: null })
+    })
+
+    it('never repeats a password said in a voice, and starts nothing of it', async () => {
+      const from = chatId()
+      const { owner } = await linked(from)
+      const before = (await said()).length
+      await deliver(words(from, '', { text: undefined, voice: { file_id: 'v', duration: 4 } }), {
+        attach: vi.fn(),
+        transcribe: vi.fn(async () => ({ text: 'пароль Qwerty123!' })),
+      })
+      const answers = (await said()).slice(before).map(({ text }) => text)
+      expect(answers.some((text) => text.includes('Qwerty123'))).toBe(false)
+      expect(await db.task.count({ where: { createdById: owner.id } })).toBe(0)
+    })
+
     it('takes a file through the media of web and refuses a voice without them', async () => {
       const from = chatId()
       const { owner } = await linked(from)
