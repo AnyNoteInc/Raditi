@@ -109,7 +109,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL leases of chats', () => {
       operation: 'turn',
       epoch: grant.epoch,
       heldForOperator: false,
-      inflightReleaseId: null,
     })
   })
 
