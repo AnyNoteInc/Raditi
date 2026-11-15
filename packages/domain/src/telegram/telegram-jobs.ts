@@ -16,6 +16,10 @@ export const TELEGRAM_POLL_JOB = 'telegram.poll'
 export const TELEGRAM_SEND_JOB = 'telegram.send'
 export const TELEGRAM_DELIVER_JOB = 'telegram.deliver'
 export const TELEGRAM_TOPIC_JOB = 'telegram.topic'
+/** The message of the work of the agent, edited every few seconds while a pass goes on. */
+export const TELEGRAM_PROGRESS_JOB = 'telegram.progress'
+/** A chat deleted in the cabinet: its topic in Telegram goes with it. */
+export const TELEGRAM_FORGET_JOB = 'telegram.forget'
 
 /** A chat id of Telegram as a string: a private chat is the positive id of its user. */
 export const telegramChatIdSchema = z.string().regex(/^-?\d{1,20}$/)
@@ -67,3 +71,19 @@ export type TelegramTopicJob = z.infer<typeof telegramTopicJobSchema>
 
 export const telegramTopicDedupeKey = (job: TelegramTopicJob): string =>
   `${TELEGRAM_TOPIC_JOB}:${job.taskId}`
+
+export const telegramProgressJobSchema = z.strictObject({
+  taskId: z.uuid(),
+  /** Absent — a new run of the message; a tick carries the run it belongs to. */
+  chain: z.uuid().optional(),
+  tick: z.number().int().min(0).max(100_000).optional(),
+  /** The press of «Продолжить» it answers: core stops the spinner of the button first. */
+  pressId: z.string().min(1).max(64).optional(),
+})
+export type TelegramProgressJob = z.infer<typeof telegramProgressJobSchema>
+
+export const telegramForgetJobSchema = z.strictObject({
+  chatId: telegramChatIdSchema,
+  threadId: z.number().int().positive(),
+})
+export type TelegramForgetJob = z.infer<typeof telegramForgetJobSchema>

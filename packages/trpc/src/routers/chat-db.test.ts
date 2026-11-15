@@ -47,7 +47,11 @@ import { dialogPageQuery } from '../services/chat/dialog-list.ts'
 import { lastQuestion, wordsOfTurn } from '../services/chat/dialog-state.ts'
 import { signConfirmToken } from '../services/chat/releases.ts'
 import { signUndoConfirmToken } from '../services/chat/undo.ts'
-import { handleTelegramUpdate, type TelegramMedia } from '../services/telegram/intake.ts'
+import {
+  handleTelegramTopicGone,
+  handleTelegramUpdate,
+  type TelegramMedia,
+} from '../services/telegram/intake.ts'
 import { readTelegramUpdate } from '@repo/telegram'
 
 // The procedures of a dialog on PostgreSQL (docs/plan/53-chat-preview-release.md, R2): what one
@@ -6867,16 +6871,79 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(
         await db.outboxEvent.count({ where: { topic: 'telegram', type: 'telegram.topic' } }),
       ).toBe(1)
-      expect((await said()).at(-1)).toMatchObject({
-        text: 'Принято, агент начал работу. Ответ пришлю сюда.',
-        buttons: [
-          [{ data: `stop:${tasks[0]!.id}` }, expect.objectContaining({ url: expect.any(String) })],
-        ],
-      })
+      // No «Принято»: the message of the work of the agent says it (owner, 15.11.2026).
+      expect((await said()).map(({ text }) => text)).not.toContain(
+        'Принято, агент начал работу. Ответ пришлю сюда.',
+      )
+      expect(
+        await db.outboxEvent.findMany({
+          where: { topic: 'telegram', type: 'telegram.progress' },
+          select: { payload: true },
+        }),
+      ).toEqual([{ payload: { taskId: tasks[0]!.id } }])
       // The agent works: the next words wait in the queue of the chat.
       await deliver(words(from, 'И цвет кнопки — зелёный'))
       expect(await db.taskQueuedMessage.count({ where: { taskId: tasks[0]!.id } })).toBe(1)
       expect((await said()).at(-1)?.text).toMatch(/Сообщение в очереди/u)
+    })
+
+    it('deletes the chat and its topic by /delete, by the cabinet and when the topic is gone', async () => {
+      const from = chatId()
+      const { owner, caller } = await linked(from)
+      const inTopic = (thread: number, text: string) =>
+        words(from, text, { message_thread_id: thread, is_topic_message: true })
+      // A service message of a topic carries no words: no answer at all.
+      const before = (await said()).length
+      await deliver({
+        update_id: base + next++,
+        message: {
+          message_id: next,
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: from, type: 'private' },
+          from: { id: from, is_bot: false },
+          message_thread_id: 31,
+          forum_topic_created: { name: 'Новая тема' },
+        },
+      })
+      expect(await said()).toHaveLength(before)
+
+      const tasksOf = () =>
+        db.task.findMany({
+          where: { createdById: owner.id },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true, deletedAt: true },
+        })
+      await deliver(inTopic(31, 'Первый чат'))
+      await deliver(inTopic(32, 'Второй чат'))
+      await deliver(inTopic(33, 'Третий чат'))
+      const [first, second, third] = await tasksOf()
+      taskIds.push(first!.id, second!.id, third!.id)
+
+      // `/delete` in a topic: the chat is deleted, the topic goes with it.
+      await deliver(inTopic(31, '/delete'))
+      // «Удалить» in the cabinet: the same.
+      await caller.task.remove({ taskId: second!.id })
+      const forgets = await db.outboxEvent.findMany({
+        where: { topic: 'telegram', type: 'telegram.forget' },
+        orderBy: { id: 'asc' },
+        select: { payload: true },
+      })
+      expect(forgets).toEqual([
+        { payload: { chatId: String(from), threadId: 31 } },
+        { payload: { chatId: String(from), threadId: 32 } },
+      ])
+      // The client deleted the topic in Telegram: core tells web, the chat goes in the cabinet.
+      expect(
+        await handleTelegramTopicGone(
+          { db: underRate(db) },
+          { chatId: String(from), threadId: 33 },
+        ),
+      ).toBe('deleted')
+      expect((await tasksOf()).map(({ deletedAt }) => deletedAt !== null)).toEqual([
+        true,
+        true,
+        true,
+      ])
     })
 
     it('starts a new chat in the project chosen in /new', async () => {

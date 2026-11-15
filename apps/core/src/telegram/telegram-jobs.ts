@@ -1,10 +1,17 @@
+import { randomUUID } from 'node:crypto'
+
 import type { PrismaClient } from '@repo/db'
 import {
+  agentEventSchema,
   feedRowMarkdown,
   readFeedRow,
   type FeedItem,
   type TelegramButton,
+  type AgentEvent,
+  type TaskStatus,
   type TelegramDeliverJob,
+  type TelegramForgetJob,
+  type TelegramProgressJob,
   type TelegramSendJob,
   type TelegramTopicJob,
 } from '@repo/domain'
@@ -17,6 +24,12 @@ import {
 } from '@repo/telegram'
 import { UnrecoverableError } from 'bullmq'
 import { z } from 'zod'
+
+import {
+  TELEGRAM_PROGRESS_EVERY_MS,
+  TELEGRAM_PROGRESS_MAX_TICKS,
+  progressText,
+} from './progress-text.ts'
 
 // The bot of the chat in Telegram, the side of core (docs/plan/80-telegram.md, §7): Telegram does
 // not reach the server, so core reads the updates of the bot and posts each to web, which answers
@@ -54,8 +67,18 @@ export interface TelegramJobsDeps {
   >
   bot: Pick<
     TelegramBotApi,
-    'call' | 'getMe' | 'sendMessage' | 'answerCallbackQuery' | 'createForumTopic'
+    | 'call'
+    | 'getMe'
+    | 'sendMessage'
+    | 'answerCallbackQuery'
+    | 'createForumTopic'
+    | 'deleteForumTopic'
+    | 'editMessageText'
+    | 'deleteMessage'
+    | 'sendChatAction'
   >
+  /** Puts the next edit of the message of the work in the queue `telegram`, `delayMs` later. */
+  later: (job: TelegramProgressJob, delayMs: number) => Promise<void>
   /** The route `/api/webhooks/telegram` of web, and the secret it checks. */
   intake: { url: string; secret: string }
   /** APP_URL: the bot links to the chats of the cabinet under it. */
@@ -99,6 +122,14 @@ export const telegramJobText = {
   topic: (title: string) => `Чат «${title}». Отвечу здесь.`,
   untitled: 'Новый чат',
 } as const
+
+/** The statuses of a chat whose pass goes on: the message of the work stands. */
+const WORKING: readonly TaskStatus[] = ['queued', 'preparing', 'running']
+
+/** Telegram refused a message into a topic that is no more. */
+const threadGone = (result: Extract<TelegramApiResult<unknown>, { ok: false }>) =>
+  result.errorCode === 400 &&
+  /thread not found|topic_deleted|TOPIC_ID_INVALID/i.test(result.description)
 
 const keyboardOf = (buttons: readonly (readonly TelegramButton[])[]): InlineKeyboardButton[][] =>
   buttons.map((row) =>
@@ -194,6 +225,26 @@ export class TelegramJobs {
     }
   }
 
+  /**
+   * Tells web the client deleted the topic of a chat (owner's request of 15.11.2026): Telegram says
+   * nothing to a bot of it, a message into the topic is refused. Web deletes the chat as «Удалить»
+   * of the cabinet does; a failure throws, so the job is tried again.
+   */
+  async #topicGone(chatId: string, threadId: number): Promise<void> {
+    const { intake } = this.#deps
+    const response = await (this.#deps.fetch ?? fetch)(intake.url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-telegram-bot-api-secret-token': intake.secret,
+      },
+      body: JSON.stringify({ raditi_topic_gone: { chat_id: chatId, thread_id: threadId } }),
+      signal: AbortSignal.timeout(TELEGRAM_INTAKE_TIMEOUT_MS),
+    })
+    await response.body?.cancel().catch(() => undefined)
+    if (!response.ok) throw new Error(`Web refused a gone topic: HTTP ${response.status}`)
+  }
+
   /** Forgets the updates of last week, the largest one aside: it is the next offset. */
   async #sweep(): Promise<void> {
     const { prisma } = this.#deps
@@ -238,20 +289,20 @@ export class TelegramJobs {
     threadId: number | undefined,
     html: string,
     buttons?: readonly (readonly TelegramButton[])[],
-  ): Promise<void> {
+  ): Promise<number | 'gone'> {
     const { bot } = this.#deps
     const options = {
       parseMode: 'HTML' as const,
       ...(threadId === undefined ? {} : { threadId }),
       ...(buttons && buttons.length > 0 ? { inlineKeyboard: keyboardOf(buttons) } : {}),
     }
-    let sent = await bot.sendMessage(chatId, html, options)
-    // The topic was deleted in Telegram: the chat itself takes the message.
-    if (!sent.ok && threadId !== undefined && /thread not found/i.test(sent.description)) {
-      const { threadId: _, ...withoutTopic } = options
-      sent = await bot.sendMessage(chatId, html, withoutTopic)
+    const sent = await bot.sendMessage(chatId, html, options)
+    if (sent.ok) return sent.result.message_id
+    // The client deleted the topic in Telegram: the chat goes in the cabinet too.
+    if (threadId !== undefined && threadGone(sent)) {
+      await this.#topicGone(chatId, threadId)
+      return 'gone'
     }
-    if (sent.ok) return
     // The client blocked the bot or deleted the chat: no try will get through.
     if (sent.errorCode === 403)
       throw new UnrecoverableError(new TelegramFailure('sendMessage', sent).message)
@@ -305,6 +356,7 @@ export class TelegramJobs {
       .map((row) => feedRowMarkdown(row, task.siteId !== null))
       .filter((block): block is string => block !== null)
       .join('\n\n')
+    await this.#clearProgress(job.taskId)
     const parts = markdownToTelegramParts(markdown)
     if (parts.length === 0) return 'skipped'
     const buttons: TelegramButton[][] = []
@@ -318,7 +370,11 @@ export class TelegramJobs {
     ])
     for (const [index, part] of parts.entries()) {
       const last = index === parts.length - 1
-      await this.#send(place.chatId, place.threadId, part, last ? buttons : undefined)
+      if (
+        (await this.#send(place.chatId, place.threadId, part, last ? buttons : undefined)) ===
+        'gone'
+      )
+        return 'skipped'
     }
     return 'sent'
   }
@@ -366,6 +422,147 @@ export class TelegramJobs {
       [[{ text: telegramJobText.open, url: this.#chatLink(job.taskId) }]],
     )
     return 'opened'
+  }
+
+  /**
+   * The message of the work of the agent (owner's request of 15.11.2026): sent once, then edited
+   * every TELEGRAM_PROGRESS_EVERY_MS while the pass goes on, with «печатает…» above the field; the
+   * answer of the pass deletes it. A newer run of it takes the message over, an older one stops.
+   */
+  async progress(job: TelegramProgressJob): Promise<'ticked' | 'stopped' | 'skipped'> {
+    const { prisma, bot } = this.#deps
+    if (job.pressId !== undefined) await bot.answerCallbackQuery(job.pressId).catch(() => undefined)
+    const place = await this.#placeOf(job.taskId)
+    if (place === null) return 'skipped'
+    const task = await prisma.task.findUniqueOrThrow({
+      where: { id: job.taskId },
+      select: {
+        status: true,
+        chatSession: {
+          select: { id: true, telegramProgressId: true, telegramProgressChain: true },
+        },
+      },
+    })
+    const session = task.chatSession!
+    if (job.chain !== undefined && session.telegramProgressChain !== job.chain) return 'skipped'
+    if (!WORKING.includes(task.status)) {
+      // The pass ended: its answer deletes the message; a stop or a failure without one, here.
+      if (job.chain !== undefined) await this.#clearProgress(job.taskId)
+      return 'stopped'
+    }
+    const chain = job.chain ?? randomUUID()
+    if (job.chain === undefined)
+      await prisma.chatSession.update({
+        where: { id: session.id },
+        data: { telegramProgressChain: chain },
+      })
+    const tick = job.tick ?? 0
+    const text = escapeTelegramHtml(
+      progressText({
+        tick,
+        status: task.status,
+        event: await this.#lastEvent(job.taskId),
+        elapsedMs: this.#now().getTime() - (await this.#since(job.taskId)).getTime(),
+      }),
+    )
+    const buttons: TelegramButton[][] = [
+      [
+        { text: 'Остановить', data: `stop:${job.taskId}` },
+        { text: telegramJobText.open, url: this.#chatLink(job.taskId) },
+      ],
+    ]
+    let messageId = session.telegramProgressId
+    if (messageId !== null) {
+      const edited = await bot.editMessageText(place.chatId, messageId, text, {
+        inlineKeyboard: keyboardOf(buttons),
+      })
+      if (!edited.ok && !/not modified/i.test(edited.description)) {
+        // The client deleted the message: a new one takes its place.
+        if (/not found|can't be edited/i.test(edited.description)) messageId = null
+        else throw new TelegramFailure('editMessageText', edited)
+      }
+    }
+    if (messageId === null) {
+      const sent = await this.#send(place.chatId, place.threadId, text, buttons)
+      if (sent === 'gone') return 'stopped'
+      const { count } = await prisma.chatSession.updateMany({
+        where: { id: session.id, telegramProgressChain: chain },
+        data: { telegramProgressId: sent },
+      })
+      // Taken over meanwhile: this message is not the one that stays.
+      if (count === 0) await bot.deleteMessage(place.chatId, sent).catch(() => undefined)
+    }
+    await bot.sendChatAction(place.chatId, 'typing', place.threadId).catch(() => undefined)
+    if (tick < TELEGRAM_PROGRESS_MAX_TICKS)
+      await this.#deps.later(
+        { taskId: job.taskId, chain, tick: tick + 1 },
+        TELEGRAM_PROGRESS_EVERY_MS,
+      )
+    return 'ticked'
+  }
+
+  /** Deletes the message of the work of a task, if it has one, and stops its run. */
+  async #clearProgress(taskId: string): Promise<void> {
+    const { prisma, bot } = this.#deps
+    const task = await prisma.task.findUnique({
+      where: { id: taskId },
+      select: {
+        chatSession: {
+          select: {
+            id: true,
+            externalChatId: true,
+            telegramProgressId: true,
+            telegramProgressChain: true,
+          },
+        },
+      },
+    })
+    const session = task?.chatSession
+    if (!session || (session.telegramProgressId === null && session.telegramProgressChain === null))
+      return
+    const { externalChatId, telegramProgressId } = session
+    await prisma.chatSession.update({
+      where: { id: session.id },
+      data: { telegramProgressId: null, telegramProgressChain: null },
+    })
+    if (telegramProgressId !== null && externalChatId !== null)
+      await bot.deleteMessage(externalChatId, telegramProgressId).catch(() => undefined)
+  }
+
+  /** The last event of the agent in the pass going on, from the journal of the turn. */
+  async #lastEvent(taskId: string): Promise<AgentEvent | null> {
+    const row = await this.#deps.prisma.taskEvent.findFirst({
+      where: { taskId, type: 'turn.output' },
+      orderBy: { id: 'desc' },
+      select: { payload: true },
+    })
+    const events = (row?.payload as { events?: unknown } | null)?.events
+    if (!Array.isArray(events)) return null
+    for (let index = events.length - 1; index >= 0; index--) {
+      const parsed = agentEventSchema.safeParse(events[index])
+      if (parsed.success && !['started', 'usage', 'completed', 'failed'].includes(parsed.data.type))
+        return parsed.data
+    }
+    return null
+  }
+
+  /** When the client's words of this pass came: the last request of the chat. */
+  async #since(taskId: string): Promise<Date> {
+    const row = await this.#deps.prisma.taskEvent.findFirst({
+      where: { taskId, type: 'feed.request' },
+      orderBy: { id: 'desc' },
+      select: { createdAt: true },
+    })
+    return row?.createdAt ?? this.#now()
+  }
+
+  /** A chat deleted in the cabinet: its topic goes with all its messages. */
+  async forget(job: TelegramForgetJob): Promise<'deleted' | 'skipped'> {
+    const done = await this.#deps.bot.deleteForumTopic(job.chatId, job.threadId)
+    if (done.ok) return 'deleted'
+    // The topic is gone already, or the client blocked the bot: nothing is left to delete.
+    if (done.errorCode === 400 || done.errorCode === 403) return 'skipped'
+    throw new TelegramFailure('deleteForumTopic', done)
   }
 
   async #topicsOn(): Promise<boolean> {
