@@ -98,7 +98,7 @@ for (const scheme of ['light', 'dark'] as const) {
       signedInUser,
     }) => {
       test.slow()
-      // A chat of a project that waits for the client, and one without a project.
+      // A chat that waits for the client, and another one: no projects since plan 83.
       const asked = await addBrowserTask(signedInUser.id)
       await addLongChat(signedInUser.id, 1)
       await context.addCookies([{ name: 'theme', value: scheme, url: baseURL }])
@@ -111,20 +111,11 @@ for (const scheme of ['light', 'dark'] as const) {
         expect(await lowTargets(list)).toEqual([])
       }
 
-      await test.step('one list, the rows with their project', async () => {
+      await test.step('one list, the rows without a project', async () => {
         await page.goto('/chats')
-        await expect(list.getByRole('link', { name: new RegExp(asked.title) })).toContainText(
-          '· Кофейня «Крошка»',
-        )
-        await expectClean()
-      })
-
-      await test.step('the folders: a closed one that says a chat waits, then an open one', async () => {
-        const closed = list.getByRole('button', { name: /Есть чаты, которые ждут вас/ })
-        await expect(closed).toHaveAttribute('aria-expanded', 'false')
-        await expectClean()
-        await closed.click()
-        await expect(list.getByRole('link', { name: new RegExp(asked.title) })).toBeVisible()
+        const row = list.getByRole('link', { name: new RegExp(asked.title) })
+        await expect(row).toBeVisible()
+        await expect(row).not.toContainText('·')
         await expectClean()
       })
     })

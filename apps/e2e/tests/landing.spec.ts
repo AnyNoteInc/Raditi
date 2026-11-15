@@ -767,14 +767,11 @@ test.describe('section headings', () => {
         .evaluateAll((headings) =>
           headings.map((heading) => parseFloat(getComputedStyle(heading).fontSize)),
         )
-      // Every section of the page, the systems and the lead among them.
-      soft(sizes).toHaveLength(7)
+      // Every section of the page, the lead among them (no systems since plan 83).
+      soft(sizes).toHaveLength(6)
       for (const size of sizes) soft(size).toBeCloseTo(expected(width), 1)
     })
   })
-
-  // «На чём сделан ваш сайт?» and «Скорее всего, подойдёт.»: the break of the markup and no other,
-  // from the width where a half fits a line.
 
   // What a section is about stands under its heading, never beside it.
 
@@ -783,7 +780,6 @@ test.describe('section headings', () => {
     await expect(page.locator('#top h2')).toHaveText(
       [
         'Попробуйте сами',
-        'На чём сделан ваш сайт? Скорее всего, подойдёт.',
         'Что можно поручить',
         'Без вашего «да» сайт не меняется',
         'Тарифы',
@@ -2642,7 +2638,7 @@ test.describe('headings on the way into the window', () => {
       await revealPrepared(page)
       const targets = await revealTargets(page)
 
-      expect(targets).toHaveLength(7)
+      expect(targets).toHaveLength(6)
       expect(targets.filter((target) => target.inWindow).map((target) => target.name)).toEqual(
         ['demo'].slice(0, shown),
       )
@@ -2845,7 +2841,7 @@ test.describe('headings on the way into the window', () => {
     test('stand in their places with their text', async ({ page }) => {
       await openAt(page, 1440)
       const targets = page.locator(RISING)
-      await expect(targets).toHaveCount(7)
+      await expect(targets).toHaveCount(6)
       for (const target of await targets.all()) {
         await expect(target).toHaveCSS('transform', 'none')
         await expect(target).toHaveCSS('opacity', '1')

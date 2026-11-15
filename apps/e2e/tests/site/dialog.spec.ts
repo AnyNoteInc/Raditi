@@ -304,9 +304,10 @@ test('a chat without a project: no tools, no word of a site, no commands of the 
   await expectChatAlone(page, { tools: false })
   await expect(page.getByRole('link', { name: /^Открыть проект/ })).toHaveCount(0)
   await expect(feed(page).getByRole('link', { name: 'Открыть сайт' })).toHaveCount(0)
-  // The reminder under the field has no «Переменные» to point to.
-  await expect(message(page)).toHaveAccessibleDescription(/Не отправляйте в чат пароли и ключи/)
-  await expect(message(page)).not.toHaveAccessibleDescription(/Переменные/)
+  // The reminder under the field points to the variables of the workspace (plan 83, БП4).
+  await expect(message(page)).toHaveAccessibleDescription(
+    /Не отправляйте в чат пароли и ключи: сохраните их в «Настройки → Переменные»/,
+  )
 
   await page.getByRole('button', { name: 'Команды' }).click()
   // No group «Сайт» and no `/retry` without the repository (К27).

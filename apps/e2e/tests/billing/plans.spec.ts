@@ -162,7 +162,9 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
     const opener = planCard(page, 'Старт').getByRole('button', { name: 'Выбрать «Старт»' })
     await opener.click()
     const dialog = page.getByRole('dialog', { name: 'Тариф «Старт»' })
-    await expect(dialog).toContainText('200 кредитов в месяц · один сайт на WordPress')
+    await expect(dialog).toContainText('200 кредитов в месяц')
+    // No sites of projects since plan 83: the dialog names none.
+    await expect(dialog).not.toContainText('сайт')
     await expect(dialog).toContainText('К оплате сегодня')
     await expect(dialog).toContainText('1 990 ₽')
     await expect(dialog).toContainText('Оплата принимается только с личной карты')

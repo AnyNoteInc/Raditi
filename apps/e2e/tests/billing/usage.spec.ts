@@ -186,9 +186,8 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     await expect(limits.getByRole('img', { name: /^Сегодня/ })).toHaveCount(0)
     await expect(limits).toContainText(/Дневного\sлимита\sна\sвашем\sтарифе\sнет\./)
     await expect(limits).not.toContainText('Сегодня можно потратить')
-    await expect(limits).toContainText(/Сайты\s*0\s+из\s3\sсайтов/)
-    await expect(limits.getByRole('img', { name: 'Добавлено 0 сайтов из 3' })).toBeVisible()
-    await expect(limits).toContainText(/Можно добавить ещё\s3\sсайта\./)
+    // No sites of projects since plan 83: the limits name none.
+    await expect(limits).not.toContainText('сайт')
   })
 
   await test.step('more credits are offered: the dialog of the pack opens and closes', async () => {

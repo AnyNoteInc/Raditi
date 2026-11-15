@@ -281,7 +281,8 @@ test('a customer schedules another tariff for the next period and takes the choi
     await expect(dialog).toContainText(
       'Неистраченные кредиты тарифа переходят на следующий месяц, один раз.',
     )
-    await expect(dialog).toContainText('1 000 кредитов в месяц · до 3 сайтов на WordPress')
+    await expect(dialog).toContainText('1 000 кредитов в месяц')
+    await expect(dialog).not.toContainText('сайт')
     await expect(dialog).toContainText('9 990 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444')
     await dialog.getByRole('button', { name: 'Не менять' }).click()
     await expect(dialog).toBeHidden()

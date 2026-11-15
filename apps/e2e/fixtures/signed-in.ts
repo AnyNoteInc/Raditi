@@ -43,12 +43,10 @@ interface Accounts {
   create(): Promise<{ user: SignedInUser; cookies: BrowserCookie[] }>
   /**
    * Removes the user with the sessions, the password, the consents and the memberships, and
-   * every workspace the user created with what a test bought or added in it: sites with what
-   * the wizard made them with — where their files are, the references of their accesses, the
-   * stage of their first import and its event —, orders, a subscription, the accounts of
-   * credits with their ledger, the audit and the letters about the orders — and what a task of
-   * the workspace left: its reserves, its model calls and the claim of its site on the gift.
-   * The secrets of the accesses stay in the OpenBao of the run, which goes with it.
+   * every workspace the user created with what a test bought or added in it: orders, a
+   * subscription, the accounts of credits with their ledger, the audit and the letters about the
+   * orders, the files nobody sent — and what a task of the workspace left: its reserves and its
+   * model calls. A secret written to the OpenBao of the run goes with it.
    */
   remove(userId: string): Promise<void>
 }
@@ -106,7 +104,7 @@ export const test = base.extend<{ signedInUser: SignedInUser }, { accounts: Acco
       const auth = createAuth({ config: authConfigFromEnv(authEnv), prisma, notifier })
 
       const remove = async (userId: string) => {
-        // A payment or a first site gives the user a workspace. Orders, subscriptions and the
+        // A payment or a first chat or file gives the user a workspace. Orders, subscriptions and the
         // accounts of credits hold it with Restrict keys, and the ledger holds the accounts and
         // the orders: what refers goes first, the user last.
         const workspaces = await prisma.workspace.findMany({
