@@ -301,25 +301,17 @@ export async function runLiveGateway(mode) {
     const task = async (overrides = {}, continued) => {
       let taskId = continued?.ref.taskId
       if (!taskId) {
-        const site = await db.site.create({
-          data: {
-            workspaceId: workspace.id,
-            name: 'Live synthetic site',
-            url: `https://${randomUUID()}.invalid`,
-            stack: 'wordpress',
-          },
-        })
+        // A chat without a project (plan 83): its lease is held under its own id.
         const record = await db.task.create({
           data: {
             workspaceId: workspace.id,
-            siteId: site.id,
             status: 'running',
             modelClass: overrides.modelClass ?? 'standard',
           },
         })
         await db.siteLease.create({
           data: {
-            siteId: site.id,
+            siteId: record.id,
             holderTaskId: record.id,
             epoch: 1,
             operation: 'turn',
