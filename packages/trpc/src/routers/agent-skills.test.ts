@@ -139,7 +139,11 @@ describe('agentSkills', () => {
 
   it('switches a platform skill with a row of its own, and audits it', async () => {
     const { audits, writes, caller } = setup()
-    const view = await caller.agentSkills.switch({ workspaceId, name: 'playwright', enabled: false })
+    const view = await caller.agentSkills.switch({
+      workspaceId,
+      name: 'playwright',
+      enabled: false,
+    })
     expect(view.canManage).toBe(true)
     expect(writes).toEqual([
       [
@@ -186,7 +190,11 @@ describe('agentSkills', () => {
         caller.agentSkills.add({ workspaceId, name, url: 'https://docs.example.org/mcp' }),
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     await expect(
-      caller.agentSkills.add({ workspaceId, name: 'context7', url: 'https://docs.example.org/mcp' }),
+      caller.agentSkills.add({
+        workspaceId,
+        name: 'context7',
+        url: 'https://docs.example.org/mcp',
+      }),
     ).rejects.toMatchObject({ code: 'CONFLICT' })
     expect(writes).toHaveLength(1)
   })
@@ -215,16 +223,21 @@ describe('agentSkills', () => {
     await caller.agentSkills.remove({ workspaceId, name: 'docs' })
     expect(writes).toEqual([
       ['delete', { where: { workspaceId_name: { workspaceId, name: 'docs' } } }],
-      ['credentialRef.deleteMany', { where: { workspaceId, vaultPath: `kv/workspaces/${workspaceId}/mcp/docs` } }],
+      [
+        'credentialRef.deleteMany',
+        { where: { workspaceId, vaultPath: `kv/workspaces/${workspaceId}/mcp/docs` } },
+      ],
     ])
-    await expect(caller.agentSkills.remove({ workspaceId, name: 'context7' })).rejects.toMatchObject(
+    await expect(
+      caller.agentSkills.remove({ workspaceId, name: 'context7' }),
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+    })
+    await expect(caller.agentSkills.remove({ workspaceId, name: 'nothing' })).rejects.toMatchObject(
       {
-        code: 'CONFLICT',
+        code: 'NOT_FOUND',
       },
     )
-    await expect(caller.agentSkills.remove({ workspaceId, name: 'nothing' })).rejects.toMatchObject({
-      code: 'NOT_FOUND',
-    })
     await expect(
       caller.agentSkills.switch({ workspaceId, name: 'nothing', enabled: true }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' })
@@ -421,10 +434,12 @@ describe('agentSkills', () => {
       { name: 'keyed', url, enabled: true, authKind: 'header', headerName: 'X-Key' },
     ])
     expect(await caller.agentSkills.signInCheck({ workspaceId, name: ' Menu ', url })).toEqual({
+      workspaceId,
       name: 'menu',
       url,
     })
     expect(await caller.agentSkills.signInCheck({ workspaceId, name: 'signed', url })).toEqual({
+      workspaceId,
       name: 'signed',
       url,
     })

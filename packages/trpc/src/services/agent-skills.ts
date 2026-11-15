@@ -73,7 +73,11 @@ export const skillLimit = () =>
 export const skillNotFound = () =>
   new DomainError('AGENT_SKILL_NOT_FOUND', 'The workspace has no such skill', 404)
 export const skillBuiltin = () =>
-  new DomainError('AGENT_SKILL_BUILTIN', 'A skill of the platform is switched off, not removed', 409)
+  new DomainError(
+    'AGENT_SKILL_BUILTIN',
+    'A skill of the platform is switched off, not removed',
+    409,
+  )
 export const skillHeaderInvalid = () =>
   new DomainError('AGENT_SKILL_HEADER_INVALID', 'Not a header or a key a server may get', 400)
 export const skillAuthUnavailable = () =>
@@ -257,7 +261,10 @@ async function eraseOwnVersion(
 ): Promise<void> {
   const metadata = await services.secrets.kvMetadata(path)
   if (metadata?.currentVersion !== version) return
-  await services.secrets.kvWrite(path, workspaceEnvVarTombstone(now), { cas: version, maxVersions: 1 })
+  await services.secrets.kvWrite(path, workspaceEnvVarTombstone(now), {
+    cas: version,
+    maxVersions: 1,
+  })
 }
 
 /** One change of the skills of a workspace; an owner or an admin only, audited. */

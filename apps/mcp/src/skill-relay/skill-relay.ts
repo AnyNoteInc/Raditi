@@ -183,7 +183,8 @@ export class SkillRelay {
         expiresAt !== undefined &&
         Date.parse(expiresAt) - this.#now().getTime() < AGENT_SKILL_TOKEN_RENEW_MS
       ) {
-        const renewed = (await this.deps.renewer?.renew(workspaceId, name, server.oauth, read)) ?? null
+        const renewed =
+          (await this.deps.renewer?.renew(workspaceId, name, server.oauth, read)) ?? null
         if (renewed === null) {
           await this.#record(workspaceId, name, 'needs_login', 'renewal_refused')
           return failure(res, 502, relayText.refused(name))

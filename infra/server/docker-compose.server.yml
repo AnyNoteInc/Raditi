@@ -214,16 +214,8 @@ services:
       # The host of the Host sandbox-gw sends upstream (SANDBOX_MCP_UPSTREAM of the runner), no port
       MCP_ALLOWED_HOSTS: 10.10.0.10
       BROWSER_WORKER_URL: http://10.10.0.10:8086
-<<<<<<< HEAD
-=======
-      SINGLE_SERVER: 'on'
-      MCP_CONTENT_PROFILE: local
-      MCP_BROWSER_PROFILE: local
-      S3_BUCKET_ARTIFACTS: raditi-artifacts
-      PREVIEW_UPSTREAM_HOST: 10.10.0.10
       # The relay of MCP servers with a key never connects to the platform itself (plan 81)
       SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:?Set SANDBOX_EGRESS_REFUSED_SUBNETS}
->>>>>>> origin/main
       HOME: /tmp
     volumes:
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/mcp' }

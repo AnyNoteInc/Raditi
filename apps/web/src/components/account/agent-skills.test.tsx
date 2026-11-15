@@ -127,7 +127,10 @@ describe('«Навыки агента» of a site', () => {
     const row = screen.getByText('https://docs.example.org/mcp').closest('li')!
     fireEvent.click(within(row).getByRole('button', { name: skillsText.remove }))
     await waitFor(() => expect(screen.queryByText('https://docs.example.org/mcp')).toBeNull())
-    expect(calls.remove).toHaveBeenCalledWith({ workspaceId: WORKSPACE_ID, name: 'docs' }, expect.anything())
+    expect(calls.remove).toHaveBeenCalledWith(
+      { workspaceId: WORKSPACE_ID, name: 'docs' },
+      expect.anything(),
+    )
   })
 
   it('says what is wrong with a name or an address before sending it', () => {

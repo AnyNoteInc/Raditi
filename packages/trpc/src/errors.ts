@@ -222,7 +222,8 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   // MCP servers with a key (docs/plan/81-mcp-server-credentials.md).
   AGENT_SKILL_HEADER_INVALID:
     'Имя заголовка — латинские буквы, цифры и дефис, а ключ — от 8 знаков, одной строкой, без русских букв. Исправьте и попробуйте снова',
-  AGENT_SKILL_AUTH_UNAVAILABLE: 'Сейчас нельзя подключить сервер с ключом. Попробуйте немного позже',
+  AGENT_SKILL_AUTH_UNAVAILABLE:
+    'Сейчас нельзя подключить сервер с ключом. Попробуйте немного позже',
   AGENT_SKILL_CHECK_FAILED: 'Сервер не ответил как сервер MCP. Проверьте адрес и попробуйте снова',
   AGENT_SKILL_KEYLESS: 'У этого сервера нет ключа, который можно заменить',
   WORKSPACE_ENV_NOT_ALLOWED: 'Переменные могут менять только владелец и администраторы',

@@ -113,6 +113,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL authorization of MCP servers', () => {
       await refused({ kind: 'mcp_server', vaultPath: `kv/x/${workspaceId}/a` }),
       await refused({ workspaceId, kind: 'subscription', vaultPath: `kv/x/${workspaceId}/b` }),
     ])
-      expect(String((error as Error | null)?.message)).toMatch(/credential_refs_platform_scope|check/i)
+      expect(String((error as Error | null)?.message)).toMatch(
+        /credential_refs_platform_scope|check/i,
+      )
   })
 })

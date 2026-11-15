@@ -61,7 +61,14 @@ const startRequest = (body: unknown, headers: Record<string, string> = {}) =>
 
 const sealed = (patch: Record<string, unknown> = {}) =>
   sealSignIn(
-    { workspaceId: WORKSPACE, name: 'menu', userId: 'user-1', expiresAt: NOW + 60_000, pending, ...patch },
+    {
+      workspaceId: WORKSPACE,
+      name: 'menu',
+      userId: 'user-1',
+      expiresAt: NOW + 60_000,
+      pending,
+      ...patch,
+    },
     SECRET,
   )
 
@@ -140,9 +147,7 @@ describe('finishSignIn', () => {
     const { value, connect, finish } = deps()
     const response = await finishSignIn(callback(`code=code-1&state=${pending.state}`), value)
     expect(response.status).toBe(303)
-    expect(response.headers.get('location')).toBe(
-      `${APP}/settings/skills?mcp=signed-in&skill=menu`,
-    )
+    expect(response.headers.get('location')).toBe(`${APP}/settings/skills?mcp=signed-in&skill=menu`)
     expect(response.headers.get('set-cookie')).toMatch(/raditi_mcp_sign_in=; .*Max-Age=0/)
     expect(finish).toHaveBeenCalledWith(pending, 'code-1')
     expect(connect).toHaveBeenCalledWith({

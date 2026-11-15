@@ -52,10 +52,23 @@ describe.skipIf(!enabled)('the servers of the MCP relay with PostgreSQL', () => 
       data: [
         { workspaceId, name: 'keyed', url, authKind: 'header', headerName: 'X-Api-Key' },
         { workspaceId, name: 'signed', url, authKind: 'oauth', oauth: signIn },
-        { workspaceId, name: 'broken', url, authKind: 'oauth', oauth: { issuer: 'https://a.example' } },
+        {
+          workspaceId,
+          name: 'broken',
+          url,
+          authKind: 'oauth',
+          oauth: { issuer: 'https://a.example' },
+        },
         { workspaceId, name: 'open', url },
         { workspaceId, name: 'off', url, enabled: false, authKind: 'header', headerName: 'X-Key' },
-        { workspaceId, name: 'login', url, authKind: 'oauth', authState: 'needs_login', oauth: signIn },
+        {
+          workspaceId,
+          name: 'login',
+          url,
+          authKind: 'oauth',
+          authState: 'needs_login',
+          oauth: signIn,
+        },
       ],
     })
     const ok = { state: 'ok', error: null }

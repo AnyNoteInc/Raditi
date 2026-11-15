@@ -20,7 +20,6 @@ import Skeleton from '@mui/material/Skeleton'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
-
 // «Навыки агента» (owner's request of 26.10.2026: «установи для агента по умолчанию следующие
 // скилы и сделай возможность добавлять — context7, playwright»): the MCP servers the site's agent
 // connects to besides Радити's own tools. The platform's two are on until an owner or an admin
@@ -110,7 +109,15 @@ export interface SkillsView {
 }
 
 /** A card of the page: its title, a note under it and what it holds. */
-function SkillsCard({ title, note, children }: { title: string; note: ReactNode; children: ReactNode }) {
+function SkillsCard({
+  title,
+  note,
+  children,
+}: {
+  title: string
+  note: ReactNode
+  children: ReactNode
+}) {
   return (
     <Box component="section" sx={{ border: 1, borderColor: 'divider', borderRadius: '14px' }}>
       <Box sx={{ px: { xs: 2, sm: 2.75 }, py: 2, borderBottom: 1, borderColor: 'divider' }}>
