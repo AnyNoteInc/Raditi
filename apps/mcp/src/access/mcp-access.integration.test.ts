@@ -201,23 +201,26 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
         .send(body as object)
   }
 
-  it.each([false, true])('admits a turn of a chat, browser %s, by its own lease', async (browser) => {
-    const turn = await chatTurnOf(browser)
-    try {
-      expect(await store.authenticate(turn.token)).toEqual({
-        keyId: turn.key.id,
-        taskId: turn.task.id,
-        workspaceId: fixture.workspaceId,
-        sessionId: turn.assignment.sessionId,
-        turn: 1,
-        firstEpoch: 1,
-        epoch: 1,
-        requirements: { repository: false, browser },
-      })
-    } finally {
-      await turn.cleanup()
-    }
-  })
+  it.each([false, true])(
+    'admits a turn of a chat, browser %s, by its own lease',
+    async (browser) => {
+      const turn = await chatTurnOf(browser)
+      try {
+        expect(await store.authenticate(turn.token)).toEqual({
+          keyId: turn.key.id,
+          taskId: turn.task.id,
+          workspaceId: fixture.workspaceId,
+          sessionId: turn.assignment.sessionId,
+          turn: 1,
+          firstEpoch: 1,
+          epoch: 1,
+          requirements: { repository: false, browser },
+        })
+      } finally {
+        await turn.cleanup()
+      }
+    },
+  )
 
   it('admits two chats at once, each by its own lease', async () => {
     const one = await chatTurnOf(false)

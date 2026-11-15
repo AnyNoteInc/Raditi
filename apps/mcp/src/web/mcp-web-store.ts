@@ -121,8 +121,7 @@ export class PostgresMcpWebStore implements McpWebStore {
 
   async #sessionOf(tx: Prisma.TransactionClient, scope: McpTurnAccess, started: number) {
     const open = await openBrowserSessionOfTask(tx, scope.taskId)
-    if (open && open.workspaceId !== scope.workspaceId)
-      throw unavailable()
+    if (open && open.workspaceId !== scope.workspaceId) throw unavailable()
     // One start and one replacement per assignment: a turn never runs up containers without end.
     if (!open && started >= browserSessionLimits.perAssignment) throw unavailable()
     return (

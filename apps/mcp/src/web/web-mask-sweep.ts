@@ -62,9 +62,7 @@ export class WebMaskSweep implements OnApplicationBootstrap, BeforeApplicationSh
           const task = await this.#claim(id)
           if (!task) continue
           // Removing it twice changes nothing, a lost acknowledgement is simply repeated.
-          await this.secrets.kvDestroyAll(
-            contentMaskPath({ siteId: task.id, taskId: task.id }),
-          )
+          await this.secrets.kvDestroyAll(contentMaskPath({ siteId: task.id, taskId: task.id }))
           // Raw: Prisma's @updatedAt would lift a chat finished long ago to the top of its list.
           await this.db.$transaction(
             (tx) => tx.$executeRaw`

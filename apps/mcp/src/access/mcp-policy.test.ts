@@ -253,9 +253,9 @@ describe('MCP request policy', () => {
     })
     expect(mcpBodyAllowed(call({ query: 'wordpress register_post_type' }), ['search'])).toBe(true)
     // Not without the family, whatever else the request may call.
-    expect(
-      mcpBodyAllowed(call({ query: 'wordpress register_post_type' }), ['web', 'docs']),
-    ).toBe(false)
+    expect(mcpBodyAllowed(call({ query: 'wordpress register_post_type' }), ['web', 'docs'])).toBe(
+      false,
+    )
     for (const args of [
       {},
       { query: 'x' },
