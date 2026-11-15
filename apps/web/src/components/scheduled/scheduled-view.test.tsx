@@ -181,6 +181,23 @@ describe('a task of «Ваши» (Зп5)', () => {
     )
   })
 
+  // F9: a deleted project is not named in the row (Зп22).
+  it('says «Проект удалён» for a task whose project was deleted', async () => {
+    list([
+      scheduleItem({
+        project: { id: '019f2a00-0000-7000-8000-00000000dead', name: 'Старый сайт', deleted: true },
+        enabled: false,
+        nextRunAt: null,
+        pausedReason: 'project_gone',
+      }),
+    ])
+    show(<ScheduledView userId={USER} tab="yours" />)
+    const row = (await screen.findByRole('link', { name: 'Проверка сайта' })).closest('li')
+    if (!(row instanceof HTMLElement)) throw new Error('no row')
+    expect(row).toHaveTextContent('Проект удалён')
+    expect(row).not.toHaveTextContent('Старый сайт')
+  })
+
   it('runs a task now and opens the chat of its run (Зп24)', async () => {
     list([scheduleItem()])
     show(<ScheduledView userId={USER} tab="yours" />)
@@ -225,6 +242,42 @@ describe('a task of «Ваши» (Зп5)', () => {
     expect(await screen.findByText('Задача удалена')).toBeInTheDocument()
   })
 
+  // F30: the row the focus was in goes away; the focus goes to the next row, or to «Новая задача».
+  it('gives the focus to the next row after a deletion, and to «Новая задача» after the last', async () => {
+    const first = scheduleItem({ id: '019f2a00-0000-7000-8000-000000000101', name: 'Первая' })
+    const second = scheduleItem({ id: '019f2a00-0000-7000-8000-000000000102', name: 'Вторая' })
+    list([first, second])
+    show(<ScheduledView userId={USER} tab="yours" />)
+    const deleteFrom = async (name: string) => {
+      fireEvent.click(await screen.findByRole('button', { name: `Действия с задачей «${name}»` }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Удалить' }))
+      fireEvent.click(
+        within(screen.getByRole('dialog', { name: `Удалить задачу «${name}»?` })).getByRole(
+          'button',
+          { name: 'Удалить' },
+        ),
+      )
+    }
+    list([second])
+    await deleteFrom('Первая')
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Действия с задачей «Вторая»' })).toHaveFocus(),
+    )
+    await waitFor(() => expect(screen.queryByText('Первая')).toBeNull())
+    expect(screen.getByRole('button', { name: 'Действия с задачей «Вторая»' })).toHaveFocus()
+
+    list([])
+    await deleteFrom('Вторая')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Новая задача' })).toHaveFocus())
+  })
+
+  it('says «Задача удалена» the page of the task left for it, once', async () => {
+    sessionStorage.setItem('raditi-schedule-notice', 'deleted')
+    show(<ScheduledView userId={USER} tab="yours" />)
+    expect(await screen.findByText('Задача удалена')).toBeInTheDocument()
+    expect(sessionStorage.getItem('raditi-schedule-notice')).toBeNull()
+  })
+
   it('opens «Изменить задачу» with its fields', async () => {
     list([scheduleItem()])
     show(<ScheduledView userId={USER} tab="yours" />)
@@ -248,7 +301,7 @@ describe('the tools of «Ваши» (Зп3)', () => {
       name: index === 0 ? 'Заявки за сутки' : `Задача ${index}`,
       enabled: index % 2 === 0,
       nextRunAt: index % 2 === 0 ? new Date(`2026-11-1${6 + (index % 3)}T06:00:00.000Z`) : null,
-      project: index === 6 ? null : { id: SITE_ID, name: 'Кофейня «Крошка»' },
+      project: index === 6 ? null : { id: SITE_ID, name: 'Кофейня «Крошка»', deleted: false },
       lastRun: index === 3 ? scheduleRun({ state: { kind: 'failed' } }) : null,
     }),
   )

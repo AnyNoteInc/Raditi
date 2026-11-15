@@ -1,12 +1,12 @@
 // The service worker of the cabinet (docs/plan/75-chat-input-output.md, ВВ8;
 // docs/plan/82-scheduled-tasks.md, Зп40, Зп41): it shows the notifications of chats and of
 // scheduled tasks. A push carries no word of the client — the push services are abroad (rule 1):
-// only `{ id, path, kind, scheduled, tag }`, the id of the notification, the path of the cabinet it
-// opens, its kind, whether it is of a scheduled task and the tag a newer one replaces it by. The
-// words are read here from the cabinet, with the cookie of the session; without a session the
-// notification says what happened in general words of its kind and still opens its path. Nothing
-// is cached. No imports: the worker is one plain file; src/lib/service-worker.test.ts keeps its
-// titles and checks in step with @repo/domain.
+// only `{ id, path, kind, scheduled, tag, at }`, the id of the notification, the path of the
+// cabinet it opens, its kind, whether it is of a scheduled task, the tag a newer one replaces it by
+// and when the cabinet made it. The words are read here from the cabinet, with the cookie of the
+// session; without a session the notification says what happened in general words of its kind and
+// still opens its path. Nothing is cached. No imports: the worker is one plain file;
+// src/lib/service-worker.test.ts keeps its titles and checks in step with @repo/domain.
 
 self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
@@ -31,6 +31,8 @@ const SCHEDULED_TITLES = Object.freeze({
   paused: 'Запланированная задача приостановлена',
   missed: 'Запланированная задача пропустила запуск',
 })
+
+const ICON = '/brand-icon.png'
 
 const GENERAL = Object.freeze({
   title: 'Радити',
@@ -74,9 +76,14 @@ function json(data) {
   }
 }
 
+/** A moment the cabinet named, in ms since the epoch; null — none, or not one. */
+function momentOf(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : null
+}
+
 /**
  * What a push named, field by field: a field that is not what the cabinet sends is null (false for
- * `scheduled`), so a push of an older cabinet — only `{ id }` — still shows.
+ * `scheduled`), so a push of an older cabinet — only `{ id }`, or no `at` — still shows.
  */
 function payloadOf(data) {
   const parsed = json(data)
@@ -88,6 +95,7 @@ function payloadOf(data) {
       typeof raw.kind === 'string' && Object.hasOwn(SCHEDULED_TITLES, raw.kind) ? raw.kind : null,
     scheduled: raw.scheduled === true,
     tag: typeof raw.tag === 'string' && TAG.test(raw.tag) ? raw.tag : null,
+    at: momentOf(raw.at),
   }
 }
 
@@ -115,22 +123,63 @@ async function wordsOf(push) {
   }
 }
 
+/** The notifications shown now under a tag; none where the browser does not tell. */
+async function shownUnder(tag) {
+  try {
+    return await self.registration.getNotifications({ tag })
+  } catch {
+    return []
+  }
+}
+
+/**
+ * A notice shown under the tag that the cabinet made after this push's one, or null (Зп41). A push
+ * service gives an urgent push at once and holds one of normal urgency on a phone that sleeps, so
+ * an older notice — «пропустила запуск» — can come after a newer, urgent one — «не запустилась» —
+ * and must not replace it. A push or a notice without its moment is not ordered: it replaces.
+ */
+async function newerShown(tag, at) {
+  if (at === null) return null
+  const shown = await shownUnder(tag)
+  return shown.find((notification) => (momentOf(notification.data?.at) ?? 0) > at) || null
+}
+
+/**
+ * Shows the newer notice again as it is, without a sound: it stays on top of the older one, and
+ * this push still shows a notification — Safari drops a subscription whose pushes show none.
+ */
+function showAgain(notification) {
+  return self.registration.showNotification(notification.title, {
+    body: notification.body,
+    icon: notification.icon || ICON,
+    lang: 'ru',
+    timestamp: notification.timestamp,
+    tag: notification.tag,
+    renotify: false,
+    data: notification.data,
+  })
+}
+
+async function showPush(push) {
+  const words = await wordsOf(push)
+  // A newer run of a task, a newer pass of a chat replaces the notice before it, and says so.
+  const tag = push.tag || words.path
+  // Asked after the words are read: a newer push may have been shown meanwhile.
+  const newer = await newerShown(tag, push.at)
+  if (newer !== null) return showAgain(newer)
+  return self.registration.showNotification(words.title, {
+    body: words.body,
+    icon: ICON,
+    lang: 'ru',
+    timestamp: push.at ?? Date.now(),
+    tag,
+    renotify: true,
+    data: { path: words.path, at: push.at },
+  })
+}
+
 self.addEventListener('push', (event) => {
-  const push = payloadOf(event.data)
-  event.waitUntil(
-    wordsOf(push).then((words) =>
-      self.registration.showNotification(words.title, {
-        body: words.body,
-        icon: '/brand-icon.png',
-        lang: 'ru',
-        timestamp: Date.now(),
-        // A newer run of a task, a newer pass of a chat replaces the notice before it, and says so.
-        tag: push.tag || words.path,
-        renotify: true,
-        data: { path: words.path },
-      }),
-    ),
-  )
+  event.waitUntil(showPush(payloadOf(event.data)))
 })
 
 const sameOrigin = (client) => new URL(client.url).origin === self.location.origin
@@ -138,10 +187,40 @@ const pathOfClient = (client) => new URL(client.url).pathname
 const inCabinet = (path) =>
   CABINET_SECTIONS.some((section) => path === section || path.startsWith(`${section}/`))
 
+/** How long a window of the cabinet has to answer that it goes to the path (Зп41). */
+const ANSWER_MS = 500
+
+/**
+ * Tells a window of the cabinet the path, with a port to answer on: true — it answered that it
+ * goes there (the bridge of the cabinet, `{ ok: true }`). A page of an older cabinet, or one that
+ * did not mount the bridge, answers nothing. Not longer than ANSWER_MS: Firefox lets a worker open
+ * a window only within a second of the click.
+ */
+function told(client, path) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel()
+    let timer = null
+    const done = (answered) => {
+      clearTimeout(timer)
+      channel.port1.close()
+      resolve(answered)
+    }
+    timer = setTimeout(() => done(false), ANSWER_MS)
+    channel.port1.onmessage = (event) => done(event.data?.ok === true)
+    try {
+      client.postMessage({ type: 'raditi:navigate', path }, [channel.port2])
+    } catch {
+      done(false)
+    }
+  })
+}
+
 /**
  * Where a click on a notification goes (Зп41): a window already on its path is brought forward; a
  * window of the cabinet is brought forward and told the path, and goes there itself without a
- * reload, keeping what the client was typing; otherwise a new window opens on the path.
+ * reload, keeping what the client was typing; a window that does not answer is moved by the worker
+ * when it controls it, and otherwise — or with no window of the cabinet — a new window opens on
+ * the path.
  */
 async function openPath(path) {
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
@@ -155,8 +234,14 @@ async function openPath(path) {
     // A browser may refuse to bring it forward; it still goes to the path.
     const focused = await cabinet.focus().catch(() => null)
     const target = focused || cabinet
-    target.postMessage({ type: 'raditi:navigate', path })
-    return target
+    if (await told(target, path)) return target
+    if (typeof target.navigate === 'function') {
+      try {
+        return await target.navigate(path)
+      } catch {
+        // A window this worker does not control: it stays, and a new one opens.
+      }
+    }
   }
   return self.clients.openWindow(path)
 }

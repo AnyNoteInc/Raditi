@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import { runStateOf, type RunChatState, type RunRow } from './outcomes.ts'
 
-const started: RunRow = { status: 'started', reason: null, missedCount: 0, taskId: 'chat' }
+const started: RunRow = {
+  status: 'started',
+  reason: null,
+  missedCount: 0,
+  missedUntil: null,
+  taskId: 'chat',
+}
 
 const chat = (patch: Partial<RunChatState> = {}): RunChatState => ({
   status: 'awaiting_user',
@@ -21,9 +27,23 @@ describe('the state of a run of a scheduled task (docs/plan/82, Зп5)', () => {
     expect(
       runStateOf({ ...started, status: 'refused', reason: 'no_credits', taskId: null }, undefined),
     ).toEqual({ kind: 'refused', reason: 'no_credits' })
+    const until = new Date('2026-11-16T11:00:00Z')
     expect(
-      runStateOf({ status: 'skipped', reason: 'missed', missedCount: 4, taskId: null }, undefined),
-    ).toEqual({ kind: 'skipped', reason: 'missed', missedCount: 4 })
+      runStateOf(
+        { ...started, status: 'skipped', reason: 'missed', missedCount: 4, missedUntil: until },
+        undefined,
+      ),
+    ).toEqual({ kind: 'skipped', reason: 'missed', missedCount: 4, missedUntil: until })
+    // A row written before the end was kept says none; another reason never has one.
+    expect(
+      runStateOf({ ...started, status: 'skipped', reason: 'missed', missedCount: 4 }, undefined),
+    ).toEqual({ kind: 'skipped', reason: 'missed', missedCount: 4, missedUntil: null })
+    expect(
+      runStateOf(
+        { ...started, status: 'skipped', reason: 'previous_running', missedUntil: until },
+        undefined,
+      ),
+    ).toEqual({ kind: 'skipped', reason: 'previous_running', missedCount: 0, missedUntil: null })
     // A reason this code does not know is told as a fault of the platform, never guessed.
     expect(
       runStateOf({ ...started, status: 'refused', reason: 'newer', taskId: null }, undefined),

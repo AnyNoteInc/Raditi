@@ -8,7 +8,8 @@ import { refusedCrossOriginPost } from './trpc-origin'
 // The browser replaced its Web Push subscription (docs/plan/82-scheduled-tasks.md, Зп41): the
 // service worker's `pushsubscriptionchange` posts the old endpoint and the new subscription here,
 // with the cookie of the session — it runs on the origin of the cabinet. The procedure
-// `notification.resubscribe` checks the session, the consents and the subscription itself.
+// `notification.replaceSubscription` checks the session, the consents and the subscription itself,
+// and moves only a row of the signed-in user (Зп37): the session may be of another account.
 
 /** A subscription is a few hundred bytes. */
 export const MAX_RESUBSCRIBE_BODY_BYTES = 4 * 1024
@@ -16,7 +17,7 @@ export const MAX_RESUBSCRIBE_BODY_BYTES = 4 * 1024
 export interface ResubscribeRoute {
   /** APP_URL: a post from another origin is refused. */
   appUrl: () => string
-  /** `notification.resubscribe` with the session of the request. */
+  /** `notification.replaceSubscription` with the session of the request. */
   resubscribe: (headers: Headers, body: unknown) => Promise<unknown>
 }
 

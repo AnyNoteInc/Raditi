@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { scheduleTemplateOf } from '@repo/domain/schedule'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ScheduleDialog, type ScheduleDialogOpening } from './schedule-dialog'
 import { NOW, scheduleDetail, SITE_ID } from './testing'
 
-const { create, update, costHint, listProjects, push } = vi.hoisted(() => ({
+const { create, update, costHint, listProjects, listSchedules, push } = vi.hoisted(() => ({
   create: vi.fn(async (input: { name: string }) => ({
     id: '019f2a00-0000-7000-8000-0000000000f1',
     ...input,
@@ -22,6 +22,7 @@ const { create, update, costHint, listProjects, push } = vi.hoisted(() => ({
     nextRunAt: null,
   })),
   listProjects: vi.fn(async () => [] as unknown[]),
+  listSchedules: vi.fn(async () => ({ schedules: [] as unknown[], timezone: 'Europe/Moscow' })),
   push: vi.fn(),
 }))
 
@@ -44,7 +45,7 @@ const mutation = (fn: (input: never) => Promise<unknown>) => ({
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
     schedule: {
-      list: query('schedule.list', async () => ({ schedules: [], timezone: 'Europe/Moscow' })),
+      list: query('schedule.list', listSchedules),
       get: query('schedule.get', async () => null),
       costHint: query('schedule.costHint', costHint),
       create: mutation(create),
@@ -76,7 +77,7 @@ function show(
       <ScheduleDialog opening={opening} userId={USER} onClose={onClose} onSaved={onSaved} />
     </QueryClientProvider>,
   )
-  return { onClose, onSaved, dialog: screen.getByRole('dialog') }
+  return { onClose, onSaved, queryClient, dialog: screen.getByRole('dialog') }
 }
 
 const template = (slug: string) => {
@@ -93,6 +94,7 @@ function choose(dialog: HTMLElement, label: string, option: string, index = 0) {
 beforeEach(() => {
   vi.clearAllMocks()
   listProjects.mockResolvedValue([])
+  listSchedules.mockResolvedValue({ schedules: [], timezone: 'Europe/Moscow' })
   sessionStorage.clear()
   localStorage.clear()
   // The clock alone: React Query and MUI keep their timers.
@@ -145,6 +147,9 @@ describe('«Новая запланированная задача» (plan 82, �
     const { dialog } = show({ kind: 'new' })
     expect(dialog).toHaveTextContent(/Задача выполняется без вас/)
     expect(dialog).toHaveTextContent(/В админке сайта он только читает/)
+    // What the platform refuses in such a run (Зп28, Зп32): pages and the keyed skills too.
+    expect(dialog).toHaveTextContent(/страницы из раздела «Страницы» не публикует и не меняет/)
+    expect(dialog).toHaveTextContent(/навыки агента с ключом не вызывает/)
     expect(
       await within(dialog).findByText(
         /Каждый запуск тратит кредиты, как обычный чат, — в среднем около 11\. Так выйдет примерно 77 в неделю; ваш недельный лимит — 73\. Остальным чатам останется меньше\./,
@@ -165,15 +170,46 @@ describe('«Новая запланированная задача» (plan 82, �
     const { dialog } = show({ kind: 'new' })
     const add = () => within(dialog).getByRole('button', { name: 'Добавить время' })
     for (let index = 0; index < 4; index += 1) fireEvent.click(add())
-    expect(within(dialog).getAllByRole('group', { name: /^Время запуска \d$/ })).toHaveLength(5)
+    const blocks = within(dialog).getAllByRole('group', { name: /^Время запуска \d$/ })
+    expect(blocks).toHaveLength(5)
+    // Each new time keeps an hour from the others: the window does not turn red by itself (F28).
+    expect(
+      blocks.map((block) => (within(block).getByLabelText('Время') as HTMLInputElement).value),
+    ).toEqual(['09:00', '12:00', '15:00', '18:00', '21:00'])
+    expect(within(dialog).queryByRole('alert')).toBeNull()
+    expect(within(dialog).getByText(/^Следующий запуск:/)).toHaveTextContent(
+      'Следующий запуск: сегодня, 15 ноября, в 15:00',
+    )
     expect(within(dialog).queryByRole('button', { name: 'Добавить время' })).toBeNull()
     expect(within(dialog).queryByRole('button', { name: 'Убрать время запуска 1' })).toBeNull()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Убрать время запуска 3' }))
     expect(within(dialog).getAllByRole('group', { name: /^Время запуска \d$/ })).toHaveLength(4)
-    // Five daily runs at 9:00 meet: «не чаще раза в час».
+  })
+
+  it('says the rule of an hour once the client makes two times meet', () => {
+    const { dialog } = show({ kind: 'new' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Добавить время' }))
+    const second = within(dialog).getByRole('group', { name: 'Время запуска 2' })
+    fireEvent.change(within(second).getByLabelText('Время'), { target: { value: '09:30' } })
     expect(within(dialog).getByRole('alert')).toHaveTextContent(
       'Запуски одной задачи — не чаще раза в час',
     )
+    expect(within(dialog).queryByText(/^Следующий запуск:/)).toBeNull()
+  })
+
+  // F27: a cleared or half-typed date is the block's, not «не чаще раза в час».
+  it('wants the date of a single run that the field does not hold whole', () => {
+    const { dialog } = show({ kind: 'new' })
+    choose(dialog, 'Как часто', 'Один раз')
+    const block = within(dialog).getByRole('group', { name: 'Время запуска 1' })
+    for (const date of ['', '0002-11-15']) {
+      fireEvent.change(within(block).getByLabelText('Дата'), { target: { value: date } })
+      expect(block).toHaveTextContent('Укажите дату')
+      expect(block).not.toHaveTextContent('Это время уже прошло')
+      expect(within(dialog).queryByRole('alert')).toBeNull()
+    }
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Создать' }))
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('says at once that a single run is in the past', () => {
@@ -209,6 +245,23 @@ describe('«Новая запланированная задача» (plan 82, �
     expect(dialog).toHaveTextContent(
       'Задача запустится, только когда вы нажмёте «Запустить сейчас».',
     )
+  })
+
+  // F26: the name is told by its own field, before the server and after it.
+  it('tells a name that reads as a key under «Название», not under the instructions', async () => {
+    const { dialog } = show({ kind: 'new' })
+    const name = within(dialog).getByRole('textbox', { name: 'Название' })
+    fireEvent.change(name, { target: { value: 'Kx9mP2vLq7wZ' } })
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Что сделать агенту' }), {
+      target: { value: 'Соберите заявки' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Создать' }))
+    expect(name).toHaveAccessibleDescription('Похоже, в названии пароль или ключ — уберите его')
+    expect(name).toHaveAttribute('aria-invalid', 'true')
+    expect(name).toHaveFocus()
+    expect(create).not.toHaveBeenCalled()
+    const instructions = within(dialog).getByRole('textbox', { name: 'Что сделать агенту' })
+    expect(instructions).not.toHaveAttribute('aria-invalid')
   })
 
   it('tells a refusal of the server by its field, or on top', async () => {
@@ -275,6 +328,24 @@ describe('«Новая запланированная задача» (plan 82, �
     expect(within(dialog).queryByTestId('browser-push')).toBeNull()
   })
 
+  // F35: the list may first answer an old zone, then the one the cabinet remembered of the browser.
+  it('follows the zone of the list as it comes, until the client picks one', async () => {
+    listSchedules.mockResolvedValueOnce({ schedules: [], timezone: 'Asia/Yekaterinburg' })
+    listSchedules.mockResolvedValue({ schedules: [], timezone: 'Asia/Novosibirsk' })
+    const { dialog, queryClient } = show({ kind: 'new' })
+    const next = () => within(dialog).getByText(/^Следующий запуск:/)
+    await waitFor(() => expect(next()).toHaveTextContent('(по времени Екатеринбурга)'))
+    await act(() => queryClient.invalidateQueries({ queryKey: ['schedule.list'] }))
+    await waitFor(() => expect(next()).toHaveTextContent('(по времени Новосибирска)'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Дополнительные настройки' }))
+    choose(dialog, 'Часовой пояс', 'Самара')
+    expect(next()).toHaveTextContent('(по времени Самары)')
+    listSchedules.mockResolvedValue({ schedules: [], timezone: 'Asia/Yekaterinburg' })
+    await act(() => queryClient.invalidateQueries({ queryKey: ['schedule.list'] }))
+    await waitFor(() => expect(listSchedules).toHaveBeenCalledTimes(3))
+    expect(next()).toHaveTextContent('(по времени Самары)')
+  })
+
   it('keeps the zone under «Дополнительные настройки»', () => {
     const { dialog } = show({ kind: 'new' })
     const more = within(dialog).getByRole('button', { name: 'Дополнительные настройки' })
@@ -302,11 +373,51 @@ describe('a template (Зп9)', () => {
 
   it('wants a project when there is none, and offers to add one', async () => {
     const { dialog } = show({ kind: 'new', template: template('site-check') })
-    expect(await within(dialog).findByRole('link', { name: 'Добавьте проект' })).toHaveAttribute(
-      'href',
-      '/projects/new',
-    )
+    const add = await within(dialog).findByRole('link', { name: 'Добавьте проект' })
+    expect(add).toHaveAttribute('href', '/projects/new')
     expect(within(dialog).getByRole('button', { name: 'Создать' })).toBeDisabled()
+    // Untouched, the window has nothing to lose: the link goes.
+    expect(fireEvent.click(add)).toBe(true)
+    expect(screen.queryByRole('dialog', { name: 'Перейти к добавлению проекта?' })).toBeNull()
+  })
+
+  // F12: what the client changed is not lost without a question.
+  it('asks before leaving for the wizard what the client changed', async () => {
+    const { dialog } = show({ kind: 'new', template: template('site-check') })
+    const add = await within(dialog).findByRole('link', { name: 'Добавьте проект' })
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Что сделать агенту' }), {
+      target: { value: 'Проверьте и корзину' },
+    })
+    expect(fireEvent.click(add)).toBe(false)
+    const ask = screen.getByRole('dialog', { name: 'Перейти к добавлению проекта?' })
+    expect(ask).toHaveTextContent('то, что вы изменили в окне, не сохранится')
+    fireEvent.click(within(ask).getByRole('button', { name: 'Остаться' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Перейти к добавлению проекта?' })).toBeNull(),
+    )
+    expect(push).not.toHaveBeenCalled()
+    fireEvent.click(add)
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Перейти к добавлению проекта?' })).getByRole(
+        'button',
+        { name: 'Перейти' },
+      ),
+    )
+    expect(push).toHaveBeenCalledWith('/projects/new')
+  })
+
+  it('has no «Добавить проект» in the choice of the project: it would leave the window', async () => {
+    listProjects.mockResolvedValue([project])
+    const { dialog } = show({ kind: 'new' })
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Проект для этого чата: Без проекта' }),
+    )
+    const menu = await screen.findByRole('menu', { name: 'Проект для этого чата' })
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Без проекта', expect.stringContaining('Кофейня «Крошка»')])
   })
 
   it('chooses the place for the addresses of «Конкуренты» to be written over', () => {
@@ -326,6 +437,131 @@ describe('a template (Зп9)', () => {
 })
 
 describe('«Изменить задачу»', () => {
+  // F31: renaming a finished «Один раз» is not a new run (Зп15, Зп24).
+  it('renames a finished single run without asking for a new date', async () => {
+    const schedule = scheduleDetail({
+      triggers: [{ kind: 'once', date: '2026-11-14', time: '09:00' }],
+      enabled: false,
+      pausedReason: 'completed',
+      nextRunAt: null,
+    })
+    const { dialog } = show({ kind: 'edit', schedule })
+    expect(dialog).not.toHaveTextContent('Это время уже прошло')
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Название' }), {
+      target: { value: 'Проверка перед выпуском' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }))
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(
+        { scheduleId: schedule.id, name: 'Проверка перед выпуском' },
+        expect.anything(),
+      ),
+    )
+    // A change of its time is a new run: in the past, it is told.
+    const block = within(dialog).getByRole('group', { name: 'Время запуска 1' })
+    fireEvent.change(within(block).getByLabelText('Время'), { target: { value: '10:00' } })
+    expect(block).toHaveTextContent('Это время уже прошло — выберите другое')
+  })
+
+  // F32: a task keeps its project while that project takes no chat right now.
+  it('saves a template task whose project cannot take a chat now', async () => {
+    listProjects.mockResolvedValue([{ ...project, chat: { state: 'closed', requirements: null } }])
+    const schedule = scheduleDetail({ templateSlug: 'site-check', createdVia: 'template' })
+    const { dialog } = show({ kind: 'edit', schedule })
+    await waitFor(() => expect(listProjects).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('button', { name: 'Проект для этого чата: Кофейня «Крошка»' }),
+      ).toBeInTheDocument(),
+    )
+    expect(dialog).not.toHaveTextContent('Этому шаблону нужен сайт')
+    expect(within(dialog).getByRole('button', { name: 'Сохранить' })).toBeEnabled()
+    const block = within(dialog).getByRole('group', { name: 'Время запуска 1' })
+    fireEvent.change(within(block).getByLabelText('Время'), { target: { value: '10:00' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }))
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(
+        { scheduleId: schedule.id, triggers: [{ kind: 'weekdays', time: '10:00' }] },
+        expect.anything(),
+      ),
+    )
+  })
+
+  // F9: the project of the task was deleted (Зп22); the task keeps it until the client moves it.
+  describe('of a deleted project', () => {
+    const GONE = '019f2a00-0000-7000-8000-00000000dead'
+    const orphan = () =>
+      scheduleDetail({
+        project: { id: GONE, name: 'Старый сайт', deleted: true },
+        enabled: false,
+        pausedReason: 'project_gone',
+      })
+    const costSites = () =>
+      (costHint.mock.calls as unknown as [{ queryKey: [string, { siteId: string | null }] }][]).map(
+        ([context]) => context.queryKey[1].siteId,
+      )
+
+    it('says «Проект удалён» in the pill with nothing chosen, and prices it without a project', async () => {
+      listProjects.mockResolvedValue([project])
+      const { dialog } = show({ kind: 'edit', schedule: orphan() })
+      const pill = await within(dialog).findByRole('button', {
+        name: 'Проект для этого чата: Проект удалён',
+      })
+      expect(dialog).not.toHaveTextContent('Старый сайт')
+      await waitFor(() => expect(costHint).toHaveBeenCalled())
+      expect(costSites()).toEqual([null])
+      fireEvent.click(pill)
+      const menu = await screen.findByRole('menu', { name: 'Проект для этого чата' })
+      for (const item of within(menu).getAllByRole('menuitem'))
+        expect(item).not.toHaveClass('Mui-selected')
+    })
+
+    it('moves it to «Без проекта» by the choice of it', async () => {
+      listProjects.mockResolvedValue([project])
+      const schedule = orphan()
+      const { dialog } = show({ kind: 'edit', schedule })
+      fireEvent.click(
+        await within(dialog).findByRole('button', {
+          name: 'Проект для этого чата: Проект удалён',
+        }),
+      )
+      const menu = await screen.findByRole('menu', { name: 'Проект для этого чата' })
+      fireEvent.click(within(menu).getByRole('menuitem', { name: 'Без проекта' }))
+      expect(
+        within(dialog).getByRole('button', { name: 'Проект для этого чата: Без проекта' }),
+      ).toBeInTheDocument()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }))
+      await waitFor(() =>
+        expect(update).toHaveBeenCalledWith(
+          { scheduleId: schedule.id, siteId: null },
+          expect.anything(),
+        ),
+      )
+    })
+
+    it('tells the refusal of a project that is gone by the field of the project', async () => {
+      update.mockRejectedValueOnce(
+        Object.assign(
+          new Error('Проект этой задачи удалён — выберите другой проект или «Без проекта»'),
+          {
+            data: { code: 'CONFLICT', domainCode: 'SCHEDULE_PROJECT_GONE' },
+          },
+        ),
+      )
+      const schedule = orphan()
+      const { dialog } = show({ kind: 'edit', schedule })
+      fireEvent.change(within(dialog).getByRole('textbox', { name: 'Название' }), {
+        target: { value: 'Проверка сайта утром' },
+      })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }))
+      const said = await within(dialog).findByText(
+        'Проект этой задачи удалён — выберите другой проект или «Без проекта»',
+      )
+      expect(said).toHaveClass('Mui-error')
+      expect(within(dialog).queryByRole('alert')).toBeNull()
+    })
+  })
+
   it('sends only what changed', async () => {
     const schedule = scheduleDetail()
     const { dialog } = show({ kind: 'edit', schedule })

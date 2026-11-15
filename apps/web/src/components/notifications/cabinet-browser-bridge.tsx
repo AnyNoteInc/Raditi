@@ -1,12 +1,12 @@
 'use client'
 
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 
 import { useTRPC } from '@/trpc/client'
 
-import { browserZone, claimZoneMark, navigatePathOf } from './cabinet-messages'
+import { browserZone, claimZoneMark, NAVIGATE_ANSWER, navigatePathOf } from './cabinet-messages'
 
 /** The session storage, or null where reading it throws. */
 function sessionStorageOrNull(): Storage | null {
@@ -20,15 +20,22 @@ function sessionStorageOrNull(): Storage | null {
 /**
  * Mounted once by the layout of the cabinet; renders nothing (docs/plan/82-scheduled-tasks.md):
  * - a click on a notification while a window of the cabinet is open brings it here as a message of
- *   the service worker, and the window goes to the path without a reload — the words the client
- *   was typing stay (Зп41);
+ *   the service worker; the window answers on the port of the message and goes to the path without
+ *   a reload — the words the client was typing stay (Зп41);
  * - the zone of the browser is remembered once a browser session, for the next scheduled task
- *   (Зп12).
+ *   (Зп12); the list of the tasks is read again, since it names the zone a new task takes.
  */
 export function CabinetBrowserBridge({ userId }: { userId: string }) {
   const router = useRouter()
   const trpc = useTRPC()
-  const remember = useMutation(trpc.schedule.rememberTimezone.mutationOptions())
+  const queryClient = useQueryClient()
+  const remember = useMutation(
+    trpc.schedule.rememberTimezone.mutationOptions({
+      // Read before the zone was written, the list would give a new task the zone of before.
+      onSuccess: () =>
+        void queryClient.invalidateQueries({ queryKey: trpc.schedule.list.queryKey() }),
+    }),
+  )
   const { mutate } = remember
 
   useEffect(() => {
@@ -36,7 +43,10 @@ export function CabinetBrowserBridge({ userId }: { userId: string }) {
     const container = navigator.serviceWorker
     const onMessage = (event: MessageEvent) => {
       const path = navigatePathOf(event.data)
-      if (path !== null) router.push(path)
+      if (path === null) return
+      // The worker waits for this answer; without it, it moves the window itself (Зп41).
+      event.ports[0]?.postMessage(NAVIGATE_ANSWER)
+      router.push(path)
     }
     container.addEventListener('message', onMessage)
     // Messages wait until the page says it listens; a listener added late would miss the first.

@@ -60,7 +60,7 @@ describe('ScheduleTick (docs/plan/82-scheduled-tasks.md, Зп14, Зп19–Зп21
       [s.tx, id(2), NOW],
       [s.tx, id(3), NOW],
     ])
-    expect(helpers.dueScheduleIds).toHaveBeenCalledWith(s.db, NOW, SCHEDULE_TICK_BATCH)
+    expect(helpers.dueScheduleIds).toHaveBeenCalledWith(s.db, NOW, SCHEDULE_TICK_BATCH, [])
     // A run that started is told by its chat; a moment skipped while one goes on, by the list.
     expect(s.notify.afterRun.mock.calls).toEqual([[id(901)]])
   })
@@ -76,6 +76,9 @@ describe('ScheduleTick (docs/plan/82-scheduled-tasks.md, Зп14, Зп19–Зп21
     const result = await s.tick.run()
     expect(result.claimed).toBe(SCHEDULE_TICK_BATCH)
     expect(helpers.dueScheduleIds).toHaveBeenCalledTimes(2)
+    // The second read leaves out the tasks the first brought — the one that threw among them —, so
+    // tasks that stay due never hide the ones after them.
+    expect(helpers.dueScheduleIds).toHaveBeenLastCalledWith(s.db, NOW, SCHEDULE_TICK_BATCH, full)
   })
 
   it('stops when a read brings only tasks it has met, and never reads more than its rounds', async () => {

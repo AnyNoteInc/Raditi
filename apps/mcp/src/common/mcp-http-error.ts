@@ -13,28 +13,33 @@ export class McpHttpError extends HttpException {
 }
 
 /**
- * A tool call the role refuses before any tool runs, answered as that tool's own refusal — the
- * result the agent reads (`isError`, `{ code, message }`) — rather than a refused request: a fixed
- * code and fixed words, nothing of the call.
+ * The JSON-RPC answer of a tool call the role refuses before any tool runs: that tool's own
+ * refusal — the result the agent reads (`isError`, `{ code, message }`) — rather than a refused
+ * request; a fixed code and fixed words, nothing of the call.
  */
+export function mcpToolRefusalBody(
+  id: string | number | null,
+  refusal: Readonly<{ code: string; message: string }>,
+) {
+  return {
+    jsonrpc: '2.0',
+    id,
+    result: {
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ ok: false, code: refusal.code, message: refusal.message }),
+        },
+      ],
+    },
+  }
+}
+
+/** A tool call the role refuses before any tool runs (`mcpToolRefusalBody`), from a guard. */
 export class McpToolRefusal extends HttpException {
   constructor(id: string | number | null, refusal: Readonly<{ code: string; message: string }>) {
-    super(
-      {
-        jsonrpc: '2.0',
-        id,
-        result: {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ ok: false, code: refusal.code, message: refusal.message }),
-            },
-          ],
-        },
-      },
-      200,
-    )
+    super(mcpToolRefusalBody(id, refusal), 200)
   }
 }
 

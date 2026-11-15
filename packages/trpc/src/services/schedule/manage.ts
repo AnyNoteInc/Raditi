@@ -89,8 +89,11 @@ export interface ScheduleView {
   lastRunAt: Date | null
   createdVia: 'manual' | 'template' | 'chat'
   templateSlug: string | null
-  /** null — without a project. */
-  project: { id: string; name: string } | null
+  /**
+   * null — without a project. `deleted` — its project was deleted (Зп22): the task stays bound to
+   * it, stopped, until the client moves it to another project or to none — shown «Проект удалён».
+   */
+  project: { id: string; name: string; deleted: boolean } | null
   createdAt: Date
   updatedAt: Date
   /** The newest run; null — none yet. */
@@ -114,8 +117,11 @@ function runView(run: RunRowOfTask, state: ScheduledRunState): ScheduleRunView {
     dueAt: run.dueAt,
     trigger: run.trigger as ScheduledRunTrigger,
     state,
+    // A chat deleted, or of a project deleted — it left the cabinet with it: «Чат удалён» (Зп6).
     chat:
-      run.task === null || run.task.deletedAt !== null
+      run.task === null ||
+      run.task.deletedAt !== null ||
+      (run.task.site !== null && run.task.site.deletedAt !== null)
         ? null
         : { id: run.task.id, title: run.task.title },
     createdAt: run.createdAt,
@@ -140,9 +146,9 @@ function taskView(row: TaskRow, lastRun: ScheduleRunView | null): ScheduleView {
     createdVia: row.createdVia as ScheduleView['createdVia'],
     templateSlug: row.templateSlug,
     project:
-      row.site === null || row.site.deletedAt !== null
+      row.site === null
         ? null
-        : { id: row.site.id, name: row.site.name },
+        : { id: row.site.id, name: row.site.name, deleted: row.site.deletedAt !== null },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     lastRun,
@@ -319,19 +325,21 @@ export async function deleteSchedule(
  * paused one too —, then the same start as a run core hands over. Its chat is the answer. A refusal
  * is recorded on the run and told in the cabinet in words, without a notice: a refusal of
  * `createDialog` as that error says it, any other by its reason. A failure that may pass leaves no
- * run behind, as if nothing was pressed.
+ * run behind, as if nothing was pressed — only a run this press wrote, and only while it still
+ * waits: a chat is bound to its run by the transaction that makes it, so a run with a chat stays,
+ * and a run of an earlier press (the same minute, or one a stopped web left waiting) is its own.
  */
 export async function runScheduleNow(
   db: PrismaClient,
   chat: ChatContext,
   input: { userId: string; scheduleId: string; now: Date },
 ): Promise<{ taskId: string }> {
-  const { runId } = await insertManualRun(db, input)
+  const { runId, created } = await insertManualRun(db, input)
   let started: Awaited<ReturnType<typeof startRun>>
   try {
     started = await startRun(db, chat, { runId, now: input.now })
   } catch (error) {
-    await dropPendingRun(db, runId).catch(() => false)
+    if (created) await dropPendingRun(db, runId).catch(() => false)
     throw error
   }
   const { response, refusal } = started

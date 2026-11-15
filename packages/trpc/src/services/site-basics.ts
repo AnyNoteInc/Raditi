@@ -150,6 +150,20 @@ export const accessibleSite = (userId: string, id: string) =>
 export const siteNotFound = () =>
   new DomainError('NOT_FOUND', 'No such site among the sites of the user', 404)
 
+/**
+ * The lock a new dialog or an undo of a release takes on its site before it writes: FOR KEY
+ * SHARE waits for a deletion in flight (FOR UPDATE, `deleteSite`), and a site deleted meanwhile is
+ * not found.
+ */
+export async function lockLiveSite(
+  tx: Pick<Prisma.TransactionClient, '$queryRaw'>,
+  siteId: string,
+): Promise<void> {
+  const rows = await tx.$queryRaw<{ deleted_at: Date | null }[]>`
+    SELECT deleted_at FROM sites WHERE id = ${siteId}::uuid FOR KEY SHARE`
+  if (rows[0] === undefined || rows[0].deleted_at !== null) throw siteNotFound()
+}
+
 export const alreadyExists = () =>
   new DomainError('PROJECT_ALREADY_EXISTS', 'The user already has access to this site', 409)
 

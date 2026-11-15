@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto'
 
 import { createPrismaClient, type PrismaClient } from '@repo/db'
+import { scheduleLimits } from '@repo/domain'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { LivePasses } from '../tasks/live-passes.ts'
 import { NotificationDelivery } from '../tasks/notification-delivery.ts'
+import { TaskSweep } from '../tasks/task-sweep.ts'
 import { ScheduleNotify } from './schedule-notify.ts'
 import { ScheduleTick } from './schedule-tick.ts'
 
@@ -185,5 +188,50 @@ describe.skipIf(!enabled)('the tick of scheduled tasks with PostgreSQL', () => {
     ).toEqual({ enabled: true, refusalStreak: 0 })
     expect(await tick(now).run()).toMatchObject({ stale: 0 })
     expect(await db.chatNotification.count({ where: { scheduledTaskId: task.id } })).toBe(1)
+  })
+
+  it('closes a run of «Запустить сейчас» a stopped web left waiting, soon and without a notice (Зп24)', async () => {
+    const now = new Date()
+    const task = await schedule(new Date(now.getTime() + 86_400_000))
+    const manualRun = (minutesAgo: number) =>
+      db.scheduledRun.create({
+        data: {
+          scheduledTaskId: task.id,
+          dueAt: new Date(Math.floor(now.getTime() / 60_000) * 60_000 - minutesAgo * 60_000),
+          trigger: 'manual',
+          status: 'pending',
+          name: task.name,
+          instructions: task.instructions,
+          effort: task.effort,
+          createdAt: new Date(now.getTime() - minutesAgo * 60_000),
+        },
+      })
+    const left = await manualRun(scheduleLimits.manualPendingSweepMinutes + 1)
+    const fresh = await manualRun(1)
+    // The sweep of chats does it: the button works through web whether core runs the schedules.
+    const sweep = new TaskSweep({
+      db,
+      settlement: {} as never,
+      live: new LivePasses(),
+      journal: {} as never,
+      drivers: {} as never,
+      queue: {} as never,
+      logger: quiet(),
+      now: () => now,
+    })
+    expect(await sweep.closeStaleManualRuns()).toBeGreaterThanOrEqual(1)
+    const states = await db.scheduledRun.findMany({
+      where: { id: { in: [left.id, fresh.id] } },
+      select: { id: true, status: true, reason: true },
+    })
+    expect(Object.fromEntries(states.map((run) => [run.id, [run.status, run.reason]]))).toEqual({
+      [left.id]: ['refused', 'platform'],
+      [fresh.id]: ['pending', null],
+    })
+    expect(await db.chatNotification.count({ where: { scheduledTaskId: task.id } })).toBe(0)
+    // «Запустить сейчас» counts for nothing in the refusals of the schedule.
+    expect(
+      (await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).refusalStreak,
+    ).toBe(0)
   })
 })

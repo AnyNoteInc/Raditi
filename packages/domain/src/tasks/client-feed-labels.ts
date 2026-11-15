@@ -322,6 +322,7 @@ export const feedScheduleLeftReasonText: Readonly<Record<ScheduleLeftReason, str
     limit: 'включено 20 задач — больше нельзя',
     not_found: 'задачи уже нет',
     text_refused: 'в инструкции нельзя оставлять пароли и ключи',
+    name_refused: 'в названии нельзя оставлять пароли и ключи',
     invalid: 'расписание не подходит',
     failed: 'ответ агента оборвался',
   })

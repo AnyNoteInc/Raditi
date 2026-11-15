@@ -155,6 +155,27 @@ describe('ScheduleNotify (docs/plan/82-scheduled-tasks.md, Зп22, Зп38, Зп3
     expect(gone.delivery.deliver).not.toHaveBeenCalled()
   })
 
+  it('says nothing of a deleted project whatever the run was refused for (Зп22)', async () => {
+    // «Один раз» that had completed: its refusal for the deletion pauses nothing.
+    const completed = stand({
+      status: 'refused',
+      reason: 'project_gone',
+      trigger: 'schedule',
+      task: { enabled: false, pausedReason: 'completed' },
+    })
+    expect(await completed.notify.afterRun(RUN)).toBe('none')
+    expect(completed.delivery.deliver).not.toHaveBeenCalled()
+    // A start that raced the deletion and was refused for the platform after the task stopped.
+    const raced = stand({
+      status: 'refused',
+      reason: 'platform',
+      trigger: 'schedule',
+      task: { enabled: false, pausedReason: 'project_gone' },
+    })
+    expect(await raced.notify.afterRun(RUN)).toBe('none')
+    expect(raced.delivery.deliver).not.toHaveBeenCalled()
+  })
+
   it('tells a missed run once a day, never one skipped while the last still went on', async () => {
     const missed = stand({ status: 'skipped', reason: 'missed', trigger: 'schedule' })
     expect(await missed.notify.afterRun(RUN)).toBe('sent')

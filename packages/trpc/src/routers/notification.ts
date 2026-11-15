@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import {
   readNotificationSettings,
+  replaceBrowserSubscription,
   resubscribeBrowser,
   subscribeBrowser,
   unsubscribeBrowser,
@@ -62,9 +63,9 @@ export const notificationRouter = router({
     ),
 
   /**
-   * The browser replaced its subscription (`pushsubscriptionchange`, docs/plan/82-scheduled-tasks.md,
-   * Зп41): the service worker posts the old endpoint and the new subscription to
-   * `/api/notifications/resubscribe`, which calls this. The old one goes only if it is this user's.
+   * «Включить» in a browser whose subscription was made under another VAPID key (docs/plan/82-
+   * scheduled-tasks.md, Зп37): the press is the consent — the new subscription is the user's. The
+   * old one goes only if it is this user's.
    */
   resubscribe: consentedProcedure
     .input(subscriptionInput.extend({ oldEndpoint: z.url().max(2048).nullable() }))
@@ -72,6 +73,25 @@ export const notificationRouter = router({
     .mutation(({ ctx, input }) => {
       const { oldEndpoint, ...subscription } = input
       return resubscribeBrowser(
+        ctx.prisma,
+        ctx.user.id,
+        { oldEndpoint, subscription },
+        ctx.chat?.webPushPublicKey ?? null,
+      )
+    }),
+
+  /**
+   * The browser replaced its subscription by itself (`pushsubscriptionchange`, Зп41): the service
+   * worker posts the old endpoint and the new subscription to `/api/notifications/resubscribe`,
+   * which calls this. Not a «turn on»: the row of the old one moves to the new one only when it is
+   * the signed-in user's — another account signed in on that browser gets nothing (Зп37).
+   */
+  replaceSubscription: consentedProcedure
+    .input(subscriptionInput.extend({ oldEndpoint: z.url().max(2048).nullable() }))
+    .output(z.strictObject({ replaced: z.boolean() }))
+    .mutation(({ ctx, input }) => {
+      const { oldEndpoint, ...subscription } = input
+      return replaceBrowserSubscription(
         ctx.prisma,
         ctx.user.id,
         { oldEndpoint, subscription },

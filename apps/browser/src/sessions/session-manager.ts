@@ -314,7 +314,8 @@ export class SessionManager {
 
   /**
    * `POST /v1/sessions/:id/actions`: the session must be the task's. `readOnly` — a pass of a
-   * scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28): no save on the site.
+   * scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28): no save on the site,
+   * and the pages send it nothing but reads from this action on (`readOnlyPolicy`).
    */
   async act(sessionId: string, request: BrowserActionRequest): Promise<BrowserToolResult> {
     const session = this.session(sessionId.toLowerCase())

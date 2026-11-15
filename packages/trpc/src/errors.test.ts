@@ -951,6 +951,7 @@ describe('the refusals of scheduled tasks (docs/plan/82-scheduled-tasks.md)', ()
       ['SCHEDULE_TEMPLATE_PLACEHOLDER', 400],
       ['SCHEDULE_TEMPLATE_NEEDS_PROJECT', 400],
       ['SCHEDULE_RUN_BUSY', 409],
+      ['SCHEDULE_PROJECT_GONE', 409],
       ['SCHEDULE_RUN_REFUSED', 409],
     ] as const) {
       const error = toTRPCError(new DomainError(code, 'English text for the logs', status))

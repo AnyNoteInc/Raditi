@@ -11,7 +11,10 @@ import {
   enqueueCandidateRewind,
   enqueueTurnCancel,
   insertFeedEvent,
+  lockWaitingRun,
+  recordRunOutcomeInTx,
   requestPreviewSync,
+  scheduledRunClosed,
   taskHasProductionWrites,
   redoTurn,
   undoTurn,
@@ -44,8 +47,7 @@ import {
 import { z } from 'zod'
 
 import { failureLabel } from '../site-access.ts'
-import { accessibleSite } from '../site-basics.ts'
-import { lockLiveSite } from '../site-delete.ts'
+import { accessibleSite, lockLiveSite } from '../site-basics.ts'
 import {
   browserAddressSecure,
   chatRequirements,
@@ -148,6 +150,13 @@ export interface CreateDialogInput {
    * task would otherwise copy the site's database on every run.
    */
   preview?: 'now' | 'on_demand'
+  /**
+   * The run of a scheduled task this chat is of (docs/plan/82-scheduled-tasks.md, Зп20, Зп27):
+   * the transaction that makes the chat takes the run's task first and writes the run `started`
+   * with it, so a chat of a run is never seen without its run — every guard of a pass without its
+   * client finds it — nor made after the run was closed (`SCHEDULE_RUN_CLOSED`, nothing written).
+   */
+  scheduledRunId?: string
   now: Date
 }
 
@@ -310,6 +319,10 @@ export async function createDialog(
   const modelClass = modelClassOfEffort(input.effort ?? 'high')
 
   return db.$transaction(async (tx) => {
+    // The task of the run first, as the tick takes it before the project; a run closed meanwhile
+    // gets no chat.
+    if (input.scheduledRunId !== undefined && !(await lockWaitingRun(tx, input.scheduledRunId)))
+      throw scheduledRunClosed()
     // A site being deleted waits here, and a deleted one is not found (`deleteSite`).
     if (site !== null) await lockLiveSite(tx, site.id)
     // The pass would fail `unavailable` without a profile of the chosen class or its price:
@@ -343,6 +356,15 @@ export async function createDialog(
       return raced
     }
     const task = await tx.task.findUniqueOrThrow({ where: { id: taskId }, select: { alias: true } })
+    if (input.scheduledRunId !== undefined) {
+      const bound = await recordRunOutcomeInTx(
+        tx,
+        input.scheduledRunId,
+        { status: 'started', taskId },
+        now,
+      )
+      if (!bound.recorded) throw scheduledRunClosed()
+    }
 
     await placeCreditHold(tx, {
       workspaceId,

@@ -7,10 +7,10 @@ import Button from '@mui/material/Button'
 import Link from '@mui/material/Link'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query'
 import NextLink from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { isNotFound } from '@/components/chat/call-error'
@@ -27,8 +27,11 @@ import {
 } from './schedule-actions'
 import { ScheduleCostLine } from './schedule-cost'
 import { ScheduleDialog, type ScheduleDialogOpening } from './schedule-dialog'
+import { keepScheduleNotice } from './schedule-notice'
 import {
+  liveProjectId,
   missedText,
+  projectText,
   runLines,
   scheduleStateText,
   scheduleWords,
@@ -135,10 +138,12 @@ function RunRow({ line, task, now }: { line: RunLine; task: ScheduleDetail; now:
  * The page of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп6): its name and state, the
  * switch, «Запустить сейчас», «Изменить» and «⋯ Удалить»; the exact instructions, the schedules
  * with the zone, the project, «Размышление», the notices and the cost; then the last 50 runs, the
- * missed ones in a row as one line. Loading — a frame of it; a failure — «Повторить».
+ * missed ones in a row as one line. Loading — a frame of it; a failure — «Повторить». A failed
+ * reading of a task already shown keeps the page, and the window open over it, as they were.
  */
 export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userId: string }) {
   const trpc = useTRPC()
+  const queryClient = useQueryClient()
   const router = useRouter()
   const now = useNow()
   const task = useQuery(trpc.schedule.get.queryOptions({ scheduleId }))
@@ -147,6 +152,16 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
   const [opening, setOpening] = useState<ScheduleDialogOpening | null>(null)
   const editButton = useRef<HTMLButtonElement>(null)
   const opener = useRef<HTMLElement | null>(null)
+  // The task deleted here: its reading is dropped as the page is left, not under its eyes.
+  const dropOnLeave = useRef<QueryKey | null>(null)
+  useEffect(
+    () => () => {
+      const key = dropOnLeave.current
+      if (key !== null) queryClient.removeQueries({ queryKey: key })
+    },
+    [queryClient],
+  )
+  const gone = task.isError && isNotFound(task.error)
 
   const back = (
     <Link
@@ -179,7 +194,8 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
         <Skeleton variant="rounded" height={140} sx={{ mt: 3, borderRadius: '14px' }} />
       </Box>
     )
-  else if (task.isError && isNotFound(task.error))
+  // A task gone while its window is open stays under the window: the window says so on «Сохранить».
+  else if (gone && (task.data === undefined || opening === null))
     content = (
       <Box sx={{ py: 6, textAlign: 'center' }}>
         <Typography component="h1" sx={{ fontSize: 22, fontWeight: 600 }}>
@@ -193,7 +209,7 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
         </Button>
       </Box>
     )
-  else if (task.isError || task.data === undefined)
+  else if (task.data === undefined)
     content = (
       <Alert
         severity="error"
@@ -209,9 +225,22 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
     )
   else {
     const data = task.data
-    const lines = runLines(data.runs, data.triggers, data.timezone)
+    const lines = runLines(data.runs)
     content = (
       <>
+        {task.isError && !gone ? (
+          <Alert
+            severity="warning"
+            sx={{ mt: 2 }}
+            action={
+              <Button color="inherit" onClick={() => void task.refetch()}>
+                {scheduledTexts.retry}
+              </Button>
+            }
+          >
+            {schedulePageTexts.stale}
+          </Alert>
+        ) : null}
         <Box
           sx={{
             mt: 1,
@@ -272,7 +301,12 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
               actions={actions}
               items={['delete']}
               label={schedulePageTexts.more}
-              onDeleted={() => router.push('/scheduled')}
+              onDeleted={() => {
+                dropOnLeave.current = trpc.schedule.get.queryKey({ scheduleId })
+                // Said on «Ваши»: this page is gone the moment it is left.
+                keepScheduleNotice('deleted')
+                router.push('/scheduled')
+              }}
             />
           </Box>
         </Box>
@@ -304,8 +338,9 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
             )}
           </Fact>
           <Fact term={schedulePageTexts.project}>
-            {data.project === null ? (
-              scheduledTexts.noProject
+            {/* A deleted project has no page to lead to (Зп22). */}
+            {data.project === null || data.project.deleted ? (
+              projectText(data)
             ) : (
               <Link component={NextLink} href={`/projects/${data.project.id}`}>
                 {data.project.name}
@@ -319,7 +354,7 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
           </Fact>
           <Fact term={schedulePageTexts.cost}>
             <ScheduleCostLine
-              siteId={data.project?.id ?? null}
+              siteId={liveProjectId(data)}
               triggers={data.triggers}
               timezone={data.timezone}
             />

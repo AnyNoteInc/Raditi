@@ -5,13 +5,20 @@ import Box from '@mui/material/Box'
 import Link from '@mui/material/Link'
 import Typography from '@mui/material/Typography'
 import NextLink from 'next/link'
+import type { Ref } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 
 import { ScheduleMoreMenu, ScheduleSwitch, type ScheduleActions } from './schedule-actions'
-import { lastRunText, scheduleStateText, scheduleWords, type ScheduleItem } from './schedule-model'
-import { scheduledTexts, scheduleRowTexts } from './schedule-texts'
+import {
+  lastRunText,
+  projectText,
+  scheduleStateText,
+  scheduleWords,
+  type ScheduleItem,
+} from './schedule-model'
+import { scheduleRowTexts } from './schedule-texts'
 
 type Tone = 'text.secondary' | 'text.primary' | 'error.main' | 'primary.main'
 
@@ -62,11 +69,17 @@ export function ScheduleRow({
   now,
   actions,
   onEdit,
+  onDeleted,
+  moreRef,
 }: {
   item: ScheduleItem
   now: Date
   actions: ScheduleActions
   onEdit: (item: ScheduleItem, opener: HTMLElement | null) => void
+  /** The task is deleted: the list says so and moves the focus on. */
+  onDeleted?: (item: ScheduleItem) => void
+  /** «⋯» of the row, which the focus moves to when a neighbour is deleted. */
+  moreRef?: Ref<HTMLButtonElement>
 }) {
   const lastRun = item.lastRun
   const lastText = lastRunText(item, now)
@@ -135,7 +148,13 @@ export function ScheduleRow({
         }}
       >
         <ScheduleSwitch task={item} actions={actions} />
-        <ScheduleMoreMenu task={item} actions={actions} onEdit={(opener) => onEdit(item, opener)} />
+        <ScheduleMoreMenu
+          task={item}
+          actions={actions}
+          onEdit={(opener) => onEdit(item, opener)}
+          {...(onDeleted ? { onDeleted: () => onDeleted(item) } : {})}
+          buttonRef={moreRef}
+        />
       </Box>
       <Box sx={{ gridColumn: { xs: '1 / -1', sm: '2 / -1' }, minWidth: 0 }}>
         <Typography variant="body2" sx={{ color: 'text.secondary', overflowWrap: 'anywhere' }}>
@@ -143,7 +162,7 @@ export function ScheduleRow({
           <Box component="span" aria-hidden sx={{ mx: 0.75 }}>
             ·
           </Box>
-          {item.project?.name ?? scheduledTexts.noProject}
+          {projectText(item)}
         </Typography>
         <Box
           sx={{

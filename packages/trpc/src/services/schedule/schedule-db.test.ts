@@ -432,6 +432,67 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       })
     })
 
+    it('makes no chat for a run closed while it was being made (Зп20, §4.3)', async () => {
+      const { owner, site } = await siteOwner()
+      const { task, run } = await runOf(owner, site.id)
+      // The sweep — or core giving its last delivery up — holds the task and closes the run.
+      let release!: () => void
+      const held = new Promise<void>((resolve) => (release = resolve))
+      let locked!: () => void
+      const isLocked = new Promise<void>((resolve) => (locked = resolve))
+      const sweep = db.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM scheduled_tasks WHERE id = ${task.id}::uuid FOR UPDATE`
+          locked()
+          await held
+          await tx.scheduledRun.update({
+            where: { id: run.id },
+            data: { status: 'refused', reason: 'platform' },
+          })
+        },
+        { timeout: 20_000 },
+      )
+      await isLocked
+      const started = start(run.id)
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      release()
+      await sweep
+      // The client is told the task did not run, and it does not: no chat, no reserve.
+      expect(await started).toEqual({ outcome: 'refused', reason: 'platform' })
+      expect(await db.task.findUnique({ where: { id: scheduledChatId(run) } })).toBeNull()
+      expect(await db.creditHold.count({ where: { taskId: scheduledChatId(run) } })).toBe(0)
+    })
+
+    it('reads a project deleted while its chat was being made as gone, not as a fault (Зп21, Зп22)', async () => {
+      const { owner, site } = await siteOwner()
+      const { task, run } = await runOf(owner, site.id)
+      // «Удалить проект» holds the row of the project while the start reads it alive.
+      let release!: () => void
+      const held = new Promise<void>((resolve) => (release = resolve))
+      let locked!: () => void
+      const isLocked = new Promise<void>((resolve) => (locked = resolve))
+      const deletion = db.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM sites WHERE id = ${site.id}::uuid FOR UPDATE`
+          locked()
+          await held
+          await tx.site.update({ where: { id: site.id }, data: { deletedAt: new Date() } })
+        },
+        { timeout: 20_000 },
+      )
+      await isLocked
+      const started = start(run.id)
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      release()
+      await deletion
+      expect(await started).toEqual({ outcome: 'refused', reason: 'project_gone' })
+      expect(await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({
+        enabled: false,
+        pausedReason: 'project_gone',
+      })
+      expect(await db.task.findUnique({ where: { id: scheduledChatId(run) } })).toBeNull()
+    })
+
     it('starts a chat without a project in the personal workspace', async () => {
       const owner = await person()
       const { run } = await runOf(owner, null)
@@ -459,7 +520,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
         notify: true,
         createdVia: 'template',
         templateSlug: 'leads-digest',
-        project: { id: site.id, name: 'Кофейня' },
+        project: { id: site.id, name: 'Кофейня', deleted: false },
         lastRun: null,
         runs: [],
       })
@@ -589,6 +650,44 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       expect(await db.chatNotification.count({ where: { userId: owner.id } })).toBe(0)
     })
 
+    it('takes up a run of «Запустить сейчас» a stopped web left waiting, and never drops another press', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const task = await caller.schedule.create({
+        siteId: site.id,
+        name: 'Брошенный запуск',
+        instructions: 'Проверьте сайт',
+        triggers: [],
+        timezone: 'Europe/Moscow',
+      })
+      // A web stopped between writing the run and starting it, two minutes ago.
+      const left = await db.scheduledRun.create({
+        data: {
+          scheduledTaskId: task.id,
+          dueAt: new Date(Math.floor(Date.now() / 60_000) * 60_000 - 2 * 60_000),
+          trigger: 'manual',
+          status: 'pending',
+          siteId: site.id,
+          name: task.name,
+          instructions: task.instructions,
+          effort: task.effort,
+        },
+      })
+      // The press that takes it up fails: the run of the earlier press is not this press's to drop.
+      vault.transit.failing = true
+      await expect(caller.schedule.runNow({ scheduleId: task.id })).rejects.toMatchObject({
+        cause: { code: 'WORKSPACE_KEY_UNAVAILABLE' },
+      })
+      expect(await db.scheduledRun.findUniqueOrThrow({ where: { id: left.id } })).toMatchObject({
+        status: 'pending',
+      })
+      vault.transit.failing = false
+      expect(await caller.schedule.runNow({ scheduleId: task.id })).toEqual({
+        taskId: scheduledChatId(left),
+      })
+      expect(await db.scheduledRun.count({ where: { scheduledTaskId: task.id } })).toBe(1)
+    })
+
     it('drops the run of «Запустить сейчас» when Vault fails', async () => {
       const { owner, site } = await siteOwner()
       const caller = callerOf(owner)
@@ -695,6 +794,25 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
         chat: null,
       })
     })
+
+    it('tells a task of a deleted project as such, the chats of its runs gone with it (Зп6, Зп22)', async () => {
+      const { owner, site } = await siteOwner()
+      const { task, run } = await runOf(owner, site.id)
+      const { taskId } = (await start(run.id)) as { taskId: string }
+      const caller = callerOf(owner)
+      expect((await caller.schedule.get({ scheduleId: task.id })).runs[0]?.chat).toEqual({
+        id: taskId,
+        title: 'Проверка сайта',
+      })
+      await db.site.update({ where: { id: site.id }, data: { deletedAt: new Date() } })
+      const page = await caller.schedule.get({ scheduleId: task.id })
+      expect(page.project).toEqual({ id: site.id, name: 'Кофейня', deleted: true })
+      // The chat left the cabinet with its project: no link to a page that says «Такого чата нет».
+      expect(page.runs[0]?.chat).toBeNull()
+      expect(
+        (await caller.schedule.list()).schedules.find((item) => item.id === task.id)?.project,
+      ).toEqual({ id: site.id, name: 'Кофейня', deleted: true })
+    })
   })
 
   describe('notices (Зп37–Зп41)', () => {
@@ -718,32 +836,62 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       ).toMatchObject({ browsers: 2, otherBrowsers: 1 })
       expect(await caller.notification.settings()).toMatchObject({ otherBrowsers: 2 })
 
-      // The browser replaced its subscription: the new one is the user's, the old one is gone.
-      await caller.notification.resubscribe({
-        oldEndpoint: subscription(1).endpoint,
-        ...subscription(3),
-      })
-      const endpoints = await db.pushSubscription.findMany({
-        where: { userId: owner.id },
-        select: { endpoint: true },
-        orderBy: { endpoint: 'asc' },
-      })
-      expect(endpoints.map(({ endpoint }) => endpoint)).toEqual([
+      const endpointsOf = async (userId: string) =>
+        (
+          await db.pushSubscription.findMany({
+            where: { userId },
+            select: { endpoint: true },
+            orderBy: { endpoint: 'asc' },
+          })
+        ).map(({ endpoint }) => endpoint)
+
+      // The browser replaced its subscription by itself: the row moves to the new one.
+      expect(
+        await caller.notification.replaceSubscription({
+          oldEndpoint: subscription(1).endpoint,
+          ...subscription(3),
+        }),
+      ).toEqual({ replaced: true })
+      expect(await endpointsOf(owner.id)).toEqual([
         subscription(2).endpoint,
         subscription(3).endpoint,
       ])
-      // An old endpoint of another user is left to them.
+      // Another account signed in on the browser then gets nothing, and the owner's row is left to
+      // the push service; an old endpoint nobody has, or none, makes nothing either (Зп37).
       const other = await person()
       await callerOf(other).notification.subscribe(subscription(4))
+      expect(
+        await caller.notification.replaceSubscription({
+          oldEndpoint: subscription(4).endpoint,
+          ...subscription(5),
+        }),
+      ).toEqual({ replaced: false })
+      for (const oldEndpoint of ['https://fcm.googleapis.com/fcm/send/nobody', null])
+        expect(
+          await caller.notification.replaceSubscription({ oldEndpoint, ...subscription(6) }),
+        ).toEqual({ replaced: false })
+      expect(await endpointsOf(other.id)).toEqual([subscription(4).endpoint])
+      expect(await endpointsOf(owner.id)).toEqual([
+        subscription(2).endpoint,
+        subscription(3).endpoint,
+      ])
+
+      // «Включить» in a browser subscribed under another key: the press is the consent — the new
+      // subscription is the user's, an old one of this user goes, another's is left to them.
+      await caller.notification.resubscribe({
+        oldEndpoint: subscription(3).endpoint,
+        ...subscription(7),
+      })
       await caller.notification.resubscribe({
         oldEndpoint: subscription(4).endpoint,
-        ...subscription(5),
+        ...subscription(8),
       })
-      expect(
-        await db.pushSubscription.findUniqueOrThrow({
-          where: { endpoint: subscription(4).endpoint },
-        }),
-      ).toMatchObject({ userId: other.id })
+      expect(await endpointsOf(owner.id)).toEqual([
+        subscription(2).endpoint,
+        subscription(7).endpoint,
+        subscription(8).endpoint,
+      ])
+      expect(await endpointsOf(other.id)).toEqual([subscription(4).endpoint])
     })
 
     it('says a notice of a pass without its client and of the task itself in the words of Зп38', async () => {

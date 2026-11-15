@@ -28,6 +28,8 @@ export interface RunRow {
   status: string
   reason: string | null
   missedCount: number
+  /** The end of a gap of missed runs; null — another row, or one written before it was kept. */
+  missedUntil: Date | null
   taskId: string | null
 }
 
@@ -53,7 +55,12 @@ export function runStateOf(run: RunRow, chat: RunChatState | undefined): Schedul
     case 'refused':
       return { kind: 'refused', reason: reasonOf(run.reason) }
     case 'skipped':
-      return { kind: 'skipped', reason: reasonOf(run.reason), missedCount: run.missedCount }
+      return {
+        kind: 'skipped',
+        reason: reasonOf(run.reason),
+        missedCount: run.missedCount,
+        missedUntil: run.reason === 'missed' ? run.missedUntil : null,
+      }
   }
   if (chat === undefined || chat.deleted) return { kind: 'chat_deleted' }
   switch (chat.status) {

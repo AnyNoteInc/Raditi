@@ -15,6 +15,7 @@ import {
   scheduleLimitReached,
   scheduleChangeLimitReached,
   scheduleNotFound,
+  scheduleProjectGone,
   scheduleRunBusy,
   scheduleTemplatePlaceholder,
   scheduleTooOften,
@@ -208,13 +209,14 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   PAGE_FORBIDDEN: 'Менять страницы может владелец или администратор рабочего пространства',
   PAGE_VERSION_CHANGED:
     'У этой страницы уже появилась новая версия. Посмотрите её и опубликуйте ещё раз, если нужно',
-  // «Расписание» (docs/plan/82-scheduled-tasks.md): the domain words them for the client already.
+  // «Запланированные задачи» (docs/plan/82-scheduled-tasks.md): the domain words them for the client already.
   SCHEDULE_NOT_FOUND: scheduleNotFound().message,
   SCHEDULE_FORBIDDEN: scheduleForbidden().message,
   SCHEDULE_TOO_OFTEN: scheduleTooOften().message,
   SCHEDULE_IN_PAST: scheduleInPast().message,
   SCHEDULE_TEMPLATE_PLACEHOLDER: scheduleTemplatePlaceholder().message,
   SCHEDULE_RUN_BUSY: scheduleRunBusy().message,
+  SCHEDULE_PROJECT_GONE: scheduleProjectGone().message,
   SCHEDULE_TEMPLATE_NEEDS_PROJECT: 'Этому шаблону нужен проект — выберите его',
   SCHEDULE_LIMIT: scheduleLimitReached().message,
   SCHEDULE_CHANGE_LIMIT: scheduleChangeLimitReached().message,

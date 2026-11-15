@@ -396,6 +396,52 @@ describe('wordpressAdapter.browserTaskPolicy: requests', () => {
   })
 })
 
+// docs/plan/82-scheduled-tasks.md, Зп28: what a pass without its client may send to the site.
+describe('wordpressAdapter.browserTaskPolicy: a pass without its client', () => {
+  const own = (path: string, method = 'GET') =>
+    policy.readOnlyDenied?.({ path, method, postData: null })
+
+  it('denies a GET that runs an action of admin-ajax or admin-post', () => {
+    expect(own('/wp-admin/admin-ajax.php?action=wp-remove-post-lock&post_ID=12')).toBe(true)
+    expect(own('/blog/wp-admin/admin-post.php?action=export')).toBe(true)
+    expect(own('/wp-admin/admin-ajax.php?action=')).toBe(true)
+    expect(own('/wp-admin/admin-ajax.php?action=heartbeat', 'HEAD')).toBe(true)
+    // Without an action, or by a method that writes: the generic rule decides.
+    expect(own('/wp-admin/admin-ajax.php')).toBeNull()
+    expect(own('/wp-admin/admin-ajax.php?action=heartbeat', 'POST')).toBeNull()
+  })
+
+  it('allows the filters and the search of a list, with their nonce, none of its actions', () => {
+    for (const path of [
+      '/wp-admin/edit.php?s=a&post_status=all&action=-1&action2=-1&_wpnonce=abc&_wp_http_referer=x',
+      '/wp-admin/edit.php?post_type=page&m=202611&filter_action=1&_wpnonce=abc',
+      '/blog/wp-admin/upload.php?mode=list&action=&_wpnonce=abc',
+      '/wp-admin/edit-comments.php?comment_status=moderated&action=-1&_wpnonce=abc',
+      '/wp-admin/edit-tags.php?taxonomy=category&s=a&action=-1&action2=-1&_wpnonce=abc',
+      // PHP keeps the last of a repeated field.
+      '/wp-admin/edit.php?action=trash&action=-1&_wpnonce=abc',
+    ])
+      expect(own(path), path).toBe(false)
+  })
+
+  it('denies «Очистить корзину» of a list, and leaves its bulk actions to the generic rule', () => {
+    expect(own('/wp-admin/edit.php?post_status=trash&delete_all=1&_wpnonce=abc')).toBe(true)
+    expect(own('/wp-admin/upload.php?mode=list&delete_all2=1&_wpnonce=abc')).toBe(true)
+    expect(own('/wp-admin/edit.php?action=trash&post%5B%5D=12&_wpnonce=abc')).toBeNull()
+    expect(own('/wp-admin/edit.php?action=-1&action2=trash&post%5B%5D=12&_wpnonce=abc')).toBeNull()
+  })
+
+  it('says nothing of other pages: the users and the plugins change things without an action', () => {
+    expect(
+      own('/wp-admin/users.php?new_role=editor&changeit=1&users%5B%5D=2&_wpnonce=abc'),
+    ).toBeNull()
+    expect(own('/wp-admin/plugins.php?plugin_status=all&action=-1&_wpnonce=abc')).toBeNull()
+    expect(own('/wp-admin/post.php?post=12&action=trash&_wpnonce=abc')).toBeNull()
+    expect(own('/edit.php?s=a&_wpnonce=abc')).toBeNull()
+    expect(own('/wp-json/wp/v2/posts')).toBeNull()
+  })
+})
+
 describe('wordpressAdapter.browserCheckpointOf', () => {
   const ref = (objectId: string, editUrl: string): BrowserCheckpointRef => ({
     kind: 'post',

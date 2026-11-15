@@ -3430,6 +3430,9 @@ model ScheduledRun {
   effort          String    @db.VarChar(8)
   /// Due moments the row stands for when it says «Пропущено» (reason missed); 0 — otherwise.
   missedCount     Int       @default(0) @map("missed_count")
+  /// The latest due moment a row of missed runs stands for («Пропущены запуски с … по …»), written
+  /// with the row by the tick; null — any other row, or one written without it.
+  missedUntil     DateTime? @map("missed_until") @db.Timestamptz(6)
   /// Deliveries of `schedule.start` core made.
   attempts        Int       @default(0)
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)

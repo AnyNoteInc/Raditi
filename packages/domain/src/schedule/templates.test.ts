@@ -85,6 +85,7 @@ describe('the state of a run (Зп5)', () => {
         kind: 'skipped' as const,
         reason,
         missedCount: 1,
+        missedUntil: reason === 'missed' ? new Date('2026-11-16T11:00:00Z') : null,
       })),
     ]
     for (const state of states) {
@@ -102,11 +103,21 @@ describe('the state of a run (Зп5)', () => {
     expect(scheduledRunStateText({ kind: 'refused', reason: 'needs_tariff' })).toBe(
       'Не запустилась: нужен тариф',
     )
-    expect(scheduledRunStateText({ kind: 'skipped', reason: 'missed', missedCount: 3 })).toBe(
-      'Пропущено',
-    )
     expect(
-      scheduledRunStateText({ kind: 'skipped', reason: 'previous_running', missedCount: 0 }),
+      scheduledRunStateText({
+        kind: 'skipped',
+        reason: 'missed',
+        missedCount: 3,
+        missedUntil: null,
+      }),
+    ).toBe('Пропущено')
+    expect(
+      scheduledRunStateText({
+        kind: 'skipped',
+        reason: 'previous_running',
+        missedCount: 0,
+        missedUntil: null,
+      }),
     ).toBe('Пропущено: предыдущий запуск ещё шёл')
     expect(scheduledRunStateText({ kind: 'stopped', cause: 'weekly_limit' })).toBe(
       'Остановилась: исчерпан недельный лимит',

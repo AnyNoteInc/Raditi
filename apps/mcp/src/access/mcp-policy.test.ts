@@ -449,6 +449,7 @@ describe('MCP request policy', () => {
     expect(mcpToolFamiliesOf(chat, { ...base, searchTools: true, pagesTools: true })).toEqual([
       'search',
       'pages',
+      'pages_changes',
     ])
     const page = (name: string, args: unknown) => ({
       jsonrpc: '2.0',
@@ -456,14 +457,16 @@ describe('MCP request policy', () => {
       method: 'tools/call',
       params: { name, arguments: args },
     })
-    expect(mcpBodyAllowed(page('page_publish', { file: 'p.html', title: 'П' }), ['pages'])).toBe(
-      true,
-    )
+    expect(
+      mcpBodyAllowed(page('page_publish', { file: 'p.html', title: 'П' }), ['pages_changes']),
+    ).toBe(true)
     expect(mcpBodyAllowed(page('page_list', {}), ['pages'])).toBe(true)
     expect(mcpBodyAllowed(page('page_list', {}), ['search'])).toBe(false)
+    expect(mcpBodyAllowed(page('page_list', {}), ['pages_changes'])).toBe(false)
     expect(
       mcpBodyAllowed(page('page_publish', { file: 'p.html', title: 'П', docId: access.taskId }), [
         'pages',
+        'pages_changes',
       ]),
     ).toBe(false)
 
@@ -531,6 +534,37 @@ describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)',
     }
     expect(mcpToolFamiliesOf(chat, security)).toEqual(['schedule', 'schedule_changes'])
     expect(mcpToolFamiliesOf(access, base)).toEqual([])
+  })
+
+  it('leaves a pass without its client the pages to read and nothing to change (Зп28)', () => {
+    const security: McpSecurity = { ...base, pagesTools: true, docsTools: true }
+    expect(mcpToolFamiliesOf(access, security)).toEqual(['docs', 'pages', 'pages_changes'])
+    const unattended = mcpToolFamiliesOf({ ...access, unattended: true }, security)
+    // Its documents are the chat's own; a page is live for every visitor once the turn ends.
+    expect(unattended).toEqual(['docs', 'pages'])
+    for (const body of [
+      call('page_publish', { file: 'p.html', title: 'Акции' }),
+      call('page_publish', {
+        file: 'p.html',
+        title: 'Акции',
+        pageId: access.taskId,
+        expectedVersion: 2,
+      }),
+      call('page_edit', {
+        pageId: access.taskId,
+        expectedVersion: 2,
+        edits: [{ old: 'Старая цена', new: 'Новая цена' }],
+      }),
+      call('page_update', { pageId: access.taskId, expectedVersion: 2, title: 'Акции' }),
+      call('page_file_put', { treeId: access.taskId, file: 'app.js', path: '/_files/app.js' }),
+      call('page_restore', { pageIds: [access.taskId] }),
+    ]) {
+      // A well-formed change: the client's turn calls it; a pass without the client cannot.
+      expect(mcpBodyAllowed(body, ['pages', 'pages_changes']), JSON.stringify(body)).toBe(true)
+      expect(mcpBodyAllowed(body, unattended), JSON.stringify(body)).toBe(false)
+    }
+    expect(mcpBodyAllowed(call('page_list', {}), unattended)).toBe(true)
+    expect(mcpBodyAllowed(call('page_read', { pageId: access.taskId }), unattended)).toBe(true)
   })
 
   it('admits the list to the family schedule and the changes to schedule_changes alone', () => {
@@ -617,11 +651,34 @@ describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)',
       ),
     ).toBe(true)
     // However it says it: the key is the question, not its value.
-    expect(mcpCallNeedsClient(call('page_delete', { confirmedByClient: false }))).toBe(true)
+    expect(mcpCallNeedsClient(call('some_tool', { confirmedByClient: false }))).toBe(true)
+    // A change of the tasks or of the pages a pass without its client is not offered, by its
+    // name, whatever its arguments: what it publishes is live for every visitor (Зп28).
+    for (const name of [
+      'schedule_create',
+      'schedule_update',
+      'schedule_delete',
+      'page_publish',
+      'page_edit',
+      'page_update',
+      'page_delete',
+      'page_restore',
+      'page_file_put',
+      'page_file_delete',
+    ]) {
+      expect(mcpCallNeedsClient(call(name, {})), name).toBe(true)
+      expect(mcpCallNeedsClient(call(name)), name).toBe(true)
+    }
     for (const body of [
       call('schedule_list', {}),
       call('schedule_list'),
-      call('page_delete', { pageIds: [access.taskId] }),
+      call('page_list', {}),
+      call('page_read', { pageId: access.taskId }),
+      call('page_tree', { treeId: access.taskId }),
+      call('page_files', { treeId: access.taskId }),
+      call('doc_create', { title: 'Отчёт' }),
+      call('web_click', { observation: 'o1', ref: 'e5' }),
+      { ...call('page_publish', {}), id: undefined },
       { ...call('page_delete', { confirmedByClient: true }), id: undefined },
       { ...call('page_delete', { confirmedByClient: true }), method: 'tools/list' },
       { jsonrpc: '2.0', method: 'notifications/initialized' },

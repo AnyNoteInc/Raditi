@@ -31,6 +31,7 @@ export const scheduleLeftReasons = [
   'limit',
   'not_found',
   'text_refused',
+  'name_refused',
   'invalid',
   'failed',
 ] as const

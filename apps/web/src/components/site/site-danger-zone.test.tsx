@@ -31,6 +31,7 @@ vi.mock('@/trpc/client', () => ({
       },
     },
     schedule: {
+      pathFilter: () => ({ queryKey: [['schedule']] }),
       projectCount: {
         queryOptions: (input: { siteId: string }) => ({
           queryKey: ['schedule.projectCount', input.siteId],
@@ -52,6 +53,7 @@ function show(options: { untitled?: boolean } = {}) {
       <SiteDangerZone site={site} untitled={options.untitled ?? false} />
     </QueryClientProvider>,
   )
+  return queryClient
 }
 
 const openDialog = () => {
@@ -140,16 +142,42 @@ describe('«Опасная область» of the settings of a site', () => {
     show()
     expect(projectCount).not.toHaveBeenCalled()
     const dialog = openDialog()
-    expect(await dialog.findByText('Остановятся 3 запланированные задачи проекта.')).toBeTruthy()
+    expect(
+      await dialog.findByText(
+        'Остановятся 3 запланированные задачи проекта. Чаты запусков, которые ждут вашего ответа, закроются.',
+      ),
+    ).toBeTruthy()
     expect(projectCount).toHaveBeenCalledWith({ siteId: SITE_ID })
   })
 
-  it('agrees the words with the number of tasks', () => {
-    expect(dangerText.schedulesStop(1)).toBe('Остановится 1 запланированная задача проекта.')
-    expect(dangerText.schedulesStop(21)).toBe('Остановится 21 запланированная задача проекта.')
-    expect(dangerText.schedulesStop(4)).toBe('Остановятся 4 запланированные задачи проекта.')
-    expect(dangerText.schedulesStop(11)).toBe('Остановятся 11 запланированных задач проекта.')
-    expect(dangerText.schedulesStop(20)).toBe('Остановятся 20 запланированных задач проекта.')
+  it('reads the scheduled tasks again once the project is deleted: they are paused now', async () => {
+    const queryClient = show()
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+    const dialog = openDialog()
+    fireEvent.change(dialog.getByLabelText('Название проекта'), { target: { value: site.name } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Удалить проект' }))
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/projects'))
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: [['schedule']] })
+  })
+
+  it('agrees the words with the number of tasks, and says their waiting chats close', () => {
+    // deleteSite closes the chats of the runs that wait for an answer, as «Удалить чат» does.
+    const closing = ' Чаты запусков, которые ждут вашего ответа, закроются.'
+    expect(dangerText.schedulesStop(1)).toBe(
+      `Остановится 1 запланированная задача проекта.${closing}`,
+    )
+    expect(dangerText.schedulesStop(21)).toBe(
+      `Остановится 21 запланированная задача проекта.${closing}`,
+    )
+    expect(dangerText.schedulesStop(4)).toBe(
+      `Остановятся 4 запланированные задачи проекта.${closing}`,
+    )
+    expect(dangerText.schedulesStop(11)).toBe(
+      `Остановятся 11 запланированных задач проекта.${closing}`,
+    )
+    expect(dangerText.schedulesStop(20)).toBe(
+      `Остановятся 20 запланированных задач проекта.${closing}`,
+    )
   })
 
   it('says nothing of tasks when none stop or the number is not known', async () => {

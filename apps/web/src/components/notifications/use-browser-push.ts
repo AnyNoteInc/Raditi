@@ -152,7 +152,7 @@ export function keyOfBytes(bytes: ArrayBuffer | null | undefined): string | null
  * The state of this browser (Зп36, Зп37). The browser decides first — no support, the hint of iOS,
  * notifications forbidden — then the cabinet: `on` only for a subscription made under the key of
  * now that the cabinet keeps for this user; any other is `off`, and turning on makes it anew.
- * A cabinet that did not answer leaves the switch `off`: turning on tries again.
+ * A cabinet that did not answer leaves the switch `off`: turning on asks it again (`enable`).
  */
 export function browserPushState(
   here: BrowserPushHere | undefined,
@@ -317,10 +317,35 @@ export function useBrowserPush(): BrowserPush {
     await queryClient.invalidateQueries({ queryKey: BROWSER_PUSH_QUERY_KEY })
   }
 
+  /**
+   * The cabinet did not answer, so which key to subscribe by is not known — not that Web Push is
+   * not set up (Зп37). It is asked again, and this click goes no further: Safari asks the
+   * permission only from the click itself, not after a request. true — the answer says this
+   * browser already takes the notifications.
+   */
+  async function askAgain(): Promise<boolean> {
+    setWorking(true)
+    try {
+      const answer = await settings.refetch()
+      if (answer.data !== undefined && browserPushState(here.data, answer.data) === 'on')
+        return true
+      // Not set up only when the cabinet said so; a cabinet still silent — try again.
+      setProblem(
+        answer.data?.publicKey === null
+          ? browserPushText.unavailable
+          : browserPushText.enableFailed,
+      )
+      return false
+    } finally {
+      setWorking(false)
+    }
+  }
+
   async function enable(): Promise<boolean> {
     setProblem(null)
     if (here.data?.support !== 'supported') return false
-    const publicKey = settings.data?.publicKey ?? null
+    if (settings.data === undefined) return askAgain()
+    const publicKey = settings.data.publicKey
     if (publicKey === null) {
       setProblem(browserPushText.unavailable)
       return false

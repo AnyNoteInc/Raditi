@@ -1995,6 +1995,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         kind: 'answered',
         scheduled: false,
         tag: `chat:${task.taskId}`,
+        at: NOW.getTime(),
       })
       expect(await letters(task.taskId)).toHaveLength(1)
       // The same job again — a repeat of BullMQ: the row of its pass is there, nothing goes twice.
@@ -2202,6 +2203,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
             kind: 'answered',
             scheduled: true,
             tag: `schedule:${run.scheduleId}`,
+            at: expect.any(Number),
           },
         ])
         expect(await told(task)).toEqual([
@@ -2265,6 +2267,41 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         expect(
           await db.chatNotification.count({ where: { scheduledTaskId: run.scheduleId } }),
         ).toBe(1)
+      })
+
+      // A cancel or an interrupt the client wrote while the pass ran is for the passes after it.
+      it('tells of a pass by the request it answered, not by the words written since (Зп27)', async () => {
+        const task = await dialog()
+        await runOf(task)
+        const answered = await db.taskEvent.findFirstOrThrow({
+          where: { taskId: task.taskId, type: 'feed.request' },
+          orderBy: { id: 'desc' },
+          select: { id: true },
+        })
+        await settlement().settle(ref(task), completed({ change_type: 'none' }))
+        await insertFeedEvent(db, {
+          taskId: task.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'answer',
+              authorId: task.userId,
+              requestId: randomUUID(),
+              answersEventId: '1',
+              text: 'Остановитесь',
+            },
+          },
+        })
+        const job = {
+          taskId: task.taskId,
+          kind: 'answered' as const,
+          attempt: 1,
+          turnNo: 1,
+          requestEventId: String(answered.id),
+        }
+        expect(await notify(sender()).run(job)).toBe('sent')
+        expect(pushOf(task)).toEqual([expect.objectContaining({ scheduled: true })])
       })
 
       it('is an ordinary chat from the first words of its client on (Зп27)', async () => {

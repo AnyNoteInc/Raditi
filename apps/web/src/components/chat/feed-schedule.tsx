@@ -17,7 +17,7 @@ import { useEffect, useId, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { BrowserPushControl } from '@/components/notifications/browser-push-control'
-import { scheduleStateText } from '@/components/scheduled/schedule-model'
+import { projectText, scheduleStateText } from '@/components/scheduled/schedule-model'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
@@ -134,8 +134,9 @@ function Instructions({ text }: { text: string }) {
  * A task the agent created, changed, paused, resumed or deleted at the end of its turn
  * (`feed.schedule_change`, Зп35): its title, its name — a link to the task while it is the
  * client's — the schedule in words, when it runs next, the project, «Размышление» and the
- * notice of a finished run, the instructions word for word, «Запустить сейчас», and the control
- * of notifications in this browser when `push` (Зп36: the newest card of the chat carries it). A
+ * notice of a finished run, the instructions word for word, «Открыть задачу», «Изменить» and
+ * «Запустить сейчас», each named by the task to a screen reader, and the control of
+ * notifications in this browser when `push` (Зп36: the newest card of the chat carries it). A
  * deleted task is one line.
  */
 export function FeedScheduleChange({
@@ -176,7 +177,10 @@ export function FeedScheduleChange({
     row.siteId === null
       ? scheduleChatText.noProject
       : task?.project && task.project.id === row.siteId
-        ? scheduleChatText.project(task.project.name)
+        ? task.project.deleted
+          ? // Not named once deleted (Зп22): «Проект удалён», as «Запланированные задачи» say.
+            projectText(task)
+          : scheduleChatText.project(task.project.name)
         : null
   const details = [
     project,
@@ -253,6 +257,29 @@ export function FeedScheduleChange({
             <Button
               variant="outlined"
               size="small"
+              component={Link}
+              href={scheduledTaskHref(row.scheduleId)}
+              aria-label={scheduleChatText.openTaskLabel(row.name)}
+              sx={{ minHeight: 40 }}
+            >
+              {scheduleChatText.openTask}
+            </Button>
+            {onEdit ? (
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => onEdit(task)}
+                aria-label={scheduleChatText.editLabel(row.name)}
+                startIcon={<AppIcon name="pencil" size={16} />}
+                sx={{ minHeight: 40 }}
+              >
+                {scheduleChatText.edit}
+              </Button>
+            ) : null}
+            <Button
+              variant="outlined"
+              size="small"
+              aria-label={scheduleChatText.runNowLabel(row.name)}
               disabled={run.isPending}
               onClick={() => {
                 setRefused(null)
@@ -273,17 +300,6 @@ export function FeedScheduleChange({
             >
               {scheduleChatText.runNow}
             </Button>
-            {onEdit ? (
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => onEdit(task)}
-                startIcon={<AppIcon name="pencil" size={16} />}
-                sx={{ minHeight: 40 }}
-              >
-                {scheduleChatText.edit}
-              </Button>
-            ) : null}
           </Box>
         ) : null}
         {refused !== null ? (

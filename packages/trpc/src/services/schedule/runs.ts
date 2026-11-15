@@ -1,4 +1,9 @@
-import { recordRunOutcome, type PrismaClient, type ScheduledRunOutcome } from '@repo/db'
+import {
+  recordRunOutcome,
+  scheduledRunClosed,
+  type PrismaClient,
+  type ScheduledRunOutcome,
+} from '@repo/db'
 import {
   DomainError,
   isDomainError,
@@ -19,8 +24,10 @@ import { deterministicUuidV7 } from '../deterministic-uuid.ts'
 // A run of a scheduled task starts its chat (docs/plan/82-scheduled-tasks.md, §4.3, Зп17–Зп24):
 // core wrote the run with a snapshot of the task under its lock and hands its id here; web starts
 // the chat by the same `createDialog` as the cabinet, from the snapshot, never from the task as it
-// is now. No long transaction: every step reads, the chat is made by its own transaction, and the
-// outcome is written by a short one only while the run still waits. The id of the chat is derived
+// is now. No long transaction: every step reads; the chat is made by its own transaction, which
+// takes the task of the run first and writes the run `started` with the chat — a chat of a run is
+// never without its run, nor made for a run the sweep or core closed meanwhile. A refusal is
+// written by a short transaction only while the run still waits. The id of the chat is derived
 // from the run, so a repeat of the delivery finds the chat the first one made.
 
 const HOUR_MS = 60 * 60 * 1000
@@ -114,6 +121,16 @@ const runSelect = {
   createdAt: true,
 } as const
 
+/** What the run holds now; null — it still waits. A run that is gone is answered `skipped/paused`. */
+async function recordedOf(db: PrismaClient, runId: string): Promise<ScheduleIntakeResponse | null> {
+  const run = await db.scheduledRun.findUnique({
+    where: { id: runId },
+    select: { status: true, reason: true, taskId: true },
+  })
+  if (run === null) return { outcome: 'skipped', reason: 'paused' }
+  return responseOf(run)
+}
+
 /**
  * Writes the outcome while the run waits (§4.3, (е)) and answers what the run holds then: a sweep
  * or another delivery that recorded it first is answered with what it recorded.
@@ -125,16 +142,30 @@ async function record(
   now: Date,
 ): Promise<ScheduleIntakeResponse> {
   await recordRunOutcome(db, runId, outcome, now)
-  const run = await db.scheduledRun.findUnique({
-    where: { id: runId },
-    select: { status: true, reason: true, taskId: true },
-  })
   return (
-    (run && responseOf(run)) ??
+    (await recordedOf(db, runId)) ??
     (outcome.status === 'started'
       ? { outcome: 'started', taskId: outcome.taskId }
       : { outcome: outcome.status, reason: outcome.reason })
   )
+}
+
+/**
+ * Why `createDialog` did not find the project of a run, read again (Зп21: the project is checked by
+ * reading): deleted, or its creator lost the right, since step (г) read them; null — neither, a
+ * fault of the platform.
+ */
+async function projectReasonNow(
+  db: PrismaClient,
+  input: { siteId: string; userId: string },
+): Promise<ScheduledRunReason | null> {
+  const site = await db.site.findUnique({
+    where: { id: input.siteId },
+    select: { workspaceId: true, deletedAt: true },
+  })
+  if (site === null || site.deletedAt !== null) return 'project_gone'
+  if (!isManagerRole(await memberRole(db, site.workspaceId, input.userId))) return 'member_gone'
+  return null
 }
 
 /**
@@ -145,7 +176,9 @@ async function record(
  * run of its schedule was written — `skipped/paused`; (г) its project was deleted, or the creator
  * no longer manages its workspace — refused, and the task stops (`project_gone`, `member_gone`);
  * the creator has documents to accept — `refused/consent`; (д) `createDialog` from the snapshot,
- * named by the task, its preview built on demand; (е) the outcome.
+ * named by the task, its preview built on demand — it writes the run `started` with its chat, or
+ * makes nothing when the run was closed meanwhile; a project deleted (or a right lost) since (г)
+ * is read again, never taken from its NOT_FOUND; (е) the outcome: what the run holds then.
  *
  * Throws only for a failure that may pass — Vault, a refusal of 503, what is not a DomainError — so
  * the run keeps waiting and core delivers it again.
@@ -232,16 +265,30 @@ export async function startRun(
         effort,
         title: run.name,
         preview: 'on_demand',
+        scheduledRunId: run.id,
         now,
       })
     ).taskId
   } catch (error) {
+    // The sweep or core closed the run while the chat was being made: no chat, its outcome stands.
+    if (isDomainError(error) && error.code === scheduledRunClosed().code)
+      return {
+        response: (await recordedOf(db, run.id)) ?? { outcome: 'skipped', reason: 'paused' },
+      }
+    if (isDomainError(error) && error.code === 'NOT_FOUND' && run.siteId !== null) {
+      const gone = await projectReasonNow(db, { siteId: run.siteId, userId })
+      if (gone !== null) return refuse(gone)
+    }
     const reason = refusalReasonOf(error)
     if (reason === 'retry') throw error
     return refuse(reason, error as DomainError)
   }
-  // (е)
-  return { response: await record(db, run.id, { status: 'started', taskId: created }, now) }
+  // (е) The chat's transaction wrote `started`; a chat a delivery beside this one made is its.
+  return {
+    response:
+      (await recordedOf(db, run.id)) ??
+      (await record(db, run.id, { status: 'started', taskId: created }, now)),
+  }
 }
 
 /** The intake of web (`/api/webhooks/scheduled-runs`): the answer core gets for the run. */

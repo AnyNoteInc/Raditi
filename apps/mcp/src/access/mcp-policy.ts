@@ -124,19 +124,23 @@ const docsCall = z.discriminatedUnion('name', [
   call('doc_finish', docFinishArgumentsSchema),
 ])
 // The pages of the workspace (docs/plan/69-pages.md, Ст20; docs/plan/73-pages-sites.md, Дер23):
-// each tool its own branch, or the body is refused.
+// each tool its own branch, or the body is refused. The reads for every turn; what changes a page
+// or a site of pages — live for every visitor once the turn ends — only for a turn its client
+// watches (docs/plan/82-scheduled-tasks.md, Зп28, Зп32).
 const pagesCall = z.discriminatedUnion('name', [
-  call('page_publish', pagePublishToolArgumentsSchema),
   call('page_list', pageListArgumentsSchema.optional()),
   call('page_tree', pageTreeArgumentsSchema),
   call('page_read', pageReadArgumentsSchema),
+  call('page_files', pageFilesArgumentsSchema),
+])
+const pagesChangeCall = z.discriminatedUnion('name', [
+  call('page_publish', pagePublishToolArgumentsSchema),
   call('page_edit', pageEditArgumentsSchema),
   call('page_update', pageUpdateArgumentsSchema),
   call('page_delete', pageDeleteArgumentsSchema),
   call('page_restore', pageRestoreArgumentsSchema),
   call('page_file_put', pageFilePutArgumentsSchema),
   call('page_file_delete', pageFileDeleteArgumentsSchema),
-  call('page_files', pageFilesArgumentsSchema),
 ])
 // The scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп31, Зп32): the list for every turn, the
 // changes only for a turn its client watches. A schedule with runs closer than an hour is the
@@ -149,6 +153,12 @@ const scheduleChangeCall = z.discriminatedUnion('name', [
   call('schedule_update', admittedBy(scheduleUpdateArgumentsSchema)),
   call('schedule_delete', admittedBy(scheduleDeleteArgumentsSchema)),
 ])
+/** The names of the tools a pass without its client is not offered (`mcpToolFamiliesOf`). */
+const unattendedWithheldTools: ReadonlySet<string> = new Set(
+  [pagesChangeCall, scheduleChangeCall].flatMap((union) =>
+    union.options.map((option) => option.shape.name.value),
+  ),
+)
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),
   id: rpcId.optional(),
@@ -196,7 +206,8 @@ export interface McpSecurity {
   searchTools?: boolean
   /**
    * The pages of a workspace (docs/plan/69-pages.md, Ст20): every turn, with a site or without,
-   * where the pages are configured (PAGES_BASE_DOMAIN).
+   * where the pages are configured (PAGES_BASE_DOMAIN); their changes only where the client
+   * watches (docs/plan/82-scheduled-tasks.md, Зп28, Зп32).
    */
   pagesTools?: boolean
   /** The documents of a workspace (docs/plan/69-pages.md, Ст21): every turn, every composition. */
@@ -233,12 +244,13 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
  * while its preview is still being built. Each call checks the kinds of the preview as built
  * then (`DB_OPERATION_NOT_ALLOWED`). `web` — the cloud browser of a task on the site itself
  * (docs/plan/57-browser-tasks.md, Б20); `browser` is the preview's. `search` — the web search of
- * any turn, with a site or without, while its key is in Vault. `pages` — the pages and documents of
- * the workspace, any turn, while the pages are configured (docs/plan/69-pages.md, Ст20); `docs` — its
- * documents, any turn (Ст21). `schedule` — the scheduled tasks of the chat's author, read by any
- * turn; `schedule_changes` — their creation, change and deletion, only by a turn the client
- * watches: a pass of a scheduled run without its client sees the list alone
- * (docs/plan/82-scheduled-tasks.md, Зп31, Зп32).
+ * any turn, with a site or without, while its key is in Vault. `pages` — the pages of the
+ * workspace read, any turn, while the pages are configured (docs/plan/69-pages.md, Ст20);
+ * `pages_changes` — their publication and every change, only by a turn the client watches: they
+ * are live for every visitor once the turn ends (docs/plan/82-scheduled-tasks.md, Зп28, Зп32);
+ * `docs` — its documents, any turn (Ст21). `schedule` — the scheduled tasks of the chat's author,
+ * read by any turn; `schedule_changes` — their creation, change and deletion, only by a turn the
+ * client watches: a pass of a scheduled run without its client sees the lists alone (Зп31, Зп32).
  */
 export const mcpToolFamilies = [
   'content',
@@ -248,6 +260,7 @@ export const mcpToolFamilies = [
   'search',
   'docs',
   'pages',
+  'pages_changes',
   'schedule',
   'schedule_changes',
 ] as const
@@ -293,7 +306,10 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
   if (security.webTools && requirements.browser) families.push('web')
   if (security.searchTools) families.push('search')
   if (security.docsTools) families.push('docs')
-  if (security.pagesTools) families.push('pages')
+  if (security.pagesTools) {
+    families.push('pages')
+    if (!access.unattended) families.push('pages_changes')
+  }
   if (security.scheduleTools) {
     families.push('schedule')
     if (!access.unattended) families.push('schedule_changes')
@@ -364,6 +380,7 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       (families.includes('search') && searchCall.safeParse(request.params).success) ||
       (families.includes('docs') && docsCall.safeParse(request.params).success) ||
       (families.includes('pages') && pagesCall.safeParse(request.params).success) ||
+      (families.includes('pages_changes') && pagesChangeCall.safeParse(request.params).success) ||
       (families.includes('schedule') && scheduleCall.safeParse(request.params).success) ||
       (families.includes('schedule_changes') &&
         scheduleChangeCall.safeParse(request.params).success)
@@ -374,13 +391,13 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
 /**
  * What a call that needs the client's word answers in a pass without the client (docs/plan/82-
  * scheduled-tasks.md, Зп32): nobody is there to have given it — whatever the instructions of the run
- * say, they are no consent (Зп28). The agent reads the code and these words as the result of its
- * tool.
+ * say, they are no consent (Зп28). The same words answer a tool of a project's MCP server through
+ * the relay (`SkillRelay`). The agent reads the code and these words as the result of its tool.
  */
 export const MCP_UNATTENDED_REFUSAL = Object.freeze({
   code: 'SCHEDULE_FORBIDDEN',
   message:
-    'This pass runs on a schedule without the client: nobody can confirm a change now. Change no scheduled task and delete nothing; prepare it and ask the client once at the end of your answer.',
+    "This pass runs on a schedule without the client: nobody can confirm a change now. Change no scheduled task, publish or change no page, call no tool of the project's MCP servers and delete nothing; prepare it and ask the client once at the end of your answer.",
 })
 
 const confirmingCall = z.object({
@@ -393,11 +410,24 @@ const confirmingCall = z.object({
   }),
 })
 
+/** A well-formed call of a tool a pass without its client is not offered, by its name alone. */
+const withheldCall = z.object({
+  jsonrpc: z.literal('2.0'),
+  id: rpcId,
+  method: z.literal('tools/call'),
+  params: z.object({ name: z.string().refine((name) => unattendedWithheldTools.has(name)) }),
+})
+
 /**
- * A well-formed call of any tool whose arguments carry `confirmedByClient` — `schedule_*`,
- * `page_delete`, `page_file_delete` — however they say it (Зп32): in a pass without the client
- * the guard answers it with `MCP_UNATTENDED_REFUSAL` before any tool sees it.
+ * A well-formed call that needs the client's word (Зп32): of any tool whose arguments carry
+ * `confirmedByClient` — `schedule_*`, `page_delete`, `page_file_delete` — however they say it, or of
+ * a tool a pass without its client is not offered — the changes of the scheduled tasks and of the
+ * pages (`page_publish`, `page_edit` and the rest), whatever its arguments. In a pass without the
+ * client the guard answers it with `MCP_UNATTENDED_REFUSAL` before any tool sees it.
  */
 export function mcpCallNeedsClient(body: unknown): boolean {
-  return bounded(body) && confirmingCall.safeParse(body).success
+  return (
+    bounded(body) &&
+    (confirmingCall.safeParse(body).success || withheldCall.safeParse(body).success)
+  )
 }

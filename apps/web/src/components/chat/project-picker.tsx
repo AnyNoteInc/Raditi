@@ -88,6 +88,11 @@ const itemSx = {
  * it «Без проекта», the projects and «Добавить проект». A menu on a computer, a sheet from the
  * bottom on a phone. «Без проекта» is there before the list is, and when it could not be read.
  * While files are attached the pill is locked: a file is bound to the site it was sent for.
+ * Without `onAddProject` there is no «Добавить проект»: a window that cannot keep what was
+ * written in it does not lead away to the wizard (docs/plan/82-scheduled-tasks.md, Зп7).
+ * `gone` — the words of a project that is no more (a scheduled task of a deleted project, Зп22):
+ * the pill says them and nothing in the list is chosen, «Без проекта» included, until the client
+ * picks one.
  */
 export function ProjectPicker({
   projects,
@@ -95,15 +100,18 @@ export function ProjectPicker({
   locked,
   onChange,
   onAddProject,
+  gone,
 }: {
   /** The list as far as it is known: nothing while it loads or when it failed. */
   projects: readonly ProjectListItem[]
-  /** The chosen project; null — «Без проекта». */
+  /** The chosen project; null — «Без проекта», or `gone`. */
   value: ProjectListItem | null
   locked: boolean
   onChange: (project: ProjectListItem | null) => void
   /** Called as the client leaves for the wizard, with time to keep what was written. */
-  onAddProject: () => void
+  onAddProject?: () => void
+  /** Said in place of «Без проекта» while `value` is null: the project chosen before is gone. */
+  gone?: string
 }) {
   const theme = useTheme()
   const sheet = useMediaQuery(theme.breakpoints.down('sm'))
@@ -117,7 +125,8 @@ export function ProjectPicker({
     // Said even of what is shown: an address may still move a pill the client has not touched.
     onChange(project)
   }
-  const shownName = value?.name ?? chatsText.noProject
+  const none = value === null && gone === undefined
+  const shownName = value?.name ?? gone ?? chatsText.noProject
   const shownMark = value ? <ProjectMark name={value.name} size={18} /> : null
 
   const pillBody = (
@@ -173,12 +182,12 @@ export function ProjectPicker({
   }
 
   const items = [
-    <MenuItem key="none" selected={value === null} onClick={() => choose(null)} sx={itemSx}>
+    <MenuItem key="none" selected={none} onClick={() => choose(null)} sx={itemSx}>
       <Choice
         mark={<ProjectMark sign={<AppIcon name="chat" size={15} />} size={28} />}
         name={chatsText.noProject}
       />
-      {value === null ? <AppIcon name="check" size={18} /> : null}
+      {none ? <AppIcon name="check" size={18} /> : null}
     </MenuItem>,
     <Divider key="after-none" component="li" sx={{ my: 0.75 }} />,
     ...projects.map((project) => {
@@ -200,24 +209,28 @@ export function ProjectPicker({
         </MenuItem>
       )
     }),
-    ...(projects.length > 0
-      ? [<Divider key="after-projects" component="li" sx={{ my: 0.75 }} />]
-      : []),
-    <MenuItem
-      key="add"
-      component={Link}
-      href={ADD_PROJECT_HREF}
-      onClick={() => {
-        close()
-        onAddProject()
-      }}
-      sx={itemSx}
-    >
-      <Choice
-        mark={<ProjectMark sign={<AppIcon name="plus" size={16} />} size={28} />}
-        name={chatsText.addProject}
-      />
-    </MenuItem>,
+    ...(onAddProject === undefined
+      ? []
+      : [
+          ...(projects.length > 0
+            ? [<Divider key="after-projects" component="li" sx={{ my: 0.75 }} />]
+            : []),
+          <MenuItem
+            key="add"
+            component={Link}
+            href={ADD_PROJECT_HREF}
+            onClick={() => {
+              close()
+              onAddProject()
+            }}
+            sx={itemSx}
+          >
+            <Choice
+              mark={<ProjectMark sign={<AppIcon name="plus" size={16} />} size={28} />}
+              name={chatsText.addProject}
+            />
+          </MenuItem>,
+        ]),
   ]
 
   return (

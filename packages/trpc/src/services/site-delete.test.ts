@@ -4,8 +4,8 @@ import { createPrismaClient, type PrismaClient } from '@repo/db'
 import type { KvMetadata, KvWriteOptions } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
-import { accessibleSite } from './site-basics.ts'
-import { deleteSite, lockLiveSite, type SiteSecretEraser } from './site-delete.ts'
+import { accessibleSite, lockLiveSite } from './site-basics.ts'
+import { deleteSite, type SiteSecretEraser } from './site-delete.ts'
 
 const now = new Date('2026-10-25T09:00:00Z')
 
@@ -195,6 +195,115 @@ describe.skipIf(!databaseUrl)('PostgreSQL: «Удалить проект»', () 
     expect(
       (await db.scheduledTask.findUniqueOrThrow({ where: { id: gone.id } })).pausedReason,
     ).toBeNull()
+  })
+
+  /** A scheduled task of the project, on, due in an hour. */
+  const scheduledTaskOf = (owner: string, workspaceId: string, siteId: string) =>
+    db.scheduledTask.create({
+      data: {
+        workspaceId,
+        siteId,
+        createdById: owner,
+        name: 'Проверка сайта',
+        instructions: 'Проверьте сайт',
+        effort: 'low',
+        triggers: [{ kind: 'hourly', minute: 0 }],
+        timezone: 'Europe/Moscow',
+        nextRunAt: new Date(now.getTime() + 3_600_000),
+        createdVia: 'manual',
+      },
+    })
+
+  it('closes the chats of runs that wait for the client, and still refuses an ordinary one (Зп22)', async () => {
+    const vault = fakeVault()
+    const { owner, workspaceId, siteId } = await siteWithSecrets(vault)
+    const schedule = await scheduledTaskOf(owner, workspaceId, siteId)
+    // Runs that answered and asked: their chats wait for the client for good.
+    const chats: string[] = []
+    for (const [index, status] of (['awaiting_user', 'awaiting_approval'] as const).entries()) {
+      const chat = await db.task.create({
+        data: { workspaceId, siteId, status, createdById: owner, needsRepository: true },
+      })
+      await db.scheduledRun.create({
+        data: {
+          scheduledTaskId: schedule.id,
+          dueAt: new Date(now.getTime() - (index + 1) * 3_600_000),
+          trigger: 'schedule',
+          status: 'started',
+          taskId: chat.id,
+          startedAt: now,
+          siteId,
+          name: schedule.name,
+          instructions: schedule.instructions,
+          effort: schedule.effort,
+        },
+      })
+      chats.push(chat.id)
+    }
+    const ordinary = await db.task.create({
+      data: { workspaceId, siteId, status: 'awaiting_user', createdById: owner },
+    })
+    await expect(deleteSite(db, () => vault.store, input(owner, siteId))).rejects.toMatchObject({
+      code: 'SITE_DELETE_BUSY',
+      details: { reason: 'tasks' },
+    })
+    // Nothing of the refused deletion stays: the chats of runs wait as they did.
+    for (const id of chats)
+      expect((await db.task.findUniqueOrThrow({ where: { id } })).status).not.toBe('cancelled')
+
+    await db.task.update({ where: { id: ordinary.id }, data: { status: 'done' } })
+    await deleteSite(db, () => vault.store, input(owner, siteId))
+    expect((await db.site.findUniqueOrThrow({ where: { id: siteId } })).deletedAt).toEqual(now)
+    for (const id of chats) {
+      expect((await db.task.findUniqueOrThrow({ where: { id } })).status).toBe('cancelled')
+      expect(await db.taskEvent.count({ where: { taskId: id, type: 'feed.cancelled' } })).toBe(1)
+    }
+    expect(await db.scheduledTask.findUniqueOrThrow({ where: { id: schedule.id } })).toMatchObject({
+      enabled: false,
+      pausedReason: 'project_gone',
+    })
+  })
+
+  it('takes the tasks of the project before the project, as the tick does: no deadlock (Зп22, Зп24)', async () => {
+    const vault = fakeVault()
+    const { owner, workspaceId, siteId } = await siteWithSecrets(vault)
+    const schedule = await scheduledTaskOf(owner, workspaceId, siteId)
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let locked!: () => void
+    const isLocked = new Promise<void>((resolve) => (locked = resolve))
+    // The tick holds the task and then writes a run that refers to the project.
+    const tick = db.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM scheduled_tasks WHERE id = ${schedule.id}::uuid FOR UPDATE`
+        locked()
+        await held
+        await tx.scheduledRun.create({
+          data: {
+            scheduledTaskId: schedule.id,
+            dueAt: now,
+            trigger: 'schedule',
+            status: 'pending',
+            siteId,
+            name: schedule.name,
+            instructions: schedule.instructions,
+            effort: schedule.effort,
+          },
+        })
+      },
+      { timeout: 20_000 },
+    )
+    await isLocked
+    const deletion = deleteSite(db, () => vault.store, input(owner, siteId))
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    release()
+    await expect(tick).resolves.toBeUndefined()
+    await expect(deletion).resolves.toBeUndefined()
+    expect((await db.site.findUniqueOrThrow({ where: { id: siteId } })).deletedAt).toEqual(now)
+    expect(await db.scheduledTask.findUniqueOrThrow({ where: { id: schedule.id } })).toMatchObject({
+      enabled: false,
+      pausedReason: 'project_gone',
+    })
   })
 
   it('lets only an owner or an admin delete, with the name typed exactly', async () => {

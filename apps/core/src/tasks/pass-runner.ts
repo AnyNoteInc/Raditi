@@ -178,7 +178,12 @@ export class PassRunner {
       return
     }
     const controller = this.deps.live.enter(job.taskId)
-    const ref: PassRef = { taskId: job.taskId, attempt: job.attempt, turnNo: claimed.turnNo }
+    const ref: PassRef = {
+      taskId: job.taskId,
+      attempt: job.attempt,
+      turnNo: claimed.turnNo,
+      requestEventId: job.requestEventId,
+    }
     // A live pass keeps its task out of `queued`, so the claim above cannot succeed beside one;
     // should it ever, that pass ends the task, never a second one.
     if (!controller) return

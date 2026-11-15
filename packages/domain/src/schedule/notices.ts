@@ -89,9 +89,11 @@ export const taskPageNotificationKinds = [
 ] as const satisfies readonly NotificationKind[]
 
 /**
- * What a push carries (Зп40): the id of the notification, the path of the cabinet it opens, its
- * kind, whether it is of a scheduled task, and the tag a newer run replaces it by. No word of the
- * client: the push services are abroad (rule 1).
+ * What a push carries (Зп40): `{ id, path, kind, scheduled, tag, at }` — the id of the
+ * notification, the path of the cabinet it opens, its kind, whether it is of a scheduled task, the
+ * tag a newer run replaces it by, and when the cabinet made it (ms since the epoch): a push that
+ * arrives late never replaces a newer notice under the same tag. No word of the client: the push
+ * services are abroad (rule 1).
  */
 export const notificationPushPayloadSchema = z.strictObject({
   id: z.uuid(),
@@ -102,5 +104,6 @@ export const notificationPushPayloadSchema = z.strictObject({
   kind: z.enum(notificationKinds),
   scheduled: z.boolean(),
   tag: z.string().regex(/^(?:schedule|chat):[0-9a-f-]{36}$/),
+  at: z.int().positive(),
 })
 export type NotificationPushPayload = z.infer<typeof notificationPushPayloadSchema>

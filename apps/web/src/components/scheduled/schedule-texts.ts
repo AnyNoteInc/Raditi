@@ -2,6 +2,8 @@
 // Зп12, Зп28, Зп30, Зп36): Russian, on «вы». The words of schedules, runs, zones and refusals are
 // the domain's (`@repo/domain/schedule`) and the server's; here — the screens' own.
 
+import { plural } from '@/lib/plural'
+
 export const scheduledTexts = Object.freeze({
   title: 'Запланированные задачи',
   // The tooltip of the heading (Зп2).
@@ -29,6 +31,8 @@ export const scheduledTexts = Object.freeze({
   loading: 'Загрузка задач',
   list: 'Ваши запланированные задачи',
   noProject: 'Без проекта',
+  /** A task of a deleted project (Зп22): no name and no link — the project is no more. */
+  projectGone: 'Проект удалён',
 })
 
 /** The filter buttons of «Ваши» (Зп3). */
@@ -94,11 +98,20 @@ export const schedulePageTexts = Object.freeze({
   byHand: 'вручную',
   openChat: 'Открыть чат',
   openChatOf: (when: string) => `Открыть чат запуска: ${when}`,
+  /** Missed runs in a row, from the first to the last of them (Зп6). */
   missedRange: (from: string, to: string) => `Пропущены запуски с ${from} по ${to}`,
+  /**
+   * Missed runs in a row, from the first of them, of a row written before the server kept the last
+   * one (Зп6).
+   */
+  missedSince: (count: number, from: string) =>
+    `${plural(count, 'Пропущен', 'Пропущены', 'Пропущено')} ${count} ${plural(count, 'запуск', 'запуска', 'запусков')}, начиная с ${from}`,
   notFound: 'Задачи уже нет.',
   notFoundLead: 'Её удалили, или она не ваша.',
   toList: 'К запланированным задачам',
   failed: 'Не удалось загрузить задачу. Попробуйте ещё раз.',
+  /** A reading after the task was shown failed: the page stays as it was. */
+  stale: 'Не удалось обновить задачу — на странице то, что было известно раньше.',
   loading: 'Загрузка задачи',
   more: 'Ещё действия',
 })
@@ -111,6 +124,7 @@ export const scheduleDialogTexts = Object.freeze({
   name: 'Название',
   namePlaceholder: 'Например, «Проверка сайта»',
   nameRequired: 'Назовите задачу',
+  nameSecret: 'Похоже, в названии пароль или ключ — уберите его',
   instructions: 'Что сделать агенту',
   instructionsPlaceholder:
     'Например: откройте сайт, пройдите главную и важные страницы и скажите, если что-то не так.',
@@ -119,8 +133,13 @@ export const scheduleDialogTexts = Object.freeze({
   needsProject: 'Этому шаблону нужен проект — выберите его',
   addProject: 'Добавьте проект',
   addProjectLead: 'Этому шаблону нужен сайт.',
+  /** «Добавьте проект» after the client changed the window: what they wrote is not kept (Зп9). */
+  leaveTitle: 'Перейти к добавлению проекта?',
+  leaveText: 'Задача ещё не создана: то, что вы изменили в окне, не сохранится.',
+  leaveKeep: 'Остаться',
+  leaveGo: 'Перейти',
   warning:
-    'Задача выполняется без вас: агент не будет спрашивать подтверждения, пока работает. В админке сайта он только читает, а файлы сайта меняет в предпросмотре — на сайт изменения попадут после вашего выпуска. Каждый запуск тратит кредиты.',
+    'Задача выполняется без вас: агент не будет спрашивать подтверждения, пока работает. В админке сайта он только читает, страницы из раздела «Страницы» не публикует и не меняет, навыки агента с ключом не вызывает, а файлы сайта меняет в предпросмотре — на сайт изменения попадут после вашего выпуска. Каждый запуск тратит кредиты.',
   when: 'Когда запускать',
   schedule: (index: number) => `Время запуска ${index}`,
   frequency: 'Как часто',
@@ -131,6 +150,7 @@ export const scheduleDialogTexts = Object.freeze({
   dayOfMonth: 'Число месяца',
   days: 'Дни недели',
   daysRequired: 'Выберите хотя бы один день',
+  dateRequired: 'Укажите дату',
   addTime: 'Добавить время',
   remove: 'Убрать',
   removeLabel: (index: number) => `Убрать время запуска ${index}`,

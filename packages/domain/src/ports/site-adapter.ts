@@ -482,6 +482,14 @@ export interface BrowserTaskPolicy {
   pageDenied(path: string, by?: BrowserController): boolean
   /** The stack's sign-in form, which the browser fills with the site's saved sign-in (Б36). */
   signIn?: BrowserSignInForm
+  /**
+   * Whether a request of a pass of a scheduled run without its client does more than read the
+   * site (docs/plan/82-scheduled-tasks.md, Зп28), as the stack knows its admin pages: true —
+   * denied (a read that acts: an AJAX `action`), false — allowed (a filter of a list that carries
+   * a nonce and changes nothing), null — the generic rule decides: a method that writes, or a read
+   * with a secret in its query. Absent — the generic rule for every request.
+   */
+  readOnlyDenied?(request: SiteBrowserRequest): boolean | null
 }
 
 /**

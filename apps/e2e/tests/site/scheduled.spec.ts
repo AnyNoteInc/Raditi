@@ -195,6 +195,8 @@ test('a task by hand: every day at a time, paused and resumed, run now, its page
     await expect(confirm).toContainText('Чаты прошлых запусков останутся.')
     await confirm.getByRole('button', { name: 'Удалить' }).click()
     await expect(page).toHaveURL(/\/scheduled$/)
+    // The page of the task is gone: «Ваши» says what became of it.
+    await expect(page.getByText('Задача удалена')).toBeVisible()
     await expect(page.getByText('Запланированных задач пока нет.')).toBeVisible()
     await page.goto('/chats')
     await expect(

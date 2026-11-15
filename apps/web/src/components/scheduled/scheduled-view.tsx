@@ -14,7 +14,7 @@ import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
-import { useRef, useState, type RefObject } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { SectionHeading } from '@/components/application/section-heading'
@@ -24,6 +24,7 @@ import { useTRPC } from '@/trpc/client'
 
 import { ScheduleNoticeBar, useScheduleActions, type ScheduleNotice } from './schedule-actions'
 import { ScheduleDialog, type ScheduleDialogOpening } from './schedule-dialog'
+import { takeScheduleNotice } from './schedule-notice'
 import {
   chatDraftOf,
   inProject,
@@ -42,6 +43,7 @@ import { ScheduleTemplateGrid } from './schedule-templates'
 import {
   scheduleDialogTexts,
   scheduledTexts,
+  scheduleRowTexts,
   scheduleSortLabels,
   scheduleTagLabels,
 } from './schedule-texts'
@@ -217,6 +219,27 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
   const [filterOpen, setFilterOpen] = useState(false)
   const searchInput = useRef<HTMLInputElement>(null)
   const newTaskButton = useRef<HTMLButtonElement>(null)
+  // «⋯» of each row by its task, and the row whose «⋯» takes the focus after a deletion: the row
+  // the focus was in is gone (null — «Новая задача»).
+  const moreButtons = useRef(new Map<string, HTMLButtonElement>())
+  const [refocus, setRefocus] = useState<{ id: string | null } | null>(null)
+
+  // What the page of a task said as the client left it for here: «Задача удалена».
+  useEffect(() => {
+    const later = setTimeout(() => {
+      const kept = takeScheduleNotice()
+      if (kept !== null) setNotice({ text: kept })
+    }, 0)
+    return () => clearTimeout(later)
+  }, [])
+
+  // After the confirmation closed and gave the focus back to «⋯» of the row that goes away.
+  useEffect(() => {
+    if (refocus === null) return
+    const row = refocus.id === null ? undefined : moreButtons.current.get(refocus.id)
+    const target = row ?? newTaskButton.current
+    target?.focus()
+  }, [refocus])
 
   const all: readonly ScheduleItem[] = list.data?.schedules ?? []
   const empty = list.isSuccess && all.length === 0
@@ -251,6 +274,13 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
   }
   const openTemplate = (template: ScheduleTemplate, from: HTMLElement) =>
     open({ kind: 'new', template }, from)
+  /** A task deleted from its row: said, and the focus to the row after it, or before it. */
+  function deleted(item: ScheduleItem) {
+    setNotice({ text: scheduleRowTexts.deleted })
+    const at = shown.findIndex((each) => each.id === item.id)
+    const next = at < 0 ? undefined : (shown[at + 1] ?? shown[at - 1])
+    setRefocus({ id: next?.id ?? null })
+  }
   // What opened the window may be gone when it closes — the card of a template over an empty list
   // that is not empty any more: then «Новая задача» takes the focus.
   const returnFocus = () => (opener.current?.isConnected ? opener.current : newTaskButton.current)
@@ -508,6 +538,11 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
                 now={now}
                 actions={actions}
                 onEdit={(schedule, from) => open({ kind: 'edit', schedule }, from)}
+                onDeleted={deleted}
+                moreRef={(element) => {
+                  if (element === null) moreButtons.current.delete(item.id)
+                  else moreButtons.current.set(item.id, element)
+                }}
               />
             ))}
           </Box>

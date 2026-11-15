@@ -21,6 +21,7 @@ import {
   scheduleLimits,
   scheduleNameSchema,
   scheduleNotFound,
+  scheduleProjectGone,
   scheduleRunBusy,
   scheduleStartDedupeKey,
   scheduleTimezoneSchema,
@@ -162,18 +163,33 @@ export function scheduleFieldsOf(row: ScheduledTask): ScheduleFields {
   }
 }
 
+const sameTriggers = (a: readonly ScheduleTrigger[], b: readonly ScheduleTrigger[]) =>
+  JSON.stringify(a) === JSON.stringify(b)
+
 /**
  * The next due moment of schedules saved now (Зп13, Зп15): from now, always ahead; null — only by
  * hand. A single run in the past is not saved — `SCHEDULE_IN_PAST` — even when another schedule
- * runs on. `recentSince`: the moment the agent asked for it (Зп15) — a single run that was ahead
- * then and is due now, not older than the catch-up limit, is kept and becomes the due moment the
- * next tick runs at once.
+ * runs on. `spent`: the single runs the task had whose moment has passed — they came and went
+ * (ran, or were skipped or missed) and are no reason to refuse the others: a task with «Один раз»
+ * beside «Ежедневно» is turned on again or changed after it ran (Зп15); a past single run the
+ * change adds, or moves, still is. `recentSince`: the moment the
+ * agent asked for it (Зп15) — a single run that was ahead then and is due now, not older than the
+ * catch-up limit, is kept and becomes the due moment the next tick runs at once.
  */
-function nextRunFor(fields: ScheduleFields, now: Date, recentSince?: Date): Date | null {
+function nextRunFor(
+  fields: ScheduleFields,
+  now: Date,
+  recentSince?: Date,
+  spent: readonly ScheduleTrigger[] = [],
+): Date | null {
   const { triggers, timezone } = fields
   if (triggers.length === 0) return null
   const next = nextRunOf(triggers, timezone, now)
-  if (!scheduleTriggersInPast(triggers, timezone, now)) {
+  const judged = triggers.filter(
+    (trigger) =>
+      trigger.kind !== 'once' || !spent.some((before) => sameTriggers([before], [trigger])),
+  )
+  if (!scheduleTriggersInPast(judged, timezone, now)) {
     if (next === null) throw scheduleInPast()
     return next
   }
@@ -183,7 +199,7 @@ function nextRunFor(fields: ScheduleFields, now: Date, recentSince?: Date): Date
     now.getTime() - scheduleLimits.catchUpHours * HOUR_MS,
   )
   let earliest: Date | null = null
-  for (const trigger of triggers) {
+  for (const trigger of judged) {
     if (trigger.kind !== 'once') continue
     if (!scheduleTriggersInPast([trigger], timezone, now)) continue
     const at = latestDueOf([trigger], timezone, new Date(since), now)
@@ -242,14 +258,19 @@ async function userManages(
   return member?.role === 'owner' || member?.role === 'admin'
 }
 
-/** The project of a task, alive and of its workspace. */
+/**
+ * The project of a task, alive and of its workspace. Its row is taken FOR KEY SHARE, as a new chat
+ * takes it (`lockLiveSite` of @repo/trpc): a deletion in flight holds it FOR UPDATE, so the check
+ * waits for it and reads its mark — a task is never written onto a project being deleted, which
+ * `pauseSiteSchedules` of that deletion would not see (Зп22). A deleted project is told as such:
+ * the task is moved to another project or to none, never turned on there.
+ */
 async function checkProject(tx: Tx, siteId: string | null, workspaceId: string): Promise<void> {
   if (siteId === null) return
-  const site = await tx.site.findUnique({
-    where: { id: siteId },
-    select: { workspaceId: true, deletedAt: true },
-  })
-  if (!site || site.workspaceId !== workspaceId || site.deletedAt !== null) throw projectNotFound()
+  const [site] = await tx.$queryRaw<{ workspace_id: string; deleted_at: Date | null }[]>`
+    SELECT workspace_id, deleted_at FROM sites WHERE id = ${siteId}::uuid FOR KEY SHARE`
+  if (!site || site.workspace_id !== workspaceId) throw projectNotFound()
+  if (site.deleted_at !== null) throw scheduleProjectGone()
 }
 
 /** A task of its creator, alive; another's or a deleted one is never told apart (Зп25). */
@@ -381,9 +402,6 @@ export interface ScheduledTaskPatch {
   enabled?: boolean
 }
 
-const sameTriggers = (a: readonly ScheduleTrigger[], b: readonly ScheduleTrigger[]) =>
-  JSON.stringify(a) === JSON.stringify(b)
-
 /** What a change makes of a task (Зп13, Зп15): its fields, its state and its due moment. */
 interface PlannedChange {
   fields: ScheduleFields
@@ -427,8 +445,14 @@ function planChange(
       : task.enabled)
   const enabling = enabled && !task.enabled
   let nextRunAt = task.nextRunAt
+  // The single runs of the task as it was whose moment, in its zone then, has passed are spent:
+  // kept beside the schedules that run on, they never refuse a resume or a change (Зп15).
+  const spent = current.triggers.filter(
+    (trigger) =>
+      trigger.kind === 'once' && scheduleTriggersInPast([trigger], current.timezone, now),
+  )
   if (!enabled) nextRunAt = null
-  else if (rescheduled || enabling) nextRunAt = nextRunFor(fields, now, recentSince)
+  else if (rescheduled || enabling) nextRunAt = nextRunFor(fields, now, recentSince, spent)
   return { fields, enabled, enabling, pausing: task.enabled && !enabled, nextRunAt }
 }
 
@@ -468,8 +492,12 @@ async function changeInTx(
       siteId,
       enabled,
       nextRunAt,
-      // A task paused by the client has no reason of its own; one resumed is a fresh start.
-      ...(enabled || pausing ? { pausedReason: null } : {}),
+      // A task paused by the client has no reason of its own; one resumed is a fresh start. A
+      // task of a deleted project moved to another or to none is no longer stopped by it: off,
+      // it is a task the client keeps paused (Зп22).
+      ...(enabled || pausing || (moved && task.pausedReason === 'project_gone')
+        ? { pausedReason: null }
+        : {}),
       ...(enabling ? { refusalStreak: 0, lastRefusalReason: null } : {}),
     },
   })
@@ -539,7 +567,18 @@ export async function deleteScheduledTask(
 
 const runOfList = {
   orderBy: [{ createdAt: 'desc' }, { dueAt: 'desc' }],
-  include: { task: { select: { id: true, status: true, title: true, deletedAt: true } } },
+  include: {
+    task: {
+      select: {
+        id: true,
+        status: true,
+        title: true,
+        deletedAt: true,
+        // A chat of a deleted project left the cabinet with it (Зп6: «Чат удалён»).
+        site: { select: { deletedAt: true } },
+      },
+    },
+  },
 } satisfies Prisma.ScheduledTask$runsArgs
 
 const siteOfList = { select: { id: true, name: true, url: true, deletedAt: true } } as const
@@ -616,12 +655,24 @@ export function countSiteSchedules(
 }
 
 /**
+ * The tasks of a project, locked before its row by «Удалить проект»: the tick and «Запустить
+ * сейчас» take a task's row and then the project's (the run they write refers to it), so the
+ * deletion takes them in the same order — tasks, then the project — and the two never wait on
+ * each other in a circle (Зп22, Зп24).
+ */
+export async function lockSiteSchedules(tx: Tx, siteId: string): Promise<void> {
+  await tx.$queryRaw`
+    SELECT id FROM scheduled_tasks WHERE site_id = ${siteId}::uuid AND deleted_at IS NULL
+    ORDER BY id FOR UPDATE`
+}
+
+/**
  * The tasks of a deleted project stop — `project_gone`, without a notice (Зп22) — in the
- * transaction of the deletion. Returns how many.
+ * transaction of the deletion, after `lockSiteSchedules` and the lock of the project: a task
+ * moved onto the project in between is locked here and stopped as well. Returns how many.
  */
 export async function pauseSiteSchedules(tx: Tx, siteId: string): Promise<number> {
-  await tx.$queryRaw`
-    SELECT id FROM scheduled_tasks WHERE site_id = ${siteId}::uuid AND deleted_at IS NULL FOR UPDATE`
+  await lockSiteSchedules(tx, siteId)
   const paused = await tx.scheduledTask.updateMany({
     where: stoppedBySiteDeletion(siteId),
     data: { enabled: false, nextRunAt: null, pausedReason: 'project_gone' },
@@ -660,19 +711,37 @@ const snapshotOf = (task: ScheduledTask) => ({
   effort: task.effort,
 })
 
-/** Whether a run of the task goes on: one waits for web, or its chat works (Зп14, Зп24). */
-async function runGoesOn(tx: Tx, scheduleId: string): Promise<boolean> {
-  const busy = await tx.scheduledRun.findFirst({
+/** A run of a task that goes on, as `runGoingOn` finds it. */
+interface RunGoingOn {
+  id: string
+  trigger: string
+  status: string
+}
+
+/**
+ * The run of the task that goes on (Зп14, Зп24): one that waits for web, or one whose chat works
+ * while it still goes without its client (Зп27). A chat of a run the client has taken over with
+ * their own words is an ordinary chat of theirs — working in it holds the schedule up no more.
+ * null — none goes on.
+ */
+async function runGoingOn(tx: Tx, scheduleId: string): Promise<RunGoingOn | null> {
+  const pending = await tx.scheduledRun.findFirst({
+    where: { scheduledTaskId: scheduleId, status: 'pending' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { id: true, trigger: true, status: true },
+  })
+  if (pending) return pending
+  const working = await tx.scheduledRun.findMany({
     where: {
       scheduledTaskId: scheduleId,
-      OR: [
-        { status: 'pending' },
-        { status: 'started', task: { status: { in: [...workingChatStatuses] } } },
-      ],
+      status: 'started',
+      task: { status: { in: [...workingChatStatuses] } },
     },
-    select: { id: true },
+    select: { id: true, trigger: true, status: true, taskId: true },
   })
-  return busy !== null
+  for (const run of working)
+    if (run.taskId !== null && (await onlyFirstRequest(tx, run.taskId, undefined))) return run
+  return null
 }
 
 /** Writes a run unless one of the same moment and kind is there; whether it was written. */
@@ -704,7 +773,8 @@ export interface ScheduleClaim {
  * The tick's claim of one task (Зп14, Зп15, Зп19, Зп20), in the caller's transaction: under the
  * task's row — skipped when another holds it — the due moment is read again. The task runs once,
  * for the last moment due; earlier ones are one row «Пропущено», and a moment older than the
- * catch-up limit is not run. While a run of the task goes on, the moment is skipped. A run takes
+ * catch-up limit is not run. While a run of the task goes on, the moment is skipped — but the last
+ * moment of a task, «Один раз», stays due until that run is over (or the limit passes). A run takes
  * a snapshot of the task and its outbox event `schedule.start`; the due moment moves on from now,
  * and a task with none left completes. Null — nothing was due.
  */
@@ -744,6 +814,11 @@ export async function claimDueSchedule(
   const snapshot = snapshotOf(task)
   if (missedCount > 0) {
     const id = uuidv7()
+    // The end of the gap (Зп6, «Пропущены запуски с … по …»): `due` itself when it is missed too,
+    // otherwise the latest moment before it — the schedule may change before the row is read.
+    const missedUntil = tooLate
+      ? due
+      : (latestDueOf(triggers, task.timezone, from, new Date(due.getTime() - 1)) ?? from)
     const written = await insertRun(tx, {
       id,
       ...snapshot,
@@ -752,21 +827,30 @@ export async function claimDueSchedule(
       status: 'skipped',
       reason: 'missed',
       missedCount,
+      missedUntil,
     })
     if (written) claim.missedRunId = id
   }
+  // From now: the due moment is never after it.
+  let nextRunAt = nextRunOf(triggers, task.timezone, now)
   if (!tooLate) {
     const id = uuidv7()
-    if (await runGoesOn(tx, task.id)) {
-      const written = await insertRun(tx, {
-        id,
-        ...snapshot,
-        dueAt: due,
-        trigger: 'schedule',
-        status: 'skipped',
-        reason: 'previous_running',
-      })
-      if (written) claim.busyRunId = id
+    if ((await runGoingOn(tx, task.id)) !== null) {
+      if (nextRunAt === null) {
+        // The last moment of the task — «Один раз» — is never thrown away for a run that goes on:
+        // it stays due and runs once that chat is idle, or is missed past the catch-up limit.
+        nextRunAt = due
+      } else {
+        const written = await insertRun(tx, {
+          id,
+          ...snapshot,
+          dueAt: due,
+          trigger: 'schedule',
+          status: 'skipped',
+          reason: 'previous_running',
+        })
+        if (written) claim.busyRunId = id
+      }
     } else if (
       await insertRun(tx, { id, ...snapshot, dueAt: due, trigger: 'schedule', status: 'pending' })
     ) {
@@ -779,8 +863,7 @@ export async function claimDueSchedule(
       })
     }
   }
-  // From now: the due moment is never after it.
-  claim.nextRunAt = nextRunOf(triggers, task.timezone, now)
+  claim.nextRunAt = nextRunAt
   claim.completed = claim.nextRunAt === null
   await tx.scheduledTask.update({
     where: { id: task.id },
@@ -793,14 +876,24 @@ export async function claimDueSchedule(
   return claim
 }
 
-/** The tasks due by now, the earliest first: the tick claims each in its own transaction. */
+/**
+ * The tasks due by now, the earliest first: the tick claims each in its own transaction. `skip` —
+ * the ones this tick has read already: a task that stays due (another tick holds it, it threw, its
+ * last moment waits for a run that goes on) never hides the ones after it.
+ */
 export async function dueScheduleIds(
   db: Pick<PrismaClient, 'scheduledTask'>,
   now: Date,
   limit = 100,
+  skip: readonly string[] = [],
 ): Promise<string[]> {
   const rows = await db.scheduledTask.findMany({
-    where: { enabled: true, deletedAt: null, nextRunAt: { lte: now } },
+    where: {
+      enabled: true,
+      deletedAt: null,
+      nextRunAt: { lte: now },
+      ...(skip.length > 0 ? { id: { notIn: [...skip] } } : {}),
+    },
     orderBy: [{ nextRunAt: 'asc' }, { id: 'asc' }],
     take: limit,
     select: { id: true },
@@ -808,14 +901,23 @@ export async function dueScheduleIds(
   return rows.map((row) => row.id)
 }
 
-/** Runs web never answered, older than `olderThan`: the tick closes them, «сбой платформы» (Зп21). */
+/**
+ * Runs web never answered, older than `olderThan`: the tick closes them, «сбой платформы» (Зп21).
+ * `trigger` — of one kind only: a run of «Запустить сейчас» has no delivery of core to wait for,
+ * so the sweep of chats closes it much sooner (`scheduleLimits.manualPendingSweepMinutes`).
+ */
 export function stalePendingRuns(
   db: Pick<PrismaClient, 'scheduledRun'>,
   olderThan: Date,
   limit = 100,
+  trigger?: ScheduledRunTrigger,
 ) {
   return db.scheduledRun.findMany({
-    where: { status: 'pending', createdAt: { lt: olderThan } },
+    where: {
+      status: 'pending',
+      createdAt: { lt: olderThan },
+      ...(trigger !== undefined ? { trigger } : {}),
+    },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     take: limit,
     select: { id: true, scheduledTaskId: true, trigger: true, dueAt: true, attempts: true },
@@ -825,8 +927,10 @@ export function stalePendingRuns(
 /**
  * «Запустить сейчас» (Зп24): a run out of the schedule, written under the task's row by its
  * creator while they manage the workspace — of a paused task as well. Its moment is the minute,
- * so a second press of the same minute is the same run (`created: false`); a run that goes on is
- * `SCHEDULE_RUN_BUSY`. Web starts it at once.
+ * so a second press of the same minute is the same run (`created: false`); a run of «Запустить
+ * сейчас» that still waits — the web that wrote it stopped before it answered — is taken up again
+ * (`created: false`): its chat is derived from it, so a start in flight is joined, never doubled;
+ * any other run that goes on is `SCHEDULE_RUN_BUSY`. Web starts it at once.
  */
 export async function insertManualRun(
   db: Db,
@@ -841,7 +945,10 @@ export async function insertManualRun(
       select: { id: true },
     })
     if (same) return { runId: same.id, created: false }
-    if (await runGoesOn(tx, task.id)) throw scheduleRunBusy()
+    const going = await runGoingOn(tx, task.id)
+    if (going?.status === 'pending' && going.trigger === trigger)
+      return { runId: going.id, created: false }
+    if (going !== null) throw scheduleRunBusy()
     const id = uuidv7()
     if (!(await insertRun(tx, { id, ...snapshotOf(task), dueAt, trigger, status: 'pending' })))
       throw scheduleRunBusy()
@@ -852,16 +959,18 @@ export async function insertManualRun(
 
 /**
  * A run of «Запустить сейчас» web could not start for a fault of the platform (503, §4.3): gone,
- * as if never pressed. Only while it waits and has no chat.
+ * as if never pressed. Only while it waits — under its task's row, as every writer of the outcome:
+ * a start of the same run in flight (a second press) is waited for, and a run it bound to its chat
+ * stays.
  */
-export async function dropPendingRun(
-  db: Pick<PrismaClient, 'scheduledRun'>,
-  runId: string,
-): Promise<boolean> {
-  const { count } = await db.scheduledRun.deleteMany({
-    where: { id: runId, status: 'pending', taskId: null },
+export async function dropPendingRun(db: Db, runId: string): Promise<boolean> {
+  return db.$transaction(async (tx) => {
+    if (!(await lockWaitingRun(tx, runId))) return false
+    const { count } = await tx.scheduledRun.deleteMany({
+      where: { id: runId, status: 'pending', taskId: null },
+    })
+    return count === 1
   })
-  return count === 1
 }
 
 /** What web answered of a run (§4.3). */
@@ -898,81 +1007,146 @@ export async function recordRunOutcome(
   outcome: ScheduledRunOutcome,
   now: Date = new Date(),
 ): Promise<RecordedRunOutcome> {
-  return db.$transaction(async (tx) => {
-    const run = await tx.scheduledRun.findUnique({
-      where: { id: runId },
-      select: { scheduledTaskId: true, trigger: true },
-    })
-    if (!run) throw scheduleNotFound()
-    const trigger = run.trigger as ScheduledRunTrigger
-    // The task first, then the run: the order every writer of runs takes.
-    const task = await lockSchedule(tx, run.scheduledTaskId)
-    const result: RecordedRunOutcome = {
-      recorded: false,
-      scheduledTaskId: run.scheduledTaskId,
-      trigger,
-      paused: null,
-      repeated: false,
-      refusalStreak: task?.refusalStreak ?? 0,
-    }
-    const { count } = await tx.scheduledRun.updateMany({
-      where: { id: runId, status: 'pending' },
-      data:
-        outcome.status === 'started'
-          ? { status: 'started', taskId: outcome.taskId, startedAt: now }
-          : {
-              status: outcome.status,
-              reason: outcome.reason,
-              ...(outcome.reason === 'missed' ? { missedCount: 1 } : {}),
-            },
-    })
-    if (count === 0 || !task) return result
-    result.recorded = true
-    if (task.deletedAt !== null) return result
-    if (outcome.status === 'started') {
-      await tx.scheduledTask.update({
-        where: { id: task.id },
-        data: { refusalStreak: 0, lastRefusalReason: null },
-      })
-      result.refusalStreak = 0
-      return result
-    }
-    if (outcome.status !== 'refused') return result
-    const stops = (pausingReasons as Partial<Record<string, SchedulePausedReason>>)[outcome.reason]
-    const counted = trigger === 'schedule' && isClientRefusalReason(outcome.reason)
-    const streak = counted ? task.refusalStreak + 1 : task.refusalStreak
-    result.refusalStreak = streak
-    result.repeated = trigger === 'schedule' && task.lastRefusalReason === outcome.reason
-    const pause =
-      stops ?? (counted && streak >= scheduleLimits.refusalsToPause ? 'refused' : undefined)
-    const stopping = pause !== undefined && (task.enabled || task.pausedReason === null)
-    await tx.scheduledTask.update({
-      where: { id: task.id },
-      data: {
-        ...(trigger === 'schedule'
-          ? { refusalStreak: streak, lastRefusalReason: outcome.reason }
-          : {}),
-        ...(stopping ? { enabled: false, nextRunAt: null, pausedReason: pause } : {}),
-      },
-    })
-    if (stopping) result.paused = pause
-    return result
-  })
+  return db.$transaction((tx) => recordRunOutcomeInTx(tx, runId, outcome, now))
 }
 
 /**
+ * `recordRunOutcome` in the caller's transaction: the chat of a run is bound to it by the very
+ * transaction that makes the chat (`createDialog` of @repo/trpc, after `lockWaitingRun`), so no
+ * chat of a run is ever seen without its run, nor a run closed while its chat is being made.
+ */
+export async function recordRunOutcomeInTx(
+  tx: Tx,
+  runId: string,
+  outcome: ScheduledRunOutcome,
+  now: Date,
+): Promise<RecordedRunOutcome> {
+  const run = await tx.scheduledRun.findUnique({
+    where: { id: runId },
+    select: { scheduledTaskId: true, trigger: true },
+  })
+  if (!run) throw scheduleNotFound()
+  const trigger = run.trigger as ScheduledRunTrigger
+  // The task first, then the run: the order every writer of runs takes.
+  const task = await lockSchedule(tx, run.scheduledTaskId)
+  const result: RecordedRunOutcome = {
+    recorded: false,
+    scheduledTaskId: run.scheduledTaskId,
+    trigger,
+    paused: null,
+    repeated: false,
+    refusalStreak: task?.refusalStreak ?? 0,
+  }
+  const { count } = await tx.scheduledRun.updateMany({
+    where: { id: runId, status: 'pending' },
+    data:
+      outcome.status === 'started'
+        ? { status: 'started', taskId: outcome.taskId, startedAt: now }
+        : {
+            status: outcome.status,
+            reason: outcome.reason,
+            ...(outcome.reason === 'missed' ? { missedCount: 1 } : {}),
+          },
+  })
+  if (count === 0 || !task) return result
+  result.recorded = true
+  if (task.deletedAt !== null) return result
+  if (outcome.status === 'started') {
+    await tx.scheduledTask.update({
+      where: { id: task.id },
+      data: { refusalStreak: 0, lastRefusalReason: null },
+    })
+    result.refusalStreak = 0
+    return result
+  }
+  if (outcome.status !== 'refused') return result
+  const stops = (pausingReasons as Partial<Record<string, SchedulePausedReason>>)[outcome.reason]
+  const counted = trigger === 'schedule' && isClientRefusalReason(outcome.reason)
+  const streak = counted ? task.refusalStreak + 1 : task.refusalStreak
+  result.refusalStreak = streak
+  result.repeated = trigger === 'schedule' && task.lastRefusalReason === outcome.reason
+  const pause =
+    stops ?? (counted && streak >= scheduleLimits.refusalsToPause ? 'refused' : undefined)
+  const stopping = pause !== undefined && (task.enabled || task.pausedReason === null)
+  await tx.scheduledTask.update({
+    where: { id: task.id },
+    data: {
+      ...(trigger === 'schedule'
+        ? { refusalStreak: streak, lastRefusalReason: outcome.reason }
+        : {}),
+      ...(stopping ? { enabled: false, nextRunAt: null, pausedReason: pause } : {}),
+    },
+  })
+  if (stopping) result.paused = pause
+  return result
+}
+
+/**
+ * The run whose chat `createDialog` was making was closed before it — by the sweep, by core giving
+ * its last delivery up, by «Запустить сейчас» dropping it — or is gone: the chat is not made, and
+ * the start answers what the run holds.
+ */
+export const scheduledRunClosed = (): DomainError =>
+  new DomainError('SCHEDULE_RUN_CLOSED', 'The run no longer waits for its chat', 409)
+
+/**
+ * The start of a run takes its task's row first (Зп20): every writer of the outcome of a run —
+ * the sweep, the last delivery of core giving up, «Запустить сейчас» dropping its run — takes it
+ * too, so none closes the run while its chat is being made. Taken before anything else of the
+ * transaction that makes the chat, in the order of the tick: the task, then its project. Whether
+ * the run still waits; false — its outcome is recorded, or it is gone.
+ */
+export async function lockWaitingRun(tx: Tx, runId: string): Promise<boolean> {
+  const run = await tx.scheduledRun.findUnique({
+    where: { id: runId },
+    select: { scheduledTaskId: true },
+  })
+  if (!run) return false
+  await lockSchedule(tx, run.scheduledTaskId)
+  const now = await tx.scheduledRun.findUnique({ where: { id: runId }, select: { status: true } })
+  return now?.status === 'pending'
+}
+
+/**
+ * The request a pass answers, the bound of `passUnattended`: its `feed.request` by id — what
+ * core's job of the pass names —, or the instant it was written — what the plan of its turn keeps
+ * (`committedAt`, to the millisecond; the feed keeps microseconds, so the bound is the end of that
+ * millisecond).
+ */
+export type PassRequest = { requestEventId: string | bigint } | { answeredAt: Date }
+
+/**
  * Whether a pass of a chat goes without its client (Зп27): the chat is a run's, and its feed holds
- * no request but its first — the instructions. From the first words of the client on, it is an
- * ordinary chat.
+ * no request but its first — the instructions — up to the request the pass answers. Decided for
+ * the pass: what the client writes while it runs — «Остановить», «Отправить сейчас» — is for the
+ * passes after it, and lifts nothing of this one, whose agent never saw a word of the client. From
+ * the first words of the client on, the chat is an ordinary one. Without `answers` — the whole
+ * feed: a reader that does not know the pass.
  */
 export async function passUnattended(
   db: Pick<PrismaClient, 'scheduledRun' | 'taskEvent'>,
   taskId: string,
+  answers?: PassRequest,
 ): Promise<boolean> {
   const run = await db.scheduledRun.findUnique({ where: { taskId }, select: { id: true } })
   if (!run) return false
+  return onlyFirstRequest(db, taskId, answers)
+}
+
+/** The feed of a chat holds no request but its first: its client has not spoken in it (Зп27). */
+async function onlyFirstRequest(
+  db: Pick<PrismaClient, 'taskEvent'>,
+  taskId: string,
+  answers: PassRequest | undefined,
+): Promise<boolean> {
+  const bound: Prisma.TaskEventWhereInput =
+    answers === undefined
+      ? {}
+      : 'requestEventId' in answers
+        ? { id: { lte: BigInt(answers.requestEventId) } }
+        : { createdAt: { lt: new Date(answers.answeredAt.getTime() + 1) } }
   const requests = await db.taskEvent.findMany({
-    where: { taskId, type: 'feed.request' },
+    where: { taskId, type: 'feed.request', ...bound },
     select: { id: true },
     orderBy: { id: 'asc' },
     take: 2,
@@ -1186,7 +1360,7 @@ export async function reserveScheduleChange(
       if ((change.project === 'this_chat') !== (chat.siteId !== null))
         throw badRequest(
           chat.siteId === null
-            ? 'A chat without a project sets up tasks without a project: project "none". A task about a site is set up in a chat of its project or by hand in «Расписание»'
+            ? 'A chat without a project sets up tasks without a project: project "none". A task about a site is set up in a chat of its project or by hand in «Запланированные задачи»'
             : 'A chat of a project sets up tasks of this project: project "this_chat"',
         )
       const author = await tx.user.findUnique({

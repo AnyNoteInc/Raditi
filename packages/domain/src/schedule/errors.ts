@@ -55,6 +55,17 @@ export const scheduleInPast = (): DomainError =>
 export const scheduleTemplatePlaceholder = (): DomainError =>
   new DomainError('SCHEDULE_TEMPLATE_PLACEHOLDER', 'Впишите адреса сайтов конкурентов', 400)
 
+/**
+ * The project of a task was deleted (Зп22): the task stays bound to it until the client moves it
+ * to another project or to none, and it is not turned on there.
+ */
+export const scheduleProjectGone = (): DomainError =>
+  new DomainError(
+    'SCHEDULE_PROJECT_GONE',
+    'Проект этой задачи удалён — выберите другой проект или «Без проекта»',
+    409,
+  )
+
 /** «Запустить сейчас» while a run of the task goes on (Зп24). */
 export const scheduleRunBusy = (): DomainError =>
   new DomainError('SCHEDULE_RUN_BUSY', 'Задача уже выполняется', 409)

@@ -64,7 +64,8 @@ const scheduleOutput = z.strictObject({
   lastRunAt: z.date().nullable(),
   createdVia: z.enum(['manual', 'template', 'chat']),
   templateSlug: z.string().nullable(),
-  project: z.strictObject({ id: z.uuid(), name: z.string() }).nullable(),
+  /** null — without a project; `deleted` — its project was deleted (Зп22): «Проект удалён». */
+  project: z.strictObject({ id: z.uuid(), name: z.string(), deleted: z.boolean() }).nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
   lastRun: runOutput.nullable(),

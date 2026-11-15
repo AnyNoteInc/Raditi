@@ -1347,6 +1347,79 @@ describe('the agent’s actions', () => {
     })
   })
 
+  it('stops at its request whatever else a read-only pass would send the site (Зп28)', async () => {
+    const { ensured, act } = setup()
+    const { row, browser } = await ensured()
+    const policy = browser.connection.policy
+    const readOnly = { readOnly: true }
+    const options = `${SITE}/wp-admin/options-general.php`
+    const deactivate = `/wp-admin/plugins.php?action=deactivate&plugin=hello.php&_wpnonce=abc`
+    const save = { path: '/wp-admin/options.php', method: 'POST', postData: 'blogname=Акции' }
+    const quickEdit = {
+      path: '/wp-admin/admin-ajax.php',
+      method: 'POST',
+      postData: 'action=inline-save',
+    }
+    // Before any action of a pass without the client, and in an ordinary one, the site gets it.
+    expect(policy.requestDenied(save)).toBe(false)
+    // «Сохранить изменения» of options-general.php is no editor's save: it is clicked, the form it
+    // sends never leaves the browser, and the page that went nowhere is told as a read-only pass.
+    browser.go(options)
+    browser.tree = '- button "Сохранить изменения" [ref=e5]\n- textbox "Название сайта" [ref=e6]'
+    await act(row, { tool: 'web_observe' }, readOnly)
+    browser.onAct = async (action) => {
+      if (action.tool !== 'web_click') return
+      // The route of the page asks the policy of the form it posts; the navigation is refused.
+      expect(policy.requestDenied(save)).toBe(true)
+      throw new PageBrowserError('denied')
+    }
+    expect(
+      await codeOf(act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' }, readOnly)),
+    ).toBe('BROWSER_READ_ONLY')
+    expect(browser.acted).toEqual([{ tool: 'web_click', ref: 'e5' }])
+    // A page the stack itself closes is the stack's refusal, as ever.
+    browser.onAct = async (action) => {
+      if (action.tool === 'web_click') throw new PageBrowserError('denied')
+    }
+    expect(
+      await codeOf(act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' }, readOnly)),
+    ).toBe('BROWSER_ACTION_DENIED')
+    browser.onAct = async () => undefined
+    browser.acted.length = 0
+    // Enter in a field of Quick Edit sends its XHR; a link of «Деактивировать» carries its nonce.
+    await act(row, { tool: 'web_press', observation: 'o1', ref: 'e6', key: 'Enter' }, readOnly)
+    expect(browser.acted).toEqual([{ tool: 'web_press', ref: 'e6', key: 'Enter' }])
+    expect(policy.requestDenied(quickEdit)).toBe(true)
+    expect(policy.requestDenied({ path: deactivate, method: 'GET', postData: null })).toBe(true)
+    // Each is judged when its request leaves — after its action too, as an autosave comes. Reading
+    // goes on.
+    expect(
+      policy.requestDenied({ path: '/wp-admin/plugins.php', method: 'GET', postData: null }),
+    ).toBe(false)
+    // «Удалить навсегда?»: the page's question is not confirmed, only dismissed.
+    browser.emit({
+      kind: 'dialog',
+      dialog: { id: 'd1', kind: 'confirm', message: 'Удалить навсегда?' },
+    })
+    expect(await codeOf(act(row, { tool: 'web_dialog', accept: true }, readOnly))).toBe(
+      'BROWSER_READ_ONLY',
+    )
+    await act(row, { tool: 'web_dialog', accept: false }, readOnly)
+    // An alert's «OK» only closes it.
+    browser.emit({ kind: 'dialog', dialog: { id: 'd2', kind: 'alert', message: 'Готово' } })
+    await act(row, { tool: 'web_dialog', accept: true }, readOnly)
+    expect(browser.acted.filter((action) => action.tool === 'web_dialog')).toEqual([
+      { tool: 'web_dialog', accept: false },
+      { tool: 'web_dialog', accept: true },
+    ])
+    // The client took the browser: what they press goes to the site.
+    expect(policy.requestDenied(save, 'user')).toBe(false)
+    // Once the client answered, the next pass's actions send the site what they send.
+    await act(row, { tool: 'web_observe' })
+    expect(policy.requestDenied(save)).toBe(false)
+    expect(policy.requestDenied(quickEdit)).toBe(false)
+  })
+
   it('takes a press on another site of a read-only pass for a press: nothing of the site (Ч6)', async () => {
     const { ensured, act } = setup()
     const { row, browser } = await ensured()

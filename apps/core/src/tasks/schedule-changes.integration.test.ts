@@ -21,6 +21,7 @@ describe('scheduleLeftReasonOf', () => {
     expect(scheduleLeftReasonOf('SCHEDULE_LIMIT')).toBe('limit')
     expect(scheduleLeftReasonOf('SCHEDULE_NOT_FOUND')).toBe('not_found')
     expect(scheduleLeftReasonOf('NOT_FOUND')).toBe('not_found')
+    expect(scheduleLeftReasonOf('SCHEDULE_PROJECT_GONE')).toBe('not_found')
     expect(scheduleLeftReasonOf('TASK_TEXT_HAS_SECRET')).toBe('text_refused')
     expect(scheduleLeftReasonOf('SCHEDULE_TOO_OFTEN')).toBe('invalid')
     expect(scheduleLeftReasonOf('SCHEDULE_IN_PAST')).toBe('invalid')
@@ -52,9 +53,16 @@ describe.skipIf(!enabled)('the scheduled tasks a turn changed, with PostgreSQL',
   })
   afterAll(async () => {
     if (!db) return
+    const chats = await db.task.findMany({ where: { workspaceId }, select: { id: true } })
+    await db.outboxEvent.deleteMany({
+      where: {
+        OR: chats.map((chat) => ({ dedupeKey: { startsWith: `telegram.deliver:${chat.id}:` } })),
+      },
+    })
     await db.scheduledTask.deleteMany({ where: { workspaceId } })
     await db.taskEvent.deleteMany({ where: { task: { workspaceId } } })
     await db.task.deleteMany({ where: { workspaceId } })
+    await db.chatSession.deleteMany({ where: { workspaceId } })
     await db.member.deleteMany({ where: { workspaceId } })
     await db.workspace.delete({ where: { id: workspaceId } })
     await db.user.delete({ where: { id: userId } })
@@ -155,12 +163,60 @@ describe.skipIf(!enabled)('the scheduled tasks a turn changed, with PostgreSQL',
         'feed.schedule_left',
         { v: 1, action: 'create', name: 'Проверка сайта', reason: 'text_refused' },
       ],
-      ['feed.schedule_left', { v: 1, action: 'create', name: null, reason: 'text_refused' }],
+      // The card says which of the words holds it: the name it cannot show (Зп35).
+      ['feed.schedule_left', { v: 1, action: 'create', name: null, reason: 'name_refused' }],
     ])
     expect(await db.scheduledTask.count({ where: { sourceTaskId: task.id } })).toBe(0)
     expect(
       await db.scheduleReservation.count({ where: { taskId: task.id, outcome: 'refused' } }),
     ).toBe(2)
+  })
+
+  it('tells each card on its own to a chat bound to Telegram, once (docs/plan/80, Зп35)', async () => {
+    const session = await db.chatSession.create({
+      data: { workspaceId, channel: 'telegram', externalChatId: '4242' },
+    })
+    const bound = await db.task.update({
+      where: { id: (await chat()).id },
+      data: { chatSessionId: session.id },
+    })
+    await create(bound.id, 1)
+    await create(bound.id, 1, { instructions: `Пароль ${SECRET}, проверьте вход` })
+    await changes().apply(bound.id, 1, refuses)
+    const cards = await db.taskEvent.findMany({
+      where: { taskId: bound.id, type: { in: ['feed.schedule_change', 'feed.schedule_left'] } },
+      orderBy: { id: 'asc' },
+      select: { id: true, type: true },
+    })
+    expect(cards.map((card) => card.type)).toEqual(['feed.schedule_change', 'feed.schedule_left'])
+    const told = await db.outboxEvent.findMany({
+      where: { dedupeKey: { startsWith: `telegram.deliver:${bound.id}:` } },
+      orderBy: { id: 'asc' },
+      select: { topic: true, type: true, payload: true },
+    })
+    expect(told).toEqual(
+      cards.map((card) => ({
+        topic: 'telegram',
+        type: 'telegram.deliver',
+        payload: {
+          taskId: bound.id,
+          kind: 'answered',
+          attempt: 1,
+          turnNo: 1,
+          eventId: String(card.id),
+        },
+      })),
+    )
+
+    // A chat of the cabinet is told nothing there.
+    const cabinet = await chat()
+    await create(cabinet.id, 1)
+    await changes().apply(cabinet.id, 1, refuses)
+    expect(
+      await db.outboxEvent.count({
+        where: { dedupeKey: { startsWith: `telegram.deliver:${cabinet.id}:` } },
+      }),
+    ).toBe(0)
   })
 
   it('pauses and deletes as asked, and refuses what the author may no longer do', async () => {

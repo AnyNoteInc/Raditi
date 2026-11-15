@@ -7,8 +7,10 @@ import {
   dropAbandonedPages,
   insertFeedEvent,
   purgeExpiredPages,
+  recordRunOutcome,
   requestPreviewSync,
   stalePageReservations,
+  stalePendingRuns,
   taskHasProductionWrites,
   type PrismaClient,
   type waitingTaskStatuses,
@@ -23,6 +25,7 @@ import {
   feedEndedSiteOf,
   isDomainError,
   requirementsOf,
+  scheduleLimits,
   type FeedCreditsState,
   type JobQueue,
   type ObjectStorage,
@@ -144,6 +147,7 @@ export class TaskSweep {
       ['attachments', () => this.collectAttachments()],
       ['pages', () => this.sweepPages()],
       ['schedules', () => this.sweepSchedules()],
+      ['manual runs', () => this.closeStaleManualRuns()],
     ] as const) {
       try {
         await pass()
@@ -538,6 +542,35 @@ export class TaskSweep {
     const { schedules, live } = this.deps
     if (!schedules) return 0
     return schedules.sweep((taskId) => live.has(taskId))
+  }
+
+  /**
+   * Runs of «Запустить сейчас» a web left waiting — it stopped between writing the run and its
+   * answer — close here, «Не запустилась: сбой платформы», without a notice (Зп24): a run that
+   * waits holds its task up as «Выполняется», and every scheduled moment would be skipped beside
+   * it. Here, not in the tick of the schedules: the button works through web alone, whether this
+   * core runs the schedules or not. Returns how many.
+   */
+  async closeStaleManualRuns(): Promise<number> {
+    const { db } = this.deps
+    const now = this.#now()
+    const olderThan = new Date(now.getTime() - scheduleLimits.manualPendingSweepMinutes * 60_000)
+    let closed = 0
+    for (const run of await stalePendingRuns(db, olderThan, BATCH, 'manual')) {
+      try {
+        const recorded = await recordRunOutcome(
+          db,
+          run.id,
+          { status: 'refused', reason: 'platform' },
+          now,
+        )
+        if (recorded.recorded) closed++
+      } catch (error) {
+        this.#warn(`task sweep manual run=${run.id}`, logged(error))
+      }
+    }
+    if (closed > 0) this.#logger.log(`task_sweep_manual_runs count=${closed}`)
+    return closed
   }
 
   /**

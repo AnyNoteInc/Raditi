@@ -30,6 +30,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { ConfirmDialog } from '@/components/billing/confirm-dialog'
 import { callErrorCode, callErrorText } from '@/components/chat/call-error'
 import { keepChatDraft } from '@/components/chat/chat-draft'
 import { useRememberedEffort } from '@/components/chat/chat-effort'
@@ -42,16 +43,18 @@ import { useTRPC } from '@/trpc/client'
 
 import { ScheduleCostLine } from './schedule-cost'
 import {
+  addedTriggerDraft,
   canAddTrigger,
   chatDraftOf,
+  formEdited,
   formNextRun,
   formOfSchedule,
   formOfTemplate,
   formProblems,
   frequenciesOf,
   hasProblems,
+  nameLooksLikeSecret,
   newScheduleForm,
-  newTriggerDraft,
   nextRunText,
   triggersOfForm,
   type FormProblems,
@@ -59,7 +62,7 @@ import {
   type ScheduleForm,
   type ScheduleItem,
 } from './schedule-model'
-import { scheduleDialogTexts } from './schedule-texts'
+import { scheduleDialogTexts, scheduledTexts } from './schedule-texts'
 import { TriggerFields } from './trigger-fields'
 import { useNow } from './use-now'
 
@@ -68,12 +71,17 @@ export type ScheduleDialogOpening =
   | { kind: 'new'; template?: ScheduleTemplate }
   | { kind: 'edit'; schedule: ScheduleDetail | ScheduleItem }
 
+/** The wizard of a new project, for a template about a site with no project to choose (Зп9). */
+const ADD_PROJECT_HREF = '/projects/new'
+
 /** The address of a new chat, on the project of the window when it has one (Зп10). */
 export const newChatHref = (siteId: string | null): string =>
   siteId === null ? '/chats/new' : `/chats/new?project=${siteId}`
 
+type RefusedField = 'name' | 'instructions' | 'schedule' | 'project'
+
 /** The refusals of the server a field of the window answers for; the others go on top. */
-const fieldOfCode: Readonly<Record<string, 'instructions' | 'schedule' | 'project'>> = {
+const fieldOfCode: Readonly<Record<string, RefusedField>> = {
   TASK_TEXT_EMPTY: 'instructions',
   TASK_TEXT_TOO_LONG: 'instructions',
   TASK_TEXT_HAS_SECRET: 'instructions',
@@ -82,18 +90,26 @@ const fieldOfCode: Readonly<Record<string, 'instructions' | 'schedule' | 'projec
   SCHEDULE_TOO_OFTEN: 'schedule',
   SCHEDULE_IN_PAST: 'schedule',
   SCHEDULE_TEMPLATE_NEEDS_PROJECT: 'project',
+  // Turned on, or created, on a project that was deleted (Зп22): another one, or none.
+  SCHEDULE_PROJECT_GONE: 'project',
 }
 
 interface ServerRefusal {
-  field: 'instructions' | 'schedule' | 'project' | null
+  field: RefusedField | null
   text: string
 }
 
-function refusalOf(error: unknown): ServerRefusal {
+function refusalOf(error: unknown, form: ScheduleForm): ServerRefusal {
   const code = callErrorCode(error)
+  if (code === 'TASK_TEXT_HAS_SECRET') {
+    // One refusal for the name and the words, the name checked first: the one that reads as a
+    // key is told by its field, in the window's words — the server's name the chat (Зп26).
+    return nameLooksLikeSecret(form)
+      ? { field: 'name', text: scheduleDialogTexts.nameSecret }
+      : { field: 'instructions', text: scheduleDialogTexts.secret }
+  }
   const field = code === null ? null : (fieldOfCode[code] ?? null)
-  // The server's words of a secret name the chat; here it is the instructions (Зп26).
-  const text = code === 'TASK_TEXT_HAS_SECRET' ? scheduleDialogTexts.secret : callErrorText(error)
+  const text = callErrorText(error)
   return { field, text: field === null ? text : text.replace(/\.$/, '') }
 }
 
@@ -181,6 +197,8 @@ function ScheduleFormBody({
   const [submitted, setSubmitted] = useState(false)
   const [refusal, setRefusal] = useState<ServerRefusal | null>(null)
   const [more, setMore] = useState(false)
+  // «Добавьте проект» asked first whether to leave what the client changed (Зп9).
+  const [leaving, setLeaving] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
   const instructionsRef = useRef<HTMLTextAreaElement>(null)
   const instructionsId = useId()
@@ -190,13 +208,12 @@ function ScheduleFormBody({
   const scheduleErrorId = useId()
   const moreId = useId()
 
-  // The zone of the browser came after the window opened: a new task takes it, until changed.
+  // The zone of the browser came after the window opened: a new task takes it — and the next one
+  // the list answers, once the cabinet remembered the browser's — until the client picks a zone.
   const listZone = list.data?.timezone
   const [zoneTouched, setZoneTouched] = useState(opening.kind === 'edit')
-  if (!zoneTouched && listZone !== undefined && listZone !== form.timezone) {
-    setZoneTouched(true)
+  if (!zoneTouched && listZone !== undefined && listZone !== form.timezone)
     setForm({ ...form, timezone: listZone })
-  }
   // A template about a site with exactly one project: it is chosen as the list arrives.
   const [projectTouched, setProjectTouched] = useState(form.siteId !== null)
   const only = choosable.length === 1 ? choosable[0] : undefined
@@ -212,9 +229,12 @@ function ScheduleFormBody({
   }
 
   const needsProject = template?.project === 'required'
+  // A task being changed: its single runs in the past are told once its schedules change.
+  const changing = opening.kind === 'edit' ? { saved: initial } : {}
   const problems: FormProblems = formProblems(form, now, {
     submitted,
     templateNeedsProject: needsProject,
+    ...changing,
   })
   const nextRun = formNextRun(form, now)
   const triggers = triggersOfForm(form)
@@ -222,6 +242,13 @@ function ScheduleFormBody({
   const update = useMutation(trpc.schedule.update.mutationOptions())
   const pending = create.isPending || update.isPending
   const project = projects.find((each) => each.id === form.siteId) ?? null
+  // A task of a deleted project keeps it until the client picks another one or none (Зп22): the
+  // pill says «Проект удалён» with nothing chosen, and its cost and a chat go without a project.
+  const projectGone =
+    opening.kind === 'edit' &&
+    opening.schedule.project?.deleted === true &&
+    form.siteId === opening.schedule.project.id
+  const liveSiteId = projectGone ? null : form.siteId
 
   useEffect(() => {
     busyRef.current = pending
@@ -243,14 +270,18 @@ function ScheduleFormBody({
 
   function setInChat() {
     keepChatDraft(userId, chatDraftOf(form))
-    router.push(newChatHref(form.siteId))
+    router.push(newChatHref(liveSiteId))
   }
 
   async function save(event: FormEvent) {
     event.preventDefault()
     if (pending) return
     setSubmitted(true)
-    const shown = formProblems(form, now, { submitted: true, templateNeedsProject: needsProject })
+    const shown = formProblems(form, now, {
+      submitted: true,
+      templateNeedsProject: needsProject,
+      ...changing,
+    })
     if (hasProblems(shown)) {
       if (shown.name) nameRef.current?.focus()
       else if (shown.instructions) instructionsRef.current?.focus()
@@ -279,7 +310,7 @@ function ScheduleFormBody({
       onSaved?.(saved, opening.kind === 'new')
       onClose()
     } catch (error) {
-      setRefusal(refusalOf(error))
+      setRefusal(refusalOf(error, form))
     }
   }
 
@@ -291,6 +322,7 @@ function ScheduleFormBody({
       : form.triggers.every((each) => each.frequency === 'manual')
         ? scheduleDialogTexts.manualOnly
         : null
+  const nameError = problems.name ?? (refusal?.field === 'name' ? refusal.text : undefined)
   const instructionsError =
     problems.instructions ?? (refusal?.field === 'instructions' ? refusal.text : undefined)
   const projectError = problems.project ?? (refusal?.field === 'project' ? refusal.text : undefined)
@@ -299,7 +331,10 @@ function ScheduleFormBody({
   const topError = refusal?.field === null ? refusal.text : null
   const frequencies = frequenciesOf(form.triggers.length)
   const zones = zoneOptions(form.timezone)
-  const noProjects = needsProject && projectList.isSuccess && choosable.length === 0
+  // A template about a site with no project to choose — while none is chosen: a task being
+  // changed keeps its project even while that project takes no chat (Зп22).
+  const noProjects =
+    needsProject && form.siteId === null && projectList.isSuccess && choosable.length === 0
 
   return (
     <Box
@@ -364,8 +399,8 @@ function ScheduleFormBody({
           placeholder={scheduleDialogTexts.namePlaceholder}
           value={form.name}
           onChange={(event) => change({ name: event.target.value.replace(/[\r\n]/g, ' ') })}
-          error={problems.name !== undefined}
-          helperText={problems.name}
+          error={nameError !== undefined}
+          helperText={nameError}
           slotProps={{ htmlInput: { maxLength: 80, autoComplete: 'off' } }}
           sx={{ mt: 0.75 }}
           fullWidth
@@ -441,14 +476,19 @@ function ScheduleFormBody({
               <ProjectPicker
                 projects={projects}
                 value={project}
+                {...(projectGone ? { gone: scheduledTexts.projectGone } : {})}
                 locked={false}
                 onChange={(next) => {
                   setProjectTouched(true)
                   change({ siteId: next?.id ?? null })
                 }}
-                onAddProject={() => undefined}
+                // No «Добавить проект» here: the wizard would take the client out of the window.
               />
-              <EffortMenu value={form.effort} onChange={(effort) => change({ effort })} />
+              <EffortMenu
+                value={form.effort}
+                onChange={(effort) => change({ effort })}
+                placement="down"
+              />
             </Box>
           </Box>
           {instructionsError ? (
@@ -459,7 +499,15 @@ function ScheduleFormBody({
           {noProjects ? (
             <FormHelperText error id={projectErrorId} sx={{ mx: 1.5 }}>
               {scheduleDialogTexts.addProjectLead}{' '}
-              <Link component={NextLink} href="/projects/new">
+              <Link
+                component={NextLink}
+                href={ADD_PROJECT_HREF}
+                onClick={(event) => {
+                  if (!formEdited(form, initial)) return
+                  event.preventDefault()
+                  setLeaving(true)
+                }}
+              >
                 {scheduleDialogTexts.addProject}
               </Link>
             </FormHelperText>
@@ -519,9 +567,7 @@ function ScheduleFormBody({
           </Box>
           {canAddTrigger(form) ? (
             <Button
-              onClick={() =>
-                change({ triggers: [...form.triggers, newTriggerDraft(form.timezone, now)] })
-              }
+              onClick={() => change({ triggers: [...form.triggers, addedTriggerDraft(form, now)] })}
               startIcon={<AppIcon name="plus" size={16} />}
               sx={{ mt: 1.25, ml: -1, minHeight: 40, px: 1.25 }}
             >
@@ -549,7 +595,7 @@ function ScheduleFormBody({
           </Box>
         </Box>
 
-        <ScheduleCostLine siteId={form.siteId} triggers={triggers} timezone={form.timezone} />
+        <ScheduleCostLine siteId={liveSiteId} triggers={triggers} timezone={form.timezone} />
 
         <Box>
           <FormControlLabel
@@ -654,6 +700,18 @@ function ScheduleFormBody({
           {opening.kind === 'edit' ? scheduleDialogTexts.save : scheduleDialogTexts.create}
         </Button>
       </Box>
+      <ConfirmDialog
+        open={leaving}
+        onClose={() => setLeaving(false)}
+        title={scheduleDialogTexts.leaveTitle}
+        busy={false}
+        error={null}
+        keepLabel={scheduleDialogTexts.leaveKeep}
+        confirmLabel={scheduleDialogTexts.leaveGo}
+        onConfirm={() => router.push(ADD_PROJECT_HREF)}
+      >
+        <Typography sx={{ mt: 1.5 }}>{nbsp(scheduleDialogTexts.leaveText)}</Typography>
+      </ConfirmDialog>
     </Box>
   )
 }

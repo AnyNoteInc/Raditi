@@ -176,6 +176,9 @@ export class NotificationDelivery {
         scheduled: notice.schedule !== null,
         // A newer run of the task replaces the notice of the one before it (Зп40).
         tag: notice.schedule ? `schedule:${notice.schedule.id}` : `chat:${notice.chat?.taskId}`,
+        // When the row was written: the worker never lets a push that arrives late replace a newer
+        // notice under the tag. Within a tick a missed run is told before the start's refusal.
+        at: now.getTime(),
       }),
     )
     const options: PushOptions = {

@@ -46,11 +46,16 @@ export const scheduledRunStateSchema = z.discriminatedUnion('kind', [
   /** The chat of the run was deleted: nothing more is told of it. */
   z.strictObject({ kind: z.literal('chat_deleted') }),
   z.strictObject({ kind: z.literal('refused'), reason }),
-  /** «Пропущено»; `missedCount` — how many moments one row of «missed» stands for. */
+  /**
+   * «Пропущено»; `missedCount` — how many moments one row of «missed» stands for, `missedUntil` —
+   * the latest of them, as the tick wrote it («Пропущены запуски с … по …»); null — a row of
+   * another reason, or one written without it.
+   */
   z.strictObject({
     kind: z.literal('skipped'),
     reason,
     missedCount: z.number().int().min(0),
+    missedUntil: z.date().nullable(),
   }),
 ])
 export type ScheduledRunState = z.infer<typeof scheduledRunStateSchema>

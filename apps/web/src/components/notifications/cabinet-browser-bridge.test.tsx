@@ -4,7 +4,7 @@ import { render, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { CabinetBrowserBridge } from './cabinet-browser-bridge'
-import { ZONE_MARK_KEY } from './cabinet-messages'
+import { NAVIGATE_ANSWER, ZONE_MARK_KEY } from './cabinet-messages'
 
 const calls = vi.hoisted(() => ({
   push: vi.fn(),
@@ -12,10 +12,15 @@ const calls = vi.hoisted(() => ({
 }))
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: calls.push }) }))
+const LIST_KEY = [['schedule', 'list'], { type: 'query' }]
+
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
     schedule: {
-      rememberTimezone: { mutationOptions: () => ({ mutationFn: calls.remember }) },
+      rememberTimezone: {
+        mutationOptions: (options?: object) => ({ ...options, mutationFn: calls.remember }),
+      },
+      list: { queryKey: () => LIST_KEY },
     },
   }),
 }))
@@ -28,9 +33,9 @@ function fakeContainer() {
   return container
 }
 
-function show(userId = 'u1') {
+function show(userId = 'u1', client = new QueryClient()) {
   return render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={client}>
       <CabinetBrowserBridge userId={userId} />
     </QueryClientProvider>,
   )
@@ -59,6 +64,28 @@ describe('the bridge of the cabinet (docs/plan/82, Зп12, Зп41)', () => {
     expect(calls.push).toHaveBeenCalledTimes(1)
   })
 
+  it('answers the worker on the port of its message, so the worker does not move the window', async () => {
+    const container = fakeContainer()
+    show()
+    await waitFor(() => expect(container.startMessages).toHaveBeenCalled())
+    const say = (data: unknown) => {
+      const port = { postMessage: vi.fn() }
+      container.dispatchEvent(Object.assign(new Event('message'), { data, ports: [port] }))
+      return port
+    }
+    const taken = say({
+      type: 'raditi:navigate',
+      path: '/chats/0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b',
+    })
+    expect(taken.postMessage).toHaveBeenCalledWith(NAVIGATE_ANSWER)
+    expect(calls.push).toHaveBeenCalledWith('/chats/0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b')
+    // A path it does not go to is not answered: the worker opens it the way it can.
+    expect(
+      say({ type: 'raditi:navigate', path: '//evil.example' }).postMessage,
+    ).not.toHaveBeenCalled()
+    expect(say({ type: 'something else' }).postMessage).not.toHaveBeenCalled()
+  })
+
   it('tells the zone of the browser once a session', async () => {
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
     show().unmount()
@@ -68,6 +95,14 @@ describe('the bridge of the cabinet (docs/plan/82, Зп12, Зп41)', () => {
     show()
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(calls.remember).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads the list of the tasks again once the zone is remembered: it names the zone of a new task', async () => {
+    const client = new QueryClient()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    show('u1', client)
+    await waitFor(() => expect(calls.remember).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: LIST_KEY }))
   })
 
   it('works in a browser without service workers', async () => {

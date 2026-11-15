@@ -33,7 +33,7 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
-import { lockLiveSite } from '../site-delete.ts'
+import { lockLiveSite } from '../site-basics.ts'
 import { accessibleTask, isManagerRole, memberRole, taskNotFound } from './access.ts'
 import { dbFieldText, dbObjectText } from './candidates.ts'
 import { assertCommandAvailable, commandRefusal, dialogFacts } from './dialog-facts.ts'

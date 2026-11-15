@@ -17,12 +17,14 @@ import {
   dueScheduleIds,
   insertManualRun,
   listScheduledTasks,
+  lockWaitingRun,
   passUnattended,
   pauseSchedule,
   pauseSiteSchedules,
   pendingScheduleChanges,
   readScheduledTask,
   recordRunOutcome,
+  recordRunOutcomeInTx,
   refuseScheduleChanges,
   rememberUserTimezone,
   reserveScheduleChange,
@@ -147,7 +149,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       expect(await codeOf(createScheduledTask(db, input(member)))).toBe('SCHEDULE_FORBIDDEN')
       const who = await owner()
       await db.site.update({ where: { id: who.siteId }, data: { deletedAt: monday } })
-      expect(await codeOf(createScheduledTask(db, input(who)))).toBe('NOT_FOUND')
+      expect(await codeOf(createScheduledTask(db, input(who)))).toBe('SCHEDULE_PROJECT_GONE')
+      // A project of another workspace is not told apart from none.
+      const elsewhere = await owner()
+      expect(await codeOf(createScheduledTask(db, input(who, { siteId: elsewhere.siteId })))).toBe(
+        'NOT_FOUND',
+      )
       const other = await owner()
       const once = (date: string): ScheduleTrigger[] => [{ kind: 'once', date, time: '07:00' }]
       expect(
@@ -255,6 +262,141 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       ])
     })
 
+    it('turns a task with a single run that ran beside a schedule on again (Зп15)', async () => {
+      const who = await owner()
+      const both: ScheduleTrigger[] = [
+        { kind: 'once', date: '2026-11-17', time: '15:00' },
+        ...daily9,
+      ]
+      const task = await createScheduledTask(db, input(who, { triggers: both }))
+      // The single run ran on the 17th; the task runs on daily.
+      const claim = await db.$transaction((tx) =>
+        claimDueSchedule(tx, task.id, at('2026-11-17T12:00:30Z')),
+      )
+      expect(claim).toMatchObject({ completed: false, nextRunAt: at('2026-11-18T06:00:00Z') })
+      const later = at('2026-11-25T08:00:00Z')
+      await setScheduledTaskEnabled(db, {
+        scheduleId: task.id,
+        userId: who.userId,
+        enabled: false,
+        now: later,
+      })
+      const resumed = await setScheduledTaskEnabled(db, {
+        scheduleId: task.id,
+        userId: who.userId,
+        enabled: true,
+        now: at('2026-11-26T08:00:00Z'),
+      })
+      expect([resumed.enabled, resumed.nextRunAt]).toEqual([true, at('2026-11-27T06:00:00Z')])
+      // A change of the other schedule keeps the spent single run…
+      const moved = await updateScheduledTask(db, {
+        scheduleId: task.id,
+        userId: who.userId,
+        patch: { triggers: [both[0]!, { kind: 'daily', time: '10:00' }] },
+        now: at('2026-11-26T08:00:00Z'),
+      })
+      expect(moved.nextRunAt).toEqual(at('2026-11-27T07:00:00Z'))
+      // …and so does another zone; a single run in the past the change adds is refused.
+      const zoned = await updateScheduledTask(db, {
+        scheduleId: task.id,
+        userId: who.userId,
+        patch: { timezone: 'Asia/Novosibirsk' },
+        now: at('2026-11-26T08:00:00Z'),
+      })
+      expect(zoned.nextRunAt).toEqual(at('2026-11-27T03:00:00Z'))
+      expect(
+        await codeOf(
+          updateScheduledTask(db, {
+            scheduleId: task.id,
+            userId: who.userId,
+            patch: {
+              triggers: [
+                both[0]!,
+                { kind: 'once', date: '2026-11-20', time: '15:00' },
+                { kind: 'daily', time: '10:00' },
+              ],
+            },
+            now: at('2026-11-26T08:00:00Z'),
+          }),
+        ),
+      ).toBe('SCHEDULE_IN_PAST')
+      // A task whose single runs are all spent is not turned on: it has nothing to run.
+      const single = await createScheduledTask(
+        db,
+        input(who, { triggers: [{ kind: 'once', date: '2026-11-17', time: '15:00' }] }),
+      )
+      await db.$transaction((tx) => claimDueSchedule(tx, single.id, at('2026-11-17T12:00:30Z')))
+      expect(
+        await codeOf(
+          setScheduledTaskEnabled(db, {
+            scheduleId: single.id,
+            userId: who.userId,
+            enabled: true,
+            now: at('2026-11-26T08:00:00Z'),
+          }),
+        ),
+      ).toBe('SCHEDULE_IN_PAST')
+    })
+
+    it('keeps a task of a deleted project off until it moves, then forgets the project (Зп22)', async () => {
+      const who = await owner()
+      const task = await createScheduledTask(db, input(who))
+      await db.site.update({ where: { id: who.siteId }, data: { deletedAt: monday } })
+      await db.$transaction((tx) => pauseSiteSchedules(tx, who.siteId))
+      expect(
+        await codeOf(
+          setScheduledTaskEnabled(db, {
+            scheduleId: task.id,
+            userId: who.userId,
+            enabled: true,
+            now: monday,
+          }),
+        ),
+      ).toBe('SCHEDULE_PROJECT_GONE')
+      // Moved to no project, it stays off — as a task the client keeps paused, not of a project.
+      const moved = await updateScheduledTask(db, {
+        scheduleId: task.id,
+        userId: who.userId,
+        patch: { project: { siteId: null, workspaceId: who.workspaceId } },
+        now: monday,
+      })
+      expect([moved.siteId, moved.enabled, moved.pausedReason]).toEqual([null, false, null])
+      const on = await setScheduledTaskEnabled(db, {
+        scheduleId: task.id,
+        userId: who.userId,
+        enabled: true,
+        now: monday,
+      })
+      expect([on.enabled, on.nextRunAt]).toEqual([true, at('2026-11-16T06:00:00Z')])
+    })
+
+    it('waits for a deletion of the project in flight and refuses a task on it (Зп22)', async () => {
+      const who = await owner()
+      let release!: () => void
+      const held = new Promise<void>((resolve) => (release = resolve))
+      let locked!: () => void
+      const isLocked = new Promise<void>((resolve) => (locked = resolve))
+      // «Удалить проект» holds the row of the project and marks it.
+      const deletion = db.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM sites WHERE id = ${who.siteId}::uuid FOR UPDATE`
+          await tx.site.update({ where: { id: who.siteId }, data: { deletedAt: monday } })
+          locked()
+          await held
+          return pauseSiteSchedules(tx, who.siteId)
+        },
+        { timeout: 20_000 },
+      )
+      await isLocked
+      const created = codeOf(createScheduledTask(db, input(who)))
+      // The task waits for the deletion instead of slipping past its pause.
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      release()
+      expect(await deletion).toBe(0)
+      expect(await created).toBe('SCHEDULE_PROJECT_GONE')
+      expect(await db.scheduledTask.count({ where: { siteId: who.siteId } })).toBe(0)
+    })
+
     it('deletes a task of its creator only, and remembers a zone', async () => {
       const who = await owner()
       const stranger = await owner()
@@ -333,6 +475,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
         reason: 'missed',
         missedCount: 3,
         dueAt: at('2026-11-16T06:00:00Z'),
+        // «Пропущены запуски с 9:00 по 11:00» by the clock of the task: the moment before the run.
+        missedUntil: at('2026-11-16T08:00:00Z'),
       })
       expect(claim!.startRunId).not.toBeNull()
       expect(claim!.nextRunAt).toEqual(at('2026-11-16T10:00:00Z'))
@@ -351,6 +495,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       expect(runs.map((run) => [run.id, run.status, run.reason, run.dueAt])).toEqual([
         [claim!.missedRunId, 'skipped', 'missed', at('2026-11-16T06:00:00Z')],
       ])
+      // Missed itself, the last moment ends the gap.
+      expect(runs[0]!.missedUntil).toEqual(at('2026-11-16T06:00:00Z'))
       expect(
         await db.outboxEvent.count({
           where: { dedupeKey: scheduleStartDedupeKey({ runId: claim!.missedRunId! }) },
@@ -385,6 +531,84 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
         claimDueSchedule(tx, task.id, at('2026-11-16T09:00:00Z')),
       )
       expect(fourth!.startRunId).not.toBeNull()
+    })
+
+    it('keeps a single run due while another run goes on, then runs it or misses it (Зп14, Зп15)', async () => {
+      const who = await owner()
+      const task = await createScheduledTask(
+        db,
+        input(who, { triggers: [{ kind: 'once', date: '2026-11-20', time: '10:00' }] }),
+      )
+      // «Запустить сейчас» shortly before: its chat still works at the moment of the single run.
+      const manual = await insertManualRun(db, {
+        scheduleId: task.id,
+        userId: who.userId,
+        now: at('2026-11-20T06:50:00Z'),
+      })
+      const chatId = await chat(who, { status: 'running' })
+      await recordRunOutcome(db, manual.runId, { status: 'started', taskId: chatId })
+      const due = at('2026-11-20T07:00:00Z')
+      const kept = await db.$transaction((tx) =>
+        claimDueSchedule(tx, task.id, at('2026-11-20T07:00:30Z')),
+      )
+      expect(kept).toMatchObject({
+        startRunId: null,
+        busyRunId: null,
+        completed: false,
+        nextRunAt: due,
+      })
+      const waiting = await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })
+      expect([waiting.enabled, waiting.pausedReason, waiting.nextRunAt]).toEqual([true, null, due])
+      expect(await dueScheduleIds(db, at('2026-11-20T07:05:00Z'), 1000)).toContain(task.id)
+      // The chat waits for the client now: the single run starts, for its own moment.
+      await db.task.update({ where: { id: chatId }, data: { status: 'awaiting_user' } })
+      const ran = await db.$transaction((tx) =>
+        claimDueSchedule(tx, task.id, at('2026-11-20T07:20:00Z')),
+      )
+      expect(ran).toMatchObject({ dueAt: due, completed: true, missedCount: 0 })
+      expect(ran!.startRunId).not.toBeNull()
+
+      // Busy past the catch-up limit: «Пропущено», and the task is over.
+      const late = await createScheduledTask(
+        db,
+        input(who, { triggers: [{ kind: 'once', date: '2026-11-20', time: '10:00' }] }),
+      )
+      const busy = await insertManualRun(db, {
+        scheduleId: late.id,
+        userId: who.userId,
+        now: at('2026-11-20T06:50:00Z'),
+      })
+      const working = await chat(who, { status: 'running' })
+      await recordRunOutcome(db, busy.runId, { status: 'started', taskId: working })
+      await db.$transaction((tx) => claimDueSchedule(tx, late.id, at('2026-11-20T07:00:30Z')))
+      const missed = await db.$transaction((tx) =>
+        claimDueSchedule(tx, late.id, at('2026-11-20T13:01:00Z')),
+      )
+      expect(missed).toMatchObject({ startRunId: null, completed: true, missedCount: 1 })
+      const row = await db.scheduledRun.findUniqueOrThrow({ where: { id: missed!.missedRunId! } })
+      expect([row.status, row.reason, row.dueAt]).toEqual(['skipped', 'missed', due])
+    })
+
+    it('runs on beside a chat of a run the client has taken over (Зп27)', async () => {
+      const who = await owner()
+      const task = await createScheduledTask(
+        db,
+        input(who, { triggers: [{ kind: 'hourly', minute: 0 }] }),
+      )
+      const first = await db.$transaction((tx) =>
+        claimDueSchedule(tx, task.id, at('2026-11-16T06:00:00Z')),
+      )
+      const chatId = await chat(who, { status: 'running' })
+      await recordRunOutcome(db, first!.startRunId!, { status: 'started', taskId: chatId })
+      for (let n = 0; n < 2; n++)
+        await db.taskEvent.create({
+          data: { taskId: chatId, type: 'feed.request', payload: { v: 1 }, clientVisible: true },
+        })
+      // Its client wrote in it: an ordinary chat of theirs, which holds the schedule up no more.
+      const next = await db.$transaction((tx) =>
+        claimDueSchedule(tx, task.id, at('2026-11-16T07:00:00Z')),
+      )
+      expect([next!.startRunId === null, next!.busyRunId]).toEqual([false, null])
     })
 
     it('completes a single run once claimed', async () => {
@@ -447,15 +671,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
           now: at('2026-11-16T10:00:50Z'),
         }),
       ).toEqual({ runId: first.runId, created: false })
+      // A press of a later minute while it still waits — a web that stopped before it answered —
+      // takes it up again: its chat is derived from it.
       expect(
-        await codeOf(
-          insertManualRun(db, {
-            scheduleId: task.id,
-            userId: who.userId,
-            now: at('2026-11-16T10:01:10Z'),
-          }),
-        ),
-      ).toBe('SCHEDULE_RUN_BUSY')
+        await insertManualRun(db, {
+          scheduleId: task.id,
+          userId: who.userId,
+          now: at('2026-11-16T10:01:10Z'),
+        }),
+      ).toEqual({ runId: first.runId, created: false })
       // web could not start it: gone, as if never pressed.
       expect(await dropPendingRun(db, first.runId)).toBe(true)
       expect(
@@ -467,6 +691,23 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
           })
         ).created,
       ).toBe(true)
+      // A run of the schedule that waits, or a chat of a run that works, is busy.
+      const pending = await db.scheduledRun.findFirstOrThrow({
+        where: { scheduledTaskId: task.id, status: 'pending' },
+      })
+      const chatId = await chat(who, { status: 'running' })
+      await recordRunOutcome(db, pending.id, { status: 'started', taskId: chatId })
+      // A run with its chat stays: only a run that waits is dropped.
+      expect(await dropPendingRun(db, pending.id)).toBe(false)
+      expect(
+        await codeOf(
+          insertManualRun(db, {
+            scheduleId: task.id,
+            userId: who.userId,
+            now: at('2026-11-16T10:02:10Z'),
+          }),
+        ),
+      ).toBe('SCHEDULE_RUN_BUSY')
       const stranger = await owner()
       expect(
         await codeOf(insertManualRun(db, { scheduleId: task.id, userId: stranger.userId, now })),
@@ -582,6 +823,68 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       expect(
         (await stalePendingRuns(db, new Date(Date.now() - minutes(75)), 1000)).map((run) => run.id),
       ).not.toContain(claim!.startRunId)
+      // Of one kind: a run of «Запустить сейчас» is swept apart (Зп24).
+      const paused = await createScheduledTask(db, input(who, { enabled: false }))
+      const manual = await insertManualRun(db, {
+        scheduleId: paused.id,
+        userId: who.userId,
+        now: at('2026-11-16T07:30:00Z'),
+      })
+      const later = new Date(Date.now() + minutes(1))
+      const manualOnly = (await stalePendingRuns(db, later, 1000, 'manual')).map((run) => run.id)
+      expect(manualOnly).toContain(manual.runId)
+      expect(manualOnly).not.toContain(claim!.startRunId)
+    })
+
+    it('binds a run to its chat in the transaction that makes it, after its task (Зп20)', async () => {
+      const who = await owner()
+      const task = await createScheduledTask(db, input(who))
+      const runId = (await db.$transaction((tx) =>
+        claimDueSchedule(tx, task.id, at('2026-11-16T06:00:00Z')),
+      ))!.startRunId!
+      const chatId = await chat(who, { status: 'queued' })
+      expect(
+        await db.$transaction(async (tx) => {
+          if (!(await lockWaitingRun(tx, runId))) return 'closed'
+          return (
+            await recordRunOutcomeInTx(tx, runId, { status: 'started', taskId: chatId }, monday)
+          ).recorded
+        }),
+      ).toBe(true)
+      // Started: a second start finds it closed; a run that is gone, too.
+      expect(await db.$transaction((tx) => lockWaitingRun(tx, runId))).toBe(false)
+      expect(await db.$transaction((tx) => lockWaitingRun(tx, uuidv7()))).toBe(false)
+      // The sweep that closes a run waits for the start that holds its task, and finds it started.
+      const other = await createScheduledTask(db, input(who))
+      const second = (await db.$transaction((tx) =>
+        claimDueSchedule(tx, other.id, at('2026-11-16T06:00:00Z')),
+      ))!.startRunId!
+      let release!: () => void
+      const held = new Promise<void>((resolve) => (release = resolve))
+      let locked!: () => void
+      const isLocked = new Promise<void>((resolve) => (locked = resolve))
+      const secondChat = await chat(who, { status: 'queued' })
+      const start = db.$transaction(
+        async (tx) => {
+          expect(await lockWaitingRun(tx, second)).toBe(true)
+          locked()
+          await held
+          return recordRunOutcomeInTx(tx, second, { status: 'started', taskId: secondChat }, monday)
+        },
+        { timeout: 20_000 },
+      )
+      await isLocked
+      const sweep = recordRunOutcome(db, second, { status: 'refused', reason: 'platform' })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      release()
+      expect((await start).recorded).toBe(true)
+      expect((await sweep).recorded).toBe(false)
+      expect(
+        await db.scheduledRun.findUniqueOrThrow({
+          where: { id: second },
+          select: { status: true },
+        }),
+      ).toEqual({ status: 'started' })
     })
   })
 
@@ -606,6 +909,39 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       expect(await passUnattended(db, plain)).toBe(false)
       await request(chatId)
       expect(await passUnattended(db, chatId)).toBe(false)
+    })
+
+    // A cancel or an interrupt written while the pass runs is for the passes after it (Зп27).
+    it('decides for a pass by the request it answers, by its id or its instant', async () => {
+      const who = await owner()
+      const task = await createScheduledTask(db, input(who))
+      const runId = (await db.$transaction((tx) =>
+        claimDueSchedule(tx, task.id, at('2026-11-16T06:00:00Z')),
+      ))!.startRunId!
+      const chatId = await chat(who)
+      const request = (createdAt: Date) =>
+        db.taskEvent.create({
+          data: {
+            taskId: chatId,
+            type: 'feed.request',
+            payload: { v: 1 },
+            clientVisible: true,
+            createdAt,
+          },
+          select: { id: true, createdAt: true },
+        })
+      const first = await request(at('2026-11-16T06:00:01.250Z'))
+      await recordRunOutcome(db, runId, { status: 'started', taskId: chatId })
+      // «Остановить» while the first pass runs.
+      const cancel = await request(at('2026-11-16T06:02:00Z'))
+      expect(await passUnattended(db, chatId)).toBe(false)
+      expect(await passUnattended(db, chatId, { requestEventId: first.id })).toBe(true)
+      expect(await passUnattended(db, chatId, { requestEventId: String(first.id) })).toBe(true)
+      // The plan keeps the instant to the millisecond: the request of that millisecond counts.
+      expect(await passUnattended(db, chatId, { answeredAt: first.createdAt })).toBe(true)
+      // A pass of the words after it has its client.
+      expect(await passUnattended(db, chatId, { requestEventId: cancel.id })).toBe(false)
+      expect(await passUnattended(db, chatId, { answeredAt: cancel.createdAt })).toBe(false)
     })
   })
 

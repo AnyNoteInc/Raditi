@@ -13,6 +13,7 @@ import {
   type BrowserVerificationPlan,
   type BrowserVerificationReading,
   type BrowserVerificationReply,
+  type SiteBrowserRequest,
 } from '@repo/domain'
 import { z } from 'zod'
 
@@ -87,7 +88,57 @@ export function wordpressBrowserTaskPolicy(site: BrowserTaskSite): BrowserTaskPo
     pageDenied: (path: string) =>
       wordpressBrowserRequestDenied({ path, method: 'GET', postData: null }),
     signIn: SIGN_IN_FORM,
+    readOnlyDenied: wordpressReadOnlyDenied,
   })
+}
+
+// ---------------------------------------------------------------------------------------------
+// What a pass without its client may read (docs/plan/82-scheduled-tasks.md, Зп28)
+// ---------------------------------------------------------------------------------------------
+
+/** The endpoints that run the `action` they are given, whatever the method (hooks of plugins). */
+const ACTION_ENDPOINTS: ReadonlySet<string> = new Set(['admin-ajax.php', 'admin-post.php'])
+
+/**
+ * The lists of the admin whose form of filters and search is sent by GET with the nonce of its
+ * bulk actions (`bulk-posts`, `bulk-media`, `bulk-comments`, `bulk-tags`): the users and the
+ * plugins are not among them — their forms change roles and plugins without an `action`.
+ */
+const LIST_PAGES: ReadonlySet<string> = new Set([
+  'edit.php',
+  'upload.php',
+  'edit-comments.php',
+  'edit-tags.php',
+])
+
+/** Buttons of those forms that delete without an `action`: «Очистить корзину», «Очистить спам». */
+const LIST_WRITES: readonly string[] = Object.freeze(['delete_all', 'delete_all2'])
+
+/** «Действия» of a list not chosen: absent, empty or `-1` — the select's own first option. */
+const noAction = (value: string | undefined) =>
+  value === undefined || value === '' || value === '-1'
+
+/**
+ * A read that acts — `admin-ajax.php` or `admin-post.php` with an `action` — is denied; a filter
+ * or search of a list (`edit.php?s=…&post_status=…&action=-1&action2=-1&_wpnonce=…`) is allowed,
+ * though it carries a nonce, unless a bulk action or «Очистить корзину» is chosen in it. Anything
+ * else — the generic rule.
+ */
+export function wordpressReadOnlyDenied(request: SiteBrowserRequest): boolean | null {
+  const method = request.method.trim().toUpperCase()
+  if (method !== 'GET' && method !== 'HEAD') return null
+  const url = URL.parse(request.path, BASE)
+  if (url === null) return null
+  const segments = url.pathname.split('/')
+  const page = plainSegment(segments.at(-1))
+  if (page === null || plainSegment(segments.at(-2)) !== 'wp-admin') return null
+  const params = url.searchParams
+  if (ACTION_ENDPOINTS.has(page)) return params.has('action') ? true : null
+  if (!LIST_PAGES.has(page)) return null
+  if (LIST_WRITES.some((name) => params.has(name))) return true
+  return noAction(lastValue(params, 'action')) && noAction(lastValue(params, 'action2'))
+    ? false
+    : null
 }
 
 // ---------------------------------------------------------------------------------------------

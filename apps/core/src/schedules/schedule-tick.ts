@@ -53,8 +53,9 @@ export class ScheduleTick {
     const result: ScheduleTickResult = { claimed: 0, started: 0, stale: 0 }
     const seen = new Set<string>()
     for (let round = 0; round < SCHEDULE_TICK_ROUNDS && !signal?.aborted; round++) {
-      const ids = await dueScheduleIds(this.deps.db, now, SCHEDULE_TICK_BATCH)
-      // A task another tick holds, or one that throws, comes back in the next read: once a tick.
+      // A task that stays due — another tick holds it, it threw, its last moment waits for a run
+      // that goes on — is read once a tick and never hides the ones after it.
+      const ids = await dueScheduleIds(this.deps.db, now, SCHEDULE_TICK_BATCH, [...seen])
       const fresh = ids.filter((id) => !seen.has(id))
       for (const id of fresh) {
         if (signal?.aborted) break

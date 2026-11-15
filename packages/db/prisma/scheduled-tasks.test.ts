@@ -34,6 +34,9 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
   // A chat without a project: its id is a UUID of version 7 (tasks_chat_id_check).
   const taskId = uuidv7()
   const earlierNotice = randomUUID()
+  // A client who had turned push off under the old switch, and one who had it on (Зп37).
+  const silentId = randomUUID()
+  const loudId = randomUUID()
 
   async function insert(table: string, values: Values) {
     const columns = Object.keys(values)
@@ -139,6 +142,21 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
       user_id: userId,
       kind: 'answered',
     })
+    for (const [id, push] of [
+      [silentId, false],
+      [loudId, true],
+    ] as const) {
+      await insert('users', { id, name: 'Клиент', email: `${id}@example.test`, updated_at: at })
+      await insert('notification_settings', { user_id: id, push, updated_at: at })
+      for (const browser of ['laptop', 'phone'])
+        await insert('push_subscriptions', {
+          id: randomUUID(),
+          user_id: id,
+          endpoint: `https://fcm.googleapis.com/fcm/send/${id}-${browser}`,
+          p256dh: 'key',
+          auth: 'auth',
+        })
+    }
     await schema.migrate()
     await schema.db.query('BEGIN')
   }, 120_000)
@@ -316,10 +334,39 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
             status: 'skipped',
             reason: 'missed',
             missed_count: 3,
+            missed_until: new Date('2026-11-16T14:20:00Z'),
           }),
         ),
       ),
     ).toBeUndefined()
+    // The end of a gap: only on a row of missed runs, and not before its first moment.
+    expect(
+      await refusal(() =>
+        insert(
+          'scheduled_runs',
+          run(id, {
+            due_at: new Date('2026-11-16T14:30:00Z'),
+            status: 'skipped',
+            reason: 'previous_running',
+            missed_until: new Date('2026-11-16T14:30:00Z'),
+          }),
+        ),
+      ),
+    ).toBe('scheduled_runs_missed_until_check')
+    expect(
+      await refusal(() =>
+        insert(
+          'scheduled_runs',
+          run(id, {
+            due_at: new Date('2026-11-16T14:40:00Z'),
+            status: 'skipped',
+            reason: 'missed',
+            missed_count: 2,
+            missed_until: new Date('2026-11-16T14:39:00Z'),
+          }),
+        ),
+      ),
+    ).toBe('scheduled_runs_missed_until_check')
     // One row per moment and kind: a second claim writes nothing.
     expect(await refusal(() => insert('scheduled_runs', run(id)))).toBe(
       'scheduled_runs_scheduled_task_id_due_at_trigger_key',
@@ -424,6 +471,15 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
     expect(
       await refusal(() => insert('chat_notifications', notice({ task_id: taskId, kind: 'gone' }))),
     ).toBe('chat_notifications_kind_check')
+  })
+
+  it('gives up the browsers of a client who had turned push off, and keeps the others (Зп37)', async () => {
+    const { rows } = await schema.db.query<{ user_id: string; count: string }>(
+      `SELECT user_id, count(*) FROM push_subscriptions WHERE user_id = ANY($1::uuid[])
+       GROUP BY user_id`,
+      [[silentId, loudId]],
+    )
+    expect(rows.map((row) => [row.user_id, Number(row.count)])).toEqual([[loudId, 2]])
   })
 
   it('takes a zone of the client and the key of a browser', async () => {

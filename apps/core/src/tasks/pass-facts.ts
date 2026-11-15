@@ -323,9 +323,11 @@ export async function readPassFacts(
   // The files of a repository task go into the sandbox of its turn (spec §8, «Подготовка»), and
   // so do those of a chat without a site (docs/plan/61, К16).
   const attachments = requirements.repository || site === null ? files : []
-  // A pass of a run before the first words of its client goes without them (Зп27, Зп29).
+  // A pass of a run before the first words of its client goes without them (Зп27, Зп29), decided
+  // by the request it answers: a cancel or an interrupt written since is for the passes after it.
   const unattended =
-    task.scheduledRun && (await passUnattended(db, task.id))
+    task.scheduledRun &&
+    (await passUnattended(db, task.id, { requestEventId: input.requestEventId }))
       ? { name: task.scheduledRun.name }
       : null
   return {

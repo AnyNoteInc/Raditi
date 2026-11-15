@@ -35,7 +35,9 @@ export const dangerText = Object.freeze({
   openChats: 'Открыть чаты проекта',
   /**
    * The scheduled tasks of the project the deletion stops (docs/plan/82-scheduled-tasks.md,
-   * Зп22): they stay in «Расписание» as «Остановлена: проект удалён».
+   * Зп22): they stay in «Запланированные задачи» as «Остановлена: проект удалён». The chats of
+   * their runs that wait for the client's answer close with the project, as «Удалить чат» closes
+   * one; other chats at work still keep the project from being deleted.
    */
   schedulesStop: (count: number) =>
     `${plural(count, 'Остановится', 'Остановятся', 'Остановятся')} ${count} ${plural(
@@ -43,7 +45,7 @@ export const dangerText = Object.freeze({
       'запланированная задача',
       'запланированные задачи',
       'запланированных задач',
-    )} проекта.`,
+    )} проекта. Чаты запусков, которые ждут вашего ответа, закроются.`,
 })
 
 /**
@@ -87,6 +89,8 @@ export function SiteDangerZone({
     try {
       await remove.mutateAsync({ id: site.id, confirmName: typed })
       void queryClient.invalidateQueries({ queryKey: trpc.project.list.queryKey() })
+      // The deletion paused the project's tasks (Зп22): «Расписание» and their pages say so.
+      void queryClient.invalidateQueries(trpc.schedule.pathFilter())
       router.replace('/projects')
       router.refresh()
     } catch (failure) {

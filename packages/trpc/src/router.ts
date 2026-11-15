@@ -52,7 +52,7 @@ export const appRouter = router({
   document: documentRouter,
   // «Страницы»: the published pages of the user's workspaces (docs/plan/69-pages.md).
   pages: pagesRouter,
-  // «Расписание»: the scheduled tasks of the user (docs/plan/82-scheduled-tasks.md).
+  // «Запланированные задачи»: the scheduled tasks of the user (docs/plan/82-scheduled-tasks.md).
   schedule: scheduleRouter,
 })
 

@@ -90,7 +90,7 @@ export class ChatNotify {
     })
     if (!task || task.deletedAt !== null || task.createdById === null)
       return this.#log(job, 'skipped')
-    const scheduled = await this.#scheduledPass(job.taskId)
+    const scheduled = await this.#scheduledPass(job)
     // The gate refused the pass of a run (Зп22): the task pauses, and that is what is told.
     if (scheduled && job.kind === 'failed') {
       const paused = await this.#pausedByGate(job.taskId, scheduled)
@@ -130,9 +130,13 @@ export class ChatNotify {
     return this.#log(job, answerOf(answer))
   }
 
-  /** The run of the chat while its pass goes without the client (Зп27); null — an ordinary chat. */
-  async #scheduledPass(taskId: string): Promise<ScheduledPass | null> {
+  /**
+   * The run of the chat while its pass goes without the client (Зп27); null — an ordinary chat.
+   * Decided by the request the pass answered: what the client wrote while it ran is not its own.
+   */
+  async #scheduledPass(job: ChatNotifyJob): Promise<ScheduledPass | null> {
     const { db } = this.deps
+    const taskId = job.taskId
     const run = await db.scheduledRun.findUnique({
       where: { taskId },
       select: {
@@ -141,7 +145,9 @@ export class ChatNotify {
         scheduledTask: { select: { id: true, name: true, notify: true, deletedAt: true } },
       },
     })
-    if (!run || !(await passUnattended(db, taskId))) return null
+    const answers =
+      job.requestEventId === undefined ? undefined : { requestEventId: job.requestEventId }
+    if (!run || !(await passUnattended(db, taskId, answers))) return null
     const schedule = run.scheduledTask
     return {
       scheduleId: schedule.id,

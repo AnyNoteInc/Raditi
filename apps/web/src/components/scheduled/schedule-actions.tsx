@@ -14,7 +14,7 @@ import Switch from '@mui/material/Switch'
 import Typography from '@mui/material/Typography'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
-import { useId, useRef, useState } from 'react'
+import { useId, useState, type Ref } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { callErrorText } from '@/components/chat/call-error'
@@ -32,7 +32,8 @@ export type ScheduleNotice = { text: string } | null
 /**
  * The switch, «Запустить сейчас» and «Удалить» of a task (Зп5, Зп6, Зп23, Зп24): each reads «Ваши»
  * and the page of the task again when it ends. «Запустить сейчас» opens the chat of its run; a
- * refusal is told in the server's words.
+ * refusal is told in the server's words. What a deletion says, and where the focus goes after it,
+ * is the caller's: the row is gone from «Ваши», and the page of the task is left.
  */
 export function useScheduleActions(onNotice: (notice: ScheduleNotice) => void) {
   const trpc = useTRPC()
@@ -77,9 +78,13 @@ export function useScheduleActions(onNotice: (notice: ScheduleNotice) => void) {
     async delete(task: Task): Promise<boolean> {
       try {
         await remove.mutateAsync({ scheduleId: task.id })
-        onNotice({ text: scheduleRowTexts.deleted })
         void queryClient.invalidateQueries({ queryKey: trpc.schedule.list.queryKey() })
-        queryClient.removeQueries({ queryKey: trpc.schedule.get.queryKey({ scheduleId: task.id }) })
+        // A page of the task that is open keeps it until it is left, and drops it then: dropped
+        // under its eyes, the page would read it again and show «Задачи уже нет» first.
+        queryClient.removeQueries({
+          queryKey: trpc.schedule.get.queryKey({ scheduleId: task.id }),
+          type: 'inactive',
+        })
         return true
       } catch (error) {
         onNotice({ text: callErrorText(error) })
@@ -152,7 +157,7 @@ export function ScheduleDeleteDialog({
 /**
  * «⋯» of a task (Зп5, Зп6): «Запустить сейчас», «Изменить» and «Удалить», or only some of them.
  * The button keeps the focus for what an item opens: the window of the task and the confirmation
- * come back to it.
+ * come back to it — except after a deletion, when `onDeleted` says where the client goes on.
  */
 export function ScheduleMoreMenu({
   task,
@@ -161,24 +166,27 @@ export function ScheduleMoreMenu({
   items = ['run', 'edit', 'delete'],
   onDeleted,
   label,
+  buttonRef,
 }: {
   task: Task
   actions: ScheduleActions
   /** «Изменить»: the window opens, and comes back to `opener` when it closes. */
   onEdit?: (opener: HTMLElement | null) => void
   items?: readonly ('run' | 'edit' | 'delete')[]
+  /** The task is deleted: the confirmation has closed. */
   onDeleted?: () => void
   /** The name of the button; the task's by default. */
   label?: string
+  /** The button «⋯», for the focus of a list after a neighbour of it is deleted. */
+  buttonRef?: Ref<HTMLButtonElement>
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [confirm, setConfirm] = useState(false)
-  const button = useRef<HTMLButtonElement>(null)
   const close = () => setAnchor(null)
   return (
     <>
       <IconButton
-        ref={button}
+        ref={buttonRef}
         aria-label={label ?? scheduleRowTexts.more(task.name)}
         aria-haspopup="menu"
         aria-expanded={anchor !== null}
@@ -219,8 +227,10 @@ export function ScheduleMoreMenu({
         {items.includes('edit') && onEdit ? (
           <MenuItem
             onClick={() => {
+              // The button the menu hangs on: the window comes back to it.
+              const opener = anchor
               close()
-              onEdit(button.current)
+              onEdit(opener)
             }}
             sx={{ minHeight: 44, fontSize: 14 }}
           >

@@ -129,16 +129,29 @@ function fakeStore() {
   } satisfies McpScheduleStore
 }
 
-/** A store of the pages: only a deletion is asked of it here. */
+/** A store of the pages: a deletion, a publication and an edit are asked of it here. */
 function pagesStore() {
   const never = vi.fn(async () => {
     throw new Error('not asked of this test')
   })
   return {
-    reserve: never,
+    reserve: vi.fn(async () => ({
+      pageId: scheduleId,
+      slug: 'akcii',
+      path: '/',
+      treeId: reservedId,
+      version: 3,
+    })),
     documentTitle: never,
     list: vi.fn(async () => []),
-    read: never,
+    read: vi.fn(async () => ({
+      pageId: scheduleId,
+      kind: 'page',
+      version: 2,
+      documentId: null,
+      format: 'html' as const,
+      text: '<h1>Старая цена</h1>',
+    })),
     putFile: never,
     files: never,
     deleteFile: never,
@@ -308,6 +321,55 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     expect(answer(await post(attended.server, deletion)).value).toMatchObject({
       live: 'when this turn ends',
     })
+    expect(attended.pages.change).toHaveBeenCalledTimes(1)
+  })
+
+  it('changes no page in a pass without the client: its visitors would see it unread (Зп28)', async () => {
+    const withPages = { ...testMcpConfig(), pages: pagesAddress }
+    const publication = call('page_publish', {
+      file: 'akcii.html',
+      title: 'Акции',
+      pageId: scheduleId,
+      expectedVersion: 2,
+    })
+    const edit = call('page_edit', {
+      pageId: scheduleId,
+      expectedVersion: 2,
+      edits: [{ old: 'Старая цена', new: 'Новая цена' }],
+    })
+    const pageTools = async (server: unknown) =>
+      (await listTools(server)).map((tool) => tool.name).filter((name) => name.startsWith('page_'))
+    const unattended = await start({ ...projectChat, unattended: true }, fakeStore(), withPages)
+    // The pages are there to read; nothing that changes them is offered.
+    expect((await pageTools(unattended.server)).sort()).toEqual([
+      'page_files',
+      'page_list',
+      'page_read',
+      'page_tree',
+    ])
+    // Called anyway — the text of a page it read may say so — each is its tool's refusal.
+    for (const body of [publication, edit]) {
+      const res = answer(await post(unattended.server, body))
+      expect(res).toMatchObject({ status: 200, isError: true })
+      expect(res.value).toMatchObject({ ok: false, code: 'SCHEDULE_FORBIDDEN' })
+      expect(res.value.message).toMatch(/publish or change no page/)
+    }
+    expect(unattended.pages.reserve).not.toHaveBeenCalled()
+    expect(unattended.pages.read).not.toHaveBeenCalled()
+    expect(unattended.pages.change).not.toHaveBeenCalled()
+    await app?.close()
+    app = undefined
+    // The same chat once its client wrote: both are reserved for the end of the turn, as ever.
+    const attended = await start({ ...projectChat, unattended: false }, fakeStore(), withPages)
+    expect(await pageTools(attended.server)).toEqual(
+      expect.arrayContaining(['page_publish', 'page_edit', 'page_file_put', 'page_restore']),
+    )
+    expect(answer(await post(attended.server, publication))).toMatchObject({
+      isError: false,
+      value: { pageId: scheduleId, version: 3 },
+    })
+    expect(answer(await post(attended.server, edit)).isError).toBe(false)
+    expect(attended.pages.reserve).toHaveBeenCalledTimes(1)
     expect(attended.pages.change).toHaveBeenCalledTimes(1)
   })
 
@@ -497,8 +559,8 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     const plain = await start(plainChat)
     const site = answer(await post(plain.server, call('schedule_create', create)))
     expect(site).toMatchObject({ isError: true, value: { ok: false, code: 'BAD_REQUEST' } })
-    // A task about a site is offered elsewhere: a chat of its project or the window.
-    expect(site.value.message).toMatch(/«Расписание»/)
+    // A task about a site is offered elsewhere: a chat of its project or the section.
+    expect(site.value.message).toMatch(/«Запланированные задачи»/)
     expect(plain.store.reserve).not.toHaveBeenCalled()
     const own = answer(
       await post(plain.server, call('schedule_create', { ...create, project: 'none' })),

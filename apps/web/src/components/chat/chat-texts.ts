@@ -446,6 +446,14 @@ export const scheduleChatText = Object.freeze({
   hideInstructions: 'Скрыть инструкцию',
   runNow: 'Запустить сейчас',
   edit: 'Изменить',
+  openTask: 'Открыть задачу',
+  /**
+   * The names of the card's buttons to a screen reader: the words shown, then the task — the
+   * last message has «Изменить» of its own, and a chat may hold several cards.
+   */
+  runNowLabel: (name: string) => `Запустить сейчас задачу «${name}»`,
+  editLabel: (name: string) => `Изменить задачу «${name}»`,
+  openTaskLabel: (name: string) => `Открыть задачу «${name}»`,
   /** A change the agent could not make: the client sets the task up in «Расписание» (Зп35). */
   setUpByHand: 'Настроить вручную',
 })

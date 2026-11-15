@@ -73,6 +73,7 @@ import type { BrowserCheckpointRecord } from '@repo/db'
 import { browserCodeOf, errorName } from '../common/browser-codes.ts'
 import type { BrowserWorkerMetrics } from '../metrics/worker-metrics.ts'
 import type { BrowserWorkerStore } from '../store/worker-store.ts'
+import { readOnlyPolicy } from './read-only-policy.ts'
 
 /** A frame as every viewer gets it: the 48-byte header and the JPEG, encoded once. */
 export interface EncodedFrame extends FlowFrame {
@@ -201,6 +202,13 @@ const writes = (event: BrowserInputEvent): boolean =>
 const INPUT_BACKLOG = 256
 
 /**
+ * Questions of a page whose «OK» confirms what it asks — «Удалить навсегда?» — or sends what is
+ * typed into it: refused to a pass without the client (Зп28). An alert's «OK» only closes it, and
+ * leaving a page with unsaved changes saves nothing.
+ */
+const CONFIRMING_DIALOGS: ReadonlySet<BrowserDialog['kind']> = new Set(['confirm', 'prompt'])
+
+/**
  * Keys that press the button they land on — the one the reference names, or the one that has the
  * focus: a commit as much as a click is. With any modifier: Shift+Enter presses a button too.
  */
@@ -253,6 +261,16 @@ export class WorkerSession {
   #signIn: BrowserSignIn | null
   /** A saved sign-in the site refused: not sent again until core gives another one. */
   #signInRefused: BrowserSignIn | null = null
+  /** The saved sign-in is being sent: its form goes even to a pass that only reads (Б36). */
+  #signingIn = false
+  /**
+   * The agent's latest action came from a pass of a scheduled run without its client (Зп28):
+   * until an action says otherwise, the pages send the site nothing but reads (`readOnlyPolicy`) —
+   * a request that comes after the action that caused it (an editor's autosave) as well.
+   */
+  #readOnly = false
+  /** Requests the read-only rule denied, ever: an action that saw one refused is told so. */
+  #readOnlyRefusals = 0
   #wrote = false
   #lastActivity: number
   #lastTouch = Number.NEGATIVE_INFINITY
@@ -362,7 +380,13 @@ export class WorkerSession {
         pageDomain: spec.pageDomain,
         startUrl: spec.startUrl,
         viewport: this.#viewport,
-        policy: spec.policy,
+        policy: readOnlyPolicy(spec.policy, {
+          readOnly: () => this.#readOnly,
+          signingIn: () => this.#signingIn,
+          refused: () => {
+            this.#readOnlyRefusals += 1
+          },
+        }),
         onEvent: (event) => this.#event(event),
       })
       if (!this.live) {
@@ -969,11 +993,14 @@ export class WorkerSession {
     if (credentials === null || !this.live || this.#control.controller !== 'agent') return
     const refused = this.#signInRefused
     if (refused?.login === credentials.login && refused.password === credentials.password) return
+    this.#signingIn = true
     try {
       if ((await browser.signIn(credentials)) !== 'refused') return
       this.#context.warn('browser_sign_in_refused')
     } catch (error) {
       this.#context.warn('browser_sign_in_failed', error)
+    } finally {
+      this.#signingIn = false
     }
     this.#signInRefused = credentials
   }
@@ -995,13 +1022,17 @@ export class WorkerSession {
    * when the client controls the browser. The answer comes within `actionBudgetMs`; the next
    * action waits until this one has really finished in the page. `readOnly` — a pass of a
    * scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28): a save or a publish
-   * on the site, and a file sent to a page, are refused (`BROWSER_READ_ONLY`).
+   * on the site, a file sent to a page and a page's question confirmed are refused
+   * (`BROWSER_READ_ONLY`), and from this action on — until one says otherwise — the pages send the
+   * site nothing but reads (`readOnlyPolicy`): a form a key or a link sends, an editor's XHR.
    */
   act(action: BrowserAction, options: { readOnly?: boolean } = {}): Promise<BrowserToolResult> {
     const readOnly = options.readOnly === true
     const queuedAt = this.#context.now()
     return new Promise<BrowserToolResult>((resolve, reject) => {
       const run = async () => {
+        // In the order of the actions: the pass of this one is the pass the pages now serve.
+        this.#readOnly = readOnly
         const outcome: { result: 'ok' | BrowserTaskCode } = { result: 'ok' }
         const settle = (error: unknown) => {
           // The first outcome stands: a timeout already answered is not answered again.
@@ -1026,12 +1057,21 @@ export class WorkerSession {
             () => settle(browserTaskError('BROWSER_TIMEOUT')),
             this.#context.settings.actionBudgetMs,
           )
+          const refusals = this.#readOnlyRefusals
           try {
             // Signed out meanwhile (a session that expired on the site): the saved sign-in first.
             if (action.tool !== 'web_help') await this.#signInIfAsked(browser)
             resolve(await this.#perform(browser, action, readOnly))
           } catch (error) {
-            settle(error)
+            // The page went nowhere because what it sent the site was a write of a pass without
+            // the client: the agent is told that, not that the site is closed to it.
+            settle(
+              readOnly &&
+                this.#readOnlyRefusals > refusals &&
+                browserCodeOf(error) === 'BROWSER_ACTION_DENIED'
+                ? browserTaskError('BROWSER_READ_ONLY')
+                : error,
+            )
           } finally {
             clearTimeout(timer)
             this.#apply(browserAgentActionSettled(this.#control))
@@ -1165,6 +1205,8 @@ export class WorkerSession {
         return this.#outcome('web_upload', result, { uploaded: result.uploaded ?? files.length })
       }
       case 'web_dialog':
+        if (readOnly && action.accept && this.#dialog && CONFIRMING_DIALOGS.has(this.#dialog.kind))
+          throw browserTaskError('BROWSER_READ_ONLY')
         if (action.accept) this.#markWrote()
         return this.#outcome('web_dialog', await browser.act(action))
       case 'web_wait': {
@@ -1307,7 +1349,9 @@ export class WorkerSession {
    * the task has changed as many objects as it may (Б34); after it — whatever came of it, a
    * timeout included — the object is unconfirmed until a check reads it, so an unclear outcome
    * leaves no duplicate. With `asked` null — or on another site, which saves nothing of the site
-   * (Ч6) — it is an ordinary action.
+   * (Ч6) — it is an ordinary action; in a pass without the client what such an action still sends
+   * the site — a form of another admin page, Enter in a field, an action link — is stopped at its
+   * request (`readOnlyPolicy`).
    */
   async #commitOr(
     tool: 'web_click' | 'web_press',

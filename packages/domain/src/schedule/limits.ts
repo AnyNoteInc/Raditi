@@ -21,6 +21,12 @@ export const scheduleLimits = Object.freeze({
   startAttempts: 8,
   /** A run `pending` longer than this is closed by the tick (Зп21). */
   pendingSweepMinutes: 75,
+  /**
+   * A run of «Запустить сейчас» `pending` longer than this is closed by the sweep of chats: web
+   * starts it at once, with no delivery of core to wait for, so one left waiting is a web that
+   * stopped mid-request, and it would hold the task up as «Выполняется» (Зп24).
+   */
+  manualPendingSweepMinutes: 5,
   /** Refusals in a row for a reason of the client before the task is paused (Зп22). */
   refusalsToPause: 3,
   /** «Запустить сейчас» at most once a minute per task (Зп24). */

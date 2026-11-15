@@ -160,7 +160,7 @@ describe('NotificationDelivery', () => {
     })
   })
 
-  it('carries no word of the chat: the id, the path, the kind, the flag and the tag (Зп40)', async () => {
+  it('carries no word of the chat: the id, the path, the kind, the flag, the tag and the moment (Зп40)', async () => {
     const s = stand({
       settings: { email: false },
       subscriptions: [{ id: 's1', endpoint: fcm(1), vapidKey: KEY }],
@@ -173,6 +173,8 @@ describe('NotificationDelivery', () => {
       kind: 'answered',
       scheduled: false,
       tag: `chat:${CHAT}`,
+      // When `deliver` wrote the row: the worker orders the notices of a tag by it.
+      at: NOW.getTime(),
     })
     expect(notificationPushPayloadSchema.safeParse(payload).success).toBe(true)
     expect(s.sent[0]).toMatchObject({ urgency: 'normal', ttl: PUSH_TTL_SECONDS })

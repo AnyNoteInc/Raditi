@@ -75,7 +75,7 @@ function task(patch: Partial<ScheduledTaskItem> = {}): ScheduledTaskItem {
     lastRunAt: null,
     createdVia: 'chat',
     templateSlug: null,
-    project: { id: SITE_ID, name: 'Кофейня «Крошка»' },
+    project: { id: SITE_ID, name: 'Кофейня «Крошка»', deleted: false },
     createdAt: now,
     updatedAt: now,
     lastRun: null,
@@ -188,7 +188,9 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     expect(shown.queryByRole('link')).toBeNull()
     expect(shown.getByText('Заявки за сутки')).toBeTruthy()
     expect(shown.getByText('Следующий запуск: завтра в 8:00')).toBeTruthy()
-    expect(shown.queryByRole('button', { name: 'Запустить сейчас' })).toBeNull()
+    expect(
+      shown.queryByRole('button', { name: 'Запустить сейчас задачу «Заявки за сутки»' }),
+    ).toBeNull()
     // Its project is not named: the list that names it does not have the task.
     expect(shown.getByText('Размышление: низкое · Уведомит, когда выполнится')).toBeTruthy()
   })
@@ -206,11 +208,26 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     expect(shown.queryByText(/Следующий запуск/)).toBeNull()
   })
 
+  it('opens the task, and names each of its buttons by it (Зп35)', async () => {
+    show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} onEdit={vi.fn()} />)
+    const shown = within(await card())
+    const open = await shown.findByRole('link', { name: 'Открыть задачу «Заявки за сутки»' })
+    expect(open.getAttribute('href')).toBe(`/scheduled/${SCHEDULE_ID}`)
+    expect(open.textContent).toBe('Открыть задачу')
+    // The words shown stand first in the name: «Изменить» of the last message is another one.
+    expect(shown.getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(
+      ['Изменить задачу «Заявки за сутки»', 'Запустить сейчас задачу «Заявки за сутки»'],
+    )
+    expect(shown.getByRole('button', { name: /^Изменить задачу/ }).textContent).toBe('Изменить')
+  })
+
   it('runs the task now and opens the chat of the run', async () => {
     runNow.mockResolvedValue({ taskId: RUN_CHAT_ID })
     show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} />)
     const shown = within(await card())
-    fireEvent.click(await shown.findByRole('button', { name: 'Запустить сейчас' }))
+    fireEvent.click(
+      await shown.findByRole('button', { name: 'Запустить сейчас задачу «Заявки за сутки»' }),
+    )
     await waitFor(() => expect(push).toHaveBeenCalledWith(`/chats/${RUN_CHAT_ID}`))
     expect(runNow).toHaveBeenCalledWith({ scheduleId: SCHEDULE_ID }, expect.anything())
   })
@@ -219,7 +236,7 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     const onEdit = vi.fn()
     show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} onEdit={onEdit} />)
     const shown = within(await card())
-    fireEvent.click(await shown.findByRole('button', { name: 'Изменить' }))
+    fireEvent.click(await shown.findByRole('button', { name: 'Изменить задачу «Заявки за сутки»' }))
     expect(onEdit).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ id: SCHEDULE_ID, name: 'Заявки за сутки' }),
     )
@@ -228,15 +245,17 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
   it('offers no window where the chat has none to open', async () => {
     show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} />)
     const shown = within(await card())
-    await shown.findByRole('button', { name: 'Запустить сейчас' })
-    expect(shown.queryByRole('button', { name: 'Изменить' })).toBeNull()
+    await shown.findByRole('button', { name: 'Запустить сейчас задачу «Заявки за сутки»' })
+    expect(shown.queryByRole('button', { name: 'Изменить задачу «Заявки за сутки»' })).toBeNull()
   })
 
   it('tells why the task did not start, in the server’s words, and stays', async () => {
     runNow.mockRejectedValue(serverRefusal('Задача уже выполняется', 'SCHEDULE_RUN_BUSY'))
     show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} />)
     const shown = within(await card())
-    fireEvent.click(await shown.findByRole('button', { name: 'Запустить сейчас' }))
+    fireEvent.click(
+      await shown.findByRole('button', { name: 'Запустить сейчас задачу «Заявки за сутки»' }),
+    )
     expect((await shown.findByRole('alert')).textContent).toBe('Задача уже выполняется.')
     expect(push).not.toHaveBeenCalled()
   })

@@ -1,14 +1,17 @@
 import type { ReasoningEffort } from '@repo/domain/llm/model-class'
 import {
   hasScheduleTemplatePlaceholder,
+  isScheduleTooOftenIssue,
   nextRunOf,
   runDateText,
   runMomentText,
   SCHEDULE_TOO_OFTEN_TEXT,
+  scheduleDateSchema,
   scheduledRunStateText,
   scheduleInPast,
   scheduleLimits,
   schedulePausedReasonText,
+  scheduleRunsTooOften,
   scheduleTemplatePlaceholder,
   scheduleText,
   scheduleTriggersInPast,
@@ -18,6 +21,7 @@ import {
   type ScheduleTrigger,
   type ScheduleTriggerKind,
 } from '@repo/domain/schedule'
+import { looksLikeSecret } from '@repo/domain/tasks/client-feed-text'
 import type { AppRouter } from '@repo/trpc'
 import type { inferRouterOutputs } from '@trpc/server'
 
@@ -26,6 +30,7 @@ import {
   scheduleDialogTexts,
   scheduleRowTexts,
   schedulePageTexts,
+  scheduledTexts,
 } from './schedule-texts'
 
 // What «Запланированные задачи» shows and checks, without React (docs/plan/82-scheduled-tasks.md,
@@ -67,17 +72,50 @@ export function inScheduleTag(item: ScheduleItem, tag: ScheduleTag): boolean {
   }
 }
 
-/** The projects the tasks are in, in the order they first come; null — «Без проекта». */
+/**
+ * The group of the filter the tasks of deleted projects make, whatever the project was (Зп22):
+ * never a project of the list, whose ids are uuids.
+ */
+export const GONE_PROJECTS = 'gone'
+
+/** The group of a task in the filter: its project; null — «Без проекта». */
+const projectGroupOf = (item: ScheduleItem): string | null =>
+  item.project === null ? null : item.project.deleted ? GONE_PROJECTS : item.project.id
+
+/**
+ * The projects the tasks are in, in the order they first come; null — «Без проекта». A deleted
+ * project is no project to show by its name: its tasks go together as «Проект удалён».
+ */
 export function projectsOfSchedules(
   items: readonly ScheduleItem[],
 ): { id: string | null; name: string | null }[] {
   const seen = new Map<string | null, string | null>()
-  for (const item of items) seen.set(item.project?.id ?? null, item.project?.name ?? null)
+  for (const item of items)
+    seen.set(
+      projectGroupOf(item),
+      item.project === null
+        ? null
+        : item.project.deleted
+          ? scheduledTexts.projectGone
+          : item.project.name,
+    )
   return [...seen].map(([id, name]) => ({ id, name }))
 }
 
 export const inProject = (item: ScheduleItem, project: string | null | 'all'): boolean =>
-  project === 'all' || (item.project?.id ?? null) === project
+  project === 'all' || projectGroupOf(item) === project
+
+/** The words of the project of a task: its name, «Без проекта» or «Проект удалён». */
+export const projectText = (item: Pick<ScheduleItem, 'project'>): string =>
+  item.project === null
+    ? scheduledTexts.noProject
+    : item.project.deleted
+      ? scheduledTexts.projectGone
+      : item.project.name
+
+/** The project a task works in now, for its cost and a new chat; null — none, or deleted. */
+export const liveProjectId = (item: Pick<ScheduleItem, 'project'>): string | null =>
+  item.project === null || item.project.deleted ? null : item.project.id
 
 /** By name and by instructions (Зп3). */
 export function matchesSearch(item: ScheduleItem, query: string): boolean {
@@ -155,52 +193,51 @@ export const scheduleWords = (item: { triggers: ScheduleTrigger[]; timezone: str
 // The runs of a task (Зп6)
 // ---------------------------------------------------------------------------------------------
 
-/** One line of the runs: a run, or missed runs in a row as one line. */
+/**
+ * One line of the runs: a run, or missed runs in a row as one line — from the first of them, to
+ * the last when the server kept it (`to`; null — a row written without it), and how many moments
+ * it stands for.
+ */
 export type RunLine =
   | { kind: 'run'; run: ScheduleRun }
-  | { kind: 'missed'; key: string; from: Date; to: Date; runs: ScheduleRun[] }
-
-const isMissed = (run: ScheduleRun) => run.state.kind === 'skipped' && run.state.reason === 'missed'
-
-/** The last of `count` moments of the schedules from `from` on: the end of a row of missed runs. */
-function lastOfMissed(
-  from: Date,
-  count: number,
-  triggers: readonly ScheduleTrigger[],
-  timezone: string,
-): Date {
-  let at = from
-  for (let index = 1; index < count; index += 1) {
-    const next = nextRunOf(triggers, timezone, at)
-    if (next === null) break
-    at = next
-  }
-  return at
-}
+  | {
+      kind: 'missed'
+      key: string
+      from: Date
+      to: Date | null
+      count: number
+      runs: ScheduleRun[]
+    }
 
 /**
- * The runs, the newest first, with missed runs next to each other as one line — «Пропущены запуски
- * с 9:00 по 14:00» (Зп6). A row of «missed» stands for `missedCount` moments from its own.
+ * The runs, the newest first, with missed runs next to each other as one line (Зп6). A row of
+ * «missed» stands for `missedCount` moments from its own to `missedUntil`, which the tick wrote
+ * with it: the end is never rebuilt from the schedule of the task now — the client may have
+ * changed it since. The newest row of the line ends it.
  */
-export function runLines(
-  runs: readonly ScheduleRun[],
-  triggers: readonly ScheduleTrigger[],
-  timezone: string,
-): RunLine[] {
+export function runLines(runs: readonly ScheduleRun[]): RunLine[] {
   const lines: RunLine[] = []
   for (const run of runs) {
-    if (!isMissed(run)) {
+    if (run.state.kind !== 'skipped' || run.state.reason !== 'missed') {
       lines.push({ kind: 'run', run })
       continue
     }
-    const count = run.state.kind === 'skipped' ? Math.max(1, run.state.missedCount) : 1
-    const to = lastOfMissed(run.dueAt, count, triggers, timezone)
+    const count = Math.max(1, run.state.missedCount)
     const last = lines.at(-1)
     // Newest first: the earlier missed run widens the line downwards.
     if (last?.kind === 'missed') {
       last.from = run.dueAt
+      last.count += count
       last.runs.push(run)
-    } else lines.push({ kind: 'missed', key: run.id, from: run.dueAt, to, runs: [run] })
+    } else
+      lines.push({
+        kind: 'missed',
+        key: run.id,
+        from: run.dueAt,
+        to: run.state.missedUntil,
+        count,
+        runs: [run],
+      })
   }
   return lines
 }
@@ -216,7 +253,8 @@ const clockOf = (at: Date, timezone: string): string =>
 
 /**
  * The words of a line of missed runs (Зп6): «Пропущены запуски с 9:00 по 14:00» within a day,
- * «… с 14 ноября, 23:00 по 15 ноября, 2:00» across days; one moment — «Пропущено».
+ * «… с 14 ноября, 23:00 по 15 ноября, 2:00» across days; a line without its end — «Пропущены 5
+ * запусков, начиная с 9:00», the day of the first beside the line; one moment — «Пропущено».
  */
 export function missedText(
   line: Extract<RunLine, { kind: 'missed' }>,
@@ -224,12 +262,13 @@ export function missedText(
   now: Date,
 ): string {
   const first = line.runs[0]
-  if (line.from.getTime() === line.to.getTime() && first !== undefined)
-    return scheduledRunStateText(first.state)
+  if (line.count <= 1 && first !== undefined) return scheduledRunStateText(first.state)
+  const from = clockOf(line.from, timezone)
+  if (line.to === null || line.to.getTime() <= line.from.getTime())
+    return schedulePageTexts.missedSince(line.count, from)
+  const to = clockOf(line.to, timezone)
   const fromDay = runDateText(line.from, timezone, now)
   const toDay = runDateText(line.to, timezone, now)
-  const from = clockOf(line.from, timezone)
-  const to = clockOf(line.to, timezone)
   return fromDay === toDay
     ? schedulePageTexts.missedRange(from, to)
     : schedulePageTexts.missedRange(`${fromDay}, ${from}`, `${toDay}, ${to}`)
@@ -321,6 +360,39 @@ export function newTriggerDraft(timezone: string, now: Date): TriggerDraft {
     days: [1],
     day: 1,
   }
+}
+
+/** A block of «Один раз» whose date the field holds whole; an empty or half-typed one is not. */
+const hasDate = (draft: TriggerDraft): boolean =>
+  draft.frequency !== 'once' || scheduleDateSchema.safeParse(draft.date).success
+
+/** The schedules of the blocks that say a moment: a «Один раз» without its date says none. */
+const knownTriggers = (form: Pick<ScheduleForm, 'triggers'>): ScheduleTrigger[] =>
+  triggersOfForm({ triggers: form.triggers.filter(hasDate) })
+
+/** The hour of a block's time, 0–23. */
+const hourOf = (draft: TriggerDraft): number => Number(draft.time.slice(0, 2)) % 24
+
+/**
+ * «+ Добавить время»: a block every day at the first whole hour, three hours on from the last
+ * block's time and later, that keeps an hour from every other run — a new block never meets one
+ * already there (Зп11). When no hour fits, the plain 9:00, and the window says why.
+ */
+export function addedTriggerDraft(
+  form: Pick<ScheduleForm, 'triggers' | 'timezone'>,
+  now: Date,
+): TriggerDraft {
+  const draft = newTriggerDraft(form.timezone, now)
+  const last = form.triggers.at(-1)
+  if (last === undefined) return draft
+  const others = knownTriggers(form)
+  for (let step = 3; step < 27; step += 1) {
+    const time = `${String((hourOf(last) + step) % 24).padStart(2, '0')}:00`
+    const candidate = { ...draft, time, date: onceDateFor(time, form.timezone, now) }
+    const trigger = triggerOfDraft(candidate)
+    if (trigger !== null && !scheduleRunsTooOften([...others, trigger])) return candidate
+  }
+  return draft
 }
 
 export function draftOfTrigger(
@@ -444,6 +516,25 @@ export function formOfSchedule(schedule: ScheduleDetail | ScheduleItem, now: Dat
   }
 }
 
+/** Whether the schedules and their zone are the same as another form's: the task's, saved. */
+export const sameSchedules = (
+  form: Pick<ScheduleForm, 'triggers' | 'timezone'>,
+  was: Pick<ScheduleForm, 'triggers' | 'timezone'>,
+): boolean =>
+  form.timezone === was.timezone &&
+  JSON.stringify(triggersOfForm(form)) === JSON.stringify(triggersOfForm(was))
+
+/**
+ * Whether the client changed what the window opened with — the name, the words, the schedules,
+ * «Размышление» or the notice; not the zone or the project the window may take by itself.
+ */
+export const formEdited = (form: ScheduleForm, was: ScheduleForm): boolean =>
+  form.name !== was.name ||
+  form.instructions !== was.instructions ||
+  form.effort !== was.effort ||
+  form.notify !== was.notify ||
+  JSON.stringify(triggersOfForm(form)) !== JSON.stringify(triggersOfForm(was))
+
 /** What the window says is wrong, by field; the server's refusals come on top of these. */
 export interface FormProblems {
   name?: string
@@ -455,32 +546,54 @@ export interface FormProblems {
   schedule?: string
 }
 
+/** A name that reads as a password or a key: the server refuses it, as it does the words (rule 2). */
+export const nameLooksLikeSecret = (form: Pick<ScheduleForm, 'name'>): boolean => {
+  const name = form.name.trim()
+  return name !== '' && looksLikeSecret(name)
+}
+
 /**
  * What stops «Создать» (Зп8, Зп9, Зп11, Зп15): what is always told — a single run in the past, runs
- * closer than an hour, a week without its days, a template about a site without one — and, once
- * the client tried to save, the empty name and instructions and the place for the addresses.
+ * closer than an hour, a week without its days, a single run without its date, a template about a
+ * site without one — and, once the client tried to save, the empty name and instructions, a name
+ * like a key and the place for the addresses. `saved` — the task being changed: its single runs in
+ * the past are told only once its schedules change, as the server checks them then alone, so a
+ * finished «Один раз» can still be renamed (Зп15, Зп24).
  */
 export function formProblems(
   form: ScheduleForm,
   now: Date,
-  options: { submitted: boolean; templateNeedsProject: boolean },
+  options: { submitted: boolean; templateNeedsProject: boolean; saved?: ScheduleForm },
 ): FormProblems {
   const problems: FormProblems = { triggers: {} }
   if (options.submitted && form.name.trim() === '') problems.name = scheduleDialogTexts.nameRequired
+  else if (options.submitted && nameLooksLikeSecret(form))
+    problems.name = scheduleDialogTexts.nameSecret
   if (options.submitted && form.instructions.trim() === '')
     problems.instructions = scheduleDialogTexts.instructionsRequired
   else if (options.submitted && hasScheduleTemplatePlaceholder(form.instructions))
     problems.instructions = scheduleTemplatePlaceholder().message
   if (options.templateNeedsProject && form.siteId === null)
     problems.project = scheduleDialogTexts.needsProject
+  const checkPast = options.saved === undefined || !sameSchedules(form, options.saved)
   for (const draft of form.triggers) {
     if (draft.frequency === 'weekly' && draft.days.length === 0)
       problems.triggers[draft.key] = scheduleDialogTexts.daysRequired
+    if (!hasDate(draft)) {
+      problems.triggers[draft.key] = scheduleDialogTexts.dateRequired
+      continue
+    }
     const trigger = triggerOfDraft(draft)
-    if (trigger?.kind === 'once' && scheduleTriggersInPast([trigger], form.timezone, now))
+    if (
+      checkPast &&
+      trigger?.kind === 'once' &&
+      scheduleTriggersInPast([trigger], form.timezone, now)
+    )
       problems.triggers[draft.key] = scheduleInPast().message
   }
-  if (!scheduleTriggersSchema.safeParse(triggersOfForm(form)).success)
+  // Only the rule of an hour is said of the schedules together; a block's own fault is its own.
+  const together = scheduleTriggersSchema.safeParse(knownTriggers(form))
+  if (!together.success && together.error.issues.some(isScheduleTooOftenIssue))
     problems.schedule = SCHEDULE_TOO_OFTEN_TEXT
   return problems
 }

@@ -254,7 +254,7 @@ export class McpScheduleService {
     if ((change.project === 'this_chat') !== (scope.siteId !== null))
       return badRequest(
         scope.siteId === null
-          ? 'A chat without a project sets up tasks without a project: project "none". A task about a site is set up in a chat of its project or by hand in «Расписание»: offer the client that'
+          ? 'A chat without a project sets up tasks without a project: project "none". A task about a site is set up in a chat of its project or by hand in «Запланированные задачи»: offer the client that'
           : 'A chat of a project sets up tasks of this project: project "this_chat"',
       )
     return this.#reserve(scope, { kind: 'create', ...change })

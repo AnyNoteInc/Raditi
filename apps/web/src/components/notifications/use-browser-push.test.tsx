@@ -29,6 +29,8 @@ const ELSEWHERE = 'https://updates.push.services.mozilla.com/wpush/v2/elsewhere'
 const server = vi.hoisted(() => ({
   endpoints: new Set<string>(),
   publicKey: null as string | null,
+  /** How many `settings` requests more the cabinet does not answer (503 during a deploy). */
+  settingsFailures: 0,
   calls: [] as { name: string; input: unknown }[],
 }))
 
@@ -40,6 +42,10 @@ vi.mock('@/trpc/client', () => ({
           queryKey: [['notification', 'settings'], { input, type: 'query' }],
           queryFn: () => {
             server.calls.push({ name: 'settings', input })
+            if (server.settingsFailures > 0) {
+              server.settingsFailures--
+              throw new Error('503')
+            }
             const here = input?.endpoint !== undefined && server.endpoints.has(input.endpoint)
             return {
               push: false,
@@ -153,6 +159,7 @@ afterEach(() => {
   Reflect.deleteProperty(navigator, 'serviceWorker')
   server.endpoints.clear()
   server.publicKey = null
+  server.settingsFailures = 0
   server.calls.length = 0
 })
 
@@ -360,6 +367,77 @@ describe('useBrowserPush', () => {
     })
     expect(browser.notification.requestPermission).not.toHaveBeenCalled()
     expect(result.current.problem).toBe(browserPushText.unavailable)
+  })
+
+  describe('when the cabinet did not answer (Зп37)', () => {
+    const settingsCalls = () => server.calls.filter((call) => call.name === 'settings').length
+
+    it('asks it again instead of saying push is not set up, and the next click subscribes', async () => {
+      const browser = fakeBrowser({ permission: 'default', answer: 'granted' })
+      server.publicKey = KEY_NOW
+      server.settingsFailures = 1
+      const { result } = renderHook(() => useBrowserPush(), { wrapper })
+      await waitFor(() => expect(result.current.state).toBe('off'))
+      const before = settingsCalls()
+      await act(async () => {
+        expect(await result.current.enable()).toBe(false)
+      })
+      expect(settingsCalls()).toBe(before + 1)
+      expect(result.current.problem).toBe(browserPushText.enableFailed)
+      // Safari asks only from the click itself: not after the request.
+      expect(browser.notification.requestPermission).not.toHaveBeenCalled()
+      await act(async () => {
+        expect(await result.current.enable()).toBe(true)
+      })
+      expect(result.current.problem).toBeNull()
+      await waitFor(() => expect(result.current.state).toBe('on'))
+    })
+
+    it('asks again on every click while it is still silent', async () => {
+      fakeBrowser({ permission: 'default' })
+      server.publicKey = KEY_NOW
+      server.settingsFailures = Number.POSITIVE_INFINITY
+      const { result } = renderHook(() => useBrowserPush(), { wrapper })
+      await waitFor(() => expect(result.current.state).toBe('off'))
+      for (const _click of [1, 2]) {
+        const before = settingsCalls()
+        await act(async () => {
+          expect(await result.current.enable()).toBe(false)
+        })
+        expect(settingsCalls()).toBe(before + 1)
+        expect(result.current.problem).toBe(browserPushText.enableFailed)
+      }
+      expect(result.current.working).toBe(false)
+    })
+
+    it('is on at once where its answer knows this browser', async () => {
+      const browser = fakeBrowser({
+        permission: 'granted',
+        subscription: { endpoint: HERE, key: KEY_NOW },
+      })
+      server.publicKey = KEY_NOW
+      server.endpoints.add(HERE)
+      server.settingsFailures = 1
+      const { result } = renderHook(() => useBrowserPush(), { wrapper })
+      await waitFor(() => expect(result.current.state).toBe('off'))
+      await act(async () => {
+        expect(await result.current.enable()).toBe(true)
+      })
+      expect(result.current.problem).toBeNull()
+      expect(browser.pushManager.subscribe).not.toHaveBeenCalled()
+      await waitFor(() => expect(result.current.state).toBe('on'))
+    })
+
+    it('says push is not set up only when its answer says so', async () => {
+      fakeBrowser({ permission: 'default' })
+      server.settingsFailures = 1
+      const { result } = renderHook(() => useBrowserPush(), { wrapper })
+      await waitFor(() => expect(result.current.state).toBe('off'))
+      await act(async () => {
+        expect(await result.current.enable()).toBe(false)
+      })
+      expect(result.current.problem).toBe(browserPushText.unavailable)
+    })
   })
 
   it('turns off only this browser, here and in the cabinet', async () => {

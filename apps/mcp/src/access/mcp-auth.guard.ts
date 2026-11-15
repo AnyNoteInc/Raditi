@@ -76,9 +76,10 @@ export class McpAuthGuard implements CanActivate {
     // The web search is offered while its key is in Vault (spec §20, «Веб-поиск агента»).
     if (families.includes('search') && !(await this.searchKey.available()))
       families = families.filter((family) => family !== 'search')
-    // A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп32): a
-    // call that needs the client's word is answered as a refusal of its tool — `schedule_*` the
-    // pass is not offered, `page_delete` it is — before the body is judged by its family.
+    // A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28, Зп32):
+    // a call that needs the client's word — with `confirmedByClient`, or a change of the tasks or
+    // of the pages, which the pass is not offered — is answered as a refusal of its tool before
+    // the body is judged by its family.
     if (req.method === 'POST' && authorized.unattended && mcpCallNeedsClient(req.body))
       throw new McpToolRefusal(mcpErrorId(req.body), MCP_UNATTENDED_REFUSAL)
     if (req.method === 'POST' && !mcpBodyAllowed(req.body, families))

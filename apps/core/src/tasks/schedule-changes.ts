@@ -1,5 +1,6 @@
 import {
   applyScheduleChange,
+  enqueueTelegramDeliver,
   insertFeedEvent,
   pendingScheduleChanges,
   refuseScheduleChanges,
@@ -22,7 +23,10 @@ import {
 // values of the client and the keys of the turn, and the words of a task go to the agent of every
 // run. Everything is checked again by `applyScheduleChange`. What was done is told by
 // `feed.schedule_change`, what was not by `feed.schedule_left`; a turn that failed or was
-// cancelled refuses its changes at once, and the sweep closes those no end of a turn reached.
+// cancelled refuses its changes at once, and the sweep closes those no end of a turn reached. A
+// chat bound to Telegram gets each of these rows there too, on its own: they come after the rows
+// of the pass were sent (docs/plan/80-telegram.md), and the client there must learn that the task
+// the agent promised was not saved.
 
 type Refuses = (text: string) => 'turn_key' | 'client_value' | null
 
@@ -40,7 +44,13 @@ const BATCH = 50
 export interface ScheduleChangesDependencies {
   db: Pick<
     PrismaClient,
-    '$transaction' | '$queryRaw' | 'scheduleReservation' | 'task' | 'taskEvent' | 'taskTurn'
+    | '$transaction'
+    | '$queryRaw'
+    | 'outboxEvent'
+    | 'scheduleReservation'
+    | 'task'
+    | 'taskEvent'
+    | 'taskTurn'
   >
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
@@ -50,7 +60,8 @@ export interface ScheduleChangesDependencies {
 export function scheduleLeftReasonOf(code: string): ScheduleLeftReason {
   if (code === 'SCHEDULE_FORBIDDEN') return 'forbidden'
   if (code === 'SCHEDULE_LIMIT') return 'limit'
-  if (code === 'SCHEDULE_NOT_FOUND' || code === 'NOT_FOUND') return 'not_found'
+  if (code === 'SCHEDULE_NOT_FOUND' || code === 'NOT_FOUND' || code === 'SCHEDULE_PROJECT_GONE')
+    return 'not_found'
   if (code.startsWith('TASK_TEXT_')) return 'text_refused'
   if (code === 'SCHEDULE_TOO_OFTEN' || code === 'SCHEDULE_IN_PAST' || code === 'BAD_REQUEST')
     return 'invalid'
@@ -126,7 +137,7 @@ export class ScheduleChanges {
       for (const change of closed)
         await this.#left(
           taskId,
-          turnId,
+          { no: turn, id: turnId },
           change.kind,
           leftName(change.kind, change.name, false),
           'failed',
@@ -163,7 +174,10 @@ export class ScheduleChanges {
         closed++
         await this.#left(
           reservation.taskId,
-          await this.#turnId(reservation.taskId, reservation.turnNo),
+          {
+            no: reservation.turnNo,
+            id: await this.#turnId(reservation.taskId, reservation.turnNo),
+          },
           change.kind,
           leftName(change.kind, change.name, false),
           'failed',
@@ -207,7 +221,12 @@ export class ScheduleChanges {
     const nameRefused = words.name !== null && refusesText(words.name) !== null
     if (nameRefused || (words.instructions !== null && refusesText(words.instructions) !== null)) {
       logger?.warn(`schedule_change_refused task=${where.taskId} turn=${where.turn} reason=text`)
-      return this.#refuse(change, where, 'text_refused', !nameRefused)
+      return this.#refuse(
+        change,
+        where,
+        nameRefused ? 'name_refused' : 'text_refused',
+        !nameRefused,
+      )
     }
     try {
       const done = await applyScheduleChange(db, {
@@ -216,11 +235,12 @@ export class ScheduleChanges {
         taskId: where.taskId,
         now: this.#now(),
       })
-      await insertFeedEvent(db, {
+      const eventId = await insertFeedEvent(db, {
         taskId: where.taskId,
         turnId: where.turnId,
         row: { type: 'feed.schedule_change', payload: changePayloadOf(done.action, done.schedule) },
       })
+      await this.#tell(where.taskId, where.turn, eventId)
       logger?.log(
         `schedule_changed task=${where.taskId} turn=${where.turn} action=${done.action} schedule=${done.schedule.id}`,
       )
@@ -239,7 +259,7 @@ export class ScheduleChanges {
 
   async #refuse(
     change: Pending,
-    where: { taskId: string; turnId: string | null },
+    where: { taskId: string; turn: number; turnId: string | null },
     reason: ScheduleLeftReason,
     nameTold: boolean,
   ): Promise<void> {
@@ -253,7 +273,7 @@ export class ScheduleChanges {
       if (!closed) return
       await this.#left(
         where.taskId,
-        where.turnId,
+        { no: where.turn, id: where.turnId },
         closed.kind,
         leftName(closed.kind, closed.name, nameTold),
         reason,
@@ -265,16 +285,39 @@ export class ScheduleChanges {
 
   async #left(
     taskId: string,
-    turnId: string | null,
+    turn: { no: number; id: string | null },
     action: ScheduleLeftAction,
     name: string | null,
     reason: ScheduleLeftReason,
   ): Promise<void> {
-    await insertFeedEvent(this.deps.db, {
+    const eventId = await insertFeedEvent(this.deps.db, {
       taskId,
-      turnId,
+      turnId: turn.id,
       row: { type: 'feed.schedule_left', payload: { v: 1, action, name, reason } },
     })
+    await this.#tell(taskId, turn.no, eventId)
+  }
+
+  /**
+   * A row of this end of a turn, to the chat bound in Telegram (`enqueueTelegramDeliver` writes
+   * nothing for one that is not): on its own and once — the job is keyed by the row. Never throws:
+   * the row is in the cabinet whatever Telegram gets.
+   */
+  async #tell(taskId: string, turn: number, eventId: bigint): Promise<void> {
+    const { db, logger } = this.deps
+    try {
+      const chat = await db.task.findUnique({ where: { id: taskId }, select: { attempt: true } })
+      if (!chat) return
+      await enqueueTelegramDeliver(db, {
+        taskId,
+        kind: 'answered',
+        attempt: Math.max(1, chat.attempt),
+        turnNo: turn,
+        eventId: String(eventId),
+      })
+    } catch {
+      logger?.warn(`schedule_change_telegram_failed task=${taskId} turn=${turn}`)
+    }
   }
 
   async #turnId(taskId: string, turn: number): Promise<string | null> {

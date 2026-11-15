@@ -96,9 +96,10 @@ export async function subscribeBrowser(
 }
 
 /**
- * The browser replaced its subscription (`pushsubscriptionchange` of the service worker,
- * docs/plan/82-scheduled-tasks.md, Зп41): the new one is kept for the same user, under the key of
- * now, and the old one of this user goes. An old one of another user, or none, is left alone.
+ * The client turned push on again in a browser whose subscription was made under another VAPID key
+ * (docs/plan/82-scheduled-tasks.md, Зп37): the press is the consent, so the new subscription is
+ * kept for the user, under the key of now, and the old one of this user goes. An old one of
+ * another user, or none, is left alone.
  */
 export async function resubscribeBrowser(
   db: PrismaClient,
@@ -117,6 +118,40 @@ export async function resubscribeBrowser(
     })
   })
   return { resubscribed: true }
+}
+
+/**
+ * The browser replaced its subscription by itself (`pushsubscriptionchange` of the service worker,
+ * Зп41): the row of the old one moves to the new one — its owner, not whoever is signed in now.
+ * The service worker posts with the session the browser holds at that moment, which may be another
+ * account's on a shared computer: that account never turned push on here (Зп37: a row is there only
+ * where the client turned push on in this browser), so nothing is made for it, and the owner's row
+ * — another user's — is left to the push service to end. Moved only when the old row is the
+ * signed-in user's; `false` — nothing changed.
+ */
+export async function replaceBrowserSubscription(
+  db: PrismaClient,
+  userId: string,
+  change: { oldEndpoint: string | null; subscription: BrowserSubscription },
+  vapidKey: string | null = null,
+): Promise<{ replaced: boolean }> {
+  const { oldEndpoint, subscription } = change
+  if (oldEndpoint === null) return { replaced: false }
+  return db.$transaction(async (tx) => {
+    const old = await tx.pushSubscription.findUnique({
+      where: { endpoint: oldEndpoint },
+      select: { userId: true },
+    })
+    if (old === null || old.userId !== userId) return { replaced: false }
+    if (oldEndpoint !== subscription.endpoint)
+      await tx.pushSubscription.delete({ where: { endpoint: oldEndpoint } })
+    await tx.pushSubscription.upsert({
+      where: { endpoint: subscription.endpoint },
+      create: { userId, ...subscription, vapidKey },
+      update: { userId, p256dh: subscription.p256dh, auth: subscription.auth, vapidKey },
+    })
+    return { replaced: true }
+  })
 }
 
 /** The browser gave its subscription up, or the client turned notifications off in it. */

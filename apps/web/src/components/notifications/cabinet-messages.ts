@@ -6,6 +6,13 @@
 /** What the service worker posts to a window of the cabinet when a notification is clicked. */
 export const NAVIGATE_MESSAGE = 'raditi:navigate'
 
+/**
+ * What the window answers on the port the worker gave with the message: it goes there itself. A
+ * window that does not answer — a page of an older cabinet, one without the bridge — is moved by
+ * the worker, or a new one opens.
+ */
+export const NAVIGATE_ANSWER = Object.freeze({ ok: true })
+
 // The path of notificationPushPayloadSchema (@repo/domain/schedule), spelled again here so the
 // layout of the cabinet does not load the whole domain of schedules; the test keeps them equal.
 const CABINET_PATH = /^\/(?!\/)[A-Za-z0-9/_-]*$/

@@ -138,6 +138,11 @@ export class ScheduleNotify {
     if (run.status === 'skipped')
       return reason === 'missed' ? this.#missed(task, runId) : this.#log(runId, 'missed', 'none')
     if (run.status !== 'refused') return 'none'
+    // A project the client deleted stops its tasks without a word (Зп22): a run refused for that
+    // deletion — of a «Один раз» that had completed too, which no pause names — or any refusal of a
+    // task it stopped, a start that raced the deletion among them.
+    if (reason === 'project_gone' || task.pausedReason === 'project_gone')
+      return this.#log(runId, 'not_started', 'none')
     const paused = recorded ? recorded.paused : pausedBy(task, reason)
     if (paused !== null && paused !== 'completed')
       return this.paused({ scheduleId: task.id, runId, reason: paused, because: reason })

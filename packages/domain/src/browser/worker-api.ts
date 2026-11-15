@@ -114,7 +114,11 @@ export const browserActionRequestSchema = z.strictObject({
   action: browserActionSchema,
   /**
    * A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп27, Зп28):
-   * the worker refuses a save or a publish on the site (`BROWSER_READ_ONLY`). Absent — false.
+   * the worker refuses a save or a publish on the site (`BROWSER_READ_ONLY`), and from this action
+   * on — until an action says otherwise — every request of the pages to the site that does more
+   * than read (a method that writes, other than the saved sign-in; a read with a secret in its
+   * query, unless the stack's `readOnlyDenied` allows it; a read that acts, which it denies), and
+   * the acceptance of a confirm or a prompt dialog. Absent — false.
    */
   readOnly: z.boolean().optional(),
 })

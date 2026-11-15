@@ -508,6 +508,24 @@ test("verify-edge's fallback for a host without journald changes the logging dri
   }
 })
 
+test('core that compose gives the intake of scheduled runs gets its secret too (docs/plan/82, §4.4)', () => {
+  // core refuses SCHEDULE_INTAKE_URL without SCHEDULE_INTAKE_SECRET («set both or neither»): every
+  // place that renders the secrets of core for this compose names the secret.
+  assert.ok(services.core.environment?.SCHEDULE_INTAKE_URL, 'compose gives core the address')
+  const example = readFileSync(new URL('./secrets.example/core/app.env', import.meta.url), 'utf8')
+  assert.match(example, /^SCHEDULE_INTAKE_SECRET=/m, 'secrets.example/core/app.env')
+  const verify = readFileSync(new URL('./verify-edge.mjs', import.meta.url), 'utf8')
+  const core = /const core = \{([\s\S]*?)\n {2}\}/.exec(verify)?.[1] ?? ''
+  const web = /const web = \{([\s\S]*?)\n {2}\}/.exec(verify)?.[1] ?? ''
+  assert.match(core, /\.\.\.scheduleIntake,/, 'verify-edge: the secrets of core')
+  assert.match(web, /\.\.\.scheduleIntake,/, 'verify-edge: the secrets of web')
+  assert.match(
+    verify,
+    /const scheduleIntake = \{ SCHEDULE_INTAKE_SECRET: /,
+    'verify-edge: the secret',
+  )
+})
+
 test('core gets time to finish its shutdown', () => {
   const [, seconds] = /^(\d+)s$/.exec(services.core.stop_grace_period) ?? []
   assert.ok(Number(seconds) >= 40)

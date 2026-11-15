@@ -76,8 +76,10 @@ export const mcpAccessSchema = z.strictObject({
   requirements: siteTaskRequirementsSchema.optional(),
   /**
    * A pass of a scheduled run before the first words of its client (docs/plan/82-scheduled-
-   * tasks.md, Зп27, `passUnattended`): nobody confirms anything, so the tasks are not changed, a
-   * call with `confirmedByClient` is refused and the browser only reads the site (Зп28, Зп32).
+   * tasks.md, Зп27, `passUnattended`): nobody confirms anything, so the tasks and the pages are not
+   * changed, a call with `confirmedByClient` is refused, the project's MCP servers are not called
+   * and the browser only reads the site (Зп28, Зп32). Decided for the pass, by the request it
+   * answers (`answeredAtOf`): what the client writes while it runs lifts nothing of it.
    * Absent — false: a scope made before the field.
    */
   unattended: z.boolean().optional(),
@@ -187,6 +189,7 @@ export class PostgresMcpAccess implements McpAccessStore {
       SELECT k.id AS "keyId", t.id AS "taskId", t.workspace_id AS "workspaceId",
         s.id AS "siteId", k.session_id AS "sessionId", k.turn_no AS turn,
         k.first_epoch AS "firstEpoch", a.lease_epoch AS epoch, a.site_id AS "leaseId",
+        a.plan->>'committedAt' AS "answeredAt",
         s.stack::text AS stack, s.url,
         t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
         p.id AS "previewId", p.status::text AS "previewStatus",
@@ -218,10 +221,30 @@ export class PostgresMcpAccess implements McpAccessStore {
     const parsed = rows.length === 1 ? mcpTurnAccessSchema.safeParse(accessOf(rows[0])) : undefined
     if (!parsed?.success)
       throw new DomainError('MCP_ACCESS_SCOPE_INVALID', 'MCP admission row is invalid', 503)
-    // Whether the client is there is one rule of the platform (Зп27): its own function, read for
-    // each request — the client's first words make the next call an ordinary chat's.
-    return { ...parsed.data, unattended: await passUnattended(this.prisma, parsed.data.taskId) }
+    // Whether the client is there is one rule of the platform (Зп27), decided for the pass: by the
+    // request it answers, never by what the feed holds when a call comes.
+    const answeredAt = answeredAtOf(rows[0])
+    const unattended = await passUnattended(
+      this.prisma,
+      parsed.data.taskId,
+      answeredAt === null ? undefined : { answeredAt },
+    )
+    return { ...parsed.data, unattended }
   }
+}
+
+/**
+ * When the request a pass answers was written: `committedAt` of the plan its assignment keeps
+ * (`turnPlanSchema`; the planner writes there the instant of that `feed.request`) — the bound of
+ * `passUnattended`, so what the client writes while the pass runs — «Остановить», «Отправить
+ * сейчас» — lifts nothing of it. null — a plan without it, which only a fixture writes: the whole
+ * feed is counted.
+ */
+function answeredAtOf(row: unknown): Date | null {
+  const value = (row as { answeredAt?: unknown } | null)?.answeredAt
+  if (typeof value !== 'string') return null
+  const at = new Date(value)
+  return Number.isNaN(at.getTime()) ? null : at
 }
 
 /**
@@ -238,6 +261,8 @@ function accessOf(row: unknown): unknown {
     previewDbKinds,
     needsRepository,
     needsBrowser,
+    // The pass's, not the scope's: read by `answeredAtOf`.
+    answeredAt: _answeredAt,
     ...access
   } = row as Record<string, unknown>
   return {

@@ -11,7 +11,8 @@
 -- schedulePausedReasons, scheduleCreatedVia, reasoningEfforts, scheduleLeftActions (the kinds of
 -- a reservation) and notificationKinds.
 --
--- Added tables and columns, one transaction; no stop is needed. The code before this release
+-- Added tables and columns, one transaction; no stop is needed. One deletion of data: the
+-- Web Push subscriptions of the clients who had turned push off (Зп37, below). The code before this release
 -- writes chat_notifications with a chat and one of the five kinds of a pass, which the new
 -- constraints accept, and reads none of the new columns; the rows it wrote keep a NULL attempt and
 -- turn_no, which no unique index counts.
@@ -23,6 +24,15 @@ ALTER TABLE "users" ADD CONSTRAINT "users_timezone_check"
   CHECK ("timezone" IS NULL OR "timezone" ~ '^[A-Za-z][A-Za-z0-9_+/-]{0,63}$');
 
 ALTER TABLE "push_subscriptions" ADD COLUMN "vapid_key" VARCHAR(128);
+
+-- Push is switched on and off per browser now (Зп37): core no longer reads
+-- notification_settings.push and pushes to every subscription of the user. A browser the client
+-- turned off under the old switch lost only its own row; the other browsers of that client kept
+-- theirs and stayed silent by the flag alone. They are given up here, so every browser of such a
+-- client says «off», as the client last chose, until they turn push on in it again.
+DELETE FROM "push_subscriptions" p
+USING "notification_settings" s
+WHERE s."user_id" = p."user_id" AND s."push" = false;
 
 -- A scheduled task: of the workspace of its project, without one — of its creator's personal one.
 CREATE TABLE "scheduled_tasks" (
@@ -115,6 +125,7 @@ CREATE TABLE "scheduled_runs" (
     "instructions" TEXT NOT NULL,
     "effort" VARCHAR(8) NOT NULL,
     "missed_count" INTEGER NOT NULL DEFAULT 0,
+    "missed_until" TIMESTAMPTZ(6),
     "attempts" INTEGER NOT NULL DEFAULT 0,
     "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "started_at" TIMESTAMPTZ(6),
@@ -144,6 +155,11 @@ CREATE TABLE "scheduled_runs" (
     -- NULL reason must not pass the CHECK as unknown.
     CONSTRAINT "scheduled_runs_missed_count_check" CHECK (
       "missed_count" >= 0 AND ("missed_count" = 0 OR "reason" IS NOT DISTINCT FROM 'missed')
+    ),
+    -- The end of the gap a row of «Пропущено» stands for: only on such a row, never before its start.
+    CONSTRAINT "scheduled_runs_missed_until_check" CHECK (
+      "missed_until" IS NULL
+      OR ("reason" IS NOT DISTINCT FROM 'missed' AND "missed_until" >= "due_at")
     ),
     CONSTRAINT "scheduled_runs_attempts_check" CHECK ("attempts" >= 0)
 );

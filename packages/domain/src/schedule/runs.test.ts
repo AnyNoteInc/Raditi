@@ -10,6 +10,7 @@ import {
   scheduleInPast,
   scheduleLimitReached,
   scheduleNotFound,
+  scheduleProjectGone,
   scheduleRunBusy,
   scheduleTemplatePlaceholder,
   scheduleTooOften,
@@ -55,6 +56,7 @@ describe('the bounds', () => {
       catchUpHours: 6,
       startAttempts: 8,
       pendingSweepMinutes: 75,
+      manualPendingSweepMinutes: 5,
       refusalsToPause: 3,
       manualRunGapMs: 60_000,
       onceMinMinutes: 5,
@@ -173,6 +175,12 @@ describe('the errors', () => {
         'Впишите адреса сайтов конкурентов',
       ],
       [scheduleRunBusy(), 'SCHEDULE_RUN_BUSY', 409, 'Задача уже выполняется'],
+      [
+        scheduleProjectGone(),
+        'SCHEDULE_PROJECT_GONE',
+        409,
+        'Проект этой задачи удалён — выберите другой проект или «Без проекта»',
+      ],
     ] as const
     for (const [error, code, status, message] of cases) {
       expect(isDomainError(error)).toBe(true)
@@ -207,6 +215,18 @@ describe('the notices', () => {
     ).toBe(false)
     expect(isNotificationKind('missed')).toBe(true)
     expect(isNotificationKind('reminder')).toBe(false)
+  })
+
+  // Зп27: the notice of a pass is told by the request it answered; the sweep does not know it.
+  it('names the request of the pass in a chat notice, when it is known', () => {
+    const job = { taskId: runId, kind: 'answered', attempt: 1, turnNo: 1 } as const
+    expect(chatNotifyJobSchema.parse(job)).toEqual(job)
+    expect(chatNotifyJobSchema.parse({ ...job, requestEventId: '42' })).toEqual({
+      ...job,
+      requestEventId: '42',
+    })
+    for (const requestEventId of ['0', '-1', '1.5', 'x', 42])
+      expect(chatNotifyJobSchema.safeParse({ ...job, requestEventId }).success).toBe(false)
   })
 
   it('title a scheduled run in the words of the plan', () => {
@@ -249,15 +269,21 @@ describe('the notices', () => {
     expect(taskPageNotificationKinds).toEqual(['not_started', 'paused', 'missed'])
   })
 
-  it('push ids, a path and a tag, no words', () => {
+  it('push ids, a path, a tag and a moment, no words', () => {
     const payload = {
       id: runId,
       path: `/scheduled/${runId}`,
       kind: 'paused',
       scheduled: true,
       tag: `schedule:${runId}`,
+      at: Date.UTC(2026, 10, 16, 9),
     }
     expect(notificationPushPayloadSchema.parse(payload)).toEqual(payload)
+    // The moment the cabinet made it, in ms since the epoch: the worker orders a tag's notices by it.
+    for (const at of [undefined, 0, -1, 1.5, '1763283600000', Number.MAX_SAFE_INTEGER + 2])
+      expect(notificationPushPayloadSchema.safeParse({ ...payload, at }).success, String(at)).toBe(
+        false,
+      )
     expect(notificationPushPayloadSchema.safeParse({ ...payload, title: 'Отчёт' }).success).toBe(
       false,
     )

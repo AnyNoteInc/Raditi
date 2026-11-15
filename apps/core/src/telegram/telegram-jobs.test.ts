@@ -353,6 +353,58 @@ describe('TelegramJobs.deliver', () => {
   })
 })
 
+describe('TelegramJobs.deliver of a row told alone (docs/plan/82-scheduled-tasks.md, Зп35)', () => {
+  it('sends only that row, keeps the message of the work, and finds no row of another kind', async () => {
+    const h = harness({ progressId: 9 })
+    h.prisma.taskEvent.findFirst.mockResolvedValueOnce({
+      id: 31n,
+      type: 'feed.schedule_left',
+      payload: { v: 1, action: 'create', name: 'Сводка заявок', reason: 'limit' },
+      createdAt: new Date('2026-11-15T09:00:00Z'),
+    } as never)
+    expect(
+      await h.jobs.deliver({
+        taskId: TASK,
+        kind: 'answered',
+        attempt: 1,
+        turnNo: 2,
+        eventId: '31',
+      }),
+    ).toBe('sent')
+    expect(h.prisma.taskEvent.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: 31n,
+          taskId: TASK,
+          clientVisible: true,
+          type: { in: ['feed.schedule_change', 'feed.schedule_left'] },
+        },
+      }),
+    )
+    // The rows of the pass are not read again, and the message of the next pass stands.
+    expect(h.prisma.taskEvent.findMany).not.toHaveBeenCalled()
+    expect(h.bot.deleteMessage).not.toHaveBeenCalled()
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0]!.text).toContain('Задачу не удалось сохранить')
+    expect(h.sent[0]!.keyboard).toEqual([
+      [{ text: 'Открыть в кабинете', url: `https://raditi.example.ru/chats/${TASK}` }],
+    ])
+
+    const none = harness({})
+    none.prisma.taskEvent.findFirst.mockResolvedValueOnce(null as never)
+    expect(
+      await none.jobs.deliver({
+        taskId: TASK,
+        kind: 'answered',
+        attempt: 1,
+        turnNo: 2,
+        eventId: '32',
+      }),
+    ).toBe('skipped')
+    expect(none.sent).toEqual([])
+  })
+})
+
 describe('TelegramJobs.topic', () => {
   it('opens a topic for a chat of a bot with topics and keeps it, once', async () => {
     const h = harness({ topics: true })

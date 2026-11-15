@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { request as httpsRequest, type RequestOptions } from 'node:https'
 import { request as httpRequest } from 'node:http'
-import { Transform } from 'node:stream'
+import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
 import { Logger } from '@nestjs/common'
@@ -9,9 +9,14 @@ import { AGENT_SKILL_TOKEN_RENEW_MS, SKILL_RELAY_PATH } from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
 import { MCP_TOKEN_PATTERN } from '@repo/turn-keys'
 
-import { mcpErrorSummary } from '../common/mcp-http-error.ts'
+import { rpcId } from '../common/json-rpc.ts'
+import { mcpErrorSummary, mcpToolRefusalBody } from '../common/mcp-http-error.ts'
 import type { McpAccessStore, McpTurnAccess } from '../access/mcp-access.ts'
-import { mcpHeadersAllowed, type McpSecurity } from '../access/mcp-policy.ts'
+import {
+  MCP_UNATTENDED_REFUSAL,
+  mcpHeadersAllowed,
+  type McpSecurity,
+} from '../access/mcp-policy.ts'
 import { maskingStream } from './masking.ts'
 import type { SkillSecretRead, SkillSecrets } from './skill-secrets.ts'
 import type { RelayedServer, SkillServerStore } from './skill-servers.ts'
@@ -23,7 +28,11 @@ import { RelayRefusal, type upstreamResolver } from './upstream.ts'
 // admits the token as /mcp does, finds the server of the turn's site by its name, reads its secret
 // from Vault and makes the server's request itself, over its own TLS, with the owner's header.
 // The answer streams back with the secret taken out of it. Nothing of the request or the answer is
-// logged: the name, the host, the status, the bytes and the time.
+// logged: the name, the host, the status, the bytes and the time. A pass of a scheduled run without
+// its client (docs/plan/82-scheduled-tasks.md, Зп27, Зп28) calls no tool of such a server: the
+// owner's key would let it write to the owner's site or service with nobody to confirm it, and the
+// relay cannot tell a tool that reads from one that writes. Its CLI may still start a session and
+// list the tools; each call is answered as that tool's refusal (`MCP_UNATTENDED_REFUSAL`).
 
 export const skillRelayLimits = Object.freeze({
   requestBytes: 4 * 1024 * 1024,
@@ -87,6 +96,67 @@ export const relayText = Object.freeze({
   addressRefused: (name: string) =>
     `Адрес MCP-сервера «${name}» ведёт во внутреннюю сеть, туда Радити не ходит.`,
 })
+
+/** The JSON-RPC answer of a refused tool call: 200 and the result the agent reads. */
+function toolRefusal(res: ServerResponse, id: string | number | null) {
+  const body = JSON.stringify(mcpToolRefusalBody(id, MCP_UNATTENDED_REFUSAL))
+  res.writeHead(200, {
+    'content-type': 'application/json',
+    'cache-control': 'no-store',
+    'content-length': Buffer.byteLength(body),
+  })
+  res.end(body)
+}
+
+/**
+ * The whole body of a request; `over` past `limit` bytes — the rest is left unread, and the answer
+ * goes out before the connection is closed — and `lost` when the CLI went meanwhile.
+ */
+function bodyOf(req: IncomingMessage, limit: number): Promise<Buffer | 'over' | 'lost'> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    const take = (chunk: Buffer) => {
+      size += chunk.length
+      if (size <= limit) {
+        chunks.push(chunk)
+        return
+      }
+      req.off('data', take)
+      req.pause()
+      resolve('over')
+    }
+    req.on('data', take)
+    req.once('end', () => resolve(Buffer.concat(chunks)))
+    req.once('error', () => resolve('lost'))
+    req.once('aborted', () => resolve('lost'))
+  })
+}
+
+/**
+ * What a POST of a pass without its client asks of the server: `call` with the id of the tool
+ * call it is, `relay` for anything else of the protocol (initialize, tools/list, a notification, an
+ * answer to the server), `refuse` for what cannot be read — a body that is not JSON, or a batch
+ * that holds a tool call (the protocol of the CLI sends no batch).
+ */
+function unattendedPost(
+  body: Buffer,
+): { kind: 'call'; id: string | number | null } | { kind: 'relay' } | { kind: 'refuse' } {
+  let message: unknown
+  try {
+    message = JSON.parse(body.toString('utf8'))
+  } catch {
+    return { kind: 'refuse' }
+  }
+  const calls = (value: unknown) =>
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { method?: unknown }).method === 'tools/call'
+  if (Array.isArray(message)) return message.some(calls) ? { kind: 'refuse' } : { kind: 'relay' }
+  if (!calls(message)) return { kind: 'relay' }
+  const id = rpcId.safeParse((message as { id?: unknown }).id)
+  return { kind: 'call', id: id.success ? id.data : null }
+}
 
 function bounded(limit: number, onOver: () => void) {
   let seen = 0
@@ -158,7 +228,23 @@ export class SkillRelay {
     if (active >= skillRelayLimits.perKey) return failure(res, 429, 'Too many MCP requests')
     this.#active.set(access.keyId, active + 1)
     try {
-      await this.#relay(req, res, { siteId, name, server })
+      let body: Buffer | undefined
+      // A pass without its client: the body is read whole, and a tool call goes nowhere.
+      if (access.unattended === true && req.method === 'POST') {
+        if (Number(req.headers['content-length']) > skillRelayLimits.requestBytes)
+          return failure(res, 413, 'Request body is too large')
+        const read = await bodyOf(req, skillRelayLimits.requestBytes)
+        if (read === 'lost') return failure(res, 400, 'Invalid MCP request')
+        if (read === 'over') return failure(res, 413, 'Request body is too large')
+        const asked = unattendedPost(read)
+        if (asked.kind === 'refuse') return failure(res, 400, 'Invalid MCP request')
+        if (asked.kind === 'call') {
+          this.#logger.log(`refused skill=${name} outcome=unattended`)
+          return toolRefusal(res, asked.id)
+        }
+        body = read
+      }
+      await this.#relay(req, res, { siteId, name, server, body })
     } finally {
       const left = (this.#active.get(access.keyId) ?? 1) - 1
       if (left > 0) this.#active.set(access.keyId, left)
@@ -166,10 +252,16 @@ export class SkillRelay {
     }
   }
 
+  /** `body` — the request's, read already; absent — it streams from `req` as it comes. */
   async #relay(
     req: IncomingMessage,
     res: ServerResponse,
-    { siteId, name, server }: { siteId: string; name: string; server: RelayedServer },
+    {
+      siteId,
+      name,
+      server,
+      body,
+    }: { siteId: string; name: string; server: RelayedServer; body?: Buffer | undefined },
   ): Promise<void> {
     const started = Date.now()
     const url = new URL(server.url)
@@ -288,7 +380,11 @@ export class SkillRelay {
           ).then(resolve, reject)
         })
         upstream.on('error', reject)
-        pipeline(req, bounded(skillRelayLimits.requestBytes, abort), upstream).catch(reject)
+        pipeline(
+          body === undefined ? req : Readable.from([body]),
+          bounded(skillRelayLimits.requestBytes, abort),
+          upstream,
+        ).catch(reject)
       })
     } catch {
       if (!res.headersSent) failure(res, 502, relayText.unreachable(name))
