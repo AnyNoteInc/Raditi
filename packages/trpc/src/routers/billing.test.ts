@@ -31,12 +31,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { INTERNAL_ERROR_MESSAGE } from '../errors.ts'
 import { appRouter, createCaller } from '../router.ts'
-import { resetSiteConnectionGate } from '../services/site-connection-gate.ts'
-import {
-  deleteSiteConnectionRows,
-  fakeSiteConnections,
-  siteCreateInput,
-} from '../testing/site-connections.ts'
 import { createContext, type BillingContext, type Context } from '../trpc.ts'
 
 // The payment functions of @repo/billing are wrapped: they run as they are — the PostgreSQL
@@ -78,7 +72,6 @@ const requiredConsents = legalDocuments.flatMap((document) =>
 
 beforeEach(() => {
   vi.stubEnv('APP_ENV', 'test')
-  resetSiteConnectionGate()
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -183,7 +176,6 @@ function context(
       : null,
     billing,
     // Projects are made through the site connection wizard: a fake of its servers and Vault.
-    siteConnections: fakeSiteConnections().services,
   }
 }
 
@@ -1422,7 +1414,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
     })
     await db.creditLedger.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
-    await deleteSiteConnectionRows(db, owned.workspaceId.in)
     await db.site.deleteMany({ where: owned })
     await db.order.deleteMany({ where: owned })
     await db.subscription.deleteMany({ where: owned })
@@ -1479,79 +1470,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
     }
     return { ...plan, maxSites, creditsPerMonth, dto }
   }
-
-  const site = (name: string) =>
-    siteCreateInput({ name, url: `https://${randomUUID()}.example.ru` })
-
-  it('marks the too-small tariff for a workspace with two sites', async () => {
-    const { user: owner, caller } = await account()
-    // «Старт» takes one site, «Бизнес» three.
-    const small = await seeded('start')
-    const roomy = await seeded('business')
-    const sites = small.maxSites + 1
-    expect(sites).toBe(2)
-    expect(roomy.maxSites).toBeGreaterThanOrEqual(sites)
-    const listed = async () => {
-      const list = await caller.billing.plans()
-      const find = (slug: string) => list.plans.find((plan) => plan.slug === slug)
-      return { list, small: find(small.slug), roomy: find(roomy.slug) }
-    }
-
-    // Before the first site there is no workspace: nothing to count, and reading makes none.
-    // The gift of the registration is shown as promised, and nothing is written for it.
-    const before = await listed()
-    expect(before.list.siteCount).toBe(0)
-    expect(before.small).toEqual({ ...small.dto, fitsSites: true, current: false })
-    expect(await caller.billing.overview()).toEqual({
-      paymentsEnabled: true,
-      autoRenewalAvailable: true,
-      subscription: null,
-      // The database of the tests has no credit rate: no task is taken, and the page says so.
-      credits: { ...promisedCredits, newTask: NO_RATE },
-      ...noWaits,
-    })
-    expect(await db.workspace.count({ where: { createdById: owner.id } })).toBe(0)
-    expect(
-      await db.creditLedger.count({ where: { idempotencyKey: `user:${owner.id}:signup-gift` } }),
-    ).toBe(0)
-
-    await caller.project.create(site('Первый'))
-    // The first site made the workspace and kept the promise: the same credits, now granted.
-    const granted = {
-      ...promisedCredits,
-      gift: giftGranted,
-      newTask: NO_RATE,
-      // The workspace is there: the windows without a tariff (plan 71).
-      tier: 'none',
-      windows: FAKE_WINDOWS,
-    }
-    expect((await caller.billing.overview()).credits).toEqual(granted)
-    await caller.project.create(site('Второй'))
-    expect((await caller.billing.overview()).credits).toEqual(granted)
-
-    const after = await listed()
-    expect(after.list.siteCount).toBe(sites)
-    expect(after.small).toEqual({ ...small.dto, fitsSites: false, current: false })
-    expect(after.roomy).toEqual({ ...roomy.dto, fitsSites: true, current: false })
-    // Whatever else is on sale in this database is judged by the same count.
-    const sitesFit = (maxSites: number) => maxSites >= sites
-    expect(after.list.plans.filter((plan) => plan.fitsSites !== sitesFit(plan.maxSites))).toEqual(
-      [],
-    )
-
-    // The checkout refuses by the same count, and the roomy tariff can be paid for.
-    await expect(
-      caller.billing.startCheckout({ planSlug: small.slug, autoRenew: false }),
-    ).rejects.toMatchObject({
-      code: 'CONFLICT',
-      message:
-        'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
-      cause: { code: 'BILLING_PLAN_SITE_LIMIT' },
-    })
-    await expect(
-      caller.billing.startCheckout({ planSlug: roomy.slug, autoRenew: false }),
-    ).resolves.toMatchObject({ orderId: expect.any(String) })
-  })
 
   it('at a shop that takes one-time payments only, refuses the consent and sells the tariff without it', async () => {
     const { user: owner, shop } = await account()
@@ -1838,54 +1756,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         { unit: 'credit_pack', kind: 'grant', orderId: started.orderId },
       ]),
     )
-  })
-
-  it('gives one workspace and one gift to a first site and a first checkout that race', async () => {
-    const { user: owner, caller } = await account()
-    const plan = await seeded('business')
-
-    // The two requests that may each make the personal workspace, several of each at once.
-    const results = await Promise.all([
-      caller.project.create(site('Первый')),
-      caller.billing.startCheckout({ planSlug: plan.slug, autoRenew: false }),
-      caller.project.create(site('Второй')),
-      caller.billing.startCheckout({ planSlug: plan.slug, autoRenew: false }),
-    ])
-
-    expect(results).toHaveLength(4)
-    const workspaces = await db.workspace.findMany({
-      where: { createdById: owner.id },
-      select: { id: true },
-    })
-    expect(workspaces).toHaveLength(1)
-    const workspaceId = workspaces[0]!.id
-    // The sites and the order of the checkouts ended in it.
-    expect(await db.site.count({ where: { workspaceId } })).toBe(2)
-    expect(await db.order.count({ where: { workspaceId } })).toBe(1)
-    // One gift, on its gift account, with one audit entry — and the page shows it.
-    const gift = await db.creditLedger.findMany({
-      where: { idempotencyKey: `user:${owner.id}:signup-gift` },
-      include: { account: { select: { workspaceId: true, unit: true } } },
-    })
-    expect(gift).toHaveLength(1)
-    expect(gift[0]).toMatchObject({
-      kind: 'grant',
-      orderId: null,
-      account: { workspaceId, unit: 'credit_gift' },
-    })
-    expect(gift[0]!.amount.toFixed(2)).toBe(GIFT.toFixed(2))
-    expect(await db.creditLedger.count({ where: { account: { workspaceId } } })).toBe(1)
-    expect(await db.auditLog.count({ where: { workspaceId, action: 'billing.gift.grant' } })).toBe(
-      1,
-    )
-    expect((await caller.billing.overview()).credits).toEqual({
-      ...promisedCredits,
-      // The workspace is there now: its windows are those without a tariff (plan 71).
-      tier: 'none',
-      windows: FAKE_WINDOWS,
-      gift: giftGranted,
-      newTask: NO_RATE,
-    })
   })
 
   it('answers «not found» for an order of another user', async () => {

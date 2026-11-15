@@ -2,12 +2,8 @@ import {
   chatCommandRefusals,
   FEED_REQUEST_TEXT_LIMIT,
   feedCursorSchema,
-  feedEventIdSchema,
   feedTaskHeadSchema,
-  previewStatuses,
   reasoningEffortSchema,
-  releaseOutcomes,
-  releaseStatuses,
   serverCommandIds,
   taskStatuses,
   type FeedItem,
@@ -21,7 +17,6 @@ import { chatContextOf } from '../services/chat/context.ts'
 import {
   DIALOG_CURSOR_PATTERN,
   DIALOG_SEARCH_TEXT,
-  listDialogFolders,
   listDialogs,
   searchDialogs,
 } from '../services/chat/dialog-list.ts'
@@ -50,7 +45,6 @@ import {
   agentCommandDialog,
   postDialogMessage,
   resumeDialog,
-  retryDialog,
   redoDialogTurn,
   undoDialogTurn,
 } from '../services/chat/tasks.ts'
@@ -78,14 +72,6 @@ export const commandsOutput = z.array(
   }),
 )
 
-const countsOutput = z
-  .strictObject({
-    files: z.strictObject({ added: z.number(), modified: z.number(), deleted: z.number() }),
-    media: z.number(),
-    records: z.number(),
-  })
-  .nullable()
-
 /** A row of the feed as `readFeedRow` gave it: its shape is the domain's, checked on reading. */
 const feedItem = z.custom<FeedItem>(
   (value) =>
@@ -95,77 +81,25 @@ const feedItem = z.custom<FeedItem>(
     typeof (value as { type?: unknown }).type === 'string',
 )
 
-const releaseOutput = z.strictObject({
-  id: z.uuid(),
-  status: z.enum(releaseStatuses),
-  step: z.string().nullable(),
-  version: z.string(),
-  outcome: z.enum(releaseOutcomes).nullable(),
-})
-
 const feedOutput = z.strictObject({
   task: feedTaskHeadSchema,
   /**
    * The cloud browser of a task in the browser (docs/plan/57-browser-tasks.md, Б12–Б18): its
    * latest session — who drives it, what the agent asked the client to do there, why it closed;
-   * null for a task with the repository, or before the first pass opened one.
+   * null for a chat without the browser, or before the first pass opened one.
    */
   browser: feedBrowserOutput,
-  preview: z
-    .strictObject({
-      status: z.enum(previewStatuses),
-      unavailableReason: z.string().nullable(),
-      origin: z.string().nullable(),
-      revision: z.number().int(),
-      dirty: z.boolean(),
-    })
-    .nullable(),
-  candidate: z
-    .strictObject({
-      id: z.uuid(),
-      revision: z.number().int(),
-      status: z.enum(['current', 'stale']),
-      counts: countsOutput,
-      proposedVersion: z.string(),
-      checks: z.strictObject({
-        pending: z.number().int(),
-        passed: z.number().int(),
-        failed: z.number().int(),
-        stale: z.number().int(),
-      }),
-    })
-    .nullable(),
-  release: releaseOutput.nullable(),
-  /**
-   * «Отменить выпуск» (docs/plan/53, «Отмена выпуска»): the latest installed release of the
-   * dialog, until when it may be undone (null — the site runs another version), and its latest
-   * undo; null — the dialog installed nothing.
-   */
-  undo: z
-    .strictObject({
-      releaseId: z.uuid(),
-      version: z.string(),
-      installedNow: z.boolean(),
-      until: z.date().nullable(),
-      run: releaseOutput.nullable(),
-    })
-    .nullable(),
   commands: commandsOutput,
   events: z.array(feedItem),
   cursor: feedCursorSchema,
   more: z.boolean(),
 })
 
-/** The project of a chat as a row of the list shows it. */
-const projectOutput = z.strictObject({ id: z.uuid(), name: z.string() })
-
 /** A chat of the list, of its head of pinned chats and of a search. */
 const dialogListItemOutput = z.strictObject({
   id: z.uuid(),
   title: z.string().nullable(),
   status: z.enum(taskStatuses),
-  /** «Отменить выпуск» of the dialog's release: under way, or installed. */
-  undo: z.enum(['running', 'installed']).nullable(),
   /** The agent answered and asked nothing: the dialog waits for no one (26.10.2026). */
   answered: z.boolean(),
   /** `/undo` left it so: the answer it would name was just taken back. */
@@ -174,7 +108,6 @@ const dialogListItemOutput = z.strictObject({
   failed: z.boolean(),
   createdAt: z.date(),
   updatedAt: z.date(),
-  project: projectOutput.nullable(),
   /** «Закрепить» (ВВ21). */
   pinned: z.boolean(),
   /** «В архив» (ВВ21). */
@@ -185,16 +118,13 @@ const dialogListItemOutput = z.strictObject({
 
 export const taskRouter = router({
   /**
-   * A new dialog with the client's first words: the task, its reserve, the files, the row, the
-   * pass and the preview in one transaction. `taskId` comes from the browser; a repeat returns the
-   * same task. `siteId` is required and null for a chat without a project: a forgotten field must
-   * not silently give one, and what the chat works with is the server's, read from the project
-   * (docs/plan/61-chats-first.md, К7).
+   * A new chat with the client's first words: the task, its reserve, the files, the row and the
+   * pass in one transaction. `taskId` comes from the browser; a repeat returns the same task. What
+   * the chat works with is the server's (docs/plan/61-chats-first.md, К7).
    */
   create: consentedProcedure
     .input(
       z.strictObject({
-        siteId: z.uuid().nullable(),
         taskId: browserId,
         text: words,
         attachments: attachmentIdsSchema.optional(),
@@ -206,7 +136,6 @@ export const taskRouter = router({
     .mutation(({ ctx, input }) =>
       createDialog(ctx.prisma, chatContextOf(ctx), {
         userId: ctx.user.id,
-        siteId: input.siteId,
         taskId: input.taskId,
         text: input.text,
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
@@ -215,7 +144,7 @@ export const taskRouter = router({
       }),
     ),
 
-  /** Words to a dialog that waits: an answer to the agent, or a new pass on top of the candidate. */
+  /** Words to a chat that waits: an answer to the agent, or a new pass. */
   message: consentedProcedure
     .input(
       z.strictObject({
@@ -246,22 +175,6 @@ export const taskRouter = router({
     .output(postedOutput)
     .mutation(({ ctx, input }) =>
       resumeDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
-    ),
-
-  /**
-   * `/init`: the agent studies the code and answers with hints for it, a paid pass of its own
-   * (docs/plan/61-chats-first.md, К31).
-   */
-  init: consentedProcedure
-    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
-    .output(postedOutput)
-    .mutation(({ ctx, input }) =>
-      agentCommandDialog(ctx.prisma, {
-        ...input,
-        command: 'init',
-        userId: ctx.user.id,
-        now: new Date(),
-      }),
     ),
 
   /**
@@ -307,24 +220,6 @@ export const taskRouter = router({
     ),
 
   /**
-   * «Попробовать ещё» after a failed pass of a dialog that kept its candidate: the next attempt,
-   * in the class `heavy`, with a reserve of its own (docs/plan/53, «Попробовать ещё (18.10)»).
-   * `failureEventId` — the failure the screen shows.
-   */
-  retry: consentedProcedure
-    .input(
-      z.strictObject({ taskId: z.uuid(), requestId: browserId, failureEventId: feedEventIdSchema }),
-    )
-    .output(postedOutput)
-    .mutation(({ ctx, input }) =>
-      retryDialog(ctx.prisma, chatContextOf(ctx), {
-        ...input,
-        userId: ctx.user.id,
-        now: new Date(),
-      }),
-    ),
-
-  /**
    * `/cancel`: closes a dialog that waits, or asks core to stop the pass that runs — and, for a
    * task in the browser, to stop it in any status and close its browser (docs/plan/57, Б24).
    */
@@ -342,8 +237,8 @@ export const taskRouter = router({
     .mutation(({ ctx, input }) => renameDialog(ctx.prisma, { ...input, userId: ctx.user.id })),
 
   /**
-   * «Удалить»: the dialog leaves the cabinet; one that goes on is cancelled first, as `/cancel`
-   * does it. Refused while a release of it goes on.
+   * «Удалить»: the chat leaves the cabinet; one that goes on is cancelled first, as `/cancel`
+   * does it.
    */
   remove: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid() }))
@@ -440,7 +335,6 @@ export const taskRouter = router({
         userId: ctx.user.id,
         taskId: input.taskId,
         after: input.after ?? '0',
-        address: ctx.chat?.preview?.address ?? null,
       })
       // The client looks at the chat: it is not notified of it (docs/plan/75, ВВ7).
       await markPresence(ctx.prisma, ctx.user.id, feed.task.id)
@@ -476,13 +370,11 @@ export const taskRouter = router({
     ),
 
   /**
-   * The chats of the user, the latest changed first; `folder` — of one project, or `none` for those
-   * without one; `cursor` is `nextCursor` of the page before.
+   * The chats of the user, the latest changed first; `cursor` is `nextCursor` of the page before.
    */
   list: consentedProcedure
     .input(
       z.strictObject({
-        folder: z.union([z.uuid(), z.literal('none')]).optional(),
         cursor: z.string().regex(DIALOG_CURSOR_PATTERN).optional(),
         /** «Архив» (docs/plan/75-chat-input-output.md, ВВ21); the list itself by default. */
         view: z.enum(['active', 'archive']).optional(),
@@ -499,7 +391,6 @@ export const taskRouter = router({
     .query(({ ctx, input }) =>
       listDialogs(ctx.prisma, {
         userId: ctx.user.id,
-        folder: input.folder,
         cursor: input.cursor,
         view: input.view,
       }),
@@ -523,39 +414,11 @@ export const taskRouter = router({
       }),
     })),
 
-  /** «По проектам»: the folders of the user's chats, counted on the server over all of them. */
-  folders: consentedProcedure
-    .input(z.strictObject({}))
-    .output(
-      z.strictObject({
-        folders: z.array(
-          z.strictObject({
-            project: projectOutput.nullable(),
-            count: z.number().int(),
-            attention: z.boolean(),
-          }),
-        ),
-      }),
-    )
-    .query(async ({ ctx }) => ({
-      folders: await listDialogFolders(ctx.prisma, { userId: ctx.user.id }),
-    })),
-
-  /** The head of one chat with its project; both null for a chat without one. */
+  /** The head of one chat. */
   get: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid() }))
     .output(
       feedTaskHeadSchema.extend({
-        siteId: z.uuid().nullable(),
-        project: z
-          .strictObject({
-            id: z.uuid(),
-            name: z.string(),
-            url: z.string(),
-            /** Paused, disconnected or archived: the chat reads and takes no words (К39). */
-            closed: z.boolean(),
-          })
-          .nullable(),
         alias: z.string(),
         createdAt: z.date(),
         updatedAt: z.date(),
@@ -576,7 +439,7 @@ export const taskRouter = router({
     .query(async ({ ctx, input }) => {
       const task = await ctx.prisma.task.findFirst({
         where: accessibleTask(ctx.user.id, input.taskId),
-        select: { id: true, workspaceId: true, siteId: true, status: true },
+        select: { id: true, workspaceId: true, status: true },
       })
       if (task === null) throw taskNotFound()
       return dialogCommands(await dialogFacts(ctx.prisma, task, ctx.user.id))

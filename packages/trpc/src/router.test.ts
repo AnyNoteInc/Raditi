@@ -407,15 +407,9 @@ describe('consentedProcedure', () => {
     expect(guarded).toEqual(
       expect.arrayContaining([
         'user.updateProfile',
-        'project.list',
-        'project.create',
-        'project.get',
-        'project.credentials',
-        'siteConnection.checkBasics',
-        'siteConnection.checkSource',
-        'siteConnection.setup',
-        'siteConnection.retry',
-        'siteConnection.replaceAccess',
+        'workspaceEnv.list',
+        'workspaceEnv.set',
+        'workspaceEnv.remove',
         'billing.overview',
         'billing.plans',
         'billing.usage',

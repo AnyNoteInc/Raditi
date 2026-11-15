@@ -243,74 +243,6 @@ describe('toTRPCError', () => {
     },
   )
 
-  it.each([
-    [
-      'SITE_CONNECTION_UNAVAILABLE',
-      503,
-      'SERVICE_UNAVAILABLE',
-      'Подключение сайтов сейчас недоступно. Попробуйте ещё раз немного позже',
-    ],
-    ['SITE_STACK_NOT_CONNECTABLE', 400, 'BAD_REQUEST', 'Эту платформу мы пока не подключаем'],
-    [
-      'SITE_CHECKS_LIMITED',
-      429,
-      'TOO_MANY_REQUESTS',
-      'Слишком много проверок подряд. Подождите несколько минут и попробуйте снова',
-    ],
-    [
-      'SITE_CONNECTIONS_BUSY',
-      429,
-      'TOO_MANY_REQUESTS',
-      'Сейчас подключаются три ваших сайта. Дождитесь, пока закончится хотя бы одно подключение',
-    ],
-    [
-      'PROJECT_CREATION_IN_PROGRESS',
-      409,
-      'CONFLICT',
-      'Проект уже добавляется. Подождите несколько секунд',
-    ],
-    [
-      'PROJECT_REQUEST_CONFLICT',
-      409,
-      'CONFLICT',
-      'Из этого окна уже добавлен проект с другим адресом. Откройте список проектов или начните добавление заново',
-    ],
-    [
-      'SITE_SETUP_NOT_FAILED',
-      409,
-      'CONFLICT',
-      'Настройку сейчас нельзя повторить. Обновите страницу, чтобы увидеть, как она идёт',
-    ],
-    [
-      'SITE_SETUP_RETRIES_LIMITED',
-      429,
-      'TOO_MANY_REQUESTS',
-      'Повторять настройку можно не чаще шести раз в час. Попробуйте немного позже',
-    ],
-    [
-      'SITE_SETUP_UNAVAILABLE',
-      409,
-      'CONFLICT',
-      'Настройку этого сайта уже нельзя повторить. Обновите страницу, чтобы увидеть, что изменилось',
-    ],
-  ] as const)(
-    'gives the refusal %s of the site connection wizard its own Russian text',
-    (domainCode, status, code, text) => {
-      const domainError = new DomainError(domainCode, 'English text for the logs', status)
-
-      const error = toTRPCError(domainError)
-
-      expect(error).toMatchObject({ code, message: text, cause: domainError })
-      expect(clientMessage(error)).toBe(text)
-      const generic = toTRPCError(new DomainError('UNLISTED', 'Unlisted', status))
-      expect(text).not.toBe(generic.message)
-      // No English, no jargon of the protocols, no final full stop; formal «вы» or impersonal.
-      expect(text).not.toMatch(/[A-Za-z]|SSH|FTP|Vault/)
-      expect(text).not.toMatch(/\.$/)
-      expect(text).not.toMatch(/(?:^|[^а-яё])(?:ты|тебя|тебе|твой|твоя|твоё|твои)(?:[^а-яё]|$)/i)
-    },
-  )
-
   it('names in its words the very limits of the wizard that the texts promise', () => {
     // The texts spell the numbers out; a changed limit must change its sentence too.
     expect(siteConnectionLimits.connectionsInProgressPerUser).toBe(3)
@@ -469,128 +401,6 @@ describe('errors over HTTP', () => {
     const body = await errorOf(response)
     expect(body.message).toBe(message)
     expect(JSON.stringify(body)).not.toContain(raw)
-  })
-})
-
-describe('a text that names a number of the refusal', () => {
-  const planLimit = (details?: unknown) =>
-    new DomainError(
-      'PROJECT_PLAN_LIMIT_REACHED',
-      'The plan of the workspace allows no more sites',
-      403,
-      details,
-    )
-  const another = 'Чтобы добавить ещё один, выберите другой тариф в настройках'
-
-  it.each([
-    [1, `В ваш тариф входит один сайт. ${another}`],
-    [2, `В ваш тариф входит до 2 сайтов. ${another}`],
-    [3, `В ваш тариф входит до 3 сайтов. ${another}`],
-    [11, `В ваш тариф входит до 11 сайтов. ${another}`],
-    [15, `В ваш тариф входит до 15 сайтов. ${another}`],
-    [21, `В ваш тариф входит до 21 сайта. ${another}`],
-    [111, `В ваш тариф входит до 111 сайтов. ${another}`],
-  ])('names the site limit of the tariff: %i', (maxSites, message) => {
-    const error = toTRPCError(planLimit({ maxSites }))
-
-    expect(error).toMatchObject({ code: 'FORBIDDEN', message })
-    // The same text on the way to the browser, with the code and without the details.
-    expect(clientMessage(error)).toBe(message)
-    const shape = {
-      message: error.message,
-      code: -32003,
-      data: { code: 'FORBIDDEN', httpStatus: 403 },
-    }
-    expect(formatError(shape, error, false)).toEqual({
-      ...shape,
-      data: { ...shape.data, domainCode: 'PROJECT_PLAN_LIMIT_REACHED' },
-    })
-  })
-
-  it.each([
-    undefined,
-    null,
-    'three',
-    {},
-    { maxSites: '3' },
-    { maxSites: 0 },
-    { maxSites: -1 },
-    { maxSites: 2.5 },
-    { maxSites: Number.NaN },
-    { maxSites: Number.POSITIVE_INFINITY },
-  ])('says the same without the number when the details do not carry it: %o', (details) => {
-    expect(toTRPCError(planLimit(details)).message).toBe(
-      `На вашем тарифе больше нельзя добавить сайт. ${another}`,
-    )
-  })
-
-  it.each([
-    [1, `В тариф, который вы оплачиваете, входит один сайт. ${another}`],
-    [3, `В тариф, который вы оплачиваете, входит до 3 сайтов. ${another}`],
-    [21, `В тариф, который вы оплачиваете, входит до 21 сайта. ${another}`],
-  ])('names the limit of a tariff that is being paid for as such: %i', (maxSites, message) => {
-    const error = toTRPCError(planLimit({ maxSites, unpaid: true }))
-
-    expect(error).toMatchObject({ code: 'FORBIDDEN', message })
-    expect(clientMessage(error)).toBe(message)
-  })
-
-  it.each([false, 'true', 1, null, undefined])(
-    'speaks of the tariff the customer has unless the details say «unpaid»: %o',
-    (unpaid) => {
-      expect(toTRPCError(planLimit({ maxSites: 3, unpaid })).message).toBe(
-        `В ваш тариф входит до 3 сайтов. ${another}`,
-      )
-    },
-  )
-
-  describe('the limit of the tariff chosen for the next period', () => {
-    // The customer may be on a tariff that holds more: «в ваш тариф входит…» would not be true.
-    const takeBack =
-      'Чтобы добавить ещё один, отмените переход или выберите другой тариф в настройках'
-
-    it.each([
-      [1, `В тариф, который вы выбрали на следующий период, входит один сайт. ${takeBack}`],
-      [3, `В тариф, который вы выбрали на следующий период, входит до 3 сайтов. ${takeBack}`],
-      [21, `В тариф, который вы выбрали на следующий период, входит до 21 сайта. ${takeBack}`],
-    ])('is named as such, with the way to take the choice back: %i', (maxSites, message) => {
-      const error = toTRPCError(planLimit({ maxSites, scheduled: true }))
-
-      expect(error).toMatchObject({ code: 'FORBIDDEN', message })
-      expect(clientMessage(error)).toBe(message)
-      expect(message).not.toContain('В ваш тариф')
-    })
-
-    it.each([false, 'true', 1, null, undefined])(
-      'is not spoken of unless the details say «scheduled»: %o',
-      (scheduled) => {
-        expect(toTRPCError(planLimit({ maxSites: 3, scheduled })).message).toBe(
-          `В ваш тариф входит до 3 сайтов. ${another}`,
-        )
-      },
-    )
-
-    it('gives way to a tariff that is being paid for: its charge cannot be taken back', () => {
-      expect(toTRPCError(planLimit({ maxSites: 1, unpaid: true, scheduled: true })).message).toBe(
-        `В тариф, который вы оплачиваете, входит один сайт. ${another}`,
-      )
-    })
-
-    it('says the same without the number as any other limit', () => {
-      expect(toTRPCError(planLimit({ scheduled: true })).message).toBe(
-        `На вашем тарифе больше нельзя добавить сайт. ${another}`,
-      )
-    })
-  })
-
-  it('reads the details of that code only', () => {
-    expect(
-      toTRPCError(new DomainError('FORBIDDEN', 'Not the owner', 403, { maxSites: 3 })).message,
-    ).toBe('Недостаточно прав')
-    expect(
-      toTRPCError(new DomainError('PROJECT_LIMIT_REACHED', 'Ceiling', 403, { maxSites: 3 }))
-        .message,
-    ).toBe('Вы добавили максимальное число сайтов. Напишите нам, если нужно больше')
   })
 })
 
@@ -791,7 +601,7 @@ describe('the text of a refused task, built from the details of its refusal', ()
   })
 })
 
-describe('the refusals of a dialog, its preview and its release', () => {
+describe('the refusals of a chat and of its variables', () => {
   const codes = [
     ['CHAT_NOT_CONFIGURED', 503],
     ['TASK_NOT_ACCEPTED', 409],
@@ -800,46 +610,24 @@ describe('the refusals of a dialog, its preview and its release', () => {
     ['TASK_TEXT_HAS_SECRET', 400],
     ['TASK_TEXT_INVALID', 400],
     ['TASK_BUSY', 409],
-    ['TASK_REWINDING', 409],
-    ['TASK_REDOING', 409],
     ['TASK_FINISHED', 409],
     ['TASK_CONTINUE_REQUIRED', 409],
     ['TASK_NOTHING_TO_CONTINUE', 409],
     ['TASK_ATTEMPTS_EXHAUSTED', 409],
-    ['TASK_NOTHING_TO_RETRY', 409],
     ['CHAT_COMMAND_UNAVAILABLE', 409],
     ['RELEASE_IN_PROGRESS', 409],
-    ['RELEASE_CONFIRMATION_INVALID', 400],
-    ['RELEASE_CONFIRMATION_EXPIRED', 409],
-    ['RELEASE_CANDIDATE_CHANGED', 409],
-    ['RELEASE_VERSION_TAKEN', 409],
-    ['RELEASE_REVIEW_REQUIRED', 409],
-    ['RELEASE_VERSION_NOT_OFFERED', 409],
-    ['RELEASE_UNDO_PLAN_CHANGED', 409],
-    ['RELEASE_UNDO_VERSION_TAKEN', 409],
-    ['PREVIEW_NOT_READY', 409],
-    ['SITE_ENV_NOT_ALLOWED', 403],
-    ['SITE_ENV_NAME_INVALID', 400],
-    ['SITE_ENV_NAME_RESERVED', 400],
-    ['SITE_ENV_VALUE_INVALID', 400],
-    ['SITE_ENV_HOSTS_INVALID', 400],
-    ['SITE_ENV_CONSENT_REQUIRED', 400],
-    ['SITE_ENV_SIGN_IN_PRIVATE', 400],
-    ['SITE_ENV_AGENT_CLOSED', 409],
-    ['SITE_ENV_LIMIT', 409],
-    ['SITE_ENV_HOSTS_LIMIT', 409],
-    ['SITE_ENV_CHANGED', 409],
+    ['WORKSPACE_ENV_NOT_ALLOWED', 403],
+    ['WORKSPACE_ENV_NAME_INVALID', 400],
+    ['WORKSPACE_ENV_NAME_RESERVED', 400],
+    ['WORKSPACE_ENV_VALUE_INVALID', 400],
+    ['WORKSPACE_ENV_LIMIT', 409],
+    ['WORKSPACE_ENV_CHANGED', 409],
     ['TASK_NOTHING_TO_RESUME', 409],
     ['BROWSER_UNAVAILABLE', 503],
     ['ATTACHMENT_NOT_READY', 409],
     ['ATTACHMENT_REFUSED', 400],
     ['ATTACHMENT_SENT', 409],
     ['ATTACHMENTS_LIMIT', 429],
-    ['PROJECT_NOTES_TOO_LONG', 400],
-    ['PROJECT_NOTES_HAS_SECRET', 400],
-    ['PROJECT_NOTES_INVALID', 400],
-    ['PROJECT_NOTES_NOT_ALLOWED', 403],
-    ['PROJECT_NOTES_CHANGED', 409],
   ] as const
 
   it.each(codes)('gives %s its own Russian text on «вы», without English', (domainCode, status) => {
@@ -921,20 +709,5 @@ describe('the refusals of a dialog, its preview and its release', () => {
       'refusal',
     )
     expect(formatted('TASK_NOT_ACCEPTED', { refusal: 'busy' }).data).not.toHaveProperty('refusal')
-  })
-
-  it('names why a project cannot be deleted: chats that are not over lead to their folder', () => {
-    const shape = { message: 'Refused', code: -32009, data: { code: 'CONFLICT', httpStatus: 409 } }
-    const formatted = (reason: string) =>
-      formatError(
-        shape,
-        toTRPCError(new DomainError('SITE_DELETE_BUSY', 'Refused', 409, { reason })),
-        false,
-      )
-
-    expect(formatted('tasks').message).toBe('Сначала завершите или отмените чаты этого проекта')
-    expect(formatted('tasks').data).toMatchObject({ refusal: 'tasks' })
-    expect(formatted('release').message).toContain('Сейчас на сайте идёт работа')
-    expect(formatted('release').data).toMatchObject({ refusal: 'release' })
   })
 })
