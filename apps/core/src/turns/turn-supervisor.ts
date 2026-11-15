@@ -12,7 +12,6 @@ import {
   preparedRunExposesSecret,
   preparedRunLimits,
   preparedRunSchema,
-  publicationMetadataSchema,
   requirementsOf,
   turnMayHoldInbox,
   runEnvValues,
@@ -29,14 +28,12 @@ import {
   type PreparedFiles,
   type PreparedRun,
   type RunContext,
-  type TurnBundleSource,
   type TurnExecutor,
   type TurnPlan,
   type TurnRequest,
   type UnkeyedTurnRequest,
   type TurnCredentialPolicy,
   type TurnRestoreSource,
-  type TurnContentRollback,
 } from '@repo/domain'
 
 import { newTurnKeys } from '@repo/turn-keys'
@@ -44,7 +41,6 @@ import { LeaseGuard, TURN_LEASE_MS, turnRenewal } from './lease-guard.ts'
 import type { LiveTurns } from './live-turns.ts'
 import type { TurnInbox } from './turn-inbox.ts'
 import {
-  gitNotConfigured,
   TurnAttempt,
   type CompletedTurn,
   type TurnAttemptDependencies,
@@ -59,8 +55,6 @@ export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
   driver: AgentDriver
   /** Shared with TurnExecRecovery: it never takes over a turn this process drives. */
   live: LiveTurns
-  /** Required for replacement actions; undo completes before the sandbox is prepared. */
-  contentRollback?: TurnContentRollback
   /** Required for a plan that names files of the client (`input.attachments`). */
   inbox?: TurnInbox
 }
@@ -91,12 +85,6 @@ export class TurnSupervisor {
     hooks: TurnRunHooks = {},
   ): Promise<CompletedTurn> {
     const plan = this.validate(request)
-    // A turn with a repository needs git; one without needs none (plan 57, Б7). Refused before
-    // the lease, so a core without git configuration still runs turns without a repository.
-    const git = this.deps.workspace
-    if (plan.workspace && !git) throw gitNotConfigured()
-    if (plan.replacesTurn !== undefined && !this.deps.contentRollback)
-      throw badRequest('Replacement requires content rollback')
     const parsed = turnCredentialPolicySchema.safeParse(policy)
     if (!parsed.success || parsed.data.driverId !== this.deps.driver.id)
       throw badRequest('Invalid turn credential policy')
@@ -121,12 +109,10 @@ export class TurnSupervisor {
       ttlMs: TURN_LEASE_MS,
     })
     if (!lease) {
-      // Only to tell the client why; a failed lookup is still just a busy site. A release the
-      // operator holds (Р31) keeps its barrier: the site waits for `releases:resolve`, and the
-      // turn with it — the release that frees the site wakes it. Only a hold without a release
-      // (a turn or a content write the operator must settle) ends the turn's dialog.
+      // Only to tell the client why; a failed lookup is still just a busy chat. A hold the
+      // operator must settle ends the turn's chat.
       const current = await this.deps.leases.inspect(labels.siteId).catch(() => null)
-      throw current?.heldForOperator && current.inflightReleaseId === null ? siteHeld() : siteBusy()
+      throw current?.heldForOperator ? siteHeld() : siteBusy()
     }
     // Before the assignment exists: recovery never takes over a turn this process drives.
     this.deps.live.enter(lease)
@@ -194,45 +180,14 @@ export class TurnSupervisor {
         containsCredential(Object.values(request.sandbox.env), turnCredentials(keyed.context, []))
       )
         throw badRequest('Sandbox env contains a turn credential')
-      if (plan.replacesTurn !== undefined) {
-        await guard.assertFence()
-        await guard.interruptible(
-          // Admitted by the fence of the site lease: no credential of the turn travels here.
-          this.deps.contentRollback!.rollback({ fence: lease, turn: plan.replacesTurn }),
-        )
-        await guard.assertFence()
-      }
-      // Cloned on the host with a short read-only credential; the executor gets objects only.
-      // With a working set it carries that part of the site only, as its own root commit. A
-      // turn without a repository gets none: an empty working directory (plan 57, Б4).
-      let bundle: TurnBundleSource | undefined
-      if (request.workspace && git) {
-        bundle = await guard.interruptible(
-          git.buildBaseBundle(request.workspace, request.committedAt),
-        )
-        attempt.sandboxBaseSha = checkedSandboxBase(plan, bundle)
-      }
       let restore: TurnRestoreSource | undefined
       if (request.previous) {
         await guard.assertFence()
         const source = await guard.interruptible(
           this.deps.snapshots.restoreSource(request.previous, presignTtlMs(guard)),
         )
-        // The next turn starts from the previous turn's candidate commit; the snapshot carries
-        // the session only. A turn without a repository restores only a checkpoint without one,
-        // and a turn with one never restores such a checkpoint. A rebased turn starts on the head
-        // the branch moved to after that commit — the session goes on, the checkout is new.
-        if (request.workspace) {
-          const saved = source.manifest.git
-          if (
-            saved === undefined ||
-            saved.branch !== request.workspace.branch ||
-            saved.provider !== request.workspace.repo.provider ||
-            (!request.rebased && saved.headSha !== request.workspace.expectedBaseSha)
-          )
-            throw conflict('Previous checkpoint differs from the expected checkout')
-        } else if (source.manifest.git !== undefined)
-          throw conflict('Previous checkpoint holds a repository the turn has not')
+        // Only the session comes back: a checkpoint of a chat that had a project (before plan 83)
+        // also names its working copy, which is not restored (TurnRestoreSource).
         // The data key leaves core only while this owner still holds the site.
         restore = {
           ...source,
@@ -276,7 +231,6 @@ export class TurnSupervisor {
               secrets: [],
             },
             remainingMs: guard.remainingMs,
-            ...(bundle ? { bundle } : {}),
             ...(restore ? { restore } : {}),
             ...(inbox.length ? { inbox } : {}),
             driverId: this.deps.driver.id,
@@ -293,7 +247,6 @@ export class TurnSupervisor {
         ),
       )
       attempt.execution = ready
-      bundle = undefined
       // Recovery derives the session state from the driver session this turn resumed.
       await attempt.record(
         'restored',
@@ -324,11 +277,10 @@ export class TurnSupervisor {
   }
 
   /**
-   * What the driver would refuse after the lease, the key and the content undo of a replacement,
-   * it refuses here: a dry run of its prepare and command over the plan, with stand-ins for the
+   * What the driver would refuse after the lease and the key, it refuses here: a dry run of its prepare and command over the plan, with stand-ins for the
    * two credentials no turn has before its lease — a pair of the turn's own formats, never
    * stored or admitted anywhere. A profile or an input the CLI cannot be launched with then
-   * costs neither a turn number nor an undo. Nothing of the run is kept.
+   * costs no turn number. Nothing of the run is kept.
    */
   private async assertLaunchable(plan: TurnPlan): Promise<void> {
     const keyed = withTurnCredentials(plan, newTurnKeys())
@@ -343,50 +295,22 @@ export class TurnSupervisor {
   private validate(request: UnkeyedTurnRequest): TurnPlan {
     assertSandboxSpec(request.sandbox)
     const labels = request.sandbox.labels
-    const { workspace } = request
-    if (requirementsOf(request).repository !== (workspace !== undefined))
-      throw badRequest('A turn has its workspace exactly when it has a repository')
-    // Both are git notions (plan 57, Б3): what a turn without a repository did on the site is
-    // not undone, and «Обновить» moves a branch it does not have.
-    if (!workspace && (request.replacesTurn !== undefined || request.rebased !== undefined))
-      throw badRequest('A turn without a repository neither replaces nor rebases')
-    // A turn with one replaces the undone turn (docs/plan/61-chats-first.md, §5.14).
-    if (request.rewound !== undefined && (workspace || labels.turn < 2))
-      throw badRequest('Only a later turn without a repository is rewound')
-    // A task on a site without a repository hands its files to the browser worker, never to the
-    // sandbox (Б26); a chat without a site has no site to hand them to (docs/plan/61, К16).
-    if (request.input.attachments.length && !turnMayHoldInbox(workspace !== undefined, labels))
-      throw badRequest('Files of the client go only to a turn with a repository or without a site')
+    if (requirementsOf(request).repository)
+      throw badRequest('A turn has no repository (docs/plan/83-remove-projects.md)')
+    // `/undo` goes back to the checkpoint the undone turn started from (docs/plan/61, §5.14).
+    if (request.rewound !== undefined && labels.turn < 2)
+      throw badRequest('Only a later turn is rewound')
+    // The client's files go only to the turn of their chat (docs/plan/61, К16).
+    if (request.input.attachments.length && !turnMayHoldInbox(labels))
+      throw badRequest('Files of the client go only to the turn of their chat')
     if (request.input.attachments.length && !this.deps.inbox)
       throw badRequest('Files of the client need the inbox of core')
     // A compaction shortens a session: only a checkpoint brings one (docs/plan/61, §5.14).
     if (request.input.action !== undefined && !request.previous)
       throw badRequest('An action of a turn needs the checkpoint of an earlier turn')
-    if (request.replacesTurn !== undefined && request.replacesTurn !== labels.turn - 1)
-      throw badRequest('Replacement must name the latest turn')
-    if (request.replacesTurn !== undefined && workspace?.expectedBranchSha === undefined)
-      throw badRequest('Replacement requires the published task branch fence')
-    if (request.replacesTurn !== undefined && !request.previous && request.context.nativeSessionId)
-      throw badRequest('A replacement without a checkpoint must start a fresh session')
-    // After «Обновить» (plan 53, Р27) or the client's edit of a file the chat stands on a moved
-    // candidate: the next turn starts on it and goes on with the session of the turn before
-    // (owner's request of 06.11.2026), or a new one when there is no checkpoint. It replaces the
-    // last turn when that one did not succeed (its content is undone first), and a failed rebased
-    // turn is replaced by a rebased one; the store checks which head it starts on.
-    if (request.rebased === true) {
-      if (labels.turn < 2) throw badRequest('A rebased turn follows an earlier turn')
-      if (!request.previous && request.context.nativeSessionId)
-        throw badRequest('A rebased turn without a checkpoint must start a fresh session')
-    } else if (
-      workspace &&
-      labels.turn > 1 &&
-      !request.previous &&
-      request.replacesTurn === undefined
-    )
-      throw badRequest('A resumed turn requires the previous checkpoint')
-    // Without a repository, a turn after an unsuccessful one starts a new session (plan 57, Б3,
-    // Б4); the assignment store checks that the turn before it did not complete.
-    if (!workspace && !request.previous && request.context.nativeSessionId)
+    // A turn after an unsuccessful one starts a new session (plan 57, Б3, Б4); the assignment
+    // store checks that the turn before it did not complete.
+    if (!request.previous && request.context.nativeSessionId)
       throw badRequest('A new session must start fresh')
     if (request.sandbox.secrets.length !== 0)
       throw badRequest('Turn secrets are installed only after restore')
@@ -398,35 +322,14 @@ export class TurnSupervisor {
       request.context.turn !== labels.turn
     )
       throw badRequest('Turn context differs from sandbox identity')
-    // The same rules preparePublication applies, checked before the lease and the agent's turn.
-    if (workspace) {
-      const publication = publicationMetadataSchema.safeParse({
-        ...workspace,
-        taskId: labels.taskId,
-        turn: labels.turn,
-        createdAt: request.committedAt,
-      })
-      if (!publication.success) throw badRequest('Invalid trusted publication metadata')
-    }
-    // The manifest's own rules: a turn must not end with a checkpoint save() refuses.
-    // Without a repository the checkpoint has no `git` (plan 57, Б4).
+    // The manifest's own rules: a turn must not end with a checkpoint save() refuses. The
+    // checkpoint has no `git`: a turn has no repository.
     const plan = snapshotPlanSchema.safeParse({
       workspaceId: labels.workspaceId,
       sessionId: labels.sessionId,
       turn: labels.turn,
       image: request.sandbox.image,
       driver: { id: this.deps.driver.id, version: request.driverVersion },
-      ...(workspace
-        ? {
-            git: {
-              provider: workspace.repo.provider,
-              branch: workspace.branch,
-              baseSha: workspace.expectedBaseSha,
-              ...(workspace.sandboxBaseSha ? { sandboxBaseSha: workspace.sandboxBaseSha } : {}),
-              publication: { taskId: labels.taskId, committedAt: request.committedAt },
-            },
-          }
-        : {}),
     })
     if (!plan.success) throw badRequest('Invalid turn snapshot metadata')
     if (request.previous) {
@@ -437,11 +340,7 @@ export class TurnSupervisor {
         !prior ||
         prior.workspaceId !== labels.workspaceId ||
         prior.sessionId !== labels.sessionId ||
-        (request.replacesTurn !== undefined
-          ? prior.turn >= request.replacesTurn
-          : request.rewound
-            ? prior.turn >= labels.turn - 1
-            : prior.turn !== labels.turn - 1) ||
+        (request.rewound ? prior.turn >= labels.turn - 1 : prior.turn !== labels.turn - 1) ||
         prior.image !== request.sandbox.image ||
         prior.driver.id !== this.deps.driver.id ||
         prior.driver.version !== request.driverVersion
@@ -450,23 +349,6 @@ export class TurnSupervisor {
     }
     return toTurnPlan(request, this.deps.driver.id)
   }
-}
-
-/**
- * The working-set commit a bundle starts the sandbox from, as the plan allows it (plan 53, Р11):
- * none without a working set, one — the planned one, when the plan names it — with it.
- */
-export function checkedSandboxBase(plan: TurnPlan, bundle: TurnBundleSource): string | undefined {
-  const { workspace } = plan
-  if (!workspace) throw conflict('A turn without a repository has no base bundle')
-  const { workingSet, sandboxBaseSha } = workspace
-  if (
-    bundle.baseSha !== workspace.expectedBaseSha ||
-    (workingSet === undefined) !== (bundle.sandboxBaseSha === undefined) ||
-    (sandboxBaseSha !== undefined && bundle.sandboxBaseSha !== sandboxBaseSha)
-  )
-    throw conflict('The base bundle differs from the planned workspace')
-  return bundle.sandboxBaseSha
 }
 
 /**

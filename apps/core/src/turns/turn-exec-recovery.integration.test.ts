@@ -159,7 +159,6 @@ describe.skipIf(!enabled)(
         driver: () => {
           throw new Error('No driver in this test')
         },
-        workspace: null,
         snapshots: {} as never,
         credentials: { issue: vi.fn(), recover: vi.fn(), revoke },
         live: new LiveTurns(),
@@ -367,7 +366,6 @@ describe.skipIf(!enabled)(
             id: sampleDriverId,
             sessionState: () => ({ root: '/agent-home/x', include: ['s.db'], exclude: [] }),
           }) as never,
-        workspace: null,
         snapshots: { load } as never,
         credentials: { issue: vi.fn(), recover: vi.fn(), revoke: vi.fn(async () => {}) },
         live: new LiveTurns(),

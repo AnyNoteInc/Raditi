@@ -46,7 +46,6 @@ function authority(raw: unknown): SiteLeaseAuthority | null {
         expiresAt: row.expires_at,
         serverNow: row.server_now,
         heldForOperator: row.held_for_operator,
-        inflightReleaseId: null,
       }
     : null
 }

@@ -31,7 +31,6 @@ function fixture() {
     serverNow: new Date(),
     expiresAt: new Date(Date.now() + 60_000),
     heldForOperator: false,
-    inflightReleaseId: null,
   }
   const destroy = vi.fn(async () => {})
   const sandbox = { id: item.id, labels: item.labels, destroy } as unknown as Sandbox

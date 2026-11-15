@@ -249,8 +249,11 @@ export class TaskSweep {
     }
     const plan = savedPlanOf(assignment.plan)
     // A plan with a repository is of a project, and projects are gone
-    // (docs/plan/83-remove-projects.md): such a turn ends as a technical failure.
-    if (plan?.workspace) return technical
+    // (docs/plan/83-remove-projects.md): its schema refuses it, and such a turn ends as a
+    // technical failure.
+    const raw = assignment.plan
+    if (plan === null && typeof raw === 'object' && raw !== null && 'workspace' in raw)
+      return technical
     if (replayed.lastPhase === 'completed') {
       const result = entries.findLast((entry) => entry.phase === 'completed')?.result
       if (!result) return technical

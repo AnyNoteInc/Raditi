@@ -1045,7 +1045,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         await passes.run(dialog.job)
 
         const [request, policy] = run.mock.calls[0]!
-        expect(request.workspace).toBeUndefined()
+        expect(request).not.toHaveProperty('workspace')
         expect(request.requirements).toEqual({ repository: false, browser: false })
         expect(request.sandbox.labels.siteId).toBe(dialog.taskId)
         expect(request.context.instructions).toContain('You help a small business owner in a chat.')

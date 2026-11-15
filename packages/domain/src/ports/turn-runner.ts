@@ -2,11 +2,6 @@ import { z } from 'zod'
 
 import { DomainError, isDomainError, isTooLarge } from '../errors.ts'
 import {
-  publicationShaSchema,
-  type PublicationMetadata,
-  type PublicationSource,
-} from '../git/publication.ts'
-import {
   agentEventSchema,
   agentOutputLimits,
   nativeSessionIdSchema,
@@ -118,19 +113,13 @@ export interface SiteLeaseAuthority {
   expiresAt: Date | null
   serverNow: Date
   heldForOperator: boolean
-  /**
-   * The release barrier (docs/plan/53-chat-preview-release.md, Р9): a release whose deploy may
-   * still write. While it stands no one acquires the site, expired or not, and the lease is
-   * neither released nor freed — the release clears it first, under its own fence.
-   */
-  inflightReleaseId: string | null
 }
 
 /** Every mutation is conditional on the entire fence, never merely the task id. */
 export interface SiteLeaseStore {
   /**
-   * null while another owner holds the site, an operator holds it, a content write is in flight
-   * or a release barrier stands (even under an expired lease).
+   * null while another owner holds the lease or an operator holds it (even under an expired
+   * lease).
    */
   acquire(input: Omit<SiteLeaseFence, 'epoch'> & { ttlMs: number }): Promise<SiteLeaseGrant | null>
   /**
@@ -152,73 +141,6 @@ export interface SiteLeaseStore {
    * exact epoch, held or expired alike, in one statement. false when another owner has the site.
    */
   free(fence: SiteLeaseFence): Promise<boolean>
-}
-
-export type TurnWorkspaceSource = PublicationSource
-
-/** A host-owned candidate; its patch includes newly created files. */
-export interface TurnPublication {
-  baseSha: string
-  headSha: string
-  patch: Uint8Array
-  /** An empty, valid compressed archive: newly created files belong to headSha now. */
-  untracked: Uint8Array
-  /**
-   * The working-set commit of `baseSha` (plan 53, Р11), derived again by publication: the turn
-   * and its recovery compare it with the one the sandbox got. Absent without a working set.
-   */
-  sandboxBaseSha?: string
-  /** After the last fence assertion, native publication must be bounded to 60 seconds. */
-  publish(assertFence: () => Promise<void>): Promise<void>
-  dispose(): Promise<void>
-}
-
-/**
- * The base checkout as a git bundle without credentials: objects and the single ref
- * `refs/heads/raditi-base` at `baseSha`. Imported through exec stdin into /workspace/repo on
- * `branch`, after its size and SHA-256 are checked.
- */
-export interface TurnBundleSource {
-  baseSha: string
-  /**
-   * With a working set (plan 53, Р11) the single ref points at this root commit instead, and
-   * `baseSha` stays the full tree publication starts from. Absent — the bundle is the full tree.
-   */
-  sandboxBaseSha?: string
-  branch: string
-  sha256: string
-  sizeBytes: number
-  read(): AsyncIterable<Uint8Array>
-}
-
-export interface TurnWorkspace {
-  /**
-   * Bundles `expectedBaseSha` for the turn's executor, or with a working set its root commit
-   * made at `committedAt` (required then, plan 53, Р11).
-   */
-  buildBaseBundle(source: TurnWorkspaceSource, committedAt?: string): Promise<TurnBundleSource>
-  /**
-   * The working-set commit of the source at `committedAt`, the same `buildBaseBundle` puts in the
-   * bundle; null without a working set. Recovery of a turn derives it here instead of storing it;
-   * a workspace without it cannot recover a turn that has a working set.
-   */
-  sandboxBase?(source: TurnWorkspaceSource, committedAt: string): Promise<string | null>
-  /**
-   * `credentials` are the turn's own (turnCredentials): a changed file of the candidate that
-   * contains one verbatim, binary ones included, is refused as snapshotHasCredential().
-   * Required like protectedPaths, so a caller cannot silently skip the check. `refusedValues`
-   * are the values of the client's variables the turn's commands got (docs/plan/53-chat-preview-
-   * release.md, Р13): a changed file or path that holds one, in any spelling `envValueForms`
-   * knows, is refused as envValueInChange().
-   */
-  preparePublication(
-    input: PublicationMetadata & {
-      patch: Uint8Array
-      untracked: Uint8Array
-      credentials: readonly string[]
-      refusedValues?: readonly string[]
-    },
-  ): Promise<TurnPublication>
 }
 
 export const turnPhases = [
@@ -254,6 +176,9 @@ export type TurnPhase = (typeof turnPhases)[number]
 
 const evidenceId = z.uuid()
 
+/** A full git SHA of history entries (turns with a repository, before plan 83). */
+const gitShaSchema = z.string().regex(/^[a-f0-9]{40}$/)
+
 /** Strips other keys: a SiteLeaseGrant's expiry and server clock are not part of the fence. */
 export const siteLeaseFenceSchema = z.object({
   siteId: evidenceId,
@@ -285,13 +210,14 @@ export const turnEvidenceSchema = z
       .max(256)
       .regex(/^sessions\/[A-Za-z0-9_-]+\/turns\/[0-9]+\/$/)
       .optional(),
-    candidateHeadSha: publicationShaSchema.optional(),
-    baseSha: publicationShaSchema.optional(),
+    // History: the candidate and base of a turn with a repository, before plan 83.
+    candidateHeadSha: gitShaSchema.optional(),
+    baseSha: gitShaSchema.optional(),
     /**
      * The working-set commit the sandbox was checked out at (plan 53, Р11). The candidate's patch
      * is against `baseSha`, the full tree, with the same paths.
      */
-    sandboxBaseSha: publicationShaSchema.optional(),
+    sandboxBaseSha: gitShaSchema.optional(),
     committedAt: z.iso.datetime().optional(),
     /** The driver session the turn resumed (turn n−1): recovery derives the session state from it. */
     nativeSessionId: nativeSessionIdSchema.optional(),

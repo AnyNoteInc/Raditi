@@ -14,9 +14,8 @@ import { pack } from 'tar-stream'
 import { describe, expect, it, vi } from 'vitest'
 
 const sampleDriverId = 'opencode' as const
-import { SandboxSnapshotTransport, type SnapshotArchives } from './sandbox-snapshot.ts'
+import { SandboxSnapshotTransport } from './sandbox-snapshot.ts'
 
-const baseSha = 'a'.repeat(40)
 const state: SessionState = {
   root: `/agent-home/${sampleDriverId}`,
   include: ['sessions', 'optional'],
@@ -35,12 +34,12 @@ async function archive(name?: string, body = ''): Promise<Uint8Array> {
   return result
 }
 
-async function fixture(): Promise<SnapshotArchives> {
-  return {
-    home: await archive('sessions/run.jsonl', '{"turn":1}\n'),
-    untracked: await archive('new.txt', 'new file'),
-    patch: Buffer.from('diff --git a/old.txt b/old.txt\n'),
-  }
+interface Parts {
+  home: Uint8Array
+}
+
+async function fixture(): Promise<Parts> {
+  return { home: await archive('sessions/run.jsonl', '{"turn":1}\n') }
 }
 
 interface Reply {
@@ -75,7 +74,7 @@ function handle(reply: Reply): ExecHandle {
   }
 }
 
-function sandboxFixture(parts: SnapshotArchives, override?: (spec: ExecSpec) => Reply | undefined) {
+function sandboxFixture(parts: Parts, override?: (spec: ExecSpec) => Reply | undefined) {
   const handles: ExecHandle[] = []
   const calls: Array<{ spec: ExecSpec; stdin: Buffer }> = []
   const exec = vi.fn(async (spec: ExecSpec) => {
@@ -86,13 +85,7 @@ function sandboxFixture(parts: SnapshotArchives, override?: (spec: ExecSpec) => 
     if (spec.argv[0] === 'test') {
       reply = { code: spec.argv[1] === '-L' || spec.argv[2]?.endsWith('/optional') ? 1 : 0 }
     } else if (spec.argv.includes('--create')) {
-      reply = {
-        stdout: spec.argv.includes('--directory=/workspace/repo') ? parts.untracked : parts.home,
-      }
-    } else if (spec.argv.includes('ls-files')) {
-      reply = { stdout: Buffer.from('new.txt\0') }
-    } else if (spec.argv.includes('diff')) {
-      reply = { stdout: parts.patch }
+      reply = { stdout: parts.home }
     }
     const result = handle(override?.(spec) ?? reply)
     handles.push(result)
@@ -101,18 +94,35 @@ function sandboxFixture(parts: SnapshotArchives, override?: (spec: ExecSpec) => 
   return { sandbox: { exec } as unknown as Sandbox, exec, calls, handles }
 }
 
+const isHomeTar = (spec: ExecSpec) => spec.argv.includes('--create')
+const touchesWorkdir = (spec: ExecSpec) =>
+  spec.cwd === '/workspace/repo' || spec.argv.some((arg) => arg.includes('/workspace'))
+
+async function packed(header: Record<string, unknown>): Promise<Uint8Array> {
+  const writer = pack()
+  const result = (async () => {
+    const chunks: Buffer[] = []
+    for await (const chunk of writer) chunks.push(Buffer.from(chunk as Uint8Array))
+    return zstdCompressSync(Buffer.concat(chunks))
+  })()
+  writer.entry({ mode: 0o644, ...header } as never, '')
+  writer.finalize()
+  return result
+}
+
 describe('SandboxSnapshotTransport', () => {
-  it('captures through argv and NUL lists, skips absent includes and validates native archives', async () => {
+  it('captures the home archive alone, through argv and NUL lists, without any git command', async () => {
     const parts = await fixture()
     const fake = sandboxFixture(parts)
-    const result = await new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha)
+    const result = await new SandboxSnapshotTransport().capture(fake.sandbox, state)
     expect(result).toEqual(parts)
-    const tarCalls = fake.calls.filter(({ spec }) => spec.argv.includes('--create'))
-    expect(tarCalls).toHaveLength(2)
+    expect(Object.keys(result)).toEqual(['home'])
+    const tarCalls = fake.calls.filter(({ spec }) => isHomeTar(spec))
+    expect(tarCalls).toHaveLength(1)
     expect(tarCalls[0]!.stdin.toString()).toBe('sessions\0')
-    expect(tarCalls[1]!.stdin.toString()).toBe('new.txt\0')
     expect(tarCalls[0]!.spec.argv).toEqual(
       expect.arrayContaining([
+        `--directory=/agent-home/${sampleDriverId}`,
         '--zstd',
         '--format=ustar',
         '--null',
@@ -122,204 +132,78 @@ describe('SandboxSnapshotTransport', () => {
         '--exclude=sessions/private',
       ]),
     )
-    expect(tarCalls[1]!.spec.argv).toContain('--no-recursion')
-    const diff = fake.calls.find(({ spec }) => spec.argv.includes('diff'))!
-    expect(diff.spec.cwd).toBe('/workspace/repo')
-    expect(diff.spec.argv).toEqual(
-      expect.arrayContaining([
-        '--no-replace-objects',
-        '--binary',
-        '--no-ext-diff',
-        '--no-textconv',
-        '--no-renames',
-        baseSha,
-      ]),
-    )
+    expect(fake.calls.some(({ spec }) => spec.argv[0] === 'git')).toBe(false)
+    expect(fake.calls.some(({ spec }) => touchesWorkdir(spec))).toBe(false)
     expect(fake.calls.every(({ spec }) => spec.argv[0] !== 'sh' && spec.argv[0] !== 'bash')).toBe(
       true,
     )
   })
 
-  it('takes new media below add-only paths that an ignore file hides (plan 53, Р12)', async () => {
-    const parts = await fixture()
-    const media = 'wp-content/uploads/raditi/hero.png'
-    const fake = sandboxFixture(parts, (spec) =>
-      spec.argv.includes('ls-files') && !spec.argv.includes('--exclude-standard')
-        ? { stdout: Buffer.from(`new.txt\0${media}\0`) }
-        : undefined,
-    )
-    await new SandboxSnapshotTransport().capture(
-      fake.sandbox,
-      state,
-      baseSha,
-      [],
-      ['wp-content/uploads/raditi/'],
-    )
-    const lists = fake.calls.filter(({ spec }) => spec.argv.includes('ls-files'))
-    expect(lists.map(({ spec }) => spec.argv)).toEqual([
-      ['git', '-c', 'core.fsmonitor=false', 'ls-files', '--others', '--exclude-standard', '-z'],
-      [
-        'git',
-        '--literal-pathspecs',
-        '-c',
-        'core.fsmonitor=false',
-        'ls-files',
-        '--others',
-        '-z',
-        '--',
-        'wp-content/uploads/raditi/',
-      ],
-    ])
-    const untracked = fake.calls.filter(({ spec }) => spec.argv.includes('--create'))[1]!
-    // Each name once, the ignored media after what the site's ignore files let through.
-    expect(untracked.stdin.toString()).toBe(`new.txt\0${media}\0`)
-  })
-
-  it('lists untracked files once without add-only paths, and refuses add-only paths it cannot read', async () => {
-    const parts = await fixture()
-    const fake = sandboxFixture(parts)
-    await new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha)
-    expect(fake.calls.filter(({ spec }) => spec.argv.includes('ls-files'))).toHaveLength(1)
-    await expect(
-      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha, [], ['../x/']),
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-  })
-
-  it('refuses a capture whose home or new files hold a turn credential, before returning it', async () => {
+  it("refuses a home with a turn credential or a value of the client's variables (Р13)", async () => {
     const key = 'synthetic-mcp-token-0123456789'
-    const clean = await fixture()
-    for (const parts of [
-      { ...clean, home: await archive('sessions/run.jsonl', `{"token":"${key}"}\n`) },
-      { ...clean, untracked: await archive('new.txt', `token=${key}`) },
-    ]) {
-      const fake = sandboxFixture(parts)
-      await expect(
-        new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha, [key]),
-      ).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
-    }
-    const fake = sandboxFixture(clean)
-    await expect(
-      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha, [key]),
-    ).resolves.toEqual(clean)
-  })
-
-  it("refuses a home that still holds a value of the client's variables, in any spelling (Р13)", async () => {
     const value = 'pay-se"cret-0001'
     const clean = await fixture()
-    // As a JSON row of the session holds it: escaped once.
-    const home = await archive('sessions/run.jsonl', JSON.stringify({ output: value }))
+    for (const [home, credentials, envValues] of [
+      [await archive('sessions/run.jsonl', `{"token":"${key}"}\n`), [key], []],
+      // As a JSON row of the session holds it: escaped once.
+      [await archive('sessions/run.jsonl', JSON.stringify({ output: value })), [], [value]],
+    ] as const) {
+      await expect(
+        new SandboxSnapshotTransport().capture(
+          sandboxFixture({ home }).sandbox,
+          state,
+          credentials,
+          envValues,
+        ),
+      ).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
+    }
     await expect(
-      new SandboxSnapshotTransport().capture(
-        sandboxFixture({ ...clean, home }).sandbox,
-        state,
-        baseSha,
-        [],
-        [],
-        [value],
-      ),
-    ).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
-    await expect(
-      new SandboxSnapshotTransport().capture(
-        sandboxFixture(clean).sandbox,
-        state,
-        baseSha,
-        [],
-        [],
-        [value],
-      ),
+      new SandboxSnapshotTransport().capture(sandboxFixture(clean).sandbox, state, [key], [value]),
     ).resolves.toEqual(clean)
   })
 
   it.each([
-    [
-      'a symlink in agent home',
-      'home',
-      { name: 'sessions/link', type: 'symlink', linkname: '/etc' },
-    ],
-    ['a FIFO in agent home', 'home', { name: 'sessions/pipe', type: 'fifo' }],
-    [
-      'a symlink in the working copy',
-      'untracked',
-      { name: 'new.txt', type: 'symlink', linkname: '/' },
-    ],
-    ['a FIFO in the working copy', 'untracked', { name: 'pipe', type: 'fifo' }],
-    ['a setuid file in the working copy', 'untracked', { name: 'run.sh', mode: 0o4755 }],
-  ] as const)(
-    'refuses %s as rejected agent output, not the client input',
-    async (_, part, header) => {
-      const writer = pack()
-      const packed = (async () => {
-        const chunks: Buffer[] = []
-        for await (const chunk of writer) chunks.push(Buffer.from(chunk as Uint8Array))
-        return zstdCompressSync(Buffer.concat(chunks))
-      })()
-      writer.entry({ mode: 0o644, ...header }, '')
-      writer.finalize()
-      const fake = sandboxFixture({ ...(await fixture()), [part]: await packed })
-      await expect(
-        new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
-      ).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED', httpStatus: 502 })
-    },
-  )
+    ['a symlink in agent home', { name: 'sessions/link', type: 'symlink', linkname: '/etc' }],
+    ['a FIFO in agent home', { name: 'sessions/pipe', type: 'fifo' }],
+    ['a setuid file in agent home', { name: 'sessions/run.sh', mode: 0o4755 }],
+  ] as const)('refuses %s as rejected agent output, not the client input', async (_, header) => {
+    const fake = sandboxFixture({ home: await packed(header) })
+    await expect(new SandboxSnapshotTransport().capture(fake.sandbox, state)).rejects.toMatchObject(
+      { code: 'TURN_OUTPUT_REJECTED', httpStatus: 502 },
+    )
+  })
 
   it('collapses overlapping home include subtrees instead of producing duplicate tar entries', async () => {
     const fake = sandboxFixture(await fixture())
-    await new SandboxSnapshotTransport().capture(
-      fake.sandbox,
-      {
-        ...state,
-        include: ['sessions', 'sessions/run.jsonl'],
-      },
-      baseSha,
-    )
-    expect(fake.calls.find(({ spec }) => spec.argv.includes('--create'))!.stdin.toString()).toBe(
-      'sessions\0',
-    )
-  })
-
-  it.each([
-    '--checkpoint-action=exec=touch\0',
-    '../outside\0',
-    '.git/config\0',
-    'same\0same\0',
-    'unterminated',
-  ])('refuses unsafe or ambiguous untracked file lists: %s', async (list) => {
-    const fake = sandboxFixture(await fixture(), (spec) =>
-      spec.argv.includes('ls-files') ? { stdout: Buffer.from(list) } : undefined,
-    )
-    await expect(
-      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
-    ).rejects.toThrow(/command/)
-    expect(fake.calls.filter(({ spec }) => spec.argv.includes('--create'))).toHaveLength(1)
+    await new SandboxSnapshotTransport().capture(fake.sandbox, {
+      ...state,
+      include: ['sessions', 'sessions/run.jsonl'],
+    })
+    expect(fake.calls.find(({ spec }) => isHomeTar(spec))!.stdin.toString()).toBe('sessions\0')
   })
 
   it('requires contiguous offsets independently for stdout and stderr', async () => {
     const parts = await fixture()
+    const home = Buffer.from(parts.home)
     const fake = sandboxFixture(parts, (spec) =>
-      spec.argv.includes('diff')
+      isHomeTar(spec)
         ? {
             chunks: [
-              { stream: 'stdout', offset: 0, data: parts.patch.subarray(0, 5) },
+              { stream: 'stdout', offset: 0, data: home.subarray(0, 5) },
               { stream: 'stderr', offset: 0, data: Buffer.from('warning') },
-              { stream: 'stdout', offset: 5, data: parts.patch.subarray(5) },
+              { stream: 'stdout', offset: 5, data: home.subarray(5) },
             ],
           }
         : undefined,
     )
-    expect(
-      (await new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha)).patch,
-    ).toEqual(parts.patch)
+    expect((await new SandboxSnapshotTransport().capture(fake.sandbox, state)).home).toEqual(home)
     for (const offset of [1, -1, Number.NaN]) {
       const wrong = sandboxFixture(parts, (spec) =>
-        spec.argv.includes('diff')
-          ? {
-              chunks: [{ stream: 'stdout', offset, data: parts.patch }],
-            }
-          : undefined,
+        isHomeTar(spec) ? { chunks: [{ stream: 'stdout', offset, data: home }] } : undefined,
       )
-      await expect(
-        new SandboxSnapshotTransport().capture(wrong.sandbox, state, baseSha),
-      ).rejects.toThrow(/command/)
+      await expect(new SandboxSnapshotTransport().capture(wrong.sandbox, state)).rejects.toThrow(
+        /command/,
+      )
       expect(wrong.handles.at(-1)!.kill).toHaveBeenCalledWith('SIGKILL')
     }
   })
@@ -333,78 +217,38 @@ describe('SandboxSnapshotTransport', () => {
     { reason: 'cancelled' },
     { outputError: true },
   ] satisfies Reply[])('rejects failed execs and stops their process: %j', async (reply) => {
-    const fake = sandboxFixture(await fixture(), (spec) =>
-      spec.argv.includes('diff') ? reply : undefined,
+    const fake = sandboxFixture(await fixture(), (spec) => (isHomeTar(spec) ? reply : undefined))
+    await expect(new SandboxSnapshotTransport().capture(fake.sandbox, state)).rejects.toThrow(
+      'Snapshot sandbox command failed or exceeded its limits',
     )
-    await expect(
-      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
-    ).rejects.toThrow('Snapshot sandbox command failed or exceeded its limits')
     expect(fake.handles.at(-1)!.kill).toHaveBeenCalledWith('SIGKILL')
   })
 
   it('bounds stdout and stderr without including either in errors', async () => {
     for (const [reply, error] of [
-      [{ stdout: Buffer.alloc(snapshotLimits.patchBytes + 1) }, { code: 'PUBLICATION_TOO_LARGE' }],
+      [
+        { stdout: Buffer.alloc(snapshotLimits.archiveBytes + 1) },
+        { code: 'SNAPSHOT_TOO_LARGE', httpStatus: 413 },
+      ],
       [
         { stderr: Buffer.alloc(64 * 1024 + 1) },
         { code: 'SANDBOX_COMMAND_FAILED', httpStatus: 502 },
       ],
     ] as const) {
-      const fake = sandboxFixture(await fixture(), (spec) =>
-        spec.argv.includes('diff') ? reply : undefined,
-      )
-      const capture = new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha)
-      await expect(capture).rejects.toMatchObject(error)
+      const fake = sandboxFixture(await fixture(), (spec) => (isHomeTar(spec) ? reply : undefined))
+      await expect(
+        new SandboxSnapshotTransport().capture(fake.sandbox, state),
+      ).rejects.toMatchObject(error)
       expect(fake.handles.at(-1)!.kill).toHaveBeenCalledWith('SIGKILL')
     }
   })
 
-  it.each([
-    [
-      'session archive',
-      (spec: ExecSpec) =>
-        spec.argv.includes('--create') && !spec.argv.includes('--directory=/workspace/repo'),
-      snapshotLimits.archiveBytes,
-      'SNAPSHOT_TOO_LARGE',
-    ],
-    [
-      'untracked archive',
-      (spec: ExecSpec) =>
-        spec.argv.includes('--directory=/workspace/repo') && spec.argv.includes('--create'),
-      snapshotLimits.archiveBytes,
-      'PUBLICATION_TOO_LARGE',
-    ],
-    [
-      'untracked list',
-      (spec: ExecSpec) => spec.argv.includes('ls-files'),
-      snapshotLimits.entries * (snapshotLimits.path + 1),
-      'PUBLICATION_TOO_LARGE',
-    ],
-  ] as const)('reports an oversized %s as a size limit (413)', async (_, match, limit, code) => {
-    const fake = sandboxFixture(await fixture(), (spec) =>
-      match(spec) ? { stdout: Buffer.alloc(limit + 1) } : undefined,
-    )
-    await expect(
-      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
-    ).rejects.toMatchObject({ code, httpStatus: 413 })
-  })
-
-  it('reports more untracked files than a snapshot holds as a size limit (413)', async () => {
-    const names = Array.from({ length: snapshotLimits.entries + 1 }, (_, i) => `f${i}\0`).join('')
-    const fake = sandboxFixture(await fixture(), (spec) =>
-      spec.argv.includes('ls-files') ? { stdout: Buffer.from(names) } : undefined,
-    )
-    await expect(
-      new SandboxSnapshotTransport().capture(fake.sandbox, state, baseSha),
-    ).rejects.toMatchObject({ code: 'PUBLICATION_TOO_LARGE', httpStatus: 413 })
-  })
-
   it('times out even when output ends but wait() never settles', async () => {
     const fake = sandboxFixture(await fixture(), (spec) =>
-      spec.argv.includes('diff') ? { waitForever: true } : undefined,
+      isHomeTar(spec) ? { waitForever: true } : undefined,
     )
     await expect(
-      new SandboxSnapshotTransport({ timeoutMs: 25 }).capture(fake.sandbox, state, baseSha),
+      new SandboxSnapshotTransport({ timeoutMs: 25 }).capture(fake.sandbox, state),
     ).rejects.toThrow(/command/)
     expect(fake.handles.at(-1)!.kill).toHaveBeenCalledWith('SIGKILL')
     expect(fake.calls.at(-1)!.spec.signal?.aborted).toBe(true)
@@ -419,7 +263,7 @@ describe('SandboxSnapshotTransport', () => {
         }),
     } as unknown as Sandbox
     await expect(
-      new SandboxSnapshotTransport({ timeoutMs: 10 }).capture(sandbox, state, baseSha),
+      new SandboxSnapshotTransport({ timeoutMs: 10 }).capture(sandbox, state),
     ).rejects.toThrow(/command/)
     const late = handle({})
     release!(late)
@@ -427,8 +271,8 @@ describe('SandboxSnapshotTransport', () => {
     expect(late.kill).toHaveBeenCalledWith('SIGKILL')
   })
 
-  it('validates both archives before any exec, including when the second archive is unsafe', async () => {
-    const parts = { ...(await fixture()), untracked: await archive('../escape', 'payload') }
+  it('validates the home archive before any exec of a restore', async () => {
+    const parts = { home: await archive('../escape', 'payload') }
     const fake = sandboxFixture(parts)
     await expect(
       new SandboxSnapshotTransport().restore(fake.sandbox, state, parts),
@@ -450,7 +294,7 @@ describe('SandboxSnapshotTransport', () => {
     async (_, offset, length) => {
       for (const corruption of ['suffix', 'high-bit']) {
         const parts = await fixture()
-        const raw = zstdDecompressSync(parts.untracked)
+        const raw = zstdDecompressSync(parts.home)
         if (offset !== 148) {
           if (corruption === 'suffix') {
             const value = Number.parseInt(raw.toString('latin1', offset, offset + length), 8)
@@ -465,7 +309,7 @@ describe('SandboxSnapshotTransport', () => {
             raw.write(sum.toString(8).padStart(length - 1, '0') + 'x', offset, 'latin1')
           } else raw[offset] = raw[offset]! | 0x80
         }
-        parts.untracked = zstdCompressSync(raw)
+        parts.home = zstdCompressSync(raw)
         const fake = sandboxFixture(parts)
         await expect(
           new SandboxSnapshotTransport().restore(fake.sandbox, state, parts),
@@ -475,62 +319,66 @@ describe('SandboxSnapshotTransport', () => {
     },
   )
 
-  it('restores only home and untracked, without executing or applying patch.diff', async () => {
-    const parts = { ...(await fixture()), patch: Buffer.from('malicious shell command') }
-    const originalUntracked = Buffer.from(parts.untracked)
+  it('restores the session alone into an empty working directory it only makes', async () => {
+    const parts = await fixture()
+    const original = Buffer.from(parts.home)
     const fake = sandboxFixture(parts, () => {
       // Mutation after the checks cannot change the already-owned restore input.
-      parts.untracked.fill(0)
+      parts.home.fill(0)
       return undefined
     })
     await new SandboxSnapshotTransport().restore(fake.sandbox, state, parts)
     const writes = fake.calls.filter(({ spec }) => spec.argv.includes('--extract'))
     expect(
       writes.map(({ spec }) => spec.argv.find((arg) => arg.startsWith('--directory='))),
-    ).toEqual([`--directory=/agent-home/${sampleDriverId}`, '--directory=/workspace/repo'])
-    expect(writes[0]!.stdin).toEqual(Buffer.from(parts.home))
-    expect(writes[1]!.stdin).toEqual(originalUntracked)
+    ).toEqual([`--directory=/agent-home/${sampleDriverId}`])
+    expect(writes[0]!.stdin).toEqual(original)
     expect(
       writes.every(
         ({ spec }) =>
           spec.argv.includes('--keep-old-files') &&
           spec.argv.includes('--no-same-owner') &&
-          spec.argv.includes('--no-same-permissions') &&
-          !spec.argv.includes('--no-overwrite-dir'),
+          spec.argv.includes('--no-same-permissions'),
       ),
     ).toBe(true)
+    const argvs = fake.calls.map(({ spec }) => spec.argv)
+    expect(argvs).toContainEqual(['mkdir', '--parents', '--', '/workspace/repo'])
+    // The working directory is checked before anything is extracted.
+    const extract = fake.calls.findIndex(({ spec }) => spec.argv.includes('--extract'))
+    const empty = fake.calls.findIndex(({ spec }) => spec.argv.includes('-mindepth'))
+    expect(empty).toBeGreaterThanOrEqual(0)
+    expect(empty).toBeLessThan(extract)
     expect(fake.calls.some(({ spec }) => spec.argv[0] === 'git' || spec.argv[0] === 'sh')).toBe(
       false,
     )
-    expect(fake.calls.some(({ stdin }) => stdin.equals(parts.patch))).toBe(false)
   })
 
-  it('refuses pre-existing symlink roots or descendants before mkdir or extraction', async () => {
+  it('refuses symlink roots and a working directory that is not empty, before extracting', async () => {
     const parts = await fixture()
     for (const override of [
       (spec: ExecSpec): Reply | undefined =>
         spec.argv[0] === 'test' && spec.argv[1] === '-L' ? { code: 0 } : undefined,
       (spec: ExecSpec): Reply | undefined =>
-        spec.argv[0] === 'find' ? { stdout: Buffer.from('/workspace/repo/link\n') } : undefined,
+        spec.argv[0] === 'find' && spec.argv.includes('-type')
+          ? { stdout: Buffer.from('/workspace/repo/link\n') }
+          : undefined,
+      (spec: ExecSpec): Reply | undefined =>
+        spec.argv.includes('-mindepth')
+          ? { stdout: Buffer.from('/workspace/repo/x\n') }
+          : undefined,
     ]) {
       const fake = sandboxFixture(parts, override)
       await expect(
         new SandboxSnapshotTransport().restore(fake.sandbox, state, parts),
       ).rejects.toThrow(/command/)
-      expect(
-        fake.calls.some(({ spec }) => spec.argv[0] === 'mkdir' || spec.argv.includes('--extract')),
-      ).toBe(false)
+      expect(fake.calls.some(({ spec }) => spec.argv.includes('--extract'))).toBe(false)
     }
   })
 
   it('refuses a session root outside /agent-home before contacting the sandbox', async () => {
     const fake = sandboxFixture(await fixture())
     await expect(
-      new SandboxSnapshotTransport().capture(
-        fake.sandbox,
-        { ...state, root: '/run/secrets' },
-        baseSha,
-      ),
+      new SandboxSnapshotTransport().capture(fake.sandbox, { ...state, root: '/run/secrets' }),
     ).rejects.toThrow(/session state/)
     expect(fake.exec).not.toHaveBeenCalled()
   })
@@ -544,151 +392,11 @@ describe('SandboxSnapshotTransport', () => {
         : undefined,
     )
     await expect(
-      new SandboxSnapshotTransport().capture(
-        fake.sandbox,
-        {
-          ...state,
-          include: ['sessions/run.jsonl'],
-        },
-        baseSha,
-      ),
+      new SandboxSnapshotTransport().capture(fake.sandbox, {
+        ...state,
+        include: ['sessions/run.jsonl'],
+      }),
     ).rejects.toThrow(/command/)
-    expect(fake.calls.some(({ spec }) => spec.argv.includes('--create'))).toBe(false)
-  })
-
-  describe('a turn without a repository (docs/plan/57-browser-tasks.md, Б4)', () => {
-    const touchesWorkdir = (spec: ExecSpec) =>
-      spec.cwd === '/workspace/repo' || spec.argv.some((arg) => arg.includes('/workspace'))
-
-    it('captures the home archive alone, without any git command or a look at the working copy', async () => {
-      const parts = await fixture()
-      const fake = sandboxFixture(parts)
-      const result = await new SandboxSnapshotTransport().capture(fake.sandbox, state, undefined)
-      expect(result).toEqual({ home: parts.home })
-      expect(Object.keys(result)).toEqual(['home'])
-      expect(fake.calls.some(({ spec }) => spec.argv[0] === 'git')).toBe(false)
-      expect(fake.calls.some(({ spec }) => touchesWorkdir(spec))).toBe(false)
-      const tarCalls = fake.calls.filter(({ spec }) => spec.argv.includes('--create'))
-      expect(
-        tarCalls.map(({ spec }) => spec.argv.find((a) => a.startsWith('--directory='))),
-      ).toEqual([`--directory=/agent-home/${sampleDriverId}`])
-      expect(tarCalls[0]!.stdin.toString()).toBe('sessions\0')
-    })
-
-    it('refuses add-only paths without a base, and a base that is no commit, before any exec', async () => {
-      const fake = sandboxFixture(await fixture())
-      const transport = new SandboxSnapshotTransport()
-      await expect(
-        transport.capture(fake.sandbox, state, undefined, [], ['media/']),
-      ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-      await expect(transport.capture(fake.sandbox, state, 'main')).rejects.toMatchObject({
-        code: 'BAD_REQUEST',
-      })
-      expect(fake.exec).not.toHaveBeenCalled()
-    })
-
-    it("refuses a home with a turn credential or a value of the client's variables", async () => {
-      const key = 'synthetic-mcp-token-0123456789'
-      const clean = await fixture()
-      for (const [home, credentials, envValues] of [
-        [await archive('sessions/run.jsonl', `{"token":"${key}"}\n`), [key], []],
-        [
-          await archive('sessions/run.jsonl', JSON.stringify({ output: 'pay-0001' })),
-          [],
-          ['pay-0001'],
-        ],
-      ] as const) {
-        const fake = sandboxFixture({ ...clean, home })
-        await expect(
-          new SandboxSnapshotTransport().capture(
-            fake.sandbox,
-            state,
-            undefined,
-            credentials,
-            [],
-            envValues,
-          ),
-        ).rejects.toMatchObject({ code: 'SNAPSHOT_NOT_WRITTEN' })
-      }
-      const link = await (async () => {
-        const writer = pack()
-        const packed = (async () => {
-          const chunks: Buffer[] = []
-          for await (const chunk of writer) chunks.push(Buffer.from(chunk as Uint8Array))
-          return zstdCompressSync(Buffer.concat(chunks))
-        })()
-        writer.entry({ name: 'sessions/link', type: 'symlink', linkname: '/etc' }, '')
-        writer.finalize()
-        return packed
-      })()
-      await expect(
-        new SandboxSnapshotTransport().capture(
-          sandboxFixture({ ...clean, home: link }).sandbox,
-          state,
-          undefined,
-        ),
-      ).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED' })
-    })
-
-    it('restores the session alone into an empty working directory it only makes', async () => {
-      const parts = await fixture()
-      const fake = sandboxFixture(parts)
-      await new SandboxSnapshotTransport().restore(fake.sandbox, state, { home: parts.home })
-      const writes = fake.calls.filter(({ spec }) => spec.argv.includes('--extract'))
-      expect(
-        writes.map(({ spec }) => spec.argv.find((arg) => arg.startsWith('--directory='))),
-      ).toEqual([`--directory=/agent-home/${sampleDriverId}`])
-      expect(writes[0]!.stdin).toEqual(Buffer.from(parts.home))
-      const argvs = fake.calls.map(({ spec }) => spec.argv)
-      expect(argvs).toContainEqual(['mkdir', '--parents', '--', '/workspace/repo'])
-      expect(argvs).toContainEqual([
-        'find',
-        '-P',
-        '/workspace/repo',
-        '-mindepth',
-        '1',
-        '-print',
-        '-quit',
-      ])
-      // The working directory is checked before anything is extracted.
-      const extract = fake.calls.findIndex(({ spec }) => spec.argv.includes('--extract'))
-      const empty = fake.calls.findIndex(({ spec }) => spec.argv.includes('-mindepth'))
-      expect(empty).toBeLessThan(extract)
-      expect(fake.calls.some(({ spec }) => spec.argv[0] === 'git')).toBe(false)
-    })
-
-    it('refuses a working directory that is not empty, or holds a link, before extracting', async () => {
-      const parts = await fixture()
-      for (const override of [
-        (spec: ExecSpec): Reply | undefined =>
-          spec.argv.includes('-mindepth')
-            ? { stdout: Buffer.from('/workspace/repo/x\n') }
-            : undefined,
-        (spec: ExecSpec): Reply | undefined =>
-          spec.argv[0] === 'test' && spec.argv[1] === '-L' && spec.argv[2] === '/workspace/repo'
-            ? { code: 0 }
-            : undefined,
-      ]) {
-        const fake = sandboxFixture(parts, override)
-        await expect(
-          new SandboxSnapshotTransport().restore(fake.sandbox, state, { home: parts.home }),
-        ).rejects.toThrow(/command/)
-        expect(fake.calls.some(({ spec }) => spec.argv.includes('--extract'))).toBe(false)
-      }
-    })
-
-    it('refuses archives that hold one repository part without the other', async () => {
-      const parts = await fixture()
-      const fake = sandboxFixture(parts)
-      // As a caller without types could pass them.
-      for (const mixed of [
-        { home: parts.home, untracked: parts.untracked },
-        { home: parts.home, patch: parts.patch },
-      ] as unknown as SnapshotArchives[])
-        await expect(
-          new SandboxSnapshotTransport().restore(fake.sandbox, state, mixed),
-        ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-      expect(fake.exec).not.toHaveBeenCalled()
-    })
+    expect(fake.calls.some(({ spec }) => isHomeTar(spec))).toBe(false)
   })
 })

@@ -13,7 +13,6 @@ import {
   toTurnPlan,
   TURN_PUBLICATION_GRACE_MS,
   BROWSER_ONLY,
-  type PublicationSource,
   type TurnExecution,
   type TurnRequest,
 } from '@repo/domain'
@@ -28,7 +27,7 @@ import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { MemoryTurnCredentials } from '../testing/turn-credentials.ts'
 import { MemoryTurnJournal } from '../testing/turn-journal.ts'
 import { LeaseGuard } from './lease-guard.ts'
-import { gitNotConfigured, TurnAttempt } from './turn-attempt.ts'
+import { TurnAttempt } from './turn-attempt.ts'
 
 const labels = {
   workspaceId: '00000000-0000-4000-8000-000000000001',
@@ -38,8 +37,8 @@ const labels = {
   turn: 1,
 }
 
-// A turn with a repository, as every turn was before plan 57: tests narrow its workspace.
-const request: TurnRequest & { workspace: PublicationSource } = {
+// A turn of a chat: no repository (docs/plan/83-remove-projects.md).
+const request: TurnRequest = {
   sandbox: {
     image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
     labels,
@@ -61,12 +60,7 @@ const request: TurnRequest & { workspace: PublicationSource } = {
   },
   input: { prompt: 'Synthetic turn', attachments: [] },
   driverVersion: '1.0.0',
-  workspace: {
-    repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
-    branch: `agent/${labels.taskId}`,
-    expectedBaseSha: 'b'.repeat(40),
-    protectedPaths: [],
-  },
+  requirements: { repository: false, browser: false },
   committedAt: '2026-09-27T00:00:00.000Z',
 }
 
@@ -104,7 +98,6 @@ async function given({ executor = 'runner' }: { executor?: 'runner' | 'local' } 
       journal,
       credentials,
       logger,
-      workspace: {} as never,
       snapshots: {} as never,
     },
     { lease, guard, plan },
@@ -482,7 +475,6 @@ async function onRunner() {
   hubs.push(hub)
   const executor = new RemoteTurnExecutor(hub, t.leases, t.assignments)
   const runnerSession = randomUUID()
-  const bundleBytes = Buffer.from('synthetic bundle')
   const poll = async () =>
     (
       await hub.poll(
@@ -508,15 +500,6 @@ async function onRunner() {
       fence: t.lease,
       sandbox: { ...request.sandbox, labels: { ...labels, leaseEpoch: 1 } },
       remainingMs: t.guard.remainingMs,
-      bundle: {
-        baseSha: request.workspace.expectedBaseSha,
-        branch: request.workspace.branch,
-        sha256: createHash('sha256').update(bundleBytes).digest('hex'),
-        sizeBytes: bundleBytes.byteLength,
-        read: async function* () {
-          yield Buffer.from(bundleBytes)
-        },
-      },
       driverId: sampleDriverId,
       prepared: {
         files: [],
@@ -673,136 +656,7 @@ describe('TurnAttempt over a runner: delivery against giving up (spec §8)', () 
   })
 })
 
-describe('TurnAttempt with a working set (plan 53, Р11)', () => {
-  const sandboxBaseSha = 'd'.repeat(40)
-  const result = {
-    summary: 'Готово',
-    change_type: 'code',
-    client_message: 'Изменение готово к проверке.',
-    files_changed: ['wp-content/themes/shop/style.css'],
-    questions: [],
-    needs_approval: false,
-    risk: 'low',
-  }
-  const home = { root: `/agent-home/${sampleDriverId}`, include: ['state.db'], exclude: [] }
-
-  /** A recovered owner's attempt: it never saw the bundle, so it has no working-set commit yet. */
-  async function recovered(derived: string | null, published: string | undefined) {
-    const leases = new MemorySiteLeases()
-    const journal = new MemoryTurnJournal(leases)
-    const lease = (await leases.acquire({
-      siteId: labels.siteId,
-      taskId: labels.taskId,
-      operation: 'turn',
-      ttlMs: MAX_SANDBOX_LEASE_MS + TURN_PUBLICATION_GRACE_MS,
-    }))!
-    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_LEASE_MS)
-    guards.push(guard)
-    const plan = toTurnPlan(
-      {
-        ...request,
-        workspace: {
-          ...request.workspace,
-          workingSet: { include: ['/wp-content/themes/'], exclude: [], maxBytes: 1024 },
-        },
-      },
-      sampleDriverId,
-    )
-    const publication = {
-      baseSha: request.workspace.expectedBaseSha,
-      headSha: 'c'.repeat(40),
-      ...(published ? { sandboxBaseSha: published } : {}),
-      patch: Buffer.from('patch'),
-      untracked: Buffer.from('untracked'),
-      publish: vi.fn(async (assertFence: () => Promise<void>) => assertFence()),
-      dispose: vi.fn(async () => {}),
-    }
-    const workspace = {
-      buildBaseBundle: vi.fn(),
-      sandboxBase: vi.fn(async () => derived),
-      preparePublication: vi.fn(async () => publication),
-    }
-    const save = vi.fn(async (metadata: object) => ({
-      ...metadata,
-      schemaVersion: 1,
-      createdAt: request.committedAt,
-      parts: [],
-    }))
-    const capture = vi.fn(async () => ({
-      patch: Buffer.from('p'),
-      untracked: Buffer.from('u'),
-      homeBytes: 4,
-    }))
-    const execution = {
-      containerId: 'container1',
-      quiesce: vi.fn(async () => {}),
-      capture,
-      seal: vi.fn(),
-      destroy: vi.fn(async () => {}),
-    } as unknown as TurnExecution
-    const driver = {
-      id: sampleDriverId,
-      sessionState: () => home,
-      extractResult: () => result,
-    }
-    const attempt = new TurnAttempt(
-      {
-        leases,
-        assignments: new MemoryTurnAssignments(leases),
-        journal,
-        credentials: new MemoryTurnCredentials(),
-        workspace,
-        snapshots: { save } as never,
-      },
-      { lease, guard, plan, driver: driver as never },
-    )
-    attempt.execution = execution
-    const run = { context: { ...request.context }, files: [], env: {}, secrets: [] }
-    return { attempt, workspace, capture, save, publication, journal, run }
-  }
-
-  it('derives the commit of the working set again before it captures against it', async () => {
-    const r = await recovered(sandboxBaseSha, sandboxBaseSha)
-    await r.attempt.complete([], r.run as never)
-    expect(r.workspace.sandboxBase).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedBaseSha: request.workspace.expectedBaseSha }),
-      request.committedAt,
-    )
-    expect(r.capture).toHaveBeenCalledWith({
-      home,
-      baseSha: request.workspace.expectedBaseSha,
-      sandboxBaseSha,
-    })
-    expect(r.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        git: expect.objectContaining({
-          baseSha: request.workspace.expectedBaseSha,
-          sandboxBaseSha,
-        }),
-      }),
-      expect.anything(),
-      expect.any(AbortSignal),
-    )
-    expect(r.publication.publish).toHaveBeenCalledOnce()
-  })
-
-  it('publishes nothing from a candidate cut from another working set', async () => {
-    const r = await recovered(sandboxBaseSha, 'e'.repeat(40))
-    await expect(r.attempt.complete([], r.run as never)).rejects.toThrow('another working set')
-    expect(r.save).not.toHaveBeenCalled()
-    expect(r.publication.publish).not.toHaveBeenCalled()
-  })
-
-  it('captures nothing when the workspace derives no working set for a plan that has one', async () => {
-    const r = await recovered(null, undefined)
-    await expect(r.attempt.complete([], r.run as never)).rejects.toMatchObject({
-      code: 'CONFLICT',
-    })
-    expect(r.capture).not.toHaveBeenCalled()
-  })
-})
-
-describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)', () => {
+describe('TurnAttempt of a chat: no repository (docs/plan/57-browser-tasks.md, Б4)', () => {
   const result = {
     summary: 'Готово',
     change_type: 'content',
@@ -813,19 +667,8 @@ describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)'
     risk: 'low',
   }
   const home = { root: `/agent-home/${sampleDriverId}`, include: ['state.db'], exclude: [] }
-  const { workspace: _workspace, ...withoutWorkspace } = request
 
-  async function homeOnly(
-    captured: {
-      homeBytes: number
-      patch?: Uint8Array
-      untracked?: Uint8Array
-      outbox?: Uint8Array
-    } = {
-      homeBytes: 4,
-    },
-    workspace: { preparePublication: ReturnType<typeof vi.fn> } | null = null,
-  ) {
+  async function homeOnly(captured: { homeBytes: number; outbox?: Uint8Array } = { homeBytes: 4 }) {
     const leases = new MemorySiteLeases()
     const journal = new MemoryTurnJournal(leases)
     const record = vi.spyOn(journal, 'record')
@@ -838,7 +681,7 @@ describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)'
     const release = vi.spyOn(leases, 'release')
     const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_LEASE_MS)
     guards.push(guard)
-    const plan = toTurnPlan({ ...withoutWorkspace, requirements: BROWSER_ONLY }, sampleDriverId)
+    const plan = toTurnPlan({ ...request, requirements: BROWSER_ONLY }, sampleDriverId)
     const save = vi.fn(async (metadata: object) => ({
       ...metadata,
       schemaVersion: 1,
@@ -865,7 +708,6 @@ describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)'
         assignments: new MemoryTurnAssignments(leases),
         journal,
         credentials: new MemoryTurnCredentials(),
-        workspace: workspace as never,
         snapshots: { save } as never,
       },
       { lease, guard, plan, driver: driver as never },
@@ -876,7 +718,7 @@ describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)'
     return { attempt, capture, save, destroy, release, record, phases, run }
   }
 
-  it('saves its home alone without git, removes the container and completes unpublished', async () => {
+  it('saves its home alone without git, removes the container and completes', async () => {
     const r = await homeOnly()
     const done = await r.attempt.complete([], r.run as never)
     expect(done.result).toEqual(result)
@@ -924,53 +766,5 @@ describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)'
       skipped: 0,
       refused: true,
     })
-  })
-
-  it('refuses a capture that answers parts of a working copy', async () => {
-    const r = await homeOnly({ homeBytes: 4, patch: Buffer.from('p'), untracked: Buffer.from('u') })
-    await expect(r.attempt.complete([], r.run as never)).rejects.toThrow('candidate parts')
-    expect(r.save).not.toHaveBeenCalled()
-    expect(r.phases()).not.toContain('checkpointing')
-  })
-
-  it('never asks the workspace, even when git is configured', async () => {
-    const preparePublication = vi.fn()
-    const r = await homeOnly(undefined, { preparePublication })
-    await r.attempt.complete([], r.run as never)
-    expect(preparePublication).not.toHaveBeenCalled()
-  })
-
-  it('refuses a turn with a repository before quiesce when git is not configured', async () => {
-    const leases = new MemorySiteLeases()
-    const lease = (await leases.acquire({
-      siteId: labels.siteId,
-      taskId: labels.taskId,
-      operation: 'turn',
-      ttlMs: MAX_SANDBOX_LEASE_MS + TURN_PUBLICATION_GRACE_MS,
-    }))!
-    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_LEASE_MS)
-    guards.push(guard)
-    const quiesce = vi.fn(async () => {})
-    const attempt = new TurnAttempt(
-      {
-        leases,
-        assignments: new MemoryTurnAssignments(leases),
-        journal: new MemoryTurnJournal(leases),
-        credentials: new MemoryTurnCredentials(),
-        workspace: null,
-        snapshots: {} as never,
-      },
-      {
-        lease,
-        guard,
-        plan: toTurnPlan(request, sampleDriverId),
-        driver: { id: sampleDriverId } as never,
-      },
-    )
-    attempt.execution = { containerId: 'container1', quiesce } as unknown as TurnExecution
-    await expect(attempt.complete([], {} as never)).rejects.toMatchObject({
-      code: gitNotConfigured().code,
-    })
-    expect(quiesce).not.toHaveBeenCalled()
   })
 })

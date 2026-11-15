@@ -17,11 +17,7 @@ import {
   type SnapshotPartName,
 } from '@repo/domain'
 import {
-  baseSha,
-  branch,
-  bundleBytes,
   credentials,
-  emptyUntrackedArchive,
   events,
   fence,
   home,
@@ -98,7 +94,6 @@ const prepareCommand = (body: Record<string, unknown> = {}, epoch = 1) =>
     {
       sandbox: sandboxSpec(epoch),
       remainingMs: 60_000,
-      bundle: { baseSha, branch, sha256: sha256(bundleBytes), sizeBytes: bundleBytes.byteLength },
       driverId: sampleDriverId,
       prepared,
       argv: ['synthetic-agent'],
@@ -174,32 +169,6 @@ describe('SandboxRunner commands', () => {
     await vi.waitFor(() => expect(core.types()).toHaveLength(6))
     expect(core.reports[5]).toMatchObject({ type: 'failed', assignmentId: third })
     expect(core.reports[5]).not.toHaveProperty('absent')
-  })
-
-  it('fetches the base bundle again while core is unavailable, as any other call', async () => {
-    const side = sandboxSide()
-    const core = scriptedCore()
-    let calls = 0
-    core.transport.bundle = async function* () {
-      calls += 1
-      if (calls === 1) throw new RunnerCallError('bundle', 503, { error: 'UNAVAILABLE' })
-      yield Buffer.from(bundleBytes.subarray(0, 4))
-      if (calls === 2) throw new RunnerCallError('bundle', null)
-      yield Buffer.from(bundleBytes.subarray(4))
-    }
-    let imported: Buffer | undefined
-    side.importBundle.mockImplementation(async (_sandbox, bundle) => {
-      const chunks: Uint8Array[] = []
-      for await (const chunk of bundle.read()) chunks.push(chunk)
-      imported = Buffer.concat(chunks)
-    })
-    startRunner(core.transport, side.executor)
-    await core.send(prepareCommand())
-    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']), {
-      timeout: 5_000,
-    })
-    expect(calls).toBe(3)
-    expect(imported).toEqual(bundleBytes)
   })
 
   it('stops a prepare still creating its container when core adopts the turn for removal', async () => {
@@ -349,7 +318,6 @@ describe('SandboxRunner commands', () => {
 
     expect(core.reports[1]).toEqual(expect.not.objectContaining({ commandId: expect.anything() }))
     expect(side.sandbox.destroy).toHaveBeenCalledWith('failed')
-    expect(side.importBundle).not.toHaveBeenCalled()
     expect(runner.holds('container1')).toBe(false)
   })
 
@@ -605,13 +573,19 @@ describe('SandboxRunner snapshot parts', () => {
       image,
       driver: { id: sampleDriverId, version: '1.0.0', nativeSessionId: 'prior-native' },
       home,
-      git: { provider: 'gitea', branch, baseSha: 'a'.repeat(40), headSha: baseSha },
+      // A checkpoint of a chat that had a project (before plan 83): its home alone is restored.
+      git: {
+        provider: 'gitea',
+        branch: `agent/${labels.taskId}`,
+        baseSha: 'a'.repeat(40),
+        headSha: 'b'.repeat(40),
+      },
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
       createdAt: new Date().toISOString(),
     }
     const archives: Record<SnapshotPartName, Uint8Array> = {
       home: await tarZst({ [home.include[0]!]: 'prior conversation' }),
-      untracked: emptyUntrackedArchive(),
+      untracked: Buffer.from('prior new files'),
       patch: Buffer.from('prior patch'),
     }
     const prefix = turnSnapshotPrefix(base.sessionId, base.turn)
@@ -649,11 +623,7 @@ describe('SandboxRunner snapshot parts', () => {
       source: { dataKey },
       restore: {
         manifest,
-        parts: {
-          home: await get('home'),
-          untracked: await get('untracked'),
-          patch: await get('patch'),
-        },
+        parts: { home: await get('home') },
       },
     }
   }
@@ -682,12 +652,12 @@ describe('SandboxRunner snapshot parts', () => {
     foreign.parts.home.url = foreign.parts.home.url.replace('/turns/0001/', '/turns/0002/')
     // The same object at another origin, or in another bucket of the same host: a forged core's.
     const elsewhere = structuredClone(prior.restore)
-    elsewhere.parts.untracked.url = elsewhere.parts.untracked.url.replace(
+    elsewhere.parts.home.url = elsewhere.parts.home.url.replace(
       'https://s3.invalid/',
       'https://s3.invalid.example/',
     )
     const otherBucket = structuredClone(prior.restore)
-    otherBucket.parts.patch.url = otherBucket.parts.patch.url.replace('/raditi-sessions/', '/evil/')
+    otherBucket.parts.home.url = otherBucket.parts.home.url.replace('/raditi-sessions/', '/evil/')
     await core.send(secondTurn(foreign))
     await vi.waitFor(() => expect(core.types()).toEqual(['failed']))
     await core.send(secondTurn(elsewhere))
@@ -708,12 +678,12 @@ describe('SandboxRunner snapshot parts', () => {
       expect(core.types()).toEqual(['failed', 'failed', 'failed', 'created', 'prepared']),
     )
     expect(side.snapshot.restore).toHaveBeenCalledWith(side.sandbox, home, expect.anything())
-    expect(side.transfer.get).toHaveBeenCalledTimes(3)
+    expect(side.transfer.get).toHaveBeenCalledTimes(1)
     expect(keys).toHaveLength(1)
     expect(keys[0]!.every((byte) => byte === 0)).toBe(true)
   })
 
-  it('restores the older checkpoint a replacement turn starts from, never its own turn or a later one', async () => {
+  it('restores the older checkpoint an undone turn started from, never its own turn or a later one', async () => {
     const side = sandboxSide()
     const core = scriptedCore()
     const prior = await previousTurn()
@@ -734,11 +704,11 @@ describe('SandboxRunner snapshot parts', () => {
     expect(side.transfer.get).not.toHaveBeenCalled()
     expect(core.transport.key).not.toHaveBeenCalled()
 
-    // Turn 3 replaces turn 2 and starts from what that one started from: the checkpoint of turn 1.
+    // Turn 3 follows the undone turn 2 and starts where that one started: the checkpoint of turn 1.
     await core.send(turn(3))
     await vi.waitFor(() => expect(core.types()).toEqual(['failed', 'created', 'prepared']))
     expect(side.snapshot.restore).toHaveBeenCalledWith(side.sandbox, home, expect.anything())
-    expect(side.transfer.get).toHaveBeenCalledTimes(3)
+    expect(side.transfer.get).toHaveBeenCalledTimes(1)
   })
 
   it('seals home only into its own turn, and logs neither presigned URLs nor refused bodies', async () => {
@@ -764,20 +734,13 @@ describe('SandboxRunner snapshot parts', () => {
     // The values of the client's variables of the turn (plan 53, Р13) come with the prepare.
     await core.send(prepareCommand({ envValues: ['pay-secret-0001'] }))
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
-    // New media below an add-only path count even when an ignore file hides them (plan 53, Р12).
-    const addOnlyPaths = ['wp-content/uploads/raditi/']
-    await core.send(command('capture', { home, baseSha, addOnlyPaths }))
+    await core.send(command('capture', { home }))
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'captured']))
     // The home archive is refused when one of them is left in it.
-    expect(side.snapshot.capture).toHaveBeenCalledWith(
-      side.sandbox,
-      home,
-      baseSha,
-      expect.any(Array),
-      addOnlyPaths,
-      ['pay-secret-0001'],
-    )
-    expect(core.transport.candidate).toHaveBeenCalledTimes(2)
+    expect(side.snapshot.capture).toHaveBeenCalledWith(side.sandbox, home, expect.any(Array), [
+      'pay-secret-0001',
+    ])
+    expect(core.transport.candidate).not.toHaveBeenCalled()
     const seal = (turn: string, target = url(turn)) =>
       command('seal', {
         base: {
@@ -787,7 +750,6 @@ describe('SandboxRunner snapshot parts', () => {
           image,
           driver: { id: sampleDriverId, version: '1.0.0' },
           home,
-          git: { provider: 'gitea', branch, baseSha, headSha: 'c'.repeat(40) },
           schemaVersion: 1,
           createdAt: '2026-09-27T00:00:00.000Z',
         },
@@ -890,21 +852,14 @@ describe('SandboxRunner: a turn without a repository (docs/plan/57-browser-tasks
     )
     return side
   }
-  const withoutBundle = (body: Record<string, unknown> = {}) => {
-    const prepare: Record<string, unknown> = prepareCommand(body)
-    delete prepare.bundle
-    return prepare
-  }
+  const withoutBundle = (body: Record<string, unknown> = {}) => prepareCommand(body)
 
-  it('fetches no bundle and makes the working directory empty, without git', async () => {
+  it('makes the working directory empty, without git', async () => {
     const side = quietWorkdir()
     const core = scriptedCore()
-    const bundle = vi.spyOn(core.transport, 'bundle')
     startRunner(core.transport, side.executor)
     await core.send(withoutBundle())
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
-    expect(bundle).not.toHaveBeenCalled()
-    expect(side.importBundle).not.toHaveBeenCalled()
     const argvs = vi.mocked(side.sandbox.exec).mock.calls.map(([spec]) => spec.argv)
     expect(argvs).toContainEqual(['mkdir', '-p', '--', '/workspace/repo'])
     expect(argvs.some((argv) => argv[0] === 'git')).toBe(false)
@@ -987,14 +942,7 @@ describe('SandboxRunner: a turn without a repository (docs/plan/57-browser-tasks
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
     await core.send(command('capture', { home }))
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'captured']))
-    expect(side.snapshot.capture).toHaveBeenCalledWith(
-      side.sandbox,
-      home,
-      undefined,
-      expect.any(Array),
-      [],
-      [],
-    )
+    expect(side.snapshot.capture).toHaveBeenCalledWith(side.sandbox, home, expect.any(Array), [])
     expect(core.transport.candidate).not.toHaveBeenCalled()
     const captured = core.reports[2]!
     expect(captured).toMatchObject({ type: 'captured', homeBytes: side.archives.home.byteLength })
@@ -1054,18 +1002,6 @@ describe('SandboxRunner: a turn without a repository (docs/plan/57-browser-tasks
     })
     expect(core.reports[2]).not.toHaveProperty('patch')
   })
-
-  it('fails a capture with a base after a prepare without a bundle, uploading nothing', async () => {
-    const side = quietWorkdir()
-    const core = scriptedCore()
-    startRunner(core.transport, side.executor)
-    await core.send(withoutBundle())
-    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
-    await core.send(command('capture', { home, baseSha }))
-    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'failed']))
-    expect(side.snapshot.capture).not.toHaveBeenCalled()
-    expect(core.transport.candidate).not.toHaveBeenCalled()
-  })
 })
 
 describe('SandboxRunner files of the client', () => {
@@ -1106,13 +1042,21 @@ describe('SandboxRunner files of the client', () => {
     expect(core.reports.at(-1)).toMatchObject({ type: 'failed' })
   })
 
-  it('refuses files of a turn without a repository with the command', async () => {
+  it('refuses files of a turn under another lease with the command', async () => {
     const side = sandboxSide()
     const core = scriptedCore({ inbox: files })
     startRunner(core.transport, side.executor)
+    const other = sandboxSpec()
+    other.labels = { ...other.labels, siteId: '00000000-0000-4000-8000-0000000000ff' }
 
     // Dropped as invalid: the next command is the first one carried out.
-    await core.send(prepareCommand({ inbox, bundle: undefined }))
+    await core.send(
+      prepareCommand({
+        inbox,
+        sandbox: other,
+        fence: { ...fence, siteId: '00000000-0000-4000-8000-0000000000ff' },
+      }),
+    )
     await core.send(prepareCommand())
     await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
     expect(side.sandboxes.create).toHaveBeenCalledOnce()

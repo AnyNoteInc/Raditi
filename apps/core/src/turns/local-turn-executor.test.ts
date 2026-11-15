@@ -76,14 +76,11 @@ async function fixture() {
     image,
     driver: { id: sampleDriverId, version: '1.0.0' },
     home,
+    // A checkpoint of a chat that had a project (before plan 83): only its home comes back.
     git: { provider: 'gitea', branch: `agent/${labels.taskId}`, baseSha, headSha: baseSha },
   }
   await snapshots.save(priorMetadata, prior)
-  const captured: SnapshotArchives = {
-    home: await tarZst({ [home.include[0]!]: 'this turn' }),
-    untracked: emptyUntrackedArchive(),
-    patch: Buffer.from('agent patch'),
-  }
+  const captured = { home: await tarZst({ [home.include[0]!]: 'this turn' }) }
   const sandbox: Sandbox = {
     id: 'container2',
     labels,
@@ -122,15 +119,11 @@ async function fixture() {
     get: vi.fn(memory.transfer.get),
     put: vi.fn(memory.transfer.put),
   }
-  const importBundle = vi.fn(async () => {
-    order.push('import')
-  })
   const executor = new LocalTurnExecutor({
     sandboxes,
     parser: () => ({ parseEvent: (line) => [JSON.parse(line) as AgentEvent] }),
     transport,
     transfer,
-    importBundle,
   })
   const source = await snapshots.restoreSource(
     {
@@ -158,13 +151,6 @@ async function fixture() {
       hardTimeoutMs: 600_000,
     },
     remainingMs: 500_000,
-    bundle: {
-      baseSha,
-      branch: `agent/${labels.taskId}`,
-      sha256: '0'.repeat(64),
-      sizeBytes: 1,
-      read: async function* () {},
-    },
     restore: source,
     driverId: sampleDriverId,
     prepared: {
@@ -198,7 +184,6 @@ async function fixture() {
     sandboxes,
     transport,
     transfer,
-    importBundle,
     executor,
     input,
     signal,
@@ -206,14 +191,13 @@ async function fixture() {
 }
 
 describe('LocalTurnExecutor', () => {
-  it('reports the container before the import, restores turn n−1, then writes files and secrets', async () => {
+  it('reports the container, restores turn n−1, then writes files and secrets', async () => {
     const f = await fixture()
     const input = f.input()
     const execution = await f.executor.prepare(input, f.signal)
     expect(f.order).toEqual([
       'create',
       'created',
-      'import',
       'restore',
       `write:/agent-home/${sampleDriverId}/.config/opencode/opencode.json`,
       `write:/agent-home/${sampleDriverId}/run.sh`,
@@ -226,13 +210,11 @@ describe('LocalTurnExecutor', () => {
       expect.objectContaining({ secrets: [], hardTimeoutMs: 500_000 }),
       f.signal,
     )
-    expect(f.importBundle).toHaveBeenCalledWith(f.sandbox, input.bundle)
+    // The home part alone: the working copy of the old checkpoint stays in S3.
     expect(f.transport.restore).toHaveBeenCalledWith(f.sandbox, home, {
       home: Buffer.from(f.prior.home),
-      untracked: Buffer.from(f.prior.untracked),
-      patch: Buffer.from(f.prior.patch),
     })
-    expect(f.transfer.get).toHaveBeenCalledTimes(3)
+    expect(f.transfer.get).toHaveBeenCalledTimes(1)
     expect(
       vi.mocked(f.sandbox.fs.write).mock.calls.map(([path, , options]) => [path, options]),
     ).toEqual([
@@ -326,7 +308,7 @@ describe('LocalTurnExecutor', () => {
 
   it('refuses a part changed in storage before asking for the key or writing anything', async () => {
     const f = await fixture()
-    const key = `sessions/${labels.sessionId}/turns/0001/untracked.tar.zst`
+    const key = `sessions/${labels.sessionId}/turns/0001/home.tar.zst`
     const stored = f.memory.objects.get(key)!
     stored[0] = (stored[0] ?? 0) ^ 1
     await expect(f.executor.prepare(f.input(), f.signal)).rejects.toMatchObject({
@@ -338,7 +320,7 @@ describe('LocalTurnExecutor', () => {
     expect(f.sandbox.fs.write).not.toHaveBeenCalled()
   })
 
-  it('stops before the import when the caller refuses the container, which it now owns', async () => {
+  it('stops before the restore when the caller refuses the container, which it now owns', async () => {
     const f = await fixture()
     const input = f.input()
     input.created = vi.fn(async () => {
@@ -347,7 +329,7 @@ describe('LocalTurnExecutor', () => {
     await expect(f.executor.prepare(input, f.signal)).rejects.toMatchObject({
       code: 'TURN_INTERRUPTED',
     })
-    expect(f.importBundle).not.toHaveBeenCalled()
+    expect(f.transport.restore).not.toHaveBeenCalled()
     // Removal is the caller's: it holds the execution from created().
     expect(f.sandbox.destroy).not.toHaveBeenCalled()
   })
@@ -356,6 +338,8 @@ describe('LocalTurnExecutor', () => {
     const f = await fixture()
     const first = lines([{ type: 'started', nativeSessionId: 'native1' }])
     const second = lines([{ type: 'completed' }])
+    // After the prepare: the commands that make the working directory print nothing.
+    const execution = await f.executor.prepare(f.input(), f.signal)
     vi.mocked(f.sandbox.exec).mockResolvedValue(
       handle('exec1', [
         { stream: 'stdout', offset: 0, data: first },
@@ -363,9 +347,8 @@ describe('LocalTurnExecutor', () => {
         { stream: 'stdout', offset: first.length, data: second },
       ]),
     )
-    const execution = await f.executor.prepare(f.input(), f.signal)
     const agent = await execution.launch()
-    expect(f.sandbox.exec).toHaveBeenCalledWith({
+    expect(f.sandbox.exec).toHaveBeenLastCalledWith({
       argv: ['opencode', 'run', '--format', 'json'],
       cwd: '/workspace/repo',
       env: { HOME: `/agent-home/${sampleDriverId}` },
@@ -391,6 +374,7 @@ describe('LocalTurnExecutor', () => {
 
   it('refuses agent output with a turn credential before handing it over', async () => {
     const f = await fixture()
+    const execution = await f.executor.prepare(f.input(), f.signal)
     vi.mocked(f.sandbox.exec).mockResolvedValue(
       handle('exec1', [
         {
@@ -400,7 +384,6 @@ describe('LocalTurnExecutor', () => {
         },
       ]),
     )
-    const execution = await f.executor.prepare(f.input(), f.signal)
     const agent = await execution.launch()
     const record = vi.fn(async () => {})
     await expect(agent.output(record)).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED' })
@@ -458,47 +441,13 @@ describe('LocalTurnExecutor', () => {
     ).rejects.toThrow('ENOENT')
   })
 
-  it('captures against the commit it imported and nothing else (plan 53, Р11)', async () => {
-    const f = await fixture()
-    const sandboxBaseSha = 'd'.repeat(40)
-    const input = f.input()
-    const execution = await f.executor.prepare(
-      { ...input, bundle: { ...input.bundle!, sandboxBaseSha } },
-      f.signal,
-    )
-    expect(f.importBundle).toHaveBeenCalledWith(
-      f.sandbox,
-      expect.objectContaining({ baseSha, sandboxBaseSha }),
-    )
-    // The full base is not in the sandbox: a diff against it is refused before it runs.
-    await expect(execution.capture({ home, baseSha })).rejects.toMatchObject({ code: 'CONFLICT' })
-    await expect(
-      execution.capture({ home, baseSha, sandboxBaseSha: 'e'.repeat(40) }),
-    ).rejects.toMatchObject({ code: 'CONFLICT' })
-    expect(f.transport.capture).not.toHaveBeenCalled()
-    const addOnlyPaths = ['wp-content/uploads/raditi/']
-    await execution.capture({ home, baseSha, sandboxBaseSha, addOnlyPaths })
-    expect(f.transport.capture).toHaveBeenCalledWith(
-      f.sandbox,
-      home,
-      sandboxBaseSha,
-      credentials,
-      addOnlyPaths,
-      [],
-    )
-  })
-
   it('keeps the captured home and seals it with the snapshot AAD through the create-only PUT', async () => {
     const f = await fixture()
     const execution = await f.executor.prepare(f.input(), f.signal)
     await expect(execution.seal({} as never)).rejects.toMatchObject({ code: 'CONFLICT' })
-    const captured = await execution.capture({ home, baseSha })
-    expect(f.transport.capture).toHaveBeenCalledWith(f.sandbox, home, baseSha, credentials, [], [])
-    expect(captured).toEqual({
-      patch: f.captured.patch,
-      untracked: f.captured.untracked,
-      homeBytes: f.captured.home.byteLength,
-    })
+    const captured = await execution.capture({ home })
+    expect(f.transport.capture).toHaveBeenCalledWith(f.sandbox, home, credentials, [])
+    expect(captured).toEqual({ homeBytes: f.captured.home.byteLength })
     expect(captured).not.toHaveProperty('home')
     const metadata: SnapshotMetadata = {
       workspaceId: labels.workspaceId,
@@ -507,18 +456,8 @@ describe('LocalTurnExecutor', () => {
       image,
       driver: { id: sampleDriverId, version: '1.0.0' },
       home,
-      git: {
-        provider: 'gitea',
-        branch: `agent/${labels.taskId}`,
-        baseSha,
-        headSha: 'c'.repeat(40),
-      },
     }
-    const sealed = await f.snapshots.seal(metadata, {
-      home: { sizeBytes: captured.homeBytes },
-      untracked: captured.untracked!,
-      patch: captured.patch!,
-    })
+    const sealed = await f.snapshots.seal(metadata, { home: { sizeBytes: captured.homeBytes } })
     await f.snapshots.reserve(sealed)
     const put = await f.snapshots.presignPart(sealed, 'home', 60_000)
     const part = await execution.seal({
@@ -629,7 +568,7 @@ describe('LocalTurnExecutor', () => {
       const f = await fixture()
       const execution = (await f.executor.adopt(adopt('removal'), f.signal))!
       await expect(execution.quiesce()).rejects.toMatchObject({ code: 'CONFLICT' })
-      await expect(execution.capture({ home, baseSha })).rejects.toMatchObject({ code: 'CONFLICT' })
+      await expect(execution.capture({ home })).rejects.toMatchObject({ code: 'CONFLICT' })
       await execution.destroy('failed')
       expect(f.sandbox.destroy).toHaveBeenCalledWith('failed')
       expect(f.sandbox.quiesce).not.toHaveBeenCalled()

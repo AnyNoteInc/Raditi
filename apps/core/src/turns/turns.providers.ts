@@ -106,8 +106,6 @@ export const turnEngineProviders: Provider[] = [
       return new TurnSupervisor({
         leases,
         assignments,
-        // Turns run without a repository (docs/plan/83-remove-projects.md, БП2).
-        workspace: null,
         snapshots,
         journal,
         executor,
@@ -148,7 +146,6 @@ export const turnEngineProviders: Provider[] = [
         executor,
         journal,
         driver: (id) => drivers.get(id),
-        workspace: null,
         snapshots,
         credentials,
         live,

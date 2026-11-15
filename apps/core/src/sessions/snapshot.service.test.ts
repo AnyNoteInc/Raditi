@@ -582,18 +582,17 @@ describe('home part sealed by a turn executor', () => {
 })
 
 describe('restore source for a turn executor', () => {
-  it('checks the manifest and presigns only the three parts of that turn', async () => {
+  it('checks the manifest and presigns only the home part of that turn (plan 83)', async () => {
     const f = fixture()
     const original = await parts()
+    // A checkpoint of a chat that had a project: its patch and new files stay in S3.
     await f.service.save(metadata, original)
     const source = await f.service.restoreSource(reference, 30_000)
     expect(source.manifest.turn).toBe(1)
-    for (const name of ['home', 'untracked', 'patch'] as const)
-      expect(source.parts[name]).toMatchObject({ method: 'GET' })
+    expect(Object.keys(source.parts)).toEqual(['home'])
+    expect(source.parts.home).toMatchObject({ method: 'GET' })
     expect(vi.mocked(f.storage.presign).mock.calls.map(([request]) => request)).toEqual([
       { bucket: 'sessions', key: `${prefix}home.tar.zst`, method: 'GET', ttlMs: 30_000 },
-      { bucket: 'sessions', key: `${prefix}untracked.tar.zst`, method: 'GET', ttlMs: 30_000 },
-      { bucket: 'sessions', key: `${prefix}patch.diff`, method: 'GET', ttlMs: 30_000 },
     ])
     // No part is read and no key unwrapped until the executor asks for it.
     expect(f.secrets.transitDecryptDataKey).not.toHaveBeenCalled()
