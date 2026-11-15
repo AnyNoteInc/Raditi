@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient } from '@repo/db'
 import { terminalTaskStatuses } from '@repo/domain'
 import { z } from 'zod'
 
-import { leaseIdOf, type McpTurnAccess } from '../access/mcp-access.ts'
+import type { McpTurnAccess } from '../access/mcp-access.ts'
 import type { McpWebSearchConfig } from '../config/config.ts'
 import type { WebSearchStatus } from './yandex-search.ts'
 
@@ -119,8 +119,7 @@ export class PostgresWebSearchStore implements WebSearchStore {
 async function turnIsLive(tx: Prisma.TransactionClient, scope: McpTurnAccess): Promise<boolean> {
   const rows = await tx.$queryRaw<unknown[]>`
     SELECT 1 FROM llm_keys k JOIN tasks t ON t.id = k.task_id
-    JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = ${leaseIdOf(scope)}::uuid
-      AND a.site_id IN (t.id, t.site_id)
+    JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = ${scope.taskId}::uuid
       AND a.session_id = k.session_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch
     JOIN site_leases l ON l.site_id = a.site_id AND l.holder_task_id = t.id
       AND l.epoch = a.lease_epoch

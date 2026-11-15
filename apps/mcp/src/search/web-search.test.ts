@@ -10,14 +10,10 @@ const scope = {
   keyId: '01960000-0000-7000-8000-000000000001',
   taskId: '01960000-0000-7000-8000-000000000002',
   workspaceId: '01960000-0000-7000-8000-000000000003',
-  siteId: null,
   sessionId: 'synthetic',
   turn: 1,
   firstEpoch: 1,
   epoch: 1,
-  stack: null,
-  url: null,
-  preview: null,
   requirements: { repository: false, browser: false },
 } satisfies McpTurnAccess
 const apiKey = 'synthetic-yandex-key-0123456789'

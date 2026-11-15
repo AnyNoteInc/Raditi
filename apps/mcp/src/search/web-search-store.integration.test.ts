@@ -178,16 +178,11 @@ describe.skipIf(!enabled)('the web search counts with PostgreSQL', () => {
       keyId: key.id,
       taskId: task.id,
       workspaceId: base.workspaceId,
-      siteId: null,
-      sessionId: suffix,
+          sessionId: suffix,
       turn: 1,
       firstEpoch: 1,
       epoch: 1,
-      leaseId: task.id,
-      stack: null,
-      url: null,
-      preview: null,
-      requirements: { repository: false, browser: false },
+                  requirements: { repository: false, browser: false },
     }
   }
 

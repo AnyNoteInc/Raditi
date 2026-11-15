@@ -44,7 +44,7 @@ describe('the sweep of contact maps', () => {
     vi.restoreAllMocks()
   })
 
-  it('removes the map of a task under the site, of a chat under its own id', async () => {
+  it('removes the map of every chat under its own id', async () => {
     const chat = { id: randomUUID(), siteId: null }
     const onSite = task()
     const { db, tx } = fakeDb([[onSite, chat]])
@@ -55,7 +55,7 @@ describe('the sweep of contact maps', () => {
       failed: 0,
     })
     expect(secrets.kvDestroyAll.mock.calls).toEqual([
-      [`kv/content-masks/${site}/${onSite.id}`],
+      [`kv/content-masks/${onSite.id}/${onSite.id}`],
       [`kv/content-masks/${chat.id}/${chat.id}`],
     ])
     expect(tx.$executeRaw).toHaveBeenCalledTimes(2)

@@ -1,81 +1,40 @@
 import { Inject } from '@nestjs/common'
 import { Ctx } from '@nestjs/microservices'
 import { McpController, Tool, type McpContext } from '@rekog/mcp-nest'
-import {
-  isPreviewServing,
-  previewOrigin,
-  requirementsOf,
-  type BrowserController,
-  type PreviewAddress,
-} from '@repo/domain'
+import type { BrowserController } from '@repo/domain'
 import { z } from 'zod'
 
-import { siteAccessOf, type McpTurnAccess } from '../access/mcp-access.ts'
-import { isClosedPreview } from '../access/mcp-policy.ts'
+import type { McpTurnAccess } from '../access/mcp-access.ts'
 import { MCP_REQUEST_ACCESS, type McpRequest } from '../access/mcp-request.ts'
 import type { McpBrowserTasks } from './browser-tasks.ts'
 import { MCP_BROWSER_TASKS } from './site-info.tokens.ts'
 
-/** Where previews answer (PREVIEW_BASE_DOMAIN and the rest); null — they are not configured. */
-export const MCP_PREVIEW_ADDRESS = Symbol('MCP_PREVIEW_ADDRESS')
-
 /**
- * The browser of a task as the agent is told it: the site, where it starts, who drives it.
- * Without a site `siteUrl` and `startPath` are null.
+ * The browser of a chat as the agent is told it: who drives it. A chat has no site
+ * (docs/plan/83-remove-projects.md, БП1), so `siteUrl` and `startPath` are always null.
  */
 export interface SiteBrowserInfo {
-  siteUrl: string | null
-  startPath: string | null
+  siteUrl: null
+  startPath: null
   controller: BrowserController | null
 }
 
 /**
- * What the agent is told of its site. A dialog with a preview (docs/plan/53-chat-preview-
- * release.md, Р3, Р21): `url` is the preview's own address while it serves — where the browser
- * tools go — and null otherwise; `siteUrl` is the site's address, the one links inside content
- * keep (the preview's database is a copy of the site's, Р15), never a place to write. A dialog
- * without one (previews are not configured): the site, as before. A chat without a site: nulls,
- * and the tool stays, so the list of a turn is never empty (docs/plan/61-chats-first.md, §5.5).
+ * What the agent is told: a chat has no site, so the stack and addresses are null; the tool stays
+ * so the list of a turn is never empty (docs/plan/61-chats-first.md, §5.5).
  */
-export function siteInfoOf(
-  access: McpTurnAccess,
-  address: PreviewAddress | null,
-  browser: SiteBrowserInfo | null = null,
-) {
-  if (access.siteId === null) return { stack: null, url: null, siteUrl: null, browser }
-  const preview = access.preview
-  // A browser task (docs/plan/57-browser-tasks.md, Б20): its browser works on the site itself.
-  const session = browser === null ? {} : { browser }
-  if (!preview) return { url: access.url, stack: access.stack, ...session }
-  return {
-    url:
-      address && isPreviewServing(preview.status) ? previewOrigin(preview.hostname, address) : null,
-    siteUrl: access.url,
-    stack: access.stack,
-    preview: preview.status,
-    // What a release carries of the database of this site (docs/plan/53, «Операции БД и
-    // миграции»; docs/plan/62-site-stacks.md, Т37): the kinds the preview's last build found
-    // writable — an empty list, none —, null while no build has said yet: the first turn starts
-    // beside the first build, and «none» read then would refuse the text of records on a site
-    // whose plugin carries it. A preview that is closed (a build that ended `unavailable`, or one
-    // destroyed) is told first, whatever its record keeps: its content tools are closed, and no
-    // build is coming that would say more — none.
-    database: { operations: isClosedPreview(preview) ? [] : (preview.dbKinds ?? null) },
-    ...session,
-  }
+export function siteInfoOf(_access: McpTurnAccess, browser: SiteBrowserInfo | null = null) {
+  return { stack: null, url: null, siteUrl: null, browser }
 }
 
 @McpController()
 export class McpToolsController {
-  constructor(
-    @Inject(MCP_PREVIEW_ADDRESS) private readonly previews: PreviewAddress | null,
-    @Inject(MCP_BROWSER_TASKS) private readonly browserTasks: McpBrowserTasks,
-  ) {}
+  constructor(@Inject(MCP_BROWSER_TASKS) private readonly browserTasks: McpBrowserTasks) {}
 
   @Tool({
     name: 'site_info',
     description:
-      "Read the stack of the site of this turn and its addresses: url — where this dialog's preview answers (null while it is not ready; the site itself where there are no previews), siteUrl — the site's own address, which links inside content keep; database.operations — what of the database a release carries here; null — the preview's first build has not said yet, call site_info again before you rely on it. For a task in the browser, browser: the site, the path its browser starts at and who controls it now (agent or user; null — not started: it starts with your first web_* call).",
+      'Read what this chat has: there is no site, so stack and url are null. For a chat with the browser, browser: who controls it now (agent or user; null — not started: it starts with your first web_* call).',
     parameters: z.strictObject({}),
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   })
@@ -84,12 +43,11 @@ export class McpToolsController {
     if (!access)
       return { isError: true, content: [{ type: 'text', text: 'MCP authorization is required' }] }
     let browser: SiteBrowserInfo | null = null
-    if (requirementsOf(access).browser)
+    if (access.requirements.browser)
       try {
-        const site = siteAccessOf(access)
         browser = {
-          siteUrl: access.url,
-          startPath: site && this.browserTasks.startPath(site),
+          siteUrl: null,
+          startPath: null,
           controller: await this.browserTasks.controller(access.taskId),
         }
       } catch {
@@ -98,9 +56,7 @@ export class McpToolsController {
           content: [{ type: 'text', text: 'The browser of the task cannot be read now' }],
         }
       }
-    // No credentials, internal ids, site owner or third-party content go to the agent.
-    return {
-      content: [{ type: 'text', text: JSON.stringify(siteInfoOf(access, this.previews, browser)) }],
-    }
+    // No credentials, internal ids or third-party content go to the agent.
+    return { content: [{ type: 'text', text: JSON.stringify(siteInfoOf(access, browser)) }] }
   }
 }

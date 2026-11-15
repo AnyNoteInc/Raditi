@@ -22,7 +22,7 @@ export async function startMcp(config: McpConfig) {
   // The profiles are the configuration's (MCP_CONTENT_PROFILE, MCP_BROWSER_PROFILE); the module
   // refuses them in production.
   logger.log(
-    `mcp role listening on ${address} (/mcp, /health); content profile ${config.contentProfile}, browser profile ${config.browserProfile}`,
+    `mcp role listening on ${address} (/mcp, /health)`,
   )
   return app
 }

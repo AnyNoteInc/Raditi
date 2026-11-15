@@ -16,7 +16,7 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
-import { leaseIdOf, type McpTurnAccess } from '../access/mcp-access.ts'
+import type { McpTurnAccess } from '../access/mcp-access.ts'
 
 /**
  * What the `web` tools of a browser task keep in PostgreSQL (docs/plan/57-browser-tasks.md,
@@ -70,9 +70,8 @@ export class PostgresMcpWebStore implements McpWebStore {
 
   /**
    * The admission of the agent (spec §8) once more, for this call: its key, its assignment and
-   * the turn lease are live, the task needs a browser and its site takes it (`PostgresMcpAccess`:
-   * none, active, or still being connected for a task without a repository). The task's open
-   * browser session is of its own site, or of none; with no open session this call opens one and
+   * the turn lease are live and the chat needs a browser (`PostgresMcpAccess`). The chat's open
+   * browser session is of its own workspace; with no open session this call opens one and
    * asks core to start it, in this transaction (К11) — within what one assignment may start (К41).
    * A session still `starting` asks again once a window: its job may have been lost. What the page
    * shows is content of the task: its contact map is kept from now on (`content_accessed_at`).
@@ -85,14 +84,11 @@ export class PostgresMcpWebStore implements McpWebStore {
           (SELECT count(*)::int FROM browser_sessions b
             WHERE b.task_id = t.id AND b.created_at >= a.created_at) AS started
         FROM llm_keys k JOIN tasks t ON t.id = k.task_id
-        LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-        JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = ${leaseIdOf(scope)}::uuid
-          AND a.site_id IN (t.id, t.site_id)
+        JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = t.id
           AND a.session_id = k.session_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch
         JOIN site_leases l ON l.site_id = a.site_id AND l.holder_task_id = t.id
           AND l.epoch = a.lease_epoch
         WHERE k.id = ${scope.keyId}::uuid AND t.id = ${scope.taskId}::uuid
-          AND t.site_id IS NOT DISTINCT FROM ${scope.siteId}::uuid
           AND t.workspace_id = ${scope.workspaceId}::uuid
           AND a.session_id = ${scope.sessionId} AND a.turn_no = ${scope.turn}
           AND a.first_epoch = ${scope.firstEpoch} AND a.lease_epoch = ${scope.epoch}
@@ -102,8 +98,6 @@ export class PostgresMcpWebStore implements McpWebStore {
           AND a.deadline_at > clock_timestamp() AND a.finished_at IS NULL AND a.outcome IS NULL
           AND l.operation = 'turn' AND NOT l.held_for_operator AND l.expires_at > clock_timestamp()
           AND t.needs_browser
-          AND (t.site_id IS NULL OR s.status = 'active' OR (t.needs_browser
-            AND NOT t.needs_repository AND s.status = 'onboarding'))
           AND t.content_retired_at IS NULL
           AND t.status <> ALL(${[...terminalTaskStatuses]}::"TaskStatus"[])`
       if (rows.length !== 1) throw unavailable()
@@ -127,7 +121,7 @@ export class PostgresMcpWebStore implements McpWebStore {
 
   async #sessionOf(tx: Prisma.TransactionClient, scope: McpTurnAccess, started: number) {
     const open = await openBrowserSessionOfTask(tx, scope.taskId)
-    if (open && (open.siteId !== scope.siteId || open.workspaceId !== scope.workspaceId))
+    if (open && open.workspaceId !== scope.workspaceId)
       throw unavailable()
     // One start and one replacement per assignment: a turn never runs up containers without end.
     if (!open && started >= browserSessionLimits.perAssignment) throw unavailable()

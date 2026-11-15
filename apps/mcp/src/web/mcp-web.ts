@@ -3,14 +3,12 @@ import { setTimeout as pause } from 'node:timers/promises'
 import type { BrowserWorkerClient } from '@repo/browser-link'
 import {
   BROWSER_TOOL_RESPONSE_MAX_BYTES,
-  browserSessionLimits,
   browserSessionTimings,
   browserTaskCodeNames,
   browserTaskCodes,
   clipTree,
   DomainError,
   isDomainError,
-  leaseScopeOf,
   redactResultAddresses,
   type BrowserAction,
   type BrowserToolArguments,
@@ -25,7 +23,7 @@ import type { McpWebAdmission, McpWebStore } from './mcp-web-store.ts'
 
 /**
  * The `web` tools of a browser task (docs/plan/57-browser-tasks.md, Б20, §3.7): the agent works in
- * the task's cloud browser on the site itself, one action at a time, through the browser worker.
+ * the chat's cloud browser on the open web, one action at a time, through the browser worker.
  * Every call is admitted again for its turn; the first one opens the task's browser session and
  * waits for it (docs/plan/61-chats-first.md, К11), or answers `BROWSER_STARTING` when the start takes
  * longer than the call may wait. One call per turn runs at a time. The agent never gets Playwright, CDP, cookies or pixels — the worker's
@@ -330,9 +328,9 @@ export class McpWebService {
   }
 }
 
-/** Where the contact map of the task lives: a chat without a site keeps it under its own id. */
+/** Where the contact map of the chat lives: under its own id (a chat has no site). */
 function maskScopeOf(scope: McpTurnAccess): { siteId: string; taskId: string } {
-  return { siteId: leaseScopeOf({ id: scope.taskId, siteId: scope.siteId }), taskId: scope.taskId }
+  return { siteId: scope.taskId, taskId: scope.taskId }
 }
 
 /** Every string an argument holds, at any depth. */
@@ -344,20 +342,10 @@ function strings(value: unknown): string[] {
 }
 
 /**
- * A path the agent gives (`/news/`) as an address of the site; a full address as it is — where a
- * page may go is the worker's to decide, with the hosts of the site. A path that resolves off the
- * site's origin (`//host`, `/\host`) is no path of it, and without a site no path is one.
+ * An address the agent gives: a full one as it is — where a page may go is the worker's to
+ * decide. A chat has no site (docs/plan/83-remove-projects.md, БП1), so a path is no address.
  */
-function siteAddress(scope: McpTurnAccess, url: string): string {
-  if (!url.startsWith('/')) return url
-  if (scope.url === null) throw webRefusal('BROWSER_ADDRESS_DENIED')
-  const site = new URL(scope.url)
-  const resolved = URL.parse(url, site)
-  if (
-    resolved === null ||
-    resolved.origin !== site.origin ||
-    resolved.href.length > browserSessionLimits.urlChars
-  )
-    throw webRefusal('BROWSER_ADDRESS_DENIED')
-  return resolved.href
+function siteAddress(_scope: McpTurnAccess, url: string): string {
+  if (url.startsWith('/')) throw webRefusal('BROWSER_ADDRESS_DENIED')
+  return url
 }
