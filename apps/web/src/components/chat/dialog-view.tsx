@@ -39,6 +39,7 @@ import {
 } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { PanelToggle } from '@/components/application/cabinet-panel'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
 import { siteHref } from '@/components/site/site-nav'
 import { SiteFiles } from '@/components/site/site-files'
@@ -253,7 +254,19 @@ function DialogHead({
         minWidth: 0,
       }}
     >
-      <Box sx={{ gridColumn: 1, gridRow: 1, minWidth: 0, display: 'flex' }}>
+      <Box sx={{ gridColumn: 1, gridRow: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+        {/* The list of chats is hidden: the way back to it starts the line of the name (Н3). */}
+        <Box
+          sx={{
+            flex: 'none',
+            ml: -1.5,
+            mr: 0.5,
+            display: { xs: 'none', md: 'flex' },
+            '&:empty': { display: 'none' },
+          }}
+        >
+          <PanelToggle place="content" />
+        </Box>
         {renaming ? (
           <RenameField
             taskId={taskId}
