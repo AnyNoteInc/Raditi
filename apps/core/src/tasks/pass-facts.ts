@@ -8,6 +8,7 @@ import {
   type LlmBackend,
   type LlmBackendId,
   type ModelClass,
+  type ProjectSectionFacts,
 } from '@repo/domain'
 
 import { poolHasRoom } from '../llm/pool-room.ts'
@@ -70,6 +71,8 @@ export async function readPassFacts(
       },
       // The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2).
       createdBy: { select: { agentInstructions: { select: { text: true } } } },
+      // The project of the chat (docs/plan/84-projects.md, ПР7): its goal and instructions.
+      project: { select: { name: true, goal: true, instructions: true, deletedAt: true } },
     },
   })
   if (!task) return null
@@ -189,6 +192,7 @@ export async function readPassFacts(
     },
     requirements,
     clientInstructions: task.createdBy?.agentInstructions?.text ?? null,
+    project: projectFactsOf(task.project),
     ...(attachments.length ? { attachments } : {}),
     requests,
     committedAt: answered.createdAt,
@@ -200,6 +204,23 @@ export async function readPassFacts(
     now: input.now,
   }
 }
+
+/**
+ * The project as the pass gives it to the agent (ПР7, ПР20): a project in the archive keeps its
+ * chats and so its section; one in the trash has its passes stopped, and a pass that still starts
+ * goes without it.
+ */
+const projectFactsOf = (
+  project: {
+    name: string
+    goal: string | null
+    instructions: string | null
+    deletedAt: Date | null
+  } | null,
+): ProjectSectionFacts | null =>
+  project && project.deletedAt === null
+    ? { name: project.name, goal: project.goal, instructions: project.instructions }
+    : null
 
 /** The files bound to a task as a pass tells the agent of them: never their key. */
 const attachmentFactsOf = (

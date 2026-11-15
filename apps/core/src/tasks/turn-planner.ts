@@ -1,5 +1,5 @@
 import type { AttemptCreditBudget } from '@repo/billing'
-import { clientInstructionsSection } from '@repo/domain'
+import { clientInstructionsSection, projectSection, type ProjectSectionFacts } from '@repo/domain'
 import {
   attemptBudgetRub,
   TURN_LEASE_TTL_MS,
@@ -132,6 +132,11 @@ export interface PassFacts {
   requirements: TaskRequirements
   /** The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2). */
   clientInstructions?: string | null
+  /**
+   * The project of the chat — its name, goal and instructions (docs/plan/84-projects.md, ПР7);
+   * absent or null — a chat without a project, or one whose project is in the trash.
+   */
+  project?: ProjectSectionFacts | null
   /**
    * The files bound to the chat, in the order they were sent: the latest go into the sandbox of
    * its turn (turnInboxOf). Absent or empty — none.
@@ -487,7 +492,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         browser,
         inbox: inboxFacts,
         variables: facts.variables ?? [],
-      })}${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}`,
+      })}${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),

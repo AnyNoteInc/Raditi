@@ -3,6 +3,7 @@ import {
   BROWSER_ONLY,
   Money,
   PLAIN_CHAT,
+  projectSection,
   toCredits,
   toTurnPlan,
   turnCredentialPolicySchema,
@@ -441,6 +442,45 @@ describe('planTurn of a chat (docs/plan/83-remove-projects.md)', () => {
     expect((await planned(facts())).request.context.instructions).not.toContain(
       'client-instructions',
     )
+  })
+})
+
+describe('the sections of the instructions of a pass (docs/plan/84-projects.md, ПР7)', () => {
+  const words = 'Мы — кофейня. Отвечайте коротко.'
+
+  it('keeps a chat without a project as it was, byte for byte', async () => {
+    const plan = await planned(facts({ clientInstructions: words }))
+    expect(plan.request.context.instructions).toMatchSnapshot()
+    expect(plan.request.context.instructions).not.toContain('## The project')
+    expect((await planned(facts({ clientInstructions: words, project: null }))).request).toEqual(
+      plan.request,
+    )
+  })
+
+  it('puts the project after the client’s own instructions, at the end of the rules (snapshot)', async () => {
+    const project = {
+      name: 'Кофейня «Зерно»',
+      goal: 'Сезонное меню',
+      instructions: 'Пишите тепло, без эмодзи.',
+    }
+    const bare = (await planned(facts({ clientInstructions: words }))).request.context.instructions
+    const instructions = (await planned(facts({ clientInstructions: words, project }))).request
+      .context.instructions
+    expect(instructions).toBe(`${bare}${projectSection(project)}`)
+    // Platform rules → the client's own instructions → the project (§4.4).
+    const order = ["## The client's own instructions", '## The project', '<project-instructions>']
+    const places = order.map((heading) => instructions.indexOf(heading))
+    expect(places.every((place) => place > 0)).toBe(true)
+    expect([...places].sort((a, b) => a - b)).toEqual(places)
+    expect(instructions.slice(instructions.indexOf('## The client'))).toMatchSnapshot()
+  })
+
+  it('gives the project to a chat whose client wrote no instructions of their own', async () => {
+    const plan = await planned(facts({ project: { name: 'Сайт', goal: null, instructions: null } }))
+    expect(plan.request.context.instructions).toMatch(
+      /\n## The project\nThis chat belongs to the client's project «Сайт»\.\n$/u,
+    )
+    expect(plan.request.context.instructions).not.toContain('client-instructions')
   })
 })
 
