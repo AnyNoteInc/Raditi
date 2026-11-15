@@ -98,7 +98,7 @@ export const projectCreateText = Object.freeze({
 export const projectPageText = Object.freeze({
   back: 'Все проекты',
   placeholder: (name: string) => `Новый чат в проекте «${name}»`,
-  appliesHere: 'Агент учитывает инструкции, цель и контекст проекта',
+  appliesHere: 'Агент учитывает инструкции, цель, контекст и память проекта',
   chats: 'Чаты проекта',
   noChats: 'Здесь появятся чаты этого проекта.',
   hints: [
@@ -237,3 +237,81 @@ export function projectUpdatedText(at: Date, now: Date): string {
   if (days < 7) return `обновлён ${days} ${plural(days, 'день', 'дня', 'дней')} назад`
   return `обновлён ${formatMoscowDay(at)}`
 }
+
+/**
+ * «Память» of a project and of the account (docs/plan/84-projects.md, ПР18, ПР28, §4.8;
+ * P-memory-empty, P-memory): one name for what waits for the client — «Предложено».
+ */
+export const memoryText = Object.freeze({
+  title: 'Память',
+  accountTitle: 'Память аккаунта',
+  open: 'Посмотреть',
+  openLabel: 'Открыть память проекта',
+  rowEmpty: 'Пока пусто. Скажите агенту «запомни…»',
+  entries: (count: number) => `${count} ${plural(count, 'запись', 'записи', 'записей')}`,
+  proposedCount: (count: number) =>
+    `${count} ${plural(count, 'предложена', 'предложены', 'предложено')}`,
+  lead: 'Агент читает сохранённые записи в каждом чате проекта как фон. Ваши слова в чате важнее.',
+  accountLead:
+    'Агент читает эти записи в ваших чатах без проекта как фон — и в проектах, где включена память аккаунта. Ваши слова в чате важнее.',
+  emptyTitle: 'Память пока пуста',
+  empty: 'Скажите агенту «запомни…» — или он сам предложит сохранить важное по ходу чатов.',
+  proposed: 'Предложено',
+  proposedHint: 'Агент их не учитывает, пока вы не сохраните',
+  saved: 'Сохранено',
+  add: 'Добавить запись',
+  save: 'Сохранить',
+  drop: 'Не надо',
+  kept: 'Сохранено',
+  dropped: 'Не сохранено',
+  forgotten: 'Удалено',
+  forget: 'Удалить',
+  edit: 'Изменить',
+  editLabel: (text: string) => `Изменить запись «${text}»`,
+  removeLabel: (text: string) => `Удалить запись «${text}»`,
+  cancel: 'Отмена',
+  kindLabel: 'Вид записи',
+  kinds: {
+    preference: 'Предпочтение',
+    fact: 'Факт',
+    decision: 'Решение',
+    reference: 'Ссылка',
+  },
+  textLabel: 'Текст записи',
+  count: (count: number, limit: number) => `${count} из ${limit}`,
+  textRequired: 'Напишите запись',
+  proposedIn: (title: string | null) =>
+    title ? `предложено в чате «${title}»` : 'предложено агентом',
+  fromChat: (title: string | null) => (title ? `из чата «${title}»` : 'из чата'),
+  byClient: 'добавлено вами',
+  updateProposed: 'Агент предлагает изменить запись',
+  updateNow: (text: string) => `Сейчас: ${text}`,
+  forgetProposed: 'Агент предлагает забыть эту запись',
+  useAccount: 'Использовать память аккаунта',
+  useAccountHint:
+    'Агент учитывает в этом проекте и то, что запомнил в чатах без проекта. Память других проектов сюда не попадает.',
+  seeAccount: 'Посмотреть память аккаунта',
+  clear: 'Очистить память',
+  clearTitle: 'Очистить память?',
+  clearBody: 'Все записи удалятся навсегда. Чаты останутся.',
+  clearConfirm: 'Очистить',
+  off: 'Память агента выключена — агент не читает и не пишет записи.',
+  offLink: 'Включить в настройках',
+  full: (limit: number) => `В памяти ${limit} записей — удалите ненужные, чтобы добавить новую.`,
+  loading: 'Загружаем память',
+  loadFailed: 'Не удалось загрузить память. Обновите страницу.',
+  failed: 'Не удалось сохранить. Попробуйте ещё раз.',
+  close: 'Закрыть',
+  done: 'Готово',
+  when: (at: Date, now: Date) => {
+    if (sameMoscowDay(at, now)) return 'сегодня'
+    if (sameMoscowDay(at, new Date(now.getTime() - 24 * 60 * 60 * 1000))) return 'вчера'
+    return formatMoscowDay(at)
+  },
+  /** «Настройки → Общее → Память агента». */
+  settingsTitle: 'Память агента',
+  settingsSwitch: 'Агент запоминает важное',
+  settingsHint:
+    'Агент записывает короткие записки — ваши предпочтения, факты и решения — и учитывает их в следующих чатах. Выключите, и он не будет ни читать, ни писать память; записи останутся.',
+  settingsHref: '/settings#memory',
+})

@@ -27,6 +27,7 @@ import { useTRPC } from '@/trpc/client'
 import { ProjectMenuButton, ProjectStarButton, useProjectActions } from './project-actions'
 import { ProjectContext } from './project-context'
 import { ProjectInstructionsDialog } from './project-instructions'
+import { ProjectMemoryRow } from './project-memory'
 import { PROJECTS_HREF, projectPageText, projectsText } from './project-texts'
 import type { ProjectDetails } from './project-types'
 import { useContextMentions } from './use-context-mentions'
@@ -36,8 +37,8 @@ import { useContextMentions } from './use-context-mentions'
  * проекты», the name and the goal, the star and «⋯»; the field «Новый чат в проекте «X»» — the
  * same `Composer` — that starts a chat in it, and «Чаты проекта». Beside them from `lg` — under
  * them below it — the column of the project: «Инструкции», «Контекст» (84.10) and «Приватный ·
- * Видите только вы»; `@` in the field names the files of the context (ПР24). «Память» and
- * «Запланировано» come with their slices (84.12, 84.14): rows without data are not drawn.
+ * Видите только вы»; `@` in the field names the files of the context (ПР24); «Память» (84.13)
+ * opens its window. «Запланировано» comes with its slice (84.14).
  */
 export function ProjectView({
   initial,
@@ -250,6 +251,9 @@ export function ProjectView({
           </Box>
           <Box sx={{ borderTop: 1, borderColor: 'divider' }}>
             <ProjectContext project={project} />
+          </Box>
+          <Box sx={{ borderTop: 1, borderColor: 'divider' }}>
+            <ProjectMemoryRow project={project} />
           </Box>
           <Box
             sx={{

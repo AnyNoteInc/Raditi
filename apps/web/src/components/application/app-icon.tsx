@@ -96,6 +96,8 @@ const paths = {
   /** «Инструкции» of a project: a book with its lines. */
   instructions:
     'M7 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM5 19a2 2 0 0 1 2-2h12M9 7h6M9 10.5h4',
+  /** «Память» of a project and of the account (lucide `bookmark`). */
+  memory: 'm19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16Z',
   /** «Вернуть» from the trash: an arrow that turns back. */
   restore: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5',
   /** «Загрузить с устройства» (docs/plan/84-projects.md, §4.8): an arrow up from a line. */

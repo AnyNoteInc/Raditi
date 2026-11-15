@@ -101,6 +101,7 @@ const kolos: ProjectDetails = {
   activityAt: NOW,
   createdAt: NOW,
   files: { count: 0, bytes: 0, limitBytes: 100 * 1024 * 1024, first: [] },
+  memory: { active: 0, proposed: 0 },
 }
 
 function show(project: ProjectDetails = kolos) {
@@ -139,7 +140,8 @@ describe('the page of a project (docs/plan/84-projects.md, ПР6)', () => {
     expect(
       within(column).getByText('Файлы и тексты, которые агент читает в каждом чате проекта'),
     ).toBeTruthy()
-    expect(within(column).queryByText('Память')).toBeNull()
+    expect(within(column).getByRole('heading', { name: 'Память' })).toBeTruthy()
+    expect(within(column).getByText('Пока пусто. Скажите агенту «запомни…»')).toBeTruthy()
     expect(within(column).queryByText('Запланировано')).toBeNull()
     expect(column.textContent).toContain('Приватный · Видите только вы')
   })

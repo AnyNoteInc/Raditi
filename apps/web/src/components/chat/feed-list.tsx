@@ -26,6 +26,7 @@ import {
   feedFailureOpenText,
   feedFileLeftText,
   feedDocLeftText,
+  feedMemoryLeftText,
   feedPageChangeText,
   feedPageLeftText,
   feedFilesChangedText,
@@ -90,6 +91,7 @@ import { FeedDocuments } from './feed-document'
 import { workingPhraseOf } from './working-phrases'
 import { DocRevisions, docRevisionsOf, FeedDoc } from './feed-doc'
 import { FeedFile } from './feed-file'
+import { FeedMemoryChange } from './feed-memory'
 import { FeedPage, FeedPageChange, FeedPageWarnings } from './feed-page'
 import { FeedScreenshot } from './feed-screenshot'
 import type { FeedHeadState } from './feed-state'
@@ -1050,6 +1052,11 @@ function RowView({
       return null
     case 'feed.doc_left':
       return <Note text={feedDocLeftText(row)} />
+    // What the end of a pass did with the memory (docs/plan/84-projects.md, ПР18; P-chat).
+    case 'feed.memory_change':
+      return <FeedMemoryChange entryId={row.entryId} action={row.action} text={row.text} />
+    case 'feed.memory_left':
+      return <Note text={feedMemoryLeftText(row)} />
     case 'feed.rewind':
       return <Note text={feedRewindText(row)} />
     case 'feed.redo':

@@ -91,6 +91,7 @@ const kolos: ProjectDetails = {
   activityAt: at,
   createdAt: at,
   files: { count: FILES.length, bytes: BYTES, limitBytes: 100 * MIB, first: FILES },
+  memory: { active: 0, proposed: 0 },
 }
 
 function wrap(node: React.ReactNode) {
