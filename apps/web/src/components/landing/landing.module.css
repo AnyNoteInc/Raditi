@@ -122,12 +122,12 @@
   border: 0;
 }
 /* A selection is ink with amber letters: seen on the paper, on the amber and on the accent
-   fields alike. On the dark surfaces the pair is turned over. */
+   fields alike. On the dark surfaces the pair is turned over; the footer of the public pages
+   turns it over by itself (public-footer.module.css). */
 .page ::selection {
   color: var(--raditi-marker);
   background: var(--raditi-ink);
 }
-.footer ::selection,
 .safety ::selection,
 .platformsAnswer::selection,
 .requestBubble::selection {
@@ -150,7 +150,7 @@
    under the header where it stands, instead of sliding behind it. Everything in the content and
    in the footer has the room, so a new target needs no rule. Without specificity: the demo adds
    4px of its own to the same room. */
-:where(.page) :where(main, main *, .footer *) {
+:where(.page) :where(main, main *, footer *) {
   scroll-margin-top: var(--anchor-room);
 }
 :global(body):has(.page) {
@@ -196,8 +196,7 @@
   font-weight: 650;
   letter-spacing: -0.03em;
 }
-.headerInner > .wordmark,
-.footerTop > a {
+.headerInner > .wordmark {
   display: inline-flex;
   align-items: center;
   min-height: 44px;
@@ -447,99 +446,6 @@
 .question[open] > p {
   animation: contentEntrance var(--raditi-motion-base) var(--raditi-ease-out);
 }
-.footer {
-  padding: 54px var(--bleed) 0;
-  background: var(--raditi-ink);
-  color: var(--raditi-paper);
-}
-.footerTop {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 30px;
-}
-.footerTop p {
-  color: var(--raditi-on-ink);
-  font-size: 13px;
-}
-.footerTop > a:last-child {
-  display: inline-flex;
-  align-items: center;
-  gap: 18px;
-  min-height: 44px;
-  font-size: 13px;
-}
-.footer :focus-visible {
-  outline-color: var(--raditi-marker);
-}
-.legalLinks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 25px;
-  padding: 35px 0 25px;
-  max-width: 980px;
-  font-size: 12px;
-  color: var(--raditi-on-ink);
-}
-.legalLinks a,
-.legalLinks button {
-  display: inline-flex;
-  min-height: 44px;
-  align-items: center;
-}
-.legalLinks button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-.footerBottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-top: 1px solid var(--raditi-rule-ink);
-  padding-top: 20px;
-  gap: 20px;
-  font-size: 12px;
-  color: var(--raditi-on-ink);
-}
-.footerBottom a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  gap: 14px;
-}
-.footerWord {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  /* The word reaches out to the left by the side bearing of its first letter, so the letter
-     stands on the axis of the page. At the right the sign ends on the axis as it is. */
-  margin: 12px 0 -0.15em -5px;
-  overflow: hidden;
-  font-family: var(--font-unbounded), sans-serif;
-  font-size: clamp(95px, 16.5vw, 240px);
-  font-weight: 500;
-  line-height: 1.3;
-  letter-spacing: -0.04em;
-}
-/* The sign of the brand closes the word. An arrow stood here, and an arrow on this page means
-   a way further, which the word is not. The sign is as tall as the lowercase letters and stands
-   on their middle, a little below the middle of the line; at this size the word, the gap and
-   the sign fit the row at every width, and the edge of the row does not cut the circle.
-   Its sides are rounded to a whole pixel where the browser can: 0.55em is a fraction of one at
-   most widths, and in such a box the circle is drawn cut by its last row of pixels. */
-.footerWord svg {
-  position: relative;
-  top: 0.09em;
-  width: 0.55em;
-  width: round(0.55em, 1px);
-  height: 0.55em;
-  height: round(0.55em, 1px);
-  margin-left: 20px;
-}
 /* States.
    A link shows its line under the keyboard focus and under a finger, not only under a pointer. */
 /* The section being read keeps the line: where the visitor is on a long page. */
@@ -548,7 +454,6 @@
   transform: scaleX(1);
 }
 .textLink:is(:focus-visible, :active),
-.footer a:is(:focus-visible, :active),
 .mobileNav a:is(:focus-visible, :active) {
   text-decoration: underline;
 }
@@ -585,7 +490,6 @@
     transform: scaleX(1);
   }
   .textLink:hover,
-  .footer a:hover,
   .mobileNav a:hover {
     text-decoration: underline;
   }
@@ -1183,20 +1087,6 @@
   .capabilityResult {
     grid-area: 3 / 2;
   }
-  .footer {
-    padding-top: 40px;
-  }
-  .footerTop {
-    flex-wrap: wrap;
-    gap: 20px;
-  }
-  .footerTop p {
-    display: none;
-  }
-  /* Just above the phone the word is at its smallest size and the row at its tightest. */
-  .footerWord svg {
-    margin-left: 12px;
-  }
 }
 @media (max-width: 540px) {
   .page {
@@ -1263,23 +1153,6 @@
   }
   .question > p {
     padding-right: 8px;
-  }
-  .footer {
-    padding-top: 36px;
-  }
-  .footerTop > a:last-child {
-    gap: 10px;
-  }
-  .legalLinks {
-    gap: 4px 20px;
-    padding: 25px 0 21px;
-  }
-  .footerWord {
-    font-size: 17vw;
-    margin-top: 17px;
-  }
-  .footerWord svg {
-    margin-left: 8px;
   }
 }
 /* A window lower than the open menu: a phone on its side, a page zoomed to 400%. The header

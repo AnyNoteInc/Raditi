@@ -9,15 +9,9 @@ import { SITE_PHONE } from '@/lib/contacts'
 import type { LandingViewer } from '@/server/landing-viewer'
 
 import { LandingIcon } from './landing-icons'
+import { landingNavigation as navigation } from './landing-navigation'
 import styles from './landing.module.css'
 import { MAIN_ACTION_SHORT, mainAction } from './main-action'
-
-const navigation = [
-  { href: '#demo', label: 'Пример' },
-  { href: '#possibilities', label: 'Возможности' },
-  { href: '#pricing', label: 'Тарифы' },
-  { href: '#faq', label: 'Вопросы' },
-]
 
 export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
   const [open, setOpen] = useState(false)
