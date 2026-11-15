@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { PrismaClient } from '@repo/db'
+import { forgetTelegramChat, type PrismaClient } from '@repo/db'
 import {
   feedLimits,
   hasVisibleText,
@@ -189,6 +189,8 @@ export async function removeDialog(
     await tx.$executeRaw`
       UPDATE tasks SET deleted_at = ${input.now}
       WHERE id = ${locked.id}::uuid AND deleted_at IS NULL`
+    // A chat in Telegram goes there too: its topic is deleted (owner's request of 15.11.2026).
+    await forgetTelegramChat(tx, locked.id)
     return { removed: true as const }
   }, WRITE)
 }

@@ -1201,6 +1201,9 @@ importers:
       '@repo/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@repo/ip-address':
+        specifier: workspace:*
+        version: link:../../packages/ip-address
       '@repo/observability':
         specifier: workspace:*
         version: link:../../packages/observability

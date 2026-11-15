@@ -89,13 +89,30 @@ export function readTelegramUpdate(body: unknown): TelegramIncoming | null {
   }
   const update = parsed.data
   const message = update.message
-  if (message && message.chat.type === 'private' && message.from && !message.from.is_bot)
+  if (
+    message &&
+    message.chat.type === 'private' &&
+    message.from &&
+    !message.from.is_bot &&
+    carriesWords(message)
+  )
     return { updateId: update.update_id, kind: 'message', message }
   const press = update.callback_query
   if (press && (press.message === undefined || press.message.chat.type === 'private'))
     return { updateId: update.update_id, kind: 'press', press }
   return { updateId: update.update_id, kind: 'other' }
 }
+
+/**
+ * A message the client wrote: words, a voice or a file. A service message — a topic created,
+ * renamed or closed — carries none and is skipped without an answer.
+ */
+const carriesWords = (message: TelegramMessage): boolean =>
+  (message.text ?? message.caption ?? '').trim() !== '' ||
+  message.voice !== undefined ||
+  message.audio !== undefined ||
+  (message.photo?.length ?? 0) > 0 ||
+  message.document !== undefined
 
 /** The words of a message: its text, or the caption of its file. */
 export const messageWords = (message: TelegramMessage): string =>

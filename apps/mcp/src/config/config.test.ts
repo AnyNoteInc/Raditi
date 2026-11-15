@@ -33,6 +33,7 @@ const prodEnv = (overrides: Env = {}): Env => ({
   VAULT_ROLE_ID: 'mcp-role',
   VAULT_SECRET_ID: 'mcp-secret',
   MCP_ALLOWED_HOSTS: 'mcp',
+  SANDBOX_EGRESS_REFUSED_SUBNETS: '45.8.250.117/32,10.10.0.0/24',
   ...overrides,
 })
 
@@ -260,5 +261,42 @@ describe('the web search of the mcp role', () => {
     }).join('\n')
     expect(problems).toMatch(/WEB_SEARCH_TURN_LIMIT/)
     expect(problems).toMatch(/WEB_SEARCH_TIMEOUT_SECONDS/)
+  })
+
+  it('needs the platform subnets in production and keeps a loopback relay out of it (plan 81)', () => {
+    expect(problemsOf(prodEnv({ SANDBOX_EGRESS_REFUSED_SUBNETS: '' }))).toContain(
+      'SANDBOX_EGRESS_REFUSED_SUBNETS: required in production (the platform subnets the relay of MCP servers never reaches)',
+    )
+    expect(problemsOf(prodEnv({ MCP_SKILL_RELAY_LOOPBACK: 'on' }))).toContain(
+      'MCP_SKILL_RELAY_LOOPBACK: only off is allowed in production',
+    )
+    expect(loadMcpConfig(prodEnv()).skillRelay).toEqual({
+      refusedSubnets: [
+        { address: '45.8.250.117', prefix: 32, family: 4 },
+        { address: '10.10.0.0', prefix: 24, family: 4 },
+      ],
+      allowLoopback: false,
+    })
+  })
+
+  it('takes the hosts of a stand only outside production and with loopback on', () => {
+    const hosts = JSON.stringify({ 'mcp.relay-stand.example': '127.0.0.1:45123' })
+    expect(
+      loadMcpConfig({ ...devEnv, MCP_SKILL_RELAY_LOOPBACK: 'on', MCP_SKILL_RELAY_HOSTS: hosts })
+        .skillRelay?.hosts,
+    ).toEqual({ 'mcp.relay-stand.example': { address: '127.0.0.1', port: 45123 } })
+    expect(problemsOf({ ...devEnv, MCP_SKILL_RELAY_HOSTS: hosts })).toContain(
+      'MCP_SKILL_RELAY_HOSTS: only outside production, with MCP_SKILL_RELAY_LOOPBACK=on',
+    )
+    expect(problemsOf(prodEnv({ MCP_SKILL_RELAY_HOSTS: hosts }))).toContain(
+      'MCP_SKILL_RELAY_HOSTS: only outside production, with MCP_SKILL_RELAY_LOOPBACK=on',
+    )
+    expect(
+      problemsOf({
+        ...devEnv,
+        MCP_SKILL_RELAY_LOOPBACK: 'on',
+        MCP_SKILL_RELAY_HOSTS: '{"x.example":"10.0.0.1:1"}',
+      })[0],
+    ).toMatch(/MCP_SKILL_RELAY_HOSTS/)
   })
 })

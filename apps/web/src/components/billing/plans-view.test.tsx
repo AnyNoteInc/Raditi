@@ -246,17 +246,18 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     expect(screen.queryByRole('heading', { name: 'Автопродление' })).not.toBeInTheDocument()
   })
 
-  it('suggests the cheapest tariff and makes its button the main one', async () => {
+  it('points to the tariff in the middle and makes its button the main one', async () => {
     showPlans()
 
-    const suggested = await planCard('Старт')
-    expect(within(suggested).getByText('Подходит вам')).toBeInTheDocument()
+    const suggested = await planCard('Бизнес')
+    expect(within(suggested).getByText('Для вас')).toBeInTheDocument()
     expect(within(suggested).getByRole('button')).toHaveClass('MuiButton-contained')
-    for (const name of ['Бизнес', 'Агентство']) {
+    for (const name of ['Старт', 'Агентство']) {
       const card = await planCard(name)
-      expect(within(card).queryByText('Подходит вам')).not.toBeInTheDocument()
+      expect(within(card).queryByText(/Для вас|Подходит вам/)).not.toBeInTheDocument()
       expect(within(card).getByRole('button')).toHaveClass('MuiButton-outlined')
     }
+    expect(screen.getAllByText('Для вас')).toHaveLength(1)
     expect(screen.queryByText('Ваш тариф')).not.toBeInTheDocument()
   })
 
@@ -366,7 +367,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
     expect(within(own).getByText('Ваш тариф')).toBeInTheDocument()
     expect(plain(own.textContent)).toContain('Продлится 18 октября.')
     expect(screen.getAllByText('Ваш тариф')).toHaveLength(1)
-    expect(screen.queryByText('Подходит вам')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Для вас|Подходит вам/)).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 2, name: 'Все тарифы' })).toBeInTheDocument()
     // Nothing is bought again: the other tariffs are offered for the next period, the pack on
     // top of this one, and auto-renewal can be switched off.
@@ -430,13 +431,23 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
 
   it('suggests no other tariff to a customer who has one', async () => {
     subscribed()
-    // No sites: «Старт» would be the suggestion of a customer without a tariff.
+    // The tariff in the middle is the customer's own: it says so, and no other card is pointed to.
     getOffers.mockResolvedValue(offers({ current: 'business' }))
     showPlans()
 
     expect(within(await planCard('Бизнес')).getByText('Ваш тариф')).toBeInTheDocument()
-    expect(screen.queryByText('Подходит вам')).not.toBeInTheDocument()
-    expect(within(await planCard('Старт')).queryByText(/Ваш тариф|Подходит/)).toBeNull()
+    expect(screen.queryByText(/Для вас|Подходит вам/)).not.toBeInTheDocument()
+    expect(within(await planCard('Старт')).queryByText(/Ваш тариф|Подходит|Для вас/)).toBeNull()
+  })
+
+  it('does not mark the tariff in the middle for a customer whose own tariff is another one', async () => {
+    subscribed()
+    getOffers.mockResolvedValue(offers({ current: 'start' }))
+    showPlans()
+
+    expect(within(await planCard('Старт')).getByText('Ваш тариф')).toBeInTheDocument()
+    expect(within(await planCard('Бизнес')).queryByText(/Для вас|Подходит вам/)).toBeNull()
+    expect(screen.queryByText(/Для вас|Подходит вам/)).not.toBeInTheDocument()
   })
 
   it('counts as left only the credits that no task has reserved', async () => {

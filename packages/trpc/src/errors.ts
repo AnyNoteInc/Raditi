@@ -210,6 +210,21 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   ATTACHMENT_SENT: 'Этот файл уже отправлен в чат, удалить его нельзя',
   ATTACHMENTS_LIMIT:
     'Слишком много файлов ждут отправки. Отправьте или удалите их и попробуйте снова',
+  AGENT_SKILL_NOT_ALLOWED: 'Менять навыки агента могут только владелец и администраторы',
+  AGENT_SKILL_NAME_INVALID:
+    'Имя навыка — латинские буквы, цифры и дефис, до 32 знаков, начинается с буквы. Исправьте его и попробуйте снова',
+  AGENT_SKILL_URL_INVALID:
+    'Укажите адрес сервера MCP, который начинается с https://, без логина, ключа и параметров после знака «?». Адреса из цифр и внутренние имена не подходят',
+  AGENT_SKILL_EXISTS: 'Навык с таким именем уже есть. Выберите другое имя',
+  AGENT_SKILL_LIMIT: 'Добавить больше навыков нельзя. Удалите ненужный и попробуйте снова',
+  AGENT_SKILL_NOT_FOUND: 'Такого навыка нет. Обновите страницу',
+  AGENT_SKILL_BUILTIN: 'Навык платформы нельзя удалить, его можно только выключить',
+  // MCP servers with a key (docs/plan/81-mcp-server-credentials.md).
+  AGENT_SKILL_HEADER_INVALID:
+    'Имя заголовка — латинские буквы, цифры и дефис, а ключ — от 8 знаков, одной строкой, без русских букв. Исправьте и попробуйте снова',
+  AGENT_SKILL_AUTH_UNAVAILABLE: 'Сейчас нельзя подключить сервер с ключом. Попробуйте немного позже',
+  AGENT_SKILL_CHECK_FAILED: 'Сервер не ответил как сервер MCP. Проверьте адрес и попробуйте снова',
+  AGENT_SKILL_KEYLESS: 'У этого сервера нет ключа, который можно заменить',
   WORKSPACE_ENV_NOT_ALLOWED: 'Переменные могут менять только владелец и администраторы',
   WORKSPACE_ENV_NAME_INVALID:
     'Имя переменной может состоять только из заглавных латинских букв, цифр и знака подчёркивания и должно начинаться с буквы. Исправьте его и сохраните снова',
@@ -336,7 +351,20 @@ const detail = (details: unknown, field: string): string | null => {
   return typeof value === 'string' ? value : null
 }
 
+/** Why a check of an MCP server failed (plan 81), in words that say what to do. */
+const SKILL_CHECK_TEXT: Readonly<Record<string, string>> = {
+  unauthorized: 'Сервер не принял ключ. Проверьте имя заголовка и ключ и попробуйте снова',
+  needs_login:
+    'Сервер просит войти через свою страницу, а не ключ. Выберите «Вход через страницу сервера» и попробуйте снова',
+  unreachable: 'Сервер не отвечает по этому адресу. Проверьте адрес и попробуйте снова',
+  address_refused: 'Адрес ведёт во внутреннюю сеть. Укажите адрес сервера в интернете',
+  not_mcp: 'По этому адресу отвечает не сервер MCP. Проверьте полный адрес вместе с путём',
+}
+
 const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string>> = {
+  AGENT_SKILL_CHECK_FAILED: (details) =>
+    SKILL_CHECK_TEXT[detail(details, 'reason') ?? ''] ??
+    MESSAGE_BY_DOMAIN_CODE.AGENT_SKILL_CHECK_FAILED!,
   // A publication of the client (docs/plan/69-pages.md, Ст25, Ст32): why, in words that say
   // what to do — never the content itself.
   PAGE_CONTENT_REFUSED: (details) =>

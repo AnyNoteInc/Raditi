@@ -87,6 +87,9 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     // key management.
     'mcp-content': {
       'kv/data/sites/+/wp': ['read'],
+      // The secret of an MCP server of a workspace's agent: read, and renewed tokens of a sign-in
+      // written by CAS (docs/plan/81-mcp-server-credentials.md; plan 83, БП11).
+      'kv/data/workspaces/+/mcp/*': ['read', 'update'],
       // The secrets of a preview, never the variables of a site (plan 53, Р21, Р24).
       'kv/data/previews/+/wp': ['read'],
       'kv/data/previews/+/browser': ['read'],
@@ -108,6 +111,8 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'kv/metadata/sites/+/*': ['create', 'update', 'read'],
       'kv/data/workspaces/+/env/*': ['create', 'update'],
       'kv/metadata/workspaces/+/env/*': ['create', 'update', 'read'],
+      'kv/data/workspaces/+/mcp/*': ['create', 'update'],
+      'kv/metadata/workspaces/+/mcp/*': ['create', 'update', 'read'],
     },
     // The key itself, never a path under it (rotate, config, trim, soft-delete-restore).
     'workspace-provisioner': { 'transit/keys/+': ['update'] },
@@ -196,7 +201,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     writer,
     /path "kv\/metadata\/sites\/\+\/\*" {\s*capabilities = \[[^\]]+\]\s*allowed_parameters\s*=\s*{\s*"max_versions"\s*=\s*\["1"\]\s*}/,
   )
-  assert.equal([...writer.matchAll(/allowed_parameters/g)].length, 2)
+  assert.equal([...writer.matchAll(/allowed_parameters/g)].length, 3)
   // core may attach recovery metadata to a secret of a preview, never weaken its retention.
   const release = await readFile(new URL('./policies/core-release.hcl', import.meta.url), 'utf8')
   assert.match(

@@ -17,6 +17,7 @@ const prodEnv = {
   APP_URL: 'https://raditi.ru',
   METRICS_TOKEN: PROD_METRICS_TOKEN,
   REDIS_URL: 'rediss://redis.internal:6380',
+  SANDBOX_EGRESS_REFUSED_SUBNETS: '45.8.250.117/32',
 }
 
 describe('webEnvFromEnv', () => {
@@ -32,11 +33,34 @@ describe('webEnvFromEnv', () => {
       webPushPublicKey: null,
       pages: null,
       pageViews: null,
+      mcpServerProbe: { refusedSubnets: [], allowLoopback: false },
     })
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: ' ', REDIS_URL: '' })).toMatchObject({
       metricsToken: DEV_METRICS_TOKEN,
       redisUrl: undefined,
     })
+  })
+
+  it('reads what the check of an MCP server may connect to, and keeps loopback out of production (plan 81)', () => {
+    expect(
+      webEnvFromEnv({
+        ...devEnv,
+        SANDBOX_EGRESS_REFUSED_SUBNETS: '45.8.250.0/24',
+        MCP_SKILL_RELAY_LOOPBACK: 'on',
+      }).mcpServerProbe,
+    ).toEqual({
+      refusedSubnets: [{ address: '45.8.250.0', prefix: 24, family: 4 }],
+      allowLoopback: true,
+    })
+    expect(() =>
+      webEnvFromEnv({ ...devEnv, SANDBOX_EGRESS_REFUSED_SUBNETS: '45.8.250.0' }),
+    ).toThrow(/SANDBOX_EGRESS_REFUSED_SUBNETS/)
+    expect(() => webEnvFromEnv({ ...prodEnv, SANDBOX_EGRESS_REFUSED_SUBNETS: '' })).toThrow(
+      /SANDBOX_EGRESS_REFUSED_SUBNETS/,
+    )
+    expect(() => webEnvFromEnv({ ...prodEnv, MCP_SKILL_RELAY_LOOPBACK: 'on' })).toThrow(
+      /MCP_SKILL_RELAY_LOOPBACK/,
+    )
   })
 
   it('reads the public VAPID key of Web Push and refuses one of another shape (docs/plan/75, ВВ8)', () => {

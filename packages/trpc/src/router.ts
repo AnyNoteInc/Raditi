@@ -10,6 +10,7 @@ import { pagesRouter } from './routers/pages.ts'
 import { taskRouter } from './routers/task.ts'
 import { userRouter } from './routers/user.ts'
 import { workspaceEnvRouter } from './routers/workspace-env.ts'
+import { agentSkillsRouter } from './routers/agent-skills.ts'
 import { createCallerFactory, router } from './trpc.ts'
 
 export const appRouter = router({
@@ -30,6 +31,8 @@ export const appRouter = router({
   pages: pagesRouter,
   // «Настройки → Переменные»: the variables every chat of a workspace gets (plan 83, БП4).
   workspaceEnv: workspaceEnvRouter,
+  // «Настройки → Навыки агента»: the MCP servers of the workspace's agent (plan 81; plan 83, БП11).
+  agentSkills: agentSkillsRouter,
 })
 
 export type AppRouter = typeof appRouter

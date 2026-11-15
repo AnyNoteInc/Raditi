@@ -4,7 +4,7 @@ import { prisma } from '@repo/db'
 import { withTimeout } from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
 
-import type { LandingPlan, LandingPricingData } from '@/components/landing/pricing-calculator'
+import type { LandingPlan, LandingPricingData } from '@/components/landing/pricing-data'
 
 const reportFailure = throttledLogger((line) => console.error(line))
 

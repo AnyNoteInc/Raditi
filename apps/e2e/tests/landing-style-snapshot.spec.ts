@@ -224,7 +224,7 @@ function read(target: Locator, options: Pick<ReadOptions, 'deep' | 'origin' | 'p
 async function openLanding(page: Page, width: number, height = HEIGHT): Promise<void> {
   await openAt(page, width, height)
   // Before the hydration a click or an observer is not wired.
-  for (const selector of ['#pricing input[type="range"]', '#site-demo button', 'header button']) {
+  for (const selector of ['#pricing article', '#site-demo button', 'header button']) {
     await hydrated(page.locator(selector).first())
   }
   await settled(page)
@@ -477,10 +477,7 @@ if (MODE === 'shots') {
       }
 
       const pricing = page.locator('#pricing')
-      const targets: [string, Locator][] = [
-        ['slider ', pricing.getByRole('slider')],
-        ['pricing action ', pricing.getByRole('link')],
-      ]
+      const targets: [string, Locator][] = [['pricing action ', pricing.getByRole('link')]]
       for (const [prefix, target] of targets) {
         // Away and back by keyboard: a focus set from a script may not count as keyboard focus.
         await target.focus()

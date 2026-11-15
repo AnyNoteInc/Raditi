@@ -11,6 +11,7 @@ import { PagesModule } from './pages/pages.module.ts'
 import { SearchModule } from './search/search.module.ts'
 import { ServerModule } from './server/server.module.ts'
 import { SiteInfoModule } from './site-info/site-info.module.ts'
+import { SkillRelayModule } from './skill-relay/skill-relay.module.ts'
 import { WebModule } from './web/web.module.ts'
 
 /**
@@ -41,6 +42,7 @@ export class AppModule {
         InfraModule,
         McpHealthModule,
         ServerModule,
+        SkillRelayModule,
         SiteInfoModule,
         ...(worker ? [WebModule] : []),
         SearchModule,

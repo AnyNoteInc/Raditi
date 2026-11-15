@@ -101,9 +101,8 @@
 .nowrap {
   white-space: nowrap;
 }
-/* Heard, not seen: words for a screen reader, in the three modules of the landing. The demo
-   says so what the eye is told by a strikethrough, an arrow and a colour; the pricing, the result
-   of its slider. The heads of the columns of the capabilities are seen once, over the first row,
+/* Heard, not seen: words for a screen reader, in the modules of the landing. The demo says so
+   what the eye is told by a strikethrough, an arrow and a colour. The heads of the columns of the capabilities are seen once, over the first row,
    and in the other rows only heard: every row names its cells. */
 .page [data-sr-only],
 .capability:not(:first-child) .columnLabel {
@@ -1175,15 +1174,9 @@
     transition: none !important;
     scroll-behavior: auto !important;
   }
-  /* The universal selector does not reach these parts. Each has a rule of its own: a browser
-     that does not know one of the pseudo-elements would drop a whole list of selectors. */
+  /* The universal selector does not reach this part. It has a rule of its own: a browser that
+     does not know the pseudo-element would drop a whole list of selectors. */
   .page details::details-content {
-    transition: none !important;
-  }
-  .page input::-webkit-slider-thumb {
-    transition: none !important;
-  }
-  .page input::-moz-range-thumb {
     transition: none !important;
   }
 }

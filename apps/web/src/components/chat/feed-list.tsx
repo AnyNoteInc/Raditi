@@ -118,10 +118,11 @@ export interface FeedActions {
   /** The document of the agent the tab shows now, on the screen; null — none. */
   shownAgentDocument?: string | null
   /**
-   * «Изменить» of the client's last message: `/undo` puts its words back into the field, and the
-   * client sends them changed (docs/plan/75-chat-input-output.md, ВВ25); absent — not offered.
+   * «Изменить» of the client's last message, sent changed: the words are edited in place, and only
+   * «Отправить» takes the turn back (`/undo`) and sends the new words; «Отмена» changes nothing
+   * (docs/plan/75-chat-input-output.md, ВВ25). true — sent; absent — not offered.
    */
-  onEditLast?: () => void
+  onEditLast?: (text: string) => Promise<boolean>
   /** The client controls the task's browser now. */
   controlling?: boolean
   /** The task's browser is open: the control can be taken. */
@@ -236,7 +237,123 @@ function Bubble({
   at: string
   now: Date
   files?: readonly SentFile[]
-  /** «Изменить»: the words go back to the field to be sent again (ВВ25). */
+  /** «Изменить»: the words are edited here and sent changed; true — they went (ВВ25). */
+  onEdit?: (text: string) => Promise<boolean>
+}) {
+  if (onEdit) return <EditableBubble text={text} at={at} now={now} files={files} onEdit={onEdit} />
+  return <BubbleView text={text} at={at} now={now} files={files} />
+}
+
+/**
+ * The client's last message while it may be changed (ВВ25): «Изменить» opens its words in place,
+ * «Отмена» leaves everything as it was, «Отправить» sends the changed words instead of these. Nothing
+ * of the chat moves before «Отправить».
+ */
+function EditableBubble({
+  text,
+  at,
+  now,
+  files,
+  onEdit,
+}: {
+  text: string
+  at: string
+  now: Date
+  files: readonly SentFile[]
+  onEdit: (text: string) => Promise<boolean>
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+  if (draft === null)
+    return <BubbleView text={text} at={at} now={now} files={files} onEdit={() => setDraft(text)} />
+  const changed = draft.trim() !== '' && draft.trim() !== text.trim()
+  const submit = async () => {
+    if (!changed || sending) return
+    setSending(true)
+    const sent = await onEdit(draft.trim())
+    setSending(false)
+    if (sent) setDraft(null)
+  }
+  return (
+    <Box
+      sx={{
+        alignSelf: 'flex-end',
+        width: { xs: '100%', sm: '80%' },
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1,
+        px: 2.5,
+        py: 1.25,
+        borderRadius: '24px',
+        bgcolor: 'var(--mui-palette-action-selected)',
+      }}
+    >
+      <Box
+        component="textarea"
+        aria-label={messageEditText.label}
+        value={draft}
+        rows={Math.min(8, Math.max(2, draft.split('\n').length))}
+        autoFocus
+        disabled={sending}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && !sending) setDraft(null)
+          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault()
+            void submit()
+          }
+        }}
+        sx={{
+          font: 'inherit',
+          fontSize: 16,
+          lineHeight: 1.65,
+          color: 'text.primary',
+          bgcolor: 'transparent',
+          border: 0,
+          outline: 'none',
+          resize: 'vertical',
+          width: '100%',
+        }}
+      />
+      <Typography variant="caption" color="text.secondary">
+        {messageEditText.hint}
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+        <Button
+          size="small"
+          onClick={() => setDraft(null)}
+          disabled={sending}
+          sx={{ minHeight: 44 }}
+        >
+          {messageEditText.cancel}
+        </Button>
+        <Button
+          size="small"
+          variant="contained"
+          disableElevation
+          loading={sending}
+          disabled={!changed}
+          onClick={() => void submit()}
+          sx={{ minHeight: 44, borderRadius: '999px' }}
+        >
+          {messageEditText.send}
+        </Button>
+      </Box>
+    </Box>
+  )
+}
+
+function BubbleView({
+  text,
+  at,
+  now,
+  files,
+  onEdit,
+}: {
+  text: string
+  at: string
+  now: Date
+  files: readonly SentFile[]
   onEdit?: () => void
 }) {
   return (

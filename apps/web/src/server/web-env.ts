@@ -10,6 +10,7 @@ import {
   type Env,
   type PagesAddress,
 } from '@repo/domain'
+import { parseRefusedSubnets, type RefusedSubnet } from '@repo/ip-address'
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
 import { z } from 'zod'
 
@@ -47,6 +48,13 @@ export interface WebEnv {
    * chat are downloaded only.
    */
   pageViews: { origin: string; secret: string } | null
+  /**
+   * What the check of an MCP server with a key connects to (docs/plan/81-mcp-server-credentials.md):
+   * public addresses outside the platform's subnets (SANDBOX_EGRESS_REFUSED_SUBNETS, the same as
+   * the relay of mcp reads) and, outside production for tests and stands alone, loopback
+   * (MCP_SKILL_RELAY_LOOPBACK).
+   */
+  mcpServerProbe: { refusedSubnets: RefusedSubnet[]; allowLoopback: boolean }
 }
 
 /** The secret of the pages outside production when none is set: never a secret of a server. */
@@ -99,6 +107,18 @@ const webEnvSchema = z
     PAGES_SIGNING_SECRET: envVar(z.string().optional()),
     PAGES_BASE_DOMAIN: envVar(z.string().optional()),
     PAGES_PUBLIC_PORT: envVar(z.coerce.number().int().min(1).max(65_535).optional()),
+    SANDBOX_EGRESS_REFUSED_SUBNETS: envVar(
+      z
+        .string()
+        .refine(
+          (text) => parseRefusedSubnets(text) !== null,
+          'must be CIDR subnets separated by commas',
+        )
+        .optional(),
+    ),
+    MCP_SKILL_RELAY_LOOPBACK: envVar(
+      z.enum(['on', 'off'], { error: 'must be on or off' }).default('off'),
+    ),
   })
   .superRefine((env, ctx) => {
     const tokenProblem = metricsTokenProblem(env.METRICS_TOKEN, env.APP_ENV)
@@ -118,6 +138,19 @@ const webEnvSchema = z
         message: 'must use wss in production',
       })
     }
+    if (isProduction(env.APP_ENV) && (env.SANDBOX_EGRESS_REFUSED_SUBNETS ?? '').trim() === '')
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SANDBOX_EGRESS_REFUSED_SUBNETS'],
+        message:
+          'required in production (the platform subnets the check of an MCP server never reaches)',
+      })
+    if (isProduction(env.APP_ENV) && env.MCP_SKILL_RELAY_LOOPBACK === 'on')
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MCP_SKILL_RELAY_LOOPBACK'],
+        message: 'only off is allowed in production',
+      })
     pagesProblems(env, ctx)
     const pageProblems: string[] = []
     pagesAddressFromEnv(env, isProduction(env.APP_ENV), pageProblems)
@@ -180,6 +213,10 @@ export function webEnvFromEnv(env: Env): WebEnv {
     webPushPublicKey: e.WEB_PUSH_VAPID_PUBLIC ?? null,
     pages: pagesAddressFromEnv(e, isProduction(e.APP_ENV), []),
     pageViews: pageViewsOf(e),
+    mcpServerProbe: {
+      refusedSubnets: parseRefusedSubnets(e.SANDBOX_EGRESS_REFUSED_SUBNETS ?? '') ?? [],
+      allowLoopback: e.MCP_SKILL_RELAY_LOOPBACK === 'on',
+    },
   }
 }
 

@@ -59,7 +59,15 @@ export async function readPassFacts(
       modelClass: true,
       billable: true,
       needsBrowser: true,
-      workspace: { select: { dataClass: true } },
+      workspace: {
+        select: {
+          dataClass: true,
+          // The skills of the workspace's agent (plan 83, БП11): every chat of it gets them.
+          agentSkills: {
+            select: { name: true, url: true, enabled: true, authKind: true, authState: true },
+          },
+        },
+      },
       // The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2).
       createdBy: { select: { agentInstructions: { select: { text: true } } } },
     },
@@ -186,7 +194,7 @@ export async function readPassFacts(
     committedAt: answered.createdAt,
     turns,
     variables: variables.map((variable) => variable.name),
-    skills: turnSkillsOf([], { platformBrowser: requirements.browser }),
+    skills: turnSkillsOf(task.workspace.agentSkills, { platformBrowser: requirements.browser }),
     profile: profile ?? null,
     budget,
     now: input.now,

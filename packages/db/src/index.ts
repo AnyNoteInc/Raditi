@@ -27,8 +27,10 @@ export {
 export { enqueueChatNotify, enqueueQueueDrain, enqueueTurnCancel } from './task-commands-outbox.ts'
 export {
   enqueueTelegramDeliver,
+  enqueueTelegramProgress,
   enqueueTelegramSend,
   enqueueTelegramTopic,
+  forgetTelegramChat,
 } from './telegram-outbox.ts'
 export {
   clearBrowserHelp,
@@ -177,6 +179,8 @@ export {
 
 export { Prisma, PrismaClient } from './generated/prisma/client.ts'
 export {
+  AgentSkillAuthKind,
+  AgentSkillAuthState,
   AttachmentStatus,
   AuditActorType,
   BillingUnit,

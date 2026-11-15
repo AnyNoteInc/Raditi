@@ -119,15 +119,14 @@ describe('landing CSS modules', () => {
     })
 
     // The block of reduced motion takes away transitions and animations, not a transform: a
-    // lift, a shift of an arrow, a press or the grip of the slider declared outside this query
-    // would be a jump. The line of a navigation link is drawn with a scale and simply appears:
+    // lift, a shift of an arrow, a press declared outside this query would be a jump. The line of a navigation link is drawn with a scale and simply appears:
     // it is not a move.
     it('moves a hovered or pressed element only when motion is welcome', () => {
       const moves = rules.filter(
         (rule) =>
           (rule.selector.includes(':hover') &&
             /\btransform\s*:[^;]*translate/.test(rule.declarations)) ||
-          /scale\((0\.98|1\.12)\)/.test(rule.declarations),
+          /scale\(0\.98\)/.test(rule.declarations),
       )
       expect(moves.length).toBeGreaterThan(0)
       expect(
@@ -187,7 +186,9 @@ describe('landing CSS modules', () => {
       ].flatMap(([, body = '']) =>
         [...body.matchAll(/([a-z-]+)\s*:/g)].map(([, property]) => property),
       )
-      expect(keyframed.length).toBeGreaterThan(0)
+      // The pricing has no keyframes since its calculator left; the other modules are read
+      // for them, so a pattern that finds none would not pass unnoticed.
+      if (module !== 'pricing.module.css') expect(keyframed.length).toBeGreaterThan(0)
       expect(
         [...new Set(keyframed)].filter(
           (property) =>
@@ -214,17 +215,14 @@ describe('landing CSS modules', () => {
       expect(everything?.declarations).toMatch(/transition:\s*none\s*!important/)
     })
 
-    // `.page *` does not reach these parts. A browser drops a whole list of selectors that names
-    // a pseudo-element it does not know, so each has a rule of its own.
-    it.each(['::details-content', '::-webkit-slider-thumb', '::-moz-range-thumb'])(
-      'reaches %s with a rule of its own',
-      (part) => {
-        const own = blocks.filter((rule) => rule.selector.includes(part))
-        expect(own).toHaveLength(1)
-        expect(own[0]?.selector).not.toContain(',')
-        expect(own[0]?.declarations).toMatch(/transition:\s*none\s*!important/)
-      },
-    )
+    // `.page *` does not reach this part. A browser drops a whole list of selectors that names
+    // a pseudo-element it does not know, so it has a rule of its own.
+    it('reaches ::details-content with a rule of its own', () => {
+      const own = blocks.filter((rule) => rule.selector.includes('::details-content'))
+      expect(own).toHaveLength(1)
+      expect(own[0]?.selector).not.toContain(',')
+      expect(own[0]?.declarations).toMatch(/transition:\s*none\s*!important/)
+    })
 
     it('leaves no part with a transition that the block does not reach', () => {
       const parts = modules.flatMap((module) =>

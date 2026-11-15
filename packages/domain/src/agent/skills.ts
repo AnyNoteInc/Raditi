@@ -2,17 +2,18 @@ import { z } from 'zod'
 
 import { parseEgressHost } from '../preview/egress-hosts.ts'
 
-// The skills of a site's agent (owner's request of 26.10.2026: «установи для агента по умолчанию
+// The skills of a workspace's agent (owner's request of 26.10.2026: «установи для агента по умолчанию
 // следующие скилы и сделай возможность добавлять — context7, playwright»): MCP servers the CLI of
 // a turn connects to besides the platform's own, over the open internet of the sandbox. Two come
-// with the platform and are on unless the owner of the site turns one off: Context7 — the current
+// with the platform and are on unless the owner of the workspace turns one off: Context7 — the current
 // documentation of libraries — and Playwright — a headless browser inside the sandbox for pages
-// of the internet. The owner adds others by the https address of a remote MCP server. A skill
-// keeps nothing secret: no header, no query string, no credentials in its address — a server
-// that wants a key is not taken yet.
+// of the internet. The owner adds others by the https address of a remote MCP server. Its address
+// keeps nothing secret: no query string, no credentials in it. A server that wants a key or a
+// sign-in (docs/plan/81-mcp-server-credentials.md) is reached through the relay of the role mcp,
+// which adds the header from Vault: the turn's CLI knows only the relay's path and its MCP token.
 
 export const agentSkillLimits = Object.freeze({
-  /** Skills an owner adds to one site; the platform's own come on top. */
+  /** Skills an owner adds to one workspace; the platform's own come on top. */
   added: 8,
   nameChars: 32,
   titleChars: 80,
@@ -33,9 +34,86 @@ export const agentSkillNameSchema = z
 export const builtinAgentSkillNames = ['context7', 'playwright'] as const
 export type BuiltinAgentSkillName = (typeof builtinAgentSkillNames)[number]
 
-/** What one skill of a turn is: a remote MCP server, or a server the sandbox image carries. */
+/**
+ * What one skill of a turn is: a remote MCP server the CLI reaches over the open internet, one it
+ * reaches through the relay of the role mcp (a server with authorization, plan 81), or a server
+ * the sandbox image carries.
+ */
 export type TurnSkill =
-  { name: string; kind: 'remote'; url: string } | { name: BuiltinAgentSkillName; kind: 'local' }
+  | { name: string; kind: 'remote'; url: string }
+  | { name: string; kind: 'relayed' }
+  | { name: BuiltinAgentSkillName; kind: 'local' }
+
+/**
+ * How an added server is authorized (plan 81, §3.3): nothing, a header of the owner's whose value
+ * is in Vault, or tokens of an OAuth sign-in in Vault.
+ */
+export const agentSkillAuthKinds = ['none', 'header', 'oauth'] as const
+export type AgentSkillAuthKind = (typeof agentSkillAuthKinds)[number]
+
+/** Whether its authorization works, as the last check or relayed call found it. */
+export const agentSkillAuthStates = ['ok', 'needs_login', 'failed'] as const
+export type AgentSkillAuthState = (typeof agentSkillAuthStates)[number]
+
+/** The path of the relay of one server, under the role mcp's own endpoint (`/mcp`). */
+export const skillRelayPath = (name: string): string => `/mcp/skill/${name}`
+/** A path the relay serves: one name of a skill, nothing after it. */
+export const SKILL_RELAY_PATH = /^\/mcp\/skill\/([a-z](?:[a-z0-9-]{0,30}[a-z0-9])?)$/
+
+export const agentSkillHeaderLimits = Object.freeze({
+  nameChars: 64,
+  /** The least that is masked in what the server answers (plan 81, §3.2, п. 6). */
+  valueMinChars: 8,
+  valueMaxChars: 4096,
+})
+
+/**
+ * Headers the relay sets or the protocol owns: the owner's header is never one of them. The relay
+ * also refuses any name the CLI sends on (`mcp-*`, `last-event-id`).
+ */
+const reservedHeaderNames = new Set([
+  'host',
+  'content-length',
+  'content-type',
+  'transfer-encoding',
+  'connection',
+  'keep-alive',
+  'proxy-authorization',
+  'proxy-connection',
+  'te',
+  'trailer',
+  'upgrade',
+  'cookie',
+  'accept',
+  'accept-encoding',
+  'last-event-id',
+  'origin',
+  'forwarded',
+  'via',
+])
+
+/** The name of the owner's header: an HTTP token, not one of the relay's own. */
+export const agentSkillHeaderNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(agentSkillHeaderLimits.nameChars)
+  .regex(/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/, 'expected an HTTP header name')
+  .refine((name) => {
+    const lower = name.toLowerCase()
+    return (
+      !reservedHeaderNames.has(lower) &&
+      !lower.startsWith('mcp-') &&
+      !lower.startsWith('x-forwarded-')
+    )
+  }, 'a header the relay owns')
+
+/** Its value: visible ASCII and spaces, one line, long enough to be masked in an answer. */
+export const agentSkillHeaderValueSchema = z
+  .string()
+  .min(agentSkillHeaderLimits.valueMinChars)
+  .max(agentSkillHeaderLimits.valueMaxChars)
+  .regex(/^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/, 'expected one line of visible characters')
 
 export interface BuiltinAgentSkill {
   name: BuiltinAgentSkillName
@@ -52,7 +130,7 @@ export const builtinAgentSkills: readonly BuiltinAgentSkill[] = Object.freeze([
   {
     name: 'context7',
     title: 'Context7',
-    description: 'Свежая документация библиотек и фреймворков, которыми сделан сайт.',
+    description: 'Свежая документация библиотек и фреймворков, с которыми работает агент.',
     turn: { name: 'context7', kind: 'remote', url: CONTEXT7_MCP_URL },
   },
   {
@@ -110,6 +188,7 @@ export const turnSkillSchema = z.discriminatedUnion('kind', [
       url: z.string().refine((url) => parseAgentSkillUrl(url) === url, 'a kept skill address'),
     })
     .strict(),
+  z.object({ name: agentSkillNameSchema, kind: z.literal('relayed') }).strict(),
   z.object({ name: z.enum(builtinAgentSkillNames), kind: z.literal('local') }).strict(),
 ]) satisfies z.ZodType<TurnSkill>
 
@@ -122,24 +201,31 @@ export const turnSkillsSchema = z
     'duplicate skill',
   )
 
-/** A row of the site's skills as the platform keeps it (`site_agent_skills`). */
-export interface SiteAgentSkillRow {
+/** A row of the workspace's skills as the platform keeps it (`workspace_agent_skills`). */
+export interface AgentSkillRow {
   name: string
   enabled: boolean
   /** An added skill's address; null for one of the platform's own. */
   url: string | null
+  /** How an added skill is authorized; absent — `none` (a row read without the column). */
+  authKind?: AgentSkillAuthKind
+  /** Whether that works; absent — `ok`. */
+  authState?: AgentSkillAuthState
 }
 
 /**
- * The skills of a site's turn, in a fixed order: the platform's own first unless a row turns one
+ * The skills of a turn, in a fixed order: the platform's own first unless a row turns one
  * off, then the added ones that are on, by name. A row that does not parse is left out.
  *
  * A turn that has the platform's browser (`web_*`) gets no local one: the skill's Chromium would
  * run inside the turn's sandbox next to the session's, a second browser of the same chat — its
  * memory and CPU on every turn, and screenshots no client can see.
+ *
+ * An added skill with authorization goes through the relay (`relayed`, plan 81); one whose
+ * authorization does not work now — the owner has to sign in again — is left out.
  */
 export function turnSkillsOf(
-  rows: readonly SiteAgentSkillRow[],
+  rows: readonly AgentSkillRow[],
   { platformBrowser = false }: { platformBrowser?: boolean } = {},
 ): TurnSkill[] {
   const byName = new Map(rows.map((row) => [row.name, row]))
@@ -151,8 +237,70 @@ export function turnSkillsOf(
     .filter((row) => !isBuiltinAgentSkill(row.name) && row.enabled && row.url !== null)
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
   for (const row of added.slice(0, agentSkillLimits.added)) {
-    const skill = turnSkillSchema.safeParse({ name: row.name, kind: 'remote', url: row.url })
+    const authorized = (row.authKind ?? 'none') !== 'none'
+    if (authorized && (row.authState ?? 'ok') !== 'ok') continue
+    const skill = turnSkillSchema.safeParse(
+      authorized
+        ? { name: row.name, kind: 'relayed' }
+        : { name: row.name, kind: 'remote', url: row.url },
+    )
     if (skill.success) skills.push(skill.data)
   }
   return skills
 }
+
+/**
+ * Where the secret of an added server lives (plan 81, §3.3; per workspace since plan 83, БП11):
+ * beside the variables of the workspace. One version, written by CAS.
+ */
+export const agentSkillSecretPath = (workspaceId: string, name: string): string =>
+  `kv/workspaces/${workspaceId}/mcp/${name}`
+
+const oauthTokenSchema = z
+  .string()
+  .min(agentSkillHeaderLimits.valueMinChars)
+  .max(8192)
+  .regex(/^[\x21-\x7e]+$/)
+
+/**
+ * The secret of an added server in Vault: the value of its header, or the tokens of its OAuth
+ * sign-in. Anything else — a version without a value that erased it — is no secret.
+ */
+export const agentSkillSecretSchema = z.union([
+  z.strictObject({ value: agentSkillHeaderValueSchema }),
+  z.strictObject({
+    accessToken: oauthTokenSchema,
+    refreshToken: oauthTokenSchema.optional(),
+    clientSecret: oauthTokenSchema.optional(),
+  }),
+])
+export type AgentSkillSecret = z.infer<typeof agentSkillSecretSchema>
+
+// https in production: the request that uses it refuses plain http but to loopback, outside
+// production alone (tests and stands).
+const httpsAddress = z
+  .string()
+  .max(agentSkillLimits.urlChars)
+  .refine(
+    (text) => ['https:', 'http:'].includes(URL.parse(text)?.protocol ?? ''),
+    'expected an http(s) address',
+  )
+
+/**
+ * What of an OAuth sign-in to a server is not secret (`workspace_agent_skills.oauth`, plan 81, §3.4):
+ * where tokens are renewed, the client the platform registered there, the resource the tokens are
+ * for and when the access token runs out. The tokens themselves are in Vault.
+ */
+export const agentSkillOAuthSchema = z.strictObject({
+  issuer: z.string().min(1).max(agentSkillLimits.urlChars),
+  tokenEndpoint: httpsAddress,
+  clientId: z.string().min(1).max(512),
+  resource: z.string().min(1).max(agentSkillLimits.urlChars),
+  scope: z.string().max(1024).optional(),
+  /** ISO 8601; absent — the server named no expiry. */
+  expiresAt: z.iso.datetime().optional(),
+})
+export type AgentSkillOAuth = z.infer<typeof agentSkillOAuthSchema>
+
+/** How long before its expiry an access token is renewed. */
+export const AGENT_SKILL_TOKEN_RENEW_MS = 60_000

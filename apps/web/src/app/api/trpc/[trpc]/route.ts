@@ -5,6 +5,7 @@ import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
 import { env } from '@/env'
 import { MAX_TRPC_BODY_BYTES, withBodyLimit } from '@/server/body-limit'
 import { chatServices } from '@/server/chat-services'
+import { mcpServerServices } from '@/server/mcp-servers'
 import { paymentShop } from '@/server/payment-shop'
 import { refusedCrossOriginPost } from '@/server/trpc-origin'
 import { MAX_BATCH_SIZE } from '@/trpc/batch'
@@ -48,6 +49,7 @@ const handler = withBodyLimit(MAX_TRPC_BODY_BYTES, async (req) => {
         headers: req.headers,
         billing: paymentShop(),
         chat: chatServices(),
+        mcpServers: mcpServerServices(),
       }),
     onError: ({ path, error, type }) => {
       const failure = failureToLog(error)

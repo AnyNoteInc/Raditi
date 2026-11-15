@@ -84,7 +84,7 @@ describe('splitOggOpus', () => {
   it('cuts a voice of 70 seconds into three pieces of at most 28 seconds, each a whole stream', () => {
     const pieces = splitOggOpus(voice(70))
     expect(pieces).toHaveLength(3)
-    let previousEnd = 0n
+    let total = 0n
     for (const piece of pieces!) {
       const pages = inspect(piece)
       // The header pages come first in every piece.
@@ -93,11 +93,12 @@ describe('splitOggOpus', () => {
       expect(pages.every((p) => p.crcOk)).toBe(true)
       expect(pages[0]!.flags & 0x02).toBe(0x02)
       expect(pages.at(-1)!.flags & 0x04).toBe(0x04)
+      // Every piece starts at zero and lasts at most 28 seconds by its own granule positions.
       const audio = pages.slice(2)
-      expect(audio.at(-1)!.granule - previousEnd).toBeLessThanOrEqual(28n * 48_000n)
-      previousEnd = audio.at(-1)!.granule
+      expect(audio.at(-1)!.granule).toBeLessThanOrEqual(28n * 48_000n)
+      total += audio.at(-1)!.granule
     }
-    expect(previousEnd).toBe(70n * 48_000n)
+    expect(total).toBe(70n * 48_000n)
   })
 
   it('refuses what is not Ogg Opus', () => {

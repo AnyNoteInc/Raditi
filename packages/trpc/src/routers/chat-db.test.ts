@@ -30,7 +30,11 @@ import type { ChatContext } from '../services/chat/context.ts'
 import { commandRefusal, dialogFacts } from '../services/chat/dialog-facts.ts'
 import { dialogPageQuery } from '../services/chat/dialog-list.ts'
 import { wordsOfTurn } from '../services/chat/dialog-state.ts'
-import { handleTelegramUpdate, type TelegramMedia } from '../services/telegram/intake.ts'
+import {
+  handleTelegramTopicGone,
+  handleTelegramUpdate,
+  type TelegramMedia,
+} from '../services/telegram/intake.ts'
 import { readTelegramUpdate } from '@repo/telegram'
 
 // The procedures of a dialog on PostgreSQL (docs/plan/53-chat-preview-release.md, R2): what one
@@ -2031,6 +2035,112 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(
         await db.channelIdentity.count({ where: { userId: owner.id, channel: 'telegram' } }),
       ).toBe(0)
+    })
+
+    it('answers a stranger with the way to link, and starts a chat for a linked client once', async () => {
+      const stranger = chatId()
+      await deliver(words(stranger, 'Поменяйте заголовок'))
+      expect((await said()).at(-1)).toMatchObject({
+        chatId: String(stranger),
+        text: expect.stringMatching(/подключите Telegram в кабинете/u),
+      })
+
+      const from = chatId()
+      const { owner } = await linked(from)
+      const first = words(from, 'Поменяйте заголовок на «Кофе с собой»')
+      expect(await deliver(first)).toBe('done')
+      const tasks = await db.task.findMany({
+        where: { createdById: owner.id },
+        select: {
+          id: true,
+          status: true,
+          chatSession: { select: { channel: true, externalChatId: true } },
+        },
+      })
+      expect(tasks).toEqual([
+        expect.objectContaining({
+          status: 'queued',
+          chatSession: { channel: 'telegram', externalChatId: String(from) },
+        }),
+      ])
+      taskIds.push(tasks[0]!.id)
+      // The topic of the chat is asked of core; the client is told the agent works.
+      expect(
+        await db.outboxEvent.count({ where: { topic: 'telegram', type: 'telegram.topic' } }),
+      ).toBe(1)
+      // No «Принято»: the message of the work of the agent says it (owner, 15.11.2026).
+      expect((await said()).map(({ text }) => text)).not.toContain(
+        'Принято, агент начал работу. Ответ пришлю сюда.',
+      )
+      expect(
+        await db.outboxEvent.findMany({
+          where: { topic: 'telegram', type: 'telegram.progress' },
+          select: { payload: true },
+        }),
+      ).toEqual([{ payload: { taskId: tasks[0]!.id } }])
+      // The agent works: the next words wait in the queue of the chat.
+      await deliver(words(from, 'И цвет кнопки — зелёный'))
+      expect(await db.taskQueuedMessage.count({ where: { taskId: tasks[0]!.id } })).toBe(1)
+      expect((await said()).at(-1)?.text).toMatch(/Сообщение в очереди/u)
+    })
+
+    it('deletes the chat and its topic by /delete, by the cabinet and when the topic is gone', async () => {
+      const from = chatId()
+      const { owner, caller } = await linked(from)
+      const inTopic = (thread: number, text: string) =>
+        words(from, text, { message_thread_id: thread, is_topic_message: true })
+      // A service message of a topic carries no words: no answer at all.
+      const before = (await said()).length
+      await deliver({
+        update_id: base + next++,
+        message: {
+          message_id: next,
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: from, type: 'private' },
+          from: { id: from, is_bot: false },
+          message_thread_id: 31,
+          forum_topic_created: { name: 'Новая тема' },
+        },
+      })
+      expect(await said()).toHaveLength(before)
+
+      const tasksOf = () =>
+        db.task.findMany({
+          where: { createdById: owner.id },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true, deletedAt: true },
+        })
+      await deliver(inTopic(31, 'Первый чат'))
+      await deliver(inTopic(32, 'Второй чат'))
+      await deliver(inTopic(33, 'Третий чат'))
+      const [first, second, third] = await tasksOf()
+      taskIds.push(first!.id, second!.id, third!.id)
+
+      // `/delete` in a topic: the chat is deleted, the topic goes with it.
+      await deliver(inTopic(31, '/delete'))
+      // «Удалить» in the cabinet: the same.
+      await caller.task.remove({ taskId: second!.id })
+      const forgets = await db.outboxEvent.findMany({
+        where: { topic: 'telegram', type: 'telegram.forget' },
+        orderBy: { id: 'asc' },
+        select: { payload: true },
+      })
+      expect(forgets).toEqual([
+        { payload: { chatId: String(from), threadId: 31 } },
+        { payload: { chatId: String(from), threadId: 32 } },
+      ])
+      // The client deleted the topic in Telegram: core tells web, the chat goes in the cabinet.
+      expect(
+        await handleTelegramTopicGone(
+          { db: underRate(db) },
+          { chatId: String(from), threadId: 33 },
+        ),
+      ).toBe('deleted')
+      expect((await tasksOf()).map(({ deletedAt }) => deletedAt !== null)).toEqual([
+        true,
+        true,
+        true,
+      ])
     })
 
     it('starts a chat once when its update is handed again after a failure, and unlinking unbinds it', async () => {

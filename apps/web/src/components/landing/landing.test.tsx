@@ -328,9 +328,8 @@ describe('landing texts', () => {
     expect(under('safety-title')).toBe(
       'Правка сначала появляется в черновике. На сайт её выпускаете вы.',
     )
-    expect(under('pricing-title')).toBe(
-      'Подвиньте ползунок — подберём тариф под число ваших задач.',
-    )
+    // The tariffs are three cards: the line under their heading is the note about the payment.
+    expect(under('pricing-title')).toBe('Оплату пока не принимаем: сервис готовится к запуску.')
     // The questions need no words under their heading; the sign «?» beside it is gone.
     expect(container.querySelector('#faq-title')?.nextElementSibling).toBeNull()
     for (const id of ['demo-title', 'can-title', 'safety-title']) {
@@ -435,9 +434,6 @@ describe('landing texts', () => {
     const text = plain(container.textContent)
 
     for (const counted of [
-      'Подвиньте ползунок — подберём тариф под число ваших задач.',
-      'Сколько задач в месяц вы планируете?',
-      'Задача — одна ваша просьба. В расчёте берём 11 кредитов на задачу — это среднее',
       '200 кредитов в месяц — в среднем около 18 задач',
       'Небольшая правка — около 50 ₽',
       'При регистрации — 50 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
@@ -476,13 +472,10 @@ describe('landing texts', () => {
       'Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
     )
     // The examples are the first two rows of the orientation list, said as usual and not as a
-    // price; the same two stand under the calculator.
+    // price.
     const { small, block } = typicalTaskCredits
     expect(answer).toContain(`обычно ${small.to} кредитов`)
     expect(answer).toContain(`— ${block.from}–${block.to}.`)
-    expect(plain(container.querySelector('#pricing')?.textContent)).toContain(
-      `обычно ${small.to} кредитов, добавить блок или страницу — ${block.from}–${block.to}.`,
-    )
     // «В карточке каждого тарифа» is true: every card names the price of a small edit in rubles.
     const cards = [...container.querySelectorAll('#pricing article')]
     expect(cards).toHaveLength(pricing.plans.length)

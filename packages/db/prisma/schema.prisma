@@ -185,6 +185,7 @@ model Workspace {
   chatDocuments   ChatDocument[]
   usageWindows    WorkspaceUsageWindow[]
   envVars         WorkspaceEnvVar[]
+  agentSkills     WorkspaceAgentSkill[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -332,6 +333,21 @@ model CredentialRef {
 enum CredentialKind {
   llm_provider
   subscription
+  mcp_server
+}
+
+/// Must equal agentSkillAuthKinds in @repo/domain.
+enum AgentSkillAuthKind {
+  none
+  header
+  oauth
+}
+
+/// Must equal agentSkillAuthStates in @repo/domain.
+enum AgentSkillAuthState {
+  ok
+  needs_login
+  failed
 }
 
 // ─── Chat and tasks (spec §7, §8, §11) ────────────────────────────────────────
@@ -339,17 +355,21 @@ enum CredentialKind {
 /// A conversation thread in one channel: the web chat, a Telegram chat or topic, a MAX
 /// chat. Holds the agent driver choice and a pointer to the latest turn for resuming.
 model ChatSession {
-  id              String   @id @default(uuid(7)) @db.Uuid
-  workspaceId     String   @map("workspace_id") @db.Uuid
-  channel         Channel
+  id                    String   @id @default(uuid(7)) @db.Uuid
+  workspaceId           String   @map("workspace_id") @db.Uuid
+  channel               Channel
   /// Chat id in the channel (Telegram or MAX chat id as a string); NULL for the web chat.
-  externalChatId  String?  @map("external_chat_id") @db.VarChar(64)
+  externalChatId        String?  @map("external_chat_id") @db.VarChar(64)
   /// Telegram forum topic (message_thread_id).
-  telegramTopicId Int?     @map("telegram_topic_id")
-  agentDriverId   String?  @map("agent_driver_id") @db.VarChar(32)
-  lastTurnId      String?  @map("last_turn_id") @db.Uuid
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  telegramTopicId       Int?     @map("telegram_topic_id")
+  /// The message of the work of the agent in Telegram while a pass goes on (docs/plan/80-telegram.md);
+  /// `telegramProgressChain` — the run that edits it: a newer run takes over, an older one stops.
+  telegramProgressId    Int?     @map("telegram_progress_id")
+  telegramProgressChain String?  @map("telegram_progress_chain") @db.Uuid
+  agentDriverId         String?  @map("agent_driver_id") @db.VarChar(32)
+  lastTurnId            String?  @map("last_turn_id") @db.Uuid
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   agentDriver AgentDriver? @relation(fields: [agentDriverId], references: [id], onDelete: Restrict)
@@ -2163,4 +2183,33 @@ model WorkspaceEnvVar {
   @@unique([workspaceId, name])
   @@index([createdBy])
   @@map("workspace_env_vars")
+}
+
+/// The skills of a workspace's agent (owner's request of 26.10.2026; per workspace since plan 83,
+/// БП11): MCP servers the CLI of every chat of the workspace connects to besides the platform's
+/// own. A workspace without rows has the platform's two skills on.
+model WorkspaceAgentSkill {
+  workspaceId   String              @map("workspace_id") @db.Uuid
+  name          String              @db.VarChar(32)
+  url           String?             @db.VarChar(512)
+  enabled       Boolean             @default(true)
+  /// Authorization of an added server (docs/plan/81-mcp-server-credentials.md); the secret is in
+  /// Vault at `kv/workspaces/<workspace>/mcp/<name>`, never here.
+  authKind      AgentSkillAuthKind  @default(none) @map("auth_kind")
+  /// The name of the owner's header, for `header`.
+  headerName    String?             @map("header_name") @db.VarChar(64)
+  authState     AgentSkillAuthState @default(ok) @map("auth_state")
+  /// When a check or a relayed call last found the authorization working or not.
+  authCheckedAt DateTime?           @map("auth_checked_at") @db.Timestamptz(6)
+  /// A code of why it does not work, never the server's own text.
+  authError     String?             @map("auth_error") @db.VarChar(64)
+  /// What of an OAuth sign-in is not secret: issuer, client id, token endpoint, scope, expiry.
+  oauth         Json?
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, name])
+  @@map("workspace_agent_skills")
 }

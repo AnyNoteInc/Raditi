@@ -893,6 +893,61 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
     // `/undo` the failure before them would be the last word, and the chat would ask again.
   })
 
+  describe('«Изменить» under the last message (docs/plan/75, ВВ25)', () => {
+    const open = () =>
+      browserAnswer({
+        status: 'awaiting_user',
+        commands: verdicts({ turn_undo: null }),
+        events: [requestRow('1', 'Добавьте новость')],
+        cursor: '1',
+      })
+    const editor = () =>
+      within(screen.getByRole('textbox', { name: 'Изменить сообщение' }).parentElement!)
+    const edit = async (words: string) => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Изменить' }))
+      fireEvent.change(screen.getByRole('textbox', { name: 'Изменить сообщение' }), {
+        target: { value: words },
+      })
+    }
+
+    it('takes nothing back until «Отправить»', async () => {
+      showDialog(open())
+      await edit('Добавьте две новости')
+      fireEvent.click(editor().getByRole('button', { name: 'Отмена' }))
+      expect(calls.undoTurn).not.toHaveBeenCalled()
+      expect(calls.message).not.toHaveBeenCalled()
+      expect(field().value).toBe('')
+    })
+
+    it('takes the turn back, then sends the changed words, waiting for the rewind', async () => {
+      calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+      calls.message
+        .mockRejectedValueOnce(serverRefusal('Подождите', 'TASK_REWINDING'))
+        .mockResolvedValue(posted)
+      showDialog(open())
+      await edit('Добавьте две новости')
+      fireEvent.click(editor().getByRole('button', { name: 'Отправить' }))
+      await waitFor(() => expect(calls.message).toHaveBeenCalledTimes(2), { timeout: 4000 })
+      expect(calls.undoTurn).toHaveBeenCalledTimes(1)
+      const [first, again] = calls.message.mock.calls.map(([input]) => input)
+      expect(again).toMatchObject({ taskId: TASK_ID, text: 'Добавьте две новости' })
+      // One message, knocked twice: the same id.
+      expect(again!.requestId).toBe(first!.requestId)
+      // The old words do not come back to the field.
+      expect(field().value).toBe('')
+    })
+
+    it('keeps the changed words in the field when they could not go', async () => {
+      calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+      calls.message.mockRejectedValue(serverRefusal('Не получилось.'))
+      showDialog(open())
+      await edit('Добавьте две новости')
+      fireEvent.click(editor().getByRole('button', { name: 'Отправить' }))
+      expect((await screen.findByRole('alert')).textContent).toBe('Не получилось.')
+      await waitFor(() => expect(field().value).toBe('Добавьте две новости'))
+    })
+  })
+
   describe('`/redo`', () => {
     const at = '2026-10-17T10:00:00.000Z'
     const row = (fields: Record<string, unknown>) => ({ at, ...fields }) as unknown as FeedRow

@@ -10,6 +10,12 @@ export interface OpencodeWrapperSettings {
   prompt: string
   /** The turn key and the MCP token: read and removed at once, then named pipes for the CLI. */
   secrets: readonly [llm: string, mcp: string]
+  /**
+   * More pipes of the MCP token, one for each skill the relay of the role mcp serves
+   * (docs/plan/81-mcp-server-credentials.md): a pipe gives its value to one reader once, and the
+   * CLI reads each \`{file:…}\` of its configuration by itself. Nothing is staged at these paths.
+   */
+  mcpCopies: readonly string[]
   /** The whole environment of every CLI process. Nothing is inherited. */
   env: Readonly<Record<string, string>>
   /** Configuration directories the CLI must not write into. */
@@ -586,6 +592,7 @@ try {
     secrets.push({ path, value: readFileSync(path), done: false });
     rmSync(path);
   }
+  for (const path of settings.mcpCopies) secrets.push({ path, value: Buffer.from(secrets[1].value), done: false });
   variables = readVariables();
   const args = JSON.parse(readFileSync(settings.args, 'utf8'));
   const compaction = present(settings.compaction) ? JSON.parse(readFileSync(settings.compaction, 'utf8')) : null;

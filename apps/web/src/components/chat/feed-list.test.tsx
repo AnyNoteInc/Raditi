@@ -5,7 +5,7 @@ import {
   type FeedFailureCode,
 } from '@repo/domain/tasks/client-feed-failures'
 import { feedFailureOpenText } from '@repo/domain/tasks/client-feed-labels'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { FeedRow } from './chat-types'
@@ -24,6 +24,7 @@ import {
   requestRow,
   resultRow,
   stepRow,
+  verdicts,
 } from './testing'
 
 const NBSP = /\u00a0/g
@@ -828,5 +829,52 @@ describe('«Изменить» of the last message (docs/plan/75, ВВ25)', () =
     ] as unknown as Parameters<typeof lastMessageId>[0]
     expect(lastMessageId(rows)).toBe('c')
     expect(lastMessageId([])).toBeNull()
+  })
+})
+
+describe('«Изменить» under the last message (docs/plan/75-chat-input-output.md, ВВ25)', () => {
+  const rows = () => [requestRow('1'), resultRow('2', 1, 'Цена поменяна.')]
+  const head = () => headOf({ status: 'awaiting_user', commands: verdicts({ turn_undo: null }) })
+
+  it('opens the words in place and takes nothing back on «Отмена»', () => {
+    const onEditLast = vi.fn(async () => true)
+    const { feed } = showFeed(rows(), head(), {}, { onEditLast })
+    fireEvent.click(within(feed).getByRole('button', { name: 'Изменить' }))
+    const field = within(feed).getByRole('textbox', { name: 'Изменить сообщение' })
+    expect((field as HTMLTextAreaElement).value).toBe('Поменяйте цену капучино на 290 ₽')
+    // Unchanged words are nothing to send.
+    expect(
+      (within(feed).getByRole('button', { name: 'Отправить' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+    fireEvent.click(within(feed).getByRole('button', { name: 'Отмена' }))
+    expect(onEditLast).not.toHaveBeenCalled()
+    expect(within(feed).queryByRole('textbox', { name: 'Изменить сообщение' })).toBeNull()
+    expect(within(feed).getByText('Цена поменяна.')).toBeTruthy()
+    cleanup()
+  })
+
+  it('sends the changed words with «Отправить» only', async () => {
+    const onEditLast = vi.fn(async () => true)
+    const { feed } = showFeed(rows(), head(), {}, { onEditLast })
+    fireEvent.click(within(feed).getByRole('button', { name: 'Изменить' }))
+    fireEvent.change(within(feed).getByRole('textbox', { name: 'Изменить сообщение' }), {
+      target: { value: 'Поменяйте цену капучино на 310 ₽ ' },
+    })
+    fireEvent.click(within(feed).getByRole('button', { name: 'Отправить' }))
+    expect(onEditLast).toHaveBeenCalledWith('Поменяйте цену капучино на 310 ₽')
+    expect(await within(feed).findByRole('button', { name: 'Изменить' })).toBeTruthy()
+    cleanup()
+  })
+
+  it('is not offered while `/undo` cannot take the turn back', () => {
+    const onEditLast = vi.fn(async () => true)
+    const { feed } = showFeed(
+      rows(),
+      headOf({ status: 'awaiting_user', commands: verdicts() }),
+      {},
+      { onEditLast },
+    )
+    expect(within(feed).queryByRole('button', { name: 'Изменить' })).toBeNull()
+    cleanup()
   })
 })

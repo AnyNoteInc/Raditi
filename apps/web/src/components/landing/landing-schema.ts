@@ -1,6 +1,6 @@
 import { SITE_PHONE } from '@/lib/contacts'
 
-import type { LandingPlan } from './pricing-calculator'
+import type { LandingPlan } from './pricing-data'
 
 /**
  * The page in the words of schema.org, for the search engines and the answer engines: who the

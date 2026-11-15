@@ -10,6 +10,7 @@ import {
   type AgentDriver,
   type LlmBackend,
   type TurnPlan,
+  type TurnSkill,
 } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -234,6 +235,21 @@ describe('planTurn of a chat (docs/plan/83-remove-projects.md)', () => {
       }),
     )
     expect(later.request.context.instructions).not.toContain(CHAT_TITLE_SECTION)
+  })
+
+  it('gives every chat the skills of its workspace, a relayed server without its address (БП11)', async () => {
+    const skills: TurnSkill[] = [
+      { name: 'context7', kind: 'remote', url: 'https://mcp.context7.com/mcp' },
+      { name: 'playwright', kind: 'local' },
+      // A server with a key goes through the relay of the role mcp (plan 81): no address here.
+      { name: 'menu', kind: 'relayed' },
+    ]
+    const plan = await planned(facts({ skills }))
+    expect(plan.request.context).toMatchObject({ internet: true, skills })
+    expect(plan.request.context.instructions).toContain('context7, playwright, menu')
+    expect(toTurnPlan(plan.request, sampleDriverId).context.skills).toEqual(skills)
+    const bare = await planned(facts({ skills: [] }))
+    expect(bare.request.context).not.toHaveProperty('skills')
   })
 
   it('names the variables of the workspace to the agent, never their values (БП4)', async () => {

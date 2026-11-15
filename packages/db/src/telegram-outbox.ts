@@ -1,10 +1,13 @@
 import {
   TELEGRAM_DELIVER_JOB,
+  TELEGRAM_FORGET_JOB,
+  TELEGRAM_PROGRESS_JOB,
   TELEGRAM_QUEUE,
   TELEGRAM_SEND_JOB,
   TELEGRAM_TOPIC_JOB,
   telegramDeliverDedupeKey,
   telegramDeliverJobSchema,
+  telegramProgressJobSchema,
   telegramSendJobSchema,
   telegramTopicDedupeKey,
   telegramTopicJobSchema,
@@ -73,5 +76,64 @@ export async function enqueueTelegramDeliver(
     type: TELEGRAM_DELIVER_JOB,
     payload,
     dedupeKey: telegramDeliverDedupeKey(payload),
+  })
+}
+
+/**
+ * The message of the work of the agent for a chat bound to Telegram: core sends it and edits it
+ * every few seconds while the pass goes on. `key` — what makes it once (the update it answers).
+ */
+export function enqueueTelegramProgress(
+  tx: OutboxWriter,
+  taskId: string,
+  key: string,
+  pressId?: string,
+): Promise<boolean> {
+  const payload = telegramProgressJobSchema.parse({
+    taskId: lower(taskId),
+    ...(pressId === undefined ? {} : { pressId }),
+  })
+  return enqueueOutbox(tx, {
+    topic: TELEGRAM_QUEUE,
+    type: TELEGRAM_PROGRESS_JOB,
+    payload,
+    dedupeKey: `${TELEGRAM_PROGRESS_JOB}:${key.slice(0, 200)}`,
+  })
+}
+
+/**
+ * A chat deleted in the cabinet (owner's request of 15.11.2026): its topic in Telegram is deleted
+ * with all its messages, and the chat stops being bound there. Written in the transaction of the
+ * delete; a chat not bound to a topic has nothing to delete.
+ */
+export async function forgetTelegramChat(
+  tx: OutboxWriter & Pick<Prisma.TransactionClient, 'task' | 'chatSession'>,
+  taskId: string,
+): Promise<boolean> {
+  const task = await tx.task.findUnique({
+    where: { id: taskId },
+    select: {
+      chatSession: {
+        select: { id: true, channel: true, externalChatId: true, telegramTopicId: true },
+      },
+    },
+  })
+  const session = task?.chatSession
+  if (session?.channel !== 'telegram' || session.externalChatId === null) return false
+  await tx.chatSession.update({
+    where: { id: session.id },
+    data: {
+      externalChatId: null,
+      telegramTopicId: null,
+      telegramProgressId: null,
+      telegramProgressChain: null,
+    },
+  })
+  if (session.telegramTopicId === null) return false
+  return enqueueOutbox(tx, {
+    topic: TELEGRAM_QUEUE,
+    type: TELEGRAM_FORGET_JOB,
+    payload: { chatId: session.externalChatId, threadId: session.telegramTopicId },
+    dedupeKey: `${TELEGRAM_FORGET_JOB}:${session.externalChatId}:${session.telegramTopicId}`,
   })
 }

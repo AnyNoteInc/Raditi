@@ -101,7 +101,7 @@ export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
           </a>
           {viewer.status === 'authenticated' ? (
             <div className={styles.headerIdentity}>
-              <UserMenu user={viewer.user} />
+              <UserMenu user={viewer.user} landing />
             </div>
           ) : (
             <Link

@@ -63,6 +63,20 @@ describe('handleTelegramIntake', () => {
     expect(handle).not.toHaveBeenCalled()
   })
 
+  it('passes the topic core found gone, and only with the secret', async () => {
+    const topicGone = vi.fn(async () => 'deleted')
+    const body = JSON.stringify({ raditi_topic_gone: { chat_id: '42', thread_id: 9 } })
+    const handle = vi.fn(async () => 'done' as const)
+    expect(
+      (await handleTelegramIntake(post(body), { secret: SECRET, handle, topicGone })).status,
+    ).toBe(200)
+    expect(topicGone).toHaveBeenCalledWith({ chatId: '42', threadId: 9 })
+    expect(
+      (await handleTelegramIntake(post(body, null), { secret: SECRET, handle, topicGone })).status,
+    ).toBe(401)
+    expect(handle).not.toHaveBeenCalled()
+  })
+
   it('answers 503 when the chat fails, so core tries the update again, and logs no words', async () => {
     const logError = vi.fn()
     const response = await handleTelegramIntake(post(JSON.stringify(update)), {

@@ -19,7 +19,6 @@ const quota = (price: string) => ({
   price: new Decimal(price),
   creditsPerMonth: 20,
   creditsPerDay: null,
-  maxSites: 1,
   packCredits: null,
 })
 let getLandingPlans: typeof getLandingPlansType
@@ -46,7 +45,6 @@ describe('landing tariff data boundary', () => {
         price: new Decimal('5001.25'),
         creditsPerMonth: 35,
         creditsPerDay: 6,
-        maxSites: 2,
         packCredits: null,
       },
       {
@@ -56,7 +54,6 @@ describe('landing tariff data boundary', () => {
         price: new Decimal('2030.10'),
         creditsPerMonth: null,
         creditsPerDay: null,
-        maxSites: null,
         packCredits: 12,
       },
     ])

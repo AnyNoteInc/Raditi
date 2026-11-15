@@ -18,6 +18,11 @@ function harness(options: {
   /** The Telegram account of the chat was unlinked since. */
   unlinked?: boolean
   web?: (update: Update) => number
+  status?: string
+  /** The events of the journal of the turn (`turn.output`). */
+  output?: unknown[]
+  progressId?: number | null
+  edit?: (text: string) => { ok: boolean; description?: string }
   send?: (body: Record<string, unknown>) => {
     ok: boolean
     errorCode?: number
@@ -31,8 +36,14 @@ function harness(options: {
       : {
           id: 's1',
           channel: 'telegram',
+          telegramProgressId: options.progressId ?? (null as number | null),
+          telegramProgressChain: null as string | null,
           ...(options.session ?? { externalChatId: '42', telegramTopicId: null }),
         }
+  const edits: { messageId: number; text: string }[] = []
+  const deleted: number[] = []
+  const later: { chain?: string; tick?: number }[] = []
+  const gone: unknown[] = []
   const sent: { chatId: string; text: string; threadId?: number; keyboard?: unknown }[] = []
   const posted: number[] = []
   const prisma = {
@@ -53,10 +64,21 @@ function harness(options: {
         title: 'Заголовок',
         chatSession: session,
       })),
-      findUniqueOrThrow: vi.fn(async () => ({ siteId: null })),
+      findUniqueOrThrow: vi.fn(async () => ({
+        siteId: null,
+        status: options.status ?? 'running',
+        chatSession: session,
+      })),
     },
     taskTurn: { findUnique: vi.fn(async () => ({ id: TURN })) },
     taskEvent: {
+      findFirst: vi.fn(async ({ where }: { where: { type: string } }) =>
+        where.type === 'turn.output'
+          ? options.output === undefined
+            ? null
+            : { payload: { events: options.output } }
+          : { createdAt: new Date(Date.now() - 65_000) },
+      ),
       findMany: vi.fn(async () =>
         (options.events ?? []).map((event) => ({
           ...event,
@@ -68,10 +90,28 @@ function harness(options: {
       findUnique: vi.fn(async () => (options.unlinked ? null : { userId: 'u1' })),
     },
     chatSession: {
-      updateMany: vi.fn(async ({ data }: { data: { telegramTopicId: number } }) => {
-        if (session) session.telegramTopicId = data.telegramTopicId
-        return { count: 1 }
+      update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        if (session) Object.assign(session, data)
+        return session
       }),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { telegramProgressChain?: string }
+          data: Record<string, unknown>
+        }) => {
+          if (!session) return { count: 0 }
+          if (
+            where.telegramProgressChain !== undefined &&
+            session.telegramProgressChain !== where.telegramProgressChain
+          )
+            return { count: 0 }
+          Object.assign(session, data)
+          return { count: 1 }
+        },
+      ),
     },
   }
   const bot = {
@@ -110,13 +150,34 @@ function harness(options: {
       },
     ),
     answerCallbackQuery: vi.fn(async () => ({ ok: true as const, result: true })),
+    editMessageText: vi.fn(async (_chat: string, messageId: number, text: string) => {
+      const answer = options.edit?.(text) ?? { ok: true }
+      if (!answer.ok)
+        return {
+          ok: false as const,
+          description: answer.description ?? 'Bad Request',
+          errorCode: 400,
+        }
+      edits.push({ messageId, text })
+      return { ok: true as const, result: true }
+    }),
+    deleteMessage: vi.fn(async (_chat: string, messageId: number) => {
+      deleted.push(messageId)
+      return { ok: true as const, result: true }
+    }),
+    sendChatAction: vi.fn(async () => ({ ok: true as const, result: true })),
+    deleteForumTopic: vi.fn(async () => ({ ok: true as const, result: true })),
     createForumTopic: vi.fn(async () => ({
       ok: true as const,
       result: { message_thread_id: 77, name: 'Заголовок' },
     })),
   }
   const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-    const update = JSON.parse(String(init?.body)) as Update
+    const update = JSON.parse(String(init?.body)) as Update & { raditi_topic_gone?: unknown }
+    if (update.raditi_topic_gone !== undefined) {
+      gone.push(update.raditi_topic_gone)
+      return new Response('{}', { status: 200 })
+    }
     posted.push(update.update_id)
     expect((init?.headers as Record<string, string>)['x-telegram-bot-api-secret-token']).toBe(
       's'.repeat(40),
@@ -132,8 +193,11 @@ function harness(options: {
     appUrl: 'https://raditi.example.ru',
     fetch: fetch as unknown as typeof globalThis.fetch,
     logger: { log: vi.fn(), warn: vi.fn() },
+    later: async (job) => {
+      later.push(job)
+    },
   })
-  return { jobs, prisma, bot, sent, posted, taken }
+  return { jobs, prisma, bot, sent, posted, taken, session, edits, deleted, later, gone }
 }
 
 describe('TelegramJobs.poll', () => {
@@ -211,6 +275,7 @@ describe('TelegramJobs.send', () => {
     await expect(blocked.jobs.send({ chatId: '42', text: 'x' })).rejects.toBeInstanceOf(
       UnrecoverableError,
     )
+    // The client deleted the topic in Telegram: web is told, so the chat goes in the cabinet too.
     const lost = harness({
       session: { externalChatId: '42', telegramTopicId: 9 },
       send: (body) =>
@@ -219,7 +284,8 @@ describe('TelegramJobs.send', () => {
           : { ok: true },
     })
     await lost.jobs.send({ chatId: '42', taskId: TASK, text: 'x' })
-    expect(lost.sent).toEqual([{ chatId: '42', text: 'x' }])
+    expect(lost.sent).toEqual([])
+    expect(lost.gone).toEqual([{ chat_id: '42', thread_id: 9 }])
   })
 })
 
@@ -299,5 +365,84 @@ describe('TelegramJobs.topic', () => {
     const h = harness({ topics: false })
     expect(await h.jobs.topic({ taskId: TASK })).toBe('skipped')
     expect(h.bot.createForumTopic).not.toHaveBeenCalled()
+  })
+})
+
+describe('TelegramJobs.progress', () => {
+  const search = [{ type: 'tool_call', tool: 'raditi_search_web', ok: true }]
+
+  it('sends the message of the work once, then edits it with what the agent does, every few seconds', async () => {
+    const h = harness({ output: search })
+    expect(await h.jobs.progress({ taskId: TASK })).toBe('ticked')
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0]!.text).toMatch(/Агент работает · 1 мин 0[45] с\nИщет в интернете/u)
+    expect(h.session!.telegramProgressId).toBe(1)
+    expect(h.bot.sendChatAction).toHaveBeenCalledWith('42', 'typing', undefined)
+    const next = h.later.at(-1)!
+    expect(next).toMatchObject({ taskId: TASK, tick: 1, chain: h.session!.telegramProgressChain })
+    expect(await h.jobs.progress({ taskId: TASK, ...next })).toBe('ticked')
+    expect(h.sent).toHaveLength(1)
+    expect(h.edits).toEqual([{ messageId: 1, text: expect.stringMatching(/Ищет в интернете/u) }])
+  })
+
+  it('stops an older run when a newer one takes the message over, and deletes the message when the pass ends', async () => {
+    const h = harness({ output: search })
+    await h.jobs.progress({ taskId: TASK })
+    const older = h.later.at(-1)!
+    await h.jobs.progress({ taskId: TASK })
+    expect(await h.jobs.progress({ taskId: TASK, ...older })).toBe('skipped')
+    const done = harness({ status: 'awaiting_user', progressId: 5 })
+    done.session!.telegramProgressChain = '019a8f00-0000-7000-8000-0000000000cc'
+    expect(
+      await done.jobs.progress({
+        taskId: TASK,
+        chain: '019a8f00-0000-7000-8000-0000000000cc',
+        tick: 3,
+      }),
+    ).toBe('stopped')
+    expect(done.deleted).toEqual([5])
+    expect(done.later).toEqual([])
+  })
+
+  it('deletes the message of the work before the answer of the pass', async () => {
+    const h = harness({
+      progressId: 3,
+      events: [
+        {
+          id: 1n,
+          type: 'feed.result',
+          payload: {
+            v: 1,
+            turn: 2,
+            message: 'Готово.',
+            site: 'changed',
+            next: 'done',
+            filesChanged: null,
+            changeType: 'content',
+            needsApproval: false,
+            risk: 'low',
+          },
+        },
+      ],
+    })
+    h.session!.telegramProgressChain = '019a8f00-0000-7000-8000-0000000000dd'
+    await h.jobs.deliver({ taskId: TASK, kind: 'answered', attempt: 1, turnNo: 2 })
+    expect(h.deleted).toEqual([3])
+    expect(h.session!.telegramProgressChain).toBeNull()
+    expect(h.sent.at(-1)?.text).toContain('Готово.')
+  })
+})
+
+describe('TelegramJobs.forget', () => {
+  it('deletes the topic of a chat deleted in the cabinet, and lets a gone topic be', async () => {
+    const h = harness({})
+    expect(await h.jobs.forget({ chatId: '42', threadId: 9 })).toBe('deleted')
+    expect(h.bot.deleteForumTopic).toHaveBeenCalledWith('42', 9)
+    h.bot.deleteForumTopic.mockResolvedValueOnce({
+      ok: false,
+      description: 'Bad Request: message thread not found',
+      errorCode: 400,
+    } as never)
+    expect(await h.jobs.forget({ chatId: '42', threadId: 9 })).toBe('skipped')
   })
 })

@@ -210,6 +210,8 @@ services:
       # Dictation (docs/plan/75-chat-input-output.md, ВВ18): the folder of the SpeechKit key; not a
       # secret, the key itself is in app.env
       YANDEX_SPEECHKIT_FOLDER_ID: ${YANDEX_SPEECHKIT_FOLDER_ID:-}
+      # The check of an MCP server with a key never reaches the platform itself (plan 81)
+      SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:?Set SANDBOX_EGRESS_REFUSED_SUBNETS}
       # The bot of the chat (docs/plan/80-telegram.md): its name for the link t.me/<bot>, and the
       # proxy web takes the files of messages through; the token is in app.env
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}

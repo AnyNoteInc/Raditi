@@ -3,7 +3,7 @@ import { vi } from 'vitest'
 
 import type { LandingViewer } from '@/server/landing-viewer'
 
-import type { LandingPricingData } from './pricing-calculator'
+import type { LandingPricingData } from './pricing-data'
 
 // What the tests of the landing share: the plans of the seeds (the terms of 13.11.2026, without a
 // daily limit), the two visitors, the reading of a text with non-breaking spaces, the passing of
