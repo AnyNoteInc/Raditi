@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
 import { baseURL, webServer } from './landing-web-server.ts'
+import { cookieChoiceMade } from './fixtures/cookie-choice.ts'
 
 // A local tool for reworking the landing CSS: records the computed styles of the page and
 // compares them after a change (tests/landing-style-snapshot.spec.ts). Not a part of the smoke
@@ -29,6 +30,6 @@ export default defineConfig({
   fullyParallel: !record,
   workers: record ? 1 : undefined,
   reporter: 'list',
-  use: { baseURL },
+  use: { storageState: cookieChoiceMade, baseURL },
   webServer: webServer(server),
 })

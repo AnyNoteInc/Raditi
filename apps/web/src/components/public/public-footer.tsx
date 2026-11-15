@@ -1,3 +1,5 @@
+'use client'
+
 import { legalDocuments } from '@repo/domain'
 import Box from '@mui/material/Box'
 import Container from '@mui/material/Container'
@@ -5,6 +7,7 @@ import Link from '@mui/material/Link'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
 
+import { COOKIE_SETTINGS_OPEN_EVENT } from '@/lib/cookie-consent'
 import { legalDocumentHref } from '@/lib/legal'
 
 export function PublicFooter() {
@@ -27,6 +30,15 @@ export function PublicFooter() {
                 {document.title}
               </Link>
             ))}
+            <Link
+              component="button"
+              type="button"
+              variant="body2"
+              color="text.secondary"
+              onClick={() => window.dispatchEvent(new Event(COOKIE_SETTINGS_OPEN_EVENT))}
+            >
+              Настройки cookie
+            </Link>
           </Box>
           <Typography variant="body2" color="text.secondary">
             © {new Date().getFullYear()} Радити

@@ -481,10 +481,19 @@
   font-size: 12px;
   color: var(--raditi-on-ink);
 }
-.legalLinks a {
+.legalLinks a,
+.legalLinks button {
   display: inline-flex;
   min-height: 44px;
   align-items: center;
+}
+.legalLinks button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 .footerBottom {
   display: flex;

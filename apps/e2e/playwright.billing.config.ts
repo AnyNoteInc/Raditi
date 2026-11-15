@@ -11,6 +11,7 @@ import {
   webPort,
   yookassaShop,
 } from './fixtures/billing-stand.ts'
+import { cookieChoiceMade } from './fixtures/cookie-choice.ts'
 
 // Browser checks of the cabinet pages that need a signed-in user: the settings and, slice by
 // slice, the billing scenarios (docs/plan/37-billing-plan.md). Tests live in tests/billing and
@@ -42,7 +43,7 @@ export default defineConfig({
   // the card of the next payment) applies to whoever pays next.
   workers: 1,
   reporter: 'list',
-  use: { baseURL, trace: 'retain-on-failure' },
+  use: { storageState: cookieChoiceMade, baseURL, trace: 'retain-on-failure' },
   webServer: [
     {
       name: 'Vault',
