@@ -181,6 +181,23 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   PAGE_TAKEN_DOWN: 'Эта страница снята. Верните её в разделе «Страницы», чтобы опубликовать снова',
   PAGE_LIMIT: 'Достигнут предел публикаций страниц. Попробуйте позже',
   PAGE_BUSY: 'Агент сейчас публикует эту страницу. Опубликуйте её, когда он закончит ответ',
+  // The trash of «Страницы» (docs/plan/73-pages-sites.md, Дер2, Дер3).
+  PAGE_DELETED:
+    'Эта страница в корзине. Верните её в разделе «Страницы», чтобы снова с ней работать',
+  PAGE_NOT_DELETED: 'Сначала удалите страницу, потом её можно удалить навсегда',
+  PAGE_PATH_TAKEN: 'Этот адрес уже занят другой страницей сайта',
+  PAGE_NAME_TAKEN: 'Это имя уже занято другим сайтом. Выберите другое',
+  PAGE_NAME_INVALID: 'Имя — от 3 до 25 латинских букв, цифр и дефисов, без служебных слов',
+  PAGE_NAME_NEEDS_PLAN: 'Своё имя сайта доступно на тарифах «Бизнес» и «Агентство»',
+  PAGE_HAS_CHILDREN: 'Внутри этой страницы есть другие страницы',
+  PAGE_PARENT_MISSING: 'Такой страницы-родителя в сайте нет',
+  PAGE_PARENT_DELETED: 'Сначала верните страницу, в которую вложена эта',
+  PAGE_PATH_TOO_DEEP: 'Так страницы окажутся слишком глубоко: не больше 8 уровней',
+  PAGE_SITE_LIMIT:
+    'На вашем тарифе больше сайтов не создать. Удалите ненужный сайт или перейдите на тариф выше',
+  PAGE_FORBIDDEN: 'Менять страницы может владелец или администратор рабочего пространства',
+  PAGE_VERSION_CHANGED:
+    'У этой страницы уже появилась новая версия. Посмотрите её и опубликуйте ещё раз, если нужно',
   // The Transit key of the workspace was not made before the task (docs/plan/57, Б32).
   WORKSPACE_KEY_UNAVAILABLE:
     'Не удалось начать задание из-за технического сбоя. Попробуйте ещё раз немного позже',
@@ -413,7 +430,7 @@ const PAGE_REFUSAL_TEXT: Readonly<Record<string, string>> = {
 const PAGE_LIMIT_TEXT: Readonly<Record<string, string>> = {
   publishesPerHour: 'За последний час опубликовано слишком много страниц. Попробуйте через час',
   pagesPerWorkspace:
-    'Достигнут предел страниц в рабочем пространстве. Снятые страницы тоже считаются: напишите нам, если нужно больше',
+    'Достигнут предел страниц в рабочем пространстве. Снятые страницы тоже считаются, удалённые — нет: удалите ненужные или напишите нам',
   contentBytes: PAGE_REFUSAL_TEXT.too_large!,
 }
 
@@ -432,6 +449,23 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
     MESSAGE_BY_DOMAIN_CODE.PAGE_CONTENT_REFUSED!,
   PAGE_LIMIT: (details) =>
     PAGE_LIMIT_TEXT[detail(details, 'limit') ?? ''] ?? MESSAGE_BY_DOMAIN_CODE.PAGE_LIMIT!,
+  // The sites of pages of the tariff (docs/plan/73-pages-sites.md, Дер36): the number it allows.
+  PAGE_SITE_LIMIT: (details) => {
+    const limit =
+      typeof details === 'object' && details !== null
+        ? (details as Record<string, unknown>).limit
+        : undefined
+    if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1)
+      return MESSAGE_BY_DOMAIN_CODE.PAGE_SITE_LIMIT!
+    // «до N» takes the genitive plural whatever the number: «до 2 сайтов», «до 21 сайтов».
+    const sites = limit === 1 ? 'один сайт' : `до ${limit} сайтов`
+    return `На вашем тарифе — ${sites} из страниц. Удалите ненужный сайт или перейдите на тариф выше`
+  },
+  // The support's take-down is not undone by a deletion (docs/plan/73-pages-sites.md, Дер3).
+  PAGE_TAKEN_DOWN: (details) =>
+    detail(details, 'by') === 'operator'
+      ? 'Страницу сняла поддержка — удалить её нельзя'
+      : MESSAGE_BY_DOMAIN_CODE.PAGE_TAKEN_DOWN!,
   // A task that was refused although the page offered it: the page was out of date. The page
   // itself tells these cases from its read model; here the sentence is built from the details
   // of the refusal, with the numbers the customer can check.

@@ -21,6 +21,7 @@ import {
   localTunnelHeadAllowed,
   parseAllowedHosts,
   parseLocalRoutes,
+  pageTargetOf,
   parsePageAddresses,
   parsePageDomain,
   parseSubnets,
@@ -348,16 +349,22 @@ test('PAGE_ADDRESSES: at most 8 IP addresses, and only with PAGE_DOMAIN', () => 
   )
 })
 
-test('the label of a page host is the length of the domain’s slug (packages/domain)', async () => {
+test('the label of a page host is the rule of the domain: its slug or a site’s own name', async () => {
   const { readFile } = await import('node:fs/promises')
   const slug = await readFile(
     new URL('../../packages/domain/src/pages/slug.ts', import.meta.url),
     'utf8',
   )
   const length = Number(/export const PAGE_SLUG_LENGTH = (\d+)/.exec(slug)?.[1])
+  const web = await readFile(
+    new URL('../../packages/domain/src/browser/open-web.ts', import.meta.url),
+    'utf8',
+  )
   const proxy = await readFile(new URL('./client-egress.mjs', import.meta.url), 'utf8')
-  assert.equal(length, 26)
-  assert.match(proxy, new RegExp(`const PAGE_LABEL = /\\^\\[a-z2-7\\]\\{${length}\\}\\$/`))
+  const domainRule = /`(\^\(\?:\[a-z2-7\]\{\$\{PAGE_SLUG_LENGTH\}\}[^`]*)`/.exec(web)?.[1]
+  assert.ok(domainRule, 'the label rule of browserPageHost')
+  const proxyRule = /const PAGE_LABEL = \/(.*)\/$/m.exec(proxy)?.[1]
+  assert.equal(proxyRule, domainRule.replace('${PAGE_SLUG_LENGTH}', String(length)))
 })
 
 test('PAGE_DOMAIN is a lower-case DNS name, or none', () => {
@@ -1368,4 +1375,17 @@ test('the open internet is a switch of the configuration, with or without listed
     { ALLOW_PUBLIC: '1', PUBLIC_TLS_ONLY: 'yes' },
   ])
     assert.throws(() => clientEgressConfig({ ...base, ...bad }), JSON.stringify(bad))
+})
+
+test('a page host is a slug or a site’s own name on 443, under the page domain only', () => {
+  const page = pageTargetOf('pages.raditi.ru')
+  const at = (host, port = 443) => page({ host, port })
+  assert.equal(at(`${'a'.repeat(26)}.pages.raditi.ru`), true)
+  assert.equal(at('shop.pages.raditi.ru'), true)
+  assert.equal(at('my-shop-2.pages.raditi.ru'), true)
+  for (const wrong of ['ab', 'a--b', '-shop', 'shop-', 'a'.repeat(27), 'sh.op'])
+    assert.equal(at(`${wrong}.pages.raditi.ru`), false, wrong)
+  assert.equal(at('shop.pages.raditi.ru', 8443), false)
+  assert.equal(at('shop.other.ru'), false)
+  assert.equal(pageTargetOf(null)({ host: 'shop.pages.raditi.ru', port: 443 }), false)
 })

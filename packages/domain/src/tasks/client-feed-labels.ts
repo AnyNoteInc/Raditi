@@ -255,10 +255,41 @@ export function feedFileLeftText(row: Pick<FeedFileLeftPayload, 'reason' | 'coun
  * A page the agent named did not get its version (`feed.page_left`, docs/plan/69-pages.md, Ст6):
  * the address the agent gave answers nothing new. Never why: a refusal may be a secret.
  */
-export function feedPageLeftText(row: { reason: 'missing' | 'refused' | 'failed' }): string {
+export function feedPageLeftText(row: {
+  reason: 'missing' | 'refused' | 'failed' | 'changed'
+  of?: 'file' | 'change' | undefined
+}): string {
+  if (row.of === 'file')
+    return row.reason === 'missing'
+      ? 'Общий файл сайта не удалось сохранить: его не оказалось среди файлов агента. Попросите агента положить файл ещё раз.'
+      : 'Общий файл сайта не удалось сохранить. Попросите агента положить файл ещё раз.'
+  if (row.of === 'change' && row.reason !== 'changed')
+    return 'Агент не смог изменить страницу, как собирался: на ней ничего не поменялось. Попросите его повторить.'
+  if (row.reason === 'changed')
+    return 'Страница изменилась, пока агент работал, и его правка к ней не применилась. Попросите агента перечитать страницу и повторить.'
   if (row.reason === 'missing')
     return 'Страницу не удалось опубликовать: её файла не оказалось среди файлов агента. Попросите его опубликовать страницу ещё раз.'
   return 'Страницу не удалось опубликовать. Попросите агента опубликовать её ещё раз.'
+}
+
+/**
+ * What the agent did to a page at the end of its turn (`feed.page_change`,
+ * docs/plan/73-pages-sites.md, Дер27): «Агент перенёс в корзину «Цены» и 3 вложенные страницы».
+ */
+export function feedPageChangeText(row: {
+  title: string
+  change: 'trashed' | 'restored' | 'updated'
+  pages: number
+}): string {
+  const below = row.pages - 1
+  const more =
+    below > 0
+      ? ` и ${groupDigits(below)} ${pluralRu(below, 'вложенную страницу', 'вложенные страницы', 'вложенных страниц')}`
+      : ''
+  if (row.change === 'trashed')
+    return `Агент перенёс в корзину «${row.title}»${more}. 30 дней её можно вернуть.`
+  if (row.change === 'restored') return `Агент вернул из корзины «${row.title}»${more}.`
+  return `Агент изменил страницу «${row.title}».`
 }
 
 /** A document the agent set up (`feed.doc`, Ст22), until the card of slice 69.9. */

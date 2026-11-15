@@ -159,16 +159,21 @@ describe('a published page of the agent (plan 69, Ст26)', () => {
   const PAGE = 'https://abcdefghijklmnopqrstuvwxyz.pages.raditi.ru/'
   const pages = 'pages.raditi.ru'
 
-  it('is one base32 label of 26 letters right under the domain of the pages', () => {
+  it('is one label right under the domain of the pages: a slug, or a site’s own name (plan 73)', () => {
     expect(browserPageHost('abcdefghijklmnopqrstuvwxyz.pages.raditi.ru', pages)).toBe(true)
+    // The own name of a site, 3 to 25 characters (docs/plan/73-pages-sites.md, Дер33).
+    expect(browserPageHost('abcdefghijklmnopqrstuvwxy.pages.raditi.ru', pages)).toBe(true)
+    expect(browserPageHost('my-shop-2.pages.raditi.ru', pages)).toBe(true)
     expect(browserPageHost('ABCDEFGHIJKLMNOPQRSTUVWXYZ.Pages.Raditi.Ru', pages)).toBe(true)
     expect(browserPageHost('abcdefghijklmnopqrstuvwxyz.pages.raditi.ru.', pages)).toBe(false)
     for (const host of [
       'pages.raditi.ru',
       'raditi.ru',
       'x.abcdefghijklmnopqrstuvwxyz.pages.raditi.ru',
-      'abcdefghijklmnopqrstuvwxy.pages.raditi.ru',
       'abcdefghijklmnopqrstuvwxy1.pages.raditi.ru',
+      'ab.pages.raditi.ru',
+      'a--b.pages.raditi.ru',
+      '-shop.pages.raditi.ru',
       'abcdefghijklmnopqrstuvwxyz.pages.raditi.ru.evil.ru',
       'abcdefghijklmnopqrstuvwxyz.raditi-preview.ru',
     ])

@@ -35,6 +35,8 @@ import { CandidateRebase } from './candidate-rebase.ts'
 import { CandidateRewind } from './candidate-rewind.ts'
 import { ChatFiles } from './chat-files.ts'
 import { DocSections } from './doc-sections.ts'
+import { PageChanges } from './page-changes.ts'
+import { PageMetrics } from '../pages/page-metrics.ts'
 import { PagePublications } from './page-publications.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
@@ -151,6 +153,8 @@ export const taskProviders: Provider[] = [
           logger: new Logger('DocSections'),
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
+        // What a turn asked of its pages besides versions (docs/plan/73-pages-sites.md, Дер23).
+        pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
         // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
         workspaceTurnLimit: config.workspaceTurnLimit,
         capacity: new TurnCapacity(executor),
@@ -254,8 +258,11 @@ export const taskProviders: Provider[] = [
       queue: JobQueue,
       browser: BrowserSessions | null,
       inbox: ObjectStorage,
-    ) =>
-      new TaskSweep({
+      registry: Registry,
+    ) => {
+      const pageMetrics = new PageMetrics(prisma)
+      pageMetrics.register(registry)
+      return new TaskSweep({
         db: prisma,
         settlement,
         live,
@@ -265,7 +272,9 @@ export const taskProviders: Provider[] = [
         browser,
         inbox,
         pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
-      }),
+        pageMetrics,
+      })
+    },
     inject: [
       PRISMA,
       PassSettlement,
@@ -275,6 +284,7 @@ export const taskProviders: Provider[] = [
       JOB_QUEUE,
       BrowserSessions,
       OBJECT_STORAGE,
+      METRICS_REGISTRY,
     ],
   },
   {

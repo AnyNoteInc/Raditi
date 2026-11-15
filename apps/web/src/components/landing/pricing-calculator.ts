@@ -12,6 +12,10 @@ import { Money } from '@/lib/rubles'
 export interface LandingPlan {
   slug: string
   name: string
+  /** Sites of pages (docs/plan/73-pages-sites.md, Дер37): beside the credits; null — none. */
+  pageSites?: number | null
+  /** The own name of a site of pages (Дер32). */
+  pageCustomNames?: boolean
   price: string
   creditsPerMonth: number
   /**

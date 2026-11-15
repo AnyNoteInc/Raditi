@@ -1,5 +1,11 @@
 import { Logger, Module } from '@nestjs/common'
-import { admitInWindow, servedPage, verifyPagePassword, type PrismaClient } from '@repo/db'
+import {
+  admitInWindow,
+  servedFile,
+  servedPage,
+  verifyPagePassword,
+  type PrismaClient,
+} from '@repo/db'
 import { PRISMA } from '@repo/service-runtime/tokens'
 
 import { PREVIEW_CONFIG, type PreviewGatewayConfig } from '../config/config.tokens.ts'
@@ -13,8 +19,12 @@ export class PostgresPagesStore implements PagesStore {
     this.#db = db
   }
 
-  served(slug: string) {
-    return servedPage(this.#db, slug)
+  served(slug: string, path: string) {
+    return servedPage(this.#db, slug, path)
+  }
+
+  file(treeId: string, path: string) {
+    return servedFile(this.#db, treeId, path)
   }
 
   admit(key: string, limit: number, windowMs: number, now: number) {

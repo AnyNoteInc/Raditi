@@ -162,10 +162,37 @@ async function startPostgres() {
 
 const load = (path) => import(pathToFileURL(join(root, path)).href)
 
-/** A synthetic workspace with one chat: what a turn of an agent would publish its pages in. */
+/**
+ * A synthetic workspace with one chat: what a turn of an agent would publish its pages in. It is
+ * on a tariff of the stand with room for its sites (docs/plan/73-pages-sites.md, Дер36): without
+ * a paid tariff a workspace has one.
+ */
 async function workspaceWithChat(db) {
   const workspace = await db.workspace.create({
     data: { name: 'Synthetic pages', dataClass: 'synthetic' },
+  })
+  const plan = await db.plan.create({
+    data: {
+      slug: 'stand-sites',
+      name: 'Стенд',
+      kind: 'quota',
+      price: '0.00',
+      creditsPerMonth: 1,
+      maxSites: 1,
+      pageSites: 100,
+      pageCustomNames: true,
+      isActive: false,
+    },
+  })
+  const now = new Date()
+  await db.subscription.create({
+    data: {
+      workspaceId: workspace.id,
+      planId: plan.id,
+      currentPeriodStart: now,
+      currentPeriodEnd: new Date(now.getTime() + 30 * 86_400_000),
+      periodAnchor: now,
+    },
   })
   const task = await db.task.create({
     data: {
@@ -179,19 +206,29 @@ async function workspaceWithChat(db) {
   return { workspaceId: workspace.id, taskId: task.id }
 }
 
-async function publish(modules, chat, title, html, turnNo, port) {
+async function publish(modules, chat, title, html, turnNo, port, place) {
   const page = await modules.db.reservePagePublication(modules.prisma, {
     ...chat,
     turnNo,
     title,
     target: { fileName: 'page.html' },
+    ...(place ? { place } : {}),
+  })
+  // As the end of its turn does: the version fulfils the turn's reservation, which closes.
+  const reservation = await modules.prisma.pageReservation.findFirstOrThrow({
+    where: { pageId: page.pageId, turnNo, outcome: null },
   })
   const version = await modules.db.applyPageVersion(modules.prisma, {
     pageId: page.pageId,
     bytes: new TextEncoder().encode(html),
     source: 'outbox',
+    reservationId: reservation.id,
   })
-  const url = modules.domain.pageUrlOf(page.slug, { baseDomain: BASE, scheme: 'http', port })
+  const url = modules.domain.pageAddressUrl(
+    page.slug,
+    { baseDomain: BASE, scheme: 'http', port },
+    page.path,
+  )
   return { ...page, url, version: version.version }
 }
 
@@ -255,8 +292,14 @@ async function pagePath(stand) {
     'only the content of the current version is kept; the former one stays a row of history',
     { contents, versions },
   )
-  for (const path of ['/v1', '/v2', '/v/', '/v/abc', '/index.html', '/../'])
+  // A site of one page answers its home page alone: other paths are no pages (Дер15).
+  for (const path of ['/v1', '/v2', '/v/abc', '/index.html', '/../', '/%2e%2e', '/a//b'])
     rt.check((await hit(port, host(page.slug), { path })).status === 404, `${path} is 404`)
+  const slashed = await hit(port, host(page.slug), { path: '/v/' })
+  rt.check(
+    slashed.status === 308 && slashed.headers.location === '/v',
+    '/v/ is sent on to its canon /v, which is no page',
+  )
   const robots = await hit(port, host(page.slug), { path: '/robots.txt' })
   rt.check(robots.body === domain.PAGE_ROBOTS_TXT, 'robots.txt forbids indexing')
   rt.check(
@@ -266,6 +309,35 @@ async function pagePath(stand) {
   rt.check(
     (await hit(port, host(page.slug), { method: 'PUT' })).status === 405,
     'other methods are 405',
+  )
+
+  // The trash (docs/plan/73-pages-sites.md, Дер2): 410 at once, back with the same version.
+  const actor = { type: 'system', service: 'pages-verify' }
+  await modules.db.deletePage(prisma, {
+    pageId: page.pageId,
+    workspaceId: chat.workspaceId,
+    by: 'client',
+    actor,
+  })
+  const trashed = await hit(port, host(page.slug))
+  rt.check(
+    trashed.status === 410 &&
+      trashed.body.includes('Страница удалена') &&
+      !trashed.body.includes('вторая версия'),
+    'a page in the trash answers 410 «Страница удалена», without its content',
+  )
+  rt.check(
+    sameHeaders(trashed, domain.pageResponseHeaders('platform')),
+    'the stub of a deleted page goes under the policy of the platform',
+  )
+  await modules.db.returnDeletedPage(prisma, {
+    pageId: page.pageId,
+    workspaceId: chat.workspaceId,
+    actor,
+  })
+  rt.check(
+    (await hit(port, host(page.slug))).body === SECOND,
+    '«Вернуть» from the trash puts the current version back at the same address',
   )
 
   await modules.db.takeDownPage(prisma, {
@@ -307,7 +379,9 @@ async function pagePath(stand) {
   )
   for (const other of [`${BASE}:${port}`, `localhost:${port}`, `${page.slug}.example.com`])
     rt.check((await hit(port, other)).body === 'Not found', `${other} is no page host`)
-  rt.note('a page has no term (Ст14): there is no clock of the page to move a year ahead')
+  rt.note(
+    'a page has no term (Ст14): only the trash has one (plan 73, Дер2), and its sweep is checked on PostgreSQL by the tRPC suite',
+  )
   rt.end()
   return second
 }
@@ -520,6 +594,234 @@ async function protections(stand, page) {
   rt.end()
 }
 
+/**
+ * A site of pages in Chromium (docs/plan/73-pages-sites.md, Дер20, 73.7): a home page and two pages
+ * below it, linked from the root. A link to its own host is a navigation of the window, which the
+ * sandbox lets through; a link out opens a new tab; a link to another site of pages opens that
+ * site, its password form first; a request of a page to its own host stays closed (connect-src).
+ */
+async function siteOfPages(stand) {
+  const { modules, chat, port, targetPort } = stand
+  rt.begin('D', 'a site of pages in Chromium: links between its pages and out')
+  const origin = `http://127.0.0.1:${targetPort}`
+  const other = await publish(modules, chat, 'Другой сайт', '<p id="v">Другой сайт</p>', 20, port)
+  await modules.db.setPagePassword(modules.prisma, {
+    ...chat,
+    pageId: other.pageId,
+    passwordHash: await modules.db.hashPagePassword('секрет-д'),
+  })
+  const home = await publish(
+    modules,
+    chat,
+    'Главная',
+    `<!doctype html><title>Главная</title><p id="v">Главная</p>
+<a id="to-uslugi" href="/uslugi">Услуги</a>
+<a id="out" href="${origin}/plain" target="_blank" rel="noopener">Наружу</a>
+<a id="other" href="${other.url}">Другой сайт</a>
+<script>fetch('/uslugi').then(() => console.log('${PROBE_MARK}' + JSON.stringify({ fetch: 'reached' })), () => console.log('${PROBE_MARK}' + JSON.stringify({ fetch: 'refused' })))</script>`,
+    21,
+    port,
+  )
+  const place = (path) => ({ treeId: home.treeId, path })
+  const uslugi = await publish(
+    modules,
+    chat,
+    'Услуги',
+    '<!doctype html><p id="v">Услуги</p><a id="home" href="/">На главную</a><a id="remont" href="/uslugi/remont">Ремонт</a>',
+    22,
+    port,
+    place('/uslugi'),
+  )
+  await publish(
+    modules,
+    chat,
+    'Ремонт',
+    '<!doctype html><p id="v">Ремонт</p><a id="up" href="/uslugi">Услуги</a>',
+    23,
+    port,
+    place('/uslugi/remont'),
+  )
+  rt.check(
+    uslugi.url === `http://${home.slug}.${BASE}:${port}/uslugi`,
+    'a page below the home page has the host of its site and its path',
+    uslugi.url,
+  )
+  const require = createRequire(join(root, 'packages/browser-providers/package.json'))
+  const { chromium } = require('playwright-core')
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const context = await browser.newContext()
+    const tab = await context.newPage()
+    const lines = []
+    tab.on('console', (message) => {
+      const text = message.text()
+      if (text.startsWith(PROBE_MARK)) lines.push(JSON.parse(text.slice(PROBE_MARK.length)))
+    })
+    await tab.goto(home.url)
+    const said = () => tab.locator('#v').textContent()
+    rt.check((await said()) === 'Главная', 'the home page opens at the root of its host')
+    await Promise.all([tab.waitForURL(`**/uslugi`), tab.click('#to-uslugi')])
+    rt.check(
+      (await said()) === 'Услуги' && new URL(tab.url()).pathname === '/uslugi',
+      'a link from the root opens the page of the site in the same window',
+    )
+    await Promise.all([tab.waitForURL(`**/uslugi/remont`), tab.click('#remont')])
+    rt.check((await said()) === 'Ремонт', 'a page two levels down opens by its link')
+    await Promise.all([tab.waitForURL(`**/uslugi`), tab.click('#up')])
+    await Promise.all([tab.waitForURL(home.url), tab.click('#home')])
+    rt.check((await said()) === 'Главная', 'and back to the home page by a link to /')
+    await tab.goBack()
+    rt.check((await said()) === 'Услуги', 'the history of the window goes back through the site')
+    await tab.goto(home.url)
+    await rt.until(
+      'the home page tried its request',
+      async () => lines.some((each) => 'fetch' in each),
+      {
+        timeoutMs: 10_000,
+      },
+    )
+    rt.check(
+      lines.find((each) => 'fetch' in each)?.fetch === 'refused',
+      'a request of a page to its own host is refused: navigation, not fetch',
+    )
+    const [outside] = await Promise.all([context.waitForEvent('page'), tab.click('#out')])
+    await outside.waitForLoadState('load')
+    rt.check(
+      (await outside.locator('#v').textContent()) !== null && outside.url() === `${origin}/plain`,
+      'control: a link out opens the other site in a new tab',
+    )
+    await outside.close()
+    await Promise.all([tab.waitForURL(other.url), tab.click('#other')])
+    rt.check(
+      (await tab.content()).includes('Страница закрыта паролем'),
+      'a link to another site of pages opens that site, its password first',
+    )
+  } finally {
+    await browser.close()
+  }
+  rt.end()
+}
+
+/**
+ * The shared files and the own name of a site (docs/plan/73-pages-sites.md, Дер32–Дер35): a page
+ * loads the CSS and a picture of its site from its own host in Chromium — `'self'` of its policy —,
+ * a request of it to the same file stays closed; a site with a password gives its files only with
+ * its cookie, which goes with the requests of a sandboxed page (SameSite=None); a site asked by its
+ * slug sends the viewer on to its own name.
+ */
+async function sharedFiles(stand) {
+  const { modules, chat, port } = stand
+  const { db, prisma } = modules
+  rt.begin('E', 'shared files and the own name of a site')
+  const html = (text) => new TextEncoder().encode(text)
+  const page = await publish(
+    modules,
+    chat,
+    'Файлы',
+    `<!doctype html><link rel="stylesheet" href="/_files/style.css">
+<p id="v">Файлы</p><img id="logo" src="/_files/logo.png" alt="">
+<script>fetch('/_files/style.css').then(() => console.log('${PROBE_MARK}' + JSON.stringify({ fetch: 'reached' })), () => console.log('${PROBE_MARK}' + JSON.stringify({ fetch: 'refused' })))</script>`,
+    30,
+    port,
+  )
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  const put = async (fileName, path, bytes, turnNo) => {
+    const reserved = await db.reservePageFile(prisma, {
+      ...chat,
+      turnNo,
+      treeId: page.treeId,
+      fileName,
+      path,
+    })
+    await db.applyPageFile(prisma, { reservationId: reserved.reservationId, bytes })
+  }
+  await put('style.css', '/_files/style.css', html('#v{color:rgb(1, 2, 3)}'), 31)
+  await put('logo.png', '/_files/logo.png', new Uint8Array(png), 32)
+  const host = (label) => `${label}.${BASE}:${port}`
+  const file = await hit(port, host(page.slug), { path: '/_files/style.css' })
+  rt.check(
+    file.status === 200 &&
+      file.headers['content-type'] === 'text/css; charset=utf-8' &&
+      file.headers['cross-origin-resource-policy'] === 'cross-origin' &&
+      file.headers['x-content-type-options'] === 'nosniff',
+    'a shared file goes with its own type, loadable by a page, read as nothing else',
+  )
+  rt.check(
+    (await hit(port, host(page.slug), { path: '/_files/index.html' })).status === 404,
+    'no HTML is a shared file',
+  )
+  const require = createRequire(join(root, 'packages/browser-providers/package.json'))
+  const { chromium } = require('playwright-core')
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const context = await browser.newContext()
+    const tab = await context.newPage()
+    const lines = []
+    tab.on('console', (message) => {
+      const text = message.text()
+      if (text.startsWith(PROBE_MARK)) lines.push(JSON.parse(text.slice(PROBE_MARK.length)))
+    })
+    await tab.goto(page.url)
+    await rt.until('the page tried its request', async () => lines.length > 0, {
+      timeoutMs: 10_000,
+    })
+    rt.check(
+      (await tab.evaluate("getComputedStyle(document.getElementById('v')).color")) ===
+        'rgb(1, 2, 3)',
+      "the CSS of the site loads from its own host ('self')",
+    )
+    rt.check(
+      (await tab.evaluate("document.getElementById('logo').naturalWidth")) === 1,
+      'a picture of the site loads from its own host',
+    )
+    rt.check(lines[0]?.fetch === 'refused', 'a request of the page to that file is refused')
+
+    // A site with a password: its files only with its cookie, sent by the sandboxed page too.
+    await db.setPagePassword(prisma, {
+      ...chat,
+      pageId: page.pageId,
+      passwordHash: await db.hashPagePassword('секрет-е'),
+    })
+    rt.check(
+      (await hit(port, host(page.slug), { path: '/_files/style.css' })).status === 404,
+      'a file of a site with a password is no file without its cookie',
+    )
+    const locked = await context.newPage()
+    await locked.goto(page.url)
+    await locked.fill('#password', 'секрет-е')
+    await Promise.all([locked.waitForURL(page.url), locked.click('button[type=submit]')])
+    await rt.until(
+      'the page of the site with a password shows',
+      async () => (await locked.locator('#v').count()) === 1,
+      { timeoutMs: 10_000 },
+    )
+    rt.check(
+      (await locked.evaluate("getComputedStyle(document.getElementById('v')).color")) ===
+        'rgb(1, 2, 3)',
+      'with the cookie the sandboxed page loads the files of its site (SameSite=None)',
+    )
+  } finally {
+    await browser.close()
+  }
+
+  // The own name of the site (Дер32, Дер33).
+  const name = 'stand-firma'
+  await db.setTreeName(prisma, { pageId: page.pageId, workspaceId: chat.workspaceId, name })
+  await db.setPagePassword(prisma, { ...chat, pageId: page.pageId, passwordHash: null })
+  const named = await hit(port, host(name))
+  rt.check(named.status === 200 && named.body.includes('Файлы'), 'the site answers by its own name')
+  const moved = await hit(port, host(page.slug), { path: '/' })
+  rt.check(
+    moved.status === 308 && moved.headers.location === `//${name}.${BASE}:${port}/`,
+    'its slug sends the viewer on to its name',
+  )
+  rt.check((await hit(port, host('www'))).status === 404, 'a reserved word is no name of a site')
+  rt.end()
+}
+
 async function main(owned) {
   await preflight()
   if (options.build) {
@@ -601,6 +903,8 @@ async function main(owned) {
   const page = await pagePath(stand)
   await passwordPath(stand, page)
   await protections(stand, page)
+  await siteOfPages(stand)
+  await sharedFiles(stand)
   const lines = rt.rows.map(
     (row) =>
       `${row.ok ? 'OK  ' : 'FAIL'} ${row.id} ${row.title}: ${row.checks} checks, ${row.notes} notes`,

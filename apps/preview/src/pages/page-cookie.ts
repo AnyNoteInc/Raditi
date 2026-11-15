@@ -8,7 +8,10 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
  * `<epoch>.<expiresAtMs>.<HMAC-SHA256(PAGES_COOKIE_SECRET, pageId|epoch|expiresAtMs)>`.
  */
 export const PAGE_COOKIE = 'raditi_page'
-const ATTRIBUTES = 'HttpOnly; Secure; SameSite=Lax; Path=/'
+// SameSite=None (docs/plan/73-pages-sites.md, Дер35): a page is sandboxed, its origin opaque, and
+// the shared files of a site with a password load from that origin — a cookie of Lax would not go
+// with them. Still only of the site's own host, signed and bound to the epoch of the password.
+const ATTRIBUTES = 'HttpOnly; Secure; SameSite=None; Path=/'
 
 const mac = (secret: string, pageId: string, epoch: number, expiresAt: number) =>
   createHmac('sha256', secret)

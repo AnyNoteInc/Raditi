@@ -12,6 +12,40 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { PostgresPagesStore } from './pages.module.ts'
 
+/**
+ * A tariff of the test with as many sites as a test makes (docs/plan/73-pages-sites.md, Дер36):
+ * without a paid tariff a workspace has one site. Returns what to remove at the end.
+ */
+async function onTariff(db: PrismaClient, workspaceId: string) {
+  const plan = await db.plan.create({
+    data: {
+      slug: `sites-${randomUUID()}`,
+      name: 'Тест',
+      kind: 'quota',
+      price: '0.00',
+      creditsPerMonth: 1,
+      maxSites: 1,
+      pageSites: 1000,
+      isActive: false,
+    },
+  })
+  const now = new Date()
+  await db.subscription.create({
+    data: {
+      workspaceId,
+      planId: plan.id,
+      currentPeriodStart: now,
+      currentPeriodEnd: new Date(now.getTime() + 30 * 86_400_000),
+      periodAnchor: now,
+    },
+  })
+  return async () => {
+    await db.pageTree.deleteMany({ where: { workspaceId } })
+    await db.subscription.deleteMany({ where: { workspaceId } })
+    await db.plan.delete({ where: { id: plan.id } })
+  }
+}
+
 // A workspace and a chat of its own, removed at the end; run by verify:db's disposable database (or
 // any throwaway one) with RADITI_GATEWAY_DB_TESTS=1.
 const databaseUrl = process.env.DATABASE_URL
@@ -21,6 +55,7 @@ describe.skipIf(!enabled)('PostgresPagesStore (plan 69, Ст4, Ст13)', () => {
   let db: PrismaClient
   let store: PostgresPagesStore
   let workspaceId: string
+  let releaseTariff: (() => Promise<void>) | undefined
 
   beforeAll(async () => {
     db = createPrismaClient({ databaseUrl: databaseUrl! })
@@ -28,11 +63,13 @@ describe.skipIf(!enabled)('PostgresPagesStore (plan 69, Ст4, Ст13)', () => {
     workspaceId = (
       await db.workspace.create({ data: { name: 'Synthetic pages', dataClass: 'synthetic' } })
     ).id
+    releaseTariff = await onTariff(db, workspaceId)
   })
   afterAll(async () => {
     if (!db) return
     await db.page.deleteMany({ where: { workspaceId } })
     await db.task.deleteMany({ where: { workspaceId } })
+    await releaseTariff?.()
     await db.workspace.delete({ where: { id: workspaceId } })
     await db.$disconnect()
   })
@@ -48,7 +85,7 @@ describe.skipIf(!enabled)('PostgresPagesStore (plan 69, Ст4, Ст13)', () => {
       title: 'Прайс',
       target: { fileName: 'p.html' },
     })
-    expect((await store.served(page.slug))?.state).toBe('pending')
+    expect((await store.served(page.slug, '/'))?.page?.state).toBe('pending')
     await applyPageVersion(db, {
       pageId: page.pageId,
       bytes: new TextEncoder().encode('<p>1'),
@@ -56,11 +93,15 @@ describe.skipIf(!enabled)('PostgresPagesStore (plan 69, Ст4, Ст13)', () => {
     })
     const hash = await hashPagePassword('секрет-1')
     await setPagePassword(db, { workspaceId, pageId: page.pageId, passwordHash: hash })
-    const served = await store.served(page.slug)
-    expect(served).toMatchObject({ state: 'live', passwordEpoch: 1, content: { version: 1 } })
+    const served = await store.served(page.slug, '/')
+    expect(served).toMatchObject({
+      treeId: page.treeId,
+      passwordEpoch: 1,
+      page: { state: 'live', content: { version: 1 } },
+    })
     expect(await store.verify('секрет-1', served!.passwordHash!)).toBe(true)
     expect(await store.verify('другой', served!.passwordHash!)).toBe(false)
-    expect(await store.served('a'.repeat(26))).toBeNull()
+    expect(await store.served('a'.repeat(26), '/')).toBeNull()
   })
 
   it('counts the attempts of a window in rate_limits', async () => {

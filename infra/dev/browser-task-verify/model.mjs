@@ -126,6 +126,9 @@ function declaredName(body, tool) {
   const names = (Array.isArray(body?.tools) ? body.tools : [])
     .map((item) => item?.function?.name)
     .filter((name) => typeof name === 'string' && sameTool(name, tool))
+  // The CLI's own `read` or `write` by its exact name, a platform tool by `raditi_<tool>`: with
+  // the pages declared, `read` also ends `raditi_doc_read` and `write` `raditi_doc_section_write`.
+  for (const exact of [tool, `raditi_${tool}`]) if (names.includes(exact)) return exact
   return names.length === 1 ? names[0] : null
 }
 

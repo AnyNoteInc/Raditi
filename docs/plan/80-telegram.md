@@ -111,7 +111,7 @@
 | Срез | Что сделано |
 | --- | --- |
 | 80.0 | Разведка на `@raditi_bot` (§7): вебхук до сервера не доходит, темы в личных чатах есть (у бота пока выключены) |
-| 80.1 | «Настройки» → «Telegram»: предупреждение Т1, «Подключить» → `t.me/raditi_bot?start=<код>`, «Отключить», «Уведомления в Telegram»; роутер `telegram` (`status`, `link`, `unlink`, `setNotifications`); `/start <код>`, `/stop`; миграция `20261115120000_telegram_chat` (`telegram_link_codes`, `telegram_updates`, поля `channel_identities`, `notification_settings.telegram`) |
+| 80.1 | «Настройки» → «Telegram»: предупреждение Т1, «Подключить» → `t.me/raditi_bot?start=<код>`, «Отключить», «Уведомления в Telegram»; роутер `telegram` (`status`, `link`, `unlink`, `setNotifications`); `/start <код>`, `/stop`; миграция `20261116000000_telegram_chat` (`telegram_link_codes`, `telegram_updates`, поля `channel_identities`, `notification_settings.telegram`) |
 | 80.2 | Приём: `core` опрашивает `getUpdates` (очередь `telegram-updates`, раз в 2 с) и отдаёт обновления web на `POST /api/webhooks/telegram`; `handleTelegramUpdate` (`@repo/trpc`) — новый чат, текущий чат, тема, `/new` с проектом, `/chats`, `/help`, очередь, «Остановить», «Продолжить», согласия, незнакомец; id выводятся из обновления |
 | 80.3 | Отправка: очередь `telegram` в `core` (`telegram.send`, `telegram.deliver`, `telegram.topic`), строки прохода словами ленты (`feedRowMarkdown`), Markdown → HTML Telegram частями, кнопки, 429 и 403, тема на чат |
 | 80.4 | Файлы и голос: `getFile` до 20 МБ через прокси, вложения по правилам кабинета, голос — SpeechKit `oggopus` кусками по 28 с (`ogg-opus.ts`), не длиннее 5 минут, распознанное — клиенту |

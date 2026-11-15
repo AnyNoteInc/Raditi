@@ -90,7 +90,8 @@ describe('options and names', () => {
     assert.deepEqual(scenariosToRun(['F']), ['A', 'D', 'E', 'F'])
     assert.deepEqual(scenariosToRun(['K', 'B']), ['A', 'D', 'B', 'K'])
     assert.deepEqual(scenariosToRun(['P']), ['A', 'P'])
-    assert.equal(scenariosToRun(null).length, 17)
+    assert.deepEqual(scenariosToRun(['R']), ['A', 'R'])
+    assert.equal(scenariosToRun(null).length, 18)
   })
 
   it('names every resource of a run under its label', () => {

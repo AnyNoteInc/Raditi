@@ -95,6 +95,44 @@ describe('ChatFiles', () => {
     expect(s.logger.log).toHaveBeenCalledWith(`chat_files_delivered task=${taskId} turn=2 files=2`)
   })
 
+  it('publishes the pages of a turn in the order the agent asked, whatever the archive holds first', async () => {
+    const s = side()
+    const reservation = (name: string) => ({ id: name, pageId: name, fileName: name }) as never
+    const published: string[] = []
+    const pages = {
+      // As filesOf reads them: in the order of the calls of page_publish.
+      filesOf: vi.fn(
+        async () =>
+          new Map(['glavnaya.html', 'uslugi.html', 'remont.html'].map((n) => [n, reservation(n)])),
+      ),
+      publish: vi.fn(async (r: { fileName: string }) => {
+        published.push(r.fileName)
+        // One the pages cannot draw goes on as a file of the chat.
+        return r.fileName !== 'uslugi.html'
+      }),
+      left: vi.fn(async () => {}),
+    }
+    const files = new ChatFiles({
+      db: s.db as never,
+      storage: s.storage,
+      logger: s.logger,
+      pages: pages as never,
+    })
+    const outbox = await packOutbox([
+      { name: 'remont.html', bytes: '<p>r</p>' },
+      { name: 'otchet.txt', bytes: 'x' },
+      { name: 'uslugi.html', bytes: '<p>u</p>' },
+      { name: 'glavnaya.html', bytes: '<p>g</p>' },
+    ])
+    expect(await files.deliver({ taskId, turn: 2, outbox })).toBe(2)
+    expect(published).toEqual(['glavnaya.html', 'uslugi.html', 'remont.html'])
+    expect(s.rows.map((row) => (row.payload as { name: string }).name)).toEqual([
+      'otchet.txt',
+      'uslugi.html',
+    ])
+    expect(pages.left).not.toHaveBeenCalled()
+  })
+
   it('writes no second row when the delivery is repeated', async () => {
     const s = side()
     const outbox = await packOutbox([{ name: 'a.txt', bytes: 'x' }])

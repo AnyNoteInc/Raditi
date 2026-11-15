@@ -1,7 +1,12 @@
 import { Module } from '@nestjs/common'
 import {
+  listTreeFiles,
   listWorkspacePages,
   readChatDocument,
+  readPageSource,
+  reservePageChange,
+  reservePageFile,
+  reservePageFileDeletion,
   reservePagePublication,
   type PrismaClient,
 } from '@repo/db'
@@ -20,6 +25,11 @@ export function postgresPagesStore(db: PrismaClient): McpPagesStore {
     documentTitle: async (workspaceId, documentId) =>
       (await readChatDocument(db, { workspaceId, documentId, reader: 'client' })).title,
     list: (workspaceId) => listWorkspacePages(db, workspaceId),
+    read: (input) => readPageSource(db, input),
+    change: (input) => reservePageChange(db, input),
+    putFile: (input) => reservePageFile(db, input),
+    deleteFile: (input) => reservePageFileDeletion(db, input),
+    files: (input) => listTreeFiles(db, input),
   }
 }
 

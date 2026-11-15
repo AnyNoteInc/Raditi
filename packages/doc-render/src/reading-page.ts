@@ -60,6 +60,8 @@ export async function readingPage({ title, markdown }: ReadingPageInput): Promis
     documents: new Set<string>(),
     imageSrc: () => null,
     documentLinks: false,
+    // A page for reading is a page of a site of pages: its links from the root stay (Дер20).
+    treeLinks: true,
   })
   const html = createElement(
     'html',
