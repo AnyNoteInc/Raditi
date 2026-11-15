@@ -258,12 +258,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
     const soon = new Date(Date.now() + 60_000)
     const live = await db.browserSession.create({
-      data: { taskId, siteId, workspaceId, status: 'ready', readyAt: new Date(), expiresAt: soon },
+      data: { taskId, workspaceId, status: 'ready', readyAt: new Date(), expiresAt: soon },
     })
     const closed = await db.browserSession.create({
       data: {
         taskId,
-        siteId,
         workspaceId,
         status: 'closed',
         closedAt: new Date(),

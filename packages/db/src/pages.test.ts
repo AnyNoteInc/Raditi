@@ -98,7 +98,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         kind: 'quota',
         price: '0.00',
         creditsPerMonth: 1,
-        maxSites: 1,
         pageSites,
         pageCustomNames,
         isActive: false,

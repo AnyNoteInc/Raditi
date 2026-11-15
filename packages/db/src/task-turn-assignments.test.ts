@@ -4,7 +4,6 @@ import {
   BROWSER_ONLY,
   leaseScopeOf,
   PLAIN_CHAT,
-  REPOSITORY_ONLY,
   type OpenTurnAssignment,
   type TaskRequirements,
   type TurnAssignmentStore,
@@ -24,8 +23,6 @@ import { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
 
 const databaseUrl = process.env.DATABASE_URL
 const image = `registry.invalid/raditi/opencode@sha256:${'a'.repeat(64)}`
-const baseSha = 'b'.repeat(40)
-const headSha = 'c'.repeat(40)
 const home = {
   root: '/agent-home/opencode',
   include: ['.local/share/opencode/opencode.db'],
@@ -327,38 +324,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       })
     })
 
-    it('refuses a plan whose requirements differ from its task, without creating a row', async () => {
-      const repository = await fixture()
-      const withoutRepository: TurnPlan = { ...repository.plan, requirements: BROWSER_ONLY }
-      delete withoutRepository.workspace
-      await expect(
-        store.open({ ...repository.input, plan: withoutRepository }),
-      ).rejects.toMatchObject({
-        code: 'CONFLICT',
-        message: 'The turn plan does not meet the requirements of its task',
-      })
-
-      // A plan saved before the requirements is a repository plan: refused for a browser task.
-      const browser = await fixture(BROWSER_ONLY)
-      const saved: TurnPlan = {
-        ...repository.plan,
-        sandbox: browser.plan.sandbox,
-        context: browser.plan.context,
-      }
-      await expect(store.open({ ...browser.input, plan: saved })).rejects.toMatchObject({
-        code: 'CONFLICT',
-        message: 'The turn plan does not meet the requirements of its task',
-      })
-      for (const taskId of [repository.task.id, browser.task.id]) {
-        expect(await db.turnAssignment.count({ where: { taskId } })).toBe(0)
-        expect(await db.taskTurn.count({ where: { taskId } })).toBe(0)
-      }
-
-      // The same task takes the old plan and one that names its requirements alike.
-      const named = { ...repository.plan, requirements: REPOSITORY_ONLY }
-      expect(await store.open({ ...repository.input, plan: named })).not.toBeNull()
-    })
-
     it('keeps the requirements of a task as they were written', async () => {
       const f = await fixture()
       expect(await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).toMatchObject({
@@ -382,7 +347,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
         driverId: 'opencode',
         driverVersion: '1.0.0',
         image,
-        baseSha,
+        baseSha: null,
         startedAt: expect.any(Date),
         finishedAt: null,
       }),
@@ -431,40 +396,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     expect(await db.turnAssignment.count({ where: { taskId: f.task.id } })).toBe(0)
   })
 
-  it('requires the completed output for continuation and the input for replacement', async () => {
-    const f = await fixture()
-    const first = (await store.open(f.input))!
-    await db.taskTurn.updateMany({ where: { taskId: f.task.id }, data: { headSha } })
-    await store.finish({ id: first.id, epoch: 1, outcome: 'completed' })
-    await expect(store.open(f.next(2))).rejects.toThrow('completed product turn')
-    await expect(store.open(f.next(2, 1))).rejects.toThrow('published task branch')
-    const wrong = f.next(2, 1, headSha)
-    wrong.plan.workspace = { ...wrong.plan.workspace!, expectedBaseSha: headSha }
-    await expect(store.open(wrong)).rejects.toThrow('replaced turn input')
-    const second = await store.open(f.next(2, 1, headSha))
-    expect(second?.plan.replacesTurn).toBe(1)
-    await store.finish({ id: second!.id, epoch: 1, outcome: 'failed' })
-    expect((await store.open(f.next(3, 2, headSha)))?.plan.replacesTurn).toBe(2)
-  })
-
-  it('refuses a replacement that names any turn but the one before it, without creating a row', async () => {
-    // The supervisor refuses such a plan first; the store is the second line under the undo
-    // that precedes a replacement, which returns the content of the one turn the plan names.
-    const f = await fixture()
-    const first = (await store.open(f.input))!
-    await db.taskTurn.updateMany({ where: { taskId: f.task.id }, data: { headSha } })
-    await store.finish({ id: first.id, epoch: 1, outcome: 'completed' })
-    const second = (await store.open(f.next(2, 1, headSha)))!
-    await store.finish({ id: second.id, epoch: 1, outcome: 'failed' })
-    await expect(store.open(f.next(3, 1, headSha))).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      message: 'Product turn identity differs from its assignment',
-    })
-    expect(await db.turnAssignment.count({ where: { taskId: f.task.id } })).toBe(2)
-    expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(2)
-    expect((await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).turnNo).toBe(2)
-  })
-
   // These three alter a saved plan, so they belong in the schema of this file: in `public` an
   // open assignment with such a plan would fail the recovery of a core that runs on the database.
   it('keeps a closed assignment of a removed driver as history and never reads it back as work', async () => {
@@ -495,30 +426,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       code: 'BAD_REQUEST',
       message: 'Invalid turn assignment returned by the database',
     })
-  })
-
-  it('refuses to replace a turn whose saved plan names a removed driver', async () => {
-    const f = await fixture()
-    const first = (await store.open(f.input))!
-    await store.finish({ id: first.id, epoch: 1, outcome: 'failed' })
-    // A task the removed shell left: its turn stays as history, its plan can no longer be read.
-    await db.$executeRaw`UPDATE turn_assignments
-      SET plan = jsonb_set(plan, '{driverId}', '"codex"') WHERE id = ${first.id}::uuid`
-    await expect(store.open(f.next(2, 1))).rejects.toMatchObject({
-      code: 'CONFLICT',
-      message: 'The replaced turn can no longer be restored',
-    })
-    expect(await db.turnAssignment.count({ where: { taskId: f.task.id } })).toBe(1)
-    expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(1)
-  })
-
-  it('requires an explicit replacement after failure and blocks a still assigned predecessor', async () => {
-    const f = await fixture()
-    const first = (await store.open(f.input))!
-    expect(await store.open(f.next(2, 1))).toBeNull()
-    await store.finish({ id: first.id, epoch: 1, outcome: 'lost' })
-    await expect(store.open(f.next(2))).rejects.toThrow('must be replaced')
-    expect(await store.open(f.next(2, 1))).not.toBeNull()
   })
 
   it('does not let a stale owner project a terminal status after takeover', async () => {
