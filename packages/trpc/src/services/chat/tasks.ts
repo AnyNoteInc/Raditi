@@ -61,9 +61,6 @@ import { dialogTitle, requestPayload, requestText } from './request-text.ts'
 
 type Tx = Prisma.TransactionClient
 
-/** A chat has no site (docs/plan/83-remove-projects.md, БП1): its rows say so. */
-const NO_SITE = { siteId: null }
-
 /** What a press or words of the client came to. */
 export interface PostedRequest {
   /** `task_events.id` of the `feed.request`, the cursor of the feed. */
@@ -586,7 +583,7 @@ export async function undoDialogTurn(
           v: 1,
           turn: task.turnNo,
           files: false,
-          site: feedEndedSiteOf(NO_SITE, await browserWrote(tx, task.id)),
+          site: feedEndedSiteOf(await browserWrote(tx, task.id)),
         },
       },
     })
@@ -719,7 +716,7 @@ export async function stopDialog(
         turn: task.turnNo >= 1 ? task.turnNo : null,
         by: 'customer',
         authorId: userId,
-        site: feedEndedSiteOf(NO_SITE, await browserWrote(tx, task.id)),
+        site: feedEndedSiteOf(await browserWrote(tx, task.id)),
         credits: creditsAfterReturn(returned),
       },
     },

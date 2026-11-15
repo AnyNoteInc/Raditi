@@ -25,7 +25,6 @@ import {
   agentChatTitle,
   feedEndedSiteOf,
   feedLimits,
-  feedSiteOf,
   isDomainError,
   Money,
   readFeedRow,
@@ -55,9 +54,6 @@ import { agentQuestionOf, agentWords, ceilingQuestionOf, feedFailureOf } from '.
 type JournalReason = NonNullable<TurnEvidence['reason']>
 type CeilingQuestion = Extract<FeedQuestionPayload, { kind: 'ceiling' }>
 type BrowserQuestion = Extract<FeedQuestionPayload, { kind: 'browser' }>
-
-/** A chat has no site (docs/plan/83-remove-projects.md, БП1): what the feed says of one. */
-const NO_SITE = Object.freeze({ siteId: null })
 
 /** A pass orphaned this many times in one attempt is failed instead of put again. */
 export const ORPHANED_PASS_LIMIT = 3
@@ -155,7 +151,7 @@ interface SettleContext {
 }
 
 /** What a failure or a cancellation says of the sites the task acted on. */
-const endedSiteOf = (context: SettleContext) => feedEndedSiteOf(NO_SITE, context.productionWrites)
+const endedSiteOf = (context: SettleContext) => feedEndedSiteOf(context.productionWrites)
 
 const creditsOf = (returned: ReturnedTaskHolds): FeedCreditsState | null =>
   returned.applied ? (returned.expiries.length > 0 ? 'expired' : 'returned') : null
@@ -421,7 +417,6 @@ export class PassSettlement {
   ): Promise<SettleAnswer> {
     const { result, turn } = ending
     await this.#nameChat(pass.taskId, result.chat_title)
-    const browser = context.browser
     const message = agentWords(result.client_message, feedLimits.message)
     const question = questionOf(context, result, turn, message)
     // Nothing readable is left of the agent's words: its result is as good as missing.
@@ -434,10 +429,8 @@ export class PassSettlement {
             v: 1,
             turn,
             message: message!,
-            site: feedSiteOf(
-              NO_SITE,
-              browser?.confirmed || context.productionWrites ? 'changed' : 'unchanged',
-            ),
+            // A chat has no site (docs/plan/83-remove-projects.md): the agent tells what it did.
+            site: 'none',
             next: 'awaiting_user',
             filesChanged: 0,
             changeType: result.change_type,

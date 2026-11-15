@@ -391,7 +391,7 @@ export class TaskSweep {
               v: 1,
               turn: task.turnNo > 0 ? task.turnNo : null,
               by: row.status === 'queued' ? 'queue_timeout' : 'no_answer',
-              site: feedEndedSiteOf({ siteId: null }, writes),
+              site: feedEndedSiteOf(writes),
               credits,
               ...(objects.length ? { objects } : {}),
             },

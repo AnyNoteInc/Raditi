@@ -28,7 +28,8 @@
     "./browser/session": "./src/browser/session.ts",
     "./browser/stream-codec": "./src/browser/stream-codec.ts",
     "./browser/stream-messages": "./src/browser/stream-messages.ts",
-    "./pages/origin": "./src/pages/origin.ts"
+    "./pages/origin": "./src/pages/origin.ts",
+    "./projects": "./src/projects/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

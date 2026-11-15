@@ -35,7 +35,8 @@ import {
   isFeedText,
   looksLikeSecret,
 } from './client-feed-text.ts'
-import { REPOSITORY_ONLY, taskRequirementsSchema } from './task-requirements.ts'
+import { chatProjectSchema } from '../projects/schemas.ts'
+import { PLAIN_CHAT, taskRequirementsSchema } from './task-requirements.ts'
 import { taskStatuses } from './task-status.ts'
 
 /**
@@ -221,27 +222,14 @@ const resultSites = ['unchanged', 'changed', 'check', 'none'] as const
 const endedSites = ['unchanged', 'restored', 'check', 'none', 'elsewhere'] as const
 /** `/undo` gives back the session and the files, never what the task left on a site. */
 const rewindSites = ['unchanged', 'check', 'none', 'elsewhere'] as const
-type ResultSiteState = (typeof resultSites)[number]
-type EndedSiteState = (typeof endedSites)[number]
-
-/** What a row of a result says of the site: a task without one says nothing of it. */
-export const feedSiteOf = (
-  task: { siteId: string | null },
-  state: ResultSiteState,
-): ResultSiteState => (task.siteId === null ? 'none' : state)
 
 /**
- * What a failure or a cancellation says of the site, by whether the task left anything on it
- * that nothing gives back (`taskHasProductionWrites`); without a site that can only be what was
- * done in its browser, on sites of others.
+ * What a failure or a cancellation says of the site. A chat has no site since plan 83
+ * (docs/plan/83-remove-projects.md), so that is only what was done in its browser, on sites of
+ * others (`taskHasProductionWrites`): `elsewhere`, or `none`. A result always says `none`.
  */
-export const feedEndedSiteOf = (
-  task: { siteId: string | null },
-  writes: boolean,
-): Exclude<EndedSiteState, 'restored'> => {
-  if (task.siteId === null) return writes ? 'elsewhere' : 'none'
-  return writes ? 'check' : 'unchanged'
-}
+export const feedEndedSiteOf = (writes: boolean): 'none' | 'elsewhere' =>
+  writes ? 'elsewhere' : 'none'
 
 /** What became of the held credits; null — not known or not applicable. Trusted. */
 export const feedCreditsStates = ['returned', 'expired'] as const
@@ -1538,15 +1526,20 @@ export const feedTaskHeadSchema = z.strictObject({
   /** When the `work` stage of the current turn was written. */
   runningSince: z.iso.datetime().nullable(),
   /**
-   * What the task works with (docs/plan/57, Б2): its site's repository, the browser of the task
-   * or both. A head built without it is of a task that has the repository alone.
+   * What the task works with (docs/plan/57, Б2): the browser of the chat or nothing. A head built
+   * without it needs neither (a chat has no repository since plan 83).
    */
-  requirements: taskRequirementsSchema.default(() => ({ ...REPOSITORY_ONLY })),
+  requirements: taskRequirementsSchema.default(() => ({ ...PLAIN_CHAT })),
   /**
    * How hard the model thinks from the next turn on (owner's request of 26.10.2026): the class of
    * the task, which the client may change while the dialog goes on (`task.setEffort`). A head
    * built without it thinks at `high`, the default of a new dialog.
    */
   effort: reasoningEffortSchema.default('high'),
+  /**
+   * The project the chat is in (docs/plan/84-projects.md, ПР2); null — a chat without a project,
+   * or a head built before projects.
+   */
+  project: chatProjectSchema.nullable().default(null),
 })
 export type FeedTaskHead = z.infer<typeof feedTaskHeadSchema>

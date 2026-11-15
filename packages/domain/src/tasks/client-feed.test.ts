@@ -29,7 +29,6 @@ import {
   feedRowSchema,
   feedRowSchemaWithin,
   feedEndedSiteOf,
-  feedSiteOf,
   feedSiteStates,
   feedStepPayloadSchema,
   feedSteps,
@@ -980,25 +979,13 @@ describe('feed.result', () => {
   })
 })
 
-describe('what a row says of the site of its task (docs/plan/61-chats-first.md, К18)', () => {
-  const site = { siteId: '0199a000-0000-7000-8000-0000000000a1' }
-  const chat = { siteId: null }
-
-  it('keeps the state of a task with a site', () => {
-    expect(feedSiteOf(site, 'changed')).toBe('changed')
-    expect(feedSiteOf(site, 'unchanged')).toBe('unchanged')
-    expect(feedEndedSiteOf(site, true)).toBe('check')
-    expect(feedEndedSiteOf(site, false)).toBe('unchanged')
+describe('what an ending says of the site (docs/plan/83-remove-projects.md: a chat has none)', () => {
+  it('has nothing to say when nothing was done in the browser', () => {
+    expect(feedEndedSiteOf(false)).toBe('none')
   })
 
-  it('has nothing to say of a site without one', () => {
-    expect(feedSiteOf(chat, 'changed')).toBe('none')
-    expect(feedSiteOf(chat, 'unchanged')).toBe('none')
-    expect(feedEndedSiteOf(chat, false)).toBe('none')
-  })
-
-  it('names other sites when a chat without a site acted in its browser', () => {
-    expect(feedEndedSiteOf(chat, true)).toBe('elsewhere')
+  it('names other sites when the chat acted in its browser', () => {
+    expect(feedEndedSiteOf(true)).toBe('elsewhere')
   })
 })
 
@@ -1544,9 +1531,11 @@ describe('task head', () => {
   it('accepts the head of the design and every status of spec §7', () => {
     expect(feedTaskHeadSchema.parse(head)).toEqual({
       ...head,
-      requirements: { repository: true, browser: false },
+      requirements: { repository: false, browser: false },
       // A head written before the choice of reasoning reads as «Высокое».
       effort: 'high',
+      // A head written before projects is of a chat without one (docs/plan/84-projects.md).
+      project: null,
     })
     for (const status of taskStatuses)
       expect(feedTaskHeadSchema.safeParse({ ...head, status }).success).toBe(true)
@@ -1955,9 +1944,9 @@ describe('the requirements of a task in its head', () => {
     runningSince: null,
   }
 
-  it('reads a head without them as a task with the repository alone', () => {
+  it('reads a head without them as a chat that needs nothing (plan 83: no repository)', () => {
     expect(feedTaskHeadSchema.parse(head).requirements).toEqual({
-      repository: true,
+      repository: false,
       browser: false,
     })
   })
