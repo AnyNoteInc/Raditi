@@ -11,16 +11,24 @@ import {
 } from './run-states.ts'
 import {
   hasScheduleTemplatePlaceholder,
-  SCHEDULE_TEMPLATE_PLACEHOLDER,
   scheduleTemplateOf,
+  scheduleTemplatePlaceholderRange,
   scheduleTemplates,
   scheduleTemplateSlugs,
 } from './templates.ts'
 import { scheduleText } from './text.ts'
 import { scheduleTriggersSchema } from './triggers.ts'
 
-describe('the templates of «Шаблоны» (§4.6)', () => {
+describe('the templates of «Шаблоны» (§4.6, Зп58)', () => {
   it('are the six of the plan, each one a task the window would save', () => {
+    expect([...scheduleTemplateSlugs]).toEqual([
+      'currency-rates',
+      'competitors',
+      'site-check',
+      'reviews',
+      'post-ideas',
+      'holidays',
+    ])
     expect(scheduleTemplates.map((template) => template.slug)).toEqual([...scheduleTemplateSlugs])
     for (const template of scheduleTemplates) {
       expect(template.slug.length).toBeLessThanOrEqual(40)
@@ -41,29 +49,36 @@ describe('the templates of «Шаблоны» (§4.6)', () => {
       ]),
     )
     expect(text).toEqual({
-      'site-check': 'По будням в 9:00',
-      'leads-digest': 'По будням в 8:00',
-      'news-ideas': 'Еженедельно: понедельник, в 9:00',
-      'site-week': 'Еженедельно: пятница, в 16:00',
+      'currency-rates': 'По будням в 9:00',
       competitors: 'Еженедельно: понедельник, в 10:00',
-      'seo-check': 'Ежемесячно: 1-го числа, в 10:00',
+      'site-check': 'По будням в 9:00',
+      reviews: 'Еженедельно: понедельник, в 9:00',
+      'post-ideas': 'Еженедельно: понедельник, в 9:00',
+      holidays: 'Ежемесячно: 25-го числа, в 10:00',
     })
   })
 
-  it('leave only «Конкуренты» with the place for addresses, which has to be filled in (Зп9)', () => {
+  it('ask nothing of a project, and write as the client asks in a chat', () => {
+    for (const template of scheduleTemplates) {
+      expect(template).not.toHaveProperty('project')
+      expect(`${template.instructions} ${template.hint ?? ''}`).not.toMatch(/проект|админк/iu)
+    }
+  })
+
+  it('mark the places the client fills in, which have to be filled in (Зп59)', () => {
     const left = scheduleTemplates.filter((template) =>
       hasScheduleTemplatePlaceholder(template.instructions),
     )
-    expect(left.map((template) => template.slug)).toEqual(['competitors'])
+    expect(left.map((template) => template.slug)).toEqual(['competitors', 'site-check', 'reviews'])
     expect(hasScheduleTemplatePlaceholder('Сайты: [Впишите адреса]')).toBe(true)
-    expect(
-      hasScheduleTemplatePlaceholder(
-        scheduleTemplateOf('competitors')!.instructions.replace(
-          SCHEDULE_TEMPLATE_PLACEHOLDER,
-          'kofe.ru, chai.ru',
-        ),
-      ),
-    ).toBe(false)
+    expect(hasScheduleTemplatePlaceholder('Сайты: [впишите]')).toBe(true)
+    expect(hasScheduleTemplatePlaceholder('Сайты: [адреса]')).toBe(false)
+    const competitors = scheduleTemplateOf('competitors')!.instructions
+    const range = scheduleTemplatePlaceholderRange(competitors)!
+    expect(competitors.slice(range.start, range.end)).toBe('[впишите адреса сайтов]')
+    const filled = `${competitors.slice(0, range.start)}kofe.ru, chai.ru${competitors.slice(range.end)}`
+    expect(hasScheduleTemplatePlaceholder(filled)).toBe(false)
+    expect(scheduleTemplatePlaceholderRange(filled)).toBeNull()
   })
 })
 
@@ -74,7 +89,6 @@ describe('the state of a run (Зп5)', () => {
       { kind: 'running' },
       { kind: 'done' },
       { kind: 'waiting' },
-      { kind: 'ready' },
       { kind: 'failed' },
       { kind: 'stopped', cause: 'credits' },
       { kind: 'stopped', cause: 'weekly_limit' },
@@ -98,7 +112,6 @@ describe('the state of a run (Зп5)', () => {
   it('says the words of the plan', () => {
     expect(scheduledRunStateText({ kind: 'done' })).toBe('Выполнена')
     expect(scheduledRunStateText({ kind: 'waiting' })).toBe('Ждёт вашего ответа')
-    expect(scheduledRunStateText({ kind: 'ready' })).toBe('Изменения готовы')
     expect(scheduledRunStateText({ kind: 'failed' })).toBe('Не выполнена')
     expect(scheduledRunStateText({ kind: 'refused', reason: 'needs_tariff' })).toBe(
       'Не запустилась: нужен тариф',

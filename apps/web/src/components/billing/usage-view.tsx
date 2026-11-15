@@ -41,13 +41,9 @@ import {
   giftNote,
   heldEarlierNote,
   heldNote,
-  NO_PROJECT,
   ofDailyLimit,
-  ofSiteLimit,
   packCredits,
   packNote,
-  sitesMeterLabel,
-  sitesNote,
   tariffCreditsOfPeriod,
   tariffMeterLabel,
   tariffNote,
@@ -62,7 +58,7 @@ import {
 } from './usage-format'
 import { UsageActivity } from './usage-activity'
 import { UsageHistory } from './usage-history'
-import { Bar, Meter, Swatch, type MeterPart, type MeterTone } from './usage-meter'
+import { Meter, Swatch, type MeterPart, type MeterTone } from './usage-meter'
 import {
   ofWindowLimit,
   usageWindowMeterLabel,
@@ -74,19 +70,6 @@ import {
 const PLANS_PATH = '/settings/plans'
 
 const subHeading = { fontSize: 15, fontWeight: 500, lineHeight: 1.4 } as const
-
-/** Read by assistive technology, not drawn: the unit of a number that stands alone. */
-const hidden = {
-  position: 'absolute',
-  width: '1px',
-  height: '1px',
-  m: '-1px',
-  p: 0,
-  overflow: 'hidden',
-  clip: 'rect(0 0 0 0)',
-  whiteSpace: 'nowrap',
-  border: 0,
-} as const
 
 const tariffState = ({
   status,
@@ -479,7 +462,7 @@ function Limits({
   subscription: Subscription
   tariff: TariffUsage
 }) {
-  const { today, sites } = tariff
+  const { today } = tariff
   return (
     <Box component="section" aria-label="Лимиты тарифа" sx={{ p: sectionPadding }}>
       <Box
@@ -522,15 +505,6 @@ function Limits({
                     tariff.credits.left === 0,
                   ),
           })}
-        />
-        <Tile
-          title="Сайты"
-          figure={{ value: sites.count, unit: ofSiteLimit(sites.max) }}
-          meter={{
-            label: sitesMeterLabel(sites.count, sites.max),
-            parts: taken(sites.count, sites.max),
-          }}
-          note={sitesNote(sites.count, sites.max)}
         />
       </Box>
     </Box>
@@ -576,63 +550,6 @@ function WindowLimits({ windows }: { windows: readonly UsageWindow[] }) {
           />
         ))}
       </Box>
-    </Box>
-  )
-}
-
-/**
- * The credits charged in the period, project by project, and what chats without one took; one
- * line while nothing is charged.
- */
-function BySite({ sites }: { sites: TariffUsage['bySite'] }) {
-  const most = Math.max(...sites.map(({ credits }) => credits), 1)
-  return (
-    <Box component="section" aria-labelledby="sites-title" sx={{ p: sectionPadding }}>
-      <Typography component="h2" id="sites-title" sx={sectionHeading}>
-        По проектам
-      </Typography>
-      <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
-        {nbsp(
-          sites.length > 0
-            ? 'Кредиты, списанные за текущий период.'
-            : 'В этом периоде кредиты ещё не списывались.',
-        )}
-      </Typography>
-      {sites.length > 0 ? (
-        <Box
-          component="ul"
-          aria-labelledby="sites-title"
-          sx={{ display: 'grid', gap: 2, m: 0, mt: 2.5, p: 0, listStyle: 'none' }}
-        >
-          {sites.map(({ siteId, name, credits }) => (
-            <Box
-              component="li"
-              key={siteId ?? 'none'}
-              sx={{
-                display: 'grid',
-                // A count of four digits keeps its width: the column grows with it.
-                gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.4fr) minmax(40px, max-content)',
-                alignItems: 'center',
-                gap: 2,
-                fontSize: 14,
-                lineHeight: 1.45,
-              }}
-            >
-              <Box component="span" sx={{ overflowWrap: 'anywhere' }}>
-                {name ?? NO_PROJECT}
-              </Box>
-              <Bar share={credits / most} />
-              <Box component="span" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                {nbsp(formatCount(credits))}
-                <Box component="span" sx={hidden}>
-                  {' '}
-                  {creditsWord(credits)}
-                </Box>
-              </Box>
-            </Box>
-          ))}
-        </Box>
-      ) : null}
     </Box>
   )
 }
@@ -754,7 +671,6 @@ export function UsageView() {
             <Limits usage={data} subscription={data.subscription} tariff={data.tariff} />
             <WindowLimits windows={data.windows} />
             <UsageActivity />
-            <BySite sites={data.tariff.bySite} />
             <UsageHistory first={data.history} readAt={usage.dataUpdatedAt} />
           </Stack>
         )

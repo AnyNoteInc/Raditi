@@ -9,31 +9,27 @@ import { GatewayTurnCredentials, type GatewayTurnCredentialsOptions } from './tu
 
 const decimal = (value: string) => ({ toFixed: (digits: number) => Number(value).toFixed(digits) })
 
-interface SiteVariable {
+interface WorkspaceVariable {
   name: string
   keyVersion: number
-  toAgent: boolean
-  toPreview: boolean
-  agentConsentAt: Date | null
 }
 
 function fixture(
   options: Partial<Pick<GatewayTurnCredentialsOptions, 'capacityOf' | 'probeAccounts'>> & {
     /** The stored state of the pool's one account, over the default. */
     account?: Record<string, unknown>
-    /** The data class of the site's workspace. */
+    /** The data class of the task's workspace. */
     dataClass?: 'synthetic' | 'client'
-    /** `tasks.needs_browser` of the task: one that works in the browser (plan 57). */
-    needsRepository?: boolean
+    /** `tasks.needs_browser` of the task: one with the cloud browser (plan 57). */
     needsBrowser?: boolean
-    /** Rows of `site_env_vars` of the site, as the query would return them. */
-    variables?: SiteVariable[]
-    /** Vault keys of the site's variables by name: their data and version. */
+    /** Rows of `workspace_env_vars` of the workspace, as the query would return them. */
+    variables?: WorkspaceVariable[]
+    /** Vault keys of the workspace's variables by name: their data and version. */
     values?: Record<string, { data: Record<string, string>; version: number }>
   } = {},
 ) {
   const now = new Date('2026-09-30T12:00:00Z')
-  const siteId = randomUUID()
+  const workspaceId = randomUUID()
   const accountId = randomUUID()
   const modelId = randomUUID()
   const ref: TurnCredentialRef = {
@@ -70,9 +66,8 @@ function fixture(
               {
                 id: ref.taskId,
                 attempt: 1,
-                siteId,
+                workspaceId,
                 dataClass: options.dataClass ?? 'synthetic',
-                needsRepository: options.needsRepository ?? true,
                 needsBrowser: options.needsBrowser ?? false,
                 now,
               },
@@ -150,7 +145,7 @@ function fixture(
       update: vi.fn(async () => ({})),
     },
     subscriptionAccount: { update: vi.fn(async () => ({})) },
-    siteEnvVar: { findMany: vi.fn(async () => options.variables ?? []) },
+    workspaceEnvVar: { findMany: vi.fn(async () => options.variables ?? []) },
   }
   const db = {
     $transaction: vi.fn(async (work: (value: typeof tx) => Promise<unknown>) => {
@@ -165,9 +160,9 @@ function fixture(
   const secrets = {
     kvRead: vi.fn(async (path: string) => {
       expect(transaction).toBe(false)
-      const variable = /^kv\/sites\/([^/]+)\/env\/([A-Z0-9_]+)$/.exec(path)
+      const variable = /^kv\/workspaces\/([^/]+)\/env\/([A-Z0-9_]+)$/.exec(path)
       if (variable) {
-        expect(variable[1]).toBe(siteId)
+        expect(variable[1]).toBe(workspaceId)
         const stored = options.values?.[variable[2]!]
         return stored ? { data: { ...stored.data }, version: stored.version } : null
       }
@@ -208,7 +203,7 @@ function fixture(
     credentials,
     ref,
     grant,
-    siteId,
+    workspaceId,
     tx,
     db,
     secrets,
@@ -446,16 +441,8 @@ describe('durable turn credentials', () => {
   })
 })
 
-describe('the client variables of a turn (plan 53, Р13)', () => {
-  const consented = new Date('2026-09-29T10:00:00Z')
-  const row = (name: string, keyVersion: number, extra: Partial<SiteVariable> = {}) => ({
-    name,
-    keyVersion,
-    toAgent: true,
-    toPreview: true,
-    agentConsentAt: consented,
-    ...extra,
-  })
+describe('the variables of the workspace in a turn (plan 83, БП4)', () => {
+  const row = (name: string, keyVersion: number) => ({ name, keyVersion })
 
   it('gives the agent the values of its variables at their versions, kept with the turn', async () => {
     const f = fixture({
@@ -475,33 +462,39 @@ describe('the client variables of a turn (plan 53, Р13)', () => {
     // Kept in the turn's own record in Vault, never in SQL.
     expect(JSON.parse(f.vault()!.env!)).toEqual(values.envValues)
     expect(JSON.stringify(f.tx.llmKey.create.mock.calls)).not.toContain('pay-secret-0001')
-    // A retry and a recovery return what the sandbox got, whatever the site holds now.
+    // A retry and a recovery return what the sandbox got, whatever the workspace holds now.
     expect(await f.credentials.issue(f.ref, f.grant)).toEqual(values)
     expect(await f.credentials.recover(f.ref)).toEqual(values)
   })
 
-  it('gives nothing without consent, for a removed variable, or in a workspace of client data', async () => {
+  it('gives every chat of the workspace its variables, the one with the browser too', async () => {
+    const variables = [row('PAYMENT_KEY', 1)]
+    const values = { PAYMENT_KEY: { data: { value: 'pay-secret-0001' }, version: 1 } }
+    const browser = fixture({ variables, values, needsBrowser: true })
+    expect((await browser.credentials.issue(browser.ref, browser.grant)).envValues).toEqual({
+      PAYMENT_KEY: 'pay-secret-0001',
+    })
+  })
+
+  it('gives nothing for a removed variable, or in a workspace of client data', async () => {
     const values = {
       PAYMENT_KEY: { data: { value: 'pay-secret-0001' }, version: 1 },
       REMOVED_KEY: { data: { removed: '2026-09-29T11:00:00.000Z' }, version: 2 },
-      OFF_KEY: { data: { value: 'off-value-0001' }, version: 1 },
     }
-    const variables = [
-      row('PAYMENT_KEY', 1),
-      row('REMOVED_KEY', 2),
-      row('OFF_KEY', 1, { toAgent: false }),
-      row('UNSIGNED_KEY', 1, { agentConsentAt: null }),
-    ]
+    const variables = [row('PAYMENT_KEY', 1), row('REMOVED_KEY', 2)]
     const synthetic = fixture({ variables, values })
     expect((await synthetic.credentials.issue(synthetic.ref, synthetic.grant)).envValues).toEqual({
       PAYMENT_KEY: 'pay-secret-0001',
     })
     // Past the gate of 152-FZ for its provider (this fake clears every one), a workspace of
-    // client data still gives the agent no variable: none is even read.
+    // client data still gives the agent no variable: none is even read (rule 1).
     const client = fixture({ variables, values, dataClass: 'client' })
     expect(await client.credentials.issue(client.ref, client.grant)).not.toHaveProperty('envValues')
+    expect(client.tx.workspaceEnvVar.findMany).not.toHaveBeenCalled()
     expect(
-      client.secrets.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
+      client.secrets.kvRead.mock.calls.filter(([path]) =>
+        String(path).startsWith('kv/workspaces/'),
+      ),
     ).toEqual([])
     const none = fixture()
     const bare = await none.credentials.issue(none.ref, none.grant)
@@ -509,33 +502,10 @@ describe('the client variables of a turn (plan 53, Р13)', () => {
     expect(none.vault()).not.toHaveProperty('env')
   })
 
-  it('gives a task in the browser no variable: its `web` tools reach the live site unchecked (plan 57)', async () => {
-    const variables = [row('PAYMENT_KEY', 1)]
-    const values = { PAYMENT_KEY: { data: { value: 'pay-secret-0001' }, version: 1 } }
-    // The same consented variable of a synthetic workspace reaches a repository task's commands.
-    const repository = fixture({ variables, values })
-    expect(
-      (await repository.credentials.issue(repository.ref, repository.grant)).envValues,
-    ).toEqual({ PAYMENT_KEY: 'pay-secret-0001' })
-    // A task in the browser would type it onto the site through `web_fill` with no candidate or
-    // release to refuse it: its turn gets none, and none is even read.
-    const browser = fixture({ variables, values, needsRepository: false, needsBrowser: true })
-    const issued = await browser.credentials.issue(browser.ref, browser.grant)
-    expect(issued).not.toHaveProperty('envValues')
-    expect(browser.vault()).not.toHaveProperty('env')
-    expect(browser.tx.siteEnvVar.findMany).not.toHaveBeenCalled()
-    expect(
-      browser.secrets.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
-    ).toEqual([])
-    // A retry and a recovery return the same record, still without values.
-    expect(await browser.credentials.issue(browser.ref, browser.grant)).toEqual(issued)
-    expect(await browser.credentials.recover(browser.ref)).toEqual(issued)
-  })
-
-  it('carries every set of variables a site may have, and refuses more than that', async () => {
+  it('carries every set of variables a workspace may have, and refuses more than that', async () => {
     // 8 KiB of what JSON escapes sixfold: the most one record of the turn has to hold.
     const worst = '\u0001'.repeat(8 * 1024)
-    const site = (count: number) => {
+    const workspace = (count: number) => {
       const names = Array.from({ length: count }, (_, i) => `BIG_${i}`)
       return fixture({
         variables: names.map((name) => row(name, 1)),
@@ -544,12 +514,12 @@ describe('the client variables of a turn (plan 53, Р13)', () => {
         ),
       })
     }
-    const full = site(64)
+    const full = workspace(64)
     const issued = await full.credentials.issue(full.ref, full.grant)
     expect(Object.keys(issued.envValues!)).toHaveLength(64)
     expect(await full.credentials.recover(full.ref)).toEqual(issued)
-    // Only two writers adding rows at once get a site past 64 variables.
-    const over = site(70)
+    // Only two writers adding rows at once get a workspace past 64 variables.
+    const over = workspace(70)
     await expect(over.credentials.issue(over.ref, over.grant)).rejects.toMatchObject({
       code: 'BAD_REQUEST',
       details: { reason: 'client_variables_too_large' },

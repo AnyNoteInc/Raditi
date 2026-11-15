@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test'
 
 import { expect, test } from '../../fixtures/signed-in.ts'
 
-import { addConnectedSite, hideDevIndicator, priceDialogClass } from './site.ts'
+import { hideDevIndicator, priceDialogClass } from './site.ts'
 
 // «Запланированные задачи» in a real browser (docs/plan/82-scheduled-tasks.md, Зп1–Зп10): the
 // stopwatch of the rail between «Чаты» and «Страницы», the list before the first task, a task set
@@ -53,12 +53,12 @@ test('the stopwatch of the rail stands after «Чаты» and before «Стра�
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/chats')
   const links = rail(page).getByRole('link')
-  await expect(links).toHaveCount(4)
+  // «Проекты» went with projects (docs/plan/83-remove-projects.md, БП1; Зп60).
+  await expect(links).toHaveCount(3)
   await expect(links.nth(0)).toHaveAccessibleName('Чаты')
   await expect(links.nth(1)).toHaveAccessibleName('Запланированные задачи')
   await expect(links.nth(1)).toHaveAttribute('href', '/scheduled')
   await expect(links.nth(2)).toHaveAccessibleName('Страницы')
-  await expect(links.nth(3)).toHaveAccessibleName('Проекты')
 
   await links.nth(1).click()
   await expect(page).toHaveURL(/\/scheduled$/)
@@ -135,7 +135,7 @@ test('a task by hand: every day at a time, paused and resumed, run now, its page
     await dialog.getByRole('textbox', { name: 'Название' }).fill('Сводка дня')
     await dialog
       .getByRole('textbox', { name: 'Что сделать агенту' })
-      .fill('Посмотрите, что нового появилось на сайте, и коротко перечислите.')
+      .fill('Пришли курс доллара, евро и юаня по ЦБ на сегодня.')
     // A regular expression meets the text as it is: the warning keeps «без» to its word.
     await expect(dialog.getByText(/Задача выполняется без\sвас/)).toBeVisible()
     const block = dialog.getByRole('group', { name: 'Время запуска 1' })
@@ -152,9 +152,9 @@ test('a task by hand: every day at a time, paused and resumed, run now, its page
   })
 
   const row = list(page).getByRole('listitem').filter({ hasText: 'Сводка дня' })
-  await test.step('the row: the schedule, no project, the next run, the switch', async () => {
+  await test.step('the row: the schedule, the next run, the switch — no project (Зп57)', async () => {
     await expect(row).toContainText('Ежедневно в 10:30')
-    await expect(row).toContainText('Без проекта')
+    await expect(row).not.toContainText(/проект/i)
     await expect(row).toContainText(/Следующий запуск: (сегодня|завтра) в 10:30/)
     await expect(row).toContainText('Ещё не запускалась')
   })
@@ -185,7 +185,7 @@ test('a task by hand: every day at a time, paused and resumed, run now, its page
     // answers the navigation, which takes longer than an expectation waits on a busy machine.
     await expect(page).toHaveURL(/\/scheduled\/[0-9a-f-]{36}$/, { timeout: 30_000 })
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Сводка дня')
-    await expect(page.getByText('Посмотрите, что нового появилось на сайте')).toBeVisible()
+    await expect(page.getByText('Пришли курс доллара, евро и юаня по ЦБ на сегодня.')).toBeVisible()
     const runs = page.getByRole('list', { name: 'Запуски' }).getByRole('listitem')
     await expect(runs).toHaveCount(1)
     await expect(runs.first()).toContainText('вручную')
@@ -212,10 +212,11 @@ test('a task by hand: every day at a time, paused and resumed, run now, its page
   })
 })
 
-test('a template opens the window filled in, and a template about a site wants a project (Зп9)', async ({
+test('a template opens the window on its place to fill in, and makes a task once it is written over (Зп9, Зп59)', async ({
   page,
   signedInUser,
 }) => {
+  void signedInUser
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/scheduled/templates')
@@ -224,32 +225,34 @@ test('a template opens the window filled in, and a template about a site wants a
       name: 'Шаблоны',
     }),
   ).toHaveAttribute('aria-current', 'page')
+  // None of the six needs a project (Зп58).
+  await expect(page.getByText('Нужен проект')).toHaveCount(0)
 
-  await test.step('without a project: «Добавьте проект», no «Создать»', async () => {
+  const dialog = windowOf(page)
+  const instructions = dialog.getByRole('textbox', { name: 'Что сделать агенту' })
+  await test.step('the place is chosen and said quietly; «Создать» sends nothing while it is left', async () => {
     await page.getByRole('button', { name: 'Проверка сайта' }).click()
-    const dialog = windowOf(page)
     await expect(dialog.getByRole('textbox', { name: 'Название' })).toHaveValue('Проверка сайта')
-    await expect(dialog.getByRole('textbox', { name: 'Что сделать агенту' })).toHaveValue(
-      /Откройте сайт и пройдите главную/,
-    )
+    await expect(instructions).toBeFocused()
+    expect(
+      await instructions.evaluate((field: HTMLTextAreaElement) =>
+        field.value.slice(field.selectionStart, field.selectionEnd),
+      ),
+    ).toBe('[впишите адрес сайта]')
+    await expect(dialog.getByText('Замените текст в квадратных скобках своим')).toBeVisible()
     await expect(dialog.getByRole('button', { name: 'Размышление: Низкое' })).toBeVisible()
-    await expect(dialog.getByRole('link', { name: 'Добавьте проект' })).toHaveAttribute(
-      'href',
-      '/projects/new',
-    )
-    await expect(dialog.getByRole('button', { name: 'Создать' })).toBeDisabled()
-    await dialog.getByRole('button', { name: 'Отмена' }).click()
-    await expect(dialog).toBeHidden()
+    await expect(dialog.getByRole('button', { name: /^Проект/ })).toHaveCount(0)
+    const create = dialog.getByRole('button', { name: 'Создать' })
+    await expect(create).toBeEnabled()
+    await create.click()
+    await expect(dialog).toBeVisible()
+    await expect(instructions).toHaveAttribute('aria-invalid', 'true')
+    await expect(instructions).toBeFocused()
   })
 
-  await test.step('with the only project: it is chosen, and the task is made from the template', async () => {
-    await addConnectedSite(signedInUser.id)
-    await page.reload()
-    await page.getByRole('button', { name: 'Проверка сайта' }).click()
-    const dialog = windowOf(page)
-    await expect(
-      dialog.getByRole('button', { name: 'Проект для этого чата: Кофейня «Крошка»' }),
-    ).toBeVisible()
+  await test.step('what is typed writes the place over, and the task is made', async () => {
+    await page.keyboard.type('kofe.example')
+    await expect(instructions).toHaveValue(/^Открой сайт kofe\.example и пройди главную/)
     await dialog.getByRole('button', { name: 'Создать' }).click()
     await expect(dialog).toBeHidden()
     await expect(page.getByRole('button', { name: 'Проверка сайта' })).toHaveAccessibleDescription(
@@ -261,7 +264,6 @@ test('a template opens the window filled in, and a template about a site wants a
       .click()
     const row = list(page).getByRole('listitem').filter({ hasText: 'Проверка сайта' })
     await expect(row).toContainText('По будням в 9:00')
-    await expect(row).toContainText('Кофейня «Крошка»')
   })
 })
 

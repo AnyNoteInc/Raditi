@@ -17,8 +17,8 @@ import {
 /**
  * The arguments of the `schedule` tools of the mcp role (docs/plan/82-scheduled-tasks.md, Зп31–Зп34),
  * as the model sends them; the policy of the role parses them too. Strict objects: an unknown key
- * is a refusal, not a guess. Who changes what — the workspace, the project, the author — comes
- * from the admission of the call, never from here.
+ * is a refusal, not a guess. Who changes what — the workspace and the author — comes from the
+ * admission of the call, never from here. A task has no project (Зп44, Зп54).
  */
 
 /** «Один раз» from now (Зп15): the server counts the moment, not the model. */
@@ -87,18 +87,13 @@ export function resolveScheduleToolTriggers(
 
 const id = z.uuid()
 
-/** Where a task of the agent belongs (Зп31): the project of the chat, or none in a chat without one. */
-export const scheduleToolProjects = ['this_chat', 'none'] as const
-export type ScheduleToolProject = (typeof scheduleToolProjects)[number]
-
-/** `schedule_list`: the author's tasks of this chat's project, the time and the zone of the client. */
+/** `schedule_list`: the author's own tasks, the time and the zone of the client (Зп54). */
 export const scheduleListArgumentsSchema = z.strictObject({})
 
 /** `schedule_create`: a new task, once the client confirmed its name, words and schedule (Зп34). */
 export const scheduleCreateArgumentsSchema = z.strictObject({
   name: scheduleNameSchema,
   instructions: scheduleInstructionsSchema,
-  project: z.enum(scheduleToolProjects),
   effort: reasoningEffortSchema.optional(),
   triggers: scheduleToolTriggersSchema,
   timezone: scheduleTimezoneSchema.optional(),

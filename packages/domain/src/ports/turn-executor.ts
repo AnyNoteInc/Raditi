@@ -3,18 +3,9 @@ import { z } from 'zod'
 import { turnSkillsSchema } from '../agent/skills.ts'
 import { attachmentLimits } from '../attachments/rules.ts'
 import { badRequest } from '../errors.ts'
-import { publicationSourceSchema, type PublicationSource } from '../git/publication.ts'
 import { snapshotIdSchema, snapshotReferenceSchema } from '../sessions/snapshot-manifest.ts'
-import type {
-  SnapshotManifest,
-  SnapshotPartName,
-  SnapshotReference,
-} from '../sessions/snapshot-manifest.ts'
-import {
-  requirementsOf,
-  taskRequirementsSchema,
-  type TaskRequirements,
-} from '../tasks/task-requirements.ts'
+import type { SnapshotManifest, SnapshotReference } from '../sessions/snapshot-manifest.ts'
+import { taskRequirementsSchema, type TaskRequirements } from '../tasks/task-requirements.ts'
 import {
   agentDriverIds,
   nativeSessionIdSchema,
@@ -37,7 +28,7 @@ import {
   type SandboxLabels,
   type SandboxSpec,
 } from './sandbox-provider.ts'
-import type { SiteLeaseFence, TurnBundleSource } from './turn-runner.ts'
+import type { SiteLeaseFence } from './turn-runner.ts'
 import {
   turnCredentialGrantSchema,
   type TurnCredentialGrant,
@@ -49,11 +40,12 @@ export const turnExecutorKinds = ['local', 'runner'] as const
 export type TurnExecutorKind = (typeof turnExecutorKinds)[number]
 
 /**
- * Turn executor port — spec §8. The supervisor in core keeps the lease, the journal, the driver
- * and publication; an executor owns the turn's container. `LocalTurnExecutor` drives a local
+ * Turn executor port — spec §8. The supervisor in core keeps the lease, the journal and the
+ * driver; an executor owns the turn's container. `LocalTurnExecutor` drives a local
  * SandboxProvider (PoC, tests); the remote one sends the same steps to a runner VM over the
  * pull protocol (runner/protocol.ts). An executor never holds platform credentials: S3 objects
- * arrive as presigned requests, data keys and the base bundle through functions of core.
+ * arrive as presigned requests, data keys through functions of core. A turn has no repository
+ * (docs/plan/83-remove-projects.md): its working directory is empty.
  */
 export interface TurnExecutor {
   readonly kind: TurnExecutorKind
@@ -67,8 +59,8 @@ export interface TurnExecutor {
    */
   slots?(): number
   /**
-   * Create the container, import the base bundle — without one an empty working directory
-   * (docs/plan/57-browser-tasks.md, Б4) — restore turn n−1, write the driver files.
+   * Create the container with an empty working directory, restore turn n−1, put the client's
+   * files, write the driver files.
    */
   prepare(input: TurnPrepareInput, signal: AbortSignal): Promise<TurnExecution>
   /**
@@ -86,37 +78,6 @@ export interface TurnExecutor {
    * holds it is away: it may come back before the turn's deadline.
    */
   takeover(assignment: { runner: TurnAssignmentRunner | null }): TurnTakeover | null
-  /**
-   * The working tree of a running turn against the commit its sandbox was given
-   * (docs/plan/53-chat-preview-release.md, Р23): what a preview overlays before an action of the
-   * agent's browser. The agent goes on; nothing is stopped or captured. Untrusted like a capture:
-   * core validates the archive as `untracked.tar.zst` and every path as a candidate's. An
-   * executor without it refuses the sync (NOT_SUPPORTED).
-   */
-  exportWorkingTree?(input: TurnWorkingTreeInput, signal: AbortSignal): Promise<TurnWorkingTree>
-}
-
-export interface TurnWorkingTreeInput {
-  /** The open assignment of the turn and its container, as the journal holds them. */
-  assignmentId: string
-  containerId: string
-  labels: SandboxLabels
-  /** The commit the sandbox was checked out at: `sandboxBaseSha`, else `expectedBaseSha`. */
-  baseSha: string
-  /** New files below them are taken even when an ignore file of the site hides them (Р12). */
-  addOnlyPaths?: readonly string[]
-  /**
-   * Paths an earlier export of the same turn wrote: taken as they are now — the agent may have
-   * put them back as they were — or listed as deleted when they are gone.
-   */
-  alsoPaths?: readonly string[]
-}
-
-export interface TurnWorkingTree {
-  /** A ustar tar in zstd of the changed and new regular files, as `untracked.tar.zst`. */
-  archive: Uint8Array
-  /** Files of the base the working tree no longer has, and `alsoPaths` that are gone. */
-  deletes: string[]
 }
 
 /** The runner session an assignment is bound to (TurnAssignment.runner). */
@@ -147,17 +108,11 @@ export interface TurnPrepareInput {
    * (TurnExecution.extend), and the container never outlives its last lease.
    */
   remainingMs: number
-  /**
-   * The repository of the turn. Absent for a turn without one (plan 57, Б4): the executor makes
-   * SANDBOX_WORKDIR an empty directory — no clone, no `git init`, no commit — and the turn's
-   * capture takes `home` alone.
-   */
-  bundle?: TurnBundleSource
   restore?: TurnRestoreSource
   /**
    * The files the client sent with the task, as the plan names them (`input.attachments`): the
-   * executor writes each at its path, read-only, after the restore. Only a turn with a bundle
-   * or of a chat without a site has them (turnMayHoldInbox, assertTurnInbox); absent — none.
+   * executor writes each at its path, read-only, after the restore (turnMayHoldInbox,
+   * assertTurnInbox); absent — none.
    */
   inbox?: readonly TurnInboxFile[]
   /** Selects the stateless event parser on the executor side. */
@@ -174,7 +129,7 @@ export interface TurnPrepareInput {
    */
   envValues?: readonly string[]
   /**
-   * Called once the container exists, before the bundle import. From then on the caller owns
+   * Called once the container exists, before the restore. From then on the caller owns
    * its removal through this execution, even when prepare fails later; a rejection stops prepare.
    */
   created(execution: TurnExecution): Promise<void>
@@ -184,21 +139,21 @@ export interface TurnPrepareInput {
   vacated(): void
 }
 
-/** Turn n−1: the manifest is already checked by core; parts are verified before any write. */
+/**
+ * Turn n−1: the manifest is already checked by core; its part is verified before any write. Only
+ * `home` is restored: a snapshot of a chat that had a project (before plan 83) also names a patch
+ * and new files of its working copy, which a turn without a repository has no place for — they
+ * stay in S3 and are not fetched; the home part opens under the manifest's AAD as before.
+ */
 export interface TurnRestoreSource {
   manifest: SnapshotManifest
-  /**
-   * Exactly the parts of the manifest (snapshotPartNamesOf): `home` alone in a snapshot without
-   * a repository, which restores nothing into the working directory (plan 57, Б4).
-   */
-  parts: { home: PresignedRequest } & Partial<Record<SnapshotPartName, PresignedRequest>>
+  parts: { home: PresignedRequest }
   /** The unwrapped data key; the executor zeroes it right after use. */
   dataKey(): Promise<Uint8Array>
 }
 
 /**
- * A file the client sent with the task, as the host puts it into a turn with a repository
- * (spec §8, «Подготовка»): at `path` (turnInboxPath), read-only for the agent. Never a key or an
+ * A file the client sent with the task, as the host puts it into a turn (spec §8, «Подготовка»): at `path` (turnInboxPath), read-only for the agent. Never a key or an
  * address of the object: core reads it from the inbox, a runner fetches it from core.
  */
 export interface TurnInboxFile {
@@ -252,21 +207,10 @@ export interface TurnExecution {
   /** Stop the agent's processes; idempotent. */
   quiesce(): Promise<void>
   /**
-   * Idempotent; the home archive stays with the executor until seal(). The patch is taken
-   * against `sandboxBaseSha` when the sandbox got a working set (plan 53, Р11), else `baseSha`.
-   * New files below `addOnlyPaths` (Р12) are taken even when an ignore file hides them.
-   * Without `baseSha` — a turn without a repository (plan 57, Б4) — only `home` is taken: the
-   * working directory is not read, and the result has neither `patch` nor `untracked`.
-   * `sandboxBaseSha` and `addOnlyPaths` come only with `baseSha`. An executor refuses a capture
-   * whose `baseSha` disagrees with its prepare: with one after a prepare without a bundle, or
-   * without one after a prepare with a bundle.
+   * Idempotent; the home archive stays with the executor until seal(). Only `home` is taken: the
+   * working directory is not read (a turn has no repository).
    */
-  capture(input: {
-    home: SessionState
-    baseSha?: string
-    sandboxBaseSha?: string
-    addOnlyPaths?: readonly string[]
-  }): Promise<CapturedTurn>
+  capture(input: { home: SessionState }): Promise<CapturedTurn>
   /** Encrypt the captured home archive and store it with a create-only presigned PUT. */
   seal(input: TurnSealInput): Promise<SealedTurnPart>
   destroy(reason: DestroyReason): Promise<void>
@@ -297,14 +241,8 @@ export interface TurnAgentExec {
   kill(): Promise<void>
 }
 
-/**
- * `patch` and `untracked` are there exactly when the capture had a `baseSha`: a turn without a
- * repository (plan 57, Б4) has neither, and its snapshot is the home part alone.
- */
+/** What a capture took: the home part alone — the snapshot of a turn is that part. */
 export interface CapturedTurn {
-  /** Untrusted until core builds the candidate: the patch against baseSha and new files. */
-  patch?: Uint8Array
-  untracked?: Uint8Array
   /** The sealed home part has exactly this size: AES-GCM adds no padding. */
   homeBytes: number
   /**
@@ -316,7 +254,7 @@ export interface CapturedTurn {
 }
 
 export interface TurnSealInput {
-  /** Snapshot metadata bound into the AAD, including the candidate headSha and createdAt. */
+  /** Snapshot metadata bound into the AAD, including createdAt. */
   base: Omit<SnapshotManifest, 'parts'>
   dataKey(): Promise<Uint8Array>
   put: PresignedRequest
@@ -383,31 +321,16 @@ export interface TurnRequest {
   input: TurnInput
   driverVersion: string
   /**
-   * What the turn's environment needs (docs/plan/57-browser-tasks.md, Б3). Absent in requests
-   * and plans written before it: a repository alone (requirementsOf).
+   * What the turn's environment needs (docs/plan/57-browser-tasks.md, Б3): never a repository.
+   * Absent — nothing (requirementsOf).
    */
   requirements?: TaskRequirements
-  /** Present exactly when the turn has a repository. */
-  workspace?: PublicationSource
-  /** Trusted persisted time; retries use the identical value for deterministic publication. */
+  /** Trusted persisted time; retries use the identical value. */
   committedAt: string
   previous?: SnapshotReference
   /**
-   * Trusted user action: replace the latest run, restoring its input checkpoint after undo.
-   * Only with a repository: what a turn without one did on the site is not undone (plan 57, Б1).
-   */
-  replacesTurn?: number
-  /**
-   * The first turn after «Обновить» moved the dialog onto a new `main`
-   * (docs/plan/53-chat-preview-release.md, Р27) or the client saved a file of the chat: it starts
-   * on the moved head and goes on with the session of the turn before when `previous` names its
-   * checkpoint (owner's request of 06.11.2026), a new session of the agent without one; the feed
-   * keeps its history. Only with a repository.
-   */
-  rebased?: boolean
-  /**
    * The turn before it was undone (`/undo`, docs/plan/61-chats-first.md, §5.14): the session goes
-   * back to the checkpoint that turn started from. A turn with a repository replaces it instead.
+   * back to the checkpoint that turn started from.
    */
   rewound?: true
 }
@@ -470,9 +393,9 @@ export const turnInputSchema = z
   .strict() satisfies z.ZodType<TurnInput>
 
 /**
- * What one turn with a repository gets of the files of its task: the latest, at most this many
- * and this many bytes together. A full message (ten files of 20 MiB) always fits, and the rest
- * of the 512 MiB tmpfs of /workspace is left to the working copy.
+ * What one turn gets of the files of its task: the latest, at most this many and this many
+ * bytes together. A full message (ten files of 20 MiB) always fits in the 512 MiB tmpfs of
+ * /workspace.
  */
 export const turnInboxLimits = Object.freeze({
   files: 50,
@@ -502,16 +425,12 @@ export function turnInboxAttachmentId(path: string): string | null {
 }
 
 /**
- * Whether the sandbox of a turn may hold the client's files: one with a repository, or the turn
- * of a chat without a site, whose lease is its own id (`leaseScopeOf`, docs/plan/61-chats-first.md,
- * К14, К16). A task on a site without a repository hands them to the browser worker alone (Б26):
- * its turn has the open internet and may have the site's admin pages in its browser, so the
- * labels of the turn are the second line against a planner that gets this wrong.
+ * Whether the sandbox of a turn may hold the client's files: the turn of a chat, whose lease is
+ * its own id (`leaseScopeOf`, docs/plan/61-chats-first.md, К14, К16). The labels are the second
+ * line against a planner that names another lease.
  */
-export const turnMayHoldInbox = (
-  hasRepository: boolean,
-  labels: Pick<SandboxLabels, 'siteId' | 'taskId'>,
-): boolean => hasRepository || labels.siteId === labels.taskId
+export const turnMayHoldInbox = (labels: Pick<SandboxLabels, 'siteId' | 'taskId'>): boolean =>
+  labels.siteId === labels.taskId
 
 /**
  * The files of a prepare, as both executors and the runner protocol take them: only a turn
@@ -523,8 +442,7 @@ export function assertTurnInbox(
   mayHold: boolean,
 ): void {
   if (files.length === 0) return
-  if (!mayHold)
-    throw badRequest('Files of the client go only to a turn with a repository or without a site')
+  if (!mayHold) throw badRequest('Files of the client go only to the turn of their chat')
   if (files.length > turnInboxLimits.files) throw badRequest('Too many files for one turn')
   let bytes = 0
   const paths = new Set<string>()
@@ -545,8 +463,8 @@ export function assertTurnInbox(
 
 /**
  * A TurnRequest without its credentials, as turn_assignments.plan keeps it for recovery.
- * Strict objects refuse an LLM key or an MCP token instead of silently storing them. A plan
- * stored before the requirements has a workspace and no `requirements`: a repository turn.
+ * Strict objects refuse an LLM key or an MCP token instead of silently storing them. A plan of a
+ * turn with a repository (before plan 83: `workspace`, `replacesTurn`, `rebased`) is refused.
  */
 export const turnPlanSchema = z
   .object({
@@ -585,52 +503,15 @@ export const turnPlanSchema = z
     /** Recovery picks the driver of the turn by it: extractResult, sessionState, the parser. */
     driverId: z.enum(agentDriverIds),
     driverVersion: snapshotReferenceSchema.shape.driver.shape.version,
-    requirements: taskRequirementsSchema.optional(),
-    workspace: publicationSourceSchema.optional(),
+    requirements: taskRequirementsSchema
+      .refine((r) => !r.repository, 'a turn has no repository')
+      .optional(),
     committedAt: z.iso.datetime(),
     previous: snapshotReferenceSchema.optional(),
-    replacesTurn: z.number().int().positive().max(999_999).optional(),
-    rebased: z.boolean().optional(),
     rewound: z.literal(true).optional(),
   })
   .strict()
-  .superRefine((plan, ctx) => {
-    const { repository } = requirementsOf(plan)
-    if (repository !== (plan.workspace !== undefined))
-      ctx.addIssue({
-        code: 'custom',
-        path: ['workspace'],
-        message: repository
-          ? 'a turn with a repository needs its workspace'
-          : 'a turn without a repository has no workspace',
-      })
-    // Both are git notions: a replacement undoes content of the previous turn, a rebased start
-    // follows «Обновить» or the client's edit onto a moved head.
-    if (!repository)
-      for (const key of ['replacesTurn', 'rebased'] as const)
-        if (plan[key] !== undefined)
-          ctx.addIssue({ code: 'custom', path: [key], message: 'only a turn with a repository' })
-    if (repository && plan.rewound !== undefined)
-      ctx.addIssue({
-        code: 'custom',
-        path: ['rewound'],
-        message: 'a turn with a repository replaces the undone one',
-      })
-  })
 export type TurnPlan = z.infer<typeof turnPlanSchema>
-
-/**
- * Where `agent/<taskId>` stood when a turn started, as its plan pinned it: what `/undo` of that turn
- * takes the branch back to (docs/plan/61-chats-first.md, §5.14). A replacement names it; a later
- * turn started on it; the first one found no branch: null. Not always the commit the turn worked
- * from: a turn the platform refused published past that one, and the replacement left it there.
- */
-export function branchBeforeTurn(plan: Pick<TurnPlan, 'context' | 'workspace'>): string | null {
-  const { workspace, context } = plan
-  if (!workspace) return null
-  if (workspace.expectedBranchSha !== undefined) return workspace.expectedBranchSha
-  return context.turn > 1 ? workspace.expectedBaseSha : null
-}
 
 /** The request without the LLM key and MCP token; refuses anything the plan cannot hold. */
 export function toTurnPlan(

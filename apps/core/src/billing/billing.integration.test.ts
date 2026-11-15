@@ -123,7 +123,6 @@ describe.skipIf(!enabled)('renewal passes of core with PostgreSQL', () => {
         kind: 'quota',
         price: '4900.00',
         creditsPerMonth: 30,
-        maxSites: 1,
         isActive: false,
       },
     })

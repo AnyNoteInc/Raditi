@@ -60,10 +60,14 @@ export interface ScheduleChangesDependencies {
 export function scheduleLeftReasonOf(code: string): ScheduleLeftReason {
   if (code === 'SCHEDULE_FORBIDDEN') return 'forbidden'
   if (code === 'SCHEDULE_LIMIT') return 'limit'
-  if (code === 'SCHEDULE_NOT_FOUND' || code === 'NOT_FOUND' || code === 'SCHEDULE_PROJECT_GONE')
-    return 'not_found'
+  if (code === 'SCHEDULE_NOT_FOUND' || code === 'NOT_FOUND') return 'not_found'
   if (code.startsWith('TASK_TEXT_')) return 'text_refused'
-  if (code === 'SCHEDULE_TOO_OFTEN' || code === 'SCHEDULE_IN_PAST' || code === 'BAD_REQUEST')
+  if (
+    code === 'SCHEDULE_TOO_OFTEN' ||
+    code === 'SCHEDULE_IN_PAST' ||
+    code === 'SCHEDULE_TEMPLATE_PLACEHOLDER' ||
+    code === 'BAD_REQUEST'
+  )
     return 'invalid'
   return 'failed'
 }
@@ -339,7 +343,6 @@ export function changePayloadOf(action: ScheduleChangeAction, schedule: Schedule
     triggers: scheduleTriggersOf(schedule),
     timezone: schedule.timezone,
     nextRunAt: schedule.nextRunAt?.toISOString() ?? null,
-    siteId: schedule.siteId,
     effort: schedule.effort as ReasoningEffort,
     notify: schedule.notify,
   }

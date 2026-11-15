@@ -15,7 +15,6 @@ describe.skipIf(!enabled)('the sweep of contact maps with PostgreSQL', () => {
   let db: PrismaClient
   let f: {
     workspaceId: string
-    siteId: string
     driverId: string
     providerId: string
     modelId: string
@@ -47,15 +46,6 @@ describe.skipIf(!enabled)('the sweep of contact maps with PostgreSQL', () => {
     f = await db.$transaction(async (tx) => {
       const workspace = await tx.workspace.create({
         data: { name: 'Synthetic masks', dataClass: 'synthetic' },
-      })
-      const site = await tx.site.create({
-        data: {
-          workspaceId: workspace.id,
-          name: 'Synthetic masks',
-          url: `https://${suffix}.example.test`,
-          stack: 'wordpress',
-          status: 'active',
-        },
       })
       const driver = await tx.agentDriver.create({
         data: {
@@ -93,7 +83,6 @@ describe.skipIf(!enabled)('the sweep of contact maps with PostgreSQL', () => {
       })
       return {
         workspaceId: workspace.id,
-        siteId: site.id,
         driverId: driver.id,
         providerId: provider.id,
         modelId: model.id,
@@ -113,28 +102,23 @@ describe.skipIf(!enabled)('the sweep of contact maps with PostgreSQL', () => {
     await db.llmModel.delete({ where: { id: f.modelId } })
     await db.llmProvider.delete({ where: { id: f.providerId } })
     await db.agentDriver.delete({ where: { id: f.driverId } })
-    await db.site.delete({ where: { id: f.siteId } })
     await db.workspace.delete({ where: { id: f.workspaceId } })
   })
 
-  /** A task with a browser that reached a final status longer ago than the window. */
+  /** A chat with a browser that reached a final status longer ago than the window. */
   async function task(
     data: {
-      site?: boolean
-      needsRepository?: boolean
       needsBrowser?: boolean
       status?: 'done' | 'failed' | 'cancelled' | 'rolled_back' | 'awaiting_user'
       finishedAgoMs?: number
       purgedByContent?: boolean
     } = {},
   ) {
-    const { site = true, needsRepository = false, needsBrowser = true } = data
+    const { needsBrowser = true } = data
     const row = await db.task.create({
       data: {
         workspaceId: f.workspaceId,
-        ...(site ? { siteId: f.siteId } : {}),
         status: data.status ?? 'done',
-        needsRepository,
         needsBrowser,
         finishedAt: new Date(Date.now() - (data.finishedAgoMs ?? CONTENT_SNAPSHOT_TTL_MS + HOUR)),
         ...(data.purgedByContent
@@ -146,8 +130,7 @@ describe.skipIf(!enabled)('the sweep of contact maps with PostgreSQL', () => {
     return row
   }
 
-  const pathOf = (row: { id: string; siteId: string | null }) =>
-    contentMaskPath({ siteId: row.siteId ?? row.id, taskId: row.id })
+  const pathOf = (row: { id: string }) => contentMaskPath({ siteId: row.id, taskId: row.id })
   const sweep = () => new WebMaskSweep(db, secrets).sweep()
   const read = (id: string) => db.task.findUniqueOrThrow({ where: { id } })
 
@@ -161,7 +144,7 @@ describe.skipIf(!enabled)('the sweep of contact maps with PostgreSQL', () => {
   })
 
   it('removes the map of a chat without a site from under its own id, with no lease to read', async () => {
-    const chat = await task({ site: false })
+    const chat = await task()
     await sweep()
     expect(paths).toContain(`kv/content-masks/${chat.id}/${chat.id}`)
     expect((await read(chat.id)).webMasksPurgedAt).not.toBeNull()
@@ -177,23 +160,13 @@ describe.skipIf(!enabled)('the sweep of contact maps with PostgreSQL', () => {
     expect(secrets.kvDestroyAll).not.toHaveBeenCalledWith(pathOf(row))
   })
 
-  it('leaves the artifacts of a repository task to their own sweep, in full', async () => {
-    const row = await task({ needsRepository: true })
-    await sweep()
-    expect(paths).toContain(pathOf(row))
-    const swept = await read(row.id)
-    expect(swept.webMasksPurgedAt).not.toBeNull()
-    // Set, it would close the removal of the artifacts; retired, its claim would skip its checks.
-    expect(swept.contentMasksPurgedAt).toBeNull()
-    expect(swept.contentRetiredAt).toBeNull()
-  })
-
   it('does not touch what is not due', async () => {
     const rows = await Promise.all([
       task({ finishedAgoMs: CONTENT_SNAPSHOT_TTL_MS - HOUR }),
       // An open chat keeps its map: it may go on (plan 61, §9, вопрос 9).
       task({ status: 'awaiting_user' }),
-      task({ needsRepository: true, needsBrowser: false }),
+      // A chat that never had a browser has no map.
+      task({ needsBrowser: false }),
       task({ purgedByContent: true }),
     ])
     await sweep()
@@ -208,7 +181,7 @@ describe.skipIf(!enabled)('the sweep of contact maps with PostgreSQL', () => {
     const assignment = await db.turnAssignment.create({
       data: {
         taskId: row.id,
-        siteId: f.siteId,
+        siteId: row.id,
         sessionId: 'synthetic',
         turnNo: 1,
         executor: 'local',

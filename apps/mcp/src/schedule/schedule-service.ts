@@ -21,12 +21,13 @@ import {
 } from './schedule-arguments.ts'
 
 /**
- * The scheduled tasks for the agent (docs/plan/82-scheduled-tasks.md, Зп31–Зп34): the tasks of the
- * chat's author of the chat's own project — or without a project in a chat without one. Reading
+ * The scheduled tasks for the agent (docs/plan/82-scheduled-tasks.md, Зп31–Зп34, Зп54): the tasks
+ * of the chat's author, in the workspace of the chat — their personal one; a task has no project.
+ * Reading
  * is at once; a creation, a change and a deletion are reserved now, checked for everything that can
  * be checked — the rights, the 20 with the reservations open, the words, a run ahead, five changes
  * a turn — and applied by core when the turn ends (Зп33). Who the caller is, its workspace, chat,
- * turn and project come from the admitted turn, never from the arguments. In a pass of a scheduled
+ * turn come from the admitted turn, never from the arguments. In a pass of a scheduled
  * run without its client nothing is changed (Зп32): the role offers only `schedule_list` there.
  */
 
@@ -57,11 +58,7 @@ export interface McpPendingScheduleChange {
 export interface McpScheduleStore {
   /** The author of the chat and the zone of their browser; null — the chat has no author. */
   author(taskId: string): Promise<{ userId: string; timezone: string | null } | null>
-  list(input: {
-    userId: string
-    workspaceId: string
-    siteId: string | null
-  }): Promise<McpListedSchedule[]>
+  list(input: { userId: string; workspaceId: string }): Promise<McpListedSchedule[]>
   pending(taskId: string, turnNo: number): Promise<McpPendingScheduleChange[]>
   /** Throws a DomainError with the code and the words of its refusal. */
   reserve(input: {
@@ -181,8 +178,8 @@ export class McpScheduleService {
   }
 
   /**
-   * The author's tasks of this chat's project (null — without one), the changes this turn
-   * reserved, the time now and the zone of the client (`users.timezone`, else Moscow).
+   * The author's tasks in the workspace of this chat — their personal one (Зп54) —, the changes
+   * this turn reserved, the time now and the zone of the client (`users.timezone`, else Moscow).
    */
   async list(scope: McpTurnAccess, args: unknown = {}): Promise<McpScheduleAnswer> {
     if (!scheduleListArgumentsSchema.safeParse(args ?? {}).success)
@@ -193,11 +190,7 @@ export class McpScheduleService {
       const now = this.#now()
       const timezone = zoneOf(author.timezone)
       const [schedules, pending] = await Promise.all([
-        this.#store.list({
-          userId: author.userId,
-          workspaceId: scope.workspaceId,
-          siteId: scope.siteId,
-        }),
+        this.#store.list({ userId: author.userId, workspaceId: scope.workspaceId }),
         this.#store.pending(scope.taskId, scope.turn),
       ])
       return bounded({
@@ -205,7 +198,6 @@ export class McpScheduleService {
         now: now.toISOString(),
         timezone,
         clientTime: wallClockOf(now, timezone),
-        project: scope.siteId === null ? 'none' : 'this_chat',
         schedules: schedules.map((task) => ({
           scheduleId: task.id,
           name: task.name,
@@ -241,22 +233,16 @@ export class McpScheduleService {
     }
   }
 
-  /** A new task of this chat's project — or of none —, once the client agreed to it (Зп34). */
+  /** A new task of the chat's author, once the client agreed to it (Зп34, Зп54). */
   async create(scope: McpTurnAccess, args: unknown): Promise<McpScheduleAnswer> {
     if (scope.unattended) return { ok: false, ...MCP_UNATTENDED_REFUSAL }
     const parsed = parsedOr(
       scheduleCreateArgumentsSchema,
       args,
-      'Give name, instructions, project, triggers and confirmedByClient: true',
+      'Give name, instructions, triggers and confirmedByClient: true',
     )
     if ('refused' in parsed) return parsed.refused
     const { confirmedByClient: _confirmed, ...change } = parsed.data
-    if ((change.project === 'this_chat') !== (scope.siteId !== null))
-      return badRequest(
-        scope.siteId === null
-          ? 'A chat without a project sets up tasks without a project: project "none". A task about a site is set up in a chat of its project or by hand in «Запланированные задачи»: offer the client that'
-          : 'A chat of a project sets up tasks of this project: project "this_chat"',
-      )
     return this.#reserve(scope, { kind: 'create', ...change })
   }
 

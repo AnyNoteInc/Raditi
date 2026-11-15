@@ -33,7 +33,6 @@ describe('plans (docs/business.md §6)', () => {
         creditsPer5h: null,
         creditsPerWeek: 73,
         packCredits: null,
-        maxSites: 1,
         pageSites: 2,
         pageCustomNames: false,
       },
@@ -47,7 +46,6 @@ describe('plans (docs/business.md §6)', () => {
         creditsPer5h: null,
         creditsPerWeek: 350,
         packCredits: null,
-        maxSites: 3,
         pageSites: 10,
         pageCustomNames: true,
       },
@@ -61,7 +59,6 @@ describe('plans (docs/business.md §6)', () => {
         creditsPer5h: null,
         creditsPerWeek: 700,
         packCredits: null,
-        maxSites: 15,
         pageSites: 20,
         pageCustomNames: true,
       },
@@ -75,7 +72,6 @@ describe('plans (docs/business.md §6)', () => {
         creditsPer5h: null,
         creditsPerWeek: null,
         packCredits: 100,
-        maxSites: null,
         pageSites: null,
         pageCustomNames: false,
       },
@@ -89,7 +85,6 @@ describe('plans (docs/business.md §6)', () => {
         creditsPer5h: null,
         creditsPerWeek: null,
         packCredits: null,
-        maxSites: 1,
         pageSites: null,
         pageCustomNames: false,
       },
@@ -139,9 +134,9 @@ describe('Appendix 1 of the public offer', () => {
         // The windows of the work (plan 71): «до 20 Кредитов за 5 часов и 55 в неделю».
         // Only the week since the owner's answer of 13.11.2026: «до 55 Кредитов в неделю».
         `(?:до (?:${whole} Кредит(?:|а|ов) за 5 часов и )?${whole}(?: Кредит(?:|а|ов))? в неделю; )?` +
-        String.raw`(?:до )?(\d+) Сайт(?:|а|ов) Заказчика` +
-        // Sites of pages (docs/plan/73-pages-sites.md, Дер37): «до 10 сайтов из страниц со своим именем».
-        String.raw`(?:; (?:до )?(\d+) сайт(?:|а|ов) из страниц( со своим именем)?)?$`,
+        // Sites of pages (docs/plan/73-pages-sites.md, Дер37): «до 10 сайтов из страниц со своим
+        // именем». Sites of the customer went with projects (docs/plan/83-remove-projects.md).
+        String.raw`(?:до )?(\d+) сайт(?:|а|ов) из страниц( со своим именем)?$`,
     ),
   }
   const pack = {
@@ -155,7 +150,7 @@ describe('Appendix 1 of the public offer', () => {
   function promised(cells: string[]) {
     const [name = '', price = '', terms = ''] = cells.map((cell) => cell.trim())
     const month = tariff.price.exec(price)
-    const [, credits, creditsPerDay, per5h, perWeek, maxSites, pageSites, ownNames] =
+    const [, credits, creditsPerDay, per5h, perWeek, pageSites, ownNames] =
       tariff.terms.exec(terms) ?? []
     if (month && credits !== undefined)
       return {
@@ -165,7 +160,6 @@ describe('Appendix 1 of the public offer', () => {
         creditsPerDay: creditsPerDay === undefined ? null : count(creditsPerDay),
         creditsPer5h: per5h === undefined ? null : count(per5h),
         creditsPerWeek: perWeek === undefined ? null : count(perWeek),
-        maxSites: count(maxSites),
         pageSites: pageSites === undefined ? null : count(pageSites),
         pageCustomNames: ownNames !== undefined,
       }
@@ -190,7 +184,6 @@ describe('Appendix 1 of the public offer', () => {
               creditsPerDay: plan.creditsPerDay,
               creditsPer5h: plan.creditsPer5h,
               creditsPerWeek: plan.creditsPerWeek,
-              maxSites: plan.maxSites,
               pageSites: plan.pageSites,
               pageCustomNames: plan.pageCustomNames,
             },
@@ -329,7 +322,9 @@ describe('subscription catalogue defaults', () => {
     for (const model of llmModelSeeds) {
       expect(model.enabled).toBe(false)
       expect(model.reserveOutputTokens).toBe(32_000)
+      expect(model.contextTokens).toBe(1_000_000)
       expect(Object.keys(model).sort()).toEqual([
+        'contextTokens',
         'enabled',
         'modelClass',
         'name',

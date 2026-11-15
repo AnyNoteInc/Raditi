@@ -5,9 +5,9 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ScheduleDialog, type ScheduleDialogOpening } from './schedule-dialog'
-import { NOW, scheduleDetail, SITE_ID } from './testing'
+import { NOW, scheduleDetail } from './testing'
 
-const { create, update, costHint, listProjects, listSchedules, push } = vi.hoisted(() => ({
+const { create, update, costHint, listSchedules, push } = vi.hoisted(() => ({
   create: vi.fn(async (input: { name: string }) => ({
     id: '019f2a00-0000-7000-8000-0000000000f1',
     ...input,
@@ -21,7 +21,6 @@ const { create, update, costHint, listProjects, listSchedules, push } = vi.hoist
     overHalf: true,
     nextRunAt: null,
   })),
-  listProjects: vi.fn(async () => [] as unknown[]),
   listSchedules: vi.fn(async () => ({ schedules: [] as unknown[], timezone: 'Europe/Moscow' })),
   push: vi.fn(),
 }))
@@ -51,18 +50,10 @@ vi.mock('@/trpc/client', () => ({
       create: mutation(create),
       update: mutation(update),
     },
-    project: { list: query('project.list', listProjects) },
   }),
 }))
 
 const USER = 'user-1'
-const project = {
-  id: SITE_ID,
-  name: 'Кофейня «Крошка»',
-  host: 'kroshka.example',
-  chat: { state: 'ready', requirements: { repository: true, browser: true } },
-}
-
 function show(
   opening: ScheduleDialogOpening,
   handlers: { onClose?: () => void; onSaved?: () => void } = {},
@@ -93,7 +84,6 @@ function choose(dialog: HTMLElement, label: string, option: string, index = 0) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  listProjects.mockResolvedValue([])
   listSchedules.mockResolvedValue({ schedules: [], timezone: 'Europe/Moscow' })
   sessionStorage.clear()
   localStorage.clear()
@@ -128,7 +118,6 @@ describe('«Новая запланированная задача» (plan 82, �
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith(
         {
-          siteId: null,
           name: 'Сводка заявок',
           instructions: 'Соберите заявки за сутки',
           effort: 'high',
@@ -147,7 +136,12 @@ describe('«Новая запланированная задача» (plan 82, �
   it('warns that the task runs without the client, and says its cost', async () => {
     const { dialog } = show({ kind: 'new' })
     expect(dialog).toHaveTextContent(/Задача выполняется без вас/)
-    expect(dialog).toHaveTextContent(/В админке сайта он только читает/)
+    // Зп56: on every site it only reads, and what to change it asks in the chat of the run.
+    expect(dialog).toHaveTextContent(
+      /На сайтах он только читает — ничего не отправляет, не сохраняет и не покупает/,
+    )
+    expect(dialog).toHaveTextContent(/подготовит и спросит вас в чате запуска/)
+    expect(dialog).not.toHaveTextContent(/админк|предпросмотр|выпуск/)
     // What the platform refuses in such a run (Зп28, Зп32): pages and the keyed skills too, the
     // skills in plain words.
     expect(dialog).toHaveTextContent(/страницы из раздела «Страницы» не публикует и не меняет/)
@@ -427,79 +421,66 @@ describe('«Новая запланированная задача» (plan 82, �
 })
 
 describe('a template (Зп9)', () => {
-  it('takes the only project of a template about a site', async () => {
-    listProjects.mockResolvedValue([project])
-    const { dialog } = show({ kind: 'new', template: template('site-check') })
-    expect(
-      await within(dialog).findByRole('button', {
-        name: 'Проект для этого чата: Кофейня «Крошка»',
-      }),
-    ).toBeInTheDocument()
+  it('fills a template in with «Размышление» on the left, and no project to choose (Зп55)', async () => {
+    const { dialog } = show({ kind: 'new', template: template('currency-rates') })
+    expect(within(dialog).getByRole('textbox', { name: 'Название' })).toHaveValue('Курс валют')
     expect(within(dialog).getByRole('button', { name: 'Размышление: Низкое' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: /^Проект/ })).toBeNull()
+    expect(within(dialog).queryByRole('link', { name: /проект/i })).toBeNull()
+    expect(within(dialog).getByRole('button', { name: 'Создать' })).toBeEnabled()
   })
 
-  it('wants a project when there is none, and offers to add one', async () => {
-    const { dialog } = show({ kind: 'new', template: template('site-check') })
-    const add = await within(dialog).findByRole('link', { name: 'Добавьте проект' })
-    expect(add).toHaveAttribute('href', '/projects/new')
-    expect(within(dialog).getByRole('button', { name: 'Создать' })).toBeDisabled()
-    // Untouched, the window has nothing to lose: the link goes.
-    expect(fireEvent.click(add)).toBe(true)
-    expect(screen.queryByRole('dialog', { name: 'Перейти к добавлению проекта?' })).toBeNull()
-  })
-
-  // F12: what the client changed is not lost without a question.
-  it('asks before leaving for the wizard what the client changed', async () => {
-    const { dialog } = show({ kind: 'new', template: template('site-check') })
-    const add = await within(dialog).findByRole('link', { name: 'Добавьте проект' })
-    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Что сделать агенту' }), {
-      target: { value: 'Проверьте и корзину' },
-    })
-    expect(fireEvent.click(add)).toBe(false)
-    const ask = screen.getByRole('dialog', { name: 'Перейти к добавлению проекта?' })
-    expect(ask).toHaveTextContent('то, что вы изменили в окне, не сохранится')
-    fireEvent.click(within(ask).getByRole('button', { name: 'Остаться' }))
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Перейти к добавлению проекта?' })).toBeNull(),
-    )
-    expect(push).not.toHaveBeenCalled()
-    fireEvent.click(add)
-    fireEvent.click(
-      within(screen.getByRole('dialog', { name: 'Перейти к добавлению проекта?' })).getByRole(
-        'button',
-        { name: 'Перейти' },
-      ),
-    )
-    expect(push).toHaveBeenCalledWith('/projects/new')
-  })
-
-  it('has no «Добавить проект» in the choice of the project: it would leave the window', async () => {
-    listProjects.mockResolvedValue([project])
-    const { dialog } = show({ kind: 'new' })
-    fireEvent.click(
-      await within(dialog).findByRole('button', { name: 'Проект для этого чата: Без проекта' }),
-    )
-    const menu = await screen.findByRole('menu', { name: 'Проект для этого чата' })
-    expect(
-      within(menu)
-        .getAllByRole('menuitem')
-        .map((item) => item.textContent),
-    ).toEqual(['Без проекта', expect.stringContaining('Кофейня «Крошка»')])
-  })
-
-  it('chooses the place for the addresses of «Конкуренты» to be written over', () => {
+  // Зп59: the place to fill in is chosen to be written over, said quietly, then as an error.
+  it('chooses the place to fill in, keeps «Создать» on, and sends nothing while it is left', async () => {
     const { dialog } = show({ kind: 'new', template: template('competitors') })
     const field = within(dialog).getByRole('textbox', {
       name: 'Что сделать агенту',
     }) as HTMLTextAreaElement
     expect(field).toHaveFocus()
-    expect(field.value.slice(field.selectionStart, field.selectionEnd)).toBe('[впишите адреса]')
-    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Название' }), {
-      target: { value: 'Конкуренты' },
-    })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Создать' }))
-    expect(within(dialog).getByText('Впишите адреса сайтов конкурентов')).toBeInTheDocument()
+    expect(field.value.slice(field.selectionStart, field.selectionEnd)).toBe(
+      '[впишите адреса сайтов]',
+    )
+    const hint = within(dialog).getByText('Замените текст в квадратных скобках своим')
+    expect(hint).not.toHaveClass('Mui-error')
+    expect(field).not.toHaveAttribute('aria-invalid')
+    expect(field.getAttribute('aria-describedby')).toBe(hint.id)
+    const button = within(dialog).getByRole('button', { name: 'Создать' })
+    expect(button).toBeEnabled()
+    // Elsewhere meanwhile: «Создать» brings the focus back on the place, chosen again.
+    within(dialog).getByRole('textbox', { name: 'Название' }).focus()
+    fireEvent.click(button)
     expect(create).not.toHaveBeenCalled()
+    const said = within(dialog).getByText('Замените текст в квадратных скобках своим')
+    expect(said).toHaveClass('Mui-error')
+    expect(field).toHaveAttribute('aria-invalid', 'true')
+    expect(field).toHaveFocus()
+    expect(field.value.slice(field.selectionStart, field.selectionEnd)).toBe(
+      '[впишите адреса сайтов]',
+    )
+    // Written over, the task is made.
+    fireEvent.change(field, {
+      target: { value: field.value.replace('[впишите адреса сайтов]', 'kofe.ru, chai.ru') },
+    })
+    fireEvent.click(button)
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(create.mock.calls[0]![0]).toMatchObject({
+      instructions:
+        'Посмотри сайты конкурентов: kofe.ru, chai.ru. Расскажи, какие у них сейчас цены, акции и новости.',
+      templateSlug: 'competitors',
+    })
+  })
+
+  it('tells the refusal of the place by the field of the instructions', async () => {
+    create.mockRejectedValueOnce(
+      Object.assign(new Error('Замените текст в квадратных скобках своим'), {
+        data: { code: 'BAD_REQUEST', domainCode: 'SCHEDULE_TEMPLATE_PLACEHOLDER' },
+      }),
+    )
+    const { dialog } = show({ kind: 'new', template: template('currency-rates') })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Создать' }))
+    const said = await within(dialog).findByText('Замените текст в квадратных скобках своим')
+    expect(said).toHaveClass('Mui-error')
+    expect(within(dialog).queryByRole('alert')).toBeNull()
   })
 })
 
@@ -528,105 +509,6 @@ describe('«Изменить задачу»', () => {
     const block = within(dialog).getByRole('group', { name: 'Время запуска 1' })
     fireEvent.change(within(block).getByLabelText('Время'), { target: { value: '10:00' } })
     expect(block).toHaveTextContent('Это время уже прошло — выберите другое')
-  })
-
-  // F32: a task keeps its project while that project takes no chat right now.
-  it('saves a template task whose project cannot take a chat now', async () => {
-    listProjects.mockResolvedValue([{ ...project, chat: { state: 'closed', requirements: null } }])
-    const schedule = scheduleDetail({ templateSlug: 'site-check', createdVia: 'template' })
-    const { dialog } = show({ kind: 'edit', schedule })
-    await waitFor(() => expect(listProjects).toHaveBeenCalled())
-    await waitFor(() =>
-      expect(
-        within(dialog).getByRole('button', { name: 'Проект для этого чата: Кофейня «Крошка»' }),
-      ).toBeInTheDocument(),
-    )
-    expect(dialog).not.toHaveTextContent('Этому шаблону нужен сайт')
-    expect(within(dialog).getByRole('button', { name: 'Сохранить' })).toBeEnabled()
-    const block = within(dialog).getByRole('group', { name: 'Время запуска 1' })
-    fireEvent.change(within(block).getByLabelText('Время'), { target: { value: '10:00' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }))
-    await waitFor(() =>
-      expect(update).toHaveBeenCalledWith(
-        { scheduleId: schedule.id, triggers: [{ kind: 'weekdays', time: '10:00' }] },
-        expect.anything(),
-      ),
-    )
-  })
-
-  // F9: the project of the task was deleted (Зп22); the task keeps it until the client moves it.
-  describe('of a deleted project', () => {
-    const GONE = '019f2a00-0000-7000-8000-00000000dead'
-    const orphan = () =>
-      scheduleDetail({
-        project: { id: GONE, name: 'Старый сайт', deleted: true },
-        enabled: false,
-        pausedReason: 'project_gone',
-      })
-    const costSites = () =>
-      (costHint.mock.calls as unknown as [{ queryKey: [string, { siteId: string | null }] }][]).map(
-        ([context]) => context.queryKey[1].siteId,
-      )
-
-    it('says «Проект удалён» in the pill with nothing chosen, and prices it without a project', async () => {
-      listProjects.mockResolvedValue([project])
-      const { dialog } = show({ kind: 'edit', schedule: orphan() })
-      const pill = await within(dialog).findByRole('button', {
-        name: 'Проект для этого чата: Проект удалён',
-      })
-      expect(dialog).not.toHaveTextContent('Старый сайт')
-      await waitFor(() => expect(costHint).toHaveBeenCalled())
-      expect(costSites()).toEqual([null])
-      fireEvent.click(pill)
-      const menu = await screen.findByRole('menu', { name: 'Проект для этого чата' })
-      for (const item of within(menu).getAllByRole('menuitem'))
-        expect(item).not.toHaveClass('Mui-selected')
-    })
-
-    it('moves it to «Без проекта» by the choice of it', async () => {
-      listProjects.mockResolvedValue([project])
-      const schedule = orphan()
-      const { dialog } = show({ kind: 'edit', schedule })
-      fireEvent.click(
-        await within(dialog).findByRole('button', {
-          name: 'Проект для этого чата: Проект удалён',
-        }),
-      )
-      const menu = await screen.findByRole('menu', { name: 'Проект для этого чата' })
-      fireEvent.click(within(menu).getByRole('menuitem', { name: 'Без проекта' }))
-      expect(
-        within(dialog).getByRole('button', { name: 'Проект для этого чата: Без проекта' }),
-      ).toBeInTheDocument()
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }))
-      await waitFor(() =>
-        expect(update).toHaveBeenCalledWith(
-          { scheduleId: schedule.id, siteId: null },
-          expect.anything(),
-        ),
-      )
-    })
-
-    it('tells the refusal of a project that is gone by the field of the project', async () => {
-      update.mockRejectedValueOnce(
-        Object.assign(
-          new Error('Проект этой задачи удалён — выберите другой проект или «Без проекта»'),
-          {
-            data: { code: 'CONFLICT', domainCode: 'SCHEDULE_PROJECT_GONE' },
-          },
-        ),
-      )
-      const schedule = orphan()
-      const { dialog } = show({ kind: 'edit', schedule })
-      fireEvent.change(within(dialog).getByRole('textbox', { name: 'Название' }), {
-        target: { value: 'Проверка сайта утром' },
-      })
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }))
-      const said = await within(dialog).findByText(
-        'Проект этой задачи удалён — выберите другой проект или «Без проекта»',
-      )
-      expect(said).toHaveClass('Mui-error')
-      expect(within(dialog).queryByRole('alert')).toBeNull()
-    })
   })
 
   it('sends only what changed', async () => {

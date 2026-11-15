@@ -5,26 +5,20 @@ import {
   addedTriggerDraft,
   canAddTrigger,
   chatDraftOf,
-  formEdited,
   formNextRun,
   formOfSchedule,
   formOfTemplate,
   formProblems,
   frequenciesOf,
   hasProblems,
-  GONE_PROJECTS,
-  inProject,
   inScheduleTag,
   lastRunText,
-  liveProjectId,
   matchesSearch,
   missedText,
   newScheduleForm,
   newTriggerDraft,
   nextRunText,
   onceDateFor,
-  projectsOfSchedules,
-  projectText,
   runLines,
   scheduleStateText,
   sortSchedules,
@@ -32,7 +26,7 @@ import {
   type RunLine,
   type ScheduleForm,
 } from './schedule-model'
-import { NOW, scheduleDetail, scheduleItem, scheduleRun, SITE_ID } from './testing'
+import { NOW, scheduleDetail, scheduleItem, scheduleRun } from './testing'
 
 const MSK = 'Europe/Moscow'
 const at = (iso: string) => new Date(iso)
@@ -94,43 +88,6 @@ describe('the filters, the search and the order of «Ваши» (Зп3)', () => 
       'a',
       'c',
     ])
-  })
-
-  // F9: a deleted project is no live project (Зп22): its tasks go together, never by its name.
-  it('puts the tasks of deleted projects in one group «Проект удалён»', () => {
-    const own = scheduleItem({ id: 'e' })
-    const none = scheduleItem({ id: 'f', project: null })
-    const gone = (id: string, name: string) =>
-      scheduleItem({
-        id,
-        project: { id: `0199a3f2-0000-8000-8000-00000000000${id}`, name, deleted: true },
-      })
-    const first = gone('1', 'Старый сайт')
-    const second = gone('2', 'Другой старый')
-    const items = [own, first, none, second]
-    expect(projectsOfSchedules(items)).toEqual([
-      { id: SITE_ID, name: 'Кофейня «Крошка»' },
-      { id: GONE_PROJECTS, name: 'Проект удалён' },
-      { id: null, name: null },
-    ])
-    expect(items.filter((item) => inProject(item, GONE_PROJECTS))).toEqual([first, second])
-    expect(items.filter((item) => inProject(item, SITE_ID))).toEqual([own])
-    expect(items.filter((item) => inProject(item, first.project!.id))).toEqual([])
-    expect(items.map(projectText)).toEqual([
-      'Кофейня «Крошка»',
-      'Проект удалён',
-      'Без проекта',
-      'Проект удалён',
-    ])
-    expect(items.map(liveProjectId)).toEqual([SITE_ID, null, null, null])
-  })
-
-  // The window keeps the project of the task, so that a move from it is sent (`changeOf`).
-  it('keeps a deleted project in the form of the task', () => {
-    const schedule = scheduleDetail({
-      project: { id: '0199a3f2-0000-8000-8000-000000000009', name: 'Старый', deleted: true },
-    })
-    expect(formOfSchedule(schedule, NOW).siteId).toBe('0199a3f2-0000-8000-8000-000000000009')
   })
 })
 
@@ -268,16 +225,18 @@ describe('the fields of the window (Зп7, Зп8)', () => {
     expect(formNextRun(manual, NOW)).toBeNull()
   })
 
-  it('fills a template in, and its project only when there is just one', () => {
-    const check = formOfTemplate(site('site-check'), MSK, NOW, SITE_ID)
-    expect(check).toMatchObject({
-      name: 'Проверка сайта',
-      siteId: SITE_ID,
+  it('fills a template in, with no project to choose (Зп58)', () => {
+    const rates = formOfTemplate(site('currency-rates'), MSK, NOW)
+    expect(rates).toMatchObject({
+      name: 'Курс валют',
       effort: 'low',
-      templateSlug: 'site-check',
+      templateSlug: 'currency-rates',
     })
-    expect(triggersOfForm(check)).toEqual([{ kind: 'weekdays', time: '09:00' }])
-    expect(formOfTemplate(site('competitors'), MSK, NOW, SITE_ID).siteId).toBeNull()
+    expect(rates).not.toHaveProperty('siteId')
+    expect(triggersOfForm(rates)).toEqual([{ kind: 'weekdays', time: '09:00' }])
+    expect(triggersOfForm(formOfTemplate(site('holidays'), MSK, NOW))).toEqual([
+      { kind: 'monthly', time: '10:00', day: 25 },
+    ])
   })
 
   it('offers «Каждый час» and «Только вручную» only alone, and five times at most', () => {
@@ -303,9 +262,7 @@ describe('the fields of the window (Зп7, Зп8)', () => {
       { kind: 'daily', time: '18:00' },
       { kind: 'daily', time: '21:00' },
     ])
-    expect(
-      hasProblems(formProblems(shown, NOW, { submitted: true, templateNeedsProject: false })),
-    ).toBe(false)
+    expect(hasProblems(formProblems(shown, NOW, { submitted: true }))).toBe(false)
     expect(formNextRun(shown, NOW)).not.toBeNull()
   })
 
@@ -331,7 +288,7 @@ describe('the fields of the window (Зп7, Зп8)', () => {
 })
 
 describe('what stops «Создать» (Зп8, Зп9, Зп11, Зп15)', () => {
-  const options = { submitted: false, templateNeedsProject: false }
+  const options = { submitted: false }
 
   it('says at once that a single run is in the past', () => {
     const draft = {
@@ -354,14 +311,11 @@ describe('what stops «Создать» (Зп8, Зп9, Зп11, Зп15)', () => {
     expect(formNextRun(form({ triggers: [a, b] }), NOW)).toBeNull()
   })
 
-  it('wants a day of the week and the project of a template about a site', () => {
+  it('wants a day of the week', () => {
     const week = { ...newTriggerDraft(MSK, NOW), frequency: 'weekly' as const, days: [] }
     expect(formProblems(form({ triggers: [week] }), NOW, options).triggers[week.key]).toBe(
       'Выберите хотя бы один день',
     )
-    expect(
-      formProblems(form(), NOW, { submitted: false, templateNeedsProject: true }).project,
-    ).toBe('Этому шаблону нужен проект — выберите его')
   })
 
   // F27: a half-typed or cleared date is the block's own fault, not the rule of an hour.
@@ -426,32 +380,28 @@ describe('what stops «Создать» (Зп8, Зп9, Зп11, Зп15)', () => {
     ).toBeUndefined()
   })
 
-  it('tells the empty name and instructions, and the place for the addresses, once saved', () => {
+  it('tells the empty name and instructions, and a place to fill in, once saved (Зп59)', () => {
     const empty = form({ name: ' ', instructions: '' })
     expect(hasProblems(formProblems(empty, NOW, options))).toBe(false)
     expect(formProblems(empty, NOW, { ...options, submitted: true })).toMatchObject({
       name: 'Назовите задачу',
       instructions: 'Напишите, что сделать агенту',
     })
-    const competitors = formOfTemplate(site('competitors'), MSK, NOW, null)
-    expect(formProblems(competitors, NOW, { ...options, submitted: true }).instructions).toBe(
-      'Впишите адреса сайтов конкурентов',
-    )
-  })
-})
-
-describe('what the client changed in the window', () => {
-  it('counts the words, the schedules, the level and the notice — not the zone or the project', () => {
-    const was = form()
-    expect(formEdited({ ...was }, was)).toBe(false)
-    expect(formEdited({ ...was, timezone: 'Asia/Novosibirsk', siteId: SITE_ID }, was)).toBe(false)
-    expect(formEdited({ ...was, name: 'Другая' }, was)).toBe(true)
-    expect(formEdited({ ...was, instructions: 'Другая' }, was)).toBe(true)
-    expect(formEdited({ ...was, effort: 'max' }, was)).toBe(true)
-    expect(formEdited({ ...was, notify: false }, was)).toBe(true)
-    const [draft] = was.triggers
-    if (draft === undefined) throw new Error('no block')
-    expect(formEdited({ ...was, triggers: [{ ...draft, time: '10:00' }] }, was)).toBe(true)
+    for (const slug of ['competitors', 'site-check', 'reviews']) {
+      const template = formOfTemplate(site(slug), MSK, NOW)
+      // Quiet before «Создать», an error of the field after it.
+      expect(formProblems(template, NOW, options).instructions).toBeUndefined()
+      expect(formProblems(template, NOW, { ...options, submitted: true }).instructions).toBe(
+        'Замените текст в квадратных скобках своим',
+      )
+    }
+    // The same place written by hand, in a task of no template, is refused alike.
+    expect(
+      formProblems(form({ instructions: 'Открой [впишите адрес]' }), NOW, {
+        ...options,
+        submitted: true,
+      }).instructions,
+    ).toBe('Замените текст в квадратных скобках своим')
   })
 })
 

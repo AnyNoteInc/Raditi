@@ -3,6 +3,7 @@ import {
   DEFAULT_SCHEDULE_TIMEZONE,
   DomainError,
   dueCountBetween,
+  hasScheduleTemplatePlaceholder,
   hasVisibleText,
   isClientRefusalReason,
   latestDueOf,
@@ -21,9 +22,9 @@ import {
   scheduleLimits,
   scheduleNameSchema,
   scheduleNotFound,
-  scheduleProjectGone,
   scheduleRunBusy,
   scheduleStartDedupeKey,
+  scheduleTemplatePlaceholder,
   scheduleTimezoneSchema,
   scheduleTriggerListSchema,
   scheduleTriggersInPast,
@@ -99,9 +100,6 @@ const textInvalid = () =>
     400,
   )
 
-/** The project of a task is not one of its workspace, or it was deleted. */
-const projectNotFound = () => new DomainError('NOT_FOUND', 'No such project in the workspace', 404)
-
 function checkedName(name: string): string {
   const parsed = scheduleNameSchema.safeParse(name)
   if (!parsed.success)
@@ -117,6 +115,9 @@ function checkedInstructions(text: string): string {
   if (looksLikeSecret(trimmed)) throw textHasSecret()
   const parsed = scheduleInstructionsSchema.safeParse(trimmed)
   if (!parsed.success) throw textInvalid()
+  // A place of a template left as it was, `[впишите …]`: no task is saved with it, the client's
+  // or the agent's (Зп59).
+  if (hasScheduleTemplatePlaceholder(parsed.data)) throw scheduleTemplatePlaceholder()
   return parsed.data
 }
 
@@ -259,21 +260,10 @@ async function userManages(
 }
 
 /**
- * The project of a task, alive and of its workspace. Its row is taken FOR KEY SHARE, as a new chat
- * takes it (`lockLiveSite` of @repo/trpc): a deletion in flight holds it FOR UPDATE, so the check
- * waits for it and reads its mark — a task is never written onto a project being deleted, which
- * `pauseSiteSchedules` of that deletion would not see (Зп22). A deleted project is told as such:
- * the task is moved to another project or to none, never turned on there.
+ * A task of its creator, alive; another's or a deleted one is never told apart (Зп25, Зп44). The
+ * creator manages their personal workspace, where every task is: the check stays the one of the
+ * pages (`chatAuthorManages`), with no reason of its own.
  */
-async function checkProject(tx: Tx, siteId: string | null, workspaceId: string): Promise<void> {
-  if (siteId === null) return
-  const [site] = await tx.$queryRaw<{ workspace_id: string; deleted_at: Date | null }[]>`
-    SELECT workspace_id, deleted_at FROM sites WHERE id = ${siteId}::uuid FOR KEY SHARE`
-  if (!site || site.workspace_id !== workspaceId) throw projectNotFound()
-  if (site.deleted_at !== null) throw scheduleProjectGone()
-}
-
-/** A task of its creator, alive; another's or a deleted one is never told apart (Зп25). */
 async function ownSchedule(tx: Tx, scheduleId: string, userId: string): Promise<ScheduledTask> {
   const task = await lockSchedule(tx, scheduleId)
   if (!task || task.deletedAt !== null || task.createdById !== userId) throw scheduleNotFound()
@@ -315,9 +305,8 @@ async function checkRoom(tx: Tx, workspaceId: string, except?: string): Promise<
 export interface ScheduledTaskInput {
   /** The creator: an owner or an administrator of the workspace (Зп25). */
   userId: string
-  /** The workspace of the project; without one — the creator's personal workspace. */
+  /** The creator's personal workspace (Зп44): a task has no project. */
   workspaceId: string
-  siteId: string | null
   name: string
   instructions: string
   effort: ReasoningEffort
@@ -348,14 +337,12 @@ async function newTaskData(
     timezone: input.timezone,
     notify: input.notify ?? true,
   })
-  await checkProject(tx, input.siteId, input.workspaceId)
   const enabled = input.enabled ?? true
   const nextRunAt = nextRunFor(fields, now, recentSince)
   if (enabled) await checkRoom(tx, input.workspaceId)
   return {
     id: uuidv7(),
     workspaceId: input.workspaceId,
-    siteId: input.siteId,
     createdById: input.userId,
     name: fields.name,
     instructions: fields.instructions,
@@ -372,9 +359,9 @@ async function newTaskData(
 }
 
 /**
- * «Создать» of the window (Зп7, Зп9): the creator manages the workspace, the project is its own
- * and alive, the fields pass the rules of the domain, a single run is ahead, and an enabled task
- * fits the 20 of the workspace — counted under its row.
+ * «Создать» of the window (Зп7, Зп9): the creator manages the workspace, the fields pass the rules
+ * of the domain, a single run is ahead, and an enabled task fits the 20 of the workspace — counted
+ * under its row.
  */
 export async function createScheduledTask(
   db: Db,
@@ -396,8 +383,6 @@ export interface ScheduledTaskPatch {
   triggers?: readonly ScheduleTrigger[]
   timezone?: string
   notify?: boolean
-  /** Another project, or none, with the workspace it belongs to (Зп16, Зп25). */
-  project?: { siteId: string | null; workspaceId: string }
   /** Paused (false) or resumed (true); left out — as it is. */
   enabled?: boolean
 }
@@ -406,7 +391,7 @@ export interface ScheduledTaskPatch {
 interface PlannedChange {
   fields: ScheduleFields
   enabled: boolean
-  /** It turns the task on: counted against the 20 (Зп16), its project checked. */
+  /** It turns the task on: counted against the 20 (Зп16). */
   enabling: boolean
   pausing: boolean
   nextRunAt: Date | null
@@ -457,8 +442,8 @@ function planChange(
 }
 
 /**
- * A change of a locked task, in the caller's transaction with the workspaces locked (Зп13–Зп16):
- * a task enabled — or moved to another workspace enabled — fits the 20 there, its project alive.
+ * A change of a locked task, in the caller's transaction with its workspace locked (Зп13–Зп16): a
+ * task enabled fits the 20 there.
  */
 async function changeInTx(
   tx: Tx,
@@ -473,12 +458,7 @@ async function changeInTx(
     now,
     recentSince,
   )
-  const workspaceId = patch.project?.workspaceId ?? task.workspaceId
-  const siteId = patch.project !== undefined ? patch.project.siteId : task.siteId
-  const moved = workspaceId !== task.workspaceId || siteId !== task.siteId
-  if (moved || enabling) await checkProject(tx, siteId, workspaceId)
-  if (enabled && (enabling || workspaceId !== task.workspaceId))
-    await checkRoom(tx, workspaceId, task.id)
+  if (enabling) await checkRoom(tx, task.workspaceId, task.id)
   const row = await tx.scheduledTask.update({
     where: { id: task.id },
     data: {
@@ -488,16 +468,10 @@ async function changeInTx(
       triggers: fields.triggers as Prisma.InputJsonValue,
       timezone: fields.timezone,
       notify: fields.notify,
-      workspaceId,
-      siteId,
       enabled,
       nextRunAt,
-      // A task paused by the client has no reason of its own; one resumed is a fresh start. A
-      // task of a deleted project moved to another or to none is no longer stopped by it: off,
-      // it is a task the client keeps paused (Зп22).
-      ...(enabled || pausing || (moved && task.pausedReason === 'project_gone')
-        ? { pausedReason: null }
-        : {}),
+      // A task paused by the client has no reason of its own; one resumed is a fresh start.
+      ...(enabled || pausing ? { pausedReason: null } : {}),
       ...(enabling ? { refusalStreak: 0, lastRefusalReason: null } : {}),
     },
   })
@@ -505,9 +479,8 @@ async function changeInTx(
 }
 
 /**
- * «Сохранить» of the window (Зп7): by its creator while they manage its workspace — and, for a
- * move, the workspace it goes to. The name, the words, «Размышление» and the notices leave the due
- * moment as it was (Зп13).
+ * «Сохранить» of the window (Зп7): by its creator while they manage its workspace. The name, the
+ * words, «Размышление» and the notices leave the due moment as it was (Зп13).
  */
 export async function updateScheduledTask(
   db: Db,
@@ -519,16 +492,8 @@ export async function updateScheduledTask(
       select: { workspaceId: true },
     })
     if (!before) throw scheduleNotFound()
-    const target = input.patch.project?.workspaceId
-    await lockWorkspaces(
-      tx,
-      target !== undefined ? [before.workspaceId, target] : [before.workspaceId],
-    )
+    await lockWorkspaces(tx, [before.workspaceId])
     const task = await ownSchedule(tx, input.scheduleId, input.userId)
-    // A move between the reading and the lock: the workspace locked is no longer its own.
-    if (task.workspaceId !== before.workspaceId) throw scheduleNotFound()
-    if (target !== undefined && !(await userManages(tx, input.userId, target)))
-      throw scheduleForbidden()
     return (await changeInTx(tx, task, input.patch, input.now)).row
   })
 }
@@ -574,23 +539,18 @@ const runOfList = {
         status: true,
         title: true,
         deletedAt: true,
-        // A chat of a deleted project left the cabinet with it (Зп6: «Чат удалён»).
-        site: { select: { deletedAt: true } },
       },
     },
   },
 } satisfies Prisma.ScheduledTask$runsArgs
 
-const siteOfList = { select: { id: true, name: true, url: true, deletedAt: true } } as const
-
 /**
  * «Ваши» (Зп25): the tasks a user created, not deleted, in workspaces they are still a member of,
- * each with its latest run. `siteId` — of one project; null — without a project (`schedule_list`
- * of a chat without one, Зп31).
+ * each with its latest run; `workspaceId` — of one workspace (`schedule_list`, Зп54).
  */
 export function listScheduledTasks(
   db: Pick<PrismaClient, 'scheduledTask'>,
-  input: { userId: string; workspaceId?: string; siteId?: string | null },
+  input: { userId: string; workspaceId?: string },
 ) {
   return db.scheduledTask.findMany({
     where: {
@@ -598,10 +558,9 @@ export function listScheduledTasks(
       deletedAt: null,
       workspace: { members: { some: { userId: input.userId } } },
       ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
-      ...(input.siteId !== undefined ? { siteId: input.siteId } : {}),
     },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    include: { site: siteOfList, runs: { ...runOfList, take: 1 } },
+    include: { runs: { ...runOfList, take: 1 } },
   })
 }
 
@@ -617,7 +576,7 @@ export async function readScheduledTask(
       deletedAt: null,
       workspace: { members: { some: { userId: input.userId } } },
     },
-    include: { site: siteOfList, runs: { ...runOfList, take: 50 } },
+    include: { runs: { ...runOfList, take: 50 } },
   })
   if (!task) throw scheduleNotFound()
   return task
@@ -637,53 +596,10 @@ export async function rememberUserTimezone(
   return canonical
 }
 
-// ———————————————————————————————————————— the project
-
-/** What «Удалить проект» stops: the tasks of the project not deleted, not already finished. */
-const stoppedBySiteDeletion = (siteId: string): Prisma.ScheduledTaskWhereInput => ({
-  siteId,
-  deletedAt: null,
-  OR: [{ pausedReason: null }, { pausedReason: { notIn: ['completed', 'project_gone'] } }],
-})
-
-/** How many tasks «Удалить проект» stops: the window of the deletion names them (Зп22). */
-export function countSiteSchedules(
-  db: Pick<PrismaClient, 'scheduledTask'>,
-  siteId: string,
-): Promise<number> {
-  return db.scheduledTask.count({ where: stoppedBySiteDeletion(siteId) })
-}
-
 /**
- * The tasks of a project, locked before its row by «Удалить проект»: the tick and «Запустить
- * сейчас» take a task's row and then the project's (the run they write refers to it), so the
- * deletion takes them in the same order — tasks, then the project — and the two never wait on
- * each other in a circle (Зп22, Зп24).
- */
-export async function lockSiteSchedules(tx: Tx, siteId: string): Promise<void> {
-  await tx.$queryRaw`
-    SELECT id FROM scheduled_tasks WHERE site_id = ${siteId}::uuid AND deleted_at IS NULL
-    ORDER BY id FOR UPDATE`
-}
-
-/**
- * The tasks of a deleted project stop — `project_gone`, without a notice (Зп22) — in the
- * transaction of the deletion, after `lockSiteSchedules` and the lock of the project: a task
- * moved onto the project in between is locked here and stopped as well. Returns how many.
- */
-export async function pauseSiteSchedules(tx: Tx, siteId: string): Promise<number> {
-  await lockSiteSchedules(tx, siteId)
-  const paused = await tx.scheduledTask.updateMany({
-    where: stoppedBySiteDeletion(siteId),
-    data: { enabled: false, nextRunAt: null, pausedReason: 'project_gone' },
-  })
-  return paused.count
-}
-
-/**
- * A task stops by itself (Зп21, Зп22): the gate of a chat refused its first pass (`not_accepted`),
- * the creator lost the right. A task the client paused takes the reason as well; one stopped for
- * another reason keeps its own. Returns whether it stopped now.
+ * A task stops by itself (Зп21, Зп22): the gate of a chat refused its first pass (`not_accepted`).
+ * A task the client paused takes the reason as well; one stopped for another reason keeps its own.
+ * Returns whether it stopped now.
  */
 export async function pauseSchedule(
   tx: Tx,
@@ -705,7 +621,6 @@ export async function pauseSchedule(
 /** The fields of a task a run takes with it (Зп20). */
 const snapshotOf = (task: ScheduledTask) => ({
   scheduledTaskId: task.id,
-  siteId: task.siteId,
   name: task.name,
   instructions: task.instructions,
   effort: task.effort,
@@ -990,16 +905,11 @@ export interface RecordedRunOutcome {
   refusalStreak: number
 }
 
-const pausingReasons = {
-  project_gone: 'project_gone',
-  member_gone: 'member_gone',
-} as const satisfies Partial<Record<ScheduledRunReason, SchedulePausedReason>>
-
 /**
  * The outcome of a run, once (Зп21, Зп22): only a run that waits takes one. A start clears the
  * refusals in a row; a refusal of its schedule for a reason of the client adds to them, and the
- * third in a row stops the task (`refused`); a project gone or a right lost stops it at once. A
- * refusal of «Запустить сейчас» is told in the cabinet and counts for nothing.
+ * third in a row stops the task (`refused`) (Зп48). A refusal of «Запустить сейчас» is told in
+ * the cabinet and counts for nothing.
  */
 export async function recordRunOutcome(
   db: Db,
@@ -1060,13 +970,12 @@ export async function recordRunOutcomeInTx(
     return result
   }
   if (outcome.status !== 'refused') return result
-  const stops = (pausingReasons as Partial<Record<string, SchedulePausedReason>>)[outcome.reason]
   const counted = trigger === 'schedule' && isClientRefusalReason(outcome.reason)
   const streak = counted ? task.refusalStreak + 1 : task.refusalStreak
   result.refusalStreak = streak
   result.repeated = trigger === 'schedule' && task.lastRefusalReason === outcome.reason
-  const pause =
-    stops ?? (counted && streak >= scheduleLimits.refusalsToPause ? 'refused' : undefined)
+  const pause: SchedulePausedReason | undefined =
+    counted && streak >= scheduleLimits.refusalsToPause ? 'refused' : undefined
   const stopping = pause !== undefined && (task.enabled || task.pausedReason === null)
   await tx.scheduledTask.update({
     where: { id: task.id },
@@ -1093,8 +1002,8 @@ export const scheduledRunClosed = (): DomainError =>
  * The start of a run takes its task's row first (Зп20): every writer of the outcome of a run —
  * the sweep, the last delivery of core giving up, «Запустить сейчас» dropping its run — takes it
  * too, so none closes the run while its chat is being made. Taken before anything else of the
- * transaction that makes the chat, in the order of the tick: the task, then its project. Whether
- * the run still waits; false — its outcome is recorded, or it is gone.
+ * transaction that makes the chat. Whether the run still waits; false — its outcome is recorded, or
+ * it is gone.
  */
 export async function lockWaitingRun(tx: Tx, runId: string): Promise<boolean> {
   const run = await tx.scheduledRun.findUnique({
@@ -1164,7 +1073,6 @@ export type ScheduleChangeRequest =
 
 /** The fields of a creation a reservation holds, checked and with its single runs as moments. */
 interface CreationPayload extends ScheduleFields {
-  siteId: string | null
   enabled: boolean
   /** It would enable a task: counted against the 20 (Зп16). */
   enables: boolean
@@ -1172,7 +1080,7 @@ interface CreationPayload extends ScheduleFields {
 
 /** What an update holds: the fields it sets, checked, and the name of the task then. */
 interface UpdatePayload {
-  patch: Omit<ScheduledTaskPatch, 'project'>
+  patch: ScheduledTaskPatch
   enables: boolean
   name: string
 }
@@ -1188,14 +1096,14 @@ export interface ReservedScheduleChange {
   /** The task it changes; null — a creation. */
   scheduleId: string | null
   /** The task as it will be; null — a deletion, or a reservation cancelled. */
-  fields: (ScheduleFields & { siteId: string | null; enabled: boolean }) | null
+  fields: (ScheduleFields & { enabled: boolean }) | null
   /** Its next due moment then; null — paused, only by hand, or none. */
   nextRunAt: Date | null
   /** `schedule_delete` of a reservation of this turn: it is gone, nothing will change. */
   cancelled: boolean
 }
 
-/** The chat of a turn: its workspace locked, its author and project. */
+/** The chat of a turn: its workspace locked, its author. */
 async function lockChat(tx: Tx, workspaceId: string, taskId: string) {
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT w.id FROM workspaces w
@@ -1205,7 +1113,7 @@ async function lockChat(tx: Tx, workspaceId: string, taskId: string) {
   if (rows.length === 0) throw scheduleNotFound()
   const chat = await tx.task.findUniqueOrThrow({
     where: { id: taskId },
-    select: { id: true, siteId: true, createdById: true, workspaceId: true },
+    select: { id: true, createdById: true, workspaceId: true },
   })
   if (!chat.createdById || !(await chatAuthorManages(tx, taskId, workspaceId)))
     throw scheduleForbidden()
@@ -1214,15 +1122,17 @@ async function lockChat(tx: Tx, workspaceId: string, taskId: string) {
 
 type LockedChat = Awaited<ReturnType<typeof lockChat>>
 
-/** A task of the chat's author and of the chat's project (Зп31): what `schedule_list` shows. */
+/**
+ * A task of the chat's author in the chat's workspace — their personal one (Зп31, Зп54): what
+ * `schedule_list` shows.
+ */
 async function chatSchedule(tx: Tx, chat: LockedChat, scheduleId: string): Promise<ScheduledTask> {
   const task = await lockSchedule(tx, scheduleId)
   if (
     !task ||
     task.deletedAt !== null ||
     task.workspaceId !== chat.workspaceId ||
-    task.createdById !== chat.authorId ||
-    task.siteId !== chat.siteId
+    task.createdById !== chat.authorId
   )
     throw scheduleNotFound()
   return task
@@ -1233,7 +1143,7 @@ function toolPatch(
   args: Omit<ScheduleUpdateArguments, 'confirmedByClient' | 'scheduleId' | 'reservedId'>,
   timezone: string,
   now: Date,
-): Omit<ScheduledTaskPatch, 'project'> {
+): ScheduledTaskPatch {
   return {
     ...(args.name !== undefined ? { name: args.name } : {}),
     ...(args.instructions !== undefined ? { instructions: args.instructions } : {}),
@@ -1259,7 +1169,6 @@ async function checkCreation(
   except?: string,
 ): Promise<{ payload: CreationPayload; nextRunAt: Date | null }> {
   const fields = checkedFields(payload)
-  await checkProject(tx, payload.siteId, chat.workspaceId)
   const nextRunAt = nextRunFor(fields, now)
   if (payload.enabled) {
     const taken =
@@ -1270,7 +1179,6 @@ async function checkCreation(
   return {
     payload: {
       ...fields,
-      siteId: payload.siteId,
       enabled: payload.enabled,
       enables: payload.enabled,
     },
@@ -1283,14 +1191,13 @@ async function checkUpdate(
   tx: Tx,
   chat: LockedChat,
   task: ScheduledTask,
-  patch: Omit<ScheduledTaskPatch, 'project'>,
+  patch: ScheduledTaskPatch,
   now: Date,
   except?: string,
 ): Promise<PlannedChange> {
   // The rules changeInTx applies at the end of the turn; the reservations open count here.
   const planned = planChange(task, patch, now)
   if (planned.enabling) {
-    await checkProject(tx, task.siteId, task.workspaceId)
     const taken =
       (await enabledTasks(tx, chat.workspaceId, task.id)) +
       (await enablingReservations(tx, chat.workspaceId, except))
@@ -1335,8 +1242,8 @@ const updateOf = (row: ScheduleReservation) => row.payload as unknown as UpdateP
 
 /**
  * `schedule_create`, `schedule_update`, `schedule_delete` (Зп31–Зп33): a reservation of the turn,
- * checked now — the author manages the workspace, the project is the chat's, the task is theirs
- * and of the chat's project, the words and the schedules pass, a single run is ahead, at most
+ * checked now — the author manages the workspace, the task is theirs, the words and the
+ * schedules pass, a single run is ahead, at most
  * five changes a turn and 20 enabled tasks a workspace with the reservations open — and applied
  * by core when the turn ended. `reservedId` amends or cancels a reservation of this turn; a second
  * change of one task in a turn amends the first.
@@ -1357,12 +1264,6 @@ export async function reserveScheduleChange(
     const turn = { taskId, turnNo }
 
     if (change.kind === 'create') {
-      if ((change.project === 'this_chat') !== (chat.siteId !== null))
-        throw badRequest(
-          chat.siteId === null
-            ? 'A chat without a project sets up tasks without a project: project "none". A task about a site is set up in a chat of its project or by hand in «Запланированные задачи»'
-            : 'A chat of a project sets up tasks of this project: project "this_chat"',
-        )
       const author = await tx.user.findUnique({
         where: { id: chat.authorId },
         select: { timezone: true },
@@ -1381,7 +1282,6 @@ export async function reserveScheduleChange(
           triggers: checkedTriggers(resolved(change.triggers, timezone, now)),
           timezone,
           notify: change.notify ?? true,
-          siteId: chat.siteId,
           enabled: true,
         },
         now,
@@ -1451,7 +1351,7 @@ export async function reserveScheduleChange(
       return reserved(
         row,
         task.id,
-        { ...checked.fields, siteId: task.siteId, enabled: checked.enabled },
+        { ...checked.fields, enabled: checked.enabled },
         checked.nextRunAt,
       )
     }
@@ -1496,7 +1396,7 @@ export async function reserveScheduleChange(
 function reserved(
   row: ScheduleReservation,
   scheduleId: string | null,
-  task: (ScheduleFields & { siteId: string | null; enabled: boolean }) | null,
+  task: (ScheduleFields & { enabled: boolean }) | null,
   nextRunAt: Date | null,
 ): ReservedScheduleChange {
   return {
@@ -1513,7 +1413,6 @@ function reserved(
             triggers: task.triggers,
             timezone: task.timezone,
             notify: task.notify,
-            siteId: task.siteId,
             enabled: task.enabled,
           },
     nextRunAt,
@@ -1543,7 +1442,7 @@ async function amendUpdate(
   return reserved(
     updated,
     task.id,
-    { ...checked.fields, siteId: task.siteId, enabled: checked.enabled },
+    { ...checked.fields, enabled: checked.enabled },
     checked.nextRunAt,
   )
 }
@@ -1568,7 +1467,7 @@ export interface AppliedScheduleChange {
 
 /**
  * Applies a change a turn reserved, at its end (Зп33): everything checked again — the author still
- * manages the workspace, the task is still theirs and of the chat's project, the words, the
+ * manages the workspace, the task is still theirs, the words, the
  * schedules and the 20 — then the change and the close of its reservation in one transaction. A
  * single run the agent asked for, due by now but not before it asked and not older than the
  * catch-up limit, becomes the due moment the next tick runs (Зп15). A refusal throws and closes
@@ -1595,14 +1494,11 @@ export async function applyScheduleChange(
 
     if (row.kind === 'create') {
       const payload = creationOf(row)
-      // The project of the chat: a reservation never makes a task of another one.
-      if (payload.siteId !== chat.siteId) throw scheduleNotFound()
       const data = await newTaskData(
         tx,
         {
           userId: chat.authorId,
           workspaceId: chat.workspaceId,
-          siteId: payload.siteId,
           name: payload.name,
           instructions: payload.instructions,
           effort: payload.effort,

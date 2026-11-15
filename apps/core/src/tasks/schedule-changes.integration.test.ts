@@ -21,7 +21,8 @@ describe('scheduleLeftReasonOf', () => {
     expect(scheduleLeftReasonOf('SCHEDULE_LIMIT')).toBe('limit')
     expect(scheduleLeftReasonOf('SCHEDULE_NOT_FOUND')).toBe('not_found')
     expect(scheduleLeftReasonOf('NOT_FOUND')).toBe('not_found')
-    expect(scheduleLeftReasonOf('SCHEDULE_PROJECT_GONE')).toBe('not_found')
+    // A place of a template left unfilled is a task that does not fit (Зп59).
+    expect(scheduleLeftReasonOf('SCHEDULE_TEMPLATE_PLACEHOLDER')).toBe('invalid')
     expect(scheduleLeftReasonOf('TASK_TEXT_HAS_SECRET')).toBe('text_refused')
     expect(scheduleLeftReasonOf('SCHEDULE_TOO_OFTEN')).toBe('invalid')
     expect(scheduleLeftReasonOf('SCHEDULE_IN_PAST')).toBe('invalid')
@@ -76,8 +77,6 @@ describe.skipIf(!enabled)('the scheduled tasks a turn changed, with PostgreSQL',
     return db.task.create({
       data: {
         workspaceId,
-        siteId: null,
-        needsRepository: false,
         needsBrowser: false,
         createdById: userId,
       },
@@ -107,7 +106,6 @@ describe.skipIf(!enabled)('the scheduled tasks a turn changed, with PostgreSQL',
         kind: 'create',
         name: patch.name ?? 'Проверка сайта',
         instructions: patch.instructions ?? 'Откройте главную и скажите, всё ли в порядке.',
-        project: 'none',
         triggers: [{ kind: 'daily', time: '09:00' }],
       },
     })
@@ -139,7 +137,6 @@ describe.skipIf(!enabled)('the scheduled tasks a turn changed, with PostgreSQL',
           triggers: [{ kind: 'daily', time: '09:00' }],
           timezone: 'Asia/Novosibirsk',
           nextRunAt: made.nextRunAt!.toISOString(),
-          siteId: null,
           effort: 'high',
           notify: true,
         },

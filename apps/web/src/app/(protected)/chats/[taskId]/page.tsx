@@ -24,7 +24,6 @@ export default async function Page({ params }: { params: Params }) {
   return (
     <DialogView
       key={chat.id}
-      project={chat.project}
       // A chat of a run: «По расписанию · <название задачи>» under its name (docs/plan/82, Зп43).
       schedule={chat.schedule}
       // The window of a scheduled task the cards of the feed open keeps its draft by the client.

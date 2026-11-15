@@ -26,9 +26,9 @@ const sections: readonly RailSection[] = [
   // After «Чаты» and before «Страницы» (owner's request of 15.11.2026, docs/plan/82, Зп1). The
   // label is «Задачи»: «Расписание» is 65 px at 11 px of Golos Text, over the 60 px of an item.
   { href: '/scheduled', label: 'Задачи', name: 'Запланированные задачи', icon: 'timer' },
-  // Between «Чаты» and «Проекты» (owner's answer of 13.11.2026, docs/plan/69-pages.md, Ст30).
+  // After «Чаты» (owner's answer of 13.11.2026, docs/plan/69-pages.md, Ст30). «Проекты» went with
+  // projects (docs/plan/83-remove-projects.md, БП1; docs/plan/82, Зп60).
   { href: '/pages', label: 'Страницы', icon: 'pages' },
-  { href: '/projects', label: 'Проекты', icon: 'projects' },
 ]
 
 /**
@@ -41,8 +41,8 @@ const within = (pathname: string, href: string) =>
   pathname === href || pathname.startsWith(`${href}/`)
 
 /**
- * The rail of the cabinet: the mark, «Чаты», «Задачи» (the scheduled tasks), «Страницы» and
- * «Проекты», the credits over the account menu. Its width is `--app-rail-width` of the shell, which
+ * The rail of the cabinet: the mark, «Чаты», «Задачи» (the scheduled tasks) and «Страницы», the
+ * credits over the account menu. Its width is `--app-rail-width` of the shell, which
  * stands it in. The current section follows the address.
  */
 export function ApplicationRail({

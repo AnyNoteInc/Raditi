@@ -31,7 +31,6 @@ const plan = {
   creditsPerDay: 10,
   creditsPer5h: null,
   creditsPerWeek: null,
-  maxSites: 3,
 }
 const pack = {
   id: ID,
@@ -91,8 +90,6 @@ describe('plan DTOs', () => {
     { creditsPerMonth: null },
     { creditsPerMonth: 80.5 },
     { creditsPerDay: 0 },
-    { maxSites: 0 },
-    { maxSites: null },
     { id: 'business' },
     { name: '' },
     { slug: '' },

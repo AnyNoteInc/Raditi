@@ -76,7 +76,6 @@ export function PlansDialog({ open, onClose }: { open: boolean; onClose: () => v
             {offers.data.plans.length > 0 ? (
               <PlanGrid
                 plans={offers.data.plans}
-                siteCount={offers.data.siteCount}
                 subscription={subscription}
                 canChoose={false}
                 onChoose={() => undefined}

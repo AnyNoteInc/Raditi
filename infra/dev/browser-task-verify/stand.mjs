@@ -1,13 +1,40 @@
-// Pure parts of the browser-task stand (verify-browser-task.mjs, docs/plan/57-browser-tasks.md §5):
-// its options, the names of everything a run owns, the images it builds, the environments of the
-// processes it starts, the synthetic WordPress it serves under its own name and the accounts of
-// that site. Nothing here touches Docker, the network or a file.
+// Pure parts of the browser-task stand (verify-browser-task.mjs, docs/plan/57-browser-tasks.md §5;
+// since plan 83 the browser of chats without a project only): its options, the names of everything
+// a run owns, the images it starts and builds, the arguments of its containers, the environments
+// of the processes it starts. Nothing here touches Docker, the network or a file.
 import { isAbsolute } from 'node:path'
 import { crc32, deflateSync } from 'node:zlib'
 
-import { MARIADB_IMAGE, WORDPRESS_IMAGE, WPCLI_IMAGE } from '../release-verify/stand.mjs'
+import { OPENBAO_IMAGE } from '../billing-verify/openbao.mjs'
+import { POSTGRES_IMAGE, REDIS_IMAGE } from '../billing-verify/stand.mjs'
 
-export { MARIADB_IMAGE, WORDPRESS_IMAGE, WPCLI_IMAGE }
+export { OPENBAO_IMAGE, POSTGRES_IMAGE, REDIS_IMAGE }
+
+/** SeaweedFS of infra/dev, by digest. Never pulled. */
+export const S3_IMAGE =
+  'chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882'
+/** The tags the pinned digests above were pulled by: `docker pull <tag>` before the first run. */
+export const PULLED_TAGS = Object.freeze({ [S3_IMAGE]: 'chrislusf/seaweedfs:4.47' })
+
+/** `repository@sha256:…`: how the configuration names an image, never by a tag. */
+export const DIGEST_REFERENCE = /^[a-z0-9][a-z0-9._/-]{0,199}@sha256:[a-f0-9]{64}$/
+
+/** The image reference of a local build, from `docker image inspect --format {{json .RepoDigests}}`. */
+export function localDigestReference(tag, inspected) {
+  const repository = tag.replace(/:[^/:]+$/, '')
+  let digests
+  try {
+    digests = JSON.parse(inspected)
+  } catch {
+    throw new Error(`No digest of ${tag}`)
+  }
+  const own = Array.isArray(digests)
+    ? digests.find((digest) => typeof digest === 'string' && digest.startsWith(`${repository}@`))
+    : undefined
+  if (!own || !DIGEST_REFERENCE.test(own))
+    throw new Error(`No digest of ${tag}: the stand needs the containerd image store`)
+  return own
+}
 
 // ─── Options ──────────────────────────────────────────────────────────────────
 
@@ -48,48 +75,18 @@ export function standOptions(argv) {
 }
 
 /**
- * The scenarios in their order (README, «Сценарии»), and what each needs to have run first: a
- * later one works in the site, the task and the session an earlier one left.
+ * The scenarios in their order (README, «Сценарии»), and what each needs to have run first: S
+ * signs up the clients the others share.
  */
-export const SCENARIO_IDS = Object.freeze([
-  'A',
-  'D',
-  'B',
-  'C',
-  'E',
-  'F',
-  'G',
-  'H',
-  'I',
-  'J',
-  'N',
-  'O',
-  'P',
-  'Q',
-  'R',
-  'K',
-  'L',
-  'M',
-])
+export const SCENARIO_IDS = Object.freeze(['S', 'P', 'K', 'L', 'Q', 'R', 'M'])
 const NEEDS = Object.freeze({
-  A: [],
-  D: ['A'],
-  B: ['A', 'D'],
-  C: ['A', 'D'],
-  E: ['A', 'D'],
-  F: ['A', 'D', 'E'],
-  G: ['A'],
-  H: ['A'],
-  I: ['A'],
-  J: ['A'],
-  N: ['A'],
-  O: ['A'],
-  P: ['A'],
-  Q: ['A'],
-  R: ['A'],
-  K: ['A'],
-  L: ['A'],
-  M: ['A'],
+  S: [],
+  P: ['S'],
+  K: ['S', 'P'],
+  L: ['S', 'P', 'K'],
+  Q: ['S'],
+  R: ['S'],
+  M: ['S'],
 })
 
 /** The scenarios a run goes through: all of them, or the named ones with what they need. */
@@ -119,14 +116,7 @@ function sandboxDeployment(stand, run) {
   return `${stand}-${run}`
 }
 
-export const CONTAINERS = Object.freeze([
-  'postgres',
-  'redis',
-  's3',
-  'openbao',
-  'site-db',
-  'site-web',
-])
+export const CONTAINERS = Object.freeze(['postgres', 'redis', 's3', 'openbao'])
 
 /** Every resource of one run by name; nothing outside these names is created or removed by name. */
 export function standNames(run) {
@@ -137,9 +127,6 @@ export function standNames(run) {
     stand,
     label: `${STAND_LABEL}=${run}`,
     containers: Object.fromEntries(CONTAINERS.map((name) => [name, `${stand}-${name}`])),
-    // The synthetic site's own network: its database and its web server.
-    network: `${stand}-site`,
-    volumes: { docroot: `${stand}-docroot` },
   }
 }
 
@@ -224,54 +211,6 @@ export const WEB_OUTPUT = Object.freeze({
   staticServed: 'apps/web/.next/standalone/apps/web/.next/static',
 })
 
-// ─── The synthetic site ───────────────────────────────────────────────────────
-
-/**
- * The site of the stand: WordPress 7.x (block editor) under an exact name of its own, which no
- * DNS knows. The browser of a task reaches it only through the session's egress proxy, which
- * maps this origin to the published port of the site (BROWSER_LOCAL_SITES, Б11): the same
- * Host header the site was installed with.
- */
-export const SITE_HOST = 'wp.raditi.test'
-export const SITE_ORIGIN = `http://${SITE_HOST}`
-
-/** The accounts of the synthetic site; their passwords are generated per run. */
-export const SITE_ACCOUNTS = Object.freeze({
-  /** The owner of the site: an editor who may publish and upload. */
-  owner: { login: 'anna-redaktor', role: 'editor', email: 'anna@example.test' },
-  /** A contributor: may write and submit for review, never publish or upload (scenario H). */
-  contributor: { login: 'boris-avtor', role: 'contributor', email: 'boris@example.test' },
-})
-
-/**
- * What wp-config.php gets besides the database: no cron of WordPress (its loopback requests would
- * go to a name nothing resolves), no request of PHP outside the site (no update checks, no
- * Gravatar from the server), a local environment, no automatic updates.
- */
-export const SITE_CONFIG_EXTRA = [
-  "define('DISABLE_WP_CRON', true);",
-  "define('WP_ENVIRONMENT_TYPE', 'local');",
-  "define('WP_HTTP_BLOCK_EXTERNAL', true);",
-  "define('AUTOMATIC_UPDATER_DISABLED', true);",
-  "define('WP_AUTO_UPDATE_CORE', false);",
-].join(' ')
-
-/**
- * The folders of the site's container the stand reads and the fixture's must-use plugins write,
- * outside the document root: the cookie values the site set (to look for them where they must
- * never be) and the switches of the refusals of scenarios I and J.
- */
-export const STAND_STATE_DIR = '/var/stand'
-export const SWITCH = Object.freeze({
-  /** Uploads of PDF files above UPLOAD_LIMIT_BYTES are refused while this file exists. */
-  uploadLimit: `${STAND_STATE_DIR}/switches/limit-pdf-uploads`,
-  /** The next publish through the REST API is held PUBLISH_DELAY_SECONDS; the file is then removed. */
-  publishDelay: `${STAND_STATE_DIR}/switches/delay-next-publish`,
-})
-export const COOKIE_TAP = `${STAND_STATE_DIR}/cookies/values.txt`
-export const UPLOAD_LIMIT_BYTES = 20 * 1024
-export const PUBLISH_DELAY_SECONDS = 30
-
 // ─── Containers ───────────────────────────────────────────────────────────────
 
 const loopbackPort = (port) => {
@@ -288,57 +227,92 @@ const envFileOf = (file) => {
   return ['--env-file', file]
 }
 
-/** The database of the synthetic site: MariaDB on the site's network only. */
-export function siteDbArgs({ names, envFile }) {
+/** PostgreSQL: data in memory, the platform's one user `raditi`, a loopback port. */
+export function postgresArgs({ names, envFile }) {
   return [
-    ...created(names, 'site-db', ['--network', names.network, '--network-alias', 'db']),
-    ...envFileOf(envFile),
-    MARIADB_IMAGE,
+    ...created(names, 'postgres'),
+    ...['--tmpfs', '/var/lib/postgresql/data:rw', '-p', '127.0.0.1::5432', ...envFileOf(envFile)],
+    POSTGRES_IMAGE,
   ]
 }
-export const siteDbEnvFile = (password) =>
-  [
-    'MARIADB_DATABASE=wordpress',
-    'MARIADB_USER=wordpress',
-    `MARIADB_PASSWORD=${password}`,
-    'MARIADB_RANDOM_ROOT_PASSWORD=1',
-    '',
-  ].join('\n')
+export const postgresEnvFile = (password) =>
+  `POSTGRES_USER=raditi\nPOSTGRES_DB=raditi\nPOSTGRES_PASSWORD=${password}\n`
 
-export const siteWebEnvFile = (password) =>
-  [
-    'WORDPRESS_DB_HOST=db',
-    'WORDPRESS_DB_USER=wordpress',
-    `WORDPRESS_DB_PASSWORD=${password}`,
-    'WORDPRESS_DB_NAME=wordpress',
-    `WORDPRESS_CONFIG_EXTRA=${SITE_CONFIG_EXTRA}`,
-    '',
-  ].join('\n')
-
-/**
- * The web server of the synthetic site on a published loopback port: the egress proxy of a
- * browser session reaches it there through host.docker.internal (Docker Desktop carries that
- * name to the loopback of the Mac).
- */
-export function siteWebArgs({ names, port, envFile }) {
+/** Redis of BullMQ: nothing on disk, keys never evicted (infra/dev, infra/app). */
+export function redisArgs({ names, envFile }) {
   return [
-    ...created(names, 'site-web', ['--network', names.network]),
-    ...['--mount', `type=volume,src=${names.volumes.docroot},dst=/var/www/html`],
-    ...['-p', `127.0.0.1:${loopbackPort(port)}:80`, ...envFileOf(envFile)],
-    WORDPRESS_IMAGE,
+    ...created(names, 'redis'),
+    ...['-p', '127.0.0.1::6379', ...envFileOf(envFile)],
+    REDIS_IMAGE,
+    ...['sh', '-c'],
+    'exec redis-server --save "" --appendonly no --maxmemory-policy noeviction --requirepass "$REDIS_PASSWORD"',
+  ]
+}
+export const redisEnvFile = (password) => `REDIS_PASSWORD=${password}\n`
+
+/** The S3 identity file of SeaweedFS: one identity of the run. */
+export function s3Identities({ accessKey, secretKey }) {
+  return JSON.stringify({
+    identities: [
+      {
+        name: 'raditi-browser-task-verify',
+        credentials: [{ accessKey, secretKey }],
+        actions: ['Admin', 'Read', 'Write', 'List', 'Tagging'],
+      },
+    ],
+  })
+}
+
+/** SeaweedFS: data on a tmpfs, the identity copied in before the start, S3 on a loopback port. */
+export function s3Args({ names, port }) {
+  return [
+    ...['create', '--pull', 'never', '--name', names.containers.s3, '--label', names.label],
+    ...['--tmpfs', '/data:rw,size=2g', '-p', `127.0.0.1:${loopbackPort(port)}:8333`],
+    S3_IMAGE,
+    ...['server', '-dir=/data', '-s3', '-s3.port=8333', '-s3.config=/stand/s3.json'],
+    // Small volumes, many of them: each bucket is a collection with volumes of its own, and the
+    // defaults (30 GB a volume) leave none writable on a tmpfs.
+    ...['-master.volumeSizeLimitMB=64', '-volume.max=128'],
   ]
 }
 
-/** WP-CLI on the site's network as the web server's user, over the same document root. */
-export function wpCliArgs({ names, envFile, args, input = false }) {
+const openbaoConfig = `disable_mlock = true
+storage "inmem" {}
+listener "tcp" {
+  address = "0.0.0.0:8200"
+  tls_disable = true
+}
+`
+
+/** OpenBao: a regular in-memory server, initialised through its API by the stand. */
+export function openbaoArgs({ names, port }) {
   return [
-    ...['run', '--rm', ...(input ? ['-i'] : []), '--pull', 'never', '--label', names.label],
-    ...['--network', names.network, '--user', '33:33', ...envFileOf(envFile)],
-    ...['--mount', `type=volume,src=${names.volumes.docroot},dst=/var/www/html`],
-    WPCLI_IMAGE,
-    'wp',
-    ...args,
+    ...created(names, 'openbao'),
+    ...['-p', `127.0.0.1:${loopbackPort(port)}:8200`, '--entrypoint', 'sh'],
+    OPENBAO_IMAGE,
+    '-c',
+    `umask 077; cat > /tmp/raditi-bao.hcl <<'RADITI_CONFIG'\n${openbaoConfig}RADITI_CONFIG\nexec bao server -config=/tmp/raditi-bao.hcl`,
   ]
+}
+
+/** The CA of the stand and its one server certificate (services.mjs, createCertificates). */
+export function certificateConfigs() {
+  return {
+    authority: [
+      'basicConstraints = critical, CA:true, pathlen:0',
+      'keyUsage = critical, keyCertSign',
+      'subjectKeyIdentifier = hash',
+      '',
+    ].join('\n'),
+    // The synthetic Z.ai under `localhost` (LLM_BACKEND_URL_ZAI_CODING).
+    server: [
+      'basicConstraints = critical, CA:false',
+      'keyUsage = critical, digitalSignature',
+      'extendedKeyUsage = serverAuth',
+      'subjectAltName = IP:127.0.0.1, DNS:localhost',
+      '',
+    ].join('\n'),
+  }
 }
 
 // ─── Processes ────────────────────────────────────────────────────────────────
@@ -392,19 +366,8 @@ const pagesOf = (ports) => ({
 export const PLATFORM_HOST = 'raditi.ru'
 
 /**
- * The local site of the stand as the worker's egress proxies reach it: the exact origin of the
- * site to the address of its web server on Docker's default bridge (Б11, outside production only).
- */
-export function localSites(target) {
-  if (!/^\d{1,3}(?:\.\d{1,3}){3}:\d{1,5}$/.test(String(target)))
-    throw new Error('The target of the local site is an IPv4 address and a port')
-  return JSON.stringify({ [SITE_ORIGIN]: target })
-}
-
-/**
  * The environment of one app of the platform (`node dist/main.js` of the build copy).
- * NODE_ENV=production keeps it from looking for a `.env`; APP_ENV is `test`. Core has no git
- * at all (no GITEA_*, no GIT_*): a task in the browser needs none (Б7).
+ * NODE_ENV=production keeps it from looking for a `.env`; APP_ENV is `test`.
  */
 export function appEnvironment(app, context) {
   const { path, directory, ports, databaseUrl, vault, roles, s3, secrets } = context
@@ -445,14 +408,6 @@ export function appEnvironment(app, context) {
       return {
         ...base,
         ...workerOf(ports, secrets),
-        // The gateway of previews is the public gateway of the platform; this stand builds no
-        // preview, but the app needs its address to start.
-        PREVIEW_BASE_DOMAIN: 'localhost',
-        PREVIEW_SCHEME: 'http',
-        PREVIEW_PUBLIC_PORT: String(loopbackPort(ports.preview)),
-        PREVIEW_GATEWAY_PORT: String(loopbackPort(ports.preview)),
-        PREVIEW_GATEWAY_HOST: '127.0.0.1',
-        PREVIEW_SESSION_SECRET: secrets.previewSession,
         APP_URL: origin(ports.web),
         BROWSER_STREAM_PORT: String(loopbackPort(ports.stream)),
         BROWSER_STREAM_HOST: '127.0.0.1',
@@ -474,7 +429,6 @@ export function appEnvironment(app, context) {
         BROWSER_IMAGE: context.images.browser,
         BROWSER_FORWARDER_IMAGE: context.images.tools,
         BROWSER_EGRESS_IMAGE: context.images.egress,
-        BROWSER_LOCAL_SITES: localSites(context.siteTarget),
         // No page of any session reaches a name of the platform (К37): scenario P opens one.
         BROWSER_PLATFORM_HOSTS: PLATFORM_HOST,
       }
@@ -508,7 +462,7 @@ export function appEnvironment(app, context) {
   }
 }
 
-/** The names of the apps' environments that must stay unset: core runs without git (Б7). */
+/** The names of the apps' environments that are gone with the projects (plan 83): never set. */
 export const CORE_WITHOUT = Object.freeze([
   'GITEA_URL',
   'GITEA_TOKEN',
@@ -588,10 +542,7 @@ export function solidPng(width, height, [r, g, b]) {
 /** A file named and typed as a JPEG whose bytes are text: the upload must refuse it. */
 export const FAKE_JPEG = Buffer.from('Это не картинка, а текст под видом JPEG.\n', 'utf8')
 
-/**
- * A one-page PDF with a padding comment, `padding` bytes long: above UPLOAD_LIMIT_BYTES it is
- * the file scenario I's site refuses.
- */
+/** A one-page PDF with a padding comment, `padding` bytes long. */
 export function syntheticPdf(title, padding = 0) {
   const lines = [
     '%PDF-1.4',
@@ -632,6 +583,47 @@ export function standRatesFile() {
       sourceUrl: 'https://synthetic.invalid/browser-task-verify-rates',
     })),
   }
+}
+
+// ─── Probes and the cabinet's requests ────────────────────────────────────────
+
+const TRPC_PATH = '/api/trpc/'
+
+/** The procedures a request of the cabinet names: `/api/trpc/a,b?batch=1` → `['a', 'b']`. */
+export function trpcProcedures(url) {
+  let path
+  try {
+    path = new URL(url).pathname
+  } catch {
+    return []
+  }
+  if (!path.startsWith(TRPC_PATH)) return []
+  return decodeURIComponent(path.slice(TRPC_PATH.length))
+    .split(',')
+    .filter((name) => name !== '')
+}
+
+/** The same from Node (the tools and the browser images): `closed:<error code>`. */
+export const NODE_ERRNO_PROBE = [
+  'const [host, port] = process.argv.slice(1);',
+  "const socket = require('net').connect({ host, port: +port, timeout: 3000 });",
+  'const done = (state) => { process.stdout.write(state); socket.destroy(); process.exit(0) };',
+  "socket.on('connect', () => done('open'));",
+  "socket.on('timeout', () => done('closed:ETIMEDOUT'));",
+  "socket.on('error', (error) => done(error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN' ? 'dns' : 'closed:' + error.code));",
+].join(' ')
+
+/** A connection that found no way to its address: unreachable network or host, or no answer. */
+const UNREACHED =
+  /^closed:(?:101|113|110|ENETUNREACH|EHOSTUNREACH|ETIMEDOUT)(?::|$)|^closed:\d+:.*(?:timed out|unreachable)/i
+
+/**
+ * Whether what a probe saw shows the target isolated: an address must be unreachable — a refusal
+ * means the packet reached a host, and proves nothing about the network —, a name must not
+ * resolve at all.
+ */
+export function isolatedAnswer(answer, { name = false } = {}) {
+  return name ? answer === 'dns' : UNREACHED.test(answer)
 }
 
 // ─── Output ───────────────────────────────────────────────────────────────────

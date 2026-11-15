@@ -6,7 +6,7 @@ import type { DialogFeed, FeedRow } from './chat-types'
 // идентификатору»; plan 53, R9). Pure: the hook that polls only dispatches answers and failures
 // and asks `pollDelay` when to read again.
 
-/** Everything of an answer but its rows: the head, the preview, the candidate, the commands. */
+/** Everything of an answer but its rows: the head, the browser, the commands. */
 export type FeedHeadState = Omit<DialogFeed, 'events' | 'cursor' | 'more'>
 
 export interface FeedState {
@@ -89,38 +89,21 @@ export const feedPolling = Object.freeze({
 })
 
 const WORKING = new Set(['queued', 'preparing', 'running', 'deploying', 'verifying'])
-const BUILDING = new Set(['pending', 'building'])
 const LIVE_BROWSER = new Set(['starting', 'ready'])
 
-/** The undo of the dialog's release goes on (docs/plan/53, «Отмена выпуска»). */
-export const undoing = (head: FeedHeadState): boolean =>
-  head.undo?.run !== undefined && head.undo.run !== null && head.undo.run.outcome === null
-
 /**
- * core has not answered a press of `/undo` or `/redo` yet. What it moves comes with its job, and
- * until it comes the words of the field are the ones `/redo` is bringing back (§5.14).
- */
-const turnMoving = (head: FeedHeadState): boolean =>
-  head.commands.some(({ refusal }) => refusal === 'turn_rewinding' || refusal === 'turn_redoing')
-
-/**
- * Milliseconds until the next read; null — no more reads: the dialog has ended (and no undo of its
- * release goes on), or there is no such dialog. 2 s while the agent, a release, an undo, a press of
- * `/undo` or `/redo` or the preview is at work or the task's browser is open, 15 s while the dialog waits for the client; after a failed read the pause
- * doubles, up to 30 s. A hidden page is not read at all — the hook waits for it to be shown again.
+ * Milliseconds until the next read; null — no more reads: the chat has ended, or there is no such
+ * chat. 2 s while the agent is at work or the chat's browser is open, 15 s while the chat waits
+ * for the client; after a failed read the pause doubles, up to 30 s. A hidden page is not read at all — the hook waits for it to be shown again.
  */
 export function pollDelay(state: FeedState): number | null {
   if (state.missing) return null
   if (state.now && state.failures === 0) return 0
   const head = state.head
-  if (head !== null && terminalTaskStatuses.includes(head.task.status) && !undoing(head))
-    return null
+  if (head !== null && terminalTaskStatuses.includes(head.task.status)) return null
   const busy =
     head === null ||
     WORKING.has(head.task.status) ||
-    undoing(head) ||
-    turnMoving(head) ||
-    (head.preview !== null && BUILDING.has(head.preview.status)) ||
     // An open browser (docs/plan/57-browser-tasks.md): who drives it and what the agent asks
     // there change while the dialog waits.
     (head.browser !== null && LIVE_BROWSER.has(head.browser.status))

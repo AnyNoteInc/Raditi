@@ -1,18 +1,13 @@
 import { createHash } from 'node:crypto'
 import { connect, type AddressInfo } from 'node:net'
 
-import { ListToolsResultSchema } from '@modelcontextprotocol/core'
 import { Logger, type INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
-import { DomainError } from '@repo/domain'
 import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { z } from 'zod'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 import { newTurnKeys } from '@repo/turn-keys'
-import { memoryStorage } from '@repo/snapshots/testing'
 
-import type { McpConfig } from './config/config.ts'
 import {
   fakeInfra,
   notDocTool,
@@ -20,14 +15,7 @@ import {
   testMcpConfig,
   type FakeInfra,
 } from './testing/fakes.ts'
-import { MCP_CONTENT_RESOLVER } from './content/content.tokens.ts'
-import { MCP_CONTENT_STORAGE, type ContentStorage } from './storage/content-storage.ts'
 import { AppModule } from './app.module.ts'
-import {
-  MCP_CONTENT,
-  type ContentGatewayResolver,
-  type McpContentService,
-} from './content/mcp-content.ts'
 import { MCP_ACCESS, type McpAccessStore } from './access/mcp-access.ts'
 import { parseMcpHosts } from './config/allowed-hosts.ts'
 import { MCP_ENDPOINT, MCP_SERVER_NAME } from './server/mcp-runtime.ts'
@@ -39,37 +27,11 @@ const scope = {
   keyId: '01960000-0000-7000-8000-000000000001',
   taskId: '01960000-0000-7000-8000-000000000002',
   workspaceId: '01960000-0000-7000-8000-000000000003',
-  siteId: '01960000-0000-7000-8000-000000000004',
   sessionId: 'synthetic',
   turn: 1,
   firstEpoch: 1,
   epoch: 1,
-  stack: 'wordpress' as const,
-  url: 'https://site.example.test',
-  preview: null,
-}
-
-/**
- * The configuration of the role with MCP_CONTENT_PROFILE=local-site — the P6 path of the stands,
- * without previews; no S3 is ever contacted.
- */
-const contentConfig = (): McpConfig => ({
-  ...testMcpConfig(),
-  contentProfile: 'local-site',
-  storage: {
-    endpoint: 'http://127.0.0.1:9',
-    region: 'us-east-1',
-    accessKeyId: 'synthetic',
-    secretAccessKey: 'synthetic-secret',
-    forcePathStyle: true,
-    buckets: { artifacts: 'raditi-test-artifacts' },
-  },
-})
-
-/** What a unit test puts in place of S3 and of the Vault resolver of the content profile. */
-interface ContentFakes {
-  storage: Partial<ContentStorage>
-  resolve?: ContentGatewayResolver
+  requirements: { repository: false, browser: false },
 }
 
 async function startMcp(
@@ -78,23 +40,14 @@ async function startMcp(
     authenticate: async (value) => (value === token ? scope : null),
   },
   config = testMcpConfig(),
-  content?: ContentFakes,
-  implementation?: Pick<McpContentService, 'wpRest' | 'restore'>,
 ): Promise<INestApplication> {
-  const builder = Test.createTestingModule({
-    imports: [
-      AppModule.forRoot(content && config.contentProfile === 'off' ? contentConfig() : config),
-    ],
-  })
+  const builder = Test.createTestingModule({ imports: [AppModule.forRoot(config)] })
     .overrideProvider(PRISMA)
     .useValue(infra.prisma)
     .overrideProvider(SECRET_STORE)
     .useValue(infra.secrets)
     .overrideProvider(MCP_ACCESS)
     .useValue(access)
-  if (content) builder.overrideProvider(MCP_CONTENT_STORAGE).useValue(content.storage)
-  if (content?.resolve) builder.overrideProvider(MCP_CONTENT_RESOLVER).useValue(content.resolve)
-  if (implementation) builder.overrideProvider(MCP_CONTENT).useValue(implementation)
   const moduleRef = await builder.compile()
   app = moduleRef.createNestApplication({ logger: false })
   await mountMcp(app)
@@ -122,402 +75,6 @@ afterEach(async () => {
 })
 
 describe('AppModule', () => {
-  it('exposes bounded content tools only with the content profile of the configuration', async () => {
-    const profile = { storage: memoryStorage().storage, resolve: vi.fn() }
-    const implementation = {
-      wpRest: vi.fn(async () => ({
-        result: 'ok' as const,
-        response: { objectRef: 'page:42', title: 'Текст' },
-      })),
-      restore: vi.fn(async () => ({ result: 'ok' as const, response: { restored: true } })),
-    }
-    const server = (
-      await startMcp(fakeInfra(), undefined, undefined, profile, implementation)
-    ).getHttpServer()
-    const post = (body: object) =>
-      request(server)
-        .post(MCP_ENDPOINT)
-        .set('Authorization', `Bearer ${token}`)
-        .set('Accept', 'application/json, text/event-stream')
-        .set('mcp-protocol-version', '2025-06-18')
-        .send(body)
-    const list = await post({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
-    expect(list.status).toBe(200)
-    expect(
-      list.body.result.tools
-        .map((tool: { name: string }) => tool.name)
-        .filter(notDocTool)
-        .sort(),
-    ).toEqual(['restore', 'site_info', 'wp_rest'])
-    for (const tool of list.body.result.tools.filter(
-      (tool: { name: string }) => tool.name !== 'site_info' && notDocTool(tool.name),
-    ))
-      expect(tool.annotations).toMatchObject({
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      })
-    const args = { method: 'GET', route: '/wp/v2/pages/42' }
-    const read = await post({
-      jsonrpc: '2.0',
-      id: 2,
-      method: 'tools/call',
-      params: { name: 'wp_rest', arguments: args },
-    })
-    expect(read.body.result).not.toHaveProperty('isError', true)
-    expect(implementation.wpRest).toHaveBeenCalledExactlyOnceWith(scope, args)
-    for (const arguments_ of [
-      { method: 'GET', route: '/wp/v2/users/42' },
-      { method: 'GET', route: '/wp/v2/pages' },
-      { method: 'GET', route: '/wp/v2/pages/42?context=edit' },
-      { method: 'DELETE', route: '/wp/v2/pages/42' },
-      {
-        method: 'POST',
-        route: '/wp/v2/pages/42',
-        body: { status: 'draft' },
-        idempotencyKey: 'test',
-      },
-    ])
-      expect(
-        (
-          await post({
-            jsonrpc: '2.0',
-            id: 3,
-            method: 'tools/call',
-            params: { name: 'wp_rest', arguments: arguments_ },
-          })
-        ).status,
-      ).toBe(400)
-    expect(implementation.wpRest).toHaveBeenCalledOnce()
-  })
-
-  it('lists every content tool with an object input schema that MCP clients accept', async () => {
-    const profile = { storage: memoryStorage().storage, resolve: vi.fn() }
-    const implementation = { wpRest: vi.fn(), restore: vi.fn() }
-    const server = (
-      await startMcp(fakeInfra(), undefined, undefined, profile, implementation)
-    ).getHttpServer()
-    const list = await request(server)
-      .post(MCP_ENDPOINT)
-      .set('Authorization', `Bearer ${token}`)
-      .set('Accept', 'application/json, text/event-stream')
-      .set('mcp-protocol-version', '2025-06-18')
-      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
-    expect(list.status).toBe(200)
-    // A client that checks the list against the MCP schema rejects the whole list otherwise.
-    expect(ListToolsResultSchema.safeParse(list.body.result).success).toBe(true)
-    const tools = list.body.result.tools as Array<{
-      name: string
-      inputSchema: { type: string; properties?: Record<string, unknown> }
-    }>
-    for (const tool of tools) expect(tool.inputSchema, tool.name).toMatchObject({ type: 'object' })
-    const wpRest = tools.find((tool) => tool.name === 'wp_rest')!
-    expect(Object.keys(wpRest.inputSchema.properties ?? {}).sort()).toEqual([
-      'body',
-      'idempotencyKey',
-      'method',
-      'route',
-    ])
-    const advertised = {
-      wp_rest: z.fromJSONSchema(wpRest.inputSchema as z.core.JSONSchema.JSONSchema),
-      restore: z.fromJSONSchema(
-        tools.find((tool) => tool.name === 'restore')!.inputSchema as z.core.JSONSchema.JSONSchema,
-      ),
-    }
-    for (const args of [
-      { method: 'GET', route: '/wp/v2/pages/42' },
-      {
-        method: 'POST',
-        route: '/wp/v2/posts/7',
-        body: { title: 'Заголовок' },
-        idempotencyKey: 'edit-1',
-      },
-    ])
-      expect(advertised.wp_rest.safeParse(args).success, JSON.stringify(args)).toBe(true)
-    expect(
-      advertised.restore.safeParse({
-        snapshotId: '01960000-0000-7000-8000-000000000009',
-        idempotencyKey: 'undo-1',
-      }).success,
-    ).toBe(true)
-    expect(
-      advertised.wp_rest.safeParse({ method: 'DELETE', route: '/wp/v2/pages/42' }).success,
-    ).toBe(false)
-  })
-
-  it('passes only fixed, content-free refusals of a content call to the agent', async () => {
-    const profile = { storage: memoryStorage().storage, resolve: vi.fn() }
-    const implementation = { wpRest: vi.fn(), restore: vi.fn() }
-    const server = (
-      await startMcp(fakeInfra(), undefined, undefined, profile, implementation)
-    ).getHttpServer()
-    const call = async () =>
-      (
-        await request(server)
-          .post(MCP_ENDPOINT)
-          .set('Authorization', `Bearer ${token}`)
-          .set('Accept', 'application/json, text/event-stream')
-          .set('mcp-protocol-version', '2025-06-18')
-          .send({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'tools/call',
-            params: { name: 'wp_rest', arguments: { method: 'GET', route: '/wp/v2/pages/42' } },
-          })
-      ).body.result
-    for (const code of [
-      'CONTENT_PRIVACY_LIMIT',
-      'CONTENT_PRIVACY_UNAVAILABLE',
-      'CONTENT_PRIVACY_CONTEXT',
-      'CONTENT_TOO_LARGE',
-      'CONTENT_OBJECT_UNAVAILABLE',
-      'MCP_APPROVAL_REQUIRED',
-      'MCP_CALL_IN_FLIGHT',
-    ]) {
-      implementation.wpRest.mockRejectedValueOnce(new DomainError(code, `private ${token}`, 409))
-      expect(await call()).toEqual({
-        isError: true,
-        content: [{ type: 'text', text: JSON.stringify({ code }) }],
-      })
-    }
-    for (const error of [
-      new DomainError('CONFLICT', `private ${token}`, 409),
-      new Error(`private ${token}`),
-    ]) {
-      implementation.wpRest.mockRejectedValueOnce(error)
-      expect(await call()).toEqual({
-        isError: true,
-        content: [{ type: 'text', text: '{"code":"CONTENT_CALL_REJECTED"}' }],
-      })
-    }
-  })
-
-  it('gives a turn token no way to the trusted undo of the host', async () => {
-    const profile = { storage: memoryStorage().storage, resolve: vi.fn() }
-    // The whole content service of the role, as the port could reach it at the worst.
-    const implementation = {
-      wpRest: vi.fn(),
-      restore: vi.fn(),
-      undoTurn: vi.fn(),
-      undoTask: vi.fn(),
-      rollbackTurn: vi.fn(),
-      recoverWrite: vi.fn(),
-    }
-    const server = (
-      await startMcp(fakeInfra(), undefined, undefined, profile, implementation)
-    ).getHttpServer()
-    const send = (method: 'post' | 'get', path: string, body?: object) =>
-      request(server)
-        [method](path)
-        .set('Authorization', `Bearer ${token}`)
-        .set('Accept', 'application/json, text/event-stream')
-        .set('mcp-protocol-version', '2025-06-18')
-        .send(body)
-    const fence = { siteId: scope.siteId, taskId: scope.taskId, operation: 'turn', epoch: 1 }
-    const snapshotId = '01960000-0000-7000-8000-000000000009'
-    const call = (name: string, args: object) =>
-      send('post', MCP_ENDPOINT, {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: { name, arguments: args },
-      })
-    // No tool of that name, however it is spelled.
-    for (const name of [
-      'undoTurn',
-      'undoTask',
-      'undo_turn',
-      'undo_task',
-      'rollbackTurn',
-      'rollback',
-      'recoverWrite',
-    ])
-      for (const args of [
-        { fence, turn: 1 },
-        { fence, targetTaskId: scope.taskId },
-        { snapshotId, idempotencyKey: `undo:1:${snapshotId}` },
-      ])
-        expect((await call(name, args)).status, name).toBe(400)
-    // The agent's restore takes a snapshot and a key and nothing of the host's scope.
-    for (const extra of [
-      { hostUndo: true },
-      { fence },
-      { targetTaskId: scope.taskId },
-      { turn: 1 },
-      { scope: { ...fence, targetTaskId: scope.taskId } },
-    ])
-      expect(
-        (await call('restore', { snapshotId, idempotencyKey: 'undo-1', ...extra })).status,
-        JSON.stringify(extra),
-      ).toBe(400)
-    // No JSON-RPC method and no path beside the endpoint.
-    expect(
-      (
-        await send('post', MCP_ENDPOINT, {
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'content/undo',
-          params: { fence, targetTaskId: scope.taskId },
-        })
-      ).status,
-    ).toBe(400)
-    for (const path of [
-      '/internal/content/undo-task',
-      '/internal/content/undo-turn',
-      '/internal/content/replace-rollback',
-      `${MCP_ENDPOINT}/undo`,
-    ])
-      for (const method of ['post', 'get'] as const)
-        expect(
-          (await send(method, path, method === 'post' ? { fence, turn: 1 } : undefined)).status,
-          path,
-        ).toBe(404)
-    for (const method of Object.values(implementation)) expect(method).not.toHaveBeenCalled()
-  })
-
-  it('refuses the content profile in production, whatever the configuration loader let through', () => {
-    const refusal = 'Local MCP content profile cannot run in production'
-    // loadConfig never produces this configuration; the module does not rely on that.
-    expect(() => AppModule.forRoot({ ...contentConfig(), appEnv: 'production' })).toThrow(refusal)
-    // Nor may a test seam reach a production composition, with the profile off as well.
-    for (const config of [contentConfig(), testMcpConfig()])
-      expect(() =>
-        AppModule.forRoot(
-          { ...config, appEnv: 'production' },
-          { wrapResolver: (regular) => regular },
-        ),
-      ).toThrow(refusal)
-    expect(() => AppModule.forRoot({ ...testMcpConfig(), appEnv: 'production' })).not.toThrow()
-  })
-
-  it('refuses a composition that names the profile without its storage, or a seam without the profile', () => {
-    expect(() => AppModule.forRoot({ ...contentConfig(), storage: null })).toThrow(
-      'MCP content profile needs its S3 settings',
-    )
-    expect(() =>
-      AppModule.forRoot(testMcpConfig(), { wrapResolver: (regular) => regular }),
-    ).toThrow('MCP content test seams need the content profile')
-  })
-
-  it('keeps the content tools and their providers out of the role while the profile is off', async () => {
-    const instance = await startMcp(fakeInfra())
-    for (const provider of [MCP_CONTENT, MCP_CONTENT_STORAGE, MCP_CONTENT_RESOLVER])
-      expect(() => instance.get(provider)).toThrow()
-  })
-
-  it('composes the content profile from the configuration: S3, Vault and the registry of site adapters', async () => {
-    const siteId = scope.siteId
-    const reference = {
-      id: '01960000-0000-7000-8000-00000000000a',
-      workspaceId: scope.workspaceId,
-      vaultPath: `kv/sites/${siteId}/wp`,
-      keyVersion: 2,
-    }
-    const findMany = vi.fn(async (_query: unknown) => [reference])
-    const kvRead = vi.fn(async (_path: string) => ({
-      version: 2,
-      data: {
-        v: '1',
-        origin: 'https://site.example.test',
-        username: 'raditi',
-        applicationPassword: 'synthetic application password',
-      },
-    }))
-    const infra = fakeInfra()
-    Object.assign(infra.prisma, { credentialRef: { findMany } })
-    Object.assign(infra.secrets, { kvRead })
-    const instance = await startMcp(infra, undefined, contentConfig(), {
-      storage: memoryStorage().storage,
-    })
-    const resolve = instance.get<ContentGatewayResolver>(MCP_CONTENT_RESOLVER)
-    // The role's own database and Vault clients, the kind and the path from the adapter of the
-    // site's stack: nothing of it is named by this module.
-    await resolve(scope)
-    expect(findMany).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ where: { siteId, kind: 'wp' } }),
-    )
-    expect(kvRead).toHaveBeenCalledExactlyOnceWith(`kv/sites/${siteId}/wp`)
-    await expect(resolve({ ...scope, stack: 'bitrix' })).rejects.toMatchObject({
-      code: 'CONTENT_SITE_ACCESS_UNAVAILABLE',
-      details: { reason: 'stack' },
-    })
-    // A reference whose path is the path of another site is not followed.
-    await expect(
-      resolve({ ...scope, siteId: '01960000-0000-7000-8000-0000000000ff' }),
-    ).rejects.toMatchObject({ details: { reason: 'path' } })
-  })
-
-  it('logs why a site access was refused as one fixed word, without the site or the secret', async () => {
-    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
-    const infra = fakeInfra()
-    Object.assign(infra.prisma, { credentialRef: { findMany: async () => [] } })
-    const instance = await startMcp(infra, undefined, contentConfig(), {
-      storage: memoryStorage().storage,
-    })
-    const resolve = instance.get<ContentGatewayResolver>(MCP_CONTENT_RESOLVER)
-    for (let attempt = 0; attempt < 3; attempt++)
-      await expect(resolve(scope)).rejects.toMatchObject({ details: { reason: 'reference' } })
-    // Throttled: one line for the repeated refusal.
-    expect(warn.mock.calls).toEqual([['site content access (reference): refused']])
-  })
-
-  it('lets a stand wrap the regular resolver to inject faults, and nothing else', async () => {
-    const infra = fakeInfra()
-    Object.assign(infra.prisma, { credentialRef: { findMany: async () => [] } })
-    const seen: ContentGatewayResolver[] = []
-    const wrapped: ContentGatewayResolver = async () => {
-      throw new Error('synthetic fault')
-    }
-    const moduleRef = await Test.createTestingModule({
-      imports: [
-        AppModule.forRoot(contentConfig(), {
-          wrapResolver: (regular) => {
-            seen.push(regular)
-            return wrapped
-          },
-        }),
-      ],
-    })
-      .overrideProvider(PRISMA)
-      .useValue(infra.prisma)
-      .overrideProvider(SECRET_STORE)
-      .useValue(infra.secrets)
-      .overrideProvider(MCP_CONTENT_STORAGE)
-      .useValue(memoryStorage().storage)
-      .compile()
-    app = moduleRef.createNestApplication({ logger: false })
-    await app.init()
-    expect(app.get(MCP_CONTENT_RESOLVER)).toBe(wrapped)
-    expect(seen).toHaveLength(1)
-    // What the wrapper was given is the regular resolver over the role's database and Vault.
-    await expect(seen[0]!(scope)).rejects.toMatchObject({
-      code: 'CONTENT_SITE_ACCESS_UNAVAILABLE',
-      details: { reason: 'reference' },
-    })
-  })
-
-  it('answers /health for the artifacts bucket of the content profile, and for no other', async () => {
-    const checkBuckets = vi.fn(async () => ({ artifacts: true }))
-    const server = (
-      await startMcp(fakeInfra(), undefined, contentConfig(), { storage: { checkBuckets } })
-    ).getHttpServer()
-    const healthy = await request(server).get('/health')
-    expect(healthy.status).toBe(200)
-    expect(healthy.body).toEqual({ status: 'ok' })
-    expect(checkBuckets).toHaveBeenCalledExactlyOnceWith(['artifacts'])
-  })
-
-  it('answers /health 503 when the bucket of content snapshots is out of reach', async () => {
-    const server = (
-      await startMcp(fakeInfra(), undefined, contentConfig(), {
-        storage: { checkBuckets: async () => ({ artifacts: false }) },
-      })
-    ).getHttpServer()
-    const degraded = await request(server).get('/health')
-    expect(degraded.status).toBe(503)
-    expect(degraded.body).toEqual({ status: 'degraded' })
-  })
   it('checks its own dependencies but exposes only status without caching', async () => {
     const infra = fakeInfra()
     const server = (await startMcp(infra)).getHttpServer()
@@ -738,7 +295,7 @@ describe('AppModule', () => {
     expect(authenticate).toHaveBeenCalledTimes(2)
   })
 
-  it('returns only the assigned site and refuses a target supplied by the caller', async () => {
+  it('tells the chat it has no site and refuses a target supplied by the caller', async () => {
     const server = (await startMcp(fakeInfra())).getHttpServer()
     const call = (args: Record<string, unknown>) =>
       request(server)
@@ -756,7 +313,10 @@ describe('AppModule', () => {
     expect(res.status).toBe(200)
     expect(res.body.id).toBe(0)
     expect(res.body.result.content).toEqual([
-      { type: 'text', text: JSON.stringify({ url: scope.url, stack: scope.stack }) },
+      {
+        type: 'text',
+        text: JSON.stringify({ stack: null, url: null, siteUrl: null, browser: null }),
+      },
     ])
     expect(JSON.stringify(res.body)).not.toMatch(/taskId|siteId|workspaceId|mcp_|keyId/)
     const foreign = await call({ siteId: 'another-site' })

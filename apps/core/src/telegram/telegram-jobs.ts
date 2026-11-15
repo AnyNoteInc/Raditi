@@ -338,13 +338,10 @@ export class TelegramJobs {
     const place = await this.#placeOf(job.taskId)
     if (place === null) return 'skipped'
     if (job.eventId !== undefined) return this.#deliverRow(job, job.eventId, place)
-    const [task, turn] = await Promise.all([
-      prisma.task.findUniqueOrThrow({ where: { id: job.taskId }, select: { siteId: true } }),
-      prisma.taskTurn.findUnique({
-        where: { taskId_turnNo: { taskId: job.taskId, turnNo: job.turnNo } },
-        select: { id: true },
-      }),
-    ])
+    const turn = await prisma.taskTurn.findUnique({
+      where: { taskId_turnNo: { taskId: job.taskId, turnNo: job.turnNo } },
+      select: { id: true },
+    })
     const events = await prisma.taskEvent.findMany({
       where: {
         taskId: job.taskId,
@@ -363,7 +360,8 @@ export class TelegramJobs {
       at: event.createdAt.toISOString(),
     }))
     const markdown = rows
-      .map((row) => feedRowMarkdown(row, task.siteId !== null))
+      // A chat has no site (docs/plan/83-remove-projects.md).
+      .map((row) => feedRowMarkdown(row, false))
       .filter((block): block is string => block !== null)
       .join('\n\n')
     await this.#clearProgress(job.taskId)
@@ -391,26 +389,23 @@ export class TelegramJobs {
     eventId: string,
     place: { chatId: string; threadId: number | undefined },
   ): Promise<'sent' | 'skipped'> {
-    const { prisma } = this.#deps
-    const [task, event] = await Promise.all([
-      prisma.task.findUniqueOrThrow({ where: { id: job.taskId }, select: { siteId: true } }),
-      prisma.taskEvent.findFirst({
-        where: {
-          id: BigInt(eventId),
-          taskId: job.taskId,
-          clientVisible: true,
-          type: { in: [...telegramRowsToldAlone] },
-        },
-        select: { id: true, type: true, payload: true, createdAt: true },
-      }),
-    ])
+    const event = await this.#deps.prisma.taskEvent.findFirst({
+      where: {
+        id: BigInt(eventId),
+        taskId: job.taskId,
+        clientVisible: true,
+        type: { in: [...telegramRowsToldAlone] },
+      },
+      select: { id: true, type: true, payload: true, createdAt: true },
+    })
     if (event === null) return 'skipped'
     const row: FeedItem = {
       ...readFeedRow(event.type, event.payload),
       id: String(event.id),
       at: event.createdAt.toISOString(),
     }
-    const markdown = feedRowMarkdown(row, task.siteId !== null)
+    // A chat has no site (docs/plan/83-remove-projects.md; docs/plan/82, Зп62).
+    const markdown = feedRowMarkdown(row, false)
     const parts = markdown === null ? [] : markdownToTelegramParts(markdown)
     if (parts.length === 0) return 'skipped'
     return this.#sendParts(place, parts, [

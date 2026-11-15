@@ -15,7 +15,6 @@ import {
   type ScheduleIntakeResponse,
 } from '@repo/domain'
 
-import { isManagerRole, memberRole } from '../chat/access.ts'
 import type { ChatContext } from '../chat/context.ts'
 import { createDialog } from '../chat/tasks.ts'
 import { loadLatestConsents } from '../consents.ts'
@@ -56,10 +55,10 @@ export interface StartedRun {
 }
 
 /**
- * Why `createDialog` refused the chat of a run (§4.3): a reason of the client or of the platform —
- * recorded, the delivery done — or `retry`: a failure that may pass, so the run keeps waiting and
- * core delivers it again. NOT_FOUND is never read as a project that is gone: that is read from the
- * database before (`project_gone`), and a NOT_FOUND here is a fault of the platform.
+ * Why `createDialog` refused the chat of a run (§4.3, Зп48): a reason of the client or of the
+ * platform — recorded, the delivery done — or `retry`: a failure that may pass, so the run keeps
+ * waiting and core delivers it again. A chat has no project (docs/plan/83-remove-projects.md,
+ * БП1): `TASK_NOT_ACCEPTED` and NOT_FOUND are faults of the platform.
  */
 export function refusalReasonOf(error: unknown): ScheduledRunReason | 'retry' {
   if (!isDomainError(error)) return 'retry'
@@ -76,12 +75,8 @@ export function refusalReasonOf(error: unknown): ScheduledRunReason | 'retry' {
       return 'daily_limit'
     case 'BILLING_CREDIT_RATE_MISSING':
       return 'platform'
-    case 'TASK_NOT_ACCEPTED': {
-      const reason = (error.details as { reason?: unknown } | undefined)?.reason
-      return reason === 'site_not_active' || reason === 'not_synthetic'
-        ? 'project_unavailable'
-        : 'platform'
-    }
+    case 'TASK_NOT_ACCEPTED':
+      return 'platform'
     case 'WORKSPACE_KEY_UNAVAILABLE':
       return 'retry'
   }
@@ -114,7 +109,6 @@ const runSelect = {
   status: true,
   reason: true,
   taskId: true,
-  siteId: true,
   name: true,
   instructions: true,
   effort: true,
@@ -151,34 +145,15 @@ async function record(
 }
 
 /**
- * Why `createDialog` did not find the project of a run, read again (Зп21: the project is checked by
- * reading): deleted, or its creator lost the right, since step (г) read them; null — neither, a
- * fault of the platform.
- */
-async function projectReasonNow(
-  db: PrismaClient,
-  input: { siteId: string; userId: string },
-): Promise<ScheduledRunReason | null> {
-  const site = await db.site.findUnique({
-    where: { id: input.siteId },
-    select: { workspaceId: true, deletedAt: true },
-  })
-  if (site === null || site.deletedAt !== null) return 'project_gone'
-  if (!isManagerRole(await memberRole(db, site.workspaceId, input.userId))) return 'member_gone'
-  return null
-}
-
-/**
  * Starts the chat of a run (§4.3), the steps in their order: (а) a run that does not wait answers
  * what it recorded — one there is not, `skipped/paused`; (б) its chat is there (deleted too): it is
  * `started` with it; (в) it came late — a later run of the task waits or started, or its moment is
  * older than the catch-up limit — `skipped/missed`; its task was deleted, or switched off since a
- * run of its schedule was written — `skipped/paused`; (г) its project was deleted, or the creator
- * no longer manages its workspace — refused, and the task stops (`project_gone`, `member_gone`);
- * the creator has documents to accept — `refused/consent`; (д) `createDialog` from the snapshot,
- * named by the task, its preview built on demand — it writes the run `started` with its chat, or
- * makes nothing when the run was closed meanwhile; a project deleted (or a right lost) since (г)
- * is read again, never taken from its NOT_FOUND; (е) the outcome: what the run holds then.
+ * run of its schedule was written — `skipped/paused`; (г) the creator has documents to accept —
+ * `refused/consent` (Зп48); (д) `createDialog` from the snapshot, named by the task — a chat
+ * without a project in the creator's personal workspace, where the task is (Зп45) — it writes the
+ * run `started` with its chat, or makes nothing when the run was closed meanwhile; (е) the outcome:
+ * what the run holds then.
  *
  * Throws only for a failure that may pass — Vault, a refusal of 503, what is not a DomainError — so
  * the run keeps waiting and core delivers it again.
@@ -220,7 +195,6 @@ export async function startRun(
     where: { id: run.scheduledTaskId },
     select: {
       createdById: true,
-      workspaceId: true,
       enabled: true,
       pausedReason: true,
       deletedAt: true,
@@ -239,16 +213,6 @@ export async function startRun(
       ...(refusal === undefined ? {} : { refusal }),
     }))
   const userId = task.createdById
-  let workspaceId = task.workspaceId
-  if (run.siteId !== null) {
-    const site = await db.site.findUnique({
-      where: { id: run.siteId },
-      select: { workspaceId: true, deletedAt: true },
-    })
-    if (site === null || site.deletedAt !== null) return refuse('project_gone')
-    workspaceId = site.workspaceId
-  }
-  if (!isManagerRole(await memberRole(db, workspaceId, userId))) return refuse('member_gone')
   if (missingRequiredConsents(await loadLatestConsents(db, userId)).length > 0)
     return refuse('consent')
 
@@ -259,12 +223,10 @@ export async function startRun(
     created = (
       await createDialog(db, chat, {
         userId,
-        siteId: run.siteId,
         taskId,
         text: run.instructions,
         effort,
         title: run.name,
-        preview: 'on_demand',
         scheduledRunId: run.id,
         now,
       })
@@ -275,10 +237,6 @@ export async function startRun(
       return {
         response: (await recordedOf(db, run.id)) ?? { outcome: 'skipped', reason: 'paused' },
       }
-    if (isDomainError(error) && error.code === 'NOT_FOUND' && run.siteId !== null) {
-      const gone = await projectReasonNow(db, { siteId: run.siteId, userId })
-      if (gone !== null) return refuse(gone)
-    }
     const reason = refusalReasonOf(error)
     if (reason === 'retry') throw error
     return refuse(reason, error as DomainError)

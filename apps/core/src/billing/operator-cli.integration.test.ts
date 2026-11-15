@@ -219,7 +219,6 @@ describe.skipIf(!enabled)('operator billing commands with PostgreSQL and the fak
         kind: 'quota',
         price: '4900.00',
         creditsPerMonth: 30,
-        maxSites: 1,
         isActive: false,
       },
     })

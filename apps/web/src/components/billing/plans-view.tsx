@@ -328,7 +328,6 @@ export function PlansView({ email }: { email: string }) {
               {offers.data.plans.length > 0 ? (
                 <PlanGrid
                   plans={offers.data.plans}
-                  siteCount={offers.data.siteCount}
                   subscription={subscription}
                   canChoose={canChoose}
                   onChoose={(plan) => setCheckout(opened({ plan, autoRenewalAvailable }))}

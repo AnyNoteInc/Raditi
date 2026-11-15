@@ -19,8 +19,8 @@ import type { DeliveryAnswer, NotificationDelivery } from './notification-delive
 // pass) or the client looks at it now. The channels are NotificationDelivery's.
 //
 // A pass of a run of a scheduled task before the first words of its client (docs/plan/82-
-// scheduled-tasks.md, Зп27, Зп38, Зп39) is told in the words of a scheduled task: «выполнена» and
-// «изменения готовы» only while the switch of the task is on, a letter only of a question or a
+// scheduled-tasks.md, Зп27, Зп38, Зп39, Зп62) is told in the words of a scheduled task: «выполнена»
+// only while the switch of the task is on, a letter only of a question or a
 // failure, at most one in 30 minutes per task. Its pass refused by the gate of the chat
 // (`not_accepted`) pauses the task, and that is the one notice (Зп22). From the client's first
 // words on the chat is an ordinary one.

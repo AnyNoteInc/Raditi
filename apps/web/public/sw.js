@@ -24,7 +24,8 @@ const CHAT_TITLES = Object.freeze({
 const SCHEDULED_TITLES = Object.freeze({
   answered: 'Запланированная задача выполнена',
   question: 'Запланированной задаче нужен ваш ответ',
-  ready: 'Запланированная задача: изменения готовы',
+  // No pass brings changes any more (docs/plan/83-remove-projects.md; plan 82, Зп62).
+  ready: 'Запланированная задача выполнена',
   failed: 'Запланированная задача не выполнена',
   limit: 'Запланированная задача остановилась',
   not_started: 'Запланированная задача не запустилась',
@@ -46,7 +47,6 @@ const CABINET_SECTIONS = Object.freeze([
   '/chats',
   '/pages',
   '/profile',
-  '/projects',
   '/scheduled',
   '/settings',
 ])

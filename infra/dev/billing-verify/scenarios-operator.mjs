@@ -6,7 +6,7 @@ import {
   PRICE,
   CREDITS,
   accountsOf,
-  addSite,
+  firstFile,
   auditOf,
   creditRateUsable,
   giftGrant,
@@ -65,12 +65,12 @@ scenarios['credit-rate'] = async (t) => {
   )
 
   // Three customers: one who only registered, one with a tariff and a pack, one whose first
-  // site made the workspace.
+  // file made the workspace.
   const onlooker = await t.customer()
   const paying = await subscribed(t)
   await packBought(t, paying.customer)
   const withSite = await t.customer()
-  await addSite(t, withSite, { name: 'Кофейня', url: `https://rate-${withSite.id}.example.ru` })
+  await firstFile(t, withSite)
   t.equal(
     'without a rate nobody’s task is taken, whatever they could spend: the gift promised, the gift granted, 350 credits of three accounts',
     [await told(onlooker), await told(withSite), await told(paying.customer)],

@@ -47,6 +47,6 @@ COPY --from=prod /repo /app
 ENV NODE_ENV=production
 WORKDIR /app/apps/preview
 USER 10001:10001
-EXPOSE 8090 8091
+EXPOSE 8091 8092
 ENTRYPOINT ["node"]
 CMD ["dist/main.js"]

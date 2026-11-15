@@ -2,7 +2,6 @@ import { Module, type DynamicModule } from '@nestjs/common'
 import type { TurnExecutorKind } from '@repo/domain'
 
 import { DriversModule } from '../drivers/drivers.module.ts'
-import { GitWorkspaceModule } from '../git-workspace/git-workspace.module.ts'
 import { LeasesModule } from '../leases/leases.module.ts'
 import { LlmModule } from '../llm/llm.module.ts'
 import { RunnerApiModule } from '../runner-api/runner-api.module.ts'
@@ -20,7 +19,7 @@ import { TURN_EXECUTOR } from './turns.tokens.ts'
  * and, for the local executor, TurnReconciler over the same SANDBOX_PROVIDER.
  *
  * Built once per process, by AppModule.forRoot, and imported as that same object by the modules
- * that run turns (TasksModule, PreviewsModule): Nest tells dynamic modules apart by reference,
+ * that run turns (TasksModule): Nest tells dynamic modules apart by reference,
  * and a second one would be a second LiveTurns — a turn driven here taken over by recovery.
  */
 @Module({})
@@ -30,12 +29,11 @@ export class TurnsModule {
       module: TurnsModule,
       imports: [
         DriversModule,
-        GitWorkspaceModule,
         SessionsModule,
         LlmModule,
         LeasesModule,
         // Last: of the modules of one level Nest stops first the one it met last, so the runner
-        // API closes before GitWorkspaceModule revokes the git credentials (AppModule's test).
+        // API closes first (AppModule's test).
         executor === 'runner' ? RunnerApiModule : SandboxModule,
       ],
       providers: [

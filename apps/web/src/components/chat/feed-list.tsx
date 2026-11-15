@@ -1,7 +1,6 @@
 'use client'
 
-import type { ChatCommandId, FeedReleaseOutcome, FeedUpdateOutcome } from '@repo/domain'
-import { chatCommandRefusalText, type ChatCommandRefusal } from '@repo/domain/release/chat-commands'
+import type { FeedReleaseOutcome, FeedUpdateOutcome } from '@repo/domain'
 import { chatDocumentsOf } from '@repo/domain/tasks/chat-documents'
 import { feedFailureTextOf, usageLimitText } from '@repo/domain/tasks/client-feed-failures'
 import {
@@ -42,9 +41,7 @@ import {
   feedReleaseReasonText,
   feedReleaseText,
   feedReleaseTitle,
-  feedRetryText,
   feedRowText,
-  feedStateText,
   feedUndoConfirmedText,
   feedUndoKeptText,
   feedUndoReasonText,
@@ -53,7 +50,6 @@ import {
   feedUpdateText,
   feedUpdateTitle,
   feedVersionBumpLabel,
-  feedVersionText,
   feedWorkedText,
   feedDurationText,
   taskStatusLabel,
@@ -71,21 +67,16 @@ import { nbsp } from '@/lib/nbsp'
 
 import { AgentMarkdown } from './agent-markdown'
 import { SentFiles, type SentFile } from './attachment-chips'
-import { dayTime, feedTime } from './chat-format'
+import { feedTime } from './chat-format'
 import { riseIn } from './chat-motion'
 import {
   activityText,
-  agentNotesText,
   browserText,
   dialogText,
   messageEditText,
   objectLinkText,
-  ownText,
-  releaseStatusText,
-  releaseStepText,
-  undoText,
 } from './chat-texts'
-import type { CommandVerdict, FeedRow, ScheduledTaskItem, UndoHead } from './chat-types'
+import type { FeedRow, ScheduledTaskItem } from './chat-types'
 import { offScreen } from './composer'
 import {
   feedEntries,
@@ -112,29 +103,12 @@ import type { FeedHeadState } from './feed-state'
 export interface FeedActions {
   /** «Продолжить» after the platform's question about credits; absent — a closed project (К39). */
   onContinue?: () => void
-  /** «Попробовать ещё» of the failure with this row id (docs/plan/53, «Попробовать ещё»). */
-  onRetry: (failureEventId: string) => void
   /** «Остановить задачу»: `/cancel` with its confirmation. */
   onStop: () => void
-  /** «Выпустить новую версию». */
-  onRelease: () => void
-  /** «Обновить рабочую копию». */
-  onUpdate: () => void
-  /** «Отменить выпуск» of the installed version of the dialog. */
-  onUndo: () => void
-  /** «Посмотреть изменения»: the tab of the changes beside the dialog (docs/plan/59, И10). */
-  onShowChanges: () => void
   /** «Взять управление» of the task's browser (docs/plan/57-browser-tasks.md, Б15); as above. */
   onTakeControl?: () => void
   /** «Продолжить работу агента» (Б16); as above. */
   onResumeAgent?: () => void
-  /**
-   * «Сохранить в подсказки агенту» with the answer of the row (docs/plan/61, К31); absent — this
-   * reader does not change the notes of the project, or the project is closed.
-   */
-  onSaveNotes?: (text: string) => void
-  /** The rows that answer `/init` (`initAnswerIds`). */
-  notesRows?: ReadonlySet<string>
   /**
    * «Открыть» of a document of the agent: the tab «Документы» on that version
    * (docs/plan/67-agent-documents.md, Д4); absent — the document opens in a window of its own.
@@ -811,52 +785,15 @@ function SiteObjects({ objects, heading }: { objects: readonly ShownObject[]; he
   )
 }
 
-/** Why `/release` cannot be run on the live candidate: said where the button would stand. */
-const RELEASE_HINTS: readonly ChatCommandRefusal[] = [
-  'not_allowed',
-  'checks_failed',
-  'release_in_progress',
-  'project_closed',
-]
-
-function CandidateCard({
-  row,
-  live,
-  release,
-  actions,
-}: {
-  row: CandidateRow
-  live: boolean
-  release: CommandVerdict | undefined
-  actions: FeedActions
-}) {
+/**
+ * The changes of a chat of a project that is no more (docs/plan/83-remove-projects.md): a row of
+ * its history, nothing to do with it.
+ */
+function CandidateCard({ row }: { row: CandidateRow }) {
   const changed = row.files.added + row.files.modified + row.files.deleted
-  const refusal = release?.available ? null : (release?.refusal ?? null)
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-      <Card
-        icon="eye"
-        title={feedCandidateText.title}
-        tone={live ? 'primary.main' : 'text.primary'}
-        actions={
-          live ? (
-            <>
-              {release?.available ? (
-                <Button
-                  variant="contained"
-                  onClick={actions.onRelease}
-                  disabled={actions.busy || actions.stopping}
-                >
-                  {feedCandidateText.release}
-                </Button>
-              ) : null}
-              <Button variant="outlined" onClick={actions.onShowChanges}>
-                {dialogText.showChanges}
-              </Button>
-            </>
-          ) : undefined
-        }
-      >
+      <Card icon="eye" title={feedCandidateText.title} tone="text.primary">
         <Paragraph>
           {nbsp(feedCandidateVersionText(row.version))}
           {row.bump ? ` (${feedVersionBumpLabel[row.bump].toLocaleLowerCase('ru')})` : ''}.
@@ -869,11 +806,6 @@ function CandidateCard({
           {row.media > 0 ? <li>{nbsp(feedMediaAddedText(row.media))}</li> : null}
           {row.records > 0 ? <li>{nbsp(feedRecordsChangedText(row.records))}</li> : null}
         </Box>
-        {live && refusal !== null && RELEASE_HINTS.includes(refusal) ? (
-          <Typography variant="body2" color="text.secondary">
-            {chatCommandRefusalText[refusal]}
-          </Typography>
-        ) : null}
       </Card>
     </Box>
   )
@@ -897,44 +829,10 @@ const updateIcon: Readonly<Record<FeedUpdateOutcome, AppIconName>> = {
   redo_failed: 'warning',
 }
 
-/**
- * «Отменить выпуск» under the card of the installed version the dialog may undo now: the server's
- * verdict on the command, and until when (docs/plan/53, «Отмена выпуска»).
- */
-function UndoAction({
-  releaseId,
-  undo,
-  commands,
-  actions,
-}: {
-  releaseId: string
-  undo: UndoHead | null
-  commands: readonly CommandVerdict[]
-  actions: FeedActions
-}) {
-  const verdict = commands.find((command) => command.id === ('undo' satisfies ChatCommandId))
-  if (undo?.releaseId !== releaseId || undo.until === null || !verdict?.available) return null
-  return (
-    <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 12px' }}>
-      <Button variant="outlined" onClick={actions.onUndo} disabled={actions.busy}>
-        {undoText.button}
-      </Button>
-      <Typography variant="body2" color="text.secondary">
-        {nbsp(undoText.until(dayTime(new Date(undo.until))))}
-      </Typography>
-    </Box>
-  )
-}
-
 function RowView({
   row,
   now,
-  siteUrl,
   openQuestionId,
-  liveCandidateId,
-  retryId,
-  commands,
-  undo,
   actions,
   filesOf,
   editable = false,
@@ -942,14 +840,7 @@ function RowView({
 }: {
   row: FeedRow
   now: Date
-  /** null — a chat without a project: nothing to open and no site to speak of. */
-  siteUrl: string | null
   openQuestionId: string | null
-  liveCandidateId: string | null
-  /** The failure the server offers «Попробовать ещё» for; null — none. */
-  retryId: string | null
-  commands: readonly CommandVerdict[]
-  undo: UndoHead | null
   actions: FeedActions
   filesOf: (ids: readonly string[]) => SentFile[]
   /** The client's last message, while `/undo` can take it back: «Изменить» under it (ВВ25). */
@@ -1001,7 +892,7 @@ function RowView({
         <QuestionCard
           row={row}
           open={row.id === openQuestionId}
-          withSite={siteUrl !== null}
+          withSite={false}
           actions={actions}
         />
       )
@@ -1010,19 +901,11 @@ function RowView({
       // A pass that changed nothing left the dialog open for the next words (26.10.2026).
       const open = row.next === 'awaiting_user'
       const site = approval ? feedApprovalSiteText[row.site] : feedDoneSiteText[row.site]
-      const { onSaveNotes } = actions
       return (
         <AgentMessage
           copy={row.message}
           title={
             approval ? feedCardTitle.approval : open ? feedCardTitle.answer : feedCardTitle.result
-          }
-          actions={
-            onSaveNotes && actions.notesRows?.has(row.id) ? (
-              <Button variant="outlined" onClick={() => onSaveNotes(row.message)}>
-                {agentNotesText.button}
-              </Button>
-            ) : undefined
           }
         >
           <AgentMarkdown text={row.message} />
@@ -1034,57 +917,18 @@ function RowView({
             ]}
           />
           <SiteObjects objects={row.objects ?? []} heading={feedObjectText.result} />
-          {!approval && site !== null && siteUrl !== null ? (
-            <MuiLink
-              href={siteUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{
-                alignSelf: 'flex-start',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 0.5,
-                minHeight: 44,
-              }}
-            >
-              {feedStateText.openSite}
-              <AppIcon name="arrow" size={16} />
-            </MuiLink>
-          ) : null}
         </AgentMessage>
       )
     }
     case 'feed.failure':
       return (
-        <Card
-          icon="warning"
-          title={feedCardTitle.failure}
-          tone="error.main"
-          actions={
-            row.id === retryId ? (
-              <Box
-                sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 12px' }}
-              >
-                <Button
-                  variant="contained"
-                  onClick={() => actions.onRetry(row.id)}
-                  loading={actions.busy}
-                >
-                  {feedRetryText.button}
-                </Button>
-                <Typography variant="body2" color="text.secondary">
-                  {nbsp(feedRetryText.hint)}
-                </Typography>
-              </Box>
-            ) : undefined
-          }
-        >
+        <Card icon="warning" title={feedCardTitle.failure} tone="error.main">
           <Sentences
             parts={[
               // A window of the workspace names when the work goes on (plan 71).
               row.code === 'usage_limit' && row.window
                 ? usageLimitText(row.window.kind, new Date(row.window.resetsAt))
-                : feedFailureTextOf(row.code, siteUrl !== null),
+                : feedFailureTextOf(row.code, false),
               feedEndedSiteText[row.site],
               feedCreditsSentence(row.credits),
               // The dialog kept its candidate: the card of the changes above says what to do.
@@ -1111,14 +955,7 @@ function RowView({
         </Card>
       )
     case 'feed.candidate':
-      return (
-        <CandidateCard
-          row={row}
-          live={row.id === liveCandidateId}
-          release={commands.find((command) => command.id === ('release' satisfies ChatCommandId))}
-          actions={actions}
-        />
-      )
+      return <CandidateCard row={row} />
     case 'feed.decision':
       return <Press text={feedDecisionText(row.version)} icon="check" />
     case 'feed.release':
@@ -1142,14 +979,6 @@ function RowView({
               feedCreditsSentence(row.credits),
             ]}
           />
-          {row.outcome === 'installed' ? (
-            <UndoAction
-              releaseId={row.releaseId}
-              undo={undo}
-              commands={commands}
-              actions={actions}
-            />
-          ) : null}
         </Card>
       )
     case 'feed.undo':
@@ -1273,10 +1102,7 @@ function RowView({
 export function FeedList({
   head,
   rows,
-  siteUrl,
   openQuestionId,
-  liveCandidateId,
-  retryId = null,
   actions,
   filesOf = noFiles,
   details = false,
@@ -1284,12 +1110,7 @@ export function FeedList({
 }: {
   head: FeedHeadState | null
   rows: readonly FeedRow[]
-  /** null — a chat without a project. */
-  siteUrl: string | null
   openQuestionId: string | null
-  liveCandidateId: string | null
-  /** The failure row «Попробовать ещё» is offered on (`retryFailure`). */
-  retryId?: string | null
   actions: FeedActions
   /** The files a message sent, by their ids, as their chips name them. */
   filesOf?: (ids: readonly string[]) => SentFile[]
@@ -1302,7 +1123,6 @@ export function FeedList({
   const entries: FeedEntry[] = feedEntries(rows, head)
   const documents = useMemo(() => chatDocumentsOf(rows), [rows])
   const commands = head?.commands ?? []
-  const undo = head?.undo ?? null
   // «Изменить» stands under the client's last message while `/undo` can take its turn back.
   const editableId =
     commands.find((command) => command.id === 'turn_undo')?.available === true
@@ -1374,12 +1194,7 @@ export function FeedList({
               <RowView
                 row={entry.row}
                 now={now}
-                siteUrl={siteUrl}
                 openQuestionId={openQuestionId}
-                liveCandidateId={liveCandidateId}
-                retryId={retryId}
-                commands={commands}
-                undo={undo}
                 actions={actions}
                 filesOf={filesOf}
                 editable={entry.row.id === editableId}
@@ -1492,14 +1307,13 @@ function useSecondsSince(since: string | null, on: boolean): number {
 }
 
 /**
- * The live block under the rows: drawn from the head of the dialog, never stored. The queue, the
- * preparation, the work with its stages and its time, and a release in progress. `stopping` —
+ * The live block under the rows: drawn from the head of the chat, never stored. The queue, the
+ * preparation, the work and its time. `stopping` —
  * the client pressed `/cancel` and the work is being stopped: the block says so instead.
  */
 export function LiveBlock({
   head,
   stopping = false,
-  withSite,
   browser,
   activity,
 }: {
@@ -1507,8 +1321,6 @@ export function LiveBlock({
   /** The stages of the turn: no longer shown (owner's request of 14.11.2026). */
   steps?: readonly StepRow[]
   stopping?: boolean
-  /** false — a chat without a project: the block says nothing of a site. */
-  withSite: boolean
   /** «Ход работы» of the turn at work, as it goes (owner's decision of 26.10.2026). */
   activity?: ReactNode
   /** A task in the browser (docs/plan/57-browser-tasks.md): who drives it. */
@@ -1519,82 +1331,58 @@ export function LiveBlock({
     busy: boolean
   }
 }) {
-  const { task, release } = head
+  const { task } = head
   const running = task.status === 'running'
   const seconds = useSecondsSince(task.runningSince, running && !task.held)
   let text: string | null
   let body: ReactNode = null
-  // The undo of the dialog's release goes on: the dialog stays closed, the block says the undo.
-  const undoRun = head.undo?.run ?? null
-  const undoing = undoRun !== null && undoRun.outcome === null
   let title: string = taskStatusLabel[task.status]
-  if (undoing) {
-    title = undoText.live(feedVersionText(head.undo!.version))
-    const status = releaseStatusText[undoRun.status] ?? null
-    const step = undoRun.step ? ownText(releaseStepText, undoRun.step) : null
-    const parts = [status, step].filter((part) => part !== null)
-    text = parts.length === 0 ? null : `${parts.join('. ')}.`
-  } else
-    switch (task.status) {
-      case 'queued':
-        text = stopping ? dialogText.stoppedHint : feedQueuedText(task.waiting, withSite)
-        break
-      case 'preparing':
-        text = stopping ? dialogText.stoppedHint : null
-        break
-      case 'running':
-        if (stopping) text = dialogText.stoppedHint
-        else if (task.held) text = withSite ? feedLiveText.held : feedLiveText.heldNoSite
-        else if (browser?.controlling) {
-          title = browserText.status.user
-          text = browserText.controlPlate
-          body = (
-            <Button
-              variant="contained"
-              onClick={browser.onResume}
-              disabled={browser.busy}
-              sx={{ alignSelf: 'flex-start' }}
-            >
-              {feedBrowserButtons.resume}
-            </Button>
-          )
-        } else {
-          // What the agent does stands in the feed as it comes, no folding and no scrolling of its
-          // own (owner's request of 09.11.2026); under it a word of what it is doing and the time,
-          // in place of «Агент работает» and the stages (owner, 14.11.2026), with the moving mark of
-          // Радити beside it (owner, 15.11.2026). The
-          // finished turn folds it under «Агент работал …».
-          return (
-            <Box
-              sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0, ...riseIn }}
-            >
-              {activity ? <Box sx={{ minWidth: 0 }}>{activity}</Box> : null}
-              <WorkingLine turn={task.turnNo} seconds={seconds} label={title} />
-            </Box>
-          )
-        }
-        break
-      case 'deploying':
-      case 'verifying': {
-        const status = release === null ? null : (releaseStatusText[release.status] ?? null)
-        const step = release?.step ? ownText(releaseStepText, release.step) : null
-        const parts = [status, step].filter((part) => part !== null)
-        text = parts.length === 0 ? null : `${parts.join('. ')}.`
-        break
+  switch (task.status) {
+    case 'queued':
+      text = stopping ? dialogText.stoppedHint : feedQueuedText(task.waiting, false)
+      break
+    case 'preparing':
+      text = stopping ? dialogText.stoppedHint : null
+      break
+    case 'running':
+      if (stopping) text = dialogText.stoppedHint
+      else if (task.held) text = feedLiveText.heldNoSite
+      else if (browser?.controlling) {
+        title = browserText.status.user
+        text = browserText.controlPlate
+        body = (
+          <Button
+            variant="contained"
+            onClick={browser.onResume}
+            disabled={browser.busy}
+            sx={{ alignSelf: 'flex-start' }}
+          >
+            {feedBrowserButtons.resume}
+          </Button>
+        )
+      } else {
+        // What the agent does stands in the feed as it comes, no folding and no scrolling of its
+        // own (owner's request of 09.11.2026); under it a word of what it is doing and the time,
+        // in place of «Агент работает» and the stages (owner, 14.11.2026), with the moving mark of
+        // Радити beside it (owner, 15.11.2026). The
+        // finished turn folds it under «Агент работал …».
+        return (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0, ...riseIn }}>
+            {activity ? <Box sx={{ minWidth: 0 }}>{activity}</Box> : null}
+            <WorkingLine turn={task.turnNo} seconds={seconds} label={title} />
+          </Box>
+        )
       }
-      default:
-        return null
-    }
+      break
+    default:
+      return null
+  }
   // The agent at work has the moving mark of Raditi before its status (owner's request of
   // 09.11.2026, in place of a pulsing dot); a wait for the client stands still. One stage, one
-  // looped trajectory (owner, 09.11.2026): preparing, work, release.
+  // looped trajectory (owner, 09.11.2026): preparing and work.
   const working = !browser?.controlling && !task.held && !stopping
   const motion: ComponentProps<typeof BrandProgress>['variant'] =
-    undoing || task.status === 'deploying' || task.status === 'verifying'
-      ? 'counterflow'
-      : task.status === 'running'
-        ? 'spiral'
-        : 'orbits'
+    task.status === 'running' ? 'spiral' : 'orbits'
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0, ...riseIn }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0 }}>

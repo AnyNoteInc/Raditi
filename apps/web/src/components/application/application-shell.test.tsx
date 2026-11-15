@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApplicationShell } from './application-shell'
 
-vi.mock('next/navigation', () => ({ usePathname: () => '/projects' }))
+// «Проекты» left the rail with projects (docs/plan/83-remove-projects.md; plan 82, Зп60): the
+// section of the rail is «Страницы» here, the crumbs say what the shell is given.
+vi.mock('next/navigation', () => ({ usePathname: () => '/pages' }))
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
 vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
 // The credits read the server: here the ring is a mark of where it stands.
@@ -88,7 +90,7 @@ describe('application shell', () => {
     expect(page.querySelector('a')).toHaveAttribute('href', '#application-content')
     expect(page.querySelector('main')).toHaveAttribute('id', 'application-content')
     expect(
-      page.querySelector('nav[aria-label="Основная навигация"] a[href="/projects"]'),
+      page.querySelector('nav[aria-label="Основная навигация"] a[href="/pages"]'),
     ).toHaveAttribute('aria-current', 'page')
     expect(page.querySelector('header [aria-current="page"]')).toHaveTextContent('Проекты')
   })

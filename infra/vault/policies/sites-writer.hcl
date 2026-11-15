@@ -1,14 +1,24 @@
-# A trusted connection step stores site access with CAS and cannot read it back.
-path "kv/data/sites/*" {
+# Variables of a workspace (docs/plan/83-remove-projects.md, БП4): written by web, never read
+# back; a removed one is overwritten by a version without a value.
+path "kv/data/workspaces/+/env/*" {
   capabilities = ["create", "update"]
 }
 
-# The version for CAS, and one thing of the metadata of a key of a site: that it keeps one
-# version. A variable of a site keeps one version (docs/plan/53-chat-preview-release.md, Р13), and
-# «Удалить проект» (25.10.2026) overwrites each access and variable with a version without a value
-# that alone is kept, so a replaced or removed value is gone from Vault. Nothing else of the
-# metadata — `max_versions` = "1" alone, as a string (a number matches no list).
-path "kv/metadata/sites/+/*" {
+path "kv/metadata/workspaces/+/env/*" {
+  capabilities = ["create", "update", "read"]
+  allowed_parameters = {
+    "max_versions" = ["1"]
+  }
+}
+
+# The secrets of the MCP servers of a workspace's agent (docs/plan/81-mcp-server-credentials.md;
+# plan 83, БП11): written by web after it checked the server, never read back; a removed server's
+# key is overwritten by a version without a value.
+path "kv/data/workspaces/+/mcp/*" {
+  capabilities = ["create", "update"]
+}
+
+path "kv/metadata/workspaces/+/mcp/*" {
   capabilities = ["create", "update", "read"]
   allowed_parameters = {
     "max_versions" = ["1"]

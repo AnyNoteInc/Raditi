@@ -14,27 +14,24 @@ import {
   scheduleItem,
   scheduleRun,
   SCHEDULE_ID,
-  SITE_ID,
 } from './testing'
 
-const { listSchedules, listProjects, setEnabled, runNow, remove, costHint, push, pathname } =
-  vi.hoisted(() => ({
-    listSchedules: vi.fn<() => Promise<{ schedules: ScheduleItem[]; timezone: string }>>(),
-    listProjects: vi.fn(async () => [] as unknown[]),
-    setEnabled: vi.fn(async (input: { scheduleId: string; enabled: boolean }) => input),
-    runNow: vi.fn(async (_input: unknown) => ({ taskId: '019f2a00-0000-7000-8000-0000000000c9' })),
-    remove: vi.fn(async (_input: unknown) => ({ deleted: true as const })),
-    costHint: vi.fn(async () => ({
-      averageCredits: 11,
-      runsPerWeek: 7,
-      creditsPerWeek: 77,
-      weeklyLimit: 73,
-      overHalf: true,
-      nextRunAt: null,
-    })),
-    push: vi.fn(),
-    pathname: { current: '/scheduled' },
-  }))
+const { listSchedules, setEnabled, runNow, remove, costHint, push, pathname } = vi.hoisted(() => ({
+  listSchedules: vi.fn<() => Promise<{ schedules: ScheduleItem[]; timezone: string }>>(),
+  setEnabled: vi.fn(async (input: { scheduleId: string; enabled: boolean }) => input),
+  runNow: vi.fn(async (_input: unknown) => ({ taskId: '019f2a00-0000-7000-8000-0000000000c9' })),
+  remove: vi.fn(async (_input: unknown) => ({ deleted: true as const })),
+  costHint: vi.fn(async () => ({
+    averageCredits: 11,
+    runsPerWeek: 7,
+    creditsPerWeek: 77,
+    weeklyLimit: 73,
+    overHalf: true,
+    nextRunAt: null,
+  })),
+  push: vi.fn(),
+  pathname: { current: '/scheduled' },
+}))
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push }),
@@ -68,7 +65,6 @@ vi.mock('@/trpc/client', () => ({
       create: mutation(async () => null),
       update: mutation(async () => null),
     },
-    project: { list: query('project.list', listProjects) },
   }),
 }))
 
@@ -158,9 +154,11 @@ describe('before the first task (Зп4)', () => {
     expect(
       templates.map((each) => each.getAttribute('aria-labelledby') && each.textContent),
     ).toHaveLength(6)
-    expect(screen.getByRole('button', { name: 'Проверка сайта' })).toHaveAccessibleDescription(
+    expect(screen.getByRole('button', { name: 'Курс валют' })).toHaveAccessibleDescription(
       /По\sбудням\sв\s9:00/,
     )
+    // Зп58: none of the six is marked as needing a project.
+    expect(screen.queryByText('Нужен проект')).toBeNull()
     // No tools over an empty list.
     expect(screen.queryByRole('button', { name: 'Фильтр задач' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Порядок задач' })).toBeNull()
@@ -196,21 +194,19 @@ describe('before the first task (Зп4)', () => {
 
   it('opens the window of a template filled in, nothing made before «Создать» (Зп9)', async () => {
     show(<ScheduledView userId={USER} tab="yours" />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Идеи для новостей' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Идеи для постов' }))
     const dialog = await screen.findByRole('dialog', { name: 'Новая запланированная задача' })
-    expect(within(dialog).getByRole('textbox', { name: 'Название' })).toHaveValue(
-      'Идеи для новостей',
-    )
+    expect(within(dialog).getByRole('textbox', { name: 'Название' })).toHaveValue('Идеи для постов')
     expect(
       (within(dialog).getByRole('textbox', { name: 'Что сделать агенту' }) as HTMLTextAreaElement)
         .value,
-    ).toContain('Предложите три идеи для новостей')
+    ).toContain('Предложи три идеи постов для соцсетей')
     expect(within(dialog).getByRole('button', { name: 'Размышление: Высокое' })).toBeInTheDocument()
   })
 })
 
 describe('a task of «Ваши» (Зп5)', () => {
-  it('shows its name, schedules, project, state and latest run, with the switch named by it', async () => {
+  it('shows its name, schedules, state and latest run, with the switch named by it', async () => {
     list([scheduleItem({ lastRun: scheduleRun() })])
     show(<ScheduledView userId={USER} tab="yours" />)
     const row = (await screen.findByRole('link', { name: 'Проверка сайта' })).closest('li')
@@ -220,7 +216,8 @@ describe('a task of «Ваши» (Зп5)', () => {
       `/scheduled/${SCHEDULE_ID}`,
     )
     expect(row).toHaveTextContent('По будням в 9:00')
-    expect(row).toHaveTextContent('Кофейня «Крошка»')
+    // A task has no project (Зп57).
+    expect(row).not.toHaveTextContent(/проект/i)
     expect(row).toHaveTextContent(/Следующий запуск: (завтра|.*) в 9:00/)
     expect(row).toHaveTextContent(/Выполнена · .* в 9:00/)
     const toggle = within(row).getByRole('switch', { name: 'Включить задачу «Проверка сайта»' })
@@ -232,23 +229,6 @@ describe('a task of «Ваши» (Зп5)', () => {
         expect.anything(),
       ),
     )
-  })
-
-  // F9: a deleted project is not named in the row (Зп22).
-  it('says «Проект удалён» for a task whose project was deleted', async () => {
-    list([
-      scheduleItem({
-        project: { id: '019f2a00-0000-7000-8000-00000000dead', name: 'Старый сайт', deleted: true },
-        enabled: false,
-        nextRunAt: null,
-        pausedReason: 'project_gone',
-      }),
-    ])
-    show(<ScheduledView userId={USER} tab="yours" />)
-    const row = (await screen.findByRole('link', { name: 'Проверка сайта' })).closest('li')
-    if (!(row instanceof HTMLElement)) throw new Error('no row')
-    expect(row).toHaveTextContent('Проект удалён')
-    expect(row).not.toHaveTextContent('Старый сайт')
   })
 
   it('runs a task now and opens the chat of its run (Зп24)', async () => {
@@ -354,7 +334,6 @@ describe('the tools of «Ваши» (Зп3)', () => {
       name: index === 0 ? 'Заявки за сутки' : `Задача ${index}`,
       enabled: index % 2 === 0,
       nextRunAt: index % 2 === 0 ? new Date(`2026-11-1${6 + (index % 3)}T06:00:00.000Z`) : null,
-      project: index === 6 ? null : { id: SITE_ID, name: 'Кофейня «Крошка»', deleted: false },
       lastRun: index === 3 ? scheduleRun({ state: { kind: 'failed' } }) : null,
     }),
   )
@@ -385,7 +364,7 @@ describe('the tools of «Ваши» (Зп3)', () => {
     expect(screen.queryByRole('button', { name: 'Найти задачу' })).toBeNull()
   })
 
-  it('filters by state with counts, and by project when there are several', async () => {
+  it('filters by state with counts, and by nothing else (Зп57)', async () => {
     list(many)
     show(<ScheduledView userId={USER} tab="yours" />)
     fireEvent.click(await screen.findByRole('button', { name: 'Фильтр задач' }))
@@ -395,35 +374,25 @@ describe('the tools of «Ваши» (Зп3)', () => {
         .getAllByRole('button')
         .map((each) => each.textContent),
     ).toEqual(['Все7', 'Включены4', 'На паузе3', 'Завершены0', 'С ошибкой1'])
-    const projects = screen.getByRole('group', { name: 'Проект' })
-    // On a phone each row is one line that scrolls sideways, its chips of their own width.
-    for (const group of [states, projects]) {
-      const phone = mediaStyleOf(group, PHONE_MEDIA)
-      expect(phone).toContain('flex-wrap:nowrap')
-      expect(phone).toContain('overflow-x:auto')
-      expect(phone).toContain('scrollbar-width:none')
-      for (const chip of within(group).getAllByRole('button'))
-        expect(getComputedStyle(chip).flexShrink).toBe('0')
-    }
-    // The two rows are one control: a chip of a project is drawn as a chip of a state is.
+    expect(screen.queryByRole('group', { name: 'Проект' })).toBeNull()
+    // On a phone the row is one line that scrolls sideways, its chips of their own width.
+    const phone = mediaStyleOf(states, PHONE_MEDIA)
+    expect(phone).toContain('flex-wrap:nowrap')
+    expect(phone).toContain('overflow-x:auto')
+    expect(phone).toContain('scrollbar-width:none')
+    for (const chip of within(states).getAllByRole('button'))
+      expect(getComputedStyle(chip).flexShrink).toBe('0')
     const look = (button: HTMLElement) =>
       [...button.classList].filter((each) => /^MuiButton-(color\w+|outlined|contained)$/.test(each))
     const chosen = within(states).getByRole('button', { name: 'Все7' })
     const other = within(states).getByRole('button', { name: 'Включены4' })
-    expect(look(within(projects).getByRole('button', { name: /^Все проекты/ }))).toEqual(
-      look(chosen),
-    )
-    expect(look(within(projects).getByRole('button', { name: /^Без проекта/ }))).toEqual(
-      look(other),
-    )
     expect(look(chosen)).not.toEqual(look(other))
     fireEvent.click(within(states).getByRole('button', { name: 'На паузе3' }))
     const rows = within(
       screen.getByRole('list', { name: 'Ваши запланированные задачи' }),
     ).getAllByRole('listitem')
     expect(rows).toHaveLength(3)
-    // The counts of the projects follow the state chosen: the task without one is not paused.
-    fireEvent.click(within(projects).getByRole('button', { name: 'Без проекта0' }))
+    fireEvent.click(within(states).getByRole('button', { name: 'Завершены0' }))
     expect(screen.getByText('Ничего не нашлось.')).toBeInTheDocument()
   })
 
@@ -461,9 +430,9 @@ describe('the tab «Шаблоны» (Зп9)', () => {
     )
     const check = await screen.findByRole('button', { name: 'Проверка сайта' })
     expect(check).toHaveAccessibleDescription(/Уже настроен/)
-    expect(screen.getByRole('button', { name: 'Конкуренты' })).not.toHaveAccessibleDescription(
-      /Уже настроен/,
-    )
+    expect(
+      screen.getByRole('button', { name: 'Цены конкурентов' }),
+    ).not.toHaveAccessibleDescription(/Уже настроен/)
     expect(
       within(screen.getByRole('list', { name: 'Шаблоны задач' })).getAllByRole('listitem'),
     ).toHaveLength(6)

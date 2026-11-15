@@ -15,7 +15,7 @@ export interface SkillSecretRead {
 }
 
 /**
- * The secrets of MCP servers in Vault (`kv/sites/<site>/mcp/<name>`, docs/plan/81-mcp-server-
+ * The secrets of MCP servers in Vault (`kv/workspaces/<workspace>/mcp/<name>`, docs/plan/81-mcp-server-
  * credentials.md), read under the role's AppRole and kept in this process for a minute. A key
  * that is gone or erased — a version without a value — is no secret. The value goes nowhere but
  * the header of the server's request; it is never logged.
@@ -28,8 +28,8 @@ export class SkillSecrets {
     private readonly options: { ttlMs?: number; now?: () => number } = {},
   ) {}
 
-  async read(siteId: string, name: string): Promise<SkillSecretRead | null> {
-    const path = agentSkillSecretPath(siteId, name)
+  async read(workspaceId: string, name: string): Promise<SkillSecretRead | null> {
+    const path = agentSkillSecretPath(workspaceId, name)
     const now = (this.options.now ?? Date.now)()
     const cached = this.#cache.get(path)
     if (cached !== undefined && cached.until > now) return cached.read
@@ -42,7 +42,7 @@ export class SkillSecrets {
   }
 
   /** Forgets a server's secret: the next read goes to Vault (a refused key, a renewed token). */
-  forget(siteId: string, name: string): void {
-    this.#cache.delete(agentSkillSecretPath(siteId, name))
+  forget(workspaceId: string, name: string): void {
+    this.#cache.delete(agentSkillSecretPath(workspaceId, name))
   }
 }

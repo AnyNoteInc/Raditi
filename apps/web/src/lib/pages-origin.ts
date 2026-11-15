@@ -1,4 +1,4 @@
-import { pagesOriginOf } from '@repo/domain/preview/hostname'
+import { pagesOriginOf } from '@repo/domain/pages/origin'
 
 export { pagesOriginOf }
 

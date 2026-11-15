@@ -25,14 +25,14 @@ import { RelayRefusal, type upstreamResolver } from './upstream.ts'
 
 // The relay of MCP servers with authorization (docs/plan/81-mcp-server-credentials.md, §3.2): the
 // turn's CLI calls /mcp/skill/<name> on the gateway of its sandbox with its MCP token; the relay
-// admits the token as /mcp does, finds the server of the turn's site by its name, reads its secret
+// admits the token as /mcp does, finds the server of the turn's workspace by its name, reads its secret
 // from Vault and makes the server's request itself, over its own TLS, with the owner's header.
 // The answer streams back with the secret taken out of it. Nothing of the request or the answer is
 // logged: the name, the host, the status, the bytes and the time. A pass of a scheduled run without
-// its client (docs/plan/82-scheduled-tasks.md, Зп27, Зп28) calls no tool of such a server: the
-// owner's key would let it write to the owner's site or service with nobody to confirm it, and the
-// relay cannot tell a tool that reads from one that writes. Its CLI may still start a session and
-// list the tools; each call is answered as that tool's refusal (`MCP_UNATTENDED_REFUSAL`).
+// its client (docs/plan/82-scheduled-tasks.md, Зп27, Зп28, Зп51) calls no tool of such a server: the
+// owner's key would let it write to the owner's service with nobody to confirm it, and the relay
+// cannot tell a tool that reads from one that writes. Its CLI may still start a session and list
+// the tools; each call is answered as that tool's refusal (`MCP_UNATTENDED_REFUSAL`).
 
 export const skillRelayLimits = Object.freeze({
   requestBytes: 4 * 1024 * 1024,
@@ -208,11 +208,10 @@ export class SkillRelay {
       return failure(res, 503, 'MCP authorization is unavailable')
     }
     if (access === null) return failure(res, 401, 'MCP token is invalid or expired')
-    if (access.siteId === null) return failure(res, 404, 'Not found')
-    const siteId = access.siteId
+    const workspaceId = access.workspaceId
     let server: RelayedServer | null
     try {
-      server = await this.deps.servers.find(siteId, name)
+      server = await this.deps.servers.find(workspaceId, name)
     } catch (error) {
       this.#warn('MCP relay could not read a server', mcpErrorSummary(error))
       return failure(res, 503, 'MCP authorization is unavailable')
@@ -244,7 +243,7 @@ export class SkillRelay {
         }
         body = read
       }
-      await this.#relay(req, res, { siteId, name, server, body })
+      await this.#relay(req, res, { workspaceId, name, server, body })
     } finally {
       const left = (this.#active.get(access.keyId) ?? 1) - 1
       if (left > 0) this.#active.set(access.keyId, left)
@@ -257,17 +256,17 @@ export class SkillRelay {
     req: IncomingMessage,
     res: ServerResponse,
     {
-      siteId,
+      workspaceId,
       name,
       server,
       body,
-    }: { siteId: string; name: string; server: RelayedServer; body?: Buffer | undefined },
+    }: { workspaceId: string; name: string; server: RelayedServer; body?: Buffer | undefined },
   ): Promise<void> {
     const started = Date.now()
     const url = new URL(server.url)
     let read: SkillSecretRead | null
     try {
-      read = await this.deps.secrets.read(siteId, name)
+      read = await this.deps.secrets.read(workspaceId, name)
       // The access token of a sign-in about to run out is renewed before the request.
       const expiresAt = server.oauth?.expiresAt
       if (
@@ -276,9 +275,10 @@ export class SkillRelay {
         expiresAt !== undefined &&
         Date.parse(expiresAt) - this.#now().getTime() < AGENT_SKILL_TOKEN_RENEW_MS
       ) {
-        const renewed = (await this.deps.renewer?.renew(siteId, name, server.oauth, read)) ?? null
+        const renewed =
+          (await this.deps.renewer?.renew(workspaceId, name, server.oauth, read)) ?? null
         if (renewed === null) {
-          await this.#record(siteId, name, 'needs_login', 'renewal_refused')
+          await this.#record(workspaceId, name, 'needs_login', 'renewal_refused')
           return failure(res, 502, relayText.refused(name))
         }
         read = renewed
@@ -289,7 +289,7 @@ export class SkillRelay {
     }
     const header = read === null ? null : authorizationOf(server, read)
     if (read === null || header === null) {
-      await this.#record(siteId, name, 'failed', 'secret_missing')
+      await this.#record(workspaceId, name, 'failed', 'secret_missing')
       return failure(res, 502, relayText.missing(name))
     }
     let target: Awaited<ReturnType<Resolve>>
@@ -351,14 +351,14 @@ export class SkillRelay {
           }
           if (status === 401 || status === 403) {
             response.resume()
-            this.deps.secrets.forget(siteId, name)
-            void this.#refused(siteId, name, server, read.version).then((replaced) => {
+            this.deps.secrets.forget(workspaceId, name)
+            void this.#refused(workspaceId, name, server, read.version).then((replaced) => {
               failure(res, 502, replaced ? relayText.replaced(name) : relayText.refused(name))
               resolve()
             }, reject)
             return
           }
-          if (status < 400) void this.#record(siteId, name, 'ok', null)
+          if (status < 400) void this.#record(workspaceId, name, 'ok', null)
           const answer: Record<string, string> = { 'cache-control': 'no-store' }
           for (const header of FORWARDED_RESPONSE) {
             const value = response.headers[header]
@@ -403,14 +403,14 @@ export class SkillRelay {
    * whether it was so.
    */
   async #refused(
-    siteId: string,
+    workspaceId: string,
     name: string,
     server: RelayedServer,
     version: number,
   ): Promise<boolean> {
     let current: SkillSecretRead | null = null
     try {
-      current = await this.deps.secrets.read(siteId, name)
+      current = await this.deps.secrets.read(workspaceId, name)
     } catch (error) {
       this.#warn('MCP relay could not read a key', mcpErrorSummary(error))
     }
@@ -418,12 +418,12 @@ export class SkillRelay {
     // A sign-in whose token the server stopped taking: one renewal, and the agent asks again.
     if (server.oauth !== null && current !== null && this.deps.renewer !== undefined) {
       const renewed = await this.deps.renewer
-        .renew(siteId, name, server.oauth, current)
+        .renew(workspaceId, name, server.oauth, current)
         .catch(() => null)
       if (renewed !== null) return true
     }
     await this.#record(
-      siteId,
+      workspaceId,
       name,
       server.authKind === 'oauth' ? 'needs_login' : 'failed',
       'unauthorized',
@@ -436,12 +436,12 @@ export class SkillRelay {
   }
 
   async #record(
-    siteId: string,
+    workspaceId: string,
     name: string,
     state: 'ok' | 'needs_login' | 'failed',
     error: string | null,
   ) {
-    const key = `${siteId}/${name}`
+    const key = `${workspaceId}/${name}`
     const now = (this.deps.now ?? (() => new Date()))()
     if (state === 'ok') {
       const last = this.#recorded.get(key)
@@ -449,7 +449,7 @@ export class SkillRelay {
       this.#recorded.set(key, now.getTime())
     } else this.#recorded.delete(key)
     try {
-      await this.deps.servers.record(siteId, name, { state, error, at: now })
+      await this.deps.servers.record(workspaceId, name, { state, error, at: now })
     } catch (caught) {
       this.#warn('MCP relay could not record a server state', mcpErrorSummary(caught))
     }

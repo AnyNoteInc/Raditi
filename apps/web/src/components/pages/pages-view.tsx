@@ -164,8 +164,8 @@ export function PagesView({ userId }: { userId: string }) {
   const shownTags = trashed > 0 ? [...tags, 'trash' as const] : tags
 
   return (
-    // The shell gives the padding, as to «Запланированные задачи» and «Проекты»: the heading
-    // stands in one place on the three neighbours of the rail.
+    // The shell gives the padding, as to «Запланированные задачи»: the heading stands in one
+    // place on the neighbours of the rail.
     <Box sx={{ width: '100%', maxWidth: 1200, mx: 'auto' }}>
       {/* Wraps: on a phone «Новый чат» moves under the title instead of breaking its word. */}
       <Box

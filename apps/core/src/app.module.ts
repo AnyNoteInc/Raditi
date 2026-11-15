@@ -12,19 +12,14 @@ import { MetricsRegistryModule } from './metrics/metrics-registry.module.ts'
 import { MetricsModule } from './metrics/metrics.module.ts'
 import { NotificationsModule } from './notifications/notifications.module.ts'
 import { OutboxModule } from './outbox/outbox.module.ts'
-import { PreviewsModule } from './previews/previews.module.ts'
 import { QueueModule } from './queue/queue.module.ts'
-import { ReleaseApiModule } from './release-api/release-api.module.ts'
-import { ReleasesModule } from './releases/releases.module.ts'
-import { SiteFilesModule } from './site-files/site-files.module.ts'
-import { SiteProvisioningModule } from './site-provisioning/site-provisioning.module.ts'
 import { TasksModule } from './tasks/tasks.module.ts'
 import { TurnsModule } from './turns/turns.module.ts'
 
 /**
- * The core role (spec §5): task lifecycle, BullMQ workers, cron, sandboxes, git publishing.
+ * The core role (spec §5): task lifecycle, BullMQ workers, cron, sandboxes.
  * Serves /health and /metrics on CORE_PORT, never on the MCP port; with runner VMs also
- * the runner API on RUNNER_API_PORT, and the release API on RELEASE_API_PORT.
+ * the runner API on RUNNER_API_PORT.
  *
  * Global are only the configuration, the connections (database, S3, Vault, Redis), the queues and
  * the metrics registry; every feature module imports the features it uses.
@@ -40,7 +35,7 @@ export class AppModule {
     }
     if (!config.schedules && background)
       new Logger('Schedules').warn('Scheduled tasks are off: SCHEDULE_INTAKE_URL is not set')
-    // The one turn engine of the process: the dialogs and the previews import this same object.
+    // The one turn engine of the process: the chats import this same object.
     const turns = TurnsModule.forRoot(config.turnExecutor)
     return {
       module: AppModule,
@@ -61,17 +56,10 @@ export class AppModule {
         ...(config.telegram ? [TelegramModule] : []),
         // The runs of scheduled tasks only with the intake of web (docs/plan/82-scheduled-tasks.md).
         ...(config.schedules ? [SchedulesModule] : []),
-        SiteProvisioningModule,
-        // The files of a project for its section «Терминал» (06.11.2026).
-        SiteFilesModule,
-        // The turn engine between the site import and the dialogs: Nest starts and stops the
-        // modules of one level in the order it meets them, the order AppModule's test pins.
+        // The turn engine before the chats: Nest starts and stops the modules of one level in
+        // the order it meets them, the order AppModule's test pins.
         turns,
-        // Chat → preview → /release (docs/plan/53-chat-preview-release.md).
         TasksModule.forRoot(turns),
-        PreviewsModule.forRoot(turns),
-        ReleasesModule,
-        ReleaseApiModule,
       ],
     }
   }

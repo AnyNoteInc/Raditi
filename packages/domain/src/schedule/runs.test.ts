@@ -10,7 +10,6 @@ import {
   scheduleInPast,
   scheduleLimitReached,
   scheduleNotFound,
-  scheduleProjectGone,
   scheduleRunBusy,
   scheduleTemplatePlaceholder,
   scheduleTooOften,
@@ -71,20 +70,17 @@ describe('the runs', () => {
     expect(scheduledRunTriggers).toEqual(['schedule', 'manual'])
     expect(scheduledRunStatuses).toEqual(['pending', 'started', 'refused', 'skipped'])
     expect(Object.keys(scheduledRunReasonText)).toEqual([...scheduledRunReasons])
-    expect(schedulePausedReasons).toEqual([
-      'completed',
-      'project_gone',
-      'member_gone',
-      'not_accepted',
-      'refused',
-    ])
+    // A task has no project to lose, nor a creator who loses rights in their own workspace (Зп48).
+    expect(schedulePausedReasons).toEqual(['completed', 'not_accepted', 'refused'])
+    expect(scheduledRunReasons).not.toContain('project_unavailable')
+    expect(scheduledRunReasons).not.toContain('project_gone')
+    expect(scheduledRunReasons).not.toContain('member_gone')
     expect(Object.keys(schedulePausedReasonText)).toEqual([...schedulePausedReasons])
   })
 
   it('say why a run did not start in the words of the cabinet', () => {
     expect(scheduledRunReasonText.no_credits).toBe('не хватило кредитов')
     expect(scheduledRunReasonText.weekly_limit).toBe('исчерпан недельный лимит')
-    expect(scheduledRunReasonText.member_gone).toBe('у вас больше нет прав в этом проекте')
     expect(scheduledRunReasonText.previous_running).toBe('предыдущий запуск ещё шёл')
     expect(scheduledRunReasonText.platform).toBe('сбой платформы')
     expect(schedulePausedReasonText.refused).toBe('Остановлена после трёх отказов подряд')
@@ -97,7 +93,6 @@ describe('the runs', () => {
       'needs_tariff',
       'weekly_limit',
       'daily_limit',
-      'project_unavailable',
       'consent',
     ])
     expect(isClientRefusalReason('consent')).toBe(true)
@@ -152,7 +147,7 @@ describe('the errors', () => {
         scheduleForbidden(),
         'SCHEDULE_FORBIDDEN',
         403,
-        'Менять запланированные задачи может владелец или администратор, создавший её',
+        'Менять запланированную задачу может только тот, кто её создал',
       ],
       [
         scheduleLimitReached(),
@@ -172,15 +167,9 @@ describe('the errors', () => {
         scheduleTemplatePlaceholder(),
         'SCHEDULE_TEMPLATE_PLACEHOLDER',
         400,
-        'Впишите адреса сайтов конкурентов',
+        'Замените текст в квадратных скобках своим',
       ],
       [scheduleRunBusy(), 'SCHEDULE_RUN_BUSY', 409, 'Задача уже выполняется'],
-      [
-        scheduleProjectGone(),
-        'SCHEDULE_PROJECT_GONE',
-        409,
-        'Проект этой задачи удалён — выберите другой проект или «Без проекта»',
-      ],
     ] as const
     for (const [error, code, status, message] of cases) {
       expect(isDomainError(error)).toBe(true)
@@ -233,7 +222,8 @@ describe('the notices', () => {
     expect(notificationKinds.map((kind) => scheduledNoticeTitle(kind))).toEqual([
       'Запланированная задача выполнена',
       'Запланированной задаче нужен ваш ответ',
-      'Запланированная задача: изменения готовы',
+      // No candidate is made any more: a `ready`, should it come, is a task done (Зп62).
+      'Запланированная задача выполнена',
       'Запланированная задача не выполнена',
       'Запланированная задача остановилась',
       'Запланированная задача не запустилась',

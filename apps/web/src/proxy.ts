@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 
-import { contentSecurityPolicy, previewFrameSource } from '@/lib/content-security-policy'
+import { contentSecurityPolicy } from '@/lib/content-security-policy'
 import { PAGES_PATHS, pagesHostOf, pagesOriginOf } from '@/lib/pages-origin'
 import { REQUEST_PATH_HEADER } from '@/lib/request-path'
 
@@ -46,10 +46,7 @@ export function proxy(request: NextRequest) {
   const headers = new Headers(request.headers)
   headers.set(REQUEST_PATH_HEADER, `${request.nextUrl.pathname}${request.nextUrl.search}`)
   const response = NextResponse.next({ request: { headers } })
-  response.headers.set(
-    'content-security-policy',
-    contentSecurityPolicy(previewFrameSource(process.env), pagesOriginOf(process.env)),
-  )
+  response.headers.set('content-security-policy', contentSecurityPolicy(pagesOriginOf(process.env)))
   return response
 }
 

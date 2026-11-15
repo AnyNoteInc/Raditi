@@ -15,7 +15,6 @@ import {
   defaultTimezone,
   deleteSchedule,
   listSchedules,
-  projectScheduleCount,
   readSchedule,
   rememberTimezone,
   runScheduleNow,
@@ -64,8 +63,6 @@ const scheduleOutput = z.strictObject({
   lastRunAt: z.date().nullable(),
   createdVia: z.enum(['manual', 'template', 'chat']),
   templateSlug: z.string().nullable(),
-  /** null — without a project; `deleted` — its project was deleted (Зп22): «Проект удалён». */
-  project: z.strictObject({ id: z.uuid(), name: z.string(), deleted: z.boolean() }).nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
   lastRun: runOutput.nullable(),
@@ -108,8 +105,6 @@ export const scheduleRouter = router({
   create: consentedProcedure
     .input(
       z.strictObject({
-        /** null — without a project; required, so a forgotten field never gives one. */
-        siteId: z.uuid().nullable(),
         name,
         instructions,
         effort: reasoningEffortSchema.optional(),
@@ -123,7 +118,6 @@ export const scheduleRouter = router({
     .mutation(({ ctx, input }) =>
       createSchedule(ctx.prisma, appEnvOf(ctx), {
         userId: ctx.user.id,
-        siteId: input.siteId,
         name: input.name,
         instructions: input.instructions,
         effort: input.effort ?? 'high',
@@ -140,7 +134,6 @@ export const scheduleRouter = router({
     .input(
       z.strictObject({
         scheduleId: z.uuid(),
-        siteId: z.uuid().nullable().optional(),
         name: name.optional(),
         instructions: instructions.optional(),
         effort: reasoningEffortSchema.optional(),
@@ -151,9 +144,8 @@ export const scheduleRouter = router({
     )
     .output(scheduleOutput.extend({ runs: z.array(runOutput) }))
     .mutation(({ ctx, input }) => {
-      const { scheduleId, siteId, ...fields } = input
+      const { scheduleId, ...fields } = input
       const change: ScheduleChange = {
-        ...(siteId === undefined ? {} : { siteId }),
         ...(fields.name === undefined ? {} : { name: fields.name }),
         ...(fields.instructions === undefined ? {} : { instructions: fields.instructions }),
         ...(fields.effort === undefined ? {} : { effort: fields.effort }),
@@ -161,7 +153,7 @@ export const scheduleRouter = router({
         ...(fields.timezone === undefined ? {} : { timezone: fields.timezone }),
         ...(fields.notify === undefined ? {} : { notify: fields.notify }),
       }
-      return updateSchedule(ctx.prisma, appEnvOf(ctx), {
+      return updateSchedule(ctx.prisma, {
         userId: ctx.user.id,
         scheduleId,
         change,
@@ -199,10 +191,11 @@ export const scheduleRouter = router({
 
   /**
    * «Стоимость» and «Следующий запуск» of the window (Зп7, Зп30): the runs of the schedules over
-   * the next 7 days, the average charge, the weekly limit of the workspace the task goes to.
+   * the next 7 days, the average charge, the weekly limit of the creator's personal workspace,
+   * where the task goes (Зп44).
    */
   costHint: consentedProcedure
-    .input(z.strictObject({ siteId: z.uuid().nullable(), triggers, timezone }))
+    .input(z.strictObject({ triggers, timezone }))
     .output(
       z.strictObject({
         averageCredits: z.number().int(),
@@ -231,13 +224,5 @@ export const scheduleRouter = router({
     .output(z.strictObject({ timezone: z.string() }))
     .mutation(({ ctx, input }) =>
       rememberTimezone(ctx.prisma, { userId: ctx.user.id, timezone: input.timezone }),
-    ),
-
-  /** How many tasks «Удалить проект» stops (Зп22): the window of the deletion names them. */
-  projectCount: consentedProcedure
-    .input(z.strictObject({ siteId: z.uuid() }))
-    .output(z.strictObject({ count: z.number().int().min(0) }))
-    .query(({ ctx, input }) =>
-      projectScheduleCount(ctx.prisma, { userId: ctx.user.id, siteId: input.siteId }),
     ),
 })

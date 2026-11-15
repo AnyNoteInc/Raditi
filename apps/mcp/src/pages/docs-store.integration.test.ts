@@ -31,7 +31,7 @@ describe.skipIf(!enabled)('postgresDocsStore', () => {
 
   it('counts the writes of one turn of one chat, and writes the rows of the feed', async () => {
     const task = await db.task.create({
-      data: { workspaceId, siteId: null, needsRepository: false, needsBrowser: false },
+      data: { workspaceId, needsBrowser: false },
     })
     const store = postgresDocsStore(db, () => 1_000)
     for (let write = 0; write < pageLimits.sectionWritesPerTurn; write += 1)

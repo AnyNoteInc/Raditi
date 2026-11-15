@@ -2,10 +2,10 @@ import { z } from 'zod'
 
 import { parseEgressHost } from '../preview/egress-hosts.ts'
 
-// The skills of a site's agent (owner's request of 26.10.2026: «установи для агента по умолчанию
+// The skills of a workspace's agent (owner's request of 26.10.2026: «установи для агента по умолчанию
 // следующие скилы и сделай возможность добавлять — context7, playwright»): MCP servers the CLI of
 // a turn connects to besides the platform's own, over the open internet of the sandbox. Two come
-// with the platform and are on unless the owner of the site turns one off: Context7 — the current
+// with the platform and are on unless the owner of the workspace turns one off: Context7 — the current
 // documentation of libraries — and Playwright — a headless browser inside the sandbox for pages
 // of the internet. The owner adds others by the https address of a remote MCP server. Its address
 // keeps nothing secret: no query string, no credentials in it. A server that wants a key or a
@@ -13,7 +13,7 @@ import { parseEgressHost } from '../preview/egress-hosts.ts'
 // which adds the header from Vault: the turn's CLI knows only the relay's path and its MCP token.
 
 export const agentSkillLimits = Object.freeze({
-  /** Skills an owner adds to one site; the platform's own come on top. */
+  /** Skills an owner adds to one workspace; the platform's own come on top. */
   added: 8,
   nameChars: 32,
   titleChars: 80,
@@ -130,7 +130,7 @@ export const builtinAgentSkills: readonly BuiltinAgentSkill[] = Object.freeze([
   {
     name: 'context7',
     title: 'Context7',
-    description: 'Свежая документация библиотек и фреймворков, которыми сделан сайт.',
+    description: 'Свежая документация библиотек и фреймворков, с которыми работает агент.',
     turn: { name: 'context7', kind: 'remote', url: CONTEXT7_MCP_URL },
   },
   {
@@ -201,8 +201,8 @@ export const turnSkillsSchema = z
     'duplicate skill',
   )
 
-/** A row of the site's skills as the platform keeps it (`site_agent_skills`). */
-export interface SiteAgentSkillRow {
+/** A row of the workspace's skills as the platform keeps it (`workspace_agent_skills`). */
+export interface AgentSkillRow {
   name: string
   enabled: boolean
   /** An added skill's address; null for one of the platform's own. */
@@ -214,7 +214,7 @@ export interface SiteAgentSkillRow {
 }
 
 /**
- * The skills of a site's turn, in a fixed order: the platform's own first unless a row turns one
+ * The skills of a turn, in a fixed order: the platform's own first unless a row turns one
  * off, then the added ones that are on, by name. A row that does not parse is left out.
  *
  * A turn that has the platform's browser (`web_*`) gets no local one: the skill's Chromium would
@@ -225,7 +225,7 @@ export interface SiteAgentSkillRow {
  * authorization does not work now — the owner has to sign in again — is left out.
  */
 export function turnSkillsOf(
-  rows: readonly SiteAgentSkillRow[],
+  rows: readonly AgentSkillRow[],
   { platformBrowser = false }: { platformBrowser?: boolean } = {},
 ): TurnSkill[] {
   const byName = new Map(rows.map((row) => [row.name, row]))
@@ -250,11 +250,11 @@ export function turnSkillsOf(
 }
 
 /**
- * Where the secret of an added server lives (plan 81, §3.3): beside the site's accesses, so that
- * «Удалить проект» erases it with them. One version, written by CAS.
+ * Where the secret of an added server lives (plan 81, §3.3; per workspace since plan 83, БП11):
+ * beside the variables of the workspace. One version, written by CAS.
  */
-export const agentSkillSecretPath = (siteId: string, name: string): string =>
-  `kv/sites/${siteId}/mcp/${name}`
+export const agentSkillSecretPath = (workspaceId: string, name: string): string =>
+  `kv/workspaces/${workspaceId}/mcp/${name}`
 
 const oauthTokenSchema = z
   .string()
@@ -287,7 +287,7 @@ const httpsAddress = z
   )
 
 /**
- * What of an OAuth sign-in to a server is not secret (`site_agent_skills.oauth`, plan 81, §3.4):
+ * What of an OAuth sign-in to a server is not secret (`workspace_agent_skills.oauth`, plan 81, §3.4):
  * where tokens are renewed, the client the platform registered there, the resource the tokens are
  * for and when the access token runs out. The tokens themselves are in Vault.
  */

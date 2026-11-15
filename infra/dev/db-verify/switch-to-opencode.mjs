@@ -356,7 +356,7 @@ export async function verifySwitchToOpencode({ client, psql, deploy, resolve, se
 
   // The suites that follow start from empty tables: the rows of this scenario and of its seeds.
   await client.query('DELETE FROM tasks WHERE id = $1', [id.task])
-  await client.query('DELETE FROM sites WHERE id = $1', [id.site])
+  // The site went with its table (20261116110000_remove_projects).
   await client.query('DELETE FROM workspaces WHERE id = $1', [id.workspace])
   await client.query('DELETE FROM subscription_accounts WHERE id = $1', [id.account])
   await client.query('DELETE FROM credential_refs WHERE id = $1', [id.credential])

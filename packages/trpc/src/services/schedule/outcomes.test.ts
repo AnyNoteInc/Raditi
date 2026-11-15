@@ -51,16 +51,18 @@ describe('the state of a run of a scheduled task (docs/plan/82, Зп5)', () => {
   })
 
   it('tells a run that started by the state of its chat, as the list of chats does', () => {
-    for (const status of ['queued', 'preparing', 'running'] as const)
+    // A status of a release no chat reaches any more is told as the nearest (Зп47).
+    for (const status of ['queued', 'preparing', 'running', 'deploying', 'verifying'] as const)
       expect(runStateOf(started, chat({ status }))).toEqual({ kind: 'running' })
-    for (const status of ['deploying', 'verifying'] as const)
-      expect(runStateOf(started, chat({ status }))).toEqual({ kind: 'ready' })
     expect(runStateOf(started, chat({ status: 'done' }))).toEqual({ kind: 'done' })
     for (const status of ['failed', 'rolled_back', 'cancelled'] as const)
       expect(runStateOf(started, chat({ status }))).toEqual({ kind: 'failed' })
     expect(runStateOf(started, chat({ answered: true }))).toEqual({ kind: 'done' })
     expect(runStateOf(started, chat())).toEqual({ kind: 'waiting' })
-    expect(runStateOf(started, chat({ status: 'awaiting_approval' }))).toEqual({ kind: 'ready' })
+    expect(runStateOf(started, chat({ status: 'awaiting_approval' }))).toEqual({ kind: 'waiting' })
+    expect(runStateOf(started, chat({ status: 'awaiting_approval', answered: true }))).toEqual({
+      kind: 'done',
+    })
     expect(runStateOf(started, chat({ failed: true }))).toEqual({ kind: 'failed' })
     expect(runStateOf(started, chat({ status: 'awaiting_approval', failed: true }))).toEqual({
       kind: 'failed',

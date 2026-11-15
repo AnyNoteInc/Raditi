@@ -30,7 +30,6 @@ import {
   scheduleDialogTexts,
   scheduleRowTexts,
   schedulePageTexts,
-  scheduledTexts,
 } from './schedule-texts'
 
 // What «Запланированные задачи» shows and checks, without React (docs/plan/82-scheduled-tasks.md,
@@ -71,51 +70,6 @@ export function inScheduleTag(item: ScheduleItem, tag: ScheduleTag): boolean {
       return lastRunFailed(item)
   }
 }
-
-/**
- * The group of the filter the tasks of deleted projects make, whatever the project was (Зп22):
- * never a project of the list, whose ids are uuids.
- */
-export const GONE_PROJECTS = 'gone'
-
-/** The group of a task in the filter: its project; null — «Без проекта». */
-const projectGroupOf = (item: ScheduleItem): string | null =>
-  item.project === null ? null : item.project.deleted ? GONE_PROJECTS : item.project.id
-
-/**
- * The projects the tasks are in, in the order they first come; null — «Без проекта». A deleted
- * project is no project to show by its name: its tasks go together as «Проект удалён».
- */
-export function projectsOfSchedules(
-  items: readonly ScheduleItem[],
-): { id: string | null; name: string | null }[] {
-  const seen = new Map<string | null, string | null>()
-  for (const item of items)
-    seen.set(
-      projectGroupOf(item),
-      item.project === null
-        ? null
-        : item.project.deleted
-          ? scheduledTexts.projectGone
-          : item.project.name,
-    )
-  return [...seen].map(([id, name]) => ({ id, name }))
-}
-
-export const inProject = (item: ScheduleItem, project: string | null | 'all'): boolean =>
-  project === 'all' || projectGroupOf(item) === project
-
-/** The words of the project of a task: its name, «Без проекта» or «Проект удалён». */
-export const projectText = (item: Pick<ScheduleItem, 'project'>): string =>
-  item.project === null
-    ? scheduledTexts.noProject
-    : item.project.deleted
-      ? scheduledTexts.projectGone
-      : item.project.name
-
-/** The project a task works in now, for its cost and a new chat; null — none, or deleted. */
-export const liveProjectId = (item: Pick<ScheduleItem, 'project'>): string | null =>
-  item.project === null || item.project.deleted ? null : item.project.id
 
 /** By name and by instructions (Зп3). */
 export function matchesSearch(item: ScheduleItem, query: string): boolean {
@@ -306,8 +260,6 @@ export interface TriggerDraft {
 export interface ScheduleForm {
   name: string
   instructions: string
-  /** null — «Без проекта». */
-  siteId: string | null
   effort: ReasoningEffort
   triggers: TriggerDraft[]
   timezone: string
@@ -463,7 +415,6 @@ export function newScheduleForm(
   return {
     name: '',
     instructions: '',
-    siteId: null,
     effort,
     triggers: [newTriggerDraft(timezone, now)],
     timezone,
@@ -477,17 +428,15 @@ const manualDraft = (timezone: string, now: Date): TriggerDraft => ({
   frequency: 'manual',
 })
 
-/** The window of a template (Зп9): its fields; a template about a site takes the only project. */
+/** The window of a template (Зп9, Зп58): its fields; a task has no project (Зп44). */
 export function formOfTemplate(
   template: ScheduleTemplate,
   timezone: string,
   now: Date,
-  onlyProject: string | null,
 ): ScheduleForm {
   return {
     name: template.name,
     instructions: template.instructions,
-    siteId: template.project === 'none' ? null : onlyProject,
     effort: template.effort,
     triggers:
       template.triggers.length === 0
@@ -504,7 +453,6 @@ export function formOfSchedule(schedule: ScheduleDetail | ScheduleItem, now: Dat
   return {
     name: schedule.name,
     instructions: schedule.instructions,
-    siteId: schedule.project?.id ?? null,
     effort: schedule.effort,
     triggers:
       schedule.triggers.length === 0
@@ -524,22 +472,10 @@ export const sameSchedules = (
   form.timezone === was.timezone &&
   JSON.stringify(triggersOfForm(form)) === JSON.stringify(triggersOfForm(was))
 
-/**
- * Whether the client changed what the window opened with — the name, the words, the schedules,
- * «Размышление» or the notice; not the zone or the project the window may take by itself.
- */
-export const formEdited = (form: ScheduleForm, was: ScheduleForm): boolean =>
-  form.name !== was.name ||
-  form.instructions !== was.instructions ||
-  form.effort !== was.effort ||
-  form.notify !== was.notify ||
-  JSON.stringify(triggersOfForm(form)) !== JSON.stringify(triggersOfForm(was))
-
 /** What the window says is wrong, by field; the server's refusals come on top of these. */
 export interface FormProblems {
   name?: string
   instructions?: string
-  project?: string
   /** By the key of a block. */
   triggers: Record<string, string>
   /** Of the schedules together: «не чаще раза в час». */
@@ -553,17 +489,17 @@ export const nameLooksLikeSecret = (form: Pick<ScheduleForm, 'name'>): boolean =
 }
 
 /**
- * What stops «Создать» (Зп8, Зп9, Зп11, Зп15): what is always told — a single run in the past, runs
- * closer than an hour, a week without its days, a single run without its date, a template about a
- * site without one — and, once the client tried to save, the empty name and instructions, a name
- * like a key and the place for the addresses. `saved` — the task being changed: its single runs in
+ * What stops «Создать» (Зп8, Зп9, Зп11, Зп15, Зп59): what is always told — a single run in the
+ * past, runs closer than an hour, a week without its days, a single run without its date — and,
+ * once the client tried to save, the empty name and instructions, a name like a key and a place of
+ * a template left unfilled. `saved` — the task being changed: its single runs in
  * the past are told only once its schedules change, as the server checks them then alone, so a
  * finished «Один раз» can still be renamed (Зп15, Зп24).
  */
 export function formProblems(
   form: ScheduleForm,
   now: Date,
-  options: { submitted: boolean; templateNeedsProject: boolean; saved?: ScheduleForm },
+  options: { submitted: boolean; saved?: ScheduleForm },
 ): FormProblems {
   const problems: FormProblems = { triggers: {} }
   if (options.submitted && form.name.trim() === '') problems.name = scheduleDialogTexts.nameRequired
@@ -573,8 +509,6 @@ export function formProblems(
     problems.instructions = scheduleDialogTexts.instructionsRequired
   else if (options.submitted && hasScheduleTemplatePlaceholder(form.instructions))
     problems.instructions = scheduleTemplatePlaceholder().message
-  if (options.templateNeedsProject && form.siteId === null)
-    problems.project = scheduleDialogTexts.needsProject
   const checkPast = options.saved === undefined || !sameSchedules(form, options.saved)
   for (const draft of form.triggers) {
     if (draft.frequency === 'weekly' && draft.days.length === 0)
@@ -601,7 +535,6 @@ export function formProblems(
 export const hasProblems = (problems: FormProblems): boolean =>
   problems.name !== undefined ||
   problems.instructions !== undefined ||
-  problems.project !== undefined ||
   problems.schedule !== undefined ||
   Object.keys(problems.triggers).length > 0
 

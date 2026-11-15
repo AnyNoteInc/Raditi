@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
-import { DomainError, type FeedRow } from '@repo/domain'
+import { DomainError, pageLimits, type FeedRow } from '@repo/domain'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -18,7 +18,6 @@ const scope = {
   keyId: '01960000-0000-7000-8000-000000000021',
   taskId: '01960000-0000-7000-8000-000000000022',
   workspaceId: '01960000-0000-7000-8000-000000000023',
-  siteId: null,
   sessionId: 'synthetic',
   turn: 2,
   firstEpoch: 1,
@@ -224,11 +223,40 @@ describe('the documents of a workspace through the gateway (plan 69, Ст21, С�
     expect(key.body.result.isError).toBe(true)
     expect(answer(key)).toMatchObject({ code: 'PAGE_CONTENT_REFUSED' })
     expect(store.write).not.toHaveBeenCalled()
+    // A second-level heading is the tool's refusal with its reason, not an «Invalid MCP request».
+    const level = await post(
+      server,
+      call('doc_section_write', { docId, id: 'a', heading: 'А', markdown: '## Раздел' }),
+    )
+    expect(level.status).toBe(200)
+    expect(level.body.result.isError).toBe(true)
+    expect(answer(level)).toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'markdown: headings inside a section start at the third level (###)',
+    })
+    const large = answer(
+      await post(
+        server,
+        call('doc_section_write', {
+          docId,
+          id: 'Плохой id',
+          heading: 'А',
+          markdown: 'x'.repeat(pageLimits.sectionBytes + 1),
+        }),
+      ),
+    )
+    expect(large.code).toBe('BAD_REQUEST')
+    expect(large.message).toContain(
+      `markdown: a section is at most ${pageLimits.sectionBytes} bytes`,
+    )
+    expect(large.message).toContain('id: a section id is 1–40')
+    expect(store.write).not.toHaveBeenCalled()
+    // Unknown keys are still the policy's: the body is refused before any tool.
     expect(
       (
         await post(
           server,
-          call('doc_section_write', { docId, id: 'a', heading: 'А', markdown: '## Раздел' }),
+          call('doc_section_write', { docId, id: 'a', heading: 'А', markdown: 'ok', extra: 1 }),
         )
       ).status,
     ).toBe(400)
@@ -262,6 +290,49 @@ describe('the documents of a workspace through the gateway (plan 69, Ст21, С�
       taskId: scope.taskId,
       turnNo: 2,
     })
+  })
+
+  it('reads a long document in parts, each under the limit of the journal', async () => {
+    const { store } = fakeStore()
+    // 16 sections of 30 KiB each — the document of the chat of 15.11.2026 that doc_read could not
+    // answer at all — and a last one cut to fit when its escapes alone are over the part.
+    const sections = Array.from({ length: 16 }, (_, index) => ({
+      key: `s${index}`,
+      heading: `Раздел ${index}`,
+      intent: `Раздел ${index}`,
+      state: 'written',
+      markdown: 'Ж'.repeat(15 * 1024),
+      checked: false,
+      refusal: null,
+    }))
+    sections.push({ ...sections[0]!, key: 'escapes', markdown: '"\n'.repeat(16 * 1024) })
+    store.read.mockResolvedValue({ id: docId, title: 'Длинный', revision: 2, version: 0, sections })
+    const server = await start(store)
+    const seen: string[] = []
+    let from: string | undefined
+    for (let reads = 0; reads < 40; reads++) {
+      const response = await post(
+        server,
+        call('doc_read', from === undefined ? { docId } : { docId, from }),
+      )
+      expect(response.body.result.isError).toBeUndefined()
+      const text = response.body.result.content[0].text as string
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024)
+      const part = JSON.parse(text) as {
+        total: number
+        sections: { id: string; cut?: true }[]
+        more?: { from: string; sections: number }
+      }
+      expect(part.total).toBe(17)
+      seen.push(...part.sections.map(({ id }) => id))
+      if (part.sections.at(-1)!.id === 'escapes') expect(part.sections.at(-1)!.cut).toBe(true)
+      if (!part.more) break
+      expect(part.more.sections).toBe(17 - seen.length)
+      from = part.more.from
+    }
+    expect(seen).toEqual([...sections.map(({ key }) => key)])
+    const unknown = answer(await post(server, call('doc_read', { docId, from: 'nope' })))
+    expect(unknown).toMatchObject({ code: 'BAD_REQUEST' })
   })
 
   it('lets the agent choose the view, and change it with doc_finish (plan 74, Д1)', async () => {

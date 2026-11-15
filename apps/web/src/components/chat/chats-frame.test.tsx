@@ -5,11 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ChatsFrame } from './chats-frame'
 import type { DialogListPage } from './chat-types'
-import type { ChatsGroup } from './chats-group'
 
-const { listPage, folders, replace, mocks } = vi.hoisted(() => ({
-  listPage: vi.fn<(input: { folder?: string }) => Promise<DialogListPage>>(),
-  folders: vi.fn(),
+const { listPage, replace, mocks } = vi.hoisted(() => ({
+  listPage: vi.fn<(input: { cursor?: string }) => Promise<DialogListPage>>(),
   replace: vi.fn(),
   mocks: { segment: null as string | null, search: new URLSearchParams() },
 }))
@@ -24,7 +22,6 @@ vi.mock('@/trpc/client', () => ({
   useTRPCClient: () => ({
     task: {
       list: { query: listPage },
-      folders: { query: folders },
       get: { query: vi.fn() },
     },
   }),
@@ -44,25 +41,23 @@ const chat: DialogListPage['items'][number] = {
   id: '0199a3f2-0000-7000-8000-000000000001',
   title: 'Идеи для названия пекарни',
   status: 'done',
-  undo: null,
   answered: false,
   rewound: false,
   failed: false,
   createdAt: NOW,
   updatedAt: NOW,
-  project: null,
   pinned: false,
   archived: false,
   telegram: false,
   schedule: null,
 }
 
-function showFrame(segment: string | null, group: ChatsGroup = 'list') {
+function showFrame(segment: string | null) {
   mocks.segment = segment
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={queryClient}>
-      <ChatsFrame group={group}>
+      <ChatsFrame>
         <p>Содержимое</p>
       </ChatsFrame>
     </QueryClientProvider>,
@@ -70,14 +65,11 @@ function showFrame(segment: string | null, group: ChatsGroup = 'list') {
 }
 
 const list = () => screen.getByRole('navigation', { name: 'Чаты' })
-const groupButton = () => screen.queryByRole('button', { name: 'Группировка чатов' })
 
 beforeEach(() => {
   vi.clearAllMocks()
-  document.cookie = 'raditi-chats-group=; max-age=0; path=/'
   mocks.search = new URLSearchParams()
   listPage.mockResolvedValue({ pinned: [], items: [chat], nextCursor: null })
-  folders.mockResolvedValue({ folders: [{ project: null, count: 1, attention: false }] })
 })
 
 describe('the frame of «Чаты»', () => {
@@ -111,7 +103,7 @@ describe('the frame of «Чаты»', () => {
   it('moves the focus to the content when the link that had it goes', async () => {
     const { rerender } = render(
       <QueryClientProvider client={new QueryClient()}>
-        <ChatsFrame group="list">
+        <ChatsFrame>
           <p>Содержимое</p>
         </ChatsFrame>
       </QueryClientProvider>,
@@ -123,7 +115,7 @@ describe('the frame of «Чаты»', () => {
     mocks.segment = 'new'
     rerender(
       <QueryClientProvider client={new QueryClient()}>
-        <ChatsFrame group="list">
+        <ChatsFrame>
           <p>Другое</p>
         </ChatsFrame>
       </QueryClientProvider>,
@@ -145,92 +137,9 @@ describe('the frame of «Чаты»', () => {
     expect(screen.getByRole('button', { name: 'Архив' })).toBeTruthy()
   })
 
-  it('offers no grouping while there is nothing to group', async () => {
-    listPage.mockResolvedValue({ pinned: [], items: [], nextCursor: null })
-    showFrame('new')
-    expect(
-      await screen.findByText('Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.'),
-    ).toBeTruthy()
-    expect(groupButton()).toBeNull()
-  })
-
-  it.each([
-    ['is being read', () => new Promise<DialogListPage>(() => {})],
-    ['could not be read', () => Promise.reject(new Error('down'))],
-  ])(
-    'keeps the grouping while the list %s: only an empty answer takes it away',
-    async (_case, answer) => {
-      listPage.mockImplementation(answer)
-      showFrame(null)
-      await waitFor(() => expect(listPage).toHaveBeenCalled())
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      expect(groupButton()).toBeTruthy()
-    },
-  )
-
   it('marks the list and the way back for the browser that covers them (docs/plan/59, И17)', () => {
     showFrame('0199a3f2-0000-7000-8000-000000000001')
     expect(list().hasAttribute('data-chat-list')).toBe(true)
     expect(screen.getByRole('link', { name: 'К чатам' }).hasAttribute('data-chat-back')).toBe(true)
-  })
-
-  it('shows the chats by projects once chosen, and keeps the choice in the cookie', async () => {
-    showFrame(null)
-    await screen.findByText('Идеи для названия пекарни')
-    fireEvent.click(groupButton()!)
-    const menu = await screen.findByRole('menu', { name: 'Показывать чаты' })
-    const [one, projects] = within(menu).getAllByRole('menuitemradio')
-    expect(one!.textContent).toBe('Одним списком')
-    expect(one!.getAttribute('aria-checked')).toBe('true')
-    expect(projects!.textContent).toBe('По проектам')
-    fireEvent.click(projects!)
-    expect(document.cookie).toContain('raditi-chats-group=projects')
-    expect(await screen.findByRole('button', { name: /Без проекта/ })).toBeTruthy()
-  })
-
-  it('opens on the choice of its cookie', async () => {
-    showFrame(null, 'projects')
-    expect(await screen.findByRole('button', { name: /Без проекта/ })).toBeTruthy()
-  })
-
-  it('shows the folder the address asks for, whatever is chosen', async () => {
-    const id = '0199a3f2-0000-8000-8000-000000000002'
-    mocks.search = new URLSearchParams(`folder=${id}`)
-    folders.mockResolvedValue({
-      folders: [
-        { project: { id, name: 'Кофейня' }, count: 1, attention: false },
-        { project: null, count: 1, attention: false },
-      ],
-    })
-    showFrame(null)
-    expect(await screen.findByRole('button', { name: /Кофейня/, expanded: true })).toBeTruthy()
-    await waitFor(() => expect(listPage).toHaveBeenCalledWith({ folder: id }))
-  })
-
-  it('says folders are shown on the address of a folder, and goes back to one list from it', async () => {
-    const id = '0199a3f2-0000-8000-8000-000000000002'
-    mocks.search = new URLSearchParams(`folder=${id}`)
-    folders.mockResolvedValue({
-      folders: [{ project: { id, name: 'Кофейня' }, count: 1, attention: false }],
-    })
-    showFrame(null, 'list')
-    await screen.findByRole('button', { name: /Кофейня/, expanded: true })
-    fireEvent.click(groupButton()!)
-    const menu = await screen.findByRole('menu', { name: 'Показывать чаты' })
-    const [one, projects] = within(menu).getAllByRole('menuitemradio')
-    expect(projects!.getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(one!)
-    expect(document.cookie).toContain('raditi-chats-group=list')
-    // The address kept the folders: it goes, and one list shows.
-    expect(replace).toHaveBeenCalledWith('/chats')
-  })
-
-  it('moves no address when the way changes without a folder in it', async () => {
-    showFrame(null)
-    await screen.findByText('Идеи для названия пекарни')
-    fireEvent.click(groupButton()!)
-    const menu = await screen.findByRole('menu', { name: 'Показывать чаты' })
-    fireEvent.click(within(menu).getAllByRole('menuitemradio')[1]!)
-    expect(replace).not.toHaveBeenCalled()
   })
 })

@@ -44,7 +44,7 @@ const AT_THE_END =
 
 /** What the agent recaps and the client agrees to before a change (Зп34). */
 const AGREED =
-  'Call it only after the client agreed in this chat, in their own words, to the exact recap you gave — the name, the exact instructions, the project, «Размышление» and the schedule with its timezone — and then set confirmedByClient: true. Never invent a time the client did not name: ask.'
+  'Call it only after the client agreed in this chat, in their own words, to the exact recap you gave — the name, the exact instructions, «Размышление» and the schedule with its timezone — and then set confirmedByClient: true. Never invent a time the client did not name: ask.'
 
 /**
  * The scheduled tasks of the chat's author (docs/plan/82-scheduled-tasks.md, Зп31–Зп34): the
@@ -63,7 +63,7 @@ export class McpScheduleController {
   @Tool({
     name: 'schedule_list',
     description:
-      "The scheduled tasks of the client — the author of this chat — of this chat's project (in a chat without a project: those without one): each with scheduleId, its name, the exact instructions, «Размышление» (effort), the schedule in words and as triggers, its timezone, its state (enabled, paused, completed, or why it stopped), the next run and the last one; the changes this turn reserved and core has not applied yet (reservedThisTurn); the time now and the client's timezone with the wall clock there. A scheduled task runs by itself: at each run the agent gets its instructions as the client's message in a new chat. Look here before schedule_create: change a task the client has rather than make a second one.",
+      "The scheduled tasks of the client — the author of this chat: each with scheduleId, its name, the exact instructions, «Размышление» (effort), the schedule in words and as triggers, its timezone, its state (enabled, paused, completed, or why it stopped), the next run and the last one; the changes this turn reserved and core has not applied yet (reservedThisTurn); the time now and the client's timezone with the wall clock there. A scheduled task runs by itself: at each run the agent gets its instructions as the client's message in a new chat. Look here before schedule_create: change a task the client has rather than make a second one.",
     parameters: scheduleListToolArgumentsSchema,
     annotations: reads,
   })
@@ -76,7 +76,7 @@ export class McpScheduleController {
   @ToolScopes(['schedule_changes'])
   @Tool({
     name: 'schedule_create',
-    description: `Set up a scheduled task for the client: at each run the agent does its instructions by itself in a new chat, while the client is away, and the client is notified. Write the instructions as the client's own request, in their words, with nothing of the schedule inside (the schedule is triggers). project is this_chat in a chat of a project and none in a chat without one; a task about a site is not set up in a chat without a project — offer a chat of its project or the section «Запланированные задачи» instead. Runs of one task are at least an hour apart; at most 20 enabled tasks a workspace and 5 changes a turn. ${AGREED} ${AT_THE_END} The answer gives reservedId — schedule_update or schedule_delete of it in this turn changes or cancels the reservation —, the schedule in words and the next run.`,
+    description: `Set up a scheduled task for the client: at each run the agent does its instructions by itself in a new chat, while the client is away, and the client is notified. Write the instructions as the client's own request, in their words, with nothing of the schedule inside (the schedule is triggers). Runs of one task are at least an hour apart; at most 20 enabled tasks a workspace and 5 changes a turn. ${AGREED} ${AT_THE_END} The answer gives reservedId — schedule_update or schedule_delete of it in this turn changes or cancels the reservation —, the schedule in words and the next run.`,
     parameters: scheduleCreateToolArgumentsSchema,
     annotations: writes,
   })

@@ -8,14 +8,6 @@ type Outputs = inferRouterOutputs<AppRouter>
 /** One answer of `task.feed`: the head of the dialog and its rows after the cursor. */
 export type DialogFeed = Outputs['task']['feed']
 export type FeedHead = DialogFeed['task']
-/** The preview of the dialog as its panel shows it. */
-export type PreviewHead = NonNullable<DialogFeed['preview']>
-/** The candidate the dialog waits with. */
-export type CandidateHead = NonNullable<DialogFeed['candidate']>
-/** The latest release of the dialog. */
-export type ReleaseHead = NonNullable<DialogFeed['release']>
-/** «Отменить выпуск»: the installed release of the dialog, its deadline and its latest undo. */
-export type UndoHead = NonNullable<DialogFeed['undo']>
 /** The server's verdict on one command of the chat. */
 export type CommandVerdict = DialogFeed['commands'][number]
 export type FeedRow = DialogFeed['events'][number]
@@ -27,25 +19,6 @@ export type ActivityEvent = TurnActivityPage['events'][number]
 export type DialogListPage = Outputs['task']['list']
 export type DialogListItem = DialogListPage['items'][number]
 
-/** The changes of a dialog for the panel beside it. */
-export type CandidateView = NonNullable<Outputs['candidate']['get']>
-export type FileDiffView = Outputs['candidate']['fileDiff']
-
-export type PreparedRelease = Outputs['release']['prepare']
-/** The plan of «Отменить выпуск» as the window shows it. */
-export type UndoPlanAnswer = Outputs['release']['undoPlan']
-export type ReadyUndoPlan = Extract<UndoPlanAnswer, { state: 'ready' }>
-export type ReleaseChoice = PreparedRelease['choices'][number]
-
-/** A variable of a site as its settings show it: never the value. */
-export type SiteEnvVar = Outputs['siteEnv']['list']['variables'][number]
-
-/** One project of the cabinet as the picker of a new chat shows it. */
-export type ProjectListItem = Outputs['project']['list'][number]
-/** The folders of «По проектам», counted by the server (docs/plan/61-chats-first.md, К23). */
-export type ChatFolder = Outputs['task']['folders']['folders'][number]
-/** A chat as its page opens it. */
-export type ChatProject = NonNullable<Outputs['task']['get']['project']>
 /**
  * The task a chat is a run of (docs/plan/82-scheduled-tasks.md, Зп43): `id` null — the task was
  * deleted, its name stays without a link.

@@ -1,7 +1,5 @@
 import {
-  browserAllowedHosts,
   browserEnsureResponseSchema,
-  browserPlatformHost,
   browserSessionTimings,
   browserTaskError,
   conflict,
@@ -12,15 +10,11 @@ import {
   type BrowserActionRequest,
   type BrowserCloseReason,
   type BrowserEnsureRequest,
-  type BrowserSignIn,
   type BrowserListResponse,
-  type BrowserLocalSite,
   type BrowserSessionState,
   type BrowserSessionStatus,
   type BrowserToolResult,
   type BrowserVerifyResponse,
-  type SiteAdapter,
-  type SiteStack,
   withTimeout,
 } from '@repo/domain'
 
@@ -38,8 +32,6 @@ export interface SessionManagerSettings extends SessionSettings {
   activityReadMs: number
   maxHours: number
   maxSessions: number
-  extraHosts: readonly string[]
-  localSites: readonly BrowserLocalSite[]
   /** BROWSER_PLATFORM_HOSTS: names of the platform no page of any session reaches (К37). */
   platformHosts: readonly string[]
   /** PAGES_BASE_DOMAIN: the agent's published pages open in every session (Ст26). */
@@ -65,7 +57,6 @@ export interface SessionManagerDeps extends Omit<
 > {
   /** null — the images are not configured (outside production): every session is unavailable. */
   runtime: SessionContext['runtime'] | null
-  adapters: (stack: SiteStack) => SiteAdapter
   settings: SessionManagerSettings
   metrics: BrowserWorkerMetrics
 }
@@ -77,14 +68,27 @@ const HOUR_MS = 3_600_000
  */
 const EXTEND_AHEAD_MS = 10 * 60_000
 
-/** Where a session's browser may go and what it knows about its pages. */
-/** `ensure` as this worker reads it: the sign-in it takes, null when there is none or no site. */
-type EnsuredSession = Omit<BrowserEnsureRequest, 'signIn'> & { signIn: BrowserSignIn | null }
+/** `ensure` as this worker reads it: a saved sign-in the caller may still send is never taken. */
+type EnsuredSession = BrowserEnsureRequest
 
+/** Where a session's browser may go and what it knows about its pages. */
 type SessionPlace = Pick<
   SessionSpec,
-  'openWeb' | 'adapter' | 'policy' | 'allowedHosts' | 'localOrigins' | 'localSites' | 'startUrl'
+  'openWeb' | 'adapter' | 'policy' | 'allowedHosts' | 'startUrl'
 >
+
+/**
+ * The browser of a chat (docs/plan/61-chats-first.md, К12; docs/plan/83-remove-projects.md, БП9):
+ * an empty page, no host of its own, no sign-in, no policy and no object — every public https site
+ * opens.
+ */
+const OPEN_WEB: SessionPlace = Object.freeze({
+  openWeb: true,
+  adapter: OPEN_WEB_OBJECTS,
+  policy: OPEN_WEB_POLICY,
+  allowedHosts: [],
+  startUrl: null,
+})
 
 /**
  * The sessions of this worker (docs/plan/57-browser-tasks.md, §3.5, Б18): the ones core starts on
@@ -140,13 +144,10 @@ export class SessionManager {
   /** `POST /v1/sessions/ensure`. */
   async ensure(input: BrowserEnsureRequest): Promise<BrowserSessionState> {
     // Ids as PostgreSQL spells them: the session of another spelling is the same session.
-    const request = {
+    const request: EnsuredSession = {
       ...input,
       sessionId: input.sessionId.toLowerCase(),
       taskId: input.taskId.toLowerCase(),
-      siteId: input.siteId?.toLowerCase() ?? null,
-      // Nothing to sign in to without a site, whatever the caller says (К12).
-      signIn: input.siteId === null ? null : (input.signIn ?? null),
     }
     const session = await this.#held(request)
     if (!session.live) {
@@ -157,7 +158,6 @@ export class SessionManager {
     }
     // A pass of the task is about to use it: an idle sweep reading its row meanwhile keeps it.
     session.noteActivity(this.#deps.now())
-    session.useSignIn(request.signIn)
     if (request.takeControl) session.agentTakesControl()
     return browserEnsureResponseSchema.parse(session.state())
   }
@@ -166,7 +166,7 @@ export class SessionManager {
     const id = request.sessionId
     const known = this.#sessions.get(id) ?? (await this.#starting.get(id))
     if (known) {
-      if (known.taskId !== request.taskId || known.siteId !== request.siteId)
+      if (known.taskId !== request.taskId)
         throw conflict('The browser session belongs to another task')
       return known
     }
@@ -187,10 +187,7 @@ export class SessionManager {
     if (new Set([...this.#sessions.keys(), ...this.#starting.keys()]).size >= settings.maxSessions)
       throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
     const row = await store.session(request.sessionId)
-    if (!row || row.taskId !== request.taskId || row.siteId !== request.siteId)
-      throw notFound('Browser session not found')
-    // Second line: a row at odds with its task never opens the whole internet to a site's task.
-    if (row.taskSiteId !== row.siteId) throw conflict('The browser session is not of its task')
+    if (!row || row.taskId !== request.taskId) throw notFound('Browser session not found')
     if (!isBrowserSessionLive(row.status)) throw conflict('The browser session is closed')
     if (row.readyAt !== null) {
       // Another worker process started it and is gone with its sign-in (Б18).
@@ -207,20 +204,17 @@ export class SessionManager {
     for (const other of this.#sessions.values())
       if (other.taskId === request.taskId) await other.close('orphaned')
 
-    const place = row.siteId === null ? this.#openWeb() : await this.#site(row.siteId)
     const deadline = Math.min(row.expiresAt.getTime(), now() + settings.maxHours * HOUR_MS)
     if (deadline <= now()) throw conflict('The browser session has expired')
     const session = new WorkerSession(
       {
-        ...place,
+        ...OPEN_WEB,
         id: row.id,
         taskId: row.taskId,
-        siteId: row.siteId,
         platformHosts: settings.platformHosts,
         pageDomain: settings.pageDomain,
         deadline,
         checkpoints: await store.checkpoints(row.taskId),
-        signIn: request.signIn,
       },
       context,
       (ended) => {
@@ -230,54 +224,6 @@ export class SessionManager {
     this.#sessions.set(session.id, session)
     await session.start()
     return session
-  }
-
-  /** Where the browser of a site's task may go: from the site's row alone, never the caller (Б11). */
-  async #site(siteId: string): Promise<SessionPlace> {
-    const { store, settings } = this.#deps
-    const stored = await store.site(siteId)
-    if (stored === null) throw notFound('Site not found')
-    if (!URL.canParse(stored.url)) throw conflict('The site cannot be reached by the browser')
-    const adapter = this.#deps.adapters(stored.stack)
-    const policy = adapter.browserTaskPolicy({ url: stored.url })
-    const site = new URL(stored.url)
-    const localSites = settings.localSites.filter((local) => local.origin === site.origin)
-    const allowedHosts = browserAllowedHosts(stored.url, policy.extraHosts, settings.extraHosts)
-    // An https site of a public name, or a local site of the stand: anything else is unreachable.
-    // So is a site at an address of the platform: a project is no way into the cabinet (К37).
-    if (
-      browserPlatformHost(site.hostname, settings.platformHosts) ||
-      (localSites.length === 0 && !allowedHosts.includes(`${site.hostname}:${site.port || 443}`))
-    )
-      throw conflict('The site cannot be reached by the browser')
-    return {
-      openWeb: false,
-      adapter,
-      policy,
-      allowedHosts,
-      localOrigins: localSites.map((local) => local.origin),
-      localSites,
-      startUrl: new URL(policy.startPath, site.origin).href,
-    }
-  }
-
-  /**
-   * The browser of a chat without a site (docs/plan/61-chats-first.md, К12): an empty page, no host
-   * of its own, no sign-in, no policy and no object. `BROWSER_EXTRA_HOSTS` are hosts a site's pages
-   * load from: there is no site here, and every public host opens anyway. Local sites exist only
-   * outside production (the configuration refuses them there).
-   */
-  #openWeb(): SessionPlace {
-    const { localSites } = this.#deps.settings
-    return {
-      openWeb: true,
-      adapter: OPEN_WEB_OBJECTS,
-      policy: OPEN_WEB_POLICY,
-      allowedHosts: [],
-      localOrigins: localSites.map((local) => local.origin),
-      localSites,
-      startUrl: null,
-    }
   }
 
   /** `POST /v1/sessions/:id/close`; a session this worker does not hold is closed in the database. */
@@ -314,8 +260,8 @@ export class SessionManager {
 
   /**
    * `POST /v1/sessions/:id/actions`: the session must be the task's. `readOnly` — a pass of a
-   * scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28): no save on the site,
-   * and the pages send it nothing but reads from this action on (`readOnlyPolicy`).
+   * scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28): no upload, no confirmed question,
+   * and the pages send nothing but reads from this action on, on any site (Зп50).
    */
   async act(sessionId: string, request: BrowserActionRequest): Promise<BrowserToolResult> {
     const session = this.session(sessionId.toLowerCase())

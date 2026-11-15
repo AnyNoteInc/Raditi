@@ -6,33 +6,24 @@ import {
   AGENT_TURN_QUEUE,
   agentTurnCancelJobSchema,
   agentTurnJobSchema,
-  CANDIDATE_EDIT_JOB,
-  CANDIDATE_REBASE_JOB,
-  CANDIDATE_REWIND_JOB,
-  candidateEditJobSchema,
   CHAT_NOTIFY_JOB,
   chatNotifyJobSchema,
   QUEUE_DRAIN_JOB,
   queueDrainJobSchema,
-  candidateRebaseJobSchema,
-  candidateRewindJobSchema,
   runnerLimits,
 } from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
 import { UnrecoverableError, type Job } from 'bullmq'
 import type { z } from 'zod'
 
-import { CandidateEdit } from './candidate-edit.ts'
-import { CandidateRebase } from './candidate-rebase.ts'
-import { CandidateRewind } from './candidate-rewind.ts'
 import { PassRunner } from './pass-runner.ts'
 import { ChatNotify } from './chat-notify.ts'
 import { QueueDrain } from './queue-drain.ts'
 
 /**
  * How many jobs of `agent-turns` one core works on at once: every turn a runner can hold
- * (`runnerLimits.capacity`, TurnCapacity) and 32 more, so a cancel, an update or an edit always
- * finds one free while every turn runs (docs/plan/70-turn-without-time-limit.md, ВР16, ВР26). A
+ * (`runnerLimits.capacity`, TurnCapacity) and 32 more, so a cancel or a notice always finds one
+ * free while every turn runs (docs/plan/70-turn-without-time-limit.md, ВР16, ВР26). A
  * pass without a place gives its worker up at once.
  */
 export const AGENT_TURN_CONCURRENCY = runnerLimits.capacity + 32
@@ -53,9 +44,8 @@ function parsed<T>(schema: z.ZodType<T>, job: Job): T {
 }
 
 /**
- * Works the `agent-turns` queue (docs/plan/53-chat-preview-release.md, «Очереди и задания»):
- * a pass of the agent, the client's «Отменить» of a pass, «Обновить» of a candidate, `/undo` of a
- * turn. Every handler reads the state from PostgreSQL; the payload carries ids only, and so do
+ * Works the `agent-turns` queue: a pass of the agent, the client's «Отменить» of a pass, the queue
+ * of a chat after its pass and the notice of a waiting chat. Every handler reads the state from PostgreSQL; the payload carries ids only, and so do
  * the logs.
  */
 @Processor(AGENT_TURN_QUEUE, {
@@ -69,9 +59,6 @@ export class TurnsProcessor extends WorkerHost {
 
   constructor(
     @Inject(PassRunner) private readonly passes: Pick<PassRunner, 'run' | 'cancel'>,
-    @Inject(CandidateRebase) private readonly rebase: Pick<CandidateRebase, 'run'>,
-    @Inject(CandidateRewind) private readonly rewind: Pick<CandidateRewind, 'run'>,
-    @Inject(CandidateEdit) private readonly edit: Pick<CandidateEdit, 'run'>,
     @Inject(QueueDrain) private readonly queue: Pick<QueueDrain, 'run'>,
     @Inject(ChatNotify) private readonly notify: Pick<ChatNotify, 'run'>,
   ) {
@@ -84,15 +71,6 @@ export class TurnsProcessor extends WorkerHost {
         return this.passes.run(parsed(agentTurnJobSchema, job))
       case AGENT_TURN_CANCEL_JOB:
         return this.passes.cancel(parsed(agentTurnCancelJobSchema, job))
-      case CANDIDATE_REBASE_JOB:
-        await this.rebase.run(parsed(candidateRebaseJobSchema, job))
-        return
-      case CANDIDATE_REWIND_JOB:
-        await this.rewind.run(parsed(candidateRewindJobSchema, job))
-        return
-      case CANDIDATE_EDIT_JOB:
-        await this.edit.run(parsed(candidateEditJobSchema, job))
-        return
       case QUEUE_DRAIN_JOB:
         await this.queue.run(parsed(queueDrainJobSchema, job))
         return

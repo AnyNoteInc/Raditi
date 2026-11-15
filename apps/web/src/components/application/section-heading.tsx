@@ -9,8 +9,8 @@ import { useId, useState } from 'react'
 import { AppIcon } from './app-icon'
 
 /**
- * The size of the title of a section of the rail — «Запланированные задачи», «Страницы»,
- * «Проекты»: one on a phone for all of them. 22 px there: «Запланированные» is 302 px at 26 px
+ * The size of the title of a section of the rail — «Запланированные задачи» and «Страницы» (Зп61):
+ * one on a phone for both. 22 px there: «Запланированные» is 302 px at 26 px
  * of the heading face, over the line a phone of 375 px leaves beside the rail.
  */
 export const sectionTitleSize = { xs: 22, sm: 26, md: 30 } as const

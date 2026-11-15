@@ -1,52 +1,39 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
-import type * as MenuListModule from '@mui/material/MenuList'
-import type { ReactNode } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { createRef } from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { EffortMenu } from './effort-menu'
+import { EffortMenu, type EffortMenuHandle } from './effort-menu'
 
-// Where a popover stands is measured in a browser; here the menu says where it hangs.
-vi.mock('@mui/material/Menu', async () => {
-  const { default: MenuList } =
-    await vi.importActual<typeof MenuListModule>('@mui/material/MenuList')
-  return {
-    default: ({
-      open,
-      anchorOrigin,
-      transformOrigin,
-      children,
-    }: {
-      open: boolean
-      anchorOrigin: { vertical: string }
-      transformOrigin: { vertical: string }
-      children: ReactNode
-    }) =>
-      open ? (
-        <MenuList data-anchor={anchorOrigin.vertical} data-transform={transformOrigin.vertical}>
-          {children}
-        </MenuList>
-      ) : null,
-  }
-})
+beforeEach(() => window.localStorage.clear())
 
-function open(placement?: 'up' | 'down') {
-  render(<EffortMenu value="high" onChange={vi.fn()} {...(placement ? { placement } : {})} />)
-  fireEvent.click(screen.getByRole('button', { name: 'Размышление: Высокое' }))
-  return screen.getByRole('menu')
-}
-
-describe('«Размышление»', () => {
-  it('opens up from the field at the bottom of the chat', () => {
-    const menu = open()
-    expect(menu.dataset.anchor).toBe('top')
-    expect(menu.dataset.transform).toBe('bottom')
+describe('«Размышление» with the switch of `/thinking` (15.11.2026)', () => {
+  it('switches the thoughts of the agent on and off and keeps the menu open', () => {
+    const onChange = vi.fn()
+    render(<EffortMenu value="high" onChange={onChange} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Размышление: Высокое' }))
+    const toggle = screen.getByRole('menuitemcheckbox', { name: /Показывать размышления/u })
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(toggle)
+    expect(window.localStorage.getItem('raditi-chat-thinking')).toBe('1')
+    expect(
+      screen
+        .getByRole('menuitemcheckbox', { name: /Показывать размышления/u })
+        .getAttribute('aria-checked'),
+    ).toBe('true')
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Показывать размышления/u }))
+    expect(window.localStorage.getItem('raditi-chat-thinking')).toBe('0')
+    expect(onChange).not.toHaveBeenCalled()
   })
 
-  // docs/plan/82-scheduled-tasks.md, Зп7: the window's menu opens down, off the field it is in.
-  it('opens down where it is asked to', () => {
-    const menu = open('down')
-    expect(menu.dataset.anchor).toBe('bottom')
-    expect(menu.dataset.transform).toBe('top')
+  it('switches while the level cannot be changed: `/models` opens the menu', () => {
+    const handle = createRef<EffortMenuHandle>()
+    render(<EffortMenu value="low" onChange={() => {}} disabled handle={handle} />)
+    act(() => handle.current?.open())
+    expect(
+      screen.getByRole('menuitemradio', { name: /Низкое/u }).getAttribute('aria-disabled'),
+    ).toBe('true')
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Показывать размышления/u }))
+    expect(window.localStorage.getItem('raditi-chat-thinking')).toBe('1')
   })
 })

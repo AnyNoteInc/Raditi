@@ -25,9 +25,6 @@ import {
   type BrowserFile,
   type BrowserInputEvent,
   type BrowserModifier,
-  type BrowserSignIn,
-  type BrowserSignInForm,
-  type BrowserSignInOutcome,
   type BrowserDownload,
   type BrowserDownloadText,
   type BrowserTab,
@@ -272,6 +269,8 @@ function checkedConnection(connection: CloudBrowserConnection): PageRules {
     platformHosts: connection.platformHosts,
     pageDomain: connection.pageDomain,
     policy: connection.policy,
+    ...(connection.readsOnly ? { readsOnly: connection.readsOnly } : {}),
+    ...(connection.onReadOnlyRefusal ? { onReadOnlyRefusal: connection.onReadOnlyRefusal } : {}),
   }
   const { startUrl } = connection
   if (
@@ -333,7 +332,6 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
   /** Who holds the browser: the policy judges the pages' requests for them (Б37). */
   #controller: BrowserController = 'agent'
   /** The saved sign-in is being typed: nothing leaves for another site meanwhile (Ч7). */
-  #signingIn = false
   readonly #settings: Settings
   #viewport: BrowserViewport
   readonly #pages = new Map<number, PageEntry>()
@@ -477,7 +475,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
       this.#rules,
       { url: request.url(), method: request.method(), postData, navigation, headers },
       this.#controller,
-      { main, document, siteOnly: this.#signingIn },
+      { main, document, siteOnly: false },
     )
     if (verdict === 'continue') return route.continue().catch(() => undefined)
     if (navigation && main && owner) owner.refused = true
@@ -578,7 +576,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     if (main) entry.generation++
     if (main && frame.url().startsWith('chrome-error:')) entry.errorPages++
     // A redirect is not routed: what it committed is judged here, and dropped unseen.
-    const place = { main, document: entry.page.url(), siteOnly: this.#signingIn }
+    const place = { main, document: entry.page.url(), siteOnly: false }
     if (!committedAllowed(this.#rules, frame.url(), this.#controller, place)) {
       entry.refused = true
       entry.dropping ??= entry.page
@@ -1333,103 +1331,6 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
 
   setController(controller: BrowserController): void {
     this.#controller = controller
-  }
-
-  // -------------------------------------------------------------------------------------------
-  // The saved sign-in (Б36)
-  // -------------------------------------------------------------------------------------------
-
-  /**
-   * Whether a page shows the stack's sign-in form of the site itself: its origin is the start
-   * page's — another host the session reaches (one of the stack's, `BROWSER_EXTRA_HOSTS`) never
-   * gets the site's sign-in —, and the policy reads its path as the form. A policy that cannot
-   * read it says no.
-   */
-  #onSignInPage(entry: PageEntry, form: BrowserSignInForm): boolean {
-    const url = URL.parse(entry.page.url())
-    const site = URL.parse(this.#connection.startUrl ?? '')
-    if (!url || !site || url.origin !== site.origin) return false
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
-    try {
-      return form.isSignInPage(`${url.pathname}${url.search}`)
-    } catch {
-      return false
-    }
-  }
-
-  async signIn(credentials: BrowserSignIn): Promise<BrowserSignInOutcome> {
-    const form = this.#rules.policy.signIn
-    const entry = await this.#ensureShown()
-    if (!form || entry.dialog || !this.#onSignInPage(entry, form)) return 'absent'
-    const { page } = entry
-    const generation = entry.generation
-    let signedIn = false
-    let moved = false
-    this.#signingIn = true
-    try {
-      try {
-        await this.#run(entry, async (deadline) => {
-          // The page's own form by the stack's selectors, never a reference an agent could hold.
-          // Elements of the very document checked above: one that went elsewhere meanwhile
-          // detaches them, and nothing of the sign-in is typed there (Ч7).
-          const fields = await Promise.all(
-            [form.login, form.password, form.submit].map((selector) =>
-              page.locator(selector).elementHandle({ timeout: deadline.left() }),
-            ),
-          )
-          try {
-            const [login, password, submit] = fields
-            if (entry.generation !== generation || !this.#onSignInPage(entry, form)) {
-              moved = true
-              return
-            }
-            await login!.fill(credentials.login, { timeout: deadline.left() })
-            await password!.fill(credentials.password, { timeout: deadline.left() })
-            const sent = page
-              .waitForEvent('framenavigated', {
-                predicate: (frame) => frame === page.mainFrame(),
-                timeout: deadline.left(),
-              })
-              // A script of the form that keeps it (a CAPTCHA) sends nothing: read below.
-              .catch(() => undefined)
-            await submit!.click({ timeout: deadline.left() })
-            await sent
-            await this.#settle(entry, deadline)
-          } finally {
-            for (const field of fields) void field.dispose().catch(() => undefined)
-          }
-        })
-        if (moved) return 'absent'
-      } catch (error) {
-        // Signed in, then sent where the task may not go (the dashboard): the start page instead.
-        const start = this.#connection.startUrl
-        if (!isPageBrowserError(error) || error.reason !== 'denied' || start === null) throw error
-        await this.navigate(start)
-      }
-      signedIn = !this.#onSignInPage(entry, form)
-      return signedIn ? 'signed_in' : 'refused'
-    } finally {
-      this.#signingIn = false
-      // Whatever stopped it — the form came back, a step failed —, nothing of the saved sign-in
-      // stays on the page for an observation.
-      if (!signedIn) await this.#forgetSignIn(entry, form)
-    }
-  }
-
-  /**
-   * Empties the fields of a sign-in form the browser filled; one it cannot empty is left for an
-   * empty document, so no value of the saved sign-in is read from it.
-   */
-  async #forgetSignIn(entry: PageEntry, form: BrowserSignInForm): Promise<void> {
-    if (!this.#onSignInPage(entry, form)) return
-    try {
-      await this.#run(entry, async (deadline) => {
-        await entry.page.locator(form.login).fill('', { timeout: deadline.left() })
-        await entry.page.locator(form.password).fill('', { timeout: deadline.left() })
-      })
-    } catch {
-      await entry.page.goto('about:blank').catch(() => undefined)
-    }
   }
 
   // -------------------------------------------------------------------------------------------

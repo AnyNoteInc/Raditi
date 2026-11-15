@@ -12,14 +12,14 @@
 | Группы безопасности облака | `raditi-host.nft`: на хост снаружи — только SSH 2222; 80 и 443 — опубликованные порты Traefik |
 | Узел выхода `egress-1` | не нужен: `llm` ходит к `api.z.ai` прямым путём (ответ владельца на П2) |
 
-Работают кабинет, вход и регистрация, биллинг (без магазина ЮKassa), письма, заявки в Telegram, чаты с проектом и без, предпросмотры, `/release` и облачный браузер.
+Работают кабинет, вход и регистрация, биллинг (без магазина ЮKassa), письма, заявки в Telegram, чаты, облачный браузер, опубликованные страницы и Telegram. Проектов, предпросмотров, `/release` и Gitea нет с 15.11.2026 ([план 83](../../docs/plan/83-remove-projects.md)).
 
 ## Что где
 
 | Файл | Что это |
 | --- | --- |
 | `docker-compose.server.yml` | Наложение: S3, `mcp`, `browser`, шлюз трансляции (`preview`), раннер, watchdog, `llm` без узла выхода, маршруты сервера в Traefik |
-| `traefik/server.yml` | `deploy.sh` копирует его в `traefik/dynamic/` рядом с `raditi.yml`. Панель Traefik `traefik.raditi.ru` с basic auth, корень `raditi-preview.ru` → кабинет, поток браузера `wss://raditi.ru/v1/browser/stream` → шлюз трансляции |
+| `traefik/server.yml` | `deploy.sh` копирует его в `traefik/dynamic/` рядом с `raditi.yml`. Панель Traefik `traefik.raditi.ru` с basic auth, поток браузера `wss://raditi.ru/v1/browser/stream` → шлюз трансляции |
 | `env.example` | Образец `/opt/raditi/app/.env`: только несекретное; `*_IMAGE` и `APP_REVISION` пишет `deploy.sh` |
 | `preflight.sh` | Проверки хоста перед стартом (часть `infra/app/preflight.sh`, которая верна для одной машины, плюс адрес, firewall, OpenBao, gVisor) |
 | `deploy.sh` | Выкладка тега: запись для отката, файлы, digest, pull, preflight, дамп, миграции, сиды, `up` |
@@ -27,8 +27,6 @@
 | `host/vault-setup.sh` | AppRole `web`, `core`, `llm`, `mcp` и `renderer` |
 | `host/platform-secrets.mjs` | `seed` — случайные секреты платформы в Vault, `set` — ключ владельца со stdin, `render` — `/run/raditi/<сервис>/` |
 | `host/internal-ca.sh` | Внутренний CA и сертификаты `*.raditi.internal` |
-| `gitea-setup.mjs` | Gitea: `bootstrap` — аккаунты, организации, команды, токены в Vault, токен регистрации раннера; `ci <каталог>` — `platform/ci` и обязательные scoped workflow |
-| `runner.yaml.in` | Конфиг раннера выкладки; `deploy.sh` подставляет образ `core` выпуска в метку `deploy` |
 
 ## Хост
 
@@ -55,34 +53,16 @@ systemctl start raditi-secrets
 - **Пароль панели Traefik** — `kv/platform/app/traefik` (`dashboard_user`, `dashboard_password`); прочитать на сервере: `curl -s -H "X-Vault-Token: $(cat /etc/raditi/openbao/root-token)" http://127.0.0.1:8200/v1/kv/data/platform/app/traefik | jq -r '.data.data.dashboard_password'`.
 - **Токен раннера** выпущен на сервере (`/etc/raditi/runner/runner-token`, 0400) и его не покидает; в `.env` — только `server-1:<sha256>@172.29.83.1`. Раннер работает в сети хоста, а Docker без userland-proxy подменяет адрес локального соединения с опубликованным портом на шлюз моста `core`: поэтому подсеть `core-egress` закреплена (`172.29.83.0/24`), и хеш привязан к её шлюзу. С того же адреса `core` видит любой контейнер, который пришёл к `10.10.0.10:8083` через hairpin, — допуск держит токен.
 
-## Gitea
+## Gitea и предпросмотры
 
-Gitea 1.27.3 — `https://git.raditi.internal:3443` (опубликован только на `10.10.0.10`, TLS внутреннего CA): репозитории сайтов, git ходов, `platform/ci` и Actions. Рецепт — тот же, что у стенда `verify:release`; `WORKFLOW_DIRS` выключает workflow репозиториев, работают только scoped workflow `platform/ci` (правило 6).
-
-| Аккаунт | Где | Токен |
-| --- | --- | --- |
-| `raditi-admin` | администратор экземпляра | пароль и токен — `kv/platform/app/gitea` |
-| `raditi-bot` | `sites/bots` (write, все репозитории) | `GITEA_TOKEN` `core` (`kv/platform/app/core`) |
-| `raditi-provisioner` | `sites/creators` (создаёт репозитории) | `GITEA_PROVISIONER_TOKEN` `core` |
-| `raditi-release` | `sites/Owners` — учётная запись выпуска | `kv/platform/gitea-org-owner`, читает только `core` |
-
-Один раз, после первого старта Gitea: `NODE_EXTRA_CA_CERTS=/etc/raditi/ca/ca.pem node server/gitea-setup.mjs bootstrap`, затем `platform-secrets.mjs render core gitea-runner` и пересоздание `core` (новые токены и SecretID). `platform/ci` из `ci/` тега `deploy.sh` обновляет на каждой выкладке (`gitea-setup.mjs ci`): оба файла — обязательные, с шаблоном статуса `platform/ci: check / *`.
-
-Раннер выкладки `server-deploy` (gitea/runner 4.0.0, метка `deploy` на образе `core` выпуска) работает в сети хоста; его задания — тоже, без сокета Docker и привилегий, с томом CA `raditi-ci-ca`. Они ходят к Vault, S3 и Gitea по `/etc/hosts` хоста (`10.10.0.10`) и к API выпуска `core` на `172.29.83.10:8085` — закреплённый адрес `core` на мосту `core-egress`. Хостинг клиента они видят с публичного адреса сервера. Раннера `check` нет: `check.yml` у сайтов ждёт его в очереди (spec §10, раннер `check` — следующий шаг).
-
-## Предпросмотры
-
-`SINGLE_SERVER=on` у `core` и `mcp` (ответ владельца от 08.11.2026: «снимаю и подтверждаю»): production запускает предпросмотры в Docker `core` (`PREVIEW_EXECUTOR=local`, `runsc`, сокет Docker хоста — у `core` теперь фактически root хоста), а `mcp` — с профилями `local` (агент пишет контент в предпросмотр и открывает его браузером). `local-site` и тестовые швы по-прежнему закрыты. Предпросмотр публикует вход на `10.10.0.10` (`PREVIEW_UPSTREAM_HOST`), шлюз и `mcp` (в сети хоста — браузер агента управляет Chromium на loopback) ходят туда же; пересыльщик браузера агента идёт к шлюзу на `10.10.0.10:8090` и приходит с шлюза моста `preview-out` (`172.29.90.1`, `PREVIEW_BROWSER_RELAYS`).
-
-- **Сертификат** `*.raditi-preview.ru` — резолвер `preview`, DNS-01 через API reg.ru (lego `regru`, `PREVIEW_DNS_PROVIDER=regru`): логин и альтернативный пароль API — `kv/platform/app/traefik` (`regru_username`, `regru_password`), IP сервера разрешён в настройках API reg.ru; reg.ru отдаёт новую TXT-запись через минуты, поэтому `REGRU_PROPAGATION_TIMEOUT=1800`. Запись DNS `*.raditi-preview.ru` → `45.8.250.117`.
-- **Образы:** сайт предпросмотра под каждую версию PHP (`publish-images.yml`, задача `site`; `PREVIEW_SITE_IMAGES` в `images.env`), пересыльщик и браузер — те же образы, что у браузерной сессии, временная база дампа — upstream `mariadb:11.4.13`.
+С 15.11.2026 их нет ([план 83](../../docs/plan/83-remove-projects.md), БП2, БП10, БП13): ни сервисов `gitea` и `gitea-runner`, ни раннера выкладки, ни предпросмотров чатов, ни домена `raditi-preview.ru`. Первая выкладка этого выпуска (`deploy.sh`, шаг 7) сама удаляет их контейнеры (`--remove-orphans`), сети предпросмотров и тома `raditi-app-gitea`, `raditi-app-gitea-config`, `raditi-app-gitea-runner` и `raditi-ci-ca`. Руками остаётся владельцу: удалить у регистратора записи DNS `raditi-preview.ru` и `*.raditi-preview.ru` (домен можно не продлевать); сертификаты этого домена лежат в `acme.json` тома `acme` и Traefik их больше не продлевает. В OpenBao сервера остаются ключи `kv/platform/app/gitea`, `kv/platform/gitea-org-owner`, `kv/platform/app/mcp` и `kv/sites/*` — их никто не читает, оператор удаляет их токеном root.
 
 ## Страницы
 
 Опубликованные страницы агента ([план 69](../../docs/plan/69-pages.md), Ст3, Ст4): `https://<slug>.pages.raditi.ru/` отдаёт слушатель страниц приложения `preview` на `8092` (`PAGES_PORT`), маршрут — `traefik/dynamic/pages.yml` (одна метка из 26 знаков base32 под `PAGES_BASE_DOMAIN`). Корень `pages.raditi.ru` — ссылки по токену плана 67 — принадлежит web и в этот маршрут не входит.
 
-- **Сертификат** `*.pages.raditi.ru` — резолвер `pages`, DNS-01 через тот же аккаунт API reg.ru, что у `*.raditi-preview.ru` (`PREVIEW_DNS_PROVIDER=regru`, `kv/platform/app/traefik`). Зона `raditi.ru` должна лежать в этом же аккаунте reg.ru. Сертификаты резолвера — в своём файле `pages-acme.json` тома `acme`. Запись DNS `*.pages.raditi.ru` → `45.8.250.117`.
-- **Секрет** cookie пароля страницы `PAGES_COOKIE_SECRET` — свой, не `PREVIEW_SESSION_SECRET`: поле `app/preview` в Vault, `seed` создаёт его, `render preview` кладёт в `/run/raditi/preview/app.env`. `deploy.sh` делает оба шага на каждой выкладке; `seed` значение не переписывает.
+- **Сертификат** `*.pages.raditi.ru` — резолвер `pages`, DNS-01 через API reg.ru (lego `regru`, `PREVIEW_DNS_PROVIDER=regru` — имя переменной осталось от предпросмотров): логин и альтернативный пароль API — `kv/platform/app/traefik` (`regru_username`, `regru_password`), IP сервера разрешён в настройках API reg.ru; reg.ru отдаёт новую TXT-запись через минуты, поэтому `REGRU_PROPAGATION_TIMEOUT=1800`. Зона `raditi.ru` должна лежать в этом же аккаунте reg.ru. Сертификаты резолвера — в своём файле `pages-acme.json` тома `acme`. Запись DNS `*.pages.raditi.ru` → `45.8.250.117`.
+- **Секрет** cookie пароля страницы `PAGES_COOKIE_SECRET`: поле `app/preview` в Vault, `seed` создаёт его, `render preview` кладёт в `/run/raditi/preview/app.env`. `deploy.sh` делает оба шага на каждой выкладке; `seed` значение не переписывает.
 - **Переменные** `.env`: `PAGES_BASE_DOMAIN=pages.raditi.ru` выкладка добавит сама. `BROWSER_PLATFORM_HOSTS` не меняется: `raditi.ru` в нём закрывает браузеру чата всё под собой, кроме страниц агента. Их открывает исключение по `PAGES_BASE_DOMAIN` у `browser`, а прокси выхода сессии пускает к адресу сервера (`BROWSER_PAGE_ADDRESSES=45.8.250.117`, выкладка добавит строку сама) только имя страницы на 443 (план 69, Ст26). После выкладки проверьте: страница открывается в браузере чата.
 
 ## Telegram

@@ -109,7 +109,6 @@ describe.skipIf(!enabled)(
     async function fixture(scenario: object = {}, { accountSlots = 2 } = {}) {
       await provider({ reset: true, scenario })
       const workspaceId = randomUUID()
-      const siteId = randomUUID()
       const modelId = randomUUID()
       const accountId = randomUUID()
       const credentialRefId = randomUUID()
@@ -123,15 +122,6 @@ describe.skipIf(!enabled)(
         .mockResolvedValue({ data: encodeSubscriptionCredential(zaiCredential), version: 1 })
       await db.workspace.create({
         data: { id: workspaceId, name: `gateway-zai-${workspaceId}`, dataClass: 'synthetic' },
-      })
-      await db.site.create({
-        data: {
-          id: siteId,
-          workspaceId,
-          name: 'Synthetic gateway integration',
-          url: `https://${siteId}.example.invalid`,
-          stack: 'wordpress',
-        },
       })
       await db.llmModel.create({
         data: {
@@ -264,7 +254,7 @@ describe.skipIf(!enabled)(
         port,
         directPort,
         async key(budgetRub = '100') {
-          const task = await db.task.create({ data: { workspaceId, siteId } })
+          const task = await db.task.create({ data: { workspaceId } })
           taskIds.push(task.id)
           const token = `sk-rdt-${randomBytes(32).toString('base64url')}`
           const row = await db.llmKey.create({
@@ -301,7 +291,6 @@ describe.skipIf(!enabled)(
           await db.credentialRef.delete({ where: { id: credentialRefId } })
           await db.llmModelPrice.deleteMany({ where: { modelId } })
           await db.llmModel.delete({ where: { id: modelId } })
-          await db.site.delete({ where: { id: siteId } })
           await db.workspace.delete({ where: { id: workspaceId } })
         },
       }

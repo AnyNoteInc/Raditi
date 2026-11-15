@@ -28,8 +28,11 @@ beforeEach(() => {
 })
 
 describe('the rail of the cabinet', () => {
-  it('stands «Чаты», the scheduled tasks, «Страницы», «Проекты», and the mark leads to the chats', () => {
-    const [chats, scheduled, pages, projects] = links()
+  it('stands «Чаты», the scheduled tasks and «Страницы», and the mark leads to the chats', () => {
+    const all = links()
+    // «Проекты» went with projects (docs/plan/83-remove-projects.md, БП1; plan 82, Зп60).
+    expect(all).toHaveLength(3)
+    const [chats, scheduled, pages] = all
     expect(chats).toHaveAccessibleName('Чаты')
     expect(chats).toHaveAttribute('href', '/chats')
     // After the chats and before the pages (owner's request of 15.11.2026, plan 82, Зп1): the
@@ -37,11 +40,8 @@ describe('the rail of the cabinet', () => {
     expect(scheduled).toHaveAccessibleName('Запланированные задачи')
     expect(scheduled).toHaveAttribute('href', '/scheduled')
     expect(scheduled).toHaveTextContent('Задачи')
-    // Between the chats and the projects (owner's answer of 13.11.2026, plan 69, Ст30).
     expect(pages).toHaveAccessibleName('Страницы')
     expect(pages).toHaveAttribute('href', '/pages')
-    expect(projects).toHaveAccessibleName('Проекты')
-    expect(projects).toHaveAttribute('href', '/projects')
     expect(screen.getByRole('link', { name: 'Радити — главная страница' })).toHaveAttribute(
       'href',
       '/chats',
@@ -56,8 +56,6 @@ describe('the rail of the cabinet', () => {
     ['/scheduled/templates', 1],
     ['/scheduled/0199a3f2-0000-7000-8000-000000000002', 1],
     ['/pages', 2],
-    ['/projects', 3],
-    ['/projects/new', 3],
   ])('marks the section of %s, and only it', (pathname, current) => {
     mocks.pathname = pathname
     const all = links()
@@ -66,7 +64,7 @@ describe('the rail of the cabinet', () => {
     )
   })
 
-  it.each(['/chatsy', '/scheduledx'])(
+  it.each(['/chatsy', '/scheduledx', '/projects'])(
     'marks nothing outside its sections, nor on a name that only starts like one: %s',
     (pathname) => {
       mocks.pathname = pathname

@@ -39,7 +39,7 @@ function renewer(reads: (SkillSecretRead | null)[]) {
   const locks: unknown[] = []
   const tx = {
     $executeRaw: vi.fn(async (...args: unknown[]) => void locks.push(args)),
-    siteAgentSkill: { updateMany: vi.fn(async (args: unknown) => void updates.push(args)) },
+    workspaceAgentSkill: { updateMany: vi.fn(async (args: unknown) => void updates.push(args)) },
   }
   const read = vi.fn<() => Promise<SkillSecretRead | null>>()
   for (const value of reads) read.mockResolvedValueOnce(value)

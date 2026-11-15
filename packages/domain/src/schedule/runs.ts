@@ -16,16 +16,13 @@ export type ScheduledRunTrigger = (typeof scheduledRunTriggers)[number]
 export const scheduledRunStatuses = ['pending', 'started', 'refused', 'skipped'] as const
 export type ScheduledRunStatus = (typeof scheduledRunStatuses)[number]
 
-/** Why a run did not start a chat (Зп14, Зп21, §4.3). */
+/** Why a run did not start a chat (Зп14, Зп21, Зп48, §4.3). */
 export const scheduledRunReasons = [
   'no_credits',
   'needs_tariff',
   'credits_held',
   'weekly_limit',
   'daily_limit',
-  'project_unavailable',
-  'project_gone',
-  'member_gone',
   'consent',
   'text_refused',
   'previous_running',
@@ -42,9 +39,6 @@ export const scheduledRunReasonText: Readonly<Record<ScheduledRunReason, string>
   credits_held: 'кредиты заняты другими задачами',
   weekly_limit: 'исчерпан недельный лимит',
   daily_limit: 'исчерпан дневной лимит',
-  project_unavailable: 'проект сейчас не принимает задачи',
-  project_gone: 'проект удалён',
-  member_gone: 'у вас больше нет прав в этом проекте',
   consent: 'нужно принять новые условия в кабинете',
   text_refused: 'инструкцию нельзя отправить агенту',
   previous_running: 'предыдущий запуск ещё шёл',
@@ -59,7 +53,6 @@ export const clientRefusalReasons = [
   'needs_tariff',
   'weekly_limit',
   'daily_limit',
-  'project_unavailable',
   'consent',
 ] as const satisfies readonly ScheduledRunReason[]
 export type ClientRefusalReason = (typeof clientRefusalReasons)[number]
@@ -67,22 +60,14 @@ export type ClientRefusalReason = (typeof clientRefusalReasons)[number]
 export const isClientRefusalReason = (reason: string): reason is ClientRefusalReason =>
   (clientRefusalReasons as readonly string[]).includes(reason)
 
-/** Why a task is off without the client's word (Зп15, Зп22). */
-export const schedulePausedReasons = [
-  'completed',
-  'project_gone',
-  'member_gone',
-  'not_accepted',
-  'refused',
-] as const
+/** Why a task is off without the client's word (Зп15, Зп22, Зп48). */
+export const schedulePausedReasons = ['completed', 'not_accepted', 'refused'] as const
 export type SchedulePausedReason = (typeof schedulePausedReasons)[number]
 
 /** The state of a task that stopped by itself, in its row of the list (Зп5); «Завершена» takes its date. */
 export const schedulePausedReasonText: Readonly<Record<SchedulePausedReason, string>> =
   Object.freeze({
     completed: 'Завершена',
-    project_gone: 'Остановлена: проект удалён',
-    member_gone: 'Остановлена: у вас больше нет прав в этом проекте',
     not_accepted: 'Остановлена: задачи пока не принимаются',
     refused: 'Остановлена после трёх отказов подряд',
   })

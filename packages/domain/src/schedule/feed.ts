@@ -44,7 +44,11 @@ const instructions = scheduleInstructionsSchema.refine(
   'looks like a password or a key',
 )
 
-/** `feed.schedule_change` v1 — a task of the chat's author created, changed, paused, resumed or deleted. */
+/**
+ * `feed.schedule_change` v1 — a task of the chat's author created, changed, paused, resumed or
+ * deleted. A task has no project (Зп44): the rows written before carry `siteId`, which the reader
+ * of the feed drops.
+ */
 export const feedScheduleChangePayloadSchema = z.strictObject({
   v: version,
   action: z.enum(scheduleChangeActions),
@@ -55,8 +59,6 @@ export const feedScheduleChangePayloadSchema = z.strictObject({
   timezone: scheduleTimezoneSchema,
   /** The next run then; null — paused, deleted, or only by hand. */
   nextRunAt: z.iso.datetime().nullable(),
-  /** The project of the task; null — none. */
-  siteId: z.uuid().nullable(),
   effort: reasoningEffortSchema,
   notify: z.boolean(),
 })

@@ -1,8 +1,7 @@
 /* global AbortController, process, setImmediate */
 // The core process of verify-runner.mjs: the turn supervisor, the runner API and exec recovery
 // over the local PostgreSQL, S3 and Vault, as P12 will wire them. The harness sends it turns over
-// IPC and kills it with SIGKILL: only the database, S3, the Git remote and the runner VM outlive
-// it. Started by verify-runner.mjs only, which sends its configuration as the first message.
+// IPC and kills it with SIGKILL: only the database, S3 and the runner VM outlive it. Started by verify-runner.mjs only, which sends its configuration as the first message.
 import { randomBytes } from 'node:crypto'
 
 import { createOpencodeDriver } from '@repo/agent-drivers'
@@ -16,14 +15,12 @@ import { createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
 import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 
 import { parseRunnerTokens, runnerCredentialAddress } from '../dist/config/runner-tokens.js'
-import { GitWorkspaceService } from '../dist/git-workspace/git-workspace.service.js'
 import { RemoteTurnExecutor } from '../dist/runner-api/remote-turn-executor.js'
 import { RunnerApiServer } from '../dist/runner-api/runner-api.server.js'
 import { RunnerAuthenticator } from '../dist/runner-api/runner-auth.js'
 import { RunnerHub } from '../dist/runner-api/runner-hub.js'
 import { SnapshotService } from '../dist/sessions/snapshot.service.js'
 import { LiveTurns } from '../dist/turns/live-turns.js'
-import { PreviewTurnRollback } from '../dist/turns/preview-turn-rollback.js'
 import { TurnExecRecovery } from '../dist/turns/turn-exec-recovery.js'
 import { TaskInboxFiles } from '../dist/turns/turn-inbox.js'
 import { TaskEventTurnJournal } from '../dist/turns/turn-journal.js'
@@ -35,9 +32,9 @@ const { config } = await new Promise((resolve) => process.once('message', resolv
 /**
  * The synthetic agent, run by the runner as uid 10001 in /workspace/repo: the rows of
  * `opencode run --format json`, the session database and its journal in the home the snapshot
- * keeps, a log next to them that the snapshot must leave behind, a tracked and a new file. A
- * later turn first checks what restore brought back: both session files and the working copy. A
- * gated agent then waits until the harness opens its gate: core or the runner may be killed
+ * keeps, a log next to them that the snapshot must leave behind, and a file in the working
+ * directory, which no snapshot keeps. A later turn first checks what restore brought back: both
+ * session files. A gated agent then waits until the harness opens its gate: core or the runner may be killed
  * meanwhile.
  */
 const AGENT = `set -eu
@@ -46,14 +43,12 @@ data=/agent-home/opencode/.local/share/opencode
 if [ "$turn" -gt 1 ]; then
   grep -qx "turn $((turn - 1))" "$data/opencode.db"
   grep -qx "turn $((turn - 1))" "$data/opencode.db-wal"
-  grep -qx "turn $((turn - 1))" index.php
 fi
 printf '%s\\n' "$started"
 mkdir -p "$data/log"
 printf 'turn %s\\n' "$turn" >> "$data/opencode.db"
 printf 'turn %s\\n' "$turn" >> "$data/opencode.db-wal"
 printf 'turn %s\\n' "$turn" > "$data/log/synthetic.log"
-printf 'turn %s\\n' "$turn" >> index.php
 printf 'turn %s\\n' "$turn" > "turn-$turn.txt"
 printf '%s\\n' "$message"
 if [ "$gated" = 1 ]; then
@@ -66,7 +61,7 @@ const result = (turn) => ({
   summary: `Синтетический ход ${turn}`,
   change_type: 'code',
   client_message: 'Изменение готово к проверке.',
-  files_changed: ['index.php', `turn-${turn}.txt`],
+  files_changed: [`turn-${turn}.txt`],
   questions: [],
   needs_approval: false,
   risk: 'low',
@@ -153,21 +148,6 @@ const cancelAt = new Map()
 // Presigned URLs are signed for S3 as the VM sees it (S3_RUNNER_ENDPOINT).
 const storage = createS3ObjectStorage(storageConfigFromEnv(env))
 const snapshots = new SnapshotService(storage, createVaultSecretStore(vaultConfigFromEnv(env)))
-const workspace = new GitWorkspaceService(
-  {
-    kind: 'gitea',
-    getRepository: async (ref) => ({
-      ref,
-      cloneUrl: config.remote,
-      defaultBranch: 'main',
-      private: true,
-    }),
-    issueCredentials: async () => {
-      throw new Error('The local remote needs no credentials')
-    },
-  },
-  { transport: { kind: 'local-test', root: config.root }, gitleaksBinary: config.gitleaks },
-)
 const hub = new RunnerHub({ assignments, leases })
 const runnerTokens = parseRunnerTokens(config.runnerTokens).hashes
 const server = new RunnerApiServer(hub, new RunnerAuthenticator(runnerTokens))
@@ -215,15 +195,12 @@ const credentials = {
 const supervisor = new TurnSupervisor({
   leases,
   assignments,
-  workspace,
   snapshots,
   journal,
   executor,
   driver,
   live,
   credentials,
-  // As TurnsModule: a replacement of a turn takes its writes out of the plan first.
-  contentRollback: new PreviewTurnRollback(db),
   // As TurnsModule: the files of a chat, read from raditi-inbox when the runner asks for them.
   inbox: new TaskInboxFiles(db, storage),
 })
@@ -259,7 +236,6 @@ const recovery = new TurnExecRecovery({
     if (id !== driver.id) throw new Error('Unknown driver')
     return driver
   },
-  workspace,
   snapshots,
   credentials,
   live,
@@ -294,15 +270,6 @@ const handlers = {
     } finally {
       cancels.delete(request.context.taskId)
     }
-  },
-  // `/undo` and `/redo` of a turn, the git half of CandidateRewind: the stand writes the row itself.
-  async holdUndone({ input }) {
-    await workspace.holdUndoneCommit(input, async () => {})
-    return null
-  },
-  async rewindBranch({ input }) {
-    await workspace.rewindBranch(input, async () => {})
-    return null
   },
   async cancel({ taskId }) {
     cancels.get(taskId)?.abort()

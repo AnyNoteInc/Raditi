@@ -4,13 +4,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   MAX_SANDBOX_LEASE_MS,
   runnerApiPaths,
-  runnerBundlePath,
   runnerInboxPath,
   runnerCandidatePath,
   runnerHeaders,
   runnerKeyPath,
   SANDBOX_SECRETS_DIR,
-  snapshotLimits,
+  outboxLimits,
   type RunnerCommand,
   type TurnInboxFile,
   type TurnPlan,
@@ -25,8 +24,9 @@ import { RunnerApiServer } from './runner-api.server.ts'
 import { RunnerAuthenticator } from './runner-auth.ts'
 import { RunnerHub } from './runner-hub.ts'
 
-const siteId = '00000000-0000-4000-8000-000000000002'
 const taskId = '00000000-0000-4000-8000-000000000003'
+/** The lease of a turn is its chat (leaseScopeOf). */
+const siteId = taskId
 const fence = { siteId, taskId, operation: 'turn' as const, epoch: 1 }
 const labels = { workspaceId: 'ws1', siteId, taskId, sessionId: 'session1', turn: 1 }
 const token = `rnr_sandbox-1.${'a'.repeat(43)}`
@@ -85,14 +85,8 @@ async function start(binding = '') {
     [runnerHeaders.command]: command.commandId,
   })
 
-  /**
-   * A turn prepared over HTTP; `restoreKey` is served for the prepare's restore. Without a
-   * repository (docs/plan/57-browser-tasks.md, Б5) the prepare carries no bundle.
-   */
-  const prepare = async (
-    restoreKey?: Uint8Array,
-    { repository = true, inbox = [] as TurnInboxFile[] } = {},
-  ) => {
+  /** A turn prepared over HTTP; `restoreKey` is served for the prepare's restore. */
+  const prepare = async (restoreKey?: Uint8Array, { inbox = [] as TurnInboxFile[] } = {}) => {
     const assignment = (await assignments.open({
       fence,
       sessionId: labels.sessionId,
@@ -101,7 +95,6 @@ async function start(binding = '') {
       plan: {} as TurnPlan,
       remainingMs: MAX_SANDBOX_LEASE_MS,
     }))!
-    const bundle = Buffer.from('synthetic bundle bytes')
     const preparing = executor.prepare(
       {
         assignmentId: assignment.id,
@@ -118,20 +111,6 @@ async function start(binding = '') {
           hardTimeoutMs: MAX_SANDBOX_LEASE_MS,
         },
         remainingMs: MAX_SANDBOX_LEASE_MS,
-        ...(repository
-          ? {
-              bundle: {
-                baseSha: 'b'.repeat(40),
-                branch: `agent/${taskId}`,
-                sha256: createHash('sha256').update(bundle).digest('hex'),
-                sizeBytes: bundle.byteLength,
-                read: async function* () {
-                  yield bundle.subarray(0, 5)
-                  yield bundle.subarray(5)
-                },
-              },
-            }
-          : {}),
         ...(restoreKey
           ? {
               restore: {
@@ -149,17 +128,11 @@ async function start(binding = '') {
                     ],
                     exclude: [],
                   },
-                  git: {
-                    provider: 'gitea',
-                    branch: `agent/${taskId}`,
-                    baseSha: 'b'.repeat(40),
-                    headSha: 'b'.repeat(40),
-                  },
                   schemaVersion: 1,
                   createdAt: '2026-09-27T00:00:00.000Z',
-                  parts: ['home', 'untracked', 'patch'].map((name) => ({
+                  parts: ['home'].map((name) => ({
                     name,
-                    key: `sessions/session1/turns/0001/${name === 'patch' ? 'patch.diff' : `${name}.tar.zst`}`,
+                    key: `sessions/session1/turns/0001/${name}.tar.zst`,
                     sha256: 'd'.repeat(64),
                     sizeBytes: 10,
                     encryption: {
@@ -173,13 +146,6 @@ async function start(binding = '') {
                 } as never,
                 parts: {
                   home: { method: 'GET', url: presignedUrl, headers: {}, expiresAt: new Date() },
-                  untracked: {
-                    method: 'GET',
-                    url: presignedUrl,
-                    headers: {},
-                    expiresAt: new Date(),
-                  },
-                  patch: { method: 'GET', url: presignedUrl, headers: {}, expiresAt: new Date() },
                 },
                 dataKey: async () => restoreKey,
               },
@@ -201,7 +167,7 @@ async function start(binding = '') {
       new AbortController().signal,
     )
     const [command] = await poll()
-    return { assignment, preparing, command: command!, bundle }
+    return { assignment, preparing, command: command! }
   }
 
   return {
@@ -273,18 +239,17 @@ describe('RunnerApiServer', () => {
     expect(await huge.json()).toEqual({ error: 'TOO_LARGE' })
   })
 
-  it('serves a prepare: its bundle, its restore key once zeroed, and the answers', async () => {
+  it('serves a prepare: its restore key once zeroed, and the answers', async () => {
     const key = new Uint8Array(32).fill(9)
     const f = await start()
-    const { assignment, preparing, command, bundle } = await f.prepare(key)
+    const { assignment, preparing, command } = await f.prepare(key)
     expect(command.type).toBe('prepare')
     expect(JSON.stringify(command)).toContain('X-Amz-Signature')
-
-    const served = await f.call(runnerBundlePath(assignment.id), { headers: f.binary(command) })
-    expect(served.status).toBe(200)
-    expect(served.headers.get('cache-control')).toBe('no-store')
-    expect(served.headers.get('content-length')).toBe(String(bundle.byteLength))
-    expect(Buffer.from(await served.arrayBuffer())).toEqual(bundle)
+    // No base bundle: a turn has no repository (plan 83).
+    const bundle = await f.call(`/runner/v1/assignments/${assignment.id}/bundle`, {
+      headers: f.binary(command),
+    })
+    expect(bundle.status).toBe(404)
 
     const missing = await f.call(runnerKeyPath(assignment.id, 'restore'))
     expect(missing.status).toBe(400)
@@ -446,20 +411,18 @@ describe('RunnerApiServer', () => {
           include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
           exclude: [],
         },
-        baseSha: 'b'.repeat(40),
       })
       .catch(() => {})
     const [capture] = await f.poll()
-    const put = (part: 'patch' | 'untracked', body: Uint8Array) =>
-      f.call(runnerCandidatePath(assignment.id, part), {
+    const put = (body: Uint8Array) =>
+      f.call(runnerCandidatePath(assignment.id, 'outbox'), {
         method: 'PUT',
         headers: { ...f.binary(capture!), 'content-type': 'application/octet-stream' },
         body,
       })
-    const tooLarge = await put('patch', new Uint8Array(snapshotLimits.patchBytes + 1))
+    const tooLarge = await put(new Uint8Array(outboxLimits.archiveBytes + 1))
     expect(tooLarge.status).toBe(413)
-    expect((await put('patch', Buffer.from('patch'))).status).toBe(200)
-    expect((await put('untracked', new Uint8Array(snapshotLimits.patchBytes + 1))).status).toBe(200)
+    expect((await put(Buffer.from('outbox'))).status).toBe(200)
   })
 
   it('serves the files of the client of a prepare by their place, and nothing else', async () => {
@@ -496,13 +459,10 @@ describe('RunnerApiServer', () => {
     await expect(preparing).rejects.toMatchObject({ code: 'CORE_STOPPING' })
   })
 
-  it('closes the bundle and candidate paths of a turn without a repository (plan 57, Б5)', async () => {
+  it('closes the candidate paths of a turn but the outbox (plan 83)', async () => {
     const f = await start()
-    const { assignment, preparing, command } = await f.prepare(undefined, { repository: false })
+    const { assignment, preparing, command } = await f.prepare()
     expect(command).not.toHaveProperty('bundle')
-    const bundle = await f.call(runnerBundlePath(assignment.id), { headers: f.binary(command) })
-    expect(bundle.status).toBe(410)
-    expect(await bundle.json()).toEqual({ error: 'COMMAND_CLOSED' })
     await f.report(assignment.id, {
       type: 'prepared',
       commandId: command.commandId,
@@ -520,15 +480,14 @@ describe('RunnerApiServer', () => {
     expect(capture).toMatchObject({ type: 'capture' })
     expect(capture).not.toHaveProperty('baseSha')
     for (const part of ['patch', 'untracked'] as const) {
-      const put = await f.call(runnerCandidatePath(assignment.id, part), {
+      const put = await f.call(`/runner/v1/assignments/${assignment.id}/candidate/${part}`, {
         method: 'PUT',
         headers: { ...f.binary(capture!), 'content-type': 'application/octet-stream' },
         body: Buffer.from('untrusted'),
       })
-      expect(put.status).toBe(410)
-      expect(await put.json()).toEqual({ error: 'COMMAND_CLOSED' })
+      expect(put.status).toBe(404)
     }
-    // The agent's files for the client go up with either kind of capture (docs/plan/66, В8).
+    // The agent's files for the client go up with the capture (docs/plan/66, В8).
     const outbox = Buffer.from('outbox archive')
     const put = await f.call(runnerCandidatePath(assignment.id, 'outbox'), {
       method: 'PUT',

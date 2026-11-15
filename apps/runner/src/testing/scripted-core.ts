@@ -3,7 +3,6 @@
 import { Buffer } from 'node:buffer'
 
 import type { RunnerPollRequest, RunnerReport } from '@repo/domain'
-import { bundleBytes } from '@repo/local-turns/testing'
 import { expect, vi } from 'vitest'
 
 import { RunnerCallError, type RunnerTransport } from '../core-api/core-client.ts'
@@ -49,9 +48,6 @@ export function scriptedCore(options: { inbox?: readonly Uint8Array[] } = {}) {
       reports.push(structuredClone(report))
     }),
     reconcile: vi.fn(async () => ({ remove: [] })),
-    bundle: async function* () {
-      yield Buffer.from(bundleBytes)
-    },
     inbox: async function* (_assignmentId: string, index: number) {
       inboxReads.push(index)
       const file = options.inbox?.[index]

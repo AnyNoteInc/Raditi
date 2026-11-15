@@ -18,7 +18,6 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { test } from 'node:test'
 
-import { ustar } from '../dev/preview-verify/probes.mjs'
 import {
   adoptPlatformFolder,
   FilesRefused,
@@ -36,6 +35,34 @@ import {
   writePlatformFiles,
   writeTree,
 } from './files.mjs'
+
+/** A tar archive of `files` in the ustar format, as the platform writes one. */
+function ustar(files) {
+  const blocks = []
+  for (const file of files) {
+    const body = Buffer.from(file.content)
+    const name = Buffer.from(file.path)
+    if (name.length > 100) throw new Error('ustar fixture: path over 100 bytes')
+    const header = Buffer.alloc(512)
+    name.copy(header, 0)
+    const octal = (value, width) => `${value.toString(8).padStart(width - 1, '0')}\0`
+    header.write(octal(file.mode ?? 0o644, 8), 100, 'latin1')
+    header.write(octal(0, 8), 108, 'latin1')
+    header.write(octal(0, 8), 116, 'latin1')
+    header.write(octal(body.length, 12), 124, 'latin1')
+    header.write(octal(0, 12), 136, 'latin1')
+    header.write('        ', 148, 'latin1')
+    header.write(file.type ?? '0', 156, 'latin1')
+    header.write('ustar\0', 257, 'latin1')
+    header.write('00', 263, 'latin1')
+    let sum = 0
+    for (const byte of header) sum += byte
+    header.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 'latin1')
+    blocks.push(header, body, Buffer.alloc((512 - (body.length % 512)) % 512))
+  }
+  blocks.push(Buffer.alloc(1024))
+  return Buffer.concat(blocks)
+}
 
 const refused = (reason) => (error) => error instanceof FilesRefused && error.reason === reason
 const frame = (value) => {

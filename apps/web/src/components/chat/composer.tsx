@@ -207,7 +207,6 @@ export function Composer({
   busy = false,
   onSend,
   commands,
-  project,
   effort,
   attachments,
   noSecrets = feedInputText.noSecrets,
@@ -237,11 +236,6 @@ export function Composer({
    */
   onSend: (text: string, attachmentIds: readonly string[]) => Promise<boolean>
   commands?: ComposerCommands
-  /**
-   * The pill of the project of a new chat, before «Размышление»; on a phone a row of its own over
-   * the buttons (docs/plan/61-chats-first.md, К6).
-   */
-  project?: ReactNode
   /** «Размышление»: the menu of how hard the model thinks, after the paperclip. */
   effort?: ReactNode
   /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
@@ -898,18 +892,6 @@ export function Composer({
                   }}
                 />
               </>
-            ) : null}
-            {project ? (
-              <Box
-                sx={{
-                  order: { xs: -1, sm: 0 },
-                  flexBasis: { xs: '100%', sm: 'auto' },
-                  display: 'flex',
-                  minWidth: 0,
-                }}
-              >
-                {project}
-              </Box>
             ) : null}
             {effort}
           </Box>

@@ -10,7 +10,7 @@ import { browserPushText, type BrowserPush } from '@/components/notifications/us
 import type { FeedRow, ScheduledTaskItem } from './chat-types'
 import { schedulePushRowId } from './feed-list'
 import { FeedScheduleChange, FeedScheduleLeft, SHORT_INSTRUCTIONS } from './feed-schedule'
-import { SCHEDULE_ID, SITE_ID, scheduleChangeRow, scheduleLeftRow } from './testing'
+import { SCHEDULE_ID, scheduleChangeRow, scheduleLeftRow } from './testing'
 
 const RUN_CHAT_ID = '0199a3f2-0000-7000-8000-0000000000a8'
 
@@ -75,7 +75,6 @@ function task(patch: Partial<ScheduledTaskItem> = {}): ScheduledTaskItem {
     lastRunAt: null,
     createdVia: 'chat',
     templateSlug: null,
-    project: { id: SITE_ID, name: 'Кофейня «Крошка»', deleted: false },
     createdAt: now,
     updatedAt: now,
     lastRun: null,
@@ -108,11 +107,7 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     expect(link.getAttribute('href')).toBe(`/scheduled/${SCHEDULE_ID}`)
     expect(shown.getByText('По будням в 8:00')).toBeTruthy()
     expect(shown.getByText('Следующий запуск: завтра в 8:00')).toBeTruthy()
-    expect(
-      shown.getByText(
-        'Проект: Кофейня «Крошка» · Размышление: низкое · Уведомит, когда выполнится',
-      ),
-    ).toBeTruthy()
+    expect(shown.getByText('Размышление: низкое · Уведомит, когда выполнится')).toBeTruthy()
     // Short instructions stand in the card as written.
     expect(
       shown.getByText('Соберите заявки с форм за прошедшие сутки и пришлите короткую сводку.'),
@@ -136,23 +131,22 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     expect(hide.getAttribute('aria-controls')).toBe(words.id)
   })
 
-  it('names a chat without a project, the level and a task that does not notify', async () => {
+  it('names the level and a task that does not notify, and no project (Зп57)', async () => {
     list.mockResolvedValue({
-      schedules: [task({ project: null, effort: 'max', notify: false })],
+      schedules: [task({ effort: 'max', notify: false })],
       timezone: 'Europe/Moscow',
     })
     show(
       <FeedScheduleChange
-        row={scheduleChangeRow('1', { siteId: null, effort: 'max', notify: false })}
+        row={scheduleChangeRow('1', { effort: 'max', notify: false })}
         now={now}
       />,
     )
     const shown = within(await card())
     expect(
-      await shown.findByText(
-        'Без проекта · Размышление: максимальное · Без уведомления о выполнении',
-      ),
+      await shown.findByText('Размышление: максимальное · Без уведомления о выполнении'),
     ).toBeTruthy()
+    expect(shown.queryByText(/проект/i)).toBeNull()
   })
 
   it('tells the next run as the task has it now, or why it does not run', async () => {
@@ -173,11 +167,11 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     paused.unmount()
 
     list.mockResolvedValue({
-      schedules: [task({ enabled: false, nextRunAt: null, pausedReason: 'project_gone' })],
+      schedules: [task({ enabled: false, nextRunAt: null, pausedReason: 'refused' })],
       timezone: 'Europe/Moscow',
     })
     show(<FeedScheduleChange row={scheduleChangeRow('3')} now={now} />)
-    expect(await screen.findByText('Остановлена: проект удалён')).toBeTruthy()
+    expect(await screen.findByText('Остановлена после трёх отказов подряд')).toBeTruthy()
   })
 
   it('keeps the words of the row for a task that is not the client’s to open, asking once more first', async () => {
@@ -191,7 +185,6 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     expect(
       shown.queryByRole('button', { name: 'Запустить сейчас задачу «Заявки за сутки»' }),
     ).toBeNull()
-    // Its project is not named: the list that names it does not have the task.
     expect(shown.getByText('Размышление: низкое · Уведомит, когда выполнится')).toBeTruthy()
   })
 

@@ -10,7 +10,6 @@ import type { PrismaClient } from './generated/prisma/client.ts'
 import {
   applyScheduleChange,
   claimDueSchedule,
-  countSiteSchedules,
   createScheduledTask,
   deleteScheduledTask,
   dropPendingRun,
@@ -20,7 +19,6 @@ import {
   lockWaitingRun,
   passUnattended,
   pauseSchedule,
-  pauseSiteSchedules,
   pendingScheduleChanges,
   readScheduledTask,
   recordRunOutcome,
@@ -70,7 +68,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
     await schema?.drop()
   })
 
-  /** A user, their workspace with a project, and the user's role there. */
+  /** A user, their workspace, and the user's role there. */
   async function owner(role: 'owner' | 'admin' | 'member' = 'owner') {
     const user = await db.user.create({
       data: { name: 'Анна', email: `owner-${uuidv7()}@example.test` },
@@ -79,15 +77,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       data: { name: 'Synthetic', dataClass: 'synthetic', createdById: user.id },
     })
     await db.member.create({ data: { workspaceId: workspace.id, userId: user.id, role } })
-    const site = await db.site.create({
-      data: {
-        workspaceId: workspace.id,
-        name: 'Сайт',
-        url: `https://${uuidv7()}.example.test`,
-        stack: 'wordpress',
-      },
-    })
-    return { userId: user.id, workspaceId: workspace.id, siteId: site.id }
+    return { userId: user.id, workspaceId: workspace.id }
   }
 
   type Owner = Awaited<ReturnType<typeof owner>>
@@ -95,9 +85,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
   const input = (who: Owner, extra: Partial<ScheduledTaskInput> = {}): ScheduledTaskInput => ({
     userId: who.userId,
     workspaceId: who.workspaceId,
-    siteId: who.siteId,
-    name: 'Проверка сайта',
-    instructions: 'Откройте сайт и проверьте главную страницу.',
+    name: 'Курс валют',
+    instructions: 'Пришли курс доллара по ЦБ на сегодня.',
     effort: 'low',
     triggers: daily9,
     timezone: MSK,
@@ -106,18 +95,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
     ...extra,
   })
 
-  /** A chat of the user: of the project, or without one. */
-  async function chat(
-    who: Owner,
-    options: { project?: boolean; status?: string; turnNo?: number } = {},
-  ) {
-    const project = options.project ?? true
+  /** A chat of the user, in their workspace. */
+  async function chat(who: Owner, options: { status?: string; turnNo?: number } = {}) {
     const task = await db.task.create({
       data: {
         id: uuidv7(),
         workspaceId: who.workspaceId,
-        siteId: project ? who.siteId : null,
-        needsRepository: project,
         needsBrowser: false,
         createdById: who.userId,
         ...(options.status ? { status: options.status as never } : {}),
@@ -144,17 +127,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       expect(manual.nextRunAt).toBeNull()
     })
 
-    it('refuses a member, a deleted project, a past run, runs too close and a key', async () => {
+    it('refuses a member, a past run, runs too close and a key', async () => {
       const member = await owner('member')
       expect(await codeOf(createScheduledTask(db, input(member)))).toBe('SCHEDULE_FORBIDDEN')
-      const who = await owner()
-      await db.site.update({ where: { id: who.siteId }, data: { deletedAt: monday } })
-      expect(await codeOf(createScheduledTask(db, input(who)))).toBe('SCHEDULE_PROJECT_GONE')
-      // A project of another workspace is not told apart from none.
-      const elsewhere = await owner()
-      expect(await codeOf(createScheduledTask(db, input(who, { siteId: elsewhere.siteId })))).toBe(
-        'NOT_FOUND',
-      )
       const other = await owner()
       const once = (date: string): ScheduleTrigger[] => [{ kind: 'once', date, time: '07:00' }]
       expect(
@@ -338,65 +313,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       ).toBe('SCHEDULE_IN_PAST')
     })
 
-    it('keeps a task of a deleted project off until it moves, then forgets the project (Зп22)', async () => {
-      const who = await owner()
-      const task = await createScheduledTask(db, input(who))
-      await db.site.update({ where: { id: who.siteId }, data: { deletedAt: monday } })
-      await db.$transaction((tx) => pauseSiteSchedules(tx, who.siteId))
-      expect(
-        await codeOf(
-          setScheduledTaskEnabled(db, {
-            scheduleId: task.id,
-            userId: who.userId,
-            enabled: true,
-            now: monday,
-          }),
-        ),
-      ).toBe('SCHEDULE_PROJECT_GONE')
-      // Moved to no project, it stays off — as a task the client keeps paused, not of a project.
-      const moved = await updateScheduledTask(db, {
-        scheduleId: task.id,
-        userId: who.userId,
-        patch: { project: { siteId: null, workspaceId: who.workspaceId } },
-        now: monday,
-      })
-      expect([moved.siteId, moved.enabled, moved.pausedReason]).toEqual([null, false, null])
-      const on = await setScheduledTaskEnabled(db, {
-        scheduleId: task.id,
-        userId: who.userId,
-        enabled: true,
-        now: monday,
-      })
-      expect([on.enabled, on.nextRunAt]).toEqual([true, at('2026-11-16T06:00:00Z')])
-    })
-
-    it('waits for a deletion of the project in flight and refuses a task on it (Зп22)', async () => {
-      const who = await owner()
-      let release!: () => void
-      const held = new Promise<void>((resolve) => (release = resolve))
-      let locked!: () => void
-      const isLocked = new Promise<void>((resolve) => (locked = resolve))
-      // «Удалить проект» holds the row of the project and marks it.
-      const deletion = db.$transaction(
-        async (tx) => {
-          await tx.$queryRaw`SELECT id FROM sites WHERE id = ${who.siteId}::uuid FOR UPDATE`
-          await tx.site.update({ where: { id: who.siteId }, data: { deletedAt: monday } })
-          locked()
-          await held
-          return pauseSiteSchedules(tx, who.siteId)
-        },
-        { timeout: 20_000 },
-      )
-      await isLocked
-      const created = codeOf(createScheduledTask(db, input(who)))
-      // The task waits for the deletion instead of slipping past its pause.
-      await new Promise((resolve) => setTimeout(resolve, 200))
-      release()
-      expect(await deletion).toBe(0)
-      expect(await created).toBe('SCHEDULE_PROJECT_GONE')
-      expect(await db.scheduledTask.count({ where: { siteId: who.siteId } })).toBe(0)
-    })
-
     it('deletes a task of its creator only, and remembers a zone', async () => {
       const who = await owner()
       const stranger = await owner()
@@ -445,8 +361,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
         name: task.name,
         instructions: task.instructions,
         effort: 'low',
-        siteId: who.siteId,
       })
+      expect(run).not.toHaveProperty('siteId')
       const events = await db.outboxEvent.findMany({
         where: { dedupeKey: scheduleStartDedupeKey({ runId: run.id }) },
       })
@@ -775,7 +691,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       expect([resumed.refusalStreak, resumed.pausedReason]).toEqual([0, null])
     })
 
-    it('stops a task whose project is gone, and clears the refusals when a run starts', async () => {
+    it('clears the refusals when a run starts, and a refusal of the platform stops nothing (Зп48)', async () => {
       const who = await owner()
       const task = await createScheduledTask(
         db,
@@ -807,9 +723,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       const third = (await db.$transaction((tx) =>
         claimDueSchedule(tx, task.id, at('2026-11-16T08:00:00Z')),
       ))!.startRunId!
+      // A refusal not of the client's — the platform's — neither counts nor stops the task.
       expect(
-        await recordRunOutcome(db, third, { status: 'refused', reason: 'project_gone' }),
-      ).toMatchObject({ paused: 'project_gone' })
+        await recordRunOutcome(db, third, { status: 'refused', reason: 'platform' }),
+      ).toMatchObject({ recorded: true, paused: null, refusalStreak: 0 })
     })
 
     it('finds the runs web never answered', async () => {
@@ -945,31 +862,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
     })
   })
 
-  describe('the project', () => {
-    it('stops the tasks of a deleted project, the finished ones as they are', async () => {
-      const who = await owner()
-      const on = await createScheduledTask(db, input(who))
-      const off = await createScheduledTask(db, input(who, { enabled: false }))
-      const once = await createScheduledTask(
-        db,
-        input(who, { triggers: [{ kind: 'once', date: '2026-11-16', time: '09:00' }] }),
-      )
-      await db.$transaction((tx) => claimDueSchedule(tx, once.id, at('2026-11-16T06:00:00Z')))
-      await createScheduledTask(db, input(who, { siteId: null }))
-      expect(await countSiteSchedules(db, who.siteId)).toBe(2)
-      expect(await db.$transaction((tx) => pauseSiteSchedules(tx, who.siteId))).toBe(2)
-      const rows = await db.scheduledTask.findMany({
-        where: { id: { in: [on.id, off.id, once.id] } },
-        select: { id: true, enabled: true, pausedReason: true },
-      })
-      expect(Object.fromEntries(rows.map((row) => [row.id, row.pausedReason]))).toEqual({
-        [on.id]: 'project_gone',
-        [off.id]: 'project_gone',
-        [once.id]: 'completed',
-      })
-      expect(await countSiteSchedules(db, who.siteId)).toBe(0)
-    })
-
+  describe('a task that stops by itself', () => {
     it('stops a task the gate refused, once', async () => {
       const who = await owner()
       const task = await createScheduledTask(db, input(who))
@@ -983,9 +876,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
   describe('the agent', () => {
     const create = (extra: Record<string, unknown> = {}) => ({
       kind: 'create' as const,
-      name: 'Заявки за сутки',
-      instructions: 'Соберите заявки с форм за прошедшие сутки.',
-      project: 'this_chat' as const,
+      name: 'Курс валют',
+      instructions: 'Пришли курс доллара, евро и юаня по ЦБ на сегодня.',
       triggers: [{ kind: 'weekdays', time: '08:00' }] as ScheduleTrigger[],
       ...extra,
     })
@@ -994,9 +886,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       const who = await owner()
       const taskId = await chat(who)
       const turn = { workspaceId: who.workspaceId, taskId, turnNo: 1, now: monday }
-      expect(
-        await codeOf(reserveScheduleChange(db, { ...turn, change: create({ project: 'none' }) })),
-      ).toBe('BAD_REQUEST')
       expect(
         await codeOf(
           reserveScheduleChange(db, {
@@ -1007,7 +896,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       ).toBe('SCHEDULE_IN_PAST')
       const reserved = await reserveScheduleChange(db, { ...turn, change: create() })
       expect(reserved).toMatchObject({ kind: 'create', scheduleId: null, cancelled: false })
-      expect(reserved.fields).toMatchObject({ siteId: who.siteId, effort: 'high', timezone: MSK })
+      expect(reserved.fields).toMatchObject({ effort: 'high', timezone: MSK })
+      expect(reserved.fields).not.toHaveProperty('siteId')
       // 8:00 of Monday is now itself: the next weekday.
       expect(reserved.nextRunAt).toEqual(at('2026-11-17T05:00:00Z'))
       expect(await db.scheduledTask.count({ where: { workspaceId: who.workspaceId } })).toBe(0)
@@ -1023,8 +913,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
         createdVia: 'chat',
         sourceTaskId: taskId,
         createdById: who.userId,
-        siteId: who.siteId,
-        name: 'Заявки за сутки',
+        workspaceId: who.workspaceId,
+        name: 'Курс валют',
       })
       const closed = await db.scheduleReservation.findUniqueOrThrow({
         where: { id: reserved.reservationId },
@@ -1036,17 +926,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
     it('takes a zone of the author and a single run some minutes from now (Зп15)', async () => {
       const who = await owner()
       await rememberUserTimezone(db, who.userId, 'Asia/Novosibirsk')
-      const taskId = await chat(who, { project: false })
+      const taskId = await chat(who)
       const reserved = await reserveScheduleChange(db, {
         workspaceId: who.workspaceId,
         taskId,
         turnNo: 1,
         now: monday,
-        change: create({ project: 'none', triggers: [{ kind: 'once', inMinutes: 15 }] }),
+        change: create({ triggers: [{ kind: 'once', inMinutes: 15 }] }),
       })
       expect(reserved.fields).toMatchObject({
         timezone: 'Asia/Novosibirsk',
-        siteId: null,
         triggers: [{ kind: 'once', date: '2026-11-16', time: '12:15' }],
       })
       expect(reserved.nextRunAt).toEqual(new Date(monday.getTime() + minutes(15)))
@@ -1129,10 +1018,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       const first = await reserveScheduleChange(db, { ...turn, change: create() })
       const amended = await reserveScheduleChange(db, {
         ...turn,
-        change: { kind: 'update', reservedId: first.reservationId, name: 'Заявки за день' },
+        change: { kind: 'update', reservedId: first.reservationId, name: 'Курс на день' },
       })
       expect(amended.reservationId).toBe(first.reservationId)
-      expect(amended.fields?.name).toBe('Заявки за день')
+      expect(amended.fields?.name).toBe('Курс на день')
       // Another turn's reservation is not this turn's.
       expect(
         await codeOf(
@@ -1151,13 +1040,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       expect(await pendingScheduleChanges(db, taskId, 1)).toEqual([])
     })
 
-    it('changes a task of the author and the chat’s project, a second change amending the first', async () => {
+    it('changes a task of the chat’s author, a second change amending the first', async () => {
       const who = await owner()
-      const other = await createScheduledTask(db, input(who, { siteId: null }))
+      const other = await createScheduledTask(db, input(await owner()))
       const task = await createScheduledTask(db, input(who))
       const taskId = await chat(who)
       const turn = { workspaceId: who.workspaceId, taskId, turnNo: 1, now: monday }
-      // A task without a project is not of this chat's (Зп31).
+      // A task of another user is none of this chat's (Зп31, Зп54).
       expect(
         await codeOf(
           reserveScheduleChange(db, {
@@ -1248,7 +1137,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
           id: reserved.reservationId,
           kind: 'create',
           scheduleId: null,
-          name: 'Заявки за сутки',
+          name: 'Курс валют',
         },
       ])
       // Never twice.

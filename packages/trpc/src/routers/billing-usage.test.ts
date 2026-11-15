@@ -9,20 +9,12 @@ import {
   type UsageHistoryPageDto,
   type UsageSummaryDto,
 } from '@repo/billing'
-import { placeReserve, settleTaskCharge } from '@repo/billing/testing'
 import { createPrismaClient, type PrismaClient, type User } from '@repo/db'
 import { legalDocuments, Money, signupGiftCredits } from '@repo/domain'
 import { YookassaApiError, type Payment, type YookassaClient } from '@repo/yookassa'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createCaller } from '../router.ts'
-import { resetSiteConnectionGate } from '../services/site-connection-gate.ts'
-import {
-  createdProject,
-  deleteSiteConnectionRows,
-  fakeSiteConnections,
-  siteCreateInput,
-} from '../testing/site-connections.ts'
 import type { BillingContext, Context } from '../trpc.ts'
 
 // «Настройки → Использование» through the router: `billing.usage` and `billing.usageHistory`.
@@ -66,7 +58,6 @@ const requiredConsents = legalDocuments.flatMap((document) =>
 
 beforeEach(() => {
   vi.stubEnv('APP_ENV', 'test')
-  resetSiteConnectionGate()
   // Only the clock is set; timers run as they are, the database client needs them.
   vi.useFakeTimers({ toFake: ['Date'], now: NOW })
 })
@@ -162,7 +153,6 @@ function context(
       : null,
     billing,
     // Projects are made through the site connection wizard: a fake of its servers and Vault.
-    siteConnections: fakeSiteConnections().services,
   }
 }
 
@@ -203,7 +193,6 @@ const plan = {
   creditsPerDay: 20,
   creditsPer5h: null,
   creditsPerWeek: null,
-  maxSites: 3,
 }
 const noPage: UsageHistoryPageDto = { items: [], nextCursor: null, total: 0 }
 const entry = (patch: Partial<UsageHistoryPageDto['items'][number]> = {}) => ({
@@ -213,7 +202,6 @@ const entry = (patch: Partial<UsageHistoryPageDto['items'][number]> = {}) => ({
   credits: 17,
   from: { tariff: 5, gift: 0, pack: 12 },
   task: { id: randomUUID(), title: 'Заменил фото на главной', status: 'done' as const },
-  site: { id: randomUUID(), name: 'Кофейня на Лесной' },
   ...patch,
 })
 const TAKEN = { allowed: true, reason: null } as const
@@ -276,8 +264,6 @@ const onTariff = (): UsageSummaryDto => ({
       burnNext: 0,
     },
     today: busyDay,
-    sites: { count: 2, max: 3 },
-    bySite: [{ siteId: randomUUID(), name: 'Пекарня «Добро»', credits: 21 }],
   },
   gift: { left: 0, held: 0, granted: false },
   pack: { left: 10, held: 0 },
@@ -517,7 +503,6 @@ describe('billing.usage', () => {
         creditsPerDay: null,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: null,
         packCredits: 100,
       },
     ])
@@ -726,8 +711,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     await db.creditHold.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
     await db.task.deleteMany({ where: owned })
-    await deleteSiteConnectionRows(db, owned.workspaceId.in)
-    await db.site.deleteMany({ where: owned })
     await db.order.deleteMany({ where: owned })
     await db.subscription.deleteMany({ where: owned })
     await db.auditLog.deleteMany({ where: owned })
@@ -763,10 +746,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
    */
   async function seeded(slug: 'start' | 'business') {
     const row = await db.plan.findFirst({ where: { slug, kind: 'quota', isActive: true } })
-    if (row === null || row.maxSites === null || row.creditsPerMonth === null) {
+    if (row === null || row.creditsPerMonth === null) {
       throw new Error(`The tariff «${slug}» is not on sale in this database: apply the seeds`)
     }
-    return { ...row, maxSites: row.maxSites, creditsPerMonth: row.creditsPerMonth }
+    return { ...row, creditsPerMonth: row.creditsPerMonth }
   }
 
   /** The tariff credits of the Moscow day as the summary tells them, of `free` tariff credits. */
@@ -808,9 +791,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     }
   }
 
-  const site = (name: string) =>
-    siteCreateInput({ name, url: `https://${randomUUID()}.example.ru` })
-
   it('has no tariff and no workspace before the first payment, and the gift as promised', async () => {
     const { user: owner, caller } = await account()
 
@@ -828,27 +808,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     expect(
       await db.creditLedger.count({ where: { idempotencyKey: `user:${owner.id}:signup-gift` } }),
     ).toBe(0)
-  })
-
-  it('shows the gift as granted once the first site made the workspace: the same credits', async () => {
-    const { caller } = await account()
-
-    await caller.project.create(site('Первый'))
-
-    expect(await caller.billing.usage()).toEqual({
-      ...promised,
-      gift: { ...promised.gift, granted: true },
-      newTask: NO_RATE,
-      // The workspace is there: the windows without a tariff (plan 71).
-      tier: 'none',
-      windows: [
-        { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
-        { kind: 'week', limit: null, used: 0, left: null, resetsAt: null },
-      ],
-      paymentsEnabled: true,
-      autoRenewalAvailable: true,
-      packOnSale: await packOnSale(),
-    })
   })
 
   it('shows the full quota of a tariff that was just paid and an empty history', async () => {
@@ -879,8 +838,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
           burnNext: 0,
         },
         today: freshDay,
-        sites: { count: 0, max: tariff.maxSites },
-        bySite: [],
       },
       // The gift the checkout granted with the workspace, beside the quota.
       gift: { left: GIFT, held: 0, granted: true },
@@ -917,118 +874,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     expect(await paying.caller.billing.usageHistory({})).toEqual(noPage)
   })
 
-  it('tells where the credits went once tasks took them, and pages through the history', async () => {
-    const paying = await account()
-    const tariff = await seeded('business')
-    await subscribe(paying, 'business')
-    const { caller } = paying
-    const bakery = await createdProject(caller.project.create(site('Пекарня «Добро»')))
-    const { workspaceId } = await db.site.findUniqueOrThrow({ where: { id: bakery.id } })
-    const expiresAt = new Date(NOW.getTime() + DAY_MS)
-    const taken: string[] = []
-    // Three tasks a minute apart: each sets 45 credits aside; the first is done for 5, the
-    // second for 17, the third is still in work.
-    for (const [minute, charged] of [5, 17, null].entries()) {
-      const task = await db.task.create({
-        data: {
-          workspaceId,
-          siteId: bakery.id,
-          modelClass: 'standard',
-          status: 'done',
-          summary: `Правка ${minute + 1}`,
-        },
-      })
-      const now = new Date(NOW.getTime() + minute * 60_000)
-      await placeReserve(db, { workspaceId, taskId: task.id, attempt: 1, now, expiresAt })
-      taken.unshift(task.id)
-      if (charged !== null) {
-        await db.$transaction((tx) =>
-          settleTaskCharge(tx, { taskId: task.id, credits: charged, now }),
-        )
-      }
-    }
-
-    const usage = await caller.billing.usage()
-
-    const quota = tariff.creditsPerMonth
-    expect(usage.tariff).toMatchObject({
-      credits: {
-        carried: 0,
-        granted: quota,
-        charged: 22,
-        held: 1,
-        expired: 0,
-        left: quota - 23,
-        heldEarlier: 0,
-        carryLimit: quota,
-        carryNext: quota - 23,
-        burnNext: 0,
-      },
-      // The day took the 22 charged and the 1 still set aside, all of the tariff.
-      today: dayOf(tariff.creditsPerDay, 22, 1, quota - 23),
-      sites: { count: 1, max: tariff.maxSites },
-      bySite: [{ siteId: bakery.id, name: 'Пекарня «Добро»', credits: 22 }],
-    })
-    // The tasks took credits of the tariff; the gift of the registration is untouched.
-    expect(usage.gift).toEqual({ left: GIFT, held: 0, granted: true })
-    expect(usage.totalLeft).toBe(quota - 23 + GIFT)
-    expect(usage).toMatchObject({ spendable: quota - 23 + GIFT, setAside: 1 })
-    expect(
-      usage.history.items.map(({ id, outcome, credits, task }) => [
-        id,
-        outcome,
-        credits,
-        task.title,
-      ]),
-    ).toEqual([
-      [taken[0], 'held', 1, 'Правка 3'],
-      [taken[1], 'charged', 17, 'Правка 2'],
-      [taken[2], 'charged', 5, 'Правка 1'],
-    ])
-
-    const first = await caller.billing.usageHistory({ limit: 2 })
-    expect(first.items.map(({ id }) => id)).toEqual(taken.slice(0, 2))
-    expect(first.nextCursor).toBe(taken[1])
-    const second = await caller.billing.usageHistory({ limit: 2, cursor: first.nextCursor! })
-    expect(second.items.map(({ id }) => id)).toEqual(taken.slice(2))
-    expect(second.nextCursor).toBeNull()
-  })
-
   // docs/plan/61-chats-first.md, §5.10: a charge of a chat without a project never drops out.
-  it('shows what a chat without a project took', async () => {
-    const paying = await account()
-    await subscribe(paying, 'business')
-    const { caller } = paying
-    const bakery = await createdProject(caller.project.create(site('Пекарня «Добро»')))
-    const { workspaceId } = await db.site.findUniqueOrThrow({ where: { id: bakery.id } })
-    const task = await db.task.create({
-      data: {
-        workspaceId,
-        siteId: null,
-        needsRepository: false,
-        needsBrowser: false,
-        modelClass: 'standard',
-        status: 'awaiting_user',
-        summary: 'Идеи для названия пекарни',
-      },
-    })
-    await placeReserve(db, {
-      workspaceId,
-      taskId: task.id,
-      attempt: 1,
-      now: NOW,
-      expiresAt: new Date(NOW.getTime() + DAY_MS),
-    })
-    await db.$transaction((tx) => settleTaskCharge(tx, { taskId: task.id, credits: 7, now: NOW }))
-
-    const usage = await caller.billing.usage()
-
-    expect(usage.tariff?.bySite).toEqual([{ siteId: null, name: null, credits: 7 }])
-    expect(usage.history.items).toMatchObject([
-      { id: task.id, outcome: 'charged', credits: 7, site: null },
-    ])
-    expect((await caller.billing.usageHistory({})).items).toMatchObject([{ site: null }])
-  })
 
   it('does not show the usage of another user', async () => {
     const paying = await account()
@@ -1041,74 +887,5 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       newTask: NO_RATE,
       paymentsEnabled: true,
     })
-  })
-
-  it('holds a paid tariff to its number of sites when a site is added', async () => {
-    const paying = await account()
-    const tariff = await seeded('start')
-    expect(tariff.maxSites).toBe(1)
-    const { caller } = paying
-    await caller.project.create(site('Первый'))
-    await subscribe(paying, 'start')
-
-    await expect(caller.project.create(site('Второй'))).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      message:
-        'В ваш тариф входит один сайт. Чтобы добавить ещё один, выберите другой тариф в настройках',
-      cause: { code: 'PROJECT_PLAN_LIMIT_REACHED', details: { maxSites: 1 } },
-    })
-
-    expect((await caller.billing.usage()).tariff?.sites).toEqual({ count: 1, max: 1 })
-    expect(await caller.project.list()).toHaveLength(1)
-  })
-
-  it('holds a tariff to its number of sites from the checkout on, before the payment arrives', async () => {
-    const paying = await account()
-    expect((await seeded('start')).maxSites).toBe(1)
-    const { caller, shop } = paying
-    const another = 'Чтобы добавить ещё один, выберите другой тариф в настройках'
-    // The customer goes to the payment page and, before paying, adds sites.
-    const { orderId } = await caller.billing.startCheckout({ planSlug: 'start', autoRenew: false })
-    await caller.project.create(site('Первый'))
-
-    await expect(caller.project.create(site('Второй'))).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      message: `В тариф, который вы оплачиваете, входит один сайт. ${another}`,
-      cause: { code: 'PROJECT_PLAN_LIMIT_REACHED', details: { maxSites: 1, unpaid: true } },
-    })
-
-    shop.payOnly()
-    const { subscription } = await caller.billing.syncOrder({ orderId })
-
-    // The tariff that started holds as many sites as it takes.
-    expect(subscription).toMatchObject({ status: 'active', plan: { slug: 'start' } })
-    expect((await caller.billing.usage()).tariff?.sites).toEqual({ count: 1, max: 1 })
-    await expect(caller.project.create(site('Второй'))).rejects.toMatchObject({
-      message: `В ваш тариф входит один сайт. ${another}`,
-      cause: { code: 'PROJECT_PLAN_LIMIT_REACHED' },
-    })
-    expect(await caller.project.list()).toHaveLength(1)
-  })
-
-  it('follows the customer to the larger tariff they choose instead', async () => {
-    const paying = await account()
-    const larger = await seeded('business')
-    expect(larger.maxSites).toBe(3)
-    const { caller } = paying
-    await caller.billing.startCheckout({ planSlug: 'start', autoRenew: false })
-    await caller.project.create(site('Первый'))
-    await expect(caller.project.create(site('Второй'))).rejects.toMatchObject({
-      cause: { code: 'PROJECT_PLAN_LIMIT_REACHED', details: { maxSites: 1, unpaid: true } },
-    })
-
-    // Another choice closes the first order and starts one of its own.
-    await caller.billing.startCheckout({ planSlug: 'business', autoRenew: false })
-
-    await caller.project.create(site('Второй'))
-    await caller.project.create(site('Третий'))
-    await expect(caller.project.create(site('Четвёртый'))).rejects.toMatchObject({
-      cause: { code: 'PROJECT_PLAN_LIMIT_REACHED', details: { maxSites: 3, unpaid: true } },
-    })
-    expect(await caller.project.list()).toHaveLength(3)
   })
 })

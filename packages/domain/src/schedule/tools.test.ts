@@ -18,9 +18,8 @@ const id = '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7de1'
 const other = '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7de2'
 
 const create = {
-  name: 'Проверка сайта',
-  instructions: 'Откройте сайт и пройдите главную и важные страницы.',
-  project: 'this_chat',
+  name: 'Курс валют',
+  instructions: 'Пришли курс доллара, евро и юаня по ЦБ на сегодня.',
   triggers: [{ kind: 'weekdays', time: '09:00' }],
   confirmedByClient: true,
 } as const
@@ -31,7 +30,6 @@ describe('schedule_create', () => {
     expect(
       scheduleCreateArgumentsSchema.safeParse({
         ...create,
-        project: 'none',
         effort: 'max',
         timezone: 'Asia/Novosibirsk',
         notify: false,
@@ -49,7 +47,9 @@ describe('schedule_create', () => {
     expect(scheduleCreateArgumentsSchema.safeParse({ ...create, workspaceId: id }).success).toBe(
       false,
     )
-    expect(scheduleCreateArgumentsSchema.safeParse({ ...create, project: id }).success).toBe(false)
+    // A task has no project (Зп54): the field is refused as any key the tool does not know.
+    for (const project of [id, 'this_chat', 'none'])
+      expect(scheduleCreateArgumentsSchema.safeParse({ ...create, project }).success).toBe(false)
     expect(scheduleCreateArgumentsSchema.safeParse({ ...create, effort: 'medium' }).success).toBe(
       false,
     )

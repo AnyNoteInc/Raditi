@@ -682,6 +682,9 @@ try {
     // remote shell's, reads ~/.bashrc instead of BASH_ENV and stops there, unless it is nested.
     Object.assign(env, { BASH_ENV: settings.shellEnv, SHELL: '/bin/bash', SHLVL: '1' });
   }
+  // The CLI's own scratch folder (\`opencode debug paths\`: tmp): the agent's files in /tmp go
+  // there too. A fresh /tmp of every turn has none, and a warm sandbox's reset empties it.
+  mkdirSync('/tmp/opencode', { recursive: true, mode: 0o700 });
   // The relay of the model's stream: only for a turn, a compaction prints no words.
   const relay = compaction === null && settings.llmRelay !== null ? await startRelay(settings.llmRelay) : null;
   let child;

@@ -16,12 +16,9 @@ describe('why createDialog refused the chat of a run (docs/plan/82, §4.3)', () 
     expect(refusalReasonOf(error('BILLING_DAILY_LIMIT_REACHED', 429))).toBe('daily_limit')
   })
 
-  it('maps a project that takes no chat by the reason of the refusal', () => {
-    for (const reason of ['site_not_active', 'not_synthetic'])
-      expect(refusalReasonOf(error('TASK_NOT_ACCEPTED', 409, { reason }))).toBe(
-        'project_unavailable',
-      )
-    for (const reason of ['class_unavailable', 'browser_unavailable', 'browser_insecure', 'x'])
+  // A chat has no project to refuse it (Зп48): any refusal of the gate is the platform's.
+  it('takes a refusal of the gate of a chat for a fault of the platform', () => {
+    for (const reason of ['class_unavailable', 'site_not_active', 'not_synthetic', 'x'])
       expect(refusalReasonOf(error('TASK_NOT_ACCEPTED', 409, { reason }))).toBe('platform')
     expect(refusalReasonOf(error('TASK_NOT_ACCEPTED', 409))).toBe('platform')
   })
@@ -30,7 +27,7 @@ describe('why createDialog refused the chat of a run (docs/plan/82, §4.3)', () 
     for (const code of ['TASK_TEXT_EMPTY', 'TASK_TEXT_TOO_LONG', 'TASK_TEXT_HAS_SECRET'])
       expect(refusalReasonOf(error(code, 400))).toBe('text_refused')
     expect(refusalReasonOf(error('BILLING_CREDIT_RATE_MISSING', 503))).toBe('platform')
-    // A project that is gone is read from the database before; NOT_FOUND is never it.
+    // No project can be gone: NOT_FOUND is the platform's.
     expect(refusalReasonOf(error('NOT_FOUND', 404))).toBe('platform')
     expect(refusalReasonOf(error('CONFLICT', 409))).toBe('platform')
     expect(refusalReasonOf(error('WORKSPACE_KEY_UNAVAILABLE', 503))).toBe('retry')

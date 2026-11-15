@@ -5,7 +5,8 @@ import { scheduledRunReasons, scheduledRunReasonText } from './runs.ts'
 /**
  * What came of a run of a scheduled task, as its row in the list and on the page of the task say
  * it (docs/plan/82-scheduled-tasks.md, Зп5, Зп6): a run that started is told by the state of its
- * chat — by the same rules as the list of chats —, one that did not by its reason.
+ * chat — by the same rules as the list of chats —, one that did not by its reason. A chat has no
+ * candidate and no `/release` (docs/plan/83-remove-projects.md, БП2; Зп47).
  */
 
 /** What stopped the chat of a run at its limit: credits, or the weekly limit of the workspace. */
@@ -17,7 +18,6 @@ export const scheduledRunStateKinds = [
   'running',
   'done',
   'waiting',
-  'ready',
   'failed',
   'stopped',
   'chat_deleted',
@@ -37,8 +37,6 @@ export const scheduledRunStateSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('done') }),
   /** The agent asked a question: the chat waits for the client's answer. */
   z.strictObject({ kind: z.literal('waiting') }),
-  /** A candidate waits for the client's look and `/release`. */
-  z.strictObject({ kind: z.literal('ready') }),
   /** The last pass failed, or the chat ended without an answer. */
   z.strictObject({ kind: z.literal('failed') }),
   /** The chat stopped at its limit; null — at a limit of another kind. */
@@ -75,8 +73,6 @@ export function scheduledRunStateText(state: ScheduledRunState): string {
       return 'Выполнена'
     case 'waiting':
       return 'Ждёт вашего ответа'
-    case 'ready':
-      return 'Изменения готовы'
     case 'failed':
       return 'Не выполнена'
     case 'stopped':

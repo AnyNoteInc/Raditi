@@ -251,24 +251,18 @@ test('every live flow reads a result twice the same way: the product decides, th
 
 test('no live flow asks the driver alone whether a turn ended with a valid result', async () => {
   const gateway = await source('verify-llm-live.mjs')
-  const content = await source('verify-agent-content-live.mjs')
-  const turnsOfContent = await source('verify-agent-content-turns.mjs')
   // The outcome «the result is valid» of the acceptances and of the measurement is the
   // product's reading (the supervisor's readTurnResult); the strict one goes to the report.
-  for (const [name, text] of [
-    ['verify-llm-live.mjs', gateway],
-    ['verify-agent-content-live.mjs', content],
-  ]) {
+  for (const [name, text] of [['verify-llm-live.mjs', gateway]]) {
     assert.doesNotMatch(text, /turnResultSchema\.safeParse\(outcome\.result\)/, name)
     assert.doesNotMatch(text, /driver\.extractResult\(/, name)
     assert.match(text, /by the strict reading of the driver/, name)
     assert.match(text, /readingShares\(/, name)
   }
   assert.match(gateway, /resultReadings\(\{ driver, events, code: result\.code \}\)/)
-  assert.match(turnsOfContent, /resultReadings\(\{ driver, events, code: result\.code \}\)/)
   // The shares still decide nothing: no flow asserts on a count of valid results outside a
   // rehearsal, whose scripted model is certain.
-  assert.doesNotMatch(content, /assert\.ok\((edits|results|strictResults) > 0/)
+  assert.doesNotMatch(gateway, /assert\.ok\((edits|results|strictResults) > 0/)
 })
 
 test('the reaction of the CLI to a refused body is measured in a rehearsal alone, under the budget of the run', async () => {

@@ -13,11 +13,11 @@ import { isScheduleTooOftenIssue, SCHEDULE_TOO_OFTEN, SCHEDULE_TOO_OFTEN_TEXT } 
 export const scheduleNotFound = (): DomainError =>
   new DomainError('SCHEDULE_NOT_FOUND', 'Задачи уже нет', 404)
 
-/** Only its creator, while an owner or an administrator of its workspace, changes a task (Зп25). */
+/** Only its creator changes a task (Зп25, Зп44). */
 export const scheduleForbidden = (): DomainError =>
   new DomainError(
     'SCHEDULE_FORBIDDEN',
-    'Менять запланированные задачи может владелец или администратор, создавший её',
+    'Менять запланированную задачу может только тот, кто её создал',
     403,
   )
 
@@ -51,20 +51,12 @@ export const scheduleTooOften = (): DomainError =>
 export const scheduleInPast = (): DomainError =>
   new DomainError('SCHEDULE_IN_PAST', 'Это время уже прошло — выберите другое', 400)
 
-/** The template «Конкуренты» with its placeholder left as it was (Зп9). */
-export const scheduleTemplatePlaceholder = (): DomainError =>
-  new DomainError('SCHEDULE_TEMPLATE_PLACEHOLDER', 'Впишите адреса сайтов конкурентов', 400)
-
 /**
- * The project of a task was deleted (Зп22): the task stays bound to it until the client moves it
- * to another project or to none, and it is not turned on there.
+ * Instructions with a place of a template left as it was, `[впишите …]` (Зп9, Зп59): refused on
+ * the creation and the change of any task.
  */
-export const scheduleProjectGone = (): DomainError =>
-  new DomainError(
-    'SCHEDULE_PROJECT_GONE',
-    'Проект этой задачи удалён — выберите другой проект или «Без проекта»',
-    409,
-  )
+export const scheduleTemplatePlaceholder = (): DomainError =>
+  new DomainError('SCHEDULE_TEMPLATE_PLACEHOLDER', 'Замените текст в квадратных скобках своим', 400)
 
 /** «Запустить сейчас» while a run of the task goes on (Зп24). */
 export const scheduleRunBusy = (): DomainError =>

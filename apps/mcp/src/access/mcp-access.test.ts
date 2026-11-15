@@ -5,52 +5,26 @@ import { terminalTaskStatuses } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
 import { MCP_TOKEN_PATTERN, newTurnKeys, turnKeyHash } from '@repo/turn-keys'
-import {
-  closedPreviewStatuses,
-  MCP_ACCESS_PROBE_TOKEN,
-  mcpTurnAccessSchema,
-  PostgresMcpAccess,
-  siteAccessOf,
-} from './mcp-access.ts'
+import { MCP_ACCESS_PROBE_TOKEN, mcpTurnAccessSchema, PostgresMcpAccess } from './mcp-access.ts'
 
 const token = `mcp_${'a'.repeat(64)}`
 const scope = () => ({
   keyId: randomUUID(),
   taskId: randomUUID(),
-  siteId: randomUUID(),
   workspaceId: randomUUID(),
   sessionId: 'synthetic',
   turn: 1,
   firstEpoch: 1,
   epoch: 2,
-  stack: 'wordpress',
-  url: 'https://site.example.test',
 })
-const preview = {
-  id: randomUUID(),
-  status: 'ready',
-  database: true,
-  hostname: 'site-0a1b2c3d-chat-0a1b2c.localhost',
-}
-/** The admission row: the scope, the task's needs and the columns of its preview, if any. */
-const row = (
-  base = scope(),
-  of: typeof preview | null = null,
-  needs = { needsRepository: true, needsBrowser: false },
-) => ({
-  ...base,
-  ...needs,
-  previewId: of?.id ?? null,
-  previewStatus: of?.status ?? null,
-  previewDatabase: of?.database ?? null,
-  previewHostname: of?.hostname ?? null,
-})
+/** The admission row: the scope and whether the chat has the browser. */
+const row = (base = scope(), needsBrowser: unknown = false) => ({ ...base, needsBrowser })
 
 /** The instant the run wrote its instructions: the first `feed.request` of its chat. */
 const RUN_STARTED = new Date('2026-11-16T06:00:00.123456Z')
 
 /**
- * The database of the store: the admission query, and what `passUnattendedOf` reads — whether the
+ * The database of the store: the admission query, and what `passUnattended` reads — whether the
  * chat is a run of a scheduled task (`scheduled_runs`) and the requests its feed holds, the first
  * at `RUN_STARTED` and each next a second later, unless their instants are given; a bound on
  * `createdAt` is taken as PostgreSQL takes it.
@@ -89,8 +63,7 @@ describe('MCP token access', () => {
     const store = new PostgresMcpAccess(dbOf($queryRaw))
     expect(await store.authenticate(token)).toEqual({
       ...base,
-      preview: null,
-      requirements: { repository: true, browser: false },
+      requirements: { repository: false, browser: false },
       unattended: false,
     })
     expect(JSON.stringify($queryRaw.mock.calls)).not.toContain(token)
@@ -99,100 +72,19 @@ describe('MCP token access', () => {
     )
   })
 
-  it('carries the preview of the dialog, never one named by the request', async () => {
+  it("carries the chat's browser, and closes a row that does not say it", async () => {
     const base = scope()
-    const $queryRaw = vi.fn(async () => [row(base, preview)])
+    const $queryRaw = vi.fn(async () => [row(base, true)])
     const store = new PostgresMcpAccess(dbOf($queryRaw))
     expect(await store.authenticate(token)).toEqual({
       ...base,
-      preview,
-      requirements: { repository: true, browser: false },
-      unattended: false,
-    })
-    const sql = ($queryRaw.mock.calls[0] as unknown as [string[]])[0].join('$').replace(/\s+/g, ' ')
-    expect(sql).toContain(
-      'LEFT JOIN preview_environments p ON p.task_id = t.id AND p.site_id = s.id',
-    )
-    // A row of another status or an unknown one is broken data: closed, never guessed.
-    $queryRaw.mockResolvedValueOnce([row(scope(), { ...preview, status: 'serving' })])
-    await expect(store.authenticate(token)).rejects.toMatchObject({
-      code: 'MCP_ACCESS_SCOPE_INVALID',
-    })
-  })
-
-  it("carries the task's needs: a browser task without a repository", async () => {
-    const base = scope()
-    const $queryRaw = vi.fn(async () => [
-      row(base, null, { needsRepository: false, needsBrowser: true }),
-    ])
-    const store = new PostgresMcpAccess(dbOf($queryRaw))
-    expect(await store.authenticate(token)).toEqual({
-      ...base,
-      preview: null,
       requirements: { repository: false, browser: true },
       unattended: false,
     })
-    // Needs nobody has (a broken row) or columns the query no longer reads: closed, never guessed.
-    for (const needs of [
-      { needsRepository: false, needsBrowser: false },
-      { needsRepository: null, needsBrowser: true },
-    ]) {
-      $queryRaw.mockResolvedValueOnce([row(scope(), null, needs as never)])
-      await expect(store.authenticate(token)).rejects.toMatchObject({
-        code: 'MCP_ACCESS_SCOPE_INVALID',
-      })
-    }
-  })
-
-  it('admits a chat without a site: no site, no stack, no address, no preview (plan 61, §5.3)', async () => {
-    const chat = { ...scope(), siteId: null, stack: null, url: null }
-    for (const needs of [
-      { needsRepository: false, needsBrowser: false },
-      { needsRepository: false, needsBrowser: true },
-    ]) {
-      const $queryRaw = vi.fn(async () => [row(chat as never, null, needs)])
-      const store = new PostgresMcpAccess(dbOf($queryRaw))
-      const access = await store.authenticate(token)
-      expect(access).toEqual({
-        ...chat,
-        preview: null,
-        requirements: { repository: needs.needsRepository, browser: needs.needsBrowser },
-        unattended: false,
-      })
-      // No tool of a site takes it.
-      expect(siteAccessOf(access!)).toBeNull()
-    }
-  })
-
-  it('gives the tools of a site the same access a turn on a site was admitted with', async () => {
-    const base = scope()
-    const $queryRaw = vi.fn(async () => [row(base)])
-    const store = new PostgresMcpAccess(dbOf($queryRaw))
-    const access = await store.authenticate(token)
-    expect(siteAccessOf(access!)).toEqual(access)
-  })
-
-  it('closes an admission whose site is half there, or a repository without a site', async () => {
-    const chat = { ...scope(), siteId: null, stack: null, url: null }
-    const needs = { needsRepository: false, needsBrowser: true }
-    for (const broken of [
-      row({ ...chat, stack: 'wordpress' } as never, null, needs),
-      row({ ...chat, url: 'https://site.example.test' } as never, null, needs),
-      row({ ...scope(), stack: null } as never, null, needs),
-      row({ ...scope(), url: null } as never, null, needs),
-      row(chat as never, preview, needs),
-      row(chat as never, null, { needsRepository: true, needsBrowser: false }),
-      row(chat as never, null, { needsRepository: true, needsBrowser: true }),
-    ]) {
-      const $queryRaw = vi.fn(async () => [broken])
-      await expect(
-        new PostgresMcpAccess(dbOf($queryRaw)).authenticate(token),
-      ).rejects.toMatchObject({ code: 'MCP_ACCESS_SCOPE_INVALID' })
-    }
-    // A scope without requirements is older than them: a repository task, so it has a site.
-    expect(
-      mcpTurnAccessSchema.safeParse({ ...chat, preview: null, requirements: undefined }).success,
-    ).toBe(false)
+    $queryRaw.mockResolvedValueOnce([row(scope(), null)])
+    await expect(store.authenticate(token)).rejects.toMatchObject({
+      code: 'MCP_ACCESS_SCOPE_INVALID',
+    })
   })
 
   it('tells a pass of a scheduled run before its client wrote (plan 82, Зп27)', async () => {
@@ -281,8 +173,7 @@ describe('MCP token access', () => {
     const $queryRaw = vi.fn(async (..._: unknown[]) => [])
     const store = new PostgresMcpAccess(dbOf($queryRaw))
     expect(await store.authenticate(issued.mcpToken)).toBeNull()
-    // The first parameter is the list of closed preview statuses; the hash comes second.
-    expect($queryRaw.mock.calls[0]![2]).toBe(turnKeyHash(issued.mcpToken))
+    expect($queryRaw.mock.calls[0]![1]).toBe(turnKeyHash(issued.mcpToken))
     // The other half of the pair is not an MCP token.
     expect(await store.authenticate(issued.llmApiKey)).toBeNull()
     expect($queryRaw).toHaveBeenCalledTimes(1)
@@ -298,8 +189,7 @@ describe('MCP token access', () => {
     const sql = ($queryRaw.mock.calls[0]![0] as string[]).join('$').replace(/\s+/g, ' ')
     for (const condition of [
       'JOIN tasks t ON t.id = k.task_id',
-      'LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id',
-      'JOIN turn_assignments a ON a.task_id = k.task_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch AND a.session_id = k.session_id AND a.site_id IN (t.id, t.site_id)',
+      'AND a.site_id = t.id',
       'JOIN site_leases l ON l.site_id = a.site_id AND l.holder_task_id = t.id AND l.epoch = a.lease_epoch',
       'k.mcp_token_hash = $',
       'k.revoke_requested_at IS NULL',
@@ -317,25 +207,12 @@ describe('MCP token access', () => {
       't.status <> ALL($::"TaskStatus"[])',
     ])
       expect(sql).toContain(condition)
-    // The one alternative: no site at all, an active site, or a site being connected for a
-    // browser task without a repository (docs/plan/57-browser-tasks.md, Б9). Paused and archived
-    // sites are never in it, and `LEFT JOIN` leaves a site of another workspace to this condition.
-    const site =
-      "AND (t.site_id IS NULL OR s.status = 'active' OR (t.needs_browser AND NOT t.needs_repository AND s.status = 'onboarding'))"
-    expect(sql).toContain(site)
-    expect(sql.replace(site, '')).not.toMatch(/\bOR\b/)
-    expect(sql).not.toMatch(/paused|disconnected|archived/)
+    expect(sql).not.toMatch(/\bOR\b|sites|preview/)
     // The final statuses are the list of spec §7, not a copy of it in this query.
     expect($queryRaw.mock.calls[0]!.slice(1)).toEqual([
-      [...closedPreviewStatuses],
       createHash('sha256').update(token).digest('hex'),
       [...terminalTaskStatuses],
     ])
-    // A closed preview says no kind of a plan, whatever its record keeps (review of Э1).
-    expect(sql).toContain(
-      "CASE WHEN p.status::text <> ALL($::text[]) AND jsonb_typeof(p.runtime->'db'->'kinds') = 'array'",
-    )
-    expect(closedPreviewStatuses).toEqual(['unavailable', 'destroyed'])
     expect(terminalTaskStatuses).toEqual(['done', 'failed', 'rolled_back', 'cancelled'])
   })
 
@@ -351,15 +228,11 @@ describe('MCP token access', () => {
   it('fails closed with a fixed, content-free invariant error on ambiguous or invalid rows', async () => {
     const $queryRaw = vi.fn()
     const store = new PostgresMcpAccess(dbOf($queryRaw))
-    for (const rows of [
-      [row(), row()],
-      [row({ ...scope(), url: 'https://password:secret@site.example.test' })],
-      [row({ ...scope(), url: 'https://site.example.test/blog/' })],
-    ]) {
+    for (const rows of [[row(), row()], [{ ...row(), keyId: 'secret' }]]) {
       $queryRaw.mockResolvedValueOnce(rows)
       const error = await store.authenticate(token).catch((caught: unknown) => caught)
       expect(error).toMatchObject({ name: 'DomainError', code: 'MCP_ACCESS_SCOPE_INVALID' })
-      expect(JSON.stringify(error) + String(error)).not.toMatch(/secret|blog|example|mcp_/)
+      expect(JSON.stringify(error) + String(error)).not.toMatch(/secret|mcp_/)
     }
   })
 })

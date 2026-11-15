@@ -5,7 +5,7 @@ import { legalDocuments, type ObjectStorage, type SecretStore } from '@repo/doma
 import { describe, expect, it, vi } from 'vitest'
 
 import { createCaller } from '../router.ts'
-import { releaseConfirmKey, type ChatContext } from '../services/chat/context.ts'
+import type { ChatContext } from '../services/chat/context.ts'
 import type { Context } from '../trpc.ts'
 
 // The procedures of a dialog against a database that holds nothing of the user: what is
@@ -31,9 +31,7 @@ const requiredConsents = legalDocuments.flatMap((document) =>
 )
 const chat: ChatContext = {
   appEnv: 'test',
-  preview: { address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 }, ttlHours: 72 },
   browser: { streamUrl: 'ws://localhost:8091/v1/browser/stream' },
-  releaseConfirmKey: releaseConfirmKey('unit test secret'),
   storage: () => ({}) as ObjectStorage,
   secrets: () => ({}) as SecretStore,
 }
@@ -46,13 +44,9 @@ function emptyDb() {
       findFirst: vi.fn().mockResolvedValue(null),
       findUnique: vi.fn().mockResolvedValue(null),
     },
-    site: { findFirst: vi.fn().mockResolvedValue(null) },
     attachment: { count: vi.fn().mockResolvedValue(0) },
     // A conditional write that finds no row of the user.
     $queryRaw: vi.fn().mockResolvedValue([]),
-    taskCandidate: { findFirst: vi.fn().mockResolvedValue(null) },
-    previewEnvironment: { findFirst: vi.fn().mockResolvedValue(null) },
-    siteRelease: { findFirst: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn(async () => {
       throw new Error('no transaction is expected')
     }),
@@ -81,7 +75,8 @@ function callerOf(prisma: PrismaClient, dialogs: ChatContext | null = chat) {
   return createCaller(context)
 }
 
-const ids = { siteId: randomUUID(), taskId: randomUUID() }
+/** A chat takes only an id of version 7 (docs/plan/61-chats-first.md, К14). */
+const ids = { taskId: '0193b2a0-4f6c-7a11-8b22-3c4d5e6f7a8b' }
 
 describe('the words of a new dialog', () => {
   it.each([
@@ -106,7 +101,6 @@ describe('the words of a new dialog', () => {
       cause: { code },
     })
     expect(db.task.findUnique).not.toHaveBeenCalled()
-    expect(db.site.findFirst).not.toHaveBeenCalled()
   })
 
   it('are refused the same way in a dialog that waits', async () => {
@@ -122,19 +116,19 @@ describe('the words of a new dialog', () => {
   })
 })
 
-describe('the project of a new chat', () => {
-  it('is said aloud: a forgotten field gives no chat without a project', async () => {
+describe('the id of a new chat', () => {
+  it('takes no project: a chat has none (docs/plan/83-remove-projects.md)', async () => {
     const { db, prisma } = emptyDb()
     await expect(
-      callerOf(prisma).task.create({ taskId: ids.taskId, text: 'Вопрос' } as never),
+      callerOf(prisma).task.create({ ...ids, siteId: null, text: 'Вопрос' } as never),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(db.task.findUnique).not.toHaveBeenCalled()
   })
 
-  it('takes only an id of version 7 for a chat without one, before anything is read', async () => {
+  it('takes only an id of version 7, before anything is read', async () => {
     const { db, prisma } = emptyDb()
     await expect(
-      callerOf(prisma).task.create({ siteId: null, taskId: ids.taskId, text: 'Вопрос' }),
+      callerOf(prisma).task.create({ taskId: randomUUID(), text: 'Вопрос' }),
     ).rejects.toMatchObject({
       code: 'BAD_REQUEST',
       message: 'Не удалось начать чат. Обновите страницу и попробуйте ещё раз',
@@ -146,35 +140,21 @@ describe('the project of a new chat', () => {
 })
 
 describe('a dialog of someone else', () => {
-  it('answers every procedure as a site that does not exist', async () => {
+  it('answers every procedure as a chat that does not exist', async () => {
     const { db, prisma } = emptyDb()
     const caller = callerOf(prisma)
     const requestId = randomUUID()
     const calls = [
-      caller.task.create({ ...ids, text: 'Поменяйте телефон' }),
       caller.task.message({ taskId: ids.taskId, requestId, text: 'Да' }),
       caller.task.continue({ taskId: ids.taskId, requestId }),
-      caller.task.retry({ taskId: ids.taskId, requestId, failureEventId: '17' }),
       caller.task.cancel({ taskId: ids.taskId, requestId }),
       caller.task.commands({ taskId: ids.taskId }),
       caller.task.activity({ taskId: ids.taskId, turn: 1 }),
-      caller.task.list({ folder: ids.siteId }),
-      caller.candidate.get({ taskId: ids.taskId }),
-      caller.candidate.update({ taskId: ids.taskId, requestId }),
-      caller.preview.ticket({ taskId: ids.taskId }),
-      caller.preview.reset({ taskId: ids.taskId }),
-      caller.release.prepare({ taskId: ids.taskId }),
       caller.task.resumeAgent({ taskId: ids.taskId, requestId }),
       caller.browser.streamTicket({ taskId: ids.taskId }),
       caller.attachment.list({ taskId: ids.taskId }),
       caller.attachment.bind({ taskId: ids.taskId, attachmentIds: [randomUUID()] }),
       caller.attachment.remove({ attachmentId: randomUUID() }),
-      caller.attachment.start({
-        siteId: ids.siteId,
-        name: 'photo.jpg',
-        size: 2048,
-        type: 'image/jpeg',
-      }),
     ]
     for (const refusal of await Promise.all(
       calls.map((call) => call.catch((error: unknown) => error)),
@@ -194,32 +174,6 @@ describe('dialogs that are not set up', () => {
       message: 'Чаты сейчас недоступны. Попробуйте ещё раз немного позже',
       cause: { code: 'CHAT_NOT_CONFIGURED' },
     })
-  })
-
-  it('refuse a release confirmation that is not one before the database is read', async () => {
-    const { db, prisma } = emptyDb()
-    await expect(
-      callerOf(prisma).release.confirm({
-        taskId: ids.taskId,
-        confirmToken: 'x.y',
-        version: 'v1.0.0',
-      }),
-    ).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      message: 'Не удалось подтвердить выпуск. Откройте выпуск версии заново',
-    })
-    expect(db.task.findFirst).not.toHaveBeenCalled()
-  })
-})
-
-describe('the list of chats', () => {
-  it('reads a project from its folder alone', async () => {
-    const { db, prisma } = emptyDb()
-    await expect(
-      // @ts-expect-error the old name of `folder` is gone (docs/plan/61-chats-first.md, 61.14)
-      callerOf(prisma).task.list({ siteId: ids.siteId }),
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-    expect(db.site.findFirst).not.toHaveBeenCalled()
   })
 })
 
@@ -250,32 +204,21 @@ describe('the environment of a new dialog', () => {
     ))
       expect(refusal).toMatchObject({ code: 'BAD_REQUEST' })
     expect(db.task.findUnique).not.toHaveBeenCalled()
-    expect(db.site.findFirst).not.toHaveBeenCalled()
   })
 })
 
 describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => {
   const workspaceId = randomUUID()
-  /** A site added by «Добавить проект» for the browser alone: no repository, still onboarding. */
-  const browserSite = (dataClass: 'synthetic' | 'client' = 'synthetic') => ({
-    id: ids.siteId,
-    workspaceId,
-    status: 'onboarding',
-    url: 'https://example.ru',
-    alias: 'kofe',
-    workspace: { dataClass },
-    provisioningStages: [],
-    gitRepositories: [],
-  })
   function withVault(transitEnsureKey: ReturnType<typeof vi.fn>): ChatContext {
     const secrets = { transitEnsureKey } as unknown as SecretStore
-    return { ...chat, preview: null, secrets: () => secrets }
+    return { ...chat, secrets: () => secrets }
   }
 
   it('is made before the transaction that writes the task, once, under the name of the workspace', async () => {
     const { db, prisma } = emptyDb()
-    db.site.findFirst.mockResolvedValue(browserSite())
-    const created = { taskId: ids.taskId, alias: 'zakaz', created: true }
+    const created = { taskId: ids.taskId, created: true }
+    // The personal workspace first, in its own transaction; then the task.
+    db.$transaction.mockResolvedValueOnce({ id: workspaceId } as never)
     db.$transaction.mockResolvedValueOnce(created as never)
     const ensure = vi.fn().mockResolvedValue(undefined)
 
@@ -284,13 +227,13 @@ describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => 
     ).resolves.toEqual(created)
     expect(ensure).toHaveBeenCalledExactlyOnceWith(`ws-${workspaceId}`)
     expect(ensure.mock.invocationCallOrder[0]).toBeLessThan(
-      db.$transaction.mock.invocationCallOrder[0]!,
+      db.$transaction.mock.invocationCallOrder[1]!,
     )
   })
 
   it('refuses the task when Vault fails, and writes nothing: no task, no reserve', async () => {
     const { db, prisma } = emptyDb()
-    db.site.findFirst.mockResolvedValue(browserSite())
+    db.$transaction.mockResolvedValueOnce({ id: workspaceId } as never)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const failure = Object.assign(new Error('permission denied hvs.private-token'), {
       name: 'VaultError',
@@ -307,7 +250,8 @@ describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => 
       cause: { code: 'WORKSPACE_KEY_UNAVAILABLE' },
     })
     expect(ensure).toHaveBeenCalledOnce()
-    expect(db.$transaction).not.toHaveBeenCalled()
+    // Only the transaction of the personal workspace ran.
+    expect(db.$transaction).toHaveBeenCalledOnce()
     // The log names the workspace and the class of the failure, never what Vault said.
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       `workspace_key_failed workspace=${workspaceId} error=VaultError status=403`,
@@ -317,11 +261,10 @@ describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => 
 
   it('refuses the task the same way when the settings of Vault do not parse', async () => {
     const { db, prisma } = emptyDb()
-    db.site.findFirst.mockResolvedValue(browserSite())
+    db.$transaction.mockResolvedValueOnce({ id: workspaceId } as never)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const broken: ChatContext = {
       ...chat,
-      preview: null,
       secrets: () => {
         throw new Error('Invalid vault configuration: VAULT_ADDR is required')
       },
@@ -330,23 +273,23 @@ describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => 
     await expect(
       callerOf(prisma, broken).task.create({ ...ids, text: 'Добавьте новость' }),
     ).rejects.toMatchObject({ cause: { code: 'WORKSPACE_KEY_UNAVAILABLE' } })
-    expect(db.$transaction).not.toHaveBeenCalled()
+    expect(db.$transaction).toHaveBeenCalledOnce()
     warn.mockRestore()
   })
 
   it('is not asked for by a task that is refused or delivered before', async () => {
     const ensure = vi.fn().mockResolvedValue(undefined)
     const refused = emptyDb()
-    refused.db.site.findFirst.mockResolvedValue(browserSite('client'))
     await expect(
-      callerOf(refused.prisma, withVault(ensure)).task.create({ ...ids, text: 'Добавьте новость' }),
-    ).rejects.toMatchObject({ cause: { code: 'TASK_NOT_ACCEPTED' } })
+      callerOf(refused.prisma, withVault(ensure)).task.create({
+        taskId: randomUUID(),
+        text: 'Добавьте новость',
+      }),
+    ).rejects.toMatchObject({ cause: { code: 'TASK_ID_INVALID' } })
 
     const repeated = emptyDb()
     repeated.db.task.findUnique.mockResolvedValue({
-      siteId: ids.siteId,
       createdById: user.id,
-      alias: 'zakaz',
       deletedAt: null,
     })
     await expect(
@@ -354,7 +297,7 @@ describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => 
         ...ids,
         text: 'Добавьте новость',
       }),
-    ).resolves.toEqual({ taskId: ids.taskId, alias: 'zakaz', created: false })
+    ).resolves.toEqual({ taskId: ids.taskId, created: false })
 
     expect(ensure).not.toHaveBeenCalled()
   })
@@ -386,7 +329,6 @@ describe('a file announced for a message', () => {
     const { db, prisma } = emptyDb()
     const refusal = await callerOf(prisma)
       .attachment.start({
-        siteId: ids.siteId,
         name: 'photo.jpg',
         size: 2048,
         type: 'image/jpeg',
@@ -399,19 +341,18 @@ describe('a file announced for a message', () => {
     })
     expect((refusal as Error).message.startsWith(start)).toBe(true)
     expect((refusal as Error).message.endsWith('.')).toBe(false)
-    expect(db.site.findFirst).not.toHaveBeenCalled()
+    expect(db.attachment.count).not.toHaveBeenCalled()
   })
 
   it('needs the dialogs of the process: nothing could store it otherwise', async () => {
     const { db, prisma } = emptyDb()
     await expect(
       callerOf(prisma, null).attachment.start({
-        siteId: ids.siteId,
         name: 'photo.jpg',
         size: 2048,
         type: 'image/jpeg',
       }),
     ).rejects.toMatchObject({ cause: { code: 'CHAT_NOT_CONFIGURED' } })
-    expect(db.site.findFirst).not.toHaveBeenCalled()
+    expect(db.attachment.count).not.toHaveBeenCalled()
   })
 })

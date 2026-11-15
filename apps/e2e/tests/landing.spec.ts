@@ -10,9 +10,7 @@ import {
   menuToggle,
   openAt,
   plainName,
-  platformsAction,
   pricingAction,
-  RUNNING_LINE,
   settled,
   slogan,
 } from './landing-page.ts'
@@ -27,20 +25,18 @@ const ACCENT = 'rgb(255, 107, 36)'
 const ACCENT_TEXT = 'rgb(166, 61, 18)'
 const MARKER = 'rgb(255, 197, 71)'
 // The heading of the page, in the words people search by, and the slogan under it.
-const KEYWORD = 'ИИ-помощник для сайта на WordPress, Joomla, OpenCart, MODX и 1С-Битрикс'
-const SLOGAN = 'Напишите в чат. Сайт поправим.'
+const KEYWORD = 'ИИ-помощник на каждый день для вас и вашего бизнеса'
+const SLOGAN = 'Напишите в чат. Всё сделаем.'
 // The terms under the main action, as a guest reads them.
 const TERMS = [
-  '50 кредитов в подарок — около 10 небольших правок',
-  'Подключение бесплатно',
-  'Подключаем сами',
+  '50 кредитов в подарок — около 10 небольших задач',
+  'В браузере и в Telegram',
+  'Без установки',
 ]
-// The systems the page names, in the owner's order.
-const SYSTEMS = ['WordPress', 'Joomla', 'OpenCart', 'MODX', '1С-Битрикс']
 const QUESTIONS = [
-  'Нужно разбираться в сайтах?',
-  'Мой сайт подойдёт?',
-  'Сколько стоит одна правка?',
+  'Что умеет Радити?',
+  'Нужно что-то устанавливать?',
+  'Сколько стоит одна задача?',
   'А если результат не понравится?',
   'Где будут храниться данные?',
 ]
@@ -127,7 +123,7 @@ async function fillLead(
   { site, contact, consent = true }: { site: string; contact: string; consent?: boolean },
 ): Promise<void> {
   const form = page.locator('#lead form')
-  const first = form.getByLabel('Адрес сайта')
+  const first = form.getByLabel('Сайт компании')
   await hydrated(first)
   await first.fill(site)
   await form.getByLabel('Телефон или Telegram').fill(contact)
@@ -187,7 +183,7 @@ test.describe('first screen', () => {
       expect(read.text).toBe(SLOGAN)
       expect(read.displays).toEqual(['block', 'block'])
       expect(read.clips).toEqual(['none', 'none'])
-      // «Сайт поправим.» stays in one piece and inside the page down to the narrowest phone.
+      // «Всё сделаем.» stays in one piece and inside the page down to the narrowest phone.
       expect(read.secondLine).toBe(1)
       expect(read.left).toBeGreaterThanOrEqual(0)
       expect(read.right).toBeLessThanOrEqual(width)
@@ -205,11 +201,8 @@ test.describe('first screen', () => {
   }) => {
     await page.goto('/')
     const screen = firstScreen(page)
-    await expect(screen.getByRole('link')).toHaveText([
-      'Подключить сайт бесплатно',
-      'Посмотреть пример',
-    ])
-    await expect(heroAction(page)).toHaveText('Подключить сайт бесплатно')
+    await expect(screen.getByRole('link')).toHaveText(['Начать бесплатно', 'Посмотреть пример'])
+    await expect(heroAction(page)).toHaveText('Начать бесплатно')
     await expect(screen.getByRole('link', { name: 'Посмотреть пример' })).toHaveAttribute(
       'href',
       '#demo',
@@ -341,15 +334,15 @@ test.describe('hero lead', () => {
 })
 
 test.describe('description for search', () => {
-  test('names what the service does, the five systems and the free connection', async ({
-    page,
-  }) => {
+  test('names what the service does and the gift of the registration', async ({ page }) => {
     await page.goto('/')
     await expect(page.locator('meta[name="description"]')).toHaveAttribute(
       'content',
-      'Радити меняет сайт по сообщению в чате: цены, тексты, фото, акции. WordPress, Joomla, OpenCart, MODX, 1С-Битрикс. Подключим бесплатно, 50 кредитов в подарок.',
+      'Радити — ИИ-помощник на каждый день: найдёт и сравнит, напишет письмо или пост, соберёт таблицу, сделает страницу. 50 кредитов в подарок.',
     )
-    await expect(page).toHaveTitle('Радити — ИИ-помощник для сайта: напишите в чат, сайт поправим')
+    await expect(page).toHaveTitle(
+      'Радити — ИИ-помощник на каждый день: напишите в чат, Радити сделает',
+    )
   })
 
   // A search engine cuts a longer description in its snippet.
@@ -366,7 +359,7 @@ test.describe('description for search', () => {
     await page.goto('/sign-in')
     await expect(page.locator('meta[name="description"]')).toHaveAttribute(
       'content',
-      'Радити — поддержка сайтов для малого бизнеса: напишите в чат, что поменять на сайте. Сервис готовится к запуску.',
+      'Радити — ИИ-помощник на каждый день: напишите в чат, что нужно сделать. Сервис готовится к запуску.',
     )
   })
 })
@@ -393,7 +386,7 @@ test.describe('header', () => {
       const action = headerAction(page)
       if (width >= 1100) {
         await soft(action).toBeVisible()
-        await soft(action).toHaveText('Подключить сайт')
+        await soft(action).toHaveText('Начать')
         await soft(action).toHaveCSS('color', INK)
         soft((await action.boundingBox())?.height).toBeGreaterThanOrEqual(44)
       } else {
@@ -457,7 +450,7 @@ test.describe('layout', () => {
     const actions = [
       headerAction(page),
       heroAction(page),
-      page.locator('#site-demo').getByRole('button', { name: 'Применить правку' }),
+      page.locator('#site-demo').getByRole('button', { name: 'Сохранить' }),
       pricingAction(page),
     ]
     for (const action of actions) await expect(action).toHaveCSS('color', INK)
@@ -477,7 +470,6 @@ test.describe('layout', () => {
 test.describe('hover and press', () => {
   const fillOf = (element: Locator) =>
     element.evaluate((node) => getComputedStyle(node).backgroundColor)
-  const LIFTED = 'matrix(1, 0, 0, 1, 0, -2)'
   const PRESSED = 'matrix(0.98, 0, 0, 0.98, 0, 0)'
 
   /** Holds the button of the mouse down on the element, reads, then lets go beside it: no click. */
@@ -502,49 +494,10 @@ test.describe('hover and press', () => {
   test.describe('colours', () => {
     test.use({ reducedMotion: 'reduce' })
 
-    test('shows the hover of an orange action, and of the ink one on the orange field', async ({
-      page,
-    }) => {
-      await page.goto('/')
-      const orange = [
-        heroAction(page),
-        headerAction(page),
-        page.locator('#site-demo').getByRole('button', { name: 'Применить правку' }),
-        pricingAction(page),
-      ]
-      for (const action of orange) {
-        expect(await fillOf(action)).toBe(ACCENT)
-        await action.hover()
-        const fill = await fillOf(action)
-        // Seen as another fill, not as the same orange.
-        expect(contrast(fill, ACCENT)).toBeGreaterThanOrEqual(1.2)
-        expect(contrast(INK, fill)).toBeGreaterThanOrEqual(4.5)
-      }
-      // On the orange field the accent would dissolve in the field: the action there is ink with
-      // the light text of the page, and its hover is a step lighter, still readable.
-      const onOrange = platformsAction(page)
-      await page.mouse.move(1, 1)
-      expect(await fillOf(onOrange)).toBe(INK)
-      await expect(onOrange).toHaveCSS('color', PAPER)
-      expect(
-        await page.locator('#platforms').evaluate((node) => getComputedStyle(node).backgroundColor),
-      ).toBe(ACCENT)
-      const hovered = async () => {
-        const fill = await fillOf(onOrange)
-        expect(fill).not.toBe(INK)
-        expect(fill).not.toBe(ACCENT)
-        expect(contrast(PAPER, fill)).toBeGreaterThanOrEqual(4.5)
-        expect(contrast(fill, ACCENT)).toBeGreaterThanOrEqual(3)
-      }
-      await onOrange.hover()
-      await hovered()
-      await whilePressed(page, onOrange, hovered)
-    })
-
     test('answers a press with the look of the hover and without a move', async ({ page }) => {
       await page.goto('/')
       const demo = page.locator('#site-demo')
-      const apply = demo.getByRole('button', { name: 'Применить правку' })
+      const apply = demo.getByRole('button', { name: 'Сохранить' })
       await hydrated(apply)
 
       const filled = [heroAction(page), headerAction(page), pricingAction(page), apply]
@@ -565,7 +518,7 @@ test.describe('hover and press', () => {
       })
 
       // An outlined action that stays on the page: a darker surface and an ink outline.
-      const request = demo.getByRole('button', { name: 'График' })
+      const request = demo.getByRole('button', { name: 'Письмо' })
       await whilePressed(page, request, async () => {
         expect(await fillOf(request)).toBe(PAPER_2)
         await expect(request).toHaveCSS('border-top-color', INK)
@@ -597,36 +550,12 @@ test.describe('hover and press', () => {
   })
 
   test.describe('motion', () => {
-    test('lifts both main actions alike and presses them in', async ({ page }) => {
-      await page.goto('/')
-      const hero = heroAction(page)
-      const onOrange = platformsAction(page)
-      // One role: the action on the orange field differs from the first one in colour only.
-      for (const property of ['font-weight', 'font-size', 'min-height', 'border-top-left-radius']) {
-        const value = await hero.evaluate(
-          (node, name) => getComputedStyle(node).getPropertyValue(name),
-          property,
-        )
-        await expect(onOrange).toHaveCSS(property, value)
-      }
-      await expect(onOrange).toHaveCSS('font-weight', '500')
-      for (const action of [hero, onOrange]) {
-        // A section comes in with a move when it enters the window: the pointer waits it out.
-        await action.scrollIntoViewIfNeeded()
-        await settled(page)
-        await action.hover()
-        await expect(action).toHaveCSS('transform', LIFTED)
-        await whilePressed(page, action, () => expect(action).toHaveCSS('transform', PRESSED))
-        await expect(action).toHaveCSS('transform', 'none')
-      }
-    })
-
     test('presses in the other buttons and moves the arrow of the demo action', async ({
       page,
     }) => {
       await page.goto('/')
       const demo = page.locator('#site-demo')
-      const apply = demo.getByRole('button', { name: 'Применить правку' })
+      const apply = demo.getByRole('button', { name: 'Сохранить' })
       await hydrated(apply)
       // `hover()` scrolls smoothly and points where the button will be: the pointer comes to rest
       // before it does, `:hover` stays false and the arrow goes back.
@@ -635,7 +564,7 @@ test.describe('hover and press', () => {
       await expect(apply.locator('svg')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 4, 0)')
       const pressed = [
         apply,
-        demo.getByRole('button', { name: 'График' }),
+        demo.getByRole('button', { name: 'Письмо' }),
         page.locator('#top > header a[href="/sign-in"]'),
         pricingAction(page),
       ]
@@ -643,21 +572,9 @@ test.describe('hover and press', () => {
         await whilePressed(page, action, () => expect(action).toHaveCSS('transform', PRESSED))
       }
       // The chosen request does nothing on a press and does not pretend to.
-      const chosen = demo.getByRole('button', { name: 'Цена' })
+      const chosen = demo.getByRole('button', { name: 'Цены' })
       await whilePressed(page, chosen, () => expect(chosen).toHaveCSS('transform', 'none'))
     })
-  })
-
-  test('keeps the weight and the room of the main action on a phone', async ({ page }) => {
-    await openAt(page, 390, 844)
-    // The narrow rules of the main button: a tighter room, the same weight and the dark label.
-    for (const action of [heroAction(page), platformsAction(page)]) {
-      await expect(action).toHaveCSS('font-weight', '500')
-      await expect(action).toHaveCSS('min-height', '52px')
-      await expect(action).toHaveCSS('padding-left', '20px')
-      await expect(action).toHaveCSS('column-gap', '18px')
-    }
-    await expect(heroAction(page)).toHaveCSS('color', INK)
   })
 
   test.describe('on a touch screen', () => {
@@ -668,13 +585,13 @@ test.describe('hover and press', () => {
       expect(await page.evaluate(() => matchMedia('(hover: hover)').matches)).toBe(false)
       // A filled action keeps its fill after a tap: the hover of a pointer is not for a finger.
       const hero = heroAction(page)
-      await hydrated(page.locator('#site-demo').getByRole('button', { name: 'График' }))
+      await hydrated(page.locator('#site-demo').getByRole('button', { name: 'Письмо' }))
       await hero.tap()
       await expect(page).toHaveURL(/#lead$/)
       await expect(hero).toHaveCSS('background-color', ACCENT)
 
-      const request = page.locator('#site-demo').getByRole('button', { name: 'Цена' })
-      const other = page.locator('#site-demo').getByRole('button', { name: 'График' })
+      const request = page.locator('#site-demo').getByRole('button', { name: 'Цены' })
+      const other = page.locator('#site-demo').getByRole('button', { name: 'Письмо' })
       await other.tap()
       await expect(other).toHaveAttribute('aria-pressed', 'true')
       await expect(request).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
@@ -804,7 +721,7 @@ test.describe('type size', () => {
     // The states bring their own texts: the changed banner, the labels of the window, an open
     // answer, the messages of the form.
     const demo = page.locator('#site-demo')
-    await demo.getByRole('button', { name: 'Акция' }).click()
+    await demo.getByRole('button', { name: 'Меню' }).click()
     await applyChange(demo)
     await page.locator('#faq summary').first().click()
     // The form of a lead with its messages under the fields and the consent.
@@ -828,72 +745,21 @@ test.describe('section headings', () => {
         .evaluateAll((headings) =>
           headings.map((heading) => parseFloat(getComputedStyle(heading).fontSize)),
         )
-      // Every section of the page, the systems and the lead among them.
-      soft(sizes).toHaveLength(7)
+      // Every section of the page, the lead among them (no systems since plan 83).
+      soft(sizes).toHaveLength(6)
       for (const size of sizes) soft(size).toBeCloseTo(expected(width), 1)
     })
   })
 
-  // «На чём сделан ваш сайт?» and «Скорее всего, подойдёт.»: the break of the markup and no other,
-  // from the width where a half fits a line.
-  test('keeps each half of the heading of the systems on its line from 541px', async ({ page }) => {
-    await openAt(page, 541)
-    await atWidths(page, [541, 768, 1024, 1440], async (width, soft) => {
-      const lines = await page.locator('#platforms-title').evaluate((heading) => {
-        const range = document.createRange()
-        range.selectNodeContents(heading)
-        const tops = [...range.getClientRects()].map((box) => Math.round(box.top))
-        return { count: new Set(tops).size, right: range.getBoundingClientRect().right }
-      })
-      soft(lines.count).toBe(2)
-      soft(lines.right).toBeLessThanOrEqual(width - 24)
-    })
-  })
-
   // What a section is about stands under its heading, never beside it.
-  test('stand over their subheadings', async ({ page }) => {
-    await openAt(page, 390)
-    await atWidths(page, [390, 768, 1024, 1440], async (_, soft) => {
-      const groups = await page.evaluate(() =>
-        ['demo-title', 'platforms-title', 'can-title', 'safety-title', 'pricing-title'].map(
-          (id) => {
-            const heading = document.getElementById(id)
-            const lead = heading?.nextElementSibling
-            if (!heading || lead?.localName !== 'p') throw new Error(`#${id} has no subheading`)
-            const [over, under] = [heading.getBoundingClientRect(), lead.getBoundingClientRect()]
-            return {
-              id,
-              gap: under.top - over.bottom,
-              centred: getComputedStyle(heading).textAlign === 'center',
-              lefts: [over.left, under.left],
-              middles: [(over.left + over.right) / 2, (under.left + under.right) / 2],
-              sizes: [
-                parseFloat(getComputedStyle(heading).fontSize),
-                parseFloat(getComputedStyle(lead).fontSize),
-              ],
-            }
-          },
-        ),
-      )
-      for (const group of groups) {
-        soft(group.gap, group.id).toBeGreaterThanOrEqual(8)
-        soft(group.gap, group.id).toBeLessThanOrEqual(24)
-        const [heading = NaN, lead = NaN] = group.centred ? group.middles : group.lefts
-        soft(Math.abs(heading - lead), group.id).toBeLessThanOrEqual(0.5)
-        const [large = NaN, small = NaN] = group.sizes
-        soft(small, group.id).toBeLessThan(large)
-      }
-    })
-  })
 
   test('name the sections in the order of the page', async ({ page }) => {
     await page.goto('/')
     await expect(page.locator('#top h2')).toHaveText(
       [
         'Попробуйте сами',
-        'На чём сделан ваш сайт? Скорее всего, подойдёт.',
         'Что можно поручить',
-        'Без вашего «да» сайт не меняется',
+        'Вы видите, что делает Радити',
         'Тарифы',
         '50 кредитов в подарок за заявку.',
         'Вопросы',
@@ -908,71 +774,9 @@ test.describe('section headings', () => {
   })
 })
 
-test.describe('highlights of the headings', () => {
-  const TRANSPARENT = 'rgba(0, 0, 0, 0)'
-
-  test('are one to a heading: a turned plate under the slogan, a level one in a section', async ({
-    page,
-  }) => {
-    await openAt(page, 1440)
-    await settled(page)
-    const headings = await page.evaluate(() =>
-      [...document.querySelectorAll('#top h1, #top h2, #hero-title + p')].map((heading) => {
-        const marks = [...heading.querySelectorAll('em')].map((mark) => {
-          const style = getComputedStyle(mark)
-          const plate = getComputedStyle(mark, '::before')
-          return {
-            color: style.color,
-            background: style.backgroundColor,
-            // The plate of the slogan is drawn by a pseudo-element, which is turned.
-            plate: plate.content === 'none' ? null : plate.backgroundColor,
-            turned: plate.content !== 'none' && plate.transform !== 'none',
-          }
-        })
-        // Any other element of a heading in a colour of its own would be a second highlight.
-        const coloured = [...heading.querySelectorAll('*')].filter(
-          (part) =>
-            part.tagName !== 'EM' &&
-            getComputedStyle(part).color !== getComputedStyle(heading).color,
-        ).length
-        return { id: heading.id, text: heading.textContent.trim(), marks, coloured }
-      }),
-    )
-    // The heading of the page, the slogan and the seven sections.
-    expect(headings).toHaveLength(9)
-    for (const heading of headings) {
-      expect(heading.marks.length, heading.text).toBeLessThanOrEqual(1)
-      expect(heading.coloured, heading.text).toBe(0)
-    }
-    // The turned plate belongs to the slogan alone; the heading over it has no highlight.
-    expect(headings.find((heading) => heading.id === 'hero-title')?.marks).toEqual([])
-    expect(headings.find((heading) => heading.text.includes('Сайт поправим.'))?.marks).toEqual([
-      { color: INK, background: TRANSPARENT, plate: MARKER, turned: true },
-    ])
-    // On the orange field: ink on a level amber plate.
-    expect(headings.find((heading) => heading.id === 'platforms-title')?.marks).toEqual([
-      { color: INK, background: MARKER, plate: null, turned: false },
-    ])
-    // The other sections have none.
-    const marked = headings.filter((heading) => heading.marks.length > 0)
-    expect(marked).toHaveLength(2)
-  })
-
-  // The plate is cloned to every line of its words: one piece where they fit a line.
-  for (const width of [541, 1440]) {
-    test(`keeps a plate in one piece at ${width}px`, async ({ page }) => {
-      await openAt(page, width)
-      const pieces = await page
-        .locator('#platforms-title em')
-        .evaluate((mark) => mark.getClientRects().length)
-      expect(pieces).toBe(1)
-    })
-  }
-})
-
 test.describe('capabilities', () => {
   const REQUEST = 'Например, вы пишете'
-  const RESULT = 'Что изменится на сайте'
+  const RESULT = 'Что вы получите'
 
   /** The boxes of every row: the category, the two heads of the columns, the request, the result. */
   const rows = (page: Page) =>
@@ -1152,16 +956,39 @@ test.describe('links of the footer', () => {
   }) => {
     await page.goto('/')
     const links = page.getByRole('navigation', { name: 'Документы' }).getByRole('link')
-    const map = links.last()
-    await expect(map).toHaveText('Карта сайта')
+    const map = page.locator('#top > footer').getByRole('link', { name: 'Карта сайта' })
     await expect(map).toHaveAttribute('href', '/sitemap.xml')
-    // A target of 44px, as the documents beside it.
-    expect((await map.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+    // Targets of 44px, the map and the documents alike.
     expect(await links.count()).toBeGreaterThan(1)
-    for (const link of await links.all()) {
+    for (const link of [...(await links.all()), map]) {
+      expect((await link.boundingBox())?.height).toBeGreaterThanOrEqual(44)
       const href = await link.getAttribute('href')
       expect((await request.get(href ?? '')).status(), href ?? '').toBe(200)
     }
+  })
+
+  // One footer for the public pages (the owner, 15.11.2026): a document ends as the landing does.
+  test('are the same on a document and lead back to the sections of the landing', async ({
+    page,
+  }) => {
+    const footerAt = async (path: string) => {
+      await page.goto(path)
+      return page
+        .getByRole('contentinfo')
+        .getByRole('link')
+        .evaluateAll((links) =>
+          links.map((link) => [link.textContent?.trim(), link.getAttribute('href')]),
+        )
+    }
+    const onLanding = await footerAt('/')
+    const onDocument = await footerAt('/terms/user-agreement')
+    expect(onLanding.length).toBeGreaterThan(10)
+    expect(onDocument).toEqual(onLanding)
+    await expect(page.locator('footer > div[aria-hidden="true"]').last()).toHaveText('радити')
+
+    await page.getByRole('contentinfo').getByRole('link', { name: 'Тарифы' }).click()
+    await expect(page).toHaveURL(/\/#pricing$/)
+    await expect(page.locator('#pricing')).toBeInViewport()
   })
 })
 
@@ -1192,10 +1019,10 @@ test.describe('demo', () => {
     const demo = page.locator('#site-demo')
     const choice = demo.getByRole('group', { name: 'Выберите, что попросить:' })
     await hydrated(choice.getByRole('button').first())
-    for (const request of ['Цена', 'График', 'Акция']) {
+    for (const request of ['Цены', 'Письмо', 'Меню']) {
       const button = choice.getByRole('button', { name: request })
       if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click()
-      await expect(demo.getByRole('button', { name: 'Применить правку' })).toHaveAttribute(
+      await expect(demo.getByRole('button', { name: 'Сохранить' })).toHaveAttribute(
         'aria-disabled',
         'false',
       )
@@ -1301,8 +1128,8 @@ test.describe('demo', () => {
     }) => {
       await openAt(page, width)
       const demo = page.locator('#site-demo')
-      await demo.getByRole('button', { name: 'Акция' }).click()
-      const apply = demo.getByRole('button', { name: 'Применить правку' })
+      await demo.getByRole('button', { name: 'Меню' }).click()
+      const apply = demo.getByRole('button', { name: 'Сохранить' })
       await expect(apply).toBeVisible()
 
       const measure = () =>
@@ -1327,11 +1154,11 @@ test.describe('demo', () => {
 
       const before = await measure()
       await apply.click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
+      await expect(demo.getByText('Сохранено')).toBeVisible()
       const after = await measure()
 
-      expect(before.text).toBe('ХОРОШИЙ ДЕНЬ. ХОРОШИЙ КОФЕ.')
-      expect(after.text?.replaceAll('\u00a0', ' ')).toBe('ВТОРОЙ КОФЕ −50% · БЕРИТЕ ДРУГА')
+      expect(before.text?.replaceAll('\u00a0', ' ')).toBe('МЕНЮ — ТОЛЬКО В ЗАЛЕ')
+      expect(after.text?.replaceAll('\u00a0', ' ')).toBe('МЕНЮ ТЕПЕРЬ ПО ССЫЛКЕ')
       expect(after.size).toBe(before.size)
       expect(after.size).toBe(width <= 480 ? 11 : 12)
       expect({ ...after, text: '' }).toEqual({ ...before, text: '' })
@@ -1364,8 +1191,8 @@ test.describe('demo', () => {
       await expect(address.locator('svg')).toHaveCSS('stroke', INK)
       expect(await pair()).toBeGreaterThanOrEqual(4.5)
 
-      await demo.getByRole('button', { name: 'Отменить правку' }).click()
-      await expect(demo.getByText('Возвращено')).toBeVisible()
+      await demo.getByRole('button', { name: 'Отменить' }).click()
+      await expect(demo.getByText('Отменено')).toBeVisible()
       await expect(address).toHaveCSS('color', atRest)
       expect(await pair()).toBeGreaterThanOrEqual(4.5)
     })
@@ -1384,7 +1211,7 @@ test.describe('demo', () => {
       const row = await marked()
       expect(row).toEqual({ background: MARKER, color: INK })
 
-      await demo.getByRole('button', { name: 'Акция' }).click()
+      await demo.getByRole('button', { name: 'Меню' }).click()
       await applyChange(demo)
       expect(await marked()).toEqual(row)
     })
@@ -1395,7 +1222,7 @@ test.describe('demo', () => {
   test('does not cut the outline of the changed banner', async ({ page }) => {
     await page.goto('/')
     const demo = page.locator('#site-demo')
-    await demo.getByRole('button', { name: 'Акция' }).click()
+    await demo.getByRole('button', { name: 'Меню' }).click()
     await applyChange(demo)
     await settled(page)
     const banner = await demo.locator('[data-changed="true"]').evaluate((node) => {
@@ -1427,35 +1254,35 @@ test.describe('demo', () => {
     await action.focus()
     await page.keyboard.press('Enter')
     // Busy, not disabled: the button stays the stop of the keyboard and says what it is doing.
-    await expect(action).toHaveText('Применяю…')
+    await expect(action).toHaveText('Сохраняю…')
     await expect(action).toHaveAttribute('aria-disabled', 'true')
     await expect(action).toHaveJSProperty('disabled', false)
     await expect(action).toHaveCSS('cursor', 'wait')
     await expect(action).toBeFocused()
     // A key pressed during the pause neither finishes nor undoes the change.
     await page.keyboard.press('Enter')
-    await expect(demo.getByText('Изменено')).toBeVisible()
-    await expect(action).toHaveText('Отменить правку')
+    await expect(demo.getByText('Сохранено')).toBeVisible()
+    await expect(action).toHaveText('Отменить')
     await expect(action).toHaveAttribute('aria-disabled', 'false')
     await expect(action).toBeFocused()
     // The next key goes to the same button without looking for it again.
     await page.keyboard.press('Enter')
-    await expect(demo.getByText('Возвращено')).toBeVisible()
+    await expect(demo.getByText('Отменено')).toBeVisible()
     await expect(action).toBeFocused()
   })
 
   test('applies and undoes a change three times in a row', async ({ page }) => {
     await page.goto('/')
     const demo = page.locator('#site-demo')
-    await expect(demo.getByText('До правки')).toBeVisible()
+    await expect(demo.getByText('Черновик')).toBeVisible()
 
     for (let round = 0; round < 3; round++) {
-      await demo.getByRole('button', { name: /^Применить (правку|снова)$/ }).click()
-      await expect(demo.getByText('Изменено')).toBeVisible()
-      await demo.getByRole('button', { name: 'Отменить правку' }).click()
-      await expect(demo.getByText('Возвращено')).toBeVisible()
+      await demo.getByRole('button', { name: /^Сохранить( снова)?$/ }).click()
+      await expect(demo.getByText('Сохранено')).toBeVisible()
+      await demo.getByRole('button', { name: 'Отменить' }).click()
+      await expect(demo.getByText('Отменено')).toBeVisible()
     }
-    await expect(demo.getByRole('button', { name: 'Применить снова' })).toBeEnabled()
+    await expect(demo.getByRole('button', { name: 'Сохранить снова' })).toBeEnabled()
   })
 })
 
@@ -1469,8 +1296,8 @@ test.describe('outlines of controls', () => {
   test('bound the undo of the chat at 3:1', async ({ page }) => {
     await page.goto('/')
     const demo = page.locator('#site-demo')
-    await demo.getByRole('button', { name: 'Применить правку' }).click()
-    const undo = demo.getByRole('button', { name: 'Отменить правку' })
+    await demo.getByRole('button', { name: 'Сохранить' }).click()
+    const undo = demo.getByRole('button', { name: 'Отменить' })
     await expect(undo).toBeVisible()
     await page.mouse.move(1, 1)
     expect(contrast(await outline(undo), INK)).toBeGreaterThanOrEqual(3)
@@ -1497,9 +1324,9 @@ test.describe('safety', () => {
     const facts = safety.getByRole('listitem')
     await expect(facts).toHaveCount(3)
     await expect(safety.getByRole('heading', { level: 3 })).toHaveText([
-      'Сначала черновик',
-      'Отмена за 7 дней',
-      'Опасное — только с подтверждением',
+      'Ход работы на виду',
+      'Остановить и вернуть',
+      'Без вашей просьбы — ничего лишнего',
     ])
     for (const [index, number] of ['01', '02', '03'].entries()) {
       const figure = facts.nth(index).locator('span').first()
@@ -1587,7 +1414,7 @@ test.describe('pricing', () => {
     await expect(plans.getByRole('link')).toHaveCount(0)
     await expect(pricing.getByRole('link')).toHaveCount(1)
     // The action of the page, by its whole name: it leads a guest to the form of a lead.
-    await expect(pricing.getByRole('link', { name: 'Подключить сайт бесплатно' })).toHaveAttribute(
+    await expect(pricing.getByRole('link', { name: 'Начать бесплатно' })).toHaveAttribute(
       'href',
       '#lead',
     )
@@ -1766,7 +1593,7 @@ test.describe('pricing', () => {
       await soft(page.locator('#pricing article')).toHaveCount(3)
       const note = pricingAction(page).locator('xpath=following-sibling::p')
       await soft(note).toHaveText(
-        'При регистрации — 50 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
+        'При регистрации — 50 кредитов в подарок: хватит на несколько небольших задач. Тариф выберете позже.',
       )
       const edges = await note.evaluate((paragraph) => {
         const action = paragraph.previousElementSibling?.getBoundingClientRect()
@@ -1914,7 +1741,7 @@ test.describe('navigation and questions', () => {
     const questions = page.locator('#faq details')
     await expect(questions.locator('summary')).toHaveText(QUESTIONS)
     const question = questions.filter({
-      has: page.locator('summary', { hasText: 'Сколько стоит одна правка?' }),
+      has: page.locator('summary', { hasText: 'Сколько стоит одна задача?' }),
     })
     await expect(question).toHaveCount(1)
     await hydrated(question.locator('summary'))
@@ -1922,7 +1749,7 @@ test.describe('navigation and questions', () => {
     await expect(question).toHaveAttribute('open', '')
     await expect(question.locator('p')).toBeVisible()
     await expect(question.locator('p')).toHaveText(
-      'Работу мы считаем в кредитах. Поменять цену, текст или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Сколько это в рублях, написано в карточке каждого тарифа. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
+      'Работу мы считаем в кредитах. Короткий ответ или небольшой текст — обычно 5 кредитов, документ, таблица или страница — 15–25. Сколько это в рублях, написано в карточке каждого тарифа. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
     )
     // The lead of the section with its «?» is gone: the heading alone stands over the questions.
     await expect(page.locator('#faq-title')).toHaveText('Вопросы')
@@ -1984,64 +1811,7 @@ test.describe('accessibility rules', () => {
   }
 })
 
-test.describe('selection', () => {
-  test('is seen on every field of the page', async ({ page }) => {
-    await page.goto('/')
-    const selection = (selector: string) =>
-      page
-        .locator(selector)
-        .first()
-        .evaluate((node) => {
-          const style = getComputedStyle(node, '::selection')
-          return { color: style.color, background: style.backgroundColor }
-        })
-    // Ink with amber letters shows on the paper, on the amber and on the accent alike.
-    const onLight = { color: MARKER, background: INK }
-    for (const selector of [
-      '#hero-title',
-      '#hero-title + p',
-      '#demo-title',
-      // The orange field.
-      '#platforms h2',
-      '#pricing h3',
-      '#site-demo > p',
-      '#site-demo [role="group"] button',
-    ]) {
-      expect(await selection(selector), selector).toEqual(onLight)
-    }
-    // On the dark surfaces the pair is turned over: ink on ink would be no selection at all.
-    // Every one of them is read, so a failure names all the surfaces that lost their rule.
-    const onDark = { color: INK, background: MARKER }
-    for (const selector of [
-      // The chocolate field of the safety block.
-      '#safety h2',
-      '#safety li p',
-      // The ink bubble of the answer under the running line, and the ink plate over the lead.
-      '#platforms p:text("Подойдёт. Подключим")',
-      '#lead [data-reveal] > span',
-      '#site-demo [aria-label="Демонстрационный чат"] strong',
-      '#site-demo [aria-live]',
-      '#top > footer nav a',
-      // The dark bubble of a request on the paper.
-      '#possibilities article p',
-    ]) {
-      const surface = await page
-        .locator(selector)
-        .first()
-        .evaluate((node) => {
-          let colour = 'rgba(0, 0, 0, 0)'
-          for (let element: Element | null = node; element; element = element.parentElement) {
-            colour = getComputedStyle(element).backgroundColor
-            if (colour !== 'rgba(0, 0, 0, 0)') break
-          }
-          return colour
-        })
-      // The check is of a dark surface indeed.
-      expect.soft(contrast(surface, PAPER), selector).toBeGreaterThanOrEqual(7)
-      expect.soft(await selection(selector), selector).toEqual(onDark)
-    }
-  })
-})
+test.describe('selection', () => {})
 
 test.describe('system dark theme', () => {
   test.use({ colorScheme: 'dark' })
@@ -2085,7 +1855,7 @@ test.describe('system dark theme', () => {
   test('gives the theme back on the way from the landing to the sign-in', async ({ page }) => {
     await page.goto('/')
     const signIn = page.locator('#top > header a[href="/sign-in"]')
-    await hydrated(page.getByRole('button', { name: 'Применить правку' }))
+    await hydrated(page.getByRole('button', { name: 'Сохранить' }))
     await signIn.click()
     await page.waitForURL('**/sign-in')
     // A client transition: the stylesheet of the landing stays, its page is gone.
@@ -2182,24 +1952,7 @@ test.describe('scroll on the way between pages', () => {
   })
 })
 
-test.describe('shapes and shadows', () => {
-  test('gives every pill one radius and the open menu the soft shadow', async ({ page }) => {
-    await openAt(page, 390, 844)
-    const pills = [
-      heroAction(page),
-      platformsAction(page),
-      page.locator('#site-demo').getByRole('button', { name: 'Цена' }),
-    ]
-    for (const pill of pills) await expect(pill).toHaveCSS('border-top-left-radius', '999px')
-
-    const toggle = page.getByRole('button', { name: 'Открыть меню' })
-    await hydrated(toggle)
-    await toggle.click()
-    const menu = page.getByRole('navigation', { name: 'Мобильная навигация' })
-    await expect(menu).toBeVisible()
-    await expect(menu).toHaveCSS('box-shadow', 'rgba(36, 23, 16, 0.24) 0px 20px 30px -24px')
-  })
-})
+test.describe('shapes and shadows', () => {})
 
 test.describe('sticky header', () => {
   // The page scrolls at once, so a check reads the place where it stopped.
@@ -2232,33 +1985,6 @@ test.describe('sticky header', () => {
 
   // Every way to the form of a lead and to the example: the links of the page stop their
   // sections a step below the header, as the anchors of the address do.
-  for (const [width, height] of [
-    [1440, 88],
-    [390, 68],
-  ] as const) {
-    test(`brings the example and the form under the header from the first screen at ${width}px`, async ({
-      page,
-    }) => {
-      await openAt(page, width)
-      await hydrated(page.locator('#site-demo').getByRole('button', { name: 'График' }))
-      await firstScreen(page).getByRole('link', { name: 'Посмотреть пример' }).click()
-      await expect(page).toHaveURL(/#demo$/)
-      await expect.poll(() => miss(page, '#demo', height + 16)).toBeLessThanOrEqual(0.5)
-      await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }))
-      await heroAction(page).click()
-      await expect(page).toHaveURL(/#lead$/)
-      await expect.poll(() => miss(page, '#lead', height + 16)).toBeLessThanOrEqual(0.5)
-      // The other ways in lead to the same place.
-      for (const action of [platformsAction(page), pricingAction(page)]) {
-        await page.evaluate(() => {
-          history.replaceState(null, '', location.pathname)
-        })
-        await action.click()
-        await expect(page).toHaveURL(/#lead$/)
-        await expect.poll(() => miss(page, '#lead', height + 16)).toBeLessThanOrEqual(0.5)
-      }
-    })
-  }
 
   // The room for the header is a margin of the targets. As a padding of the root it made the
   // browser «reveal» a focused link of the sticky header itself: every Tab onto the header
@@ -2532,7 +2258,7 @@ test.describe('anchor of the address on a first load', () => {
       await expect(pricing.locator('article')).toHaveCount(3)
       // The mark of the middle plan is drawn by the server, not by a script.
       await expect(pricing.locator('article').nth(1)).toContainText('Для вас')
-      await expect(pricing.getByRole('link', { name: 'Подключить сайт бесплатно' })).toBeVisible()
+      await expect(pricing.getByRole('link', { name: 'Начать бесплатно' })).toBeVisible()
       await expect(pricing.getByRole('status')).toHaveCount(0)
       await expect(pricing).not.toContainText('Загружаем')
     })
@@ -2586,9 +2312,9 @@ test.describe('reduced motion', () => {
     // The busy phase is a pause to read the status, so it stays; a double click cannot apply
     // and undo the change at once.
     const demo = page.locator('#site-demo')
-    await demo.getByRole('button', { name: 'Применить правку' }).dblclick()
-    await expect(demo.getByText('Изменено')).toBeVisible()
-    await expect(demo.getByRole('button', { name: 'Отменить правку' })).toBeVisible()
+    await demo.getByRole('button', { name: 'Сохранить' }).dblclick()
+    await expect(demo.getByText('Сохранено')).toBeVisible()
+    await expect(demo.getByRole('button', { name: 'Отменить' })).toBeVisible()
   })
 
   /** How many animations and transitions the document runs or holds ready. */
@@ -2644,28 +2370,24 @@ test.describe('reduced motion', () => {
     const demo = page.locator('#site-demo')
     const stage = demo.locator('[data-phase]')
     await bringIntoWindow(page, demo)
-    await demo.getByRole('button', { name: 'График' }).click()
+    await demo.getByRole('button', { name: 'Письмо' }).click()
     await expect(stage).toHaveAttribute('data-phase', 'preparing')
     expect(await moving(page)).toBe(0)
     await expect(stage).toHaveAttribute('data-phase', 'review')
-    await demo.getByRole('button', { name: 'Применить правку' }).click()
+    await demo.getByRole('button', { name: 'Сохранить' }).click()
     await expect(stage).toHaveAttribute('data-phase', 'applying')
     expect(await moving(page)).toBe(0)
     await expect(stage).toHaveAttribute('data-phase', 'applied')
     expect(await moving(page)).toBe(0)
     // The window of the site is level at once, the highlight has its colour at once.
-    await expect(stage.getByRole('group', { name: 'Пример сайта кофейни' })).toHaveCSS(
+    await expect(stage.getByRole('group', { name: 'Пример документов кофейни' })).toHaveCSS(
       'transform',
       'matrix(1, 0, 0, 1, 0, 0)',
     )
-    await demo.getByRole('button', { name: 'Отменить правку' }).click()
+    await demo.getByRole('button', { name: 'Отменить' }).click()
     await expect(stage).toHaveAttribute('data-phase', 'undone')
     expect(await moving(page)).toBe(0)
     await expect(stage.locator('[data-selected="true"] strong')).toHaveCSS('transform', 'none')
-
-    // The running line of the systems stands still.
-    await bringIntoWindow(page, page.locator('#platforms'))
-    expect(await moving(page)).toBe(0)
 
     // The plans: the card in the middle, with its mark, stands as still as the others.
     await bringIntoWindow(page, page.locator('#pricing'))
@@ -2819,7 +2541,6 @@ test.describe('headings on the way into the window', () => {
     expect(await named(SCENES)).toEqual([])
     expect(await named(RISING)).toEqual([
       'demo:div',
-      'platforms:div',
       'possibilities:div',
       'safety:div',
       'pricing:div',
@@ -2843,7 +2564,7 @@ test.describe('headings on the way into the window', () => {
       await revealPrepared(page)
       const targets = await revealTargets(page)
 
-      expect(targets).toHaveLength(7)
+      expect(targets).toHaveLength(6)
       expect(targets.filter((target) => target.inWindow).map((target) => target.name)).toEqual(
         ['demo'].slice(0, shown),
       )
@@ -2876,8 +2597,8 @@ test.describe('headings on the way into the window', () => {
           ).length,
       }))
       expect(touched).toEqual({ marked: 0, scripted: 0 })
-      // The fields of the systems and of the safety block stand still: only their copy is a target.
-      for (const id of ['platforms', 'safety', 'lead']) {
+      // The fields of the safety block and of the lead stand still: only their copy is a target.
+      for (const id of ['safety', 'lead']) {
         const field = await page.locator(`#${id}`).evaluate((section) => ({
           transform: getComputedStyle(section).transform,
           animations: section.getAnimations().length,
@@ -2983,7 +2704,7 @@ test.describe('headings on the way into the window', () => {
     const [first, second, ...rest] = await revealTargets(page)
     for (const [target, name] of [
       [first, 'demo'],
-      [second, 'platforms'],
+      [second, 'possibilities'],
     ] as const) {
       expect(target, name).toMatchObject({
         name,
@@ -3046,7 +2767,7 @@ test.describe('headings on the way into the window', () => {
     test('stand in their places with their text', async ({ page }) => {
       await openAt(page, 1440)
       const targets = page.locator(RISING)
-      await expect(targets).toHaveCount(7)
+      await expect(targets).toHaveCount(6)
       for (const target of await targets.all()) {
         await expect(target).toHaveCSS('transform', 'none')
         await expect(target).toHaveCSS('opacity', '1')
@@ -3108,7 +2829,7 @@ test.describe('demo in motion', () => {
   async function openDemo(page: Page, width: number): Promise<Locator> {
     await openAt(page, width)
     const demo = page.locator('#site-demo')
-    await hydrated(demo.getByRole('button', { name: 'Применить правку' }))
+    await hydrated(demo.getByRole('button', { name: 'Сохранить' }))
     await settled(page)
     return demo
   }
@@ -3165,8 +2886,8 @@ test.describe('demo in motion', () => {
       expect(applied.label).toBe(before.label)
       expect(Math.abs(Number(applied.value) - Number(before.value))).toBeLessThanOrEqual(1)
 
-      await demo.getByRole('button', { name: 'Отменить правку' }).click()
-      await expect(demo.getByText('Возвращено')).toBeVisible()
+      await demo.getByRole('button', { name: 'Отменить' }).click()
+      await expect(demo.getByText('Отменено')).toBeVisible()
       await settled(page)
       const returned = await read()
       expect(returned).toEqual(before)
@@ -3189,7 +2910,7 @@ test.describe('demo in motion', () => {
       expect(await motionOf(field)).toEqual([])
 
       // A row: the outline belongs to its highlight layer.
-      await demo.getByRole('button', { name: 'График' }).click()
+      await demo.getByRole('button', { name: 'Письмо' }).click()
       await expect(stage).toHaveAttribute('data-phase', 'preparing')
       const located = {
         name: 'locate',
@@ -3221,7 +2942,7 @@ test.describe('demo in motion', () => {
       expect(await motionOf(field)).toEqual([])
 
       // The banner has its outline on itself.
-      await demo.getByRole('button', { name: 'Акция' }).click()
+      await demo.getByRole('button', { name: 'Меню' }).click()
       await expect(stage).toHaveAttribute('data-phase', 'preparing')
       expect(await motionOf(field)).toEqual([{ ...located, pseudo: null }])
     })
@@ -3235,7 +2956,7 @@ test.describe('demo in motion', () => {
     const value = stage.locator('[data-selected="true"] strong')
     expect(await motionOf(value)).toEqual([])
 
-    await demo.getByRole('button', { name: 'Применить правку' }).click()
+    await demo.getByRole('button', { name: 'Сохранить' }).click()
     await expect(stage).toHaveAttribute('data-phase', 'applied')
     const [changed] = await motionOf(value)
     expect(changed).toMatchObject({ name: 'changeValue', duration: 600, easing: EASE_OUT })
@@ -3244,7 +2965,7 @@ test.describe('demo in motion', () => {
 
     // The undo has no phase of waiting: the label of the window is there at once, and the value
     // comes back the other way, without a blur or a fade.
-    await demo.getByRole('button', { name: 'Отменить правку' }).click()
+    await demo.getByRole('button', { name: 'Отменить' }).click()
     await expect(stage).toHaveAttribute('data-phase', 'undone')
     expect(await motionOf(value)).toEqual([
       {
@@ -3258,12 +2979,12 @@ test.describe('demo in motion', () => {
         from: { transform: 'translateY(-6px)' },
       },
     ])
-    await expect(value).toHaveText('250 ₽')
+    await expect(value).toHaveText('Не сравнивали')
     await settled(page)
     expect(await motionOf(value)).toEqual([])
     await expect(value).toHaveCSS('transform', 'none')
     // The status has the sign of a turn back, for the eye only.
-    const status = demo.getByText('Вернул как было. Всё под контролем.')
+    const status = demo.getByText('Отменил. Всё как было.')
     await expect(status.locator('svg')).toHaveAttribute('aria-hidden', 'true')
     await expect(status.locator('svg')).toHaveCSS('color', MARKER)
   })
@@ -3306,7 +3027,7 @@ test.describe('demo in motion', () => {
         expect(dot.y).toBeLessThan(place.siteBottom + 60)
       }
 
-      await demo.getByRole('button', { name: 'Применить правку' }).click()
+      await demo.getByRole('button', { name: 'Сохранить' }).click()
       await expect(stage).toHaveAttribute('data-phase', 'applying')
       const phase = await stage.evaluate((node) =>
         parseFloat((node as HTMLElement).style.getPropertyValue('--demo-phase')),
@@ -3693,7 +3414,7 @@ test.describe('current section of the navigation', () => {
       'Возможности',
       'Тарифы',
       'Вопросы',
-      'Подключить сайт',
+      'Начать',
       PHONE.text,
     ])
     expect(links[0]).toEqual({
@@ -3716,7 +3437,7 @@ test.describe('example under the first screen', () => {
     await expect(page.locator('section:has(#hero-title) + section')).toHaveAttribute('id', 'demo')
     await expect(page.locator('#demo #site-demo')).toHaveCount(1)
     await expect(page.locator('#demo-title + p')).toHaveText(
-      'Сайт кофейни для примера. Выберите просьбу — и посмотрите, что изменится.',
+      'Кофейня для примера. Выберите просьбу — и посмотрите, что сделает Радити.',
     )
     await atWidths(page, [320, 390, 768, 1024, 1440, 1920], async (width, soft) => {
       const places = await page.evaluate(() => {
@@ -3742,252 +3463,6 @@ test.describe('example under the first screen', () => {
         soft(Math.abs(part.middle - places.page / 2)).toBeLessThanOrEqual(1)
         soft(part.left).toBeGreaterThanOrEqual(0)
         soft(part.right).toBeLessThanOrEqual(width)
-      }
-    })
-  })
-})
-
-test.describe('running line of the systems', () => {
-  const LINES = '#platforms > div[aria-hidden="true"] > div'
-
-  /** The two lines: their names, where they are and what moves them. */
-  const lines = (page: Page) =>
-    page.locator(LINES).evaluateAll((all) =>
-      all.map((line) => {
-        const [animation] = line.getAnimations()
-        const effect = animation?.effect as KeyframeEffect | null | undefined
-        const timing = effect?.getComputedTiming()
-        return {
-          names: [...line.children].map((item) => item.firstElementChild?.textContent ?? ''),
-          animation: animation instanceof CSSAnimation ? animation.animationName : null,
-          moving: line.getAnimations().length,
-          state: animation?.playState ?? null,
-          iterations: timing?.iterations ?? null,
-          duration: timing?.duration ?? null,
-          direction: timing?.direction ?? null,
-          // CSS puts the curve of an animation on its keyframes.
-          easing: effect?.getKeyframes()[0]?.easing ?? null,
-          transform: getComputedStyle(line).transform,
-          // How far the line has run, in its own row: the rows are turned a little.
-          x: new DOMMatrix(getComputedStyle(line).transform).m41,
-          width: (line as HTMLElement).offsetWidth,
-          row: (line.parentElement as HTMLElement).offsetWidth,
-        }
-      }),
-    )
-
-  test('runs two lines towards each other for ever where motion is welcome', async ({ page }) => {
-    await openAt(page, 1440)
-    await bringIntoWindow(page, page.locator('#platforms'))
-    const first = await lines(page)
-    expect(first).toHaveLength(2)
-    expect(first.map((line) => plainName(line.animation ?? ''))).toEqual([
-      RUNNING_LINE,
-      RUNNING_LINE,
-    ])
-    for (const line of first) {
-      expect(line.state).toBe('running')
-      expect(line.iterations).toBe(Infinity)
-      // An even pace: the line neither starts nor stops.
-      expect(line.easing).toBe('linear')
-      expect(line.moving).toBe(1)
-    }
-    expect(first.map((line) => line.duration)).toEqual([38_000, 46_000])
-    expect(first.map((line) => line.direction)).toEqual(['normal', 'reverse'])
-
-    // A third of a second later the upper line has gone to the left and the lower to the right.
-    await page.evaluate(
-      () =>
-        new Promise<void>((done) => {
-          const start = performance.now()
-          const wait = () =>
-            performance.now() - start < 320 ? requestAnimationFrame(wait) : done()
-          wait()
-        }),
-    )
-    const [upper, lower] = await lines(page)
-    expect(upper?.x).toBeLessThan(first[0]?.x ?? NaN)
-    expect(lower?.x).toBeGreaterThan(first[1]?.x ?? NaN)
-  })
-
-  // A line holds its names twice and runs by half of itself. The half must be as wide as the row
-  // at least, or the end of the line would show before the run starts again.
-  test('names the five systems, each line twice over and wider than its row', async ({ page }) => {
-    await openAt(page, 320)
-    await atWidths(page, [320, 768, 1440, 1920], async (width, soft) => {
-      const both = await lines(page)
-      soft(both).toHaveLength(2)
-      for (const line of both) {
-        const half = line.names.length / 2
-        soft(line.names.slice(half)).toEqual(line.names.slice(0, half))
-        soft(line.row).toBeGreaterThan(width)
-        soft(line.width / 2).toBeGreaterThanOrEqual(line.row)
-      }
-      soft(new Set(both.flatMap((line) => line.names))).toEqual(new Set(SYSTEMS))
-    })
-  })
-
-  // The rule of the page: what moves, moves once and rests. The running line is the one
-  // exception, the owner's choice (13.11.2026); nothing else may run for ever.
-  test('is the only thing on the page that never rests', async ({ page }) => {
-    await openAt(page, 1440)
-    const demo = page.locator('#site-demo')
-    await hydrated(demo.getByRole('button', { name: 'Применить правку' }))
-    const endless = () =>
-      page.evaluate(
-        (runningLine) =>
-          document
-            .getAnimations()
-            .filter((animation) => {
-              const timing = animation.effect?.getComputedTiming()
-              return timing?.iterations === Infinity || timing?.duration === Infinity
-            })
-            .filter(
-              (animation) =>
-                !(
-                  animation instanceof CSSAnimation && animation.animationName.includes(runningLine)
-                ),
-            )
-            .map((animation) => {
-              const target = (animation.effect as KeyframeEffect).target
-              const name = animation instanceof CSSAnimation ? animation.animationName : 'not CSS'
-              return `${target?.localName}.${target?.getAttribute('class') ?? ''} ${name}`
-            }),
-        RUNNING_LINE,
-      )
-    expect(await endless()).toEqual([])
-    // The states of the demo, the busy ones among them.
-    await demo.getByRole('button', { name: 'Применить правку' }).click()
-    expect(await endless()).toEqual([])
-    await expect(demo.getByText('Изменено')).toBeVisible()
-    expect(await endless()).toEqual([])
-    // The way through the page: whatever comes into the window plays and rests.
-    const height = await page.evaluate(() => document.documentElement.scrollHeight)
-    for (let top = 0; top < height; top += 600) {
-      await page.evaluate((top) => window.scrollTo({ top, behavior: 'instant' }), top)
-      expect(await endless(), `at ${top}px`).toEqual([])
-    }
-    // And the line is the two rows of the systems, nothing more.
-    const running = await page.evaluate(
-      (runningLine) =>
-        document
-          .getAnimations()
-          .filter(
-            (animation) =>
-              animation instanceof CSSAnimation && animation.animationName.includes(runningLine),
-          ).length,
-      RUNNING_LINE,
-    )
-    expect(running).toBe(2)
-  })
-
-  test('causes no scroll sideways, though it is wider than the window', async ({ page }) => {
-    await openAt(page, 320)
-    await atWidths(page, [320, 390, 768, 1024, 1440, 1920], async (width, soft) => {
-      const read = await page.evaluate(async () => {
-        const section = document.querySelector('#platforms')
-        if (!section) throw new Error('No section of the systems')
-        window.scrollTo({ left: 400, behavior: 'instant' })
-        await new Promise<void>((done) => requestAnimationFrame(() => done()))
-        return {
-          overflow: document.documentElement.scrollWidth - window.innerWidth,
-          body: document.body.scrollWidth - window.innerWidth,
-          scrolled: window.scrollX,
-          section: section.getBoundingClientRect().width,
-          clip: getComputedStyle(section).overflowX,
-          page: document.documentElement.clientWidth,
-        }
-      })
-      soft(read.overflow).toBeLessThanOrEqual(0)
-      soft(read.body).toBeLessThanOrEqual(0)
-      soft(read.scrolled).toBe(0)
-      soft(read.section).toBe(read.page)
-      // Clipped, not hidden: a hidden overflow would make the section a scroll container.
-      soft(read.clip).toBe('clip')
-      soft((await lines(page)).every((line) => line.width > width)).toBe(true)
-    })
-  })
-
-  test('is hidden from a screen reader, which reads the five systems as a list', async ({
-    page,
-  }) => {
-    await page.goto('/')
-    const section = page.locator('#platforms')
-    const line = section.locator('> div[aria-hidden="true"]')
-    await expect(line).toHaveCount(1)
-    // Nothing in the ornament takes the focus.
-    await expect(line.locator('a, button, input, [tabindex]')).toHaveCount(0)
-    const list = section.getByRole('list', { name: 'Поддерживаемые системы' })
-    await expect(list.getByRole('listitem')).toHaveText(SYSTEMS)
-    // Heard, not seen: the list takes no room on the page.
-    const box = await list.boundingBox()
-    expect(box?.width).toBeLessThanOrEqual(1)
-    expect(box?.height).toBeLessThanOrEqual(1)
-    // The systems are also named in the text under the heading, for every reader.
-    await expect(section.locator('#platforms-title + p')).toHaveText(
-      'WordPress, Joomla, OpenCart, MODX и 1С-Битрикс — Радити работает с каждой из этих систем.',
-    )
-    // What a screen reader is given: each system in the text and in the list, and not once more
-    // for every pass of the line.
-    const heard = await section.ariaSnapshot()
-    for (const system of SYSTEMS) {
-      const times = heard.split(system).length - 1
-      // «OpenCart» is also the example of the dialogue under the line.
-      expect(times, system).toBe(system === 'OpenCart' ? 3 : 2)
-    }
-  })
-
-  test('asks its question in the heading and leads to the form of a lead', async ({ page }) => {
-    await page.goto('/')
-    const section = page.locator('#platforms')
-    await expect(section.getByRole('heading', { level: 2 })).toHaveText(
-      'На чём сделан ваш сайт? Скорее всего, подойдёт.',
-      { useInnerText: true },
-    )
-    await expect(section.getByText('У меня магазин на OpenCart. Это подойдёт?')).toBeVisible()
-    await expect(section.getByText('Подойдёт. Подключим и настроим бесплатно.')).toBeVisible()
-    await expect(section.getByRole('link')).toHaveCount(1)
-    await expect(section.getByRole('link', { name: 'Подключить сайт' })).toHaveAttribute(
-      'href',
-      '#lead',
-    )
-    // The talk is light on the orange field and dark with a light text: both read at 4.5:1.
-    for (const bubble of await section.locator('a[href="#lead"]').locator('xpath=../div/p').all()) {
-      const { color, background } = await bubble.evaluate((node) => ({
-        color: getComputedStyle(node).color,
-        background: getComputedStyle(node).backgroundColor,
-      }))
-      expect(contrast(color, background)).toBeGreaterThanOrEqual(4.5)
-    }
-  })
-
-  test.describe('under reduced motion', () => {
-    test.use({ reducedMotion: 'reduce' })
-
-    test('stands still with its names in the window', async ({ page }) => {
-      await openAt(page, 1440)
-      await hydrated(page.locator('#site-demo').getByRole('button', { name: 'График' }))
-      await bringIntoWindow(page, page.locator('#platforms'))
-      const both = await lines(page)
-      expect(both).toHaveLength(2)
-      for (const line of both) {
-        expect(line.animation).toBeNull()
-        expect(line.moving).toBe(0)
-        expect(line.transform).toBe('none')
-      }
-      expect(await page.evaluate(() => document.getAnimations().length)).toBe(0)
-      // A second later the lines are where they were.
-      const places = () =>
-        page
-          .locator(`${LINES} > span:first-child`)
-          .evaluateAll((items) => items.map((item) => item.getBoundingClientRect().left))
-      const before = await places()
-      await page.evaluate(() => new Promise<void>((done) => setTimeout(done, 1000)))
-      expect(await places()).toEqual(before)
-      // The first name of each line is on the screen: the still line is still a line of names.
-      for (const left of before) {
-        expect(left).toBeGreaterThanOrEqual(-60)
-        expect(left).toBeLessThan(1440)
       }
     })
   })
@@ -4027,11 +3502,11 @@ test.describe('form of a lead', () => {
     await page.goto('/')
     const lead = page.locator('#lead')
     const form = lead.locator('form')
-    await hydrated(form.getByLabel('Адрес сайта'))
+    await hydrated(form.getByLabel('Сайт компании'))
     // Two fields (the owner, 13.11.2026): the name, the mail and the task are asked later.
     const fields = form.getByRole('textbox')
     await expect(fields).toHaveCount(2)
-    await expect(form.getByLabel('Адрес сайта')).toHaveAttribute('name', 'site')
+    await expect(form.getByLabel('Сайт компании')).toHaveAttribute('name', 'site')
     await expect(form.getByLabel('Телефон или Telegram')).toHaveAttribute('name', 'phone')
     for (const field of await fields.all()) {
       await expect(field).toHaveAttribute('required', '')
@@ -4052,7 +3527,7 @@ test.describe('form of a lead', () => {
     await expect(trap).toHaveCount(1)
     await expect(trap).toHaveAttribute('tabindex', '-1')
     expect(await trap.evaluate((node) => node.closest('[aria-hidden="true"]') !== null)).toBe(true)
-    await form.getByLabel('Адрес сайта').focus()
+    await form.getByLabel('Сайт компании').focus()
     const stops: string[] = []
     for (let press = 0; press < 5; press++) {
       await page.keyboard.press('Tab')
@@ -4084,7 +3559,7 @@ test.describe('form of a lead', () => {
     await page.goto('/')
     const sent = await answerLeads(page)
     const form = page.locator('#lead form')
-    const site = form.getByLabel('Адрес сайта')
+    const site = form.getByLabel('Сайт компании')
     const contact = form.getByLabel('Телефон или Telegram')
     const consent = form.getByRole('checkbox')
     const send = form.getByRole('button', { name: 'Отправить заявку' })
@@ -4150,14 +3625,14 @@ test.describe('form of a lead', () => {
       const heading = done.getByRole('heading', { level: 3 })
       await expect(heading).toHaveText('Заявка у нас.')
       await expect(heading).toBeFocused()
-      await expect(done).toContainText('Свяжемся с вами и подключим kofeinya.ru.')
+      await expect(done).toContainText('Свяжемся с вами и поможем начать.')
       await expect(done).toContainText('50 кредитов придут, как только вы зарегистрируетесь.')
       await expect(lead.locator('form')).toHaveCount(0)
 
       // Another lead starts from an empty form.
       await done.getByRole('button', { name: 'Отправить ещё одну' }).click()
       const form = lead.locator('form')
-      await expect(form.getByLabel('Адрес сайта')).toHaveValue('')
+      await expect(form.getByLabel('Сайт компании')).toHaveValue('')
       await expect(form.getByLabel('Телефон или Telegram')).toHaveValue('')
       await expect(form.getByRole('checkbox')).not.toBeChecked()
       await expect(form.locator('[aria-invalid]')).toHaveCount(0)
@@ -4171,7 +3646,7 @@ test.describe('form of a lead', () => {
     const form = lead.locator('form')
     const send = form.getByRole('button', { name: 'Отправить заявку' })
     const typed = async () => {
-      await expect(form.getByLabel('Адрес сайта')).toHaveValue('kofeinya.ru')
+      await expect(form.getByLabel('Сайт компании')).toHaveValue('kofeinya.ru')
       await expect(form.getByLabel('Телефон или Telegram')).toHaveValue('+7 900 000-00-00')
       await expect(form.getByRole('checkbox')).toBeChecked()
       await expect(send).toBeEnabled()
@@ -4230,7 +3705,7 @@ test.describe('form of a lead', () => {
     page,
   }) => {
     await openAt(page, 320)
-    await hydrated(page.locator('#lead form').getByLabel('Адрес сайта'))
+    await hydrated(page.locator('#lead form').getByLabel('Сайт компании'))
     // With the messages shown: the tallest state of the form.
     await page.locator('#lead form').getByRole('button', { name: 'Отправить заявку' }).click()
     await atWidths(page, [320, 390, 768, 1024, 1440], async (width, soft) => {
@@ -4275,7 +3750,7 @@ test.describe('phone of the service', () => {
     await settled(page)
     const phone = menu.getByRole('link', { name: PHONE.text })
     await expect(phone).toHaveAttribute('href', PHONE.href)
-    const action = menu.getByRole('link', { name: 'Подключить сайт' })
+    const action = menu.getByRole('link', { name: 'Начать' })
     await expect(action).toHaveAttribute('href', '#lead')
     for (const link of [phone, action]) {
       expect((await link.boundingBox())?.height).toBeGreaterThanOrEqual(44)

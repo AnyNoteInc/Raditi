@@ -60,7 +60,6 @@ vi.mock('@/trpc/client', () => ({
       create: mutation(async () => null),
       update: mutation(async () => null),
     },
-    project: { list: query('project.list', async () => []) },
   }),
 }))
 
@@ -124,7 +123,6 @@ describe('the page of a scheduled task (plan 82, Зп6)', () => {
     if (!(facts instanceof HTMLElement)) throw new Error('no facts')
     expect(facts).toHaveTextContent('Откройте сайт и пройдите главную и важные страницы.')
     expect(facts).toHaveTextContent('По будням в 9:00')
-    expect(within(facts).getByRole('link', { name: 'Кофейня «Крошка»' })).toBeInTheDocument()
     expect(facts).toHaveTextContent('Низкое')
     expect(facts).toHaveTextContent('Сообщим, когда задача выполнится')
     expect(
@@ -217,27 +215,17 @@ describe('the page of a scheduled task (plan 82, Зп6)', () => {
     expect(getComputedStyle(cost).fontSize).toBe('15px')
   })
 
-  // F9: the project of the task was deleted (Зп22): no name, no link, a cost without a project.
-  it('says a deleted project without its name or a link to it', async () => {
-    getSchedule.mockResolvedValue(
-      scheduleDetail({
-        project: { id: '019f2a00-0000-7000-8000-00000000dead', name: 'Старый сайт', deleted: true },
-        enabled: false,
-        pausedReason: 'project_gone',
-      }),
-    )
+  it('names no project among the facts of a task (Зп57)', async () => {
+    getSchedule.mockResolvedValue(scheduleDetail())
     show()
     await screen.findByRole('heading', { level: 1, name: 'Проверка сайта' })
     const facts = screen.getAllByRole('term')[0]?.closest('dl')
     if (!(facts instanceof HTMLElement)) throw new Error('no facts')
-    expect(facts).toHaveTextContent('Проект удалён')
-    expect(facts).not.toHaveTextContent('Старый сайт')
-    expect(within(facts).queryByRole('link')).toBeNull()
+    expect(within(facts).queryByText('Проект')).toBeNull()
+    expect(facts).not.toHaveTextContent(/Кофейня/)
     await within(facts).findByText(/в среднем около 11/)
-    const sites = (
-      costHint.mock.calls as unknown as [{ queryKey: [string, { siteId: unknown }] }][]
-    ).map(([context]) => context.queryKey[1].siteId)
-    expect(sites).toEqual([null])
+    for (const [context] of costHint.mock.calls as unknown as [{ queryKey: [string, object] }][])
+      expect(context.queryKey[1]).not.toHaveProperty('siteId')
   })
 
   it('lists the runs: when, how, what came of it, its chat; missed in a row as one line', async () => {

@@ -1,8 +1,6 @@
 import type { CSSProperties } from 'react'
 
 const paths = {
-  projects:
-    'M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Zm0 0V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2',
   profile: 'M20 21v-2a6 6 0 0 0-6-6h-4a6 6 0 0 0-6 6v2M16 5a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',
   /** «Страницы»: a sheet with its lines (docs/plan/69-pages.md, Ст30). */
   pages: 'M6 3h8l4 4v14H6V3ZM14 3v4h4M9 12h6M9 16h6',
@@ -91,8 +89,6 @@ const paths = {
   // Templates of scheduled tasks (docs/plan/82-scheduled-tasks.md, §4.6).
   /** A line of a heartbeat: checking that something keeps working. */
   pulse: 'M3 12h4l3-8 4 16 3-8h4',
-  /** A tray with a dip: what came in. */
-  inbox: 'M3 13h5l1.5 3h5l1.5-3h5M5.5 5h13l2.5 8v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5l2.5-8Z',
   /** A lamp: an idea. */
   bulb: 'M9 18h6M10 21h4M9.5 15.5c0-1-.5-1.7-1.2-2.4a6 6 0 1 1 7.4 0c-.7.7-1.2 1.4-1.2 2.4',
   /** Binoculars: looking at others. */

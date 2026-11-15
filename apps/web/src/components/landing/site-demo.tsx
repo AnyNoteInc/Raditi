@@ -19,7 +19,7 @@ export type DemoAction =
   | { type: 'undo' }
   | { type: 'finish'; revision: number; phase: Phase }
 
-export const initialDemoState: DemoState = { scenario: 'price', phase: 'review', revision: 0 }
+export const initialDemoState: DemoState = { scenario: 'compare', phase: 'review', revision: 0 }
 
 export function reducer(state: DemoState, action: DemoAction): DemoState {
   if (action.type === 'choose') {
@@ -47,9 +47,9 @@ export function reducer(state: DemoState, action: DemoAction): DemoState {
 type PhaseView = {
   /** The status of the chat; the applied phase tells the result of the scenario instead. */
   status?: string
-  /** The sign before the status: Радити is working, the change is on the site, it is taken back. */
+  /** The sign before the status: Радити is working, the result is kept, it is taken back. */
   sign?: 'activity' | 'check' | 'undo'
-  /** The label of the site window. */
+  /** The label of the window of documents. */
   site: string
   /** The label of the action. */
   action: string
@@ -60,30 +60,30 @@ type PhaseView = {
 /** What each phase shows, in one place: the markup below asks this table, not the phase. */
 const phases: Record<Phase, PhaseView> = {
   preparing: {
-    status: nbsp('Нахожу нужное место на странице…'),
+    status: nbsp('Ищу, читаю и собираю…'),
     sign: 'activity',
-    site: nbsp('До правки'),
-    action: 'Готовлю правку…',
+    site: 'Черновик',
+    action: 'Готовлю…',
     pause: PHASE_MS.preparing,
   },
   review: {
-    status: 'Подготовил правку. Посмотрите:',
-    site: nbsp('До правки'),
-    action: 'Применить правку',
+    status: 'Сделал. Посмотрите:',
+    site: 'Черновик',
+    action: 'Сохранить',
   },
   applying: {
-    status: nbsp('Сохраняю копию и применяю правку…'),
+    status: nbsp('Сохраняю в документы…'),
     sign: 'activity',
-    site: nbsp('До правки'),
-    action: 'Применяю…',
+    site: 'Черновик',
+    action: 'Сохраняю…',
     pause: PHASE_MS.applying,
   },
-  applied: { sign: 'check', site: 'Изменено', action: 'Отменить правку' },
+  applied: { sign: 'check', site: 'Сохранено', action: 'Отменить' },
   undone: {
-    status: nbsp('Вернул как было. Всё под контролем.'),
+    status: nbsp('Отменил. Всё как было.'),
     sign: 'undo',
-    site: 'Возвращено',
-    action: 'Применить снова',
+    site: 'Отменено',
+    action: 'Сохранить снова',
   },
 }
 
@@ -93,7 +93,7 @@ export function SiteDemo() {
   const scenario = scenarios[state.scenario]
   const view = phases[state.phase]
   const isApplied = state.phase === 'applied'
-  // The field of the site that shows its new value: the one of the request, once it is applied.
+  // The line of the documents that shows its new value: the one of the request, once it is kept.
   const changed = isApplied ? state.scenario : null
   const isBusy = view.pause !== undefined
 
@@ -151,7 +151,7 @@ export function SiteDemo() {
         data-phase={state.phase}
         style={isBusy ? ({ '--demo-phase': `${view.pause}ms` } as CSSProperties) : undefined}
       >
-        <div className={styles.browser} role="group" aria-label="Пример сайта кофейни">
+        <div className={styles.browser} role="group" aria-label="Пример документов кофейни">
           <div className={styles.browserBar}>
             <div className={styles.windowDots} aria-hidden="true">
               <i />
@@ -170,8 +170,8 @@ export function SiteDemo() {
 
           <div className={styles.cafe}>
             <div className={styles.cafeTopline}>
-              <span>КОФЕ&nbsp;· ВЫПЕЧКА&nbsp;· СОСЕДИ</span>
-              <span>С&nbsp;2019</span>
+              <span>ДЕЛА НА&nbsp;НЕДЕЛЮ</span>
+              <span>ПРИМЕР</span>
             </div>
             <div className={styles.cafeIdentity}>
               <span className={styles.cafeName}>{cafe.name}</span>
@@ -180,37 +180,35 @@ export function SiteDemo() {
                 <path d="M32 3v9m0 40v9M3 32h9m40 0h9M11.5 11.5l6.4 6.4m28.2 28.2 6.4 6.4m0-41-6.4 6.4M17.9 46.1l-6.4 6.4" />
               </svg>
             </div>
-            <p className={styles.cafeTagline}>Большие планы начинаются с&nbsp;маленького кофе.</p>
+            <p className={styles.cafeTagline}>{nbsp('Что Радити сделал для кофейни за неделю.')}</p>
 
             <div
               className={styles.promotion}
-              data-selected={state.scenario === 'promotion'}
-              data-changed={changed === 'promotion'}
+              data-selected={state.scenario === 'page'}
+              data-changed={changed === 'page'}
             >
-              {changed === 'promotion' ? cafe.banner.after : cafe.banner.before}
+              {changed === 'page' ? cafe.banner.after : cafe.banner.before}
             </div>
 
             <div className={styles.cafeDetails}>
               <div
                 className={styles.cafeRow}
-                data-selected={state.scenario === 'price'}
-                data-changed={changed === 'price'}
+                data-selected={state.scenario === 'compare'}
+                data-changed={changed === 'compare'}
               >
-                <span>
-                  {cafe.item} <small>{cafe.volume}</small>
-                </span>
-                <strong key={`price-${changed === 'price'}`}>
-                  {scenarios.price[changed === 'price' ? 'after' : 'before']}
+                <span>{scenarios.compare.field}</span>
+                <strong key={`compare-${changed === 'compare'}`}>
+                  {scenarios.compare[changed === 'compare' ? 'after' : 'before']}
                 </strong>
               </div>
               <div
                 className={styles.cafeRow}
-                data-selected={state.scenario === 'hours'}
-                data-changed={changed === 'hours'}
+                data-selected={state.scenario === 'letter'}
+                data-changed={changed === 'letter'}
               >
-                <span>В&nbsp;субботу</span>
-                <strong key={`hours-${changed === 'hours'}`}>
-                  {scenarios.hours[changed === 'hours' ? 'after' : 'before']}
+                <span>{scenarios.letter.field}</span>
+                <strong key={`letter-${changed === 'letter'}`}>
+                  {scenarios.letter[changed === 'letter' ? 'after' : 'before']}
                 </strong>
               </div>
             </div>
@@ -228,7 +226,7 @@ export function SiteDemo() {
             <AnimatedBrandSymbol size={30} />
             <div className={styles.agentTitle}>
               <strong>Радити</strong>
-              <span>{nbsp('ИИ-помощник для вашего сайта')}</span>
+              <span>{nbsp('ИИ-помощник на каждый день')}</span>
             </div>
             <span className={styles.chatStatus} aria-hidden="true" />
           </div>
@@ -286,14 +284,14 @@ export function SiteDemo() {
           </div>
           <div className={styles.chatFooter}>
             <LandingIcon name="check" size={16} />
-            Сначала копия. Потом изменения.
+            Сначала покажу. Решаете вы.
           </div>
         </div>
       </div>
 
       <p className={styles.disclaimer}>
         {nbsp(
-          'Это вымышленная кофейня, просьбы готовые. Попробуйте применить правку и отменить её — ваш сайт не изменится.',
+          'Это вымышленная кофейня, просьбы готовые. Здесь ничего не ищется, не отправляется и не публикуется.',
         )}
       </p>
     </figure>

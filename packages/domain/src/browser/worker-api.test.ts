@@ -34,17 +34,16 @@ describe('API of the browser worker', () => {
   })
 
   it('reads ensure, its answer and close', () => {
-    const ensure = { sessionId, taskId, siteId, takeControl: true }
+    const ensure = { sessionId, taskId, takeControl: true }
     expect(browserEnsureRequestSchema.parse(ensure)).toEqual(ensure)
-    // A chat without a site says so: a forgotten field is not one.
-    const open = { ...ensure, siteId: null }
-    expect(browserEnsureRequestSchema.parse(open)).toEqual(open)
+    // No site and no sign-in since projects went (plan 83).
+    expect(browserEnsureRequestSchema.safeParse({ ...ensure, siteId: null }).success).toBe(false)
     for (const bad of [
       { ...ensure, takeControl: undefined },
-      { ...ensure, siteId: undefined },
-      { ...ensure, siteId: 'site' },
+      { ...ensure, siteId },
+      { ...ensure, signIn: { login: 'a', password: 'b' } },
       { ...ensure, taskId: 'task' },
-      // Where the browser goes is the site's address in the database, never the caller's word.
+      // Where the browser goes is never the caller's word.
       { ...ensure, siteUrl: 'https://news.example.ru' },
       { ...ensure, allowedHosts: ['evil.example.com'] },
       // The notes reach the agent in the prompt of its turn; the worker has no use for them.

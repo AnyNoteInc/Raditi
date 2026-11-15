@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto'
-
 import {
   chargeTask,
   ensurePersonalWorkspaceWithGift,
@@ -64,8 +62,13 @@ export interface TaskInWork {
 }
 
 export interface Credits {
-  /** The personal workspace of the customer; null until a first site or a checkout makes it. */
+  /** The personal workspace of the customer; null until a first chat or a checkout makes it. */
   workspaceId(): Promise<string | null>
+  /**
+   * The personal workspace with the gift of the registration, as the first chat or file makes it
+   * (`ensurePersonalWorkspaceWithGift`); the one there is, when there is one.
+   */
+  ensureWorkspace(): Promise<string>
   /** The three accounts of the workspace; all empty while there is none. */
   stored(): Promise<Record<CreditAccount, StoredAccount>>
   /** The journal of the three accounts, oldest first. */
@@ -77,23 +80,16 @@ export interface Credits {
   debt(): Promise<number>
   /** The live subscription of the customer. */
   subscription(): Promise<{ id: string; currentPeriodEnd: Date; status: string }>
-  /** A site of the workspace, added past the form: the workspace must exist. */
-  site(name: string): Promise<{ id: string; name: string }>
   /**
-   * A task of the customer is queued and taken into work on a site of the workspace: its
-   * reserve is placed by `placeCreditHold`, with every check of a placement. `modelClass` is
-   * the mode it runs in: `standard` unless told otherwise, `heavy` for a large one. `at` is
-   * the moment it is queued — now unless told: an earlier one queues it on an earlier Moscow
-   * day of the period (`periodBegan`), and it is done a minute after it. `withProject: false`
-   * is a chat without a project: no site, no repository, and the workspace is made for it when
-   * there is none, as `task.create` makes it.
+   * A chat of the customer is queued and taken into work: its reserve is placed by
+   * `placeCreditHold`, with every check of a placement. `modelClass` is the mode it runs in:
+   * `standard` unless told otherwise, `heavy` for a large one. `at` is the moment it is queued —
+   * now unless told: an earlier one queues it on an earlier Moscow day of the period
+   * (`periodBegan`), and it is done a minute after it. A chat has no project
+   * (docs/plan/83-remove-projects.md): the workspace is made for it when there is none, as
+   * `task.create` makes it.
    */
-  task(input: {
-    title: string
-    modelClass?: ModelClass
-    at?: Date
-    withProject?: boolean
-  }): Promise<TaskInWork>
+  task(input: { title: string; modelClass?: ModelClass; at?: Date }): Promise<TaskInWork>
   /**
    * The current period of the customer's tariff began at `start`, before the payment that
    * opened it — so that tasks can be queued on earlier Moscow days of it: a tariff gives only
@@ -226,45 +222,16 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
     return row
   }
 
-  const site = async (name: string) =>
-    prisma.site.create({
-      data: {
-        workspaceId: await workspace(),
-        name,
-        // An address of its own: a site spends gift credits in one workspace only.
-        url: `https://credits-${randomUUID()}.example.ru`,
-        stack: 'wordpress',
-      },
-      select: { id: true, name: true },
-    })
-
-  /** The workspace and the first site of a task on a project. */
-  const projectOfTask = async () => {
-    const id = await workspace()
-    const on = await prisma.site.findFirst({
-      where: { workspaceId: id },
-      orderBy: { createdAt: 'asc' },
-      select: { id: true },
-    })
-    if (on === null) throw new Error('The workspace has no site to work on')
-    return { id, siteId: on.id }
-  }
-
   /** The workspace of a chat without a project; the id of its task is the uuid(7) of the schema. */
   const noProject = async () => {
     const { id } = await prisma.$transaction((tx) =>
       ensurePersonalWorkspaceWithGift(tx, { userId: user.id, appEnv: authEnv.APP_ENV }),
     )
-    return { id, siteId: null, needsRepository: false, needsBrowser: false }
+    return { id, needsBrowser: false }
   }
 
-  const task: Credits['task'] = async ({
-    title,
-    modelClass = 'standard',
-    at,
-    withProject = true,
-  }) => {
-    const { id, ...where } = withProject ? await projectOfTask() : await noProject()
+  const task: Credits['task'] = async ({ title, modelClass = 'standard', at }) => {
+    const { id, ...where } = await noProject()
     const { id: taskId } = await prisma.task.create({
       data: {
         workspaceId: id,
@@ -359,7 +326,7 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
     journal,
     debt,
     subscription,
-    site,
+    ensureWorkspace: async () => (await noProject()).id,
     task,
     tariffEnded,
     periodBegan,

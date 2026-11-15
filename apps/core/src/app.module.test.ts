@@ -10,21 +10,14 @@ import { BillingScheduler } from './billing/billing-scheduler.ts'
 import { BrowserSessions } from './browser/browser-sessions.ts'
 import { OutboxRelayService } from './outbox/outbox-relay.service.ts'
 import type { CoreConfig } from './config/config.ts'
-import { GitCredentialRuntime } from './git-workspace/git-credential-runtime.ts'
-import { StaleClonesSweep } from './git-workspace/stale-clones.ts'
 import { hashRunnerToken, parseRunnerTokens } from './config/runner-tokens.ts'
 import { AGENT_DRIVERS } from './drivers/drivers.tokens.ts'
 import { RedisLifecycle } from './infra/redis.ts'
 import { CoreCredentialRuntime } from './llm/credential-runtime.ts'
 import { METRICS_REGISTRY } from './metrics/metrics.tokens.ts'
-import { PreviewLoops } from './previews/preview-loops.ts'
 import { BullMqShutdownService } from './queue/bullmq-shutdown.service.ts'
 import { JOB_QUEUE } from './queue/queue.tokens.ts'
-import { ReleaseApiServer } from './release-api/release-api.server.ts'
-import { ReleaseSweepRuntime } from './releases/release-sweep.ts'
 import { SANDBOX_PROVIDER } from './sandbox/sandbox.tokens.ts'
-import { SiteImportProcessor } from './site-provisioning/site-import.processor.ts'
-import { SiteImportSweeper } from './site-provisioning/site-import.sweeper.ts'
 import { TaskSweepRuntime } from './tasks/task-sweep.ts'
 import { LiveTurns } from './turns/live-turns.ts'
 import { TurnExecRecovery } from './turns/turn-exec-recovery.ts'
@@ -99,32 +92,21 @@ function recordHooks(types: (abstract new (...args: never[]) => object)[]): stri
  */
 function lifecycleOf(runner: boolean, schedules = false): string[] {
   return [
-    'onModuleInit StaleClonesSweep',
-    'onApplicationBootstrap GitCredentialRuntime',
     'onApplicationBootstrap CoreCredentialRuntime',
     'onApplicationBootstrap OutboxRelayService',
     'onApplicationBootstrap BillingScheduler',
     // The tick of scheduled tasks only with the intake of web (docs/plan/82-scheduled-tasks.md).
     ...(schedules ? ['onApplicationBootstrap ScheduleScheduler'] : []),
-    'onApplicationBootstrap SiteImportSweeper',
     'onApplicationBootstrap TurnRuntime',
     'onApplicationBootstrap TaskSweepRuntime',
-    'onApplicationBootstrap PreviewLoops',
-    'onApplicationBootstrap ReleaseSweepRuntime',
-    'onModuleDestroy ReleaseSweepRuntime',
-    'onModuleDestroy PreviewLoops',
     'onModuleDestroy TaskSweepRuntime',
     'onModuleDestroy TurnRuntime',
-    'onModuleDestroy SiteImportProcessor',
-    'onModuleDestroy SiteImportSweeper',
     ...(schedules ? ['onModuleDestroy ScheduleScheduler'] : []),
     'onModuleDestroy BillingScheduler',
     'onModuleDestroy OutboxRelayService',
     'onModuleDestroy CoreCredentialRuntime',
     'beforeApplicationShutdown BullMqShutdownService',
-    'onApplicationShutdown ReleaseApiServer',
     ...(runner ? ['onApplicationShutdown RunnerApiServer', 'onApplicationShutdown RunnerHub'] : []),
-    'onApplicationShutdown GitCredentialRuntime',
     // These two hooks used to run at the same time, both in one InfraModule. DatabaseModule is a
     // global module of its own now, and Redis quits before Prisma disconnects: the one conscious
     // difference of plan 56 for core (docs/plan/56-nest-modules.md §4.5).
@@ -317,13 +299,6 @@ describe('AppModule', () => {
     await expect(poll(`Bearer ${token}`)).rejects.toThrow()
   })
 
-  it('sweeps stale publication clones once, while the modules start', async () => {
-    const sweep = vi.spyOn(StaleClonesSweep.prototype, 'onModuleInit')
-    const core = await startCore(fakeInfra())
-    expect(core.get(StaleClonesSweep)).toBeInstanceOf(StaleClonesSweep)
-    expect(sweep).toHaveBeenCalledOnce()
-  })
-
   it('closes its connections on shutdown without errors', async () => {
     const infra = fakeInfra()
     // Nest logs (and swallows) errors thrown by shutdown hooks.
@@ -364,11 +339,9 @@ describe('AppModule', () => {
     }
   })
 
-  it('drives turns without git, and gives the passes one cloud browser only with its worker', async () => {
-    // Without git a task in the cloud browser still runs and is recovered: it has no repository
-    // (docs/plan/57-browser-tasks.md, Б7).
+  it('drives turns without a repository, and gives the passes one cloud browser only with its worker', async () => {
+    // A chat has no repository (docs/plan/83-remove-projects.md): its turns run and are recovered.
     const plain = testCoreConfig()
-    expect(plain.git).toBeNull()
     expect(plain.browser).toBeNull()
     const core = await startCore(fakeInfra(), false, plain)
     expect(core.get(TurnSupervisor, { strict: false })).toBeInstanceOf(TurnSupervisor)
@@ -393,20 +366,13 @@ describe('AppModule', () => {
     'starts and stops its background in the order it always had (runner VMs=%s, schedules=%s)',
     async (runner, schedules) => {
       const calls = recordHooks([
-        StaleClonesSweep,
-        GitCredentialRuntime,
         CoreCredentialRuntime,
         OutboxRelayService,
         BillingScheduler,
         ScheduleScheduler,
-        SiteImportSweeper,
-        SiteImportProcessor,
         TurnRuntime,
         TaskSweepRuntime,
-        PreviewLoops,
-        ReleaseSweepRuntime,
         BullMqShutdownService,
-        ReleaseApiServer,
         RunnerApiServer,
         RunnerHub,
         RedisLifecycle,
@@ -419,8 +385,7 @@ describe('AppModule', () => {
       await core.close()
       app = undefined
 
-      // The workers stop after every loop, the connections after everything else; the runner
-      // API closes before the git credentials of this process are revoked.
+      // The workers stop after every loop, the connections after everything else.
       expect(calls).toEqual(lifecycleOf(runner, schedules))
     },
   )

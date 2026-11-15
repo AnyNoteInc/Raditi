@@ -49,9 +49,7 @@ export function Pricing({
         <p>
           Обновите страницу чуть позже.{' '}
           {nbsp(
-            isGuest
-              ? 'Оставить заявку на подключение можно уже сейчас.'
-              : 'Перейти к чатам можно по ссылке ниже.',
+            isGuest ? 'Оставить заявку можно уже сейчас.' : 'Перейти к чатам можно по ссылке ниже.',
           )}
         </p>
         <Link className={styles.action} href={action.href}>
@@ -92,13 +90,6 @@ export function Pricing({
                 {planWindowLimits(plan.creditsPer5h, plan.creditsPerWeek) && (
                   <li>{nbsp(planWindowLimits(plan.creditsPer5h, plan.creditsPerWeek)!)}</li>
                 )}
-                <li>
-                  {plan.maxSites === 1
-                    ? 'Один сайт'
-                    : nbsp(
-                        `До ${plan.maxSites} ${plural(plan.maxSites, 'сайта', 'сайтов', 'сайтов')}`,
-                      )}
-                </li>
                 {/* Sites of pages beside the credits (docs/plan/73-pages-sites.md, Дер37). */}
                 {plan.pageSites != null && plan.pageSites > 0 && (
                   <li>
@@ -119,7 +110,7 @@ export function Pricing({
       <div className={styles.signup}>
         <p className={styles.included}>
           {nbsp(
-            'В каждый тариф войдут правки текстов, цен, фото, акций и страниц сайта, копия перед правкой и отмена.',
+            'В каждый тариф входят поиск в интернете, браузер помощника, письма, документы, таблицы и страницы по ссылке.',
           )}
         </p>
         <div className={styles.signupAction}>

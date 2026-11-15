@@ -8,7 +8,7 @@ import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { BrowserPane, type BrowserPaneProps } from './browser-pane'
 import type { BrowserState } from './browser-stream'
 import type { FeedHeadState } from './feed-state'
-import { browserAnswer, declared, SESSION_ID, SITE_ID, TASK_ID } from './testing'
+import { browserAnswer, declared, SESSION_ID, TASK_ID } from './testing'
 import type { BrowserStream } from './use-browser-stream'
 
 const VIEWER = '0199a3f2-0000-7000-8000-0000000000aa'
@@ -110,7 +110,6 @@ function show(props: Partial<BrowserPaneProps> = {}) {
     >
       <BrowserPane
         taskId={TASK_ID}
-        siteId={SITE_ID}
         head={head()}
         stream={stream}
         configured
@@ -242,7 +241,7 @@ describe('the browser of a task', () => {
 
   it('leaves the address empty on a browser with no page yet, with nothing to load again', () => {
     const stream = holding({ url: 'about:blank', tabs: [] })
-    show({ stream, siteId: null, head: head({ task: { requirements: NO_SITE } }) })
+    show({ stream, head: head({ task: { requirements: NO_SITE } }) })
     const bar = within(toolbar())
     const address = bar.getByRole<HTMLInputElement>('textbox', { name: 'Адрес страницы' })
     expect(address.value).toBe('')
@@ -260,17 +259,14 @@ describe('the browser of a task', () => {
   })
 
   it('shows no address under the agent either while there is no page yet', () => {
-    show({ stream: fakeStream({ state: state({ url: 'about:blank', tabs: [] }) }), siteId: null })
+    show({ stream: fakeStream({ state: state({ url: 'about:blank', tabs: [] }) }) })
     expect(within(toolbar()).getByLabelText('Адрес страницы').textContent).toBe('')
     expect(toolbar().innerHTML).toContain(outlineOf('globe'))
   })
 
-  it('says what the browser opens when an address is refused: a site, or any public one', () => {
+  it('says what the browser opens when an address is refused: any public site', () => {
     const refusal = { seq: 1, reason: 'address_denied' } as const
     show({ stream: { ...holding(), refusal } })
-    expect(screen.getByText('На эту страницу агенту и вам переходить нельзя.')).toBeTruthy()
-    cleanup()
-    show({ stream: { ...holding(), refusal }, siteId: null })
     expect(
       screen.getByText(
         'Этот адрес не открыть: браузер открывает только публичные сайты по https://.',

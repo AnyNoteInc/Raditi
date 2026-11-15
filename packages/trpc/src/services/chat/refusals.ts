@@ -48,12 +48,6 @@ export const workspaceKeyUnavailable = () =>
 
 /** The agent is at work: words wait until it finishes or asks. */
 export const taskBusy = () => new DomainError('TASK_BUSY', 'The agent is at work', 409)
-/** `/undo` is moving the chat a turn back: words wait until it stands. */
-export const taskRewinding = () =>
-  new DomainError('TASK_REWINDING', 'The last turn of the chat is being taken back', 409)
-/** `/redo` is bringing the chat a turn forward: words wait until it stands. */
-export const taskRedoing = () =>
-  new DomainError('TASK_REDOING', 'The undone turn of the chat is being brought back', 409)
 export const taskFinished = () => new DomainError('TASK_FINISHED', 'The dialog has ended', 409)
 export const releaseInProgress = () =>
   new DomainError('RELEASE_IN_PROGRESS', 'A release of the dialog is in work', 409)
@@ -71,9 +65,6 @@ export const taskAttemptsExhausted = () =>
  */
 export const taskNothingToResume = () =>
   new DomainError('TASK_NOTHING_TO_RESUME', 'The task does not wait for the client', 409)
-/** «Попробовать ещё»: no failure of the dialog waits for a retry, or not the one pressed on. */
-export const taskNothingToRetry = () =>
-  new DomainError('TASK_NOTHING_TO_RETRY', 'The dialog has no failure to retry', 409)
 /** A command of the chat the server does not allow now; the text is the one `task.commands` shows. */
 export const commandUnavailable = (command: ChatCommandId, refusal: ChatCommandRefusal) =>
   new DomainError('CHAT_COMMAND_UNAVAILABLE', `Command ${command} is refused: ${refusal}`, 409, {
@@ -81,65 +72,20 @@ export const commandUnavailable = (command: ChatCommandId, refusal: ChatCommandR
     refusal,
   })
 
-export const releaseConfirmationInvalid = () =>
-  new DomainError('RELEASE_CONFIRMATION_INVALID', 'The release confirmation is not valid', 400)
-export const releaseConfirmationExpired = () =>
-  new DomainError('RELEASE_CONFIRMATION_EXPIRED', 'The release confirmation has expired', 409)
-export const releaseCandidateChanged = () =>
-  new DomainError('RELEASE_CANDIDATE_CHANGED', 'The candidate changed after the confirmation', 409)
-export const releaseVersionTaken = () =>
-  new DomainError('RELEASE_VERSION_TAKEN', 'The version is taken on the site', 409)
-/**
- * A plan of more than twenty objects, or one whose description is shortened (docs/plan/53,
- * «Операции БД и миграции»; rule 4): the client says they looked at every change first.
- */
-export const releaseReviewRequired = () =>
-  new DomainError('RELEASE_REVIEW_REQUIRED', 'The changes of the database were not reviewed', 409)
-export const releaseVersionNotOffered = () =>
-  new DomainError('RELEASE_VERSION_NOT_OFFERED', 'The version is not among the choices', 409)
-
-export const previewNotReady = () =>
-  new DomainError('PREVIEW_NOT_READY', 'The preview is being built', 409)
-
-export const siteEnvNotAllowed = () =>
-  new DomainError('SITE_ENV_NOT_ALLOWED', 'Only an owner or an admin changes variables', 403)
-export const siteEnvNameInvalid = () =>
-  new DomainError('SITE_ENV_NAME_INVALID', 'The name of the variable is not allowed', 400)
-export const siteEnvNameReserved = () =>
-  new DomainError('SITE_ENV_NAME_RESERVED', 'The name of the variable is reserved', 400)
-export const siteEnvValueInvalid = () =>
-  new DomainError('SITE_ENV_VALUE_INVALID', 'The value of the variable is not allowed', 400)
-export const siteEnvHostsInvalid = () =>
-  new DomainError('SITE_ENV_HOSTS_INVALID', 'The hosts of the variable are not allowed', 400)
-export const siteEnvConsentRequired = () =>
-  new DomainError(
-    'SITE_ENV_CONSENT_REQUIRED',
-    'The agent gets a variable only with the consent',
-    400,
-  )
-/** The saved sign-in of the admin pages is the browser's only (Б36). */
-export const siteEnvSignInPrivate = () =>
-  new DomainError(
-    'SITE_ENV_SIGN_IN_PRIVATE',
-    'The saved sign-in is given neither to the agent nor to a preview',
-    400,
-  )
-export const siteEnvAgentClosed = () =>
-  new DomainError(
-    'SITE_ENV_AGENT_CLOSED',
-    'Variables are not given to the agent in a workspace of client data before the 152-FZ gate',
-    409,
-  )
-export const siteEnvLimit = () =>
-  new DomainError('SITE_ENV_LIMIT', 'The site has the most variables it may have', 409)
-export const siteEnvHostsLimit = () =>
-  new DomainError(
-    'SITE_ENV_HOSTS_LIMIT',
-    'The variables of the site would lead to more hosts than a sandbox takes',
-    409,
-  )
-export const siteEnvChanged = () =>
-  new DomainError('SITE_ENV_CHANGED', 'The variable was changed meanwhile', 409)
+export const workspaceEnvNotAllowed = () =>
+  new DomainError('WORKSPACE_ENV_NOT_ALLOWED', 'Only an owner or an admin changes variables', 403)
+export const workspaceEnvNameInvalid = () =>
+  new DomainError('WORKSPACE_ENV_NAME_INVALID', 'The name of the variable is not allowed', 400)
+export const workspaceEnvNameReserved = () =>
+  new DomainError('WORKSPACE_ENV_NAME_RESERVED', 'The name of the variable is reserved', 400)
+export const workspaceEnvValueInvalid = () =>
+  new DomainError('WORKSPACE_ENV_VALUE_INVALID', 'The value of the variable is not allowed', 400)
+export const workspaceEnvLimit = () =>
+  new DomainError('WORKSPACE_ENV_LIMIT', 'The workspace has the most variables it may have', 409)
+export const workspaceEnvChanged = () =>
+  new DomainError('WORKSPACE_ENV_CHANGED', 'The variable was changed meanwhile', 409)
+export const workspaceNotFound = () =>
+  new DomainError('NOT_FOUND', 'No such workspace among the workspaces of the user', 404)
 
 // Files attached to a message (docs/plan/57-browser-tasks.md, Б26).
 

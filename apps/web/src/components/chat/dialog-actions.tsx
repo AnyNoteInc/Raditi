@@ -280,16 +280,10 @@ export function RemoveDialogConfirm({
   taskId,
   open,
   onClose,
-  withSite,
-  undoable = false,
 }: {
   taskId: string
   open: boolean
   onClose: () => void
-  /** The chat has a project; without one the words say nothing of a site. */
-  withSite: boolean
-  /** «Отменить выпуск» of the dialog is offered now: deleting it takes the button away too. */
-  undoable?: boolean
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
@@ -330,8 +324,7 @@ export function RemoveDialogConfirm({
       danger
       onConfirm={() => void confirm()}
     >
-      <Typography sx={{ mt: 1.5 }}>{nbsp(dialogMenuText.removeBody(withSite))}</Typography>
-      {undoable ? <Typography sx={{ mt: 1 }}>{nbsp(dialogMenuText.removeUndo)}</Typography> : null}
+      <Typography sx={{ mt: 1.5 }}>{nbsp(dialogMenuText.removeBody)}</Typography>
     </ConfirmDialog>
   )
 }

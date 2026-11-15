@@ -3,9 +3,9 @@ import { DomainError } from '@repo/domain'
 
 import { bindMessageAttachments, requestAttachments } from './attachments.ts'
 import { underDialogLock, writeRequest } from './dialog-lock.ts'
-import { cancelPending, requestOf, turnRewinding } from './dialog-state.ts'
+import { cancelPending, requestOf } from './dialog-state.ts'
 import { requestPayload, requestText } from './request-text.ts'
-import { releaseInProgress, taskFinished, taskRedoing, taskRewinding } from './refusals.ts'
+import { taskFinished } from './refusals.ts'
 
 // The queue of a chat (docs/plan/75-chat-input-output.md, ВВ1–ВВ5): while the agent works the
 // client writes on. The words wait in `task_queued_messages`, where the client may change or
@@ -41,18 +41,10 @@ export interface QueuedWords {
 const working = (status: string) => (WORKING as readonly string[]).includes(status)
 
 /** What a dialog of the queue refuses besides its status: what `task.message` refuses. */
-async function assertQueueOpen(
-  tx: Tx,
-  task: { id: string; status: string; requirements: { repository: boolean; browser: boolean } },
-) {
-  if (task.status === 'deploying' || task.status === 'verifying') throw releaseInProgress()
+async function assertQueueOpen(tx: Tx, task: { id: string; status: string }) {
   if (!working(task.status)) throw taskNotBusy()
   // «Остановить» is on its way: the chat ends, nothing waits for it.
   if (await cancelPending(tx, task.id)) throw taskFinished()
-  if (task.requirements.repository) {
-    const pending = await turnRewinding(tx, task.id)
-    if (pending !== null) throw pending.redo ? taskRedoing() : taskRewinding()
-  }
 }
 
 /**
@@ -90,7 +82,6 @@ export async function queueDialogWords(
       taskId: task.id,
       userId: input.userId,
       workspaceId: task.workspaceId,
-      siteId: task.siteId,
     })
     const row = await tx.taskQueuedMessage.create({
       data: {

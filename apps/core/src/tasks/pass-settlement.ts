@@ -8,16 +8,9 @@ import {
 } from '@repo/billing'
 import {
   cancelWaitingTask,
-  carryBrowserChecks,
-  excludeTurnDbOperations,
   insertFeedEvent,
-  nextCandidateRevision,
-  recordCandidate,
   rejectTurn,
-  requestPreviewSync,
   settleTurn,
-  supersedeStandingCandidate,
-  taskHasProductionWrites,
   waitingTaskStatuses,
   type Prisma,
   type PrismaClient,
@@ -30,21 +23,17 @@ import {
 } from '@repo/db'
 import {
   agentChatTitle,
-  candidateFactsSchema,
   feedEndedSiteOf,
   feedLimits,
   feedSiteOf,
   isDomainError,
-  isTooLarge,
   Money,
   readFeedRow,
   taskHoldExpiry,
-  withSite,
   type FeedCreditsState,
   type FeedFailureCode,
   type FeedQuestionPayload,
   type FeedRow,
-  type SiteStack,
   type TaskRequirements,
   type TaskWaitingReason,
   type TurnEvidence,
@@ -53,19 +42,12 @@ import {
   refusingWindow,
 } from '@repo/domain'
 
-import {
-  browserFailedInTurn,
-  readBrowserTaskFacts,
-  type BrowserTaskFacts,
-} from '../browser/browser-facts.ts'
+import { readBrowserTaskFacts, type BrowserTaskFacts } from '../browser/browser-facts.ts'
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
-import type { CandidateBuild, CandidateBuilder, StandingCandidate } from './candidate-builder.ts'
-import { isComparisonMissing } from './candidate-git.ts'
 import { agentQuestionOf, agentWords, ceilingQuestionOf, feedFailureOf } from './turn-outcome.ts'
 
-// How a pass of the agent ends (docs/plan/53-chat-preview-release.md, R3, Р5–Р8, Р22; spec §7).
-// Each ending is one transaction: the conditional move of the task (settleTurn), its feed rows,
-// the candidate and the money — the move first, then @repo/billing, so the task row is always
+// How a pass of the agent ends (spec §7). Each ending is one transaction: the conditional move of
+// the task (settleTurn), its feed rows and the money — the move first, then @repo/billing, so the task row is always
 // locked before the credit accounts. The live handler and the sweep both end passes here; the
 // conditional move lets only one of them write. The client's «Отменить» is read again after the
 // move has locked the task row, so a press web wrote while the pass was being ended still wins.
@@ -73,7 +55,9 @@ import { agentQuestionOf, agentWords, ceilingQuestionOf, feedFailureOf } from '.
 type JournalReason = NonNullable<TurnEvidence['reason']>
 type CeilingQuestion = Extract<FeedQuestionPayload, { kind: 'ceiling' }>
 type BrowserQuestion = Extract<FeedQuestionPayload, { kind: 'browser' }>
-type FeedResultSite = Parameters<typeof feedSiteOf>[1]
+
+/** A chat has no site (docs/plan/83-remove-projects.md, БП1): what the feed says of one. */
+const NO_SITE = Object.freeze({ siteId: null })
 
 /** A pass orphaned this many times in one attempt is failed instead of put again. */
 export const ORPHANED_PASS_LIMIT = 3
@@ -86,11 +70,8 @@ export const ORPHANED_PASS_EVENT = 'pass.orphaned'
 export const CHARGE_LATER_EVENT = 'billing.charge_later'
 
 export type PassEnding =
-  /**
-   * The turn completed: its result, and with a repository the head it published on
-   * `agent/<taskId>` — a turn without one publishes nothing (docs/plan/57-browser-tasks.md, Б4).
-   */
-  | { kind: 'completed'; turn: number; result: TurnResult; headSha?: string }
+  /** The turn completed with its result; it publishes nothing (docs/plan/57, Б4). */
+  | { kind: 'completed'; turn: number; result: TurnResult }
   /** The turn, or the pass before its turn, failed. */
   | {
       kind: 'failed'
@@ -105,7 +86,7 @@ export type PassEnding =
   | { kind: 'ceiling'; question: CeilingQuestion }
   /** Before a turn: the pass cannot be run at all. */
   | { kind: 'refused'; code: FeedFailureCode }
-  /** The site or the pool of agents is busy: back to the queue, not a failure. */
+  /** The lease or the pool of agents is busy: back to the queue, not a failure. */
   | { kind: 'busy'; waiting: TaskWaitingReason }
   /**
    * Before a turn: the handler of the pass is gone (its core stopped while planning). Nothing
@@ -129,15 +110,13 @@ export interface PassRef {
 /**
  * - `moved` — the task left its pass with this ending;
  * - `skipped` — another writer moved it first, or a turn of it is still assigned;
- * - `later` — the ending cannot be written yet (the usage of the turn keys is open, git did not
- *   answer): the task stays where it is and the sweep comes back to it.
+ * - `later` — the ending cannot be written yet: the task stays where it is and the sweep comes
+ *   back to it.
  */
 export type SettleAnswer = 'moved' | 'skipped' | 'later'
 
 export interface SettlementDependencies {
   db: PrismaClient
-  /** null while git is not configured: a completed pass then cannot become a candidate. */
-  candidates: CandidateBuilder | null
   /**
    * Closes the cloud browser of a task that ended (docs/plan/57, Б18); null — no worker is
    * configured, and the collector closes what is left.
@@ -147,14 +126,6 @@ export interface SettlementDependencies {
   now?: () => Date
   /** Counts a pass a window of its workspace stopped (plan 71, a metric without ids). */
   onUsageLimit?: (refusal: { window: '5h' | 'week'; tier: string }) => void
-}
-
-export interface SettleOptions {
-  /**
-   * The sweep has waited long enough: a candidate that cannot be built fails the pass — the task
-   * is moved anyway, never kept forever.
-   */
-  giveUp?: boolean
 }
 
 /** Thrown inside a transaction to roll it back: the move matched nothing. */
@@ -171,15 +142,8 @@ class CancelPressed extends Error {
 type Reader = Pick<Prisma.TransactionClient, 'taskEvent'>
 
 interface SettleContext {
-  task: {
-    id: string
-    workspaceId: string
-    /** null — a chat without a project (docs/plan/61-chats-first.md, К7). */
-    siteId: string | null
-    billable: boolean
-    site: { stack: SiteStack; url: string; installedVersion: string | null } | null
-  }
-  /** What the task works with (docs/plan/57, Б2): a pass without a repository has no candidate. */
+  task: { id: string; workspaceId: string; billable: boolean }
+  /** What the task works with (docs/plan/57, Б2): the browser or nothing. */
   requirements: TaskRequirements
   /** The facts of the task's cloud browser; null for a task without one. */
   browser: BrowserTaskFacts | null
@@ -191,13 +155,12 @@ interface SettleContext {
    */
   interrupt: boolean
   policyFlagged: boolean
-  /**
-   * The task wrote the production site and the write was not undone (legacy content path), or
-   * anyone acted in its cloud browser (Б28).
-   */
+  /** Anyone acted in the task's cloud browser (Б28): nothing gives that back. */
   productionWrites: boolean
-  standing: StandingCandidate | null
 }
+
+/** What a failure or a cancellation says of the sites the task acted on. */
+const endedSiteOf = (context: SettleContext) => feedEndedSiteOf(NO_SITE, context.productionWrites)
 
 const creditsOf = (returned: ReturnedTaskHolds): FeedCreditsState | null =>
   returned.applied ? (returned.expiries.length > 0 ? 'expired' : 'returned') : null
@@ -205,42 +168,6 @@ const creditsOf = (returned: ReturnedTaskHolds): FeedCreditsState | null =>
 /** What a task in the browser had saved on the site, for a row that ends it (Б23, Б24). */
 const objectsOf = (context: SettleContext) =>
   context.browser?.objects.length ? { objects: context.browser.objects } : {}
-
-/**
- * The same for a row that ends a pass and leaves the chat open: a chat with the code tells of
- * what this pass did (docs/plan/61-chats-first.md, §5.8), a task in the browser alone of all it did.
- */
-const passObjectsOf = (context: SettleContext) => {
-  const objects = (context.browser?.pass ?? context.browser)?.objects
-  return objects?.length ? { objects } : {}
-}
-
-/**
- * What a failure says of the site. A chat with the code is told by what this pass did, as its
- * result is: `check` closes «Попробовать ещё» (`failureAllowsRetry`), and a news item of an earlier
- * pass must not close it for a pass that never touched the browser. «unchanged» would be untrue
- * after that news item, so such a row says nothing of the site.
- */
-function failureSiteOf(context: SettleContext) {
-  const pass = context.browser?.pass
-  if (!pass) return feedEndedSiteOf(context.task, context.productionWrites)
-  if (pass.wrote) return feedEndedSiteOf(context.task, true)
-  return context.productionWrites ? ('none' as const) : ('unchanged' as const)
-}
-
-/**
- * What the row of a result of a task with a repository says of the site. A chat with the browser
- * too is told by what this pass did: after one news item, every answer about the code would say
- * «Правка уже на сайте.». On the card of a candidate «unchanged» reads «На сайте пока ничего не
- * изменилось», which an earlier pass made untrue: such a card says nothing of the site.
- */
-function resultSiteOf(context: SettleContext, hasCandidate: boolean): FeedResultSite {
-  const pass = context.browser?.pass
-  if (!pass) return context.productionWrites ? 'changed' : 'unchanged'
-  if (pass.confirmed) return 'changed'
-  if (pass.wrote) return 'check'
-  return hasCandidate && context.productionWrites ? 'none' : 'unchanged'
-}
 
 /**
  * What a completed pass asks the client, in this order: the agent asked them to act in the browser
@@ -331,11 +258,7 @@ export class PassSettlement {
     this.#now = deps.now ?? (() => new Date())
   }
 
-  async settle(
-    pass: PassRef,
-    ending: PassEnding,
-    options: SettleOptions = {},
-  ): Promise<SettleAnswer> {
+  async settle(pass: PassRef, ending: PassEnding): Promise<SettleAnswer> {
     const context = await this.#context(pass.taskId)
     if (!context) return 'skipped'
     const turn = 'turn' in ending ? ending.turn : null
@@ -346,7 +269,7 @@ export class PassSettlement {
     if (context.interrupt && ending.kind === 'cancelled')
       return this.#interrupted(pass, context, turn)
     try {
-      return await this.#end(pass, context, ending, options)
+      return await this.#end(pass, context, ending)
     } catch (error) {
       // The press was written while this ending was being prepared: the move is rolled back.
       if (!(error instanceof CancelPressed)) throw error
@@ -359,13 +282,6 @@ export class PassSettlement {
     }
   }
 
-  /**
-   * A dialog that waits — queued, with a question or with a candidate — whose «Отменить» came
-   * while core still saw its pass at work: web left it to core (`turn.cancel`), and the pass
-   * ended otherwise first. It is closed as web closes a waiting dialog: `cancelled`, the reserve
-   * given back, `feed.cancelled` by its author, the preview taken down. Never with a release in
-   * work (cancelWaitingTask).
-   */
   /**
    * A pass the limit of its workspace kept from its claim (docs/plan/70-turn-without-time-limit
    * .md, ВР13): the task stays `queued` for the attempt and waits for the agents, as a pass the
@@ -387,6 +303,12 @@ export class PassSettlement {
     })
   }
 
+  /**
+   * A dialog that waits — queued or with a question — whose «Отменить» came while core still saw
+   * its pass at work: web left it to core (`turn.cancel`), and the pass ended otherwise first. It
+   * is closed as web closes a waiting dialog: `cancelled`, the reserve given back, `feed.cancelled`
+   * by its author (cancelWaitingTask).
+   */
   async cancelWaiting(taskId: string): Promise<SettleAnswer> {
     const context = await this.#context(taskId)
     // «Отправить сейчас» that came after its pass had ended (docs/plan/75, ВВ4): there is nothing
@@ -419,13 +341,12 @@ export class PassSettlement {
             turn: task.turnNo > 0 ? task.turnNo : null,
             by: 'customer',
             authorId: cancel.authorId,
-            site: feedEndedSiteOf(context.task, context.productionWrites),
+            site: endedSiteOf(context),
             credits: creditsOf(returned),
             ...objectsOf(context),
           },
         },
       })
-      await requestPreviewSync(tx, { taskId, revision: 0 })
     }).then((answer) => this.#closeBrowser(context, answer, 'task_cancelled'))
   }
 
@@ -452,15 +373,10 @@ export class PassSettlement {
     })
   }
 
-  #end(
-    pass: PassRef,
-    context: SettleContext,
-    ending: PassEnding,
-    options: SettleOptions,
-  ): Promise<SettleAnswer> {
+  #end(pass: PassRef, context: SettleContext, ending: PassEnding): Promise<SettleAnswer> {
     switch (ending.kind) {
       case 'completed':
-        return this.#completed(pass, context, ending, options)
+        return this.#completed(pass, context, ending)
       case 'failed':
         return this.#failed(pass, context, ending)
       case 'cancelled':
@@ -498,195 +414,22 @@ export class PassSettlement {
 
   // --- Endings --------------------------------------------------------------------------------
 
+  /**
+   * A completed pass (docs/plan/57-browser-tasks.md, Б25; owner's answer of 26.10.2026: «сделай
+   * также как в работе, результат не должен быть подтвержден, мы тарифицируем работу с LLM»). In
+   * this order: the agent asked the client to act in the browser (`web_help`), the client holds
+   * the browser, the agent asked a question — each a question for the client; else the agent's
+   * answer, with what the task saved through its browser as the platform found it, and the dialog
+   * stays open for the client's next words. Every way the pass is charged (`#chargePass`), and the
+   * browser lives on until its idle time ends.
+   */
   async #completed(
     pass: PassRef,
     context: SettleContext,
     ending: Extract<PassEnding, { kind: 'completed' }>,
-    options: SettleOptions,
   ): Promise<SettleAnswer> {
     const { result, turn } = ending
     await this.#nameChat(pass.taskId, result.chat_title)
-    // Without a repository there is no candidate: the site itself is what the pass changed.
-    if (!context.requirements.repository)
-      return this.#completedWithoutRepository(pass, context, ending)
-    const message = agentWords(result.client_message, 2000)
-    const question = questionOf(context, result, turn, message)
-    // Nothing readable is left of the agent's words: its result is as good as missing.
-    if (!question && !message) return this.#failure(pass, context, turn, 'technical')
-    // A turn with a repository published its head: without one there is nothing to compare.
-    const headSha = ending.headSha
-    if (!headSha) return this.#failure(pass, context, turn, 'technical')
-
-    let build: CandidateBuild
-    try {
-      if (!this.deps.candidates) throw new Error('git is not configured')
-      const revision = await nextCandidateRevision(this.deps.db, pass.taskId)
-      // A repository is of a site: the database holds no task with one and without the other.
-      const candidateContext = await this.deps.candidates.context(
-        withSite(context.task),
-        context.standing,
-        revision,
-      )
-      if (!candidateContext) throw new Error('the dialog has no base')
-      build = await this.deps.candidates.build(candidateContext, {
-        turnNo: turn,
-        headSha,
-        claims: result,
-      })
-    } catch (error) {
-      if (isTooLarge(error)) return this.#failure(pass, context, turn, 'too_large')
-      // This build of core cannot compare commits (R4): the change can never become a
-      // candidate here, so the client is not kept waiting for it.
-      if (isComparisonMissing(error)) {
-        this.#logger.error(`pass_candidate_unsupported task=${pass.taskId} turn=${turn}`)
-        return this.#failure(pass, context, turn, 'unavailable')
-      }
-      if (!options.giveUp) {
-        this.#logger.warn(`pass_candidate_later task=${pass.taskId} turn=${turn}`)
-        return 'later'
-      }
-      return this.#failure(pass, context, turn, 'technical')
-    }
-
-    const hasCandidate =
-      build.kind === 'candidate' || (build.kind === 'unchanged' && !!context.standing)
-    // Nothing to release and nothing asked: the dialog stays open for the client's next words
-    // (owner's decision of 26.10.2026, «не закрывай чат»).
-    const to: SettledTaskStatus = question || !hasCandidate ? 'awaiting_user' : 'awaiting_approval'
-    // The trusted count of what the dialog would release now; none once the pass undid it all.
-    const facts =
-      build.kind === 'candidate'
-        ? build.record.facts
-        : build.kind === 'unchanged'
-          ? (context.standing?.facts ?? null)
-          : null
-    const filesChanged = facts
-      ? facts.addedFiles + facts.modifiedFiles + facts.deletedFiles + facts.mediaFiles
-      : 0
-    const rows: FeedRow[] = []
-    if (build.kind === 'candidate') {
-      const { record } = build
-      rows.push({
-        type: 'feed.candidate',
-        payload: {
-          v: 1,
-          turn,
-          revision: record.revision,
-          version: record.proposedVersion,
-          bump: record.proposedBump,
-          files: {
-            added: record.facts.addedFiles,
-            modified: record.facts.modifiedFiles,
-            deleted: record.facts.deletedFiles,
-          },
-          media: record.facts.mediaFiles,
-          records: record.dbPlan.length,
-        },
-      })
-    }
-    rows.push(
-      question
-        ? { type: 'feed.question', payload: question }
-        : {
-            type: 'feed.result',
-            payload: {
-              v: 1,
-              turn,
-              message: message!,
-              site: feedSiteOf(context.task, resultSiteOf(context, hasCandidate)),
-              next: hasCandidate ? 'awaiting_approval' : 'awaiting_user',
-              filesChanged: Math.min(filesChanged, 10_000),
-              changeType: result.change_type,
-              needsApproval: result.needs_approval,
-              risk: result.risk,
-              ...passObjectsOf(context),
-            },
-          },
-    )
-
-    return this.#transaction(async (tx, now) => {
-      const moved = await settleTurn(tx, {
-        taskId: pass.taskId,
-        attempt: pass.attempt,
-        expectedTurnNo: pass.turnNo,
-        from: ['running'],
-        to,
-        turn,
-        feed: rows,
-        summary: result.summary,
-        changeType: result.change_type,
-      })
-      if (!moved.moved) throw new NotMoved()
-      await this.#assertNotCancelled(tx, pass.taskId)
-      if (build.kind === 'candidate') {
-        const recorded = await recordCandidate(tx, build.record)
-        // The agent's checks in the browser of this turn, when nothing reached the preview
-        // after them (R7): a row `agent_browser` of the revision the turn made.
-        await carryBrowserChecks(tx, {
-          taskId: pass.taskId,
-          candidateId: recorded.id,
-          turnNo: pass.turnNo,
-        })
-        await requestPreviewSync(tx, { taskId: pass.taskId, revision: build.record.revision })
-      } else if (build.kind === 'unchanged' && context.standing) {
-        // The turn looked at the revision that stands and changed nothing of it.
-        await carryBrowserChecks(tx, {
-          taskId: pass.taskId,
-          candidateId: context.standing.id,
-          turnNo: pass.turnNo,
-        })
-      } else if (build.kind === 'empty' && context.standing) {
-        // The pass undid every change of the dialog: nothing stands to release, and the preview
-        // shows the site as it is.
-        await supersedeStandingCandidate(tx, pass.taskId)
-        await requestPreviewSync(tx, { taskId: pass.taskId, revision: 0 })
-      }
-      // The pass is charged now, whatever the dialog waits for — an answer, a decision on its
-      // changes or the next words (owner's answer of 26.10.2026, «любой успешный запрос от LLM
-      // должен тарифицироваться»): the next words open a new chain.
-      if (context.task.billable) await this.#chargePass(tx, pass, now)
-      // The words the client queued while it worked go next (docs/plan/75, ВВ2).
-      await enqueueQueueDrain(tx, {
-        taskId: pass.taskId,
-        attempt: pass.attempt,
-        turnNo: pass.turnNo,
-      })
-      await this.#notify(
-        tx,
-        pass,
-        question ? 'question' : build.kind === 'candidate' ? 'ready' : 'answered',
-        now,
-      )
-    })
-  }
-
-  /**
-   * A completed pass of a task in the cloud browser (docs/plan/57-browser-tasks.md, Б25; Б23
-   * changed by the owner's answer of 26.10.2026: «сделай также как в работе, результат не должен
-   * быть подтвержден, мы тарифицируем работу с LLM»): no candidate — what the site holds now is
-   * the result. In this order: the agent asked the client to act in the browser (`web_help`),
-   * the client holds the browser, the agent asked a question — each a question for the client;
-   * else the agent's answer, with what the task saved on the site as the platform found it there
-   * (confirmed or not), and the dialog stays open for the client's next words, as a dialog with
-   * the repository does. Every way the pass is charged (`#chargePass`), and the browser lives on until
-   * its idle time ends. The exception: the browser, all such a task has, failed to start in this
-   * turn. That is the platform's failure whatever the agent said of it: `unavailable`, not charged
-   * (rule 7), as when the browser was opened before the turn.
-   */
-  async #completedWithoutRepository(
-    pass: PassRef,
-    context: SettleContext,
-    ending: Extract<PassEnding, { kind: 'completed' }>,
-  ): Promise<SettleAnswer> {
-    const { result, turn } = ending
-    // Only where the browser is the whole work. A chat without a site has more than the browser,
-    // and what the agent answered there is a finished pass.
-    if (
-      context.requirements.browser &&
-      context.task.siteId !== null &&
-      (await browserFailedInTurn(this.deps.db, pass.taskId, turn))
-    )
-      return this.#failure(pass, context, turn, 'unavailable')
     const browser = context.browser
     const message = agentWords(result.client_message, feedLimits.message)
     const question = questionOf(context, result, turn, message)
@@ -700,9 +443,8 @@ export class PassSettlement {
             v: 1,
             turn,
             message: message!,
-            // Changed when the platform found a saved object there or anyone acted in the browser.
             site: feedSiteOf(
-              context.task,
+              NO_SITE,
               browser?.confirmed || context.productionWrites ? 'changed' : 'unchanged',
             ),
             next: 'awaiting_user',
@@ -763,7 +505,7 @@ export class PassSettlement {
       if (window) return this.#usageLimit(pass, context, ending.turn, window)
     }
     // The step or the client's credits ran out inside the turn: the platform asks «Продолжить?»
-    // instead of failing, and a dialog with a candidate keeps `/release` (Р8). A key the gateway
+    // instead of failing (Р8). A key the gateway
     // stopped for its pace or its count of calls (`budget` too, П22) still had money: that is
     // the platform's limit, not the client's, and the pass fails as it is.
     if (code === 'technical' && ending.turn !== null && context.task.billable) {
@@ -775,19 +517,11 @@ export class PassSettlement {
 
   /**
    * A pass failed. Its turn, when it opened one, is marked refused (`rejectTurn`): the planner
-   * replaces it, «Обновить» does not carry it, and its model calls are not charged.
-   *
-   * A dialog that already had a candidate keeps it and its preview, whatever the failure (the
-   * owner's answer 1 of 18.10.2026; docs/plan/53, «Попробовать ещё (18.10)»): it waits in
-   * `awaiting_approval` with the failure row, as with «Продолжить?» (Р8) — `/release`, «Обновить»,
-   * words, «Отменить» and, when the failure allows one, «Попробовать ещё» stay open. The reserve
-   * stays and is moved on: the release is charged from it, and a retry gives it back.
-   *
-   * A dialog without a candidate stays open as well (owner's decision of 28.10.2026: «никогда не
-   * завершай диалог, если произошла ошибка… пользователь может ввести „продолжи“»): it waits in
-   * `awaiting_user` with the failure row, and its reserve goes back — the client's next words
-   * open a new chain with a reserve of its own (`postDialogMessage`). Its preview and its browser
-   * stay for that pass; they end by their own idle limits.
+   * starts a new session after it, and its model calls are not charged. The dialog stays open
+   * (owner's decision of 28.10.2026: «никогда не завершай диалог, если произошла ошибка…
+   * пользователь может ввести „продолжи“»): it waits in `awaiting_user` with the failure row, and
+   * its reserve goes back — the client's next words open a new chain with a reserve of its own
+   * (`postDialogMessage`). Its browser stays for that pass; it ends by its own idle limit.
    */
   async #failure(
     pass: PassRef,
@@ -795,48 +529,6 @@ export class PassSettlement {
     turn: number | null,
     code: FeedFailureCode,
   ): Promise<SettleAnswer> {
-    const site = failureSiteOf(context)
-    const { standing } = context
-    if (standing)
-      return this.#transaction(async (tx, now) => {
-        const moved = await settleTurn(tx, {
-          taskId: pass.taskId,
-          attempt: pass.attempt,
-          expectedTurnNo: pass.turnNo,
-          from: ['preparing', 'running'],
-          to: 'awaiting_approval',
-          turn,
-          feed: [
-            {
-              type: 'feed.failure',
-              payload: {
-                v: 1,
-                turn,
-                code,
-                site,
-                credits: null,
-                next: 'awaiting_approval',
-                ...passObjectsOf(context),
-              },
-            },
-          ],
-        })
-        if (!moved.moved) throw new NotMoved()
-        await this.#assertNotCancelled(tx, pass.taskId)
-        if (turn !== null) {
-          await rejectTurn(tx, { taskId: pass.taskId, turnNo: turn })
-          // The preview goes back to the candidate: the database writes of the turn leave the
-          // plan (Р22).
-          await excludeTurnDbOperations(tx, { taskId: pass.taskId, turnNo: turn })
-          await requestPreviewSync(tx, { taskId: pass.taskId, revision: standing.revision })
-        }
-        if (context.task.billable)
-          await extendTaskHolds(tx, {
-            taskId: pass.taskId,
-            expiresAt: taskHoldExpiry(now, 'waiting'),
-          })
-        await this.#notify(tx, pass, 'failed', now)
-      })
     return this.#transaction(async (tx, now) => {
       const moved = await settleTurn(tx, {
         taskId: pass.taskId,
@@ -860,50 +552,41 @@ export class PassSettlement {
             v: 1,
             turn,
             code,
-            site,
+            site: endedSiteOf(context),
             credits: creditsOf(returned),
             next: 'awaiting_user',
-            ...passObjectsOf(context),
+            ...objectsOf(context),
           },
         },
       })
-      await this.#syncPreview(tx, pass.taskId, turn)
       await this.#notify(tx, pass, 'failed', now)
     })
   }
 
   /**
    * A pass stopped for «Отправить сейчас» (docs/plan/75-chat-input-output.md, ВВ4): the dialog
-   * stays open — with its candidate as it stood, or waiting for words — and the words the client
+   * stays open and the words the client
    * queued go next (`queue.drain`). The turn is not rejected: the client stopped it, the platform
    * did not fail, so what the model did is charged like a pass that completed (rule 7; the owner's
-   * answer of 26.10.2026). Nothing of it is published: the next pass replaces the turn from the
-   * checkpoint it started with, so its words and the queued ones go to the agent together. The
-   * press stands in the feed; no other row is written.
+   * answer of 26.10.2026). The press stands in the feed; no other row is written.
    */
   async #interrupted(
     pass: PassRef,
     context: SettleContext,
     turn: number | null,
   ): Promise<SettleAnswer> {
-    const { standing } = context
     return this.#transaction(async (tx, now) => {
       const moved = await settleTurn(tx, {
         taskId: pass.taskId,
         attempt: pass.attempt,
         expectedTurnNo: pass.turnNo,
         from: ['preparing', 'running'],
-        to: standing ? 'awaiting_approval' : 'awaiting_user',
+        to: 'awaiting_user',
         turn,
         feed: [],
       })
       if (!moved.moved) throw new NotMoved()
       await this.#assertNotCancelled(tx, pass.taskId)
-      if (turn !== null && standing) {
-        // The preview goes back to the candidate: the database writes of the turn leave the plan.
-        await excludeTurnDbOperations(tx, { taskId: pass.taskId, turnNo: turn })
-        await requestPreviewSync(tx, { taskId: pass.taskId, revision: standing.revision })
-      }
       if (context.task.billable) await this.#chargePass(tx, pass, now)
       await enqueueQueueDrain(tx, {
         taskId: pass.taskId,
@@ -946,13 +629,12 @@ export class PassSettlement {
             turn,
             by: 'customer',
             ...(context.cancel ? { authorId: context.cancel.authorId } : {}),
-            site: feedEndedSiteOf(context.task, context.productionWrites),
+            site: endedSiteOf(context),
             credits: creditsOf(returned),
             ...objectsOf(context),
           },
         },
       })
-      await this.#syncPreview(tx, pass.taskId, turn)
     }).then((answer) => this.#closeBrowser(context, answer, 'task_cancelled'))
   }
 
@@ -962,7 +644,7 @@ export class PassSettlement {
     turn: number | null,
     question: CeilingQuestion,
   ): Promise<SettleAnswer> {
-    const to: SettledTaskStatus = context.standing ? 'awaiting_approval' : 'awaiting_user'
+    const to: SettledTaskStatus = 'awaiting_user'
     return this.#transaction(async (tx, now) => {
       const moved = await settleTurn(tx, {
         taskId: pass.taskId,
@@ -976,15 +658,6 @@ export class PassSettlement {
       if (!moved.moved) throw new NotMoved()
       await this.#assertNotCancelled(tx, pass.taskId)
       await this.#notify(tx, pass, 'limit', now)
-      // The preview goes back to the last candidate, or to the base: the database writes of
-      // the turn leave the plan (Р22).
-      if (turn !== null) {
-        await excludeTurnDbOperations(tx, { taskId: pass.taskId, turnNo: turn })
-        await requestPreviewSync(tx, {
-          taskId: pass.taskId,
-          revision: context.standing?.revision ?? 0,
-        })
-      }
       if (!context.task.billable) return
       // The turn worked until the step ran out: that work is charged (26.10.2026), and
       // «Продолжить» opens a new chain. A ceiling found before any turn charges nothing: the
@@ -999,7 +672,7 @@ export class PassSettlement {
   }
 
   /**
-   * Back to the queue from `preparing`: `waiting` names why the site or the pool sent it back;
+   * Back to the queue from `preparing`: `waiting` names why the lease or the pool sent it back;
    * null — its handler was lost before a turn (`orphaned`), and the row that counts those is
    * written with the move.
    */
@@ -1111,20 +784,6 @@ export class PassSettlement {
   }
 
   /**
-   * The last turn was refused or the dialog was closed (`cancelled`): the database writes of that
-   * turn leave the plan (Р22), and the manager of previews is woken — it takes the preview of a
-   * closed task down (R5c), whether or not a turn ever ran, and syncs an open one without them.
-   */
-  async #syncPreview(
-    tx: Prisma.TransactionClient,
-    taskId: string,
-    turn: number | null,
-  ): Promise<void> {
-    if (turn !== null) await excludeTurnDbOperations(tx, { taskId, turnNo: turn })
-    await requestPreviewSync(tx, { taskId, revision: 0 })
-  }
-
-  /**
    * The task ended with this move: its cloud browser is closed (Б18) — after the commit, best
    * effort; the collector closes what a failure here leaves. Answers the move as it was.
    */
@@ -1198,7 +857,7 @@ export class PassSettlement {
   /**
    * A pass a window of the workspace stopped (plan 71): what it did is charged, as after a ceiling
    * of money (`#ceiling`); the row is a failure `usage_limit` with the window and its reset, so it
-   * says when the work goes on. A dialog with a candidate keeps it (`awaiting_approval`).
+   * says when the work goes on.
    */
   async #usageLimit(
     pass: PassRef,
@@ -1206,7 +865,7 @@ export class PassSettlement {
     turn: number,
     window: { kind: '5h' | 'week'; resetsAt: Date; tier: string },
   ): Promise<SettleAnswer> {
-    const next = context.standing ? 'awaiting_approval' : 'awaiting_user'
+    const next = 'awaiting_user'
     const answer = await this.#transaction(async (tx, now) => {
       const moved = await settleTurn(tx, {
         taskId: pass.taskId,
@@ -1222,22 +881,17 @@ export class PassSettlement {
               v: 1,
               turn,
               code: 'usage_limit',
-              site: failureSiteOf(context),
+              site: endedSiteOf(context),
               credits: null,
               next,
               window: { kind: window.kind, resetsAt: window.resetsAt.toISOString() },
-              ...passObjectsOf(context),
+              ...objectsOf(context),
             },
           },
         ],
       })
       if (!moved.moved) throw new NotMoved()
       await this.#assertNotCancelled(tx, pass.taskId)
-      await excludeTurnDbOperations(tx, { taskId: pass.taskId, turnNo: turn })
-      await requestPreviewSync(tx, {
-        taskId: pass.taskId,
-        revision: context.standing?.revision ?? 0,
-      })
       if (context.task.billable) await this.#chargePass(tx, pass, now)
       await this.#notify(tx, pass, 'limit', now)
     })
@@ -1297,85 +951,30 @@ export class PassSettlement {
     )
   }
 
-  /**
-   * When the work the feed has not told of yet started: the first turn after the last result or
-   * failure. A pass that ended with a question tells of nothing, so the next ending tells of it
-   * too. null — no turn started since: the pass being ended did nothing.
-   */
-  async #untoldSince(taskId: string): Promise<Date | null> {
-    const { db } = this.deps
-    const told = await db.taskEvent.findFirst({
-      where: { taskId, type: { in: ['feed.result', 'feed.failure'] } },
-      orderBy: { id: 'desc' },
-      select: { createdAt: true },
-    })
-    const first = await db.taskTurn.findFirst({
-      where: { taskId, startedAt: told ? { gte: told.createdAt } : { not: null } },
-      orderBy: { turnNo: 'asc' },
-      select: { startedAt: true },
-    })
-    return first?.startedAt ?? null
-  }
-
   /** What the ending of a pass depends on beyond the pass itself, read before its transaction. */
   async #context(taskId: string): Promise<SettleContext | null> {
     const { db } = this.deps
     const task = await db.task.findUnique({
       where: { id: taskId },
-      select: {
-        id: true,
-        workspaceId: true,
-        siteId: true,
-        billable: true,
-        needsRepository: true,
-        needsBrowser: true,
-        site: { select: { stack: true, url: true, installedVersion: true } },
-      },
+      select: { id: true, workspaceId: true, billable: true, needsBrowser: true },
     })
     if (!task) return null
-    const { needsRepository, needsBrowser, ...settled } = task
-    // Only a chat with the code goes on past what its browser did (docs/plan/61, §5.8).
-    const window =
-      needsRepository && needsBrowser ? { since: await this.#untoldSince(taskId) } : null
-    const [cancel, interrupt, flagged, writes, standing, browser] = await Promise.all([
+    const { needsBrowser, ...settled } = task
+    const [cancel, interrupt, flagged, writes, browser] = await Promise.all([
       pressedCancel(db, taskId),
       pressedInterrupt(db, taskId),
       db.taskEvent.count({ where: { taskId, type: 'llm.policy_flagged' } }),
-      taskHasProductionWrites(db, taskId),
-      db.taskCandidate.findFirst({
-        where: { taskId, status: { in: ['current', 'stale'] } },
-        orderBy: { revision: 'desc' },
-        select: {
-          id: true,
-          revision: true,
-          baseSha: true,
-          headSha: true,
-          dbPlanSha256: true,
-          facts: true,
-        },
-      }),
-      needsBrowser ? readBrowserTaskFacts(db, taskId, window) : null,
+      db.browserSession.count({ where: { taskId, wroteAt: { not: null } } }),
+      needsBrowser ? readBrowserTaskFacts(db, taskId, null) : null,
     ])
-    const facts = standing ? candidateFactsSchema.safeParse(standing.facts) : null
     return {
       task: settled,
-      requirements: { repository: needsRepository, browser: needsBrowser },
+      requirements: { repository: false, browser: needsBrowser },
       browser,
       cancel,
       interrupt,
       policyFlagged: flagged > 0,
-      productionWrites: writes,
-      standing:
-        standing && facts?.success
-          ? {
-              id: standing.id,
-              revision: standing.revision,
-              baseSha: standing.baseSha,
-              headSha: standing.headSha,
-              dbPlanSha256: standing.dbPlanSha256,
-              facts: facts.data,
-            }
-          : null,
+      productionWrites: writes > 0,
     }
   }
 }

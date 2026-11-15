@@ -16,7 +16,7 @@ import { nbsp } from '@/lib/nbsp'
 
 import { scheduleTemplateTexts } from './schedule-texts'
 
-/** One template: its icon, name, when it runs, and whether it needs a project or is set up. */
+/** One template: its icon, name, when it runs, and whether it is set up already. */
 function TemplateCard({
   template,
   used,
@@ -88,43 +88,26 @@ function TemplateCard({
             >
               {nbsp(scheduleText(template.triggers, DEFAULT_SCHEDULE_TIMEZONE))}
             </Typography>
-            {used || template.project === 'required' ? (
+            {used ? (
               <Box component="span" sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1 }}>
-                {used ? (
-                  <Box
-                    component="span"
-                    sx={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 0.5,
-                      px: 1,
-                      py: 0.25,
-                      borderRadius: 999,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      color: 'success.main',
-                      bgcolor: 'action.hover',
-                    }}
-                  >
-                    <AppIcon name="check" size={13} />
-                    {scheduleTemplateTexts.used}
-                  </Box>
-                ) : null}
-                {template.project === 'required' ? (
-                  <Box
-                    component="span"
-                    sx={{
-                      px: 1,
-                      py: 0.25,
-                      borderRadius: 999,
-                      fontSize: 12,
-                      color: 'text.secondary',
-                      boxShadow: 'inset 0 0 0 1px var(--mui-palette-divider)',
-                    }}
-                  >
-                    {scheduleTemplateTexts.needsProject}
-                  </Box>
-                ) : null}
+                <Box
+                  component="span"
+                  sx={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    px: 1,
+                    py: 0.25,
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: 'success.main',
+                    bgcolor: 'action.hover',
+                  }}
+                >
+                  <AppIcon name="check" size={13} />
+                  {scheduleTemplateTexts.used}
+                </Box>
               </Box>
             ) : null}
           </Box>

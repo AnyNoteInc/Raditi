@@ -104,7 +104,7 @@ export class TokenRenewer {
    * refresh token, or the server of sign-in refused it: the owner signs in again.
    */
   async renew(
-    siteId: string,
+    workspaceId: string,
     name: string,
     oauth: AgentSkillOAuth,
     used: SkillSecretRead,
@@ -112,9 +112,9 @@ export class TokenRenewer {
     const now = (this.deps.now ?? (() => new Date()))()
     return this.deps.prisma.$transaction(
       async (tx) => {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`mcp-skill:${siteId}/${name}`}, 0))`
-        this.deps.secrets.forget(siteId, name)
-        const fresh = await this.deps.secrets.read(siteId, name)
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`mcp-skill:${workspaceId}/${name}`}, 0))`
+        this.deps.secrets.forget(workspaceId, name)
+        const fresh = await this.deps.secrets.read(workspaceId, name)
         if (fresh === null || !('accessToken' in fresh.secret)) return null
         // Another turn renewed it while this one waited for the lock.
         if (fresh.version !== used.version) return fresh
@@ -140,15 +140,15 @@ export class TokenRenewer {
           ...(clientSecret ? { clientSecret } : {}),
         }
         const written = await this.deps.vault.kvWrite(
-          agentSkillSecretPath(siteId, name),
+          agentSkillSecretPath(workspaceId, name),
           Object.fromEntries(Object.entries(secret).filter(([, value]) => value !== undefined)),
           { cas: fresh.version, maxVersions: 1 },
         )
         const seconds =
           typeof answer?.expires_in === 'number' && answer.expires_in > 0 ? answer.expires_in : null
         const { expiresAt: _expired, ...kept } = oauth
-        await tx.siteAgentSkill.updateMany({
-          where: { siteId, name, authKind: 'oauth' },
+        await tx.workspaceAgentSkill.updateMany({
+          where: { workspaceId, name, authKind: 'oauth' },
           data: {
             oauth:
               seconds === null
@@ -159,7 +159,7 @@ export class TokenRenewer {
             authCheckedAt: now,
           },
         })
-        this.deps.secrets.forget(siteId, name)
+        this.deps.secrets.forget(workspaceId, name)
         return { secret, version: written.version }
       },
       { timeout: 30_000 },

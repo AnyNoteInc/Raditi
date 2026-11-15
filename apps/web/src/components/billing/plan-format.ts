@@ -28,7 +28,6 @@ export interface PlanLimits {
   creditsPerMonth: number
   /** Tariff credits a Moscow day may take; null: the tariff has no daily limit. */
   creditsPerDay: number | null
-  maxSites: number
 }
 
 /** What new tasks may still take from each account of credits. */
@@ -94,7 +93,7 @@ function typicalCredits({ from, to }: TypicalCredits, withWord: boolean): string
  */
 export function taskCostRule(): string {
   const { small, block } = typicalTaskCredits
-  return `Задача стоит столько кредитов, сколько работы она потребовала: небольшая правка текста, цены или фото — обычно ${typicalCredits(small, true)}, добавить блок или страницу — ${typicalCredits(block, false)}. ${CHARGED_FOR_DONE_WORK} Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.`
+  return `Задача стоит столько кредитов, сколько работы она потребовала: короткий ответ, письмо или поиск — обычно ${typicalCredits(small, true)}, документ, таблица или страница — ${typicalCredits(block, false)}. ${CHARGED_FOR_DONE_WORK} Уточнения — часть той же задачи: работа над ними добавляется к её стоимости.`
 }
 
 /**
@@ -112,7 +111,6 @@ export function planAverageTasks(creditsPerMonth: number): string | null {
   return about === null ? null : `В среднем ${about}`
 }
 
-/** «Один сайт на WordPress», «До 3 сайтов на WordPress». */
 /**
  * The sites of pages of a tariff, beside its credits (docs/plan/73-pages-sites.md, Дер37):
  * «До 2 сайтов из страниц»; null — the tariff gives none of its own.
@@ -125,11 +123,6 @@ export function planPageSites(pageSites: number | null): string | null {
 
 /** The own name of a site of pages (Дер32): «Бизнес» and above. */
 export const planCustomNames = 'Своё имя сайта: имя.pages.raditi.ru'
-
-export function planSites(maxSites: number): string {
-  if (maxSites === 1) return 'Один сайт на WordPress'
-  return `До ${maxSites} ${plural(maxSites, 'сайта', 'сайтов', 'сайтов')} на WordPress`
-}
 
 /** «до 50 кредитов в день», «до 21 кредита в день»: the daily limit of a tariff. */
 const upToADay = (creditsPerDay: number) =>
@@ -152,25 +145,10 @@ export function planDailyLimit(creditsPerDay: number | null): string | null {
 
 export { planWindowLimits } from '@/lib/plan-windows'
 
-/**
- * A tariff in one line: «800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на
- * WordPress».
- */
-export function planLimits({ creditsPerMonth, creditsPerDay, maxSites }: PlanLimits): string {
+/** A tariff in one line: «800 кредитов в месяц, до 100 кредитов в день». */
+export function planLimits({ creditsPerMonth, creditsPerDay }: PlanLimits): string {
   const perDay = creditsPerDay === null ? '' : `, ${upToADay(creditsPerDay)}`
-  const sites = planSites(maxSites)
-  return `${creditsCount(creditsPerMonth)} в месяц${perDay} · ${sites.charAt(0).toLocaleLowerCase('ru')}${sites.slice(1)}`
-}
-
-const SMALL_NUMBERS = ['один', 'два', 'три', 'четыре']
-
-/** A count as a sentence reads it: a word up to four, digits after that. */
-const inWords = (count: number) => SMALL_NUMBERS[count - 1] ?? String(count)
-
-/** Why a tariff cannot be chosen: «Не подойдёт: у вас два сайта, а тариф рассчитан на один.» */
-export function planTooSmall(siteCount: number, maxSites: number): string {
-  const sites = `${inWords(siteCount)} ${plural(siteCount, 'сайт', 'сайта', 'сайтов')}`
-  return `Не подойдёт: у вас ${sites}, а тариф рассчитан на ${inWords(maxSites)}.`
+  return `${creditsCount(creditsPerMonth)} в месяц${perDay}`
 }
 
 /** «45 по тарифу, 4 подарочных и 10 из пакета»: the parts of a list, the last one after «и». */
@@ -261,15 +239,15 @@ const FEMININE_COUNTS = [
 const countWord = (count: number) => FEMININE_COUNTS[count - 1] ?? String(count)
 
 /**
- * «на семь небольших правок или на две-три задачи побольше»: what a number of gift credits is
+ * «на семь небольших задач или на две-три задачи побольше»: what a number of gift credits is
  * enough for, by the counts of the domain (`giftTaskCounts`). Without the larger tasks when the
- * credits hold none; null when they are not enough for one small edit. The welcome letter says
+ * credits hold none; null when they are not enough for one small task. The welcome letter says
  * the same with a copy of this function (`packages/mail/src/templates/billing-format.ts`).
  */
 export function giftIsEnoughFor(credits: number): string | null {
   const { small, larger } = giftTaskCounts(credits)
   if (small === 0) return null
-  const edits = `на ${countWord(small)} ${plural(small, 'небольшую правку', 'небольшие правки', 'небольших правок')}`
+  const edits = `на ${countWord(small)} ${plural(small, 'небольшую задачу', 'небольшие задачи', 'небольших задач')}`
   if (larger.from === 0) return edits
   const range =
     larger.from === larger.to
@@ -303,13 +281,14 @@ export function endsWithPeriod(periodEnd: Date, left: CreditsLeft): string {
     left.tariff > 0
       ? `Тариф и ${creditsCount(left.tariff)} по тарифу доступны до ${until}.`
       : `Тариф действует до ${until}.`
-  const kept = left.pack > 0 ? `${creditsCount(left.pack)} из пакета, сайты` : 'Сайты'
+  const kept =
+    left.pack > 0 ? `${creditsCount(left.pack)} из пакета, чаты и страницы` : 'Чаты и страницы'
   const after = tasksOnGift(
     giftTakesTasks(left.gift + left.pack),
     'не принимаются, пока вы снова не выберете тариф',
     'принимаются',
   )
-  return `Автопродление отключено. ${tariff} После этого новые задачи ${after}. ${kept} и история правок сохранятся.`
+  return `Автопродление отключено. ${tariff} После этого новые задачи ${after}. ${kept} сохранятся.`
 }
 
 /** What happens at the end of the period while auto-renewal is on. */
@@ -497,8 +476,9 @@ function renewalCancelOutcome(input: RenewalCancel): string[] {
       'Способ оплаты, которым вы заплатите, мы не сохраним.',
     ]
   }
-  const kept = left.pack > 0 ? `${creditsCount(left.pack)} из пакета, сайты` : 'Сайты'
-  const after = `${kept} и история правок сохранятся.`
+  const kept =
+    left.pack > 0 ? `${creditsCount(left.pack)} из пакета, чаты и страницы` : 'Чаты и страницы'
+  const after = `${kept} сохранятся.`
   const tasks = tasksOnGift(
     giftTakesTasks(left.gift + left.pack),
     'не будут приниматься, пока вы снова не выберете тариф',
@@ -737,9 +717,10 @@ export function endedText(input: {
     not_paid: 'Оплата за следующий период не прошла, и тариф закончился. ',
     refunded: 'Мы вернули оплату за этот тариф, и он закончился. ',
   }[reason]
-  const kept = packCredits > 0 ? `${creditsCount(packCredits)} из пакета, сайты` : 'Сайты'
+  const kept =
+    packCredits > 0 ? `${creditsCount(packCredits)} из пакета, чаты и страницы` : 'Чаты и страницы'
   const tasks = tasksOnGift(tasksTaken, 'сейчас не принимаются', 'принимаются')
-  return `${why}Новые задачи ${tasks}. ${kept} и история правок на месте.`
+  return `${why}Новые задачи ${tasks}. ${kept} на месте.`
 }
 
 /** The coming charge of a tariff that renews, as `billing.autoRenewal` tells it. */

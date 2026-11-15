@@ -1,89 +1,20 @@
 // @vitest-environment jsdom
 import { signupGiftCredits } from '@repo/domain/billing/credit-numbers'
 import { leadFieldErrors } from '@repo/domain/leads/lead-input'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SITE_PHONE } from '@/lib/contacts'
 
 import { LandingLead } from './landing-lead'
-import { LandingPlatforms, platforms } from './landing-platforms'
-import { MAIN_ACTION_SHORT } from './main-action'
 import { HANGING, plain } from './testing'
 
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('LandingPlatforms', () => {
-  it('names the five systems the owner listed, in his order, in a list a screen reader hears', () => {
-    const { container } = render(<LandingPlatforms />)
-
-    expect(platforms).toEqual(['WordPress', 'Joomla', 'OpenCart', 'MODX', '1С-Битрикс'])
-    // The list is heard and not seen: the role finds it, so nothing hides it from a reader.
-    const list = screen.getByRole('list', { name: 'Поддерживаемые системы' })
-    expect(list).toHaveAttribute('data-sr-only')
-    expect(list.closest('[aria-hidden]')).toBeNull()
-    expect(
-      within(list)
-        .getAllByRole('listitem')
-        .map((item) => item.textContent),
-    ).toEqual([...platforms])
-    // And in the words under the heading, for the eye: the same five in the same order.
-    const words = plain(container.querySelector('#platforms h2 + p')?.textContent)
-    expect(words).toBe(
-      'WordPress, Joomla, OpenCart, MODX и 1С-Битрикс — Радити работает с каждой из этих систем.',
-    )
-    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
-      /^На\sчём сделан ваш сайт\?\s*Скорее всего, подойдёт\.$/,
-    )
-  })
-
-  it('runs the names as an ornament: hidden from a screen reader, every system on it', () => {
-    const { container } = render(<LandingPlatforms />)
-    const marquee = container.querySelector('#platforms [aria-hidden="true"]')
-    if (!marquee) throw new Error('no running line')
-
-    // Nothing of the line is a control or a name of the accessibility tree.
-    expect(marquee.querySelectorAll('a, button, [role], [tabindex]')).toHaveLength(0)
-    expect(within(marquee as HTMLElement).queryAllByRole('listitem')).toHaveLength(0)
-    const lines = [...marquee.children].map((line) =>
-      [...line.querySelectorAll('[class*="marqueeName"]')].map((name) => name.textContent),
-    )
-    expect(lines).toHaveLength(2)
-    for (const names of lines) {
-      // A line is written twice, so the run has no seam.
-      expect(names.length % 2).toBe(0)
-      expect(names.slice(names.length / 2)).toEqual(names.slice(0, names.length / 2))
-    }
-    // The two lines together show every system, and no name the list does not hold.
-    expect([...new Set(lines.flat())].sort()).toEqual([...platforms].sort())
-    // The second line runs the other way.
-    expect([...marquee.children].map((line) => line.getAttribute('data-reverse'))).toEqual([
-      'false',
-      'true',
-    ])
-    // No state is left in the section: no button, nothing pressed, no example card.
-    expect(screen.queryAllByRole('button')).toHaveLength(0)
-    expect(container.querySelector('[aria-pressed], #platform-example')).toBeNull()
-  })
-
-  it('leads to the lead by the short name of the main action and says none is coming later', () => {
-    const { container } = render(<LandingPlatforms />)
-
-    const links = screen.getAllByRole('link')
-    expect(links).toHaveLength(1)
-    expect(links[0]).toHaveAttribute('href', '#lead')
-    expect(links[0]).toHaveTextContent(new RegExp(`^${MAIN_ACTION_SHORT}\\s*$`))
-    const text = plain(container.textContent)
-    expect(text).toContain('У меня магазин на OpenCart. Это подойдёт?')
-    expect(text).toContain('Подойдёт. Подключим и настроим бесплатно.')
-    expect(text).not.toMatch(/скоро|в планах|позже/i)
-  })
-})
-
 describe('LandingLead', () => {
-  const site = () => screen.getByLabelText('Адрес сайта')
+  const site = () => screen.getByLabelText('Сайт компании')
   const contact = () => screen.getByLabelText('Телефон или Telegram')
   const fill = (phone = '+7 900 000-00-00') => {
     fireEvent.change(site(), { target: { value: 'kofeinya.ru' } })
@@ -102,26 +33,26 @@ describe('LandingLead', () => {
     return JSON.parse(String(init.body)) as unknown
   }
 
-  it('offers a signed-in visitor the free connection and no second gift', () => {
+  it('offers a signed-in visitor the free help and no second gift', () => {
     const { container } = render(<LandingLead isGuest={false} />)
     const text = plain(container.textContent)
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
-      /^0 ₽ за подключение\s*и настройку\.$/,
+      /^0 ₽ за помощь\s*с началом\.$/,
     )
     expect(text).not.toMatch(/подарок|кредитов/)
   })
 
-  it('says that connecting is free and the gift is 50 credits', () => {
+  it('says that the help is free and the gift is 50 credits', () => {
     const { container } = render(<LandingLead isGuest />)
     const text = plain(container.textContent)
-    expect(text).toContain('Подключение и настройка — бесплатно')
+    expect(text).toContain('Помощь с первыми задачами — бесплатно')
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
       /^50 кредитов в подарок\s*за заявку\.$/,
     )
     expect(signupGiftCredits).toBe(50)
   })
 
-  it('asks for two things only: the site and a phone or a Telegram name', () => {
+  it('asks for two things only: the site of the business and a phone or a Telegram name', () => {
     for (const isGuest of [true, false]) {
       const { container, unmount } = render(<LandingLead isGuest={isGuest} />)
 
@@ -144,7 +75,8 @@ describe('LandingLead', () => {
       const text = plain(container.textContent)
       expect(text).toContain('Оба поля обязательны')
       expect(text).toContain('Два поля, одна минута')
-      expect(text).toContain('Оставьте адрес сайта и телефон — мы сами подключим ваш сайт')
+      expect(text).toContain('Оставьте сайт компании и телефон — расскажем')
+      expect(text).not.toMatch(/подключ/i)
       unmount()
     }
   })
@@ -247,7 +179,7 @@ describe('LandingLead', () => {
     // The form asks no name, so the card thanks by none.
     expect(await screen.findByRole('heading', { name: /^Заявка у\s+нас\.$/ })).toHaveFocus()
     const status = screen.getByRole('status')
-    expect(status).toHaveTextContent(/подключим kofeinya\.ru/)
+    expect(status).toHaveTextContent(/Свяжемся с вами и поможем начать\./)
     expect(status).toHaveTextContent(/50\sкредитов придут, как только вы зарегистрируетесь/)
     expect(status).not.toHaveTextContent(/спасибо|,\s+[А-ЯЁ][а-яё]+\./i)
     // Only what the form asks: the site, the contact, the consent and the empty trap.
@@ -276,7 +208,7 @@ describe('LandingLead', () => {
 
       send()
 
-      expect(await screen.findByRole('status')).toHaveTextContent(/подключим kofeinya\.ru/)
+      expect(await screen.findByRole('status')).toHaveTextContent(/поможем начать/)
       // A signed-in visitor has had the gift: the card promises none.
       expect(screen.getByRole('status')).not.toHaveTextContent(/кредит|подар|зарегистр/i)
       expect(screen.queryByText(leadFieldErrors.phone)).not.toBeInTheDocument()

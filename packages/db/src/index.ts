@@ -1,5 +1,5 @@
 // PostgreSQL adapter: Prisma client, generated types and enums, outbox, personal workspaces,
-// site leases, turn assignments, browser sessions and attachments.
+// leases of chats, turn assignments, browser sessions and attachments.
 // Explicit re-exports keep the public surface visible and avoid leaking internals.
 export {
   createPrismaClient,
@@ -22,20 +22,9 @@ export {
   agentTurnPriority,
   enqueueAgentTurn,
   enqueueBrowserEnsure,
-  enqueuePreviewBrowser,
-  enqueuePreviewSync,
-  enqueueReleaseAdvance,
   enqueueAgentWaitingPasses,
-  enqueueSiteWaitingPasses,
 } from './chat-outbox.ts'
-export {
-  enqueueCandidateRebase,
-  enqueueCandidateRewind,
-  enqueueChatNotify,
-  enqueueQueueDrain,
-  enqueueTurnCancel,
-} from './task-commands-outbox.ts'
-export { taskHasProductionWrites } from './task-production-writes.ts'
+export { enqueueChatNotify, enqueueQueueDrain, enqueueTurnCancel } from './task-commands-outbox.ts'
 export {
   enqueueTelegramDeliver,
   enqueueTelegramProgress,
@@ -44,7 +33,6 @@ export {
   forgetTelegramChat,
 } from './telegram-outbox.ts'
 export {
-  browserClosedSiteStatuses,
   clearBrowserHelp,
   closeBrowserSession,
   listOpenBrowserSessions,
@@ -82,17 +70,6 @@ export {
   type ExpiredAttachment,
 } from './attachments.ts'
 export { classProfile, type ClassProfile } from './class-profile.ts'
-export {
-  BROWSER_CHECKS_EVENT,
-  BROWSER_SCREENSHOT_EVENT,
-  browserChecksEventSchema,
-  browserScreenshotEventSchema,
-  carryBrowserChecks,
-  recordBrowserChecks,
-  type BrowserChecksRun,
-} from './browser-checks.ts'
-export { markStaleCandidates } from './preview-staleness.ts'
-export { demandStoppedPreview, PREVIEW_DEMAND_SECONDS } from './preview-on-demand.ts'
 export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-events.ts'
 export {
   applyPageVersion,
@@ -168,18 +145,15 @@ export {
 export {
   applyScheduleChange,
   claimDueSchedule,
-  countSiteSchedules,
   createScheduledTask,
   deleteScheduledTask,
   dropPendingRun,
   dueScheduleIds,
   insertManualRun,
   listScheduledTasks,
-  lockSiteSchedules,
   lockWaitingRun,
   passUnattended,
   pauseSchedule,
-  pauseSiteSchedules,
   pendingScheduleChanges,
   readScheduledTask,
   recordRunOutcome,
@@ -222,77 +196,22 @@ export {
   personalWorkspaceDataClass,
   type PersonalWorkspaceOwner,
 } from './personal-workspace.ts'
-export {
-  activateSite,
-  type SiteActivationInput,
-  type SiteActivationResult,
-} from './site-activation.ts'
-export { mergeSiteStackFacts } from './site-stack-facts.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
-export {
-  freeReleaseLease,
-  holdReleaseForOperator,
-  ownsReleaseLease,
-  raiseReleaseBarrier,
-  recordReleaseLease,
-  renewReleaseLease,
-  returnReleaseFromOperator,
-  takeOverReleaseLease,
-  type ReleaseLease,
-} from './release-leases.ts'
-export {
-  recordReleaseStep,
-  releaseAttemptWrote,
-  releaseWritingAttempt,
-  wakeRelease,
-  type ReleaseStepRecord,
-} from './release-records.ts'
-export {
-  installRelease,
-  markSiteCandidatesStale,
-  type InstalledRelease,
-} from './release-install.ts'
-export {
-  enqueueUndoPlan,
-  failUndoPlan,
-  recordUndoPlan,
-  requestUndoPlan,
-  undoReturnsTo,
-  wakeUndoPlan,
-  type ReadyUndoPlan,
-  type UndoPlanRequest,
-} from './release-undo.ts'
-export {
-  RELEASE_RESOLVE_AUDIT_ACTION,
-  resolveRelease,
-  type ReleaseResolveInput,
-  type ReleaseResolveResult,
-} from './release-resolve.ts'
-export { enqueueSiteProvisioningStage } from './site-provisioning.ts'
 export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
 export {
   cancelWaitingTask,
   claimQueuedPass,
   claimQueuedTask,
-  excludeTurnDbOperations,
-  includeTurnDbOperations,
-  finishEmptiedDialog,
-  nextCandidateRevision,
-  recordCandidate,
   rejectTurn,
-  requestPreviewSync,
   settledTaskStatuses,
   settleTurn,
-  supersedeStandingCandidate,
   redoDialog,
   redoTurn,
   rewindDialog,
   undoTurn,
   waitingTaskStatuses,
-  type CandidateRecordInput,
   type ClaimedTask,
-  type RecordedCandidate,
   type SettledTaskStatus,
   type SettledTurn,
   type SettleTurnInput,
@@ -309,51 +228,28 @@ export {
   BrowserCheckpointState,
   BrowserController,
   BrowserSessionStatus,
-  CandidateCheckStatus,
-  CandidateStatus,
   ChangeType,
   Channel,
-  ConnectionTls,
   ConsentDocumentType,
   ConsentSource,
   CredentialKind,
-  DatabaseEngine,
-  DbOperationKind,
-  DeployMethod,
-  DeploymentKind,
-  DeploymentStatus,
-  DriftPolicy,
-  EnvironmentKind,
-  GitProviderKind,
   HoldStatus,
   LeaseOperation,
   LedgerKind,
   LlmProviderKind,
-  McpCallResult,
   MemberRole,
   ModelClass,
   OrderKind,
   OrderStatus,
   OutboxEventStatus,
   PlanKind,
-  PreviewDbMode,
-  PreviewStatus,
-  ProvisioningStage,
-  ProvisioningStageStatus,
   ReceiptStatus,
-  ReleaseKind,
-  ReleaseStatus,
-  SiteSourceKind,
-  SiteStack,
-  SiteStatus,
   SubscriptionStatus,
   TaskStatus,
   TaskWaiting,
   TurnAssignmentOutcome,
   TurnExecutorKind,
   TurnStatus,
-  UndoPlanStatus,
-  VersionBump,
   WorkspaceDataClass,
 } from './generated/prisma/client.ts'
 export type {
@@ -365,7 +261,6 @@ export type {
   BrowserCheckpoint,
   BrowserSession,
   BrowserStreamTicket,
-  CandidateCheck,
   ChannelIdentity,
   ChatNotification,
   ChatSession,
@@ -373,45 +268,23 @@ export type {
   CreditLedger,
   CreditRate,
   CredentialRef,
-  Deployment,
-  Environment,
-  GiftSiteClaim,
-  GitRepository,
   LlmModel,
   LlmModelPrice,
   LlmProvider,
-  McpCall,
   Member,
   Order,
   OutboxEvent,
   Plan,
-  PreviewBrowserRequest,
-  PreviewDbOperation,
-  PreviewEnvironment,
-  PreviewSession,
-  PreviewSyncRequest,
-  PreviewTicket,
   PricingRule,
   RateLimit,
-  ReleaseStep,
-  ReleaseUndoPlan,
   ScheduledRun,
   ScheduledTask,
   ScheduleReservation,
   Session,
-  Site,
-  SiteCodeSource,
-  SiteDatabase,
-  SiteDatabaseSchema,
-  SiteEnvVar,
   SiteLease,
-  SiteProvisioningStage,
-  SiteRelease,
-  Snapshot,
   Subscription,
   SubscriptionAccount,
   Task,
-  TaskCandidate,
   TaskEvent,
   TaskTurn,
   TokenUsage,
@@ -420,4 +293,5 @@ export type {
   UserConsent,
   Verification,
   Workspace,
+  WorkspaceEnvVar,
 } from './generated/prisma/client.ts'

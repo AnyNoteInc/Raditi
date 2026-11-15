@@ -7,77 +7,52 @@ import {
 } from '@repo/billing'
 import {
   enqueueAgentTurn,
-  enqueueCandidateRebase,
-  enqueueCandidateRewind,
   enqueueTurnCancel,
   insertFeedEvent,
   lockWaitingRun,
   recordRunOutcomeInTx,
-  requestPreviewSync,
   scheduledRunClosed,
-  taskHasProductionWrites,
   redoTurn,
   undoTurn,
   type Prisma,
   type PrismaClient,
 } from '@repo/db'
 import {
-  assertTransition,
   conflict,
   feedEndedSiteOf,
   feedLimits,
   hasVisibleText,
-  isProduction,
   llmBackendIds,
   looksLikeSecret,
   maxTaskAttempts,
   modelClassOfEffort,
-  siteIdOf,
-  siteSetupState,
   taskHoldExpiry,
   terminalTaskStatuses,
   workspaceTransitKey,
-  type FeedAgentCommandId,
   type FeedRequestPayload,
   type ReasoningEffort,
-  type RetryRefusal,
-  type TaskRequirements,
   type TaskStatus,
 } from '@repo/domain'
 import { z } from 'zod'
 
-import { failureLabel } from '../site-access.ts'
-import { accessibleSite, lockLiveSite } from '../site-basics.ts'
-import {
-  browserAddressSecure,
-  chatRequirements,
-  siteCapabilities,
-  siteClosed,
-  type ProjectChatState,
-} from '../site-capabilities.ts'
-import { codeImportOnly } from '../site-setup.ts'
+import { failureLabel } from '../failure-label.ts'
 import { taskNotFound, type LockedTask } from './access.ts'
 import { bindMessageAttachments, requestAttachments } from './attachments.ts'
-import { browserConfigured, browserStackSupported, type ChatContext } from './context.ts'
+import { browserConfigured, type ChatContext } from './context.ts'
 import { assertCommandAvailable, dialogFacts, type DialogFacts } from './dialog-facts.ts'
 import { moveTo, personalWorkspaceOf, underDialogLock, WRITE, writeRequest } from './dialog-lock.ts'
 import {
   cancelPending,
   creditsAfterReturn,
-  dialogRetry,
   lastQuestion,
-  liveCandidate,
   openCeilingQuestion,
   openResult,
   requestOf,
-  turnRewinding,
   wordsOfTurn,
   wordsOfUndonePress,
   type DialogQuestion,
 } from './dialog-state.ts'
-import { insertDialogPreview, siteHasDatabase } from './previews.ts'
 import {
-  releaseInProgress,
   taskAttemptsExhausted,
   taskBusy,
   taskContinueRequired,
@@ -86,18 +61,17 @@ import {
   taskNotAccepted,
   taskNothingToContinue,
   taskNothingToResume,
-  taskNothingToRetry,
-  taskRedoing,
-  taskRewinding,
   taskTextEmpty,
   taskTextHasSecret,
   taskTextTooLong,
   workspaceKeyUnavailable,
-  type TaskNotAcceptedReason,
 } from './refusals.ts'
 import { dialogTitle, requestPayload, requestText } from './request-text.ts'
 
 type Tx = Prisma.TransactionClient
+
+/** A chat has no site (docs/plan/83-remove-projects.md, БП1): its rows say so. */
+const NO_SITE = { siteId: null }
 
 /** What a press or words of the client came to. */
 export interface PostedRequest {
@@ -114,9 +88,6 @@ function notWaiting(status: TaskStatus): Error {
     case 'preparing':
     case 'running':
       return taskBusy()
-    case 'deploying':
-    case 'verifying':
-      return releaseInProgress()
     default:
       return taskFinished()
   }
@@ -128,8 +99,6 @@ function notWaiting(status: TaskStatus): Error {
 
 export interface CreateDialogInput {
   userId: string
-  /** null — a chat without a project (docs/plan/61-chats-first.md, К7). */
-  siteId: string | null
   /** Invented by the browser (UUID v7): a repeated request is recognised by it. */
   taskId: string
   text: string
@@ -144,13 +113,6 @@ export interface CreateDialogInput {
    */
   title?: string
   /**
-   * When the preview of a chat of a project is built: `now` (the default) — at once, as the chat
-   * starts; `on_demand` — its row is there, stopped, and built at the first need — a candidate,
-   * the agent's browser or a content tool in it, a look of the client (Зп18): a run of a scheduled
-   * task would otherwise copy the site's database on every run.
-   */
-  preview?: 'now' | 'on_demand'
-  /**
    * The run of a scheduled task this chat is of (docs/plan/82-scheduled-tasks.md, Зп20, Зп27):
    * the transaction that makes the chat takes the run's task first and writes the run `started`
    * with it, so a chat of a run is never seen without its run — every guard of a pass without its
@@ -162,25 +124,16 @@ export interface CreateDialogInput {
 
 export interface CreatedDialog {
   taskId: string
-  /** The second label of the preview address. */
-  alias: string
   /** false — the same request was delivered before, nothing was written now. */
   created: boolean
 }
 
-/** A chat without a project takes only these ids (К14, `tasks_chat_id_check`). */
+/** A chat takes only these ids (К14, `tasks_chat_id_check`): its id is its lease. */
 const UUID_V7 = z.uuid({ version: 'v7' })
-
-/** Why a project takes no chat now, by the state `chatRequirements` gives it. */
-function chatRefusal(state: ProjectChatState): TaskNotAcceptedReason {
-  if (state === 'closed') return 'site_not_active'
-  return state === 'insecure' ? 'browser_insecure' : 'browser_unavailable'
-}
 
 /**
  * The Transit key of the workspace, made when it is missing (docs/plan/57-browser-tasks.md, Б32):
- * every turn of a task seals its snapshot with it, and a site added by «Добавить проект» has no
- * other step that makes it. A failure of Vault — or of its settings — refuses the task with
+ * every turn of a task seals its snapshot with it. A failure of Vault — or of its settings — refuses the task with
  * WORKSPACE_KEY_UNAVAILABLE; the log names the workspace and the class of the failure only.
  */
 async function ensureWorkspaceKey(chat: ChatContext, workspaceId: string): Promise<void> {
@@ -192,107 +145,27 @@ async function ensureWorkspaceKey(chat: ChatContext, workspaceId: string): Promi
   }
 }
 
-/** Where a new chat goes and what it works with. */
-interface ChatPlace {
-  workspaceId: string
-  /** null — a chat without a project. */
-  site: { id: string; alias: string } | null
-  requirements: TaskRequirements
-  preview: ChatContext['preview']
-  hasDatabase: boolean
-}
-
 /**
- * A chat of a project: what it works with is the server's alone (`chatRequirements`, К7). A site
- * of someone else answers as one that does not exist.
- */
-async function projectPlace(
-  db: PrismaClient,
-  chat: ChatContext,
-  input: { userId: string; siteId: string },
-): Promise<ChatPlace> {
-  const site = await db.site.findFirst({
-    where: accessibleSite(input.userId, input.siteId),
-    select: {
-      id: true,
-      workspaceId: true,
-      status: true,
-      stack: true,
-      url: true,
-      alias: true,
-      workspace: { select: { dataClass: true } },
-      provisioningStages: { ...codeImportOnly, select: { status: true } },
-      gitRepositories: { select: { id: true }, take: 1 },
-    },
-  })
-  if (site === null) throw taskNotFound()
-  const capabilities = siteCapabilities({
-    status: site.status,
-    setup: siteSetupState(site.provisioningStages[0]),
-    hasRepository: site.gitRepositories.length > 0,
-    browserConfigured: browserConfigured({ chat }),
-    browserStack: browserStackSupported({ chat }, site.stack),
-    secureAddress: browserAddressSecure(site.url, chat.appEnv),
-  })
-  const { state, requirements } = chatRequirements(capabilities)
-  if (requirements === null) throw taskNotAccepted(chatRefusal(state))
-  if (!isProduction(chat.appEnv) && site.workspace.dataClass !== 'synthetic')
-    throw taskNotAccepted('not_synthetic')
-  const preview = requirements.repository ? chat.preview : null
-  return {
-    workspaceId: site.workspaceId,
-    site: { id: site.id, alias: site.alias },
-    requirements,
-    preview,
-    hasDatabase: preview !== null && (await siteHasDatabase(db, site.id)),
-  }
-}
-
-/**
- * A chat without a project (К15, §5.9): in the user's personal workspace, made here for a new user
- * with the gift of the registration; no repository, no preview, and the browser where the platform
- * has one. Rule 1 stands without a site: the personal workspace has the data class of this
- * environment, so outside production it is synthetic (`findPersonalWorkspace`).
- */
-async function personalPlace(
-  db: PrismaClient,
-  chat: ChatContext,
-  userId: string,
-): Promise<ChatPlace> {
-  const { id } = await personalWorkspaceOf(db, { userId, appEnv: chat.appEnv })
-  return {
-    workspaceId: id,
-    site: null,
-    requirements: { repository: false, browser: browserConfigured({ chat }) },
-    preview: null,
-    hasDatabase: false,
-  }
-}
-
-/**
- * A new dialog (docs/plan/53-chat-preview-release.md, Р1, Р8; feed design, «Три писателя»):
- * one transaction writes the task (`queued`, class `standard`, billable), sets credits aside
- * for its first attempt (`placeCreditHold`), binds the files of the first message, writes the
- * client's words as `feed.request`, puts the pass into the outbox and opens the preview of the
- * dialog. A refused reserve or file rolls all of it back: there is no task without a reserve. A
- * repeat with the same id returns the task of the first delivery to its author; an id that is
- * someone else's answers NOT_FOUND.
+ * A new chat (docs/plan/53-chat-preview-release.md, Р1, Р8; feed design, «Три писателя»): one
+ * transaction writes the task (`queued`, billable), sets credits aside for its first attempt
+ * (`placeCreditHold`), binds the files of the first message, writes the client's words as
+ * `feed.request` and puts the pass into the outbox. A refused reserve or file rolls all of it back:
+ * there is no task without a reserve. A repeat with the same id returns the task of the first
+ * delivery to its author; an id that is someone else's answers NOT_FOUND.
  *
- * What a chat works with comes from its project alone (docs/plan/61-chats-first.md, К7): the
- * matrix of `chatRequirements` names the files, the browser, or the refusal; a chat without the
- * files of a site gets no preview. A chat without a project takes only an id of version 7: its id
- * is its lease (К14), and the id of a site is of version 8. Outside production a dialog is taken
- * only in a synthetic workspace (rule 1; spec §20, decision 6 of 11.10.2026). The Transit key of
- * the workspace is made before the transaction, after the refusals that read the database only
- * (Б32): a refused task asks nothing of Vault, and a failure of Vault writes nothing — no task, no
- * reserve.
+ * A chat has no project (docs/plan/83-remove-projects.md, БП1): it goes to the user's personal
+ * workspace, made here for a new user with the gift of the registration (К15), without the
+ * repository and with the browser where the platform has one. Its id is of version 7: it is its
+ * lease (К14). Rule 1 stands: the personal workspace has the data class of this environment, so
+ * outside production it is synthetic (`findPersonalWorkspace`). The Transit key of the workspace
+ * is made before the transaction (Б32): a failure of Vault writes nothing — no task, no reserve.
  */
 export async function createDialog(
   db: PrismaClient,
   chat: ChatContext,
   input: CreateDialogInput,
 ): Promise<CreatedDialog> {
-  const { userId, siteId, now } = input
+  const { userId, now } = input
   const taskId = input.taskId.toLowerCase()
   const text = requestText(input.text)
   const title = input.title === undefined ? null : clientTitle(input.title)
@@ -305,26 +178,20 @@ export async function createDialog(
     text,
     ...requestAttachments(attachments),
   })
-  if (siteId === null && !UUID_V7.safeParse(taskId).success) throw taskIdInvalid()
+  if (!UUID_V7.safeParse(taskId).success) throw taskIdInvalid()
 
-  const earlier = await sameDialog(db, { taskId, siteId, userId })
+  const earlier = await sameDialog(db, { taskId, userId })
   if (earlier !== null) return earlier
 
-  const place =
-    siteId === null
-      ? await personalPlace(db, chat, userId)
-      : await projectPlace(db, chat, { userId, siteId })
-  const { workspaceId, site, requirements, preview, hasDatabase } = place
+  const { id: workspaceId } = await personalWorkspaceOf(db, { userId, appEnv: chat.appEnv })
+  const browser = browserConfigured({ chat })
   await ensureWorkspaceKey(chat, workspaceId)
   const modelClass = modelClassOfEffort(input.effort ?? 'high')
 
   return db.$transaction(async (tx) => {
-    // The task of the run first, as the tick takes it before the project; a run closed meanwhile
-    // gets no chat.
+    // The task of the run first, as the tick takes it; a run closed meanwhile gets no chat.
     if (input.scheduledRunId !== undefined && !(await lockWaitingRun(tx, input.scheduledRunId)))
       throw scheduledRunClosed()
-    // A site being deleted waits here, and a deleted one is not found (`deleteSite`).
-    if (site !== null) await lockLiveSite(tx, site.id)
     // The pass would fail `unavailable` without a profile of the chosen class or its price:
     // refused before anything is written, as «Попробовать ещё» refuses it.
     if (!(await modelClassPriced(tx, { modelClass, backends: llmBackendIds, now })))
@@ -336,7 +203,6 @@ export async function createDialog(
         {
           id: taskId,
           workspaceId,
-          siteId: site?.id ?? null,
           createdById: userId,
           status: 'queued',
           modelClass,
@@ -344,18 +210,16 @@ export async function createDialog(
           ...(title === null
             ? { title: dialogTitle(text) }
             : { title, titleSource: 'client' as const }),
-          needsRepository: requirements.repository,
-          needsBrowser: requirements.browser,
+          needsBrowser: browser,
         },
       ],
       skipDuplicates: true,
     })
     if (inserted.count === 0) {
-      const raced = await sameDialog(tx, { taskId, siteId, userId })
+      const raced = await sameDialog(tx, { taskId, userId })
       if (raced === null) throw taskNotFound()
       return raced
     }
-    const task = await tx.task.findUniqueOrThrow({ where: { id: taskId }, select: { alias: true } })
     if (input.scheduledRunId !== undefined) {
       const bound = await recordRunOutcomeInTx(
         tx,
@@ -365,7 +229,6 @@ export async function createDialog(
       )
       if (!bound.recorded) throw scheduledRunClosed()
     }
-
     await placeCreditHold(tx, {
       workspaceId,
       taskId,
@@ -378,27 +241,13 @@ export async function createDialog(
       taskId,
       userId,
       workspaceId,
-      siteId: site?.id ?? null,
     })
     const requestEventId = await insertFeedEvent(tx, {
       taskId,
       row: { type: 'feed.request', payload },
     })
     await enqueueAgentTurn(tx, { taskId, attempt: 1, requestEventId: String(requestEventId) })
-    if (site !== null && preview !== null) {
-      await insertDialogPreview(tx, {
-        siteId: site.id,
-        taskId,
-        siteAlias: site.alias,
-        taskAlias: task.alias,
-        hasDatabase,
-        address: preview.address,
-        ttlHours: preview.ttlHours,
-        onDemand: input.preview === 'on_demand',
-        now,
-      })
-    }
-    return { taskId, alias: task.alias, created: true }
+    return { taskId, created: true }
   }, WRITE)
 }
 
@@ -415,22 +264,21 @@ function clientTitle(name: string): string {
 }
 
 /**
- * The task of an earlier delivery of the same `task.create`: the same id, site and author. An
- * id taken by anything else is NOT_FOUND — the caller learns nothing of it.
+ * The task of an earlier delivery of the same `task.create`: the same id and author. An id taken
+ * by anything else is NOT_FOUND — the caller learns nothing of it.
  */
 async function sameDialog(
   db: Pick<Tx, 'task'>,
-  ids: { taskId: string; siteId: string | null; userId: string },
+  ids: { taskId: string; userId: string },
 ): Promise<CreatedDialog | null> {
   const task = await db.task.findUnique({
     where: { id: ids.taskId },
-    select: { siteId: true, createdById: true, alias: true, deletedAt: true },
+    select: { createdById: true, deletedAt: true },
   })
   if (task === null) return null
   // A dialog deleted since is not found again by a late repeat of the request that made it.
-  if (task.siteId !== ids.siteId || task.createdById !== ids.userId || task.deletedAt !== null)
-    throw taskNotFound()
-  return { taskId: ids.taskId, alias: task.alias, created: false }
+  if (task.createdById !== ids.userId || task.deletedAt !== null) throw taskNotFound()
+  return { taskId: ids.taskId, created: false }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -451,8 +299,7 @@ export interface DialogMessageInput {
 /**
  * The attempt the next pass of an open dialog runs in, and its reserve (owner's answer of
  * 26.10.2026: every completed pass is charged when it ends). A chain that is still active — a
- * pass failed and the dialog kept its candidate, or the charge of the last pass waits for its
- * usage — goes on, and its reserve is moved on. A chain that was charged, or given back after a
+ * charge of the last pass waits for its usage — goes on, and its reserve is moved on. A chain that was charged, or given back after a
  * failure that left the dialog open (28.10.2026), is followed by a new one: the next attempt,
  * its reserve placed now (`follows` — the client's words or «Продолжить»), refused as a new task
  * would be. A task that is not billable goes on in its attempt.
@@ -486,31 +333,9 @@ async function nextPassAttempt(
 }
 
 /**
- * The chat of a project that was paused, disconnected or archived is read, not written (К39): its
- * words, «Продолжить» and «Продолжить работу агента» are refused. Asked here and not in the access
- * to a task, so a pass under way is not cut off.
- */
-async function assertProjectOpen(tx: Tx, task: LockedTask): Promise<void> {
-  if (task.siteId === null) return
-  const site = await tx.site.findUniqueOrThrow({
-    where: { id: task.siteId },
-    select: { status: true },
-  })
-  if (siteClosed(site.status)) throw taskNotAccepted('site_not_active')
-}
-
-/** core is moving the chat a turn (`candidate.rewind`): what would start waits for it. */
-async function assertNotRewinding(tx: Tx, task: LockedTask): Promise<void> {
-  if (!task.requirements.repository) return
-  const pending = await turnRewinding(tx, task.id)
-  if (pending !== null) throw pending.redo ? taskRedoing() : taskRewinding()
-}
-
-/**
  * Words to a dialog that waits (Р6): the answer to the agent's question or to a result that
  * left the dialog open (`awaiting_user → queued`, `feed.request` `answer`; owner's decision of
- * 26.10.2026) or a new pass on top of the candidate (`awaiting_approval →
- * queued`, `revision`). The pass that ended was charged, so the words open the next attempt with
+ * 26.10.2026). The pass that ended was charged, so the words open the next attempt with
  * a reserve of its own (`nextPassAttempt`; refused for credits as a new task is); a chain still
  * active goes on under its reserve. The pass goes into the outbox with the row. A question of the platform about credits is answered
  * by «Продолжить» (`task.continue`), never by words. A repeat with the same `requestId` returns
@@ -534,10 +359,8 @@ export async function postDialogMessage(
   return underDialogLock(db, input, async (tx, task) => {
     const repeated = await requestOf(tx, task.id, requestId)
     if (repeated !== null) return { requestEventId: String(repeated), repeated: true }
-    await assertProjectOpen(tx, task)
     // «Остановить» of a task in the browser is final: core is closing it (Б24).
     if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
-    await assertNotRewinding(tx, task)
 
     let payload: FeedRequestPayload
     const ceiling =
@@ -570,18 +393,6 @@ export async function postDialogMessage(
         ...attachments,
         answersEventId: String(answers),
       }
-    } else if (task.status === 'awaiting_approval') {
-      const candidate = await liveCandidate(tx, task.id)
-      if (candidate === null) throw conflict('The dialog waits for approval without a candidate')
-      payload = {
-        v: 1,
-        kind: 'revision',
-        authorId: userId,
-        requestId,
-        text,
-        ...attachments,
-        candidateRevision: candidate.revision,
-      }
     } else {
       throw notWaiting(task.status)
     }
@@ -596,7 +407,6 @@ export async function postDialogMessage(
       taskId: task.id,
       userId,
       workspaceId: task.workspaceId,
-      siteId: task.siteId,
     })
     const requestEventId = await writeRequest(tx, task.id, payload)
     // A message to an archived chat brings it back to the list (docs/plan/75, ВВ21).
@@ -658,8 +468,7 @@ async function wordsAfterCeiling(
  * «Продолжить» after a question of the platform about credits (Р8; spec §17, «Потолок
  * достигнут»): the next attempt of the same dialog with a reserve of its own — a continuation,
  * which keeps the reserve of the attempt before, or, when the pass that ran out was charged
- * (26.10.2026), a new chain (`follows: 'continue'`). The dialog waits in `awaiting_user`, or in
- * `awaiting_approval` when it has a candidate (so `/release` stays open meanwhile). A dialog
+ * (26.10.2026), a new chain (`follows: 'continue'`). The dialog waits in `awaiting_user`. A dialog
  * that used its three attempts is not continued.
  */
 export async function continueDialog(
@@ -671,7 +480,6 @@ export async function continueDialog(
   return underDialogLock(db, input, async (tx, task) => {
     const repeated = await requestOf(tx, task.id, requestId)
     if (repeated !== null) return { requestEventId: String(repeated), repeated: true }
-    await assertProjectOpen(tx, task)
     // «Остановить» of a task in the browser is final: core is closing it (Б24).
     if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
 
@@ -713,10 +521,8 @@ export async function resumeDialog(
   return underDialogLock(db, input, async (tx, task) => {
     const repeated = await requestOf(tx, task.id, requestId)
     if (repeated !== null) return { requestEventId: String(repeated), repeated: true }
-    await assertProjectOpen(tx, task)
     // «Остановить» of a task in the browser is final: core is closing it (Б24).
     if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
-    await assertNotRewinding(tx, task)
 
     if (!task.requirements.browser) throw taskNothingToResume()
     if (task.status !== 'awaiting_user') {
@@ -741,9 +547,8 @@ export async function resumeDialog(
 }
 
 /**
- * A command the agent carries out (docs/plan/61-chats-first.md, К30, К31, §5.14): `/init` — a pass
- * on the words of the platform, in a chat with the code — and `/compact` — a pass that shortens the
- * session. It goes as the next words of the client would — paid, its reserve placed as theirs
+ * A command the agent carries out (docs/plan/61-chats-first.md, К30, §5.14): `/compact` — a pass
+ * that shortens the session. It goes as the next words of the client would — paid, its reserve placed as theirs
  * (`follows`), refused for credits as they are — and, as they do, moves the chat on past a
  * question; it writes no words, only the command. A repeat with the same `requestId` returns the
  * row of the first delivery.
@@ -754,7 +559,8 @@ export async function agentCommandDialog(
     userId: string
     taskId: string
     requestId: string
-    command: FeedAgentCommandId
+    /** The one command of the agent a chat has since `/init` went (plan 83). */
+    command: 'compact'
     now: Date
   },
 ): Promise<PostedRequest> {
@@ -788,12 +594,9 @@ export async function agentCommandDialog(
  * `/undo` (docs/plan/61-chats-first.md, К29, §5.14): the last turn is taken back, so the next pass
  * starts where it started and its words go to the agent no more; they come back to the field
  * instead. No model: its browser and its sign-in stay, and no money moves — the pass was charged
- * when it ended, and `undone_at` is no `rejected_at`. In a chat without the repository it is done
- * here: the chat keeps waiting as it did, and the row says what stays on the sites — the browser
- * belongs to the whole task, not to the turn. In a chat with the repository the press and the job
- * `candidate.rewind` are written here, and core moves the branch, the candidate and the preview
- * under the site's lease and writes the undo with that row; the chat takes nothing else until then
- * (`turnRewinding`), and the words go back to the field at once. A repeat with the same
+ * when it ended, and `undone_at` is no `rejected_at`. It is done here: the chat keeps waiting as it
+ * did, and the row says what stays on the sites — the browser belongs to the whole task, not to
+ * the turn. A repeat with the same
  * `requestId` returns the row of the first delivery and the words too: it comes when the page
  * never got the first answer, and the page puts them only into an empty field.
  */
@@ -814,17 +617,6 @@ export async function undoDialogTurn(
     const facts = await dialogFacts(tx, task, userId)
     assertCommandAvailable(facts.commands, 'turn_undo')
     const words = await wordsOfTurn(tx, task.id, task.turnNo)
-    if (task.requirements.repository) {
-      const requestEventId = await writeRequest(tx, task.id, {
-        v: 1,
-        kind: 'command',
-        command: 'turn_undo',
-        authorId: userId,
-        requestId,
-      })
-      await enqueueCandidateRewind(tx, { taskId: task.id, requestEventId })
-      return { requestEventId, repeated: false, words }
-    }
     const turnId = await undoTurn(tx, { taskId: task.id, turnNo: task.turnNo })
     if (turnId === null) throw conflict('The last turn of the chat is no longer there to undo')
     const requestEventId = await writeRequest(tx, task.id, {
@@ -843,7 +635,7 @@ export async function undoDialogTurn(
           v: 1,
           turn: task.turnNo,
           files: false,
-          site: feedEndedSiteOf(task, await taskHasProductionWrites(tx, task.id)),
+          site: feedEndedSiteOf(NO_SITE, await browserWrote(tx, task.id)),
         },
       },
     })
@@ -855,10 +647,8 @@ export async function undoDialogTurn(
  * `/redo` (docs/plan/61-chats-first.md, §5.14): the turn `/undo` took comes back, while nothing
  * moved the chat since. The next pass goes on from it, its words stand as read, and the page takes
  * them out of the field, or they would be sent a second time: they are given back as `/undo` gives
- * them. No model and no money. In a chat without the repository it is done here, and the chat, which
- * `/undo` did not move either, waits as it did. In a chat with the repository the press and the job
- * `candidate.rewind` are written here, and core moves the branch, the candidate and the preview
- * forward under the site's lease; the chat takes nothing else until then. A repeat with the same
+ * them. No model and no money. It is done here, and the chat, which `/undo` did not move either,
+ * waits as it did. A repeat with the same
  * `requestId` returns the row of the first delivery.
  */
 export async function redoDialogTurn(
@@ -885,11 +675,6 @@ export async function redoDialogTurn(
       authorId: userId,
       requestId,
     } as const
-    if (task.requirements.repository) {
-      const requestEventId = await writeRequest(tx, task.id, press)
-      await enqueueCandidateRewind(tx, { taskId: task.id, requestEventId })
-      return { requestEventId, repeated: false, words }
-    }
     const turnId = await redoTurn(tx, { taskId: task.id, turnNo: task.turnNo })
     if (turnId === null) throw conflict('The undone turn of the chat is no longer there to redo')
     const requestEventId = await writeRequest(tx, task.id, press)
@@ -899,93 +684,6 @@ export async function redoDialogTurn(
       row: { type: 'feed.redo', payload: { v: 1, turn: task.turnNo, files: false, open: false } },
     })
     return { requestEventId, repeated: false, words }
-  })
-}
-
-/** The refusal of a press of «Попробовать ещё» by why it is not offered. */
-const retryRefused: Readonly<Record<RetryRefusal, () => Error>> = {
-  nothing: taskNothingToRetry,
-  busy: taskBusy,
-  releasing: releaseInProgress,
-  finished: taskFinished,
-}
-
-/**
- * «Попробовать ещё» (the owner's answer 1 of 18.10.2026; docs/plan/53, «Попробовать ещё
- * (18.10)»): a pass of a dialog that already had a candidate failed, and the dialog waits with
- * the candidate and the failure row. The press repeats the pass as the next attempt with a
- * reserve of its own, in the class `heavy` (spec §9): the reserve of the failed attempt — the
- * whole chain — is given back, a new one is placed, the press is written as `feed.request` of
- * the kind `retry` naming the failure it answers, the preview is woken and the pass goes into the
- * outbox, in one transaction: a refused reserve rolls all of it back, and the dialog keeps
- * waiting with its candidate and its reserve. The work that built the candidate is not given
- * back with the reserve: it is charged with the dialog, from the new reserve, and bounds the keys
- * of the retry (`chargeTask`, `attemptCreditBudget`); only the pass that failed stays free (its
- * turn is rejected). Who may open the dialog may press it, as
- * «Продолжить». The three attempts do not stop it — it starts a new chain (spec §20, decision 4
- * of 11.10.2026) —, and neither does the daily limit (the owner, 19.10.2026): the reserve is
- * placed as a retry (`retry: true`), whose tariff part only the free tariff credits bound, and
- * what it takes still counts on the day for the placements after it. It needs five credits that
- * can be spent, and unpaid work bounds it like a new task. A repeat with the same `requestId`
- * returns the row of the first delivery; a press on a failure that was answered meanwhile, or on
- * another one, is refused.
- */
-export async function retryDialog(
-  db: PrismaClient,
-  chat: ChatContext,
-  input: { userId: string; taskId: string; requestId: string; failureEventId: string; now: Date },
-): Promise<PostedRequest> {
-  const { userId, now } = input
-  const requestId = input.requestId.toLowerCase()
-  return underDialogLock(db, input, async (tx, task) => {
-    const repeated = await requestOf(tx, task.id, requestId)
-    if (repeated !== null) return { requestEventId: String(repeated), repeated: true }
-    // «Остановить» of a chat with a browser is final: core is closing it (Б24).
-    if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
-    await assertNotRewinding(tx, task)
-
-    const verdict = await dialogRetry(tx, task)
-    if (!verdict.allowed) throw retryRefused[verdict.refusal]()
-    // The screen showed another failure: this one is the client's to see first.
-    if (verdict.failureId !== input.failureEventId) throw taskNothingToRetry()
-    const candidate = await liveCandidate(tx, task.id)
-    if (candidate === null) throw conflict('The dialog waits for approval without a candidate')
-    const site = await tx.site.findUniqueOrThrow({
-      where: { id: siteIdOf(task) },
-      select: { status: true, workspace: { select: { dataClass: true } } },
-    })
-    if (site.status !== 'active') throw taskNotAccepted('site_not_active')
-    if (!isProduction(chat.appEnv) && site.workspace.dataClass !== 'synthetic')
-      throw taskNotAccepted('not_synthetic')
-    // The pass would fail `unavailable` — no profile of the class the planner would take, or
-    // no price of it: refused before anything moves.
-    if (!(await modelClassPriced(tx, { modelClass: 'heavy', backends: llmBackendIds, now })))
-      throw taskNotAccepted('class_unavailable')
-
-    assertTransition(task.status, 'queued')
-    const attempt = task.attempt + 1
-    await moveTo(tx, task, 'queued', { attempt, modelClass: 'heavy' })
-    await releaseTask(tx, { taskId: task.id, now })
-    // A retry by the verdict above, which the day does not bound: said here, never by the client.
-    await placeCreditHold(tx, {
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      attempt,
-      now,
-      expiresAt: taskHoldExpiry(now, 'waiting'),
-      retry: true,
-    })
-    const requestEventId = await writeRequest(tx, task.id, {
-      v: 1,
-      kind: 'retry',
-      authorId: userId,
-      requestId,
-      failureEventId: verdict.failureId,
-    })
-    // A preview that fell asleep meanwhile is built again for the pass.
-    await requestPreviewSync(tx, { taskId: task.id, revision: candidate.revision })
-    await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
-    return { requestEventId, repeated: false }
   })
 }
 
@@ -1003,14 +701,11 @@ export interface CancelledDialog extends PostedRequest {
 }
 
 /**
- * `/cancel` (Р34; spec §7): a dialog that waits — queued, with a question or with a candidate —
- * is closed at once: `cancelled`, the reserve given back (`releaseTask`), `feed.cancelled` by
- * the client, and the manager of previews is woken to take its preview down. A pass that is
- * preparing or running is stopped by core: `turn.cancel` on `agent-turns`. A release in work is
- * not cancelled. Content of a dialog lives in its preview (Р3), so the site is `unchanged` —
- * unless the dialog had no preview and its agent wrote to the production site: then the client
- * is asked to check it, as the sweep says of the same dialog (`taskHasProductionWrites`). The
- * press is a `feed.request` of the command `cancel`, by which a repeat is recognised.
+ * `/cancel` (Р34; spec §7): a chat that waits — queued or with a question — is closed at once:
+ * `cancelled`, the reserve given back (`releaseTask`), `feed.cancelled` by the client. A pass that
+ * is preparing or running is stopped by core: `turn.cancel` on `agent-turns`. When the agent wrote
+ * on a site in the browser the client is asked to check it, as the sweep says of the same chat
+ * (`browserWrote`). The press is a `feed.request` of the command `cancel`, by which a repeat is recognised.
  *
  * A task in the browser (docs/plan/57, Б24) is stopped by core in any status it has not ended
  * in: core reads on the site what the task saved there, writes `feed.cancelled` with it, gives
@@ -1037,8 +732,7 @@ export async function cancelDialog(
 
 /**
  * `/cancel` of a locked dialog the verdicts allow it for: the command is written as the client's
- * request, then the dialog that waits is closed at once — its reserve given back, its preview
- * sent to be removed — while one that works, or a task in the browser, is stopped by core. Also
+ * request, then the dialog that waits is closed at once — its reserve given back — while one that works, or a task in the browser, is stopped by core. Also
  * the first step of «Удалить диалог» (`removeDialog`).
  */
 export async function stopDialog(
@@ -1074,40 +768,18 @@ export async function stopDialog(
         turn: task.turnNo >= 1 ? task.turnNo : null,
         by: 'customer',
         authorId: userId,
-        site: feedEndedSiteOf(task, await taskHasProductionWrites(tx, task.id)),
+        site: feedEndedSiteOf(NO_SITE, await browserWrote(tx, task.id)),
         credits: creditsAfterReturn(returned),
       },
     },
   })
-  if (facts.preview !== null)
-    await requestPreviewSync(tx, { taskId: task.id, revision: facts.preview.revision })
   return { requestEventId, state: 'cancelled' }
 }
 
 /**
- * «Обновить» (`/update`, Р27): core carries the candidate of the dialog onto the current
- * `main` without the model, rebuilds the preview and runs the checks again
- * (`candidate.rebase` on `agent-turns`). Offered when the candidate stands on an old version of
- * the site; the press is a `feed.request` of the command `update`, by which a repeat is known.
+ * Whether anyone acted in the browser of the chat (`browser_sessions.wrote_at`): what was done
+ * there stays on the site it was done on, and the feed says to check it.
  */
-export async function updateDialogCandidate(
-  db: PrismaClient,
-  input: { userId: string; taskId: string; requestId: string },
-): Promise<PostedRequest> {
-  const requestId = input.requestId.toLowerCase()
-  return underDialogLock(db, input, async (tx, task) => {
-    const repeated = await requestOf(tx, task.id, requestId)
-    if (repeated !== null) return { requestEventId: String(repeated), repeated: true }
-    const facts = await dialogFacts(tx, task, input.userId)
-    assertCommandAvailable(facts.commands, 'update')
-    const requestEventId = await writeRequest(tx, task.id, {
-      v: 1,
-      kind: 'command',
-      command: 'update',
-      authorId: input.userId,
-      requestId,
-    })
-    await enqueueCandidateRebase(tx, { taskId: task.id, requestEventId })
-    return { requestEventId, repeated: false }
-  })
+async function browserWrote(db: Pick<Tx, 'browserSession'>, taskId: string): Promise<boolean> {
+  return (await db.browserSession.count({ where: { taskId, wroteAt: { not: null } } })) > 0
 }

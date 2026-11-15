@@ -91,7 +91,6 @@ const home = `/agent-home/${sampleDriverId}`
 // CLI keeps its key store and its logs in the same directory, and its configuration beside it.
 const data = `${home}/.local/share/opencode`
 const sessionFiles = ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal']
-const git = (sandbox, ...args) => run(sandbox, ['git', ...args], { cwd: repository })
 async function write(sandbox, path, bytes) {
   await run(sandbox, ['mkdir', '-p', '--', path.slice(0, path.lastIndexOf('/'))])
   await run(sandbox, ['dd', `of=${path}`, 'status=none'], { bytes })
@@ -129,48 +128,13 @@ async function create(suffix) {
 try {
   const a = await create('capture')
   const b = await create('restore')
-  const baseText = Buffer.from('synthetic base\n', 'utf8')
-  const changedText = Buffer.from('synthetic changed\nЮникод preserved\n', 'utf8')
-  const baseBinary = Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 256))
-  const changedBinary = Buffer.from(baseBinary)
-  changedBinary.fill(0xff, 101, 239)
-  const executable = Buffer.from('#!/bin/sh\nprintf synthetic\\n\n')
   for (const sandbox of [a, b]) {
     assert.equal((await run(sandbox, ['id', '-u'])).bytes.toString().trim(), '10001')
     assert.notEqual((await run(sandbox, ['touch', '/rootfs-probe'], { codes: [1] })).code, 0)
   }
-  await run(a, ['mkdir', '-p', repository])
-  await git(a, 'init', '-b', 'main')
-  await git(a, 'config', 'user.name', 'Synthetic Transport Fixture')
-  await git(a, 'config', 'user.email', 'fixture@example.invalid')
-  await write(a, `${repository}/tracked.txt`, baseText)
-  await write(a, `${repository}/tracked.bin`, baseBinary)
-  await write(a, `${repository}/deleted.txt`, Buffer.from('will be deleted\n'))
-  await write(a, `${repository}/script.sh`, executable)
-  await run(a, ['chmod', '755', `${repository}/script.sh`])
-  await write(a, `${repository}/.gitignore`, Buffer.from('ignored.tmp\n'))
-  await git(a, 'add', '--all')
-  await run(a, ['git', 'commit', '-m', 'Synthetic base'], {
-    cwd: repository,
-    env: { GIT_AUTHOR_DATE: '2026-09-26T00:00:00Z', GIT_COMMITTER_DATE: '2026-09-26T00:00:00Z' },
-  })
-  const head = (await git(a, 'rev-parse', 'HEAD')).bytes.toString().trim()
-  await git(a, 'bundle', 'create', '/workspace/base.bundle', 'HEAD', 'main')
-  await write(b, '/workspace/base.bundle', await read(a, '/workspace/base.bundle'))
-  await run(b, ['git', 'clone', '--branch', 'main', '/workspace/base.bundle', repository])
-  assert.equal((await git(b, 'rev-parse', 'HEAD')).bytes.toString().trim(), head)
-  assert.deepEqual((await git(b, 'status', '--porcelain')).bytes, Buffer.alloc(0))
-
-  await write(a, `${repository}/tracked.txt`, changedText)
-  await write(a, `${repository}/tracked.bin`, changedBinary)
-  await run(a, ['rm', '--', `${repository}/deleted.txt`])
-  const untracked = new Map([
-    ['new dir/данные.bin', Buffer.from([0, 1, 2, 255, 128, 10, 13, 0])],
-    ['new dir/notes.txt', Buffer.from('untracked UTF-8: привет\n')],
-    ['empty.txt', Buffer.alloc(0)],
-  ])
-  for (const [name, bytes] of untracked) await write(a, `${repository}/${name}`, bytes)
-  await write(a, `${repository}/ignored.tmp`, Buffer.from('ignored synthetic file'))
+  // A file the agent left in the working directory: a turn has no repository
+  // (docs/plan/83-remove-projects.md), and no snapshot keeps it.
+  await write(a, `${repository}/notes.txt`, Buffer.from('working directory, never kept\n'))
   // Binary, as a database is: a NUL, bytes that are no UTF-8, a line break inside.
   const session = new Map([
     [
@@ -192,38 +156,17 @@ try {
   const transport = new SandboxSnapshotTransport()
   // As in a turn: agent processes are stopped before capture.
   await created[0].quiesce()
-  const parts = await transport.capture(a, state, head)
-  const expectedPatch = (
-    await git(
-      a,
-      '-c',
-      'core.fsmonitor=false',
-      'diff',
-      '--binary',
-      '--no-ext-diff',
-      '--no-textconv',
-      'HEAD',
-      '--',
-    )
-  ).bytes
-  assert.ok(parts.patch.byteLength > 0)
-  assert.deepEqual(Buffer.from(parts.patch), expectedPatch)
-  assert.match(expectedPatch.toString(), /GIT binary patch/)
+  const parts = await transport.capture(a, state)
+  assert.deepEqual(Object.keys(parts), ['home'])
   // Existing directories are legitimate; only existing files must be rejected.
-  await run(b, ['mkdir', '-p', data, `${repository}/new dir`])
+  await run(b, ['mkdir', '-p', data])
   await transport.restore(b, state, parts)
 
-  // P1 restore moves home/untracked only. The trusted P2 patch application remains
-  // a distinct operation, explicitly exercised here using synthetic fixture bytes.
-  assert.deepEqual(await read(b, `${repository}/tracked.txt`), baseText)
-  assert.deepEqual(await read(b, `${repository}/tracked.bin`), baseBinary)
   for (const [name, bytes] of session) assert.deepEqual(await read(b, `${home}/${name}`), bytes)
-  for (const [name, bytes] of untracked)
-    assert.deepEqual(await read(b, `${repository}/${name}`), bytes)
   await absent(b, `${data}/auth.json`)
   await absent(b, `${data}/log`)
   await absent(b, `${home}/.config`)
-  await absent(b, `${repository}/ignored.tmp`)
+  await absent(b, `${repository}/notes.txt`)
 
   // Refuse overwriting existing files, even if a repeated archive has the same bytes.
   // A sentinel differing from archive contents makes non-overwrite observable.
@@ -231,9 +174,6 @@ try {
   await write(b, `${home}/${sessionFiles[0]}`, sentinel)
   await assert.rejects(transport.restore(b, state, parts), { code: 'SANDBOX_COMMAND_FAILED' })
   assert.deepEqual(await read(b, `${home}/${sessionFiles[0]}`), sentinel)
-  for (const [name, bytes] of untracked)
-    assert.deepEqual(await read(b, `${repository}/${name}`), bytes)
-  assert.deepEqual(await read(b, `${repository}/tracked.txt`), baseText)
   await write(b, `${home}/${sessionFiles[0]}`, session.get(sessionFiles[0]))
 
   // An absolute destination symlink must be refused before any tar extraction.
@@ -244,43 +184,17 @@ try {
   for (const [name, bytes] of session) assert.deepEqual(await read(b, `${home}/${name}`), bytes)
   await run(b, ['rm', '--', `${data}/absolute-link`])
 
-  await run(b, ['git', 'apply', '--binary', '-'], { cwd: repository, bytes: parts.patch })
-  assert.deepEqual(await read(b, `${repository}/tracked.txt`), changedText)
-  assert.deepEqual(await read(b, `${repository}/tracked.bin`), changedBinary)
-  assert.deepEqual(await read(b, `${repository}/script.sh`), executable)
-  assert.equal(
-    (await run(b, ['stat', '-c', '%a', `${repository}/script.sh`])).bytes.toString().trim(),
-    '755',
-  )
-  await absent(b, `${repository}/deleted.txt`)
-  assert.equal((await git(b, 'rev-parse', 'HEAD')).bytes.toString().trim(), head)
-  assert.deepEqual(
-    (
-      await git(
-        b,
-        '-c',
-        'core.fsmonitor=false',
-        'diff',
-        '--binary',
-        '--no-ext-diff',
-        '--no-textconv',
-        'HEAD',
-        '--',
-      )
-    ).bytes,
-    expectedPatch,
-  )
-  assert.deepEqual(
-    (await git(b, 'status', '--porcelain', '-z')).bytes,
-    (await git(a, 'status', '--porcelain', '-z')).bytes,
-  )
+  // A working directory that is not empty: nothing is restored into it.
+  await write(b, `${repository}/left-over.txt`, Buffer.from("not the turn's\n"))
+  await run(b, ['rm', '--', `${home}/${sessionFiles[0]}`, `${home}/${sessionFiles[1]}`])
+  await assert.rejects(transport.restore(b, state, parts), { code: 'SANDBOX_COMMAND_FAILED' })
+  await absent(b, `${home}/${sessionFiles[0]}`)
 
   console.log(
     JSON.stringify(
       {
         result: 'PASS',
         image,
-        head,
         parts: Object.fromEntries(
           Object.entries(parts).map(([name, bytes]) => [
             name,
@@ -289,17 +203,13 @@ try {
         ),
         verified: [
           'P2 Docker provider exec path: runc, network none, uid 10001, read-only rootfs',
-          'session exact bytes',
-          'three untracked files including binary, empty and UTF-8 paths',
+          'session exact bytes, the home part alone',
           'credentials/config omitted by allowlist',
-          'gitignored file omitted',
+          'the working directory never captured',
           'existing directories accepted',
           'repeated restore refuses existing files without overwrite',
           'absolute destination symlink rejected before extraction',
-          'P1 restore leaves tracked base intact',
-          'separate trusted git apply restores text, binary and deletion',
-          'executable mode preserved',
-          'identical Git HEAD, binary diff and porcelain status',
+          'a working directory that is not empty refused before extraction',
         ],
         metrics,
       },

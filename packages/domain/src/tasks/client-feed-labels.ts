@@ -1,6 +1,5 @@
 import { pluralRu } from '../plural.ts'
-import type { PreviewUnavailableReason } from '../preview/preview-state.ts'
-import type { VersionBump } from '../release/semver.ts'
+import type { PreviewUnavailableReason, VersionBump } from './feed-history.ts'
 import type { ScheduleChangeAction, ScheduleLeftReason } from '../schedule/feed.ts'
 import type {
   FeedRedoPayload,

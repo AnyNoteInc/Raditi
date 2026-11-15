@@ -1,18 +1,11 @@
 import { taskStatuses, terminalTaskStatuses } from '@repo/domain/tasks/task-status'
 import { describe, expect, it } from 'vitest'
 
-import { toolText } from './chat-texts'
-import type { CandidateHead, PreviewHead } from './chat-types'
 import {
-  candidateCount,
-  changesEmptyText,
-  changesMark,
-  changesToolOf,
   closedTools,
   dialogEnded,
   dialogTools,
   dialogToolsOf,
-  isChangesTool,
   movesFocus,
   toolIcons,
   toolMark,
@@ -20,7 +13,6 @@ import {
   toolOpeners,
   toolPanelId,
   toolsDot,
-  toolsLabel,
   toolsReducer,
   toolsShown,
   toolTabId,
@@ -30,35 +22,9 @@ import {
   type ToolsAction,
   type ToolsState,
 } from './dialog-tools'
-import { browserAnswer, CANDIDATE_ID, candidateHead, feedAnswer } from './testing'
-
-const ORIGIN = 'http://site-0a1b2c3d-chat-4e5f6a.localhost:8090'
-
-function previewOf(patch: Partial<PreviewHead> = {}): PreviewHead {
-  return {
-    status: 'ready',
-    unavailableReason: null,
-    origin: ORIGIN,
-    revision: 1,
-    dirty: false,
-    ...patch,
-  }
-}
-
-const candidateOf = (patch: Partial<CandidateHead> = {}): CandidateHead => ({
-  ...candidateHead,
-  ...patch,
-})
-
-const noChecks = { pending: 0, passed: 0, failed: 0, stale: 0 }
-/** The changes touch the records of the site alone. */
-const recordsOnly = candidateOf({
-  counts: { files: { added: 0, modified: 0, deleted: 0 }, media: 0, records: 3 },
-  checks: noChecks,
-})
+import { browserAnswer, feedAnswer } from './testing'
 
 const closed = { open: false }
-const opened = { open: true }
 
 /** The state after the actions, from a closed panel. */
 const after = (...actions: ToolsAction[]): ToolsState => actions.reduce(toolsReducer, closedTools)
@@ -70,153 +36,9 @@ const back: ToolsAction = { type: 'back' }
 const launch: ToolsAction = { type: 'launch' }
 
 describe('the tools a dialog has (И6)', () => {
-  it('lists them in the order of the menu, and names every opener of И9', () => {
-    expect(dialogTools).toEqual([
-      'preview',
-      'files',
-      'database',
-      'checks',
-      'terminal',
-      'browser',
-      'documents',
-    ])
-    // The launch of the browser is an action of its own, and the feed has no buttons of the browser
-    // but «Взять управление» (owner's answers of 30.10.2026).
-    expect(toolOpeners).toEqual(['menu', 'changes', 'command', 'take'])
-  })
-
-  it('offers a task in the browser its browser alone, whatever the state of its session, ended too', () => {
+  it('offers a chat with a browser the browser, ended or not', () => {
     expect(dialogToolsOf(browserAnswer())).toEqual(['browser'])
-    // Before the first pass opened a session, and after it closed.
-    expect(dialogToolsOf(browserAnswer({ browser: null }))).toEqual(['browser'])
-    expect(
-      dialogToolsOf(browserAnswer({ browser: { status: 'closed', closeReason: 'idle' } })),
-    ).toEqual(['browser'])
-    expect(
-      dialogToolsOf(
-        browserAnswer({ status: 'done', browser: { status: 'closed', closeReason: 'task_done' } }),
-      ),
-    ).toEqual(['browser'])
-    expect(dialogToolsOf(browserAnswer({ status: 'cancelled', browser: null }))).toEqual([
-      'browser',
-    ])
-    // What a head of the repository would offer is not the browser's: the requirements decide.
-    expect(
-      dialogToolsOf(browserAnswer({ preview: previewOf(), candidate: candidateHead })),
-    ).toEqual(['browser'])
-  })
-
-  // The owner, 06.11.2026: «если чат привязан к проекту добавь возможность в чате смотреть файлы
-  // как в терминале и редактировать их».
-  it('offers the files of the working copy to a chat with the code once its agent took it', () => {
-    expect(dialogToolsOf(feedAnswer({ task: { turnNo: 1 } }))).toEqual(['terminal'])
-    expect(dialogToolsOf(feedAnswer({ status: 'done', task: { turnNo: 2 } }))).toEqual(['terminal'])
-    expect(dialogToolsOf(feedAnswer({ task: { turnNo: 1 }, candidate: candidateHead }))).toEqual([
-      'files',
-      'database',
-      'checks',
-      'terminal',
-    ])
-    // A new chat starts with the field alone (И1), and a chat without the code has no files.
-    expect(dialogToolsOf(feedAnswer())).toEqual([])
-    expect(
-      dialogToolsOf(browserAnswer({ task: { turnNo: 1 }, preview: previewOf(), browser: null })),
-    ).toEqual(['browser'])
-  })
-
-  it('offers nothing of the changes before there are any (К19)', () => {
-    expect(dialogToolsOf(feedAnswer())).toEqual([])
-    expect(dialogToolsOf(feedAnswer({ status: 'running' }))).toEqual([])
-    expect(dialogToolsOf(feedAnswer({ status: 'done' }))).toEqual([])
-  })
-
-  it('offers the files and the checks only with something in them', () => {
-    expect(dialogToolsOf(feedAnswer({ candidate: candidateHead }))).toEqual([
-      'files',
-      'database',
-      'checks',
-    ])
-    const filesOnly = candidateOf({
-      counts: { files: { added: 1, modified: 0, deleted: 0 }, media: 0, records: 0 },
-      checks: noChecks,
-    })
-    expect(dialogToolsOf(feedAnswer({ candidate: filesOnly }))).toEqual(['files'])
-    const mediaOnly = candidateOf({
-      counts: { files: { added: 0, modified: 0, deleted: 0 }, media: 1, records: 0 },
-      checks: noChecks,
-    })
-    expect(dialogToolsOf(feedAnswer({ candidate: mediaOnly }))).toEqual(['files'])
-    // Changes the platform could not count: their checks still are.
-    expect(dialogToolsOf(feedAnswer({ candidate: candidateOf({ counts: null }) }))).toEqual([
-      'checks',
-    ])
-    expect(
-      dialogToolsOf(feedAnswer({ candidate: candidateOf({ counts: null, checks: noChecks }) })),
-    ).toEqual([])
-  })
-
-  it('offers the preview while one can be shown: made, ready, stopped or failed', () => {
-    for (const status of ['pending', 'building', 'ready', 'failed', 'expired'] as const)
-      expect(dialogToolsOf(feedAnswer({ preview: previewOf({ status }) }))).toEqual(['preview'])
-  })
-
-  it('offers no preview where the platform makes none, where it cannot be shown or is gone', () => {
-    // No preview of the dialog at all.
-    expect(dialogToolsOf(feedAnswer({ preview: null }))).toEqual([])
-    // The platform has no address of previews (`PREVIEW_BASE_DOMAIN` is empty).
-    expect(dialogToolsOf(feedAnswer({ preview: previewOf({ origin: null }) }))).toEqual([])
-    expect(
-      dialogToolsOf(
-        feedAnswer({
-          preview: previewOf({ status: 'unavailable', unavailableReason: 'no_database' }),
-        }),
-      ),
-    ).toEqual([])
-    expect(
-      dialogToolsOf(feedAnswer({ status: 'done', preview: previewOf({ status: 'destroyed' }) })),
-    ).toEqual([])
-  })
-
-  it("offers the records only once the changes hold some (owner's answer of 30.10.2026)", () => {
-    expect(dialogToolsOf(feedAnswer({ candidate: recordsOnly }))).toEqual(['database'])
-    expect(dialogToolsOf(feedAnswer({ preview: previewOf(), candidate: recordsOnly }))).toEqual([
-      'preview',
-      'database',
-    ])
-    // A dialog stopped with records among its changes still shows them.
-    expect(dialogToolsOf(feedAnswer({ status: 'cancelled', candidate: recordsOnly }))).toEqual([
-      'database',
-    ])
-    // Changes of the files alone: no tool, whatever the stack or the preview could do with the
-    // database.
-    const filesOnly = candidateOf({
-      counts: { files: { added: 1, modified: 0, deleted: 0 }, media: 0, records: 0 },
-    })
-    expect(
-      dialogToolsOf(
-        feedAnswer({ status: 'awaiting_approval', preview: previewOf(), candidate: filesOnly }),
-      ),
-    ).toEqual(['preview', 'files', 'checks'])
-  })
-
-  const both = { requirements: { repository: true, browser: true } }
-
-  it('offers a chat with the code and the browser both, the browser last (plan 61, §5.11)', () => {
-    // No changes yet, no session yet: the files of the working copy and the browser.
-    expect(dialogToolsOf(browserAnswer({ task: both, browser: null }))).toEqual([
-      'terminal',
-      'browser',
-    ])
-    expect(
-      dialogToolsOf(
-        browserAnswer({
-          task: both,
-          status: 'awaiting_approval',
-          preview: previewOf(),
-          candidate: candidateHead,
-        }),
-      ),
-    ).toEqual(['preview', 'files', 'database', 'checks', 'terminal', 'browser'])
+    expect(dialogToolsOf(browserAnswer({ status: 'done' }))).toEqual(['browser'])
   })
 
   it('offers a chat with neither nothing at all', () => {
@@ -227,44 +49,6 @@ describe('the tools a dialog has (И6)', () => {
 })
 
 describe('the marks of the tiles (И5)', () => {
-  const ready = feedAnswer({
-    status: 'awaiting_approval',
-    preview: previewOf(),
-    candidate: candidateHead,
-  })
-
-  it('counts the files with the media, the records, and the checks passed of all', () => {
-    // One file added and two changed, a medium besides; three records; two checks, both passed.
-    expect(toolMark('files', ready, closed)).toBe('4')
-    expect(toolMark('database', ready, closed)).toBe('3')
-    expect(toolMark('checks', ready, closed)).toBe('2 из 2')
-    const checks = { pending: 1, passed: 1, failed: 1, stale: 1 }
-    expect(toolMark('checks', feedAnswer({ candidate: candidateOf({ checks }) }), closed)).toBe(
-      '1 из 4',
-    )
-    expect(
-      toolMark(
-        'checks',
-        feedAnswer({ candidate: candidateOf({ checks: { ...noChecks, pending: 2 } }) }),
-        closed,
-      ),
-    ).toBe('0 из 2')
-  })
-
-  it('gives the preview no mark', () => {
-    expect(toolMark('preview', ready, closed)).toBeNull()
-    expect(
-      toolMark('preview', feedAnswer({ preview: previewOf({ status: 'building' }) }), closed),
-    ).toBeNull()
-  })
-
-  it('says «Открыто» for an open tool, whatever it holds', () => {
-    for (const tool of ['preview', 'files', 'database', 'checks'] as const)
-      expect(toolMark(tool, ready, opened)).toBe('Открыто')
-    expect(toolMark('browser', browserAnswer(), opened)).toBe('Открыто')
-    expect(toolMark('browser', browserAnswer({ browser: null }), opened)).toBe('Открыто')
-  })
-
   it('says «пока нет» of a browser the agent has not needed yet (plan 61, К11)', () => {
     const none = browserAnswer({ browser: null })
     expect(dialogToolsOf(none)).toEqual(['browser'])
@@ -353,105 +137,9 @@ describe('the marks of the tiles (И5)', () => {
       ),
     ).toBe('Закрыт')
   })
-
-  it('lays the tiles of the menu in its order, the open tools marked «Открыто»', () => {
-    const tools = after(open('checks'), open('preview'))
-    expect(toolTilesOf(ready, tools)).toEqual([
-      { tool: 'preview', open: true, mark: 'Открыто' },
-      { tool: 'files', open: false, mark: '4' },
-      { tool: 'database', open: false, mark: '3' },
-      { tool: 'checks', open: true, mark: 'Открыто' },
-    ])
-    expect(toolTilesOf(browserAnswer({ browser: null }), closedTools)).toEqual([
-      { tool: 'browser', open: false, mark: 'пока нет' },
-    ])
-  })
-
-  it('counts what a tool of the changes holds', () => {
-    expect(candidateCount('files', null)).toBe(0)
-    expect(candidateCount('files', candidateHead)).toBe(4)
-    expect(candidateCount('database', candidateHead)).toBe(3)
-    expect(candidateCount('checks', candidateHead)).toBe(2)
-    const media = candidateOf({
-      counts: { files: { added: 0, modified: 0, deleted: 1 }, media: 2, records: 0 },
-    })
-    expect(candidateCount('files', media)).toBe(3)
-    expect(candidateCount('database', candidateOf({ counts: null }))).toBe(0)
-  })
 })
 
-describe('«Посмотреть изменения» (И10)', () => {
-  it('opens the first of the files, the records and the checks that holds anything', () => {
-    expect(changesToolOf(feedAnswer({ candidate: candidateHead }))).toBe('files')
-    // Only a medium is new: it is among the files.
-    const media = candidateOf({
-      counts: { files: { added: 0, modified: 0, deleted: 0 }, media: 1, records: 2 },
-    })
-    expect(changesToolOf(feedAnswer({ candidate: media }))).toBe('files')
-    expect(changesToolOf(feedAnswer({ candidate: recordsOnly }))).toBe('database')
-    const checksOnly = candidateOf({
-      counts: { files: { added: 0, modified: 0, deleted: 0 }, media: 0, records: 0 },
-      checks: { ...noChecks, failed: 1 },
-    })
-    expect(changesToolOf(feedAnswer({ candidate: checksOnly }))).toBe('checks')
-  })
-
-  it('opens only a tool the menu offers: the records, once they hold any', () => {
-    const head = feedAnswer({
-      candidate: candidateOf({ ...recordsOnly, checks: { ...noChecks, passed: 1 } }),
-    })
-    expect(changesToolOf(head)).toBe('database')
-    expect(dialogToolsOf(head)).toContain('database')
-    // A chat without the repository has no tool of the changes: the files, which it does not offer
-    // either, are only what the function falls back to.
-    expect(dialogToolsOf(browserAnswer({ candidate: recordsOnly }))).not.toContain('database')
-  })
-
-  it('opens the files, with what they say before the changes, when nothing holds anything', () => {
-    expect(changesToolOf(feedAnswer())).toBe('files')
-    expect(changesToolOf(feedAnswer({ status: 'done' }))).toBe('files')
-    expect(
-      changesToolOf(feedAnswer({ candidate: candidateOf({ counts: null, checks: noChecks }) })),
-    ).toBe('files')
-  })
-})
-
-describe('the empty tabs of the changes (И6)', () => {
-  it('says the changes are yet to come', () => {
-    const working = { ended: false, candidate: null }
-    expect(changesEmptyText('files', working)).toEqual({
-      title: 'Изменений пока нет.',
-      note: 'Они появятся здесь, когда агент закончит работу.',
-    })
-    expect(changesEmptyText('database', working)).toEqual({
-      title: 'Изменений в базе данных пока нет.',
-      note: null,
-    })
-    expect(changesEmptyText('checks', working)).toEqual({ title: 'Проверок пока нет.', note: null })
-  })
-
-  it('says a dialog that has ended has none, and where the released versions are', () => {
-    const ended = { ended: true, candidate: null }
-    expect(changesEmptyText('files', ended)).toEqual({
-      title: 'Чат закрыт: изменений для показа здесь нет.',
-      note: 'Выпущенные версии — в разделе «Изменения».',
-    })
-    expect(changesEmptyText('database', ended)).toEqual({
-      title: 'Чат закрыт: изменений в базе данных нет.',
-      note: null,
-    })
-    expect(changesEmptyText('checks', ended)).toEqual({
-      title: 'Чат закрыт: проверок нет.',
-      note: null,
-    })
-  })
-
-  it('says nothing in place of the changes once they are there', () => {
-    for (const ended of [false, true])
-      for (const tool of ['files', 'database', 'checks'] as const)
-        expect(changesEmptyText(tool, { ended, candidate: candidateHead })).toBeNull()
-  })
-
+describe('the end of a dialog', () => {
   it('takes a dialog as ended by the statuses that end a task', () => {
     for (const status of taskStatuses)
       expect(dialogEnded(feedAnswer({ status }))).toBe(terminalTaskStatuses.includes(status))
@@ -459,210 +147,46 @@ describe('the empty tabs of the changes (И6)', () => {
 })
 
 describe('the names, icons and ids of the tools', () => {
-  it('names the files with their changes in the menu, and shortly on their tab (И7)', () => {
-    expect(toolMenuNames).toEqual({
-      browser: 'Браузер',
-      preview: 'Предпросмотр',
-      files: 'Файлы и изменения',
-      database: 'База данных',
-      checks: 'Проверки',
-      terminal: 'Изменения',
-      documents: 'Документы',
-    })
-    expect(toolTabNames).toEqual({ ...toolMenuNames, files: 'Файлы' })
-    expect(Object.keys(toolIcons)).toEqual([...dialogTools])
+  it('names the two tools of a chat on their tabs and in the menu, with ids the stands find', () => {
+    expect(dialogTools).toEqual(['browser', 'documents'])
+    expect(toolTabNames).toMatchObject({ browser: 'Браузер', documents: 'Документы' })
+    expect(toolMenuNames).toMatchObject({ browser: 'Браузер', documents: 'Документы' })
+    expect(toolIcons).toEqual({ browser: 'globe', documents: 'document' })
+    expect(toolTabId('browser')).toBe('dialog-pane-tab-browser')
+    expect(toolPanelId('documents')).toBe('dialog-pane-panel-documents')
   })
 
-  it('keeps the ids of the tabs and panels the stands find, the browser among them (И20)', () => {
-    expect(dialogTools.map(toolTabId)).toEqual([
-      'dialog-pane-tab-preview',
-      'dialog-pane-tab-files',
-      'dialog-pane-tab-database',
-      'dialog-pane-tab-checks',
-      'dialog-pane-tab-terminal',
-      'dialog-pane-tab-browser',
-      'dialog-pane-tab-documents',
-    ])
-    expect(toolPanelId('preview')).toBe('dialog-pane-panel-preview')
-    expect(toolPanelId('browser')).toBe('dialog-pane-panel-browser')
-  })
-
-  it('puts the focus on the tab after an explicit opening, but for «Взять управление» (И9)', () => {
-    expect(toolOpeners.filter((by) => movesFocus(by))).toEqual(['menu', 'changes', 'command'])
+  it('puts the focus on the tab of a tool opened by «+», never by «Взять управление» beside the dialog', () => {
+    expect(movesFocus('menu')).toBe(true)
+    expect(movesFocus('take')).toBe(false)
   })
 
   it('puts it there for «Взять управление» too where the tool hides the dialog it was pressed in (И14)', () => {
     expect(toolOpeners.filter((by) => movesFocus(by, { covers: true }))).toEqual([...toolOpeners])
   })
-
-  it('tells the tools of the changes from the browser and the preview', () => {
-    expect(dialogTools.filter(isChangesTool)).toEqual(['files', 'database', 'checks'])
-    expect(isChangesTool(null)).toBe(false)
-  })
 })
 
 describe('the tabs of the open tools', () => {
-  it('starts every showing of a dialog with the panel closed (И1)', () => {
-    expect(closedTools).toEqual({
-      open: [],
-      active: null,
-      away: false,
-      launchSpent: false,
-      seenChanges: null,
-      documentsSpent: false,
-      documentsUnseen: false,
+  it('opens a tool once, as the last tab, and closes to the tab beside it', () => {
+    const both = after(open('browser'), open('documents'), open('browser'))
+    expect(both).toMatchObject({ open: ['browser', 'documents'], active: 'browser' })
+    expect(toolsReducer(both, close('browser'))).toMatchObject({
+      open: ['documents'],
+      active: 'documents',
     })
-    expect(toolsShown(closedTools)).toBe(false)
-    expect(Object.isFrozen(closedTools)).toBe(true)
-  })
-
-  it('opens a tool as the last tab and shows it', () => {
-    const files = after(open('files'))
-    expect(files.open).toEqual(['files'])
-    expect(files.active).toBe('files')
-    const both = toolsReducer(files, { type: 'open', tool: 'preview', by: 'command' })
-    expect(both.open).toEqual(['files', 'preview'])
-    expect(both.active).toBe('preview')
-  })
-
-  it('shows a tool chosen again without a second tab', () => {
-    const state = after(open('preview'), open('files'), open('checks'))
-    const again = toolsReducer(state, { type: 'open', tool: 'files', by: 'changes' })
-    expect(again.open).toEqual(['preview', 'files', 'checks'])
-    expect(again.active).toBe('files')
-    // The tab on the screen chosen again: nothing changes.
-    expect(toolsReducer(again, open('files'))).toBe(again)
-  })
-
-  it('closes the tab on the screen: the one on its right is shown, else the one on its left', () => {
-    const three = after(open('preview'), open('files'), open('checks'), open('files'))
-    const right = toolsReducer(three, close('files'))
-    expect(right.open).toEqual(['preview', 'checks'])
-    expect(right.active).toBe('checks')
-    const left = toolsReducer(right, close('checks'))
-    expect(left.open).toEqual(['preview'])
-    expect(left.active).toBe('preview')
-  })
-
-  it('shows a tab chosen on the strip, and opens nothing by it', () => {
-    const state = after(open('preview'), open('files'))
-    const chosen = toolsReducer(state, { type: 'show', tool: 'preview' })
-    expect(chosen.open).toEqual(['preview', 'files'])
-    expect(chosen.active).toBe('preview')
-    expect(toolsReducer(chosen, { type: 'show', tool: 'preview' })).toBe(chosen)
-    // A tab that is not there: nothing opens, whatever the strip was asked.
-    expect(toolsReducer(state, { type: 'show', tool: 'checks' })).toBe(state)
-    expect(toolsReducer(closedTools, { type: 'show', tool: 'browser' })).toBe(closedTools)
-  })
-
-  it('closes the panel with its last tab', () => {
-    const state = toolsReducer(after(open('files')), close('files'))
-    expect(state.open).toEqual([])
-    expect(state.active).toBeNull()
-  })
-
-  it('closes a tab in the background without moving the one on the screen', () => {
-    const state = toolsReducer(
-      after(open('preview'), open('files'), open('checks')),
-      close('files'),
-    )
-    expect(state.open).toEqual(['preview', 'checks'])
-    expect(state.active).toBe('checks')
-  })
-
-  it('closes every tab at once', () => {
-    const state = toolsReducer(after(open('preview'), open('files')), closeAll)
-    expect(state.open).toEqual([])
-    expect(state.active).toBeNull()
-  })
-
-  it('changes nothing by closing what is not open', () => {
-    const state = after(open('files'))
-    expect(toolsReducer(state, close('database'))).toBe(state)
-    expect(toolsReducer(closedTools, close('browser'))).toBe(closedTools)
-    expect(toolsReducer(closedTools, closeAll)).toBe(closedTools)
-  })
-
-  it('remembers the changes a tab of them was on the screen at (И13)', () => {
-    const mark = changesMark(candidateHead)!
-    expect(mark).toBe(`${CANDIDATE_ID}:1`)
-    expect(changesMark(null)).toBeNull()
-    const seen = toolsReducer(after(open('files')), { type: 'seen', changes: mark })
-    expect(seen.seenChanges).toBe(mark)
-    expect(toolsReducer(seen, { type: 'seen', changes: mark })).toBe(seen)
-    // Closing the panel keeps what was seen.
-    expect(toolsReducer(seen, closeAll).seenChanges).toBe(mark)
+    expect(toolsShown(after(open('documents'), closeAll))).toBe(false)
   })
 })
 
 describe("«К чату» below `lg` (И14, owner's answer of 30.10.2026)", () => {
   it('closes the tab on the screen and keeps the others behind the dialog', () => {
-    const three = after(open('preview'), open('files'), open('checks'))
-    expect(toolsShown(three)).toBe(true)
-    const behind = toolsReducer(three, back)
-    expect(behind.open).toEqual(['preview', 'files'])
-    expect(behind.active).toBe('files')
-    expect(behind.away).toBe(true)
-    // The dialog is on the screen, the area of the tools is not.
-    expect(toolsShown(behind)).toBe(false)
-    // Another tab than the browser closed: the launch is still to come.
-    expect(behind.launchSpent).toBe(false)
-  })
-
-  it('shows the area again when a tool is chosen in the menu, open or not', () => {
-    const behind = after(open('preview'), open('files'), open('checks'), back)
-    // «Предпросмотр, Открыто»: its tab on the screen, the others where they were.
-    const preview = toolsReducer(behind, open('preview'))
-    expect(preview).toMatchObject({ open: ['preview', 'files'], active: 'preview', away: false })
-    expect(toolsShown(preview)).toBe(true)
-    // The tab that was on the screen before «К чату», chosen as it is.
-    const files = toolsReducer(behind, open('files'))
-    expect(files).toMatchObject({ open: ['preview', 'files'], active: 'files', away: false })
-    // A tool not open: the last tab, beside the ones kept.
-    const checks = toolsReducer(behind, { type: 'open', tool: 'checks', by: 'changes' })
-    expect(checks).toMatchObject({
-      open: ['preview', 'files', 'checks'],
-      active: 'checks',
-      away: false,
-    })
-  })
-
-  it('closes the area with its last tab, and the launch with the browser', () => {
-    const last = after(open('files'), back)
-    expect(last).toMatchObject({ open: [], active: null, away: false, launchSpent: true })
-    const browser = after(launch, back)
-    expect(browser).toMatchObject({ open: [], active: null, away: false, launchSpent: true })
-    expect(toolsReducer(browser, launch)).toBe(browser)
-  })
-
-  it('changes nothing while the area is away or nothing is open', () => {
-    const behind = after(open('preview'), open('files'), back)
-    expect(toolsReducer(behind, back)).toBe(behind)
-    expect(toolsReducer(closedTools, back)).toBe(closedTools)
-  })
-
-  it('leaves «Скрыть панель» closing every tab, the ones behind the dialog too', () => {
-    const hidden = toolsReducer(after(open('preview'), open('files'), back), closeAll)
-    expect(hidden).toMatchObject({ open: [], active: null, away: false, launchSpent: true })
+    const state = after(open('browser'), open('documents'), back)
+    expect(state).toMatchObject({ open: ['browser'], active: 'browser', away: true })
+    expect(toolsShown(state)).toBe(false)
   })
 })
 
 describe('the launch of the browser (И2, И3)', () => {
-  it("opens the browser by itself once, on any width (owner's answer of 30.10.2026)", () => {
-    const launched = after(launch)
-    expect(launched).toEqual({
-      open: ['browser'],
-      active: 'browser',
-      away: false,
-      launchSpent: true,
-      seenChanges: null,
-      documentsSpent: false,
-      documentsUnseen: false,
-    })
-    expect(toolsShown(launched)).toBe(true)
-    expect(toolsReducer(launched, launch)).toBe(launched)
-  })
-
   it('opens nothing after the client closed the browser', () => {
     const state = after(open('browser'), close('browser'))
     expect(state.launchSpent).toBe(true)
@@ -672,21 +196,6 @@ describe('the launch of the browser (И2, И3)', () => {
     expect(toolsReducer(again, launch)).toBe(again)
   })
 
-  it('opens nothing after the client closed the panel', () => {
-    const hidden = after(open('browser'), closeAll)
-    expect(hidden.launchSpent).toBe(true)
-    expect(toolsReducer(hidden, launch)).toBe(hidden)
-    // The last tab closed is the panel closed, whichever tool it was.
-    const lastTab = after(open('files'), close('files'))
-    expect(lastTab.launchSpent).toBe(true)
-    expect(toolsReducer(lastTab, launch)).toBe(lastTab)
-  })
-
-  it('leaves the launch for the browser while the client closes another tab', () => {
-    const state = after(open('preview'), open('files'), close('files'))
-    expect(state.launchSpent).toBe(false)
-  })
-
   it('shows the browser the client opened before it was ready, and spends the launch on it', () => {
     const early = after(open('browser'))
     const launched = toolsReducer(early, launch)
@@ -694,57 +203,10 @@ describe('the launch of the browser (И2, И3)', () => {
     expect(launched.active).toBe('browser')
     expect(launched.launchSpent).toBe(true)
   })
-
-  it('leaves on the screen what the client reads there, the browser a tab beside it (К10)', () => {
-    expect(after(open('files'), launch)).toMatchObject({
-      open: ['files', 'browser'],
-      active: 'files',
-      away: false,
-      launchSpent: true,
-    })
-    // The browser the client opened and left for another tab: no tab more, none taken away.
-    const asked = after(open('browser'), open('files'))
-    expect(toolsReducer(asked, launch)).toMatchObject({
-      open: ['browser', 'files'],
-      active: 'files',
-      launchSpent: true,
-    })
-    expect(toolsReducer(after(open('files'), launch), launch).active).toBe('files')
-  })
-
-  it('brings an area put away back on the browser', () => {
-    expect(after(open('files'), open('checks'), back, launch)).toMatchObject({
-      open: ['files', 'browser'],
-      active: 'browser',
-      away: false,
-    })
-  })
 })
 
 describe('the dot on «+» (И13)', () => {
   const help = { reason: 'login' as const, message: null }
-  const changes = feedAnswer({ status: 'awaiting_approval', candidate: candidateHead })
-
-  it('marks the changes the client has not had on the screen, those there at the start too', () => {
-    expect(toolsDot(changes, closedTools)).toBe('changes')
-    // Never while the panel is open, whatever tab is on it.
-    expect(toolsDot(changes, after(open('preview')))).toBeNull()
-    const seen = after(open('files'), { type: 'seen', changes: changesMark(candidateHead)! })
-    const hidden = toolsReducer(seen, closeAll)
-    expect(toolsDot(changes, hidden)).toBeNull()
-    // A new revision: the dot again, and the panel stays closed.
-    const revised = feedAnswer({ candidate: candidateOf({ revision: 2 }) })
-    expect(toolsDot(revised, hidden)).toBe('changes')
-    expect(hidden.active).toBeNull()
-    expect(toolsDot(feedAnswer(), closedTools)).toBeNull()
-  })
-
-  it('marks them while the area is away behind the dialog, its tabs open (И14)', () => {
-    const behind = after(open('preview'), open('files'), back)
-    expect(toolsDot(changes, behind)).toBe('changes')
-    // Shown again: no dot.
-    expect(toolsDot(changes, toolsReducer(behind, open('preview')))).toBeNull()
-  })
 
   it('marks a browser that waits for the client, while its session holds one', () => {
     expect(toolsDot(browserAnswer({ browser: { help } }), closedTools)).toBe('browser')
@@ -756,27 +218,6 @@ describe('the dot on «+» (И13)', () => {
       ),
     ).toBeNull()
     expect(toolsDot(browserAnswer({ browser: { help } }), after(open('browser')))).toBeNull()
-  })
-
-  it('has no dot for a browser that started: it opens by itself on any width', () => {
-    expect(toolsDot(browserAnswer(), after(launch))).toBeNull()
-    // Closed by the client after it opened: no news either.
-    expect(toolsDot(browserAnswer(), after(launch, close('browser')))).toBeNull()
-    expect(toolsDot(browserAnswer({ browser: { status: 'starting' } }), closedTools)).toBeNull()
-    expect(Object.keys(toolText.dot)).toEqual(['browser', 'changes', 'documents'])
-  })
-
-  it('says the most pressing first', () => {
-    expect(
-      toolsDot(browserAnswer({ browser: { help }, candidate: candidateHead }), closedTools),
-    ).toBe('browser')
-    expect(toolsDot(browserAnswer({ candidate: candidateHead }), closedTools)).toBe('changes')
-  })
-
-  it('names «+» with what its dot says', () => {
-    expect(toolsLabel(null)).toBe('Инструменты')
-    expect(toolsLabel('browser')).toBe('Инструменты — браузер ждёт вас')
-    expect(toolsLabel('changes')).toBe('Инструменты — есть новые изменения')
   })
 })
 
@@ -799,8 +240,6 @@ describe('toolsReducer, whatever the client does', () => {
     closeAll,
     back,
     launch,
-    { type: 'seen', changes: `${CANDIDATE_ID}:1` },
-    { type: 'seen', changes: `${CANDIDATE_ID}:2` },
   ]
 
   it('keeps one tab per tool, an active tab exactly while one is open, and one launch', () => {
@@ -854,33 +293,11 @@ describe('the documents of the agent (docs/plan/67-agent-documents.md, Д4)', ()
     expect(toolIcons.documents).toBe('document')
   })
 
-  it('open by themselves from lg, again for the next one, until the client closes them', () => {
-    const opened = after(arrived())
-    expect(opened).toMatchObject({ open: ['documents'], active: 'documents' })
-    expect(toolsReducer(opened, arrived())).toBe(opened)
-    const closedByClient = after(arrived(), close('documents'))
-    expect(closedByClient.documentsSpent).toBe(true)
-    expect(toolsReducer(closedByClient, arrived())).toMatchObject({
-      open: [],
-      documentsUnseen: true,
-    })
-    expect(after(arrived(), { type: 'closeAll' }).documentsSpent).toBe(true)
-  })
-
   it('join a panel on the screen beside the tool the client reads, without the focus', () => {
     const reading = after(launch)
     expect(toolsReducer(reading, arrived())).toMatchObject({
       open: ['browser', 'documents'],
       active: 'browser',
     })
-  })
-
-  it('below lg only mark «+», until the client opens them', () => {
-    const marked = after(arrived(false))
-    expect(marked).toMatchObject({ open: [], documentsUnseen: true })
-    expect(toolsDot(browserAnswer(), marked)).toBe('documents')
-    const seen = toolsReducer(marked, { type: 'open', tool: 'documents', by: 'menu' })
-    expect(seen.documentsUnseen).toBe(false)
-    expect(toolsDot(browserAnswer(), toolsReducer(seen, close('documents')))).toBeNull()
   })
 })

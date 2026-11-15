@@ -9,7 +9,7 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import type { BrowserSessionState } from '@repo/domain'
-import { DomainError, siteIdOf } from '@repo/domain'
+import { DomainError } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { readBrowserTaskFacts } from './browser-facts.ts'
@@ -51,12 +51,9 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
     )
     const { taskId } = await fixtures.task(workspace.id, {
       status: status as never,
-      needsRepository: false,
       needsBrowser: true,
     })
-    const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-    await db.site.update({ where: { id: siteIdOf(task) }, data: { agentNotes: 'Вход по /login' } })
-    return task
+    return db.task.findUniqueOrThrow({ where: { id: taskId } })
   }
 
   function worker() {
@@ -105,14 +102,12 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
     await sessions.start({ taskId: task.id, sessionId: opened.id }, running)
     expect(await db.browserSession.findUnique({ where: { id: opened.id } })).toMatchObject({
       status: 'ready',
-      siteId: task.siteId,
     })
     // Ids alone: the worker reads the site's address itself, the notes go to the turn's prompt.
     expect(client.ensure).toHaveBeenCalledExactlyOnceWith(
       {
         sessionId: opened.id,
         taskId: task.id,
-        siteId: task.siteId,
         takeControl: false,
       },
       { signal: running },
@@ -125,7 +120,7 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
     expect(again).toHaveLength(1)
     expect(again[0]).toMatchObject({ helpReason: null, helpMessage: null })
     expect(client.ensure).toHaveBeenLastCalledWith(
-      { sessionId: opened.id, taskId: task.id, siteId: task.siteId, takeControl: true },
+      { sessionId: opened.id, taskId: task.id, takeControl: true },
       expect.anything(),
     )
   })

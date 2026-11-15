@@ -21,8 +21,6 @@ import {
   planWindowLimits,
   planCustomNames,
   planPageSites,
-  planSites,
-  planTooSmall,
   scheduledPlanNote,
 } from './plan-format'
 
@@ -39,7 +37,6 @@ const ONE_COLUMN_BELOW = 696
  */
 export function PlanGrid({
   plans,
-  siteCount,
   subscription,
   canChoose,
   onChoose,
@@ -47,27 +44,21 @@ export function PlanGrid({
   onChange,
 }: {
   plans: PlanOffer[]
-  siteCount: number
   subscription: Subscription | null
-  /** Payments are on and no tariff is live: every tariff that fits the sites has its button. */
+  /** Payments are on and no tariff is live: every tariff has its button. */
   canChoose: boolean
   onChoose: (plan: PlanOffer) => void
   /**
    * The customer's tariff is paid for and its next period can still be changed: every other
-   * tariff that fits the sites has «Перейти на …».
+   * tariff has «Перейти на …».
    */
   canChange: boolean
   onChange: (plan: PlanOffer) => void
 }) {
   // What a customer without a tariff is pointed to: the tariff in the middle of three, as on the
-  // landing, while it holds their sites; when it does not, the cheapest one that does. With a
-  // tariff of their own nothing else is suggested.
+  // landing, else the cheapest. With a tariff of their own nothing else is suggested.
   const featured = featuredPlan(plans)
-  const suggested = subscription
-    ? undefined
-    : featured?.fitsSites
-      ? featured
-      : plans.find((plan) => plan.fitsSites)
+  const suggested = subscription ? undefined : (featured ?? plans[0])
 
   return (
     <Box
@@ -116,11 +107,8 @@ export function PlanGrid({
               overdue
               ? null
               : scheduledPlanNote(subscription.period.end, subscription.autoRenewal)
-            : plan.fitsSites
-              ? null
-              : planTooSmall(siteCount, plan.maxSites)
-        // A card has a note or a button, never both: where buttons are shown at all, a tariff
-        // without a note is one that fits the sites.
+            : null
+        // A card has a note or a button, never both.
         const offered = !current && !scheduled
 
         return (
@@ -226,7 +214,6 @@ export function PlanGrid({
               {dailyLimit ? <li>{nbsp(dailyLimit)}</li> : null}
               {windowLimits ? <li>{nbsp(windowLimits)}</li> : null}
               {smallEdit ? <li>{nbsp(smallEdit)}</li> : null}
-              <li>{nbsp(planSites(plan.maxSites))}</li>
               {planPageSites(plan.pageSites ?? null) ? (
                 <li>{nbsp(planPageSites(plan.pageSites ?? null)!)}</li>
               ) : null}

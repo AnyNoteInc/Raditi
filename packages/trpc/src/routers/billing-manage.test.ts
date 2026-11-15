@@ -20,7 +20,6 @@ import {
   billingNothingToChange,
   billingPaymentInProgress,
   billingPlanNotFound,
-  billingPlanSiteLimit,
   billingSubscriptionPastDue,
   legalDocuments,
   Money,
@@ -35,12 +34,6 @@ import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { appRouter, createCaller } from '../router.ts'
-import { resetSiteConnectionGate } from '../services/site-connection-gate.ts'
-import {
-  deleteSiteConnectionRows,
-  fakeSiteConnections,
-  siteCreateInput,
-} from '../testing/site-connections.ts'
 import type { BillingContext, Context } from '../trpc.ts'
 
 // What the customer changes about a tariff they have, through the router: auto-renewal off and
@@ -92,7 +85,6 @@ const requiredConsents = legalDocuments.flatMap((document) =>
 
 beforeEach(() => {
   vi.stubEnv('APP_ENV', 'test')
-  resetSiteConnectionGate()
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -236,7 +228,6 @@ function context(
       : null,
     billing,
     // Projects are made through the site connection wizard: a fake of its servers and Vault.
-    siteConnections: fakeSiteConnections().services,
   }
 }
 
@@ -250,7 +241,6 @@ const planRow = (data: Record<string, unknown> = {}) => ({
   creditsPerDay: 20,
   creditsPer5h: null,
   creditsPerWeek: null,
-  maxSites: 3,
   packCredits: null,
   ...data,
 })
@@ -263,7 +253,6 @@ const agencyRow = () =>
     creditsPerDay: 30,
     creditsPer5h: null,
     creditsPerWeek: null,
-    maxSites: 15,
   })
 
 const subscriptionRow = (data: Record<string, unknown> = {}) => ({
@@ -333,7 +322,6 @@ const overviewDto = (patch: Partial<SubscriptionOverviewDto> = {}): Subscription
     creditsPerDay: 20,
     creditsPer5h: null,
     creditsPerWeek: null,
-    maxSites: 3,
   },
   period: { start: new Date('2026-09-18T09:00:00Z'), end: PERIOD_END },
   autoRenewal: true,
@@ -797,12 +785,6 @@ describe('billing.schedulePlanChange and billing.cancelPlanChange', () => {
       'Этот тариф у вас уже есть или уже выбран на следующий период. Обновите страницу, чтобы увидеть изменения',
     ],
     [
-      'more sites than the tariff takes',
-      billingPlanSiteLimit,
-      'CONFLICT',
-      'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
-    ],
-    [
       'a renewal charge that is under way',
       billingPaymentInProgress,
       'CONFLICT',
@@ -1044,8 +1026,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     })
     await db.creditLedger.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
-    await deleteSiteConnectionRows(db, owned.workspaceId.in)
-    await db.site.deleteMany({ where: owned })
     await db.order.deleteMany({ where: owned })
     await db.subscription.deleteMany({ where: owned })
     await db.auditLog.deleteMany({ where: owned })
@@ -1254,7 +1234,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     expect((await actionsOf(paying)).slice(-2)).toEqual([planChangeSchedule, planChangeCancel])
   })
 
-  it('refuses a tariff the sites of the workspace do not fit, and a change while the charge is at the bank', async () => {
+  it('refuses a change while the charge is at the bank', async () => {
     const paying = await account()
     const { caller } = paying
     await seeded('business')
@@ -1266,28 +1246,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     paying.shop.pay({ saved: true })
     await caller.billing.syncOrder({ orderId })
     const subscription = await subscriptionOf(paying)
-    for (const host of ['one', 'two']) {
-      await db.site.create({
-        data: {
-          workspaceId: subscription.workspaceId,
-          name: host,
-          url: `https://${host}-${subscription.id}.example.ru`,
-          stack: 'wordpress',
-        },
-      })
-    }
-
-    try {
-      await expect(caller.billing.schedulePlanChange({ planSlug: 'start' })).rejects.toMatchObject({
-        code: 'CONFLICT',
-        message:
-          'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
-        cause: { code: 'BILLING_PLAN_SITE_LIMIT' },
-      })
-      expect((await subscriptionOf(paying)).nextPlanId).toBeNull()
-    } finally {
-      await db.site.deleteMany({ where: { workspaceId: subscription.workspaceId } })
-    }
 
     // The scheduler has started the charge of the period: its order is pending.
     await db.order.create({
@@ -1310,125 +1268,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     // Switching off does not wait for the charge, and says where it stands.
     expect(await caller.billing.cancelAutoRenew({})).toMatchObject({ renewalCharge: 'at_bank' })
     expect((await subscriptionOf(paying)).nextPlanId).toBeNull()
-  })
-
-  describe('the sites of a customer who chose a smaller tariff for the next period', () => {
-    // Default «м» of docs/plan/37-billing-plan.md: a tariff the sites do not fit cannot be
-    // chosen. Nothing counts the sites again when the renewal applies the choice, so from the
-    // moment it is made `project.create` holds the workspace to the smaller of the two.
-    const site = (index: number) =>
-      siteCreateInput({
-        name: `Сайт ${index}`,
-        url: `https://limit-${index}-${randomUUID()}.example.ru`,
-      })
-    const refusalOf = (adding: Promise<unknown>) =>
-      adding.then(
-        () => {
-          throw new Error('The site was added')
-        },
-        (error: unknown) => error as { message: string; cause: { code: string; details: unknown } },
-      )
-
-    /** A customer on «Агентство» (15 sites) with auto-renewal. */
-    async function onAgency() {
-      const paying = await account()
-      for (const slug of ['start', 'business', 'agency'] as const) await seeded(slug)
-      const { orderId } = await paying.caller.billing.startCheckout({
-        planSlug: 'agency',
-        autoRenew: true,
-      })
-      paying.shop.pay({ saved: true })
-      await paying.caller.billing.syncOrder({ orderId })
-      return paying
-    }
-    const sitesOf = async (paying: Account) =>
-      db.site.count({ where: { workspaceId: (await subscriptionOf(paying)).workspaceId } })
-
-    it('cannot add a site above the limit of the chosen tariff, and can again after «Отменить переход»', async () => {
-      const paying = await onAgency()
-      const { caller } = paying
-      await caller.project.create(site(1))
-      // One site fits «Старт»: the choice is allowed.
-      await caller.billing.schedulePlanChange({ planSlug: 'start' })
-
-      const refused = await refusalOf(caller.project.create(site(2)))
-
-      expect(refused).toMatchObject({
-        code: 'FORBIDDEN',
-        message:
-          'В тариф, который вы выбрали на следующий период, входит один сайт. Чтобы добавить ещё один, отмените переход или выберите другой тариф в настройках',
-        cause: { code: 'PROJECT_PLAN_LIMIT_REACHED' },
-      })
-      expect(refused.cause.details).toEqual({ maxSites: 1, scheduled: true })
-      expect(await sitesOf(paying)).toBe(1)
-      // The tariff of today is what it was: the limit is not its own.
-      expect((await caller.billing.overview()).subscription).toMatchObject({
-        plan: { slug: 'agency', maxSites: 15 },
-        nextPlan: { slug: 'start', maxSites: 1 },
-      })
-
-      await caller.billing.cancelPlanChange({})
-
-      await caller.project.create(site(2))
-      await caller.project.create(site(3))
-      expect(await sitesOf(paying)).toBe(3)
-      // And the smaller tariff no longer fits: the rule holds in both directions.
-      await expect(caller.billing.schedulePlanChange({ planSlug: 'start' })).rejects.toMatchObject({
-        cause: { code: 'BILLING_PLAN_SITE_LIMIT' },
-      })
-    })
-
-    it('follows the customer to the other tariff they choose instead', async () => {
-      const paying = await onAgency()
-      const { caller } = paying
-      await caller.project.create(site(1))
-      await caller.billing.schedulePlanChange({ planSlug: 'start' })
-      await expect(caller.project.create(site(2))).rejects.toMatchObject({
-        cause: { code: 'PROJECT_PLAN_LIMIT_REACHED' },
-      })
-
-      // «Бизнес» (3 sites) replaces «Старт» as the tariff of the next period.
-      await caller.billing.schedulePlanChange({ planSlug: 'business' })
-
-      await caller.project.create(site(2))
-      await caller.project.create(site(3))
-      const refused = await refusalOf(caller.project.create(site(4)))
-      expect(refused.cause.details).toEqual({ maxSites: 3, scheduled: true })
-      expect(refused.message).toBe(
-        'В тариф, который вы выбрали на следующий период, входит до 3 сайтов. Чтобы добавить ещё один, отмените переход или выберите другой тариф в настройках',
-      )
-      expect(await sitesOf(paying)).toBe(3)
-    })
-
-    it('never ends with more sites than the chosen tariff takes when a site and the choice come at once', async () => {
-      // Both take the lock of the user's row first: whichever is second sees what the first did.
-      for (let round = 0; round < 4; round += 1) {
-        const paying = await onAgency()
-        const { caller } = paying
-        await caller.project.create(site(1))
-
-        const [added, chosen] = await Promise.allSettled([
-          caller.project.create(site(2)),
-          caller.billing.schedulePlanChange({ planSlug: 'start' }),
-        ])
-
-        const sites = await sitesOf(paying)
-        const { nextPlanId } = await subscriptionOf(paying)
-        if (chosen.status === 'fulfilled') {
-          expect(added).toMatchObject({
-            status: 'rejected',
-            reason: { cause: { code: 'PROJECT_PLAN_LIMIT_REACHED' } },
-          })
-          expect(sites).toBe(1)
-          expect(nextPlanId).not.toBeNull()
-        } else {
-          expect(chosen.reason).toMatchObject({ cause: { code: 'BILLING_PLAN_SITE_LIMIT' } })
-          expect(added.status).toBe('fulfilled')
-          expect(sites).toBe(2)
-          expect(nextPlanId).toBeNull()
-        }
-      }
-    })
   })
 
   it('pays for an overdue tariff: active again for a month from the payment', async () => {

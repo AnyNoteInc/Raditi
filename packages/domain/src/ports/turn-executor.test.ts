@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import { isDomainError } from '../errors.ts'
-import type { PublicationSource } from '../git/publication.ts'
 import {
   BROWSER_ONLY,
   PLAIN_CHAT,
@@ -10,7 +9,6 @@ import {
 } from '../tasks/task-requirements.ts'
 import {
   assertTurnInbox,
-  branchBeforeTurn,
   turnMayHoldInbox,
   toTurnPlan,
   turnInboxAttachmentId,
@@ -26,13 +24,6 @@ import {
 const digest = 'a'.repeat(64)
 const taskId = '11111111-1111-4111-8111-111111111111'
 const siteId = '22222222-2222-4222-8222-222222222222'
-
-const workspace = (): PublicationSource => ({
-  repo: { provider: 'gitea', owner: 'sites', name: 'shop' },
-  branch: `agent/${taskId}`,
-  expectedBaseSha: 'b'.repeat(40),
-  protectedPaths: ['wp-config.php'],
-})
 
 const request = (): TurnRequest => ({
   sandbox: {
@@ -57,7 +48,6 @@ const request = (): TurnRequest => ({
   },
   input: { prompt: 'Поменяйте цену на главной', attachments: ['/workspace/inbox/price.pdf'] },
   driverVersion: '1.18.34',
-  workspace: workspace(),
   committedAt: '2026-09-27T10:00:00.000Z',
   previous: {
     workspaceId: 'ws-1',
@@ -256,54 +246,21 @@ describe('turn plan', () => {
     expect(turnPlanSchema.safeParse({ ...plan, context: stored }).success).toBe(false)
   })
 
-  it('keeps the working set, the add-only media paths and «rebased» of plan 53, all optional', () => {
-    // A plan stored before them is read as it was.
-    const stored = toTurnPlan(request(), 'opencode')
-    expect(turnPlanSchema.parse(JSON.parse(JSON.stringify(stored)))).toEqual(stored)
-    expect(stored).not.toHaveProperty('rebased')
-    const withWorkingSet = request()
-    withWorkingSet.workspace = {
-      ...workspace(),
-      sandboxBaseSha: 'c'.repeat(40),
-      addOnlyPaths: ['wp-content/uploads/raditi/'],
-    }
-    withWorkingSet.rebased = true
-    const plan = toTurnPlan(withWorkingSet, 'opencode')
-    expect(plan.workspace).toMatchObject({
-      sandboxBaseSha: 'c'.repeat(40),
-      addOnlyPaths: ['wp-content/uploads/raditi/'],
-    })
-    expect(plan.rebased).toBe(true)
-    expect(withTurnCredentials(plan, { llmApiKey: 'k', mcpToken: 't' }).rebased).toBe(true)
-    for (const invalid of [
-      { ...withWorkingSet.workspace, sandboxBaseSha: 'C'.repeat(40) },
-      { ...withWorkingSet.workspace, addOnlyPaths: ['wp-content/uploads/raditi'] },
-      { ...withWorkingSet.workspace, addOnlyPaths: ['../uploads/'] },
-    ])
-      expect(turnPlanSchema.safeParse({ ...plan, workspace: invalid }).success).toBe(false)
-  })
-
-  it('reads a plan stored before the requirements as a turn with a repository (plan 57, Б3)', () => {
-    // The JSON a turn_assignments row holds today: a workspace and no requirements.
+  it('refuses a plan of a turn with a repository, as one stored before plan 83 was', () => {
     const stored = JSON.parse(JSON.stringify(toTurnPlan(request(), 'opencode')))
-    expect(stored).not.toHaveProperty('requirements')
-    const plan = turnPlanSchema.parse(stored)
-    expect(plan).toEqual(stored)
-    expect(requirementsOf(plan)).toEqual(REPOSITORY_ONLY)
-    expect(withTurnCredentials(plan, { llmApiKey: 'k', mcpToken: 't' })).not.toHaveProperty(
-      'requirements',
-    )
-    // Naming them changes nothing for such a turn, and both needs together are expressible.
-    for (const requirements of [REPOSITORY_ONLY, { repository: true, browser: true }]) {
-      const named = toTurnPlan({ ...request(), requirements }, 'opencode')
-      expect(named.requirements).toEqual(requirements)
-      expect(named.workspace).toEqual(workspace())
-    }
+    for (const legacy of [
+      { workspace: { branch: `agent/${taskId}` } },
+      { replacesTurn: 1 },
+      { rebased: true },
+      { requirements: REPOSITORY_ONLY },
+    ])
+      expect(turnPlanSchema.safeParse({ ...stored, ...legacy }).success).toBe(false)
+    // Without requirements a plan needs nothing.
+    expect(requirementsOf(turnPlanSchema.parse(stored))).toEqual(PLAIN_CHAT)
   })
 
-  it('keeps a turn without a repository: no workspace, its requirements carried both ways', () => {
-    const { workspace: _workspace, ...rest } = request()
-    const browser: TurnRequest = { ...rest, requirements: BROWSER_ONLY }
+  it('keeps a turn of a chat with the browser: its requirements carried both ways', () => {
+    const browser: TurnRequest = { ...request(), requirements: BROWSER_ONLY }
     const unkeyed = withoutTurnCredentials(browser)
     expect(unkeyed.requirements).toEqual(BROWSER_ONLY)
     const plan = toTurnPlan(unkeyed, 'opencode')
@@ -319,9 +276,8 @@ describe('turn plan', () => {
     ).toEqual(browser)
   })
 
-  it('keeps a turn that needs nothing: a chat without a project, no workspace', () => {
-    const { workspace: _workspace, ...rest } = request()
-    const chat: TurnRequest = { ...rest, requirements: PLAIN_CHAT }
+  it('keeps a turn that needs nothing: a chat without the browser', () => {
+    const chat: TurnRequest = { ...request(), requirements: PLAIN_CHAT }
     const plan = toTurnPlan(withoutTurnCredentials(chat), 'opencode')
     expect(plan).not.toHaveProperty('workspace')
     expect(plan.requirements).toEqual(PLAIN_CHAT)
@@ -330,29 +286,8 @@ describe('turn plan', () => {
     )
   })
 
-  it('tells where the task branch stood when a turn started', () => {
-    const plan = toTurnPlan(withoutTurnCredentials(request()), 'opencode')
-    const turn = (number: number, pin?: string | null) => ({
-      context: { ...plan.context, turn: number },
-      workspace: {
-        ...plan.workspace!,
-        ...(pin === undefined ? {} : { expectedBranchSha: pin }),
-      },
-    })
-    const base = plan.workspace!.expectedBaseSha
-    const pinned = 'c'.repeat(40)
-    // The first turn creates the branch.
-    expect(branchBeforeTurn(turn(1))).toBeNull()
-    expect(branchBeforeTurn(turn(2))).toBe(base)
-    // A replacement names it: a refused turn may have published past what it works from.
-    expect(branchBeforeTurn(turn(2, pinned))).toBe(pinned)
-    expect(branchBeforeTurn(turn(2, null))).toBeNull()
-    expect(branchBeforeTurn({ context: plan.context })).toBeNull()
-  })
-
-  it('keeps «rewound» of a turn without a repository after `/undo`, absent otherwise', () => {
-    const { workspace: _workspace, ...rest } = request()
-    const chat: TurnRequest = { ...rest, requirements: PLAIN_CHAT, rewound: true }
+  it('keeps «rewound» of a turn after `/undo`, absent otherwise', () => {
+    const chat: TurnRequest = { ...request(), requirements: PLAIN_CHAT, rewound: true }
     const plan = turnPlanSchema.parse(toTurnPlan(withoutTurnCredentials(chat), 'opencode'))
     expect(plan.rewound).toBe(true)
     expect(withTurnCredentials(plan, { llmApiKey: 'k', mcpToken: 't' }).rewound).toBe(true)
@@ -360,40 +295,9 @@ describe('turn plan', () => {
   })
 
   it.each([
-    ['«rewound» with a repository', { rewound: true }, ['rewound']],
-    [
-      '«rewound» that is not true',
-      { requirements: BROWSER_ONLY, workspace: undefined, rewound: false },
-      ['rewound'],
-    ],
-    ['a workspace without a repository', { requirements: BROWSER_ONLY }, ['workspace']],
-    [
-      'a repository without its workspace',
-      { requirements: REPOSITORY_ONLY, workspace: undefined },
-      ['workspace'],
-    ],
-    ['no requirements and no workspace', { workspace: undefined }, ['workspace']],
-    [
-      'a replacement without a repository',
-      { requirements: BROWSER_ONLY, workspace: undefined, replacesTurn: 1 },
-      ['replacesTurn'],
-    ],
-    [
-      'a rebased start without a repository',
-      { requirements: BROWSER_ONLY, workspace: undefined, rebased: true },
-      ['rebased'],
-    ],
-    [
-      '«rebased» even false without a repository',
-      { requirements: BROWSER_ONLY, workspace: undefined, rebased: false },
-      ['rebased'],
-    ],
-    [
-      'a workspace in a turn that needs nothing',
-      { requirements: { repository: false, browser: false } },
-      ['workspace'],
-    ],
-    ['an unknown need', { requirements: { ...REPOSITORY_ONLY, database: true } }, ['requirements']],
+    ['«rewound» that is not true', { requirements: BROWSER_ONLY, rewound: false }, ['rewound']],
+    ['a repository', { requirements: REPOSITORY_ONLY }, ['requirements']],
+    ['an unknown need', { requirements: { ...PLAIN_CHAT, database: true } }, ['requirements']],
   ])('refuses %s', (_label, change, path) => {
     const plan = { ...toTurnPlan(request(), 'opencode'), ...change }
     const stored = JSON.parse(JSON.stringify(plan))
@@ -472,22 +376,19 @@ describe('files of the client in a turn', () => {
     expect(turnInboxAttachmentId(path)).toBeNull()
   })
 
-  it('takes the files of a turn with a repository within the limits', () => {
+  it('takes the files of a turn within the limits', () => {
     const full = Array.from({ length: 10 }, (_, index) => file(index, 20 * 1024 * 1024))
     expect(refusal(() => assertTurnInbox(full, true))).toBeNull()
     expect(refusal(() => assertTurnInbox([], false))).toBeNull()
   })
 
-  it('lets a turn hold them with a repository or in a chat without a site, never else (К16)', () => {
-    const site = { siteId: 'site-id', taskId: 'task-id' }
-    const chat = { siteId: 'task-id', taskId: 'task-id' }
-    expect(turnMayHoldInbox(true, site)).toBe(true)
-    expect(turnMayHoldInbox(false, chat)).toBe(true)
-    expect(turnMayHoldInbox(false, site)).toBe(false)
+  it('lets the turn of their chat hold them, never one under another lease (К16)', () => {
+    expect(turnMayHoldInbox({ siteId: 'task-id', taskId: 'task-id' })).toBe(true)
+    expect(turnMayHoldInbox({ siteId: 'other-id', taskId: 'task-id' })).toBe(false)
   })
 
   it.each([
-    ['a turn without a repository', [file(1)], false],
+    ['a turn of another lease', [file(1)], false],
     ['a path twice', [file(1), file(1)], true],
     ['a path of no attachment', [{ path: '/workspace/inbox/x', sizeBytes: 1 }], true],
     ['an empty file', [file(1, 0)], true],
@@ -502,7 +403,7 @@ describe('files of the client in a turn', () => {
       Array.from({ length: 11 }, (_, index) => file(index, 20 * 1024 * 1024)),
       true,
     ],
-  ])('refuses %s', (_label, files, hasRepository) => {
-    expect(refusal(() => assertTurnInbox(files, hasRepository))).toBe('BAD_REQUEST')
+  ])('refuses %s', (_label, files, mayHold) => {
+    expect(refusal(() => assertTurnInbox(files, mayHold))).toBe('BAD_REQUEST')
   })
 })

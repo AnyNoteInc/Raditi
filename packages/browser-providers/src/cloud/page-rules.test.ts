@@ -252,7 +252,7 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
     allowedHosts: [],
     localSites: [],
     openWeb: true,
-    platformHosts: ['raditi.ru', 'raditi-preview.ru'],
+    platformHosts: ['raditi.ru', 'raditi-platform.example'],
     pageDomain: null,
     policy: OPEN_WEB_POLICY,
   }
@@ -276,7 +276,7 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
       'https://localhost/',
       'https://raditi.ru/',
       'https://app.raditi.ru/',
-      'https://site-a-chat-b.raditi-preview.ru/',
+      'https://site-a-chat-b.raditi-platform.example/',
     ]) {
       expect(openAllowed(open, away), away).toBe(false)
       expect(ask(away, { navigation: true }, blank), away).toBe('blockedbyclient')
@@ -402,5 +402,129 @@ describe('a name of the platform in a session with a site (plan 61, К37)', () =
         ON_THE_SITE,
       ),
     ).toBe('blockedbyclient')
+  })
+})
+
+describe('a pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп50)', () => {
+  const state = { readOnly: true, refused: 0 }
+  const open: PageRules = {
+    allowedHosts: [],
+    localSites: [],
+    openWeb: true,
+    platformHosts: ['raditi.ru'],
+    pageDomain: null,
+    policy: OPEN_WEB_POLICY,
+    readsOnly: () => state.readOnly,
+    onReadOnlyRefusal: () => {
+      state.refused += 1
+    },
+  }
+  const page: PagePlace = { main: true, document: 'https://shop.example.com/cart' }
+  const ask = (
+    url: string,
+    more: { method?: string; navigation?: boolean; headers?: Record<string, string> } = {},
+    by: 'agent' | 'user' = 'agent',
+    place: PagePlace = page,
+  ) =>
+    requestVerdict(
+      open,
+      { url, method: 'GET', postData: null, navigation: false, ...more },
+      by,
+      place,
+    )
+
+  it('sends nothing that writes, on the page’s own site and on any other', () => {
+    state.readOnly = true
+    state.refused = 0
+    for (const write of [
+      ask('https://shop.example.com/order', { method: 'POST' }),
+      ask('https://api.example.net/graphql', { method: 'POST' }),
+      ask('https://shop.example.com/cart/1', { method: 'DELETE' }),
+      ask('https://shop.example.com/cart/1', { method: 'PUT' }),
+      ask('https://shop.example.com/cart/1', { method: 'PATCH' }),
+      // A read that asks the server to run it as a write.
+      ask('https://shop.example.com/cart/1', { headers: { 'X-HTTP-Method-Override': 'DELETE' } }),
+      // A form of a frame inside the page, to another site.
+      ask('https://pay.example.org/pay', { method: 'POST', navigation: true }, 'agent', {
+        main: false,
+        document: page.document,
+      }),
+    ])
+      expect(write).toBe('accessdenied')
+    expect(state.refused).toBe(7)
+  })
+
+  it('follows no link with a secret in its query, and loads what a page reads', () => {
+    state.readOnly = true
+    state.refused = 0
+    // An action by a link: unsubscribe, confirm, delete.
+    for (const url of [
+      'https://shop.example.com/unsubscribe?token=abc',
+      'https://shop.example.com/admin/post.php?post=12&action=trash&_wpnonce=abc',
+      'https://mail.example.org/confirm?code=123456',
+    ]) {
+      expect(ask(url, { navigation: true }), url).toBe('accessdenied')
+      // A frame goes there too: refused as the main frame.
+      expect(ask(url, { navigation: true }, 'agent', { ...page, main: false }), url).toBe(
+        'accessdenied',
+      )
+    }
+    expect(state.refused).toBe(6)
+    // A subresource with a key of its service reads: a map, a counter, a signed picture.
+    expect(ask('https://maps.example.net/tiles.js?key=abc&lang=ru')).toBe('continue')
+    expect(ask('https://cdn.example.net/photo.jpg?signature=abc')).toBe('continue')
+    // A page with a plain query, and an empty secret, opens.
+    expect(ask('https://shop.example.com/search?q=кофе&page=2', { navigation: true })).toBe(
+      'continue',
+    )
+    expect(ask('https://shop.example.com/search?q=a&token=', { navigation: true })).toBe('continue')
+    expect(ask('https://shop.example.com/', { method: 'HEAD' })).toBe('continue')
+    expect(ask('https://shop.example.com/', { method: 'OPTIONS' })).toBe('continue')
+    expect(state.refused).toBe(6)
+  })
+
+  it('limits neither an ordinary pass nor the client at the controls', () => {
+    state.readOnly = false
+    state.refused = 0
+    expect(ask('https://shop.example.com/order', { method: 'POST' })).toBe('continue')
+    expect(ask('https://shop.example.com/unsubscribe?token=abc', { navigation: true })).toBe(
+      'continue',
+    )
+    state.readOnly = true
+    // The client took the browser: they are there, and their own controls go.
+    expect(ask('https://shop.example.com/order', { method: 'POST' }, 'user')).toBe('continue')
+    expect(
+      ask('https://shop.example.com/unsubscribe?token=abc', { navigation: true }, 'user'),
+    ).toBe('continue')
+    expect(state.refused).toBe(0)
+    // What other rules close stays closed, and is no refusal of this rule.
+    expect(ask('https://raditi.ru/api/trpc')).toBe('blockedbyclient')
+    expect(state.refused).toBe(0)
+  })
+
+  it('denies when the session cannot say, and limits nothing without the question', () => {
+    const broken: PageRules = {
+      ...open,
+      readsOnly: () => {
+        throw new Error('unreadable')
+      },
+    }
+    expect(
+      requestVerdict(
+        broken,
+        { url: 'https://shop.example.com/', method: 'POST', postData: null, navigation: false },
+        'agent',
+        page,
+      ),
+    ).toBe('accessdenied')
+    const { readsOnly: _readsOnly, onReadOnlyRefusal: _told, ...plain } = open
+    expect(
+      requestVerdict(
+        plain,
+        { url: 'https://shop.example.com/', method: 'POST', postData: null, navigation: false },
+        'agent',
+        page,
+      ),
+    ).toBe('continue')
   })
 })

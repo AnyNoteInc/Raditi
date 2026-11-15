@@ -79,7 +79,6 @@ const planRow = (data: Record<string, unknown>) => ({
   creditsPerDay: 10,
   creditsPer5h: null,
   creditsPerWeek: null,
-  maxSites: 1,
   packCredits: null,
   ...data,
 })
@@ -131,7 +130,6 @@ describe('read models without a database', () => {
         creditsPerDay: null,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: null,
         packCredits: 100,
       }),
       planRow({
@@ -142,7 +140,6 @@ describe('read models without a database', () => {
         creditsPerDay: null,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: 3,
       }),
       planRow({ slug: 'pack-50', kind: 'pack', packCredits: 50 }),
     ]
@@ -158,7 +155,6 @@ describe('read models without a database', () => {
           creditsPerDay: 10,
           creditsPer5h: null,
           creditsPerWeek: null,
-          maxSites: 1,
         },
         {
           id: rows[2]!.id,
@@ -169,7 +165,6 @@ describe('read models without a database', () => {
           creditsPerDay: null,
           creditsPer5h: null,
           creditsPerWeek: null,
-          maxSites: 3,
         },
       ],
       pack: {
@@ -185,7 +180,7 @@ describe('read models without a database', () => {
 
   it('fails on a tariff row its DTO does not describe instead of showing it', async () => {
     const db = {
-      plan: { findMany: vi.fn().mockResolvedValue([planRow({ maxSites: null })]) },
+      plan: { findMany: vi.fn().mockResolvedValue([planRow({ creditsPerMonth: null })]) },
     } as unknown as PlansReader
     await expect(listPlans(db)).rejects.toThrow()
   })
@@ -220,7 +215,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
       creditsPerDay: 10,
       creditsPer5h: null,
       creditsPerWeek: null,
-      maxSites: 3,
     })
 
   describe('plan overview', () => {
@@ -254,7 +248,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
             creditsPerDay: 10,
             creditsPer5h: null,
             creditsPerWeek: null,
-            maxSites: 3,
             pageSites: null,
             pageCustomNames: false,
           },
@@ -305,7 +298,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         creditsPerDay: 30,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: 15,
       })
       await fixtures.subscription({
         workspaceId,
@@ -325,7 +317,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
           creditsPerDay: 30,
           creditsPer5h: null,
           creditsPerWeek: null,
-          maxSites: 15,
         },
         autoRenewal: true,
         paymentMethod: { label: 'Банковская карта' },
@@ -468,7 +459,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         creditsPerDay: 10,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: 1,
         sortOrder,
         ...data,
       })
@@ -509,7 +499,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
             creditsPerDay: null,
             creditsPer5h: null,
             creditsPerWeek: null,
-            maxSites: 1,
             pageSites: null,
             pageCustomNames: false,
           })
@@ -563,7 +552,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         creditsPerDay: null,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: null,
         packCredits: 10,
       })
       // Each account is granted from an order of its own kind.
@@ -677,7 +665,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         creditsPerDay: null,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: null,
         packCredits: 10,
       })
       const order = await fixtures.order({ workspaceId, planId: (await business()).id })
@@ -766,7 +753,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         creditsPerDay: null,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: null,
         packCredits: 100,
       })
       const period = {

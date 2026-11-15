@@ -7,14 +7,13 @@ import {
   llmBackendIds,
   looksLikeSecret,
   modelClassOfEffort,
-  terminalReleaseStatuses,
   terminalTaskStatuses,
   type ReasoningEffort,
 } from '@repo/domain'
 import { modelClassPriced } from '@repo/billing'
 
 import { accessibleTask, lockTask, taskNotFound } from './access.ts'
-import { dialogCommands, dialogFacts } from './dialog-facts.ts'
+import { dialogFacts } from './dialog-facts.ts'
 import { WRITE } from './dialog-lock.ts'
 import {
   releaseInProgress,
@@ -155,12 +154,9 @@ export async function setDialogEffort(
 
 /**
  * «Удалить диалог»: the dialog leaves the cabinet. One that has not ended is cancelled first, as
- * `/cancel` does it — the reserve is given back and the preview removed at once when it waits,
- * core stops it when it works — so nothing of it keeps running or holding credits. Refused while
- * a release of it — or «Отменить выпуск», which runs in a dialog that has ended — is not finished,
- * an outcome the operator still settles included: its feed is where the client reads it. The row
- * stays with all that points at it (billing, releases, calls); what was released stays on the site.
- * A repeat after a lost answer — or a second delete at the same time — finds it deleted and answers
+ * `/cancel` does it — the reserve is given back at once when it waits, core stops it when it
+ * works — so nothing of it keeps running or holding credits. The row stays with all that points at
+ * it (billing, calls). A repeat after a lost answer — or a second delete at the same time — finds it deleted and answers
  * the same.
  */
 export async function removeDialog(
@@ -171,7 +167,6 @@ export async function removeDialog(
   const task = await db.task.findFirst({
     where: {
       id: input.taskId,
-      OR: [{ siteId: null }, { site: { deletedAt: null } }],
       workspace: { members: { some: { userId: input.userId } } },
     },
     select: { id: true, deletedAt: true },
@@ -182,14 +177,8 @@ export async function removeDialog(
     // `lockTask` finds no row deleted meanwhile: a delete at the same time came first.
     const locked = await lockTask(tx, task.id)
     if (locked === null) return { removed: true as const }
-    const releasing = await tx.siteRelease.count({
-      where: { taskId: locked.id, status: { notIn: [...terminalReleaseStatuses] } },
-    })
-    if (releasing > 0) throw releaseInProgress()
     if (!terminalTaskStatuses.includes(locked.status)) {
       const facts = await dialogFacts(tx, locked, input.userId)
-      const cancel = dialogCommands(facts).find((command) => command.id === 'cancel')
-      if (cancel?.refusal === 'release_in_progress') throw releaseInProgress()
       await stopDialog(tx, locked, facts, {
         userId: input.userId,
         // The press is the server's own: a repeat is known by the mark below, not by this id.

@@ -36,9 +36,5 @@ describe('createMcpRuntime', () => {
     mcpNest.withoutAuthorization = true
     expect(() => assertMcpNestToolAuthorization()).toThrow(moved)
     expect(() => AppModule.forRoot(testMcpConfig())).toThrow(moved)
-    // The refusals of the composition come first, as when the runtime was made there.
-    expect(() =>
-      AppModule.forRoot({ ...testMcpConfig(), contentProfile: 'local-site', storage: null }),
-    ).toThrow('MCP content profile needs its S3 settings')
   })
 })

@@ -437,13 +437,12 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
       v: 1,
       action: 'created',
       scheduleId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7de1',
-      name: 'Заявки за сутки',
+      name: 'Курс валют',
       instructions:
-        'Откройте админку сайта и соберите заявки с форм за прошедшие сутки: кто, когда и что просил. Пришлите короткую сводку.',
-      triggers: [{ kind: 'weekdays', time: '08:00' }],
+        'Пришли курс доллара, евро и юаня по ЦБ на сегодня и насколько он изменился со вчера.',
+      triggers: [{ kind: 'weekdays', time: '09:00' }],
       timezone: 'Europe/Moscow',
-      nextRunAt: '2026-11-16T05:00:00.000Z',
-      siteId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7de2',
+      nextRunAt: '2026-11-16T06:00:00.000Z',
       effort: 'low',
       notify: true,
     },
@@ -451,7 +450,7 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
   {
     name: 'schedule_left v1 limit',
     type: 'feed.schedule_left',
-    payload: { v: 1, action: 'create', name: 'Идеи для новостей', reason: 'limit' },
+    payload: { v: 1, action: 'create', name: 'Идеи для постов', reason: 'limit' },
   },
   {
     name: 'failure v1 with objects',

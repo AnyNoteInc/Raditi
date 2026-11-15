@@ -2,17 +2,19 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { scenarioIds, scenarios, story } from './landing-story'
+import { scenarioIds, scenarios } from './landing-story'
 import { PHASE_MS } from './motion'
 import { initialDemoState, reducer, SiteDemo, type DemoState } from './site-demo'
 import { HANGING, pass, plain } from './testing'
 
 const phases = ['preparing', 'review', 'applying', 'applied', 'undone'] as const
+// The first request of the demo, the one it opens with.
+const story = scenarios.compare
 
 describe('demo reducer', () => {
   it('starts a new revision when another scenario is chosen', () => {
-    expect(reducer(initialDemoState, { type: 'choose', scenario: 'hours' })).toEqual({
-      scenario: 'hours',
+    expect(reducer(initialDemoState, { type: 'choose', scenario: 'letter' })).toEqual({
+      scenario: 'letter',
       phase: 'preparing',
       revision: 1,
     })
@@ -20,14 +22,14 @@ describe('demo reducer', () => {
 
   it('ignores choosing the current scenario in every phase', () => {
     for (const phase of phases) {
-      const state: DemoState = { scenario: 'price', phase, revision: 3 }
-      expect(reducer(state, { type: 'choose', scenario: 'price' })).toBe(state)
+      const state: DemoState = { scenario: 'compare', phase, revision: 3 }
+      expect(reducer(state, { type: 'choose', scenario: 'compare' })).toBe(state)
     }
   })
 
   it('applies only a prepared or an undone change', () => {
     for (const phase of phases) {
-      const state: DemoState = { scenario: 'price', phase, revision: 0 }
+      const state: DemoState = { scenario: 'compare', phase, revision: 0 }
       const next = reducer(state, { type: 'apply' })
       if (phase === 'review' || phase === 'undone') expect(next.phase).toBe('applying')
       else expect(next).toBe(state)
@@ -36,7 +38,7 @@ describe('demo reducer', () => {
 
   it('undoes only an applied change', () => {
     for (const phase of phases) {
-      const state: DemoState = { scenario: 'price', phase, revision: 0 }
+      const state: DemoState = { scenario: 'compare', phase, revision: 0 }
       const next = reducer(state, { type: 'undo' })
       if (phase === 'applied') expect(next.phase).toBe('undone')
       else expect(next).toBe(state)
@@ -44,26 +46,26 @@ describe('demo reducer', () => {
   })
 
   it('finishes the busy phase it was started for', () => {
-    const preparing: DemoState = { scenario: 'hours', phase: 'preparing', revision: 2 }
+    const preparing: DemoState = { scenario: 'letter', phase: 'preparing', revision: 2 }
     expect(reducer(preparing, { type: 'finish', revision: 2, phase: 'preparing' }).phase).toBe(
       'review',
     )
-    const applying: DemoState = { scenario: 'hours', phase: 'applying', revision: 2 }
+    const applying: DemoState = { scenario: 'letter', phase: 'applying', revision: 2 }
     expect(reducer(applying, { type: 'finish', revision: 2, phase: 'applying' }).phase).toBe(
       'applied',
     )
   })
 
   it('drops a finish that belongs to an older revision or to another phase', () => {
-    const state: DemoState = { scenario: 'hours', phase: 'preparing', revision: 2 }
+    const state: DemoState = { scenario: 'letter', phase: 'preparing', revision: 2 }
     expect(reducer(state, { type: 'finish', revision: 1, phase: 'preparing' })).toBe(state)
     expect(reducer(state, { type: 'finish', revision: 2, phase: 'applying' })).toBe(state)
   })
 
   it('lets a choice made while applying win over the pending finish', () => {
-    const applying: DemoState = { scenario: 'price', phase: 'applying', revision: 0 }
-    const chosen = reducer(applying, { type: 'choose', scenario: 'promotion' })
-    expect(chosen).toEqual({ scenario: 'promotion', phase: 'preparing', revision: 1 })
+    const applying: DemoState = { scenario: 'compare', phase: 'applying', revision: 0 }
+    const chosen = reducer(applying, { type: 'choose', scenario: 'page' })
+    expect(chosen).toEqual({ scenario: 'page', phase: 'preparing', revision: 1 })
     expect(reducer(chosen, { type: 'finish', revision: 0, phase: 'applying' })).toBe(chosen)
   })
 })
@@ -86,10 +88,10 @@ describe('SiteDemo', () => {
         .map((button) => button.textContent),
     ).toEqual(scenarioIds.map((id) => scenarios[id].label))
     expect(screen.getByText('Вы')).toBeInTheDocument()
-    expect(screen.getByText('ИИ-помощник для вашего сайта')).toBeInTheDocument()
+    expect(screen.getByText('ИИ-помощник на каждый день')).toBeInTheDocument()
     expect(
       screen.getByText(
-        'Это вымышленная кофейня, просьбы готовые. Попробуйте применить правку и отменить её — ваш сайт не изменится.',
+        'Это вымышленная кофейня, просьбы готовые. Здесь ничего не ищется, не отправляется и не публикуется.',
       ),
     ).toBeInTheDocument()
   })
@@ -112,7 +114,7 @@ describe('SiteDemo', () => {
       'false',
     ])
 
-    fireEvent.click(within(choice).getByRole('button', { name: 'Акция' }))
+    fireEvent.click(within(choice).getByRole('button', { name: 'Меню' }))
     expect(buttons.map((button) => button.getAttribute('aria-pressed'))).toEqual([
       'false',
       'false',
@@ -122,13 +124,13 @@ describe('SiteDemo', () => {
 
   it('applies a change after its pause and undoes it at once', () => {
     render(<SiteDemo />)
-    expect(screen.getByText('До правки')).toBeInTheDocument()
+    expect(screen.getByText('Черновик')).toBeInTheDocument()
 
-    const apply = screen.getByRole('button', { name: 'Применить правку' })
+    const apply = screen.getByRole('button', { name: 'Сохранить' })
     expect(apply).toHaveAttribute('aria-disabled', 'false')
     apply.focus()
     fireEvent.click(apply)
-    const busy = screen.getByRole('button', { name: 'Применяю…' })
+    const busy = screen.getByRole('button', { name: 'Сохраняю…' })
     // Busy, not disabled: a disabled button would drop the focus of the keyboard. jsdom keeps
     // the focus on a disabled button too, so the attributes are what is checked.
     expect(busy).not.toBeDisabled()
@@ -137,18 +139,18 @@ describe('SiteDemo', () => {
     // A second click during the pause must neither finish nor undo the change.
     fireEvent.click(busy)
     pass(PHASE_MS.applying - 1)
-    expect(screen.getByText('До правки')).toBeInTheDocument()
+    expect(screen.getByText('Черновик')).toBeInTheDocument()
 
     pass(1)
-    expect(screen.getByText('Изменено')).toBeInTheDocument()
-    expect(screen.getByText('Готово. В меню уже новая цена.')).toBeInTheDocument()
-    const undo = screen.getByRole('button', { name: 'Отменить правку' })
+    expect(screen.getByText('Сохранено')).toBeInTheDocument()
+    expect(screen.getByText(plain(story.result))).toBeInTheDocument()
+    const undo = screen.getByRole('button', { name: 'Отменить' })
     expect(undo).toHaveAttribute('aria-disabled', 'false')
     expect(undo).toHaveFocus()
 
     fireEvent.click(undo)
-    expect(screen.getByText('Возвращено')).toBeInTheDocument()
-    const again = screen.getByRole('button', { name: 'Применить снова' })
+    expect(screen.getByText('Отменено')).toBeInTheDocument()
+    const again = screen.getByRole('button', { name: 'Сохранить снова' })
     expect(again).toBeEnabled()
     expect(again).toHaveAttribute('aria-disabled', 'false')
   })
@@ -162,46 +164,41 @@ describe('SiteDemo', () => {
     expect(screen.getByText('Станет:').parentElement).toHaveTextContent(
       `Станет: ${plain(story.after)}`,
     )
-    const status = screen.getByText(/^Подготовил правку/)
+    const status = screen.getByText(/^Сделал/)
     expect(status).toHaveAttribute('aria-live', 'polite')
     expect(status).toHaveAttribute('aria-atomic', 'true')
     expect(status).toHaveTextContent(
-      plain(
-        `Подготовил правку. Посмотрите: ${story.field}: было ${story.before}, станет ${story.after}.`,
-      ),
+      plain(`Сделал. Посмотрите: ${story.field}: было ${story.before}, станет ${story.after}.`),
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Применить правку' }))
-    expect(status).toHaveTextContent(/^Сохраняю копию и применяю правку…$/)
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+    expect(status).toHaveTextContent(/^Сохраняю в документы…$/)
     pass(PHASE_MS.applying)
     // «Готово» must not be followed by the change it has already made.
     expect(plain(status.textContent)).toBe(plain(story.result))
-    fireEvent.click(screen.getByRole('button', { name: 'Отменить правку' }))
-    expect(status).toHaveTextContent(/^Вернул как было\. Всё под контролем\.$/)
-    // The preposition stays with its word: on a narrow phone the status takes two lines.
-    expect(status.textContent).toContain('под\u00a0контролем')
+    fireEvent.click(screen.getByRole('button', { name: 'Отменить' }))
+    expect(status).toHaveTextContent(/^Отменил\. Всё как было\.$/)
+    // On a narrow phone the status takes two lines: no short word ends the first.
     expect(status.textContent).not.toMatch(HANGING)
 
-    fireEvent.click(screen.getByRole('button', { name: 'График' }))
-    expect(status).toHaveTextContent(/^Нахожу нужное место на странице…$/)
+    fireEvent.click(screen.getByRole('button', { name: 'Письмо' }))
+    expect(status).toHaveTextContent(/^Ищу, читаю и собираю…$/)
     pass(PHASE_MS.preparing)
-    const { hours } = scenarios
+    const { letter } = scenarios
     expect(status).toHaveTextContent(
-      plain(
-        `Подготовил правку. Посмотрите: ${hours.field}: было ${hours.before}, станет ${hours.after}.`,
-      ),
+      plain(`Сделал. Посмотрите: ${letter.field}: было ${letter.before}, станет ${letter.after}.`),
     )
   })
 
   it('puts a sign before the status of a phase, for the eye only', () => {
     render(<SiteDemo />)
-    const status = screen.getByText(/^Подготовил правку/)
+    const status = screen.getByText(/^Сделал/)
     const signs = () => [...status.querySelectorAll(':scope > svg, :scope > span:empty')]
     const outline = () => status.querySelector('svg path')?.getAttribute('d')
     // The offer waits for the decision without a sign.
     expect(signs()).toHaveLength(0)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Применить правку' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
     expect(signs()).toHaveLength(1)
     expect(signs()[0]).toHaveAttribute('aria-hidden', 'true')
     expect(signs()[0]?.localName).toBe('span')
@@ -211,13 +208,13 @@ describe('SiteDemo', () => {
     const check = outline()
 
     // The undo has a sign of its own, the turn back; the region still says one sentence.
-    fireEvent.click(screen.getByRole('button', { name: 'Отменить правку' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Отменить' }))
     expect(signs()).toHaveLength(1)
     expect(signs()[0]).toHaveAttribute('aria-hidden', 'true')
     expect(outline()).not.toBe(check)
     // The same turn back as on the action that undid the change.
     expect(outline()).toBe('m9 5-5 5 5 5')
-    expect(plain(status.textContent)).toBe('Вернул как было. Всё под контролем.')
+    expect(plain(status.textContent)).toBe('Отменил. Всё как было.')
   })
 
   it('draws the value of the field anew when it is changed and when it is returned', () => {
@@ -227,7 +224,7 @@ describe('SiteDemo', () => {
     const before = value()
     expect(before).toHaveTextContent(plain(story.before))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Применить правку' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
     // Nothing is drawn anew while the change is only being applied.
     expect(value()).toBe(before)
     pass(PHASE_MS.applying)
@@ -235,13 +232,13 @@ describe('SiteDemo', () => {
     expect(applied).toHaveTextContent(plain(story.after))
     expect(applied).not.toBe(before)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Отменить правку' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Отменить' }))
     const returned = value()
     expect(returned).toHaveTextContent(plain(story.before))
     expect(returned).not.toBe(applied)
     expect(container.querySelector('[data-phase]')).toHaveAttribute('data-phase', 'undone')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Применить снова' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить снова' }))
     expect(value()).toBe(returned)
   })
 
@@ -252,12 +249,12 @@ describe('SiteDemo', () => {
     // The timer and the animations of a phase read one number; a phase that waits has none.
     expect(length()).toBe('')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Применить правку' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
     expect(length()).toBe(`${PHASE_MS.applying}ms`)
     pass(PHASE_MS.applying)
     expect(length()).toBe('')
 
-    fireEvent.click(screen.getByRole('button', { name: 'График' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Письмо' }))
     expect(length()).toBe(`${PHASE_MS.preparing}ms`)
     pass(PHASE_MS.preparing)
     expect(length()).toBe('')
@@ -266,37 +263,37 @@ describe('SiteDemo', () => {
   it('names the window of the site and the chat as groups', () => {
     render(<SiteDemo />)
 
-    const site = screen.getByRole('group', { name: 'Пример сайта кофейни' })
+    const site = screen.getByRole('group', { name: 'Пример документов кофейни' })
     expect(within(site).getByText('КРОШКА')).toBeInTheDocument()
     const chat = screen.getByRole('group', { name: 'Демонстрационный чат' })
-    expect(within(chat).getByRole('button', { name: 'Применить правку' })).toBeInTheDocument()
+    expect(within(chat).getByRole('button', { name: 'Сохранить' })).toBeInTheDocument()
     // The dot in the header of the chat is a decoration: the name is on the group.
     expect(chat.querySelectorAll('[aria-label]')).toHaveLength(0)
   })
 
   it('keeps an applied change when its scenario is chosen again', () => {
     render(<SiteDemo />)
-    fireEvent.click(screen.getByRole('button', { name: 'Применить правку' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
     pass(PHASE_MS.applying)
-    fireEvent.click(screen.getByRole('button', { name: 'Цена' }))
-    expect(screen.getByText('Изменено')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Цена' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: 'Цены' }))
+    expect(screen.getByText('Сохранено')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Цены' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('prepares another scenario for its pause before offering the change', () => {
     render(<SiteDemo />)
-    fireEvent.click(screen.getByRole('button', { name: 'График' }))
-    const busy = screen.getByRole('button', { name: 'Готовлю правку…' })
+    fireEvent.click(screen.getByRole('button', { name: 'Письмо' }))
+    const busy = screen.getByRole('button', { name: 'Готовлю…' })
     expect(busy).not.toBeDisabled()
     expect(busy).toHaveAttribute('aria-disabled', 'true')
     // A click before the change is ready applies nothing.
     fireEvent.click(busy)
     pass(PHASE_MS.preparing)
-    expect(screen.getByRole('button', { name: 'Применить правку' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Сохранить' })).toHaveAttribute(
       'aria-disabled',
       'false',
     )
-    expect(screen.getByText('До правки')).toBeInTheDocument()
-    expect(screen.getByText(plain(scenarios.hours.request))).toBeInTheDocument()
+    expect(screen.getByText('Черновик')).toBeInTheDocument()
+    expect(screen.getByText(plain(scenarios.letter.request))).toBeInTheDocument()
   })
 })

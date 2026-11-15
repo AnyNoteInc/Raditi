@@ -5,59 +5,30 @@ import {
   feedLimits,
   feedMarkdown,
   feedTaskHeadSchema,
-  leaseScopeOf,
   modelClassSchema,
-  previewOrigin,
   readFeedRow,
   type ChatCommandAvailability,
   type FeedItem,
   type FeedTaskHead,
-  type PreviewAddress,
-  type PreviewStatus,
   type ScheduledRunTrigger,
   type TaskStatus,
 } from '@repo/domain'
 
 import { accessibleTask, taskNotFound } from './access.ts'
 import { feedBrowser, type FeedBrowser } from './browser.ts'
-import { candidateCountsOf, dialogCommands, dialogFacts, type DialogFacts } from './dialog-facts.ts'
+import { dialogCommands, dialogFacts } from './dialog-facts.ts'
 import type { DialogSchedule } from './dialog-list.ts'
-import { dialogRetry, movingRequest } from './dialog-state.ts'
-import { siteClosed } from '../site-capabilities.ts'
+import { movingRequest } from './dialog-state.ts'
 
 type Tx = Prisma.TransactionClient
 
 /** A long chat is many pages of rows: the snapshot stays open while they are read. */
 const EXPORT_TIMEOUT_MS = 30_000
 
-/** The preview of a dialog as its panel shows it. */
-export interface FeedPreview {
-  status: PreviewStatus
-  unavailableReason: string | null
-  /** `scheme://host[:port]` of the preview; null — previews are not set up in this process. */
-  origin: string | null
-  revision: number
-  dirty: boolean
-}
-
-export interface FeedCandidate {
-  id: string
-  revision: number
-  status: 'current' | 'stale'
-  /** null — the facts of the row are unreadable. */
-  counts: ReturnType<typeof candidateCountsOf>
-  proposedVersion: string
-  checks: { pending: number; passed: number; failed: number; stale: number }
-}
-
 export interface DialogFeed {
   task: FeedTaskHead
   /** The cloud browser of a task in the browser (docs/plan/57, Б12–Б18); null for any other. */
   browser: FeedBrowser | null
-  preview: FeedPreview | null
-  candidate: FeedCandidate | null
-  release: DialogFacts['release']
-  undo: DialogFacts['undo']
   commands: ChatCommandAvailability[]
   events: FeedItem[]
   /** The id of the last row read, or the `after` of the request. */
@@ -68,9 +39,8 @@ export interface DialogFeed {
 /**
  * `task.feed` (feed design, «Чтение по идентификатору»): the head of the dialog and the rows
  * after the cursor from one snapshot of the database — REPEATABLE READ, read only — so an
- * answer never holds a new status without its row. Beside the head: the preview, the candidate
- * the dialog waits with, its latest release and the verdict on each command (Р20, Р34) — or, for
- * a task in the browser, the session of its browser (docs/plan/57, Б12). Rows are
+ * answer never holds a new status without its row. Beside the head: the verdict on each command
+ * (Р34) and the session of the chat's browser (docs/plan/57, Б12). Rows are
  * read with `readFeedRow` and never thrown away, except a stage the reader does not know and a
  * second row of the same stage of a turn.
  */
@@ -81,7 +51,6 @@ export async function readDialogFeed(
     taskId: string
     /** `task_events.id` of the last row the screen has; '0' before the first. */
     after: string
-    address: PreviewAddress | null
   },
 ): Promise<DialogFeed> {
   return db.$transaction(
@@ -92,13 +61,11 @@ export async function readDialogFeed(
         select: {
           id: true,
           workspaceId: true,
-          siteId: true,
           title: true,
           status: true,
           attempt: true,
           turnNo: true,
           waiting: true,
-          needsRepository: true,
           needsBrowser: true,
           modelClass: true,
         },
@@ -111,32 +78,6 @@ export async function readDialogFeed(
       return {
         task: head,
         browser,
-        preview:
-          facts.preview === null
-            ? null
-            : {
-                status: facts.preview.status,
-                unavailableReason: facts.preview.unavailableReason,
-                origin:
-                  input.address === null
-                    ? null
-                    : previewOrigin(facts.preview.hostname, input.address),
-                revision: facts.preview.revision,
-                dirty: facts.preview.dirty,
-              },
-        candidate:
-          facts.candidate === null
-            ? null
-            : {
-                id: facts.candidate.id,
-                revision: facts.candidate.revision,
-                status: facts.candidate.status,
-                counts: candidateCountsOf(facts.candidate.facts),
-                proposedVersion: facts.candidate.proposedVersion,
-                checks: facts.candidate.checks,
-              },
-        release: facts.release,
-        undo: facts.undo,
         commands: dialogCommands(facts),
         ...page,
       }
@@ -150,22 +91,19 @@ export async function feedHead(
   tx: Tx,
   task: {
     id: string
-    siteId: string | null
     title: string | null
     status: TaskStatus
     attempt: number
     turnNo: number
     waiting: 'agents' | 'site' | null
-    needsRepository: boolean
     needsBrowser: boolean
     /** The database's class; one the domain does not know (`service`) reads as the default. */
     modelClass: string | null
   },
 ): Promise<FeedTaskHead> {
-  // The chat's own row and its site's: its turns hold one of them (`turnLeaseOf`), a release of
-  // it the site's.
+  // The chat's own lease: its turns hold it.
   const leases = await tx.siteLease.findMany({
-    where: { siteId: { in: [...new Set([leaseScopeOf(task), task.id])] } },
+    where: { siteId: task.id },
     select: { heldForOperator: true, holderTaskId: true },
   })
   // The work of the agent began with the last words or «Продолжить»; a press of a command
@@ -198,11 +136,11 @@ export async function feedHead(
     turnNo: task.turnNo,
     waiting: task.status === 'queued' ? task.waiting : null,
     held: leases.some((lease) => lease.heldForOperator && lease.holderTaskId === task.id),
-    // docs/plan/53, «Попробовать ещё (18.10)»: decided by `retryVerdict` alone.
-    canRetry: (await dialogRetry(tx, task)).allowed,
+    // «Попробовать ещё» kept a candidate; a chat has none (docs/plan/83-remove-projects.md).
+    canRetry: false,
     workingSince: request?.createdAt.toISOString() ?? null,
     runningSince: work?.createdAt.toISOString() ?? null,
-    requirements: { repository: task.needsRepository, browser: task.needsBrowser },
+    requirements: { repository: false, browser: task.needsBrowser },
     // A task older than the classes thinks at the level of `standard` (`createDialog`'s default).
     effort: effortOfModelClass(modelClassSchema.catch('standard').parse(task.modelClass)),
   })
@@ -239,7 +177,7 @@ async function feedPage(
 
 /**
  * `task.export`: every row of a chat from one snapshot, as the screen would read them, written out
- * as a Markdown file. A chat of a closed project is read, so it is exported too.
+ * as a Markdown file.
  */
 export async function readDialogExport(
   db: PrismaClient,
@@ -250,7 +188,7 @@ export async function readDialogExport(
       await tx.$executeRaw`SET TRANSACTION READ ONLY`
       const task = await tx.task.findFirst({
         where: accessibleTask(input.userId, input.taskId),
-        select: { id: true, siteId: true, title: true },
+        select: { id: true, title: true },
       })
       if (task === null) throw taskNotFound()
       const rows: FeedItem[] = []
@@ -263,30 +201,19 @@ export async function readDialogExport(
       }
       return {
         fileName: feedFileName(task.title),
-        markdown: feedMarkdown({ title: task.title, rows, withSite: task.siteId !== null }),
+        markdown: feedMarkdown({ title: task.title, rows, withSite: false }),
       }
     },
     { isolationLevel: 'RepeatableRead', timeout: EXPORT_TIMEOUT_MS },
   )
 }
 
-/** The project of a chat as its screen shows it; `closed` — it reads, it takes no words (К39). */
-export interface DialogProject {
-  id: string
-  name: string
-  url: string
-  closed: boolean
-}
-
-/** The head of one dialog with its project and alias, for `task.get`. */
+/** The head of one chat, for `task.get`. */
 export async function readDialogHead(
   db: PrismaClient,
   input: { userId: string; taskId: string },
 ): Promise<
   FeedTaskHead & {
-    siteId: string | null
-    project: DialogProject | null
-    alias: string
     createdAt: Date
     updatedAt: Date
     /** The scheduled task the chat is a run of (docs/plan/82-scheduled-tasks.md, Зп43). */
@@ -300,15 +227,11 @@ export async function readDialogHead(
         where: accessibleTask(input.userId, input.taskId),
         select: {
           id: true,
-          siteId: true,
-          site: { select: { id: true, name: true, url: true, status: true } },
-          alias: true,
           title: true,
           status: true,
           attempt: true,
           turnNo: true,
           waiting: true,
-          needsRepository: true,
           needsBrowser: true,
           modelClass: true,
           createdAt: true,
@@ -325,7 +248,6 @@ export async function readDialogHead(
           scheduledTask: { select: { id: true, name: true, deletedAt: true } },
         },
       })
-      const { site } = task
       return {
         ...head,
         // The label «По расписанию · <name>»: a link while the task is there (Зп23, Зп43).
@@ -339,12 +261,6 @@ export async function readDialogHead(
                   trigger: run.trigger as ScheduledRunTrigger,
                 }
               : { id: null, name: run.name, trigger: run.trigger as ScheduledRunTrigger },
-        siteId: task.siteId,
-        project:
-          site === null
-            ? null
-            : { id: site.id, name: site.name, url: site.url, closed: siteClosed(site.status) },
-        alias: task.alias,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
       }

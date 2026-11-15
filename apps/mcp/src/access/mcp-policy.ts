@@ -14,26 +14,12 @@ import {
   docReadArgumentsSchema,
   docSectionMoveArgumentsSchema,
   docSectionRemoveArgumentsSchema,
-  docSectionWriteArgumentsSchema,
-  requirementsOf,
+  docSectionWriteShapeSchema,
 } from '@repo/domain'
 import { z } from 'zod'
 
-import {
-  browserClickArgumentsSchema,
-  browserExpectArgumentsSchema,
-  browserFillArgumentsSchema,
-  browserNavigateArgumentsSchema,
-  browserNoArgumentsSchema,
-  browserRunChecksArgumentsSchema,
-} from '../browser/browser-arguments.ts'
 import { rpcId } from '../common/json-rpc.ts'
 import { mcpProfilesOf, type McpConfig } from '../config/config.ts'
-import {
-  dbSchemaArgumentsSchema,
-  restoreArgumentsSchema,
-  wpRestArgumentsSchema,
-} from '../content/content-arguments.ts'
 import {
   pageDeleteArgumentsSchema,
   pageEditArgumentsSchema,
@@ -55,7 +41,7 @@ import {
   scheduleUpdateArgumentsSchema,
 } from '../schedule/schedule-arguments.ts'
 import { webSearchArgumentsSchema } from '../search/search-arguments.ts'
-import { closedPreviewStatuses, type McpTurnAccess } from './mcp-access.ts'
+import type { McpTurnAccess } from './mcp-access.ts'
 
 export const MCP_SECURITY = Symbol('MCP_SECURITY')
 export const MCP_BODY_LIMIT = 100 * 1024
@@ -65,40 +51,12 @@ const siteInfoCall = z.strictObject({
   arguments: z.strictObject({}).optional(),
   _meta: z.record(z.string(), z.unknown()).optional(),
 })
-const contentCall = z.discriminatedUnion('name', [
-  z.strictObject({
-    name: z.literal('wp_rest'),
-    arguments: wpRestArgumentsSchema,
-    _meta: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.strictObject({
-    name: z.literal('restore'),
-    arguments: restoreArgumentsSchema,
-    _meta: z.record(z.string(), z.unknown()).optional(),
-  }),
-])
-const schemaCall = z.strictObject({
-  name: z.literal('db_schema'),
-  arguments: dbSchemaArgumentsSchema,
-  _meta: z.record(z.string(), z.unknown()).optional(),
-})
 const call = <Name extends string, Arguments extends z.ZodType>(name: Name, args: Arguments) =>
   z.strictObject({
     name: z.literal(name),
     arguments: args,
     _meta: z.record(z.string(), z.unknown()).optional(),
   })
-const browserCall = z.discriminatedUnion('name', [
-  call('browser_navigate', browserNavigateArgumentsSchema),
-  call('browser_click', browserClickArgumentsSchema),
-  call('browser_fill', browserFillArgumentsSchema),
-  call('browser_expect', browserExpectArgumentsSchema),
-  call('browser_snapshot', browserNoArgumentsSchema.optional()),
-  call('browser_screenshot', browserNoArgumentsSchema.optional()),
-  call('browser_console', browserNoArgumentsSchema.optional()),
-  call('browser_network', browserNoArgumentsSchema.optional()),
-  call('browser_run_checks', browserRunChecksArgumentsSchema),
-])
 /**
  * The `web` tools of a browser task (docs/plan/57-browser-tasks.md, Б20, §3.7), each with the
  * domain's own arguments: the worker checks the same schemas again. Absent arguments are `{}`,
@@ -117,7 +75,8 @@ const webCall = z
 const searchCall = call('search_web', webSearchArgumentsSchema)
 const docsCall = z.discriminatedUnion('name', [
   call('doc_create', docCreateArgumentsSchema),
-  call('doc_section_write', docSectionWriteArgumentsSchema),
+  // The shape only: the tool itself says what is wrong with the text of a section.
+  call('doc_section_write', docSectionWriteShapeSchema),
   call('doc_section_remove', docSectionRemoveArgumentsSchema),
   call('doc_section_move', docSectionMoveArgumentsSchema),
   call('doc_read', docReadArgumentsSchema),
@@ -184,18 +143,9 @@ const methodSchemas = {
 export interface McpSecurity {
   allowedHosts: readonly string[]
   allowLocalOrigin: boolean
-  /** The content profile is on: wp_rest and restore, into the preview of the dialog. */
-  contentTools?: boolean
   /**
-   * The P6 path: content of a dialog without a preview row goes to the site itself. Only where
-   * previews are not configured (the local stands); a dialog with a preview never writes there.
-   */
-  siteContent?: boolean
-  /** The browser profile is on: browser_* on the preview of the dialog. */
-  browserTools?: boolean
-  /**
-   * The browser worker is configured (BROWSER_WORKER_URL): web_* for a task that needs a
-   * browser, on the site itself (docs/plan/57-browser-tasks.md, Б20). A product path, open in
+   * The browser worker is configured (BROWSER_WORKER_URL): web_* for a chat that needs a
+   * browser, on the open web (docs/plan/57-browser-tasks.md, Б20). A product path, open in
    * production too.
    */
   webTools?: boolean
@@ -221,12 +171,10 @@ export interface McpSecurity {
 
 /** The security of the role's MCP endpoint, as the profiles of its configuration make it. */
 export function mcpSecurityOf(config: McpConfig): McpSecurity {
-  const { content, siteContent, browser, worker } = mcpProfilesOf(config)
+  const { worker } = mcpProfilesOf(config)
   return {
     allowedHosts: config.allowedHosts,
     allowLocalOrigin: config.appEnv !== 'production',
-    ...(content ? { contentTools: true, siteContent } : {}),
-    ...(browser ? { browserTools: true } : {}),
     ...(worker ? { webTools: true } : {}),
     searchTools: true,
     docsTools: true,
@@ -236,26 +184,17 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
 }
 
 /**
- * Tool families beside site_info; a request sees and calls only those of its scope. `content` —
- * on a preview, where its last build found any kind of a plan a release could carry, or where no
- * build has said yet (docs/plan/62-site-stacks.md, Т37); `schema` — `db_schema`, where the
- * preview's last build found tables of the platform writable, or where no build has said yet:
- * the CLI asks for its tools once, when its turn starts, and the first turn of a dialog starts
- * while its preview is still being built. Each call checks the kinds of the preview as built
- * then (`DB_OPERATION_NOT_ALLOWED`). `web` — the cloud browser of a task on the site itself
- * (docs/plan/57-browser-tasks.md, Б20); `browser` is the preview's. `search` — the web search of
- * any turn, with a site or without, while its key is in Vault. `pages` — the pages of the
- * workspace read, any turn, while the pages are configured (docs/plan/69-pages.md, Ст20);
+ * Tool families beside site_info; a request sees and calls only those of its scope. `web` — the
+ * cloud browser of a chat (docs/plan/57-browser-tasks.md, Б20); `search` — the web search of any
+ * turn, while its key is in Vault; `docs` — the documents of the workspace, any turn
+ * (docs/plan/69-pages.md, Ст21); `pages` — its pages read, while the pages are configured (Ст20);
  * `pages_changes` — their publication and every change, only by a turn the client watches: they
- * are live for every visitor once the turn ends (docs/plan/82-scheduled-tasks.md, Зп28, Зп32);
- * `docs` — its documents, any turn (Ст21). `schedule` — the scheduled tasks of the chat's author,
- * read by any turn; `schedule_changes` — their creation, change and deletion, only by a turn the
- * client watches: a pass of a scheduled run without its client sees the lists alone (Зп31, Зп32).
+ * are live for every visitor once the turn ends (docs/plan/82-scheduled-tasks.md, Зп28, Зп32).
+ * `schedule` — the scheduled tasks of the chat's author, read by any turn; `schedule_changes` —
+ * their creation, change and deletion, only by a turn the client watches: a pass of a scheduled
+ * run without its client sees the lists alone (Зп31, Зп32).
  */
 export const mcpToolFamilies = [
-  'content',
-  'browser',
-  'schema',
   'web',
   'search',
   'docs',
@@ -266,44 +205,10 @@ export const mcpToolFamilies = [
 ] as const
 export type McpToolFamily = (typeof mcpToolFamilies)[number]
 
-/** A preview that is gone for the dialog, or never was there to work on (Р4, Р16). */
-const closedPreview = new Set<string>(closedPreviewStatuses)
-export const isClosedPreview = (preview: NonNullable<McpTurnAccess['preview']>) =>
-  closedPreview.has(preview.status)
-
-/** `kinds` of the preview's last build; undefined — no build has said yet (each call checks). */
-const kindsAllowContent = (preview: NonNullable<McpTurnAccess['preview']>) =>
-  preview.dbKinds === undefined || preview.dbKinds.length > 0
-
-/**
- * What a request of this scope is offered (Р3, Р4, Р21): content tools only for a preview with
- * its own database a release could carry a change of (Т37) — or, where previews are not
- * configured, the P6 path of a dialog without one; the browser only on a preview. Each call checks the preview again under its own lock.
- * A task without a repository changes its site through the browser alone (docs/plan/57, Б1):
- * no content tools, whatever the profile; the `web` tools go to a task that needs a browser
- * where the worker is configured, each call admitted again with its session (Б20).
- */
+/** What a request of this scope is offered: `web` to a chat that needs a browser (Б20). */
 export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity): McpToolFamily[] {
-  const preview = access.preview
-  const open = preview !== null && !isClosedPreview(preview)
-  const requirements = requirementsOf(access)
   const families: McpToolFamily[] = []
-  if (
-    security.contentTools &&
-    requirements.repository &&
-    (preview === null
-      ? security.siteContent
-      : open && preview.database && kindsAllowContent(preview))
-  )
-    families.push('content')
-  if (
-    families.includes('content') &&
-    preview !== null &&
-    (preview.dbKinds === undefined || preview.dbKinds.includes('schema_migration'))
-  )
-    families.push('schema')
-  if (security.browserTools && open) families.push('browser')
-  if (security.webTools && requirements.browser) families.push('web')
+  if (security.webTools && access.requirements.browser) families.push('web')
   if (security.searchTools) families.push('search')
   if (security.docsTools) families.push('docs')
   if (security.pagesTools) {
@@ -373,9 +278,6 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
   if (request.method === 'tools/call')
     return (
       siteInfoCall.safeParse(request.params).success ||
-      (families.includes('content') && contentCall.safeParse(request.params).success) ||
-      (families.includes('schema') && schemaCall.safeParse(request.params).success) ||
-      (families.includes('browser') && browserCall.safeParse(request.params).success) ||
       (families.includes('web') && webCall.safeParse(request.params).success) ||
       (families.includes('search') && searchCall.safeParse(request.params).success) ||
       (families.includes('docs') && docsCall.safeParse(request.params).success) ||
@@ -391,13 +293,14 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
 /**
  * What a call that needs the client's word answers in a pass without the client (docs/plan/82-
  * scheduled-tasks.md, Зп32): nobody is there to have given it — whatever the instructions of the run
- * say, they are no consent (Зп28). The same words answer a tool of a project's MCP server through
- * the relay (`SkillRelay`). The agent reads the code and these words as the result of its tool.
+ * say, they are no consent (Зп28). The same words answer a tool of an MCP server of the workspace
+ * through the relay (`SkillRelay`, Зп51). The agent reads the code and these words as the result of
+ * its tool.
  */
 export const MCP_UNATTENDED_REFUSAL = Object.freeze({
   code: 'SCHEDULE_FORBIDDEN',
   message:
-    "This pass runs on a schedule without the client: nobody can confirm a change now. Change no scheduled task, publish or change no page, call no tool of the project's MCP servers and delete nothing; prepare it and ask the client once at the end of your answer.",
+    'This pass runs on a schedule without the client: nobody can confirm a change now. Change no scheduled task, publish or change no page, call no tool of the MCP servers of the workspace and delete nothing; prepare it and ask the client once at the end of your answer.',
 })
 
 const confirmingCall = z.object({

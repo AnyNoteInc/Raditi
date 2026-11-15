@@ -185,7 +185,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     expect(pageText()).toContain('Выберите тариф, чтобы начать ставить задачи.')
     // What a task costs, in the numbers of the credits model.
     expect(pageText()).toContain(
-      'Задача стоит столько кредитов, сколько работы она потребовала: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит. Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.',
+      'Задача стоит столько кредитов, сколько работы она потребовала: короткий ответ, письмо или поиск — обычно 5 кредитов, документ, таблица или страница — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит. Уточнения — часть той же задачи: работа над ними добавляется к её стоимости.',
     )
     // The rule of the charge is said once on the page.
     expect(pageText().match(/Списываем только за выполненную работу/g)).toHaveLength(1)
@@ -212,8 +212,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
       'В среднем около 91 задачи',
       // The windows of the work (plan 71, Л14).
       'До 350 кредитов в неделю',
-      'Небольшая правка — около 50 ₽',
-      'До 3 сайтов на WordPress',
+      'Небольшая задача — около 50 ₽',
     ])
     expect(
       within(await planCard('Старт'))
@@ -223,8 +222,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
       '200 кредитов в месяц',
       'В среднем около 18 задач',
       'До 73 кредитов в неделю',
-      'Небольшая правка — около 50 ₽',
-      'Один сайт на WordPress',
+      'Небольшая задача — около 50 ₽',
     ])
     // A count of four digits is grouped, and a line never parts its groups.
     const largest = within(await planCard('Агентство')).getAllByRole('listitem')
@@ -232,8 +230,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
       '2 000 кредитов в месяц',
       'В среднем около 180 задач',
       'До 700 кредитов в неделю',
-      'Небольшая правка — около 50 ₽',
-      'До 15 сайтов на WordPress',
+      'Небольшая задача — около 50 ₽',
     ])
     expect(largest[0]?.textContent).toBe('2\u00a0000\u00a0кредитов в\u00a0месяц')
     // No tariff on sale has a daily limit: no card speaks of a day.
@@ -262,58 +259,6 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     }
     expect(screen.getAllByText('Для вас')).toHaveLength(1)
     expect(screen.queryByText('Ваш тариф')).not.toBeInTheDocument()
-  })
-
-  it('explains instead of a button why a tariff does not fit the sites', async () => {
-    getOffers.mockResolvedValue(offers({ siteCount: 2 }))
-    showPlans()
-
-    const tooSmall = await planCard('Старт')
-    expect(plain(tooSmall.textContent)).toContain(
-      'Не подойдёт: у вас два сайта, а тариф рассчитан на один.',
-    )
-    expect(within(tooSmall).queryByRole('button')).not.toBeInTheDocument()
-    expect(within(tooSmall).queryByText(/Для вас|Подходит вам/)).not.toBeInTheDocument()
-
-    // The tariff in the middle holds two sites: it stays the one that is pointed to.
-    const suggested = await planCard('Бизнес')
-    expect(within(suggested).getByText('Для вас')).toBeInTheDocument()
-    expect(within(suggested).getByRole('button', { name: 'Выбрать «Бизнес»' })).toHaveClass(
-      'MuiButton-contained',
-    )
-    expect(
-      within(await planCard('Агентство')).getByRole('button', { name: 'Выбрать «Агентство»' }),
-    ).toHaveClass('MuiButton-outlined')
-  })
-
-  it('points to the cheapest tariff that holds the sites when the middle one does not', async () => {
-    getOffers.mockResolvedValue(offers({ siteCount: 4 }))
-    showPlans()
-
-    const middle = await planCard('Бизнес')
-    expect(plain(middle.textContent)).toContain(
-      'Не подойдёт: у вас четыре сайта, а тариф рассчитан на три.',
-    )
-    expect(within(middle).queryByText(/Для вас|Подходит вам/)).not.toBeInTheDocument()
-    expect(within(middle).queryByRole('button')).not.toBeInTheDocument()
-
-    const suggested = await planCard('Агентство')
-    expect(within(suggested).getByText('Подходит вам')).toBeInTheDocument()
-    expect(within(suggested).queryByText('Для вас')).not.toBeInTheDocument()
-    expect(within(suggested).getByRole('button', { name: 'Выбрать «Агентство»' })).toHaveClass(
-      'MuiButton-contained',
-    )
-  })
-
-  it('suggests nothing when no tariff holds the sites', async () => {
-    getOffers.mockResolvedValue(offers({ siteCount: 16 }))
-    showPlans()
-
-    expect(plain((await planCard('Агентство')).textContent)).toContain(
-      'Не подойдёт: у вас 16 сайтов, а тариф рассчитан на 15.',
-    )
-    expect(screen.queryByText(/Для вас|Подходит вам/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^Выбрать/ })).not.toBeInTheDocument()
   })
 
   it('says who can pay, how, and links the public offer', async () => {
@@ -379,7 +324,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
         credits: creditBalances(credits[0] ?? 0, credits[1] ?? 0),
       }),
     )
-    getOffers.mockResolvedValue(offers({ siteCount: 2, current: 'business' }))
+    getOffers.mockResolvedValue(offers({ current: 'business' }))
   }
 
   it('shows an active tariff with the next charge, the payment method and the credits', async () => {
@@ -390,7 +335,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
       await screen.findByRole('heading', { level: 2, name: 'Тариф «Бизнес»' })
     ).closest('section')
     if (!block) throw new Error('the tariff has no section')
-    expect(plain(block.textContent)).toContain('1 000 кредитов в месяц · до 3 сайтов на WordPress')
+    expect(plain(block.textContent)).toContain('1 000 кредитов в месяц')
     expect(plain(block.textContent)).toContain('9 990 ₽ в месяц')
     // The status is words and an icon, never a colour alone.
     const chip = within(block).getByText('Активен').closest('.MuiChip-root')
@@ -424,11 +369,10 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
     expect(screen.getAllByText('Ваш тариф')).toHaveLength(1)
     expect(screen.queryByText(/Для вас|Подходит вам/)).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 2, name: 'Все тарифы' })).toBeInTheDocument()
-    // A tariff the sites do not fit says so here as well.
-    expect(plain((await planCard('Старт')).textContent)).toContain('Не подойдёт: у вас два сайта')
-    // Nothing is bought again: the other tariff that fits is offered for the next period, the
-    // pack on top of this one, and auto-renewal can be switched off.
+    // Nothing is bought again: the other tariffs are offered for the next period, the pack on
+    // top of this one, and auto-renewal can be switched off.
     expect(screen.getAllByRole('button').map(buttonName)).toEqual([
+      'Перейти на тариф «Старт»',
       'Перейти на тариф «Агентство»',
       'Купить пакет',
       'Отключить автопродление',
@@ -488,7 +432,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
   it('suggests no other tariff to a customer who has one', async () => {
     subscribed()
     // The tariff in the middle is the customer's own: it says so, and no other card is pointed to.
-    getOffers.mockResolvedValue(offers({ siteCount: 0, current: 'business' }))
+    getOffers.mockResolvedValue(offers({ current: 'business' }))
     showPlans()
 
     expect(within(await planCard('Бизнес')).getByText('Ваш тариф')).toBeInTheDocument()
@@ -498,7 +442,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
 
   it('does not mark the tariff in the middle for a customer whose own tariff is another one', async () => {
     subscribed()
-    getOffers.mockResolvedValue(offers({ siteCount: 0, current: 'start' }))
+    getOffers.mockResolvedValue(offers({ current: 'start' }))
     showPlans()
 
     expect(within(await planCard('Старт')).getByText('Ваш тариф')).toBeInTheDocument()
@@ -554,7 +498,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
       .closest('.MuiChip-root')
     expect(chip?.querySelector('svg')).not.toBeNull()
     expect(plain(block.textContent)).toContain(
-      'Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, сайты и история правок сохранятся.',
+      'Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, чаты и страницы сохранятся.',
     )
     expect(row('Действует до')).toBe('18 октября 2026')
     expect(row('Способ оплаты')).toBe('Не сохранён')
@@ -564,6 +508,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
     // The tariff still takes tasks, so a pack can be bought, and another tariff chosen.
     expect(screen.getAllByRole('button').map(buttonName)).toEqual([
       'Включить автопродление',
+      'Перейти на тариф «Старт»',
       'Перейти на тариф «Агентство»',
       'Купить пакет',
     ])
@@ -715,7 +660,7 @@ describe('buying a pack of credits', () => {
       'Пакет из 100 кредитов — 1 490 ₽',
     )
     expect(plain(row.textContent)).toContain(
-      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Небольшая правка из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
+      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Небольшая задача из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
     )
     expect(within(row).getByRole('button', { name: 'Купить пакет' })).toBeEnabled()
     // In the section of the tariffs, under their grid.
@@ -902,7 +847,7 @@ function onBusiness(
   getOverview.mockResolvedValue(
     overviewOf({ subscription, credits: creditBalances(45, 10), ...overview }),
   )
-  getOffers.mockResolvedValue(offers({ siteCount: 2, current: 'business' }))
+  getOffers.mockResolvedValue(offers({ current: 'business' }))
   return subscription
 }
 
@@ -940,7 +885,7 @@ describe('switching auto-renewal off', () => {
       'Тариф «Бизнес» будет действовать до 18 октября 2026. 45 кредитов по тарифу можно использовать до этого дня.',
     )
     expect(dialogText()).toContain(
-      'С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, сайты и история правок сохранятся.',
+      'С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, чаты и страницы сохранятся.',
     )
     // The description of the dialog is what it confirms.
     expect(
@@ -979,7 +924,7 @@ describe('switching auto-renewal off', () => {
     expect(cancelAutoRenew).toHaveBeenCalledExactlyOnceWith({}, expect.anything())
     const said = screen.getByRole('status')
     expect(plain(said.textContent)).toBe(
-      'Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, сайты и история правок сохранятся.',
+      'Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, чаты и страницы сохранятся.',
     )
     await waitFor(() => expect(said).toHaveFocus())
     expect(screen.queryByRole('heading', { name: 'Автопродление' })).not.toBeInTheDocument()
@@ -1222,24 +1167,6 @@ describe('switching auto-renewal on', () => {
 })
 
 describe('choosing another tariff for the next period', () => {
-  it('offers every other tariff the sites fit, and none they do not', async () => {
-    onBusiness()
-    showPlans()
-
-    const change = within(await planCard('Агентство')).getByRole('button', {
-      name: 'Перейти на тариф «Агентство»',
-    })
-    expect(change).toBeEnabled()
-    // One word on the button, whatever the tariff is called: the buttons of a row stay one line
-    // tall. Which tariff is said by the card and by the name of the button.
-    expect(change).toHaveTextContent(/^Перейти$/)
-    expect(within(await planCard('Бизнес')).queryByRole('button')).toBeNull()
-    // Two sites do not fit «Старт»: its note stays and it has no button.
-    const small = await planCard('Старт')
-    expect(within(small).queryByRole('button')).toBeNull()
-    expect(plain(small.textContent)).toContain('Не подойдёт: у вас два сайта')
-  })
-
   it('names the day, what stays and what is charged, and «Не менять» changes nothing', async () => {
     onBusiness()
     showPlans()
@@ -1252,7 +1179,7 @@ describe('choosing another tariff for the next period', () => {
     expect(dialogText()).toContain(
       'Тариф изменится 18 октября 2026 — с началом нового периода. До этого дня действует «Бизнес». Неистраченные кредиты тарифа переходят на следующий месяц, один раз. Кредиты из пакета остаются.',
     )
-    expect(dialogText()).toContain('С 18 октября2 000 кредитов в месяц · до 15 сайтов на WordPress')
+    expect(dialogText()).toContain('С 18 октября2 000 кредитов в месяц')
     expect(dialogText()).toContain(
       'Спишем 18 октября19 990 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444',
     )
@@ -1288,7 +1215,7 @@ describe('choosing another tariff for the next period', () => {
     await waitFor(() => expect(said).toHaveFocus())
     const coming = screen.getByRole('group', { name: /^С.18.октября.— тариф «Агентство»$/ })
     expect(plain(coming.textContent)).toContain(
-      '2 000 кредитов в месяц · до 15 сайтов на WordPress. 18 октября спишем 19 990 ₽ сохранённым способом оплаты.',
+      '2 000 кредитов в месяц. 18 октября спишем 19 990 ₽ сохранённым способом оплаты.',
     )
     expect(within(coming).getByRole('button', { name: 'Отменить переход' })).toBeEnabled()
     // The card of the chosen tariff has its note instead of the button.
@@ -1329,7 +1256,7 @@ describe('choosing another tariff for the next period', () => {
 
   it('says which earlier choice the new one replaces', async () => {
     const current = onBusiness({ nextPlan: agencyPlan })
-    getOffers.mockResolvedValue(offers({ siteCount: 1, current: 'business' }))
+    getOffers.mockResolvedValue(offers({ current: 'business' }))
     schedulePlanChange.mockResolvedValue({ ...current, nextPlan: agencyPlan })
     showPlans()
 
@@ -1563,7 +1490,7 @@ describe('a tariff whose renewal charge failed', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Оплатить сейчас' }))
 
     await screen.findByRole('dialog', { name: 'Тариф «Агентство»' })
-    expect(dialogText()).toContain('2 000 кредитов в месяц · до 15 сайтов на WordPress')
+    expect(dialogText()).toContain('2 000 кредитов в месяц')
     expect(dialogText()).toContain('К оплате сегодня19 990 ₽')
   })
 
@@ -1737,7 +1664,7 @@ describe('a tariff whose renewal charge failed', () => {
 
     // The same dialog, now with what the payment will be started for.
     await waitFor(() => expect(dialog).toHaveAccessibleName('Тариф «Бизнес»'))
-    expect(dialogText()).toContain('1 000 кредитов в месяц · до 3 сайтов на WordPress')
+    expect(dialogText()).toContain('1 000 кредитов в месяц')
     expect(dialogText()).toContain('К оплате сегодня9 990 ₽')
     expect(dialogText()).toContain('каждый месяц будем списывать 9 990 ₽ тем же способом')
     expect(dialogText()).not.toMatch(/Агентство|19 990/)
@@ -1865,7 +1792,7 @@ describe('the «Тарифы» page of a customer whose tariff is over', () => {
       .closest('.MuiChip-root')
     expect(chip?.querySelector('svg')).not.toBeNull()
     expect(plain(block.textContent)).toContain(
-      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, сайты и история правок на месте.',
+      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, чаты и страницы на месте.',
     )
     const choose = within(block).getByRole('link', { name: 'Выбрать тариф' })
     expect(choose).toHaveAttribute('href', '#plans')
@@ -1888,11 +1815,11 @@ describe('the «Тарифы» page of a customer whose tariff is over', () => {
   it.each([
     [
       'not_paid',
-      'Оплата за следующий период не прошла, и тариф закончился. Новые задачи сейчас не принимаются. Сайты и история правок на месте.',
+      'Оплата за следующий период не прошла, и тариф закончился. Новые задачи сейчас не принимаются. Чаты и страницы на месте.',
     ],
     [
       'refunded',
-      'Мы вернули оплату за этот тариф, и он закончился. Новые задачи сейчас не принимаются. Сайты и история правок на месте.',
+      'Мы вернули оплату за этот тариф, и он закончился. Новые задачи сейчас не принимаются. Чаты и страницы на месте.',
     ],
   ] as const)('says why it ended: %s', async (reason, text) => {
     ended(reason)
@@ -1916,7 +1843,7 @@ describe('the «Тарифы» page of a customer whose tariff is over', () => {
 
     const block = await tariffBlock()
     expect(plain(block.textContent)).toContain(
-      'Новые задачи сейчас не принимаются. Сайты и история правок на месте.',
+      'Новые задачи сейчас не принимаются. Чаты и страницы на месте.',
     )
     expect(within(block).queryByRole('link', { name: 'Выбрать тариф' })).toBeNull()
     expect(pageText()).toContain('Оплата пока недоступна.')
@@ -2028,6 +1955,7 @@ describe('the «Тарифы» page of a shop that takes one-time payments only'
     )
     expect(row('Следующее списание')).toBe('18 октября 2026 — 9 990 ₽')
     expect(screen.getAllByRole('button').map(buttonName)).toEqual([
+      'Перейти на тариф «Старт»',
       'Перейти на тариф «Агентство»',
       'Купить пакет',
       'Отключить автопродление',
@@ -2247,7 +2175,7 @@ describe('two kinds of dialogs opened on one page', () => {
 
 describe('the gift of the registration on «Тарифы»', () => {
   const A1 =
-    'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.'
+    'У вас 35 подарочных кредитов — их хватит на семь небольших задач или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.'
   const offTariff =
     'новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета'
   const noTariff = (gift: number, granted = gift > 0, patch: Partial<BillingOverview> = {}) =>
@@ -2290,7 +2218,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     [
       'a gift that was partly spent',
       20,
-      'У вас 20 подарочных кредитов — их хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
+      'У вас 20 подарочных кредитов — их хватит на четыре небольшие задачи или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
     ],
     // One credit starts a task since 10.11.2026 (КР5–КР8): three gift credits carry one.
     [
@@ -2338,7 +2266,7 @@ describe('the gift of the registration on «Тарифы»', () => {
         ...overview,
       }),
     )
-    getOffers.mockResolvedValue(offers({ siteCount: 1, current: 'business' }))
+    getOffers.mockResolvedValue(offers({ current: 'business' }))
   }
 
   it('names the gift credits of a customer with a tariff in the row of balances', async () => {
@@ -2371,7 +2299,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     showPlans()
 
     expect(plain((await tariffBlock()).textContent)).toContain(
-      `Автопродление отключено. Тариф и 1 000 кредитов по тарифу доступны до 18 октября 2026. После этого ${offTariff}. 100 кредитов из пакета, сайты и история правок сохранятся.`,
+      `Автопродление отключено. Тариф и 1 000 кредитов по тарифу доступны до 18 октября 2026. После этого ${offTariff}. 100 кредитов из пакета, чаты и страницы сохранятся.`,
     )
     expect(pageText()).not.toContain('новые задачи не принимаются')
   })
@@ -2389,7 +2317,7 @@ describe('the gift of the registration on «Тарифы»', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Отключить автопродление?' })
     expect(dialogText()).toContain(
-      `С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, сайты и история правок сохранятся.`,
+      `С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, чаты и страницы сохранятся.`,
     )
     expect(dialogText()).not.toContain('не будут приниматься')
 
@@ -2444,7 +2372,7 @@ describe('the gift of the registration on «Тарифы»', () => {
 
     const block = await tariffBlock()
     expect(plain(block.textContent)).toContain(
-      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, сайты и история правок на месте.',
+      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, чаты и страницы на месте.',
     )
     expect(await lead()).toBe(A1)
     // The page does not say both that tasks are taken and that they are not.
@@ -2469,7 +2397,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     showPlans()
 
     expect(plain((await tariffBlock()).textContent)).toContain(
-      'Оплата за следующий период не прошла, и тариф закончился. Новые задачи сейчас не принимаются. Сайты и история правок на месте.',
+      'Оплата за следующий период не прошла, и тариф закончился. Новые задачи сейчас не принимаются. Чаты и страницы на месте.',
     )
     expect(await lead()).toBe(
       'Подарочные кредиты закончились. Чтобы ставить новые задачи, выберите тариф.',
@@ -2682,7 +2610,7 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
       )
       const first = showPlansOnce()
       expect(await lead()).toBe(
-        'У вас 20 подарочных кредитов — их хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
+        'У вас 20 подарочных кредитов — их хватит на четыре небольшие задачи или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
       )
       first.unmount()
     })

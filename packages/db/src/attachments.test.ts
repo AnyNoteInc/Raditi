@@ -41,36 +41,18 @@ describe.skipIf(!databaseUrl)('PostgreSQL: files a client attaches to a message'
   const person = () =>
     db.user.create({ data: { name: 'Synthetic', email: `${randomUUID()}@example.test` } })
 
-  /** A member of a workspace with two sites, a task of the first and a file to upload there. */
+  /** A member of a workspace, a chat of it and a file to upload there. */
   async function uploads() {
     const user = await person()
     const workspace = await db.workspace.create({
       data: { name: 'Synthetic', dataClass: 'synthetic' },
     })
     await db.member.create({ data: { workspaceId: workspace.id, userId: user.id } })
-    const [site, otherSite] = await Promise.all(
-      [1, 2].map(() =>
-        db.site.create({
-          data: {
-            workspaceId: workspace.id,
-            name: 'Synthetic',
-            url: `https://${randomUUID()}.example.test`,
-            stack: 'wordpress',
-          },
-        }),
-      ),
-    )
     const task = await db.task.create({
-      data: {
-        workspaceId: workspace.id,
-        siteId: site!.id,
-        needsRepository: false,
-        needsBrowser: true,
-      },
+      data: { workspaceId: workspace.id, needsBrowser: true },
     })
     const file = {
       workspaceId: workspace.id,
-      siteId: site!.id,
       uploadedById: user.id,
       fileName: 'Фото витрины.jpg',
       contentType: 'image/jpeg',
@@ -93,17 +75,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL: files a client attaches to a message'
       taskId: task.id,
       userId: user.id,
       workspaceId: workspace.id,
-      siteId: site!.id,
     }
-    return { user, workspace, site: site!, otherSite: otherSite!, task, file, stored, binding }
+    return { user, workspace, task, file, stored, binding }
   }
 
-  it('announces a file under its key in the inbox, for a member and a site of the workspace', async () => {
+  it('announces a file under its key in the inbox, for a member of the workspace', async () => {
     const u = await uploads()
     const created = (await createAttachment(db, u.file))!
     expect(created).toMatchObject({
       workspaceId: u.workspace.id,
-      siteId: u.site.id,
       taskId: null,
       uploadedById: u.user.id,
       source: 'web',
@@ -187,23 +167,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: files a client attaches to a message'
     ).rejects.toThrow()
   })
 
-  it('binds only the uploader’s own files, of the task’s workspace and site', async () => {
+  it('binds only the uploader’s own files, of the task’s workspace', async () => {
     const u = await uploads()
     const file = await u.stored()
     const colleague = await person()
     await db.member.create({ data: { workspaceId: u.workspace.id, userId: colleague.id } })
-    const otherTask = await db.task.create({
-      data: {
-        workspaceId: u.workspace.id,
-        siteId: u.otherSite.id,
-        needsRepository: false,
-        needsBrowser: true,
-      },
-    })
+    const elsewhere = await db.workspace.create({ data: { name: 'Another' } })
+    const otherTask = await db.task.create({ data: { workspaceId: elsewhere.id } })
     for (const wrong of [
       { userId: colleague.id },
-      { siteId: u.otherSite.id },
-      // The site matches the file, the task is of another site.
+      // The task is of another workspace.
       { taskId: otherTask.id },
       { taskId: randomUUID() },
     ])
@@ -215,90 +188,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: files a client attaches to a message'
     await db.$executeRaw`UPDATE attachments SET expires_at = clock_timestamp() - interval '1 second'
       WHERE id = ${file.id}::uuid`
     expect(await bindAttachments(db, { ...u.binding, ids: [file.id] })).toBe(false)
-  })
-
-  describe('in a chat without a project (docs/plan/61-chats-first.md, К16)', () => {
-    async function chat() {
-      const u = await uploads()
-      const task = await db.task.create({
-        data: {
-          workspaceId: u.workspace.id,
-          siteId: null,
-          needsRepository: false,
-          needsBrowser: false,
-        },
-      })
-      const file = { ...u.file, siteId: null }
-      const stored = async () => {
-        const created = (await createAttachment(db, file))!
-        await markAttachmentReady(db, {
-          id: created.id,
-          sizeBytes: created.sizeBytes,
-          contentType: created.contentType,
-        })
-        return created
-      }
-      return {
-        ...u,
-        task,
-        file,
-        stored,
-        chatBinding: { ...u.binding, taskId: task.id, siteId: null },
-      }
-    }
-
-    it('announces a file for a member of the workspace, with no site', async () => {
-      const c = await chat()
-      const created = await createAttachment(db, c.file)
-      expect(created).toMatchObject({
-        siteId: null,
-        workspaceId: c.workspace.id,
-        status: 'uploading',
-      })
-      expect(created!.s3Key).toBe(attachmentKey(c.workspace.id, created!.id))
-    })
-
-    it('announces nothing for someone who is not a member of the workspace', async () => {
-      const c = await chat()
-      const stranger = await person()
-      expect(await createAttachment(db, { ...c.file, uploadedById: stranger.id })).toBeNull()
-    })
-
-    it('still takes no site of another workspace', async () => {
-      const c = await chat()
-      const other = await uploads()
-      expect(await createAttachment(db, { ...c.file, siteId: other.site.id })).toBeNull()
-    })
-
-    it('binds a file without a site to a task without one, and only there', async () => {
-      const c = await chat()
-      const file = await c.stored()
-      // A file of the chat goes to no task of a site, whatever the call says of the site.
-      expect(await bindAttachments(db, { ...c.binding, ids: [file.id] })).toBe(false)
-      expect(await bindAttachments(db, { ...c.binding, siteId: null, ids: [file.id] })).toBe(false)
-      expect(await bindAttachments(db, { ...c.chatBinding, ids: [file.id] })).toBe(true)
-      expect(await taskAttachments(db, c.task.id)).toMatchObject([{ id: file.id, status: 'bound' }])
-      // What the browser worker reads for `web_upload`.
-      expect(await taskAttachment(db, { id: file.id, taskId: c.task.id })).toMatchObject({
-        id: file.id,
-        siteId: null,
-      })
-    })
-
-    it('binds no file of a site to a task without one', async () => {
-      const c = await chat()
-      const file = await c.stored()
-      const ofSite = await c.stored()
-      await db.attachment.update({ where: { id: ofSite.id }, data: { siteId: c.site.id } })
-      expect(await bindAttachments(db, { ...c.chatBinding, ids: [ofSite.id] })).toBe(false)
-      expect(
-        await bindAttachments(db, { ...c.chatBinding, siteId: c.site.id, ids: [ofSite.id] }),
-      ).toBe(false)
-      expect(await bindAttachments(db, { ...c.chatBinding, ids: [file.id, ofSite.id] })).toBe(false)
-      expect((await db.attachment.findUniqueOrThrow({ where: { id: file.id } })).status).toBe(
-        'ready',
-      )
-    })
   })
 
   // The collector of core (docs/plan/57, «Открыто»): objects of files nobody sent leave the inbox.

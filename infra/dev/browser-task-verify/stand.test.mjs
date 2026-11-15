@@ -7,11 +7,8 @@ import { nextMove, toolAnswerOf, turnOf } from './model.mjs'
 import { Page, attachmentsOf, treeLines } from './programs.mjs'
 import {
   CORE_WITHOUT,
-  SITE_ORIGIN,
-  UPLOAD_LIMIT_BYTES,
   appEnvironment,
   leakedIn,
-  localSites,
   scenariosToRun,
   solidPng,
   standNames,
@@ -28,7 +25,6 @@ const context = {
   ports: {
     vault: 41001,
     s3: 41002,
-    site: 41003,
     web: 41004,
     core: 41005,
     mcp: 41006,
@@ -52,13 +48,11 @@ const context = {
   secrets: {
     metrics: 'm'.repeat(48),
     auth: 'a'.repeat(48),
-    previewSession: 'p'.repeat(48),
     workerToken: 'w'.repeat(48),
     pagesCookie: 'c'.repeat(48),
     pagesSigning: 's'.repeat(48),
   },
   caFile: '/tmp/run/ca.pem',
-  siteTarget: '172.17.0.9:80',
   socket: '/var/run/docker.sock',
   images: Object.fromEntries(
     ['sandbox', 'gateway', 'guard', 'egress', 'tools', 'browser'].map((name) => [
@@ -78,8 +72,8 @@ describe('options and names', () => {
       only: null,
     })
     assert.deepEqual(
-      standOptions(['--', '--no-build', '--keep', '--web-dev', '--stream-only', '--only', 'F,K']),
-      { build: false, keep: true, webDev: true, streamOnly: true, only: ['F', 'K'] },
+      standOptions(['--', '--no-build', '--keep', '--web-dev', '--stream-only', '--only', 'P,K']),
+      { build: false, keep: true, webDev: true, streamOnly: true, only: ['P', 'K'] },
     )
     assert.deepEqual(standOptions(['--only=L']).only, ['L'])
     assert.throws(() => standOptions(['--database=x']), /accepts/)
@@ -87,17 +81,19 @@ describe('options and names', () => {
   })
 
   it('runs a scenario with what it needs, in the order of the stand', () => {
-    assert.deepEqual(scenariosToRun(['F']), ['A', 'D', 'E', 'F'])
-    assert.deepEqual(scenariosToRun(['K', 'B']), ['A', 'D', 'B', 'K'])
-    assert.deepEqual(scenariosToRun(['P']), ['A', 'P'])
-    assert.deepEqual(scenariosToRun(['R']), ['A', 'R'])
-    assert.equal(scenariosToRun(null).length, 18)
+    assert.deepEqual(scenariosToRun(['K']), ['S', 'P', 'K'])
+    assert.deepEqual(scenariosToRun(['L', 'Q']), ['S', 'P', 'K', 'L', 'Q'])
+    assert.deepEqual(scenariosToRun(['P']), ['S', 'P'])
+    assert.deepEqual(scenariosToRun(['R']), ['S', 'R'])
+    assert.deepEqual(scenariosToRun(null), ['S', 'P', 'K', 'L', 'Q', 'R', 'M'])
   })
 
   it('names every resource of a run under its label', () => {
     const names = standNames('0123abcd')
     assert.equal(names.label, 'io.raditi.browser-task-verify=0123abcd')
-    assert.equal(names.containers['site-web'], 'raditi-browser-task-verify-0123abcd-site-web')
+    assert.equal(names.containers.openbao, 'raditi-browser-task-verify-0123abcd-openbao')
+    // No site of a project since plan 83: nothing of WordPress or MariaDB.
+    assert.deepEqual(Object.keys(names.containers), ['postgres', 'redis', 's3', 'openbao'])
     assert.throws(() => standNames('nope'), /Invalid run/)
   })
 })
@@ -118,15 +114,16 @@ describe('the environments of the apps', () => {
     assert.equal(core.NODE_ENV, 'production')
   })
 
-  it('maps the exact origin of the site to its published port for the worker only', () => {
+  it('gives the worker the inbox alone, no local site and the name of the platform', () => {
     const browser = appEnvironment('browser', context)
-    assert.deepEqual(JSON.parse(browser.BROWSER_LOCAL_SITES), { [SITE_ORIGIN]: '172.17.0.9:80' })
-    assert.equal(browser.BROWSER_LOCAL_SITES, localSites('172.17.0.9:80'))
-    assert.throws(() => localSites('host.docker.internal:80'), /IPv4/)
     assert.equal(browser.S3_BUCKET_INBOX, 'raditi-inbox')
     assert.equal(browser.S3_BUCKET_SESSIONS, undefined)
-    for (const app of ['core', 'mcp', 'preview', 'llm'])
+    assert.equal(browser.BROWSER_PLATFORM_HOSTS, 'raditi.ru')
+    for (const app of ['core', 'mcp', 'preview', 'llm', 'browser'])
       assert.equal(appEnvironment(app, context).BROWSER_LOCAL_SITES, undefined, app)
+    // The gateway of previews is gone (plan 83): preview starts with its stream and its pages.
+    const preview = appEnvironment('preview', context)
+    for (const name of Object.keys(preview)) assert.ok(!name.startsWith('PREVIEW_'), name)
   })
 
   it('opens the stream gateway in preview and points web at it', () => {
@@ -166,13 +163,13 @@ describe('the environments of the apps', () => {
 })
 
 describe('the files of a task', () => {
-  it('makes a valid PNG and a PDF above the limit of scenario I', () => {
+  it('makes a valid PNG and a padded PDF', () => {
     const png = solidPng(8, 4, [1, 2, 3])
     assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a')
     assert.equal(png.readUInt32BE(16), 8)
     assert.equal(png.readUInt32BE(20), 4)
-    const pdf = syntheticPdf('x', UPLOAD_LIMIT_BYTES + 10)
-    assert.ok(pdf.byteLength > UPLOAD_LIMIT_BYTES)
+    const pdf = syntheticPdf('x', 2000)
+    assert.ok(pdf.byteLength > 2000)
     assert.equal(pdf.subarray(0, 5).toString('latin1'), '%PDF-')
   })
 

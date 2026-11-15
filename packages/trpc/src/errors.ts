@@ -1,7 +1,6 @@
 import {
   attachmentRefusalText,
   attachmentRefusals,
-  BROWSER_AGENT_NOTES_MAX_CHARS,
   chatCommandRefusals,
   chatCommandRefusalText,
   FEED_REQUEST_TEXT_LIMIT,
@@ -15,7 +14,6 @@ import {
   scheduleLimitReached,
   scheduleChangeLimitReached,
   scheduleNotFound,
-  scheduleProjectGone,
   scheduleRunBusy,
   scheduleTemplatePlaceholder,
   scheduleTooOften,
@@ -75,33 +73,6 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   FORBIDDEN: 'Недостаточно прав',
   NOT_FOUND: 'Не нашли то, что вы ищете',
   CONFLICT: UNAVAILABLE_MESSAGE,
-  PROJECT_ALREADY_EXISTS: 'Сайт с таким адресом уже добавлен',
-  PROJECT_LIMIT_REACHED: 'Вы добавили максимальное число сайтов. Напишите нам, если нужно больше',
-  SITE_ADDRESS_NOT_PUBLIC: 'Укажите адрес сайта, который открывается из интернета',
-  // A site for the browser alone at an http address in production (docs/plan/57, Б33).
-  SITE_ADDRESS_NOT_SECURE:
-    'Без доступа к файлам агент работает только с сайтами, которые открываются по защищённому адресу. Укажите адрес, который начинается с https://',
-  // The wizard «Добавить проект» and the screen «Настраиваем сайт» (docs/plan/39-site-connection-wizard.md).
-  // Why a check of the files or the database failed is told by its reason, not by these.
-  SITE_CONNECTION_UNAVAILABLE:
-    'Подключение сайтов сейчас недоступно. Попробуйте ещё раз немного позже',
-  SITE_STACK_NOT_CONNECTABLE: 'Эту платформу мы пока не подключаем',
-  SITE_CHECKS_LIMITED:
-    'Слишком много проверок подряд. Подождите несколько минут и попробуйте снова',
-  SITE_CONNECTIONS_BUSY:
-    'Сейчас подключаются три ваших сайта. Дождитесь, пока закончится хотя бы одно подключение',
-  PROJECT_CREATION_IN_PROGRESS: 'Проект уже добавляется. Подождите несколько секунд',
-  // This opening of the wizard already added a project, at another address (its answer was lost).
-  PROJECT_REQUEST_CONFLICT:
-    'Из этого окна уже добавлен проект с другим адресом. Откройте список проектов или начните добавление заново',
-  // Any stage that is not failed: still going, or already done in another tab.
-  SITE_SETUP_NOT_FAILED:
-    'Настройку сейчас нельзя повторить. Обновите страницу, чтобы увидеть, как она идёт',
-  SITE_SETUP_RETRIES_LIMITED:
-    'Повторять настройку можно не чаще шести раз в час. Попробуйте немного позже',
-  // A failed import of a site that is no longer being connected (activated, paused, archived).
-  SITE_SETUP_UNAVAILABLE:
-    'Настройку этого сайта уже нельзя повторить. Обновите страницу, чтобы увидеть, что изменилось',
   NOT_IMPLEMENTED: 'Эта возможность ещё в разработке',
   [CONSENT_REQUIRED]: CONSENT_REQUIRED_MESSAGE,
   // Tariffs and their payment: what the customer can do next. Why a bank declined a payment
@@ -109,8 +80,6 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   BILLING_PAYMENTS_NOT_CONFIGURED: 'Оплата сейчас недоступна. Попробуйте ещё раз немного позже',
   BILLING_PLAN_NOT_FOUND: 'Этот тариф сейчас не продаётся. Обновите страницу и выберите другой',
   BILLING_SUBSCRIPTION_EXISTS: 'Тариф уже оформлен. Обновите страницу, чтобы увидеть его',
-  BILLING_PLAN_SITE_LIMIT:
-    'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
   BILLING_PAYMENT_DECLINED:
     'Платёж не прошёл. Попробуйте ещё раз или выберите другой способ оплаты',
   BILLING_PAYMENT_IN_PROGRESS:
@@ -216,8 +185,6 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   SCHEDULE_IN_PAST: scheduleInPast().message,
   SCHEDULE_TEMPLATE_PLACEHOLDER: scheduleTemplatePlaceholder().message,
   SCHEDULE_RUN_BUSY: scheduleRunBusy().message,
-  SCHEDULE_PROJECT_GONE: scheduleProjectGone().message,
-  SCHEDULE_TEMPLATE_NEEDS_PROJECT: 'Этому шаблону нужен проект — выберите его',
   SCHEDULE_LIMIT: scheduleLimitReached().message,
   SCHEDULE_CHANGE_LIMIT: scheduleChangeLimitReached().message,
   SCHEDULE_RUN_REFUSED: 'Задача не запустилась. Попробуйте ещё раз немного позже',
@@ -235,8 +202,6 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   TELEGRAM_LINK_TOO_MANY: 'Ссылок за час получено слишком много. Попробуйте позже',
   TASK_BUSY:
     'Подождите: агент ещё работает. Написать можно будет, когда он закончит или задаст вопрос',
-  TASK_REWINDING: 'Подождите: последний запрос ещё отменяется. Написать можно будет через минуту',
-  TASK_REDOING: 'Подождите: отменённый запрос ещё возвращается. Написать можно будет через минуту',
   TASK_FINISHED: 'Чат завершён. Чтобы попросить что-то ещё, начните новый',
   // The client's own instructions to the agent (docs/plan/76-agent-instructions.md, И3).
   AGENT_INSTRUCTIONS_TOO_LONG: 'Инструкции длиннее 2000 знаков. Сократите их',
@@ -246,36 +211,15 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   TASK_NOT_BUSY: 'Агент уже закончил — отправьте сообщение ещё раз',
   TASK_QUEUE_FULL: 'В очереди уже 10 сообщений. Дождитесь, пока агент возьмёт их',
   TASK_QUEUE_GONE: 'Это сообщение уже ушло агенту',
-  // «Терминал»: the client's edit of a file of a chat (06.11.2026).
-  SITE_FILE_EDIT_CLOSED: 'Чат закрыт: правку файла в него сохранить нельзя',
-  SITE_FILE_EDIT_NO_TURN: 'Сохранить файл можно после первого ответа агента в этом чате',
   TASK_CONTINUE_REQUIRED:
     'Кредиты, отложенные на эту работу, закончились. Нажмите «Продолжить», чтобы агент работал дальше',
   TASK_NOTHING_TO_CONTINUE:
     'Продолжать нечего: чат не ждёт вашего решения. Обновите страницу, чтобы увидеть, что изменилось',
   TASK_ATTEMPTS_EXHAUSTED:
     'Эту задачу больше нельзя продолжить: на неё ушли все заходы, которые даются одной задаче. Начните новый чат или напишите нам',
-  // «Попробовать ещё» (docs/plan/53, «Попробовать ещё (18.10)»): the failure was answered meanwhile.
-  TASK_NOTHING_TO_RETRY: 'Повторить уже нельзя: в чате что-то изменилось',
   CHAT_COMMAND_UNAVAILABLE:
     'Эта команда сейчас недоступна. Обновите страницу, чтобы увидеть, что изменилось',
   RELEASE_IN_PROGRESS: 'Сейчас выпускается новая версия сайта. Дождитесь, пока выпуск закончится',
-  RELEASE_CONFIRMATION_INVALID: 'Не удалось подтвердить выпуск. Откройте выпуск версии заново',
-  RELEASE_CONFIRMATION_EXPIRED:
-    'Подтверждение устарело. Откройте выпуск версии заново и подтвердите его ещё раз',
-  RELEASE_CANDIDATE_CHANGED:
-    'Изменения обновились, пока вы подтверждали выпуск. Посмотрите их и подтвердите выпуск ещё раз',
-  RELEASE_VERSION_TAKEN:
-    'Этот номер версии уже занят. Откройте выпуск заново и выберите номер из предложенных',
-  RELEASE_REVIEW_REQUIRED:
-    'Изменений базы данных много, или часть из них показана не полностью. Посмотрите их все, отметьте, что проверили, и подтвердите выпуск',
-  RELEASE_VERSION_NOT_OFFERED:
-    'Этот номер версии больше не подходит. Откройте выпуск заново и выберите номер из предложенных',
-  RELEASE_UNDO_PLAN_CHANGED:
-    'Пока вы подтверждали отмену, на сайте что-то изменилось. Откройте «Отменить выпуск» ещё раз — мы проверим заново',
-  RELEASE_UNDO_VERSION_TAKEN:
-    'Этот номер версии уже занят. Откройте «Отменить выпуск» ещё раз — мы предложим следующий',
-  PREVIEW_NOT_READY: 'Предпросмотр ещё готовится. Откройте его через минуту',
   // A task in the cloud browser and the files of messages (docs/plan/57-browser-tasks.md).
   TASK_NOTHING_TO_RESUME:
     'Продолжать нечего: задание не ждёт ваших действий. Обновите страницу, чтобы увидеть, что изменилось',
@@ -286,64 +230,31 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   ATTACHMENT_SENT: 'Этот файл уже отправлен в чат, удалить его нельзя',
   ATTACHMENTS_LIMIT:
     'Слишком много файлов ждут отправки. Отправьте или удалите их и попробуйте снова',
-  PROJECT_NOTES_TOO_LONG: `Подсказка для агента слишком длинная — сократите её до ${BROWSER_AGENT_NOTES_MAX_CHARS} знаков`,
-  PROJECT_NOTES_HAS_SECRET: 'Похоже, в подсказке для агента есть пароль или ключ. Уберите его',
-  PROJECT_NOTES_INVALID:
-    'В подсказке для агента есть символы, которые мы не можем сохранить. Уберите их и попробуйте снова',
-  PROJECT_NOTES_NOT_ALLOWED: 'Менять подсказки агенту могут только владелец и администраторы',
-  PROJECT_NOTES_CHANGED:
-    'Пока окно было открыто, подсказки изменились. Посмотрите новый текст и сохраните ещё раз',
-  SITE_DELETE_NOT_ALLOWED: 'Удалить проект могут только владелец и администраторы',
-  SITE_DELETE_NAME_MISMATCH:
-    'Название не совпадает. Введите название проекта точно так, как оно написано',
-  SITE_DELETE_BUSY:
-    'Сейчас на сайте идёт работа: чат, выпуск или настройка. Дождитесь, пока она закончится, или остановите чаты, затем удалите проект',
-  SITE_DELETE_UNAVAILABLE: 'Удалить проект сейчас не получается. Попробуйте ещё раз немного позже',
-  SITE_DUMP_PATH_INVALID:
-    'Укажите путь к файлу .sql или .sql.gz от папки, в которую попадает вход по FTP или SFTP, — например backup.sql',
-  SITE_DUMP_NOT_ALLOWED: 'Выбрать файл дампа базы могут только владелец и администраторы',
-  SITE_DUMP_NO_FILE_SOURCE:
-    'У сайта нет доступа к файлам по SFTP или FTP, поэтому файл дампа взять неоткуда',
-  SITE_SKILL_NOT_ALLOWED: 'Менять навыки агента могут только владелец и администраторы',
-  SITE_SKILL_NAME_INVALID:
+  AGENT_SKILL_NOT_ALLOWED: 'Менять навыки агента могут только владелец и администраторы',
+  AGENT_SKILL_NAME_INVALID:
     'Имя навыка — латинские буквы, цифры и дефис, до 32 знаков, начинается с буквы. Исправьте его и попробуйте снова',
-  SITE_SKILL_URL_INVALID:
+  AGENT_SKILL_URL_INVALID:
     'Укажите адрес сервера MCP, который начинается с https://, без логина, ключа и параметров после знака «?». Адреса из цифр и внутренние имена не подходят',
-  SITE_SKILL_EXISTS: 'Навык с таким именем уже есть. Выберите другое имя',
-  SITE_SKILL_LIMIT: 'Добавить больше навыков нельзя. Удалите ненужный и попробуйте снова',
-  SITE_SKILL_NOT_FOUND: 'Такого навыка у сайта нет. Обновите страницу',
-  SITE_SKILL_BUILTIN: 'Навык платформы нельзя удалить, его можно только выключить',
+  AGENT_SKILL_EXISTS: 'Навык с таким именем уже есть. Выберите другое имя',
+  AGENT_SKILL_LIMIT: 'Добавить больше навыков нельзя. Удалите ненужный и попробуйте снова',
+  AGENT_SKILL_NOT_FOUND: 'Такого навыка нет. Обновите страницу',
+  AGENT_SKILL_BUILTIN: 'Навык платформы нельзя удалить, его можно только выключить',
   // MCP servers with a key (docs/plan/81-mcp-server-credentials.md).
-  SITE_SKILL_HEADER_INVALID:
+  AGENT_SKILL_HEADER_INVALID:
     'Имя заголовка — латинские буквы, цифры и дефис, а ключ — от 8 знаков, одной строкой, без русских букв. Исправьте и попробуйте снова',
-  SITE_SKILL_AUTH_UNAVAILABLE: 'Сейчас нельзя подключить сервер с ключом. Попробуйте немного позже',
-  SITE_SKILL_CHECK_FAILED: 'Сервер не ответил как сервер MCP. Проверьте адрес и попробуйте снова',
-  SITE_SKILL_KEYLESS: 'У этого сервера нет ключа, который можно заменить',
-  SITE_ENV_NOT_ALLOWED: 'Переменные сайта могут видеть и менять только владелец и администраторы',
-  SITE_ENV_NAME_INVALID:
+  AGENT_SKILL_AUTH_UNAVAILABLE:
+    'Сейчас нельзя подключить сервер с ключом. Попробуйте немного позже',
+  AGENT_SKILL_CHECK_FAILED: 'Сервер не ответил как сервер MCP. Проверьте адрес и попробуйте снова',
+  AGENT_SKILL_KEYLESS: 'У этого сервера нет ключа, который можно заменить',
+  WORKSPACE_ENV_NOT_ALLOWED: 'Переменные могут менять только владелец и администраторы',
+  WORKSPACE_ENV_NAME_INVALID:
     'Имя переменной может состоять только из заглавных латинских букв, цифр и знака подчёркивания и должно начинаться с буквы. Исправьте его и сохраните снова',
-  SITE_ENV_NAME_RESERVED: 'Это имя занято платформой. Выберите другое имя переменной',
-  SITE_ENV_VALUE_INVALID:
+  WORKSPACE_ENV_NAME_RESERVED: 'Это имя занято платформой. Выберите другое имя переменной',
+  WORKSPACE_ENV_VALUE_INVALID:
     'Значение не должно быть пустым или слишком длинным. Проверьте, что вы вставили его целиком',
-  SITE_ENV_HOSTS_INVALID:
-    'Укажите адреса сервисов, к которым обращается переменная: имя сайта и, если нужно, порт через двоеточие. Адреса из цифр и внутренние имена не подходят',
-  SITE_ENV_CONSENT_REQUIRED:
-    'Чтобы передать переменную агенту, подтвердите, что агент увидит ответы этого сервиса',
-  SITE_ENV_SIGN_IN_PRIVATE:
-    'Логин и пароль входа в админку не передаются ни агенту, ни предпросмотру: их вводит браузер задачи. Выключите оба переключателя и сохраните снова',
-  SITE_ENV_AGENT_CLOSED:
-    'Для этого сайта передавать переменные агенту пока нельзя, а без агента их не получает и предпросмотр. Выключите «Передавать агенту», чтобы сохранить переменную',
-  SITE_ENV_LIMIT:
-    'У сайта уже 64 переменные — больше добавить нельзя. Удалите ненужную и попробуйте снова',
-  SITE_ENV_HOSTS_LIMIT:
-    'У переменных сайта не может быть больше 256 разных адресов сервисов. Уберите адреса, которые больше не нужны, и сохраните снова',
-  SITE_ENV_CHANGED: 'Переменную только что изменили. Обновите страницу и попробуйте ещё раз',
-  SITE_ACCESS_CHANGE_NOT_ALLOWED: 'Доступы сайта могут менять только владелец и администраторы',
-  // A release approved or going on, one whose outcome the operator resolves, or the first import.
-  SITE_ACCESS_CHANGE_BUSY:
-    'Сейчас идёт выпуск новой версии или настройка сайта либо мы проверяем, чем закончился выпуск. Изменить доступ можно после этого',
-  SITE_ACCESS_MISSING: 'Этого доступа у сайта уже нет. Обновите страницу',
-  SITE_ACCESS_CHANGED: 'Доступ только что изменили. Обновите страницу и попробуйте ещё раз',
+  WORKSPACE_ENV_LIMIT:
+    'Переменных уже 64 — больше добавить нельзя. Удалите ненужную и попробуйте снова',
+  WORKSPACE_ENV_CHANGED: 'Переменную только что изменили. Обновите страницу и попробуйте ещё раз',
 }
 
 const CODE_BY_HTTP_STATUS: Readonly<Record<number, TRPC_ERROR_CODE_KEY>> = {
@@ -371,15 +282,6 @@ export function trpcCodeForStatus(httpStatus: number): TRPC_ERROR_CODE_KEY {
     CODE_BY_HTTP_STATUS[httpStatus] ?? (httpStatus >= 500 ? 'INTERNAL_SERVER_ERROR' : 'BAD_REQUEST')
   )
 }
-
-const ANOTHER_PLAN = 'Чтобы добавить ещё один, выберите другой тариф в настройках'
-// The tariff of the next period can be taken back as well as replaced.
-const ANOTHER_NEXT_PLAN =
-  'Чтобы добавить ещё один, отмените переход или выберите другой тариф в настройках'
-
-/** «до 3 сайтов», «до 21 сайта»: the number with the form of the noun that follows it. */
-const sitesUpTo = (count: number) =>
-  `${count} ${count % 10 === 1 && count % 100 !== 11 ? 'сайта' : 'сайтов'}`
 
 /** One of three forms of a word by the number before it: 1 кредит, 2 кредита, 5 кредитов. */
 function plural(count: number, one: string, few: string, many: string): string {
@@ -490,9 +392,9 @@ const SKILL_CHECK_TEXT: Readonly<Record<string, string>> = {
 }
 
 const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string>> = {
-  SITE_SKILL_CHECK_FAILED: (details) =>
+  AGENT_SKILL_CHECK_FAILED: (details) =>
     SKILL_CHECK_TEXT[detail(details, 'reason') ?? ''] ??
-    MESSAGE_BY_DOMAIN_CODE.SITE_SKILL_CHECK_FAILED!,
+    MESSAGE_BY_DOMAIN_CODE.AGENT_SKILL_CHECK_FAILED!,
   // The scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп16, Зп24, Зп31): the number of the
   // limit, and why «Запустить сейчас» did not start, in the words of the list of runs.
   SCHEDULE_LIMIT: (details) => {
@@ -610,38 +512,12 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
       ? attachmentRefusalText[reason as AttachmentRefusal].replace(/\.$/, '')
       : MESSAGE_BY_DOMAIN_CODE.ATTACHMENT_REFUSED!
   },
-  // A project with chats that are not over: the way out is the client's own (docs/plan/61, К40).
-  SITE_DELETE_BUSY: (details) =>
-    reasonOf(details) === 'tasks'
-      ? 'Сначала завершите или отмените чаты этого проекта'
-      : MESSAGE_BY_DOMAIN_CODE.SITE_DELETE_BUSY!,
   // A command of the chat the server refused: the words `task.commands` shows for it.
   CHAT_COMMAND_UNAVAILABLE: (details) => {
     const refusal = commandRefusalOf(details)
     return refusal === null
       ? MESSAGE_BY_DOMAIN_CODE.CHAT_COMMAND_UNAVAILABLE!
       : chatCommandRefusalText[refusal].replace(/\.$/, '')
-  },
-  // The site limit of the tariff (project.create): `details.maxSites`. `details.unpaid` is
-  // true when the limit is of a tariff the customer has started to pay for and does not have yet,
-  // `details.scheduled` — when it is of the tariff they chose for the next period: the tariff
-  // they have may hold more sites, and «в ваш тариф входит…» would not be true of it.
-  PROJECT_PLAN_LIMIT_REACHED: (details) => {
-    const {
-      maxSites,
-      unpaid,
-      scheduled,
-    }: { maxSites?: unknown; unpaid?: unknown; scheduled?: unknown } =
-      typeof details === 'object' && details !== null ? details : {}
-    if (typeof maxSites !== 'number' || !Number.isSafeInteger(maxSites) || maxSites < 1) {
-      return `На вашем тарифе больше нельзя добавить сайт. ${ANOTHER_PLAN}`
-    }
-    const included = maxSites === 1 ? 'входит один сайт' : `входит до ${sitesUpTo(maxSites)}`
-    if (unpaid === true) return `В тариф, который вы оплачиваете, ${included}. ${ANOTHER_PLAN}`
-    if (scheduled === true) {
-      return `В тариф, который вы выбрали на следующий период, ${included}. ${ANOTHER_NEXT_PLAN}`
-    }
-    return `В ваш тариф ${included}. ${ANOTHER_PLAN}`
   },
 }
 
@@ -701,9 +577,7 @@ export interface ErrorDetails {
  * Error shape sent to clients: a Russian message on «вы» (clientMessage) and the DomainError
  * code in `data.domainCode`; a refused command of the chat adds which refusal it was,
  * `data.refusal` — one of `chatCommandRefusals`, the same id `task.commands` gives — so the
- * screen can offer the way out (a reset for a broken preview) without parsing words; so does a
- * project that cannot be deleted, with the reason of `siteDeleteBusy`, for the link to its chats.
- * Nothing else of the details leaves the server. The original message, zod issues and the stack
+ * screen can offer the way out without parsing words. Nothing else of the details leaves the server. The original message, zod issues and the stack
  * trace are added only in development.
  */
 export function formatError<S extends ErrorShape>(shape: S, error: TRPCError, isDev: boolean) {
@@ -712,9 +586,7 @@ export function formatError<S extends ErrorShape>(shape: S, error: TRPCError, is
     ? null
     : error.cause.code === 'CHAT_COMMAND_UNAVAILABLE'
       ? commandRefusalOf(error.cause.details)
-      : error.cause.code === 'SITE_DELETE_BUSY'
-        ? reasonOf(error.cause.details)
-        : null
+      : null
   const { stack, ...data } = shape.data
   let details: ErrorDetails | undefined
   if (isDev) {

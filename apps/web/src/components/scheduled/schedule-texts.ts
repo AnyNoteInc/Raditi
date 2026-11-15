@@ -22,17 +22,12 @@ export const scheduledTexts = Object.freeze({
   filter: 'Фильтр задач',
   sort: 'Порядок задач',
   showGroup: 'Показать',
-  projectGroup: 'Проект',
-  allProjects: 'Все проекты',
   nothingFound: 'Ничего не нашлось.',
   reset: 'Сбросить',
   failed: 'Не удалось загрузить задачи. Попробуйте ещё раз.',
   retry: 'Повторить',
   loading: 'Загрузка задач',
   list: 'Ваши запланированные задачи',
-  noProject: 'Без проекта',
-  /** A task of a deleted project (Зп22): no name and no link — the project is no more. */
-  projectGone: 'Проект удалён',
 })
 
 /** The filter buttons of «Ваши» (Зп3). */
@@ -85,7 +80,6 @@ export const schedulePageTexts = Object.freeze({
   back: 'Запланированные задачи',
   instructions: 'Инструкция',
   schedule: 'Когда запускается',
-  project: 'Проект',
   effort: 'Размышление',
   notify: 'Уведомления',
   notifyOn: 'Сообщим, когда задача выполнится',
@@ -128,24 +122,19 @@ export const scheduleDialogTexts = Object.freeze({
   editTitle: 'Изменить задачу',
   inChat: 'Вместо этого настроить в чате',
   name: 'Название',
-  namePlaceholder: 'Например, «Проверка сайта»',
+  namePlaceholder: 'Например, «Отзывы за неделю»',
   nameRequired: 'Назовите задачу',
   nameSecret: 'Похоже, в названии пароль или ключ — уберите его',
   instructions: 'Что сделать агенту',
   instructionsPlaceholder:
-    'Например: откройте сайт, пройдите главную и важные страницы и скажите, если что-то не так.',
+    'Например: найди новые отзывы о нашей кофейне и коротко перескажи, что хвалят и на что жалуются.',
   instructionsRequired: 'Напишите, что сделать агенту',
+  /** Under the instructions of a template with a place to fill in, from the first look (Зп59). */
+  placeholderHint: 'Замените текст в квадратных скобках своим',
   secret: 'Похоже, в инструкции пароль или ключ — уберите его',
-  needsProject: 'Этому шаблону нужен проект — выберите его',
-  addProject: 'Добавьте проект',
-  addProjectLead: 'Этому шаблону нужен сайт.',
-  /** «Добавьте проект» after the client changed the window: what they wrote is not kept (Зп9). */
-  leaveTitle: 'Перейти к добавлению проекта?',
-  leaveText: 'Задача ещё не создана: то, что вы изменили в окне, не сохранится.',
-  leaveKeep: 'Остаться',
-  leaveGo: 'Перейти',
+  // Rule 10, in place of the quote of Зп28 (Зп56).
   warning:
-    'Задача выполняется без вас: агент не будет спрашивать подтверждения, пока работает. В админке сайта он только читает, страницы из раздела «Страницы» не публикует и не меняет, к подключённым сервисам, которым нужен ваш ключ доступа, не обращается, а файлы сайта меняет в предпросмотре — на сайт изменения попадут после вашего выпуска. Каждый запуск тратит кредиты.',
+    'Задача выполняется без вас: агент не будет спрашивать подтверждения, пока работает. На сайтах он только читает — ничего не отправляет, не сохраняет и не покупает, страницы из раздела «Страницы» не публикует и не меняет, к подключённым сервисам, которым нужен ваш ключ доступа, не обращается. Что нужно изменить, он подготовит и спросит вас в чате запуска. Каждый запуск тратит кредиты.',
   when: 'Когда запускать',
   schedule: (index: number) => `Время запуска ${index}`,
   frequency: 'Как часто',
@@ -191,6 +180,5 @@ export const scheduleChatDraft = Object.freeze({
 /** «Уже настроен» of a template already used (Зп9). */
 export const scheduleTemplateTexts = Object.freeze({
   used: 'Уже настроен',
-  needsProject: 'Нужен проект',
   list: 'Шаблоны задач',
 })

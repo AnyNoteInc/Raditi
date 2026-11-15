@@ -190,14 +190,18 @@ describe('OpenCode driver: prepared files and argv', () => {
         '*': 'deny',
         [`${SANDBOX_INBOX}/*`]: 'allow',
         [`${SANDBOX_OUT}/*`]: 'allow',
+        '/tmp': 'allow',
+        '/tmp/*': 'allow',
       },
       'raditi_*': 'allow',
     })
-    // The last matching rule wins: the inbox and outbox exceptions come after the general denial.
+    // The last matching rule wins: the inbox, outbox and /tmp exceptions come after the denial.
     expect(Object.keys(value.permission.external_directory)).toEqual([
       '*',
       `${SANDBOX_INBOX}/*`,
       `${SANDBOX_OUT}/*`,
+      '/tmp',
+      '/tmp/*',
     ])
     // An `ask` rule is rejected automatically in `run` mode and may end the turn with exit 0.
     const leaves = (node: unknown): unknown[] =>
@@ -250,11 +254,13 @@ describe('OpenCode driver: prepared files and argv', () => {
     for (const flag of ['--headless', '--isolated', '--no-sandbox']) expect(command).toContain(flag)
     // The model reads no pixels (N22): a screenshot answers without its image.
     expect(command[command.indexOf('--image-responses') + 1]).toBe('omit')
-    // The snapshots the skill writes are the only files outside the inbox and outbox the agent reads.
+    // Besides the inbox, outbox and /tmp, the agent reads only the snapshots the skill writes.
     expect(value.permission.external_directory).toEqual({
       '*': 'deny',
       [`${SANDBOX_INBOX}/*`]: 'allow',
       [`${SANDBOX_OUT}/*`]: 'allow',
+      '/tmp': 'allow',
+      '/tmp/*': 'allow',
       [`${home}/playwright/output/*`]: 'allow',
     })
     expect(command[command.indexOf('--proxy-server') + 1]).toBe(egressProxy)

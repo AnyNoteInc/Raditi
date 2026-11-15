@@ -10,20 +10,16 @@ import { ArchiveButton, DialogList } from './dialog-list'
 import { SearchDialog } from './search-dialog'
 import { declared } from './testing'
 
-const { listPage, folders, chatGet, segment, rename, remove, pin, archive, search } = vi.hoisted(
-  () => ({
-    listPage: vi.fn<(input: { folder?: string; cursor?: string }) => Promise<DialogListPage>>(),
-    folders: vi.fn<() => Promise<{ folders: unknown[] }>>(),
-    chatGet: vi.fn(),
-    segment: { current: null as string | null },
-    rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
-    remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
-    pin: vi.fn<(input: { taskId: string; pinned: boolean }) => Promise<{ pinned: boolean }>>(),
-    archive:
-      vi.fn<(input: { taskId: string; archived: boolean }) => Promise<{ archived: boolean }>>(),
-    search: vi.fn<(input: { query: string }) => Promise<{ items: DialogListItem[] }>>(),
-  }),
-)
+const { listPage, segment, rename, remove, pin, archive, search } = vi.hoisted(() => ({
+  listPage: vi.fn<(input: { cursor?: string }) => Promise<DialogListPage>>(),
+  segment: { current: null as string | null },
+  rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
+  remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
+  pin: vi.fn<(input: { taskId: string; pinned: boolean }) => Promise<{ pinned: boolean }>>(),
+  archive:
+    vi.fn<(input: { taskId: string; archived: boolean }) => Promise<{ archived: boolean }>>(),
+  search: vi.fn<(input: { query: string }) => Promise<{ items: DialogListItem[] }>>(),
+}))
 
 const mutation = <I, O>(fn: (input: I) => Promise<O>) => ({
   mutationOptions: () => ({ mutationFn: fn }),
@@ -38,8 +34,6 @@ vi.mock('@/trpc/client', () => ({
   useTRPCClient: () => ({
     task: {
       list: { query: listPage },
-      folders: { query: folders },
-      get: { query: chatGet },
       search: { query: search },
     },
   }),
@@ -54,7 +48,6 @@ vi.mock('@/trpc/client', () => ({
   }),
 }))
 
-const PROJECT_ID = '0199a3f2-0000-8000-8000-0000000000a1'
 const now = new Date()
 const yesterday = new Date(now.getTime() - 36 * 60 * 60_000)
 
@@ -63,13 +56,11 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
     id: `0199a3f2-0000-7000-8000-${id.padStart(12, '0')}`,
     title: 'Поменять цену капучино',
     status: 'done',
-    undo: null,
     answered: false,
     rewound: false,
     failed: false,
     createdAt: now,
     updatedAt: now,
-    project: null,
     pinned: false,
     archived: false,
     telegram: false,
@@ -78,11 +69,11 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
   }
 }
 
-function showList(props: { grouped?: boolean; folder?: string | null } = {}) {
+function showList() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const list = () => (
     <QueryClientProvider client={queryClient}>
-      <DialogList {...props} />
+      <DialogList />
       {/* The frame pins «Архив» at the bottom of the column (docs/plan/77, Р1). */}
       <ArchiveButton />
     </QueryClientProvider>
@@ -222,32 +213,6 @@ describe('the list of dialogs', () => {
     expect(remove.mock.calls[0]![0]).toEqual({ taskId: dialog('2').id })
   })
 
-  it('speaks of the site in the window of deleting only for a chat with a project', async () => {
-    listPage.mockResolvedValue({
-      pinned: [],
-      items: [
-        dialog('1', { title: 'Без проекта' }),
-        dialog('2', {
-          title: 'С проектом',
-          project: { id: PROJECT_ID, name: 'Кофейня «Крошка»' },
-        }),
-      ],
-      nextCursor: null,
-    })
-    showList()
-    const asked = async (title: string) => {
-      fireEvent.click(await screen.findByRole('button', { name: `Действия с чатом: ${title}` }))
-      fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
-      return plain((await screen.findByRole('dialog', { name: 'Удалить чат?' })).textContent)
-    }
-    const without = await asked('Без проекта')
-    expect(without).toContain('Чат пропадёт из списка.')
-    expect(without).not.toContain('сайт')
-    fireEvent.click(screen.getByRole('button', { name: 'Оставить' }))
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(await asked('С проектом')).toContain('То, что агент уже сделал на сайте, останется.')
-  })
-
   // MUI lets a menu item shrink to its content from `sm` up by a media query of its own, which wins
   // over a plain height: the pressing area of a finger (DESIGN.md) has to hold on every width.
   it('keeps the items of the menu of a row 44px high on every width', async () => {
@@ -327,171 +292,6 @@ describe('the list of dialogs', () => {
     expect(await screen.findByText('Не удалось загрузить чаты.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Повторить' }))
     expect(await screen.findByText('Поменять цену капучино')).toBeTruthy()
-  })
-})
-
-describe('the row of a chat', () => {
-  it('names the project of a chat in one list, and nothing for a chat without one', async () => {
-    listPage.mockResolvedValue({
-      pinned: [],
-      items: [
-        dialog('1', {
-          title: 'С проектом',
-          project: { id: PROJECT_ID, name: 'Кофейня «Крошка»' },
-        }),
-        dialog('2', { title: 'Без проекта вовсе' }),
-      ],
-      nextCursor: null,
-    })
-    showList()
-    expect(plain((await screen.findByRole('link', { name: /С проектом/ })).textContent)).toContain(
-      '· Кофейня «Крошка»',
-    )
-    expect(screen.getByRole('link', { name: /Без проекта вовсе/ }).textContent).not.toContain('·')
-  })
-})
-
-describe('the chats by projects (docs/plan/61-chats-first.md, К23)', () => {
-  const OTHER_ID = '0199a3f2-0000-8000-8000-0000000000b2'
-  const kroshka = { id: PROJECT_ID, name: 'Кофейня «Крошка»' }
-  const grand = { id: OTHER_ID, name: 'Автосервис «Гранд»' }
-  const folder = (name: RegExp, expanded?: boolean) =>
-    screen.findByRole('button', { name, ...(expanded === undefined ? {} : { expanded }) })
-
-  beforeEach(() => {
-    folders.mockResolvedValue({
-      folders: [
-        { project: kroshka, count: 2, attention: false },
-        { project: grand, count: 1, attention: true },
-        { project: null, count: 3, attention: false },
-      ],
-    })
-    listPage.mockImplementation(async ({ folder: asked }) => ({
-      pinned: [],
-      items:
-        asked === OTHER_ID
-          ? [dialog('7', { title: 'Цены на диагностику', project: grand })]
-          : asked === 'none'
-            ? [dialog('8', { title: 'Идеи для пекарни' })]
-            : [dialog('9', { title: 'Новость о дегустации', project: kroshka })],
-      nextCursor: null,
-    }))
-  })
-
-  it('stands the folders as the server counted them, read only once one is open', async () => {
-    showList({ grouped: true })
-    await screen.findByRole('button', { name: /Кофейня/ })
-    // «Архив» under the folders opens too, and is not a folder (docs/plan/75, ВВ21).
-    const names = screen
-      .getAllByRole('button')
-      .filter(
-        (button) =>
-          button.hasAttribute('aria-expanded') && !plain(button.textContent).startsWith('Архив'),
-      )
-    expect(names.map((button) => plain(button.textContent))).toEqual([
-      expect.stringContaining('Кофейня «Крошка»'),
-      expect.stringContaining('Автосервис «Гранд»'),
-      expect.stringContaining('Без проекта'),
-    ])
-    expect(names[0]!.textContent).toMatch(/2$/)
-    expect(listPage).not.toHaveBeenCalled()
-  })
-
-  it('reads a folder once it is opened, closes it, and shows no project in its rows', async () => {
-    showList({ grouped: true })
-    fireEvent.click(await folder(/Кофейня/, false))
-    const row = await screen.findByRole('link', { name: /Новость о дегустации/ })
-    expect(listPage).toHaveBeenCalledWith({ folder: PROJECT_ID })
-    expect(row.textContent).not.toContain('·')
-    fireEvent.click(await folder(/Кофейня/, true))
-    expect(screen.queryByRole('link', { name: /Новость о дегустации/ })).toBeNull()
-  })
-
-  it('asks for the chats without a project by the word of the server', async () => {
-    showList({ grouped: true })
-    fireEvent.click(await folder(/Без проекта/, false))
-    expect(await screen.findByRole('link', { name: /Идеи для пекарни/ })).toBeTruthy()
-    expect(listPage).toHaveBeenCalledWith({ folder: 'none' })
-  })
-
-  it('says of a closed folder that a chat in it waits, and stops once it is open', async () => {
-    showList({ grouped: true })
-    const closed = await folder(/Есть чаты, которые ждут вас/, false)
-    expect(closed.textContent).toContain('Автосервис «Гранд»')
-    expect(screen.getAllByText(/Есть чаты, которые ждут вас/)).toHaveLength(1)
-    fireEvent.click(closed)
-    await screen.findByRole('link', { name: /Цены на диагностику/ })
-    expect(screen.queryByText(/Есть чаты, которые ждут вас/)).toBeNull()
-  })
-
-  it('opens the folder of the open chat', async () => {
-    const id = dialog('7').id
-    segment.current = id
-    chatGet.mockResolvedValue({ project: grand })
-    showList({ grouped: true })
-    const row = await screen.findByRole('link', { name: /Цены на диагностику/ })
-    expect(row.getAttribute('aria-current')).toBe('page')
-    expect(chatGet).toHaveBeenCalledWith({ taskId: id })
-    expect(await folder(/Гранд/, true)).toBeTruthy()
-    expect(await folder(/Кофейня/, false)).toBeTruthy()
-  })
-
-  it('lets the client close the folder of the open chat, and it stays closed', async () => {
-    segment.current = dialog('7').id
-    chatGet.mockResolvedValue({ project: grand })
-    showList({ grouped: true })
-    fireEvent.click(await folder(/Гранд/, true))
-    expect(await folder(/Гранд/, false)).toBeTruthy()
-    expect(screen.queryByRole('link', { name: /Цены на диагностику/ })).toBeNull()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(await folder(/Гранд/, false)).toBeTruthy()
-  })
-
-  it('opens again the folder the client closed on a move to a chat in it', async () => {
-    const shown = dialog('7').id
-    segment.current = shown
-    chatGet.mockResolvedValue({ project: grand })
-    const moveTo = showList({ grouped: true })
-    fireEvent.click(await folder(/Гранд/, true))
-    await folder(/Гранд/, false)
-    moveTo('new')
-    moveTo(shown)
-    const row = await screen.findByRole('link', { name: /Цены на диагностику/ })
-    expect(row.getAttribute('aria-current')).toBe('page')
-    expect(await folder(/Гранд/, true)).toBeTruthy()
-  })
-
-  it('opens the folder without a project for a chat without one', async () => {
-    segment.current = dialog('8').id
-    chatGet.mockResolvedValue({ project: null })
-    showList({ grouped: true })
-    expect(await folder(/Без проекта/, true)).toBeTruthy()
-  })
-
-  it('leaves the folders closed on a new chat, and asks nothing about it', async () => {
-    segment.current = 'new'
-    showList({ grouped: true })
-    expect(await folder(/Кофейня/, false)).toBeTruthy()
-    expect(chatGet).not.toHaveBeenCalled()
-  })
-
-  it('opens the folder the address names', async () => {
-    showList({ grouped: true, folder: OTHER_ID.toUpperCase() })
-    expect(await folder(/Гранд/, true)).toBeTruthy()
-  })
-
-  it('opens the only folder there is', async () => {
-    folders.mockResolvedValue({ folders: [{ project: null, count: 1, attention: false }] })
-    showList({ grouped: true })
-    expect(await folder(/Без проекта/, true)).toBeTruthy()
-  })
-
-  it('says there are no chats when there is no folder', async () => {
-    folders.mockResolvedValue({ folders: [] })
-    showList({ grouped: true })
-    expect(
-      await screen.findByText('Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.'),
-    ).toBeTruthy()
   })
 })
 

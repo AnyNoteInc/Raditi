@@ -139,16 +139,12 @@ const plansOutput = z.object({
   /** Tariffs on sale, in the order they are shown. */
   plans: z.array(
     planSchema.extend({
-      /** The sites of the workspace fit the plan; a checkout refuses a plan they do not fit. */
-      fitsSites: z.boolean(),
       /** The plan of the live subscription. */
       current: z.boolean(),
     }),
   ),
   /** The pack on sale; null when none is. */
   pack: packSchema.nullable(),
-  /** Sites of the workspace, whatever their status: what `maxSites` is compared with. */
-  siteCount: z.number().int().nonnegative(),
   /** Whether a tariff can be bought with the consent to auto-renewal; as in `overview`. */
   autoRenewalAvailable,
   /**
@@ -333,28 +329,24 @@ export const billingRouter = router({
   }),
 
   /**
-   * What is on sale, how each tariff suits the user's sites, and how the work of a task is
+   * What is on sale and how the work of a task is
    * turned into credits (`creditConversion`).
    */
   plans: consentedProcedure.output(plansOutput).query(async ({ ctx }) => {
     const workspaceId = await personalWorkspaceId(ctx)
-    const [{ plans }, pack, { subscription }, siteCount, creditConversion] = await Promise.all([
+    const [{ plans }, pack, { subscription }, creditConversion] = await Promise.all([
       listPlans(ctx.prisma),
       // At the price this customer pays: twice it without a tariff that takes tasks (КР9).
       packOfferFor(ctx.prisma, workspaceId),
       getPlanOverview(ctx.prisma, workspaceId),
-      // The count a checkout compares with the plan (startCheckout of @repo/billing).
-      workspaceId === null ? 0 : ctx.prisma.site.count({ where: { workspaceId, deletedAt: null } }),
       getCreditConversion(ctx.prisma, new Date()),
     ])
     return {
       plans: plans.map((plan) => ({
         ...plan,
-        fitsSites: siteCount <= plan.maxSites,
         current: plan.id === subscription?.plan.id,
       })),
       pack,
-      siteCount,
       autoRenewalAvailable: autoRenewalAvailableIn(ctx),
       creditConversion,
     }

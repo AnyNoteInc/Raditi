@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
 import {
-  countSiteSchedules,
   createScheduledTask,
   deleteScheduledTask,
   dropPendingRun,
@@ -22,11 +21,9 @@ import {
   badRequest,
   DEFAULT_SCHEDULE_TIMEZONE,
   dueCountBetween,
-  DomainError,
   hasScheduleTemplatePlaceholder,
   nextRunOf,
   scheduledRunReasons,
-  scheduleNotFound,
   scheduleTemplateOf,
   scheduleTemplatePlaceholder,
   scheduleTimezoneSchema,
@@ -43,21 +40,17 @@ import {
 import type { ChatContext } from '../chat/context.ts'
 import { personalWorkspaceOf } from '../chat/dialog-lock.ts'
 import { requestPayload, requestText } from '../chat/request-text.ts'
-import { accessibleSite, siteNotFound } from '../site-basics.ts'
 import { runStates } from './outcomes.ts'
 import { scheduleRunRefused, startRun } from './runs.ts'
 
 // The scheduled tasks of the cabinet (docs/plan/82-scheduled-tasks.md, §4.5): «Ваши», the page of a
 // task with its runs, and what the window and the switch do with one. The rules of a task — its
 // rights, the 20 of a workspace, the schedules and the zone — are of `@repo/db` and `@repo/domain`;
-// here the words of the instructions are checked as the words of a chat (Зп26), a template (Зп9),
-// and the workspace a task goes to: of its project, or the creator's personal one (Зп25).
+// here the words of the instructions are checked as the words of a chat (Зп26), a place of a
+// template left unfilled (Зп59), and the workspace a task goes to: the creator's personal one
+// (Зп25, Зп44) — a task has no project.
 
 const DAY_MS = 24 * 60 * 60 * 1000
-
-/** A template about a site saved without a project (Зп9): the window offers no «Создать» then. */
-export const scheduleTemplateNeedsProject = () =>
-  new DomainError('SCHEDULE_TEMPLATE_NEEDS_PROJECT', 'This template is about a site', 400)
 
 /** A run of a task, as «Ваши» and the page of a task show it (Зп5, Зп6). */
 export interface ScheduleRunView {
@@ -89,11 +82,6 @@ export interface ScheduleView {
   lastRunAt: Date | null
   createdVia: 'manual' | 'template' | 'chat'
   templateSlug: string | null
-  /**
-   * null — without a project. `deleted` — its project was deleted (Зп22): the task stays bound to
-   * it, stopped, until the client moves it to another project or to none — shown «Проект удалён».
-   */
-  project: { id: string; name: string; deleted: boolean } | null
   createdAt: Date
   updatedAt: Date
   /** The newest run; null — none yet. */
@@ -117,11 +105,9 @@ function runView(run: RunRowOfTask, state: ScheduledRunState): ScheduleRunView {
     dueAt: run.dueAt,
     trigger: run.trigger as ScheduledRunTrigger,
     state,
-    // A chat deleted, or of a project deleted — it left the cabinet with it: «Чат удалён» (Зп6).
+    // A chat deleted: «Чат удалён» (Зп6).
     chat:
-      run.task === null ||
-      run.task.deletedAt !== null ||
-      (run.task.site !== null && run.task.site.deletedAt !== null)
+      run.task === null || run.task.deletedAt !== null
         ? null
         : { id: run.task.id, title: run.task.title },
     createdAt: run.createdAt,
@@ -145,10 +131,6 @@ function taskView(row: TaskRow, lastRun: ScheduleRunView | null): ScheduleView {
     lastRunAt: row.lastRunAt,
     createdVia: row.createdVia as ScheduleView['createdVia'],
     templateSlug: row.templateSlug,
-    project:
-      row.site === null
-        ? null
-        : { id: row.site.id, name: row.site.name, deleted: row.site.deletedAt !== null },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     lastRun,
@@ -183,7 +165,8 @@ export async function readSchedule(
 
 /**
  * The words of the instructions, as the words of a chat (Зп26): empty, too long, a password or a
- * key — refused in the client's terms; and the place for the addresses of «Конкуренты» (Зп9).
+ * key — refused in the client's terms; and a place of a template left unfilled, `[впишите …]`, in
+ * any task (Зп9, Зп59).
  */
 function checkedInstructions(userId: string, text: string): string {
   const words = requestText(text)
@@ -192,37 +175,14 @@ function checkedInstructions(userId: string, text: string): string {
   return words
 }
 
-/**
- * The workspace of a task (Зп25): of its project — one the user can open, not deleted — or the
- * creator's personal workspace, made with the gift of the registration for a new user. Whether
- * they manage it, the rules of `@repo/db` ask under its lock.
- */
-async function workspaceOf(
-  db: PrismaClient,
-  appEnv: AppEnv,
-  input: { userId: string; siteId: string | null },
-): Promise<string> {
-  if (input.siteId === null)
-    return (await personalWorkspaceOf(db, { userId: input.userId, appEnv })).id
-  const site = await db.site.findFirst({
-    where: accessibleSite(input.userId, input.siteId),
-    select: { workspaceId: true },
-  })
-  if (site === null) throw siteNotFound()
-  return site.workspaceId
-}
-
-/** A template of §4.6 named by a task: known, and about a site only with a project (Зп9). */
-function checkTemplate(slug: string | null, siteId: string | null): void {
-  if (slug === null) return
-  const template = scheduleTemplateOf(slug)
-  if (template === undefined) throw badRequest('Unknown template of a scheduled task')
-  if (template.project === 'required' && siteId === null) throw scheduleTemplateNeedsProject()
+/** A template of §4.6 named by a task, known; a slug of none is refused, never stored. */
+function checkTemplateSlug(slug: string | null): void {
+  if (slug !== null && scheduleTemplateOf(slug) === undefined)
+    throw badRequest('Unknown template of a scheduled task')
 }
 
 export interface ScheduleInput {
   userId: string
-  siteId: string | null
   name: string
   instructions: string
   effort: ReasoningEffort
@@ -241,12 +201,13 @@ export async function createSchedule(
   input: ScheduleInput,
 ): Promise<ScheduleDetail> {
   const instructions = checkedInstructions(input.userId, input.instructions)
-  checkTemplate(input.templateSlug, input.siteId)
-  const workspaceId = await workspaceOf(db, appEnv, input)
+  checkTemplateSlug(input.templateSlug)
+  // The creator's personal workspace, made with the gift of the registration for a new user, as
+  // a first chat makes it (Зп44); whether they manage it, `@repo/db` asks under its lock.
+  const { id: workspaceId } = await personalWorkspaceOf(db, { userId: input.userId, appEnv })
   const row = await createScheduledTask(db, {
     userId: input.userId,
     workspaceId,
-    siteId: input.siteId,
     name: input.name,
     instructions,
     effort: input.effort,
@@ -267,14 +228,11 @@ export interface ScheduleChange {
   triggers?: ScheduleTrigger[]
   timezone?: string
   notify?: boolean
-  /** Another project, or none (null). */
-  siteId?: string | null
 }
 
 /** «Сохранить» (Зп7, Зп13): only what is given changes. */
 export async function updateSchedule(
   db: PrismaClient,
-  appEnv: AppEnv,
   input: { userId: string; scheduleId: string; change: ScheduleChange; now: Date },
 ): Promise<ScheduleDetail> {
   const { change, userId } = input
@@ -286,18 +244,6 @@ export async function updateSchedule(
   if (change.triggers !== undefined) patch.triggers = change.triggers
   if (change.timezone !== undefined) patch.timezone = change.timezone
   if (change.notify !== undefined) patch.notify = change.notify
-  if (change.siteId !== undefined) {
-    const own = await db.scheduledTask.findFirst({
-      where: { id: input.scheduleId, createdById: userId, deletedAt: null },
-      select: { templateSlug: true },
-    })
-    if (own === null) throw scheduleNotFound()
-    checkTemplate(own.templateSlug, change.siteId)
-    patch.project = {
-      siteId: change.siteId,
-      workspaceId: await workspaceOf(db, appEnv, { userId, siteId: change.siteId }),
-    }
-  }
   await updateScheduledTask(db, { scheduleId: input.scheduleId, userId, patch, now: input.now })
   return readSchedule(db, { userId, scheduleId: input.scheduleId })
 }
@@ -365,29 +311,20 @@ export interface ScheduleCostHint {
 /**
  * «Каждый запуск тратит кредиты, как обычный чат, — в среднем около 11. Так выйдет примерно N в
  * неделю; ваш недельный лимит — M.» (Зп30): N by the schedules of the window over the next 7 days,
- * M — of the tariff of the workspace the task would go to. Nothing is made: a user without a
- * personal workspace yet is told without a limit.
+ * M — of the tariff of the creator's personal workspace, where the task goes (Зп44). Nothing is
+ * made: a user without a personal workspace yet is told without a limit.
  */
 export async function scheduleCostHint(
   db: PrismaClient,
   appEnv: AppEnv,
-  input: { userId: string; siteId: string | null; triggers: unknown; timezone: string; now: Date },
+  input: { userId: string; triggers: unknown; timezone: string; now: Date },
 ): Promise<ScheduleCostHint> {
   const triggers = scheduleTriggerListSchema.safeParse(input.triggers)
   if (!triggers.success) throw badRequest('Invalid schedules of a scheduled task')
   const timezone = scheduleTimezoneSchema.safeParse(input.timezone)
   if (!timezone.success) throw badRequest('An unknown time zone')
-  let workspaceId: string | null
-  if (input.siteId === null) {
-    workspaceId = (await findPersonalWorkspace(db, { userId: input.userId, appEnv }))?.id ?? null
-  } else {
-    const site = await db.site.findFirst({
-      where: accessibleSite(input.userId, input.siteId),
-      select: { workspaceId: true },
-    })
-    if (site === null) throw siteNotFound()
-    workspaceId = site.workspaceId
-  }
+  const workspaceId =
+    (await findPersonalWorkspace(db, { userId: input.userId, appEnv }))?.id ?? null
   const from = new Date(input.now.getTime() + 1)
   const runsPerWeek = dueCountBetween(
     triggers.data,
@@ -435,20 +372,4 @@ export async function rememberTimezone(
 export async function defaultTimezone(db: PrismaClient, userId: string): Promise<string> {
   const user = await db.user.findUnique({ where: { id: userId }, select: { timezone: true } })
   return user?.timezone ?? DEFAULT_SCHEDULE_TIMEZONE
-}
-
-/**
- * How many tasks «Удалить проект» stops (Зп22): the window of the deletion names them. A project
- * the user cannot open answers as one that does not exist.
- */
-export async function projectScheduleCount(
-  db: PrismaClient,
-  input: { userId: string; siteId: string },
-): Promise<{ count: number }> {
-  const site = await db.site.findFirst({
-    where: accessibleSite(input.userId, input.siteId),
-    select: { id: true },
-  })
-  if (site === null) throw siteNotFound()
-  return { count: await countSiteSchedules(db, site.id) }
 }

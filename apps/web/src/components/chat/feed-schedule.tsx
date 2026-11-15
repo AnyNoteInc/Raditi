@@ -17,7 +17,7 @@ import { useEffect, useId, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { BrowserPushControl } from '@/components/notifications/browser-push-control'
-import { projectText, scheduleStateText } from '@/components/scheduled/schedule-model'
+import { scheduleStateText } from '@/components/scheduled/schedule-model'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
@@ -133,7 +133,7 @@ function Instructions({ text }: { text: string }) {
 /**
  * A task the agent created, changed, paused, resumed or deleted at the end of its turn
  * (`feed.schedule_change`, Зп35): its title, its name — a link to the task while it is the
- * client's — the schedule in words, when it runs next, the project, «Размышление» and the
+ * client's — the schedule in words, when it runs next, «Размышление» and the
  * notice of a finished run, the instructions word for word, «Открыть задачу», «Изменить» and
  * «Запустить сейчас», each named by the task to a screen reader, and the control of
  * notifications in this browser when `push` (Зп36: the newest card of the chat carries it). A
@@ -173,17 +173,8 @@ export function FeedScheduleChange({
     )
 
   const state = stateLine(row, task, now)
-  const project =
-    row.siteId === null
-      ? scheduleChatText.noProject
-      : task?.project && task.project.id === row.siteId
-        ? task.project.deleted
-          ? // Not named once deleted (Зп22): «Проект удалён», as «Запланированные задачи» say.
-            projectText(task)
-          : scheduleChatText.project(task.project.name)
-        : null
+  // No line of a project: a task has none (Зп57).
   const details = [
-    project,
     effortWord(row.effort),
     row.notify ? scheduleChatText.notifyOn : scheduleChatText.notifyOff,
   ].filter((part): part is string => part !== null)

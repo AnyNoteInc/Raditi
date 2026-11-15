@@ -55,15 +55,13 @@ const GENERATED = {
     S3_SECRET_ACCESS_KEY: b64url(30),
   },
   // PAGES_COOKIE_SECRET: the cookie of a page's password (docs/plan/69-pages.md, Ст13), its own
-  'app/preview': { PREVIEW_SESSION_SECRET: b64url(48), PAGES_COOKIE_SECRET: b64url(48) },
-  // mcp writes the content snapshots of previews into raditi-artifacts, its only bucket (spec §14)
-  'app/mcp': { S3_ACCESS_KEY_ID: s3Key, S3_SECRET_ACCESS_KEY: b64url(30) },
+  'app/preview': { PAGES_COOKIE_SECRET: b64url(48) },
   'app/traefik': { dashboard_user: () => 'admin', dashboard_password: b64url(18) },
 }
 
 /** Fields `set` accepts: what the owner hands over. */
 const PROVIDED = {
-  // reg.ru API (an alternative password, the server's IP allowed): DNS-01 of *.raditi-preview.ru
+  // reg.ru API (an alternative password, the server's IP allowed): DNS-01 of *.pages.raditi.ru
   'app/traefik': ['regru_username', 'regru_password'],
   // YANDEX_CLIENT_*: the Yandex ID app of sign-in (oauth.yandex.ru), both or neither
   'app/web': [
@@ -79,8 +77,6 @@ const PROVIDED = {
     // The bot of the chat @raditi_bot (docs/plan/80-telegram.md): web and core both get it
     'TELEGRAM_BOT_TOKEN',
     'WEB_PUSH_PRIVATE_KEY',
-    'GITEA_TOKEN',
-    'GITEA_PROVISIONER_TOKEN',
   ],
 }
 
@@ -140,7 +136,7 @@ async function set(path, field) {
 
 /** One file of a service directory: name → contents. */
 function serviceFiles(kv, roles) {
-  const { shared, web, core, browser, preview, traefik, gitea, mcp } = kv
+  const { shared, web, core, browser, preview, traefik } = kv
   const db = `postgresql://raditi:${shared.pg_password}@postgres:5432/raditi`
   // browser runs in the host network: the database on the private address (docker-compose.server.yml)
   const hostDb = `postgresql://raditi:${shared.pg_password}@10.10.0.10:5432/raditi`
@@ -216,8 +212,6 @@ function serviceFiles(kv, roles) {
             : undefined,
           WEB_PUSH_PRIVATE_KEY: core.WEB_PUSH_PRIVATE_KEY,
           SCHEDULE_INTAKE_SECRET: core.SCHEDULE_INTAKE_SECRET,
-          GITEA_TOKEN: core.GITEA_TOKEN,
-          GITEA_PROVISIONER_TOKEN: core.GITEA_PROVISIONER_TOKEN,
           BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,
           ...s3(core),
           ...approle('core'),
@@ -235,11 +229,10 @@ function serviceFiles(kv, roles) {
     mcp: {
       uid: 10005,
       files: {
-        // mcp runs in the host network (the agent's browser on a preview): the private address
+        // mcp runs in the host network (the sandbox gateway reaches it there): the private address
         'app.env': env({
           DATABASE_URL: hostDb,
           BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,
-          ...s3(mcp),
           ...approle('mcp'),
         }),
         'vault-ca.pem': ca,
@@ -262,7 +255,6 @@ function serviceFiles(kv, roles) {
       files: {
         'app.env': env({
           DATABASE_URL: db,
-          PREVIEW_SESSION_SECRET: preview.PREVIEW_SESSION_SECRET,
           PAGES_COOKIE_SECRET: preview.PAGES_COOKIE_SECRET,
           BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,
         }),
@@ -277,19 +269,6 @@ function serviceFiles(kv, roles) {
           : {}),
       },
     },
-    // Gitea: the TLS pair of git.raditi.internal; its runner: the registration token gitea-setup.mjs
-    // stored (empty until then) and the public CA
-    gitea: {
-      uid: 1000,
-      files: {
-        'git.pem': readFileSync(`${TLS_DIR}/git.pem`, 'utf8'),
-        'git.key': readFileSync(`${TLS_DIR}/git.key`, 'utf8'),
-      },
-    },
-    'gitea-runner': {
-      uid: 0,
-      files: { 'registration-token': gitea.runner_registration_token ?? '', 'ca.pem': ca },
-    },
     // SeaweedFS: one identity per service that holds S3 keys; the TLS pair of s3.raditi.internal
     s3: {
       uid: 10007,
@@ -301,11 +280,6 @@ function serviceFiles(kv, roles) {
             ['web', web, ['Read', 'Write', 'List', 'Tagging']],
             ['core', core, ['Read', 'Write', 'List', 'Tagging']],
             ['browser', browser, ['Read:raditi-inbox', 'Write:raditi-inbox', 'List:raditi-inbox']],
-            [
-              'mcp',
-              mcp,
-              ['Read:raditi-artifacts', 'Write:raditi-artifacts', 'List:raditi-artifacts'],
-            ],
           ].map(([name, keys, actions]) => ({
             name,
             credentials: [
@@ -338,7 +312,7 @@ async function render(only) {
   const token = (await auth.json()).auth.client_token
 
   const kv = {}
-  for (const name of ['shared', 'web', 'core', 'browser', 'preview', 'traefik', 'gitea', 'mcp'])
+  for (const name of ['shared', 'web', 'core', 'browser', 'preview', 'traefik'])
     kv[name] = (await readKv(token, name === 'shared' ? 'shared' : `app/${name}`)).data ?? {}
   if (!kv.shared.pg_password) fail('kv/platform/shared is empty: run seed first')
 
@@ -354,8 +328,6 @@ async function render(only) {
     'preview',
     'traefik',
     's3',
-    'gitea',
-    'gitea-runner',
   ]
   const named = only.length === 0 ? all : only
   for (const name of named) if (!all.includes(name)) fail(`${name} is not a service`)

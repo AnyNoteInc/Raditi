@@ -15,7 +15,7 @@ describe.skipIf(!enabled)('core credential cleanup with PostgreSQL', () => {
   let db: PrismaClient
   let sweeper: CredentialSweeper
   let workspaceId: string, taskId: string, providerId: string, backend: string
-  let driverId: string, credentialId: string, accountId: string, modelId: string, siteId: string
+  let driverId: string, credentialId: string, accountId: string, modelId: string
   let turn = 0
   const revoke = vi.fn()
   const secrets = { kvList: vi.fn().mockResolvedValue([]) } as unknown as SecretStore
@@ -82,14 +82,9 @@ describe.skipIf(!enabled)('core credential cleanup with PostgreSQL', () => {
       },
     })
     workspaceId = (await db.workspace.create({ data: { name: 'Synthetic credential sweep' } })).id
-    siteId = (
-      await db.site.create({
-        data: { workspaceId, name: 'Synthetic', url: 'https://sweep.invalid', stack: 'wordpress' },
-      })
-    ).id
     taskId = (
       await db.task.create({
-        data: { workspaceId, siteId, status: 'running', modelClass: 'standard' },
+        data: { workspaceId, status: 'running', modelClass: 'standard' },
       })
     ).id
     revoke.mockReset()
@@ -109,7 +104,6 @@ describe.skipIf(!enabled)('core credential cleanup with PostgreSQL', () => {
     await db.llmCall.deleteMany({ where: { subscriptionAccountId: accountId } })
     await db.llmKey.deleteMany({ where: { subscriptionAccountId: accountId } })
     await db.task.delete({ where: { id: taskId } })
-    await db.site.deleteMany({ where: { workspaceId } })
     await db.workspace.delete({ where: { id: workspaceId } })
     await db.llmModelPrice.deleteMany({ where: { modelId } })
     await db.llmModel.delete({ where: { id: modelId } })
@@ -188,7 +182,7 @@ describe.skipIf(!enabled)('core credential cleanup with PostgreSQL', () => {
       await db.turnAssignment.create({
         data: {
           taskId,
-          siteId,
+          siteId: taskId,
           sessionId: 'synthetic-session',
           turnNo,
           executor: 'local',

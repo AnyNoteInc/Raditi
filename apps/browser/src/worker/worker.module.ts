@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common'
 import type { Registry } from '@prometheus-io/client'
 import type { BrowserSessionRuntime, CloudBrowserFactory } from '@repo/domain'
-import { getSiteAdapter } from '@repo/site-adapters'
 
 import type { InboxStorage } from '../attachments/attachments.ts'
 import { AttachmentsModule } from '../attachments/attachments.module.ts'
@@ -41,8 +40,6 @@ import { BrowserWorker } from './browser-worker.ts'
           runtime,
           browsers,
           inbox,
-          // The stack of the site picks its policy; this module names no CMS.
-          adapters: getSiteAdapter,
           registry,
         }),
       inject: [

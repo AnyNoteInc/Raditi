@@ -20,8 +20,9 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { SectionHeading } from '@/components/application/section-heading'
+import { newChatHref } from '@/components/chat/chat-address'
 import { keepChatDraft } from '@/components/chat/chat-draft'
-import { SectionTabs } from '@/components/site/site-section'
+import { SectionTabs } from '@/components/application/section-tabs'
 import { useTRPC } from '@/trpc/client'
 
 import { ScheduleNoticeBar, useScheduleActions, type ScheduleNotice } from './schedule-actions'
@@ -29,10 +30,8 @@ import { ScheduleDialog, type ScheduleDialogOpening } from './schedule-dialog'
 import { takeScheduleNotice } from './schedule-notice'
 import {
   chatDraftOf,
-  inProject,
   inScheduleTag,
   matchesSearch,
-  projectsOfSchedules,
   scheduleOrders,
   scheduleTags,
   sortSchedules,
@@ -237,7 +236,6 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
   const [opening, setOpening] = useState<ScheduleDialogOpening | null>(null)
   const opener = useRef<HTMLElement | null>(null)
   const [tag, setTag] = useState<ScheduleTag>('all')
-  const [project, setProject] = useState<string | null | 'all'>('all')
   const [order, setOrder] = useState<ScheduleOrder>('next')
   const [search, setSearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -281,15 +279,14 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
   }, [empty, phone])
   const searchable = all.length > SEARCH_ABOVE
   const query = searchable && searchOpen ? search : ''
-  const projects = projectsOfSchedules(all)
   const shownTag = filterOpen ? tag : 'all'
-  const shownProject = filterOpen && projects.length > 1 ? project : 'all'
-  const fits = (item: ScheduleItem) => inProject(item, shownProject) && matchesSearch(item, query)
+  // The buttons of the states alone: a task has no project to filter by (Зп57).
+  const fits = (item: ScheduleItem) => matchesSearch(item, query)
   const shown = sortSchedules(
     all.filter((item) => fits(item) && inScheduleTag(item, shownTag)),
     order,
   )
-  const filtered = shownTag !== 'all' || shownProject !== 'all' || query.trim() !== ''
+  const filtered = shownTag !== 'all' || query.trim() !== ''
   const used = new Set(
     all.flatMap((item) => (item.templateSlug === null ? [] : [item.templateSlug])),
   )
@@ -300,11 +297,10 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
   }
   function inChat() {
     keepChatDraft(userId, chatDraftOf(null))
-    router.push('/chats/new')
+    router.push(newChatHref())
   }
   function reset() {
     setTag('all')
-    setProject('all')
     setSearch('')
     searchInput.current?.focus()
   }
@@ -476,39 +472,6 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
               </Button>
             ))}
           </Box>
-          {projects.length > 1 ? (
-            <Box role="group" aria-label={scheduledTexts.projectGroup} sx={chipRowSx}>
-              {[{ id: 'all' as const, name: scheduledTexts.allProjects }, ...projects].map(
-                (each) => {
-                  const pressed = project === each.id
-                  const count = all.filter(
-                    (item) =>
-                      inProject(item, each.id) &&
-                      matchesSearch(item, query) &&
-                      inScheduleTag(item, tag),
-                  ).length
-                  return (
-                    <Button
-                      key={each.id ?? 'none'}
-                      aria-pressed={pressed}
-                      onClick={() => setProject(each.id)}
-                      variant={pressed ? 'contained' : 'outlined'}
-                      size="small"
-                      sx={pillSx}
-                    >
-                      {each.name ?? scheduledTexts.noProject}
-                      <Box
-                        component="span"
-                        sx={{ ml: 1, opacity: 0.75, fontVariantNumeric: 'tabular-nums' }}
-                      >
-                        {count}
-                      </Box>
-                    </Button>
-                  )
-                },
-              )}
-            </Box>
-          ) : null}
         </Box>
       ) : null}
 

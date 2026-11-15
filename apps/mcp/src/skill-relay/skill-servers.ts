@@ -27,22 +27,23 @@ export interface RelayOutcome {
 }
 
 export interface SkillServerStore {
-  /** The server of a site by its name; null for one that is off or has no authorization. */
-  find(siteId: string, name: string): Promise<RelayedServer | null>
+  /** The server of a workspace by its name; null for one that is off or has no authorization. */
+  find(workspaceId: string, name: string): Promise<RelayedServer | null>
   /** Writes the state of its authorization; a server turned to none meanwhile is left alone. */
-  record(siteId: string, name: string, outcome: RelayOutcome): Promise<void>
+  record(workspaceId: string, name: string, outcome: RelayOutcome): Promise<void>
 }
 
 /**
- * The servers of `site_agent_skills` (docs/plan/81-mcp-server-credentials.md). The site comes from
- * the admission of the turn, never from the request: a turn reaches only its own site's servers.
+ * The servers of `workspace_agent_skills` (docs/plan/81-mcp-server-credentials.md). The workspace comes
+ * from the admission of the turn, never from the request: a turn reaches only its own workspace's
+ * servers.
  */
 export class PostgresSkillServers implements SkillServerStore {
-  constructor(private readonly prisma: Pick<PrismaClient, 'siteAgentSkill'>) {}
+  constructor(private readonly prisma: Pick<PrismaClient, 'workspaceAgentSkill'>) {}
 
-  async find(siteId: string, name: string): Promise<RelayedServer | null> {
-    const row = await this.prisma.siteAgentSkill.findUnique({
-      where: { siteId_name: { siteId, name } },
+  async find(workspaceId: string, name: string): Promise<RelayedServer | null> {
+    const row = await this.prisma.workspaceAgentSkill.findUnique({
+      where: { workspaceId_name: { workspaceId, name } },
       select: {
         url: true,
         enabled: true,
@@ -74,9 +75,9 @@ export class PostgresSkillServers implements SkillServerStore {
     }
   }
 
-  async record(siteId: string, name: string, outcome: RelayOutcome): Promise<void> {
-    await this.prisma.siteAgentSkill.updateMany({
-      where: { siteId, name, authKind: { not: 'none' } },
+  async record(workspaceId: string, name: string, outcome: RelayOutcome): Promise<void> {
+    await this.prisma.workspaceAgentSkill.updateMany({
+      where: { workspaceId, name, authKind: { not: 'none' } },
       data: { authState: outcome.state, authError: outcome.error, authCheckedAt: outcome.at },
     })
   }

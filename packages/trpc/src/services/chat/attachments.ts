@@ -19,7 +19,6 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
-import { accessibleSite, siteNotFound } from '../site-basics.ts'
 import { accessibleTask, taskNotFound } from './access.ts'
 import type { ChatContext } from './context.ts'
 import { personalWorkspaceOf, underDialogLock } from './dialog-lock.ts'
@@ -56,7 +55,7 @@ export const attachmentIdsSchema = z
 
 /**
  * Binds the files of a message to its task in the transaction that writes the message: all or
- * none, each `ready`, unsent, of this uploader and of the task's workspace and site (Б26). A file
+ * none, each `ready`, unsent, of this uploader and of the task's workspace (Б26). A file
  * that is not refuses the message: the caller's transaction rolls back.
  */
 export async function bindMessageAttachments(
@@ -66,12 +65,11 @@ export async function bindMessageAttachments(
     taskId: string
     userId: string
     workspaceId: string
-    /** null — a chat without a project (docs/plan/61-chats-first.md, §5.9). */
-    siteId: string | null
   },
 ): Promise<void> {
   if (input.ids.length === 0) return
-  if (!(await bindAttachments(tx, input))) throw attachmentNotReady()
+  // A chat has no site (docs/plan/83-remove-projects.md, БП1).
+  if (!(await bindAttachments(tx, { ...input }))) throw attachmentNotReady()
 }
 
 /** `attachments` of a `feed.request`: absent when the message has none. */
@@ -80,8 +78,6 @@ export const requestAttachments = (ids: readonly string[]): { attachments?: stri
 
 export interface AttachmentStart {
   userId: string
-  /** null — a file of a chat without a project, which goes to the user's personal workspace. */
-  siteId: string | null
   /** Makes the personal workspace of a new user: the file may come before the first message. */
   appEnv: AppEnv
   /** As the browser gave it: cleaned here. */
@@ -106,12 +102,10 @@ function startRefusal(input: AttachmentStart): AttachmentRefusal | null {
 }
 
 /**
- * `attachment.start`: a file of a site the user may open, or of a chat without a project, is
- * announced (`uploading`), with a day to be sent (`ATTACHMENT_UNSENT_HOURS`). Answers its id and
- * where the bytes go. A file the rules refuse answers why, in the client's words; a site of someone
- * else answers as one that does not exist. Without a site the file goes to the personal workspace,
- * made here for a new user (docs/plan/61-chats-first.md, К15) after every refusal: one that is
- * refused makes nothing.
+ * `attachment.start`: a file of a chat is announced (`uploading`), with a day to be sent
+ * (`ATTACHMENT_UNSENT_HOURS`). Answers its id and where the bytes go. A file the rules refuse
+ * answers why, in the client's words. The file goes to the personal workspace, made here for a new
+ * user (docs/plan/61-chats-first.md, К15) after every refusal: one that is refused makes nothing.
  */
 export async function startAttachment(
   db: PrismaClient,
@@ -122,19 +116,10 @@ export async function startAttachment(
   // The rules of the domain once more, as the row will be written: the clean name and the listed
   // type spelt as the list spells it.
   const file = attachmentStartInputSchema.parse({
-    siteId: input.siteId,
     name: input.name,
     size: input.size,
     type: attachmentTypeOf(input.type)?.mime,
   })
-  const site =
-    file.siteId === null
-      ? null
-      : await db.site.findFirst({
-          where: accessibleSite(input.userId, file.siteId),
-          select: { id: true, workspaceId: true },
-        })
-  if (file.siteId !== null && site === null) throw siteNotFound()
   const unsent = await db.attachment.count({
     where: {
       uploadedById: input.userId,
@@ -143,19 +128,18 @@ export async function startAttachment(
     },
   })
   if (unsent >= UNSENT_ATTACHMENTS_PER_USER) throw attachmentsLimit()
-  const workspaceId =
-    site?.workspaceId ??
-    (await personalWorkspaceOf(db, { userId: input.userId, appEnv: input.appEnv })).id
+  const workspaceId = (
+    await personalWorkspaceOf(db, { userId: input.userId, appEnv: input.appEnv })
+  ).id
   const row = await createAttachment(db, {
     workspaceId,
-    siteId: site?.id ?? null,
     uploadedById: input.userId,
     fileName: file.name,
     contentType: file.type,
     sizeBytes: file.size,
   })
   // The membership was lost between the two reads.
-  if (row === null) throw siteNotFound()
+  if (row === null) throw taskNotFound()
   return { attachmentId: row.id, uploadPath: attachmentUploadPath(row.id) }
 }
 
@@ -174,7 +158,7 @@ export async function removeUnsentAttachment(
     const sent = await db.attachment.count({
       where: { id: input.attachmentId, uploadedById: input.userId, status: 'bound' },
     })
-    throw sent > 0 ? attachmentSent() : siteNotFound()
+    throw sent > 0 ? attachmentSent() : taskNotFound()
   }
   await chat.storage().delete('inbox', key)
 }
@@ -228,7 +212,6 @@ export async function bindChooserAttachments(
       taskId: task.id,
       userId: input.userId,
       workspaceId: task.workspaceId,
-      siteId: task.siteId,
     })
     return { bound: input.ids.length }
   })

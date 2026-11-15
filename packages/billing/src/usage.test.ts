@@ -107,8 +107,6 @@ describe('usage summary DTO', () => {
   const tariff = {
     credits,
     today,
-    sites: { count: 2, max: 3 },
-    bySite: [],
   }
   const subscription = {
     id: WORKSPACE,
@@ -122,7 +120,6 @@ describe('usage summary DTO', () => {
       creditsPerDay: 100,
       creditsPer5h: null,
       creditsPerWeek: null,
-      maxSites: 3,
     },
     period: { start: PERIOD_START, end: PERIOD_END },
     autoRenewal: false,
@@ -274,18 +271,6 @@ describe('usage summary DTO', () => {
       { tariff: { ...tariff, today: null } },
     ],
     ['a fraction of a credit', { pack: { left: 9.5, held: 0 }, totalLeft: 175.5 }],
-    [
-      'a site without a charged credit',
-      { tariff: { ...tariff, bySite: [{ siteId: WORKSPACE, name: 'Сайт', credits: 0 }] } },
-    ],
-    [
-      'a line without a project that names one',
-      { tariff: { ...tariff, bySite: [{ siteId: null, name: 'Сайт', credits: 5 }] } },
-    ],
-    [
-      'a project without a name',
-      { tariff: { ...tariff, bySite: [{ siteId: WORKSPACE, name: null, credits: 5 }] } },
-    ],
     ['a summary without its history', { history: undefined }],
     ['a summary that does not say whether a task would be taken', { newTask: undefined }],
     ['a task that is taken for a reason', { newTask: { allowed: true, reason: 'empty' } }],
@@ -321,7 +306,6 @@ describe('usage history line DTO', () => {
     credits: 17,
     from: { tariff: 5, gift: 0, pack: 12 },
     task: { id: WORKSPACE, title: 'Новый блок', status: 'done' },
-    site: { id: WORKSPACE, name: 'Блог' },
   }
   const nothing = { credits: null, from: null }
 
@@ -330,7 +314,6 @@ describe('usage history line DTO', () => {
     ['a task in work', { outcome: 'held', credits: 45, from: { tariff: 45, gift: 0, pack: 0 } }],
     ['a task that ended without a charge', { outcome: 'unpaid', ...nothing }],
     ['an undo', { outcome: 'free', ...nothing }],
-    ['a chat without a project', { site: null }],
   ])('accepts %s', (_case, patch) => {
     expect(usageEntrySchema.safeParse({ ...line, ...patch }).success).toBe(true)
   })
@@ -450,7 +433,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     const { tariff = 300, pack = 0 } = options
     const { userId, workspaceId } = await fixtures.workspace()
     workspaceIds.push(workspaceId)
-    const plan = await fixtures.plan({ creditsPerMonth: 300, maxSites: 2, ...options.plan })
+    const plan = await fixtures.plan({ creditsPerMonth: 300, ...options.plan })
     const subscription =
       options.subscription === null
         ? null
@@ -488,7 +471,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       kind: 'pack',
       price: '1990.00',
       creditsPerMonth: null,
-      maxSites: null,
       packCredits: credits,
     })
     const order = await fixtures.order({
@@ -500,17 +482,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     await db.$transaction((tx) => grantPackCredits(tx, { workspaceId, orderId: order.id, credits }))
   }
 
-  const site = (workspaceId: string, name: string) =>
-    db.site.create({
-      data: { workspaceId, name, url: `https://${randomUUID()}.example.ru`, stack: 'wordpress' },
-    })
+  /** What a project of the workspace was: a name, and an id the chats no longer carry. */
+  const site = async (workspaceId: string, name: string) => {
+    void workspaceId
+    return { id: randomUUID(), name }
+  }
 
-  /** A task of the site in the class a new task of the queue has. */
+  /** A chat in the class a new task of the queue has; the site went with projects (plan 83). */
   const task = (
     workspaceId: string,
     siteId: string,
     data: Partial<Prisma.TaskUncheckedCreateInput> = {},
-  ) => db.task.create({ data: { workspaceId, siteId, modelClass: 'standard', ...data } })
+  ) => {
+    void siteId
+    return db.task.create({ data: { workspaceId, modelClass: 'standard', ...data } })
+  }
 
   /**
    * Sets the step of an attempt aside — 45 credits, or what is free —, as the queue did before
@@ -671,7 +657,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
           creditsPerDay: 50,
           creditsPer5h: null,
           creditsPerWeek: null,
-          maxSites: 2,
           pageSites: null,
           pageCustomNames: false,
         },
@@ -684,8 +669,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       tariff: {
         credits: scale(FULL),
         today: dayOf(50, 0, 0, 300),
-        sites: { count: 0, max: 2 },
-        bySite: [],
       },
       gift: { left: 0, held: 0, granted: false },
       pack: { left: 0, held: 0 },
@@ -733,7 +716,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     expect(summary.tariff).toMatchObject({
       credits: FULL,
       today: dayOf(50, 0, 0, 300),
-      bySite: [],
     })
     expect(summary.history).toEqual(noHistory)
   })
@@ -759,13 +741,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
     expect(summary.pack).toEqual({ left: 100, held: 0 })
     expect(summary.totalLeft).toBe(400)
-    expect(summary.tariff).toMatchObject({ credits: FULL, bySite: [] })
+    expect(summary.tariff).toMatchObject({ credits: FULL })
     expect(summary.history).toEqual(noHistory)
   })
 
   describe('what the quota went to', () => {
     it('tells every outcome of a task: charged, in work, without a charge and free', async () => {
-      const { workspaceId } = await funded({ pack: 100, plan: { maxSites: 3 } })
+      const { workspaceId } = await funded({ pack: 100 })
       const bakery = await site(workspaceId, 'Пекарня «Добро»')
       const cafe = await site(workspaceId, 'Кофейня на Лесной')
       const done = await task(workspaceId, bakery.id, {
@@ -810,8 +792,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         // What the day took of the tariff: the 5 charged and the 45 set aside; the reserves that
         // came back took nothing. This plan has no daily limit.
         today: dayOf(null, 5, 45, 250),
-        sites: { count: 2, max: 3 },
-        bySite: [{ siteId: bakery.id, name: 'Пекарня «Добро»', credits: 5 }],
       })
       const from = (tariff: number) => ({ tariff, gift: 0, pack: 0 })
       const nothing = { credits: null, from: null }
@@ -823,7 +803,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
             outcome: 'free',
             ...nothing,
             task: { id: undo.id, title: 'Вернул прежний баннер', status: 'done' },
-            site: { id: cafe.id, name: 'Кофейня на Лесной' },
           },
           {
             id: running.id,
@@ -833,7 +812,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
             from: from(45),
             // A summary of spaces is no title.
             task: { id: running.id, title: null, status: 'running' },
-            site: { id: cafe.id, name: 'Кофейня на Лесной' },
           },
           {
             id: rolledBack.id,
@@ -841,7 +819,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
             outcome: 'unpaid',
             ...nothing,
             task: { id: rolledBack.id, title: null, status: 'rolled_back' },
-            site: { id: cafe.id, name: 'Кофейня на Лесной' },
           },
           {
             id: cancelled.id,
@@ -849,7 +826,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
             outcome: 'unpaid',
             ...nothing,
             task: { id: cancelled.id, title: null, status: 'cancelled' },
-            site: { id: bakery.id, name: 'Пекарня «Добро»' },
           },
           {
             id: failed.id,
@@ -857,7 +833,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
             outcome: 'unpaid',
             ...nothing,
             task: { id: failed.id, title: null, status: 'failed' },
-            site: { id: bakery.id, name: 'Пекарня «Добро»' },
           },
           {
             id: done.id,
@@ -866,7 +841,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
             credits: 5,
             from: from(5),
             task: { id: done.id, title: 'Поправил часы работы в контактах', status: 'done' },
-            site: { id: bakery.id, name: 'Пекарня «Добро»' },
           },
         ],
         nextCursor: null,
@@ -922,7 +896,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       )
       expect(done.pack).toEqual({ left: 88, held: 0 })
       // One line and one sum by site, whatever accounts paid.
-      expect(done.tariff?.bySite).toEqual([{ siteId: shop.id, name: 'Магазин', credits: 17 }])
       expect(done.history.items).toMatchObject([
         { id: block.id, outcome: 'charged', credits: 17, from: { tariff: 5, gift: 0, pack: 12 } },
       ])
@@ -930,41 +903,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     })
 
     // docs/plan/61-chats-first.md, §5.10: a charge of a chat without a project never drops out.
-    it('counts what chats without a project took as one more line, the last of equals', async () => {
-      const { workspaceId } = await funded({ tariff: 300, plan: startDay })
-      const shop = await site(workspaceId, 'Магазин')
-      const onSite = await charged(workspaceId, shop.id, NOW, 9)
-      const chatOf = async (minutes: number, credits: number) => {
-        const { id } = await db.task.create({
-          data: {
-            workspaceId,
-            siteId: null,
-            needsRepository: false,
-            needsBrowser: false,
-            modelClass: 'standard',
-            status: 'done',
-          },
-        })
-        await place(workspaceId, id, { now: minutesAfter(minutes) })
-        await charge(id, credits, { now: minutesAfter(minutes + 20) })
-        return id
-      }
-      const first = await chatOf(1, 5)
-      const second = await chatOf(2, 4)
-
-      const summary = await summaryAt(workspaceId)
-
-      expect(summary.tariff?.bySite).toEqual([
-        { siteId: shop.id, name: 'Магазин', credits: 9 },
-        { siteId: null, name: null, credits: 9 },
-      ])
-      expect(summary.history.items.map(({ id, site, credits }) => [id, site, credits])).toEqual([
-        [second, null, 4],
-        [first, null, 5],
-        [onSite.taskId, { id: shop.id, name: 'Магазин' }, 9],
-      ])
-    })
-
     it('shows a task whose reserve stands on three accounts as one line, and sums what they paid', async () => {
       const { userId, workspaceId } = await funded({ tariff: 5, pack: 100, plan: startDay })
       await db.$transaction((tx) => grantSignupGift(tx, { userId, workspaceId }))
@@ -990,7 +928,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       await charge(big.id, 100)
       const done = await summaryAt(workspaceId)
 
-      expect(done.tariff?.bySite).toEqual([{ siteId: shop.id, name: 'Магазин', credits: 100 }])
       expect(done.history.items).toMatchObject([
         { id: big.id, outcome: 'charged', credits: 100, from: { tariff: 5, gift: 50, pack: 45 } },
       ])
@@ -1049,7 +986,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         // Only the tariff counts in the day: the 5 the first task paid.
         today: dayOf(null, 5, 0, 0),
         // Five from the tariff and 17 from the pack.
-        bySite: [{ siteId: shop.id, name: 'Магазин', credits: 22 }],
       })
       // The waiting task took everything the pack had left.
       expect(summary.pack).toEqual({ left: 0, held: 43 })
@@ -1067,47 +1003,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         [fromPack.taskId, 'charged', 17, { tariff: 0, gift: 0, pack: 17 }],
         [first.taskId, 'charged', 5, { tariff: 5, gift: 0, pack: 0 }],
       ])
-    })
-
-    it('sums the charged credits of each site and puts the largest first', async () => {
-      const { workspaceId } = await funded({ plan: { maxSites: 3 } })
-      const quiet = await site(workspaceId, 'Аптека')
-      const busy = await site(workspaceId, 'Яблоко')
-      const equal = await site(workspaceId, 'Булочная')
-      const idle = await site(workspaceId, 'Без задач')
-      for (const [target, count] of [
-        [quiet, 2],
-        [busy, 3],
-        [equal, 2],
-      ] as const) {
-        for (let index = 0; index < count; index += 1) await charged(workspaceId, target.id)
-      }
-      // Reserved and returned credits are not charged ones.
-      const inWork = await task(workspaceId, idle.id)
-      await place(workspaceId, inWork.id)
-      const back = await task(workspaceId, idle.id, { status: 'cancelled' })
-      await place(workspaceId, back.id)
-      await release(back.id)
-
-      const tariff = await tariffAt(workspaceId)
-
-      expect(tariff.bySite).toEqual([
-        { siteId: busy.id, name: 'Яблоко', credits: 15 },
-        // Equal sites go by name.
-        { siteId: quiet.id, name: 'Аптека', credits: 10 },
-        { siteId: equal.id, name: 'Булочная', credits: 10 },
-      ])
-      expect(tariff.credits).toEqual(
-        scale({
-          granted: 300,
-          charged: 35,
-          held: 45,
-          expired: 0,
-          left: 220,
-          heldEarlier: 0,
-        }),
-      )
-      expect(tariff.sites).toEqual({ count: 4, max: 3 })
     })
 
     it('shows a task that was tried again as one line, at the moment of its first reserve', async () => {
@@ -1130,7 +1025,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       const summary = await summaryAt(workspaceId)
 
       expect(summary.tariff?.credits).toMatchObject({ charged: 17, held: 0, left: 283 })
-      expect(summary.tariff?.bySite).toEqual([{ siteId: blog.id, name: 'Блог', credits: 17 }])
       expect(
         summary.history.items.map(({ id, at, outcome, credits }) => [id, at, outcome, credits]),
       ).toEqual([[retried.id, minutesAfter(0), 'charged', 17]])
@@ -1198,8 +1092,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         credits: scale({ ...FULL, carried: 255, left: 555, heldEarlier: 45, carryLimit: 300 }),
         // The reserve of the 17th takes nothing of the 18th.
         today: dayOf(50, 0, 0, 555),
-        sites: { count: 1, max: 2 },
-        bySite: [],
       })
       expect(renewed.history).toEqual(noHistory)
       expect(renewed).toMatchObject({ totalLeft: 555, spendable: 555, setAside: 45 })
@@ -1218,7 +1110,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       expect(settled.tariff?.credits).toEqual(
         scale({ ...FULL, carried: 255, left: 555, carryLimit: 300 }),
       )
-      expect(settled.tariff?.bySite).toEqual([])
       expect(settled.history).toEqual(noHistory)
     })
 
@@ -1251,7 +1142,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       expect(settled.tariff?.credits).toEqual(
         scale({ ...FULL, carried: 255, charged: 5, left: 550, carryLimit: 300 }),
       )
-      expect(settled.tariff?.bySite).toEqual([{ siteId: blog.id, name: 'Блог', credits: 5 }])
       expect(settled.history).toEqual(noHistory)
 
       // Once there is no period — the tariff has ended —, the history has no lower bound: the
@@ -1270,7 +1160,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
           credits: 50,
           from: { tariff: 50, gift: 0, pack: 0 },
           task: { id: long.id, title: null, status: 'awaiting_user' },
-          site: { id: blog.id, name: 'Блог' },
         },
       ])
     })
@@ -1291,7 +1180,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       const summary = await summaryAt(workspaceId, PERIOD_START)
 
       expect(summary.tariff?.credits).toEqual(scale({ ...FULL, charged: 5, held: 45, left: 250 }))
-      expect(summary.tariff?.bySite).toEqual([{ siteId: blog.id, name: 'Блог', credits: 5 }])
       expect(summary.history.items.map(({ id, at }) => [id, at]).sort()).toEqual(
         [
           [early.taskId, PERIOD_START],
@@ -1431,7 +1319,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     /** A user who paid for a tariff of 300 credits on 1 June 2026, through the checkout. */
     async function subscribed() {
       const { userId } = await fixtures.user()
-      const plan = await fixtures.plan({ isActive: true, creditsPerMonth: 300, maxSites: 2 })
+      const plan = await fixtures.plan({ isActive: true, creditsPerMonth: 300 })
       const { shop, deps } = billingTestDeps(db)
       const { orderId } = await startCheckout(deps, {
         userId,
@@ -1556,7 +1444,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       expect(after.tariff?.credits).toEqual(
         scale({ ...FULL, carried: 187, left: 487, carryLimit: 300 }),
       )
-      expect(after.tariff?.bySite).toEqual([])
       expect(after.history).toEqual(noHistory)
     })
 
@@ -1807,8 +1694,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       tariff: {
         credits: FULL,
         today: dayOf(null, 0, 0, 300),
-        sites: { count: 0, max: 2 },
-        bySite: [],
       },
       pack: { left: 0, held: 0 },
       totalLeft: 300,

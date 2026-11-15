@@ -21,15 +21,14 @@ const change = {
   action: 'created',
   scheduleId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7de1',
   name: 'Проверка сайта',
-  instructions: 'Откройте сайт и пройдите главную.\nФормы не отправляйте.',
+  instructions: 'Открой сайт kofe.ru и пройди главную.\nФормы не отправляй.',
   triggers: [{ kind: 'weekdays', time: '09:00' }],
   timezone: 'Europe/Moscow',
   nextRunAt: '2026-11-16T06:00:00.000Z',
-  siteId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7de2',
   effort: 'low',
   notify: true,
 } as const
-const left = { v: 1, action: 'create', name: 'Заявки за сутки', reason: 'limit' } as const
+const left = { v: 1, action: 'create', name: 'Курс валют', reason: 'limit' } as const
 
 const { v: _v, ...shownChange } = change
 
@@ -65,7 +64,17 @@ describe('feed.schedule_change', () => {
     expect(refused({ nextRunAt: 'завтра в 9:00' })).toBe(false)
     expect(refused({ effort: 'medium' })).toBe(false)
     expect(refused({ extra: true })).toBe(false)
-    expect(refused({ nextRunAt: null, siteId: null, triggers: [] })).toBe(true)
+    expect(refused({ nextRunAt: null, triggers: [] })).toBe(true)
+    // A task has no project (Зп44): the writer names none.
+    expect(refused({ siteId: null })).toBe(false)
+  })
+
+  it('reads a row written before plan 83 without the project it named', () => {
+    const older = { ...change, siteId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7de2' }
+    expect(readFeedRow('feed.schedule_change', older)).toEqual({
+      type: 'feed.schedule_change',
+      ...shownChange,
+    })
   })
 
   it('reads what a newer writer may have stored as the less it knows', () => {
@@ -156,7 +165,7 @@ describe('the rows in the export of a chat', () => {
     expect(text).toContain('«Проверка сайта»')
     expect(text).toContain('По будням в 9:00. Следующий запуск: завтра в 9:00.')
     expect(text).toContain(
-      'Инструкция:\n\nОткройте сайт и пройдите главную.\nФормы не отправляйте.',
+      'Инструкция:\n\nОткрой сайт kofe.ru и пройди главную.\nФормы не отправляй.',
     )
   })
 

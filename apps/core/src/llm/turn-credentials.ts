@@ -8,8 +8,6 @@ import {
   DomainError,
   envVarLimits,
   envVarNameProblem,
-  envVarReachesAgent,
-  envVarReachesTask,
   envVarValueSchema,
   isDomainError,
   leaseLost,
@@ -17,7 +15,6 @@ import {
   llmPriceMissing,
   pickAccount,
   poolPolicy,
-  siteIdOf,
   subscriptionBusy,
   subscriptionWait,
   turnCredentialExpiresAt,
@@ -37,6 +34,8 @@ import {
   type TurnCredentialRef,
   type TurnCredentialSource,
   type TurnCredentialValues,
+  workspaceEnvVarLimits,
+  workspaceEnvVarsReachAgent,
 } from '@repo/domain'
 import {
   decodeLimitWindows,
@@ -53,10 +52,10 @@ import {
 import { z } from 'zod'
 
 import {
-  readSiteEnvValues,
-  readSiteEnvValuesToRefuse,
-  type SiteEnvVarVersion,
-} from '../site-env/site-env-values.ts'
+  readWorkspaceEnvValues,
+  readWorkspaceEnvValuesToRefuse,
+  type WorkspaceEnvVarVersion,
+} from '../workspace-env/workspace-env-values.ts'
 
 type Transaction = Prisma.TransactionClient
 type Database = Pick<PrismaClient, '$transaction'>
@@ -79,8 +78,8 @@ const storedGrantSchema = turnCredentialGrantSchema
     )
   })
 /**
- * The client's variables a turn's agent commands get (docs/plan/53-chat-preview-release.md, Р13),
- * by name; the driver spreads them over as many secret files as they take (`envFiles`).
+ * The variables of the workspace a turn's agent commands get (docs/plan/83-remove-projects.md,
+ * БП4), by name; the driver spreads them over as many secret files as they take (`envFiles`).
  */
 const envValuesSchema = z
   .record(
@@ -89,10 +88,10 @@ const envValuesSchema = z
   )
   .refine((values) => Object.keys(values).length > 0)
 /**
- * Every value a site may have, as one JSON object in the record of the turn: 64 values of 8 KiB,
- * each escaped up to sixfold (a control character is `\u0001`), with their names.
+ * Every value a workspace may have, as one JSON object in the record of the turn: 64 values of
+ * 8 KiB, each escaped up to sixfold (a control character is `\u0001`), with their names.
  */
-const ENV_JSON_CHARS = envVarLimits.perSite * (6 * envVarLimits.valueMaxBytes + 80)
+const ENV_JSON_CHARS = workspaceEnvVarLimits.perWorkspace * (6 * envVarLimits.valueMaxBytes + 80)
 const envJson = z
   .string()
   .max(ENV_JSON_CHARS)
@@ -132,12 +131,10 @@ type KeyRow = Prisma.LlmKeyGetPayload<Record<string, never>>
 interface OwnedTask {
   id: string
   attempt: number
-  /** null — a chat without a project: it leases by its own id (`leaseScopeOf`). */
-  siteId: string | null
+  /** The workspace whose variables the agent's commands get (БП4). */
+  workspaceId: string
   dataClass: 'synthetic' | 'client'
-  /** `tasks.needs_repository`: the task has a working copy, a candidate and a release. */
-  needsRepository: boolean
-  /** `tasks.needs_browser`: the task drives the live site through the `web` tools (plan 57, Б2). */
+  /** `tasks.needs_browser`: the chat has the cloud browser (plan 57, Б2). */
   needsBrowser: boolean
   now: Date
   modelClass?: string | null
@@ -163,8 +160,8 @@ interface Selection {
 }
 type Preparation =
   | { kind: 'existing'; key: KeyRow; now: Date }
-  /** `variables`: those of the site the agent's commands get, at the versions their rows name. */
-  | ({ kind: 'selection'; variables: SiteEnvVarVersion[] } & Selection)
+  /** `variables`: those the agent's commands get, at the versions their rows name. */
+  | ({ kind: 'selection'; variables: WorkspaceEnvVarVersion[] } & Selection)
 
 export interface GatewayTurnCredentialsOptions {
   prisma: Database
@@ -387,20 +384,19 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
   }
 
   /**
-   * The values of the variables the agent's commands get (Р13), read from Vault at the version
+   * The values of the variables the agent's commands get (БП4), read from Vault at the version
    * each row names: one written after the row was read waits for the next turn, and one removed
    * meanwhile is left out. A JSON object for the turn's record, or null when nothing is left.
    */
   async #agentValues(
     task: OwnedTask,
-    variables: readonly SiteEnvVarVersion[],
+    variables: readonly WorkspaceEnvVarVersion[],
   ): Promise<string | null> {
-    // Variables belong to a site: only with some is there one to read them under.
     if (variables.length === 0) return null
-    const values = await readSiteEnvValues(this.#secrets, siteIdOf(task), variables)
+    const values = await readWorkspaceEnvValues(this.#secrets, task.workspaceId, variables)
     if (Object.keys(values).length === 0) return null
     const json = JSON.stringify(values)
-    // More than a site may have: only rows two writers added at once give that.
+    // More than a workspace may have: only rows two writers added at once give that.
     if (json.length > ENV_JSON_CHARS)
       throw badRequest('The client variables for the agent do not fit one turn', {
         reason: 'client_variables_too_large',
@@ -409,24 +405,24 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
   }
 
   /**
-   * The current values of every variable of the turn's site, whatever their recipients and the
-   * version the turn got (Р13): what the turn's candidate is refused for besides its own.
+   * The current values of every variable of the turn's workspace, whatever the version the turn
+   * got (БП4): what the text the turn keeps is refused for besides its own.
    */
   async siteValues(input: TurnCredentialRef): Promise<string[]> {
     const ref = turnCredentialRefSchema.parse(input)
     return this.#safe(async () => {
       const rows = await this.#transaction(
         (tx) =>
-          tx.$queryRaw<{ siteId: string; name: string }[]>`
-          SELECT v.site_id AS "siteId", v.name FROM tasks t
-          JOIN site_env_vars v ON v.site_id = t.site_id
+          tx.$queryRaw<{ workspaceId: string; name: string }[]>`
+          SELECT v.workspace_id AS "workspaceId", v.name FROM tasks t
+          JOIN workspace_env_vars v ON v.workspace_id = t.workspace_id
           WHERE t.id = ${ref.taskId}::uuid ORDER BY v.name`,
       )
-      const siteId = rows[0]?.siteId
-      if (siteId === undefined) return []
-      return readSiteEnvValuesToRefuse(
+      const workspaceId = rows[0]?.workspaceId
+      if (workspaceId === undefined) return []
+      return readWorkspaceEnvValuesToRefuse(
         this.#secrets,
-        siteId,
+        workspaceId,
         rows.map((row) => row.name),
       )
     })
@@ -852,28 +848,25 @@ async function clock(tx: Transaction): Promise<Date> {
 /** The task as `admit` reads it: without a lease, and without locking anything. */
 async function unfencedTask(tx: Transaction, taskId: string): Promise<OwnedTask | null> {
   const rows = await tx.$queryRaw<OwnedTask[]>`
-    SELECT t.id, t.attempt, t.site_id AS "siteId", t.model_class::text AS "modelClass",
-      t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
-      w.data_class::text AS "dataClass", clock_timestamp() AS now
+    SELECT t.id, t.attempt, t.workspace_id AS "workspaceId", t.model_class::text AS "modelClass",
+      t.needs_browser AS "needsBrowser", w.data_class::text AS "dataClass",
+      clock_timestamp() AS now
     FROM tasks t
     JOIN workspaces w ON w.id = t.workspace_id
-    LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-    WHERE t.id = ${taskId}::uuid AND (t.site_id IS NULL OR s.id IS NOT NULL)`
+    WHERE t.id = ${taskId}::uuid`
   return rows[0] ?? null
 }
 async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<OwnedTask> {
   // The turn sends what the client gave, so the 152-FZ gate reads the data class of the task's
-  // workspace, with or without a site. A task row whose site is of another workspace owns
-  // nothing, as in MCP access: `LEFT JOIN` finds no site, and the condition refuses it.
+  // workspace. The lease of a chat is its own row (docs/plan/83-remove-projects.md, БП6).
   const rows = await tx.$queryRaw<OwnedTask[]>`
-    SELECT t.id, t.attempt, t.site_id AS "siteId", t.model_class::text AS "modelClass",
-      t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
-      w.data_class::text AS "dataClass", clock_timestamp() AS now
+    SELECT t.id, t.attempt, t.workspace_id AS "workspaceId", t.model_class::text AS "modelClass",
+      t.needs_browser AS "needsBrowser", w.data_class::text AS "dataClass",
+      clock_timestamp() AS now
     FROM tasks t
     JOIN workspaces w ON w.id = t.workspace_id
-    LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-    JOIN site_leases l ON l.site_id IN (t.id, t.site_id)
-    WHERE t.id = ${ref.taskId}::uuid AND (t.site_id IS NULL OR s.id IS NOT NULL)
+    JOIN site_leases l ON l.site_id = t.id
+    WHERE t.id = ${ref.taskId}::uuid
       AND l.holder_task_id = t.id AND l.epoch = ${ref.epoch}
       AND l.operation = 'turn' AND NOT l.held_for_operator AND l.expires_at > clock_timestamp()
     FOR UPDATE OF l`
@@ -884,37 +877,24 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
   return { ...rows[0], now: await clock(tx) }
 }
 /**
- * The variables of the task's site whose values the agent's commands get (Р13): the client
- * turned `to_agent` on with consent, and the workspace holds no real client data
- * (`envVarReachesAgent`; until the gate of 152-FZ, rule 1).
+ * The variables of the task's workspace whose values the agent's commands get (БП4): every chat
+ * of the workspace gets them all, unless it holds real client data (until the gate of 152-FZ,
+ * rule 1).
  */
-async function agentVariables(tx: Transaction, task: OwnedTask): Promise<SiteEnvVarVersion[]> {
-  // A task with the browser alone drives the live site through the `web` tools, and no candidate
-  // or release refuses a value written there: its commands get no client variable (plan 57, Б20;
-  // rule 2). A chat with the code too gets them without the wizard's accesses to the hosting's
-  // files (plan 61, К21 and 61.27; `envVarReachesTask`). A chat without a site has none at all.
-  if (!task.needsRepository || task.siteId === null) return []
-  const requirements = { repository: task.needsRepository, browser: task.needsBrowser }
-  const rows = await tx.siteEnvVar.findMany({
-    where: { siteId: siteIdOf(task), toAgent: true, agentConsentAt: { not: null } },
+async function agentVariables(tx: Transaction, task: OwnedTask): Promise<WorkspaceEnvVarVersion[]> {
+  if (!workspaceEnvVarsReachAgent(task.dataClass)) return []
+  const rows = await tx.workspaceEnvVar.findMany({
+    where: { workspaceId: task.workspaceId },
     orderBy: { name: 'asc' },
-    select: { name: true, keyVersion: true, toAgent: true, toPreview: true, agentConsentAt: true },
+    select: { name: true, keyVersion: true },
   })
-  return rows
-    .filter(
-      (row) =>
-        envVarReachesAgent(row, task.dataClass) &&
-        envVarReachesTask(row.name, requirements) &&
-        envVarNameProblem(row.name) === null,
-    )
-    .map((row) => ({ name: row.name, keyVersion: row.keyVersion }))
+  return rows.filter((row) => envVarNameProblem(row.name) === null)
 }
 async function assertCurrentFence(tx: Transaction, ref: TurnCredentialRef): Promise<void> {
   const rows = await tx.$queryRaw<{ owned: boolean }[]>`
     SELECT EXISTS (SELECT 1 FROM tasks t
-      LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-      JOIN site_leases l ON l.site_id IN (t.id, t.site_id)
-      WHERE t.id = ${ref.taskId}::uuid AND (t.site_id IS NULL OR s.id IS NOT NULL)
+      JOIN site_leases l ON l.site_id = t.id
+      WHERE t.id = ${ref.taskId}::uuid
         AND l.holder_task_id = t.id AND l.epoch = ${ref.epoch}
         AND l.operation = 'turn' AND NOT l.held_for_operator
         AND l.expires_at > clock_timestamp()) AS owned`

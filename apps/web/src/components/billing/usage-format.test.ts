@@ -9,12 +9,9 @@ import {
   heldEarlierNote,
   heldNote,
   ofDailyLimit,
-  ofSiteLimit,
   outcomeText,
   packCredits,
   packNote,
-  sitesMeterLabel,
-  sitesNote,
   tariffCreditsOfPeriod,
   tariffMeterLabel,
   tariffNote,
@@ -731,37 +728,6 @@ describe('the gift credits', () => {
   })
 })
 
-describe('the sites of a tariff', () => {
-  it.each([
-    [1, 'из 1 сайта'],
-    [3, 'из 3 сайтов'],
-    [15, 'из 15 сайтов'],
-    [21, 'из 21 сайта'],
-  ])('puts the limit %i after the number of sites', (max, text) => {
-    expect(ofSiteLimit(max)).toBe(text)
-  })
-
-  it.each([
-    [0, 'Добавлено 0 сайтов из 3'],
-    [1, 'Добавлен 1 сайт из 3'],
-    [2, 'Добавлено 2 сайта из 3'],
-    [5, 'Добавлено 5 сайтов из 3'],
-  ])('names the meter of %i sites', (count, label) => {
-    expect(sitesMeterLabel(count, 3)).toBe(label)
-  })
-
-  it('says how many more sites the tariff takes', () => {
-    expect(sitesNote(2, 3)).toBe('Можно добавить ещё один сайт.')
-    expect(sitesNote(0, 3)).toBe('Можно добавить ещё 3 сайта.')
-    expect(sitesNote(3, 15)).toBe('Можно добавить ещё 12 сайтов.')
-  })
-
-  it('says that a full tariff takes no more', () => {
-    expect(sitesNote(3, 3)).toBe('Больше сайтов на этом тарифе добавить нельзя.')
-    expect(sitesNote(5, 3)).toBe('Сайтов больше, чем входит в тариф: новый добавить нельзя.')
-  })
-})
-
 describe('a line of the history', () => {
   const from = (tariff: number, gift = 0, pack = 0) => ({ tariff, gift, pack })
   const nothing = { credits: null, from: null }
@@ -813,11 +779,11 @@ describe('a line of the history', () => {
   })
 
   it.each([
-    ['free', 'done', 'Отмена правки'],
-    ['free', 'running', 'Отмена правки'],
+    ['free', 'done', 'Отмена запроса'],
+    ['free', 'running', 'Отмена запроса'],
     ['unpaid', 'failed', 'Не получилось'],
     ['unpaid', 'cancelled', 'Задача отменена'],
-    ['unpaid', 'rolled_back', 'Вернули сайт как было'],
+    ['unpaid', 'rolled_back', 'Вернули как было'],
     // A reserve that expired under a task that still waits: nothing more to say.
     ['unpaid', 'awaiting_user', null],
     ['charged', 'done', null],

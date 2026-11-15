@@ -41,9 +41,9 @@ const isInvalidWrapping = (error: unknown) => error instanceof VaultError && err
 /**
  * Response wrapping over the shared session (spec §15; plan 53, Р29): `core` wraps the
  * credentials of one release attempt, the deploy job unwraps them once, and `core` sees whether
- * that happened (lookup) or ends it early (revocation by accessor). Policy `core-release` grants
- * `sys/wrapping/wrap`, `sys/wrapping/lookup` and `auth/token/revoke-accessor`; an unwrap needs no
- * policy, the wrapping token is its own credential.
+ * that happened (lookup) or ends it early (revocation by accessor). No policy grants
+ * `sys/wrapping/wrap`, `sys/wrapping/lookup` or `auth/token/revoke-accessor` since releases went
+ * with projects (plan 83); an unwrap needs no policy, the wrapping token is its own credential.
  * https://openbao.org/api-docs/system/wrapping-wrap/
  * https://openbao.org/api-docs/auth/token/#revoke-a-token-accessor
  */

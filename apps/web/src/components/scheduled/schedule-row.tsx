@@ -11,13 +11,7 @@ import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 
 import { ScheduleMoreMenu, ScheduleSwitch, type ScheduleActions } from './schedule-actions'
-import {
-  lastRunText,
-  projectText,
-  scheduleStateText,
-  scheduleWords,
-  type ScheduleItem,
-} from './schedule-model'
+import { lastRunText, scheduleStateText, scheduleWords, type ScheduleItem } from './schedule-model'
 import { scheduleRowTexts } from './schedule-texts'
 
 type Tone = 'text.secondary' | 'text.primary' | 'error.main' | 'primary.main'
@@ -69,8 +63,8 @@ export function RunStateMark({ state, text }: { state: ScheduledRunState; text?:
 }
 
 /**
- * A task of «Ваши» (Зп5): its name — the link to its page —, its schedules in words and its
- * project; under them its state and its latest run; the switch and «⋯» on the right.
+ * A task of «Ваши» (Зп5, Зп57): its name — the link to its page — and its schedules in words;
+ * under them its state and its latest run; the switch and «⋯» on the right.
  */
 export function ScheduleRow({
   item,
@@ -167,10 +161,6 @@ export function ScheduleRow({
       <Box sx={{ gridColumn: { xs: '1 / -1', sm: '2 / -1' }, minWidth: 0 }}>
         <Typography variant="body2" sx={{ color: 'text.secondary', overflowWrap: 'anywhere' }}>
           {nbsp(scheduleWords(item))}
-          <Box component="span" aria-hidden sx={{ mx: 0.75 }}>
-            ·
-          </Box>
-          {projectText(item)}
         </Typography>
         <Box
           sx={{

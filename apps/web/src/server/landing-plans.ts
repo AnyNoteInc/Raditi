@@ -61,7 +61,6 @@ async function readLandingPlans(): Promise<LandingPricingData> {
         creditsPerDay: true,
         creditsPer5h: true,
         creditsPerWeek: true,
-        maxSites: true,
         pageSites: true,
         pageCustomNames: true,
         packCredits: true,
@@ -80,8 +79,6 @@ async function readLandingPlans(): Promise<LandingPricingData> {
       // No daily limit is a term of its own (no plan on sale has one since 06.11.2026); a
       // limit that lets nothing through is not one the landing can sell.
       (row.creditsPerDay !== null && row.creditsPerDay <= 0) ||
-      row.maxSites === null ||
-      row.maxSites <= 0 ||
       row.price.isNegative()
     ) {
       continue
@@ -94,7 +91,6 @@ async function readLandingPlans(): Promise<LandingPricingData> {
       creditsPerDay: row.creditsPerDay,
       creditsPer5h: row.creditsPer5h,
       creditsPerWeek: row.creditsPerWeek,
-      maxSites: row.maxSites,
       pageSites: row.pageSites,
       pageCustomNames: row.pageCustomNames,
     })

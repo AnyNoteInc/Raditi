@@ -51,7 +51,6 @@ import {
   type BrowserSessionRuntime,
   type BrowserSessionState,
   type BrowserSessionStatus,
-  type BrowserSignIn,
   type BrowserStreamRefusal,
   type BrowserTab,
   type BrowserTaskCode,
@@ -73,7 +72,6 @@ import type { BrowserCheckpointRecord } from '@repo/db'
 import { browserCodeOf, errorName } from '../common/browser-codes.ts'
 import type { BrowserWorkerMetrics } from '../metrics/worker-metrics.ts'
 import type { BrowserWorkerStore } from '../store/worker-store.ts'
-import { readOnlyPolicy } from './read-only-policy.ts'
 
 /** A frame as every viewer gets it: the 48-byte header and the JPEG, encoded once. */
 export interface EncodedFrame extends FlowFrame {
@@ -100,12 +98,7 @@ export interface SessionContext {
   browsers: CloudBrowserFactory
   store: BrowserWorkerStore
   files: {
-    read(input: {
-      taskId: string
-      /** null — a file of a chat without a site. */
-      siteId: string | null
-      attachmentIds: readonly string[]
-    }): Promise<BrowserFile[]>
+    read(input: { taskId: string; attachmentIds: readonly string[] }): Promise<BrowserFile[]>
   }
   /**
    * Snapshots for the client (`web_screenshot`): the bytes into the inbox under the task, then
@@ -144,16 +137,11 @@ export interface SessionSettings {
 export interface SessionSpec {
   id: string
   taskId: string
-  /** null — a chat without a site (docs/plan/61-chats-first.md, К12), from the session's row. */
-  siteId: string | null
   /** A chat without a site: any public https site opens, nothing there is an object of the task. */
   openWeb: boolean
   adapter: BrowserObjects
   policy: BrowserTaskPolicy
   allowedHosts: readonly string[]
-  /** Exact origins of local sites (`browserNavigationAllowed`); empty in production. */
-  localOrigins: readonly string[]
-  localSites: readonly { origin: string; target: string }[]
   /** Names of the platform (`BROWSER_PLATFORM_HOSTS`), closed in every session (К37). */
   platformHosts: readonly string[]
   /** PAGES_BASE_DOMAIN: the agent's published pages open by address (Ст26); null — none. */
@@ -163,8 +151,6 @@ export interface SessionSpec {
   /** Milliseconds since the epoch: the session ends there whatever happens in it. */
   deadline: number
   checkpoints: readonly BrowserCheckpointRecord[]
-  /** The site's saved sign-in of the first `ensure` (Б36); null — none. */
-  signIn: BrowserSignIn | null
 }
 
 interface Observation {
@@ -203,8 +189,8 @@ const INPUT_BACKLOG = 256
 
 /**
  * Questions of a page whose «OK» confirms what it asks — «Удалить навсегда?» — or sends what is
- * typed into it: refused to a pass without the client (Зп28). An alert's «OK» only closes it, and
- * leaving a page with unsaved changes saves nothing.
+ * typed into it: refused to a pass without the client (docs/plan/82-scheduled-tasks.md, Зп28,
+ * Зп50). An alert's «OK» only closes it, and leaving a page with unsaved changes saves nothing.
  */
 const CONFIRMING_DIALOGS: ReadonlySet<BrowserDialog['kind']> = new Set(['confirm', 'prompt'])
 
@@ -242,7 +228,6 @@ const toFragment = (from: string, to: string) =>
 export class WorkerSession {
   readonly id: string
   readonly taskId: string
-  readonly siteId: string | null
   #spec: SessionSpec
   readonly #context: SessionContext
   #status: BrowserSessionStatus = 'starting'
@@ -257,16 +242,11 @@ export class WorkerSession {
   #observation: Observation | null = null
   #observationSeq = 0
   #pendingCommit: PendingCommit | null = null
-  /** The site's saved sign-in of the latest `ensure` (Б36): in memory only, never logged. */
-  #signIn: BrowserSignIn | null
-  /** A saved sign-in the site refused: not sent again until core gives another one. */
-  #signInRefused: BrowserSignIn | null = null
-  /** The saved sign-in is being sent: its form goes even to a pass that only reads (Б36). */
-  #signingIn = false
   /**
-   * The agent's latest action came from a pass of a scheduled run without its client (Зп28):
-   * until an action says otherwise, the pages send the site nothing but reads (`readOnlyPolicy`) —
-   * a request that comes after the action that caused it (an editor's autosave) as well.
+   * The agent's latest action came from a pass of a scheduled run without its client (Зп28, Зп50):
+   * until an action says otherwise, the pages send nothing but reads, on any site
+   * (`CloudBrowserConnection.readsOnly`) — a request that comes after the action that caused it
+   * (an editor's autosave) as well.
    */
   #readOnly = false
   /** Requests the read-only rule denied, ever: an action that saw one refused is told so. */
@@ -301,11 +281,9 @@ export class WorkerSession {
   ) {
     this.id = spec.id
     this.taskId = spec.taskId
-    this.siteId = spec.siteId
     this.#spec = spec
     this.#context = context
     this.#onEnded = onEnded
-    this.#signIn = spec.signIn
     this.#lastActivity = context.now()
     for (const record of spec.checkpoints) this.#checkpoints.set(checkpointKey(record.ref), record)
   }
@@ -358,10 +336,10 @@ export class WorkerSession {
       const { endpoint } = await runtime.start({
         sessionId: spec.id,
         taskId: spec.taskId,
-        // What the containers are labelled by: without a site, the task.
-        siteId: spec.siteId ?? spec.taskId,
+        // What the containers are labelled by: the chat (`leaseScopeOf`).
+        siteId: spec.taskId,
         allowedHosts: spec.allowedHosts,
-        localSites: spec.localSites,
+        localSites: [],
         openWeb: spec.openWeb,
         deadline: spec.deadline,
       })
@@ -374,19 +352,17 @@ export class WorkerSession {
       const browser = await browsers.open({
         endpoint,
         allowedHosts: spec.allowedHosts,
-        localSites: spec.localOrigins,
+        localSites: [],
         openWeb: spec.openWeb,
         platformHosts: spec.platformHosts,
         pageDomain: spec.pageDomain,
         startUrl: spec.startUrl,
         viewport: this.#viewport,
-        policy: readOnlyPolicy(spec.policy, {
-          readOnly: () => this.#readOnly,
-          signingIn: () => this.#signingIn,
-          refused: () => {
-            this.#readOnlyRefusals += 1
-          },
-        }),
+        policy: spec.policy,
+        readsOnly: () => this.#readOnly,
+        onReadOnlyRefusal: () => {
+          this.#readOnlyRefusals += 1
+        },
         onEvent: (event) => this.#event(event),
       })
       if (!this.live) {
@@ -405,9 +381,6 @@ export class WorkerSession {
       if (shown !== null) this.#apply(browserPageShown(this.#control, shown))
       this.#publish()
       this.#syncFrames()
-      // The start page of a signed-out session is the stack's form: the saved sign-in, first in
-      // the queue of the agent's actions.
-      this.#actions = this.#actions.then(() => this.#signInIfAsked(browser))
     } catch (error) {
       this.#context.warn('browser_session_start_failed', error)
       if (this.live) await this.#end('failed', 'crashed', errorName(error))
@@ -624,11 +597,7 @@ export class WorkerSession {
     if (this.#spec.openWeb) return true
     const page = URL.parse(url)
     if (!page || (page.protocol !== 'https:' && page.protocol !== 'http:')) return false
-    return !browserNavigationAllowed(
-      `${page.origin}/`,
-      this.#spec.allowedHosts,
-      this.#spec.localOrigins,
-    )
+    return !browserNavigationAllowed(`${page.origin}/`, this.#spec.allowedHosts, [])
   }
 
   /** The object of the task an address of the site edits; none on another site (Ч6). */
@@ -909,7 +878,6 @@ export class WorkerSession {
           try {
             files = await this.#context.files.read({
               taskId: this.taskId,
-              siteId: this.siteId,
               attachmentIds: message.attachmentIds,
             })
           } catch {
@@ -947,11 +915,11 @@ export class WorkerSession {
 
   /** Whether an address opens in this session at all (К12, К37). */
   #opens(url: string): boolean {
-    const { openWeb, allowedHosts, localOrigins, platformHosts, pageDomain } = this.#spec
+    const { openWeb, allowedHosts, platformHosts, pageDomain } = this.#spec
     return browserAddressOpens(url, {
       openWeb,
       allowedHosts,
-      localSites: localOrigins,
+      localSites: [],
       platformHosts,
       pageDomain,
     })
@@ -975,36 +943,6 @@ export class WorkerSession {
   // The agent
   // -------------------------------------------------------------------------------------------
 
-  /**
-   * The site's saved sign-in core read for this pass (Б36): it replaces the one held, and none
-   * forgets it. The values stay in this object: never logged, stored or answered.
-   */
-  useSignIn(credentials: BrowserSignIn | null): void {
-    this.#signIn = credentials
-  }
-
-  /**
-   * Signs in with the saved sign-in when the shown page is the stack's form and the agent holds
-   * the browser (Б36): while the client controls it, the form is theirs. One the site refused is
-   * not sent again. A failure is the operator's line; the agent sees the form and asks the client.
-   */
-  async #signInIfAsked(browser: CloudBrowserSession): Promise<void> {
-    const credentials = this.#signIn
-    if (credentials === null || !this.live || this.#control.controller !== 'agent') return
-    const refused = this.#signInRefused
-    if (refused?.login === credentials.login && refused.password === credentials.password) return
-    this.#signingIn = true
-    try {
-      if ((await browser.signIn(credentials)) !== 'refused') return
-      this.#context.warn('browser_sign_in_refused')
-    } catch (error) {
-      this.#context.warn('browser_sign_in_failed', error)
-    } finally {
-      this.#signingIn = false
-    }
-    this.#signInRefused = credentials
-  }
-
   /** core's turn starts (`ensure` with `takeControl`, Б16): the agent takes the browser back. */
   agentTakesControl(): void {
     if (!this.live) return
@@ -1021,10 +959,10 @@ export class WorkerSession {
    * One action of the agent (`POST …/actions`): in its turn after the ones before it, refused
    * when the client controls the browser. The answer comes within `actionBudgetMs`; the next
    * action waits until this one has really finished in the page. `readOnly` — a pass of a
-   * scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28): a save or a publish
-   * on the site, a file sent to a page and a page's question confirmed are refused
-   * (`BROWSER_READ_ONLY`), and from this action on — until one says otherwise — the pages send the
-   * site nothing but reads (`readOnlyPolicy`): a form a key or a link sends, an editor's XHR.
+   * scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28, Зп50): a file sent to
+   * a page and a page's question confirmed are refused (`BROWSER_READ_ONLY`), and from this action
+   * on — until one says otherwise — the pages send nothing but reads, on any site: a form a key or
+   * a link sends, an editor's XHR, a link with a secret in its query.
    */
   act(action: BrowserAction, options: { readOnly?: boolean } = {}): Promise<BrowserToolResult> {
     const readOnly = options.readOnly === true
@@ -1059,12 +997,10 @@ export class WorkerSession {
           )
           const refusals = this.#readOnlyRefusals
           try {
-            // Signed out meanwhile (a session that expired on the site): the saved sign-in first.
-            if (action.tool !== 'web_help') await this.#signInIfAsked(browser)
             resolve(await this.#perform(browser, action, readOnly))
           } catch (error) {
-            // The page went nowhere because what it sent the site was a write of a pass without
-            // the client: the agent is told that, not that the site is closed to it.
+            // The page went nowhere because what it sent was a write of a pass without the
+            // client: the agent is told that, not that the site is closed to it.
             settle(
               readOnly &&
                 this.#readOnlyRefusals > refusals &&
@@ -1161,14 +1097,14 @@ export class WorkerSession {
       case 'web_click': {
         const { observation, ...rest } = action
         const ref = this.#ref(observation, rest.ref)
-        return this.#commitOr('web_click', browser, this.#commitOf(ref), rest, readOnly)
+        return this.#commitOr('web_click', browser, this.#commitOf(ref), rest)
       }
       case 'web_press': {
         const { observation, ref: named, ...rest } = action
         const ref = named === undefined ? undefined : this.#ref(observation, named)
         const press: CloudBrowserAction = ref === undefined ? rest : { ...rest, ref }
         const commit = await this.#pressCommit(browser, action.key, ref)
-        return this.#commitOr('web_press', browser, commit, press, readOnly)
+        return this.#commitOr('web_press', browser, commit, press)
       }
       case 'web_fill': {
         const { observation, ...rest } = action
@@ -1188,12 +1124,11 @@ export class WorkerSession {
         )
       }
       case 'web_upload': {
-        // A file reaches the site — or another one — the moment a page takes it: nobody to ask.
+        // A file reaches a site the moment a page takes it: nobody to ask.
         if (readOnly) throw browserTaskError('BROWSER_READ_ONLY')
         const ref = action.ref === undefined ? undefined : this.#ref(action.observation, action.ref)
         const files = await this.#context.files.read({
           taskId: this.taskId,
-          siteId: this.siteId,
           attachmentIds: action.attachmentIds,
         })
         this.#markWrote()
@@ -1344,27 +1279,22 @@ export class WorkerSession {
   }
 
   /**
-   * An action that may save or publish an object (Б22): refused in a pass without the client
-   * (`readOnly`, docs/plan/82-scheduled-tasks.md, Зп28), while another save is unconfirmed or when
-   * the task has changed as many objects as it may (Б34); after it — whatever came of it, a
-   * timeout included — the object is unconfirmed until a check reads it, so an unclear outcome
-   * leaves no duplicate. With `asked` null — or on another site, which saves nothing of the site
-   * (Ч6) — it is an ordinary action; in a pass without the client what such an action still sends
-   * the site — a form of another admin page, Enter in a field, an action link — is stopped at its
-   * request (`readOnlyPolicy`).
+   * An action that may save or publish an object (Б22): refused while another save is
+   * unconfirmed or when the task has changed as many objects as it may (Б34); after it —
+   * whatever came of it, a timeout included — the object is unconfirmed until a check reads it,
+   * so an unclear outcome leaves no duplicate. With `asked` null — or on another site, which
+   * saves nothing of the site (Ч6) — it is an ordinary action.
    */
   async #commitOr(
     tool: 'web_click' | 'web_press',
     browser: CloudBrowserSession,
     asked: BrowserCommitAction | null,
     action: CloudBrowserAction,
-    readOnly: boolean,
   ): Promise<BrowserToolResult> {
     const pageId = this.#control.pageId
     const before = this.#tabs.find((tab) => tab.pageId === pageId)?.url ?? ''
     const commit = this.#elsewhere(before) ? null : asked
     if (commit !== null) {
-      if (readOnly) throw browserTaskError('BROWSER_READ_ONLY')
       if (this.#blocked(pageId)) throw browserTaskError('BROWSER_CHECKPOINT_UNVERIFIED')
       if (this.#overChangeLimit(this.#checkpointRef(before)))
         throw browserTaskError('BROWSER_ACTION_DENIED')

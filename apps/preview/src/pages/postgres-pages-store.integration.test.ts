@@ -24,7 +24,6 @@ async function onTariff(db: PrismaClient, workspaceId: string) {
       kind: 'quota',
       price: '0.00',
       creditsPerMonth: 1,
-      maxSites: 1,
       pageSites: 1000,
       isActive: false,
     },
@@ -76,7 +75,7 @@ describe.skipIf(!enabled)('PostgresPagesStore (plan 69, Ст4, Ст13)', () => {
 
   it('reads a page by its slug and checks its password', async () => {
     const task = await db.task.create({
-      data: { workspaceId, siteId: null, needsRepository: false, needsBrowser: false },
+      data: { workspaceId, needsBrowser: false },
     })
     const page = await reservePagePublication(db, {
       workspaceId,

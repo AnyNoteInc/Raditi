@@ -43,10 +43,11 @@ const stopCauseOf = (stopped: RunChatState['stopped']): ScheduledRunStopCause | 
   stopped === 'credits' || stopped === 'weekly_limit' ? stopped : null
 
 /**
- * The state of one run (Зп5). Its chat: `undefined` — not read (none, or gone from the database),
- * told as deleted. A chat at work is «Выполняется»; one in a release — its changes were ready; one
- * that ended is done or not; an open one waits for the client, brought changes, failed or stopped
- * at a limit — the newest row that ends a pass says which.
+ * The state of one run (Зп5, Зп47). Its chat: `undefined` — not read (none, or gone from the
+ * database), told as deleted. A chat at work is «Выполняется»; one that ended is done or not; an
+ * open one waits for the client, failed or stopped at a limit — the newest row that ends a pass
+ * says which. A chat has no candidate and no release (docs/plan/83-remove-projects.md, БП2): a
+ * status of a release, should a reader meet one, is told as the nearest of these.
  */
 export function runStateOf(run: RunRow, chat: RunChatState | undefined): ScheduledRunState {
   switch (run.status) {
@@ -67,10 +68,9 @@ export function runStateOf(run: RunRow, chat: RunChatState | undefined): Schedul
     case 'queued':
     case 'preparing':
     case 'running':
-      return { kind: 'running' }
     case 'deploying':
     case 'verifying':
-      return { kind: 'ready' }
+      return { kind: 'running' }
     case 'done':
       return { kind: 'done' }
     case 'failed':
@@ -81,7 +81,6 @@ export function runStateOf(run: RunRow, chat: RunChatState | undefined): Schedul
     case 'awaiting_approval':
       if (chat.stopped !== null) return { kind: 'stopped', cause: stopCauseOf(chat.stopped) }
       if (chat.failed) return { kind: 'failed' }
-      if (chat.status === 'awaiting_approval') return { kind: 'ready' }
       return chat.answered ? { kind: 'done' } : { kind: 'waiting' }
   }
 }

@@ -22,17 +22,12 @@ import type {
   BrowserHelp,
   BrowserSessionStatus,
   BrowserVerifiedObject,
-  SiteStack,
 } from '@repo/domain'
 
 /** A session as the database keeps it: what the worker checks before it starts a browser. */
 export interface StoredBrowserSession {
   id: string
   taskId: string
-  /** null — a chat without a site: the only word on whether a session is one (К12). */
-  siteId: string | null
-  /** `tasks.site_id` of its task: a row at odds with it starts no browser. */
-  taskSiteId: string | null
   status: BrowserSessionStatus
   /** The hard deadline core gave it. */
   expiresAt: Date
@@ -45,19 +40,10 @@ export interface StoredBrowserSession {
   lastActivityAt: Date
 }
 
-/** The site of a session as the database keeps it: where its browser goes and its stack's policy. */
-export interface StoredSite {
-  stack: SiteStack
-  /** `sites.url`: the only address a session's hosts and start page are built from (Б11). */
-  url: string
-}
-
 /** An attachment of a task the worker may read for a page of the task (Б26). */
 export interface StoredAttachment {
   id: string
   workspaceId: string
-  /** null — a file of a chat without a site. */
-  siteId: string | null
   s3Key: string
   fileName: string
   contentType: string
@@ -66,12 +52,11 @@ export interface StoredAttachment {
 
 /**
  * What the worker reads and writes in PostgreSQL (docs/plan/57-browser-tasks.md, §3.4): the
- * session rows core opened, the site of a session, the hand-overs, the help request, the first
+ * session rows core opened, the hand-overs, the help request, the first
  * write, the checkpoints of the task and its attachments. Nothing secret is ever written.
  */
 export interface BrowserWorkerStore {
   session(sessionId: string): Promise<StoredBrowserSession | null>
-  site(siteId: string): Promise<StoredSite | null>
   markReady(sessionId: string): Promise<boolean>
   recordControl(input: {
     sessionId: string
@@ -127,24 +112,13 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
       select: {
         id: true,
         taskId: true,
-        siteId: true,
         status: true,
         expiresAt: true,
         readyAt: true,
         lastActivityAt: true,
-        task: { select: { siteId: true } },
       },
     })
-    if (!row) return null
-    const { task, ...session } = row
-    return { ...session, taskSiteId: task.siteId }
-  }
-
-  site(siteId: string): Promise<StoredSite | null> {
-    return this.#db.site.findUnique({
-      where: { id: siteId },
-      select: { stack: true, url: true },
-    })
+    return row
   }
 
   markReady(sessionId: string): Promise<boolean> {
@@ -205,7 +179,6 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
     return {
       id: row.id,
       workspaceId: row.workspaceId,
-      siteId: row.siteId,
       s3Key: row.s3Key,
       fileName: row.fileName,
       contentType: row.contentType,

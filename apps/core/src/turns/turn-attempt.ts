@@ -19,7 +19,6 @@ import {
   type DestroyReason,
   type ExecExit,
   type PreparedRun,
-  type SessionState,
   type SiteLeaseGrant,
   type SiteLeaseStore,
   type SnapshotManifest,
@@ -36,10 +35,8 @@ import {
   type TurnJournal,
   type TurnPhase,
   type TurnPlan,
-  type TurnPublication,
   type TurnRestoreSource,
   type TurnResult,
-  type TurnWorkspace,
 } from '@repo/domain'
 import { packOutbox, readOutboxArchive } from '@repo/snapshots'
 
@@ -69,12 +66,6 @@ export interface TurnAttemptDependencies {
   leases: SiteLeaseStore
   /** Where the turn is held for recovery: its plan without credentials, epochs and deadline. */
   assignments: TurnAssignmentStore
-  /**
-   * The site's git, for a turn with a repository; null while git is not configured — a turn
-   * without a repository runs all the same (docs/plan/57-browser-tasks.md, Б7), one with a
-   * repository is refused (gitNotConfigured).
-   */
-  workspace: TurnWorkspace | null
   snapshots: TurnSnapshotStore
   journal: TurnJournal
   credentials: TurnCredentialSource
@@ -83,7 +74,7 @@ export interface TurnAttemptDependencies {
 
 export interface CompletedTurn {
   result: TurnResult
-  /** Without `git` for a turn without a repository: it published nothing (plan 57, Б4). */
+  /** Without `git`: a turn has no repository. */
   manifest: SnapshotManifest
   /**
    * The files the agent left for the client (docs/plan/66-chat-visuals.md, В8), checked here
@@ -94,20 +85,12 @@ export interface CompletedTurn {
   /**
    * Whether a text holds a key of this turn or a value of the client's variables (docs/plan/69-
    * pages.md, Ст19): the end of the turn checks the sections of documents by it. A closure over
-   * what the attempt holds in memory — the values its commands got and those the site holds now,
-   * as the candidate is checked — : the values never leave it. null — Vault did not answer: the
+   * what the attempt holds in memory — the values its commands got and those the workspace holds
+   * now — : the values never leave it. null — Vault did not answer: the
    * sections wait unchecked for the next end of a turn.
    */
   refusesText: ((text: string) => 'turn_key' | 'client_value' | null) | null
 }
-
-/**
- * A turn with a repository asked of a core whose git is not configured (spec §20 «Транспорт
- * git»): nothing of the site can be cloned, captured or published. The client reads
- * `unavailable`.
- */
-export const gitNotConfigured = (): DomainError =>
-  new DomainError('GIT_NOT_CONFIGURED', 'Git is not configured for a turn with a repository', 503)
 
 export interface TurnAttemptInit {
   lease: SiteLeaseGrant
@@ -126,11 +109,9 @@ export interface TurnAttemptInit {
 /** A presigned URL never outlives the lease that allowed it (spec §14). */
 const presignTtlMs = (guard: LeaseGuard) => Math.min(MAX_PRESIGN_TTL_MS, guard.leaseRemainingMs)
 
-/** What a turn's capture leaves for its checkpoint: its home, with a repository its candidate. */
+/** What a turn's capture leaves for its checkpoint: its home. */
 interface Captured {
   homeBytes: number
-  publication?: TurnPublication
-  git?: NonNullable<SnapshotMetadata['git']>
   /** The agent's files for the client as the executor took them: untrusted. */
   outbox?: Uint8Array
 }
@@ -138,8 +119,8 @@ interface Captured {
 /**
  * One owner's run of a turn under one fence: the supervisor's from the lease on, recovery's from
  * the epoch it took the turn over with. It journals every step, runs the agent's output, capture,
- * checkpoint and publication, and when the turn ends removes its container, then releases the
- * site or holds it for recovery when S3 or Git may have been written. A turn given up while its
+ * and checkpoint, and when the turn ends removes its container, then releases the lease or holds
+ * it for recovery when S3 may have been written. A turn given up while its
  * prepare was out and without proof that no container is left is vacating: the lease is neither
  * released nor held until that proof comes, and otherwise expires by itself (spec §8).
  */
@@ -150,23 +131,16 @@ export class TurnAttempt {
   assignment: TurnAssignment | undefined
   /** Issuance identity: recovery keeps the first epoch even after taking the lease over. */
   credentialRef: TurnCredentialRef | undefined
-  /** turnCredentials() of the run: a changed file of the candidate must not contain one. */
+  /** turnCredentials() of the run: no text the turn leaves may contain one. */
   credentials: readonly string[] = []
   /**
    * The values of the client's variables the run's commands got (plan 53, Р13, `runEnvValues`):
-   * masked in its events, refused in its candidate.
+   * masked in its events, refused in its texts.
    */
   envValues: readonly string[] = []
-  /**
-   * The working-set commit the sandbox started from (plan 53, Р11), from the bundle; a recovered
-   * owner derives it again from the plan before it captures.
-   */
-  sandboxBaseSha: string | undefined
-  #publication: TurnPublication | undefined
   #abandoned = false
   #destroyed = false
   #checkpointStarted = false
-  #publishStarted = false
   #completed = false
   #sequence: number
   #lastPhase: TurnPhase
@@ -174,7 +148,6 @@ export class TurnAttempt {
   #outcome: TurnAssignmentOutcome = 'failed'
   /** How the agent's exec ended when it did not finish successfully: journaled with `failed`. */
   #exit: ExecExit | undefined
-  #candidateHeadSha: string | undefined
   /** A container of the prepare may exist from now on. */
   #dispatched = false
   /** Proof that the prepare left no container and never will. */
@@ -238,10 +211,6 @@ export class TurnAttempt {
       phase,
       ...(this.execution ? { containerId: this.execution.containerId } : {}),
       ...(this.execId ? { execId: this.execId } : {}),
-      ...(this.#candidateHeadSha ? { candidateHeadSha: this.#candidateHeadSha } : {}),
-      // A turn without a repository has no base: its entries name none (plan 57, Б4).
-      ...(plan.workspace ? { baseSha: plan.workspace.expectedBaseSha } : {}),
-      ...(this.sandboxBaseSha ? { sandboxBaseSha: this.sandboxBaseSha } : {}),
       committedAt: plan.committedAt,
       ...(this.#checkpointStarted
         ? { snapshotPrefix: turnSnapshotPrefix(labels.sessionId, labels.turn) }
@@ -272,8 +241,7 @@ export class TurnAttempt {
     await this.init.guard.assertFence()
     await this.record('created')
     // A runner's container is recorded by the runner API when the runner reports it; core's own
-    // is recorded here. The preview of the dialog exports the working tree of the turn by it
-    // (Р23): without it every sync of the turn was refused `no_turn` (stand R12).
+    // is recorded here.
     if (this.assignment?.executor === 'local')
       await this.deps.assignments.recordContainer({
         id: this.assignment.id,
@@ -386,11 +354,9 @@ export class TurnAttempt {
   }
 
   /**
-   * Quiesce, capture, candidate, checkpoint, removal and publication of a turn whose agent
-   * finished. `run` is the driver's run of the turn; its session state names the home to save.
-   * A turn without a repository (docs/plan/57-browser-tasks.md, Б4) takes its home alone and
-   * saves it as a checkpoint without `git`: no candidate, no publication — it completes once its
-   * container is removed.
+   * Quiesce, capture, checkpoint and removal of a turn whose agent finished. `run` is the
+   * driver's run of the turn; its session state names the home to save, as a checkpoint without
+   * `git` — the turn completes once its container is removed.
    */
   async complete(events: readonly AgentEvent[], run: PreparedRun): Promise<CompletedTurn> {
     const { guard, plan, driver, lease } = this.init
@@ -399,9 +365,6 @@ export class TurnAttempt {
     const ready = this.execution
     if (!ready) throw conflict('The turn has no container')
     if (!driver) throw conflict('The turn has no driver')
-    // Checked before the agent's work is captured: without git nothing of it could be published.
-    const git = this.deps.workspace
-    if (plan.workspace && !git) throw gitNotConfigured()
     await guard.assertFence()
     await ready.quiesce()
     await this.record('quiesced')
@@ -411,15 +374,12 @@ export class TurnAttempt {
         run.context.nativeSessionId = event.nativeSessionId
     }
     const home = driver.sessionState(run)
-    const published =
-      plan.workspace && git
-        ? await this.#candidate(ready, home, plan.workspace, git)
-        : await this.#homeOnly(ready, home)
+    const published = await this.#homeOnly(ready, home)
     const outbox = published.outbox ? await this.#checkedOutbox(published.outbox) : undefined
     await guard.assertFence()
     await this.record('checkpointing')
     this.#checkpointStarted = true
-    // Sealed where the archive stayed; with a repository its AAD binds the candidate's headSha.
+    // Sealed where the archive stayed.
     const sealedHome: SealedElsewhere = {
       sizeBytes: published.homeBytes,
       ttlMs: () => presignTtlMs(guard),
@@ -446,17 +406,10 @@ export class TurnAttempt {
         ...(run.context.nativeSessionId ? { nativeSessionId: run.context.nativeSessionId } : {}),
       },
       home,
-      ...(published.git ? { git: published.git } : {}),
     }
     const saving = snapshots.save(
       metadata,
-      published.publication
-        ? {
-            home: sealedHome,
-            patch: published.publication.patch,
-            untracked: published.publication.untracked,
-          }
-        : { home: sealedHome },
+      { home: sealedHome },
       // Stops a save still pending on Vault from writing after the attempt gave up on it.
       guard.signal,
     )
@@ -482,13 +435,6 @@ export class TurnAttempt {
     await this.#destroy(true)
     await this.record('destroyed')
     await this.#revoke()
-    if (published.publication) {
-      await guard.assertFence()
-      await this.record('publishing')
-      this.#publishStarted = true
-      const publication = published.publication
-      await guard.interruptible(publication.publish(() => guard.assertFence()))
-    }
     await guard.assertFence()
     await this.record('completed', { result })
     if (!(await this.deps.leases.release(lease)))
@@ -522,76 +468,13 @@ export class TurnAttempt {
     }
   }
 
-  /**
-   * The candidate of a turn with a repository: the patch against the commit the sandbox holds —
-   * the working set's when it got one —, checked and committed by the workspace, and the `git`
-   * of its checkpoint. Refused when the agent copied a turn credential into its home or the site.
-   */
-  async #candidate(
+  /** The turn's home alone: the executor reads no working directory. */
+  async #homeOnly(
     ready: TurnExecution,
-    home: SessionState,
-    workspace: NonNullable<TurnPlan['workspace']>,
-    git: TurnWorkspace,
+    home: Parameters<TurnExecution['capture']>[0]['home'],
   ): Promise<Captured> {
-    const { guard, plan } = this.init
-    const labels = plan.sandbox.labels
-    const sandboxBaseSha = await this.#sandboxBase()
-    await guard.assertFence()
-    const captured = await ready.capture({
-      home,
-      baseSha: workspace.expectedBaseSha,
-      ...(sandboxBaseSha ? { sandboxBaseSha } : {}),
-      ...(workspace.addOnlyPaths?.length ? { addOnlyPaths: workspace.addOnlyPaths } : {}),
-    })
-    if (!captured.patch || !captured.untracked)
-      throw conflict('The capture of a turn with a repository has no candidate parts')
-    const outbox = captured.outbox
-    const refusedValues = await this.#refusedValues()
-    await guard.assertFence()
-    const publication = await guard.interruptibleResource(
-      git.preparePublication({
-        ...workspace,
-        taskId: labels.taskId,
-        turn: labels.turn,
-        createdAt: plan.committedAt,
-        patch: captured.patch,
-        untracked: captured.untracked,
-        // Binary edits of tracked files are compressed in the patch: checked there in full.
-        credentials: this.credentials,
-        ...(refusedValues.length ? { refusedValues } : {}),
-      }),
-      (late) => late.dispose(),
-    )
-    this.#publication = publication
-    // Publication cut the working set again from the full base: the same commit, or the patch
-    // was taken against something else.
-    if (publication.sandboxBaseSha !== sandboxBaseSha)
-      throw conflict('The candidate stands on another working set than the sandbox')
-    this.#candidateHeadSha = publication.headSha
-    return {
-      homeBytes: captured.homeBytes,
-      ...(outbox ? { outbox } : {}),
-      publication,
-      git: {
-        provider: workspace.repo.provider,
-        branch: workspace.branch,
-        baseSha: publication.baseSha,
-        ...(sandboxBaseSha ? { sandboxBaseSha } : {}),
-        headSha: publication.headSha,
-        publication: { taskId: labels.taskId, committedAt: plan.committedAt },
-      },
-    }
-  }
-
-  /**
-   * A turn without a repository (plan 57, Б4): its home alone. The executor reads no working
-   * directory and answers no candidate parts; one that does is refused.
-   */
-  async #homeOnly(ready: TurnExecution, home: SessionState): Promise<Captured> {
     await this.init.guard.assertFence()
     const captured = await ready.capture({ home })
-    if (captured.patch !== undefined || captured.untracked !== undefined)
-      throw conflict('The capture of a turn without a repository has candidate parts')
     return {
       homeBytes: captured.homeBytes,
       ...(captured.outbox ? { outbox: captured.outbox } : {}),
@@ -608,9 +491,9 @@ export class TurnAttempt {
   }
 
   /**
-   * The values the candidate must not hold (plan 53, Р13): the ones the turn's commands got and
-   * the ones the site's variables hold now — the preview may have shown the agent a value the
-   * client changed after the turn's key was issued. Vault that does not answer fails the turn.
+   * The values a text of the turn must not hold (plan 53, Р13): the ones the turn's commands got
+   * and the ones the workspace's variables hold now — the client may change one while the turn
+   * runs. Vault that does not answer fails the check.
    */
   async #refusedValues(): Promise<string[]> {
     const { guard } = this.init
@@ -619,24 +502,6 @@ export class TurnAttempt {
         ? await guard.interruptible(this.deps.credentials.siteValues(this.credentialRef))
         : []
     return [...new Set([...this.envValues, ...current])]
-  }
-
-  /**
-   * The working-set commit of the turn: the bundle's, or for a recovered owner the one the plan
-   * gives again — deterministic, so the same the sandbox was given (plan 53, Р11).
-   */
-  async #sandboxBase(): Promise<string | undefined> {
-    const { plan, guard } = this.init
-    const workspace = plan.workspace
-    if (this.sandboxBaseSha || !workspace?.workingSet) return this.sandboxBaseSha
-    if (!this.deps.workspace?.sandboxBase)
-      throw conflict('The workspace cannot derive a working set')
-    const derived = await guard.interruptible(
-      this.deps.workspace.sandboxBase(workspace, plan.committedAt),
-    )
-    if (!derived) throw conflict('The workspace derived no working set')
-    this.sandboxBaseSha = derived
-    return derived
   }
 
   /** Why the turn failed, from where it stopped. */
@@ -648,15 +513,13 @@ export class TurnAttempt {
       ? guard.reason
       : this.#exit?.reason === 'timeout'
         ? 'timeout'
-        : this.#publishStarted
-          ? 'publication_ambiguous'
-          : this.#checkpointStarted
-            ? 'snapshot_ambiguous'
-            : isSnapshotCredential(error)
-              ? 'snapshot_credential'
-              : isDomainError(error) && error.code === 'LEASE_LOST'
-                ? 'lease_lost'
-                : 'run_failed'
+        : this.#checkpointStarted
+          ? 'snapshot_ambiguous'
+          : isSnapshotCredential(error)
+            ? 'snapshot_credential'
+            : isDomainError(error) && error.code === 'LEASE_LOST'
+              ? 'lease_lost'
+              : 'run_failed'
   }
 
   /**
@@ -673,7 +536,7 @@ export class TurnAttempt {
 
   /**
    * Removes the container (and, unless the turn completed, whatever `alsoRemove` removes), then
-   * releases the site, or holds it when a removal failed or S3 or Git may have been written.
+   * releases the lease, or holds it when a removal failed or S3 may have been written.
    * Without its last journal entry the site stays held only in the latter cases; a failed
    * release expires by its TTL. A turn whose prepare is out without a container reported is
    * vacating: nothing is released or finished until vacated() or a late container's removal.
@@ -708,7 +571,6 @@ export class TurnAttempt {
         // The runner keeps the turn: the journal stays on its last step and the lease on its
         // epoch, so the next core's recovery resumes the agent or removes the container.
         guard.close()
-        await this.#publication?.dispose().catch(() => {})
         return 'held'
       }
       recovery = true
@@ -739,7 +601,6 @@ export class TurnAttempt {
         })
         .catch(() => false)
     guard.close()
-    await this.#publication?.dispose().catch(() => {})
     return this.#completed ? 'completed' : recovery ? 'held' : 'released'
   }
 

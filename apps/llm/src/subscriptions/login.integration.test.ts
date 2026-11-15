@@ -188,7 +188,6 @@ describe.skipIf(!enabled)('subscription import and relogin on disposable Postgre
       keyVersion: 1,
       vaultPath: `subs/${f.input.backend}/${result.accountId}`,
       workspaceId: null,
-      siteId: null,
     })
     expect(f.writer.kvWrite).toHaveBeenCalledExactlyOnceWith(
       account.credentialRef.vaultPath,

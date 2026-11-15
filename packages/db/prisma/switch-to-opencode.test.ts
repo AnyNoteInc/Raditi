@@ -244,19 +244,10 @@ async function earlierDatabase(prefix: string) {
   async function work(input: WorkInput) {
     const forms = input.forms ?? ['turn', 'assignment', 'binding', 'key']
     const workspace = await db.workspace.create({ data: { name: 'Synthetic history' } })
-    const site = await db.site.create({
-      data: {
-        workspaceId: workspace.id,
-        name: 'Synthetic',
-        url: `https://${randomUUID()}.example.test`,
-        stack: 'wordpress',
-      },
-    })
     const finished = (finishedStatuses as readonly string[]).includes(input.status)
     const task = await db.task.create({
       data: {
         workspaceId: workspace.id,
-        siteId: site.id,
         status: input.status,
         turnNo: 1,
         costRub: '0.012814',
@@ -282,7 +273,7 @@ async function earlierDatabase(prefix: string) {
       await db.turnAssignment.create({
         data: {
           taskId: task.id,
-          siteId: site.id,
+          siteId: task.id,
           sessionId,
           turnNo: 1,
           executor: 'local',
@@ -360,7 +351,7 @@ async function earlierDatabase(prefix: string) {
         })
       }
     }
-    return { taskId: task.id, siteId: site.id, workspaceId: workspace.id }
+    return { taskId: task.id, workspaceId: workspace.id }
   }
 
   async function removeWork(ids: Awaited<ReturnType<typeof work>>) {
@@ -369,7 +360,6 @@ async function earlierDatabase(prefix: string) {
     await db.llmKey.deleteMany({ where: { taskId: ids.taskId } })
     await db.taskAccountBinding.deleteMany({ where: { taskId: ids.taskId } })
     await db.task.delete({ where: { id: ids.taskId } })
-    await db.site.delete({ where: { id: ids.siteId } })
     await db.workspace.delete({ where: { id: ids.workspaceId } })
   }
 

@@ -34,28 +34,21 @@ const authorId = '01960000-0000-7000-8000-0000000000a3'
 // 15 November 2026, 10:05 in Moscow.
 const NOW = new Date('2026-11-15T07:05:00Z')
 
-/** A chat of a project: the turn the role admitted. */
-const projectChat: McpTurnAccess = {
+/** A chat with the browser: the turn the role admitted. A chat has no project (Зп44, Зп54). */
+const browserChat: McpTurnAccess = {
   keyId: '01960000-0000-7000-8000-000000000021',
   taskId: '01960000-0000-7000-8000-000000000022',
   workspaceId: '01960000-0000-7000-8000-000000000023',
-  siteId: '01960000-0000-7000-8000-000000000024',
   sessionId: 'synthetic',
   turn: 3,
   firstEpoch: 1,
   epoch: 1,
-  stack: 'wordpress',
-  url: 'https://site.example.test',
-  preview: null,
-  requirements: { repository: true, browser: false },
+  requirements: { repository: false, browser: true },
   unattended: false,
 }
-/** A chat without a project. */
+/** A chat without the browser. */
 const plainChat: McpTurnAccess = {
-  ...projectChat,
-  siteId: null,
-  stack: null,
-  url: null,
+  ...browserChat,
   requirements: { repository: false, browser: false },
 }
 
@@ -63,8 +56,8 @@ const weekdays: ScheduleTrigger[] = [{ kind: 'weekdays', time: '09:00' }]
 
 const listed = (extra: Partial<McpListedSchedule> = {}): McpListedSchedule => ({
   id: scheduleId,
-  name: 'Проверка сайта',
-  instructions: 'Откройте сайт и пройдите главную и важные страницы.',
+  name: 'Курс валют',
+  instructions: 'Пришли курс доллара, евро и юаня по ЦБ на сегодня.',
   effort: 'low',
   triggers: weekdays,
   timezone: 'Europe/Moscow',
@@ -100,13 +93,12 @@ function reservedOf(input: Parameters<McpScheduleStore['reserve']>[0]): Reserved
     kind: change.kind,
     scheduleId: change.kind === 'update' ? (change.scheduleId ?? null) : null,
     fields: {
-      name: change.name ?? 'Проверка сайта',
-      instructions: change.instructions ?? 'Откройте сайт.',
+      name: change.name ?? 'Курс валют',
+      instructions: change.instructions ?? 'Пришли курс доллара.',
       effort: change.effort ?? 'high',
       triggers,
       timezone,
       notify: change.notify ?? true,
-      siteId: null,
       enabled: change.kind === 'update' ? (change.enabled ?? true) : true,
     },
     nextRunAt:
@@ -173,7 +165,7 @@ afterEach(async () => {
 const pagesAddress = { baseDomain: 'pages.localhost', scheme: 'http' as const, port: 8092 }
 
 async function start(
-  scope: McpTurnAccess = projectChat,
+  scope: McpTurnAccess = browserChat,
   store = fakeStore(),
   config: McpConfig = testMcpConfig(),
   pages = pagesStore(),
@@ -236,9 +228,9 @@ const answer = (res: request.Response) => ({
 })
 
 const create = {
-  name: 'Проверка сайта',
-  instructions: 'Откройте сайт и пройдите главную и важные страницы. Формы не отправляйте.',
-  project: 'this_chat',
+  name: 'Курс валют',
+  instructions:
+    'Пришли курс доллара, евро и юаня по ЦБ на сегодня и насколько он изменился со вчера.',
   effort: 'low',
   triggers: weekdays,
   confirmedByClient: true,
@@ -273,14 +265,13 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
       'instructions',
       'name',
       'notify',
-      'project',
       'timezone',
       'triggers',
     ])
   })
 
   it('offers only schedule_list to a pass of a scheduled run without its client (Зп32)', async () => {
-    const unattended = { ...projectChat, unattended: true }
+    const unattended = { ...browserChat, unattended: true }
     const { server, store } = await start(unattended)
     expect(await scheduleTools(server)).toEqual(['schedule_list'])
     // A change is answered as a refusal of its tool, before any tool sees it.
@@ -339,7 +330,7 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     })
     const pageTools = async (server: unknown) =>
       (await listTools(server)).map((tool) => tool.name).filter((name) => name.startsWith('page_'))
-    const unattended = await start({ ...projectChat, unattended: true }, fakeStore(), withPages)
+    const unattended = await start({ ...browserChat, unattended: true }, fakeStore(), withPages)
     // The pages are there to read; nothing that changes them is offered.
     expect((await pageTools(unattended.server)).sort()).toEqual([
       'page_files',
@@ -360,7 +351,7 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     await app?.close()
     app = undefined
     // The same chat once its client wrote: both are reserved for the end of the turn, as ever.
-    const attended = await start({ ...projectChat, unattended: false }, fakeStore(), withPages)
+    const attended = await start({ ...browserChat, unattended: false }, fakeStore(), withPages)
     expect(await pageTools(attended.server)).toEqual(
       expect.arrayContaining(['page_publish', 'page_edit', 'page_file_put', 'page_restore']),
     )
@@ -373,12 +364,12 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     expect(attended.pages.change).toHaveBeenCalledTimes(1)
   })
 
-  it('lists the author’s tasks of this chat’s project, the time and the client’s zone', async () => {
+  it('lists the tasks of the chat’s author, the time and the client’s zone (Зп54)', async () => {
     const store = fakeStore()
     store.pending.mockResolvedValueOnce([
-      { reservedId, kind: 'create', scheduleId: null, name: 'Заявки за сутки' },
+      { reservedId, kind: 'create', scheduleId: null, name: 'Идеи для постов' },
     ])
-    const { server } = await start(projectChat, store)
+    const { server } = await start(browserChat, store)
     const res = answer(await post(server, call('schedule_list')))
     expect(res.isError).toBe(false)
     expect(res.value).toEqual({
@@ -386,12 +377,11 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
       now: NOW.toISOString(),
       timezone: 'Europe/Moscow',
       clientTime: '2026-11-15 10:05, Sunday',
-      project: 'this_chat',
       schedules: [
         {
           scheduleId,
-          name: 'Проверка сайта',
-          instructions: 'Откройте сайт и пройдите главную и важные страницы.',
+          name: 'Курс валют',
+          instructions: 'Пришли курс доллара, евро и юаня по ЦБ на сегодня.',
           effort: 'low',
           triggers: weekdays,
           timezone: 'Europe/Moscow',
@@ -408,19 +398,18 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
           },
         },
       ],
-      reservedThisTurn: [{ reservedId, kind: 'create', scheduleId: null, name: 'Заявки за сутки' }],
+      reservedThisTurn: [{ reservedId, kind: 'create', scheduleId: null, name: 'Идеи для постов' }],
     })
-    // Whose and of what project come from the admitted turn: its author and its site.
-    expect(store.author).toHaveBeenCalledWith(projectChat.taskId)
+    // Whose and where come from the admitted turn: its author and their workspace.
+    expect(store.author).toHaveBeenCalledWith(browserChat.taskId)
     expect(store.list).toHaveBeenCalledWith({
       userId: authorId,
-      workspaceId: projectChat.workspaceId,
-      siteId: projectChat.siteId,
+      workspaceId: browserChat.workspaceId,
     })
-    expect(store.pending).toHaveBeenCalledWith(projectChat.taskId, 3)
+    expect(store.pending).toHaveBeenCalledWith(browserChat.taskId, 3)
   })
 
-  it('lists the tasks without a project in a chat without one, in Moscow without a zone', async () => {
+  it('lists the tasks in a chat without the browser alike, in Moscow without a zone', async () => {
     const store = fakeStore()
     store.author.mockResolvedValue({ userId: authorId, timezone: null })
     store.list.mockResolvedValue([
@@ -436,7 +425,8 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     ])
     const { server } = await start(plainChat, store)
     const res = answer(await post(server, call('schedule_list', {})))
-    expect(res.value).toMatchObject({ timezone: 'Europe/Moscow', project: 'none' })
+    expect(res.value).toMatchObject({ timezone: 'Europe/Moscow' })
+    expect(res.value).not.toHaveProperty('project')
     expect(res.value.schedules).toEqual([
       expect.objectContaining({
         state: 'completed',
@@ -446,7 +436,10 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
       }),
       expect.objectContaining({ state: 'enabled', nextRunText: null }),
     ])
-    expect(store.list).toHaveBeenCalledWith(expect.objectContaining({ siteId: null }))
+    expect(store.list).toHaveBeenCalledWith({
+      userId: authorId,
+      workspaceId: plainChat.workspaceId,
+    })
     // A chat whose author is gone has nobody's tasks.
     store.author.mockResolvedValueOnce(null)
     expect(answer(await post(server, call('schedule_list', {}))).value).toMatchObject({
@@ -466,7 +459,7 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
         }),
       ),
     )
-    const { server } = await start(projectChat, store)
+    const { server } = await start(browserChat, store)
     const res = await post(server, call('schedule_list', {}))
     expect(Buffer.byteLength(res.body.result.content[0].text)).toBeLessThanOrEqual(
       SCHEDULE_LIST_MAX_BYTES,
@@ -477,7 +470,7 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     expect(value).toMatchObject({ truncated: true, total: 60 })
   })
 
-  it('reserves a task of this chat’s project from the admitted turn (Зп33)', async () => {
+  it('reserves a task of the chat’s author from the admitted turn (Зп33)', async () => {
     const { server, store } = await start()
     const res = answer(await post(server, call('schedule_create', create)))
     expect(res).toMatchObject({ status: 200, isError: false })
@@ -486,7 +479,7 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
       reservedId,
       action: 'create',
       scheduleId: null,
-      name: 'Проверка сайта',
+      name: 'Курс валют',
       scheduleText: 'По будням в 9:00',
       timezone: 'Europe/Moscow',
       enabled: true,
@@ -497,8 +490,8 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     })
     const { confirmedByClient: _confirmed, ...change } = create
     expect(store.reserve).toHaveBeenCalledWith({
-      workspaceId: projectChat.workspaceId,
-      taskId: projectChat.taskId,
+      workspaceId: browserChat.workspaceId,
+      taskId: browserChat.taskId,
       turnNo: 3,
       change: { kind: 'create', ...change },
       now: NOW,
@@ -533,8 +526,11 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     for (const args of [
       { ...create, confirmedByClient: undefined },
       { ...create, confirmedByClient: false },
-      { ...create, workspaceId: projectChat.workspaceId },
-      { ...create, siteId: projectChat.siteId },
+      { ...create, workspaceId: browserChat.workspaceId },
+      // A task has no project (Зп54): the field is no argument of the tool.
+      { ...create, siteId: browserChat.workspaceId },
+      { ...create, project: 'none' },
+      { ...create, project: 'this_chat' },
     ])
       expect((await post(server, call('schedule_create', args))).status, JSON.stringify(args)).toBe(
         400,
@@ -546,35 +542,13 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     expect(store.reserve).not.toHaveBeenCalled()
   })
 
-  it('keeps a task of a chat to the chat’s own project, or to none (Зп31)', async () => {
-    const project = await start(projectChat)
-    const none = answer(
-      await post(project.server, call('schedule_create', { ...create, project: 'none' })),
-    )
-    expect(none).toMatchObject({ isError: true, value: { ok: false, code: 'BAD_REQUEST' } })
-    expect(none.value.message).toMatch(/this_chat/)
-    expect(project.store.reserve).not.toHaveBeenCalled()
-    await app?.close()
-    app = undefined
-    const plain = await start(plainChat)
-    const site = answer(await post(plain.server, call('schedule_create', create)))
-    expect(site).toMatchObject({ isError: true, value: { ok: false, code: 'BAD_REQUEST' } })
-    // A task about a site is offered elsewhere: a chat of its project or the section.
-    expect(site.value.message).toMatch(/«Запланированные задачи»/)
-    expect(plain.store.reserve).not.toHaveBeenCalled()
-    const own = answer(
-      await post(plain.server, call('schedule_create', { ...create, project: 'none' })),
-    )
-    expect(own).toMatchObject({ isError: false, value: { ok: true, action: 'create' } })
-  })
-
   it('tells refusals of the store and of the schedule as results the agent explains', async () => {
     const store = fakeStore()
     store.reserve
       .mockRejectedValueOnce(scheduleLimitReached())
       .mockRejectedValueOnce(new DomainError('SCHEDULE_CHANGE_LIMIT', 'Не больше 5', 409))
       .mockRejectedValueOnce(new DomainError('TASK_TEXT_HAS_SECRET', 'A password or a key', 400))
-    const { server } = await start(projectChat, store)
+    const { server } = await start(browserChat, store)
     const results = []
     for (const code of ['SCHEDULE_LIMIT', 'SCHEDULE_CHANGE_LIMIT', 'TASK_TEXT_HAS_SECRET']) {
       const res = answer(await post(server, call('schedule_create', create)))

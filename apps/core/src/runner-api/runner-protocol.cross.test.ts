@@ -12,8 +12,6 @@ import {
   type TurnPlan,
 } from '@repo/domain'
 import {
-  baseSha,
-  bundleBytes,
   credentials,
   events,
   fence,
@@ -238,7 +236,7 @@ describe('SandboxRunner with core', () => {
 })
 
 describe('A chat without a site on the runner (docs/plan/61-chats-first.md, К16)', () => {
-  it('fetches the files of the client from core into a turn without a bundle', async () => {
+  it('fetches the files of the client from core into the turn of their chat', async () => {
     const c = await core()
     const side = sandboxSide()
     side.finish()
@@ -258,7 +256,7 @@ describe('A chat without a site on the runner (docs/plan/61-chats-first.md, К16
     runner.start()
     closers.push(() => runner.stop())
     // The lease of a chat is its own id: the labels are all that says so on the wire.
-    const chatFence = { ...fence, siteId: labels.taskId }
+    const chatFence = fence
     const assignment = (await c.assignments.open({
       fence: chatFence,
       sessionId: labels.sessionId,
@@ -269,7 +267,7 @@ describe('A chat without a site on the runner (docs/plan/61-chats-first.md, К16
     }))!
     const path = '/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/Смета.pdf'
     const body = Buffer.from('%PDF synthetic estimate')
-    const { bundle: _bundle, ...input } = prepareInput(assignment.id)
+    const input = prepareInput(assignment.id)
 
     const execution = await c.executor.prepare(
       {
@@ -293,7 +291,6 @@ describe('A chat without a site on the runner (docs/plan/61-chats-first.md, К16
     )
     await execution.destroy('completed')
 
-    expect(side.importBundle).not.toHaveBeenCalled()
     const written = vi.mocked(side.sandbox.fs.write).mock.calls.find(([to]) => to === path)!
     expect(Buffer.from(written[1])).toEqual(body)
     expect(written[2]).toEqual({ mode: 0o444 })
@@ -305,10 +302,6 @@ describe('HttpRunnerTransport', () => {
     const c = await core()
     const side = sandboxSide()
     side.finish()
-    const imported: Buffer[] = []
-    side.importBundle.mockImplementation(async (_sandbox, bundle) => {
-      for await (const chunk of bundle.read()) imported.push(Buffer.from(chunk))
-    })
     const runner = new SandboxRunner({
       transport: c.transport(),
       executor: side.executor,
@@ -334,7 +327,7 @@ describe('HttpRunnerTransport', () => {
     const journal: TurnOutputBatch[] = []
     await agent.output(async (batch) => void journal.push(batch))
     await execution.quiesce()
-    const captured = await execution.capture({ home, baseSha })
+    const captured = await execution.capture({ home })
     const key = new Uint8Array(32).fill(5)
     const sealed = await execution.seal({
       base: {
@@ -344,12 +337,6 @@ describe('HttpRunnerTransport', () => {
         image,
         driver: { id: sampleDriverId, version: '1.0.0' },
         home,
-        git: {
-          provider: 'gitea',
-          branch: `agent/${labels.taskId}`,
-          baseSha,
-          headSha: 'c'.repeat(40),
-        },
         schemaVersion: 1,
         createdAt: '2026-09-27T00:00:00.000Z',
       },
@@ -363,10 +350,8 @@ describe('HttpRunnerTransport', () => {
     })
     await execution.destroy('completed')
 
-    expect(Buffer.concat(imported)).toEqual(bundleBytes)
     expect(journal.flatMap((batch) => batch.events)).toEqual(events)
-    expect(Buffer.from(captured.patch!)).toEqual(side.archives.patch)
-    expect(Buffer.from(captured.untracked!)).toEqual(Buffer.from(side.archives.untracked))
+    expect(captured).not.toHaveProperty('patch')
     expect(captured.homeBytes).toBe(side.archives.home.byteLength)
     const [put, body] = side.transfer.put.mock.calls[0]!
     expect(put.url).toContain('/turns/0001/home.tar.zst')

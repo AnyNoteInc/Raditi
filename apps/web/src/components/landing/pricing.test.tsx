@@ -11,7 +11,7 @@ const { plans, pack } = pricing
 
 // The line under the main action, as it reads.
 const GIFT_NOTE =
-  'При регистрации — 50 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.'
+  'При регистрации — 50 кредитов в подарок: хватит на несколько небольших задач. Тариф выберете позже.'
 
 function planCard(name: string): HTMLElement {
   const card = screen.getByRole('heading', { name }).closest('article')
@@ -57,7 +57,7 @@ describe('landing pricing', () => {
     const { unmount } = render(<Pricing plans={plans} pack={pack} />)
     const offer = screen.getByText(/^Кредитов не хватит\?/)
     expect(plain(offer.textContent)).toBe(
-      'Кредитов не хватит? Можно будет докупить пакет — 100 кредитов за 1 490 ₽. Небольшая правка из пакета — около 75 ₽. Кредиты из пакета не сгорают.',
+      'Кредитов не хватит? Можно будет докупить пакет — 100 кредитов за 1 490 ₽. Небольшая задача из пакета — около 75 ₽. Кредиты из пакета не сгорают.',
     )
     expect(screen.getByText('Цены в рублях.')).toBeInTheDocument()
     unmount()
@@ -72,7 +72,7 @@ describe('landing pricing', () => {
     render(<Pricing plans={[{ ...first!, creditsPerDay: 50 }, ...others]} pack={pack} />)
 
     expect(plain(screen.getByText(/^Кредитов не хватит\?/).textContent)).toBe(
-      'Кредитов не хватит? Можно будет докупить пакет — 100 кредитов за 1 490 ₽. Небольшая правка из пакета — около 75 ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.',
+      'Кредитов не хватит? Можно будет докупить пакет — 100 кредитов за 1 490 ₽. Небольшая задача из пакета — около 75 ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.',
     )
     expect(
       within(planCard('Старт'))
@@ -103,19 +103,14 @@ describe('landing pricing', () => {
       within(planCard('Старт'))
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
-    ).toEqual([
-      '200 кредитов в месяц — в среднем около 18 задач',
-      'Небольшая правка — около 50 ₽',
-      'Один сайт',
-    ])
+    ).toEqual(['200 кредитов в месяц — в среднем около 18 задач', 'Небольшая задача — около 50 ₽'])
     expect(
       within(planCard('Бизнес'))
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
     ).toEqual([
       '1 000 кредитов в месяц — в среднем около 91 задачи',
-      'Небольшая правка — около 50 ₽',
-      'До 3 сайтов',
+      'Небольшая задача — около 50 ₽',
     ])
     expect(
       within(planCard('Агентство'))
@@ -123,21 +118,19 @@ describe('landing pricing', () => {
         .map((item) => plain(item.textContent)),
     ).toEqual([
       '2 000 кредитов в месяц — в среднем около 180 задач',
-      'Небольшая правка — около 50 ₽',
-      'До 15 сайтов',
+      'Небольшая задача — около 50 ₽',
     ])
     // No plan on sale has a daily limit: no card speaks of a day.
     for (const name of ['Старт', 'Бизнес', 'Агентство']) {
       expect(planCard(name)).not.toHaveTextContent(/в день|дневн/)
     }
 
-    const included = screen.getByText(/^В каждый тариф войдут/)
+    const included = screen.getByText(/^В каждый тариф входят/)
     expect(included).toHaveTextContent(
-      'В каждый тариф войдут правки текстов, цен, фото, акций и страниц сайта, копия перед правкой и отмена.',
+      'В каждый тариф входят поиск в интернете, браузер помощника, письма, документы, таблицы и страницы по ссылке.',
     )
     for (const name of ['Старт', 'Бизнес', 'Агентство']) {
       expect(planCard(name).contains(included)).toBe(false)
-      expect(planCard(name)).not.toHaveTextContent('отмена')
     }
   })
 
@@ -145,8 +138,8 @@ describe('landing pricing', () => {
     render(<Pricing plans={plans} pack={pack} />)
 
     // The main action of a guest, by its whole name: the way to the form of a lead.
-    const action = screen.getByRole('link', { name: 'Подключить сайт бесплатно' })
-    expect(mainAction(true).label).toBe('Подключить сайт бесплатно')
+    const action = screen.getByRole('link', { name: 'Начать бесплатно' })
+    expect(mainAction(true).label).toBe('Начать бесплатно')
     // The plan is chosen later, so the link carries no plan.
     expect(action).toHaveAttribute('href', '#lead')
     expect(screen.getAllByRole('link')).toEqual([action])
@@ -160,16 +153,14 @@ describe('landing pricing', () => {
 
     const note = screen.getByText(GIFT_NOTE)
     // Beside the action, under the plans: one paragraph after the link.
-    expect(screen.getByRole('link', { name: 'Подключить сайт бесплатно' }).nextElementSibling).toBe(
-      note,
-    )
+    expect(screen.getByRole('link', { name: 'Начать бесплатно' }).nextElementSibling).toBe(note)
     for (const name of ['Старт', 'Бизнес', 'Агентство']) {
       expect(planCard(name).contains(note)).toBe(false)
     }
     // The gift is a number of the credits model; without a tariff there is no daily limit.
     expect(GIFT_NOTE).toContain(`— ${signupGiftCredits} кредитов в подарок`)
     expect(GIFT_NOTE).not.toMatch(/в день/)
-    // The gift is promised in credits and in small edits, never as a count of tasks.
+    // The gift is promised in credits and in small tasks, never as a count of tasks.
     expect(GIFT_NOTE).not.toMatch(/\d+ задач/)
     // The line of before the gift is gone.
     expect(screen.queryByText(/когда откроется оплата/)).toBeNull()
@@ -197,14 +188,11 @@ describe('landing pricing', () => {
 
     expect(screen.getByText('Сейчас не удалось загрузить тарифы.')).toBeInTheDocument()
     // The sentence names what the link under it does, and no registration.
-    const way = screen.getByText(/Оставить заявку на\s+подключение можно уже сейчас\./)
-    expect(way.textContent).toContain('на\u00a0подключение можно')
+    const way = screen.getByText(/Оставить заявку можно уже сейчас\./)
+    expect(way.textContent).toContain('Оставить заявку можно уже сейчас.')
     expect(screen.queryByText(/Зарегистр/)).not.toBeInTheDocument()
     expect(screen.getAllByRole('link')).toHaveLength(1)
-    expect(screen.getByRole('link', { name: 'Подключить сайт бесплатно' })).toHaveAttribute(
-      'href',
-      '#lead',
-    )
+    expect(screen.getByRole('link', { name: 'Начать бесплатно' })).toHaveAttribute('href', '#lead')
   })
 
   it('leads a signed-in visitor to the chats when the plans are unavailable', () => {

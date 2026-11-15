@@ -1,6 +1,5 @@
 import { z } from 'zod'
 
-import { envVarValueSchema } from '../release/env-vars.ts'
 import {
   browserCloseReasons,
   browserSessionStateSchema,
@@ -42,30 +41,16 @@ export const browserWorkerTokenSchema = z
 export const BROWSER_AGENT_NOTES_MAX_CHARS = 2000
 
 /**
- * The site's saved sign-in (Б36) as core reads it from Vault (`siteSignInEnvVars`): values of
- * site variables, so never logged, answered or put in an error.
- */
-export const browserSignInSchema = z.strictObject({
-  login: envVarValueSchema,
-  password: envVarValueSchema,
-})
-export type BrowserSignIn = z.infer<typeof browserSignInSchema>
-
-/**
  * `POST /v1/sessions/ensure` (core): the live session of the task, started when there is none —
  * core asks it to start a session a `web_*` call opened, and when a turn starts. `takeControl` — a
- * turn starts: the agent takes the browser back from the client (Б16). `signIn` — the site's saved sign-in, which replaces what the session held; none — the
- * session forgets it. Answers the state (`browserSessionStateSchema`). The worker reads the
- * site's address and stack from the database by `siteId`: where the browser may go is never the
- * caller's word. `siteId` null — a chat without a site (docs/plan/61-chats-first.md, К12): the
- * worker checks it against the session's row and the task's.
+ * turn starts: the agent takes the browser back from the client (Б16). Answers the state
+ * (`browserSessionStateSchema`). Every session is the open web of a chat
+ * (docs/plan/83-remove-projects.md, БП9).
  */
 export const browserEnsureRequestSchema = z.strictObject({
   sessionId: z.uuid(),
   taskId: z.uuid(),
-  siteId: z.uuid().nullable(),
   takeControl: z.boolean(),
-  signIn: browserSignInSchema.optional(),
 })
 export type BrowserEnsureRequest = z.infer<typeof browserEnsureRequestSchema>
 export const browserEnsureResponseSchema = browserSessionStateSchema
@@ -113,12 +98,11 @@ export const browserActionRequestSchema = z.strictObject({
   assignmentId: z.uuid(),
   action: browserActionSchema,
   /**
-   * A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп27, Зп28):
-   * the worker refuses a save or a publish on the site (`BROWSER_READ_ONLY`), and from this action
-   * on — until an action says otherwise — every request of the pages to the site that does more
-   * than read (a method that writes, other than the saved sign-in; a read with a secret in its
-   * query, unless the stack's `readOnlyDenied` allows it; a read that acts, which it denies), and
-   * the acceptance of a confirm or a prompt dialog. Absent — false.
+   * A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп27, Зп28,
+   * Зп50): the worker refuses a file sent to a page and the acceptance of a confirm or a prompt
+   * dialog (`BROWSER_READ_ONLY`), and from this action on — until an action says otherwise — every
+   * request of the pages, on any site, that does more than read: a method that writes, or a
+   * document a frame goes to with a secret in its query. Absent — false.
    */
   readOnly: z.boolean().optional(),
 })

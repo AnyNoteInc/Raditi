@@ -1,10 +1,9 @@
 import { randomInt, randomUUID } from 'node:crypto'
 
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
-import { underPrivateCreditRate } from '@repo/billing/testing'
+import { placeReserve, settleTaskCharge, underPrivateCreditRate } from '@repo/billing/testing'
 import {
   createPrismaClient,
-  ensurePersonalWorkspace,
   insertFeedEvent,
   type Prisma,
   type PrismaClient,
@@ -12,6 +11,7 @@ import {
 } from '@repo/db'
 import {
   legalDocuments,
+  signupGiftCredits,
   type KvMetadata,
   type KvWriteOptions,
   type ModelClass,
@@ -21,8 +21,9 @@ import {
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { createCaller } from '../../router.ts'
-import { releaseConfirmKey, type ChatContext } from '../chat/context.ts'
+import type { ChatContext } from '../chat/context.ts'
 import { readChatNotification } from '../notifications.ts'
+import { deterministicUuidV7 } from '../deterministic-uuid.ts'
 import { scheduledChatId, startScheduledRun } from './runs.ts'
 
 // The scheduled tasks on PostgreSQL (docs/plan/82-scheduled-tasks.md, slice 82.3): the start of a
@@ -36,8 +37,6 @@ const requiredConsents = legalDocuments.flatMap((document) =>
     ? [{ documentType: document.consentType, documentVersion: document.version, granted: true }]
     : [],
 )
-const ADDRESS = { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 } as const
-const KEY = releaseConfirmKey('a-secret-of-the-sessions-of-this-test-of-schedules')
 const VAPID = 'B'.repeat(87)
 const HOUR = 3_600_000
 
@@ -135,10 +134,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
   const storage = { get: async () => null } as unknown as ObjectStorage
   const chat: ChatContext = {
     appEnv: 'test',
-    preview: { address: ADDRESS, ttlHours: 72 },
     browser: null,
     webPushPublicKey: VAPID,
-    releaseConfirmKey: KEY,
     storage: () => storage,
     secrets: () => vault.secrets,
   }
@@ -155,14 +152,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
     const owned = { workspaceId: { in: workspaces.map(({ id }) => id) } }
     const tasks = await db.task.findMany({ where: owned, select: { id: true } })
-    const previews = await db.previewEnvironment.findMany({
-      where: { task: owned },
-      select: { id: true },
-    })
     await db.outboxEvent.deleteMany({
-      where: {
-        OR: [...tasks, ...previews].map(({ id }) => ({ dedupeKey: { contains: id } })),
-      },
+      where: { OR: tasks.map(({ id }) => ({ dedupeKey: { contains: id } })) },
     })
     await db.chatNotification.deleteMany({ where: { userId: { in: users } } })
     await db.pushSubscription.deleteMany({ where: { userId: { in: users } } })
@@ -170,12 +161,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     await db.creditLedger.deleteMany({ where: { account: owned } })
     await db.creditHold.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
-    await db.giftSiteClaim.deleteMany({ where: owned })
-    await db.gitRepository.deleteMany({ where: { site: owned } })
     await db.task.deleteMany({ where: owned })
-    await db.credentialRef.deleteMany({ where: owned })
     await db.auditLog.deleteMany({ where: owned })
-    await db.site.deleteMany({ where: owned })
     await db.workspace.deleteMany({ where: { id: owned.workspaceId } })
     await db.user.deleteMany({ where: { id: { in: users } } })
   })
@@ -199,41 +186,42 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     return row
   }
 
-  /** An owner with the gift and an active site with its repository and database access. */
-  async function siteOwner(options: { gift?: boolean } = {}) {
-    const owner = await person()
+  /**
+   * A client with their personal workspace and the gift of the registration, where every task of
+   * theirs goes (Зп44); `credits: false` — the gift spent by a chat of theirs, nothing left: a task
+   * makes the personal workspace with the gift, so a client without credits is one who spent it.
+   */
+  async function newClient(options: { credits?: boolean } = {}) {
+    const user = await person()
     const workspace = await db.$transaction((tx) =>
-      options.gift === false
-        ? ensurePersonalWorkspace(tx, { userId: owner.id, appEnv: 'test' })
-        : ensurePersonalWorkspaceWithGift(tx, { userId: owner.id, appEnv: 'test' }),
+      ensurePersonalWorkspaceWithGift(tx, { userId: user.id, appEnv: 'test' }),
     )
-    const site = await db.site.create({
-      data: {
-        name: 'Кофейня',
-        url: `https://${randomUUID()}.example.ru`,
-        stack: 'wordpress',
-        status: 'active',
+    if (options.credits === false) {
+      const now = new Date()
+      const taskId = deterministicUuidV7('schedule-test', randomUUID(), now)
+      await db.task.create({
+        data: {
+          id: taskId,
+          workspaceId: workspace.id,
+          createdById: user.id,
+          status: 'awaiting_user',
+          modelClass: 'light',
+          billable: true,
+        },
+      })
+      await placeReserve(db, {
         workspaceId: workspace.id,
-      },
-    })
-    await db.gitRepository.create({
-      data: {
-        siteId: site.id,
-        provider: 'gitea',
-        owner: 'sites',
-        name: `site-${site.id}`,
-        url: `https://git.example.ru/sites/site-${site.id}`,
-      },
-    })
-    await db.credentialRef.create({
-      data: {
-        kind: 'db',
-        workspaceId: workspace.id,
-        siteId: site.id,
-        vaultPath: `kv/sites/${site.id}/db`,
-      },
-    })
-    return { owner, workspaceId: workspace.id, site }
+        taskId,
+        attempt: 1,
+        now,
+        expiresAt: new Date(now.getTime() + HOUR),
+      })
+      await db.$transaction(
+        (tx) => settleTaskCharge(tx, { taskId, credits: signupGiftCredits, now }),
+        { isolationLevel: 'ReadCommitted' },
+      )
+    }
+    return { owner: user, workspaceId: workspace.id }
   }
 
   function callerOf(user: User, client: PrismaClient = underRate(db)) {
@@ -256,15 +244,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
   }
 
-  /** A task of the owner's project and a run of its schedule, as the tick writes them. */
+  /** A task of the owner and a run of its schedule, as the tick writes them. */
   async function runOf(
     owner: User,
-    siteId: string | null,
     options: { dueAt?: Date; trigger?: 'schedule' | 'manual' } = {},
   ) {
     const caller = callerOf(owner)
     const task = await caller.schedule.create({
-      siteId,
       name: 'Проверка сайта',
       instructions: 'Откройте главную и скажите, всё ли открывается',
       effort: 'low',
@@ -277,7 +263,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
         dueAt: options.dueAt ?? new Date(Math.floor(Date.now() / 60_000) * 60_000),
         trigger: options.trigger ?? 'schedule',
         status: 'pending',
-        siteId,
         name: task.name,
         instructions: task.instructions,
         effort: task.effort,
@@ -290,9 +275,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     startScheduledRun(underRate(db), chat, { runId, now })
 
   describe('the start of a run (§4.3)', () => {
-    it('starts its chat from the snapshot, named by the task, its preview waiting for a need', async () => {
-      const { owner, site } = await siteOwner()
-      const { task, run } = await runOf(owner, site.id)
+    it('starts its chat from the snapshot, named by the task, in the creator’s workspace (Зп45)', async () => {
+      const { owner, workspaceId } = await newClient()
+      const { task, run } = await runOf(owner)
       // The task is edited after the run was written: the run starts with what it took.
       await callerOf(owner).schedule.update({ scheduleId: task.id, instructions: 'Другая просьба' })
 
@@ -301,8 +286,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       expect(answer).toEqual({ outcome: 'started', taskId })
       const chatRow = await db.task.findUniqueOrThrow({ where: { id: taskId } })
       expect(chatRow).toMatchObject({
-        siteId: site.id,
+        workspaceId,
         createdById: owner.id,
+        needsBrowser: false,
         title: 'Проверка сайта',
         titleSource: 'client',
         modelClass: 'light',
@@ -314,14 +300,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       expect((request.payload as { text: string }).text).toBe(
         'Откройте главную и скажите, всё ли открывается',
       )
-      // Зп18: the row of the preview is there, stopped and never built, and no build is queued.
-      const preview = await db.previewEnvironment.findUniqueOrThrow({ where: { taskId } })
-      expect(preview).toMatchObject({ status: 'expired', dbMode: 'copy', writeEpoch: 0 })
-      expect(
-        await db.outboxEvent.count({
-          where: { dedupeKey: { startsWith: `preview.sync:${preview.id}:` } },
-        }),
-      ).toBe(0)
       expect(await db.scheduledRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({
         status: 'started',
         taskId,
@@ -329,48 +307,47 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
 
       // A repeat of the delivery answers the same and makes nothing more.
       expect(await start(run.id)).toEqual({ outcome: 'started', taskId })
-      expect(await db.task.count({ where: { siteId: site.id } })).toBe(1)
+      expect(await db.task.count({ where: { workspaceId } })).toBe(1)
     })
 
     it('records the chat a delivery made before its outcome was written (б)', async () => {
-      const { owner, site } = await siteOwner()
-      const { run } = await runOf(owner, site.id)
+      const { owner, workspaceId } = await newClient()
+      const { run } = await runOf(owner)
       const taskId = scheduledChatId(run)
       await start(run.id)
       // As if the outcome had been lost: the run waits again, its chat is there.
       await db.$executeRaw`UPDATE scheduled_runs SET status = 'pending', task_id = NULL,
         started_at = NULL WHERE id = ${run.id}::uuid`
       expect(await start(run.id)).toEqual({ outcome: 'started', taskId })
-      expect(await db.task.count({ where: { siteId: site.id } })).toBe(1)
+      expect(await db.task.count({ where: { workspaceId } })).toBe(1)
     })
 
     it('skips a run that came late or whose task was paused or deleted (в)', async () => {
-      const { owner, site } = await siteOwner()
-      const old = await runOf(owner, site.id, { dueAt: new Date(Date.now() - 7 * HOUR) })
+      const { owner, workspaceId } = await newClient()
+      const old = await runOf(owner, { dueAt: new Date(Date.now() - 7 * HOUR) })
       expect(await start(old.run.id)).toEqual({ outcome: 'skipped', reason: 'missed' })
 
-      const paused = await runOf(owner, site.id)
+      const paused = await runOf(owner)
       await callerOf(owner).schedule.setEnabled({ scheduleId: paused.task.id, enabled: false })
       expect(await start(paused.run.id)).toEqual({ outcome: 'skipped', reason: 'paused' })
 
-      const deleted = await runOf(owner, site.id)
+      const deleted = await runOf(owner)
       await callerOf(owner).schedule.delete({ scheduleId: deleted.task.id })
       expect(await start(deleted.run.id)).toEqual({ outcome: 'skipped', reason: 'paused' })
 
       expect(await start(randomUUID())).toEqual({ outcome: 'skipped', reason: 'paused' })
-      expect(await db.task.count({ where: { siteId: site.id } })).toBe(0)
+      expect(await db.task.count({ where: { workspaceId } })).toBe(0)
     })
 
     it('skips a run when a later one of its task already waits or started (в)', async () => {
-      const { owner, site } = await siteOwner()
-      const { task, run } = await runOf(owner, site.id, { dueAt: new Date(Date.now() - HOUR) })
+      const { owner } = await newClient()
+      const { task, run } = await runOf(owner, { dueAt: new Date(Date.now() - HOUR) })
       await db.scheduledRun.create({
         data: {
           scheduledTaskId: task.id,
           dueAt: new Date(Date.now() - 60_000),
           trigger: 'schedule',
           status: 'pending',
-          siteId: site.id,
           name: task.name,
           instructions: task.instructions,
           effort: task.effort,
@@ -379,37 +356,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       expect(await start(run.id)).toEqual({ outcome: 'skipped', reason: 'missed' })
     })
 
-    it('stops the task when its project is gone or its creator lost the right (г)', async () => {
-      const { owner, workspaceId, site } = await siteOwner()
-      const gone = await runOf(owner, site.id)
-      const right = await runOf(owner, site.id)
-      await db.site.update({ where: { id: site.id }, data: { deletedAt: new Date() } })
-      expect(await start(gone.run.id)).toEqual({ outcome: 'refused', reason: 'project_gone' })
-      expect(
-        await db.scheduledTask.findUniqueOrThrow({ where: { id: gone.task.id } }),
-      ).toMatchObject({ enabled: false, pausedReason: 'project_gone' })
-
-      await db.site.update({ where: { id: site.id }, data: { deletedAt: null } })
-      await db.member.update({
-        where: { workspaceId_userId: { workspaceId, userId: owner.id } },
-        data: { role: 'member' },
-      })
-      expect(await start(right.run.id)).toEqual({ outcome: 'refused', reason: 'member_gone' })
-      expect(
-        await db.scheduledTask.findUniqueOrThrow({ where: { id: right.task.id } }),
-      ).toMatchObject({ enabled: false, pausedReason: 'member_gone' })
-    })
-
     it('refuses while the creator has documents to accept (г)', async () => {
-      const { owner, site } = await siteOwner()
-      const { run } = await runOf(owner, site.id)
+      const { owner } = await newClient()
+      const { run } = await runOf(owner)
       await db.userConsent.deleteMany({ where: { userId: owner.id } })
       expect(await start(run.id)).toEqual({ outcome: 'refused', reason: 'consent' })
     })
 
     it('records the refusal of credits, counted for the pause (д)', async () => {
-      const { owner, site } = await siteOwner({ gift: false })
-      const { task, run } = await runOf(owner, site.id)
+      const { owner, workspaceId } = await newClient({ credits: false })
+      const { task, run } = await runOf(owner)
       const answer = await start(run.id)
       expect(answer.outcome).toBe('refused')
       expect(['needs_tariff', 'no_credits']).toContain(
@@ -419,12 +375,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
         refusalStreak: 1,
         enabled: true,
       })
-      expect(await db.task.count({ where: { siteId: site.id } })).toBe(0)
+      // No chat of the run: the one chat is the client's own, which spent the gift.
+      expect(await db.task.findUnique({ where: { id: scheduledChatId(run) } })).toBeNull()
+      expect(await db.task.count({ where: { workspaceId } })).toBe(1)
     })
 
     it('leaves the run waiting when Vault fails, so core delivers it again', async () => {
-      const { owner, site } = await siteOwner()
-      const { run } = await runOf(owner, site.id)
+      const { owner } = await newClient()
+      const { run } = await runOf(owner)
       vault.transit.failing = true
       await expect(start(run.id)).rejects.toMatchObject({ code: 'WORKSPACE_KEY_UNAVAILABLE' })
       expect(await db.scheduledRun.findUniqueOrThrow({ where: { id: run.id } })).toMatchObject({
@@ -433,8 +391,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
 
     it('makes no chat for a run closed while it was being made (Зп20, §4.3)', async () => {
-      const { owner, site } = await siteOwner()
-      const { task, run } = await runOf(owner, site.id)
+      const { owner } = await newClient()
+      const { task, run } = await runOf(owner)
       // The sweep — or core giving its last delivery up — holds the task and closes the run.
       let release!: () => void
       const held = new Promise<void>((resolve) => (release = resolve))
@@ -463,64 +421,34 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       expect(await db.creditHold.count({ where: { taskId: scheduledChatId(run) } })).toBe(0)
     })
 
-    it('reads a project deleted while its chat was being made as gone, not as a fault (Зп21, Зп22)', async () => {
-      const { owner, site } = await siteOwner()
-      const { task, run } = await runOf(owner, site.id)
-      // «Удалить проект» holds the row of the project while the start reads it alive.
-      let release!: () => void
-      const held = new Promise<void>((resolve) => (release = resolve))
-      let locked!: () => void
-      const isLocked = new Promise<void>((resolve) => (locked = resolve))
-      const deletion = db.$transaction(
-        async (tx) => {
-          await tx.$queryRaw`SELECT id FROM sites WHERE id = ${site.id}::uuid FOR UPDATE`
-          locked()
-          await held
-          await tx.site.update({ where: { id: site.id }, data: { deletedAt: new Date() } })
-        },
-        { timeout: 20_000 },
-      )
-      await isLocked
-      const started = start(run.id)
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      release()
-      await deletion
-      expect(await started).toEqual({ outcome: 'refused', reason: 'project_gone' })
-      expect(await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({
-        enabled: false,
-        pausedReason: 'project_gone',
-      })
-      expect(await db.task.findUnique({ where: { id: scheduledChatId(run) } })).toBeNull()
-    })
-
-    it('starts a chat without a project in the personal workspace', async () => {
+    it('makes the personal workspace of a new user with its gift, and starts the chat there', async () => {
       const owner = await person()
-      const { run } = await runOf(owner, null)
+      const { task, run } = await runOf(owner)
       const answer = await start(run.id)
       expect(answer).toEqual({ outcome: 'started', taskId: scheduledChatId(run) })
-      expect(await db.previewEnvironment.count({ where: { taskId: scheduledChatId(run) } })).toBe(0)
+      const chatRow = await db.task.findUniqueOrThrow({ where: { id: scheduledChatId(run) } })
+      const row = await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })
+      expect(chatRow.workspaceId).toBe(row.workspaceId)
     })
   })
 
   describe('the procedures of «Расписание»', () => {
     it('creates, lists, reads, changes, pauses and deletes a task of its creator', async () => {
-      const { owner, site } = await siteOwner()
+      const { owner } = await newClient()
       const caller = callerOf(owner)
       const created = await caller.schedule.create({
-        siteId: site.id,
-        name: 'Заявки за сутки',
-        instructions: 'Соберите заявки за сутки',
+        name: 'Курс валют',
+        instructions: 'Пришли курс доллара, евро и юаня по ЦБ на сегодня',
         triggers: [{ kind: 'weekdays', time: '08:00' }],
         timezone: 'Asia/Novosibirsk',
-        templateSlug: 'leads-digest',
+        templateSlug: 'currency-rates',
       })
       expect(created).toMatchObject({
         effort: 'high',
         enabled: true,
         notify: true,
         createdVia: 'template',
-        templateSlug: 'leads-digest',
-        project: { id: site.id, name: 'Кофейня', deleted: false },
+        templateSlug: 'currency-rates',
         lastRun: null,
         runs: [],
       })
@@ -530,12 +458,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       expect(schedules.map((schedule) => schedule.id)).toEqual([created.id])
       expect(timezone).toBe('Europe/Moscow')
 
-      const renamed = await caller.schedule.update({
-        scheduleId: created.id,
-        name: 'Заявки',
-        siteId: site.id,
-      })
-      expect(renamed).toMatchObject({ name: 'Заявки', nextRunAt: created.nextRunAt })
+      expect(created).not.toHaveProperty('project')
+      const renamed = await caller.schedule.update({ scheduleId: created.id, name: 'Курс' })
+      expect(renamed).toMatchObject({ name: 'Курс', nextRunAt: created.nextRunAt })
 
       const paused = await caller.schedule.setEnabled({ scheduleId: created.id, enabled: false })
       expect(paused).toMatchObject({ enabled: false, nextRunAt: null, pausedReason: null })
@@ -548,10 +473,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
 
     it('refuses in the words of the client what the rules of a task refuse', async () => {
-      const { owner, site } = await siteOwner()
+      const { owner } = await newClient()
       const caller = callerOf(owner)
       const base = {
-        siteId: site.id,
         name: 'Проверка',
         instructions: 'Проверьте сайт',
         triggers: [{ kind: 'daily' as const, time: '09:00' }],
@@ -578,17 +502,26 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
           triggers: [{ kind: 'once', date: '2020-01-01', time: '09:00' }],
         }),
       ).rejects.toMatchObject({ message: 'Это время уже прошло — выберите другое' })
+      // A place of a template left unfilled, in a task of a template or of none (Зп59).
+      for (const templateSlug of ['competitors', null])
+        await expect(
+          caller.schedule.create({
+            ...base,
+            instructions: 'Посмотри сайты конкурентов: [впишите адреса сайтов].',
+            templateSlug,
+          }),
+        ).rejects.toMatchObject({
+          message: 'Замените текст в квадратных скобках своим',
+          cause: { code: 'SCHEDULE_TEMPLATE_PLACEHOLDER' },
+        })
+      const kept = await caller.schedule.create({ ...base, templateSlug: 'site-check' })
       await expect(
-        caller.schedule.create({
-          ...base,
-          siteId: null,
-          instructions: 'Посмотрите сайты конкурентов: [впишите адреса].',
-          templateSlug: 'competitors',
-        }),
-      ).rejects.toMatchObject({ message: 'Впишите адреса сайтов конкурентов' })
+        caller.schedule.update({ scheduleId: kept.id, instructions: 'Открой [впишите адрес]' }),
+      ).rejects.toMatchObject({ cause: { code: 'SCHEDULE_TEMPLATE_PLACEHOLDER' } })
+      // A slug of no template is never stored.
       await expect(
-        caller.schedule.create({ ...base, siteId: null, templateSlug: 'site-check' }),
-      ).rejects.toMatchObject({ message: 'Этому шаблону нужен проект — выберите его' })
+        caller.schedule.create({ ...base, templateSlug: 'leads-digest' }),
+      ).rejects.toMatchObject({ cause: { code: 'BAD_REQUEST' } })
       // Another user's task is not there for this one.
       const stranger = callerOf(await person())
       const own = await caller.schedule.create(base)
@@ -601,10 +534,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
 
     it('runs a task now, opens its chat, and refuses a second run while it goes on', async () => {
-      const { owner, site } = await siteOwner()
+      const { owner } = await newClient()
       const caller = callerOf(owner)
       const task = await caller.schedule.create({
-        siteId: site.id,
         name: 'Вручную',
         instructions: 'Проверьте сайт',
         triggers: [],
@@ -633,10 +565,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
 
     it('tells a refused «Запустить сейчас» in the words of its refusal and leaves no notice', async () => {
-      const { owner, site } = await siteOwner({ gift: false })
+      const { owner } = await newClient({ credits: false })
       const caller = callerOf(owner)
       const task = await caller.schedule.create({
-        siteId: site.id,
         name: 'Без кредитов',
         instructions: 'Проверьте сайт',
         triggers: [],
@@ -651,10 +582,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
 
     it('takes up a run of «Запустить сейчас» a stopped web left waiting, and never drops another press', async () => {
-      const { owner, site } = await siteOwner()
+      const { owner } = await newClient()
       const caller = callerOf(owner)
       const task = await caller.schedule.create({
-        siteId: site.id,
         name: 'Брошенный запуск',
         instructions: 'Проверьте сайт',
         triggers: [],
@@ -667,7 +597,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
           dueAt: new Date(Math.floor(Date.now() / 60_000) * 60_000 - 2 * 60_000),
           trigger: 'manual',
           status: 'pending',
-          siteId: site.id,
           name: task.name,
           instructions: task.instructions,
           effort: task.effort,
@@ -689,10 +618,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
 
     it('drops the run of «Запустить сейчас» when Vault fails', async () => {
-      const { owner, site } = await siteOwner()
+      const { owner } = await newClient()
       const caller = callerOf(owner)
       const task = await caller.schedule.create({
-        siteId: site.id,
         name: 'Сбой',
         instructions: 'Проверьте сайт',
         triggers: [],
@@ -706,17 +634,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
 
     it('says what a week of runs costs against the weekly limit, and remembers the zone', async () => {
-      const { owner, site } = await siteOwner()
+      const { owner } = await newClient()
       const caller = callerOf(owner)
       const hint = await caller.schedule.costHint({
-        siteId: site.id,
         triggers: [{ kind: 'daily', time: '09:00' }],
         timezone: 'Europe/Moscow',
       })
       expect(hint).toMatchObject({ averageCredits: 11, runsPerWeek: 7, creditsPerWeek: 77 })
       expect(hint.nextRunAt).toBeInstanceOf(Date)
       expect(
-        await caller.schedule.costHint({ siteId: null, triggers: [], timezone: 'Europe/Moscow' }),
+        await caller.schedule.costHint({ triggers: [], timezone: 'Europe/Moscow' }),
       ).toMatchObject({ runsPerWeek: 0, creditsPerWeek: 0, nextRunAt: null, overHalf: false })
 
       expect(await caller.schedule.rememberTimezone({ timezone: 'Asia/Novosibirsk' })).toEqual({
@@ -724,29 +651,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       })
       expect((await caller.schedule.list()).timezone).toBe('Asia/Novosibirsk')
     })
-
-    it('counts the tasks «Удалить проект» stops', async () => {
-      const { owner, site } = await siteOwner()
-      const caller = callerOf(owner)
-      for (const name of ['Первая', 'Вторая'])
-        await caller.schedule.create({
-          siteId: site.id,
-          name,
-          instructions: 'Проверьте сайт',
-          triggers: [],
-          timezone: 'Europe/Moscow',
-        })
-      expect(await caller.schedule.projectCount({ siteId: site.id })).toEqual({ count: 2 })
-      await expect(
-        callerOf(await person()).schedule.projectCount({ siteId: site.id }),
-      ).rejects.toMatchObject({ cause: { code: 'NOT_FOUND' } })
-    })
   })
 
   describe('a chat of a run', () => {
     it('is labelled by its task in the list and in its head, without a link once it is deleted', async () => {
-      const { owner, site } = await siteOwner()
-      const { task, run } = await runOf(owner, site.id)
+      const { owner } = await newClient()
+      const { task, run } = await runOf(owner)
       const { taskId } = (await start(run.id)) as { taskId: string }
       const caller = callerOf(owner)
       const label = { id: task.id, name: 'Проверка сайта', trigger: 'schedule' }
@@ -762,8 +672,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
 
     it('tells the run by the state of its chat: an answer, a stop at the limit', async () => {
-      const { owner, site } = await siteOwner()
-      const { task, run } = await runOf(owner, site.id)
+      const { owner } = await newClient()
+      const { task, run } = await runOf(owner)
       const { taskId } = (await start(run.id)) as { taskId: string }
       const caller = callerOf(owner)
       await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_user' } })
@@ -793,25 +703,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
         state: { kind: 'chat_deleted' },
         chat: null,
       })
-    })
-
-    it('tells a task of a deleted project as such, the chats of its runs gone with it (Зп6, Зп22)', async () => {
-      const { owner, site } = await siteOwner()
-      const { task, run } = await runOf(owner, site.id)
-      const { taskId } = (await start(run.id)) as { taskId: string }
-      const caller = callerOf(owner)
-      expect((await caller.schedule.get({ scheduleId: task.id })).runs[0]?.chat).toEqual({
-        id: taskId,
-        title: 'Проверка сайта',
-      })
-      await db.site.update({ where: { id: site.id }, data: { deletedAt: new Date() } })
-      const page = await caller.schedule.get({ scheduleId: task.id })
-      expect(page.project).toEqual({ id: site.id, name: 'Кофейня', deleted: true })
-      // The chat left the cabinet with its project: no link to a page that says «Такого чата нет».
-      expect(page.runs[0]?.chat).toBeNull()
-      expect(
-        (await caller.schedule.list()).schedules.find((item) => item.id === task.id)?.project,
-      ).toEqual({ id: site.id, name: 'Кофейня', deleted: true })
     })
   })
 
@@ -895,8 +786,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     })
 
     it('says a notice of a pass without its client and of the task itself in the words of Зп38', async () => {
-      const { owner, site } = await siteOwner()
-      const { task, run } = await runOf(owner, site.id)
+      const { owner } = await newClient()
+      const { task, run } = await runOf(owner)
       const { taskId } = (await start(run.id)) as { taskId: string }
       const notice = (data: Prisma.ChatNotificationUncheckedCreateInput) =>
         db.chatNotification.create({ data, select: { id: true } })
@@ -968,7 +859,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
           trigger: 'schedule',
           status: 'refused',
           reason: 'needs_tariff',
-          siteId: site.id,
           name: task.name,
           instructions: task.instructions,
           effort: task.effort,

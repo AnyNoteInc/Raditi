@@ -7,17 +7,14 @@ import {
   bindAttachments,
   createAttachment,
   createPrismaClient,
-  enqueueSiteWaitingPasses,
   insertFeedEvent,
   markAttachmentReady,
   openBrowserSession,
-  recordCandidate,
   upsertBrowserCheckpoint,
   type PrismaClient,
 } from '@repo/db'
 import {
   BROWSER_ONLY,
-  siteIdOf,
   toTurnPlan,
   type AgentDriver,
   type AgentEvent,
@@ -28,32 +25,16 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import { sampleDriverId } from '../testing/ids.ts'
 import { TaskEventTurnJournal } from '../turns/turn-journal.ts'
-import type { CandidateBuilder } from './candidate-builder.ts'
 import { LivePasses } from './live-passes.ts'
 import { CHARGE_LATER_EVENT, PassSettlement } from './pass-settlement.ts'
-import { LOST_REWIND_MS, ORPHAN_PREPARING_MS, TaskSweep } from './task-sweep.ts'
+import { ORPHAN_PREPARING_MS, TaskSweep } from './task-sweep.ts'
 
 // The sweep reads every task of the database: only on a disposable one (RADITI_GATEWAY_DB_TESTS).
 const databaseUrl = process.env.DATABASE_URL
 const enabled = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS === '1')
 
-const HEAD = 'b'.repeat(40)
 const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
 const quiet = { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
-const candidates = {
-  context: vi.fn(async (task: { id: string }) => ({
-    taskId: task.id,
-    repo: { provider: 'gitea', owner: 'sites', name: 'site' },
-    addOnlyPaths: [],
-    base: 'a'.repeat(40),
-    standing: null,
-    installedVersion: null,
-    releasedVersions: [],
-    revision: 1,
-  })),
-  build: vi.fn(async () => ({ kind: 'empty' as const })),
-} as unknown as CandidateBuilder
-
 describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
   let db: PrismaClient
   let fixtures: ReturnType<typeof billingFixtures>
@@ -64,8 +45,6 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     fixtures = billingFixtures(db)
   })
   afterEach(async () => {
-    await db.outboxEvent.deleteMany({ where: { dedupeKey: { startsWith: 'preview.sync:' } } })
-    await db.siteRelease.deleteMany({})
     await fixtures.cleanup()
     vi.clearAllMocks()
   })
@@ -76,7 +55,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
   const sweep = (now = new Date()) =>
     new TaskSweep({
       db,
-      settlement: new PassSettlement({ db, candidates, logger: quiet, now: () => now }),
+      settlement: new PassSettlement({ db, logger: quiet, now: () => now }),
       live: new LivePasses(),
       journal: new TaskEventTurnJournal(db),
       drivers: { has: () => false } as unknown as AgentDriverRegistry,
@@ -89,7 +68,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     status: string,
     turnNo: number,
     expiresAt = new Date(Date.now() + 3_600_000),
-    { browser = false, chat = false }: { browser?: boolean; chat?: boolean } = {},
+    { browser = false }: { browser?: boolean } = {},
   ) {
     const { userId } = await fixtures.user()
     const workspace = await db.$transaction((tx) =>
@@ -97,8 +76,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     )
     const { taskId } = await fixtures.task(workspace.id, {
       status: 'queued',
-      ...(browser ? { needsRepository: false, needsBrowser: true } : {}),
-      ...(chat ? { siteId: null, needsRepository: false, needsBrowser: false } : {}),
+      needsBrowser: browser,
     })
     const placedAt = new Date(expiresAt.getTime() - 3_600_000)
     await fixtures.reserve({
@@ -116,13 +94,11 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
           status: 'completed',
           driverId: sampleDriverId,
           image,
-          // A turn without a repository publishes no head (plan 57, Б4).
-          headSha: browser ? null : HEAD,
         },
       })
     await db.$executeRaw`UPDATE tasks SET status = ${status}::"TaskStatus", turn_no = ${turnNo}
       WHERE id = ${taskId}::uuid`
-    const task = await db.task.findUniqueOrThrow({ where: { id: taskId }, include: { site: true } })
+    const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
     return { taskId, task, userId }
   }
 
@@ -167,12 +143,12 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
   })
 
   it('ends from its journal a turn the pass itself opened and that closed before it ran', async () => {
-    const { taskId, task } = await dialog('preparing', 1)
+    const { taskId } = await dialog('preparing', 1)
     const opened = new Date(Date.now() - 10 * 60_000)
     await db.turnAssignment.create({
       data: {
         taskId,
-        siteId: siteIdOf(task),
+        siteId: taskId,
         sessionId: taskId,
         turnNo: 1,
         executor: 'local',
@@ -190,7 +166,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
         taskId,
         type: 'turn.lifecycle',
         payload: {
-          fence: { siteId: task.siteId, taskId, operation: 'turn', epoch: 1 },
+          fence: { siteId: taskId, taskId, operation: 'turn', epoch: 1 },
           sessionId: taskId,
           turn: 1,
           sequence: 1,
@@ -213,7 +189,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
         v: 1,
         turn: 1,
         code: 'secret_found',
-        site: 'unchanged',
+        site: 'none',
         credits: 'returned',
         next: 'awaiting_user',
       },
@@ -223,11 +199,11 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
   it('goes on past a row that fails, and leaves a pass that must wait alone for a while', async () => {
     const first = await dialog('running', 1)
     const second = await dialog('running', 1)
-    for (const { taskId, task } of [first, second])
+    for (const { taskId } of [first, second])
       await db.turnAssignment.create({
         data: {
           taskId,
-          siteId: siteIdOf(task),
+          siteId: taskId,
           sessionId: taskId,
           turnNo: 1,
           executor: 'local',
@@ -264,11 +240,11 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
   })
 
   it('ends a turn recovery closed, from the result its journal kept', async () => {
-    const { taskId, task } = await dialog('running', 1)
+    const { taskId } = await dialog('running', 1)
     await db.turnAssignment.create({
       data: {
         taskId,
-        siteId: siteIdOf(task),
+        siteId: taskId,
         sessionId: taskId,
         turnNo: 1,
         executor: 'local',
@@ -281,7 +257,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       },
     })
     const entry = (sequence: number, phase: TurnEvidence['phase'], extra = {}) => ({
-      fence: { siteId: task.siteId, taskId, operation: 'turn', epoch: 2 },
+      fence: { siteId: taskId, taskId, operation: 'turn', epoch: 2 },
       sessionId: taskId,
       turn: 1,
       sequence,
@@ -312,55 +288,10 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     expect(await db.taskEvent.count({ where: { taskId, type: 'feed.result' } })).toBe(1)
   })
 
-  it('cancels a dialog whose reserve ran out while it waited, never one with a release in work', async () => {
+  it('cancels a dialog whose reserve ran out while it waited', async () => {
     const past = new Date(Date.now() - 60_000)
     const waiting = await dialog('awaiting_user', 1, past)
-    const releasing = await dialog('awaiting_approval', 1, past)
-    const recorded = await db.$transaction((tx) =>
-      recordCandidate(tx, {
-        taskId: releasing.taskId,
-        revision: 1,
-        turnNo: 1,
-        baseSha: 'a'.repeat(40),
-        baseTree: 'c'.repeat(40),
-        baseVersion: null,
-        headSha: HEAD,
-        files: [],
-        media: [],
-        dbPlan: [],
-        dbPlanSha256: '0'.repeat(64),
-        proposedBump: 'patch',
-        proposedVersion: 'v0.0.1',
-        facts: {
-          changeType: 'content',
-          risk: 'low',
-          addedFiles: 0,
-          modifiedFiles: 0,
-          deletedFiles: 0,
-          mediaFiles: 0,
-          dbObjects: 0,
-          newFunctionality: false,
-        },
-        checks: [],
-        installed: null,
-      }),
-    )
-    await db.siteRelease.create({
-      data: {
-        siteId: siteIdOf(releasing.task),
-        taskId: releasing.taskId,
-        candidateId: recorded.id,
-        candidateRevision: 1,
-        attempt: 1,
-        releaseKey: randomUUID().replaceAll('-', '').padEnd(64, '0'),
-        version: 'v0.0.1',
-        tag: 'v0.0.1',
-        bump: 'patch',
-        mainBeforeSha: 'a'.repeat(40),
-        committedAt: new Date(),
-        approvedAt: new Date(),
-      },
-    })
+    const fresh = await dialog('awaiting_user', 1)
 
     expect(await sweep().expireHolds()).toBe(1)
 
@@ -371,14 +302,14 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       (
         await db.taskEvent.findMany({ where: { taskId: waiting.taskId, type: 'feed.cancelled' } })
       ).map((row) => row.payload),
-    ).toEqual([{ v: 1, turn: 1, by: 'no_answer', site: 'unchanged', credits: 'returned' }])
+    ).toEqual([{ v: 1, turn: 1, by: 'no_answer', site: 'none', credits: 'returned' }])
     expect(
       (await db.creditHold.findMany({ where: { taskId: waiting.taskId } })).every(
         (hold) => hold.status === 'expired',
       ),
     ).toBe(true)
-    expect((await db.task.findUniqueOrThrow({ where: { id: releasing.taskId } })).status).toBe(
-      'awaiting_approval',
+    expect((await db.task.findUniqueOrThrow({ where: { id: fresh.taskId } })).status).toBe(
+      'awaiting_user',
     )
   })
 
@@ -401,100 +332,6 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     expect(new Set(await statuses(working.taskId))).toEqual(new Set(['active']))
     // Settled: the next tick finds nothing more to do.
     expect(await sweep().chargeLater()).toBe(0)
-  })
-
-  it('keeps the reserve of a dialog that waits with a candidate while its preview lives', async () => {
-    const soon = new Date(Date.now() + 60_000)
-    const { taskId, task } = await dialog('awaiting_approval', 1, soon)
-    await db.$transaction((tx) =>
-      recordCandidate(tx, {
-        taskId,
-        revision: 1,
-        turnNo: 1,
-        baseSha: 'a'.repeat(40),
-        baseTree: 'c'.repeat(40),
-        baseVersion: null,
-        headSha: HEAD,
-        files: [],
-        media: [],
-        dbPlan: [],
-        dbPlanSha256: '0'.repeat(64),
-        proposedBump: 'patch',
-        proposedVersion: 'v0.0.1',
-        facts: {
-          changeType: 'content',
-          risk: 'low',
-          addedFiles: 0,
-          modifiedFiles: 0,
-          deletedFiles: 0,
-          mediaFiles: 0,
-          dbObjects: 0,
-          newFunctionality: false,
-        },
-        checks: [],
-        installed: null,
-      }),
-    )
-    const lives = new Date(Date.now() + 48 * 3_600_000)
-    await db.previewEnvironment.create({
-      data: {
-        siteId: siteIdOf(task),
-        taskId,
-        status: 'ready',
-        hostname: `site-${task.site?.alias}-chat-${task.alias}.localhost`,
-        expiresAt: lives,
-      },
-    })
-
-    expect(await sweep().extendHolds()).toBe(1)
-    for (const hold of await db.creditHold.findMany({ where: { taskId } }))
-      expect(hold.expiresAt.getTime()).toBe(lives.getTime())
-    expect(await sweep().extendHolds()).toBe(0)
-
-    // The client pressed «Попробовать ещё» (or wrote) between the selection and its transaction:
-    // the new reserve keeps the expiry of its queue, the preview's would cut it short.
-    await db.previewEnvironment.update({
-      where: { taskId },
-      data: { expiresAt: new Date(lives.getTime() + 3_600_000) },
-    })
-    const pressed = new Proxy(db, {
-      get(target, key, receiver) {
-        if (key !== '$transaction') return Reflect.get(target, key, receiver)
-        return async (...args: Parameters<typeof db.$transaction>) => {
-          await db.task.update({ where: { id: taskId }, data: { status: 'queued' } })
-          return (target.$transaction as (...a: unknown[]) => unknown)(...args)
-        }
-      },
-    })
-    const raced = new TaskSweep({
-      db: pressed,
-      settlement: new PassSettlement({ db, candidates, logger: quiet }),
-      live: new LivePasses(),
-      journal: new TaskEventTurnJournal(db),
-      drivers: { has: () => false } as unknown as AgentDriverRegistry,
-      queue,
-      logger: quiet,
-    })
-    expect(await raced.extendHolds()).toBe(0)
-    for (const hold of await db.creditHold.findMany({ where: { taskId } }))
-      expect(hold.expiresAt.getTime()).toBe(lives.getTime())
-
-    // Stopped while no one used it (owner's answer of 26.10.2026), the preview still lives: the
-    // reserve follows it as before; one past its life does not keep it.
-    await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_approval' } })
-    const later = new Date(lives.getTime() + 2 * 3_600_000)
-    await db.previewEnvironment.update({
-      where: { taskId },
-      data: { status: 'expired', expiresAt: later },
-    })
-    expect(await sweep().extendHolds()).toBe(1)
-    for (const hold of await db.creditHold.findMany({ where: { taskId } }))
-      expect(hold.expiresAt.getTime()).toBe(later.getTime())
-    await db.previewEnvironment.update({
-      where: { taskId },
-      data: { expiresAt: new Date(Date.now() - 1000) },
-    })
-    expect(await sweep().extendHolds()).toBe(0)
   })
 
   it('puts again the lost job of a queued pass that waits for nothing', async () => {
@@ -543,131 +380,6 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     )
   })
 
-  it('wakes the `/init` that waits for its site with its own request (docs/plan/61, §5.2)', async () => {
-    const { taskId, userId } = await dialog('queued', 0)
-    await firstWords(taskId, userId)
-    const init = await insertFeedEvent(db, {
-      taskId,
-      row: {
-        type: 'feed.request',
-        payload: {
-          v: 1,
-          kind: 'agent_command',
-          command: 'init',
-          authorId: userId,
-          requestId: randomUUID(),
-        },
-      },
-    })
-    // A press after it is no request of the pass.
-    await press(taskId, userId, 'update')
-    const { siteId } = await db.task.update({
-      where: { id: taskId },
-      data: { waiting: 'site' },
-      select: { siteId: true },
-    })
-
-    const put = await db.$transaction((tx) =>
-      enqueueSiteWaitingPasses(tx, { siteId: siteId!, tag: `turn-${randomUUID()}` }),
-    )
-
-    expect(put).toBe(1)
-    const jobs = await db.outboxEvent.findMany({
-      where: { topic: 'agent-turns', dedupeKey: { contains: taskId } },
-    })
-    await db.outboxEvent.deleteMany({ where: { id: { in: jobs.map(({ id }) => id) } } })
-    expect(jobs.map(({ payload }) => payload)).toEqual([
-      // No tariff: the last place in the queue (plan 71, §2.3).
-      { taskId, attempt: 1, requestEventId: init.toString(), priority: 4 },
-    ])
-  })
-
-  describe('an `/undo` nobody answered (docs/plan/61-chats-first.md, §5.14)', () => {
-    const undo = (taskId: string, userId: string) =>
-      insertFeedEvent(db, {
-        taskId,
-        row: {
-          type: 'feed.request',
-          payload: {
-            v: 1,
-            kind: 'command',
-            command: 'turn_undo',
-            authorId: userId,
-            requestId: randomUUID(),
-          },
-        },
-      })
-    const aged = (id: bigint, minutes: number) =>
-      db.$executeRaw`UPDATE task_events SET created_at = now() - make_interval(mins => ${minutes})
-        WHERE id = ${id}`
-
-    it('puts the press of a chat with the repository again, once in its span', async () => {
-      const { taskId, userId } = await dialog('awaiting_approval', 1)
-      const pressed = await undo(taskId, userId)
-      await aged(pressed, LOST_REWIND_MS / 60_000 + 1)
-      const at = new Date()
-
-      expect(await sweep(at).rewinds()).toBe(1)
-
-      const span = Math.floor(at.getTime() / LOST_REWIND_MS)
-      expect(queue.enqueue).toHaveBeenCalledWith(
-        'agent-turns',
-        'candidate.rewind',
-        { taskId, requestEventId: pressed.toString() },
-        { jobId: `candidate.rewind:${taskId}:${pressed}:sweep:${span}` },
-      )
-    })
-
-    it('leaves a press a job may still be at, and one that was answered', async () => {
-      const fresh = await dialog('awaiting_user', 1)
-      await undo(fresh.taskId, fresh.userId)
-      const answered = await dialog('awaiting_user', 1)
-      const pressed = await undo(answered.taskId, answered.userId)
-      await aged(pressed, 10)
-      await db.taskEvent.create({
-        data: {
-          taskId: answered.taskId,
-          type: 'candidate.rewind',
-          payload: { v: 1, requestEventId: pressed.toString(), outcome: 'refused' },
-        },
-      })
-      expect(await sweep().rewinds()).toBe(0)
-    })
-
-    it('reads the last press only: an answered one after it closes the matter', async () => {
-      const { taskId, userId } = await dialog('awaiting_user', 1)
-      await aged(await undo(taskId, userId), 10)
-      const last = await undo(taskId, userId)
-      await aged(last, 10)
-      await db.taskEvent.create({
-        data: {
-          taskId,
-          type: 'candidate.rewind',
-          payload: { v: 1, requestEventId: last.toString(), outcome: 'rewound' },
-        },
-      })
-      expect(await sweep().rewinds()).toBe(0)
-    })
-
-    it('has no business with a chat that ended, or one that has no branch to move', async () => {
-      const ended = await dialog('cancelled', 1)
-      await aged(await undo(ended.taskId, ended.userId), 10)
-      const plain = await dialog('awaiting_user', 1, undefined, { chat: true })
-      await aged(await undo(plain.taskId, plain.userId), 10)
-      expect(await sweep().rewinds()).toBe(0)
-    })
-
-    it('goes on past a press the queue would not take', async () => {
-      const first = await dialog('awaiting_user', 1)
-      await aged(await undo(first.taskId, first.userId), 10)
-      const second = await dialog('awaiting_user', 1)
-      await aged(await undo(second.taskId, second.userId), 9)
-      queue.enqueue.mockRejectedValueOnce(new Error('Redis does not answer'))
-      expect(await sweep().rewinds()).toBe(1)
-      expect(queue.enqueue).toHaveBeenCalledTimes(2)
-    })
-  })
-
   it('puts again a pass whose retry got lost', async () => {
     const { taskId, userId } = await dialog('queued', 0)
     const request = await insertFeedEvent(db, {
@@ -689,49 +401,34 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     )
   })
 
-  // docs/plan/61-chats-first.md, К18.
-  it('closes a chat without a project with no word of a site', async () => {
-    const past = new Date(Date.now() - 60_000)
-    const { taskId } = await dialog('awaiting_user', 1, past, { chat: true })
-
-    expect(await sweep().expireHolds()).toBe(1)
-
-    expect(
-      (await db.taskEvent.findMany({ where: { taskId, type: 'feed.cancelled' } })).map(
-        (row) => row.payload,
-      ),
-    ).toEqual([{ v: 1, turn: 1, by: 'no_answer', site: 'none', credits: 'returned' }])
-  })
-
   // What was done in a browser stays, with a site or without one (docs/plan/61, К18, Б28).
-  it.each([
-    ['a chat without a project', { chat: true }, 'elsewhere'],
-    ['a task with a site', { browser: true }, 'check'],
-  ] as const)('tells %s what its browser left', async (_, kind, site) => {
-    const past = new Date(Date.now() - 60_000)
-    const { taskId } = await dialog('awaiting_user', 1, past, kind)
-    const { workspaceId, siteId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-    await db.browserSession.create({
-      data: {
-        taskId,
-        workspaceId,
-        siteId,
-        status: 'ready',
-        readyAt: new Date(),
-        expiresAt: new Date(Date.now() + 3_600_000),
-        wroteAt: new Date(),
-        lastWroteAt: new Date(),
-      },
-    })
+  it.each([['a chat whose browser acted', { browser: true }, 'elsewhere']] as const)(
+    'tells %s what it left',
+    async (_, kind, site) => {
+      const past = new Date(Date.now() - 60_000)
+      const { taskId } = await dialog('awaiting_user', 1, past, kind)
+      const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+      await db.browserSession.create({
+        data: {
+          taskId,
+          workspaceId,
+          status: 'ready',
+          readyAt: new Date(),
+          expiresAt: new Date(Date.now() + 3_600_000),
+          wroteAt: new Date(),
+          lastWroteAt: new Date(),
+        },
+      })
 
-    expect(await sweep().expireHolds()).toBe(1)
+      expect(await sweep().expireHolds()).toBe(1)
 
-    expect(
-      (await db.taskEvent.findMany({ where: { taskId, type: 'feed.cancelled' } })).map(
-        (row) => row.payload,
-      ),
-    ).toEqual([{ v: 1, turn: 1, by: 'no_answer', site, credits: 'returned' }])
-  })
+      expect(
+        (await db.taskEvent.findMany({ where: { taskId, type: 'feed.cancelled' } })).map(
+          (row) => row.payload,
+        ),
+      ).toEqual([{ v: 1, turn: 1, by: 'no_answer', site, credits: 'returned' }])
+    },
+  )
 
   describe('of tasks in the cloud browser (docs/plan/57-browser-tasks.md)', () => {
     const turnResult = {
@@ -750,14 +447,14 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     } as unknown as AgentDriver
 
     /** The plan a turn without a repository was assigned with. */
-    const planOf = (task: { id: string; siteId: string | null; workspaceId: string }) =>
+    const planOf = (task: { id: string; workspaceId: string }) =>
       toTurnPlan(
         {
           sandbox: {
             image,
             labels: {
               workspaceId: task.workspaceId,
-              siteId: siteIdOf(task),
+              siteId: task.id,
               taskId: task.id,
               sessionId: task.id,
               turn: 1,
@@ -796,7 +493,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       await db.turnAssignment.create({
         data: {
           taskId,
-          siteId: siteIdOf(task),
+          siteId: taskId,
           sessionId: taskId,
           turnNo: 1,
           executor: 'local',
@@ -815,7 +512,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
             taskId,
             type: phase === 'output' ? 'turn.output' : 'turn.lifecycle',
             payload: {
-              fence: { siteId: task.siteId, taskId, operation: 'turn', epoch: 2 },
+              fence: { siteId: taskId, taskId, operation: 'turn', epoch: 2 },
               sessionId: taskId,
               turn: 1,
               sequence: ++sequence,
@@ -833,7 +530,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     ) =>
       new TaskSweep({
         db,
-        settlement: new PassSettlement({ db, candidates: null, logger: quiet }),
+        settlement: new PassSettlement({ db, logger: quiet }),
         live,
         journal: new TaskEventTurnJournal(db),
         drivers: { has: () => true, get: () => driver } as unknown as AgentDriverRegistry,
@@ -902,7 +599,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
         'awaiting_user',
       )
       const [row] = await db.taskEvent.findMany({ where: { taskId, type: 'feed.result' } })
-      expect(row!.payload).toMatchObject({ next: 'awaiting_user', site: 'unchanged' })
+      expect(row!.payload).toMatchObject({ next: 'awaiting_user', site: 'none' })
     })
 
     it('ends a compaction that recovery finished by the line of the platform: its text is no result', async () => {
@@ -980,7 +677,6 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     const file = async (ready: boolean) => {
       const created = (await createAttachment(db, {
         workspaceId: task.workspaceId,
-        siteId: siteIdOf(task),
         uploadedById: userId,
         fileName: 'news.pdf',
         contentType: 'application/pdf',
@@ -1002,7 +698,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       await file(true),
       await file(true),
     ]
-    const binding = { taskId, userId, workspaceId: task.workspaceId, siteId: siteIdOf(task) }
+    const binding = { taskId, userId, workspaceId: task.workspaceId }
     expect(await bindAttachments(db, { ...binding, ids: [sent.id] })).toBe(true)
     await db.$executeRaw`UPDATE attachments SET expires_at = clock_timestamp() - interval '2 hours'
       WHERE id = ANY(${[uploading.id, ready.id, sent.id]}::uuid[])`
@@ -1012,7 +708,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     const collector = (inbox: { delete: (bucket: 'inbox', key: string) => Promise<void> }) =>
       new TaskSweep({
         db,
-        settlement: new PassSettlement({ db, candidates: null, logger: quiet }),
+        settlement: new PassSettlement({ db, logger: quiet }),
         live: new LivePasses(),
         journal: new TaskEventTurnJournal(db),
         drivers: { has: () => false } as unknown as AgentDriverRegistry,

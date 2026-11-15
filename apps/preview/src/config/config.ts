@@ -5,38 +5,21 @@ import {
   envProblems,
   envVar,
   isProduction,
-  previewAddressEnvShape,
-  previewAddressFromEnv,
-  previewAddressProblems,
-  previewDefaults,
-  previewSessionSecretProblem,
   type Env,
 } from '@repo/domain'
 import { browserWorkerOrigin } from '@repo/browser-link'
 import { dbConfigFromEnv, type DbConfig } from '@repo/db'
 import { ipLiteral, isLoopbackAddress, isPrivateAddress } from '@repo/ip-address'
 import { ConfigError } from '@repo/app-bootstrap'
-import { getDomain } from 'tldts'
 import { z } from 'zod'
 
-import { parsePreviewRelays } from './browser-relays.ts'
-import type {
-  BrowserStreamConfig,
-  PagesListenerConfig,
-  PreviewGatewayConfig,
-} from './config.tokens.ts'
+import type { BrowserStreamConfig, PagesListenerConfig, PreviewConfig } from './config.tokens.ts'
 
 export { ConfigError }
-export type { BrowserStreamConfig, PagesListenerConfig, PreviewGatewayConfig }
+export type { BrowserStreamConfig, PagesListenerConfig, PreviewConfig }
 
-export const DEFAULT_PREVIEW_GATEWAY_PORT = previewDefaults.gatewayPort
 /** The listener of the stream of a task's browser (docs/plan/57-browser-tasks.md, Б12). */
 export const DEFAULT_BROWSER_STREAM_PORT = 8091
-/**
- * PREVIEW_SESSION_SECRET outside production when it is unset: the gateway signs its cookie with
- * it. Production refuses to start the role without a secret of its own.
- */
-export const DEV_PREVIEW_SESSION_SECRET = 'raditi-dev-preview-session-secret-not-for-production'
 
 /** The listener of published pages (docs/plan/69-pages.md, Ст4). */
 export const DEFAULT_PAGES_PORT = 8092
@@ -64,14 +47,6 @@ const ownEnvSchema = z.object({
       .transform((url) => url.replace(/\/+$/, ''))
       .optional(),
   ),
-  GITEA_URL: envVar(z.url({ protocol: /^https?$/, error: 'must be an http(s):// URL' }).optional()),
-  ...previewAddressEnvShape,
-  PREVIEW_GATEWAY_PORT: envVar(
-    z.coerce.number().int().min(1).max(65_535).default(DEFAULT_PREVIEW_GATEWAY_PORT),
-  ),
-  PREVIEW_SESSION_SECRET: envVar(z.string().optional()),
-  PREVIEW_BROWSER_RELAYS: envVar(z.string().optional()),
-  PREVIEW_GATEWAY_HOST: listenHost(),
   BROWSER_STREAM_PORT: envVar(
     z.coerce.number().int().min(1).max(65_535).default(DEFAULT_BROWSER_STREAM_PORT),
   ),
@@ -101,16 +76,11 @@ const ownEnvSchema = z.object({
   PAGES_ABUSE_EMAIL: envVar(z.email().optional()),
 })
 
-/** The registrable domain of a host by the Public Suffix List; null for an address or a local name. */
-const registrableDomain = (host: string): string | null =>
-  getDomain(host, { allowPrivateDomains: true })
-
 /**
- * The settings of the preview gateway and nothing else: the database, the address of previews,
- * the cabinet it frames, its cookie secret, the sources of the agent's browser and the stream
- * of a task's browser. Lists every problem at once.
+ * The settings of the preview app and nothing else: the database, the cabinet, the listener of
+ * the pages and the stream of a chat's browser. Lists every problem at once.
  */
-export function loadPreviewConfig(env: Env): PreviewGatewayConfig {
+export function loadPreviewConfig(env: Env): PreviewConfig {
   const parsed = ownEnvSchema.safeParse(env)
   if (!parsed.success) throw new ConfigError(envProblems(parsed.error), 'preview')
   const own = parsed.data
@@ -123,20 +93,7 @@ export function loadPreviewConfig(env: Env): PreviewGatewayConfig {
   } catch (err) {
     problems.push(err instanceof Error ? err.message : String(err))
   }
-  const address = previewAddressFromEnv(own, appEnv)
-  problems.push(
-    ...previewAddressProblems(
-      { appEnv, address, appUrl: own.APP_URL ?? env.APP_URL ?? '', giteaUrl: own.GITEA_URL },
-      registrableDomain,
-    ),
-  )
-  if (address === null) problems.push('PREVIEW_BASE_DOMAIN: required for the preview role')
-  if (own.APP_URL === undefined)
-    problems.push('APP_URL: required for the preview role (the cabinet that frames a preview)')
-  const secretProblem = previewSessionSecretProblem(own.PREVIEW_SESSION_SECRET, appEnv)
-  if (secretProblem) problems.push(`PREVIEW_SESSION_SECRET: ${secretProblem}`)
-  const relays = parsePreviewRelays(own.PREVIEW_BROWSER_RELAYS, production)
-  problems.push(...relays.problems)
+  if (own.APP_URL === undefined) problems.push('APP_URL: required for the preview role')
   // The worker's address needs its token (Б10); the token alone is the worker's own in the one
   // .env of the platform and opens no listener here — the same rule as core's and mcp's.
   if (own.BROWSER_WORKER_URL !== undefined) {
@@ -163,12 +120,13 @@ export function loadPreviewConfig(env: Env): PreviewGatewayConfig {
           workerUrl: browserWorkerOrigin(own.BROWSER_WORKER_URL),
           workerToken: own.BROWSER_WORKER_TOKEN,
         }
-  if (browserStream !== null && browserStream.port === own.PREVIEW_GATEWAY_PORT)
-    problems.push('BROWSER_STREAM_PORT: must differ from PREVIEW_GATEWAY_PORT')
   const pages = pagesListenerOf(own, production, problems)
+  // Nothing else is left of the role (docs/plan/83-remove-projects.md): one listener at least.
+  if (pages === null && browserStream === null)
+    problems.push(
+      'PAGES_BASE_DOMAIN: the preview role serves the pages or the stream of a browser (BROWSER_WORKER_URL); neither is set',
+    )
   if (pages !== null) {
-    if (pages.port === own.PREVIEW_GATEWAY_PORT)
-      problems.push('PAGES_PORT: must differ from PREVIEW_GATEWAY_PORT')
     if (browserStream !== null && pages.port === browserStream.port)
       problems.push('PAGES_PORT: must differ from BROWSER_STREAM_PORT')
     const base = pages.baseDomain
@@ -176,26 +134,11 @@ export function loadPreviewConfig(env: Env): PreviewGatewayConfig {
     // A page host must never be the cabinet's or a preview's, nor hold them (Ст3).
     if (own.APP_URL !== undefined && under(new URL(own.APP_URL).hostname, base))
       problems.push('PAGES_BASE_DOMAIN: must not be the host of APP_URL or above it')
-    // A preview host is one `site-…-chat-…` label under its base, never `<slug>.<pages base>`: the
-    // pages may sit under the previews' base (dev: pages.localhost under localhost), not the reverse.
-    if (address !== null && under(address.baseDomain, base))
-      problems.push('PAGES_BASE_DOMAIN: must not be PREVIEW_BASE_DOMAIN or above it')
   }
-  if (problems.length > 0 || address === null || own.APP_URL === undefined || db === undefined)
+  if (problems.length > 0 || own.APP_URL === undefined || db === undefined)
     throw new ConfigError(problems, 'preview')
 
-  return {
-    appEnv,
-    port: own.PREVIEW_GATEWAY_PORT,
-    address,
-    sessionSecret: own.PREVIEW_SESSION_SECRET ?? DEV_PREVIEW_SESSION_SECRET,
-    appUrl: own.APP_URL,
-    db,
-    browserRelays: relays.ranges,
-    host: own.PREVIEW_GATEWAY_HOST ?? (production ? undefined : '127.0.0.1'),
-    browserStream,
-    pages,
-  }
+  return { appEnv, appUrl: own.APP_URL, db, browserStream, pages }
 }
 
 /** The pages' listener, or null without PAGES_BASE_DOMAIN; its problems go to `problems`. */
@@ -217,10 +160,8 @@ function pagesListenerOf(
   const secret = own.PAGES_COOKIE_SECRET
   if (production && (secret === undefined || secret.length < 32))
     problems.push('PAGES_COOKIE_SECRET: at least 32 characters in production')
-  if (production && (secret === DEV_PAGES_COOKIE_SECRET || secret === own.PREVIEW_SESSION_SECRET))
-    problems.push(
-      'PAGES_COOKIE_SECRET: a secret of its own in production, not the dev value or the preview one',
-    )
+  if (production && secret === DEV_PAGES_COOKIE_SECRET)
+    problems.push('PAGES_COOKIE_SECRET: a secret of its own in production, not the dev value')
   if (secret !== undefined && !/^[\x21-\x7e]+$/.test(secret))
     problems.push('PAGES_COOKIE_SECRET: visible ASCII characters only')
   if (production && own.PAGES_PUBLIC_PORT !== undefined)

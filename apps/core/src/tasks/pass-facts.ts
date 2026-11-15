@@ -1,46 +1,24 @@
 import { attemptCreditBudget } from '@repo/billing'
+import { classProfile, passUnattended, taskAttachments, type PrismaClient } from '@repo/db'
 import {
-  classProfile,
-  passUnattended,
-  taskAttachments,
-  taskBrowserCheckpoints,
-  type BrowserCheckpointRecord,
-  type PrismaClient,
-} from '@repo/db'
-import {
-  branchBeforeTurn,
-  egressHostListSchema,
-  egressHostsOf,
-  envVarReachesAgent,
-  envVarReachesTask,
-  isDomainError,
   modelClassSchema,
-  previewOrigin,
-  previewUnavailableReasons,
   readFeedRow,
-  siteWorkspaceRules,
   turnSkillsOf,
+  workspaceEnvVarsReachAgent,
   type LlmBackend,
   type LlmBackendId,
   type ModelClass,
-  type PreviewAddress,
-  type SiteAdapter,
-  type SiteFacts,
-  type SiteStack,
 } from '@repo/domain'
 
 import { poolHasRoom } from '../llm/pool-room.ts'
-import { AGENT_COMMANDS, type PreviewFacts } from './turn-instructions.ts'
+import { AGENT_COMMANDS } from './turn-instructions.ts'
 import {
   savedPlanOf,
-  type BrowserPassFacts,
   type ClientRequest,
   type FinishedTurn,
   type PassBudget,
   type PassFacts,
-  type SavedObjectFacts,
   type TaskAttachmentFacts,
-  type WorkspaceRules,
 } from './turn-planner.ts'
 
 export interface PassFactsInput {
@@ -55,60 +33,13 @@ export interface PassFactsInput {
 
 export interface PassFactsDependencies {
   db: PrismaClient
-  adapter: (stack: SiteStack) => SiteAdapter
   backends: readonly LlmBackend[]
-  /** Where previews are served; null — previews are off in this core. */
-  previews: PreviewAddress | null
 }
-
-/**
- * What the facts of a site are known by in core today: its stack and address. The docroot and
- * versions come with the connection of the site (plan 39); the adapters read none of them for
- * the paths a pass needs.
- */
-export const siteFactsOf = (site: { stack: SiteStack; url: string }): SiteFacts => ({
-  stack: site.stack,
-  url: site.url,
-  docroot: '/',
-  extras: {},
-})
 
 const turnStatus = (status: string): FinishedTurn['status'] =>
   status === 'completed' || status === 'failed' || status === 'lost' || status === 'cancelled'
     ? status
     : 'other'
-
-/**
- * The workspace rules of the stack in one call (R4), or its protected paths alone while its
- * adapter has no working set or media rules yet: the turn then gets the full tree.
- */
-export function workspaceRulesOf(adapter: SiteAdapter, site: SiteFacts): WorkspaceRules {
-  try {
-    return siteWorkspaceRules(adapter, site)
-  } catch (error) {
-    if (isDomainError(error) && error.code === 'NOT_IMPLEMENTED')
-      return { protectedPaths: adapter.protectedPaths(site) }
-    throw error
-  }
-}
-
-function previewFactsOf(
-  preview: { status: string; hostname: string; unavailableReason: string | null } | null,
-  address: PreviewAddress | null,
-): PreviewFacts {
-  if (!preview) return { state: 'absent' }
-  if (preview.status === 'unavailable') {
-    const reason = previewUnavailableReasons.find((known) => known === preview.unavailableReason)
-    return { state: 'unavailable', reason: reason ?? 'not_supported' }
-  }
-  if (preview.status === 'ready' && address)
-    return { state: 'serving', origin: previewOrigin(preview.hostname, address) }
-  // Being built — the first build of the dialog, or one the start of this pass asked for after
-  // the preview stopped unused (owner's answer of 26.10.2026).
-  if (['pending', 'building', 'expired'].includes(preview.status) && address)
-    return { state: 'starting', origin: previewOrigin(preview.hostname, address) }
-  return { state: 'absent' }
-}
 
 /**
  * Reads what the planner of a pass needs, in PostgreSQL only. null — the request of the job is
@@ -125,33 +56,27 @@ export async function readPassFacts(
     select: {
       id: true,
       workspaceId: true,
-      siteId: true,
       modelClass: true,
       billable: true,
-      needsRepository: true,
       needsBrowser: true,
-      workspace: { select: { dataClass: true } },
-      // The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2).
-      createdBy: { select: { agentInstructions: { select: { text: true } } } },
-      // The run of a scheduled task the chat is (docs/plan/82-scheduled-tasks.md, Зп27, Зп29).
-      scheduledRun: { select: { name: true } },
-      site: {
+      workspace: {
         select: {
-          stack: true,
-          url: true,
-          agentNotes: true,
+          dataClass: true,
+          // The skills of the workspace's agent (plan 83, БП11): every chat of it gets them.
           agentSkills: {
             select: { name: true, url: true, enabled: true, authKind: true, authState: true },
           },
         },
       },
+      // The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2).
+      createdBy: { select: { agentInstructions: { select: { text: true } } } },
+      // The run of a scheduled task the chat is (docs/plan/82-scheduled-tasks.md, Зп27, Зп29).
+      scheduledRun: { select: { name: true } },
     },
   })
   if (!task) return null
-  // Null in a chat without a project (docs/plan/61-chats-first.md, §5.6): no repository, no
-  // variables of the client, no rules of a stack and only the skills every turn has.
-  const { siteId, site } = task
-  const requirements = { repository: task.needsRepository, browser: task.needsBrowser }
+  // No chat has a repository (docs/plan/83-remove-projects.md, БП2).
+  const requirements = { repository: false, browser: task.needsBrowser }
   const rows = await db.taskEvent.findMany({
     where: { taskId: task.id, type: 'feed.request' },
     orderBy: { id: 'asc' },
@@ -186,20 +111,12 @@ export async function readPassFacts(
     }
   })
 
-  const [repository, turnRows, assignments, candidate, preview, variables] = await Promise.all([
-    siteId === null
-      ? null
-      : db.gitRepository.findFirst({
-          where: { siteId },
-          orderBy: { createdAt: 'asc' },
-          select: { provider: true, owner: true, name: true, defaultBranch: true },
-        }),
+  const [turnRows, assignments, variables] = await Promise.all([
     db.taskTurn.findMany({
       where: { taskId: task.id },
       select: {
         turnNo: true,
         status: true,
-        headSha: true,
         startedAt: true,
         nativeSessionId: true,
         rejectedAt: true,
@@ -211,24 +128,15 @@ export async function readPassFacts(
       orderBy: { createdAt: 'asc' },
       select: { turnNo: true, plan: true },
     }),
-    // The latest revision whatever its status: an «Обновить» that left nothing to release while
-    // a pass of the dialog was queued records its head as a revision superseded at once (R3).
-    db.taskCandidate.findFirst({
-      where: { taskId: task.id },
-      orderBy: { revision: 'desc' },
-      select: { turnNo: true, headSha: true },
-    }),
-    db.previewEnvironment.findUnique({
-      where: { taskId: task.id },
-      select: { status: true, hostname: true, unavailableReason: true },
-    }),
-    siteId === null
-      ? []
-      : db.siteEnvVar.findMany({
-          where: { siteId, toAgent: true, agentConsentAt: { not: null } },
+    // The variables of the workspace (docs/plan/83-remove-projects.md, БП4): every chat gets them,
+    // none in a workspace of client data before the gate of 152-FZ (rule 1).
+    workspaceEnvVarsReachAgent(task.workspace.dataClass)
+      ? db.workspaceEnvVar.findMany({
+          where: { workspaceId: task.workspaceId },
           orderBy: { name: 'asc' },
-          select: { name: true, hosts: true, toAgent: true, toPreview: true, agentConsentAt: true },
-        }),
+          select: { name: true },
+        })
+      : [],
   ])
   const plans = new Map(assignments.map((row) => [row.turnNo, savedPlanOf(row.plan)]))
   const turns = new Map<number, FinishedTurn>(
@@ -239,33 +147,12 @@ export async function readPassFacts(
         status: turnStatus(row.status),
         rejected: row.rejectedAt !== null,
         undone: row.undoneAt !== null,
-        headSha: row.headSha,
         startedAt: row.startedAt,
         nativeSessionId: row.nativeSessionId,
         plan: plans.get(row.turnNo) ?? null,
       },
     ]),
   )
-  const published = turnRows
-    .filter((row) => row.status === 'completed' && row.headSha && row.undoneAt === null)
-    .sort((a, b) => b.turnNo - a.turnNo)[0]
-  // `/undo` left the branch where the turn found it, while no later turn published
-  // (docs/plan/61-chats-first.md, §5.14): the rule of the store of assignments (`taskBranch`).
-  const undone = turnRows
-    .filter((row) => row.undoneAt !== null && row.turnNo > (published?.turnNo ?? 0))
-    .sort((a, b) => b.turnNo - a.turnNo)[0]
-  const undonePlan = undone ? plans.get(undone.turnNo) : undefined
-  const lastWritten = undone
-    ? { turnNo: undone.turnNo, head: undonePlan ? branchBeforeTurn(undonePlan) : null }
-    : { turnNo: published?.turnNo ?? 0, head: published?.headSha ?? null }
-  // A candidate whose head is not the head of its turn was moved by «Обновить» (Р27): when
-  // no turn completed after it, its head is what the task branch holds.
-  const rebased =
-    candidate && candidate.headSha !== (turns.get(candidate.turnNo)?.headSha ?? null)
-      ? candidate
-      : null
-  const writtenHead =
-    rebased && rebased.turnNo >= lastWritten.turnNo ? rebased.headSha : lastWritten.head
 
   const modelClass = modelClassSchema.safeParse(task.modelClass ?? 'standard')
   if (!modelClass.success) return null
@@ -293,36 +180,7 @@ export async function readPassFacts(
       }
     : { kind: 'quota' }
 
-  // The variables the agent's commands get and the hosts they reach through the egress proxy
-  // (plan 53, Р13): none in a workspace of client data, and the same ones `issue` gives this task.
-  const agentVariables = variables.filter(
-    (variable) =>
-      envVarReachesAgent(variable, task.workspace.dataClass) &&
-      envVarReachesTask(variable.name, requirements),
-  )
-  const egress = egressHostsOf(
-    agentVariables.map((variable) => {
-      const hosts = egressHostListSchema.safeParse(variable.hosts)
-      return { hosts: hosts.success ? hosts.data : [] }
-    }),
-  )
-
-  // The repository's rules and the database guide are of a repository task; a task in the
-  // browser takes the stack's guide to its admin pages instead (docs/plan/57, Б20, Б21).
-  const stack =
-    requirements.repository && site
-      ? { adapter: deps.adapter(site.stack), facts: siteFactsOf(site) }
-      : null
-  const rules: WorkspaceRules = stack
-    ? workspaceRulesOf(stack.adapter, stack.facts)
-    : { protectedPaths: [] }
-  const files = attachmentFactsOf(await taskAttachments(deps.db, task.id))
-  const browser = requirements.browser
-    ? await browserFactsOf(deps, task.id, site, files)
-    : undefined
-  // The files of a repository task go into the sandbox of its turn (spec §8, «Подготовка»), and
-  // so do those of a chat without a site (docs/plan/61, К16).
-  const attachments = requirements.repository || site === null ? files : []
+  const attachments = attachmentFactsOf(await taskAttachments(deps.db, task.id))
   // A pass of a run before the first words of its client goes without them (Зп27, Зп29), decided
   // by the request it answers: a cancel or an interrupt written since is for the passes after it.
   const unattended =
@@ -334,69 +192,22 @@ export async function readPassFacts(
     task: {
       id: task.id,
       workspaceId: task.workspaceId,
-      siteId: task.siteId,
       attempt: input.attempt,
       turnNo: input.turnNo,
       modelClass: modelClass.data,
     },
     requirements,
-    ...(browser ? { browser } : {}),
-    agentNotes: site?.agentNotes ?? null,
     clientInstructions: task.createdBy?.agentInstructions?.text ?? null,
     ...(unattended ? { unattended } : {}),
     ...(attachments.length ? { attachments } : {}),
-    repo: repository
-      ? {
-          provider: repository.provider,
-          owner: repository.owner,
-          name: repository.name,
-          defaultBranch: repository.defaultBranch,
-        }
-      : null,
-    rules,
     requests,
     committedAt: answered.createdAt,
     turns,
-    writtenHead,
-    candidate: candidate ?? null,
-    preview: previewFactsOf(preview, deps.previews),
-    egress,
-    variables: agentVariables.map((variable) => variable.name),
-    skills: turnSkillsOf(site?.agentSkills ?? [], { platformBrowser: requirements.browser }),
-    ...(stack ? { databaseGuide: stack.adapter.dbPlanGuide(stack.facts) } : {}),
+    variables: variables.map((variable) => variable.name),
+    skills: turnSkillsOf(task.workspace.agentSkills, { platformBrowser: requirements.browser }),
     profile: profile ?? null,
     budget,
     now: input.now,
-  }
-}
-
-/**
- * A title that may hold an e-mail address or a phone number. The agent meets contacts only as
- * the markers of the `mcp` role's privacy map, which core does not hold; the title the site
- * keeps has the real ones, so such a title is not told at all (the editor shows it masked).
- */
-const MAY_HOLD_CONTACT = /@|\d(?:[\s().+-]*\d){6}/u
-
-/**
- * An object the task saved, as a pass tells the agent of it (Б22): one it only looked at
- * (`seen`) is none. Its editor goes by its path alone: a query string is left out whatever it
- * holds. `verified` without what a read found is not trusted (browserFeedObjectOf): the agent
- * verifies it again.
- */
-export function savedObjectOf(checkpoint: BrowserCheckpointRecord): SavedObjectFacts | null {
-  if (checkpoint.state === 'seen') return null
-  const found = checkpoint.state === 'verified' ? checkpoint.verified : null
-  return {
-    kind: checkpoint.ref.kind,
-    objectId: checkpoint.ref.objectId,
-    state: checkpoint.state === 'verified' && !found ? 'unverified' : checkpoint.state,
-    ...(found
-      ? {
-          ...(MAY_HOLD_CONTACT.test(found.title) ? {} : { title: found.title }),
-          status: found.status,
-        }
-      : {}),
-    editPath: new URL(checkpoint.ref.editUrl).pathname,
   }
 }
 
@@ -410,36 +221,6 @@ const attachmentFactsOf = (
     contentType: file.contentType,
     sizeBytes: file.sizeBytes,
   }))
-
-/**
- * What a pass in the cloud browser needs of its site: the address, the client's notes, the files
- * bound to the task, what the task saved there and the stack's guide to its admin pages — null
- * when the stack has no adapter or no browser support yet (the planner refuses the task then). A
- * chat without a site has its files alone: no objects, and no stack to guide it.
- */
-async function browserFactsOf(
-  deps: PassFactsDependencies,
-  taskId: string,
-  site: { stack: SiteStack; url: string; agentNotes: string | null } | null,
-  attachments: readonly TaskAttachmentFacts[],
-): Promise<BrowserPassFacts> {
-  if (site === null) return { siteUrl: null, agentNotes: null, attachments, saved: [], guide: null }
-  const checkpoints = await taskBrowserCheckpoints(deps.db, taskId)
-  let guide: string | null
-  try {
-    guide = deps.adapter(site.stack).browserGuide()
-  } catch (error) {
-    if (!isDomainError(error) || error.code !== 'NOT_IMPLEMENTED') throw error
-    guide = null
-  }
-  return {
-    siteUrl: site.url,
-    agentNotes: site.agentNotes,
-    attachments,
-    saved: checkpoints.flatMap((checkpoint) => savedObjectOf(checkpoint) ?? []),
-    guide,
-  }
-}
 
 /** The profile of the class on the first backend whose pool has room, or on the first at all. */
 async function profileWithRoom(

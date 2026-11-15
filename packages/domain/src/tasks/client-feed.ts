@@ -37,9 +37,8 @@ import {
 } from '../browser/session.ts'
 import { reasoningEffortSchema, reasoningEfforts } from '../llm/model-class.ts'
 import { agentOutputLimits } from '../ports/agent-driver.ts'
-import { serverCommandIds } from '../release/chat-commands.ts'
-import { releaseOutcomes } from '../release/release-state.ts'
-import { versionBumps, versionTagSchema } from '../release/semver.ts'
+import { historicFeedCommandIds } from '../release/chat-commands.ts'
+import { releaseOutcomes, versionBumps, versionTagSchema } from './feed-history.ts'
 import { outboxFileNameSchema, outboxLimits } from './chat-files.ts'
 import { FEED_FAILURE_FALLBACK, feedFailureCodes } from './client-feed-failures.ts'
 import {
@@ -423,9 +422,7 @@ export function feedObjectOf(read: {
  * but «Попробовать ещё», whose press is a row of its own kind (`retry`). What the page runs by
  * itself leaves no row.
  */
-export const feedCommandIds = serverCommandIds.filter(
-  (id): id is Exclude<(typeof serverCommandIds)[number], 'retry'> => id !== 'retry',
-)
+export const feedCommandIds = historicFeedCommandIds
 export type FeedCommandId = (typeof feedCommandIds)[number]
 
 /** The commands that are a pass of the agent: `feed.request` of the kind `agent_command`. */
@@ -1309,7 +1306,7 @@ const readScheduleChange = z.object({
       canonicalTimezone(timezone) === null ? DEFAULT_SCHEDULE_TIMEZONE : timezone,
     ),
   nextRunAt: z.iso.datetime({ offset: true }).nullable(),
-  siteId: z.uuid().nullable(),
+  // A row written before plan 83 names a project too (`siteId`): dropped, as any other key.
   effort: known(reasoningEfforts, 'high' as const),
   notify: z.boolean(),
 })

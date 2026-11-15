@@ -20,18 +20,18 @@ export const mcpSignInDependencies: McpSignInDependencies = {
     return (await getSessionFromHeaders(headers))?.user.id ?? null
   },
   async check(headers, input) {
-    return createCaller(await createContext({ headers })).siteAgentSkills.signInCheck(input)
+    return createCaller(await createContext({ headers })).agentSkills.signInCheck(input)
   },
   client: () => mcpOAuthClient(publicRequester(env.web().mcpServerProbe)),
   async connect(input) {
     const services = mcpServerServices()
     if (services === null)
       throw new DomainError(
-        'SITE_SKILL_AUTH_UNAVAILABLE',
+        'AGENT_SKILL_AUTH_UNAVAILABLE',
         'Servers with a key cannot be added here',
         503,
       )
-    await connectSignedInServer(prisma, services, input)
+    await connectSignedInServer(prisma, services, { ...input, appEnv: env.web().appEnv })
   },
   clientIp,
 }

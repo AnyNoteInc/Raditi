@@ -4,29 +4,24 @@ import { appLogger, SHUTDOWN_SIGNALS } from '@repo/app-bootstrap'
 
 import { AppModule } from './app.module.ts'
 import { BrowserStreamListener } from './browser-stream/browser-stream.ts'
-import type { PreviewGatewayConfig } from './config/config.ts'
-import { PreviewGatewayServer } from './gateway/preview-gateway.server.ts'
+import type { PreviewConfig } from './config/config.ts'
 import { PagesServer } from './pages/pages-server.ts'
 
 const logger = new Logger('preview')
 
 /**
- * The gateway of previews: its own port, on PREVIEW_GATEWAY_HOST — loopback outside production
- * unless a stand names the Docker bridge (docs/plan/53-chat-preview-release.md, Р19, Р21). With
- * the browser worker configured, also the stream of a task's browser on BROWSER_STREAM_PORT
- * (docs/plan/57-browser-tasks.md, Б12) and, with PAGES_BASE_DOMAIN, the published pages on PAGES_PORT
- * (docs/plan/69-pages.md, Ст4); health stays on the preview port.
+ * The listeners of the preview app: with the browser worker configured, the stream of a chat's
+ * browser on BROWSER_STREAM_PORT (docs/plan/57-browser-tasks.md, Б12); with PAGES_BASE_DOMAIN, the
+ * published pages on PAGES_PORT (docs/plan/69-pages.md, Ст4), which also answers the health of the
+ * role, `GET /__raditi/health` on any host that is not a page's.
  */
-export async function startPreview(config: PreviewGatewayConfig) {
+export async function startPreview(config: PreviewConfig) {
   const app = await NestFactory.createApplicationContext(AppModule.forRoot(config), {
     abortOnError: false,
     logger: appLogger(config.appEnv, 'preview'),
   })
   app.enableShutdownHooks([...SHUTDOWN_SIGNALS])
   try {
-    const host = config.host
-    const address = await app.get(PreviewGatewayServer).listen(config.port, host)
-    logger.log(`preview role listening on ${host ?? '*'}:${address.port}`)
     const stream = config.browserStream
     if (stream !== null) {
       const streamAddress = await app.get(BrowserStreamListener).listen(stream.port, stream.host)

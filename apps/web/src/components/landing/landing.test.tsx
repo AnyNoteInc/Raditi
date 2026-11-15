@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 import { legalDocuments } from '@repo/domain'
 import {
@@ -15,14 +12,20 @@ import { describe, expect, it, vi } from 'vitest'
 import type { LandingViewer } from '@/server/landing-viewer'
 
 import { Landing, questions } from './landing'
-import { platforms } from './landing-platforms'
-import { cafe, story } from './landing-story'
+import { cafe, scenarios } from './landing-story'
 import { MAIN_ACTION_SHORT, mainAction } from './main-action'
 import { Pricing } from './pricing'
 import { guest, HANGING, member, plain, pricing } from './testing'
 
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
 vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
+
+/** The first request of the demo, the one it opens with. */
+const story = scenarios.compare
+
+/** The words of a site to connect that left the page with the projects (docs/plan/83). */
+const SITE_WORDS =
+  /WordPress|Joomla|OpenCart|MODX|Битрикс|подключ\S* (ваш )?сайт|(?<![а-яё])правк|на сайте/i
 
 function renderLanding(viewer: LandingViewer) {
   return render(
@@ -73,34 +76,28 @@ describe('landing texts', () => {
     }
   })
 
-  it('keeps the names with a hyphen or a slash in one piece', () => {
+  it('keeps the address of the pages in one piece', () => {
     const container = renderLanding(guest)
-    const names = textsOf(container).filter(({ text }) => /1С-Битрикс/.test(text))
-    const heard = (parent: HTMLElement) => parent.closest('[data-sr-only]') !== null
-    const ornament = (parent: HTMLElement) => parent.closest('[aria-hidden="true"]') !== null
-
-    // Wherever the name stands, it is a piece of text of its own.
-    expect(names.map(({ text }) => text)).toEqual(Array.from({ length: 6 }, () => '1С-Битрикс'))
-    // In the prose it is bound by the class: the heading of the page, the words under the
-    // heading of the systems and the answer about the sites.
-    const prose = names.filter(({ parent }) => !heard(parent) && !ornament(parent))
-    expect(prose.map(({ parent }) => parent.closest('h1, section')?.id)).toEqual([
-      'hero-title',
-      'platforms',
-      'faq',
-    ])
-    for (const { parent } of prose) expect(parent.className).toContain('nowrap')
-    // The list of the systems is heard and not seen: it has no line to break.
-    expect(names.filter(({ parent }) => heard(parent))).toHaveLength(1)
-    // The running line is seen and not heard, twice as it is written twice; a name of it is kept
-    // in one piece by its own class.
-    const running = names.filter(({ parent }) => ornament(parent))
-    expect(running).toHaveLength(2)
-    for (const { parent } of running) expect(parent.className).toContain('marqueeName')
-    const name = /\.marqueeName\s*\{([^}]*)\}/.exec(
-      readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'landing.module.css'), 'utf8'),
+    const names = textsOf(container).filter(({ text }) => /pages\.raditi\.ru/.test(text))
+    const prose = names.filter(
+      ({ parent }) =>
+        parent.closest('[data-sr-only], [aria-hidden="true"], #site-demo') === null &&
+        !isControl(parent),
     )
-    expect(name?.[1]).toMatch(/white-space:\s*nowrap/)
+
+    // The dots of an address are places to break a line: in the prose it is bound by the class.
+    expect(prose.length).toBeGreaterThan(0)
+    for (const { parent, text } of prose) {
+      expect(text).toBe('pages.raditi.ru')
+      expect(parent.className).toContain('nowrap')
+    }
+  })
+
+  it('tells of no site to connect: an assistant for every day (docs/plan/83)', () => {
+    for (const viewer of [guest, member]) {
+      const text = plain(renderLanding(viewer).textContent)
+      expect(text.match(SITE_WORDS)).toBeNull()
+    }
   })
 
   it('keeps the range of figures of an answer in one piece', () => {
@@ -122,10 +119,10 @@ describe('landing texts', () => {
       link.textContent.trim(),
     )
 
-    // The header, its mobile menu, the first screen, the section of the systems and the plans:
-    // the whole name, or its first words where a row has no room for it.
+    // The header, its mobile menu, the first screen and the plans: the whole name, or its first
+    // word where a row has no room for it.
     expect(href).toBe('#lead')
-    expect(labels).toEqual([MAIN_ACTION_SHORT, MAIN_ACTION_SHORT, label, MAIN_ACTION_SHORT, label])
+    expect(labels).toEqual([MAIN_ACTION_SHORT, MAIN_ACTION_SHORT, label, label])
     expect(label.startsWith(`${MAIN_ACTION_SHORT} `)).toBe(true)
     // And the form it leads to is on the page.
     expect(container.querySelector('section#lead form')).not.toBeNull()
@@ -135,16 +132,6 @@ describe('landing texts', () => {
       plain(control.textContent),
     )
     expect(controls.filter((name) => /зарегистр/i.test(name))).toEqual([])
-  })
-
-  it('gives the action of the systems the role of the main one', () => {
-    const container = renderLanding(guest)
-    const main = container.querySelector('section[aria-labelledby="hero-title"] a[href="#lead"]')
-    const second = container.querySelector('#platforms a[href="#lead"]')
-
-    // One class for the role, so hover, press and weight cannot drift apart.
-    expect(main?.className).toContain('primaryButton')
-    expect(second?.className).toBe(main?.className)
   })
 
   it('does not ask a signed-in visitor to register', () => {
@@ -163,12 +150,10 @@ describe('landing texts', () => {
     expect(hero?.querySelector('a[href="/chats"]')).toHaveTextContent(/^Открыть чаты\s*$/)
     expect(hero?.querySelector('a[href="#lead"]')).toBeNull()
     expect(plain(container.textContent)).not.toMatch(/регистрац|в подарок/i)
-    // The form of a lead stays open to them: the section of the systems leads to it.
-    expect(
-      [...container.querySelectorAll('a[href="#lead"]')].map((link) => link.textContent.trim()),
-    ).toEqual([MAIN_ACTION_SHORT])
+    // The form of a lead stays on the page; nothing of it leads a signed-in visitor there.
+    expect(container.querySelectorAll('a[href="#lead"]')).toHaveLength(0)
     expect(plain(container.querySelector('#lead')?.textContent)).toContain(
-      'Оставьте адрес сайта и телефон — мы сами подключим ваш сайт и настроим Радити под вашу систему.',
+      'Оставьте сайт компании и телефон — расскажем, какие ежедневные дела можно поручить Радити, и поможем с первыми задачами.',
     )
   })
 
@@ -185,15 +170,18 @@ describe('landing texts', () => {
   })
 
   it('links every legal document and the map of the site from the foot of the page', () => {
+    const container = renderLanding(guest)
     const links = [
-      ...renderLanding(guest).querySelectorAll('footer nav[aria-label="Документы"] a'),
+      ...container.querySelectorAll('footer nav[aria-labelledby="footer-documents"] a'),
     ].map((link) => [link.textContent, link.getAttribute('href')])
 
-    expect(links).toEqual([
-      ...legalDocuments.map((document) => [document.title, `/terms/${document.slug}`]),
-      ['Карта сайта', '/sitemap.xml'],
-    ])
+    expect(links).toEqual(
+      legalDocuments.map((document) => [document.title, `/terms/${document.slug}`]),
+    )
     expect(legalDocuments.length).toBeGreaterThan(0)
+    expect(container.querySelector('footer a[href="/sitemap.xml"]')).toHaveTextContent(
+      /^Карта сайта$/,
+    )
   })
 
   it('promises a visitor whose session is unknown no gift and no registration', () => {
@@ -204,7 +192,7 @@ describe('landing texts', () => {
     expect(hero?.querySelector('a[href="/chats"]')).toHaveTextContent(/^Открыть чаты\s*$/)
     // No gift is promised to a visitor who may have had it: not on the first screen, not under
     // the tariffs and not in the lead.
-    expect(termsOf(container)).toEqual(['Подключение бесплатно', 'Подключаем сами'])
+    expect(termsOf(container)).toEqual(['В браузере и в Telegram', 'Без установки'])
     for (const id of ['pricing', 'lead']) {
       expect(plain(container.querySelector(`#${id}`)?.textContent)).not.toMatch(
         /при регистрации|в подарок/i,
@@ -220,10 +208,8 @@ describe('landing texts', () => {
       expect(headings).toHaveLength(1)
       expect(headings[0]).toHaveAttribute('id', 'hero-title')
       expect(plain(headings[0]?.textContent)).toBe(
-        'ИИ-помощник для сайта на WordPress, Joomla, OpenCart, MODX и 1С-Битрикс',
+        'ИИ-помощник на каждый день для вас и вашего бизнеса',
       )
-      // The five systems of the heading are those of the section of the systems, in its order.
-      expect(plain(headings[0]?.textContent).match(/[A-Za-z]+|1С-Битрикс/g)).toEqual([...platforms])
       // The section of the first screen is named by it.
       expect(headings[0]?.closest('section')).toHaveAttribute('aria-labelledby', 'hero-title')
       // The demo names the service in a heading of the chat it draws, at a lower level.
@@ -238,9 +224,9 @@ describe('landing texts', () => {
 
     // The slogan is the large line under the heading, a paragraph and not a second heading.
     const slogan = hero?.querySelector('h1 + p')
-    expect(plain(slogan?.textContent)).toBe('Напишите в чат. Сайт поправим.')
+    expect(plain(slogan?.textContent)).toBe('Напишите в чат. Всё сделаем.')
     expect(text).toContain(
-      'Цены, фото, акции, часы работы. Напишите обычными словами, что поменять, — Радити сделает и покажет до публикации.',
+      'Найти, сравнить, написать письмо, собрать таблицу. Напишите обычными словами, что нужно, — Радити сделает.',
     )
     // Two ways on: the main action and the example under the first screen.
     expect(
@@ -266,11 +252,11 @@ describe('landing texts', () => {
     const { small } = giftTaskCounts(signupGiftCredits)
     const container = renderLanding(guest)
 
-    // The numbers are those of the credits model: the gift and the small edits it holds.
+    // The numbers are those of the credits model: the gift and the small tasks it holds.
     expect(termsOf(container)).toEqual([
-      `${signupGiftCredits} кредитов в подарок — около ${small} небольших правок`,
-      'Подключение бесплатно',
-      'Подключаем сами',
+      `${signupGiftCredits} кредитов в подарок — около ${small} небольших задач`,
+      'В браузере и в Telegram',
+      'Без установки',
     ])
     expect(small).toBeGreaterThanOrEqual(3)
     const list = container.querySelector('section[aria-labelledby="hero-title"] ul')
@@ -285,11 +271,11 @@ describe('landing texts', () => {
     }
     // A number stays with its word and a dash with the word before it.
     expect(list?.querySelector('li')?.textContent).toContain(
-      `${signupGiftCredits}\u00a0кредитов в\u00a0подарок\u00a0— около ${small}\u00a0небольших правок`,
+      `${signupGiftCredits}\u00a0кредитов в\u00a0подарок\u00a0— около ${small}\u00a0небольших задач`,
     )
 
     // A visitor with an account has had the gift of the sign-up: the two other terms stay.
-    expect(termsOf(renderLanding(member))).toEqual(['Подключение бесплатно', 'Подключаем сами'])
+    expect(termsOf(renderLanding(member))).toEqual(['В браузере и в Telegram', 'Без установки'])
   })
 
   it('sets the sections in the order of the visitor, each under its own heading', () => {
@@ -299,7 +285,6 @@ describe('landing texts', () => {
     expect(sections.map((section) => section.id)).toEqual([
       '',
       'demo',
-      'platforms',
       'possibilities',
       'safety',
       'pricing',
@@ -319,9 +304,8 @@ describe('landing texts', () => {
       }),
     ).toEqual([
       'Попробуйте сами',
-      'На чём сделан ваш сайт?Скорее всего, подойдёт.',
       'Что можно поручить',
-      'Без вашего «да» сайт не меняется',
+      'Вы видите, что делает Радити',
       'Тарифы',
       `${signupGiftCredits} кредитов в подарокза заявку.`,
       'Вопросы',
@@ -348,22 +332,19 @@ describe('landing texts', () => {
     }
 
     expect(under('demo-title')).toBe(
-      'Сайт кофейни для примера. Выберите просьбу — и посмотрите, что изменится.',
-    )
-    expect(under('platforms-title')).toBe(
-      'WordPress, Joomla, OpenCart, MODX и 1С-Битрикс — Радити работает с каждой из этих систем.',
+      'Кофейня для примера. Выберите просьбу — и посмотрите, что сделает Радити.',
     )
     expect(under('can-title')).toBe(
-      'То, ради чего обычно пишут разработчику: ваша просьба — и что после неё появится на сайте.',
+      'Дела, на которые обычно уходит полдня: ваша просьба — и что вы получите в ответ.',
     )
     expect(under('safety-title')).toBe(
-      'Правка сначала появляется в черновике. На сайт её выпускаете вы.',
+      'Каждый шаг — в чате. Остановить работу можно в любой момент.',
     )
     // The tariffs are three cards: the line under their heading is the note about the payment.
     expect(under('pricing-title')).toBe('Оплату пока не принимаем: сервис готовится к запуску.')
     // The questions need no words under their heading; the sign «?» beside it is gone.
     expect(container.querySelector('#faq-title')?.nextElementSibling).toBeNull()
-    for (const id of ['demo-title', 'platforms-title', 'can-title', 'safety-title']) {
+    for (const id of ['demo-title', 'can-title', 'safety-title']) {
       expect(container.querySelector(`#${id}`)?.nextElementSibling?.tagName).toBe('P')
     }
   })
@@ -377,10 +358,10 @@ describe('landing texts', () => {
     expect(demo?.querySelector('#site-demo')).not.toBeNull()
     expect(demo?.previousElementSibling).toHaveAttribute('aria-labelledby', 'hero-title')
     expect(text('#site-demo')).toContain(plain(story.request))
-    expect(text('#site-demo')).toContain(cafe.item)
-    expect(text('#site-demo')).toContain(`Станет: ${story.amount.after}`)
+    expect(text('#site-demo')).toContain(cafe.name)
+    expect(text('#site-demo')).toContain(`Станет: ${plain(story.after)}`)
     // Wherever the cafe appears, it is called an example or a demo.
-    expect(text('#demo')).toContain('Сайт кофейни для примера.')
+    expect(text('#demo')).toContain('Кофейня для примера.')
     expect(text('#site-demo')).toContain('Интерактивное демо')
     // The request and its prices stand in the demo alone: the safety block undoes nothing by itself.
     const outside = plain(container.textContent).replace(text('#site-demo'), '')
@@ -388,7 +369,7 @@ describe('landing texts', () => {
     expect(container.querySelectorAll('#safety button, #safety a')).toHaveLength(0)
   })
 
-  it('tells in three facts that the site does not change without a «да»', () => {
+  it('tells in three facts that the work of Радити is in view', () => {
     const container = renderLanding(guest)
     const facts = [...container.querySelectorAll('#safety ol > li')]
 
@@ -400,16 +381,16 @@ describe('landing texts', () => {
       ]),
     ).toEqual([
       [
-        'Сначала черновик',
-        'Радити показывает правку на копии сайта. Посетители её не видят, пока вы не опубликуете.',
+        'Ход работы на виду',
+        'Пока Радити работает, в чате видно, что он ищет, читает и пишет. Браузер помощника можно открыть и посмотреть.',
       ],
       [
-        'Отмена за 7 дней',
-        'Опубликовали и передумали — отмените в чате. Сайт вернётся к прежнему виду.',
+        'Остановить и вернуть',
+        'Работу можно остановить, а последнюю просьбу — отменить: разговор вернётся к тому, что было до неё.',
       ],
       [
-        'Опасное — только с подтверждением',
-        'Удалить страницы, сменить оформление, поставить дополнения Радити без вашего отдельного согласия не станет.',
+        'Без вашей просьбы — ничего лишнего',
+        'Платить, удалять, вводить пароли и что-то менять на чужих сайтах Радити без вашей явной просьбы не станет.',
       ],
     ])
     // The numbers are drawn for the eye; the list itself counts for a screen reader.
@@ -418,9 +399,9 @@ describe('landing texts', () => {
       '02',
       '03',
     ])
-    // The term of the undo is the one the answer about a result gives.
+    // The undo is the one the answer about a result gives.
     const answer = questions.find(({ question }) => question === 'А если результат не понравится?')
-    expect(answer?.answer).toContain('отменить в течение 7 дней')
+    expect(answer?.answer).toContain('Последнюю просьбу можно отменить')
   })
 
   it('keeps one word for the saved state and the words of the launch status', () => {
@@ -445,14 +426,14 @@ describe('landing texts', () => {
       'Вернём как было.',
       'После запуска',
       'Оплата откроется позже',
+      // The footer keeps the name and the way in alone (the owner, 15.11.2026).
+      'Ваш сайт в заботливых руках.',
     ]) {
       expect(text).not.toContain(gone)
     }
     for (const kept of [
-      'Сначала копия. Потом изменения.',
-      'Сначала черновик',
+      'Сначала покажу. Решаете вы.',
       'Оплату пока не принимаем: сервис готовится к запуску.',
-      'Ваш сайт в заботливых руках.',
     ]) {
       expect(text).toContain(kept)
     }
@@ -460,43 +441,38 @@ describe('landing texts', () => {
     expect(text.split('готовится к запуску')).toHaveLength(2)
   })
 
-  it('counts credits in the tariffs and says «правка» only of a change on the site', () => {
+  it('counts credits in the tariffs and says «задача» of what the visitor asks', () => {
     const container = renderLanding(guest)
     const text = plain(container.textContent)
 
     for (const counted of [
       '200 кредитов в месяц — в среднем около 18 задач',
-      'Небольшая правка — около 50 ₽',
-      'При регистрации — 50 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
+      'Небольшая задача — около 50 ₽',
+      'При регистрации — 50 кредитов в подарок: хватит на несколько небольших задач. Тариф выберете позже.',
     ]) {
       expect(text).toContain(counted)
     }
-    // The unit is never «правка»: no count, no price and no volume of it.
-    expect(text).not.toMatch(
-      /\d правк|\d правок|за правку|числу правок|объём правок|считается правкой|правок не хватит/i,
-    )
+    // No «правка» at all: there is no site to change (docs/plan/83).
+    expect(text).not.toMatch(/(?<![а-яё])(правк|правок)/i)
     // Nor is a tariff chosen by a volume of credits, or a credit something a task «counts as»:
     // the visitor thinks in tasks, and the page translates.
     expect(text).not.toMatch(/объём кредитов|считается кредитом|один кредит — одна/i)
-    // The word stays for the change itself: what a tariff includes, what the gift holds, what
-    // the visitor asks the price of.
-    expect(text).toContain('В каждый тариф войдут правки текстов')
-    expect(text).toContain('хватит на несколько небольших правок')
-    expect(text).toContain('небольших правок')
-    expect(text).toContain('Сколько стоит одна правка?')
-    expect(text).toContain('Правка сначала появляется в черновике.')
+    // What a tariff includes, what the gift holds, what the visitor asks the price of.
+    expect(text).toContain('В каждый тариф входят поиск в интернете')
+    expect(text).toContain('хватит на несколько небольших задач')
+    expect(text).toContain('Сколько стоит одна задача?')
   })
 
   it('answers what a change costs in the words of the credits model and promises no terms to come', () => {
     const container = renderLanding(guest)
     const question = [...container.querySelectorAll('#faq details')].find(
       (details) =>
-        plain(details.querySelector('summary')?.textContent) === 'Сколько стоит одна правка?',
+        plain(details.querySelector('summary')?.textContent) === 'Сколько стоит одна задача?',
     )
     const answer = plain(question?.querySelector('p')?.textContent)
 
     expect(answer).toBe(
-      'Работу мы считаем в кредитах. Поменять цену, текст или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Сколько это в рублях, написано в карточке каждого тарифа. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
+      'Работу мы считаем в кредитах. Короткий ответ или небольшой текст — обычно 5 кредитов, документ, таблица или страница — 15–25. Сколько это в рублях, написано в карточке каждого тарифа. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
     )
     // The rule of the charge is the sentence under the tariffs, word for word.
     expect(plain(container.querySelector('#pricing')?.textContent)).toContain(
@@ -507,11 +483,11 @@ describe('landing texts', () => {
     const { small, block } = typicalTaskCredits
     expect(answer).toContain(`обычно ${small.to} кредитов`)
     expect(answer).toContain(`— ${block.from}–${block.to}.`)
-    // «В карточке каждого тарифа» is true: every card names the price of a small edit in rubles.
+    // «В карточке каждого тарифа» is true: every card names the price of a small task in rubles.
     const cards = [...container.querySelectorAll('#pricing article')]
     expect(cards).toHaveLength(pricing.plans.length)
     for (const card of cards) {
-      expect(plain(card.textContent)).toMatch(/Небольшая правка — около \d+ ₽/)
+      expect(plain(card.textContent)).toMatch(/Небольшая задача — около \d+ ₽/)
     }
     // The answer names no price in rubles itself: the cards do.
     expect(answer).not.toContain('₽')
@@ -544,7 +520,7 @@ describe('landing texts', () => {
     expect(plain(container.querySelector('#lead')?.textContent)).toContain(
       'придут вместе с регистрацией',
     )
-    // In credits and in small edits: no count of tasks is made of the gift.
+    // In credits and in small tasks: no count of tasks is made of the gift.
     expect(text).not.toMatch(/в подарок[^.]*\d+ задач/)
   })
 
@@ -560,9 +536,9 @@ describe('landing texts', () => {
       ]),
     ).toEqual(questions.map(({ question, answer }) => [question, answer]))
     expect(questions.map(({ question }) => question)).toEqual([
-      'Нужно разбираться в сайтах?',
-      'Мой сайт подойдёт?',
-      'Сколько стоит одна правка?',
+      'Что умеет Радити?',
+      'Нужно что-то устанавливать?',
+      'Сколько стоит одна задача?',
       'А если результат не понравится?',
       'Где будут храниться данные?',
     ])
@@ -574,9 +550,6 @@ describe('landing texts', () => {
     }
     // All closed at first, and each opens by itself.
     expect(asked.filter((details) => details.hasAttribute('open'))).toEqual([])
-    // The answer about the sites names the five systems of the page.
-    const suits = questions.find(({ question }) => question === 'Мой сайт подойдёт?')
-    for (const name of platforms) expect(suits?.answer).toContain(name)
     const data = asked.find((question) =>
       question.querySelector('summary')?.textContent.includes('Где будут храниться данные?'),
     )

@@ -383,11 +383,11 @@ export const browserTaskCodes: Readonly<
     message: 'This is not a file attached to the task.',
   },
   BROWSER_UPLOAD_REFUSED: { status: 422, message: 'The page did not accept the file.' },
-  // A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28).
+  // A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28, Зп50).
   BROWSER_READ_ONLY: {
     status: 403,
     message:
-      'A scheduled run only reads the site: save or publish nothing now, ask the client at the end.',
+      'A scheduled run only reads: send, save or publish nothing now, ask the client at the end.',
   },
 })
 

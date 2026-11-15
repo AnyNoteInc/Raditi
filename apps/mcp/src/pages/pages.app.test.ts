@@ -20,7 +20,6 @@ const scope = {
   keyId: '01960000-0000-7000-8000-000000000011',
   taskId: '01960000-0000-7000-8000-000000000012',
   workspaceId: '01960000-0000-7000-8000-000000000013',
-  siteId: null,
   sessionId: 'synthetic',
   turn: 4,
   firstEpoch: 1,

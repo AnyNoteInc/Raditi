@@ -18,8 +18,8 @@ import type {
 // The notices of a scheduled task itself (docs/plan/82-scheduled-tasks.md, Зп22, Зп38, Зп39): a
 // run that did not start, a task that paused, a run the platform missed. They open the page of
 // the task, not a chat; the push says the kind, the cabinet the name and the reason. A run of
-// «Запустить сейчас» is told in the cabinet by its own words and never here (Зп24); a project the
-// client deleted pauses its tasks without a notice (Зп22). A refusal for the reason told last is
+// «Запустить сейчас» is told in the cabinet by its own words and never here (Зп24). A task has no
+// project to lose (Зп48, Зп49). A refusal for the reason told last is
 // told once until the task starts again, or once a day; a missed run once a day; a notice of one
 // kind is sent once per run whoever asks again.
 
@@ -31,8 +31,6 @@ export type ScheduleNotifyAnswer = DeliveryAnswer | 'none'
 
 /** Why a task paused, told after «Запланированная задача приостановлена». */
 const pauseReasonText: Readonly<Record<Exclude<SchedulePausedReason, 'completed'>, string>> = {
-  project_gone: scheduledRunReasonText.project_gone,
-  member_gone: scheduledRunReasonText.member_gone,
   not_accepted: 'задачи пока не принимаются',
   refused: 'три отказа подряд',
 }
@@ -73,8 +71,8 @@ export class ScheduleNotify {
   }
 
   /**
-   * A task stopped by itself for its runs (Зп22): three refusals in a row, a right lost, the gate
-   * of a chat (`not_accepted`). One notice per run. Never throws.
+   * A task stopped by itself for its runs (Зп22): three refusals in a row, the gate of a chat
+   * (`not_accepted`). One notice per run. Never throws.
    */
   async paused(input: {
     scheduleId: string
@@ -89,8 +87,6 @@ export class ScheduleNotify {
         select: { id: true, name: true, createdById: true, deletedAt: true },
       })
       if (!task || task.deletedAt !== null) return this.#log(input.runId, 'paused', 'none')
-      // A project the client deleted stops its tasks without a word (Зп22).
-      if (input.reason === 'project_gone') return this.#log(input.runId, 'paused', 'none')
       const reason =
         input.reason === 'refused' && input.because
           ? scheduledRunReasonText[input.because]
@@ -138,11 +134,6 @@ export class ScheduleNotify {
     if (run.status === 'skipped')
       return reason === 'missed' ? this.#missed(task, runId) : this.#log(runId, 'missed', 'none')
     if (run.status !== 'refused') return 'none'
-    // A project the client deleted stops its tasks without a word (Зп22): a run refused for that
-    // deletion — of a «Один раз» that had completed too, which no pause names — or any refusal of a
-    // task it stopped, a start that raced the deletion among them.
-    if (reason === 'project_gone' || task.pausedReason === 'project_gone')
-      return this.#log(runId, 'not_started', 'none')
     const paused = recorded ? recorded.paused : pausedBy(task, reason)
     if (paused !== null && paused !== 'completed')
       return this.paused({ scheduleId: task.id, runId, reason: paused, because: reason })
@@ -222,8 +213,8 @@ type TaskOfNotice = { id: string; name: string; createdById: string }
 
 /**
  * Whether the refusal of a run stopped its task, read from the task when web wrote the outcome
- * (recordRunOutcome's rules, Зп21, Зп22): a project gone or a right lost at once, the third
- * refusal in a row for a reason of the client.
+ * (recordRunOutcome's rules, Зп21, Зп22, Зп48): the third refusal in a row for a reason of the
+ * client.
  */
 export function pausedBy(
   task: {
@@ -235,8 +226,6 @@ export function pausedBy(
   reason: ScheduledRunReason,
 ): SchedulePausedReason | null {
   if (task.enabled || task.pausedReason === null) return null
-  if ((reason === 'project_gone' || reason === 'member_gone') && task.pausedReason === reason)
-    return reason
   if (
     task.pausedReason === 'refused' &&
     isClientRefusalReason(reason) &&

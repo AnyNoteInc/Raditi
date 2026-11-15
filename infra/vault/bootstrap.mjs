@@ -26,8 +26,7 @@ export const policyNames = Object.freeze([
   'core-transit',
   'sites-writer',
   'workspace-provisioner',
-  'core-site-import',
-  'core-release',
+  'core-workspace-env',
 ])
 
 export function localVaultAddress(address) {

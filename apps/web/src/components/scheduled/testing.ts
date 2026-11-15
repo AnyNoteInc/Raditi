@@ -38,7 +38,6 @@ export function scheduleItem(patch: Partial<ScheduleItem> = {}): ScheduleItem {
     lastRunAt: null,
     createdVia: 'manual',
     templateSlug: null,
-    project: { id: SITE_ID, name: 'Кофейня «Крошка»', deleted: false },
     createdAt: new Date('2026-11-10T09:00:00.000Z'),
     updatedAt: new Date('2026-11-10T09:00:00.000Z'),
     lastRun: null,

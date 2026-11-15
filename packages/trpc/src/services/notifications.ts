@@ -204,10 +204,6 @@ function pausedWords(task: { pausedReason: string | null; lastRefusalReason: str
     }
     case 'not_accepted':
       return 'задачи пока не принимаются'
-    case 'project_gone':
-      return scheduledRunReasonText.project_gone
-    case 'member_gone':
-      return scheduledRunReasonText.member_gone
     default:
       return null
   }

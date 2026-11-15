@@ -1,11 +1,14 @@
 import {
   checkSectionText,
+  DomainError,
+  docSectionWriteArgumentsSchema,
   isDomainError,
   pageContentRefused,
   pageLimits,
   type DocCreateArguments,
   type DocFinishArguments,
-  type DocSectionWriteArguments,
+  type DocReadArguments,
+  type DocSectionWriteShape,
   type DocView,
   type FeedRow,
 } from '@repo/domain'
@@ -96,6 +99,56 @@ function assertText(...texts: string[]): void {
   }
 }
 
+/**
+ * The JSON of the sections one `doc_read` answers with: the role's answers stay under the limit
+ * of its journal (64 KiB, `mcpCanonicalJson`) with the title and the rest around them.
+ */
+export const docReadPartBytes = 48 * 1024
+
+interface ReadSection {
+  id: string
+  markdown: string | null
+}
+
+const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value))
+
+/**
+ * The sections from the first on while they fit `docReadPartBytes` — at least one. A single
+ * section whose JSON alone is larger (a section is at most 32 KiB, its escapes may double it)
+ * comes cut, with `cut: true`.
+ */
+export function readPart<T extends ReadSection>(sections: readonly T[]): { sections: T[] } {
+  const part: T[] = []
+  let bytes = 0
+  for (const section of sections) {
+    const size = jsonBytes(section)
+    if (part.length > 0 && bytes + size > docReadPartBytes) break
+    part.push(section)
+    bytes += size
+    if (bytes >= docReadPartBytes) break
+  }
+  const first = part[0]
+  if (part.length === 1 && first && first.markdown !== null && bytes > docReadPartBytes) {
+    let markdown = first.markdown
+    while (jsonBytes({ ...first, markdown, cut: true }) > docReadPartBytes)
+      // On a whole character: a cut through a surrogate pair would leave half of one.
+      markdown = Array.from(markdown)
+        .slice(0, Math.floor(Array.from(markdown).length * 0.9))
+        .join('')
+    part[0] = { ...first, markdown, cut: true }
+  }
+  return { sections: part }
+}
+
+/** What is wrong with a section write, in the schema's own words: never the text itself. */
+const sectionRefused = (issues: readonly { path: PropertyKey[]; message: string }[]) => ({
+  ok: false as const,
+  code: 'BAD_REQUEST',
+  message: issues
+    .map((issue) => `${issue.path.map(String).join('.') || 'arguments'}: ${issue.message}`)
+    .join('; '),
+})
+
 const tooManyWrites = () => ({
   ok: false as const,
   code: 'DOC_LIMIT',
@@ -131,7 +184,11 @@ export class McpDocsService {
     })
   }
 
-  async write(scope: McpTurnAccess, args: DocSectionWriteArguments): Promise<McpPagesAnswer> {
+  async write(scope: McpTurnAccess, shape: DocSectionWriteShape): Promise<McpPagesAnswer> {
+    // Before a write is counted: a section the agent fixes and sends again costs one write.
+    const parsed = docSectionWriteArgumentsSchema.safeParse(shape)
+    if (!parsed.success) return sectionRefused(parsed.error.issues)
+    const args = parsed.data
     if (!(await this.#store.admitWrite(scope.taskId, scope.turn))) return tooManyWrites()
     return answerOf(async () => {
       assertText(args.heading, args.markdown)
@@ -180,25 +237,35 @@ export class McpDocsService {
     })
   }
 
-  read(scope: McpTurnAccess, args: { docId: string }): Promise<McpPagesAnswer> {
+  read(scope: McpTurnAccess, args: DocReadArguments): Promise<McpPagesAnswer> {
     return answerOf(async () => {
       const document = await this.#store.read({
         workspaceId: scope.workspaceId,
         documentId: args.docId,
         taskId: scope.taskId,
       })
+      const sections = document.sections.map((section) => ({
+        id: section.key,
+        intent: section.intent,
+        state: section.state,
+        heading: section.heading,
+        markdown: section.markdown,
+        ...(section.refusal ? { refused: section.refusal } : {}),
+      }))
+      const start = args.from === undefined ? 0 : sections.findIndex(({ id }) => id === args.from)
+      if (start < 0)
+        throw new DomainError('BAD_REQUEST', 'The document has no section with this id', 400)
+      const part = readPart(sections.slice(start))
+      const rest = sections.length - start - part.sections.length
       return {
         docId: document.id,
         title: document.title,
         version: document.version,
-        sections: document.sections.map((section) => ({
-          id: section.key,
-          intent: section.intent,
-          state: section.state,
-          heading: section.heading,
-          markdown: section.markdown,
-          ...(section.refusal ? { refused: section.refusal } : {}),
-        })),
+        total: sections.length,
+        sections: part.sections,
+        ...(rest > 0
+          ? { more: { from: sections[start + part.sections.length]!.id, sections: rest } }
+          : {}),
       }
     })
   }

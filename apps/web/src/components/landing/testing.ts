@@ -19,7 +19,6 @@ export const pricing: LandingPricingData = {
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: null,
-      maxSites: 1,
     },
     {
       slug: 'business',
@@ -29,7 +28,6 @@ export const pricing: LandingPricingData = {
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: null,
-      maxSites: 3,
     },
     {
       slug: 'agency',
@@ -39,7 +37,6 @@ export const pricing: LandingPricingData = {
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: null,
-      maxSites: 15,
     },
   ],
   pack: { price: '1490.00', credits: 100 },

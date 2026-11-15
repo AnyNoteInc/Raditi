@@ -177,7 +177,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL checkout', () => {
           creditsPerDay: null,
           creditsPer5h: null,
           creditsPerWeek: null,
-          maxSites: null,
         },
         undefined,
       ],
@@ -326,43 +325,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL checkout', () => {
       }
     })
 
-    it('is refused when it has more sites than the plan allows', async () => {
-      const { shop, deps } = billingTestDeps(db)
-      const { userId, workspaceId } = await fixtures.workspace()
-      const site = (name: string) =>
-        db.site.create({
-          data: {
-            workspaceId,
-            name,
-            url: `https://${randomUUID()}.example.ru`,
-            stack: 'wordpress',
-          },
-        })
-      await site('Кофейня')
-      await site('Пекарня')
-      const one = await fixtures.plan({ isActive: true, maxSites: 1 })
-      const two = await fixtures.plan({ isActive: true, maxSites: 2 })
-
-      await expect(
-        startCheckout(deps, { userId, planSlug: one.slug, autoRenew: false }),
-      ).rejects.toMatchObject({ code: 'BILLING_PLAN_SITE_LIMIT', httpStatus: 409 })
-      expect(await db.order.count({ where: { workspaceId } })).toBe(0)
-      expect(shop.created).toEqual([])
-
-      // As many sites as the plan allows is fine.
-      const { orderId } = await startCheckout(deps, {
-        userId,
-        planSlug: two.slug,
-        autoRenew: false,
-      })
-      expect(await db.order.findUnique({ where: { id: orderId } })).toMatchObject({
-        planId: two.id,
-        status: 'pending',
-      })
-    })
-  })
-
-  describe('an unfinished order', () => {
     it('gives the same order and page to the same choice, without a second payment', async () => {
       const { shop, deps, userId, plan } = await setup()
       const choice = { userId, planSlug: plan.slug, autoRenew: true }
@@ -947,7 +909,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL checkout', () => {
             creditsPerDay: null,
             creditsPer5h: null,
             creditsPerWeek: null,
-            maxSites: 1,
             pageSites: null,
             pageCustomNames: false,
           },

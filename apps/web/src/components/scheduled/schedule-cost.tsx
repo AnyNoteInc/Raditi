@@ -28,17 +28,16 @@ export function costText(cost: ScheduleCost): { text: string; over: boolean } {
 }
 
 /**
- * The cost of the schedules of a task, as the server counts it for its workspace (Зп30). In the
+ * The cost of the schedules of a task, as the server counts it for the client's personal workspace,
+ * where every task is (Зп30, Зп44). In the
  * window it is a quiet line under the schedules; on the page of the task it is the value of the
  * fact «Стоимость», drawn as the other values are.
  */
 export function ScheduleCostLine({
-  siteId,
   triggers,
   timezone,
   tone = 'quiet',
 }: {
-  siteId: string | null
   triggers: ScheduleTrigger[]
   timezone: string
   /** `quiet` — a hint, 14 px and secondary; `value` — a value of a fact, 15 px and primary. */
@@ -47,7 +46,7 @@ export function ScheduleCostLine({
   const trpc = useTRPC()
   const valid = scheduleTriggersSchema.safeParse(triggers).success
   const cost = useQuery({
-    ...trpc.schedule.costHint.queryOptions({ siteId, triggers, timezone }),
+    ...trpc.schedule.costHint.queryOptions({ triggers, timezone }),
     enabled: valid,
     placeholderData: keepPreviousData,
   })

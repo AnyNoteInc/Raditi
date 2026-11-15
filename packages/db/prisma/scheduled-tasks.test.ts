@@ -21,8 +21,11 @@ import { uuidv7 } from '../src/uuidv7.ts'
 import { createMigratedSchema, type MigratedSchema } from './migrated-schema.ts'
 
 const databaseUrl = process.env.DATABASE_URL
-/** The last migration before the scheduled tasks. */
-const before = '20261116000000_telegram_chat'
+/**
+ * The last migration before the scheduled tasks (Зп63): they come after the migrations of plan 83,
+ * which removed projects, so a task and a run name no site.
+ */
+const before = '20261116200000_llm_model_context_tokens'
 const at = new Date('2026-11-16T09:00:00Z')
 type Values = Record<string, unknown>
 
@@ -30,7 +33,6 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
   let schema: MigratedSchema
   const workspaceId = randomUUID()
   const userId = randomUUID()
-  const siteId = randomUUID()
   // A chat without a project: its id is a UUID of version 7 (tasks_chat_id_check).
   const taskId = uuidv7()
   const earlierNotice = randomUUID()
@@ -80,10 +82,9 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
   const task = (extra: Values = {}): Values => ({
     id: uuidv7(),
     workspace_id: workspaceId,
-    site_id: siteId,
     created_by_id: userId,
-    name: 'Проверка сайта',
-    instructions: 'Откройте сайт и проверьте главную',
+    name: 'Курс валют',
+    instructions: 'Пришли курс доллара по ЦБ на сегодня',
     effort: 'low',
     triggers: [{ kind: 'weekdays', time: '09:00' }],
     timezone: 'Europe/Moscow',
@@ -99,8 +100,8 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
     due_at: at,
     trigger: 'schedule',
     status: 'pending',
-    name: 'Проверка сайта',
-    instructions: 'Откройте сайт и проверьте главную',
+    name: 'Курс валют',
+    instructions: 'Пришли курс доллара по ЦБ на сегодня',
     effort: 'low',
     ...extra,
   })
@@ -120,18 +121,9 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
       data_class: 'synthetic',
       updated_at: at,
     })
-    await insert('sites', {
-      id: siteId,
-      workspace_id: workspaceId,
-      name: 'Сайт',
-      url: 'https://scheduled.example.test',
-      stack: 'wordpress',
-      updated_at: at,
-    })
     await insert('tasks', {
       id: taskId,
       workspace_id: workspaceId,
-      needs_repository: false,
       needs_browser: false,
       updated_at: at,
     })
@@ -162,6 +154,15 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
   }, 120_000)
   afterAll(async () => {
     await schema?.drop()
+  })
+
+  it('names no project in a task or a run (Зп44, Зп63)', async () => {
+    const { rows } = await schema.db.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.columns
+       WHERE table_schema = current_schema() AND column_name = 'site_id'
+         AND table_name IN ('scheduled_tasks', 'scheduled_runs')`,
+    )
+    expect(rows).toEqual([])
   })
 
   it('lists in its CHECKs exactly the values of the domain', async () => {
@@ -247,7 +248,7 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
     )
     expect(
       await refusal(() =>
-        insert('scheduled_tasks', task({ created_via: 'manual', template_slug: 'site-check' })),
+        insert('scheduled_tasks', task({ created_via: 'manual', template_slug: 'currency-rates' })),
       ),
     ).toBe('scheduled_tasks_created_via_check')
     expect(

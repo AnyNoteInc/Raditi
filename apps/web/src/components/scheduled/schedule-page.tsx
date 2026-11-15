@@ -33,9 +33,7 @@ import { ScheduleCostLine } from './schedule-cost'
 import { ScheduleDialog, type ScheduleDialogOpening } from './schedule-dialog'
 import { keepScheduleNotice } from './schedule-notice'
 import {
-  liveProjectId,
   missedText,
-  projectText,
   runLines,
   scheduleStateText,
   scheduleWords,
@@ -166,7 +164,7 @@ function RunRow({ line, task, now }: { line: RunLine; task: ScheduleDetail; now:
 /**
  * The page of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп6): its name and state, the
  * switch, «Запустить сейчас», «Изменить» and «⋯ Удалить»; the exact instructions, the schedules
- * with the zone, the project, «Размышление», the notices and the cost; then the last 50 runs, the
+ * with the zone, «Размышление», the notices and the cost; then the last 50 runs, the
  * missed ones in a row as one line. Loading — a frame of it; a failure — «Повторить». A failed
  * reading of a task already shown keeps the page, and the window open over it, as they were.
  */
@@ -400,28 +398,13 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
               </Box>
             )}
           </Fact>
-          <Fact term={schedulePageTexts.project}>
-            {/* A deleted project has no page to lead to (Зп22). */}
-            {data.project === null || data.project.deleted ? (
-              projectText(data)
-            ) : (
-              <Link component={NextLink} href={`/projects/${data.project.id}`}>
-                {data.project.name}
-              </Link>
-            )}
-          </Fact>
           <Fact term={schedulePageTexts.effort}>{effortText[data.effort]}</Fact>
           <Fact term={schedulePageTexts.notify}>
             {data.notify ? schedulePageTexts.notifyOn : schedulePageTexts.notifyOff}
             <BrowserPushControl sx={{ mt: 1 }} />
           </Fact>
           <Fact term={schedulePageTexts.cost}>
-            <ScheduleCostLine
-              siteId={liveProjectId(data)}
-              triggers={data.triggers}
-              timezone={data.timezone}
-              tone="value"
-            />
+            <ScheduleCostLine triggers={data.triggers} timezone={data.timezone} tone="value" />
           </Fact>
         </Box>
 

@@ -6,19 +6,17 @@ import { pluralCredits } from './pricing-data'
 
 /**
  * The main action of the landing, wherever it stands: a guest is led to the form of a lead (one
- * way in, the owner, 13.11.2026: we connect the site, the registration comes after), a visitor
- * with an account to the chats. Written once, so every place calls it by one name.
+ * way in, the owner, 13.11.2026; since docs/plan/83 the lead asks for help with the first tasks,
+ * no site is connected), a visitor with an account to the chats. Written once, so every place
+ * calls it by one name.
  */
 export const mainAction = (isGuest: boolean) =>
   isGuest
-    ? ({ href: '#lead', label: 'Подключить сайт бесплатно' } as const)
+    ? ({ href: '#lead', label: 'Начать бесплатно' } as const)
     : ({ href: '/chats', label: 'Открыть чаты' } as const)
 
-/**
- * The same action where a row has no room for the whole name — the header — and where the words
- * around it have said «бесплатно» already: the section of the systems.
- */
-export const MAIN_ACTION_SHORT = 'Подключить сайт'
+/** The same action where a row has no room for the whole name: the header. */
+export const MAIN_ACTION_SHORT = 'Начать'
 
 /** When a tariff is chosen: the last words under the action, whoever reads them. */
 const PLAN_LATER = 'Тариф выберете позже.'
@@ -34,5 +32,5 @@ const PLAN_LATER = 'Тариф выберете позже.'
 export function mainActionNote(isGuest: boolean): string {
   if (!isGuest) return PLAN_LATER
   const gift = `${signupGiftCredits} ${pluralCredits(signupGiftCredits)}`
-  return `При регистрации — ${gift} в подарок: хватит на несколько небольших правок. ${PLAN_LATER}`
+  return `При регистрации — ${gift} в подарок: хватит на несколько небольших задач. ${PLAN_LATER}`
 }
