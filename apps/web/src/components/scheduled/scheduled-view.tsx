@@ -1,0 +1,529 @@
+'use client'
+
+import type { ScheduleTemplate } from '@repo/domain/schedule'
+import Alert from '@mui/material/Alert'
+import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
+import IconButton from '@mui/material/IconButton'
+import InputAdornment from '@mui/material/InputAdornment'
+import ListItemIcon from '@mui/material/ListItemIcon'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
+import Skeleton from '@mui/material/Skeleton'
+import TextField from '@mui/material/TextField'
+import Typography from '@mui/material/Typography'
+import { useQuery } from '@tanstack/react-query'
+import { useRouter } from 'next/navigation'
+import { useRef, useState, type RefObject } from 'react'
+
+import { AppIcon } from '@/components/application/app-icon'
+import { SectionHeading } from '@/components/application/section-heading'
+import { keepChatDraft } from '@/components/chat/chat-draft'
+import { SectionTabs } from '@/components/site/site-section'
+import { useTRPC } from '@/trpc/client'
+
+import { ScheduleNoticeBar, useScheduleActions, type ScheduleNotice } from './schedule-actions'
+import { ScheduleDialog, type ScheduleDialogOpening } from './schedule-dialog'
+import {
+  chatDraftOf,
+  inProject,
+  inScheduleTag,
+  matchesSearch,
+  projectsOfSchedules,
+  scheduleOrders,
+  scheduleTags,
+  sortSchedules,
+  type ScheduleItem,
+  type ScheduleOrder,
+  type ScheduleTag,
+} from './schedule-model'
+import { ScheduleRow } from './schedule-row'
+import { ScheduleTemplateGrid } from './schedule-templates'
+import {
+  scheduleDialogTexts,
+  scheduledTexts,
+  scheduleSortLabels,
+  scheduleTagLabels,
+} from './schedule-texts'
+import { ScheduledEmpty } from './scheduled-empty'
+import { useNow } from './use-now'
+
+/** A list this long is read at a glance: search only above it (Зп3, К24). */
+const SEARCH_ABOVE = 6
+
+const ROOT = '/scheduled'
+const tabs = [
+  { label: scheduledTexts.yours, href: ROOT, segments: [''] },
+  { label: scheduledTexts.templates, href: `${ROOT}/templates`, segments: ['templates'] },
+] as const
+
+const iconButtonSx = {
+  width: 44,
+  height: 44,
+  borderRadius: '12px',
+  color: 'text.secondary',
+  '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+  '&[aria-pressed="true"]': { color: 'text.primary', bgcolor: 'action.selected' },
+} as const
+
+const pillSx = { borderRadius: 999, minHeight: 36, px: 1.75 } as const
+
+const LINE = '1px solid var(--mui-palette-divider)'
+
+/** «Новая задача ▾» (Зп2): «Настроить вручную» or «Настроить в чате». */
+function NewTaskButton({
+  onByHand,
+  onInChat,
+  buttonRef,
+}: {
+  onByHand: (opener: HTMLElement | null) => void
+  onInChat: () => void
+  buttonRef: RefObject<HTMLButtonElement | null>
+}) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  const button = buttonRef
+  return (
+    <>
+      <Button
+        ref={button}
+        variant="contained"
+        aria-haspopup="menu"
+        aria-expanded={anchor !== null}
+        onClick={(event) => setAnchor(event.currentTarget)}
+        startIcon={<AppIcon name="plus" size={16} />}
+        endIcon={<AppIcon name="down" size={16} />}
+        sx={{ minHeight: 40, width: { xs: '100%', sm: 'auto' }, whiteSpace: 'nowrap' }}
+      >
+        {scheduledTexts.newTask}
+      </Button>
+      <Menu
+        anchorEl={anchor}
+        open={anchor !== null}
+        onClose={() => setAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        slotProps={{
+          paper: { sx: { borderRadius: '14px', minWidth: 240, mt: 0.5 } },
+          list: { 'aria-label': scheduledTexts.newTaskMenu },
+        }}
+      >
+        <MenuItem
+          onClick={() => {
+            setAnchor(null)
+            onByHand(button.current)
+          }}
+          sx={{ minHeight: 44, fontSize: 14 }}
+        >
+          <ListItemIcon>
+            <AppIcon name="pencil" size={18} />
+          </ListItemIcon>
+          {scheduledTexts.byHand}
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            setAnchor(null)
+            onInChat()
+          }}
+          sx={{ minHeight: 44, fontSize: 14 }}
+        >
+          <ListItemIcon>
+            <AppIcon name="chat" size={18} />
+          </ListItemIcon>
+          {scheduledTexts.inChat}
+        </MenuItem>
+      </Menu>
+    </>
+  )
+}
+
+/** The order of «Ваши» (Зп3), a menu of three. */
+function SortButton({
+  order,
+  onChange,
+}: {
+  order: ScheduleOrder
+  onChange: (order: ScheduleOrder) => void
+}) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  return (
+    <>
+      <IconButton
+        aria-label={scheduledTexts.sort}
+        aria-haspopup="menu"
+        aria-expanded={anchor !== null}
+        onClick={(event) => setAnchor(event.currentTarget)}
+        sx={iconButtonSx}
+      >
+        <AppIcon name="sort" size={20} />
+      </IconButton>
+      <Menu
+        anchorEl={anchor}
+        open={anchor !== null}
+        onClose={() => setAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        slotProps={{
+          paper: { sx: { borderRadius: '14px', minWidth: 240 } },
+          list: { 'aria-label': scheduledTexts.sort },
+        }}
+      >
+        {scheduleOrders.map((key) => (
+          <MenuItem
+            key={key}
+            role="menuitemradio"
+            aria-checked={order === key}
+            selected={order === key}
+            onClick={() => {
+              onChange(key)
+              setAnchor(null)
+            }}
+            sx={{ minHeight: 44, fontSize: 14, justifyContent: 'space-between', gap: 2 }}
+          >
+            {scheduleSortLabels[key]}
+            <Box
+              component="span"
+              aria-hidden
+              sx={{ display: 'flex', visibility: order === key ? 'visible' : 'hidden' }}
+            >
+              <AppIcon name="check" size={18} />
+            </Box>
+          </MenuItem>
+        ))}
+      </Menu>
+    </>
+  )
+}
+
+/**
+ * «Запланированные задачи» (docs/plan/82-scheduled-tasks.md, Зп2–Зп5, Зп9, Зп10): the heading with
+ * what the section is in its tooltip; the tabs «Ваши» and «Шаблоны»; the search above six tasks,
+ * the filters with their counts, the order and «Новая задача ▾». Before the first task — the
+ * stopwatch and the templates; on «Шаблоны» — the six of §4.6, the used ones marked.
+ */
+export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 'templates' }) {
+  const trpc = useTRPC()
+  const router = useRouter()
+  const now = useNow()
+  const list = useQuery(trpc.schedule.list.queryOptions())
+  const [notice, setNotice] = useState<ScheduleNotice>(null)
+  const actions = useScheduleActions(setNotice)
+  const [opening, setOpening] = useState<ScheduleDialogOpening | null>(null)
+  const opener = useRef<HTMLElement | null>(null)
+  const [tag, setTag] = useState<ScheduleTag>('all')
+  const [project, setProject] = useState<string | null | 'all'>('all')
+  const [order, setOrder] = useState<ScheduleOrder>('next')
+  const [search, setSearch] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [filterOpen, setFilterOpen] = useState(false)
+  const searchInput = useRef<HTMLInputElement>(null)
+  const newTaskButton = useRef<HTMLButtonElement>(null)
+
+  const all: readonly ScheduleItem[] = list.data?.schedules ?? []
+  const empty = list.isSuccess && all.length === 0
+  const searchable = all.length > SEARCH_ABOVE
+  const query = searchable && searchOpen ? search : ''
+  const projects = projectsOfSchedules(all)
+  const shownTag = filterOpen ? tag : 'all'
+  const shownProject = filterOpen && projects.length > 1 ? project : 'all'
+  const fits = (item: ScheduleItem) => inProject(item, shownProject) && matchesSearch(item, query)
+  const shown = sortSchedules(
+    all.filter((item) => fits(item) && inScheduleTag(item, shownTag)),
+    order,
+  )
+  const filtered = shownTag !== 'all' || shownProject !== 'all' || query.trim() !== ''
+  const used = new Set(
+    all.flatMap((item) => (item.templateSlug === null ? [] : [item.templateSlug])),
+  )
+
+  function open(next: ScheduleDialogOpening, from: HTMLElement | null) {
+    opener.current = from
+    setOpening(next)
+  }
+  function inChat() {
+    keepChatDraft(userId, chatDraftOf(null))
+    router.push('/chats/new')
+  }
+  function reset() {
+    setTag('all')
+    setProject('all')
+    setSearch('')
+    searchInput.current?.focus()
+  }
+  const openTemplate = (template: ScheduleTemplate, from: HTMLElement) =>
+    open({ kind: 'new', template }, from)
+  // What opened the window may be gone when it closes — the card of a template over an empty list
+  // that is not empty any more: then «Новая задача» takes the focus.
+  const returnFocus = () => (opener.current?.isConnected ? opener.current : newTaskButton.current)
+
+  const yours = tab === 'yours'
+  const tools = yours && list.isSuccess && !empty
+
+  return (
+    <Box
+      sx={{
+        width: '100%',
+        maxWidth: 1200,
+        mx: 'auto',
+        flex: '1 0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', minHeight: 48, mb: 2 }}>
+        <SectionHeading title={scheduledTexts.title} about={scheduledTexts.about} />
+      </Box>
+
+      {/*
+        One line under the tabs, the tools and, from `sm`, «Новая задача»: the line of the row, which
+        the tabs lie on; on a phone «Новая задача» goes the whole width under it (Зп2).
+      */}
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'flex-end',
+          // Whole values: a responsive `borderBottom: 1` resets the colour to the text's.
+          borderBottom: { xs: 'none', sm: LINE },
+        }}
+      >
+        <Box sx={{ flex: '1 1 auto', minWidth: 0, mb: { xs: 0, sm: '-1px' } }}>
+          <SectionTabs label={scheduledTexts.tabs} root={ROOT} tabs={tabs} />
+        </Box>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            alignSelf: 'stretch',
+            borderBottom: { xs: LINE, sm: 'none' },
+          }}
+        >
+          {tools && searchable ? (
+            <IconButton
+              aria-label={scheduledTexts.search}
+              aria-pressed={searchOpen}
+              onClick={() => {
+                setSearchOpen(!searchOpen)
+                if (searchOpen) setSearch('')
+              }}
+              sx={iconButtonSx}
+            >
+              <AppIcon name="search" size={20} />
+            </IconButton>
+          ) : null}
+          {tools && all.length > 1 ? (
+            <>
+              <IconButton
+                aria-label={scheduledTexts.filter}
+                aria-pressed={filterOpen}
+                onClick={() => setFilterOpen(!filterOpen)}
+                sx={iconButtonSx}
+              >
+                <AppIcon name="filter" size={20} />
+              </IconButton>
+              <SortButton order={order} onChange={setOrder} />
+            </>
+          ) : null}
+        </Box>
+        <Box
+          sx={{
+            display: 'flex',
+            flex: { xs: '1 1 100%', sm: 'none' },
+            alignSelf: 'center',
+            mt: { xs: 1.5, sm: 0 },
+            py: { sm: 0.5 },
+            pl: { sm: 1 },
+          }}
+        >
+          <NewTaskButton
+            buttonRef={newTaskButton}
+            onByHand={(from) => open({ kind: 'new' }, from)}
+            onInChat={inChat}
+          />
+        </Box>
+      </Box>
+
+      {tools && searchable && searchOpen ? (
+        <TextField
+          inputRef={searchInput}
+          autoFocus
+          size="small"
+          placeholder={scheduledTexts.search}
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          slotProps={{
+            htmlInput: { 'aria-label': scheduledTexts.searchField },
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <AppIcon name="search" size={18} />
+                </InputAdornment>
+              ),
+              endAdornment: search ? (
+                <InputAdornment position="end">
+                  <IconButton
+                    size="small"
+                    aria-label={scheduledTexts.clearSearch}
+                    onClick={() => {
+                      setSearch('')
+                      searchInput.current?.focus()
+                    }}
+                    edge="end"
+                    sx={{ width: 44, height: 44 }}
+                  >
+                    <AppIcon name="close" size={16} />
+                  </IconButton>
+                </InputAdornment>
+              ) : undefined,
+            },
+          }}
+          sx={{ mt: 2, width: { xs: '100%', sm: 320 }, '& .MuiInputBase-root': { minHeight: 48 } }}
+        />
+      ) : null}
+
+      {tools && filterOpen ? (
+        <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+          <Box
+            role="group"
+            aria-label={scheduledTexts.showGroup}
+            sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}
+          >
+            {scheduleTags.map((each) => (
+              <Button
+                key={each}
+                aria-pressed={tag === each}
+                onClick={() => setTag(each)}
+                variant={tag === each ? 'contained' : 'outlined'}
+                size="small"
+                sx={pillSx}
+              >
+                {scheduleTagLabels[each]}
+                <Box
+                  component="span"
+                  sx={{ ml: 1, opacity: 0.75, fontVariantNumeric: 'tabular-nums' }}
+                >
+                  {all.filter((item) => fits(item) && inScheduleTag(item, each)).length}
+                </Box>
+              </Button>
+            ))}
+          </Box>
+          {projects.length > 1 ? (
+            <Box
+              role="group"
+              aria-label={scheduledTexts.projectGroup}
+              sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}
+            >
+              {[{ id: 'all' as const, name: scheduledTexts.allProjects }, ...projects].map(
+                (each) => {
+                  const pressed = project === each.id
+                  const count = all.filter(
+                    (item) =>
+                      inProject(item, each.id) &&
+                      matchesSearch(item, query) &&
+                      inScheduleTag(item, tag),
+                  ).length
+                  return (
+                    <Button
+                      key={each.id ?? 'none'}
+                      aria-pressed={pressed}
+                      onClick={() => setProject(each.id)}
+                      variant={pressed ? 'contained' : 'outlined'}
+                      color={pressed ? 'primary' : 'inherit'}
+                      size="small"
+                      sx={{ ...pillSx, borderColor: pressed ? undefined : 'divider' }}
+                    >
+                      {each.name ?? scheduledTexts.noProject}
+                      <Box
+                        component="span"
+                        sx={{ ml: 1, opacity: 0.75, fontVariantNumeric: 'tabular-nums' }}
+                      >
+                        {count}
+                      </Box>
+                    </Button>
+                  )
+                },
+              )}
+            </Box>
+          ) : null}
+        </Box>
+      ) : null}
+
+      <Box sx={{ mt: 3, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {list.isPending ? (
+          <Box
+            role="status"
+            aria-label={scheduledTexts.loading}
+            sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}
+          >
+            {[0, 1, 2].map((row) => (
+              <Skeleton key={row} variant="rounded" height={96} sx={{ borderRadius: '14px' }} />
+            ))}
+          </Box>
+        ) : list.isError && list.data === undefined ? (
+          <Alert
+            severity="error"
+            action={
+              <Button color="inherit" onClick={() => void list.refetch()}>
+                {scheduledTexts.retry}
+              </Button>
+            }
+          >
+            {scheduledTexts.failed}
+          </Alert>
+        ) : !yours ? (
+          <ScheduleTemplateGrid used={used} onOpen={openTemplate} wide />
+        ) : empty ? (
+          <ScheduledEmpty
+            onByHand={(from) => open({ kind: 'new' }, from)}
+            onInChat={inChat}
+            onTemplate={openTemplate}
+          />
+        ) : shown.length === 0 ? (
+          <Box sx={{ py: 4, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+            <Typography sx={{ color: 'text.secondary' }}>{scheduledTexts.nothingFound}</Typography>
+            {filtered ? (
+              <Button size="small" onClick={reset}>
+                {scheduledTexts.reset}
+              </Button>
+            ) : null}
+          </Box>
+        ) : (
+          <Box
+            component="ul"
+            aria-label={scheduledTexts.list}
+            sx={{
+              listStyle: 'none',
+              m: 0,
+              p: 0,
+              border: 1,
+              borderColor: 'divider',
+              borderRadius: '14px',
+              bgcolor: 'background.paper',
+              overflow: 'hidden',
+            }}
+          >
+            {shown.map((item) => (
+              <ScheduleRow
+                key={item.id}
+                item={item}
+                now={now}
+                actions={actions}
+                onEdit={(schedule, from) => open({ kind: 'edit', schedule }, from)}
+              />
+            ))}
+          </Box>
+        )}
+      </Box>
+
+      <ScheduleDialog
+        opening={opening}
+        userId={userId}
+        onClose={() => setOpening(null)}
+        onSaved={(_, created) =>
+          setNotice({ text: created ? scheduleDialogTexts.created : scheduleDialogTexts.saved })
+        }
+        returnFocus={returnFocus}
+      />
+      <ScheduleNoticeBar notice={notice} onClose={() => setNotice(null)} />
+    </Box>
+  )
+}

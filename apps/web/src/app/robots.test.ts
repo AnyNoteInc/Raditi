@@ -28,6 +28,7 @@ describe('robots.txt', () => {
       '/api/',
       '/app',
       '/chats',
+      '/scheduled',
       '/projects',
       '/profile',
       '/settings',

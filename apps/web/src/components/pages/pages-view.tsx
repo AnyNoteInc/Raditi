@@ -8,12 +8,12 @@ import InputAdornment from '@mui/material/InputAdornment'
 import Link from '@mui/material/Link'
 import Skeleton from '@mui/material/Skeleton'
 import TextField from '@mui/material/TextField'
-import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { SectionHeading } from '@/components/application/section-heading'
 import { useTRPC } from '@/trpc/client'
 
 import {
@@ -134,63 +134,6 @@ const inTag = (page: ListedPage, tag: PageTag): boolean =>
       (tag === 'all' || (tag === 'password' ? page.hasPassword : page.state === tag))
 
 /**
- * The heading «Страницы» with what the section is in a tooltip (docs/plan/73-pages-sites.md,
- * Дер7, §7.2): it lights up under the pointer and the keyboard focus, and opens on a hover, a
- * focus and a tap — a tap comes as a click, Tooltip's own touch listener loses a short one.
- */
-function PagesHeading() {
-  const [open, setOpen] = useState(false)
-  const [touch, setTouch] = useState(false)
-  return (
-    <Typography
-      variant="h2"
-      component="h1"
-      sx={{ flex: '1 1 auto', minWidth: 0, fontSize: { xs: 26, md: 30 }, lineHeight: 1.2 }}
-    >
-      <Tooltip
-        describeChild
-        title={pageTexts.about}
-        placement="bottom-start"
-        open={open}
-        onOpen={() => setOpen(true)}
-        onClose={() => setOpen(false)}
-        disableTouchListener
-        slotProps={{
-          tooltip: { sx: { maxWidth: 360, p: 1.5, fontSize: 13, lineHeight: 1.45 } },
-        }}
-      >
-        <Box
-          component="span"
-          tabIndex={0}
-          onPointerDown={(event) => setTouch(event.pointerType === 'touch')}
-          // A tap toggles it; a click of a mouse keeps open what its hover opened.
-          onClick={() => setOpen((was) => (touch ? !was : true))}
-          sx={{
-            cursor: 'help',
-            borderRadius: '6px',
-            outline: 'none',
-            textDecorationLine: 'underline',
-            textDecorationStyle: 'dotted',
-            textDecorationThickness: '1.5px',
-            textUnderlineOffset: '6px',
-            textDecorationColor: 'transparent',
-            transition: 'color 150ms ease, text-decoration-color 150ms ease',
-            '&:hover, &:focus-visible': {
-              color: 'primary.main',
-              textDecorationColor: 'currentColor',
-            },
-            '&:focus-visible': { boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}` },
-            '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
-          }}
-        >
-          {pageTexts.title}
-        </Box>
-      </Tooltip>
-    </Typography>
-  )
-}
-
-/**
  * «Страницы» (docs/plan/69-pages.md, Ст30; docs/plan/73-pages-sites.md, Дер2, Дер6–Дер8): the
  * pages and documents of the user's workspaces — a page belongs to its workspace, not to a chat —
  * filtered by tags over the list, searched by title, each with its address, kind, version and
@@ -231,7 +174,7 @@ export function PagesView({ userId }: { userId: string }) {
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 48, mb: 2.5 }}>
-        <PagesHeading />
+        <SectionHeading title={pageTexts.title} about={pageTexts.about} />
         {!empty && list.data?.enabled !== false && (
           <Button
             variant="contained"

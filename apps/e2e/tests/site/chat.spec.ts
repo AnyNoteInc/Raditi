@@ -77,9 +77,11 @@ for (const [name, width, height] of viewports) {
       await expectChatsCurrent(page)
       const links = page.getByRole('navigation', { name: 'Основная навигация' }).getByRole('link')
       await expect(links.nth(0)).toHaveAccessibleName('Чаты')
-      // «Страницы» stands between «Чаты» and «Проекты» (docs/plan/69-pages.md, Ст30).
-      await expect(links.nth(1)).toHaveAccessibleName('Страницы')
-      await expect(links.nth(2)).toHaveAccessibleName('Проекты')
+      // The scheduled tasks after «Чаты» (docs/plan/82-scheduled-tasks.md, Зп1), then «Страницы»
+      // before «Проекты» (docs/plan/69-pages.md, Ст30).
+      await expect(links.nth(1)).toHaveAccessibleName('Запланированные задачи')
+      await expect(links.nth(2)).toHaveAccessibleName('Страницы')
+      await expect(links.nth(3)).toHaveAccessibleName('Проекты')
     })
 
     if (width >= 900) {
