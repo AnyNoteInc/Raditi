@@ -14,7 +14,7 @@ import {
   docReadArgumentsSchema,
   docSectionMoveArgumentsSchema,
   docSectionRemoveArgumentsSchema,
-  docSectionWriteArgumentsSchema,
+  docSectionWriteShapeSchema,
   requirementsOf,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -110,7 +110,8 @@ const webCall = z
 const searchCall = call('search_web', webSearchArgumentsSchema)
 const docsCall = z.discriminatedUnion('name', [
   call('doc_create', docCreateArgumentsSchema),
-  call('doc_section_write', docSectionWriteArgumentsSchema),
+  // The shape only: the tool itself says what is wrong with the text of a section.
+  call('doc_section_write', docSectionWriteShapeSchema),
   call('doc_section_remove', docSectionRemoveArgumentsSchema),
   call('doc_section_move', docSectionMoveArgumentsSchema),
   call('doc_read', docReadArgumentsSchema),
