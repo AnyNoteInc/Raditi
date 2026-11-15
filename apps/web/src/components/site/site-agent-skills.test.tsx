@@ -12,6 +12,7 @@ const calls = vi.hoisted(() => ({
   switch: vi.fn<Answer>(),
   add: vi.fn<Answer>(),
   remove: vi.fn<Answer>(),
+  key: vi.fn<Answer>(),
 }))
 
 const mutation = (fn: Answer) => ({
@@ -26,10 +27,12 @@ vi.mock('@/trpc/client', () => ({
       switch: mutation(calls.switch),
       add: mutation(calls.add),
       remove: mutation(calls.remove),
+      key: mutation(calls.key),
     },
   }),
 }))
 
+const noAuth = { kind: 'none', headerName: null, state: 'ok', error: null } as const
 const platform: SkillsView['skills'] = [
   {
     name: 'context7',
@@ -38,6 +41,7 @@ const platform: SkillsView['skills'] = [
     builtin: true,
     url: null,
     enabled: true,
+    auth: noAuth,
   },
   {
     name: 'playwright',
@@ -46,6 +50,7 @@ const platform: SkillsView['skills'] = [
     builtin: true,
     url: null,
     enabled: true,
+    auth: noAuth,
   },
 ]
 const view = (patch: Partial<SkillsView> = {}): SkillsView => ({
@@ -101,6 +106,7 @@ describe('«Навыки агента» of a site', () => {
       builtin: false,
       url: 'https://docs.example.org/mcp',
       enabled: true,
+      auth: noAuth,
     }
     calls.add.mockResolvedValue(view({ skills: [...platform, added], addable: 7 }))
     calls.remove.mockResolvedValue(view())
@@ -144,5 +150,75 @@ describe('«Навыки агента» of a site', () => {
     for (const box of screen.getAllByRole('switch'))
       expect((box as HTMLInputElement).disabled).toBe(true)
     expect(screen.queryByRole('button', { name: skillsText.add })).toBeNull()
+  })
+
+  it('adds a server with a key in a header and never shows the key again', async () => {
+    const added: SkillsView['skills'][number] = {
+      name: 'menu',
+      title: 'menu',
+      description: null,
+      builtin: false,
+      url: 'https://mcp.krosha.example/v1/mcp',
+      enabled: true,
+      auth: { kind: 'header', headerName: 'X-Api-Key', state: 'ok', error: null },
+    }
+    calls.add.mockResolvedValue(view({ skills: [...platform, added], addable: 7 }))
+    show(view())
+    fireEvent.change(screen.getByLabelText(skillsText.name), { target: { value: 'menu' } })
+    fireEvent.change(screen.getByLabelText(skillsText.url), {
+      target: { value: 'https://mcp.krosha.example/v1/mcp' },
+    })
+    fireEvent.click(screen.getByLabelText(skillsText.authHeader))
+    fireEvent.change(screen.getByLabelText(skillsText.headerName), {
+      target: { value: 'X-Api-Key' },
+    })
+    const key = screen.getByLabelText(skillsText.headerValue) as HTMLInputElement
+    expect(key.type).toBe('password')
+    fireEvent.change(key, { target: { value: 'sk_live_0123456789' } })
+    fireEvent.click(screen.getByRole('button', { name: skillsText.add }))
+    await waitFor(() => expect(screen.getByText(skillsText.keyed('X-Api-Key'))).toBeTruthy())
+    expect(calls.add).toHaveBeenCalledWith(
+      {
+        siteId: SITE_ID,
+        name: 'menu',
+        url: 'https://mcp.krosha.example/v1/mcp',
+        header: { headerName: 'X-Api-Key', value: 'sk_live_0123456789' },
+      },
+      expect.anything(),
+    )
+    expect(document.body.textContent).not.toContain('sk_live_0123456789')
+  })
+
+  it('says a key was refused and replaces it', async () => {
+    const refused: SkillsView['skills'][number] = {
+      name: 'menu',
+      title: 'menu',
+      description: null,
+      builtin: false,
+      url: 'https://mcp.krosha.example/v1/mcp',
+      enabled: true,
+      auth: { kind: 'header', headerName: 'X-Api-Key', state: 'failed', error: 'unauthorized' },
+    }
+    calls.key.mockResolvedValue(
+      view({
+        skills: [...platform, { ...refused, auth: { ...refused.auth, state: 'ok', error: null } }],
+      }),
+    )
+    show(view({ skills: [...platform, refused] }))
+    expect(screen.getByText(skillsText.keyRefused)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: skillsText.replaceKey }))
+    fireEvent.change(screen.getByLabelText(skillsText.headerValue), {
+      target: { value: 'sk_live_new_01234' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: skillsText.saveKey }))
+    await waitFor(() => expect(screen.queryByText(skillsText.keyRefused)).toBeNull())
+    expect(calls.key).toHaveBeenCalledWith(
+      {
+        siteId: SITE_ID,
+        name: 'menu',
+        header: { headerName: 'X-Api-Key', value: 'sk_live_new_01234' },
+      },
+      expect.anything(),
+    )
   })
 })

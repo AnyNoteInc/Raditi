@@ -27,3 +27,8 @@ export { readTaskScreenshot } from './services/chat/screenshots.ts'
 export { readSiteBackupDownload } from './services/site-history.ts'
 
 export { readChatNotification } from './services/notifications.ts'
+export type {
+  McpServerCheck,
+  McpServerProbe,
+  McpServerServices,
+} from './services/mcp-server-auth.ts'

@@ -5,6 +5,7 @@ import { legalDocuments } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import type { McpServerCheck, McpServerServices } from '../services/mcp-server-auth.ts'
 import type { Context } from '../trpc.ts'
 
 const now = new Date('2026-10-26T09:00:00Z')
@@ -25,17 +26,62 @@ const requiredConsents = legalDocuments.flatMap((document) =>
 )
 const siteId = randomUUID()
 const workspaceId = randomUUID()
-type Row = { name: string; url: string | null; enabled: boolean }
+type Row = {
+  name: string
+  url: string | null
+  enabled: boolean
+  authKind?: 'none' | 'header' | 'oauth'
+  headerName?: string | null
+}
 
-function setup(role: string | null = 'owner', rows: Row[] = []) {
+/** Vault that can only write, and a check of the server that answers as told. */
+function mcpServers(check: McpServerCheck = { ok: true, tools: 3 }) {
+  const vault: { path: string; data: Record<string, string>; cas: number | undefined }[] = []
+  const versions = new Map<string, number>()
+  const services: McpServerServices = {
+    secrets: {
+      kvMetadata: vi.fn(async (path: string) =>
+        versions.has(path)
+          ? {
+              currentVersion: versions.get(path)!,
+              createdTime: now,
+              updatedTime: now,
+              customMetadata: {},
+            }
+          : null,
+      ) as McpServerServices['secrets']['kvMetadata'],
+      kvWrite: vi.fn(async (path: string, data: Record<string, string>, options) => {
+        vault.push({ path, data, cas: options?.cas })
+        const version = (versions.get(path) ?? 0) + 1
+        versions.set(path, version)
+        return { version }
+      }),
+    },
+    probe: vi.fn(async () => check),
+  }
+  return { services, vault, versions }
+}
+
+function setup(
+  role: string | null = 'owner',
+  rows: Row[] = [],
+  services: McpServerServices | null = null,
+) {
   const audits: unknown[] = []
   const writes: unknown[] = []
+  const stored = rows.map((row) => ({
+    authKind: 'none',
+    headerName: null,
+    authState: 'ok',
+    authError: null,
+    ...row,
+  }))
   const db = {
     userConsent: { findMany: vi.fn().mockResolvedValue(requiredConsents) },
     site: {
       findFirst: vi
         .fn<(args: unknown) => Promise<unknown>>()
-        .mockImplementation(async () => ({ id: siteId, workspaceId, agentSkills: rows })),
+        .mockImplementation(async () => ({ id: siteId, workspaceId, agentSkills: stored })),
     },
     member: {
       findUnique: vi.fn().mockResolvedValue(role ? { role } : null),
@@ -46,7 +92,12 @@ function setup(role: string | null = 'owner', rows: Row[] = []) {
         siteAgentSkill: {
           upsert: async (args: unknown) => writes.push(['upsert', args]),
           create: async (args: unknown) => writes.push(['create', args]),
+          update: async (args: unknown) => writes.push(['update', args]),
           delete: async (args: unknown) => writes.push(['delete', args]),
+        },
+        credentialRef: {
+          upsert: async (args: unknown) => writes.push(['credentialRef.upsert', args]),
+          deleteMany: async (args: unknown) => writes.push(['credentialRef.deleteMany', args]),
         },
         auditLog: { create: async (args: unknown) => audits.push(args) },
       }),
@@ -64,6 +115,7 @@ function setup(role: string | null = 'owner', rows: Row[] = []) {
       updatedAt: now,
     },
     billing: null,
+    mcpServers: services,
   }
   return { db, audits, writes, caller: createCaller(context) }
 }
@@ -163,7 +215,10 @@ describe('siteAgentSkills', () => {
       { name: 'docs', url: 'https://docs.example.org/mcp', enabled: true },
     ])
     await caller.siteAgentSkills.remove({ siteId, name: 'docs' })
-    expect(writes).toEqual([['delete', { where: { siteId_name: { siteId, name: 'docs' } } }]])
+    expect(writes).toEqual([
+      ['delete', { where: { siteId_name: { siteId, name: 'docs' } } }],
+      ['credentialRef.deleteMany', { where: { siteId, vaultPath: `kv/sites/${siteId}/mcp/docs` } }],
+    ])
     await expect(caller.siteAgentSkills.remove({ siteId, name: 'context7' })).rejects.toMatchObject(
       {
         code: 'CONFLICT',
@@ -186,5 +241,175 @@ describe('siteAgentSkills', () => {
       caller.siteAgentSkills.add({ siteId, name: 'docs', url: 'https://docs.example.org/mcp' }),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' })
     expect(writes).toEqual([])
+  })
+
+  it('adds a server with a key: checked against the server, written to Vault, never kept in a row', async () => {
+    const { services, vault } = mcpServers()
+    const { writes, audits, caller } = setup('owner', [], services)
+    const view = await caller.siteAgentSkills.add({
+      siteId,
+      name: 'menu',
+      url: 'https://mcp.krosha.example:8443/api/v1/mcp',
+      header: { headerName: 'X-Api-Key', value: 'sk_live_0123456789' },
+    })
+    expect(services.probe).toHaveBeenCalledWith({
+      url: 'https://mcp.krosha.example:8443/api/v1/mcp',
+      header: { name: 'X-Api-Key', value: 'sk_live_0123456789' },
+    })
+    const path = `kv/sites/${siteId}/mcp/menu`
+    expect(vault).toEqual([{ path, data: { value: 'sk_live_0123456789' }, cas: 0 }])
+    expect(writes).toEqual([
+      [
+        'create',
+        {
+          data: {
+            siteId,
+            name: 'menu',
+            url: 'https://mcp.krosha.example:8443/api/v1/mcp',
+            authKind: 'header',
+            headerName: 'X-Api-Key',
+            authCheckedAt: expect.any(Date),
+          },
+        },
+      ],
+      [
+        'credentialRef.upsert',
+        {
+          where: { vaultPath: path },
+          create: { workspaceId, siteId, kind: 'mcp_server', vaultPath: path, keyVersion: 1 },
+          update: { keyVersion: 1 },
+        },
+      ],
+    ])
+    // The key is in no row, no audit and no answer.
+    expect(JSON.stringify([writes, audits, view])).not.toContain('sk_live_0123456789')
+    expect(audits).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'site.agent_skill.add',
+          meta: {
+            name: 'menu',
+            url: 'https://mcp.krosha.example:8443/api/v1/mcp',
+            header: 'X-Api-Key',
+          },
+        }),
+      }),
+    ])
+  })
+
+  it('keeps nothing when the server refuses the key, and says why', async () => {
+    const { services, vault } = mcpServers({ ok: false, reason: 'unauthorized' })
+    const { writes, caller } = setup('owner', [], services)
+    await expect(
+      caller.siteAgentSkills.add({
+        siteId,
+        name: 'menu',
+        url: 'https://mcp.krosha.example/mcp',
+        header: { headerName: 'Authorization', value: 'Bearer wrong-key-123' },
+      }),
+    ).rejects.toMatchObject({
+      code: 'UNPROCESSABLE_CONTENT',
+      message: 'Сервер не принял ключ. Проверьте имя заголовка и ключ и попробуйте снова',
+    })
+    expect(vault).toEqual([])
+    expect(writes).toEqual([])
+  })
+
+  it('refuses a header the relay owns and a key it could not mask, before asking the server', async () => {
+    const { services } = mcpServers()
+    const { caller } = setup('owner', [], services)
+    for (const header of [
+      { headerName: 'Cookie', value: 'session=0123456789' },
+      { headerName: 'X-Api-Key', value: 'short' },
+      { headerName: 'X-Api-Key', value: 'two\nlines-of-key' },
+    ])
+      await expect(
+        caller.siteAgentSkills.add({
+          siteId,
+          name: 'menu',
+          url: 'https://mcp.example.org/mcp',
+          header,
+        }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(services.probe).not.toHaveBeenCalled()
+    const { caller: offline } = setup('owner', [], null)
+    await expect(
+      offline.siteAgentSkills.add({
+        siteId,
+        name: 'menu',
+        url: 'https://mcp.example.org/mcp',
+        header: { headerName: 'X-Api-Key', value: 'sk_live_0123456789' },
+      }),
+    ).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' })
+  })
+
+  it('replaces a key over the old one and makes the server work again', async () => {
+    const { services, vault, versions } = mcpServers()
+    const path = `kv/sites/${siteId}/mcp/menu`
+    versions.set(path, 2)
+    const { writes, caller } = setup(
+      'admin',
+      [
+        {
+          name: 'menu',
+          url: 'https://mcp.example.org/mcp',
+          enabled: true,
+          authKind: 'header',
+          headerName: 'X-Api-Key',
+        },
+      ],
+      services,
+    )
+    await caller.siteAgentSkills.key({
+      siteId,
+      name: 'menu',
+      header: { headerName: 'X-Api-Key', value: 'sk_live_new_0123456' },
+    })
+    expect(vault).toEqual([{ path, data: { value: 'sk_live_new_0123456' }, cas: 2 }])
+    expect(writes[0]).toEqual([
+      'update',
+      {
+        where: { siteId_name: { siteId, name: 'menu' } },
+        data: {
+          headerName: 'X-Api-Key',
+          authState: 'ok',
+          authError: null,
+          authCheckedAt: expect.any(Date),
+        },
+      },
+    ])
+    await expect(
+      setup(
+        'owner',
+        [{ name: 'open', url: 'https://mcp.example.org/mcp', enabled: true }],
+        services,
+      ).caller.siteAgentSkills.key({
+        siteId,
+        name: 'open',
+        header: { headerName: 'X-Api-Key', value: 'sk_live_new_0123456' },
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+
+  it('erases the key of a removed server before its row goes', async () => {
+    const { services, vault, versions } = mcpServers()
+    const path = `kv/sites/${siteId}/mcp/menu`
+    versions.set(path, 1)
+    const { writes, caller } = setup(
+      'owner',
+      [
+        {
+          name: 'menu',
+          url: 'https://mcp.example.org/mcp',
+          enabled: true,
+          authKind: 'header',
+          headerName: 'X-Api-Key',
+        },
+      ],
+      services,
+    )
+    await caller.siteAgentSkills.remove({ siteId, name: 'menu' })
+    expect(vault).toEqual([{ path, data: { removed: expect.any(String) }, cas: 1 }])
+    expect(writes.map(([kind]) => kind)).toEqual(['delete', 'credentialRef.deleteMany'])
   })
 })
