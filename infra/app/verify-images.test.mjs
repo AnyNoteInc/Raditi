@@ -132,7 +132,6 @@ test('an image carries no stand, stand test or fixture, and keeps the operator c
       '/app/apps/llm/scripts/verify-llm-worker.mjs',
       '/app/apps/mcp/scripts/verify-content-worker.mjs',
       '/app/apps/core/scripts/billing-refund.mjs',
-      '/app/apps/core/scripts/releases-resolve.mjs',
       '/app/apps/core/scripts/verify-agent-supervisor.test.mjs',
       '/app/apps/core/scripts/opencode-runner-fixture.mjs',
       '/app/apps/runner/scripts/runner-token.mjs',
@@ -168,7 +167,7 @@ test('the .dockerignore matcher of these tests reads the file as Docker does', (
 })
 
 test('.dockerignore leaves out exactly the stands, never an operator command of an app', () => {
-  // core is built by verify:edge and verify:release, not by verify:images; its operator commands
+  // core is built by verify:edge, not by verify:images; its operator commands
   // run in its image on the app VM
   // (`docker compose run --entrypoint node core scripts/billing-refund.mjs …`).
   const kept = {
@@ -185,7 +184,6 @@ test('.dockerignore leaves out exactly the stands, never an operator command of 
       // The support's take-down and return of a site of pages (docs/plan/73-pages-sites.md, Дер18).
       'pages-return.mjs',
       'pages-take-down.mjs',
-      'releases-resolve.mjs',
     ],
   }
   // The stands of the packages the images carry go too (the runner image holds agent-drivers and

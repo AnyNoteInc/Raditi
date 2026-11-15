@@ -4,7 +4,6 @@ import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 
 import {
   runnerApiPaths,
-  runnerBundlePath,
   runnerInboxPath,
   runnerCandidatePath,
   runnerConflictSchema,
@@ -41,12 +40,6 @@ export interface RunnerTransport {
   poll(request: RunnerPollRequest, signal: AbortSignal): Promise<unknown>
   report(report: RunnerReport): Promise<void>
   reconcile(request: RunnerReconcileRequest): Promise<unknown>
-  /** The base bundle of an open prepare; never more than `sizeBytes`. */
-  bundle(
-    assignmentId: string,
-    fence: RunnerCommandFence,
-    sizeBytes: number,
-  ): AsyncIterable<Uint8Array>
   /** A file of the client of an open prepare, by its place in the command; exactly `sizeBytes`. */
   inbox(
     assignmentId: string,
@@ -174,29 +167,6 @@ export class HttpRunnerTransport implements RunnerTransport {
 
   reconcile(request: RunnerReconcileRequest): Promise<unknown> {
     return this.#json('reconcile', runnerApiPaths.reconcile, request)
-  }
-
-  async *bundle(
-    assignmentId: string,
-    fence: RunnerCommandFence,
-    sizeBytes: number,
-  ): AsyncIterable<Uint8Array> {
-    const response = await this.#answer('bundle', 'GET', runnerBundlePath(assignmentId), {
-      headers: fenceHeaders(fence),
-      timeoutMs: TRANSFER_MS,
-    })
-    let total = 0
-    try {
-      for await (const chunk of response as AsyncIterable<Buffer>) {
-        total += chunk.byteLength
-        if (total > sizeBytes) throw new RunnerCallError('bundle', 200)
-        yield chunk
-      }
-    } catch (error) {
-      throw error instanceof RunnerCallError ? error : new RunnerCallError('bundle', null)
-    } finally {
-      response.destroy()
-    }
   }
 
   async *inbox(

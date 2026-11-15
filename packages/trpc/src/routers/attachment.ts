@@ -26,14 +26,13 @@ const attachmentItem = z.strictObject({
 
 export const attachmentRouter = router({
   /**
-   * Announces a file for a site, or with `siteId` null for a chat without a project: its name as the browser gave it, its size in bytes and the type
+   * Announces a file of a chat: its name as the browser gave it, its size in bytes and the type
    * of its extension. Answers its id and the path its bytes are sent to; a file the rules refuse
    * answers why (`ATTACHMENT_REFUSED`).
    */
   start: consentedProcedure
     .input(
       z.strictObject({
-        siteId: z.uuid().nullable(),
         name: z.string().max(attachmentLimits.rawNameLength),
         size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
         type: z.string().max(255),

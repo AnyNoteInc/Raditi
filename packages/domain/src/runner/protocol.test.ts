@@ -10,7 +10,6 @@ import {
   isCoreStopping,
   parseRunnerToken,
   runnerApiErrors,
-  runnerBundlePath,
   runnerCandidatePath,
   runnerCommandSchema,
   runnerConflictSchema,
@@ -93,14 +92,10 @@ const prepare = () => ({
     hardTimeoutMs: 600_000,
   },
   remainingMs: 600_000,
-  bundle: { baseSha: 'b'.repeat(40), branch: `agent/${ids.task}`, sha256: digest, sizeBytes: 1024 },
   restore: {
     manifest,
-    parts: {
-      home: get('sessions/session-1/turns/0001/home.tar.zst'),
-      untracked: get('sessions/session-1/turns/0001/untracked.tar.zst'),
-      patch: get('sessions/session-1/turns/0001/patch.diff'),
-    },
+    // The home part alone: a snapshot of a chat that had a project names more (plan 83).
+    parts: { home: get('sessions/session-1/turns/0001/home.tar.zst') },
   },
   driverId: 'opencode',
   prepared: {
@@ -114,15 +109,11 @@ const prepare = () => ({
   credentials: ['sk-turn-llm-key', 'mcp-turn-token'],
 })
 const sealCommand = () => {
-  const { parts: _parts, ...base } = manifest
+  const { parts: _parts, git: _git, ...base } = manifest
   return {
     ...envelope,
     type: 'seal',
-    base: {
-      ...base,
-      turn: 2,
-      git: { ...manifest.git, publication: { taskId: ids.task, committedAt: manifest.createdAt } },
-    },
+    base: { ...base, turn: 2 },
     sizeBytes: 10,
     put: {
       method: 'PUT',
@@ -161,19 +152,6 @@ describe('runner commands', () => {
   )
   it('accepts a full prepare and every other command', () => {
     expect(runnerCommandSchema.parse(prepare())).toMatchObject({ type: 'prepare' })
-    const workingSet = {
-      ...prepare(),
-      bundle: { ...prepare().bundle, sandboxBaseSha: 'd'.repeat(40) },
-    }
-    expect(runnerCommandSchema.parse(workingSet)).toMatchObject({
-      bundle: { sandboxBaseSha: 'd'.repeat(40) },
-    })
-    expect(
-      runnerCommandSchema.safeParse({
-        ...prepare(),
-        bundle: { ...prepare().bundle, sandboxBaseSha: 'main' },
-      }).success,
-    ).toBe(false)
     for (const cmd of [
       { ...envelope, type: 'launch', timeoutMs: 420_000 },
       // A runner that extends its turns launches the agent without a time limit (plan 70, ВР1).
@@ -195,21 +173,6 @@ describe('runner commands', () => {
           include: ['.local/share/opencode/opencode.db', '.local/share/opencode/opencode.db-wal'],
           exclude: [],
         },
-        baseSha: 'b'.repeat(40),
-      },
-      // With a working set (plan 53, Р11) the patch is taken against its root commit.
-      {
-        ...envelope,
-        type: 'capture',
-        home: {
-          root: '/agent-home/opencode',
-          include: ['.local/share/opencode/opencode.db'],
-          exclude: [],
-        },
-        baseSha: 'b'.repeat(40),
-        sandboxBaseSha: 'd'.repeat(40),
-        // New media below these count even when an ignore file hides them (Р12).
-        addOnlyPaths: ['wp-content/uploads/raditi/'],
       },
       sealCommand(),
       { ...envelope, type: 'abort' },
@@ -253,20 +216,6 @@ describe('runner commands', () => {
     ],
     ['a container outliving the turn', { ...prepare(), remainingMs: 599_999 }],
     [
-      'an add-only path of capture that is no folder of the repository',
-      {
-        ...envelope,
-        type: 'capture',
-        home: {
-          root: '/agent-home/opencode',
-          include: ['.local/share/opencode/opencode.db'],
-          exclude: [],
-        },
-        baseSha: 'b'.repeat(40),
-        addOnlyPaths: ['../media/'],
-      },
-    ],
-    [
       'a restore part as PUT',
       {
         ...prepare(),
@@ -284,7 +233,7 @@ describe('runner commands', () => {
           ...prepare().restore,
           parts: {
             ...prepare().restore.parts,
-            patch: { ...get('k'), url: 'https://user:pass@s3.local/k' },
+            home: { ...get('k'), url: 'https://user:pass@s3.local/k' },
           },
         },
       },
@@ -295,7 +244,7 @@ describe('runner commands', () => {
         ...prepare(),
         restore: {
           ...prepare().restore,
-          parts: { ...prepare().restore.parts, patch: { ...get('k'), url: 'not a url' } },
+          parts: { home: { ...get('k'), url: 'not a url' } },
         },
       },
     ],
@@ -305,7 +254,7 @@ describe('runner commands', () => {
         ...prepare(),
         restore: {
           ...prepare().restore,
-          parts: { ...prepare().restore.parts, patch: { ...get('k'), url: 'file:///etc/passwd' } },
+          parts: { home: { ...get('k'), url: 'file:///etc/passwd' } },
         },
       },
     ],
@@ -320,12 +269,24 @@ describe('runner commands', () => {
       },
     ],
     [
-      'a bundle above its limit',
-      { ...prepare(), bundle: { ...prepare().bundle, sizeBytes: 64 * 1024 * 1024 + 1 } },
+      'a base bundle (a turn has no repository)',
+      {
+        ...prepare(),
+        bundle: { baseSha: 'b'.repeat(40), branch: 'agent/t', sha256: digest, sizeBytes: 1 },
+      },
     ],
     [
-      'a bundle branch that git would read as an option',
-      { ...prepare(), bundle: { ...prepare().bundle, branch: '--upload-pack=touch' } },
+      'a patch to restore',
+      {
+        ...prepare(),
+        restore: {
+          ...prepare().restore,
+          parts: {
+            ...prepare().restore.parts,
+            patch: get('sessions/session-1/turns/0001/patch.diff'),
+          },
+        },
+      },
     ],
     ['no credentials', { ...prepare(), credentials: [] }],
     [
@@ -341,10 +302,25 @@ describe('runner commands', () => {
       { ...sealCommand(), base: { ...sealCommand().base, parts: manifest.parts } },
     ],
     [
-      'a seal base without headSha',
+      'a seal base with git',
       {
         ...sealCommand(),
-        base: { ...sealCommand().base, git: { ...manifest.git, headSha: undefined } },
+        base: {
+          ...sealCommand().base,
+          git: {
+            ...manifest.git,
+            publication: { taskId: ids.task, committedAt: manifest.createdAt },
+          },
+        },
+      },
+    ],
+    [
+      'a capture against a base',
+      {
+        ...envelope,
+        type: 'capture',
+        home: { root: '/agent-home/opencode', include: [], exclude: [] },
+        baseSha: 'b'.repeat(40),
       },
     ],
     [
@@ -367,95 +343,22 @@ describe('runner commands', () => {
   })
 })
 
-describe('runner commands of a turn without a repository (plan 57, Б5)', () => {
+describe('runner commands restore the home part alone (plan 83)', () => {
   const { git: _git, ...gitless } = manifest
-  /** The snapshot of turn 1 of such a turn: no `git`, the home part alone. */
   const homeOnly = { ...gitless, parts: manifest.parts.filter((part) => part.name === 'home') }
   const homeParts = { home: get('sessions/session-1/turns/0001/home.tar.zst') }
-  const withoutBundle = () => {
-    const { bundle: _bundle, restore: _restore, ...rest } = prepare()
-    return rest
-  }
-  const capture = (change: Record<string, unknown> = {}) => ({
-    ...envelope,
-    type: 'capture',
-    home: {
-      root: '/agent-home/opencode',
-      include: ['.local/share/opencode/opencode.db'],
-      exclude: [],
-    },
-    ...change,
-  })
 
-  it('prepares a first turn and restores a snapshot of the home part alone, without a bundle', () => {
-    const first = runnerCommandSchema.parse(withoutBundle())
-    expect(first).not.toHaveProperty('bundle')
-    const next = runnerCommandSchema.parse({
-      ...withoutBundle(),
-      restore: { manifest: homeOnly, parts: homeParts },
-    })
-    expect(next).toMatchObject({ restore: { parts: { home: homeParts.home } } })
-    expect(next).not.toHaveProperty('restore.parts.patch')
-  })
-
-  it.each([
-    [
-      'a snapshot with a repository restored without a bundle',
-      () => ({ ...withoutBundle(), restore: prepare().restore }),
-      ['restore', 'manifest'],
-    ],
-    [
-      'a snapshot without a repository restored with a bundle',
-      () => ({ ...prepare(), restore: { manifest: homeOnly, parts: homeParts } }),
-      ['restore', 'manifest'],
-    ],
-    [
-      'the three parts of a snapshot without a repository',
-      () => ({
-        ...withoutBundle(),
-        restore: { manifest: homeOnly, parts: prepare().restore.parts },
-      }),
-      ['restore', 'parts'],
-    ],
-    [
-      'the home part alone of a snapshot with a repository',
-      () => ({ ...prepare(), restore: { manifest, parts: homeParts } }),
-      ['restore', 'parts'],
-    ],
-    [
-      'a snapshot without a repository that keeps three parts',
-      () => ({
-        ...withoutBundle(),
-        restore: { manifest: gitless, parts: prepare().restore.parts },
-      }),
-      ['restore', 'manifest', 'parts'],
-    ],
-  ])('refuses %s', (_label, cmd, path) => {
-    const result = runnerCommandSchema.safeParse(cmd())
-    expect(result.success).toBe(false)
-    if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toContainEqual(path)
-  })
-
-  it('captures home alone without a base, and a working set only with one', () => {
-    const parsed = runnerCommandSchema.parse(capture())
-    expect(parsed).not.toHaveProperty('baseSha')
-    for (const change of [
-      { sandboxBaseSha: 'd'.repeat(40) },
-      { addOnlyPaths: ['wp-content/uploads/raditi/'] },
-    ]) {
-      expect(runnerCommandSchema.safeParse(capture(change)).success).toBe(false)
-      expect(
-        runnerCommandSchema.safeParse(capture({ ...change, baseSha: 'b'.repeat(40) })).success,
-      ).toBe(true)
+  it('restores the home part of a snapshot with or without git', () => {
+    for (const restored of [homeOnly, manifest]) {
+      const next = runnerCommandSchema.parse({
+        ...prepare(),
+        restore: { manifest: restored, parts: homeParts },
+      })
+      expect(next).toMatchObject({ restore: { parts: { home: homeParts.home } } })
+      expect(next).not.toHaveProperty('restore.parts.patch')
     }
-  })
-
-  it('seals the home part of a snapshot without git', () => {
-    const { git: _sealGit, ...base } = sealCommand().base
-    expect(runnerCommandSchema.safeParse({ ...sealCommand(), base }).success).toBe(true)
-    expect(
-      runnerCommandSchema.safeParse({ ...sealCommand(), base: { ...base, git: null } }).success,
-    ).toBe(false)
+    const { restore: _restore, ...first } = prepare()
+    expect(runnerCommandSchema.parse(first)).not.toHaveProperty('restore')
   })
 })
 
@@ -561,8 +464,6 @@ describe('runner reports', () => {
         type: 'captured',
         commandId: ids.command,
         homeBytes: 100,
-        patch: { sha256: digest, sizeBytes: 0 },
-        untracked: { sha256: digest, sizeBytes: 50 },
       },
       {
         ...base,
@@ -579,7 +480,7 @@ describe('runner reports', () => {
       expect(runnerReportSchema.safeParse(value).success, value.type).toBe(true)
   })
 
-  it('reports a capture of home alone without candidate parts, never with one of them', () => {
+  it('reports a capture of home alone, never with candidate parts (plan 83)', () => {
     const captured = {
       ...base,
       type: 'captured',
@@ -589,20 +490,15 @@ describe('runner reports', () => {
     expect(runnerReportSchema.parse(captured)).not.toHaveProperty('patch')
     const patch = { sha256: digest, sizeBytes: 0 }
     expect(runnerReportSchema.safeParse({ ...captured, patch }).success).toBe(false)
-    expect(runnerReportSchema.safeParse({ ...captured, untracked: patch }).success).toBe(false)
     expect(runnerReportSchema.safeParse({ ...captured, patch, untracked: patch }).success).toBe(
-      true,
+      false,
     )
   })
 
-  it('reports the outbox of the agent with either kind of capture, within its limit', () => {
+  it('reports the outbox of the agent within its limit', () => {
     const captured = { ...base, type: 'captured', commandId: ids.command, homeBytes: 100 }
     const part = { sha256: digest, sizeBytes: 10 }
     expect(runnerReportSchema.parse({ ...captured, outbox: part })).toHaveProperty('outbox')
-    expect(
-      runnerReportSchema.safeParse({ ...captured, patch: part, untracked: part, outbox: part })
-        .success,
-    ).toBe(true)
     expect(
       runnerReportSchema.safeParse({
         ...captured,
@@ -646,8 +542,7 @@ describe('runner reports', () => {
         type: 'captured',
         commandId: ids.command,
         homeBytes: 100,
-        patch: { sha256: digest, sizeBytes: 8 * 1024 * 1024 + 1 },
-        untracked: { sha256: digest, sizeBytes: 0 },
+        outbox: { sha256: digest, sizeBytes: 16 * 1024 * 1024 + 1 },
       }).success,
     ).toBe(false)
   })
@@ -720,17 +615,16 @@ describe('runner poll and answers', () => {
   })
 
   it('builds endpoint paths only from an assignment uuid', () => {
-    expect(runnerBundlePath(ids.assignment)).toBe(`/runner/v1/assignments/${ids.assignment}/bundle`)
     expect(runnerKeyPath(ids.assignment, 'seal')).toBe(
       `/runner/v1/assignments/${ids.assignment}/keys/seal`,
     )
-    expect(runnerCandidatePath(ids.assignment, 'patch')).toBe(
-      `/runner/v1/assignments/${ids.assignment}/candidate/patch`,
+    expect(runnerCandidatePath(ids.assignment, 'outbox')).toBe(
+      `/runner/v1/assignments/${ids.assignment}/candidate/outbox`,
     )
     expect(runnerInboxPath(ids.assignment, 0)).toBe(
       `/runner/v1/assignments/${ids.assignment}/inbox/0`,
     )
-    expect(() => runnerBundlePath('../poll')).toThrow()
+    expect(() => runnerKeyPath('../poll', 'seal')).toThrow()
     expect(() => runnerInboxPath(ids.assignment, -1)).toThrow()
     expect(() => runnerInboxPath(ids.assignment, 50)).toThrow()
   })
@@ -784,14 +678,6 @@ describe('runner commands with files of the client', () => {
     ...change,
   })
 
-  it('carries the files of a turn with a repository by path and size', () => {
-    const inbox = [
-      { path: path(1), sizeBytes: 1024 },
-      { path: path(2), sizeBytes: 20 * 1024 * 1024 },
-    ]
-    expect(runnerCommandSchema.parse(withInbox(inbox))).toMatchObject({ inbox })
-  })
-
   /** The labels of a chat without a site: its lease is its own id (К14). */
   const inChat = (command: Record<string, unknown>) => {
     const sandbox = command.sandbox as { labels: Record<string, unknown> }
@@ -803,21 +689,16 @@ describe('runner commands with files of the client', () => {
     }
   }
 
-  it('carries the files of a chat without a site, which has no bundle (К16)', () => {
-    const inbox = [{ path: path(1), sizeBytes: 1024 }]
-    expect(
-      runnerCommandSchema.parse(
-        inChat(withInbox(inbox, { bundle: undefined, restore: undefined })),
-      ),
-    ).toMatchObject({ inbox })
+  it('carries the files of the turn of their chat by path and size (К16)', () => {
+    const inbox = [
+      { path: path(1), sizeBytes: 1024 },
+      { path: path(2), sizeBytes: 20 * 1024 * 1024 },
+    ]
+    expect(runnerCommandSchema.parse(inChat(withInbox(inbox)))).toMatchObject({ inbox })
   })
 
   it.each([
-    ['without a bundle', withInbox([{ path: path(1), sizeBytes: 1 }], { bundle: undefined })],
-    [
-      'of a site without a bundle, the second line of Б26',
-      withInbox([{ path: path(1), sizeBytes: 1 }], { bundle: undefined, restore: undefined }),
-    ],
+    ['of a turn under another lease', withInbox([{ path: path(1), sizeBytes: 1 }])],
     ['an empty list', withInbox([])],
     ['a path twice', withInbox([1, 1].map((index) => ({ path: path(index), sizeBytes: 1 })))],
     ['a path outside the inbox', withInbox([{ path: '/workspace/repo/a.pdf', sizeBytes: 1 }])],

@@ -12,7 +12,6 @@ import {
   browserTaskError,
   conflict,
   DomainError,
-  leaseScopeOf,
   type BrowserActionRequest,
   type BrowserToolResult,
   type KvSecret,
@@ -20,7 +19,7 @@ import {
 import { newTurnKeys } from '@repo/turn-keys'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { McpAccess, McpTurnAccess } from '../access/mcp-access.ts'
+import type { McpTurnAccess } from '../access/mcp-access.ts'
 import { contentMaskPath, ContentPrivacy } from '../privacy/content-privacy.ts'
 import { McpWebService, type McpWebOptions } from './mcp-web.ts'
 import type { McpWebAdmission, McpWebStore } from './mcp-web-store.ts'
@@ -28,19 +27,15 @@ import type { McpWebAdmission, McpWebStore } from './mcp-web-store.ts'
 const SITE = 'https://site.example.test/'
 const PAGE = { pageId: 1, url: `${SITE}wp-admin/post-new.php`, title: 'Добавить запись' }
 
-function scopeOf(): McpAccess {
+function scopeOf(): McpTurnAccess {
   return {
     keyId: randomUUID(),
     taskId: randomUUID(),
     workspaceId: randomUUID(),
-    siteId: randomUUID(),
     sessionId: 'synthetic',
     turn: 2,
     firstEpoch: 1,
     epoch: 1,
-    stack: 'wordpress',
-    url: SITE,
-    preview: null,
     requirements: { repository: false, browser: true },
   }
 }
@@ -78,7 +73,7 @@ function resultOf(request: BrowserActionRequest): BrowserToolResult {
   }
 }
 
-function fixture<Scope extends McpTurnAccess = McpAccess>(
+function fixture<Scope extends McpTurnAccess = McpTurnAccess>(
   options: { scope?: Scope; store?: Partial<McpWebStore>; service?: McpWebOptions } = {},
 ) {
   const scope = (options.scope ?? scopeOf()) as Scope
@@ -125,7 +120,7 @@ function fixture<Scope extends McpTurnAccess = McpAccess>(
   const known = (value: string) => {
     const id = randomUUID()
     const path = contentMaskPath({
-      siteId: leaseScopeOf({ id: scope.taskId, siteId: scope.siteId }),
+      siteId: scope.taskId,
       taskId: scope.taskId,
     })
     const entries = JSON.parse(records.get(path)?.data.entries ?? '[]') as unknown[]
@@ -143,7 +138,7 @@ const refused = (code: keyof typeof browserTaskCodes | 'CONTENT_PRIVACY_LIMIT') 
   expect.objectContaining({ name: 'DomainError', code })
 
 describe('the web tools of a chat without a site (plan 61, §5.3, §5.5)', () => {
-  const chat = (): McpTurnAccess => ({ ...scopeOf(), siteId: null, stack: null, url: null })
+  const chat = (): McpTurnAccess => scopeOf()
 
   it('reads a page as it is, and still gives back a contact marker of an earlier turn', async () => {
     const { scope, service, worker, records, known } = fixture({ scope: chat() })
@@ -283,22 +278,6 @@ describe('the web tools of a browser task', () => {
     })
   })
 
-  it('opens a path of the site on its own address and nothing off it', async () => {
-    const { scope, service, worker } = fixture()
-    await service.call(scope, 'web_open', { url: '/wp-admin/post-new.php' })
-    await service.call(scope, 'web_open', { url: 'https://other.example.test/' })
-    expect(worker.action.mock.calls.map((call) => call[1].action)).toEqual([
-      { tool: 'web_open', url: `${SITE}wp-admin/post-new.php` },
-      // A full address is the worker's to judge, with the hosts of the site.
-      { tool: 'web_open', url: 'https://other.example.test/' },
-    ])
-    for (const url of ['//evil.example.test/', '/\\evil.example.test/', `/${'a'.repeat(2048)}`])
-      await expect(service.call(scope, 'web_open', { url })).rejects.toEqual(
-        refused('BROWSER_ADDRESS_DENIED'),
-      )
-    expect(worker.action).toHaveBeenCalledTimes(2)
-  })
-
   it('gives the agent the contacts of the page as they are (the owner’s decision of 09.11.2026)', async () => {
     const { scope, service, worker, records } = fixture()
     const at = `${SITE}wp-admin/edit.php?s=anna@example.test`
@@ -325,7 +304,7 @@ describe('the web tools of a browser task', () => {
       checkpoint: { kind: 'post', objectId: '79991234567', state: 'seen' },
     })
     // No contact map is written for a page any more.
-    expect(records.has(contentMaskPath(scope))).toBe(false)
+    expect(records.has(contentMaskPath({ siteId: scope.taskId, taskId: scope.taskId }))).toBe(false)
   })
 
   it('gives what a check of the site reads as it is: titles and addresses of the objects', async () => {

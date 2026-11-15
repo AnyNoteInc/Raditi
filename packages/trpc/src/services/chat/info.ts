@@ -101,7 +101,6 @@ export async function readChatInfo(
             status: true,
             title: true,
             modelClass: true,
-            site: { select: { name: true } },
           },
         })
   if (input.taskId !== null && task === null) throw taskNotFound()
@@ -140,7 +139,6 @@ export async function readChatInfo(
   const status: ChatStatusInfo = {
     title: task.title,
     status: statusWord(task.status),
-    project: task.site?.name ?? null,
     model: turn?.model ? modelWord(turn.model.name, turn.model.modelClass) : null,
     effort: effortOfModelClass(
       task.modelClass === null || task.modelClass === 'service' ? 'standard' : task.modelClass,

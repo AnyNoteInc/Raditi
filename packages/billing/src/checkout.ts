@@ -11,7 +11,6 @@ import {
   billingPaymentInProgress,
   billingPaymentsNotConfigured,
   billingPlanNotFound,
-  billingPlanSiteLimit,
   billingSubscriptionExists,
   conflict,
   liveSubscriptionStatuses,
@@ -97,7 +96,7 @@ export function confirmationUrlOf(object: Pick<Payment, 'confirmation'> | null):
  * one-time payments only, `autopayments` off: nothing is read and the shop is not asked; the
  * same tariff is paid for without the consent), BILLING_PLAN_NOT_FOUND (no such tariff on
  * sale), BILLING_SUBSCRIPTION_EXISTS (a live subscription: the plan is changed, not bought
- * again), BILLING_PLAN_SITE_LIMIT (more sites than the plan allows), BILLING_PAYMENT_DECLINED
+ * again), BILLING_PAYMENT_DECLINED
  * (ЮKassa cancelled the payment at once), BILLING_PAYMENT_IN_PROGRESS (the customer has
  * confirmed the previous payment and the bank has not answered yet) and
  * BILLING_PAYMENTS_NOT_CONFIGURED (the shop did not take the request or cannot be asked; nothing
@@ -119,19 +118,18 @@ export async function startCheckout(
     where: { slug: planSlug, kind: 'quota', isActive: true },
   })
   // orders.amount is positive: a tariff that costs nothing is not sold through a payment.
-  if (plan === null || plan.maxSites === null || !plan.price.greaterThan(0)) {
+  if (plan === null || !plan.price.greaterThan(0)) {
     throw billingPlanNotFound()
   }
-  const { maxSites } = plan
   const description = paymentDescription(plan.name)
 
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     const { order, created } = await prisma.$transaction(
       async (tx) => {
-        // Takes the lock of the user's row: their checkouts and first site go one at a time.
+        // Takes the lock of the user's row: their checkouts go one at a time.
         // The gift of the registration is granted here when the user has none yet: a checkout
         // may be what makes the workspace. A refusal below takes it back with the rest of the
-        // transaction, and the next site or checkout grants it.
+        // transaction, and the next chat or checkout grants it.
         const workspace = await ensurePersonalWorkspaceWithGift(tx, { userId, appEnv })
         const workspaceId = workspace.id
         // The unfinished order is read before the live subscription. A settlement takes the
@@ -146,9 +144,6 @@ export async function startCheckout(
           select: { id: true },
         })
         if (live !== null) throw billingSubscriptionExists()
-        if ((await tx.site.count({ where: { workspaceId, deletedAt: null } })) > maxSites) {
-          throw billingPlanSiteLimit()
-        }
         if (unfinished !== null) return { order: unfinished, created: false }
         const order = await tx.order.create({
           data: {

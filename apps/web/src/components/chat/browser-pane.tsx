@@ -403,8 +403,6 @@ function Address({
 
 export interface BrowserPaneProps {
   taskId: string
-  /** null — a chat without a project. */
-  siteId: string | null
   head: FeedHeadState | null
   stream: BrowserStream
   /** The cabinet knows where the stream is. */
@@ -436,7 +434,6 @@ type Send = (event: BrowserInputEvent) => void
 
 export function BrowserPane({
   taskId,
-  siteId,
   head,
   stream,
   configured,
@@ -791,7 +788,7 @@ export function BrowserPane({
   const refusalText =
     refusal === null || refusal.reason.startsWith('stale_') || refusal.reason === 'outside_viewport'
       ? null
-      : refusal.reason === 'address_denied' && siteId === null
+      : refusal.reason === 'address_denied'
         ? browserText.refused.address_denied_public
         : ((browserText.refused as Record<string, string>)[refusal.reason] ??
           browserText.refused.other)
@@ -1168,7 +1165,6 @@ export function BrowserPane({
           key={state.chooser.id}
           chooser={state.chooser}
           taskId={taskId}
-          siteId={siteId}
           onAnswer={(attachmentIds) =>
             stream.send({ t: 'files', chooserId: state.chooser!.id, attachmentIds })
           }

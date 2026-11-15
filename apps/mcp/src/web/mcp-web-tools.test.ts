@@ -6,10 +6,9 @@ import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { MCP_ACCESS, type McpAccess } from '../access/mcp-access.ts'
+import { MCP_ACCESS, type McpTurnAccess } from '../access/mcp-access.ts'
 import { AppModule } from '../app.module.ts'
 import type { McpConfig } from '../config/config.ts'
-import { MCP_CONTENT_MAINTENANCE } from '../content/mcp-content-maintenance.ts'
 import { MCP_ENDPOINT } from '../server/mcp-runtime.ts'
 import { mountMcp } from '../server/mount-mcp.ts'
 import type { McpBrowserTasks } from '../site-info/browser-tasks.ts'
@@ -26,19 +25,15 @@ let app: INestApplication | undefined
 const token = `mcp_${'c'.repeat(64)}`
 const webTools = [...browserToolNames].sort()
 
-const scopeOf = (requirements: McpAccess['requirements']): McpAccess => ({
+const scopeOf = (requirements: McpTurnAccess['requirements']): McpTurnAccess => ({
   keyId: '01960000-0000-7000-8000-000000000001',
   taskId: '01960000-0000-7000-8000-000000000002',
   workspaceId: '01960000-0000-7000-8000-000000000003',
-  siteId: '01960000-0000-7000-8000-000000000004',
   sessionId: 'synthetic',
   turn: 1,
   firstEpoch: 1,
   epoch: 1,
-  stack: 'wordpress',
-  url: 'https://site.example.test/',
-  preview: null,
-  ...(requirements === undefined ? {} : { requirements }),
+  requirements,
 })
 const browserTask = scopeOf({ repository: false, browser: true })
 
@@ -53,13 +48,12 @@ function fakes() {
   return {
     web: { call: vi.fn<McpWebService['call']>(async (_scope, tool) => ({ tool, ok: 1 })) },
     tasks: {
-      startPath: vi.fn<McpBrowserTasks['startPath']>(() => '/wp-admin/edit.php'),
       controller: vi.fn<McpBrowserTasks['controller']>(async () => 'user'),
     },
   }
 }
 
-async function start(scope: McpAccess, roleConfig = config(), doubles = fakes()) {
+async function start(scope: McpTurnAccess, roleConfig = config(), doubles = fakes()) {
   let builder = Test.createTestingModule({ imports: [AppModule.forRoot(roleConfig)] })
     .overrideProvider(PRISMA)
     .useValue(fakeInfra().prisma)
@@ -141,13 +135,10 @@ describe('the web tools of the mcp role', () => {
     expect(described.web_click).toMatch(/web_verify/)
   })
 
-  it('offers them to no other task, and nowhere without the worker', async () => {
-    expect(await (await start(scopeOf({ repository: true, browser: false }))).names()).toEqual([
+  it('offers them to no chat without the browser, and nowhere without the worker', async () => {
+    expect(await (await start(scopeOf({ repository: false, browser: false }))).names()).toEqual([
       'site_info',
     ])
-    await app?.close()
-    // A scope made before requirements is a repository task.
-    expect(await (await start(scopeOf(undefined))).names()).toEqual(['site_info'])
     await app?.close()
     expect(await (await start(browserTask, config({ browserWorker: null }))).names()).toEqual([
       'site_info',
@@ -202,27 +193,26 @@ describe('the web tools of the mcp role', () => {
     expect(JSON.stringify(failed.body)).not.toMatch(/anna|site\.example\.test\/x/)
   })
 
-  it('tells a browser task where its browser works and who drives it', async () => {
+  it('tells a chat with the browser who drives it', async () => {
     const { call, doubles } = await start(browserTask, config({ browserWorker: null }))
     const info = JSON.parse((await call('site_info')).body.result.content[0].text)
     expect(info).toEqual({
-      url: 'https://site.example.test/',
-      stack: 'wordpress',
-      browser: {
-        siteUrl: 'https://site.example.test/',
-        startPath: '/wp-admin/edit.php',
-        controller: 'user',
-      },
+      stack: null,
+      url: null,
+      siteUrl: null,
+      browser: { siteUrl: null, startPath: null, controller: 'user' },
     })
     expect(doubles.tasks.controller).toHaveBeenCalledWith(browserTask.taskId)
     await app?.close()
-    // A repository task is told what it was told before.
-    const repository = await start(scopeOf({ repository: true, browser: false }))
-    expect(JSON.parse((await repository.call('site_info')).body.result.content[0].text)).toEqual({
-      url: 'https://site.example.test/',
-      stack: 'wordpress',
+    // A chat without the browser is told no browser.
+    const plain = await start(scopeOf({ repository: false, browser: false }))
+    expect(JSON.parse((await plain.call('site_info')).body.result.content[0].text)).toEqual({
+      stack: null,
+      url: null,
+      siteUrl: null,
+      browser: null,
     })
-    expect(repository.doubles.tasks.controller).not.toHaveBeenCalled()
+    expect(plain.doubles.tasks.controller).not.toHaveBeenCalled()
   })
 
   it('says the browser cannot be read rather than guess who drives it', async () => {
@@ -234,28 +224,9 @@ describe('the web tools of the mcp role', () => {
     expect(JSON.stringify(answer.body)).not.toContain('db.internal')
   })
 
-  it('takes the start of the browser from the policy of the stack', async () => {
+  it('sweeps the contact maps in production (plan 61, К38)', async () => {
     const moduleRef = await Test.createTestingModule({
-      imports: [AppModule.forRoot(config({ browserWorker: null }))],
-    })
-      .overrideProvider(PRISMA)
-      .useValue(fakeInfra().prisma)
-      .overrideProvider(SECRET_STORE)
-      .useValue(fakeInfra().secrets)
-      .compile()
-    const tasks = moduleRef.get<McpBrowserTasks>(MCP_BROWSER_TASKS)
-    expect(tasks.startPath(browserTask)).toBe('/wp-admin/edit.php')
-    expect(tasks.startPath({ ...browserTask, url: 'https://site.example.test/blog/' })).toBe(
-      '/blog/wp-admin/edit.php',
-    )
-    // A stack with no adapter yet has no start to name.
-    expect(tasks.startPath({ ...browserTask, stack: 'static' })).toBeNull()
-    await moduleRef.close()
-  })
-
-  it('sweeps the contact maps in production, where the content profile is off (plan 61, К38)', async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule.forRoot(config({ appEnv: 'production', contentProfile: 'off' }))],
+      imports: [AppModule.forRoot(config({ appEnv: 'production' }))],
     })
       .overrideProvider(PRISMA)
       .useValue(fakeInfra().prisma)
@@ -264,7 +235,6 @@ describe('the web tools of the mcp role', () => {
       .compile()
     const sweep = moduleRef.get<WebMaskSweep>(WEB_MASK_SWEEP)
     expect(sweep).toBeInstanceOf(WebMaskSweep)
-    expect(() => moduleRef.get(MCP_CONTENT_MAINTENANCE)).toThrow()
     // The timer is started and stopped by the lifecycle of the app.
     const start = vi.spyOn(sweep, 'onApplicationBootstrap')
     const stop = vi.spyOn(sweep, 'beforeApplicationShutdown')

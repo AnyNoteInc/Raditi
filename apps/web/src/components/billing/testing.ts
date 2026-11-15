@@ -30,9 +30,8 @@ export function serverRefusal(message: string, domainCode: string | null = null)
   return Object.assign(new Error(message), { data: { code: 'CONFLICT', domainCode } })
 }
 
-const offer = (plan: Omit<PlanOffer, 'fitsSites' | 'current'>): PlanOffer => ({
+const offer = (plan: Omit<PlanOffer, 'current'>): PlanOffer => ({
   ...plan,
-  fitsSites: true,
   current: false,
 })
 
@@ -45,7 +44,6 @@ export const start = offer({
   creditsPerDay: null,
   creditsPer5h: null,
   creditsPerWeek: 73,
-  maxSites: 1,
 })
 
 export const business = offer({
@@ -57,7 +55,6 @@ export const business = offer({
   creditsPerDay: null,
   creditsPer5h: null,
   creditsPerWeek: 350,
-  maxSites: 3,
 })
 
 export const agency = offer({
@@ -69,7 +66,6 @@ export const agency = offer({
   creditsPerDay: null,
   creditsPer5h: null,
   creditsPerWeek: 700,
-  maxSites: 15,
 })
 
 /**
@@ -90,7 +86,6 @@ const planOf = ({
   creditsPerDay,
   creditsPer5h,
   creditsPerWeek,
-  maxSites,
 }: PlanOffer) => ({
   id,
   slug,
@@ -100,22 +95,19 @@ const planOf = ({
   creditsPerDay,
   creditsPer5h,
   creditsPerWeek,
-  maxSites,
 })
 
 /**
- * The tariffs on sale as `billing.plans` answers for a customer with `siteCount` sites. No
- * table of «Точный расчёт» unless told: no credit rate is in force.
+ * The tariffs on sale as `billing.plans` answers. No table of «Точный расчёт» unless told: no
+ * credit rate is in force.
  */
 export function offers({
-  siteCount = 0,
   current,
   creditConversion = null,
-}: { siteCount?: number; current?: string; creditConversion?: CreditConversion | null } = {}) {
+}: { current?: string; creditConversion?: CreditConversion | null } = {}) {
   return {
     plans: [start, business, agency].map((plan) => ({
       ...plan,
-      fitsSites: siteCount <= plan.maxSites,
       current: plan.slug === current,
     })),
     pack: {
@@ -126,7 +118,6 @@ export function offers({
       withoutTariff: false,
       credits: 100,
     },
-    siteCount,
     autoRenewalAvailable: true,
     creditConversion,
   }

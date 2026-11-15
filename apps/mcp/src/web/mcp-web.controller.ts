@@ -29,8 +29,8 @@ const BY_REFERENCE =
 /**
  * The cloud browser of a browser task (docs/plan/57-browser-tasks.md, Б20): the family `web`,
  * declared to a request whose task needs a browser where the worker is configured
- * (`@ToolScopes(['web'])`, mcpToolFamiliesOf). The agent works on the client's live site through
- * its admin pages, or, in a chat without a site, on any public site; tools never take a session,
+ * (`@ToolScopes(['web'])`, mcpToolFamiliesOf). The agent works on any public site
+ * (docs/plan/83-remove-projects.md, БП9); tools never take a session,
  * a task or an origin: the scope of the turn does. The model sees them as `raditi_web_*`.
  */
 @McpController()
@@ -41,7 +41,7 @@ export class McpWebController {
   @Tool({
     name: 'web_open',
     description:
-      "Open a page in the task's browser. In a task with a site: a path of the site or a full address on it. In a task without a site: a full https:// address of any public site. In a task with a site, addresses of other sites and closed admin pages are refused; a page of the site may still take the browser on to another site (a payment, a sign-in service, an editor elsewhere): you may work there with these tools, but it is not the client's site and the platform's rules hold there too. Answers where the page landed; call web_observe before you act on it.",
+      'Open a page in the browser of this chat: a full https:// address of any public site. Answers where the page landed; call web_observe before you act on it.',
     parameters: schemas.web_open,
     annotations: { ...moves, idempotentHint: true },
   })

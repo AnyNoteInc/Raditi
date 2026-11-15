@@ -38,8 +38,6 @@ import {
   planChangeTerms,
   planDailyLimit,
   planLimits,
-  planSites,
-  planTooSmall,
   renewalOffWhileOverdue,
   renewalUnavailable,
   renewalWhileOverdue,
@@ -62,32 +60,30 @@ const periodEnd = new Date('2026-10-18T09:00:00Z')
 
 describe('the limits of a tariff', () => {
   it('puts a tariff into one line', () => {
-    expect(planLimits({ creditsPerMonth: 800, creditsPerDay: 100, maxSites: 3 })).toBe(
-      '800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 800, creditsPerDay: 100 })).toBe(
+      '800 кредитов в месяц, до 100 кредитов в день',
     )
-    expect(planLimits({ creditsPerMonth: 300, creditsPerDay: 50, maxSites: 1 })).toBe(
-      '300 кредитов в месяц, до 50 кредитов в день · один сайт на WordPress',
+    expect(planLimits({ creditsPerMonth: 300, creditsPerDay: 50 })).toBe(
+      '300 кредитов в месяц, до 50 кредитов в день',
     )
-    expect(planLimits({ creditsPerMonth: 21, creditsPerDay: 1, maxSites: 2 })).toBe(
-      '21 кредит в месяц, до 1 кредита в день · до 2 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 21, creditsPerDay: 1 })).toBe(
+      '21 кредит в месяц, до 1 кредита в день',
     )
   })
 
   // A count of four digits is grouped as an amount of money is, with a plain space: the
   // component binds it where it is shown.
   it('groups the digits of a count of four digits', () => {
-    expect(planLimits({ creditsPerMonth: 2500, creditsPerDay: 300, maxSites: 15 })).toBe(
-      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 2500, creditsPerDay: 300 })).toBe(
+      '2 500 кредитов в месяц, до 300 кредитов в день',
     )
-    expect(planLimits({ creditsPerMonth: 5000, creditsPerDay: 1200, maxSites: 15 })).toBe(
-      '5 000 кредитов в месяц, до 1 200 кредитов в день · до 15 сайтов на WordPress',
+    expect(planLimits({ creditsPerMonth: 5000, creditsPerDay: 1200 })).toBe(
+      '5 000 кредитов в месяц, до 1 200 кредитов в день',
     )
   })
 
   it('leaves the day out for a tariff without a daily limit', () => {
-    expect(planLimits({ creditsPerMonth: 21, creditsPerDay: null, maxSites: 2 })).toBe(
-      '21 кредит в месяц · до 2 сайтов на WordPress',
-    )
+    expect(planLimits({ creditsPerMonth: 21, creditsPerDay: null })).toBe('21 кредит в месяц')
     expect(planDailyLimit(null)).toBeNull()
   })
 
@@ -127,15 +123,6 @@ describe('the limits of a tariff', () => {
     expect(planAverageTasks(0)).toBeNull()
   })
 
-  it.each([
-    [1, 'Один сайт на WordPress'],
-    [3, 'До 3 сайтов на WordPress'],
-    [15, 'До 15 сайтов на WordPress'],
-    [21, 'До 21 сайта на WordPress'],
-  ])('names the sites of a tariff for %i', (count, text) => {
-    expect(planSites(count)).toBe(text)
-  })
-
   // The noun is masculine: what there is and what is added or charged take the same form.
   it.each([
     [1, 'кредит'],
@@ -172,7 +159,7 @@ describe('the limits of a tariff', () => {
 describe('what a task costs', () => {
   it('says the rule in the numbers of the credits model', () => {
     expect(taskCostRule()).toBe(
-      'Задача стоит столько кредитов, сколько работы она потребовала: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит. Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.',
+      'Задача стоит столько кредитов, сколько работы она потребовала: короткий ответ, письмо или поиск — обычно 5 кредитов, документ, таблица или страница — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит. Уточнения — часть той же задачи: работа над ними добавляется к её стоимости.',
     )
   })
 
@@ -191,18 +178,6 @@ describe('what a task costs', () => {
 
   it('no longer says that a task is one credit', () => {
     expect(taskCostRule()).not.toMatch(/один кредит|тот же кредит/)
-  })
-})
-
-describe('a tariff that does not fit the sites', () => {
-  it('says how many sites the customer has and how many the tariff holds', () => {
-    expect(planTooSmall(2, 1)).toBe('Не подойдёт: у вас два сайта, а тариф рассчитан на один.')
-    expect(planTooSmall(4, 3)).toBe('Не подойдёт: у вас четыре сайта, а тариф рассчитан на три.')
-  })
-
-  it('writes larger numbers in digits', () => {
-    expect(planTooSmall(5, 3)).toBe('Не подойдёт: у вас 5 сайтов, а тариф рассчитан на три.')
-    expect(planTooSmall(21, 15)).toBe('Не подойдёт: у вас 21 сайт, а тариф рассчитан на 15.')
   })
 })
 
@@ -341,7 +316,7 @@ describe('the gift of the registration', () => {
 
   it('says what the gift is enough for, as the welcome letter does', () => {
     expect(giftIsEnoughFor(signupGiftCredits)).toBe(
-      'на десять небольших правок или на три-пять задач побольше',
+      'на десять небольших задач или на три-пять задач побольше',
     )
   })
 
@@ -350,17 +325,17 @@ describe('the gift of the registration', () => {
   it.each([
     [0, null],
     [4, null],
-    [5, 'на одну небольшую правку'],
-    [10, 'на две небольшие правки'],
-    [14, 'на две небольшие правки'],
-    [15, 'на три небольшие правки или на одну задачу побольше'],
-    [20, 'на четыре небольшие правки или на одну-две задачи побольше'],
-    [25, 'на пять небольших правок или на одну-две задачи побольше'],
-    [30, 'на шесть небольших правок или на две-три задачи побольше'],
-    [50, 'на десять небольших правок или на три-пять задач побольше'],
-    [55, 'на 11 небольших правок или на три-пять задач побольше'],
-    [105, 'на 21 небольшую правку или на семь-десять задач побольше'],
-    [300, 'на 60 небольших правок или на 20-27 задач побольше'],
+    [5, 'на одну небольшую задачу'],
+    [10, 'на две небольшие задачи'],
+    [14, 'на две небольшие задачи'],
+    [15, 'на три небольшие задачи или на одну задачу побольше'],
+    [20, 'на четыре небольшие задачи или на одну-две задачи побольше'],
+    [25, 'на пять небольших задач или на одну-две задачи побольше'],
+    [30, 'на шесть небольших задач или на две-три задачи побольше'],
+    [50, 'на десять небольших задач или на три-пять задач побольше'],
+    [55, 'на 11 небольших задач или на три-пять задач побольше'],
+    [105, 'на 21 небольшую задачу или на семь-десять задач побольше'],
+    [300, 'на 60 небольших задач или на 20-27 задач побольше'],
   ])('says for %i credits: %s', (credits, text) => {
     expect(giftIsEnoughFor(credits)).toBe(text)
   })
@@ -380,7 +355,7 @@ describe('the gift of the registration', () => {
 
   it('tells a customer without a tariff what the gift is enough for, and that a tariff comes after it', () => {
     const text =
-      'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.'
+      'У вас 35 подарочных кредитов — их хватит на семь небольших задач или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.'
     // Without a tariff there is no day: the gift is the bound.
     expect(text).not.toMatch(/в день/)
     expect(lead(gift(35))).toBe(text)
@@ -393,19 +368,19 @@ describe('the gift of the registration', () => {
   it.each([
     [
       20,
-      'У вас 20 подарочных кредитов — их хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
+      'У вас 20 подарочных кредитов — их хватит на четыре небольшие задачи или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
     ],
     [
       21,
-      'У вас 21 подарочный кредит — его хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
+      'У вас 21 подарочный кредит — его хватит на четыре небольшие задачи или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
     ],
     [
       22,
-      'У вас 22 подарочных кредита — их хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
+      'У вас 22 подарочных кредита — их хватит на четыре небольшие задачи или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
     ],
     [
       5,
-      'У вас 5 подарочных кредитов — их хватит на одну небольшую правку. Когда кредиты закончатся, понадобится тариф.',
+      'У вас 5 подарочных кредитов — их хватит на одну небольшую задачу. Когда кредиты закончатся, понадобится тариф.',
     ],
   ])('counts what is left of a gift that was partly spent: %i', (available, text) => {
     expect(lead(gift(available))).toBe(text)
@@ -446,7 +421,7 @@ describe('the gift of the registration', () => {
   it('does not send the customer to choose a tariff while nothing can be paid for', () => {
     const off = { canChoose: false }
     expect(lead(gift(35), off)).toBe(
-      'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф. Оплата пока недоступна.',
+      'У вас 35 подарочных кредитов — их хватит на семь небольших задач или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф. Оплата пока недоступна.',
     )
     expect(lead(gift(3), off)).toBe(
       'У вас 3 подарочных кредита. Когда кредиты закончатся, понадобится тариф. Оплата пока недоступна.',
@@ -462,21 +437,21 @@ describe('the gift of the registration', () => {
       'После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.'
     const without = 'После этого новые задачи не принимаются, пока вы снова не выберете тариф.'
     expect(plain(endsWithPeriod(periodEnd, { tariff: 45, gift: 35, pack: 10 }))).toBe(
-      `Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. ${after} 10 кредитов из пакета, сайты и история правок сохранятся.`,
+      `Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. ${after} 10 кредитов из пакета, чаты и страницы сохранятся.`,
     )
     expect(plain(endsWithPeriod(periodEnd, { tariff: 0, gift: 5, pack: 0 }))).toBe(
-      `Автопродление отключено. Тариф действует до 18 октября 2026. ${after} Сайты и история правок сохранятся.`,
+      `Автопродление отключено. Тариф действует до 18 октября 2026. ${after} Чаты и страницы сохранятся.`,
     )
     // The gift and the pack together start a task: one credit is one credit.
     expect(plain(endsWithPeriod(periodEnd, { tariff: 0, gift: 2, pack: 3 }))).toBe(
-      `Автопродление отключено. Тариф действует до 18 октября 2026. ${after} 3 кредита из пакета, сайты и история правок сохранятся.`,
+      `Автопродление отключено. Тариф действует до 18 октября 2026. ${after} 3 кредита из пакета, чаты и страницы сохранятся.`,
     )
     // A few gift credits start a task; none — as without a gift.
     expect(plain(endsWithPeriod(periodEnd, { tariff: 45, gift: 4, pack: 0 }))).toBe(
-      `Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. ${after} Сайты и история правок сохранятся.`,
+      `Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. ${after} Чаты и страницы сохранятся.`,
     )
     expect(plain(endsWithPeriod(periodEnd, { tariff: 45, gift: 0, pack: 0 }))).toBe(
-      `Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. ${without} Сайты и история правок сохранятся.`,
+      `Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. ${without} Чаты и страницы сохранятся.`,
     )
   })
 
@@ -497,17 +472,17 @@ describe('the gift of the registration', () => {
 
     expect(cancel({ tariff: 300, gift: 35, pack: 0 }, 'none')).toEqual([
       'Тариф «Старт» будет действовать до 18 октября 2026. 300 кредитов по тарифу можно использовать до этого дня.',
-      'С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок сохранятся.',
+      'С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. Чаты и страницы сохранятся.',
     ])
     expect(cancel({ tariff: 300, gift: 4, pack: 100 }, 'none').at(-1)).toBe(
-      'С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, сайты и история правок сохранятся.',
+      'С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, чаты и страницы сохранятся.',
     )
     // While a charge is under way no day is named, and the gift changes the same clause.
     expect(cancel({ tariff: 300, gift: 35, pack: 100 }, 'at_bank').at(-1)).toBe(
-      'Когда тариф закончится, новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, сайты и история правок сохранятся.',
+      'Когда тариф закончится, новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, чаты и страницы сохранятся.',
     )
     expect(cancel({ tariff: 300, gift: 0, pack: 0 }, 'at_bank').at(-1)).toBe(
-      'Когда тариф закончится, новые задачи не будут приниматься, пока вы снова не выберете тариф. Сайты и история правок сохранятся.',
+      'Когда тариф закончится, новые задачи не будут приниматься, пока вы снова не выберете тариф. Чаты и страницы сохранятся.',
     )
   })
 
@@ -582,13 +557,13 @@ describe('the gift of the registration', () => {
 
   it('says of an ended tariff that tasks are taken while gift credits can start one', () => {
     expect(endedText({ reason: 'not_renewed', packCredits: 0, tasksTaken: true })).toBe(
-      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок на месте.',
+      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Чаты и страницы на месте.',
     )
     expect(endedText({ reason: 'not_paid', packCredits: 100, tasksTaken: true })).toBe(
-      'Оплата за следующий период не прошла, и тариф закончился. Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, сайты и история правок на месте.',
+      'Оплата за следующий период не прошла, и тариф закончился. Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, чаты и страницы на месте.',
     )
     expect(endedText({ reason: 'refunded', packCredits: 0, tasksTaken: false })).toBe(
-      'Мы вернули оплату за этот тариф, и он закончился. Новые задачи сейчас не принимаются. Сайты и история правок на месте.',
+      'Мы вернули оплату за этот тариф, и он закончился. Новые задачи сейчас не принимаются. Чаты и страницы на месте.',
     )
   })
 
@@ -627,19 +602,19 @@ describe('the end of the period', () => {
 
   it('tells what stays when auto-renewal is off', () => {
     expect(plain(endsWithPeriod(periodEnd, { tariff: 45, gift: 0, pack: 10 }))).toBe(
-      'Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, сайты и история правок сохранятся.',
+      'Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, чаты и страницы сохранятся.',
     )
   })
 
   it('does not count credits that are not there', () => {
     expect(plain(endsWithPeriod(periodEnd, { tariff: 0, gift: 0, pack: 0 }))).toBe(
-      'Автопродление отключено. Тариф действует до 18 октября 2026. После этого новые задачи не принимаются, пока вы снова не выберете тариф. Сайты и история правок сохранятся.',
+      'Автопродление отключено. Тариф действует до 18 октября 2026. После этого новые задачи не принимаются, пока вы снова не выберете тариф. Чаты и страницы сохранятся.',
     )
     expect(plain(endsWithPeriod(periodEnd, { tariff: 1, gift: 0, pack: 2 }))).toContain(
       'Тариф и 1 кредит по тарифу доступны до 18 октября 2026.',
     )
     expect(plain(endsWithPeriod(periodEnd, { tariff: 1, gift: 0, pack: 2 }))).toContain(
-      '2 кредита из пакета, сайты и история правок сохранятся.',
+      '2 кредита из пакета, чаты и страницы сохранятся.',
     )
   })
 
@@ -727,21 +702,21 @@ describe('a pack of credits', () => {
 
   it('offers the pack with the average tasks its credits hold and the price of a small edit', () => {
     expect(packOffer(pack(100), false)).toBe(
-      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Небольшая правка из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
+      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Небольшая задача из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
     )
     expect(plain(packOffer(pack(11, '220.00'), false))).toBe(
-      `Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 1 задачи. Небольшая правка из пакета — около 100 ₽. ${packPromise(11)}`,
+      `Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 1 задачи. Небольшая задача из пакета — около 100 ₽. ${packPromise(11)}`,
     )
     // A pack that holds no average task makes no promise of tasks.
     expect(plain(packOffer(pack(5), false))).toBe(
-      `Пригодится, если кредиты по тарифу закончатся до конца периода. Небольшая правка из пакета — около 1 490 ₽. ${packPromise(5)}`,
+      `Пригодится, если кредиты по тарифу закончатся до конца периода. Небольшая задача из пакета — около 1 490 ₽. ${packPromise(5)}`,
     )
   })
 
   // КР9: without a tariff that takes tasks the pack costs twice, and the row says so.
   it('tells a customer without a tariff that the pack costs twice its price on a tariff', () => {
     expect(plain(packOffer(pack(100, '2980.00', true), false))).toBe(
-      `Без тарифа пакет стоит вдвое дороже — с тарифом он стоит 1 490 ₽: это в среднем около 9 задач. Небольшая правка из пакета — около 149 ₽. ${packPromise(100)}`,
+      `Без тарифа пакет стоит вдвое дороже — с тарифом он стоит 1 490 ₽: это в среднем около 9 задач. Небольшая задача из пакета — около 149 ₽. ${packPromise(100)}`,
     )
     // the day is of no matter without a tariff
     expect(packOffer(pack(100, '2980.00', true), true)).toBe(
@@ -751,7 +726,7 @@ describe('a pack of credits', () => {
 
   it('names the day as well while a tariff on sale has a daily limit', () => {
     expect(packOffer(pack(100), true)).toBe(
-      'Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода: это в среднем около 9 задач. Небольшая правка из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
+      'Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода: это в среднем около 9 задач. Небольшая задача из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
     )
   })
 
@@ -774,7 +749,6 @@ describe('managing the tariff', () => {
     price: '39900.00',
     creditsPerMonth: 2500,
     creditsPerDay: 300,
-    maxSites: 15,
   }
   const MIR = `Карта «Мир» ••${String.fromCharCode(0xa0)}4444`
 
@@ -817,7 +791,7 @@ describe('managing the tariff', () => {
       }).map(plain),
     ).toEqual([
       'Тариф «Старт» будет действовать до 18 октября 2026.',
-      'С 18 октября новые задачи не будут приниматься, пока вы снова не выберете тариф. Сайты и история правок сохранятся.',
+      'С 18 октября новые задачи не будут приниматься, пока вы снова не выберете тариф. Чаты и страницы сохранятся.',
     ])
   })
 
@@ -835,7 +809,7 @@ describe('managing the tariff', () => {
     ).toEqual([
       'Автопродление отключится. Списание за следующий период уже отправлялось в банк, ответа пока нет. Мы проверим его: если деньги списаны, тариф продлится ещё на месяц или мы вернём их. Отключение это списание не отменит; других списаний не будет.',
       // One credit of a pack starts a task since 10.11.2026 (КР5–КР8).
-      'Когда тариф закончится, новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 1 кредит из пакета, сайты и история правок сохранятся.',
+      'Когда тариф закончится, новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 1 кредит из пакета, чаты и страницы сохранятся.',
     ])
   })
 
@@ -931,10 +905,10 @@ describe('managing the tariff', () => {
       })
     expect(plain(coming({}).title)).toBe('С 18 октября — тариф «Агентство»')
     expect(plain(coming({ charge: 'unanswered' }).text)).toBe(
-      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress. Списание за следующий период уже отправлялось в банк, ответа пока нет. Отменить переход можно будет после него.',
+      '2 500 кредитов в месяц, до 300 кредитов в день. Списание за следующий период уже отправлялось в банк, ответа пока нет. Отменить переход можно будет после него.',
     )
     expect(coming({ autoRenewal: false }).title).toBe('Выбран тариф «Агентство»')
-    const limits = '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress.'
+    const limits = '2 500 кредитов в месяц, до 300 кредитов в день.'
     const ends = `${limits} Автопродление отключено, поэтому 18 октября тариф закончится и переход не состоится.`
     expect(plain(coming({ autoRenewal: false }).text)).toBe(
       `${ends} Чтобы перейти, включите автопродление: 18 октября спишем 39 900 ₽.`,
@@ -944,7 +918,7 @@ describe('managing the tariff', () => {
     expect(coming({ canResume: false })).toEqual(coming({}))
     // An overdue tariff is paid by hand: nothing is said of auto-renewal or of a day.
     expect(plain(coming({ pastDue: true, autoRenewal: false }).text)).toBe(
-      '2 500 кредитов в месяц, до 300 кредитов в день · до 15 сайтов на WordPress. К оплате — 39 900 ₽: тариф сменится, как только оплата пройдёт.',
+      '2 500 кредитов в месяц, до 300 кредитов в день. К оплате — 39 900 ₽: тариф сменится, как только оплата пройдёт.',
     )
     expect(plain(scheduledPlanNote(periodEnd, true))).toBe('Начнёт действовать 18 октября.')
     expect(scheduledPlanNote(periodEnd, false)).toBe('Выбран на следующий период.')
@@ -1045,13 +1019,13 @@ describe('managing the tariff', () => {
 
   it('says why the last tariff is over and what is kept', () => {
     expect(endedText({ reason: 'not_renewed', packCredits: 0, tasksTaken: false })).toBe(
-      'Новые задачи сейчас не принимаются. Сайты и история правок на месте.',
+      'Новые задачи сейчас не принимаются. Чаты и страницы на месте.',
     )
     expect(endedText({ reason: 'not_paid', packCredits: 2, tasksTaken: false })).toBe(
-      'Оплата за следующий период не прошла, и тариф закончился. Новые задачи сейчас не принимаются. 2 кредита из пакета, сайты и история правок на месте.',
+      'Оплата за следующий период не прошла, и тариф закончился. Новые задачи сейчас не принимаются. 2 кредита из пакета, чаты и страницы на месте.',
     )
     expect(endedText({ reason: 'refunded', packCredits: 0, tasksTaken: false })).toBe(
-      'Мы вернули оплату за этот тариф, и он закончился. Новые задачи сейчас не принимаются. Сайты и история правок на месте.',
+      'Мы вернули оплату за этот тариф, и он закончился. Новые задачи сейчас не принимаются. Чаты и страницы на месте.',
     )
     // What to do next is said by the page around the block, once: not by this sentence too.
     for (const reason of ['not_renewed', 'not_paid', 'refunded'] as const) {
@@ -1204,32 +1178,25 @@ describe('billing sources', () => {
     ).toEqual([])
   })
 
-  // The unit is the credit. «Правка» is the change on the site itself, and these pages name it
-  // in three places only: the history of the changes, the undo of one in «Использование», and
-  // the small change — the example of the rule of the tariffs, and what the gift credits are
-  // said to be enough for («на семь небольших правок»).
-  it('count credits, and say «правка» only of the change on the site', () => {
+  // The unit is the credit. Since plan 83 there is no site to edit: the pages count tasks, never «правки».
+  it('count credits and tasks, never «правка»', () => {
     const here = fileURLToPath(new URL('.', import.meta.url))
     const sources = readdirSync(here).filter(
       (name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name),
     )
-    const theChange =
-      /история правок|Отмена правки|небольш(?:ая правка|ую правку|ие правки|их правок)/g
     const counted = sources.flatMap((name) =>
       readFileSync(`${here}${name}`, 'utf8')
         .split('\n')
-        .filter((line) => /правк|правок/i.test(line.replace(theChange, '')))
+        .filter((line) => /правк|правок/i.test(line))
         .map((line) => `${name}: ${line.trim()}`),
     )
 
     expect(sources.length).toBeGreaterThan(8)
     expect(counted).toEqual([])
-    // And the three phrases are still there: the check above reads the files it means to.
+    // And the phrases are there: the check above reads the files it means to.
     const all = sources.map((name) => readFileSync(`${here}${name}`, 'utf8')).join('\n')
-    expect(all).toContain('история правок')
-    expect(all).toContain('Отмена правки')
-    expect(all).toContain('небольшая правка текста')
-    expect(all).toContain('небольших правок')
+    expect(all).toContain('Отмена запроса')
+    expect(all).toContain('небольших задач')
   })
 })
 

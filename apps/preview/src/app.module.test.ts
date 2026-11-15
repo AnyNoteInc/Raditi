@@ -18,43 +18,30 @@ vi.mock('@repo/db', async (importOriginal) => ({
 }))
 
 const { AppModule } = await import('./app.module.ts')
-const { PreviewGatewayServer } = await import('./gateway/preview-gateway.server.ts')
+const { PagesServer } = await import('./pages/pages-server.ts')
 const { testPreviewConfig } = await import('./testing/fakes.ts')
 
 describe('AppModule', () => {
-  it('closes the pool of the database after the gateway has closed', async () => {
+  it('closes the pool of the database after the pages have closed', async () => {
     const app = await NestFactory.createApplicationContext(AppModule.forRoot(testPreviewConfig()), {
       logger: false,
     })
-    const gateway = app.get(PreviewGatewayServer)
-    await gateway.listen(0, '127.0.0.1')
-    const close = gateway.close.bind(gateway)
-    vi.spyOn(gateway, 'close').mockImplementation(async () => {
+    const pages = app.get(PagesServer)
+    await pages.listen(0, '127.0.0.1')
+    const close = pages.close.bind(pages)
+    vi.spyOn(pages, 'close').mockImplementation(async () => {
       await close()
-      events.push('gateway')
+      events.push('pages')
     })
 
     await app.close()
 
     // The database module is global: Nest stops it after every other module.
-    expect(events).toEqual(['gateway', 'database'])
+    expect(events).toEqual(['pages', 'database'])
     expect(createPrismaClient).toHaveBeenCalledOnce()
   })
 
-  it('gives startPreview the server of the gateway, which no module exports', async () => {
-    // No module injects the server (plan 56, §3, item 4); app.get looks in every module.
-    const { GatewayModule } = await import('./gateway/gateway.module.ts')
-    expect(Reflect.getMetadata('exports', GatewayModule)).toBeUndefined()
-    const app = await NestFactory.createApplicationContext(AppModule.forRoot(testPreviewConfig()), {
-      logger: false,
-    })
-    const gateway = app.get(PreviewGatewayServer)
-    expect(gateway).toBeInstanceOf(PreviewGatewayServer)
-    expect(app.select(GatewayModule).get(PreviewGatewayServer, { strict: true })).toBe(gateway)
-    await app.close()
-  })
-
-  it('composes the stream of a task browser only with the worker, and closes it before the database', async () => {
+  it('composes the stream of a chat browser only with the worker, and closes it before the database', async () => {
     const { BrowserStreamModule } = await import('./browser-stream/browser-stream.module.ts')
     const { BrowserStreamListener } = await import('./browser-stream/browser-stream.ts')
     const imports = (config: ReturnType<typeof testPreviewConfig>) =>
@@ -87,7 +74,7 @@ describe('AppModule', () => {
 
     await app.close()
 
-    expect(events).toEqual(['stream', 'database'])
+    expect(events.filter((event) => event !== 'pages')).toEqual(['stream', 'database'])
     expect(listener.address()).toBeNull()
   })
 })

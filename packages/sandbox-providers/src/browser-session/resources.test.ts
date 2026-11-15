@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 
-import { browserBridge } from '../preview/resources.ts'
 import {
   BROWSER_LABEL,
   browserSessionBridge,
@@ -70,10 +69,9 @@ describe('browser session resources', () => {
     expect(isSessionUuid('../etc')).toBe(false)
   })
 
-  it('names a bridge the host firewall knows, never that of a preview of the same id', () => {
+  it('names a bridge the host firewall knows', () => {
     const bridge = browserSessionBridge(identity.sessionId)
     expect(bridge).toMatch(/^rpb[0-9a-f]{12}$/)
-    expect(bridge).not.toBe(browserBridge(identity.sessionId))
     expect(browserSessionBridge(identity.taskId)).not.toBe(bridge)
     expect(browserSessionNames(identity.sessionId)).toMatchObject({
       network: `raditi-browser-${identity.sessionId}`,

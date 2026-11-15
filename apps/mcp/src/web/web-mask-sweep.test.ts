@@ -10,7 +10,7 @@ import { WebMaskSweep } from './web-mask-sweep.ts'
 const HOUR = 60 * 60_000
 
 /** A database with `tasks` due: each page of the listing gives the next list. */
-function fakeDb(pages: Array<Array<{ id: string; siteId: string | null }>>) {
+function fakeDb(pages: Array<Array<{ id: string }>>) {
   const queries: Prisma.Sql[] = []
   const listed = [...pages]
   const due = new Map(pages.flat().map((task) => [task.id, task]))
@@ -32,8 +32,7 @@ function fakeDb(pages: Array<Array<{ id: string; siteId: string | null }>>) {
   return { db: db as unknown as Pick<PrismaClient, '$transaction'>, tx, spy: db, queries }
 }
 
-const site = randomUUID()
-const task = () => ({ id: randomUUID(), siteId: site })
+const task = () => ({ id: randomUUID() })
 
 describe('the sweep of contact maps', () => {
   beforeEach(() => {
@@ -44,8 +43,8 @@ describe('the sweep of contact maps', () => {
     vi.restoreAllMocks()
   })
 
-  it('removes the map of a task under the site, of a chat under its own id', async () => {
-    const chat = { id: randomUUID(), siteId: null }
+  it('removes the map of every chat under its own id', async () => {
+    const chat = { id: randomUUID() }
     const onSite = task()
     const { db, tx } = fakeDb([[onSite, chat]])
     const secrets = { kvDestroyAll: vi.fn(async () => undefined) }
@@ -55,7 +54,7 @@ describe('the sweep of contact maps', () => {
       failed: 0,
     })
     expect(secrets.kvDestroyAll.mock.calls).toEqual([
-      [`kv/content-masks/${site}/${onSite.id}`],
+      [`kv/content-masks/${onSite.id}/${onSite.id}`],
       [`kv/content-masks/${chat.id}/${chat.id}`],
     ])
     expect(tx.$executeRaw).toHaveBeenCalledTimes(2)

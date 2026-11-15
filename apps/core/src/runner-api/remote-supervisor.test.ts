@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 
 import {
   MAX_SANDBOX_LEASE_MS,
@@ -11,7 +11,6 @@ import {
   type RunnerCommand,
   type SiteLeaseFence,
   type SiteLeaseGrant,
-  type TurnBundleSource,
   type TurnEvidence,
   type TurnResult,
 } from '@repo/domain'
@@ -19,7 +18,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { sealSnapshotPart } from '@repo/snapshots'
 import { memoryStorage, memoryTransit, tarZst } from '@repo/snapshots/testing'
 
-import { emptyUntrackedArchive } from '../git-workspace/archive.ts'
 import { SnapshotService } from '../sessions/snapshot.service.ts'
 import { sampleDriverId } from '../testing/ids.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
@@ -36,8 +34,6 @@ const labels = {
   sessionId: 'session1',
   turn: 1,
 }
-const baseSha = 'b'.repeat(40)
-const headSha = 'c'.repeat(40)
 const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
 const home = {
   root: `/agent-home/${sampleDriverId}`,
@@ -53,7 +49,6 @@ const result: TurnResult = {
   needs_approval: false,
   risk: 'low',
 }
-const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 
 const stops: AbortController[] = []
 const hubs: RunnerHub[] = []
@@ -69,7 +64,7 @@ afterEach(() => {
 function scriptedRunner(
   hub: RunnerHub,
   memory: ReturnType<typeof memoryStorage>,
-  captured: { home: Uint8Array; patch: Uint8Array; untracked: Uint8Array },
+  captured: { home: Uint8Array },
   events: AgentEvent[],
 ) {
   const runnerId = 'sandbox-1'
@@ -96,10 +91,7 @@ function scriptedRunner(
     }
     switch (command.type) {
       case 'prepare': {
-        const bundle = await hub.bundle(runnerId, command.assignmentId, headers)
-        const chunks: Uint8Array[] = []
-        for await (const chunk of bundle.read()) chunks.push(chunk)
-        expect(sha256(Buffer.concat(chunks))).toBe(command.bundle!.sha256)
+        expect(command).not.toHaveProperty('bundle')
         await report({ type: 'created', commandId: command.commandId, containerId: 'container1' })
         await report({ type: 'prepared', commandId: command.commandId, containerId: 'container1' })
         return
@@ -123,17 +115,10 @@ function scriptedRunner(
         await report({ type: 'quiesced', commandId: command.commandId })
         return
       case 'capture': {
-        for (const part of ['patch', 'untracked'] as const)
-          (await hub.candidate(runnerId, command.assignmentId, part, headers))(captured[part])
         await report({
           type: 'captured',
           commandId: command.commandId,
           homeBytes: captured.home.byteLength,
-          patch: { sha256: sha256(captured.patch), sizeBytes: captured.patch.byteLength },
-          untracked: {
-            sha256: sha256(captured.untracked),
-            sizeBytes: captured.untracked.byteLength,
-          },
         })
         return
       }
@@ -216,12 +201,7 @@ describe('TurnSupervisor on a runner', () => {
       },
       input: { prompt: 'Synthetic turn', attachments: [] },
       driverVersion: '1.0.0',
-      workspace: {
-        repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
-        branch: `agent/${labels.taskId}`,
-        expectedBaseSha: baseSha,
-        protectedPaths: [],
-      },
+      requirements: { repository: false, browser: false },
       committedAt: '2026-09-27T00:00:00.000Z',
     }
     const events: AgentEvent[] = [
@@ -261,33 +241,7 @@ describe('TurnSupervisor on a runner', () => {
           JSON.parse(seen.findLast((event) => event.type === 'message')?.text ?? 'null') as unknown,
       ),
     }
-    const bundleBytes = Buffer.from('synthetic bundle')
-    const bundle: TurnBundleSource = {
-      baseSha,
-      branch: request.workspace!.branch,
-      sha256: sha256(bundleBytes),
-      sizeBytes: bundleBytes.byteLength,
-      read: async function* () {
-        yield Buffer.from(bundleBytes)
-      },
-    }
-    const captured = {
-      home: await tarZst({ [home.include[0]!]: 'native session' }),
-      patch: Buffer.from('tracked-patch'),
-      untracked: emptyUntrackedArchive(),
-    }
-    const publish = vi.fn(async (assertFence: () => Promise<void>) => assertFence())
-    const workspace = {
-      buildBaseBundle: vi.fn(async () => bundle),
-      preparePublication: vi.fn(async (input: { patch: Uint8Array; untracked: Uint8Array }) => ({
-        baseSha,
-        headSha,
-        patch: input.patch,
-        untracked: input.untracked,
-        publish,
-        dispose: vi.fn(async () => {}),
-      })),
-    }
+    const captured = { home: await tarZst({ [home.include[0]!]: 'native session' }) }
     const evidence: TurnEvidence[] = []
     const journal = {
       record: vi.fn(async (entry: TurnEvidence) => {
@@ -305,7 +259,6 @@ describe('TurnSupervisor on a runner', () => {
       }),
       assignments,
       driver,
-      workspace,
       snapshots,
       journal,
       live: new LiveTurns(),
@@ -323,15 +276,10 @@ describe('TurnSupervisor on a runner', () => {
       'checkpointing',
       'checkpointed',
       'destroyed',
-      'publishing',
       'completed',
     ])
     expect(evidence[1]).toMatchObject({ containerId: 'container1' })
     expect(evidence[4]).toMatchObject({ execId: 'exec1', events })
-    // The captured parts reached the candidate as uploaded.
-    expect(workspace.preparePublication).toHaveBeenCalledWith(
-      expect.objectContaining({ patch: captured.patch, untracked: captured.untracked }),
-    )
     const loaded = await snapshots.load({
       workspaceId: labels.workspaceId,
       sessionId: labels.sessionId,
@@ -351,7 +299,6 @@ describe('TurnSupervisor on a runner', () => {
         runner: expect.objectContaining({ id: 'sandbox-1' }),
       }),
     ])
-    expect(publish).toHaveBeenCalledOnce()
     expect(leases.release).toHaveBeenCalledOnce()
   })
 })

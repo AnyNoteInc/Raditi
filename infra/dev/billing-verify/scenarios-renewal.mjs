@@ -1300,14 +1300,13 @@ scenarios['plan-change'] = async (t) => {
   )
   const usage = await customer.query('billing.usage')
   t.equal(
-    'the customer sees «Бизнес»: its price, its quota with the carried credits of «Старт», no daily limit, its sites, the gift and the hundred purchased credits',
+    'the customer sees «Бизнес»: its price, its quota with the carried credits of «Старт», no daily limit, the gift and the hundred purchased credits',
     [
       usage.subscription.plan.slug,
       usage.subscription.plan.price,
       usage.subscription.nextPlan,
       usage.tariff.credits.left,
       usage.tariff.today?.limit,
-      usage.tariff.sites.max,
       usage.gift,
       usage.pack,
       usage.totalLeft,
@@ -1318,7 +1317,6 @@ scenarios['plan-change'] = async (t) => {
       null,
       CREDITS.start + CREDITS.business,
       null,
-      3,
       { left: CREDITS.gift, held: 0, granted: true },
       { left: CREDITS.pack, held: 0 },
       CREDITS.start + CREDITS.business + CREDITS.gift + CREDITS.pack,

@@ -2,7 +2,7 @@ import { Logger, Module } from '@nestjs/common'
 import type { PrismaClient } from '@repo/db'
 import { PRISMA } from '@repo/service-runtime/tokens'
 
-import { PREVIEW_CONFIG, type PreviewGatewayConfig } from '../config/config.tokens.ts'
+import { PREVIEW_CONFIG, type PreviewConfig } from '../config/config.tokens.ts'
 import { BrowserStreamListener, PostgresBrowserStreamStore } from './browser-stream.ts'
 
 /**
@@ -15,7 +15,7 @@ import { BrowserStreamListener, PostgresBrowserStreamStore } from './browser-str
   providers: [
     {
       provide: BrowserStreamListener,
-      useFactory: (config: PreviewGatewayConfig, prisma: PrismaClient) => {
+      useFactory: (config: PreviewConfig, prisma: PrismaClient) => {
         const stream = config.browserStream
         if (stream === null) throw new Error('The browser stream needs BROWSER_WORKER_URL')
         const logger = new Logger('BrowserStream')

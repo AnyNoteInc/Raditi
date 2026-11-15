@@ -1,6 +1,5 @@
 import { z } from 'zod'
 
-import { envVarValueSchema } from '../release/env-vars.ts'
 import {
   browserCloseReasons,
   browserSessionStateSchema,
@@ -42,30 +41,16 @@ export const browserWorkerTokenSchema = z
 export const BROWSER_AGENT_NOTES_MAX_CHARS = 2000
 
 /**
- * The site's saved sign-in (Б36) as core reads it from Vault (`siteSignInEnvVars`): values of
- * site variables, so never logged, answered or put in an error.
- */
-export const browserSignInSchema = z.strictObject({
-  login: envVarValueSchema,
-  password: envVarValueSchema,
-})
-export type BrowserSignIn = z.infer<typeof browserSignInSchema>
-
-/**
  * `POST /v1/sessions/ensure` (core): the live session of the task, started when there is none —
  * core asks it to start a session a `web_*` call opened, and when a turn starts. `takeControl` — a
- * turn starts: the agent takes the browser back from the client (Б16). `signIn` — the site's saved sign-in, which replaces what the session held; none — the
- * session forgets it. Answers the state (`browserSessionStateSchema`). The worker reads the
- * site's address and stack from the database by `siteId`: where the browser may go is never the
- * caller's word. `siteId` null — a chat without a site (docs/plan/61-chats-first.md, К12): the
- * worker checks it against the session's row and the task's.
+ * turn starts: the agent takes the browser back from the client (Б16). Answers the state
+ * (`browserSessionStateSchema`). Every session is the open web of a chat
+ * (docs/plan/83-remove-projects.md, БП9).
  */
 export const browserEnsureRequestSchema = z.strictObject({
   sessionId: z.uuid(),
   taskId: z.uuid(),
-  siteId: z.uuid().nullable(),
   takeControl: z.boolean(),
-  signIn: browserSignInSchema.optional(),
 })
 export type BrowserEnsureRequest = z.infer<typeof browserEnsureRequestSchema>
 export const browserEnsureResponseSchema = browserSessionStateSchema

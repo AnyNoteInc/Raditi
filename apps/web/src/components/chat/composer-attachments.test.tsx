@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { UploadFailure, type UploadBytes } from './attachment-upload'
 import { Composer } from './composer'
-import { SITE_ID } from './testing'
 import { useAttachments } from './use-attachments'
 
 // The files of a message (docs/plan/57-browser-tasks.md, Б26): chosen, announced, sent one at a
@@ -17,7 +16,7 @@ const SECOND_ID = '0199a3f2-0000-7000-8000-0000000000f2'
 
 const calls = vi.hoisted(() => ({
   start: vi.fn<
-    (input: { siteId: string; name: string; size: number; type: string }) => Promise<{
+    (input: { name: string; size: number; type: string }) => Promise<{
       attachmentId: string
       uploadPath: string
     }>
@@ -59,7 +58,7 @@ function Harness({
   upload: UploadBytes
   onSend: (text: string, ids: readonly string[]) => Promise<boolean>
 }) {
-  const attachments = useAttachments(SITE_ID, upload)
+  const attachments = useAttachments(upload)
   return <Composer placeholder="Ваш ответ" onSend={onSend} attachments={attachments} />
 }
 
@@ -172,7 +171,6 @@ describe('files of a message', () => {
     choose(sized(jpeg('oblozhka.jpg'), 2_100_000), sized(jpeg('veranda.jpg'), 1_900_000))
     await waitFor(() => expect(pending).toHaveLength(1))
     expect(calls.start).toHaveBeenCalledWith({
-      siteId: SITE_ID,
       name: 'oblozhka.jpg',
       size: 2_100_000,
       type: 'image/jpeg',

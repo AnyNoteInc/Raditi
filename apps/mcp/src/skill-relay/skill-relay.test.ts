@@ -44,7 +44,7 @@ async function stand(
     secretAfter?: SkillSecretRead | null
     findFails?: boolean
     renewed?: SkillSecretRead | null
-    siteId?: string | null
+    workspaceId?: string
     resolveTo?: string
   } = {},
 ) {
@@ -89,14 +89,14 @@ async function stand(
             ...options.server,
           }
     }),
-    record: vi.fn(async (_site, _name, outcome) => void recorded.push(outcome)),
+    record: vi.fn(async (_workspace, _name, outcome) => void recorded.push(outcome)),
   }
   const access: McpAccessStore = {
     authenticate: vi.fn(async (token: string) =>
       token === TOKEN
         ? ({
             keyId: '0199a000-0000-7000-8000-0000000000aa',
-            siteId: options.siteId === undefined ? SITE : options.siteId,
+            workspaceId: options.workspaceId ?? SITE,
           } as McpTurnAccess)
         : null,
     ),
@@ -213,7 +213,7 @@ describe('SkillRelay', () => {
     expect(seen[0]!.headers.authorization).toBe('Bearer oauth-access-token-1')
   })
 
-  it('admits only a turn token of a site, and only a server of that site', async () => {
+  it('admits only a turn token, and only a server of its workspace', async () => {
     const plain = await stand()
     expect(
       (await plain.call('/mcp/skill/menu', { headers: { authorization: 'Bearer nope' } })).status,
@@ -231,11 +231,9 @@ describe('SkillRelay', () => {
     ).toBe(403)
     expect((await plain.call('/mcp/skill/menu', { method: 'PUT' })).status).toBe(405)
     expect(plain.seen).toEqual([])
-    const noSite = await stand({ siteId: null })
-    expect((await noSite.call('/mcp/skill/menu')).status).toBe(404)
     const noServer = await stand({ server: null })
     expect((await noServer.call('/mcp/skill/menu')).status).toBe(404)
-    expect(noSite.seen.length + noServer.seen.length).toBe(0)
+    expect(noServer.seen.length).toBe(0)
   })
 
   it('records a refused key, forgets it and tells the agent what the owner can do', async () => {

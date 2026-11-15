@@ -56,16 +56,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: checkpoints of what a task made in it
     const workspace = await db.workspace.create({
       data: { name: 'Synthetic', dataClass: 'synthetic' },
     })
-    const row = await db.site.create({
-      data: { workspaceId: workspace.id, name: 'Synthetic', url: site, stack: 'wordpress' },
-    })
     const task = await db.task.create({
-      data: {
-        workspaceId: workspace.id,
-        siteId: row.id,
-        needsRepository: false,
-        needsBrowser: true,
-      },
+      data: { workspaceId: workspace.id, needsBrowser: true },
     })
     const session = await openBrowserSession(db, { taskId: task.id })
     return { task, session }

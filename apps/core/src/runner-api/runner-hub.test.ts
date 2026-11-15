@@ -108,12 +108,6 @@ function prepareBody({ fence, sessionId }: TurnAssignment): RunnerCommandBody {
       hardTimeoutMs: 60_000,
     },
     remainingMs: 60_000,
-    bundle: {
-      baseSha: 'b'.repeat(40),
-      branch: `agent/${fence.taskId}`,
-      sha256: '0'.repeat(64),
-      sizeBytes: 1,
-    },
     driverId: sampleDriverId,
     prepared: { files: [], env: {}, secrets: [] },
     argv: ['opencode', 'run', '--format', 'json'],

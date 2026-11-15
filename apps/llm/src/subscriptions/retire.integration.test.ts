@@ -101,13 +101,12 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
       await db.llmKey.deleteMany({ where: { subscriptionAccountId: f.accountId } })
       await db.taskAccountBinding.deleteMany({ where: tasks })
       await db.taskEvent.deleteMany({ where: tasks })
-      const sites = await db.site.findMany({
+      const sites = await db.task.findMany({
         where: { workspaceId: f.workspaceId },
         select: { id: true },
       })
       await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
       await db.task.deleteMany({ where: { workspaceId: f.workspaceId } })
-      await db.site.deleteMany({ where: { workspaceId: f.workspaceId } })
       await db.workspace.delete({ where: { id: f.workspaceId } })
       await db.llmModelPrice.deleteMany({ where: { modelId: f.modelId } })
       await db.llmModel.delete({ where: { id: f.modelId } })
@@ -210,25 +209,16 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
     const service = new SubscriptionRetirement(options)
     const store = new PostgresGatewayStore(db)
     async function task() {
-      const site = await db.site.create({
-        data: {
-          workspaceId: workspace.id,
-          name: 'Synthetic',
-          url: `https://${randomUUID()}.invalid`,
-          stack: 'wordpress',
-        },
-      })
       const task = await db.task.create({
         data: {
           workspaceId: workspace.id,
-          siteId: site.id,
           status: 'running',
           modelClass: 'standard',
         },
       })
       await db.siteLease.create({
         data: {
-          siteId: site.id,
+          siteId: task.id,
           holderTaskId: task.id,
           epoch: 1,
           operation: 'turn',

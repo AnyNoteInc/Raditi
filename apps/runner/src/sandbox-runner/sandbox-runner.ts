@@ -13,7 +13,6 @@ import {
   runnerPollRequestSchema,
   runnerPollResponseSchema,
   runnerReportSchema,
-  snapshotHasRepository,
   snapshotPartFiles,
   TURN_PUBLICATION_GRACE_MS,
   turnOutputTooLarge,
@@ -31,7 +30,6 @@ import {
   type SiteLeaseFence,
   type SnapshotPartName,
   type TurnAgentExec,
-  type TurnBundleSource,
   type TurnInboxFile,
   type TurnExecution,
   type TurnExecutor,
@@ -136,20 +134,9 @@ export function runnerFailureCode(
 }
 
 const passes = {
-  prepare: [
-    'CONFLICT',
-    'DRIVER_PREPARE_INVALID',
-    'SNAPSHOT_LOAD_FAILED',
-    'REPOSITORY_TOO_LARGE',
-    'REPOSITORY_UNSUPPORTED',
-  ],
+  prepare: ['CONFLICT', 'DRIVER_PREPARE_INVALID', 'SNAPSHOT_LOAD_FAILED'],
   output: ['TURN_OUTPUT_REJECTED', 'TURN_OUTPUT_TOO_LARGE'],
-  capture: [
-    'SNAPSHOT_CREDENTIAL',
-    'SNAPSHOT_NOT_WRITTEN',
-    'SNAPSHOT_TOO_LARGE',
-    'PUBLICATION_TOO_LARGE',
-  ],
+  capture: ['SNAPSHOT_CREDENTIAL', 'SNAPSHOT_NOT_WRITTEN', 'SNAPSHOT_TOO_LARGE'],
   seal: ['SNAPSHOT_TOO_LARGE'],
 } satisfies Record<string, RunnerFailureCode[]>
 
@@ -518,9 +505,6 @@ export class SandboxRunner {
           fence: command.fence,
           sandbox: command.sandbox,
           remainingMs: Math.max(1, Math.floor(held.deadline - performance.now())),
-          // Without a bundle the turn has no repository (plan 57, Б5): nothing is fetched and
-          // the working directory is made empty.
-          ...(command.bundle ? { bundle: this.#bundleSource(held, fence, command.bundle) } : {}),
           ...(restore ? { restore } : {}),
           ...(command.inbox ? { inbox: this.#inboxFiles(held, fence, command.inbox) } : {}),
           driverId: command.driverId,
@@ -528,7 +512,7 @@ export class SandboxRunner {
           argv: command.argv,
           credentials: command.credentials,
           ...(command.envValues ? { envValues: command.envValues } : {}),
-          // Core takes the container over before anything is imported into it.
+          // Core takes the container over before anything is restored into it.
           created: async (execution) => {
             held.execution = execution
             held.containerId = execution.containerId
@@ -572,15 +556,6 @@ export class SandboxRunner {
     }
   }
 
-  /** The base bundle of a turn with a repository, fetched from core as the import reads it. */
-  #bundleSource(
-    held: Held,
-    fence: RunnerCommandFence,
-    bundle: NonNullable<Command<'prepare'>['bundle']>,
-  ): TurnBundleSource {
-    return { ...bundle, read: () => this.#bundle(held, fence, bundle.sizeBytes) }
-  }
-
   /** The files of the client of a turn, each fetched from core when the executor writes it. */
   #inboxFiles(
     held: Held,
@@ -594,10 +569,8 @@ export class SandboxRunner {
   }
 
   /**
-   * The checkpoint core names: only the parts of one earlier turn of this session — all three,
-   * or `home` alone for a turn without a repository (plan 57, Б5). A continuation restores turn
-   * n−1; a replacement restores what the turn it replaces started from, which is older
-   * (TurnRequest.replacesTurn).
+   * The checkpoint core names: the home part of one earlier turn of this session (turn n−1, or
+   * the one an undone turn started from).
    */
   #restoreSource(
     held: Held,
@@ -607,7 +580,7 @@ export class SandboxRunner {
     const { manifest, parts } = command.restore!
     const labels = command.sandbox.labels
     const expiresAt = new Date(Date.now() + MAX_PRESIGN_TTL_MS)
-    const part = (name: SnapshotPartName): PresignedRequest => {
+    const part = (name: 'home'): PresignedRequest => {
       const request = parts[name]
       if (
         !request ||
@@ -625,9 +598,7 @@ export class SandboxRunner {
     }
     return {
       manifest,
-      parts: snapshotHasRepository(manifest)
-        ? { home: part('home'), untracked: part('untracked'), patch: part('patch') }
-        : { home: part('home') },
+      parts: { home: part('home') },
       dataKey: () => this.#key(held, 'restore', fence),
     }
   }
@@ -785,31 +756,16 @@ export class SandboxRunner {
   }
 
   /**
-   * The candidate parts go to core as untrusted data; home stays here until seal. A capture
-   * without `baseSha` — a turn without a repository (plan 57, Б5) — takes home alone: no
-   * candidate part is uploaded and the report names none. The agent's files for the client
-   * (`outbox`, docs/plan/66-chat-visuals.md, В8) go up the same way with either kind.
+   * Home stays here until seal. The agent's files for the client (`outbox`,
+   * docs/plan/66-chat-visuals.md, В8) go to core as untrusted data.
    */
   async #capture(held: Held, command: Command<'capture'>): Promise<void> {
     const answer = this.#answer(held, command)
     const fence = this.#fence(command)
     try {
       if (!held.execution) throw new Error('No container')
-      const captured = await held.execution.capture({
-        home: command.home,
-        ...(command.baseSha ? { baseSha: command.baseSha } : {}),
-        ...(command.sandboxBaseSha ? { sandboxBaseSha: command.sandboxBaseSha } : {}),
-        ...(command.addOnlyPaths ? { addOnlyPaths: command.addOnlyPaths } : {}),
-      })
+      const captured = await held.execution.capture({ home: command.home })
       const parts: Array<readonly [CandidatePart, Uint8Array]> = []
-      if (command.baseSha === undefined) {
-        if (captured.patch !== undefined || captured.untracked !== undefined)
-          throw new Error('A capture without a base returned candidate parts')
-      } else {
-        const { patch, untracked } = captured
-        if (!patch || !untracked) throw new Error('A capture with a base returned no candidate')
-        parts.push(['patch', patch], ['untracked', untracked])
-      }
       if (captured.outbox) parts.push(['outbox', captured.outbox])
       for (const [part, bytes] of parts) {
         const uploaded = await this.#call(held, () =>
@@ -1074,31 +1030,7 @@ export class SandboxRunner {
     return key.value
   }
 
-  /**
-   * The base bundle, fetched whole and retried like any other call to core: the importer checks
-   * its size and SHA-256 anyway. Each chunk is let go once the importer took it.
-   */
-  async *#bundle(
-    held: Held,
-    fence: RunnerCommandFence,
-    sizeBytes: number,
-  ): AsyncIterable<Uint8Array> {
-    const read = await this.#call(
-      held,
-      async () => {
-        const chunks: Uint8Array[] = []
-        for await (const chunk of this.deps.transport.bundle(held.id, fence, sizeBytes))
-          chunks.push(chunk)
-        return chunks.reverse()
-      },
-      held.abort.signal,
-    )
-    if (!read.ok) throw new Error('No base bundle')
-    const chunks = read.value
-    while (chunks.length > 0) yield chunks.pop()!
-  }
-
-  /** A file of the client, fetched whole and retried like the base bundle. */
+  /** A file of the client, fetched whole and retried like any other call to core. */
   async *#inboxFile(
     held: Held,
     fence: RunnerCommandFence,

@@ -15,7 +15,7 @@ export const MCP_SIGN_IN_TTL_MS = 10 * 60_000
 const KEY_INFO = 'raditi-mcp-sign-in-v1'
 
 export const pendingSignInSchema = z.strictObject({
-  siteId: z.uuid(),
+  workspaceId: z.uuid(),
   name: z.string().min(1).max(32),
   userId: z.string().min(1).max(128),
   expiresAt: z.number().int(),

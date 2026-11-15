@@ -21,7 +21,6 @@ on:
       - apps/runner/**
       - apps/mcp/**
       - apps/llm/**
-      - packages/site-content/**
       - packages/service-runtime/**
       - packages/app-bootstrap/**
       - packages/domain/**
@@ -98,9 +97,6 @@ jobs:
 
       - name: Rehearse the live compaction of a session on the synthetic provider
         run: pnpm verify:llm-gateway --rehearsal --compact --no-build
-
-      - name: Rehearse the live pass of /init on the synthetic provider
-        run: pnpm verify:llm-gateway --rehearsal --init --no-build
 
       # The acceptance on the pay-per-token API (П15): its live run needs a key of its own and a
       # topped-up account, and is started by a person; the rehearsal runs its code here.

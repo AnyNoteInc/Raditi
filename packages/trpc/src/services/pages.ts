@@ -546,11 +546,8 @@ export async function publishDocumentPage(
     where: {
       id: input.documentId,
       workspace: { members: { some: { userId: input.userId } } },
-      // A document of a removed chat, or of a chat of a removed project, is not published.
-      OR: [
-        { taskId: null },
-        { task: { deletedAt: null, OR: [{ siteId: null }, { site: { deletedAt: null } }] } },
-      ],
+      // A document of a removed chat is not published.
+      OR: [{ taskId: null }, { task: { deletedAt: null } }],
     },
     select: { workspaceId: true, taskId: true, title: true },
   })

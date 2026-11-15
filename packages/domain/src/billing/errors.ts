@@ -24,7 +24,6 @@ export const billingErrorCodes = [
   'BILLING_PAYMENT_IN_PROGRESS',
   'BILLING_NOTHING_TO_CHANGE',
   'BILLING_AUTO_RENEWAL_UNAVAILABLE',
-  'BILLING_PLAN_SITE_LIMIT',
   'BILLING_TASK_NEEDS_SUBSCRIPTION',
   'BILLING_NOT_ENOUGH_CREDITS',
   'BILLING_DAILY_LIMIT_REACHED',
@@ -177,9 +176,6 @@ export const billingAutoRenewalUnavailable = (): DomainError =>
     'Auto-renewal is unavailable: the shop does not save payment methods',
     409,
   )
-/** The workspace has more sites than the plan allows. */
-export const billingPlanSiteLimit = (): DomainError =>
-  billingError('BILLING_PLAN_SITE_LIMIT', 'The plan allows fewer sites than the workspace has', 409)
 /**
  * A workspace without a paid tariff — no subscription, an ended one or one in past_due — whose
  * gift and pack credits cannot carry the task; the reason says which case it is.

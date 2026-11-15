@@ -10,9 +10,6 @@ import {
   agentTurnDedupeKey,
   agentTurnJobSchema,
   agentTurnRetryJobId,
-  CANDIDATE_REBASE_JOB,
-  candidateRebaseDedupeKey,
-  candidateRebaseJobSchema,
 } from './agent-turn-job.ts'
 
 const id = '0196abcd-0000-7000-8000-00000000000a'
@@ -42,12 +39,5 @@ describe('the commands of a dialog on agent-turns', () => {
     expect(agentTurnCancelDedupeKey({ ...job, requestEventId: '4813' })).not.toBe(
       agentTurnCancelDedupeKey(job),
     )
-  })
-
-  it('carries a candidate onto the current version as candidate.rebase', () => {
-    expect(CANDIDATE_REBASE_JOB).toBe('candidate.rebase')
-    expect(candidateRebaseJobSchema.parse(job)).toEqual(job)
-    expect(candidateRebaseJobSchema.safeParse({ ...job, requestEventId: '0' }).success).toBe(false)
-    expect(candidateRebaseDedupeKey(job)).toBe(`candidate.rebase:${id}:4812`)
   })
 })

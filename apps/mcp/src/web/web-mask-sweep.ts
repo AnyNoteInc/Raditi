@@ -1,6 +1,6 @@
 import { Logger, type BeforeApplicationShutdown, type OnApplicationBootstrap } from '@nestjs/common'
 import { Prisma, type PrismaClient } from '@repo/db'
-import { leaseScopeOf, type SecretStore } from '@repo/domain'
+import type { SecretStore } from '@repo/domain'
 
 import { contentExpiredSql } from '../privacy/content-expiry.ts'
 import { contentMaskPath } from '../privacy/content-privacy.ts'
@@ -62,9 +62,7 @@ export class WebMaskSweep implements OnApplicationBootstrap, BeforeApplicationSh
           const task = await this.#claim(id)
           if (!task) continue
           // Removing it twice changes nothing, a lost acknowledgement is simply repeated.
-          await this.secrets.kvDestroyAll(
-            contentMaskPath({ siteId: leaseScopeOf(task), taskId: task.id }),
-          )
+          await this.secrets.kvDestroyAll(contentMaskPath({ siteId: task.id, taskId: task.id }))
           // Raw: Prisma's @updatedAt would lift a chat finished long ago to the top of its list.
           await this.db.$transaction(
             (tx) => tx.$executeRaw`
@@ -110,8 +108,8 @@ export class WebMaskSweep implements OnApplicationBootstrap, BeforeApplicationSh
   /** The task, locked and read again; null when it has stopped being due or is still in use. */
   #claim(id: string) {
     return this.db.$transaction(async (tx) => {
-      const [task] = await tx.$queryRaw<Array<{ id: string; siteId: string | null }>>`
-        SELECT id, site_id AS "siteId" FROM tasks WHERE id = ${id}::uuid AND ${dueSql} FOR UPDATE`
+      const [task] = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM tasks WHERE id = ${id}::uuid AND ${dueSql} FOR UPDATE`
       if (!task) return null
       if (await tx.turnAssignment.count({ where: { taskId: id, finishedAt: null } })) return null
       const keys = await tx.$queryRaw<Array<{ id: string }>>`

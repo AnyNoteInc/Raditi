@@ -1,41 +1,50 @@
 // The scenarios of the browser-task stand (README.md, «Сценарии»; docs/plan/57-browser-tasks.md,
-// §5). Each PASS line is a fact read from the product — its database, its pages, the stream of its
-// gateway, the API of its worker — or from what WordPress, S3 and Docker hold. The client acts
+// §5; since plan 83 the chats without a project only). Each PASS line is a fact read from the
+// product — its database, its pages, the stream of its gateway, the API of its worker — or from
+// what S3 and Docker hold. The client acts
 // only from outside: web over HTTP with a session cookie, the stream through the gateway, the
 // cabinet in a real Chromium. The "agent" is the real OpenCode CLI on the scripted model
 // (programs.mjs), which finds what to click in the observations the platform gives it.
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { zstdDecompressSync } from 'node:zlib'
 
 import { localVaultRequest } from '../../vault/bootstrap.mjs'
-import { CheckFailed, exchange } from '../release-verify/runtime.mjs'
-import { grantTariff } from '../release-verify/setup.mjs'
-import { NODE_ERRNO_PROBE, isolatedAnswer } from '../release-verify/stand.mjs'
-import {
-  CABINET_TEXT,
-  cabinetAvailable,
-  cabinetBrowser,
-  cabinetOperator,
-  canvasPainted,
-} from './cabinet.mjs'
+import { cabinetAvailable, cabinetBrowser, cabinetOperator } from './cabinet.mjs'
 import { STAND_DOC, STAND_PAGE } from './programs.mjs'
-import { signUp, switchOnModel, uploadFile } from './setup.mjs'
-import { rawDocker } from './site.mjs'
+import { CheckFailed, callerEnv, exchange } from './runtime.mjs'
+import { grantTariff, signUp, switchOnModel, uploadFile } from './setup.mjs'
 import {
   FAKE_JPEG,
+  NODE_ERRNO_PROBE,
   PAGES_DOMAIN,
   PLATFORM_HOST,
-  SITE_ORIGIN,
-  SWITCH,
-  UPLOAD_LIMIT_BYTES,
+  isolatedAnswer,
   leakedIn,
   solidPng,
   syntheticPdf,
 } from './stand.mjs'
-import { jpegLooksPainted, openViewer, streamOperator, streamTools } from './stream.mjs'
+import { openViewer, streamOperator, streamTools } from './stream.mjs'
 
 const ENDED = new Set(['done', 'failed', 'cancelled', 'rolled_back'])
+
+/**
+ * A Docker command whose output is read as it is: the runtime of the stand blacks out every
+ * secret it knows in what its commands print, and the stand must see the very values it looks
+ * for (the logs of a session's containers). Never printed.
+ */
+function rawDocker(args, { timeoutMs = 60_000 } = {}) {
+  return new Promise((resolve) => {
+    execFile(
+      'docker',
+      args,
+      { env: callerEnv, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 },
+      (error, stdout, stderr) =>
+        resolve({ code: error ? (error.code ?? 1) : 0, output: `${stdout}${stderr}` }),
+    )
+  })
+}
 
 // ─── Small readers ────────────────────────────────────────────────────────────
 
@@ -112,16 +121,15 @@ async function waitAnswered(stand, taskId, { results = 0, timeoutMs = 600_000, w
 
 // ─── Tasks and turns ──────────────────────────────────────────────────────────
 
-/** A task in the browser through `task.create`, its first turn scripted beforehand. */
+/** A chat through `task.create`, its first turn scripted beforehand. */
 async function newBrowserTask(
   stand,
   client,
-  { text, attachments = [], program = 'askToSignIn', ctx = {} },
+  { text, attachments = [], program = 'holdTheBrowser', ctx = {} },
 ) {
   const taskId = stand.modules.ids.uuidv7()
   stand.model.script(program, ctx)
   const created = await client.mutate('task.create', {
-    siteId: stand.state.siteId,
     taskId,
     text,
     ...(attachments.length > 0 ? { attachments } : {}),
@@ -143,27 +151,14 @@ async function closeDialog(stand, taskId) {
   })
 }
 
-/** The Transit key of the owner's workspace as the operator reads it: 404 while there is none. */
-const workspaceKey = (stand) =>
-  localVaultRequest(
-    stand.vault.root,
-    `transit/keys/${stand.modules.domain.workspaceTransitKey(stand.state.workspaceId)}`,
-  )
-
-/** The first turn: the agent finds the sign-in page and asks the client to sign in. */
+/** The first turn: the agent opens its browser and answers. */
 async function firstTurn(stand, taskId) {
   const task = await waitTask(stand, taskId, ['awaiting_user'], {
-    what: 'the first turn to ask for a sign-in',
+    what: 'the first turn to answer',
   })
   const program = stand.model.current()
   if (!program.finished) throw new CheckFailed('the first turn ended before its program did')
   return { task, facts: program.facts }
-}
-
-/** «Продолжить работу агента» of a waiting task, with the program of the next turn. */
-async function resumeWith(stand, client, taskId, program, ctx) {
-  stand.model.script(program, ctx)
-  return client.mutate('task.resumeAgent', { taskId, requestId: randomUUID() })
 }
 
 /** The ticket of the stream of a task's browser, as the cabinet asks for it. */
@@ -215,84 +210,31 @@ async function refusedWith(stand, viewer, send, reason) {
   return true
 }
 
-/**
- * The client signs in in the browser of the task, as `operator` acts — over a raw viewer of the
- * stream, or in the cabinet: «Взять управление», the sign-in page opened again (WordPress focuses
- * its first field), the login and the password typed, Tab and Enter pressed. The browser lands on
- * the list of posts; the operator keeps control.
- */
-export async function signIn(stand, operator, account, origin = SITE_ORIGIN) {
-  await operator.take()
-  await operator.navigate(
-    `${origin}/wp-login.php?redirect_to=${encodeURIComponent(`${origin}/wp-admin/edit.php`)}`,
-  )
-  await stand.rt.until(
-    'the sign-in page',
-    async () => operator.state()?.url.includes('/wp-login.php') ?? false,
-    { timeoutMs: 20_000, intervalMs: 50 },
-  )
-  // WordPress focuses the first field of its form a moment after the page loads.
-  await stand.rt.pause(1500)
-  await operator.type(account.login)
-  await operator.press('Tab')
-  await operator.type(account.password)
-  await operator.press('Enter')
-  await stand.rt.until(
-    'the browser to land on the list of posts after the sign-in',
-    async () => {
-      const url = operator.state()?.url ?? ''
-      return url.includes('/wp-admin/edit.php') && !url.includes('wp-login')
-    },
-    { timeoutMs: 30_000, intervalMs: 100 },
-  )
-  await stand.site.cookies?.()
-}
-
 /** A raw viewer of the task's stream as the client's operator (stream.mjs). */
 export async function streamOperatorOf(stand, client, taskId) {
   return streamOperator(stand, await watch(stand, client, taskId))
 }
 
-/**
- * A whole task of the scenarios G–J: created with its words and files, its first turn asks for the
- * sign-in, the client signs in over the stream with `account`, «Продолжить работу агента» starts
- * `program`, and the task ends as `until` says.
- */
-async function taskWithProgram(
-  stand,
-  client,
-  { text, attachments, account, program, ctx, until, before },
-) {
-  const taskId = await newBrowserTask(stand, client, { text, attachments })
-  await firstTurn(stand, taskId)
-  const operator = await streamOperatorOf(stand, client, taskId)
-  await signIn(stand, operator, account)
-  if (before) await before(taskId)
-  await resumeWith(stand, client, taskId, program, ctx)
-  await stateWhere(
-    stand,
-    operator.viewer,
-    (state) => state.controller === 'agent',
-    'the next turn to take the browser back',
-    120_000,
-  )
-  operator.close()
-  const task = await waitTask(stand, taskId, until, { what: `the turn of ${program} to end` })
-  const current = stand.model.current()
-  if (!current.finished) throw new CheckFailed(`the program ${program} did not finish`)
-  return { taskId, task, facts: current.facts }
+// ─── S: the clients of the run and their files ────────────────────────────────
+
+async function readObject(storage, bucket, key) {
+  if (!key) return null
+  const body = await storage.get(bucket, key)
+  if (body === null) return null
+  const chunks = []
+  for await (const chunk of body) chunks.push(Buffer.from(chunk))
+  return Buffer.concat(chunks)
 }
 
-// ─── A: the site, its files, the task ─────────────────────────────────────────
-
-const TEXT_F = Object.freeze({
-  title: 'Мы открыли второй магазин',
-  text: 'Наш второй магазин работает на Садовой улице каждый день с девяти до девяти.',
-})
-
-async function scenarioA(stand) {
+/**
+ * The owner and another client signed up as web signs them up; the owner's first file makes the
+ * personal workspace (docs/plan/61-chats-first.md, К15), which gets a paid tariff, and the operator
+ * switches on the synthetic account and its profiles. The files go as the cabinet uploads them;
+ * another client's file is never the owner's.
+ */
+async function scenarioS(stand) {
   const { rt, db, state } = stand
-  rt.begin('A', 'сайт без доступа к файлам и вложения')
+  rt.begin('S', 'клиенты, личное рабочее пространство и вложения')
   state.owner = await signUp(rt, {
     webUrl: stand.webUrl,
     db,
@@ -307,49 +249,48 @@ async function scenarioA(stand) {
     name: 'Борис',
     login: 'stranger',
   })
-  const created = await state.owner.mutate('project.create', {
-    requestKey: randomUUID(),
-    name: 'Цветочная лавка',
-    url: SITE_ORIGIN,
-    stack: 'wordpress',
-    access: 'browser',
-    agentNotes: 'Вход в админку — через /wp-login.php. Новости — это записи.',
+  const files = [
+    { name: 'magazin-fasad.png', type: 'image/png', bytes: solidPng(320, 200, [190, 60, 70]) },
+    { name: 'magazin-vitrina.png', type: 'image/png', bytes: solidPng(240, 240, [40, 120, 200]) },
+    { name: 'prais-list.pdf', type: 'application/pdf', bytes: syntheticPdf('Прайс-лист', 2000) },
+  ]
+  state.files = []
+  for (const file of files) {
+    const sent = await uploadFile(state.owner, file)
+    if (sent.upload?.status === 404)
+      throw new CheckFailed(
+        'PUT /api/attachments/<id> answered 404: the upload route of web is missing',
+      )
+    rt.check(
+      sent.upload !== null && sent.upload.status >= 200 && sent.upload.status < 300,
+      `PUT /api/attachments: ${file.name} (${file.bytes.byteLength} bytes) taken`,
+      { started: sent.started.ok, upload: sent.upload },
+    )
+    state.files.push({ ...file, id: sent.id })
+  }
+  const rows = await db.attachment.findMany({
+    where: { id: { in: state.files.map((file) => file.id) } },
   })
+  state.workspaceId = rows[0]?.workspaceId
   rt.check(
-    created.outcome === 'created',
-    'project.create, browser variant: the site is created',
-    created,
+    typeof state.workspaceId === 'string' &&
+      rows.every((row) => row.workspaceId === state.workspaceId) &&
+      (await db.member.count({ where: { userId: state.owner.id } })) === 1,
+    'the first file of the owner made the personal workspace, and the three files are in it',
   )
-  state.siteId = created.project.id
-  stand.owned.siteId = state.siteId
-  const site = await db.site.findUniqueOrThrow({ where: { id: state.siteId } })
-  state.workspaceId = site.workspaceId
-  const sources = await db.siteCodeSource.count({ where: { siteId: state.siteId } })
-  const refs = await db.credentialRef.count({ where: { siteId: state.siteId } })
-  const stages = await db.siteProvisioningStage.count({ where: { siteId: state.siteId } })
+  const storage = await stand.storage()
+  let same = true
+  for (const file of state.files) {
+    const row = rows.find((item) => item.id === file.id)
+    const held = await readObject(storage, 'inbox', row?.s3Key ?? '')
+    same &&=
+      row?.status === 'ready' &&
+      row.s3Key === `inbox/${state.workspaceId}/${file.id}` &&
+      held?.equals(file.bytes)
+  }
   rt.check(
-    site.status === 'onboarding' &&
-      site.url === SITE_ORIGIN &&
-      site.agentNotes?.includes('/wp-login.php') &&
-      sources === 0 &&
-      refs === 0 &&
-      stages === 0,
-    'the site is `onboarding` with the hints for the agent, and has no file access, no Vault reference and no import stage (Б8)',
-    { status: site.status, sources, refs, stages },
-  )
-  const project = await state.owner.query('project.get', { id: state.siteId })
-  rt.check(
-    project.capabilities?.browser === 'ready' && project.capabilities?.repository === 'absent',
-    'project.get: the browser is ready, the repository absent (Б9)',
-    project.capabilities,
-  )
-  // The Transit key of the workspace, which every turn seals its snapshot with: web makes it
-  // before the first task (Б32), project.create makes none — the stand makes none either.
-  const noKey = await workspaceKey(stand)
-  rt.check(
-    noKey.status === 404,
-    'project.create makes no Transit key of the workspace: task.create does (Б32)',
-    { status: noKey.status },
+    same,
+    'the three files are `ready`, each at inbox/<workspace>/<id> of raditi-inbox with the very bytes sent (Б26)',
   )
   await grantTariff(
     { db, billing: stand.modules.billing },
@@ -366,46 +307,7 @@ async function scenarioA(stand) {
     'the tariff «Агентство» paid for the workspace; the synthetic account and the profiles switched on by the operator commands with the stand rates',
   )
 
-  // The files of the task, as the cabinet uploads them.
-  const files = [
-    { name: 'magazin-fasad.png', type: 'image/png', bytes: solidPng(320, 200, [190, 60, 70]) },
-    { name: 'magazin-vitrina.png', type: 'image/png', bytes: solidPng(240, 240, [40, 120, 200]) },
-    { name: 'prais-list.pdf', type: 'application/pdf', bytes: syntheticPdf('Прайс-лист', 2000) },
-  ]
-  state.files = []
-  for (const file of files) {
-    const sent = await uploadFile(state.owner, { siteId: state.siteId, ...file })
-    if (sent.upload?.status === 404)
-      throw new CheckFailed(
-        'PUT /api/attachments/<id> answered 404: the upload route of web is missing',
-      )
-    rt.check(
-      sent.upload !== null && sent.upload.status >= 200 && sent.upload.status < 300,
-      `PUT /api/attachments: ${file.name} (${file.bytes.byteLength} bytes) taken`,
-      { started: sent.started.ok, upload: sent.upload },
-    )
-    state.files.push({ ...file, id: sent.id })
-  }
-  const rows = await db.attachment.findMany({
-    where: { id: { in: state.files.map((file) => file.id) } },
-  })
-  const storage = await stand.storage()
-  let same = true
-  for (const file of state.files) {
-    const row = rows.find((item) => item.id === file.id)
-    const held = await readObject(storage, 'inbox', row?.s3Key ?? '')
-    same &&=
-      row?.status === 'ready' &&
-      row.s3Key === `inbox/${state.workspaceId}/${file.id}` &&
-      held?.equals(file.bytes)
-  }
-  rt.check(
-    same,
-    'the three files are `ready`, each at inbox/<workspace>/<id> of raditi-inbox with the very bytes sent (Б26)',
-  )
-
   const fake = await uploadFile(state.owner, {
-    siteId: state.siteId,
     name: 'podmena.jpg',
     type: 'image/jpeg',
     bytes: FAKE_JPEG,
@@ -417,17 +319,8 @@ async function scenarioA(stand) {
     { upload: fake.upload, status: fakeRow?.status },
   )
 
-  // Another client's file: their own site and upload, then the owner's attempts.
-  const strangerSite = await state.stranger.mutate('project.create', {
-    requestKey: randomUUID(),
-    name: 'Чужой сайт',
-    url: 'http://other.raditi.test',
-    stack: 'wordpress',
-    access: 'browser',
-  })
-  state.strangerSiteId = strangerSite.project.id
+  // Another client's file, then the owner's attempts.
   const foreign = await uploadFile(state.stranger, {
-    siteId: state.strangerSiteId,
     name: 'chuzhoe.png',
     type: 'image/png',
     bytes: solidPng(64, 64, [10, 200, 10]),
@@ -443,13 +336,10 @@ async function scenarioA(stand) {
     intoForeign.status >= 400 && intoForeign.status < 500,
     `PUT into another client's file is refused (${intoForeign.status})`,
   )
-
-  // The task: the owner's words, the three files; and the refusal of the other client's file.
   const refusedTask = stand.modules.ids.uuidv7()
   const withForeign = await state.owner.call('mutation', 'task.create', {
-    siteId: state.siteId,
     taskId: refusedTask,
-    text: 'Добавьте новость с картинкой.',
+    text: 'Посмотрите картинку.',
     attachments: [state.foreignAttachment],
   })
   const written = {
@@ -467,1240 +357,18 @@ async function scenarioA(stand) {
   rt.end()
 }
 
-async function readObject(storage, bucket, key) {
-  if (!key) return null
-  const body = await storage.get(bucket, key)
-  if (body === null) return null
-  const chunks = []
-  for await (const chunk of body) chunks.push(Buffer.from(chunk))
-  return Buffer.concat(chunks)
-}
-
-// ─── D: the first turn ────────────────────────────────────────────────────────
-
-async function scenarioD(stand) {
-  const { rt, db, state } = stand
-  rt.begin('D', 'задача в браузере, первый ход: страница входа и просьба войти')
-  await turnWithoutBrowser(stand)
-  await slowBrowserStart(stand)
-  // The task of A's files: created here, so a run of later scenarios alone has no task of A
-  // running in the background.
-  state.taskF = await newBrowserTask(stand, state.owner, {
-    text: `Добавьте на сайт новость «${TEXT_F.title}»: ${TEXT_F.text} Первую фотографию вставьте в текст, вторую сделайте изображением записи, прайс приложите файлом. Опубликуйте.`,
-    attachments: state.files.map((file) => file.id),
-  })
-  const task = await db.task.findUniqueOrThrow({ where: { id: state.taskF } })
-  const bound = await db.attachment.count({ where: { taskId: state.taskF, status: 'bound' } })
-  rt.check(
-    task.needsBrowser === true && task.needsRepository === false && bound === 3,
-    'task.create in the browser: needs_browser, no repository, the three files bound to the task in its transaction',
-    { needsBrowser: task.needsBrowser, needsRepository: task.needsRepository, bound },
-  )
-  const key = (await workspaceKey(stand)).body?.data
-  rt.check(
-    key?.type === 'aes256-gcm96' && key.latest_version === 1 && key.exportable === false,
-    'task.create made the Transit key of the workspace under web’s AppRole: aes256-gcm96, one version, not exportable (Б32)',
-    { type: key?.type, version: key?.latest_version, exportable: key?.exportable },
-  )
-  const { facts } = await firstTurn(stand, state.taskF)
-  rt.check(
-    // Since 09.11.2026 the rights of the site's account decide what the task browser opens
-    // (spec §20, «Данные сайта клиента», ДС10; replaces Б31): the platform refuses no screen.
-    facts.dashboard === null,
-    'web_open(/wp-admin/) — the platform closes no screen of the console: the site decides (ДС10)',
-    facts,
-  )
-  rt.check(
-    facts.loginPage === true,
-    'web_open(/wp-admin/edit.php) → web_observe: the agent read the WordPress sign-in form',
-    facts,
-  )
-  rt.check(facts.help === 'requested', 'web_help(login) was taken by the platform', facts)
-  const session = await openSession(db, state.taskF)
-  state.sessionF = session.id
-  const assignment = await db.turnAssignment.findFirstOrThrow({
-    where: { taskId: state.taskF },
-    orderBy: { createdAt: 'asc' },
-  })
-  rt.check(
-    session.createdAt >= assignment.createdAt && session.readyAt !== null,
-    `the session was opened by the first web_* call of the turn, not before it (К11); a cold start took ${session.readyAt - session.createdAt} ms`,
-    { session: session.createdAt, assignment: assignment.createdAt, ready: session.readyAt },
-  )
-  rt.check(
-    session.status === 'ready' && session.helpReason === 'login' && session.controller === 'agent',
-    'browser_sessions: the session of the task is ready, held by the agent, with the help request `login`',
-    { status: session.status, help: session.helpReason, controller: session.controller },
-  )
-  const questions = await rowsOf(db, state.taskF, 'feed.question')
-  rt.check(
-    questions.some((row) => row.kind === 'browser' && row.reason === 'login'),
-    'the task waits (`awaiting_user`) with a `browser` question of reason `login` in its feed (Б23)',
-    questions,
-  )
-  const feed = await state.owner.query('task.feed', { taskId: state.taskF })
-  rt.check(
-    feed.task.requirements?.browser === true &&
-      feed.browser?.status === 'ready' &&
-      feed.browser?.help?.reason === 'login' &&
-      feed.commands.every((command) => command.id === 'cancel' || command.available === false),
-    'task.feed: the head names the browser session, its help request, and only «Остановить» among the commands',
-    { browser: feed.browser, commands: feed.commands },
-  )
-  const prompts = stand.model.requests.join('\n')
-  rt.check(
-    state.files.every((file) => prompts.includes(file.id)) &&
-      !prompts.includes('inbox/') &&
-      !/X-Amz-|presigned/i.test(prompts),
-    'the model got the ids of the three files and the site, never a key or a link of S3',
-  )
-  if (stand.cabinet) await panelOpensOnLaunch(stand)
-  else
-    rt.note(
-      'the cabinet has no browser pane in this build: the panel opening by itself as the browser of a dialog starts (И2) is not checked in this run',
-    )
-  rt.end()
-}
-
-/**
- * A turn that needs no browser starts none (docs/plan/61-chats-first.md, К11): no row, nothing on
- * the worker, nothing the client waits for in the head of the dialog.
- */
-async function turnWithoutBrowser(stand) {
-  const { rt, db, state } = stand
-  const taskId = await newBrowserTask(stand, state.owner, {
-    text: 'Что вы умеете делать на сайте?',
-    program: 'answerInWords',
-  })
-  await waitTask(stand, taskId, ['awaiting_user'], { what: 'the answer without a browser' })
-  const feed = await state.owner.query('task.feed', { taskId })
-  const held = await workerSessions(stand)
-  rt.check(
-    (await db.browserSession.count({ where: { taskId } })) === 0 &&
-      held.length === 0 &&
-      feed.browser === null,
-    'a turn without a web_* call started no browser: no row, nothing on the worker, none in the head of the dialog (К11)',
-    { held, browser: feed.browser },
-  )
-  await closeDialog(stand, taskId)
-}
-
-/**
- * A start longer than a call may wait: with the worker stopped the first `web_*` call answers
- * `BROWSER_STARTING` after its 35 s, the real CLI gets it as the answer of the tool and the agent
- * calls again; once the worker is back the same turn goes on in the same session (К11).
- */
-async function slowBrowserStart(stand) {
-  const { rt, db, state, model, processes } = stand
-  const before = model.moves.length
-  const starting = () =>
-    model.moves.slice(before).filter((move) => move.answered === 'BROWSER_STARTING').length
-  let taskId
-  process.kill(processes.browser.pid, 'SIGSTOP')
-  try {
-    taskId = await newBrowserTask(stand, state.owner, {
-      text: 'Проверьте, открывается ли список записей, пока браузер запускается.',
-    })
-    await rt.until('the first web call to answer BROWSER_STARTING', async () => starting() > 0, {
-      timeoutMs: 180_000,
-      intervalMs: 250,
-    })
-  } finally {
-    process.kill(processes.browser.pid, 'SIGCONT')
-  }
-  const { facts } = await firstTurn(stand, taskId)
-  const sessions = await db.browserSession.findMany({ where: { taskId } })
-  rt.check(
-    facts.starting >= 1 &&
-      facts.help === 'requested' &&
-      sessions.length === 1 &&
-      sessions[0].status === 'ready',
-    `a slow start answered BROWSER_STARTING ${facts.starting} times, the agent called again and the turn went on in one session, up after ${sessions[0]?.readyAt - sessions[0]?.createdAt} ms`,
-    { facts, sessions: sessions.map((session) => session.status) },
-  )
-  await closeDialog(stand, taskId)
-}
-
-/** What the client writes in «Новый чат» of the cabinet in scenario D. */
-const WATCHED_WORDS = 'Проверьте, открывается ли список записей в админке.'
-
-/**
- * A chat the client starts in «Новый чат» of the cabinet and watches from its start
- * (docs/plan/59-dialog-tools-panel.md, И2, И3): its browser opens beside it by itself once, when
- * it starts — the start of the dialog speaks for its first answers, so it does not matter whether
- * the page read the feed before the session was ready or after —, and the focus stays where it
- * was. Hidden by the client, the panel does not come back while the turn goes on to ask for the
- * sign-in; a reload opens nothing. The dialog is then stopped, as the client stops it.
- */
-async function panelOpensOnLaunch(stand) {
-  const { rt, db, state } = stand
-  const cabinet = await cabinetBrowser(stand, state.owner)
-  let taskId
-  try {
-    stand.model.script('askToSignIn')
-    const tab = await cabinet.start(WATCHED_WORDS)
-    taskId = tab.taskId
-    const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-    rt.check(
-      task.siteId === state.siteId && task.needsBrowser === true && task.needsRepository === false,
-      '«Новый чат» of the project in the cabinet: the page started a chat in the browser (task.create with the id it invented, the server read needs_browser and no repository from the project) and moved to it',
-      { needsBrowser: task.needsBrowser, needsRepository: task.needsRepository },
-    )
-    // Nothing is pressed from here on: the panel opens by itself, or not at all.
-    await tab.panel.waitFor({ timeout: 180_000 })
-    await tab.panel
-      .getByRole('tab', { name: CABINET_TEXT.browserTab, selected: true })
-      .waitFor({ timeout: 10_000 })
-    const opened = await tab.seen()
-    const session = await openSession(db, taskId)
-    const appeared = opened.panels?.[0] ?? 0
-    const ticketsBefore = tab.calls.filter(
-      (call) => call.name === 'browser.streamTicket' && call.at < appeared,
-    ).length
-    // Which way it went: the page saw the session start, or the session was ready by the first
-    // answer and the start of the dialog spoke for it (И3) — either opens the panel.
-    const firstRead = tab.calls.find((call) => call.name === 'task.feed')?.at ?? null
-    const lead =
-      session?.readyAt && firstRead !== null ? session.readyAt.getTime() - firstRead : null
-    const way =
-      lead === null
-        ? ''
-        : lead >= 0
-          ? ` — the page first read the dialog ${lead} ms before its browser was ready`
-          : ` — its browser was ready ${-lead} ms before the page first read the dialog, and the start of the dialog spoke for it`
-    rt.check(
-      opened.panels?.length === 1 &&
-        opened.focusIn === 0 &&
-        !opened.focusInPanel &&
-        session?.status === 'ready' &&
-        ticketsBefore === 0,
-      `the dialog watched from its start opened its panel «Инструменты чата» by itself on «Браузер» once its browser was ready${way}: once, the focus never in the panel, nothing of the stream read before it (И2, И3, И11)`,
-      {
-        panels: opened.panels,
-        focusIn: opened.focusIn,
-        focusInPanel: opened.focusInPanel,
-        session: session?.status,
-        ticketsBefore,
-      },
-    )
-    // The client hides it; the turn goes on, asks for the sign-in, and the panel stays closed.
-    await tab.hidePanel()
-    await rt.until('the focus to come back to «+»', () => tab.plusFocused(), {
-      timeoutMs: 10_000,
-      intervalMs: 100,
-    })
-    await firstTurn(stand, taskId)
-    await tab.answers(2)
-    const hidden = await tab.seen()
-    const waiting = await tab.plus.getAttribute('aria-label')
-    rt.check(
-      hidden.panels?.length === 1 &&
-        (await tab.panel.count()) === 0 &&
-        waiting === CABINET_TEXT.toolsWaiting,
-      `«Скрыть панель»: the panel goes and the focus is back on «+»; the turn went on to ask for the sign-in and the panel stayed closed — «+» says «${waiting}» (И2, И8, И13)`,
-      { panels: hidden.panels, label: waiting },
-    )
-    // A reload: the browser is ready by the first answer of the new page, which opens nothing.
-    const sockets = tab.sockets
-    const calls = tab.calls.length
-    await tab.reload()
-    await tab.answers(2)
-    const reloaded = await tab.seen()
-    const label = await tab.plus.getAttribute('aria-label')
-    rt.check(
-      reloaded.panels?.length === 0 &&
-        tab.sockets === sockets &&
-        tab.called('browser.streamTicket', calls) === 0 &&
-        label === CABINET_TEXT.toolsWaiting,
-      'after a reload the panel stays closed though the browser is ready: no ticket and no socket of the stream, «+» keeps its dot (И1, И2, И11, И13)',
-      {
-        panels: reloaded.panels,
-        sockets: tab.sockets - sockets,
-        tickets: tab.called('browser.streamTicket', calls),
-        label,
-      },
-    )
-  } finally {
-    await cabinet.close()
-  }
-  // Its browser closes with it; scenario M counts its session among the closed ones.
-  await state.owner.mutate('task.cancel', { taskId, requestId: randomUUID() })
-  await waitTask(stand, taskId, ['cancelled'], {
-    what: 'the dialog started in the cabinet to close',
-    timeoutMs: 120_000,
-  })
-}
-
-// ─── B: no git ────────────────────────────────────────────────────────────────
-
-async function scenarioB(stand) {
-  const { rt, db, state } = stand
-  rt.begin('B', 'нет git: ход без репозитория')
-  rt.passed(
-    'core runs without GITEA_URL, GITEA_TOKEN, GIT_CA_FILE and GIT_MIRROR_DIR (its environment, checked at start)',
-  )
-  const turns = await db.taskTurn.findMany({ where: { taskId: state.taskF } })
-  rt.check(
-    turns.length >= 1 &&
-      turns.every(
-        (turn) => turn.baseSha === null && turn.headSha === null && turn.status === 'completed',
-      ),
-    `task_turns of the task: ${turns.length} completed, base_sha and head_sha NULL`,
-    turns.map((turn) => ({ status: turn.status, base: turn.baseSha, head: turn.headSha })),
-  )
-  const storage = await stand.storage()
-  const manifests = []
-  for (const turn of turns) {
-    const bytes = await readObject(storage, 'sessions', `${turn.snapshotPrefix}manifest.json`)
-    manifests.push(bytes ? JSON.parse(bytes.toString('utf8')) : null)
-  }
-  rt.check(
-    manifests.length > 0 &&
-      manifests.every(
-        (manifest) =>
-          manifest &&
-          manifest.git === undefined &&
-          manifest.parts.length === 1 &&
-          manifest.parts[0].name === 'home',
-      ),
-    'the snapshot manifests of the turns in raditi-sessions have no `git` block and the `home` part alone (Б4)',
-    manifests.map(
-      (manifest) =>
-        manifest && { git: manifest.git, parts: manifest.parts.map((part) => part.name) },
-    ),
-  )
-  const coreLog = stand.processes.core.log()
-  rt.check(
-    !/\bgit (clone|fetch|push|bundle|init|checkout)\b/.test(coreLog),
-    'the log of core names no git command',
-  )
-  rt.note(
-    'the commands run in the sandbox are not logged by the local executor: «no git process in the sandbox» is proven by the manifest and the empty SHAs, not by an exec log',
-  )
-  rt.end()
-}
-
-// ─── C: the stream ────────────────────────────────────────────────────────────
-
-async function scenarioC(stand) {
-  const { rt, db, state } = stand
-  rt.begin('C', 'трансляция: кадры, заголовок, переподключение')
-  const ticket = await ticketOf(state.owner, state.taskF)
-  rt.check(
-    ticket.url === stand.streamUrl &&
-      ticket.sessionId === state.sessionF &&
-      /^[A-Za-z0-9_-]{43}$/.test(ticket.ticket),
-    'browser.streamTicket: the address of the gateway, the session of the task and a one-time ticket',
-    { url: ticket.url, session: ticket.sessionId },
-  )
-  const stored = await db.browserStreamTicket.findMany({ where: { sessionId: state.sessionF } })
-  rt.check(
-    stored.length >= 1 &&
-      stored.every(
-        (row) => row.tokenHash !== ticket.ticket && !JSON.stringify(row).includes(ticket.ticket),
-      ),
-    'the database keeps the hash of the ticket only (Б12)',
-  )
-  const started = Date.now()
-  const viewer = openViewer(stand.streamTools, {
-    url: ticket.url,
-    origin: stand.webUrl,
-    ticket: ticket.ticket,
-  })
-  await viewer.opened
-  await rt.until('the first frame', async () => viewer.frames.length > 0, {
-    timeoutMs: 15_000,
-    intervalMs: 20,
-  })
-  const first = viewer.frames[0]
-  rt.check(
-    viewer.messages[0]?.t === 'viewer' &&
-      viewer.messages.find((message) => message.t === 'state')?.session === state.sessionF,
-    'the gateway sends `viewer` first, then the `state` of the session',
-    viewer.messages.slice(0, 2).map((message) => message.t),
-  )
-  rt.check(
-    first.sessionId === state.sessionF &&
-      first.pageId === viewer.state.pageId &&
-      first.viewportVersion === viewer.state.viewportVersion &&
-      first.width === 1280 &&
-      first.height === 800 &&
-      first.controlEpoch === viewer.state.controlEpoch,
-    `a frame right after connecting (${first.at - started} ms): its 48-byte header names the session, the page, the window 1280×800 and the epoch of the state`,
-    { ...first, jpeg: first.jpeg.byteLength },
-  )
-  rt.check(
-    jpegLooksPainted(first.jpeg),
-    `the frame is a painted JPEG of the sign-in page (${first.jpeg.byteLength} bytes)`,
-  )
-  // The caret of the focused field repaints the page: frames keep coming while acknowledged.
-  await rt.until('more frames', async () => viewer.frames.length >= 3, {
-    timeoutMs: 20_000,
-    intervalMs: 50,
-  })
-  const seqs = viewer.frames.map((frame) => frame.frameSeq)
-  rt.check(
-    seqs.every((seq, index) => index === 0 || seq > seqs[index - 1]),
-    `frames arrive with an increasing number (${seqs.slice(0, 6).join(', ')}…)`,
-    seqs,
-  )
-  await rt.until(
-    'a ping of the gateway',
-    async () => viewer.messages.some((message) => message.t === 'ping'),
-    { timeoutMs: 15_000, intervalMs: 100 },
-  )
-  rt.check(
-    viewer.closed === null,
-    'the gateway pings (every 10 s) and the answered connection stays open (Б14)',
-  )
-  const page = viewer.state.pageId
-  viewer.close()
-  await rt.until('the viewer to close', async () => viewer.closed !== null, {
-    timeoutMs: 5_000,
-    intervalMs: 20,
-  })
-
-  const again = await ticketOf(state.owner, state.taskF)
-  const reconnected = Date.now()
-  const second = openViewer(stand.streamTools, {
-    url: again.url,
-    origin: stand.webUrl,
-    ticket: again.ticket,
-  })
-  await second.opened
-  await rt.until('the first frame after reconnecting', async () => second.frames.length > 0, {
-    timeoutMs: 10_000,
-    intervalMs: 20,
-  })
-  rt.check(
-    second.frames[0].pageId === page &&
-      second.frames[0].sessionId === state.sessionF &&
-      second.frames[0].at - reconnected < 5_000,
-    `reconnect with a new ticket: a frame of the same page right away (${second.frames[0].at - reconnected} ms)`,
-  )
-  second.close()
-
-  if (stand.cabinet) await canvasInCabinet(stand, state.taskF)
-  else
-    rt.note(
-      'the cabinet has no browser pane in this build: the canvas of the dialog page is not checked in this run',
-    )
-  rt.end()
-}
-
-/**
- * The dialog page of the task in a real Chromium, as the client opens it: the chat alone — no panel
- * and nothing of the stream read, though the browser of the task is ready
- * (docs/plan/59-dialog-tools-panel.md, И1, И11). «+» → «Браузер» opens the panel on the browser:
- * its stream starts, the canvas draws the frames it gets (many colours, opaque) and acknowledges
- * them. A reload starts with the chat alone again, and the browser opened once more — a new
- * ticket, a new connection — draws the same page at once.
- */
-async function canvasInCabinet(stand, taskId) {
-  const { rt, state } = stand
-  const cabinet = await cabinetBrowser(stand, state.owner)
-  try {
-    const tab = await cabinet.load(taskId)
-    // A dialog opened with a live browser opens nothing by itself (И2): a few answers of its feed
-    // and still no panel, no ticket and no socket.
-    await tab.answers(2)
-    const loaded = await tab.seen()
-    rt.check(
-      loaded.panels?.length === 0 && tab.sockets === 0 && tab.called('browser.streamTicket') === 0,
-      'the dialog page opens with the chat alone though the browser of the task is ready: no panel «Инструменты чата», no ticket and no socket of the stream (И1, И11)',
-      {
-        panels: loaded.panels,
-        sockets: tab.sockets,
-        tickets: tab.called('browser.streamTicket'),
-      },
-    )
-    await tab.showBrowser()
-    await rt.until(
-      'the pane to get frames and acknowledge them',
-      async () => tab.frames.length >= 2 && tab.acks >= 1,
-      {
-        timeoutMs: 60_000,
-        intervalMs: 100,
-      },
-    )
-    let painted = null
-    const paintedBy = Date.now() + 30_000
-    do {
-      painted = await canvasPainted(tab)
-      if (painted.colours > 20 && painted.drawn > 0.3) break
-      await rt.pause(250)
-    } while (Date.now() < paintedBy)
-    rt.check(
-      painted.colours > 20 && painted.drawn > 0.3,
-      `«+» → «Браузер» opens the panel on the browser, and its canvas is painted from real frames: ${painted.colours} colours, ${Math.round(painted.drawn * 100)}% of its ${painted.width}×${painted.height} drawn (the rest is the letterbox)`,
-      painted,
-    )
-    const seqs = tab.frames.map((frame) => frame.frameSeq)
-    rt.check(
-      tab.frames.every((frame) => frame.sessionId === state.sessionF) &&
-        seqs.every((seq, index) => index === 0 || seq > seqs[index - 1]) &&
-        tab.acks >= 1,
-      `the pane's own WebSocket: frames of the session with an increasing number (${seqs.slice(0, 5).join(', ')}…), each acknowledged after drawing (${tab.acks} acks)`,
-    )
-    // A reload: the chat alone again, nothing of the stream until the client opens the browser.
-    const sockets = tab.sockets
-    const calls = tab.calls.length
-    const before = tab.frames.findLast((frame) => frame.socket <= sockets)
-    await tab.reload()
-    await tab.answers(2)
-    const reloaded = await tab.seen()
-    rt.check(
-      reloaded.panels?.length === 0 &&
-        tab.sockets === sockets &&
-        tab.called('browser.streamTicket', calls) === 0,
-      'after a reload of the page the panel is closed again: no ticket and no socket until the client opens the browser (И1, И11)',
-      {
-        panels: reloaded.panels,
-        sockets: tab.sockets - sockets,
-        tickets: tab.called('browser.streamTicket', calls),
-      },
-    )
-    const chosen = Date.now()
-    await tab.showBrowser()
-    const frame = await rt.until(
-      'a frame of the browser opened again after the reload',
-      async () => tab.frames.find((one) => one.socket > sockets) ?? null,
-      { timeoutMs: 60_000, intervalMs: 100 },
-    )
-    rt.check(
-      tab.called('browser.streamTicket', calls) >= 1 &&
-        frame.sessionId === state.sessionF &&
-        frame.pageId === before?.pageId,
-      `opened again after the reload, the browser takes a new ticket and a new connection and draws the same page at once (${frame.at - chosen} ms after «Браузер» was chosen)`,
-    )
-  } finally {
-    await cabinet.close()
-  }
-}
-
-// ─── E: the client signs in, writes in Russian, two tabs ──────────────────────
-
-const OWNER_DRAFT = 'Черновик владельца: ёжик и щука в тумане'
-
-async function scenarioE(stand) {
-  const { rt, db, site, state } = stand
-  rt.begin('E', 'ручной вход в том же браузере, русский ввод, параллельное управление')
-  const before = await db.browserSession.findUniqueOrThrow({ where: { id: state.sessionF } })
-  let cabinet = null
-  let operator
-  if (stand.cabinet) {
-    cabinet = await cabinetBrowser(stand, state.owner)
-    operator = cabinetOperator(stand, await cabinet.open(state.taskF))
-  } else {
-    rt.note(
-      'the cabinet has no browser pane in this build: the client acts over the stream as the canvas would',
-    )
-    operator = await streamOperatorOf(stand, state.owner, state.taskF)
-  }
-  const how =
-    operator.kind === 'cabinet'
-      ? 'in the cabinet (real key events into the pane)'
-      : 'over the stream'
-  try {
-    if (operator.kind === 'cabinet') {
-      // «Взять управление» works with the panel closed (docs/plan/59-dialog-tools-panel.md, И12):
-      // the button of the card of the request opens the browser and takes the control there, so
-      // the client has the page to sign in on.
-      const { tab } = operator
-      await tab.hidePanel()
-      const sockets = tab.sockets
-      await tab.takeFromCard()
-      rt.check(
-        tab.holds() && tab.sockets > sockets,
-        '«Скрыть панель», then «Взять управление» on the card of the request in the feed: the panel opens again on «Браузер», on a new connection, and this tab holds the control (И8, И12)',
-        { sockets: tab.sockets - sockets, state: tab.state },
-      )
-    }
-    await signIn(stand, operator, site.accounts.owner)
-    const held = await db.browserSession.findUniqueOrThrow({ where: { id: state.sessionF } })
-    rt.check(
-      held.controller === 'user' && held.controlEpoch > before.controlEpoch,
-      `«Взять управление» ${how}: the session is the client's, epoch ${before.controlEpoch} → ${held.controlEpoch} (Б15)`,
-    )
-    const cookies = await site.cookies()
-    rt.check(
-      operator.state().url.includes('/wp-admin/edit.php') && cookies.length >= 2,
-      `the client signed in in the same browser ${how}: login and password typed, the list of posts open, the site set its sign-in cookies`,
-      { url: operator.state().url, cookies: cookies.length },
-    )
-    // Russian in the block editor, saved with Ctrl+S.
-    await operator.navigate(`${SITE_ORIGIN}/wp-admin/post-new.php`)
-    await rt.until(
-      'the editor of a new post',
-      async () => operator.state()?.url.includes('/wp-admin/post-new.php') ?? false,
-      {
-        timeoutMs: 20_000,
-        intervalMs: 100,
-      },
-    )
-    await rt.pause(5000)
-    // The welcome guide of the editor closes with Escape; the title field then has the focus.
-    await operator.press('Escape')
-    await rt.pause(800)
-    await operator.type(OWNER_DRAFT)
-    await rt.pause(500)
-    await operator.press('Control+s')
-    const draft = await rt.until(
-      'the draft with the Russian title in the database of the site',
-      async () =>
-        (await site.objects()).find(
-          (row) => row.type === 'post' && row.title === OWNER_DRAFT && row.status === 'draft',
-        ) ?? null,
-      { timeoutMs: 30_000, intervalMs: 1000 },
-    )
-    rt.check(
-      Boolean(draft),
-      `Russian text typed ${how} and Ctrl+S: WordPress holds the draft «${OWNER_DRAFT}» (post ${draft.id})`,
-    )
-    state.ownerDraft = draft.id
-
-    // A second tab of the cabinet is refused while the first holds, then takes over.
-    const other = await watch(stand, state.owner, state.taskF)
-    await refusedWith(stand, other, () => other.text('x'), 'not_holder')
-    rt.passed("a second viewer's input is refused while the first holds control (`not_holder`)")
-    const oldEpoch = other.state.controlEpoch
-    other.send({ t: 'take' })
-    await stateWhere(stand, other, () => other.holds(), 'the second viewer to take control')
-    rt.check(
-      other.state.controlEpoch > oldEpoch,
-      `the second viewer took control explicitly: epoch ${oldEpoch} → ${other.state.controlEpoch}`,
-    )
-    if (operator.kind === 'cabinet') {
-      await rt.until(
-        'the first tab to show the control is elsewhere',
-        async () => operator.otherTabShown(),
-        { timeoutMs: 10_000, intervalMs: 100 },
-      )
-      rt.passed(
-        'the first tab of the cabinet says the browser is controlled in another tab and sends nothing',
-      )
-      await operator.tab.page
-        .getByLabel(CABINET_TEXT.keyboard)
-        .focus()
-        .catch(() => {})
-      await refusedWith(
-        stand,
-        other,
-        () => other.input({ kind: 'text', text: 'z' }, { ...other.state, controlEpoch: oldEpoch }),
-        'stale_epoch',
-      )
-      rt.passed('input stamped with the epoch before the hand-over is refused (`stale_epoch`)')
-    } else {
-      await refusedWith(stand, operator.viewer, () => operator.viewer.text('y'), 'not_holder')
-      await refusedWith(
-        stand,
-        other,
-        () => other.input({ kind: 'text', text: 'z' }, { ...other.state, controlEpoch: oldEpoch }),
-        'stale_epoch',
-      )
-      rt.passed(
-        "the first viewer's input is refused now (`not_holder`), and input stamped with the epoch before the hand-over is refused (`stale_epoch`)",
-      )
-    }
-
-    // «Продолжить работу агента» of the waiting task: the next turn takes control. The pass that
-    // asked for the sign-in completed and was charged (owner's answer of 26.10.2026: every
-    // completed pass is paid), so the press opens the next attempt with a reserve of its own;
-    // while that charge waits for the usage of the key, it continues the same attempt.
-    const attempt = (await db.task.findUniqueOrThrow({ where: { id: state.taskF } })).attempt
-    const charged =
-      (await db.creditHold.count({ where: { taskId: state.taskF, attempt, status: 'active' } })) ===
-      0
-    if (operator.kind === 'cabinet') {
-      // The first tab takes the browser back and gives it to the agent with its own button.
-      await operator.take()
-      stand.model.script('publishNews', { words: TEXT_F })
-      await operator.resume()
-    } else await resumeWith(stand, state.owner, state.taskF, 'publishNews', { words: TEXT_F })
-    await stateWhere(
-      stand,
-      other,
-      (current) => current.controller === 'agent',
-      'the next turn to take the browser back',
-      120_000,
-    )
-    const requests = await rowsOf(stand.db, state.taskF, 'feed.request')
-    const resumed = await db.task.findUniqueOrThrow({ where: { id: state.taskF } })
-    rt.check(
-      requests.some((row) => row.kind === 'resume') &&
-        resumed.attempt === (charged ? attempt + 1 : attempt),
-      `«Продолжить работу агента» ${operator.kind === 'cabinet' ? 'pressed in the cabinet' : '(task.resumeAgent)'}: a \`resume\` request in the feed, ${charged ? 'the next attempt after the charged pass' : 'the same attempt'}, and the next turn takes the browser back (Б16)`,
-    )
-    other.close()
-  } finally {
-    await Promise.resolve()
-      .then(() => operator.close())
-      .catch(() => {})
-    await cabinet?.close().catch(() => {})
-  }
-  rt.end()
-}
-
-// ─── F: the post with two images and a PDF ────────────────────────────────────
-
-async function scenarioF(stand) {
-  const { rt, db, site, state } = stand
-  rt.begin('F', 'новость с двумя картинками и PDF: публикация и проверка')
-  const baseline = state.ownerDraft ?? 0
-  const task = await waitAnswered(stand, state.taskF, {
-    what: 'the task to answer',
-    timeoutMs: 900_000,
-  })
-  const facts = stand.model.current().facts
-  rt.check(
-    facts.featured === true,
-    'the agent set the featured image in the media window of the editor',
-  )
-  rt.check(
-    (facts.held ?? 0) >= 1,
-    `the worker held a second commit back until web_verify read the post (BROWSER_CHECKPOINT_UNVERIFIED, ${facts.held}×), and the agent went on after the check (Б22)`,
-    facts,
-  )
-  const results = await rowsOf(db, state.taskF, 'feed.result')
-  const result = results.at(-1)
-  const object = result?.objects?.find((item) => item.status === 'published')
-  rt.check(
-    task.status === 'awaiting_user' &&
-      result?.next === 'awaiting_user' &&
-      object &&
-      object.kind === 'post' &&
-      object.title === TEXT_F.title &&
-      typeof object.url === 'string' &&
-      object.url.startsWith(SITE_ORIGIN),
-    `the task answered with feed.result naming the post as the site shows it: «${object?.title}», published, ${object?.url}; the dialog stays open`,
-    result,
-  )
-  rt.check(result.site === 'changed', 'the result says the site changed')
-  const holds = await db.creditHold.findMany({ where: { taskId: state.taskF } })
-  const charged = holds.reduce((sum, hold) => sum + Number(hold.charged ?? 0), 0)
-  const audit = await db.auditLog.findFirst({
-    where: { action: 'billing.task.charge', targetId: state.taskF },
-  })
-  rt.check(
-    // Since 10.11.2026 a pass costs what it used, rounded up, at least 1 credit — no minimum of
-    // five (spec §20, «Только кредиты»): each captured reserve paid at least one.
-    charged >= 1 &&
-      holds
-        .filter((hold) => hold.status === 'captured')
-        .every((hold) => Number(hold.charged ?? 0) >= 1) &&
-      audit !== null &&
-      holds.every((hold) => hold.status !== 'active'),
-    `every pass is charged from its token usage when it ends: ${charged} credits, the reserves settled (billing.task.charge)`,
-    holds.map((hold) => ({ status: hold.status, charged: hold.charged })),
-  )
-  const objects = await site.objects({ after: baseline })
-  const posts = objects.filter((row) => row.type === 'post' && row.status === 'publish')
-  const post = posts[0]
-  const files = objects.filter((row) => row.type === 'attachment' && row.parent === post?.id)
-  const thumbnail = post ? Number(await site.meta(post.id, '_thumbnail_id')) : 0
-  rt.check(
-    posts.length === 1 && post.title === TEXT_F.title,
-    `WordPress: exactly one new published post «${post?.title}» (id ${post?.id})`,
-    objects,
-  )
-  rt.check(
-    files.length === 3 &&
-      files.filter((row) => row.mime === 'image/png').length === 2 &&
-      files.some((row) => row.mime === 'application/pdf'),
-    'WordPress: three attachments of the post — the two images and the PDF',
-    files,
-  )
-  rt.check(
-    files.some((row) => row.id === thumbnail && row.mime === 'image/png'),
-    `WordPress: the featured image of the post is one of its images (attachment ${thumbnail})`,
-  )
-  const content = await site.content(post.id)
-  rt.check(
-    content.includes(TEXT_F.text) && content.includes('wp:image') && content.includes('wp:file'),
-    'the content of the post holds the text, an Image block and a File block',
-  )
-  const page = await site.page(`/?p=${post.id}`)
-  rt.check(
-    page.status === 200 && page.text.includes(TEXT_F.title),
-    `the post is public: /?p=${post.id} answers 200 with its title`,
-  )
-  const session = await db.browserSession.findUniqueOrThrow({ where: { id: state.sessionF } })
-  rt.check(
-    session.closedAt === null && ['starting', 'ready'].includes(session.status),
-    'the session lives on after the answer for the next words: it closes on its idle time or with the dialog (Б18)',
-    { status: session.status, reason: session.closeReason },
-  )
-  await closeDialog(stand, state.taskF)
-  rt.end()
-}
-
-// ─── G: a draft ───────────────────────────────────────────────────────────────
-
-async function scenarioG(stand) {
-  const { rt, site, state, db } = stand
-  rt.begin('G', 'черновик по поручению: ничего не опубликовано')
-  const words = {
-    title: 'Скоро распродажа тюльпанов',
-    text: 'В субботу продаём тюльпаны со скидкой.',
-  }
-  const baseline = await site.lastId()
-  const { taskId, task, facts } = await taskWithProgram(stand, state.owner, {
-    text: `Подготовьте новость «${words.title}»: ${words.text} Сохраните черновик, не публикуйте.`,
-    account: site.accounts.owner,
-    program: 'keepDraft',
-    ctx: { words, foreignAttachment: state.foreignAttachment },
-    until: ['awaiting_user'],
-  })
-  rt.check(
-    facts.foreign === 'BROWSER_ATTACHMENT_UNKNOWN',
-    "web_upload with another client's file is refused by mcp (BROWSER_ATTACHMENT_UNKNOWN)",
-    facts,
-  )
-  const result = (await rowsOf(db, taskId, 'feed.result')).at(-1)
-  const object = result?.objects?.[0]
-  rt.check(
-    task.status === 'awaiting_user' &&
-      result?.next === 'awaiting_user' &&
-      object?.status === 'draft' &&
-      object.url === undefined &&
-      object.title === words.title,
-    'the answer names the draft as the site shows it: status draft, no public address',
-    result,
-  )
-  const objects = await site.objects({ after: baseline })
-  rt.check(
-    objects.filter((row) => row.type === 'post').length === 1 &&
-      objects.some(
-        (row) => row.type === 'post' && row.status === 'draft' && row.title === words.title,
-      ) &&
-      !objects.some((row) => row.status === 'publish'),
-    'WordPress: one new post, a draft; nothing published',
-    objects,
-  )
-  await closeDialog(stand, taskId)
-  rt.end()
-}
-
-// ─── H: an account that cannot publish ────────────────────────────────────────
-
-async function scenarioH(stand) {
-  const { rt, site, state, db } = stand
-  rt.begin('H', 'недостаточно прав: «Submit for Review», не публикация')
-  const words = {
-    title: 'Новые горшки для рассады',
-    text: 'Привезли глиняные горшки трёх размеров.',
-  }
-  const baseline = await site.lastId()
-  const { taskId, task, facts } = await taskWithProgram(stand, state.owner, {
-    text: `Опубликуйте новость «${words.title}»: ${words.text}`,
-    account: site.accounts.contributor,
-    program: 'submitForReview',
-    ctx: { words },
-    until: ['awaiting_user'],
-  })
-  rt.check(
-    facts.submitButton === true && facts.publishButton === false,
-    'the editor offers the contributor «Submit for Review», not «Publish»',
-    facts,
-  )
-  const result = (await rowsOf(db, taskId, 'feed.result')).at(-1)
-  rt.check(
-    task.status === 'awaiting_user' &&
-      result?.objects?.[0]?.status === 'pending' &&
-      Boolean(facts.pending) &&
-      /отправили «.+» на утверждение/.test(result.message),
-    'the result is honest: the post is pending review, the client is told it waits for an editor',
-    result,
-  )
-  const objects = await site.objects({ after: baseline })
-  rt.check(
-    objects.some((row) => row.type === 'post' && row.status === 'pending') &&
-      !objects.some((row) => row.status === 'publish'),
-    'WordPress: the post is pending; nothing published',
-    objects,
-  )
-  await closeDialog(stand, taskId)
-  rt.end()
-}
-
-// ─── I: the site refuses the PDF; the task is stopped ─────────────────────────
-
-async function scenarioI(stand) {
-  const { rt, site, state, db } = stand
-  rt.begin('I', 'сайт не принял файл; «Остановить» с объектами и «проверьте сайт»')
-  const words = {
-    title: 'Прайс на осень',
-    text: 'Осенние цены на луковицы — в приложенном файле.',
-    refusal: 'Файл больше 20 КБ',
-  }
-  const big = await uploadFile(state.owner, {
-    siteId: state.siteId,
-    name: 'prais-osen.pdf',
-    type: 'application/pdf',
-    bytes: syntheticPdf('Осенний прайс', UPLOAD_LIMIT_BYTES + 10_000),
-  })
-  rt.check(
-    big.upload?.status >= 200 && big.upload.status < 300,
-    "the large PDF is taken by the platform (the site's limit is the site's)",
-  )
-  await site.switches.on(SWITCH.uploadLimit)
-  const baseline = await site.lastId()
-  try {
-    const { taskId, task, facts } = await taskWithProgram(stand, state.owner, {
-      text: `Опубликуйте новость «${words.title}»: ${words.text} Приложите PDF.`,
-      attachments: [big.id],
-      account: site.accounts.owner,
-      program: 'uploadRefused',
-      ctx: { words },
-      until: ['awaiting_user'],
-    })
-    rt.check(
-      facts.refusalShown === true,
-      'the site refused the PDF with its own words, and the agent read them in the editor',
-      facts,
-    )
-    const questions = await rowsOf(db, taskId, 'feed.question')
-    const results = await rowsOf(db, taskId, 'feed.result')
-    rt.check(
-      task.status === 'awaiting_user' &&
-        questions.at(-1)?.kind === 'browser' &&
-        questions.at(-1)?.reason === 'other' &&
-        results.length === 0,
-      'the agent reported the refusal and asked the client (`web_help`, reason other); the task waits, nothing is done',
-      { questions, results },
-    )
-    const objects = await site.objects({ after: baseline })
-    rt.check(
-      !objects.some((row) => row.status === 'publish') &&
-        !objects.some((row) => row.mime === 'application/pdf') &&
-        objects.some(
-          (row) => row.type === 'post' && row.status === 'draft' && row.title === words.title,
-        ),
-      'WordPress: the draft only — no published post, no PDF in the media library',
-      objects,
-    )
-    const session = await openSession(db, taskId)
-    await state.owner.mutate('task.cancel', { taskId, requestId: randomUUID() })
-    const cancelled = await waitTask(stand, taskId, ['cancelled'], {
-      what: 'the cancellation of the task',
-      timeoutMs: 120_000,
-    })
-    const row = (await rowsOf(db, taskId, 'feed.cancelled')).at(-1)
-    rt.check(
-      cancelled.status === 'cancelled' &&
-        row?.site === 'check' &&
-        row?.objects?.some((item) => item.status === 'draft' && item.title === words.title),
-      '«Остановить»: feed.cancelled names the draft as the site shows it and says to check the site (Б24, Б28)',
-      row,
-    )
-    const closed = await db.browserSession.findUniqueOrThrow({ where: { id: session.id } })
-    const left = await rt.until(
-      'the containers of the cancelled session to go',
-      async () => {
-        const found = await sessionResources(rt, session.id)
-        return found.containers.length === 0 && found.networks.length === 0 ? found : null
-      },
-      { timeoutMs: 60_000, intervalMs: 1000 },
-    )
-    rt.check(
-      closed.status === 'closed' &&
-        closed.closeReason === 'task_cancelled' &&
-        left.containers.length === 0,
-      "the cancelled task's session is closed (task_cancelled) and its containers and network are gone; nothing on the site was deleted",
-    )
-    const still = await site.objects({ after: baseline })
-    rt.check(
-      still.some(
-        (item) => item.type === 'post' && item.status === 'draft' && item.title === words.title,
-      ),
-      'the draft is still on the site after the cancellation',
-    )
-  } finally {
-    await site.switches.off(SWITCH.uploadLimit)
-  }
-  rt.end()
-}
-
-// ─── J: a publish slower than the agent waits ─────────────────────────────────
-
-async function scenarioJ(stand) {
-  const { rt, site, state, db } = stand
-  rt.begin('J', 'нет дубликата после долгой публикации')
-  const words = {
-    title: 'Ярмарка саженцев в воскресенье',
-    text: 'Ждём всех на ярмарке саженцев у магазина.',
-  }
-  const baseline = await site.lastId()
-  const { taskId, task, facts } = await taskWithProgram(stand, state.owner, {
-    text: `Опубликуйте новость «${words.title}»: ${words.text}`,
-    account: site.accounts.owner,
-    program: 'publishAfterTimeout',
-    ctx: { words },
-    until: ['awaiting_user'],
-    before: () => site.switches.on(SWITCH.publishDelay),
-  })
-  rt.check(
-    facts.waitMatched === false,
-    'the site held the publish longer than the agent waited for it (web_wait: not published)',
-    facts,
-  )
-  rt.check(
-    facts.newPostRefused === 'BROWSER_CHECKPOINT_UNVERIFIED' &&
-      ['BROWSER_CHECKPOINT_UNVERIFIED', 'none'].includes(facts.secondPublish),
-    `the worker refused a new post while the publish was unconfirmed (BROWSER_CHECKPOINT_UNVERIFIED); a second publish: ${facts.secondPublish}`,
-    facts,
-  )
-  rt.check(Boolean(facts.published), 'web_verify read the post published once the site finished')
-  rt.check(
-    !(await site.switches.isOn(SWITCH.publishDelay)),
-    'the slow publish of the site happened (its switch was spent)',
-  )
-  const objects = await site.objects({ after: baseline })
-  const posts = objects.filter((row) => row.type === 'post' && row.title === words.title)
-  rt.check(
-    task.status === 'awaiting_user' && posts.length === 1 && posts[0].status === 'publish',
-    'WordPress: exactly one post, published — no duplicate',
-    objects,
-  )
-  const result = (await rowsOf(db, taskId, 'feed.result')).at(-1)
-  rt.check(
-    result?.objects?.some((item) => item.status === 'published'),
-    'the answer names the published post',
-    result,
-  )
-  await closeDialog(stand, taskId)
-  rt.end()
-}
-
-// ─── N: `/undo` of the last request ───────────────────────────────────────────
-
-/** What the chat has of money: nothing of it may move with `/undo`. */
-const moneyOf = async (db, taskId, workspaceId) =>
-  JSON.stringify([
-    await db.creditHold.findMany({ where: { taskId }, orderBy: { id: 'asc' } }),
-    await db.creditLedger.findMany({ where: { account: { workspaceId } }, orderBy: { id: 'asc' } }),
-    await db.billingAccount.findMany({ where: { workspaceId }, orderBy: { id: 'asc' } }),
-  ])
-
-/**
- * `/undo` in a chat without the repository (docs/plan/61-chats-first.md, §5.14): the agent saved a
- * draft, answered one more request and that request is taken back. The conversation goes back to
- * the checkpoint before it and its words reach the model no more, while the browser, its sign-in
- * and the money stay, and the feed says that the draft stays on the site.
- */
-async function scenarioN(stand) {
-  const { rt, site, state, db, model } = stand
-  rt.begin('N', '`/undo`: переписка вернулась, браузер и вход на месте, деньги не тронуты')
-  const words = { title: 'Новость перед отменой', text: 'Проверяем отмену последнего запроса.' }
-  const undoneWords = 'Сколько всего записей на сайте сейчас?'
-  const nextWords = 'Лучше откройте список записей.'
-  const { taskId } = await taskWithProgram(stand, state.owner, {
-    text: `Подготовьте новость «${words.title}»: ${words.text} Сохраните черновик.`,
-    account: site.accounts.owner,
-    program: 'keepDraft',
-    ctx: { words, foreignAttachment: state.foreignAttachment },
-    until: ['awaiting_user'],
-  })
-  model.script('answerInWords')
-  await state.owner.mutate('task.message', {
-    taskId,
-    requestId: randomUUID(),
-    text: undoneWords,
-  })
-  const answered = await waitTask(stand, taskId, ['awaiting_user'], {
-    what: 'the answer to the request to undo',
-  })
-  const session = await openSession(db, taskId)
-  const money = await moneyOf(db, taskId, answered.workspaceId)
-  const offered = (await state.owner.query('task.feed', { taskId })).commands.find(
-    (command) => command.id === 'turn_undo',
-  )
-  rt.check(offered?.available === true, 'the chat without the repository offers `/undo`', offered)
-
-  const requestId = randomUUID()
-  const undone = await state.owner.mutate('task.undoTurn', { taskId, requestId })
-  rt.check(
-    undone.words === undoneWords,
-    'the words of the undone request come back for the field',
-    undone,
-  )
-  const turn = await db.taskTurn.findUniqueOrThrow({
-    where: { taskId_turnNo: { taskId, turnNo: answered.turnNo } },
-  })
-  rt.check(
-    turn.undoneAt !== null && turn.rejectedAt === null && turn.status === 'completed',
-    'the turn is undone, not rejected: it stays paid',
-    { undoneAt: turn.undoneAt, rejectedAt: turn.rejectedAt, status: turn.status },
-  )
-  rt.check(
-    (await moneyOf(db, taskId, answered.workspaceId)) === money,
-    'no hold, no ledger row and no balance moved',
-  )
-  const rewind = (await rowsOf(db, taskId, 'feed.rewind')).at(-1)
-  rt.check(
-    rewind?.site === 'check' && rewind.files === false && rewind.turn === answered.turnNo,
-    'the feed says the request is undone and asks to check the site: the draft of the chat stays',
-    rewind,
-  )
-  const after = await openSession(db, taskId)
-  rt.check(
-    after.id === session.id &&
-      after.status === 'ready' &&
-      (await workerSessions(stand)).some((held) => held.sessionId === session.id),
-    'the browser of the chat stays where it was, open on the worker',
-    { status: after.status },
-  )
-  rt.check(
-    (await db.task.findUniqueOrThrow({ where: { id: taskId } })).status === 'awaiting_user',
-    'the chat keeps waiting: `/undo` starts no work',
-  )
-  const listed = (await state.owner.query('task.list', {})).items.find(({ id }) => id === taskId)
-  rt.check(
-    listed?.answered === true && listed.rewound === true,
-    'the list keeps the chat out of those that wait, and does not call it answered',
-    listed,
-  )
-
-  const asked = model.requests.length
-  model.script('readTheList')
-  await state.owner.mutate('task.message', { taskId, requestId: randomUUID(), text: nextWords })
-  const next = await waitTask(stand, taskId, ['awaiting_user'], {
-    what: 'the turn after `/undo`',
-  })
-  const assignment = await db.turnAssignment.findFirstOrThrow({
-    where: { taskId, turnNo: next.turnNo },
-  })
-  rt.check(
-    assignment.plan.rewound === true && assignment.plan.previous?.turn === answered.turnNo - 1,
-    'the next turn restores the checkpoint the undone one started from',
-    { rewound: assignment.plan.rewound, previous: assignment.plan.previous?.turn },
-  )
-  const prompts = model.requests.slice(asked).join('\n')
-  rt.check(
-    prompts.includes(nextWords) && !prompts.includes(undoneWords),
-    'the model reads the next words, and nothing of the undone request',
-  )
-  rt.check(
-    model.current().finished === true && model.current().facts.loginPage === false,
-    'the sign-in in the browser of the chat is still there',
-    model.current().facts,
-  )
-  rt.check(
-    (await openSession(db, taskId)).id === session.id,
-    'the next turn works in the same browser',
-  )
-  await closeDialog(stand, taskId)
-  rt.end()
-}
-
-/**
- * `/redo` in a chat without the repository (docs/plan/61-chats-first.md, §5.14): the request `/undo`
- * took comes back while nothing moved the chat. The chat waits as it did, the next turn goes on from
- * the snapshot of the turn that came back, not from the one before it, and no money moves.
- */
-async function scenarioO(stand) {
-  const { rt, site, state, db, model } = stand
-  rt.begin('O', '`/redo`: запрос вернулся, следующий ход продолжает его снимок, деньги не тронуты')
-  const words = { title: 'Новость перед возвратом', text: 'Проверяем возврат запроса.' }
-  const redoneWords = 'Сколько всего записей на сайте сейчас?'
-  const nextWords = 'Теперь откройте список записей.'
-  const { taskId } = await taskWithProgram(stand, state.owner, {
-    text: `Подготовьте новость «${words.title}»: ${words.text} Сохраните черновик.`,
-    account: site.accounts.owner,
-    program: 'keepDraft',
-    ctx: { words, foreignAttachment: state.foreignAttachment },
-    until: ['awaiting_user'],
-  })
-  model.script('answerInWords')
-  await state.owner.mutate('task.message', { taskId, requestId: randomUUID(), text: redoneWords })
-  const answered = await waitTask(stand, taskId, ['awaiting_user'], {
-    what: 'the answer to the request to take back and bring back',
-  })
-  const session = await openSession(db, taskId)
-  const money = await moneyOf(db, taskId, answered.workspaceId)
-  const commands = async () => (await state.owner.query('task.feed', { taskId })).commands
-  const redoRefusal = async () =>
-    (await commands()).find((command) => command.id === 'turn_redo')?.refusal
-
-  rt.check(
-    (await redoRefusal()) === 'nothing_to_redo',
-    'nothing to bring back before `/undo`',
-    await redoRefusal(),
-  )
-  await state.owner.mutate('task.undoTurn', { taskId, requestId: randomUUID() })
-  rt.check((await redoRefusal()) === null, 'the chat offers `/redo` after `/undo`')
-
-  const redone = await state.owner.mutate('task.redoTurn', { taskId, requestId: randomUUID() })
-  rt.check(
-    redone.words === redoneWords,
-    'the words of the request come with the answer: the page takes them out of the field',
-    redone,
-  )
-  const turn = await db.taskTurn.findUniqueOrThrow({
-    where: { taskId_turnNo: { taskId, turnNo: answered.turnNo } },
-  })
-  rt.check(turn.undoneAt === null, 'the turn counts again', { undoneAt: turn.undoneAt })
-  const redo = (await rowsOf(db, taskId, 'feed.redo')).at(-1)
-  rt.check(
-    redo?.files === false && redo.open === false && redo.turn === answered.turnNo,
-    'the feed says the request is back, and no word of files',
-    redo,
-  )
-  rt.check(
-    (await moneyOf(db, taskId, answered.workspaceId)) === money,
-    'no hold, no ledger row and no balance moved',
-  )
-  const listed = (await state.owner.query('task.list', {})).items.find(({ id }) => id === taskId)
-  rt.check(
-    listed?.answered === true && listed.rewound === false,
-    'the list calls the chat answered again, as it was before `/undo`',
-    listed,
-  )
-  const open = await openSession(db, taskId)
-  rt.check(
-    open.id === session.id && open.status === 'ready',
-    'the browser of the chat stays where it was',
-    { status: open.status },
-  )
-  rt.check((await redoRefusal()) === 'nothing_to_redo', 'a turn comes back once')
-  rt.check(
-    (await commands()).find((command) => command.id === 'turn_undo')?.refusal === null,
-    'the turn may be taken back again',
-  )
-
-  const asked = model.requests.length
-  model.script('readTheList')
-  await state.owner.mutate('task.message', { taskId, requestId: randomUUID(), text: nextWords })
-  const next = await waitTask(stand, taskId, ['awaiting_user'], {
-    what: 'the turn after `/redo`',
-  })
-  const assignment = await db.turnAssignment.findFirstOrThrow({
-    where: { taskId, turnNo: next.turnNo },
-  })
-  rt.check(
-    assignment.plan.rewound === undefined && assignment.plan.previous?.turn === answered.turnNo,
-    'the next turn goes on from the snapshot of the turn that came back',
-    { rewound: assignment.plan.rewound, previous: assignment.plan.previous?.turn },
-  )
-  const prompts = model.requests.slice(asked).join('\n')
-  rt.check(
-    prompts.includes(nextWords) && prompts.includes(redoneWords),
-    'the model reads the next words after the request that came back',
-  )
-  await closeDialog(stand, taskId)
-  rt.end()
-}
-
 // ─── K: isolation and access ──────────────────────────────────────────────────
 
 async function scenarioK(stand) {
   const { rt, state, db } = stand
   rt.begin('K', 'изоляция и доступ')
   const taskId = await newBrowserTask(stand, state.owner, {
-    text: 'Проверьте, открывается ли админка сайта.',
-    // Another client's file, and a file of another task of the same client.
+    text: 'Откройте, пожалуйста, страницу.',
+    program: 'holdWithForeignFiles',
+    // Another client's file, and a file of the owner this chat was not sent.
     ctx: { foreignAttachments: [state.foreignAttachment, state.files[0].id] },
   })
+  stand.owned.chats.push(taskId)
   await firstTurn(stand, taskId)
   const session = await openSession(db, taskId)
   state.taskK = taskId
@@ -1785,7 +453,7 @@ async function scenarioK(stand) {
   rt.check(
     facts.foreignAll?.length === 2 &&
       facts.foreignAll.every((code) => code === 'BROWSER_ATTACHMENT_UNKNOWN'),
-    "web_upload through mcp of another client's file and of another task's file is refused (BROWSER_ATTACHMENT_UNKNOWN)",
+    "web_upload through mcp of another client's file and of a file this chat was not sent is refused (BROWSER_ATTACHMENT_UNKNOWN)",
     facts,
   )
 
@@ -1827,34 +495,40 @@ async function sessionContainerLogs(rt, sessionId) {
 
 /**
  * From the session's Chromium container: the services of the host (core, web, mcp, llm, the
- * worker, OpenBao, S3, the site's published port) and the metadata address are unreachable, each
- * with a control that reaches it (the egress container, on the default bridge); through the egress
- * proxy, the metadata address, a public host on a port it does not open and a service of the host
- * are refused, the site of the task answers, and so does another public site — one a page of the
- * site may go on to (docs/plan/60-browser-foreign-redirects.md, Ч3; the stand needs the internet).
+ * worker, OpenBao, S3) and the metadata address are unreachable, each with a control that reaches
+ * it (the egress container, on the default bridge); through the egress proxy, the metadata
+ * address, a public host on a port it does not open and a service of the host are refused, and a
+ * public site answers (the stand needs the internet).
  */
 async function networkProbes(stand, sessionId) {
   const { rt } = stand
   const containers = await sessionContainers(rt, sessionId)
   if (!containers.browser || !containers.egress)
     throw new CheckFailed('the session has no browser or egress container')
-  const hosts = (await rt.docker(['exec', containers.egress, 'cat', '/etc/hosts'])).output
-  const gateway = /^(\d+\.\d+\.\d+\.\d+)\s+host\.docker\.internal/m.exec(hosts)?.[1]
-  if (!gateway) throw new CheckFailed('the egress container has no host.docker.internal')
+  // The address of the host as Docker names it (`host-gateway`): the egress container has no name
+  // for it since BROWSER_EXTRA_HOSTS left with the sites (plan 83), so a throwaway container of the
+  // tools image is asked.
+  const hosts = (
+    await rt.docker([
+      ...['run', '--rm', '--pull', 'never', '--network', 'none', '--label', stand.names.label],
+      ...['--add-host', 'stand-host:host-gateway', '--entrypoint', 'cat'],
+      stand.context.images.tools,
+      '/etc/hosts',
+    ])
+  ).output
+  const gateway = /^(\d+\.\d+\.\d+\.\d+)\s+stand-host/m.exec(hosts)?.[1]
+  if (!gateway) throw new CheckFailed('Docker names no address of the host (host-gateway)')
   const probe = (container, host, port) =>
     rt
       .docker(['exec', container, 'node', '-e', NODE_ERRNO_PROBE, host, String(port)], {
         allowFailure: true,
       })
       .then((answer) => answer.output.trim())
-  const targets = ['core', 'web', 'mcp', 'llm', 'browser', 'vault', 's3', 'site'].map((name) => [
+  const targets = ['core', 'web', 'mcp', 'llm', 'browser', 'vault', 's3'].map((name) => [
     name,
     gateway,
     stand.ports[name],
   ])
-  // The web server of the site itself, where the egress proxy reaches it.
-  const [siteIp, sitePort] = stand.site.target.split(':')
-  targets.push(['the site on the bridge', siteIp, Number(sitePort)])
   const blocked = []
   const control = []
   for (const [name, host, port] of targets) {
@@ -1865,12 +539,12 @@ async function networkProbes(stand, sessionId) {
   }
   rt.check(
     control.length === 0,
-    `control: the egress container reaches every service of the host at ${gateway} and the site's web server`,
+    `control: the egress container reaches every service of the host at ${gateway}`,
     control,
   )
   rt.check(
     blocked.length === 0,
-    "Chromium's container reaches none of them: core, web, mcp, llm, the worker, OpenBao, S3, the site's published port and its web server (unreachable, not refused)",
+    "Chromium's container reaches none of them: core, web, mcp, llm, the worker, OpenBao and S3 (unreachable, not refused)",
     blocked,
   )
   const metadata = await probe(containers.browser, '169.254.169.254', 80)
@@ -1907,18 +581,13 @@ async function networkProbes(stand, sessionId) {
         allowFailure: true,
       })
       .then((answer) => answer.output.trim())
-  const site = await viaProxy(`${SITE_ORIGIN}/wp-login.php`)
   const metadataProxy = await viaProxy('http://169.254.169.254/latest/meta-data/')
   const elsewhere = await viaProxy('CONNECT example.com:443')
   const otherPort = await viaProxy('CONNECT example.com:444')
   const hostService = await viaProxy(`http://host.docker.internal:${stand.ports.core}/health`)
   rt.check(
-    site === '200',
-    `control: through the egress proxy the site of the task answers (${site})`,
-  )
-  rt.check(
     elsewhere === '200',
-    `through the egress proxy another public site answers, one a page of the site may go on to (${elsewhere})`,
+    `control: through the egress proxy a public site answers (${elsewhere})`,
   )
   rt.check(
     [metadataProxy, otherPort, hostService].every((answer) => /^4\d\d$/.test(answer)),
@@ -1939,33 +608,35 @@ const PROXY_PROBE = [
 // ─── L: no secrets anywhere ───────────────────────────────────────────────────
 
 async function scenarioL(stand) {
-  const { rt, db, site } = stand
-  rt.begin('L', 'нет секретов входа в модели, журналах, событиях и S3')
-  const cookies = await site.cookies()
-  const secrets = {}
-  for (const [key, account] of Object.entries(site.accounts))
-    secrets[`password of ${key}`] = account.password
-  cookies.forEach((value, index) => {
-    secrets[`cookie ${index + 1}`] = value
-    const [, , token, hmac] = value.split('|')
-    if (token) secrets[`cookie ${index + 1} token`] = token
-    if (hmac) secrets[`cookie ${index + 1} hmac`] = hmac
-  })
-  rt.check(
-    cookies.length >= 2 && Object.keys(secrets).length >= 4,
-    `the stand knows ${cookies.length} sign-in cookie values the site set and the passwords of its two accounts`,
-  )
+  const { rt, db } = stand
+  rt.begin('L', 'нет секретов платформы в модели, журналах, событиях и S3')
+  // What no chat may carry anywhere: the token of the worker, the secrets of web and of the pages,
+  // the SecretIDs of the AppRoles of the processes.
+  const secrets = {
+    'worker token': stand.secrets.workerToken,
+    'auth secret': stand.secrets.auth,
+    'pages cookie secret': stand.secrets.pagesCookie,
+    'pages signing secret': stand.secrets.pagesSigning,
+  }
+  for (const [name, role] of Object.entries(stand.vault.roles))
+    secrets[`SecretID of ${name}`] = role.secretId
   const model = stand.model.requests.join('\n')
   rt.check(
     leakedIn(model, secrets).length === 0,
-    `${stand.model.requests.length} requests to the model hold no password and no cookie value`,
+    `${stand.model.requests.length} requests to the model hold none of them`,
     leakedIn(model, secrets),
   )
+  // A process may name its own settings in its log at start, never the token of the worker or a
+  // SecretID: those are checked in every log.
+  const never = {
+    'worker token': secrets['worker token'],
+    ...Object.fromEntries(Object.entries(secrets).filter(([name]) => name.startsWith('SecretID'))),
+  }
   for (const [name, service] of Object.entries(stand.processes))
     rt.check(
-      leakedIn(service.log(), secrets).length === 0,
-      `the log of ${name} holds none of them`,
-      leakedIn(service.log(), secrets),
+      leakedIn(service.log(), never).length === 0,
+      `the log of ${name} holds neither the token of the worker nor a SecretID`,
+      leakedIn(service.log(), never),
     )
   if (stand.state.sessionLogs !== undefined)
     rt.check(
@@ -2080,7 +751,6 @@ async function newChat(stand, client, { text, attachments = [], program, ctx = {
   stand.owned.chats.push(taskId)
   stand.model.script(program, ctx)
   const created = await client.mutate('task.create', {
-    siteId: null,
     taskId,
     text,
     ...(attachments.length > 0 ? { attachments } : {}),
@@ -2122,9 +792,9 @@ async function scenarioP(stand) {
   await waitAnswered(stand, first, { what: 'the first chat of a new user to answer' })
   const chat = await db.task.findUniqueOrThrow({ where: { id: first } })
   rt.check(
-    chat.siteId === null && chat.needsRepository === false && chat.needsBrowser === true,
-    'task.create without a project made the chat: no site, no repository, a browser on demand',
-    { siteId: chat.siteId, repository: chat.needsRepository, browser: chat.needsBrowser },
+    chat.needsBrowser === true,
+    'task.create made the chat: no project, a browser on demand',
+    { browser: chat.needsBrowser },
   )
   const gift = await db.creditLedger.findMany({
     where: { account: { workspaceId: chat.workspaceId, unit: 'credit_gift' } },
@@ -2173,7 +843,6 @@ async function scenarioP(stand) {
   const word = `raditi-chat-file-${randomUUID().replaceAll('-', '')}`
   const bytes = Buffer.from(`Записка клиента: ${word}\n`)
   const file = await uploadFile(client, {
-    siteId: null,
     name: 'zapiska.txt',
     type: 'text/plain',
     bytes,
@@ -2204,40 +873,10 @@ async function scenarioP(stand) {
   )
 
   // The browser of a chat without a project: the open internet, no object of a task.
-  const contact = `stand-contact-${randomUUID().slice(0, 8)}@example.ru`
-  const contactTitle = 'Контакты стенда'
-  const page = (
-    await stand.site.wp([
-      'post',
-      'create',
-      `--post_title=${contactTitle}`,
-      `--post_content=Пишите нам: ${contact}`,
-      '--post_status=publish',
-      '--porcelain',
-    ])
-  ).output
-    .trim()
-    .split('\n')
-    .at(-1)
-  // The file of this chat goes on a page through the worker (К16): raditi-inbox, `site_id` NULL.
-  const uploadWord = `raditi-chat-upload-${randomUUID().replaceAll('-', '')}`
-  const toUpload = await uploadFile(client, {
-    siteId: null,
-    name: 'dlya-stranicy.txt',
-    type: 'text/plain',
-    bytes: Buffer.from(`${uploadWord}\n`),
-  })
-  rt.check(toUpload.upload?.status === 200, 'a second file of a chat without a project is uploaded')
   const web = await newChat(stand, client, {
     text: 'Откройте несколько страниц.',
-    attachments: [toUpload.id],
     program: 'openTheWeb',
     ctx: {
-      uploadWord,
-      origin: SITE_ORIGIN,
-      contact,
-      contactTitle,
-      contactPage: `${SITE_ORIGIN}/?p=${page}`,
       refused: {
         http: 'http://example.com/',
         address: 'https://93.184.216.34/',
@@ -2250,15 +889,9 @@ async function scenarioP(stand) {
   await waitAnswered(stand, web, { what: 'the chat with the browser to answer' })
   const seen = stand.model.current().facts
   rt.check(
-    seen.start === 'about:blank' && seen.startEmpty === true,
-    'the browser of a chat without a project starts on an empty page, not on a page of a site',
-    { start: seen.start, empty: seen.startEmpty },
-  )
-  const attachmentRow = await db.attachment.findUniqueOrThrow({ where: { id: toUpload.id } })
-  rt.check(
-    seen.upload === null && seen.uploaded === true && attachmentRow.siteId === null,
-    '`web_upload` of a file of the chat (`site_id` NULL): the worker read it from raditi-inbox, the page got its name and its words',
-    { refused: seen.upload, uploaded: seen.uploaded, site: attachmentRow.siteId },
+    seen.start === 'about:blank',
+    'the browser of a chat without a project starts on an empty page',
+    { start: seen.start },
   )
   rt.check(
     Object.values(seen.refused).every((code) => code === 'BROWSER_ADDRESS_DENIED'),
@@ -2266,15 +899,8 @@ async function scenarioP(stand) {
     seen.refused,
   )
   rt.check(
-    seen.example === true,
-    'the agent opened example.com on the open internet and read it',
-    seen,
-  )
-  rt.check(
-    // Since 09.11.2026 pages of `web_*` reach the model without contact marks (spec §20, «Данные
-    // сайта клиента», ДС3): the contact is read as the page shows it.
-    seen.contactRead === true && seen.contact === true,
-    'a page of the local site opened as well, and a contact on it reached the model as the page shows it (ДС3)',
+    seen.example === true && seen.typed === null,
+    'the agent opened example.com on the open internet, read it and typed on the page',
     seen,
   )
   rt.check(seen.objects === 0, '`web_verify` of a chat without a project: no object', seen.objects)
@@ -2282,8 +908,8 @@ async function scenarioP(stand) {
   const checkpoints = await db.browserCheckpoint.count({ where: { sessionId: openSessionRow.id } })
   const webResult = (await rowsOf(db, web, 'feed.result')).at(-1)
   rt.check(
-    checkpoints === 0 && openSessionRow.siteId === null && openSessionRow.wroteAt !== null,
-    'the session has no site and not one row of `browser_checkpoints`, though the agent wrote',
+    checkpoints === 0 && openSessionRow.wroteAt !== null,
+    'the session has not one row of `browser_checkpoints`, though the agent wrote',
     { checkpoints, wrote: openSessionRow.wroteAt !== null },
   )
   rt.check(
@@ -2292,11 +918,9 @@ async function scenarioP(stand) {
     webResult,
   )
   const masks = await localVaultRequest(stand.vault.root, `kv/metadata/content-masks/${web}/${web}`)
-  rt.check(
-    masks.status === 404 && stand.model.requests.some((body) => body.includes(contact)),
-    'no contact map is written for the chat (ДС3), and the model got the contact as the page shows it',
-    { map: masks.status },
-  )
+  rt.check(masks.status === 404, 'no contact map is written for the chat (ДС3)', {
+    map: masks.status,
+  })
 
   // The address from the client, in the panel of the same browser: the address field of the
   // cabinet in Chromium («+» → «Браузер», «Взять управление»), over the stream when the build has
@@ -2406,9 +1030,8 @@ async function scenarioP(stand) {
 
   // A pass that fails after the agent typed in the browser: its failure names the other sites.
   const broken = await newChat(stand, client, {
-    text: 'Заполните поле входа.',
+    text: 'Напечатайте что-нибудь на странице.',
     program: 'failAfterWriting',
-    ctx: { origin: SITE_ORIGIN },
   })
   const failure = await rt.until(
     'the pass that wrote in the browser to fail',
@@ -2462,7 +1085,10 @@ async function scenarioM(stand) {
   // A dialog stays open after an answer (26.10.2026): the client closes what is left with
   // «Остановить», and core closes the browser of each.
   const open = await db.task.findMany({
-    where: { siteId: state.siteId, status: { in: ['awaiting_user', 'awaiting_approval'] } },
+    where: {
+      workspaceId: state.workspaceId,
+      status: { in: ['awaiting_user', 'awaiting_approval'] },
+    },
     select: { id: true },
   })
   for (const { id } of open) {
@@ -2473,17 +1099,17 @@ async function scenarioM(stand) {
     })
   }
   const sessions = await rt.until(
-    'every session of the site to close',
+    'every session of the workspace to close',
     async () => {
-      const rows = await db.browserSession.findMany({ where: { siteId: state.siteId } })
+      const rows = await db.browserSession.findMany({ where: { workspaceId: state.workspaceId } })
       return rows.every((session) => session.closedAt !== null) ? rows : null
     },
     { timeoutMs: 120_000, intervalMs: 1000, service: stand.processes.core },
   )
-  const tasks = await db.task.findMany({ where: { siteId: state.siteId } })
+  const tasks = await db.task.findMany({ where: { workspaceId: state.workspaceId } })
   rt.check(
     tasks.every((task) => ENDED.has(task.status)),
-    `every task of the site ended (${tasks.map((task) => task.status).join(', ')})`,
+    `every chat of the workspace ended (${tasks.map((task) => task.status).join(', ')})`,
   )
   const unclosed = sessions.filter((session) => session.closedAt === null)
   rt.check(
@@ -2505,10 +1131,14 @@ async function scenarioM(stand) {
     { timeoutMs: 60_000, intervalMs: 1000 },
   )
   rt.check(left.length === 0, 'Docker holds no container and no network of any session of the run')
-  const sandboxes = (
-    await rt.docker(['ps', '-aq', '--filter', `label=io.raditi.sandbox.siteId=${state.siteId}`])
-  ).output.trim()
-  rt.check(sandboxes === '', 'no sandbox of a turn is left for the site')
+  const sandboxes = []
+  for (const { id } of tasks)
+    sandboxes.push(
+      ...(await rt.docker(['ps', '-aq', '--filter', `label=io.raditi.sandbox.siteId=${id}`])).output
+        .split('\n')
+        .filter(Boolean),
+    )
+  rt.check(sandboxes.length === 0, 'no sandbox of a turn is left for a chat of the workspace')
   stand.owned.checkPlatformLeft = true
   rt.end()
 }
@@ -2930,23 +1560,12 @@ async function scenarioQ(stand) {
 }
 
 const SCENARIOS = Object.freeze({
-  A: scenarioA,
-  D: scenarioD,
-  B: scenarioB,
-  C: scenarioC,
-  E: scenarioE,
-  F: scenarioF,
-  G: scenarioG,
-  H: scenarioH,
-  I: scenarioI,
-  J: scenarioJ,
-  N: scenarioN,
-  O: scenarioO,
+  S: scenarioS,
   P: scenarioP,
-  Q: scenarioQ,
-  R: scenarioR,
   K: scenarioK,
   L: scenarioL,
+  Q: scenarioQ,
+  R: scenarioR,
   M: scenarioM,
 })
 

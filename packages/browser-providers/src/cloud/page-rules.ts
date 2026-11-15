@@ -6,7 +6,7 @@ import {
   browserPlatformHost,
   type BrowserController,
   type BrowserTaskPolicy,
-  type SiteBrowserRequest,
+  type BrowserPageRequest,
 } from '@repo/domain'
 
 /**
@@ -167,7 +167,7 @@ export function requestVerdict(
   if (onAnotherSite(place, rules) && methods.some((method) => !READS.has(method)))
     return 'accessdenied'
   for (const method of methods) {
-    const asked: SiteBrowserRequest = { path, method, postData: request.postData }
+    const asked: BrowserPageRequest = { path, method, postData: request.postData }
     if (denies(() => rules.policy.requestDenied(asked, by))) return 'accessdenied'
   }
   if (request.navigation && denies(() => rules.policy.pageDenied(path, by))) return 'accessdenied'

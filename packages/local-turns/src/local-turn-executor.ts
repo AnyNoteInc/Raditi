@@ -12,7 +12,6 @@ import {
   preparedFilesSchema,
   preparedRunExposesSecret,
   SANDBOX_WORKDIR,
-  snapshotHasRepository,
   snapshotManifestSchema,
   turnMayHoldInbox,
   type AgentDriver,
@@ -37,18 +36,14 @@ import {
   type TurnRestoreSource,
   type TurnSealInput,
   type TurnTakeover,
-  type TurnWorkingTree,
-  type TurnWorkingTreeInput,
 } from '@repo/domain'
-import type { PresignedTransfer, SandboxSnapshotTransport, TurnArchives } from '@repo/snapshots'
+import type { PresignedTransfer, SandboxSnapshotTransport } from '@repo/snapshots'
 import { openSnapshotParts, packOutbox, sealSnapshotPart } from '@repo/snapshots'
 
-import { bundleBase, importBaseBundle } from './base-bundle.ts'
 import { makeEmptyWorkdir } from './empty-workdir.ts'
 import { placeInbox } from './inbox.ts'
 import { readTurnOutput, type TurnOutputStart } from './turn-output.ts'
 import type { WarmSandboxes } from './warm-sandboxes.ts'
-import { exportSandboxWorkingTree } from './working-tree-export.ts'
 
 export interface LocalTurnExecutorDependencies {
   sandboxes: SandboxProvider
@@ -58,7 +53,6 @@ export interface LocalTurnExecutorDependencies {
     Partial<Pick<SandboxSnapshotTransport, 'captureOutbox'>>
   /** Snapshot parts of the restored checkpoint in, the sealed home part out. */
   transfer: PresignedTransfer
-  importBundle?: typeof importBaseBundle
   /**
    * The warm containers of completed turns (spec §8, «Тёплая песочница»): absent — every turn
    * gets a new container and every removal removes it.
@@ -77,17 +71,13 @@ const loadFailed = () =>
 /**
  * The sandbox side of a turn over a local SandboxProvider: core's executor in the PoC and tests,
  * and the one a runner drives on its VM. It never holds platform credentials: snapshot parts
- * move through presigned requests, the data key and the base bundle come from core's functions.
+ * move through presigned requests, the data key comes from core's functions. A turn has no
+ * repository: its working directory is empty.
  */
 export class LocalTurnExecutor implements TurnExecutor {
   readonly kind = 'local'
 
   private readonly deps: LocalTurnExecutorDependencies
-  /**
-   * Containers this executor prepared without a repository (plan 57, Б4) and has not removed:
-   * their working directory is no working tree to export.
-   */
-  readonly #withoutRepository = new Set<string>()
 
   constructor(deps: LocalTurnExecutorDependencies) {
     this.deps = deps
@@ -101,18 +91,8 @@ export class LocalTurnExecutor implements TurnExecutor {
       throw driverPrepareInvalid('Prepared turn files, env or command contain a turn credential')
     if (input.sandbox.secrets.length !== 0)
       throw badRequest('Turn secrets are installed only after restore')
-    // A patch is never left without its repository, nor a session of one turn kind restored
-    // into the other (plan 57, Б4).
-    if (
-      input.restore &&
-      snapshotHasRepository(input.restore.manifest) !== (input.bundle !== undefined)
-    )
-      throw badRequest('The snapshot and the bundle disagree on the repository')
     // The client's files go only to a turn that may hold them, within one turn's limits.
-    assertTurnInbox(
-      input.inbox ?? [],
-      turnMayHoldInbox(input.bundle !== undefined, input.sandbox.labels),
-    )
+    assertTurnInbox(input.inbox ?? [], turnMayHoldInbox(input.sandbox.labels))
     const { files, env, secrets } = parsed.data
     const parser = this.deps.parser(input.driverId)
     input.dispatched()
@@ -162,22 +142,13 @@ export class LocalTurnExecutor implements TurnExecutor {
     if (warm && key) execution.warm = { pool: warm, key }
     await input.created(execution)
     signal.throwIfAborted()
-    if (input.bundle) {
-      await (this.deps.importBundle ?? importBaseBundle)(sandbox, input.bundle)
-      execution.importedBase = bundleBase(input.bundle)
-    } else {
-      this.#withoutRepository.add(sandbox.id)
-      execution.removed = () => this.#withoutRepository.delete(sandbox.id)
-      await makeEmptyWorkdir(sandbox)
-      execution.importedBase = null
-    }
+    await makeEmptyWorkdir(sandbox)
     if (input.restore) {
       signal.throwIfAborted()
-      const { home, archives } = await this.#restoreSource(input.restore)
-      await this.deps.transport.restore(sandbox, home, archives)
+      const { home, archive } = await this.#restoreSource(input.restore)
+      await this.deps.transport.restore(sandbox, home, { home: archive })
     }
-    // Outside the working copy: nothing of them is captured or published unless the agent
-    // copies one into the working copy.
+    // Outside the working directory: nothing of them is captured.
     if (input.inbox?.length) await placeInbox(sandbox, input.inbox, signal)
     // Secrets only after restore: an archive of an earlier turn never lands next to them. A
     // secret is read-only unless its driver rewrites it, and never open beyond its owner. The
@@ -202,10 +173,7 @@ export class LocalTurnExecutor implements TurnExecutor {
       const removable = await this.deps.sandboxes.getForRemoval(input.containerId)
       if (!removable) return null
       assertIdentity(removable, input)
-      return new RemovalExecution(removable, () => {
-        this.#withoutRepository.delete(removable.id)
-        this.deps.warm?.forget(removable.id)
-      })
+      return new RemovalExecution(removable, () => this.deps.warm?.forget(removable.id))
     }
     // Without the turn's credentials its output cannot be filtered: the turn is given up.
     if (!input.credentials.length)
@@ -238,49 +206,27 @@ export class LocalTurnExecutor implements TurnExecutor {
   }
 
   /**
-   * The working tree of a running turn for its preview (plan 53, Р23): the container is found by
-   * its exact id and labels, the agent goes on.
-   */
-  async exportWorkingTree(
-    input: TurnWorkingTreeInput,
-    signal: AbortSignal,
-  ): Promise<TurnWorkingTree> {
-    signal.throwIfAborted()
-    const sandbox = await this.deps.sandboxes.get(input.containerId)
-    if (!sandbox) throw conflict('The turn container is gone')
-    if (!sameContainer(sandbox, input.containerId, input.labels))
-      throw conflict('The turn container has other labels')
-    if (this.#withoutRepository.has(sandbox.id))
-      throw conflict('The turn has no repository to export')
-    return exportSandboxWorkingTree(sandbox, {
-      baseSha: input.baseSha,
-      ...(input.addOnlyPaths ? { addOnlyPaths: input.addOnlyPaths } : {}),
-      ...(input.alsoPaths ? { alsoPaths: input.alsoPaths } : {}),
-    })
-  }
-
-  /**
-   * Every part is fetched and checked, and the data key zeroed, before anything is written: all
-   * three, or `home` alone for a snapshot without a repository — the parts its manifest names.
+   * The home part is fetched and checked, and the data key zeroed, before anything is written.
+   * Only `home`: the patch and new files a snapshot of a chat that had a project names are not
+   * fetched (TurnRestoreSource); its home part opens under the manifest's AAD all the same.
    */
   async #restoreSource(
     source: TurnRestoreSource,
-  ): Promise<{ home: SessionState; archives: TurnArchives }> {
+  ): Promise<{ home: SessionState; archive: Uint8Array }> {
     try {
       const manifest = snapshotManifestSchema.parse(source.manifest)
-      const stored = []
-      for (const part of manifest.parts) {
-        const request = source.parts[part.name]
-        if (!request) throw badRequest('A restore part is missing')
-        stored.push({ part, body: await this.deps.transfer.get(request, part.sizeBytes) })
-      }
-      // The schema holds the parts to snapshotPartNamesOf(manifest): all three, or home alone.
-      const archives: TurnArchives = await openSnapshotParts(manifest, stored, manifest.home, () =>
-        source.dataKey(),
+      const part = manifest.parts.find((p) => p.name === 'home')
+      if (!part) throw badRequest('A restore part is missing')
+      const body = await this.deps.transfer.get(source.parts.home, part.sizeBytes)
+      const archives = await openSnapshotParts(
+        manifest,
+        [{ part: { ...part, name: 'home' as const }, body }],
+        manifest.home,
+        () => source.dataKey(),
       )
-      return { home: manifest.home, archives }
+      return { home: manifest.home, archive: archives.home }
     } catch {
-      // Whatever went wrong in storage, the key or the parts: the prior turn is unusable here.
+      // Whatever went wrong in storage, the key or the part: the prior turn is unusable here.
       throw loadFailed()
     }
   }
@@ -314,9 +260,9 @@ function assertIdentity(found: RemovableSandbox, input: TurnAdoptInput): void {
 
 /**
  * The turns that may share a container: one task, one session, one driver, and the same
- * container — image, runtime, resources, user, network and env — with or without a repository.
+ * container — image, runtime, resources, user, network and env.
  */
-function warmKeyOf({ sandbox, driverId, bundle }: TurnPrepareInput): string {
+function warmKeyOf({ sandbox, driverId }: TurnPrepareInput): string {
   const { workspaceId, siteId, taskId, sessionId } = sandbox.labels
   return canonicalJson([
     workspaceId,
@@ -330,7 +276,6 @@ function warmKeyOf({ sandbox, driverId, bundle }: TurnPrepareInput): string {
     sandbox.user,
     sandbox.network,
     sandbox.env,
-    bundle !== undefined,
   ])
 }
 
@@ -391,16 +336,6 @@ class RemovalExecution implements TurnExecution {
 
 class LocalTurnExecution implements TurnExecution {
   #home: Uint8Array | undefined
-  /** Whether the home part waiting for seal() came with the parts of a repository. */
-  #capturedRepository: boolean | undefined
-  /**
-   * The commit the sandbox was checked out at, when this execution imported it: capture diffs
-   * against it and nothing else (plan 53, Р11). null when it was prepared without a repository
-   * (plan 57, Б4): its capture takes the home part alone. Unknown for an adopted container.
-   */
-  importedBase: string | null | undefined
-  /** Called once the container is removed. */
-  removed: (() => void) | undefined
   /** Where a completed turn leaves its container. */
   warm: { pool: Pick<WarmSandboxes, 'park' | 'forget'>; key: string } | undefined
   /** Left to the next turn of the task: nothing of this execution may touch it any more. */
@@ -480,35 +415,19 @@ class LocalTurnExecution implements TurnExecution {
     await this.sandbox.quiesce()
   }
 
-  async capture(input: {
-    home: SessionState
-    baseSha?: string
-    sandboxBaseSha?: string
-    addOnlyPaths?: readonly string[]
-  }): Promise<CapturedTurn> {
+  async capture(input: { home: SessionState }): Promise<CapturedTurn> {
     this.#allow('turn', 'work')
-    if (input.baseSha === undefined) return this.#captureHome(input)
-    if (this.importedBase === null)
-      throw conflict('Capture names a base, but the sandbox got no repository')
-    const base = input.sandboxBaseSha ?? input.baseSha
-    if (this.importedBase !== undefined && this.importedBase !== base)
-      throw conflict('Capture names another base than the sandbox was given')
-    // The agent may have copied a turn credential into its home or the site, or a value of the
-    // client's variables into its home: never save it.
+    // The agent may have copied a turn credential or a value of the client's variables into its
+    // home: never save it.
     const archives = await this.deps.transport.capture(
       this.sandbox,
       input.home,
-      base,
       this.credentials,
-      input.addOnlyPaths ?? [],
       this.envValues,
     )
-    const { patch, untracked } = archives
-    if (!patch || !untracked) throw conflict('A capture with a base took no candidate')
     const outbox = await this.#outbox()
     this.#home = archives.home
-    this.#capturedRepository = true
-    return { patch, untracked, homeBytes: archives.home.byteLength, ...(outbox ? { outbox } : {}) }
+    return { homeBytes: archives.home.byteLength, ...(outbox ? { outbox } : {}) }
   }
 
   /**
@@ -532,36 +451,11 @@ class LocalTurnExecution implements TurnExecution {
     }
   }
 
-  /** A turn without a repository (plan 57, Б4): its session alone; no git command runs. */
-  async #captureHome(input: {
-    home: SessionState
-    sandboxBaseSha?: string
-    addOnlyPaths?: readonly string[]
-  }): Promise<CapturedTurn> {
-    if (input.sandboxBaseSha !== undefined || input.addOnlyPaths !== undefined)
-      throw badRequest('A working set needs the base of the capture')
-    if (typeof this.importedBase === 'string')
-      throw conflict('Capture names no base, but the sandbox got a repository')
-    const archives = await this.deps.transport.capture(
-      this.sandbox,
-      input.home,
-      undefined,
-      this.credentials,
-      [],
-      this.envValues,
-    )
-    const outbox = await this.#outbox()
-    this.#home = archives.home
-    this.#capturedRepository = false
-    return { homeBytes: archives.home.byteLength, ...(outbox ? { outbox } : {}) }
-  }
-
   async seal({ base, dataKey, put }: TurnSealInput): Promise<SealedTurnPart> {
     this.#allow('turn', 'work')
     const home = this.#home
     if (!home) throw conflict('Nothing was captured to seal')
-    if (snapshotHasRepository(base) !== this.#capturedRepository)
-      throw conflict('The snapshot and the capture disagree on the repository')
+    if (base.git !== undefined) throw conflict('A turn has no repository to seal')
     const key = await dataKey()
     let sealed: ReturnType<typeof sealSnapshotPart>
     try {
@@ -586,7 +480,6 @@ class LocalTurnExecution implements TurnExecution {
       (await warm.pool.park(this.sandbox, warm.key))
     ) {
       this.#handedOver = true
-      this.removed?.()
       return
     }
     try {
@@ -594,7 +487,6 @@ class LocalTurnExecution implements TurnExecution {
     } finally {
       warm?.pool.forget(this.sandbox.id)
     }
-    this.removed?.()
   }
 
   #allow(...purposes: Purpose[]): void {

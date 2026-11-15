@@ -33,16 +33,19 @@ export interface McpSignInDependencies {
   now(): number
   /** The signed-in user of a request, or null. */
   userOf(headers: Headers): Promise<string | null>
-  /** `siteAgentSkills.signInCheck` as the user: the kept name and address, or its refusal. */
+  /**
+   * `agentSkills.signInCheck` as the user: the workspace, the kept name and address, or its
+   * refusal. Without a workspace it is the user's personal one (plan 83, БП11).
+   */
   check(
     headers: Headers,
-    input: { siteId: string; name: string; url: string },
-  ): Promise<{ name: string; url: string }>
+    input: { workspaceId?: string; name: string; url: string },
+  ): Promise<{ workspaceId: string; name: string; url: string }>
   client(): McpOAuthClient
   /** connectSignedInServer of @repo/trpc with the app's Vault and check of a server. */
   connect(input: {
     userId: string
-    siteId: string
+    workspaceId: string
     name: string
     url: string
     ip: string | null
@@ -59,7 +62,7 @@ export interface McpSignInDependencies {
 }
 
 const startInput = z.strictObject({
-  siteId: z.uuid(),
+  workspaceId: z.uuid().optional(),
   name: z.string().min(1).max(64),
   url: z.string().min(1).max(1024),
 })
@@ -102,7 +105,7 @@ export async function startSignIn(
   }
   const input = startInput.safeParse(body)
   if (!input.success) return answer(400, { reason: 'invalid' })
-  let kept: { name: string; url: string }
+  let kept: { workspaceId: string; name: string; url: string }
   try {
     kept = await deps.check(request.headers, input.data)
   } catch (error) {
@@ -115,7 +118,7 @@ export async function startSignIn(
       .client()
       .start(kept.url, `${app}/api/mcp-oauth/callback`)
     const sealed: SealedSignIn = {
-      siteId: input.data.siteId,
+      workspaceId: kept.workspaceId,
       name: kept.name,
       userId,
       expiresAt: deps.now() + MCP_SIGN_IN_TTL_MS,
@@ -153,11 +156,9 @@ export async function finishSignIn(
       headers: { location: `${app}${path}`, 'set-cookie': cleared, 'cache-control': 'no-store' },
     })
   const sealed = openSignIn(cookieOf(request.headers), deps.secret(), deps.now())
-  if (sealed === null) return back('/projects?mcp=expired')
+  if (sealed === null) return back('/settings/skills?mcp=expired')
   const settings = (outcome: SignInOutcome) =>
-    back(
-      `/projects/${sealed.siteId}/settings?mcp=${outcome}&skill=${encodeURIComponent(sealed.name)}`,
-    )
+    back(`/settings/skills?mcp=${outcome}&skill=${encodeURIComponent(sealed.name)}`)
   const params = new URL(request.url).searchParams
   const code = params.get('code')
   // The state ties the return to this browser's own start: another one is refused.
@@ -168,7 +169,7 @@ export async function finishSignIn(
     const tokens = await deps.client().finish(sealed.pending, code)
     await deps.connect({
       userId: sealed.userId,
-      siteId: sealed.siteId,
+      workspaceId: sealed.workspaceId,
       name: sealed.name,
       url: sealed.pending.url,
       ip: deps.clientIp(request.headers),
@@ -189,9 +190,9 @@ export async function finishSignIn(
     return settings('signed-in')
   } catch (error) {
     if (error instanceof McpOAuthRefused) return settings('failed')
-    // A refusal of the domain: the server, the site or the name — said on the page, not thrown.
+    // A refusal of the domain: the server, the workspace or the name — said on the page, not thrown.
     if (isDomainError(error))
-      return settings(error.code === 'SITE_SKILL_AUTH_UNAVAILABLE' ? 'unavailable' : 'failed')
+      return settings(error.code === 'AGENT_SKILL_AUTH_UNAVAILABLE' ? 'unavailable' : 'failed')
     throw error
   }
 }

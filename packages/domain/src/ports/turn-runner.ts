@@ -1,11 +1,6 @@
 import { z } from 'zod'
 
-import { conflict, DomainError, isDomainError, isTooLarge } from '../errors.ts'
-import {
-  publicationShaSchema,
-  type PublicationMetadata,
-  type PublicationSource,
-} from '../git/publication.ts'
+import { DomainError, isDomainError, isTooLarge } from '../errors.ts'
 import {
   agentEventSchema,
   agentOutputLimits,
@@ -14,48 +9,19 @@ import {
 } from './agent-driver.ts'
 import { execCursorSchema, execExitSchema } from './sandbox-provider.ts'
 
-export const siteLeaseOperations = ['turn', 'deploy', 'revert'] as const
+export const siteLeaseOperations = ['turn'] as const
 export type SiteLeaseOperation = (typeof siteLeaseOperations)[number]
 
 /**
- * The site of a task, or the task itself without one: the row of `site_leases` the releases of
- * its site are fenced by, and the scope its contact maps are kept under (docs/plan/61-chats-
- * first.md, К14). The turns of a chat with the code lease their own row instead (`turnLeaseOf`).
+ * The row of `site_leases` the turns of a chat are fenced by — what `site_id` holds in
+ * `turn_assignments`, `SiteLeaseFence` and the labels of a turn — and the scope its contact maps
+ * are kept under: the chat itself. The name of the table and of its key stays from the leases of
+ * sites, which went with projects (docs/plan/83-remove-projects.md, БП6).
  */
-export const leaseScopeOf = (task: { id: string; siteId: string | null }): string =>
-  task.siteId ?? task.id
+export const leaseScopeOf = (task: { id: string }): string => task.id
 
-/**
- * The row of `site_leases` the turns of a task are fenced by — what `site_id` holds in
- * `turn_assignments`, `SiteLeaseFence` and the labels of a turn, and what its «Обновить»,
- * `/undo` and `/redo` lease. A chat with the code, or one without a site, leases its own id: the
- * chats of one project work side by side (owner's answer of 06.11.2026: «конечно, чаты идут в
- * общей квоте параллельных запросов, которых 8»), each on its own branch and preview. A chat of a
- * project without the code works on the live site alone and keeps the site's row, one at a time
- * (the inbox rule `turnMayHoldInbox` reads that). A release of the site keeps the site's row;
- * no turn of the site starts while it holds it (`PostgresSiteLeaseStore.acquire`). The SQL of
- * admission takes either key: a stand fences a turn by the site as before.
- */
-export const turnLeaseOf = (task: {
-  id: string
-  siteId: string | null
-  needsRepository: boolean
-}): string => (task.needsRepository ? task.id : leaseScopeOf(task))
-
-/** The site of a task on a path only a task with a site reaches; CONFLICT otherwise. */
-export function siteIdOf(task: { siteId: string | null }): string {
-  if (task.siteId === null) throw conflict('The task has no site')
-  return task.siteId
-}
-
-/** A task read with its site, on such a path: both are there; CONFLICT otherwise. */
-export function withSite<T extends { siteId: string | null; site: unknown }>(
-  task: T,
-): T & { siteId: string; site: NonNullable<T['site']> } {
-  const { site } = task
-  if (site === null || site === undefined) throw conflict('The task has no site')
-  return { ...task, siteId: siteIdOf(task), site }
-}
+/** The same row for a turn, its `/undo` and its `/redo`. */
+export const turnLeaseOf = (task: { id: string }): string => leaseScopeOf(task)
 
 /** A fenced publication may spend 60s in a native command after core dies; retain 30s cleanup margin. */
 export const TURN_PUBLICATION_GRACE_MS = 90_000
@@ -147,19 +113,13 @@ export interface SiteLeaseAuthority {
   expiresAt: Date | null
   serverNow: Date
   heldForOperator: boolean
-  /**
-   * The release barrier (docs/plan/53-chat-preview-release.md, Р9): a release whose deploy may
-   * still write. While it stands no one acquires the site, expired or not, and the lease is
-   * neither released nor freed — the release clears it first, under its own fence.
-   */
-  inflightReleaseId: string | null
 }
 
 /** Every mutation is conditional on the entire fence, never merely the task id. */
 export interface SiteLeaseStore {
   /**
-   * null while another owner holds the site, an operator holds it, a content write is in flight
-   * or a release barrier stands (even under an expired lease).
+   * null while another owner holds the lease or an operator holds it (even under an expired
+   * lease).
    */
   acquire(input: Omit<SiteLeaseFence, 'epoch'> & { ttlMs: number }): Promise<SiteLeaseGrant | null>
   /**
@@ -181,73 +141,6 @@ export interface SiteLeaseStore {
    * exact epoch, held or expired alike, in one statement. false when another owner has the site.
    */
   free(fence: SiteLeaseFence): Promise<boolean>
-}
-
-export type TurnWorkspaceSource = PublicationSource
-
-/** A host-owned candidate; its patch includes newly created files. */
-export interface TurnPublication {
-  baseSha: string
-  headSha: string
-  patch: Uint8Array
-  /** An empty, valid compressed archive: newly created files belong to headSha now. */
-  untracked: Uint8Array
-  /**
-   * The working-set commit of `baseSha` (plan 53, Р11), derived again by publication: the turn
-   * and its recovery compare it with the one the sandbox got. Absent without a working set.
-   */
-  sandboxBaseSha?: string
-  /** After the last fence assertion, native publication must be bounded to 60 seconds. */
-  publish(assertFence: () => Promise<void>): Promise<void>
-  dispose(): Promise<void>
-}
-
-/**
- * The base checkout as a git bundle without credentials: objects and the single ref
- * `refs/heads/raditi-base` at `baseSha`. Imported through exec stdin into /workspace/repo on
- * `branch`, after its size and SHA-256 are checked.
- */
-export interface TurnBundleSource {
-  baseSha: string
-  /**
-   * With a working set (plan 53, Р11) the single ref points at this root commit instead, and
-   * `baseSha` stays the full tree publication starts from. Absent — the bundle is the full tree.
-   */
-  sandboxBaseSha?: string
-  branch: string
-  sha256: string
-  sizeBytes: number
-  read(): AsyncIterable<Uint8Array>
-}
-
-export interface TurnWorkspace {
-  /**
-   * Bundles `expectedBaseSha` for the turn's executor, or with a working set its root commit
-   * made at `committedAt` (required then, plan 53, Р11).
-   */
-  buildBaseBundle(source: TurnWorkspaceSource, committedAt?: string): Promise<TurnBundleSource>
-  /**
-   * The working-set commit of the source at `committedAt`, the same `buildBaseBundle` puts in the
-   * bundle; null without a working set. Recovery of a turn derives it here instead of storing it;
-   * a workspace without it cannot recover a turn that has a working set.
-   */
-  sandboxBase?(source: TurnWorkspaceSource, committedAt: string): Promise<string | null>
-  /**
-   * `credentials` are the turn's own (turnCredentials): a changed file of the candidate that
-   * contains one verbatim, binary ones included, is refused as snapshotHasCredential().
-   * Required like protectedPaths, so a caller cannot silently skip the check. `refusedValues`
-   * are the values of the client's variables the turn's commands got (docs/plan/53-chat-preview-
-   * release.md, Р13): a changed file or path that holds one, in any spelling `envValueForms`
-   * knows, is refused as envValueInChange().
-   */
-  preparePublication(
-    input: PublicationMetadata & {
-      patch: Uint8Array
-      untracked: Uint8Array
-      credentials: readonly string[]
-      refusedValues?: readonly string[]
-    },
-  ): Promise<TurnPublication>
 }
 
 export const turnPhases = [
@@ -283,6 +176,9 @@ export type TurnPhase = (typeof turnPhases)[number]
 
 const evidenceId = z.uuid()
 
+/** A full git SHA of history entries (turns with a repository, before plan 83). */
+const gitShaSchema = z.string().regex(/^[a-f0-9]{40}$/)
+
 /** Strips other keys: a SiteLeaseGrant's expiry and server clock are not part of the fence. */
 export const siteLeaseFenceSchema = z.object({
   siteId: evidenceId,
@@ -314,13 +210,14 @@ export const turnEvidenceSchema = z
       .max(256)
       .regex(/^sessions\/[A-Za-z0-9_-]+\/turns\/[0-9]+\/$/)
       .optional(),
-    candidateHeadSha: publicationShaSchema.optional(),
-    baseSha: publicationShaSchema.optional(),
+    // History: the candidate and base of a turn with a repository, before plan 83.
+    candidateHeadSha: gitShaSchema.optional(),
+    baseSha: gitShaSchema.optional(),
     /**
      * The working-set commit the sandbox was checked out at (plan 53, Р11). The candidate's patch
      * is against `baseSha`, the full tree, with the same paths.
      */
-    sandboxBaseSha: publicationShaSchema.optional(),
+    sandboxBaseSha: gitShaSchema.optional(),
     committedAt: z.iso.datetime().optional(),
     /** The driver session the turn resumed (turn n−1): recovery derives the session state from it. */
     nativeSessionId: nativeSessionIdSchema.optional(),

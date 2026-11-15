@@ -178,7 +178,6 @@ async function workspaceWithChat(db) {
       kind: 'quota',
       price: '0.00',
       creditsPerMonth: 1,
-      maxSites: 1,
       pageSites: 100,
       pageCustomNames: true,
       isActive: false,
@@ -197,8 +196,6 @@ async function workspaceWithChat(db) {
   const task = await db.task.create({
     data: {
       workspaceId: workspace.id,
-      siteId: null,
-      needsRepository: false,
       needsBrowser: false,
       title: 'Цены',
     },
@@ -864,7 +861,6 @@ async function main(owned) {
   owned.target = target
   const targetPort = await target.listen()
   const port = await freeLoopbackPort()
-  const gateway = await freeLoopbackPort()
   const stream = await freeLoopbackPort()
   rt.setStage('the preview app with its pages listener')
   const preview = startProcess(rt, 'preview', ['dist/main.js'], {
@@ -877,12 +873,6 @@ async function main(owned) {
       APP_ENV: 'test',
       DATABASE_URL: postgres.url,
       APP_URL: 'http://127.0.0.1:3999',
-      PREVIEW_BASE_DOMAIN: 'localhost',
-      PREVIEW_SCHEME: 'http',
-      PREVIEW_PUBLIC_PORT: String(gateway),
-      PREVIEW_GATEWAY_PORT: String(gateway),
-      PREVIEW_GATEWAY_HOST: '127.0.0.1',
-      PREVIEW_SESSION_SECRET: rt.secret(randomBytes(32).toString('hex')),
       BROWSER_STREAM_PORT: String(stream),
       PAGES_BASE_DOMAIN: BASE,
       PAGES_PORT: String(port),

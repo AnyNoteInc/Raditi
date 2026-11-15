@@ -28,7 +28,6 @@ describe('webEnvFromEnv', () => {
       metricsToken: DEV_METRICS_TOKEN,
       redisUrl: 'redis://localhost:6379',
       pastDueDays: 7,
-      preview: null,
       browserStreamUrl: null,
       // Web Push is not set up in the example (docs/plan/75, ВВ8).
       webPushPublicKey: null,
@@ -143,49 +142,6 @@ describe('webEnvFromEnv', () => {
   })
 })
 
-describe('the address of previews', () => {
-  it('reads the address of .env.example and nothing without a base domain', () => {
-    expect(
-      webEnvFromEnv({
-        ...devEnv,
-        PREVIEW_BASE_DOMAIN: 'localhost',
-        PREVIEW_SCHEME: 'http',
-        PREVIEW_PUBLIC_PORT: '8090',
-      }).preview,
-    ).toEqual({ baseDomain: 'localhost', scheme: 'http', publicPort: 8090 })
-    expect(webEnvFromEnv({ ...devEnv, PREVIEW_BASE_DOMAIN: '' }).preview).toBeNull()
-  })
-
-  it('takes https in production and refuses http there', () => {
-    expect(
-      webEnvFromEnv({ ...prodEnv, PREVIEW_BASE_DOMAIN: 'preview.raditi-sites.ru' }).preview,
-    ).toEqual({ baseDomain: 'preview.raditi-sites.ru', scheme: 'https', publicPort: null })
-    expect(() =>
-      webEnvFromEnv({
-        ...prodEnv,
-        PREVIEW_BASE_DOMAIN: 'preview.raditi-sites.ru',
-        PREVIEW_SCHEME: 'http',
-      }),
-    ).toThrow(/PREVIEW_SCHEME: must be https in production/)
-  })
-
-  it('refuses in production a base under the domain of the cabinet or of Gitea', () => {
-    expect(() => webEnvFromEnv({ ...prodEnv, PREVIEW_BASE_DOMAIN: 'preview.raditi.ru' })).toThrow(
-      /PREVIEW_BASE_DOMAIN: must not share its registrable domain with APP_URL/,
-    )
-    expect(() =>
-      webEnvFromEnv({
-        ...prodEnv,
-        PREVIEW_BASE_DOMAIN: 'p.code-raditi.ru',
-        GITEA_URL: 'https://git.code-raditi.ru',
-      }),
-    ).toThrow(/with GITEA_URL/)
-    expect(() => webEnvFromEnv({ ...prodEnv, PREVIEW_BASE_DOMAIN: 'localhost:8090' })).toThrow(
-      /PREVIEW_BASE_DOMAIN/,
-    )
-  })
-})
-
 describe('the stream of the browser of tasks', () => {
   it('reads the address of the gateway as it is given, and nothing when it is not set', () => {
     expect(
@@ -259,7 +215,7 @@ describe('the root of the domain of pages (docs/plan/67-agent-documents.md, Д3)
     expect(webEnvFromEnv(devEnv).pageViews).toBeNull()
   })
 
-  it('in production is https, a host apart from the cabinet and the previews, with a long secret', () => {
+  it('in production is https, a host apart from the cabinet, with a long secret', () => {
     const prod = { ...prodEnv, PAGES_BASE_DOMAIN: 'pages.raditi.ru', PAGES_SIGNING_SECRET: secret }
     // A subdomain of the cabinet's domain (owner's answer of 13.11.2026).
     expect(webEnvFromEnv(prod).pageViews).toEqual({ origin: 'https://pages.raditi.ru', secret })
@@ -267,11 +223,8 @@ describe('the root of the domain of pages (docs/plan/67-agent-documents.md, Д3)
     expect(webEnvFromEnv({ ...prod, PAGES_SIGNING_SECRET: '' }).pageViews).toBeNull()
     for (const [name, value] of [
       ['PAGES_BASE_DOMAIN', 'raditi.ru'],
-      ['PAGES_BASE_DOMAIN', 'docs.raditi-preview.ru'],
       ['PAGES_SIGNING_SECRET', 'short'],
     ] as const)
-      expect(() =>
-        webEnvFromEnv({ ...prod, PREVIEW_BASE_DOMAIN: 'raditi-preview.ru', [name]: value }),
-      ).toThrow(new RegExp(name))
+      expect(() => webEnvFromEnv({ ...prod, [name]: value })).toThrow(new RegExp(name))
   })
 })

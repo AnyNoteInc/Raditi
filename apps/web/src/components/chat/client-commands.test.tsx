@@ -12,9 +12,9 @@ vi.mock('@repo/ui/providers', () => ({
   useThemePreference: () => ({ preference: 'dark', setPreference }),
 }))
 
-function Place({ projectId = null }: { projectId?: string | null }) {
+function Place() {
   const anchor = useRef<HTMLDivElement>(null)
-  const { run, menu } = useClientCommands({ projectId, anchor })
+  const { run, menu } = useClientCommands({ anchor })
   return (
     <div ref={anchor}>
       <button type="button" onClick={() => run('themes')}>

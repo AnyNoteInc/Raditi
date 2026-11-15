@@ -1,18 +1,5 @@
 import type { Prisma } from '@repo/db'
-import {
-  answersFailure,
-  CANDIDATE_REWIND_EVENT,
-  readFeedRow,
-  retryVerdict,
-  type CandidateStatus,
-  type FeedCeilingReason,
-  type FeedCreditsState,
-  type OpenFailure,
-  type RetryVerdict,
-  type TaskStatus,
-} from '@repo/domain'
-
-type Reader = Pick<Prisma.TransactionClient, 'taskEvent' | 'taskCandidate'>
+import { readFeedRow, type FeedCeilingReason, type FeedCreditsState } from '@repo/domain'
 
 /** A `feed.request` already written for this press of the browser: its id, or null. */
 export async function requestOf(
@@ -31,64 +18,6 @@ export async function requestOf(
   })
   return row?.id ?? null
 }
-
-/** A press of `/undo` or `/redo` core has not answered yet. */
-export interface PendingTurnPress {
-  id: bigint
-  redo: boolean
-}
-
-/**
- * The `/undo` or `/redo` press of a chat with the repository that core has not answered yet
- * (docs/plan/61-chats-first.md, §5.14): its branch and its candidate are moving, and nothing else
- * starts until they stand. null — none. The press of a chat without the repository gets no answer
- * row — it is done with its own transaction —, so its caller does not ask.
- */
-export async function turnRewinding(
-  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
-  taskId: string,
-): Promise<PendingTurnPress | null> {
-  const press = await db.taskEvent.findFirst({
-    where: {
-      taskId,
-      type: 'feed.request',
-      AND: [
-        { payload: { path: ['kind'], equals: 'command' } },
-        {
-          OR: [
-            { payload: { path: ['command'], equals: 'turn_undo' } },
-            { payload: { path: ['command'], equals: 'turn_redo' } },
-          ],
-        },
-      ],
-    },
-    orderBy: { id: 'desc' },
-    select: { id: true, payload: true },
-  })
-  if (press === null) return null
-  const answered = await db.taskEvent.count({
-    where: {
-      taskId,
-      type: CANDIDATE_REWIND_EVENT,
-      payload: { path: ['requestEventId'], equals: String(press.id) },
-    },
-  })
-  if (answered > 0) return null
-  const row = readFeedRow('feed.request', press.payload)
-  return {
-    id: press.id,
-    redo: row.type === 'feed.request' && row.kind === 'command' && row.command === 'turn_redo',
-  }
-}
-
-/** The press of «Обновить»: a plain command, `movingRequest` does not count it. */
-export const updatePress = {
-  type: 'feed.request',
-  AND: [
-    { payload: { path: ['kind'], equals: 'command' } },
-    { payload: { path: ['command'], equals: 'update' } },
-  ],
-} as const satisfies Prisma.TaskEventWhereInput
 
 /** How far back a pending `/cancel` is looked for: as far as core's `pressedCancel` looks. */
 const PRESSES_READ = 50
@@ -273,10 +202,7 @@ export async function wordsOfUndonePress(
     orderBy: { id: 'asc' },
     select: { id: true, payload: true },
   })
-  if (row === null)
-    return (await turnRewinding(db, taskId))?.id === pressId
-      ? wordsOfTurn(db, taskId, task.turnNo)
-      : null
+  if (row === null) return null
   if ((await openResult(db, taskId)) !== row.id) return null
   const rewind = readFeedRow('feed.rewind', row.payload)
   return rewind.type === 'feed.rewind' ? wordsOfTurn(db, taskId, rewind.turn) : null
@@ -289,77 +215,6 @@ export async function openCeilingQuestion(
 ): Promise<DialogQuestion | null> {
   const question = await lastQuestion(db, taskId)
   return question !== null && question.kind === 'ceiling' && !question.answered ? question : null
-}
-
-/** The rows that may answer a failure (`answersFailure`): the client's presses and releases. */
-const ANSWER_TYPES = ['feed.request', 'feed.decision', 'feed.release']
-/** More rows after a failure than this, and it is surely answered. */
-const ANSWERS_READ = 50
-
-/**
- * The newest `feed.failure` of a dialog and whether the client answered it since — words, a
- * press other than `/reset`, a release (docs/plan/53, «Попробовать ещё (18.10)»). null — the
- * dialog has none.
- */
-export async function openFailure(
-  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
-  taskId: string,
-): Promise<OpenFailure | null> {
-  const row = await db.taskEvent.findFirst({
-    where: { taskId, type: 'feed.failure' },
-    orderBy: { id: 'desc' },
-    select: { id: true, payload: true },
-  })
-  if (row === null) return null
-  const failure = readFeedRow('feed.failure', row.payload)
-  if (failure.type !== 'feed.failure') return null
-  const after = await db.taskEvent.findMany({
-    where: { taskId, type: { in: ANSWER_TYPES }, id: { gt: row.id } },
-    orderBy: { id: 'asc' },
-    take: ANSWERS_READ,
-    select: { type: true, payload: true },
-  })
-  return {
-    id: String(row.id),
-    code: failure.code,
-    site: failure.site,
-    answered:
-      after.length >= ANSWERS_READ ||
-      after.some((answer) => answersFailure(readFeedRow(answer.type, answer.payload))),
-  }
-}
-
-/** Whether «Попробовать ещё» is offered in a dialog now, by `retryVerdict`. */
-export async function dialogRetry(
-  db: Pick<Prisma.TransactionClient, 'taskEvent' | 'task'>,
-  task: { id: string; status: TaskStatus },
-): Promise<RetryVerdict> {
-  const row = await db.task.findUnique({ where: { id: task.id }, select: { billable: true } })
-  return retryVerdict({
-    status: task.status,
-    billable: row?.billable ?? false,
-    failure: task.status === 'awaiting_approval' ? await openFailure(db, task.id) : null,
-  })
-}
-
-/** The candidate a dialog waits with: its latest one that is current or stale. */
-export interface LiveCandidate {
-  id: string
-  revision: number
-  status: Extract<CandidateStatus, 'current' | 'stale'>
-}
-
-export async function liveCandidate(
-  db: Pick<Reader, 'taskCandidate'>,
-  taskId: string,
-): Promise<LiveCandidate | null> {
-  const row = await db.taskCandidate.findFirst({
-    where: { taskId, status: { in: ['current', 'stale'] } },
-    orderBy: { revision: 'desc' },
-    select: { id: true, revision: true, status: true },
-  })
-  if (row === null) return null
-  return { id: row.id, revision: row.revision, status: row.status as LiveCandidate['status'] }
 }
 
 /**

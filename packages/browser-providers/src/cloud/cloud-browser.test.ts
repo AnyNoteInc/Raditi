@@ -396,7 +396,6 @@ describe('the cloud browser session', () => {
         'denied',
       )
     // Nothing of a site to read, and no form to fill.
-    expect(await session.signIn({ login: 'a', password: 'b' })).toBe('absent')
     expect(
       codeOf(
         await session

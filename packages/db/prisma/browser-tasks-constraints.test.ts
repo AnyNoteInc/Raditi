@@ -13,6 +13,8 @@ import { createMigratedSchema, type MigratedSchema } from './migrated-schema.ts'
 const databaseUrl = process.env.DATABASE_URL
 /** The last migration before the change. */
 const before = '20261018150000_task_turn_rejected'
+/** The last migration with sites and projects: their constraints are history after it (plan 83). */
+const through = '20261116100000_workspace_env_vars'
 const at = new Date('2026-10-22T12:00:00Z')
 const later = new Date('2026-10-22T16:00:00Z')
 const CHECK_VIOLATION = '23514'
@@ -133,7 +135,7 @@ describe.skipIf(!databaseUrl)('browser task constraints', () => {
       content_type: 'image/jpeg',
       size_bytes: 1,
     })
-    await expect(schema.migrate()).rejects.toThrow(
+    await expect(schema.migrate(through)).rejects.toThrow(
       'attachments holds rows, though nothing in the product writes them',
     )
     // The stop comes before the transaction: nothing of the change is there.
@@ -145,7 +147,7 @@ describe.skipIf(!databaseUrl)('browser task constraints', () => {
     expect(columns).toEqual([])
 
     await schema.db.query('DELETE FROM attachments')
-    await schema.migrate()
+    await schema.migrate(through)
     const { rows } = await schema.db.query(
       `SELECT t.needs_repository, t.needs_browser, s.agent_notes
          FROM tasks t JOIN sites s ON s.id = t.site_id WHERE t.id = $1`,

@@ -13,10 +13,9 @@ const TOKEN = 'worker-token-0123456789abcdef0123456789abcdef'
 
 const sessionId = '0196abcd-0000-7000-8000-000000000001'
 const taskId = '0196abcd-0000-7000-8000-000000000002'
-const siteId = '0196abcd-0000-7000-8000-000000000003'
 const assignmentId = '0196abcd-0000-7000-8000-000000000004'
 
-const ensureRequest = { sessionId, taskId, siteId, takeControl: true }
+const ensureRequest = { sessionId, taskId, takeControl: true }
 
 const state: BrowserSessionState = {
   session: sessionId,
@@ -95,8 +94,8 @@ async function rejection(promise: Promise<unknown>): Promise<DomainError> {
 describe('the HTTP client of the browser worker', () => {
   it('ensures the browser of a chat without a site: it says so (plan 61, К12)', async () => {
     const { client, calls } = workerWith(() => json(state))
-    await expect(client.ensure({ ...ensureRequest, siteId: null })).resolves.toEqual(state)
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ ...ensureRequest, siteId: null })
+    await expect(client.ensure({ ...ensureRequest })).resolves.toEqual(state)
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ ...ensureRequest })
   })
 
   it('ensures a session with the token and reads its state', async () => {

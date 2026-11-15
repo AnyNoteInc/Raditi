@@ -10,7 +10,7 @@ type Deps = Parameters<typeof startSignIn>[1]
 
 const APP = 'https://raditi.example'
 const SECRET = 'synthetic-better-auth-secret-for-tests-only'
-const SITE = '0199a000-0000-7000-8000-000000000001'
+const WORKSPACE = '0199a000-0000-7000-8000-000000000001'
 const NOW = 1_800_000_000_000
 
 const pending = {
@@ -39,7 +39,11 @@ function deps(overrides: Partial<Deps> = {}) {
     secret: () => SECRET,
     now: () => NOW,
     userOf: async () => 'user-1',
-    check: vi.fn(async (_headers, input) => ({ name: input.name, url: input.url })),
+    check: vi.fn(async (_headers, input) => ({
+      workspaceId: input.workspaceId ?? WORKSPACE,
+      name: input.name,
+      url: input.url,
+    })),
     client: () => ({ start, finish }) as unknown as ReturnType<Deps['client']>,
     connect,
     clientIp: () => '203.0.113.5',
@@ -57,7 +61,14 @@ const startRequest = (body: unknown, headers: Record<string, string> = {}) =>
 
 const sealed = (patch: Record<string, unknown> = {}) =>
   sealSignIn(
-    { siteId: SITE, name: 'menu', userId: 'user-1', expiresAt: NOW + 60_000, pending, ...patch },
+    {
+      workspaceId: WORKSPACE,
+      name: 'menu',
+      userId: 'user-1',
+      expiresAt: NOW + 60_000,
+      pending,
+      ...patch,
+    },
     SECRET,
   )
 
@@ -70,7 +81,7 @@ describe('startSignIn', () => {
   it('checks the site and the name, then answers the address and seals the sign-in in a cookie', async () => {
     const { value, start } = deps()
     const response = await startSignIn(
-      startRequest({ siteId: SITE, name: 'menu', url: pending.url }),
+      startRequest({ workspaceId: WORKSPACE, name: 'menu', url: pending.url }),
       value,
     )
     expect(response.status).toBe(200)
@@ -82,7 +93,7 @@ describe('startSignIn', () => {
     expect(cookie).toMatch(/Path=\/api\/mcp-oauth; HttpOnly; SameSite=Lax; Max-Age=600; Secure/)
     const token = /raditi_mcp_sign_in=([^;]+)/.exec(cookie)?.[1]
     expect(openSignIn(token, SECRET, NOW)).toMatchObject({
-      siteId: SITE,
+      workspaceId: WORKSPACE,
       name: 'menu',
       userId: 'user-1',
       pending,
@@ -99,7 +110,7 @@ describe('startSignIn', () => {
     expect(
       (
         await startSignIn(
-          startRequest({ siteId: SITE, name: 'menu', url: pending.url }),
+          startRequest({ workspaceId: WORKSPACE, name: 'menu', url: pending.url }),
           deps({ userOf: async () => null }).value,
         )
       ).status,
@@ -113,7 +124,7 @@ describe('startSignIn', () => {
       },
     })
     const refused = await startSignIn(
-      startRequest({ siteId: SITE, name: 'menu', url: pending.url }),
+      startRequest({ workspaceId: WORKSPACE, name: 'menu', url: pending.url }),
       forbidden.value,
     )
     expect(refused.status).toBe(403)
@@ -123,7 +134,7 @@ describe('startSignIn', () => {
     const noSignIn = deps()
     noSignIn.start.mockRejectedValueOnce(new McpOAuthRefused('no_sign_in'))
     const unsupported = await startSignIn(
-      startRequest({ siteId: SITE, name: 'menu', url: pending.url }),
+      startRequest({ workspaceId: WORKSPACE, name: 'menu', url: pending.url }),
       noSignIn.value,
     )
     expect(unsupported.status).toBe(422)
@@ -136,14 +147,12 @@ describe('finishSignIn', () => {
     const { value, connect, finish } = deps()
     const response = await finishSignIn(callback(`code=code-1&state=${pending.state}`), value)
     expect(response.status).toBe(303)
-    expect(response.headers.get('location')).toBe(
-      `${APP}/projects/${SITE}/settings?mcp=signed-in&skill=menu`,
-    )
+    expect(response.headers.get('location')).toBe(`${APP}/settings/skills?mcp=signed-in&skill=menu`)
     expect(response.headers.get('set-cookie')).toMatch(/raditi_mcp_sign_in=; .*Max-Age=0/)
     expect(finish).toHaveBeenCalledWith(pending, 'code-1')
     expect(connect).toHaveBeenCalledWith({
       userId: 'user-1',
-      siteId: SITE,
+      workspaceId: WORKSPACE,
       name: 'menu',
       url: pending.url,
       ip: '203.0.113.5',
@@ -172,13 +181,13 @@ describe('finishSignIn', () => {
       callback(`code=code-1&state=${pending.state}`, sealed({ expiresAt: NOW - 1 })),
       deps().value,
     )
-    expect(late.headers.get('location')).toBe(`${APP}/projects?mcp=expired`)
+    expect(late.headers.get('location')).toBe(`${APP}/settings/skills?mcp=expired`)
   })
 
   it('says a check that failed after the sign-in, and a Vault that is off', async () => {
     const failed = deps({
       connect: async () => {
-        throw new DomainError('SITE_SKILL_CHECK_FAILED', 'x', 422, { reason: 'not_mcp' })
+        throw new DomainError('AGENT_SKILL_CHECK_FAILED', 'x', 422, { reason: 'not_mcp' })
       },
     })
     expect(
@@ -188,7 +197,7 @@ describe('finishSignIn', () => {
     ).toContain('mcp=failed')
     const off = deps({
       connect: async () => {
-        throw new DomainError('SITE_SKILL_AUTH_UNAVAILABLE', 'x', 503)
+        throw new DomainError('AGENT_SKILL_AUTH_UNAVAILABLE', 'x', 503)
       },
     })
     expect(

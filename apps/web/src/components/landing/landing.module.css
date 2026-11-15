@@ -31,11 +31,6 @@
   /* The upper limit of the slogan of the first screen: a low window lowers it, so that the main
      action stays above the fold. */
   --hero-title-cap: min(90px, 12vh);
-  /* The running line of the systems: one pass of a line and of the line that runs back. The
-     pace is even, so the curve is none. */
-  --marquee-time: 38s;
-  --marquee-time-back: 46s;
-  --marquee-curve: linear;
   /* The radius and the shadows of the objects of the page; the colours of the shadows are roles
      of the theme, a pill takes its radius from the theme too. */
   --radius-card: 12px;
@@ -129,7 +124,6 @@
   background: var(--raditi-ink);
 }
 .safety ::selection,
-.platformsAnswer::selection,
 .requestBubble::selection {
   color: var(--raditi-ink);
   background: var(--raditi-marker);
@@ -321,18 +315,6 @@
   background: var(--raditi-rule-ink);
   color: var(--raditi-paper);
   line-height: 1.45;
-}
-/* The highlight of a section heading on a light or an orange field: ink on a level amber plate,
-   one to a heading. On the chocolate field the highlight is an amber text instead, and the plate
-   is turned only in the first heading of the page. */
-.highlight {
-  padding: 0 0.06em;
-  margin-inline: -0.06em;
-  font-style: normal;
-  color: var(--raditi-ink);
-  background: var(--raditi-marker);
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
 }
 /* Six rows of «a request, its result». A row is a grid of three columns: the category, the
    message of the owner, what will change on the site. The names of the two columns stand in a
@@ -711,130 +693,6 @@
 .demoSection > :last-child {
   margin-inline: auto;
 }
-/* «На чём сделан ваш сайт?»: the five systems run in two lines on the orange field. */
-.platforms {
-  display: flex;
-  flex-direction: column;
-  gap: 56px;
-  padding-block: var(--section-y);
-  overflow: clip;
-  background: var(--raditi-accent);
-  color: var(--raditi-ink);
-}
-.platformsInner {
-  width: 100%;
-  max-width: var(--container);
-  margin-inline: auto;
-  padding-inline: var(--gutter);
-}
-.platforms .sectionHeading {
-  margin-bottom: 0;
-}
-.platforms .sectionHeading > p {
-  color: var(--raditi-ink);
-}
-.marquee {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  margin-inline: -40px;
-  padding-block: 28px;
-  border-block: 2px solid var(--raditi-ink);
-  transform: rotate(-2deg);
-}
-/* A line holds its names twice and runs by half of itself: the second half takes the place of
-   the first, and the run has no seam. */
-.marqueeLine {
-  display: flex;
-  width: max-content;
-}
-.marqueeItem {
-  display: inline-flex;
-  align-items: center;
-  gap: 48px;
-  padding-right: 48px;
-}
-.marqueeName {
-  font-family: var(--font-unbounded), sans-serif;
-  font-size: clamp(56px, 9vw, 132px);
-  font-weight: 500;
-  letter-spacing: -0.05em;
-  line-height: 1;
-  white-space: nowrap;
-}
-/* An outlined name: the stroke is drawn first and the fill of the field over it, so the fill
-   hides the half of the stroke that lies inside a letter and the seams where the parts of a
-   glyph of the variable face overlap. */
-.marqueeName[data-outline='true'] {
-  color: var(--raditi-accent);
-  -webkit-text-stroke: 4px var(--raditi-ink);
-  paint-order: stroke fill;
-}
-.signAmber,
-.signInk {
-  flex: none;
-  width: clamp(40px, 5.8vw, 84px);
-  height: clamp(40px, 5.8vw, 84px);
-}
-.signAmber path,
-.signInk path {
-  fill: none;
-  stroke-width: 8.3;
-  stroke-linecap: round;
-}
-.signAmber circle {
-  fill: var(--raditi-marker);
-}
-.signAmber path {
-  stroke: var(--raditi-ink);
-}
-.signInk circle {
-  fill: var(--raditi-ink);
-}
-.signInk path {
-  stroke: var(--raditi-accent);
-}
-.platformsFoot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 32px 40px;
-}
-.platformsTalk {
-  display: flex;
-  flex: 1 1 320px;
-  flex-direction: column;
-  gap: 12px;
-  max-width: 620px;
-}
-.platformsAsk,
-.platformsAnswer {
-  padding: 13px 18px;
-  font-size: 19px;
-  line-height: 1.4;
-}
-.platformsAsk {
-  align-self: flex-start;
-  border-radius: 18px 18px 18px 4px;
-  background: var(--raditi-paper);
-}
-.platformsAnswer {
-  align-self: flex-end;
-  border-radius: 18px 18px 4px 18px;
-  background: var(--raditi-ink);
-  color: var(--raditi-paper);
-}
-/* On the orange field the filled action is ink: the accent would dissolve in the field. */
-.platforms .primaryButton {
-  border-color: var(--raditi-ink);
-  background: var(--raditi-ink);
-  color: var(--raditi-paper);
-}
-.platforms .primaryButton:active {
-  background: var(--raditi-ink-2);
-}
-/* «Без вашего „да“ сайт не меняется»: three facts on the chocolate field. */
 .safety {
   background: var(--raditi-ink);
   color: var(--raditi-paper);
@@ -890,25 +748,8 @@
   white-space: nowrap;
 }
 @media (hover: hover) {
-  .platforms .primaryButton:hover {
-    background: var(--raditi-ink-2);
-  }
   .headerPhone:hover {
     text-decoration: underline;
-  }
-}
-@media (prefers-reduced-motion: no-preference) {
-  .marqueeLine {
-    animation: marqueeRun var(--marquee-time) var(--marquee-curve) infinite;
-  }
-  .marqueeLine[data-reverse='true'] {
-    animation-direction: reverse;
-    animation-duration: var(--marquee-time-back);
-  }
-}
-@keyframes marqueeRun {
-  to {
-    transform: translateX(-50%);
   }
 }
 @media (min-width: 1240px) {
@@ -930,20 +771,6 @@
     margin-bottom: 36px;
   }
   .sectionHeading > p {
-    font-size: 17px;
-  }
-  .platforms {
-    gap: 40px;
-  }
-  .marquee {
-    padding-block: 20px;
-  }
-  .marqueeItem {
-    gap: 28px;
-    padding-right: 28px;
-  }
-  .platformsAsk,
-  .platformsAnswer {
     font-size: 17px;
   }
   .safetyList {

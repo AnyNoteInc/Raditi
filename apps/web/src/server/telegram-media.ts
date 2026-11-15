@@ -82,7 +82,6 @@ export function telegramMedia(config: TelegramConfig): TelegramMedia {
       try {
         started = await startAttachmentForTelegram(prisma, {
           userId: input.userId,
-          siteId: input.siteId,
           appEnv: chat.appEnv,
           name: input.name,
           size: bytes.byteLength,

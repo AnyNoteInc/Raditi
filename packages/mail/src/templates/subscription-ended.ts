@@ -14,12 +14,12 @@ import type { MailData, RenderedEmail } from './schemas.ts'
  * a tariff.
  */
 function keptText(pack: number, gift: number): string {
-  let kept = 'Сайты'
-  if (pack > 0 && gift > 0) kept = 'Кредиты из пакета и подарочные, сайты'
-  else if (pack > 0) kept = 'Кредиты из пакета, сайты'
-  else if (gift > 0) kept = 'Подарочные кредиты, сайты'
+  let kept = 'Чаты и страницы'
+  if (pack > 0 && gift > 0) kept = 'Кредиты из пакета и подарочные, чаты и страницы'
+  else if (pack > 0) kept = 'Кредиты из пакета, чаты и страницы'
+  else if (gift > 0) kept = 'Подарочные кредиты, чаты и страницы'
   const counted = pack > 0 ? ` Кредитов из пакета осталось: ${formatCount(pack)}.` : ''
-  return `${kept} и история правок сохраняются.${counted}`
+  return `${kept} сохраняются.${counted}`
 }
 
 export function renderSubscriptionEnded(data: MailData['subscription-ended']): RenderedEmail {

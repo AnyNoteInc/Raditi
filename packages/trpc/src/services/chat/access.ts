@@ -1,24 +1,22 @@
 import type { MemberRole, Prisma } from '@repo/db'
-import type { TaskRequirements, TaskStatus } from '@repo/domain'
-
-import { siteNotFound } from '../site-basics.ts'
+import { DomainError, type TaskRequirements, type TaskStatus } from '@repo/domain'
 
 /**
- * A dialog the user may open: a task of a workspace they are a member of, of a site that is not
- * deleted, not deleted itself («Удалить диалог»). A task of someone else and a task that does not
- * exist answer the same NOT_FOUND as a site (`project.get`).
+ * A chat the user may open: a task of a workspace they are a member of, not deleted itself
+ * («Удалить диалог»). A task of someone else and a task that does not exist answer the same
+ * NOT_FOUND.
  */
 export const accessibleTask = (userId: string, id: string) =>
   ({
     id,
     deletedAt: null,
-    OR: [{ siteId: null }, { site: { deletedAt: null } }],
     workspace: { members: { some: { userId } } },
   }) satisfies Prisma.TaskWhereInput
 
-export const taskNotFound = siteNotFound
+export const taskNotFound = () =>
+  new DomainError('NOT_FOUND', 'No such chat among the chats of the user', 404)
 
-/** Who may release a version and change the variables of a site (Р25, Р13). */
+/** Who may change the variables of a workspace (docs/plan/83-remove-projects.md, БП4). */
 export const isManagerRole = (role: MemberRole | null): boolean =>
   role === 'owner' || role === 'admin'
 
@@ -39,8 +37,6 @@ export async function memberRole(
 export interface LockedTask {
   id: string
   workspaceId: string
-  /** null — a chat without a project (docs/plan/61-chats-first.md, К7). */
-  siteId: string | null
   status: TaskStatus
   attempt: number
   turnNo: number
@@ -64,26 +60,23 @@ export async function lockTask(
     Array<{
       id: string
       workspace_id: string
-      site_id: string | null
       status: TaskStatus
       attempt: number
       turn_no: number
-      needs_repository: boolean
       needs_browser: boolean
     }>
   >`
-    SELECT id, workspace_id, site_id, status::text AS status, attempt, turn_no,
-           needs_repository, needs_browser
+    SELECT id, workspace_id, status::text AS status, attempt, turn_no,
+           needs_browser
     FROM tasks WHERE id = ${taskId}::uuid AND deleted_at IS NULL FOR UPDATE`
   const row = rows[0]
   if (row === undefined) return null
   return {
     id: row.id,
     workspaceId: row.workspace_id,
-    siteId: row.site_id,
     status: row.status,
     attempt: row.attempt,
     turnNo: row.turn_no,
-    requirements: { repository: row.needs_repository, browser: row.needs_browser },
+    requirements: { repository: false, browser: row.needs_browser },
   }
 }

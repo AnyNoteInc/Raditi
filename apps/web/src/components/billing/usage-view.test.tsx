@@ -62,8 +62,6 @@ vi.mock('@/trpc/client', () => ({
 }))
 
 const ID = (n: number) => `018f0000-0000-7000-8000-${String(n).padStart(12, '0')}`
-const bakery = { id: ID(101), name: 'Пекарня «Добро»' }
-const cafe = { id: ID(102), name: 'Кофейня на Лесной' }
 const pack100 = {
   id: ID(4),
   slug: 'pack',
@@ -83,7 +81,6 @@ function entry(patch: Partial<UsageEntry> = {}): UsageEntry {
     credits: 5,
     from: { tariff: 5, gift: 0, pack: 0 },
     task: { id: ID(2000 + nextEntry), title: 'Заменил фото на главной', status: 'done' },
-    site: cafe,
     ...patch,
   }
 }
@@ -101,7 +98,6 @@ const mockupHistory = (): UsageEntry[] => [
     credits: 45,
     from: { tariff: 45, gift: 0, pack: 0 },
     task: { id: ID(11), title: 'Обновить цены в разделе «Торты на заказ»', status: 'running' },
-    site: bakery,
   }),
   entry({ task: { id: ID(12), title: 'Заменить фото на главной', status: 'done' } }),
   entry({
@@ -114,14 +110,12 @@ const mockupHistory = (): UsageEntry[] => [
     outcome: 'unpaid',
     ...nothing,
     task: { id: ID(14), title: 'Добавить страницу «Доставка»', status: 'failed' },
-    site: bakery,
   }),
   entry({
     at: new Date('2026-10-01T08:00:00Z'),
     credits: 17,
     from: { tariff: 5, gift: 0, pack: 12 },
     task: { id: ID(15), title: 'Поправить часы работы в контактах', status: 'done' },
-    site: bakery,
   }),
 ]
 const noHistory: HistoryPage = { items: [], nextCursor: null, total: 0 }
@@ -137,11 +131,6 @@ function tariffOf(patch: Partial<Omit<TariffUsage, 'today'>> = {}): TariffUsage 
   return {
     credits: meterOf({ charged: 34, held: 1, left: 965 }),
     today: null,
-    sites: { count: 2, max: 3 },
-    bySite: [
-      { siteId: bakery.id, name: bakery.name, credits: 21 },
-      { siteId: cafe.id, name: cafe.name, credits: 13 },
-    ],
     ...patch,
   }
 }
@@ -409,13 +398,12 @@ describe('the «Использование» page of a customer without a tariff
       .slice(1)
       .map((row) => texts(within(row).getAllByRole('cell')))
     expect(rows).toEqual([
-      ['3 октября 2026', 'Добавить форму заявкиНе получилось', 'Кофейня на Лесной', 'Не списано'],
-      ['3 октября 2026', 'Заменить телефон в шапке', 'Кофейня на Лесной', '5 кредитов'],
+      ['3 октября 2026', 'Добавить форму заявкиНе получилось', 'Не списано'],
+      ['3 октября 2026', 'Заменить телефон в шапке', '5 кредитов'],
     ])
     // Still nothing of a tariff: no meter, no limits, no sites.
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Лимиты тарифа' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: 'По проектам' })).not.toBeInTheDocument()
   })
 
   it('prints the year of every line: the history has no period, and the same day comes round again', async () => {
@@ -1007,12 +995,12 @@ describe('the limits of the tariff', () => {
     }
   })
 
-  it('measures the day and the sites, each with a named meter and a line', async () => {
+  it('measures the day with a named meter and a line', async () => {
     getUsage.mockResolvedValue(usageOf({ subscription: daily }))
     showUsage()
 
     const limits = await section('Лимиты тарифа')
-    const [today, sites] = within(limits)
+    const [today] = within(limits)
       .getAllByRole('heading', { level: 2 })
       .map((heading) => heading.parentElement as HTMLElement)
     // The day counts the tariff credits of «Бизнес»: 4 charged and 1 set aside of 100.
@@ -1030,13 +1018,6 @@ describe('the limits of the tariff', () => {
     expect(plain(today!.textContent)).toContain(
       `Сегодня можно потратить ещё 95 кредитов. ${outside}`,
     )
-
-    expect(plain(sites!.textContent)).toContain('Сайты2 из 3 сайтов')
-    expect(tones(within(sites!).getByRole('img', { name: 'Добавлено 2 сайта из 3' }))).toEqual([
-      'spent',
-      'left',
-    ])
-    expect(plain(sites!.textContent)).toContain('Можно добавить ещё один сайт.')
   })
 
   it('fills the meters of a day and of a tariff that are full', async () => {
@@ -1044,7 +1025,7 @@ describe('the limits of the tariff', () => {
       usageOf(
         {
           subscription: daily,
-          tariff: tariffOf({ sites: { count: 4, max: 3 } }),
+          tariff: tariffOf(),
           pack: { left: 0, held: 0 },
         },
         { today: { charged: 100 } },
@@ -1060,14 +1041,8 @@ describe('the limits of the tariff', () => {
         }),
       ),
     ).toEqual(['spent'])
-    expect(tones(within(limits).getByRole('img', { name: 'Добавлено 4 сайта из 3' }))).toEqual([
-      'spent',
-    ])
     expect(plain(limits.textContent)).toContain(
       `Кредиты по тарифу на сегодня закончились — завтра снова можно будет потратить до 100. ${outside}`,
-    )
-    expect(plain(limits.textContent)).toContain(
-      'Сайтов больше, чем входит в тариф: новый добавить нельзя.',
     )
     // The server refuses a new task for the day, and the page says so above the meter.
     expect(plain(within(await section('Кредиты')).getByRole('status').textContent)).toBe(
@@ -1155,52 +1130,7 @@ describe('the limits of the tariff', () => {
     const limits = await section('Лимиты тарифа')
     expect(plain(limits.textContent)).toContain('Сегодня5 кредитов')
     expect(plain(limits.textContent)).toContain('Дневного лимита на вашем тарифе нет.')
-    expect(texts(within(limits).getAllByRole('img'))).toHaveLength(1)
-    expect(within(limits).getByRole('img', { name: 'Добавлено 2 сайта из 3' })).toBeVisible()
-  })
-})
-
-describe('the credits by site', () => {
-  it('draws a bar for each site with its number beside it', async () => {
-    showUsage()
-
-    const bySite = await section('По проектам')
-    expect(plain(bySite.textContent)).toContain('Кредиты, списанные за текущий период.')
-    const rows = within(within(bySite).getByRole('list', { name: 'По проектам' })).getAllByRole(
-      'listitem',
-    )
-    expect(texts(rows)).toEqual(['Пекарня «Добро»21 кредит', 'Кофейня на Лесной13 кредитов'])
-    // The widest bar is the busiest site; the others are measured against it.
-    const widths = rows.map((row) => {
-      const bar = row.querySelector('[aria-hidden="true"] > span')
-      return bar ? getComputedStyle(bar).width : ''
-    })
-    expect(widths[0]).toBe('100%')
-    expect(Number.parseFloat(widths[1] ?? '')).toBeCloseTo((13 / 21) * 100, 5)
-  })
-
-  // docs/plan/61-chats-first.md, §5.10: a charge of a chat without a project never drops out.
-  it('names what chats without a project took', async () => {
-    getUsage.mockResolvedValue(
-      usageOf({
-        tariff: tariffOf({
-          bySite: [{ siteId: null, name: null, credits: 9 }],
-        }),
-      }),
-    )
-    showUsage()
-
-    const bySite = await section('По проектам')
-    expect(texts(within(bySite).getAllByRole('listitem'))).toEqual(['Без проекта9 кредитов'])
-  })
-
-  it('says in one line that nothing is charged yet', async () => {
-    getUsage.mockResolvedValue(usageOf({ tariff: tariffOf({ bySite: [] }) }))
-    showUsage()
-
-    const bySite = await section('По проектам')
-    expect(plain(bySite.textContent)).toBe('По проектамВ этом периоде кредиты ещё не списывались.')
-    expect(within(bySite).queryByRole('list')).not.toBeInTheDocument()
+    expect(within(limits).queryAllByRole('img')).toHaveLength(0)
   })
 })
 
@@ -1212,27 +1142,6 @@ describe('the history of charges', () => {
         texts(within(row).getAllByRole(row.querySelector('th') ? 'columnheader' : 'cell')),
       )
 
-  it('names a chat without a project', async () => {
-    getUsage.mockResolvedValue(
-      usageOf({
-        history: {
-          items: [
-            entry({
-              task: { id: ID(2999), title: 'Идеи для названия пекарни', status: 'awaiting_user' },
-              site: null,
-            }),
-          ],
-          nextCursor: null,
-          total: 1,
-        },
-      }),
-    )
-    showUsage()
-
-    const [, row] = rowsOf(await section('История списаний'))
-    expect(row).toEqual(['3 октября', 'Идеи для названия пекарни', 'Без проекта', '5 кредитов'])
-  })
-
   it('lists the tasks of the period with what each one cost', async () => {
     showUsage()
 
@@ -1241,22 +1150,16 @@ describe('the history of charges', () => {
       'Сколько кредитов ушло на каждую задачу. Списываем только за выполненные задачи; уточнения и «Изменить» считаются вместе с задачей. «Отменить» — бесплатно.',
     )
     expect(rowsOf(history)).toEqual([
-      ['Дата', 'Задача', 'Проект', 'Списано'],
+      ['Дата', 'Задача', 'Списано'],
       [
         '4 октября',
         'Обновить цены в разделе «Торты на заказ»',
-        'Пекарня «Добро»',
         'В работеОтложено до 45 кредитов — спишем по факту',
       ],
-      ['3 октября', 'Заменить фото на главной', 'Кофейня на Лесной', '5 кредитов'],
-      ['3 октября', 'Вернуть прежний баннерОтмена правки', 'Кофейня на Лесной', 'Бесплатно'],
-      ['2 октября', 'Добавить страницу «Доставка»Не получилось', 'Пекарня «Добро»', 'Не списано'],
-      [
-        '1 октября',
-        'Поправить часы работы в контактах',
-        'Пекарня «Добро»',
-        '17 кредитов5 по тарифу и 12 из пакета',
-      ],
+      ['3 октября', 'Заменить фото на главной', '5 кредитов'],
+      ['3 октября', 'Вернуть прежний баннерОтмена запроса', 'Бесплатно'],
+      ['2 октября', 'Добавить страницу «Доставка»Не получилось', 'Не списано'],
+      ['1 октября', 'Поправить часы работы в контактах', '17 кредитов5 по тарифу и 12 из пакета'],
     ])
     // The lines are of the period named above them with its year: a date needs none.
     expect(plain(history.textContent)).not.toMatch(/октября 2026/)
@@ -1302,28 +1205,22 @@ describe('the history of charges', () => {
     showUsage()
 
     expect(rowsOf(await section('История списаний')).slice(1)).toEqual([
-      [
-        '3 октября',
-        'Задача без описания',
-        'Кофейня на Лесной',
-        'В работеОтложено до 21 кредита — спишем по факту',
-      ],
-      ['3 октября', 'Заменил фото на главной', 'Кофейня на Лесной', '1 200 кредитов'],
+      ['3 октября', 'Задача без описания', 'В работеОтложено до 21 кредита — спишем по факту'],
+      ['3 октября', 'Заменил фото на главной', '1 200 кредитов'],
       [
         '3 октября',
         'Заменил фото на главной',
-        'Кофейня на Лесной',
         '43 кредита5 по тарифу, 35 подарочных и 3 из пакета',
       ],
-      ['3 октября', 'Обновить менюЗадача отменена', 'Кофейня на Лесной', 'Не списано'],
-      ['3 октября', 'Новая шапкаВернули сайт как было', 'Кофейня на Лесной', 'Не списано'],
+      ['3 октября', 'Обновить менюЗадача отменена', 'Не списано'],
+      ['3 октября', 'Новая шапкаВернули как было', 'Не списано'],
     ])
     // A credit that came back or expired with its period is no line of the history.
     expect(pageText()).not.toMatch(/Кредит вернули|Кредит сгорел|Период тарифа закончился/)
   })
 
   it('says that nothing is charged yet instead of an empty table', async () => {
-    getUsage.mockResolvedValue(usageOf({ tariff: tariffOf({ bySite: [] }), history: noHistory }))
+    getUsage.mockResolvedValue(usageOf({ tariff: tariffOf(), history: noHistory }))
     showUsage()
 
     const history = await section('История списаний')

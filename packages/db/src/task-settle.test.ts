@@ -1,13 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
-
-import {
-  canonicalDbPlanJson,
-  siteIdOf,
-  type CandidateFacts,
-  type DbPlan,
-  type DbPlanView,
-  type FeedRow,
-} from '@repo/domain'
+import { type FeedRow } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -20,20 +11,12 @@ import {
   cancelWaitingTask,
   claimQueuedPass,
   claimQueuedTask,
-  excludeTurnDbOperations,
-  finishEmptiedDialog,
-  includeTurnDbOperations,
-  nextCandidateRevision,
-  recordCandidate,
   redoDialog,
   redoTurn,
   rejectTurn,
   rewindDialog,
-  requestPreviewSync,
   settleTurn,
-  supersedeStandingCandidate,
   undoTurn,
-  type CandidateRecordInput,
 } from './task-settle.ts'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -53,17 +36,6 @@ const result = (turn: number): FeedRow => ({
     risk: 'low',
   },
 })
-
-const facts: CandidateFacts = {
-  changeType: 'code',
-  risk: 'low',
-  addedFiles: 1,
-  modifiedFiles: 0,
-  deletedFiles: 0,
-  mediaFiles: 0,
-  dbObjects: 0,
-  newFunctionality: false,
-}
 
 describe('turn settlement input', () => {
   it('refuses a move the task machine does not have, before querying', async () => {
@@ -145,17 +117,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
   afterEach(async () => {
     const ids = workspaces.splice(0)
     const of = { task: { workspaceId: { in: ids } } }
-    for (const preview of await db.previewEnvironment.findMany({ where: of, select: { id: true } }))
-      await db.outboxEvent.deleteMany({
-        where: { dedupeKey: { startsWith: `preview.sync:${preview.id}:` } },
-      })
-    await db.siteRelease.deleteMany({ where: of })
-    await db.candidateCheck.deleteMany({ where: { candidate: of } })
-    await db.previewEnvironment.deleteMany({ where: of })
-    await db.taskCandidate.deleteMany({ where: of })
     await db.turnAssignment.deleteMany({ where: of })
     await db.task.deleteMany({ where: { workspaceId: { in: ids } } })
-    await db.site.deleteMany({ where: { workspaceId: { in: ids } } })
     await db.workspace.deleteMany({ where: { id: { in: ids } } })
   })
   afterAll(async () => {
@@ -168,18 +131,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
       data: { name: 'Synthetic settlement verification', dataClass: 'synthetic' },
     })
     workspaces.push(workspace.id)
-    const site = await db.site.create({
-      data: {
-        workspaceId: workspace.id,
-        name: 'Settlement test',
-        url: `https://${randomUUID()}.example.invalid`,
-        stack: 'wordpress',
-      },
-    })
     const row = await db.task.create({
       data: {
         workspaceId: workspace.id,
-        siteId: site.id,
         status: data.status ?? 'queued',
         turnNo: data.turnNo ?? 0,
         modelClass: 'standard',
@@ -195,29 +149,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
           image,
         },
       })
-    return { ...row, siteRow: site }
+    return row
   }
-
-  const candidate = (taskId: string, revision: number): CandidateRecordInput => ({
-    taskId,
-    revision,
-    turnNo: 1,
-    baseSha: 'a'.repeat(40),
-    baseTree: 'b'.repeat(40),
-    baseVersion: null,
-    headSha: 'c'.repeat(40),
-    files: [
-      { path: 'wp-content/themes/t/a.php', change: 'added', sizeBytes: 3, executable: false },
-    ],
-    media: [],
-    dbPlan: [],
-    dbPlanSha256: createHash('sha256').update('[]').digest('hex'),
-    proposedBump: 'minor',
-    proposedVersion: 'v0.1.0',
-    facts,
-    checks: ['php_lint', 'preview_smoke'],
-    installed: null,
-  })
 
   // docs/plan/53, «Попробовать ещё (18.10)».
   it('marks the turn of a failed pass once, and keeps the first moment', async () => {
@@ -307,13 +240,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 
-  it('moves no chat with a turn assigned or a release in work: `/undo` is not theirs to take', async () => {
+  it('moves no chat with a turn assigned: `/undo` is not theirs to take', async () => {
     const assigned = await task({ status: 'running', turnNo: 1 })
-    await db.task.update({ where: { id: assigned.id }, data: { status: 'awaiting_approval' } })
+    await db.task.update({ where: { id: assigned.id }, data: { status: 'awaiting_user' } })
     await db.turnAssignment.create({
       data: {
         taskId: assigned.id,
-        siteId: siteIdOf(assigned),
+        siteId: assigned.id,
         sessionId: assigned.id,
         turnNo: 1,
         executor: 'local',
@@ -323,53 +256,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
         deadlineAt: new Date(Date.now() + 60_000),
       },
     })
-    const released = await task({ status: 'running', turnNo: 1 })
-    await db.task.update({ where: { id: released.id }, data: { status: 'awaiting_approval' } })
-    const candidate = await db.taskCandidate.create({
-      data: {
-        taskId: released.id,
-        revision: 1,
-        turnNo: 1,
-        baseSha: 'a'.repeat(40),
-        baseTree: 'b'.repeat(40),
-        headSha: 'c'.repeat(40),
-        dbPlanSha256: '0'.repeat(64),
-        proposedBump: 'minor',
-        proposedVersion: 'v0.1.0',
-        facts: {},
-      },
-    })
-    const at = new Date()
-    await db.siteRelease.create({
-      data: {
-        siteId: siteIdOf(released),
-        taskId: released.id,
-        candidateId: candidate.id,
-        candidateRevision: 1,
-        attempt: 1,
-        releaseKey: 'd'.repeat(64),
-        version: 'v0.1.0',
-        tag: 'v0.1.0',
-        bump: 'minor',
-        mainBeforeSha: 'a'.repeat(40),
-        installedBeforeSha: 'a'.repeat(40),
-        approvedSha: 'd'.repeat(40),
-        status: 'approved',
-        committedAt: at,
-        approvedAt: at,
-      },
-    })
-
-    for (const { id } of [assigned, released]) {
-      expect(await rewindDialog(db, { taskId: id, turnNo: 1, to: 'awaiting_user' })).toBeNull()
-      const after = await db.task.findUniqueOrThrow({ where: { id } })
-      expect(after.status).toBe('awaiting_approval')
-      expect((await db.taskTurn.findFirstOrThrow({ where: { taskId: id } })).undoneAt).toBeNull()
-    }
-    await db.siteRelease.updateMany({ where: { taskId: released.id }, data: { status: 'failed' } })
     expect(
-      await rewindDialog(db, { taskId: released.id, turnNo: 1, to: 'awaiting_user' }),
-    ).not.toBeNull()
+      await rewindDialog(db, { taskId: assigned.id, turnNo: 1, to: 'awaiting_user' }),
+    ).toBeNull()
+    expect(
+      (await db.taskTurn.findFirstOrThrow({ where: { taskId: assigned.id } })).undoneAt,
+    ).toBeNull()
   })
 
   it('takes a completed turn back once, never one whose result was refused', async () => {
@@ -435,7 +327,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     const others = await Promise.all(
       Array.from({ length: 8 }, () =>
         db.task.create({
-          data: { workspaceId, siteId: null, needsRepository: false, modelClass: 'standard' },
+          data: { workspaceId, modelClass: 'standard' },
         }),
       ),
     )
@@ -487,7 +379,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     const assignment = await db.turnAssignment.create({
       data: {
         taskId: row.id,
-        siteId: siteIdOf(row),
+        siteId: row.id,
         sessionId: row.id,
         turnNo: 1,
         executor: 'local',
@@ -553,271 +445,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     })
   })
 
-  it('records the next revision of a candidate over the one that stood, with pending checks', async () => {
+  it('cancels a waiting dialog once, under its attempt, with its feed row', async () => {
     const row = await task({ status: 'running', turnNo: 1 })
-    expect(await nextCandidateRevision(db, row.id)).toBe(1)
-    const first = await db.$transaction((tx) => recordCandidate(tx, candidate(row.id, 1)))
-    expect(first).toMatchObject({ revision: 1, supersededId: null })
-    await db.taskCandidate.update({ where: { id: first.id }, data: { status: 'stale' } })
-
-    expect(await nextCandidateRevision(db, row.id)).toBe(2)
-    const second = await db.$transaction((tx) => recordCandidate(tx, candidate(row.id, 2)))
-    expect(second).toMatchObject({ revision: 2, supersededId: first.id })
-
-    const rows = await db.taskCandidate.findMany({
-      where: { taskId: row.id },
-      orderBy: { revision: 'asc' },
-      include: { checks: { orderBy: { kind: 'asc' } } },
-    })
-    expect(
-      rows.map((c) => [c.revision, c.status, c.previewRevision, c.supersededAt !== null]),
-    ).toEqual([
-      [1, 'superseded', 1, true],
-      [2, 'current', 2, false],
-    ])
-    expect(rows[1]!.checks.map((check) => [check.kind, check.status, check.revision])).toEqual([
-      ['php_lint', 'pending', 2],
-      ['preview_smoke', 'pending', 2],
-    ])
-    // A revision taken by another writer fails on its UNIQUE and writes nothing.
-    await expect(
-      db.$transaction((tx) => recordCandidate(tx, candidate(row.id, 2))),
-    ).rejects.toThrow()
-    expect(await db.taskCandidate.count({ where: { taskId: row.id, status: 'current' } })).toBe(1)
-
-    expect(await db.$transaction((tx) => supersedeStandingCandidate(tx, row.id))).toBe(second.id)
-    expect(await db.taskCandidate.count({ where: { taskId: row.id, status: 'current' } })).toBe(0)
-  })
-
-  it('keeps the description of a plan with its revision, and drops it with the revision', async () => {
-    const row = await task({ status: 'running', turnNo: 1 })
-    const side = (name: string) => ({
-      key: `tasks/${row.id}/db/${name}.json`,
-      sha256: 'e'.repeat(64),
-      sizeBytes: 90,
-    })
-    const dbPlan: DbPlan = [
-      {
-        kind: 'option_update',
-        objectRef: 'option:blogname',
-        fields: ['value'],
-        beforeHash: 'a'.repeat(64),
-        afterHash: 'b'.repeat(64),
-        before: side('1/before'),
-        after: side('1/after'),
-      },
-    ]
-    const dbPlanSha256 = createHash('sha256').update(canonicalDbPlanJson(dbPlan)).digest('hex')
-    const dbView: DbPlanView = {
-      v: 1,
-      planSha256: dbPlanSha256,
-      operations: [
-        {
-          kind: 'option_update',
-          index: 0,
-          objectRef: 'option:blogname',
-          label: 'Название сайта',
-          before: 'Цветы',
-          after: 'Цветы у дома',
-          truncated: false,
-        },
-      ],
-      truncated: false,
-      oversize: false,
-    }
-    const input = { ...candidate(row.id, 1), dbPlan, dbPlanSha256, dbView }
-    // A description of another plan, or of none, is no description of this revision.
-    for (const broken of [
-      { ...input, dbView: { ...dbView, planSha256: 'f'.repeat(64) } },
-      { ...candidate(row.id, 1), dbView },
-    ])
-      await expect(db.$transaction((tx) => recordCandidate(tx, broken))).rejects.toThrow(
-        'Invalid candidate',
-      )
-    const first = await db.$transaction((tx) => recordCandidate(tx, input))
-    const stored = await db.taskCandidate.findUniqueOrThrow({ where: { id: first.id } })
-    expect(stored.dbView).toEqual(dbView)
-    expect(stored.dbViewSha256).toBe(
-      createHash('sha256').update(JSON.stringify(dbView)).digest('hex'),
-    )
-    await db.$transaction((tx) => recordCandidate(tx, candidate(row.id, 2)))
-    expect(
-      await db.taskCandidate.findUniqueOrThrow({
-        where: { id: first.id },
-        select: { status: true, dbView: true, dbViewSha256: true },
-      }),
-    ).toEqual({ status: 'superseded', dbView: null, dbViewSha256: null })
-
-    // A variable set after the builder read the values: the description was not checked for its
-    // value, so the revision is recorded without one (Р13); with the versions it read, it is kept.
-    await db.siteEnvVar.create({
-      data: { siteId: siteIdOf(row), name: 'API_TOKEN', keyVersion: 2 },
-    })
-    const late = await db.$transaction((tx) =>
-      recordCandidate(tx, {
-        ...input,
-        revision: 3,
-        dbViewVariables: [{ name: 'API_TOKEN', keyVersion: 1 }],
-      }),
-    )
-    expect(
-      await db.taskCandidate.findUniqueOrThrow({
-        where: { id: late.id },
-        select: { dbView: true, dbViewSha256: true },
-      }),
-    ).toEqual({ dbView: null, dbViewSha256: null })
-    const checked = await db.$transaction((tx) =>
-      recordCandidate(tx, {
-        ...input,
-        revision: 4,
-        dbViewVariables: [{ name: 'API_TOKEN', keyVersion: 2 }],
-      }),
-    )
-    expect(
-      (await db.taskCandidate.findUniqueOrThrow({ where: { id: checked.id } })).dbView,
-    ).toEqual(dbView)
-  })
-
-  it('records a candidate `stale` when its base is not what the site has installed (Р15)', async () => {
-    const row = await task({ status: 'running', turnNo: 1 })
-    const installed = { sha: 'd'.repeat(40), tree: 'b'.repeat(40) }
-    await db.site.update({
-      where: { id: siteIdOf(row) },
-      data: { installedVersion: 'v1.0.0', installedSha: installed.sha, installedAt: new Date() },
-    })
-    const recordOf = (revision: number, overrides: Partial<CandidateRecordInput>) =>
-      db.$transaction((tx) => recordCandidate(tx, { ...candidate(row.id, revision), ...overrides }))
-    // The base has the tree of the installed version: it stands on what the site holds.
-    expect(await recordOf(1, { installed })).toMatchObject({ status: 'current' })
-    // A revision built on the base of a dialog that began before a release of another one: the
-    // release installed meanwhile, and its markers ran before this row existed.
-    expect(await recordOf(2, { installed, baseTree: 'e'.repeat(40) })).toMatchObject({
-      status: 'stale',
-    })
-    // The builder saw nothing installed, or another version: a release installed after it read.
-    expect(await recordOf(3, { installed: null })).toMatchObject({ status: 'stale' })
-    expect(
-      await recordOf(4, { installed: { sha: 'f'.repeat(40), tree: 'b'.repeat(40) } }),
-    ).toMatchObject({ status: 'stale' })
-    const rows = await db.taskCandidate.findMany({
-      where: { taskId: row.id },
-      orderBy: { revision: 'asc' },
-      select: { revision: true, status: true },
-    })
-    expect(rows.map((c) => [c.revision, c.status])).toEqual([
-      [1, 'superseded'],
-      [2, 'superseded'],
-      [3, 'superseded'],
-      [4, 'stale'],
-    ])
-  })
-
-  it('asks the preview manager for a revision only when the dialog has a preview', async () => {
-    const row = await task({ status: 'running', turnNo: 1 })
-    expect(
-      await db.$transaction((tx) => requestPreviewSync(tx, { taskId: row.id, revision: 1 })),
-    ).toBe(false)
-    const preview = await db.previewEnvironment.create({
-      data: {
-        siteId: siteIdOf(row),
-        taskId: row.id,
-        hostname: `site-${row.siteRow.alias}-chat-${row.alias}.localhost`,
-        expiresAt: new Date(Date.now() + 3_600_000),
-      },
-    })
-    expect(
-      await db.$transaction((tx) => requestPreviewSync(tx, { taskId: row.id, revision: 1 })),
-    ).toBe(true)
-    expect(
-      await db.$transaction((tx) => requestPreviewSync(tx, { taskId: row.id, revision: 1 })),
-    ).toBe(true)
-    const jobs = await db.outboxEvent.findMany({
-      where: { topic: 'previews', dedupeKey: { startsWith: `preview.sync:${preview.id}` } },
-      orderBy: { dedupeKey: 'asc' },
-    })
-    // A second request for the same revision is a new job: the counter of the row moved.
-    expect(jobs.map((job) => job.dedupeKey)).toEqual([
-      `preview.sync:${preview.id}:1:2`,
-      `preview.sync:${preview.id}:1:3`,
-    ])
-    expect(await excludeTurnDbOperations(db, { taskId: row.id, turnNo: 1 })).toBe(0)
-    expect(await includeTurnDbOperations(db, { taskId: row.id, turnNo: 1 })).toBe(0)
-    await expect(includeTurnDbOperations(db, { taskId: row.id, turnNo: 0 })).rejects.toThrow()
-  })
-
-  it('cancels a waiting dialog only while no release of it is in work', async () => {
-    const row = await task({ status: 'running', turnNo: 1 })
-    await db.task.update({ where: { id: row.id }, data: { status: 'awaiting_approval' } })
-    const recorded = await db.$transaction((tx) => recordCandidate(tx, candidate(row.id, 1)))
-    const release = await db.siteRelease.create({
-      data: {
-        siteId: siteIdOf(row),
-        taskId: row.id,
-        candidateId: recorded.id,
-        candidateRevision: 1,
-        attempt: 1,
-        releaseKey: 'f'.repeat(64),
-        version: 'v0.1.0',
-        tag: 'v0.1.0',
-        bump: 'minor',
-        mainBeforeSha: 'a'.repeat(40),
-        committedAt: new Date(),
-        approvedAt: new Date(),
-      },
-    })
-    const cancelled: FeedRow = {
-      type: 'feed.cancelled',
-      payload: { v: 1, turn: 1, by: 'no_answer', site: 'unchanged', credits: 'returned' },
-    }
-    const input = {
-      taskId: row.id,
-      from: 'awaiting_approval' as const,
-      attempt: 1,
-      feed: [cancelled],
-    }
-
+    await db.task.update({ where: { id: row.id }, data: { status: 'awaiting_user' } })
+    const input = { taskId: row.id, from: 'awaiting_user' as const, attempt: 1, feed: [] }
+    expect((await cancelWaitingTask(db, { ...input, attempt: 2 })).moved).toBe(false)
+    expect((await cancelWaitingTask(db, input)).moved).toBe(true)
     expect((await cancelWaitingTask(db, input)).moved).toBe(false)
-    await db.siteRelease.update({ where: { id: release.id }, data: { status: 'failed' } })
-    const moved = await cancelWaitingTask(db, input)
-    expect(moved.moved).toBe(true)
     expect(await db.task.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
       status: 'cancelled',
+      finishedAt: expect.any(Date),
     })
-    expect(await db.taskEvent.count({ where: { taskId: row.id, type: 'feed.cancelled' } })).toBe(1)
-    expect((await cancelWaitingTask(db, input)).moved).toBe(false)
-  })
-
-  it('ends a dialog «Обновить» emptied only while it waits for approval, with no release in work', async () => {
-    const row = await task({ status: 'running', turnNo: 1 })
-    await db.task.update({ where: { id: row.id }, data: { status: 'awaiting_approval' } })
-    const recorded = await db.$transaction((tx) => recordCandidate(tx, candidate(row.id, 1)))
-    const release = await db.siteRelease.create({
-      data: {
-        siteId: siteIdOf(row),
-        taskId: row.id,
-        candidateId: recorded.id,
-        candidateRevision: 1,
-        attempt: 1,
-        releaseKey: 'e'.repeat(64),
-        version: 'v0.1.0',
-        tag: 'v0.1.0',
-        bump: 'minor',
-        mainBeforeSha: 'a'.repeat(40),
-        committedAt: new Date(),
-        approvedAt: new Date(),
-      },
-    })
-    const input = { taskId: row.id, attempt: 1, turnNo: 1 }
-
-    expect(await finishEmptiedDialog(db, input)).toBe(false)
-    await db.siteRelease.update({ where: { id: release.id }, data: { status: 'failed' } })
-    // Another turn number or attempt is another dialog's moment.
-    expect(await finishEmptiedDialog(db, { ...input, turnNo: 2 })).toBe(false)
-    expect(await finishEmptiedDialog(db, { ...input, attempt: 2 })).toBe(false)
-    expect(await finishEmptiedDialog(db, input)).toBe(true)
-    const done = await db.task.findUniqueOrThrow({ where: { id: row.id } })
-    expect(done.status).toBe('done')
-    expect(done.finishedAt).not.toBeNull()
-    expect(await finishEmptiedDialog(db, input)).toBe(false)
   })
 })

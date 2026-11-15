@@ -15,7 +15,6 @@ import { LandingHeader } from './landing-header'
 import { LandingIcon } from './landing-icons'
 import { LandingLead } from './landing-lead'
 import { LandingMotion } from './landing-motion'
-import { LandingPlatforms } from './landing-platforms'
 import { mainAction } from './main-action'
 import { pluralCredits, typicalCreditsInWords } from './pricing-data'
 import { SiteDemo } from './site-demo'
@@ -25,64 +24,66 @@ import styles from './landing.module.css'
 const arrow = { size: 20, strokeWidth: 1.7, linecap: 'round', linejoin: 'round' } as const
 
 // A request is set as a message of the chat, so it needs no quotation marks. A result names what
-// will stand on the site: a noun phrase, no past tense, no figure that the demo does not show.
+// the chat gives back: a noun phrase, no past tense, nothing the agent of a chat cannot do today
+// (web search, its browser on public sites, the files of the chat, documents and pages by a link).
 const capabilities = [
   {
-    name: 'Цены и тексты',
-    request: 'Стрижка теперь 1 800 ₽, поправь в прайсе',
-    result: 'Новая цена стрижки в прайсе',
+    name: 'Найти и сравнить',
+    request: 'Найди три типографии рядом и сравни цены на 500 визиток',
+    result: 'Таблица с ценами, сроками и ссылками',
   },
   {
-    name: 'Фото и файлы',
-    request: 'Замени меню на этот PDF',
-    result: 'Новый файл меню на прежнем месте',
+    name: 'Письма и ответы',
+    request: 'Ответь клиенту вежливо: заказ задержится на два дня',
+    result: 'Готовый текст письма',
   },
   {
-    name: 'Акции и баннеры',
-    request: 'Напиши на главной: в выходные скидка 20% на всё',
-    result: 'Плашка с акцией на главной странице',
+    name: 'Документы и таблицы',
+    request: 'Собери из этих счетов таблицу расходов за октябрь',
+    result: 'Таблица по вашим файлам',
   },
   {
-    name: 'Страницы и разделы',
-    request: 'Добавь раздел с нашими услугами',
-    result: 'Раздел «Услуги» в стиле вашего сайта',
+    name: 'Тексты для соцсетей',
+    request: 'Напиши пост о скидке выходного дня, коротко и тепло',
+    result: 'Пост, который можно сразу публиковать',
   },
   {
-    name: 'Кнопки и формы',
-    request: 'Добавь кнопку записи в шапку',
-    result: 'Кнопка записи в шапке сайта',
+    name: 'Страница по ссылке',
+    request: 'Сделай страницу с прайсом и дай ссылку для клиентов',
+    result: 'Страница на pages.raditi.ru',
   },
   {
-    name: 'Заголовок и описание для поиска',
-    request: 'Напиши в описании для поиска, что теперь готовим и завтраки',
-    result: 'Новое описание страницы для поисковиков',
+    name: 'Разобраться в файле',
+    request: 'Прочитай договор и выпиши сроки и штрафы',
+    result: 'Короткая выжимка главного',
   },
 ]
 
-// The order follows the visitor: does it suit me, what does it cost, what if it goes wrong, where
-// the data lives. The page and the FAQPage markup of the search engines read this one list.
+// The order follows the visitor: what can I ask, does it suit me, what does it cost, what if it
+// goes wrong, where the data lives. The page and the FAQPage markup of the search engines read this
+// one list.
 export const questions = [
   {
-    question: 'Нужно разбираться в сайтах?',
+    question: 'Что умеет Радити?',
     answer:
-      'Нет. Пишите, как написали бы знакомому: «поменяй цену капучино на 290», «замени фото на главной». Если чего-то не хватит, Радити переспросит.',
+      'Ищет в интернете и открывает сайты в своём браузере, читает ваши файлы, пишет письма, посты и документы, собирает таблицы и публикует страницы по ссылке. Пишите в чат обычными словами — если чего-то не хватит, Радити переспросит.',
   },
   {
-    question: 'Мой сайт подойдёт?',
+    question: 'Нужно что-то устанавливать?',
     answer:
-      'Если он на WordPress, Joomla, OpenCart, MODX или 1С-Битрикс — да. Не знаете, на чём сделан сайт? Оставьте заявку — посмотрим сами.',
+      'Нет. Радити работает в браузере и в Telegram: зарегистрируйтесь и напишите первую задачу.',
   },
   {
     // What the two commonest kinds of request cost: estimates of the credits model, so the answer
-    // says «обычно»; the numbers are constants of the domain, as under the calculator. The rule
-    // of the charge is the sentence of the tariffs, word for word (Ц14).
-    question: 'Сколько стоит одна правка?',
-    answer: `Работу мы считаем в кредитах. Поменять цену, текст или фото — обычно ${typicalCreditsInWords(typicalTaskCredits.small)}, добавить блок или страницу — ${typicalCreditsInWords(typicalTaskCredits.block, false)}. Сколько это в рублях, написано в карточке каждого тарифа. ${CHARGED_FOR_DONE_WORK}`,
+    // says «обычно»; the numbers are constants of the domain. The rule of the charge is the
+    // sentence of the tariffs, word for word (Ц14).
+    question: 'Сколько стоит одна задача?',
+    answer: `Работу мы считаем в кредитах. Короткий ответ или небольшой текст — обычно ${typicalCreditsInWords(typicalTaskCredits.small)}, документ, таблица или страница — ${typicalCreditsInWords(typicalTaskCredits.block, false)}. Сколько это в рублях, написано в карточке каждого тарифа. ${CHARGED_FOR_DONE_WORK}`,
   },
   {
     question: 'А если результат не понравится?',
     answer:
-      'До публикации — скажите, что поправить, или отмените правку. После публикации её можно отменить в течение 7 дней: сайт вернётся к прежнему виду.',
+      'Скажите, что поправить, — Радити доработает. Последнюю просьбу можно отменить в чате, и разговор вернётся к тому, что было до неё.',
   },
   {
     question: 'Где будут храниться данные?',
@@ -93,7 +94,7 @@ export const questions = [
 
 // A hyphen or a slash lets the browser break the line inside a name, and so does a dash between
 // the figures of a range: «15–» would end a line and «25» start the next.
-const UNBREAKABLE = /(1С-Битрикс|\d+–\d+)/
+const UNBREAKABLE = /(pages\.raditi\.ru|\d+–\d+)/
 
 /** Readable text with non-breaking spaces and with the names and ranges kept in one piece. */
 function readable(text: string): ReactNode {
@@ -128,11 +129,11 @@ export function Landing({
   const terms = [
     ...(isGuest
       ? [
-          `${signupGiftCredits} ${pluralCredits(signupGiftCredits)} в подарок — около ${giftTaskCounts(signupGiftCredits).small} небольших правок`,
+          `${signupGiftCredits} ${pluralCredits(signupGiftCredits)} в подарок — около ${giftTaskCounts(signupGiftCredits).small} небольших задач`,
         ]
       : []),
-    'Подключение бесплатно',
-    'Подключаем сами',
+    'В браузере и в Telegram',
+    'Без установки',
   ]
   return (
     <div className={styles.page} id="top">
@@ -147,17 +148,17 @@ export function Landing({
           {/* The heading of the page says what the service is, in the words people search by;
               the slogan under it is the large line of the first screen. */}
           <h1 id="hero-title" className={styles.heroKey}>
-            {readable('ИИ-помощник для сайта на WordPress, Joomla, OpenCart, MODX и 1С-Битрикс')}
+            {readable('ИИ-помощник на каждый день для вас и вашего бизнеса')}
           </h1>
           <p className={styles.heroTitle}>
             <span>Напишите в&nbsp;чат.</span>{' '}
             <span>
-              <em>Сайт поправим.</em>
+              <em>Всё сделаем.</em>
             </span>
           </p>
           <p className={styles.heroLead}>
             {nbsp(
-              'Цены, фото, акции, часы работы. Напишите обычными словами, что поменять, — Радити сделает и покажет до публикации.',
+              'Найти, сравнить, написать письмо, собрать таблицу. Напишите обычными словами, что нужно, — Радити сделает.',
             )}
           </p>
           <div className={styles.heroActions}>
@@ -193,20 +194,18 @@ export function Landing({
           <div className={`${styles.sectionHeading} ${styles.centred}`} data-reveal>
             <h2 id="demo-title">Попробуйте сами</h2>
             <p>
-              {nbsp('Сайт кофейни для примера. Выберите просьбу — и посмотрите, что изменится.')}
+              {nbsp('Кофейня для примера. Выберите просьбу — и посмотрите, что сделает Радити.')}
             </p>
           </div>
           <SiteDemo />
         </section>
-
-        <LandingPlatforms />
 
         <section id="possibilities" className={styles.section} aria-labelledby="can-title">
           <div className={styles.sectionHeading} data-reveal>
             <h2 id="can-title">Что можно поручить</h2>
             <p>
               {nbsp(
-                'То, ради чего обычно пишут разработчику: ваша просьба — и что после неё появится на сайте.',
+                'Дела, на которые обычно уходит полдня: ваша просьба — и что вы получите в ответ.',
               )}
             </p>
           </div>
@@ -220,8 +219,8 @@ export function Landing({
                 <h3>{nbsp(item.name)}</h3>
                 <span className={styles.columnLabel}>Например, вы&nbsp;пишете</span>
                 <p className={styles.requestBubble}>{nbsp(item.request)}</p>
-                <span className={styles.columnLabel}>Что изменится на&nbsp;сайте</span>
-                <p className={styles.capabilityResult}>{nbsp(item.result)}</p>
+                <span className={styles.columnLabel}>Что вы&nbsp;получите</span>
+                <p className={styles.capabilityResult}>{readable(item.result)}</p>
               </article>
             ))}
           </div>
@@ -230,34 +229,34 @@ export function Landing({
         <section id="safety" className={styles.safety} aria-labelledby="safety-title">
           <div className={styles.safetyInner}>
             <div className={styles.sectionHeading} data-reveal>
-              <h2 id="safety-title">Без&nbsp;вашего «да» сайт не&nbsp;меняется</h2>
-              <p>{nbsp('Правка сначала появляется в черновике. На сайт её выпускаете вы.')}</p>
+              <h2 id="safety-title">Вы&nbsp;видите, что делает Радити</h2>
+              <p>{nbsp('Каждый шаг — в чате. Остановить работу можно в любой момент.')}</p>
             </div>
             <ol className={styles.safetyList} role="list">
               <li>
                 <span aria-hidden="true">01</span>
-                <h3>Сначала черновик</h3>
+                <h3>Ход работы на&nbsp;виду</h3>
                 <p>
                   {nbsp(
-                    'Радити показывает правку на копии сайта. Посетители её не видят, пока вы не опубликуете.',
+                    'Пока Радити работает, в чате видно, что он ищет, читает и пишет. Браузер помощника можно открыть и посмотреть.',
                   )}
                 </p>
               </li>
               <li>
                 <span aria-hidden="true">02</span>
-                <h3>Отмена за&nbsp;7&nbsp;дней</h3>
+                <h3>Остановить и&nbsp;вернуть</h3>
                 <p>
                   {nbsp(
-                    'Опубликовали и передумали — отмените в чате. Сайт вернётся к прежнему виду.',
+                    'Работу можно остановить, а последнюю просьбу — отменить: разговор вернётся к тому, что было до неё.',
                   )}
                 </p>
               </li>
               <li>
                 <span aria-hidden="true">03</span>
-                <h3>Опасное&nbsp;— только с&nbsp;подтверждением</h3>
+                <h3>Без&nbsp;вашей просьбы&nbsp;— ничего лишнего</h3>
                 <p>
                   {nbsp(
-                    'Удалить страницы, сменить оформление, поставить дополнения Радити без вашего отдельного согласия не станет.',
+                    'Платить, удалять, вводить пароли и что-то менять на чужих сайтах Радити без вашей явной просьбы не станет.',
                   )}
                 </p>
               </li>

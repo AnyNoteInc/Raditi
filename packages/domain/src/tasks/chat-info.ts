@@ -26,8 +26,6 @@ export interface ChatStatusInfo {
   title: string | null
   /** The word of its status, as the header of the chat says it. */
   status: string
-  /** The name of its project; null — a chat without a project. */
-  project: string | null
   /** The model of the last turn, as its card names it; null — no turn yet. */
   model: string | null
   effort: ReasoningEffort
@@ -130,7 +128,6 @@ function statusLines(status: ChatStatusInfo | null): string[] {
   return [
     ...(status.title === null ? [] : [`Чат «${status.title}».`]),
     `${status.status}.`,
-    status.project === null ? 'Без проекта.' : `Проект «${status.project}».`,
     model,
     ...(status.queued > 0
       ? [

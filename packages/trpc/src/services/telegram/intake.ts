@@ -48,8 +48,6 @@ export interface TelegramMedia {
    */
   attach(input: {
     userId: string
-    /** The project of the chat the file goes to; null — a chat without one. */
-    siteId: string | null
     fileId: string
     name: string
     contentType: string | null
@@ -77,8 +75,6 @@ export type IntakeAnswer = 'done' | 'repeated' | 'skipped'
 
 /** At most this many chats `/chats` offers. */
 export const TELEGRAM_CHATS_LISTED = 8
-/** At most this many projects `/new` offers. */
-export const TELEGRAM_PROJECTS_LISTED = 12
 
 /**
  * A UUID of version 7 derived from the update (RFC 9562): the time of the message in the first 48
@@ -101,18 +97,16 @@ const PRESS_EPOCH = new Date(Date.UTC(2026, 10, 1))
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
 
-/** What a button of the bot says it does: `stop:<id>`, `go:<id>`, `proj:<id|none>`, `chat:<id>`. */
-export type TelegramPressAction =
-  { kind: 'stop' | 'go' | 'chat'; taskId: string } | { kind: 'project'; siteId: string | null }
+/** What a button of the bot says it does: `stop:<id>`, `go:<id>`, `chat:<id>`. */
+export interface TelegramPressAction {
+  kind: 'stop' | 'go' | 'chat'
+  taskId: string
+}
 
 export function readPressData(data: string | undefined): TelegramPressAction | null {
-  const match = /^(stop|go|chat|proj):(.+)$/u.exec(data ?? '')
+  const match = /^(stop|go|chat):(.+)$/u.exec(data ?? '')
   if (!match) return null
   const [, kind, value] = match
-  if (kind === 'proj') {
-    if (value === 'none') return { kind: 'project', siteId: null }
-    return UUID.test(value!) ? { kind: 'project', siteId: value! } : null
-  }
   return UUID.test(value!) ? { kind: kind as 'stop' | 'go' | 'chat', taskId: value! } : null
 }
 
@@ -120,13 +114,16 @@ export const pressData = {
   stop: (taskId: string) => `stop:${taskId}`,
   go: (taskId: string) => `go:${taskId}`,
   chat: (taskId: string) => `chat:${taskId}`,
-  project: (siteId: string | null) => `proj:${siteId ?? 'none'}`,
 }
 
 interface Where {
   chatId: string
   threadId: number | undefined
 }
+
+/** Where the words of a message go: a chat that is, or a new one. */
+type Target = { taskId: string } | { newChat: true }
+const NEW_CHAT: Target = { newChat: true }
 
 /** Handles one update; throws only on a failure worth trying again (the database is away). */
 export async function handleTelegramUpdate(
@@ -184,7 +181,7 @@ class Intake {
   async #userOf(externalId: string) {
     return this.#deps.db.channelIdentity.findUnique({
       where: { channel_externalId: { channel: 'telegram', externalId } },
-      select: { id: true, userId: true, currentTaskId: true, newChat: true, newChatSiteId: true },
+      select: { id: true, userId: true, currentTaskId: true, newChat: true },
     })
   }
 
@@ -240,7 +237,7 @@ class Intake {
       return
     }
     if (command?.name === 'new') {
-      await this.#newChat(where, identity.userId, identity.id)
+      await this.#newChat(where, identity.id)
       return
     }
     if (command?.name === 'delete') {
@@ -260,19 +257,10 @@ class Intake {
     // createDialog repeats safely — never the words a second time into that chat.
     const started = await this.#deps.db.task.findUnique({
       where: { id: updateUuid(`task:${this.#updateId}`, new Date(message.date * 1000)) },
-      select: { siteId: true },
+      select: { id: true },
     })
-    const target = started ? { siteId: started.siteId } : await this.#targetOf(where, identity)
-    const siteId =
-      'siteId' in target
-        ? target.siteId
-        : ((
-            await this.#deps.db.task.findUnique({
-              where: { id: target.taskId },
-              select: { siteId: true },
-            })
-          )?.siteId ?? null)
-    const words = await this.#wordsOf(message, identity.userId, siteId, where)
+    const target = started ? NEW_CHAT : await this.#targetOf(where, identity)
+    const words = await this.#wordsOf(message, identity.userId, where)
     if (words === null) return
     await this.#post(where, identity, words, message, target)
   }
@@ -305,7 +293,6 @@ class Intake {
   async #wordsOf(
     message: TelegramMessage,
     userId: string,
-    siteId: string | null,
     where: Where,
   ): Promise<{ text: string; attachments: string[] } | null> {
     const media = this.#deps.media
@@ -357,7 +344,7 @@ class Intake {
       await this.#reply(where, telegramText.heard(heard.text))
     }
     for (const file of files) {
-      const stored = await media!.attach({ userId, siteId, ...file })
+      const stored = await media!.attach({ userId, ...file })
       if ('refused' in stored) {
         await this.#reply(where, stored.refused)
         return null
@@ -375,7 +362,7 @@ class Intake {
   async #targetOf(
     where: Where,
     identity: { userId: string; currentTaskId: string | null; newChat: boolean },
-  ): Promise<{ taskId: string } | { siteId: string | null }> {
+  ): Promise<Target> {
     const { db } = this.#deps
     if (where.threadId !== undefined) {
       const session = await db.chatSession.findFirst({
@@ -394,16 +381,10 @@ class Intake {
         },
       })
       const task = session?.tasks[0]
-      // A topic the client opened in Telegram is a new chat without a project.
-      return task ? { taskId: task.id } : { siteId: null }
+      // A topic the client opened in Telegram is a new chat.
+      return task ? { taskId: task.id } : NEW_CHAT
     }
-    if (identity.newChat) {
-      const pending = await db.channelIdentity.findUnique({
-        where: { userId_channel: { userId: identity.userId, channel: 'telegram' } },
-        select: { newChatSiteId: true },
-      })
-      return { siteId: pending?.newChatSiteId ?? null }
-    }
+    if (identity.newChat) return NEW_CHAT
     if (identity.currentTaskId !== null) {
       const task = await db.task.findFirst({
         where: { id: identity.currentTaskId, deletedAt: null, createdById: identity.userId },
@@ -411,7 +392,7 @@ class Intake {
       })
       if (task) return { taskId: task.id }
     }
-    return { siteId: null }
+    return NEW_CHAT
   }
 
   async #post(
@@ -419,18 +400,17 @@ class Intake {
     identity: { id: string; userId: string; currentTaskId: string | null; newChat: boolean },
     words: { text: string; attachments: string[] },
     message: TelegramMessage,
-    target: { taskId: string } | { siteId: string | null },
+    target: Target,
   ): Promise<void> {
     const { db, chat } = this.#deps
     const now = this.#now
     const at = new Date(message.date * 1000)
     const attachments = words.attachments.length > 0 ? { attachments: words.attachments } : {}
     try {
-      if ('siteId' in target) {
+      if (!('taskId' in target)) {
         const taskId = updateUuid(`task:${this.#updateId}`, at)
         await createDialog(db, chat, {
           userId: identity.userId,
-          siteId: target.siteId,
           taskId,
           text: words.text,
           ...attachments,
@@ -439,7 +419,7 @@ class Intake {
         await this.#bind(taskId, where)
         await db.channelIdentity.update({
           where: { id: identity.id },
-          data: { currentTaskId: taskId, newChat: false, newChatSiteId: null },
+          data: { currentTaskId: taskId, newChat: false },
         })
         if (where.threadId === undefined) await enqueueTelegramTopic(db, { taskId })
         // No «Принято»: the message of the work of the agent says it (owner, 15.11.2026).
@@ -489,7 +469,6 @@ class Intake {
       where: { id: taskId },
       select: {
         workspaceId: true,
-        siteId: true,
         chatSession: {
           select: { id: true, channel: true, externalChatId: true, telegramTopicId: true },
         },
@@ -514,7 +493,6 @@ class Intake {
     const created = await db.chatSession.create({
       data: {
         workspaceId: task.workspaceId,
-        siteId: task.siteId,
         channel: 'telegram',
         externalChatId: where.chatId,
         telegramTopicId: where.threadId ?? null,
@@ -524,25 +502,12 @@ class Intake {
     await db.task.update({ where: { id: taskId }, data: { chatSessionId: created.id } })
   }
 
-  async #newChat(where: Where, userId: string, identityId: string): Promise<void> {
-    const { db } = this.#deps
-    await db.channelIdentity.update({
+  async #newChat(where: Where, identityId: string): Promise<void> {
+    await this.#deps.db.channelIdentity.update({
       where: { id: identityId },
-      data: { newChat: true, newChatSiteId: null },
+      data: { newChat: true },
     })
-    const sites = await db.site.findMany({
-      where: { deletedAt: null, workspace: { members: { some: { userId } } } },
-      orderBy: { createdAt: 'desc' },
-      take: TELEGRAM_PROJECTS_LISTED,
-      select: { id: true, name: true },
-    })
-    const buttons: TelegramButton[][] = [
-      [{ text: telegramText.noProject, data: pressData.project(null) }],
-      ...sites.map((site) => [{ text: buttonText(site.name), data: pressData.project(site.id) }]),
-    ]
-    await this.#reply(where, sites.length > 0 ? telegramText.newChatAsk : telegramText.newChat, {
-      ...(sites.length > 0 ? { buttons } : {}),
-    })
+    await this.#reply(where, telegramText.newChat)
   }
 
   /**
@@ -641,36 +606,12 @@ class Intake {
           }
           await db.channelIdentity.update({
             where: { id: identity.id },
-            data: { currentTaskId: task.id, newChat: false, newChatSiteId: null },
+            data: { currentTaskId: task.id, newChat: false },
           })
           await this.#bind(task.id, where)
           await reply(telegramText.chatChosen(task.title ?? telegramText.untitled), {
             buttons: [[{ text: telegramText.openButton, url: this.#chatLink(task.id) }]],
           })
-          return
-        }
-        case 'project': {
-          let name: string | null = null
-          if (action.siteId !== null) {
-            const site = await db.site.findFirst({
-              where: {
-                id: action.siteId,
-                deletedAt: null,
-                workspace: { members: { some: { userId: identity.userId } } },
-              },
-              select: { name: true },
-            })
-            if (!site) {
-              await reply(telegramText.pressStale)
-              return
-            }
-            name = site.name
-          }
-          await db.channelIdentity.update({
-            where: { id: identity.id },
-            data: { newChat: true, newChatSiteId: action.siteId },
-          })
-          await reply(telegramText.projectChosen(name))
           return
         }
       }

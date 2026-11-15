@@ -10,7 +10,7 @@ import {
   showsRefresh,
   type FeedState,
 } from './feed-state'
-import { candidateHead, feedAnswer, requestRow, resultRow, stepRow, verdicts } from './testing'
+import { feedAnswer, requestRow, resultRow, stepRow } from './testing'
 
 const answered = (state: FeedState, answer = feedAnswer(), after = state.cursor) =>
   feedReducer(state, { type: 'answer', answer, after })
@@ -137,22 +137,6 @@ describe('pollDelay', () => {
       expect(pollDelay(at({ status }))).toBe(feedPolling.working)
   })
 
-  it('reads every 15 s while the dialog waits for the client', () => {
-    expect(pollDelay(at({ status: 'awaiting_user' }))).toBe(feedPolling.waiting)
-    expect(pollDelay(at({ status: 'awaiting_approval', candidate: candidateHead }))).toBe(15_000)
-  })
-
-  it('counts the build of the preview as work', () => {
-    const preview = {
-      status: 'building' as const,
-      unavailableReason: null,
-      origin: null,
-      revision: 1,
-      dirty: false,
-    }
-    expect(pollDelay(at({ status: 'awaiting_approval', preview }))).toBe(2_000)
-  })
-
   it('counts an open browser of the task as work while the task waits', () => {
     const browser = {
       sessionId: '0199a3f2-0000-7000-8000-0000000000e1',
@@ -165,16 +149,6 @@ describe('pollDelay', () => {
     expect(
       pollDelay(at({ status: 'awaiting_user', browser: { ...browser, status: 'closed' } })),
     ).toBe(feedPolling.waiting)
-  })
-
-  it('counts a press of `/undo` or `/redo` core has not answered as work: it comes with its job', () => {
-    for (const refusal of ['turn_rewinding', 'turn_redoing'] as const) {
-      const commands = verdicts({ turn_undo: refusal, turn_redo: refusal })
-      expect(pollDelay(at({ status: 'awaiting_user', commands }))).toBe(feedPolling.working)
-    }
-    expect(pollDelay(at({ status: 'awaiting_user', commands: verdicts() }))).toBe(
-      feedPolling.waiting,
-    )
   })
 
   it('stops at the end of a dialog', () => {
@@ -195,37 +169,5 @@ describe('pollDelay', () => {
       notFound: false,
     })
     expect(pollDelay(waiting)).toBe(30_000)
-  })
-})
-
-describe('a closed dialog whose release is undone', () => {
-  it('is read every 2 s while the undo goes on, and no more once it ended', () => {
-    const run = {
-      id: '0199a3f2-0000-7000-8000-0000000000e1',
-      status: 'deploying' as const,
-      step: null,
-      version: 'v1.4.1',
-      outcome: null,
-    }
-    const undo = {
-      releaseId: '0199a3f2-0000-7000-8000-0000000000d1',
-      version: 'v1.4.0',
-      installedNow: true,
-      until: new Date(),
-      run,
-    }
-    const state = (patch: Parameters<typeof feedAnswer>[0]) => ({
-      ...feedReducer(initialFeedState, { type: 'answer', answer: feedAnswer(patch), after: '0' }),
-      now: false,
-    })
-    expect(pollDelay(state({ status: 'done', undo }))).toBe(feedPolling.working)
-    expect(
-      pollDelay(
-        state({
-          status: 'done',
-          undo: { ...undo, run: { ...run, status: 'installed', outcome: 'installed' } },
-        }),
-      ),
-    ).toBeNull()
   })
 })

@@ -1,7 +1,7 @@
 import { serverCommandIds } from '@repo/domain/release/chat-commands'
 import type { FeedAgentCommandId, FeedCommandId, TaskStatus } from '@repo/domain'
 
-import type { CandidateView, CommandVerdict, DialogFeed, FeedHead, FeedRow } from './chat-types'
+import type { CommandVerdict, DialogFeed, FeedHead, FeedRow } from './chat-types'
 
 // Answers of `task.feed` for the component tests: a dialog of the kofeinya «Крошка» whose agent
 // changes the price of a cappuccino. And the rules of the page as a browser of a given width reads
@@ -23,12 +23,10 @@ export function verdicts(
   refused: Partial<Record<CommandVerdict['id'], CommandVerdict['refusal']>> = {},
 ): CommandVerdict[] {
   const closed = { turn_undo: 'nothing_to_undo', turn_redo: 'nothing_to_redo', ...refused } as const
-  return serverCommandIds
-    .filter((id) => (id !== 'undo' && id !== 'retry') || id in refused)
-    .map((id) => {
-      const refusal = closed[id] ?? null
-      return { id, available: refusal === null, refusal }
-    })
+  return serverCommandIds.map((id) => {
+    const refusal = closed[id] ?? null
+    return { id, available: refusal === null, refusal }
+  })
 }
 
 export function taskHead(patch: Partial<FeedHead> = {}): FeedHead {
@@ -43,7 +41,7 @@ export function taskHead(patch: Partial<FeedHead> = {}): FeedHead {
     canRetry: false,
     workingSince: '2026-10-17T09:00:00.000Z',
     runningSince: null,
-    requirements: { repository: true, browser: false },
+    requirements: { repository: false, browser: false },
     effort: 'high',
     ...patch,
   }
@@ -56,10 +54,6 @@ export function feedAnswer(
   return {
     task: taskHead({ ...(status ? { status } : {}), ...task }),
     browser: null,
-    preview: null,
-    candidate: null,
-    release: null,
-    undo: null,
     commands: verdicts(),
     events: [],
     cursor: '0',
@@ -202,86 +196,6 @@ export const candidateHead = {
   checks: { pending: 0, passed: 2, failed: 0, stale: 0 },
 }
 
-/**
- * A description of a database plan of every kind, as core keeps it with a revision (docs/plan/53,
- * «Операции БД и миграции»): a table, a setting, a new page and a text change.
- */
-export const databaseView: NonNullable<CandidateView['databaseView']> = {
-  v: 1,
-  planSha256: 'a'.repeat(64),
-  operations: [
-    {
-      kind: 'schema_migration',
-      index: 0,
-      objectRef: 'table:bookings',
-      table: 'bookings',
-      created: true,
-      columns: [
-        { name: 'name', type: 'string', length: 120, nullable: false, default: { value: '' } },
-        { name: 'starts_at', type: 'datetime', nullable: true },
-      ],
-      indexes: [{ name: 'by_start', columns: ['starts_at'], unique: false }],
-    },
-    {
-      kind: 'option_update',
-      index: 1,
-      objectRef: 'option:blogdescription',
-      label: 'Описание сайта',
-      before: 'Цветы у дома',
-      after: 'Цветы у дома — доставка за час',
-      truncated: false,
-    },
-    {
-      kind: 'post_create',
-      index: 2,
-      objectRef: 'page:1000000001',
-      record: { type: 'page' },
-      title: 'Цены',
-      slug: 'prices',
-      status: 'draft',
-      excerpt: '',
-      contentText: 'Букет от 500 ₽',
-      contentBytes: 40,
-      links: ['/contacts/'],
-      truncated: false,
-    },
-    {
-      kind: 'content_update',
-      index: 3,
-      objectRef: 'page:42',
-      record: { type: 'page', title: 'Контакты и реквизиты' },
-      fields: ['title', 'excerpt', 'content'],
-      title: {
-        before: 'Контакты',
-        after: 'Контакты и реквизиты',
-        markupOnly: false,
-        links: { added: [], removed: [] },
-        truncated: false,
-      },
-      excerpt: {
-        before: 'Как нас найти',
-        after: 'Как нас найти',
-        markupOnly: true,
-        links: { added: ['https://map.example.ru/shop'], removed: [] },
-        truncated: false,
-      },
-      content: {
-        hunks: [
-          { op: 'same', text: 'Пишите нам ' },
-          { op: 'del', text: 'через форму' },
-          { op: 'add', text: 'на почту' },
-        ],
-        replaced: null,
-        markupOnly: false,
-        links: { added: ['mailto:shop@example.ru'], removed: [] },
-        truncated: true,
-      },
-    },
-  ],
-  truncated: true,
-  oversize: false,
-}
-
 // A task in the browser (docs/plan/57-browser-tasks.md): the agent adds a news post on the site of
 // the kofeinya through its admin pages, and the client signs in there when asked.
 
@@ -299,9 +213,7 @@ export function browserAnswer(
     status: 'running',
     commands: verdicts(
       Object.fromEntries(
-        serverCommandIds
-          .filter((id) => id !== 'cancel' && id !== 'undo' && id !== 'retry')
-          .map((id) => [id, 'not_allowed' as const]),
+        serverCommandIds.filter((id) => id !== 'cancel').map((id) => [id, 'busy' as const]),
       ),
     ),
     ...rest,

@@ -26,7 +26,6 @@
     "@repo/observability": "workspace:*",
     "@repo/sandbox-providers": "workspace:*",
     "@repo/service-runtime": "workspace:*",
-    "@repo/site-adapters": "workspace:*",
     "@repo/storage": "workspace:*",
     "express": "catalog:",
     "reflect-metadata": "catalog:",

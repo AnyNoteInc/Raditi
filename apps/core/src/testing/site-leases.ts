@@ -16,8 +16,6 @@ interface Row {
   epoch: number
   expiresAt: number | null
   held: boolean
-  /** site_leases.inflight_release_id: a test sets it on the row of a deploy lease. */
-  releaseBarrier?: string | null
 }
 
 export class MemorySiteLeases implements SiteLeaseStore {
@@ -27,11 +25,7 @@ export class MemorySiteLeases implements SiteLeaseStore {
     input: Omit<SiteLeaseFence, 'epoch'> & { ttlMs: number },
   ): Promise<SiteLeaseGrant | null> {
     const row = this.rows.get(input.siteId)
-    if (
-      row &&
-      (row.held || row.releaseBarrier || (row.taskId !== null && row.expiresAt! > Date.now()))
-    )
-      return null
+    if (row && (row.held || (row.taskId !== null && row.expiresAt! > Date.now()))) return null
     const next: Row = {
       taskId: input.taskId,
       operation: input.operation,
@@ -56,7 +50,7 @@ export class MemorySiteLeases implements SiteLeaseStore {
 
   async release(fence: SiteLeaseFence): Promise<boolean> {
     const row = this.#live(fence)
-    if (!row || row.releaseBarrier) return false
+    if (!row) return false
     Object.assign(row, { taskId: null, operation: null, expiresAt: null })
     return true
   }
@@ -72,7 +66,6 @@ export class MemorySiteLeases implements SiteLeaseStore {
           expiresAt: row.expiresAt === null ? null : new Date(row.expiresAt),
           serverNow: new Date(),
           heldForOperator: row.held,
-          inflightReleaseId: row.releaseBarrier ?? null,
         }
       : null
   }
@@ -94,7 +87,7 @@ export class MemorySiteLeases implements SiteLeaseStore {
 
   async free(fence: SiteLeaseFence): Promise<boolean> {
     const row = this.#owned(fence)
-    if (!row || row.releaseBarrier) return false
+    if (!row) return false
     Object.assign(row, { taskId: null, operation: null, expiresAt: null, held: false })
     return true
   }

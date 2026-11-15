@@ -471,15 +471,7 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
         rate: { id: approval.rateId },
       })
       const workspace = await tx.workspace.create({ data: { name: 'Rate verification' } })
-      const site = await tx.site.create({
-        data: {
-          workspaceId: workspace.id,
-          name: 'Rate verification',
-          url: `https://${randomUUID()}.example.ru`,
-          stack: 'wordpress',
-        },
-      })
-      const task = await tx.task.create({ data: { workspaceId: workspace.id, siteId: site.id } })
+      const task = await tx.task.create({ data: { workspaceId: workspace.id } })
       await writeModelCall(tx, {
         taskId: task.id,
         pool: sol,
@@ -721,7 +713,6 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
           kind: 'quota',
           price: '1000.00',
           creditsPerMonth: 100,
-          maxSites: 1,
           isActive: true,
           ...data,
         },

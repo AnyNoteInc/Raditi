@@ -1,13 +1,9 @@
-import { hkdfSync } from 'node:crypto'
-
 import {
   DomainError,
   type AppEnv,
   type ObjectStorage,
   type PagesAddress,
-  type PreviewAddress,
   type SecretStore,
-  type SiteStack,
 } from '@repo/domain'
 
 import type { PageKeys } from './page-tokens.ts'
@@ -21,15 +17,9 @@ export interface ChatContext {
   /** APP_ENV: outside production a dialog is taken only in a synthetic workspace (rule 1). */
   appEnv: AppEnv
   /**
-   * Where previews are served and how long an unviewed one lives (PREVIEW_BASE_DOMAIN,
-   * PREVIEW_SCHEME, PREVIEW_PUBLIC_PORT, PREVIEW_TTL_HOURS). null — previews are not set up
-   * here: a dialog gets no preview row, and `/preview` answers that there is none.
-   */
-  preview: { address: PreviewAddress; ttlHours: number } | null
-  /**
    * The cloud browser of tasks (docs/plan/57-browser-tasks.md, Б9, Б12): `streamUrl` is where the
    * cabinet opens the stream of a session (BROWSER_STREAM_PUBLIC_URL, `ws(s)://…`). Absent or
-   * null — the platform has no browser here: no site offers tasks in it, and no ticket is issued.
+   * null — the platform has no browser here: chats get none, and no ticket is issued.
    */
   browser?: { streamUrl: string } | null
   /**
@@ -37,11 +27,6 @@ export interface ChatContext {
    * the cabinet subscribes a browser with it. Absent or null — no notifications in browsers.
    */
   webPushPublicKey?: string | null
-  /**
-   * Whether the adapter of this stack works in the site's admin pages: `@repo/trpc` knows no
-   * adapter, the app that builds this context does. Absent — every stack is taken for one.
-   */
-  browserSupported?: (stack: SiteStack) => boolean
   /**
    * Where published pages answer (docs/plan/69-pages.md, Ст3): the cabinet names their address.
    * Absent or null — no pages here: the section «Страницы» says so.
@@ -59,38 +44,24 @@ export interface ChatContext {
    * the cabinet links Telegram through `t.me/<bot>`. Absent or null — no Telegram here.
    */
   telegramBot?: string | null
-  /** The HMAC key of release confirmations: `releaseConfirmKey(BETTER_AUTH_SECRET)`. */
-  releaseConfirmKey: Uint8Array
-  /** `raditi-artifacts`: the diff of a candidate (`candidate.fileDiff`). */
+  /** `raditi-inbox`: the files of messages, removed while unsent (`attachment.remove`). */
   storage: () => ObjectStorage
   /**
    * Vault under the policies `sites-writer` and `workspace-provisioner`: the values of the
-   * client's variables are written and never read back (`siteEnv.*`), and the Transit key of a
-   * workspace is made before its first task (`task.create`; docs/plan/57-browser-tasks.md, Б32).
-   * Three methods, not the store, as the wizard's (spec §15): web shares its AppRole with `core`
-   * at MVP (П9), so nothing that holds this object can call `kvRead`.
+   * variables of a workspace are written and never read back (`workspaceEnv.*`;
+   * docs/plan/83-remove-projects.md, БП4), and the Transit key of a workspace is made before its
+   * first task (`task.create`; docs/plan/57-browser-tasks.md, Б32). Three methods, not the store
+   * (spec §15): web shares its AppRole with `core` at MVP (П9), so nothing that holds this object
+   * can call `kvRead`.
    */
-  secrets: () => SiteSecretWriter
+  secrets: () => ChatSecretWriter
 }
 
 /**
  * What a procedure may do with Vault: write a value by CAS, read a key's versions, and create
  * the Transit key of a workspace when it is missing — never read, export or remove one.
  */
-export type SiteSecretWriter = Pick<SecretStore, 'kvWrite' | 'kvMetadata' | 'transitEnsureKey'>
-
-/** The `info` of HKDF: a key of its own, never the secret of the sessions itself. */
-export const RELEASE_CONFIRM_KEY_INFO = 'raditi-release-confirm-v1'
-
-/**
- * The key `release.prepare` signs a confirmation with and `release.confirm` checks it by:
- * HKDF-SHA256 of BETTER_AUTH_SECRET with its own `info`, 32 bytes. Every web replica derives the
- * same key; rotating the secret of the sessions voids the confirmations in flight, nothing else.
- */
-export function releaseConfirmKey(secret: string): Uint8Array {
-  if (secret.length === 0) throw new Error('The secret of release confirmations is empty')
-  return new Uint8Array(hkdfSync('sha256', secret, new Uint8Array(0), RELEASE_CONFIRM_KEY_INFO, 32))
-}
+export type ChatSecretWriter = Pick<SecretStore, 'kvWrite' | 'kvMetadata' | 'transitEnsureKey'>
 
 /** The dialog context of a procedure, or the refusal that dialogs are not set up. */
 export function chatContextOf(context: { chat?: ChatContext | null }): ChatContext {
@@ -106,12 +77,6 @@ export const browserUnavailable = () =>
 /** Whether the cabinet of this process can show a browser of the platform (Б9). */
 export const browserConfigured = (context: { chat?: ChatContext | null }): boolean =>
   context.chat?.browser != null
-
-/** `SiteCapabilityFacts.browserStack` of a stack in this process. */
-export const browserStackSupported = (
-  context: { chat?: ChatContext | null },
-  stack: SiteStack,
-): boolean => context.chat?.browserSupported?.(stack) ?? true
 
 /** Where the cabinet opens the stream of a browser, or the refusal that there is none. */
 export function browserStreamUrlOf(chat: ChatContext): string {

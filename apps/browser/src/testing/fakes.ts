@@ -17,8 +17,6 @@ import {
   type BrowserSessionRuntime,
   type BrowserSessionRuntimeSpec,
   type BrowserSessionStatus,
-  type BrowserSignIn,
-  type BrowserSignInOutcome,
   type BrowserTab,
   type BrowserVerificationPlan,
   type BrowserVerificationReading,
@@ -32,7 +30,6 @@ import {
   type CloudBrowserFrame,
   type CloudBrowserObservation,
   type CloudBrowserSession,
-  type SiteStack,
 } from '@repo/domain'
 
 import type { InboxStorage } from '../attachments/attachments.ts'
@@ -42,7 +39,6 @@ import type {
   BrowserWorkerStore,
   StoredAttachment,
   StoredBrowserSession,
-  StoredSite,
 } from '../store/worker-store.ts'
 
 export { fakeInfra, TEST_METRICS_TOKEN } from '@repo/service-runtime/testing/fakes'
@@ -300,16 +296,6 @@ export class FakeCloudBrowser implements CloudBrowserSession {
     this.controllers.push(controller)
   }
 
-  /** The sign-ins asked for, in order (Б36). */
-  readonly signIns: BrowserSignIn[] = []
-  /** What a sign-in does: `absent` unless a test puts the page on the form. */
-  onSignIn: (credentials: BrowserSignIn) => Promise<BrowserSignInOutcome> = async () => 'absent'
-
-  async signIn(credentials: BrowserSignIn): Promise<BrowserSignInOutcome> {
-    this.signIns.push(credentials)
-    return this.onSignIn(credentials)
-  }
-
   async verify(plan: BrowserVerificationPlan): Promise<BrowserVerificationReading> {
     this.verified.push(plan)
     return this.reading(plan)
@@ -370,7 +356,6 @@ export class FakeBrowsers implements CloudBrowserFactory {
 
 export class FakeStore implements BrowserWorkerStore {
   readonly sessions = new Map<string, StoredBrowserSession & { closeReason?: string }>()
-  readonly sites = new Map<string, StoredSite>()
   readonly checkpointRows = new Map<string, BrowserCheckpointRecord>()
   readonly attachments = new Map<string, StoredAttachment & { taskId: string }>()
   readonly controls: { controller: BrowserController; controlEpoch: number }[] = []
@@ -389,24 +374,17 @@ export class FakeStore implements BrowserWorkerStore {
   touched = 0
   cleared = 0
 
-  /** A live session of a new task on a site of the stack and address, as core opens it. */
-  open(input: { stack?: SiteStack; siteUrl?: string; expiresInMs?: number; readyAt?: Date } = {}) {
-    const siteId = randomUUID()
-    const row: StoredBrowserSession & { siteId: string } = {
+  /** A live session of a new chat, as core opens it (plan 83: no session has a site). */
+  open(input: { expiresInMs?: number; readyAt?: Date } = {}) {
+    const row: StoredBrowserSession = {
       id: randomUUID(),
       taskId: randomUUID(),
-      siteId,
-      taskSiteId: siteId,
       status: 'starting',
       expiresAt: new Date(Date.now() + (input.expiresInMs ?? 3_600_000)),
       readyAt: input.readyAt ?? null,
       lastActivityAt: new Date(),
     }
     this.sessions.set(row.id, row)
-    this.sites.set(row.siteId, {
-      stack: input.stack ?? 'wordpress',
-      url: input.siteUrl ?? TEST_SITE,
-    })
     return row
   }
 
@@ -415,8 +393,6 @@ export class FakeStore implements BrowserWorkerStore {
     const row: StoredBrowserSession = {
       id: randomUUID(),
       taskId: randomUUID(),
-      siteId: null,
-      taskSiteId: null,
       status: 'starting',
       expiresAt: new Date(Date.now() + (input.expiresInMs ?? 3_600_000)),
       readyAt: null,
@@ -429,11 +405,6 @@ export class FakeStore implements BrowserWorkerStore {
   async session(sessionId: string) {
     const row = this.sessions.get(sessionId)
     return row ? { ...row } : null
-  }
-
-  async site(siteId: string) {
-    const site = this.sites.get(siteId)
-    return site ? { ...site } : null
   }
 
   async markReady(sessionId: string) {

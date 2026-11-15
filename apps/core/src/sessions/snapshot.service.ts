@@ -342,8 +342,8 @@ export class SnapshotService {
   }
 
   /**
-   * Turn n−1 for a TurnExecution: the checked manifest, presigned GETs of its parts — all three,
-   * or `home` alone for a turn without a repository — and its data key on demand. No part is
+   * Turn n−1 for a TurnExecution: the checked manifest, the presigned GET of its home part and
+   * its data key on demand. No part is
    * read here; the executor checks each before any write.
    */
   async restoreSource(input: SnapshotReference, ttlMs: number): Promise<TurnRestoreSource> {
@@ -358,9 +358,8 @@ export class SnapshotService {
           method: 'GET',
           ttlMs,
         })
+      // The home part alone: the working copy of a chat that had a project is not restored.
       const parts: TurnRestoreSource['parts'] = { home: await presign('home') }
-      for (const name of snapshotPartNamesOf(manifest))
-        if (name !== 'home') parts[name] = await presign(name)
       return { manifest, parts, dataKey: () => this.unwrap(manifest) }
     } catch (error) {
       throw loadFailed(error)

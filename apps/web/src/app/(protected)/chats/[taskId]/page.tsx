@@ -22,7 +22,6 @@ export default async function Page({ params }: { params: Params }) {
   return (
     <DialogView
       key={chat.id}
-      project={chat.project}
       taskId={chat.id}
       title={chat.title}
       // Where the stream of a task's browser is opened (docs/plan/57-browser-tasks.md, Б12).

@@ -41,8 +41,7 @@ export const PRICE = { start: '1990.00', business: '9990.00', pack: '1490.00' }
 export const CREDITS = { start: 200, business: 1000, pack: 100, gift: 50 }
 /**
  * What «Тарифы» sells, as the stand expects it of the seeds: the credits a month, the tariff
- * credits a day — none since 06.11.2026 (Ц6) — and the sites of each tariff, and the credits of
- * the pack, with their prices.
+ * credits a day — none since 06.11.2026 (Ц6) — and the credits of the pack, with their prices.
  */
 export const ON_SALE = Object.freeze({
   plans: [
@@ -55,7 +54,6 @@ export const ON_SALE = Object.freeze({
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: 73,
-      maxSites: 1,
     },
     {
       slug: 'business',
@@ -64,7 +62,6 @@ export const ON_SALE = Object.freeze({
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: 350,
-      maxSites: 3,
     },
     {
       slug: 'agency',
@@ -73,7 +70,6 @@ export const ON_SALE = Object.freeze({
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: 700,
-      maxSites: 15,
     },
   ],
   pack: { slug: 'pack', price: '1490.00', credits: 100 },
@@ -150,10 +146,6 @@ export function scenarioContext(stand, scenario, counter) {
   const t = {
     webUrl: stand.webUrl,
     coreUrl: stand.coreUrl,
-    /** The files of the site customers add (`addSite`) and the logins its server has seen. */
-    site: stand.site,
-    /** The current version of a secret in the Vault web writes to; null for none. */
-    vaultVersion: stand.vaultVersion,
     /** Every customer the scenario has signed up. */
     customers: [],
     /** One printed line per check; the first one that does not hold ends the stand. */
@@ -467,7 +459,7 @@ export function scenarioContext(stand, scenario, counter) {
       got: (subject, count = 1) =>
         letters(subject).length === count ||
         notYet({ expected: `${count} × «${subject}»`, got: customer.subjects() }),
-      /** The personal workspace, once a payment or a site has made one. */
+      /** The personal workspace, once a payment or a first file has made one. */
       async workspaceId() {
         const row = await t.one(`SELECT id FROM workspaces WHERE created_by_id = $1`, [user.id])
         if (row === null) throw new CheckFailed(`${email} has no workspace`)
@@ -667,67 +659,24 @@ export const outboxOf = async (t, type, keyEnd) =>
 // ─── What scenarios share ─────────────────────────────────────────────────────
 
 /**
- * The access to the files of the stand's site as «Доступ к файлам» sends it: SSH, a password,
- * the folder of the site; with `hostKey` once the customer has confirmed the key of the server.
+ * The first file of a chat (`attachment.start`): what makes the personal workspace of a new
+ * customer, and so its gift (docs/plan/61-chats-first.md, К15; plan 83 left no sites). Only the
+ * row of the file is written — the bytes are never sent, nothing reaches S3 — and it stays unsent
+ * until it expires. Resolves to the id of the attachment.
  */
-export const siteAccess = (t, hostKey) => ({
-  kind: 'sftp',
-  host: t.site.host,
-  port: t.site.port,
-  username: t.site.username,
-  auth: { method: 'password', password: t.site.password },
-  rootPath: t.site.rootPath,
-  ...(hostKey === undefined ? {} : { hostKey }),
-})
-
-/**
- * Adds a site the way the wizard «Добавить проект» does, over HTTP and step by step — the one
- * way the product makes a site, and so a workspace with its gift. «Основные данные»: the name
- * and the address as they will be stored. «Доступ к файлам»: the first check names the key the
- * server presented and sends it no login; the customer confirms that key, and the check passes.
- * «База данных»: none; «Добавить проект» checks the files once more, writes the access to Vault
- * and creates the site. Resolves to the project and the input of the creation, which may be
- * sent again.
- */
-export async function addSite(t, customer, { name, url }, who = '') {
-  const stack = 'wordpress'
-  const basics = await customer.mutate('siteConnection.checkBasics', { name, url, stack })
-  t.equal(
-    `${who}«Основные данные»: the name and the address are taken as they will be stored`,
-    basics,
-    { name, url: new URL(url).origin, host: new URL(url).host, stack },
-  )
-  const logins = t.site.logins()
-  const first = await customer.mutate('siteConnection.checkSource', {
-    stack,
-    source: siteAccess(t),
+export async function firstFile(t, customer, who = '') {
+  const started = await customer.mutate('attachment.start', {
+    name: 'brief.pdf',
+    size: 1024,
+    type: 'application/pdf',
   })
-  t.equal(
-    `${who}«Доступ к файлам»: the first check names the key the server presented and sends it no login`,
-    [first, t.site.logins() - logins],
-    [{ ok: false, reason: 'host_key_unknown', hostKey: t.site.hostKey }, 0],
-  )
-  const source = siteAccess(t, first.hostKey)
-  const checked = await customer.mutate('siteConnection.checkSource', { stack, source })
-  const request = {
-    requestKey: randomUUID(),
-    name: basics.name,
-    url: basics.url,
-    stack,
-    source,
-    database: null,
-  }
-  const created = await customer.mutate('project.create', request)
   t.check(
-    `${who}the key confirmed, the files are found, and «Добавить проект» without a database creates the project`,
-    checked.ok === true &&
-      checked.hostKey === t.site.hostKey &&
-      created.outcome === 'created' &&
-      created.project.url === basics.url &&
-      created.project.status === 'onboarding',
-    { checked, created },
+    `${who}a first file of a chat is announced: an id and the path its bytes would go to`,
+    typeof started.attachmentId === 'string' &&
+      started.uploadPath === `/api/attachments/${started.attachmentId}`,
+    started,
   )
-  return { project: created.project, request }
+  return started.attachmentId
 }
 
 /**
@@ -930,7 +879,7 @@ export async function atRest(t) {
     [],
   )
   // The gift of the registration, for every workspace the run has made so far — the product
-  // makes each of them with a first site or a first payment: one grant on the gift account,
+  // makes each of them with a first file or a first payment: one grant on the gift account,
   // of the whole gift, under the key of the user who made the workspace and paid for by no
   // order, and one entry of it in the audit. Whatever happened to the tariff since.
   t.equal(
@@ -1123,14 +1072,13 @@ export async function windowsOf(t, workspaceId, limits) {
 
 const onSale = ({ plans, pack }) => ({
   plans: plans.map(
-    ({ slug, price, creditsPerMonth, creditsPerDay, creditsPer5h, creditsPerWeek, maxSites }) => ({
+    ({ slug, price, creditsPerMonth, creditsPerDay, creditsPer5h, creditsPerWeek }) => ({
       slug,
       price,
       creditsPerMonth,
       creditsPerDay,
       creditsPer5h,
       creditsPerWeek,
-      maxSites,
     }),
   ),
   pack: pack && { slug: pack.slug, price: pack.price, credits: pack.credits },
@@ -1142,7 +1090,7 @@ export async function pagesShowWhatIsStored(t) {
   const listed = await t.rows(
     `SELECT slug, kind::text AS kind, price::text AS price, credits_per_month AS "creditsPerMonth",
        credits_per_day AS "creditsPerDay", credits_per_5h AS "creditsPer5h",
-       credits_per_week AS "creditsPerWeek", max_sites AS "maxSites", pack_credits AS credits
+       credits_per_week AS "creditsPerWeek", pack_credits AS credits
      FROM plans WHERE is_active AND kind IN ('quota', 'pack') ORDER BY sort_order, slug`,
   )
   const sold = onSale({
@@ -1420,15 +1368,15 @@ async function endedLetterSays(t, letter) {
   )
   if (row === null) return { about: letter.key, expected: ['a tariff of the letter'] }
   const { plan, gift, pack } = row
-  let kept = 'Сайты'
-  if (pack > 0 && gift > 0) kept = 'Кредиты из пакета и подарочные, сайты'
-  else if (pack > 0) kept = 'Кредиты из пакета, сайты'
-  else if (gift > 0) kept = 'Подарочные кредиты, сайты'
+  let kept = 'Чаты и страницы'
+  if (pack > 0 && gift > 0) kept = 'Кредиты из пакета и подарочные, чаты и страницы'
+  else if (pack > 0) kept = 'Кредиты из пакета, чаты и страницы'
+  else if (gift > 0) kept = 'Подарочные кредиты, чаты и страницы'
   return {
     about: `subscription ${subscriptionId}`,
     expected: [
       `Тариф «${plan}» закончился ${moscowDate(letter.data.endedAt)}. Новые задачи ${tasksOnGift(gift + pack, 'сейчас не принимаются')}.`,
-      `${kept} и история правок сохраняются.${pack > 0 ? ` Кредитов из пакета осталось: ${counted(pack)}.` : ''}`,
+      `${kept} сохраняются.${pack > 0 ? ` Кредитов из пакета осталось: ${counted(pack)}.` : ''}`,
     ],
   }
 }

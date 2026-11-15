@@ -1,6 +1,5 @@
 import { z } from 'zod'
 
-import { clipPageText } from '../preview/ports.ts'
 import {
   browserCheckpointKinds,
   browserCheckpointStates,
@@ -349,4 +348,16 @@ export function clipTree(
   // A UTF-16 unit is at most three bytes of UTF-8 (a surrogate pair is four for two).
   const first = clipPageText(lines[0] ?? '', Math.min(max, Math.floor(maxBytes / 3)))
   return { text: first, truncated: true }
+}
+
+/**
+ * A text cut to `limit` characters at a word: the tail of a cut word and of a cut number go, so no
+ * part of a contact or a figure is left. The caller masks whole texts and cuts what it masked.
+ */
+export function clipPageText(text: string, limit: number): string {
+  if (text.length <= limit) return text
+  return text
+    .slice(0, Math.max(0, limit) + 1)
+    .replace(/\S*$/u, '')
+    .replace(/[\s\d()+\-.]*$/u, '')
 }

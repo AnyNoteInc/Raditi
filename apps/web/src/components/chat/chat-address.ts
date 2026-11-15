@@ -8,8 +8,4 @@ export const NEW_CHAT_HREF = `${CHATS_HREF}/${NEW_CHAT_SEGMENT}`
 export const chatHref = (taskId: string) => `${CHATS_HREF}/${taskId}`
 
 /** A new chat, with this project chosen in its picker when one is named. */
-export const newChatHref = (projectId?: string | null) =>
-  projectId ? `${NEW_CHAT_HREF}?project=${projectId}` : NEW_CHAT_HREF
-
-/** The list of chats open on the folder of a project (К40). */
-export const chatFolderHref = (projectId: string) => `${CHATS_HREF}?folder=${projectId}`
+export const newChatHref = () => NEW_CHAT_HREF

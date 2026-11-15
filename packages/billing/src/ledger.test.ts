@@ -179,7 +179,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: null,
-      maxSites: null,
       packCredits: 10,
     })
     const order = await fixtures.order({ workspaceId, planId: plan.id })

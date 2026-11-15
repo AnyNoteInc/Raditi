@@ -31,8 +31,6 @@
     "@repo/domain": "workspace:*",
     "@repo/ip-address": "workspace:*",
     "@repo/observability": "workspace:*",
-    "@repo/site-adapters": "workspace:*",
-    "@repo/site-connections": "workspace:*",
     "@repo/storage": "workspace:*",
     "@repo/telegram": "workspace:*",
     "@repo/trpc": "workspace:*",
@@ -56,7 +54,6 @@
     "server-only": "catalog:",
     "sharp": "catalog:",
     "superjson": "catalog:",
-    "tldts": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

@@ -1,12 +1,6 @@
 import { getSessionFromHeaders, type Auth, type Session } from '@repo/auth'
 import { prisma as defaultPrisma, type PrismaClient } from '@repo/db'
-import {
-  DomainError,
-  isDomainError,
-  missingRequiredConsents,
-  type AppEnv,
-  type SiteConnectionServices,
-} from '@repo/domain'
+import { DomainError, isDomainError, missingRequiredConsents, type AppEnv } from '@repo/domain'
 import type { YookassaClient } from '@repo/yookassa'
 import { initTRPC, TRPCError } from '@trpc/server'
 import superjson from 'superjson'
@@ -22,7 +16,7 @@ export interface BillingContext {
   yookassa: YookassaClient
   /** Public origin of the app (APP_URL), no trailing slash: the customer returns to it. */
   appUrl: string
-  /** APP_ENV: it decides which workspace is the user's personal one, as in project.create. */
+  /** APP_ENV: it decides which workspace is the user's personal one, as in task.create. */
   appEnv: AppEnv
   /**
    * YOOKASSA_AUTOPAYMENTS: the shop may save a payment method and charge it. false — one-time
@@ -45,19 +39,12 @@ export interface Context {
   /** null: payments are switched off (the shop is not set up); the tariff state is still read. */
   billing: BillingContext | null
   /**
-   * What the procedures of a dialog reach outside the database: the address of previews, the key
-   * of release confirmations, the artifacts and Vault (docs/plan/53-chat-preview-release.md).
+   * What the procedures of a chat reach outside the database: the browser, the inbox and Vault
+   * (docs/plan/53-chat-preview-release.md).
    * Absent or null: dialogs are not set up in this process, and their procedures that need it
    * answer CHAT_NOT_CONFIGURED.
    */
   chat?: ChatContext | null
-  /**
-   * What the site connection wizard checks and writes through (spec §12): DNS, the adapters of the
-   * file sources and databases, and a Vault store that can only write. Absent or null: Vault is
-   * not configured for web, and a project cannot be created — the checks and the creation refuse,
-   * everything else works. The app builds it once per process.
-   */
-  siteConnections?: SiteConnectionServices | null
   /**
    * What an MCP server with a key is checked and written through (docs/plan/81-mcp-server-
    * credentials.md): a check of the server and a Vault store that can only write. Absent or null:
@@ -77,8 +64,6 @@ export interface CreateContextOptions {
   billing?: BillingContext | null
   /** Defaults to null: dialogs are not set up. */
   chat?: ChatContext | null
-  /** Defaults to null: projects cannot be created. */
-  siteConnections?: SiteConnectionServices | null
   /** Defaults to null: servers with a key cannot be added. */
   mcpServers?: McpServerServices | null
 }
@@ -89,7 +74,6 @@ export async function createContext({
   auth,
   billing = null,
   chat = null,
-  siteConnections = null,
   mcpServers = null,
 }: CreateContextOptions): Promise<Context> {
   const current = await getSessionFromHeaders(headers, auth)
@@ -100,7 +84,6 @@ export async function createContext({
     user: current?.user ?? null,
     billing,
     chat,
-    siteConnections,
     mcpServers,
   }
 }

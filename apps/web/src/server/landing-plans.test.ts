@@ -19,7 +19,6 @@ const quota = (price: string) => ({
   price: new Decimal(price),
   creditsPerMonth: 20,
   creditsPerDay: null,
-  maxSites: 1,
   packCredits: null,
 })
 let getLandingPlans: typeof getLandingPlansType
@@ -46,7 +45,6 @@ describe('landing tariff data boundary', () => {
         price: new Decimal('5001.25'),
         creditsPerMonth: 35,
         creditsPerDay: 6,
-        maxSites: 2,
         packCredits: null,
       },
       {
@@ -56,7 +54,6 @@ describe('landing tariff data boundary', () => {
         price: new Decimal('2030.10'),
         creditsPerMonth: null,
         creditsPerDay: null,
-        maxSites: null,
         packCredits: 12,
       },
     ])
@@ -76,7 +73,6 @@ describe('landing tariff data boundary', () => {
           price: '5001.25',
           creditsPerMonth: 35,
           creditsPerDay: 6,
-          maxSites: 2,
         },
       ],
       pack: { price: '2030.10', credits: 12 },
@@ -100,12 +96,10 @@ describe('landing tariff data boundary', () => {
     ])
   })
 
-  it('leaves out a tariff without credits, sites or a price', async () => {
+  it('leaves out a tariff without credits or a price', async () => {
     findMany.mockResolvedValue([
       { ...quota('4900'), slug: 'no-credits', creditsPerMonth: null },
       { ...quota('4900'), slug: 'zero-credits', creditsPerMonth: 0 },
-      { ...quota('4900'), slug: 'no-sites', maxSites: null },
-      { ...quota('4900'), slug: 'zero-sites', maxSites: 0 },
       { ...quota('-1'), slug: 'negative-price' },
       quota('1990'),
     ])

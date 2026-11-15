@@ -252,7 +252,7 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
     allowedHosts: [],
     localSites: [],
     openWeb: true,
-    platformHosts: ['raditi.ru', 'raditi-preview.ru'],
+    platformHosts: ['raditi.ru', 'raditi-platform.example'],
     pageDomain: null,
     policy: OPEN_WEB_POLICY,
   }
@@ -276,7 +276,7 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
       'https://localhost/',
       'https://raditi.ru/',
       'https://app.raditi.ru/',
-      'https://site-a-chat-b.raditi-preview.ru/',
+      'https://site-a-chat-b.raditi-platform.example/',
     ]) {
       expect(openAllowed(open, away), away).toBe(false)
       expect(ask(away, { navigation: true }, blank), away).toBe('blockedbyclient')

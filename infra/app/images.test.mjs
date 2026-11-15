@@ -71,22 +71,16 @@ for (const [app, text] of Object.entries(dockerfiles)) {
   })
 }
 
-for (const app of ['llm', 'mcp', 'preview', 'runner', 'browser']) {
+for (const app of ['core', 'llm', 'mcp', 'preview', 'runner', 'browser']) {
   test(`${app}: its own image prunes and builds its own app, and carries no git or gitleaks`, () => {
     const code = instructions(dockerfiles[app]).join('\n')
     assert.match(code, new RegExp(`turbo prune ${app} --docker`))
     assert.match(code, new RegExp(`pnpm --filter ${app} build`))
     assert.match(code, new RegExp(`WORKDIR /app/apps/${app}$`, 'm'))
-    // Only core publishes to git and scans for secrets; the other processes hold no such tools.
+    // No process publishes to git or scans for secrets since plan 83: none holds such tools.
     assert.doesNotMatch(code, /gitleaks|apt-get install[^\n]*\bgit\b/)
   })
 }
-
-test('core: the build fails without git 2.47, which publication needs', () => {
-  const runtime = stage(dockerfiles.core, 'runtime').join('\n')
-  assert.match(runtime, /git --version \| awk .*v\[2\] >= 47/)
-  assert.match(runtime, /COPY --from=gitleaks \/usr\/bin\/gitleaks \/usr\/local\/bin\/gitleaks/)
-})
 
 test('core: migrate runs the Prisma CLI of @repo/db as its own uid', () => {
   const migrate = stage(dockerfiles.core, 'migrate')

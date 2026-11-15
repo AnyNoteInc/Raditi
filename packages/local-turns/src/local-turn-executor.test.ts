@@ -26,12 +26,9 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { LocalTurnExecutor } from './local-turn-executor.ts'
 
-// A turn without a repository (docs/plan/57-browser-tasks.md, Б4): the working directory is an
-// empty directory, the snapshot is the home part alone, and no git command ever runs. The real
-// snapshot transport works over a sandbox that only records what it is asked to run.
-vi.mock('./working-tree-export.ts', () => ({
-  exportSandboxWorkingTree: vi.fn(async () => ({ archive: new Uint8Array([1]), deletes: [] })),
-}))
+// A turn has no repository (docs/plan/83-remove-projects.md): the working directory is an empty
+// directory, the snapshot is the home part alone, and no git command ever runs. The real snapshot
+// transport works over a sandbox that only records what it is asked to run.
 
 const labels = {
   workspaceId: '00000000-0000-4000-8000-000000000001',
@@ -125,14 +122,12 @@ async function fixture(
     list: vi.fn(async () => [] as SandboxInfo[]),
   }
   const transfer = { get: vi.fn(memory.transfer.get), put: vi.fn(memory.transfer.put) }
-  const importBundle = vi.fn(async () => {})
   const log = vi.fn()
   const executor = new LocalTurnExecutor({
     sandboxes,
     parser: () => ({ parseEvent: () => [] }),
     transport: new SandboxSnapshotTransport(),
     transfer,
-    importBundle,
     log,
   })
 
@@ -198,13 +193,6 @@ async function fixture(
     vacated: vi.fn(),
     ...overrides,
   })
-  const bundle = {
-    baseSha: 'b'.repeat(40),
-    branch: `agent/${labels.taskId}`,
-    sha256: '0'.repeat(64),
-    sizeBytes: 1,
-    read: async function* () {},
-  }
   return {
     memory,
     priorHome,
@@ -214,13 +202,11 @@ async function fixture(
     sandbox,
     sandboxes,
     transfer,
-    importBundle,
     log,
     executor,
     manifest,
     restore,
     input,
-    bundle,
     presigned,
   }
 }
@@ -228,7 +214,7 @@ async function fixture(
 const argvs = (calls: ExecSpec[]) => calls.map((spec) => spec.argv)
 const ranGit = (calls: ExecSpec[]) => calls.some((spec) => spec.argv[0] === 'git')
 
-describe('a turn without a repository on the local executor (plan 57, Б4)', () => {
+describe('a turn on the local executor: no repository (plan 57, Б4; plan 83)', () => {
   it('prepares an empty working directory: links refused first, no clone, no git command', async () => {
     const f = await fixture()
     await f.executor.prepare(f.input(), signal)
@@ -238,7 +224,6 @@ describe('a turn without a repository on the local executor (plan 57, Б4)', () 
       ['mkdir', '-p', '--', '/workspace/repo'],
       ['find', '-P', '/workspace/repo', '-mindepth', '1', '-print', '-quit'],
     ])
-    expect(f.importBundle).not.toHaveBeenCalled()
     expect(ranGit(f.calls)).toBe(false)
     // The driver's files still come after the working directory.
     expect(f.writes).toEqual(['/agent-home/opencode/.config/opencode/opencode.json'])
@@ -265,30 +250,51 @@ describe('a turn without a repository on the local executor (plan 57, Б4)', () 
     expect(f.restore.dataKey).toHaveBeenCalledTimes(1)
   })
 
-  it('refuses a restore of the other kind before any container exists', async () => {
+  it('restores the home part alone of a snapshot of a chat that had a project', async () => {
     const f = await fixture()
-    const withGit = {
-      ...f.restore,
-      manifest: {
-        ...f.manifest,
-        git: {
-          provider: 'gitea' as const,
-          branch: `agent/${labels.taskId}`,
-          baseSha: 'b'.repeat(40),
-          headSha: 'c'.repeat(40),
-        },
-      },
+    const git = {
+      provider: 'gitea' as const,
+      branch: `agent/${labels.taskId}`,
+      baseSha: 'b'.repeat(40),
+      headSha: 'c'.repeat(40),
     }
-    for (const input of [
-      f.input({ restore: withGit }),
-      f.input({ bundle: f.bundle, restore: f.restore }),
-    ]) {
-      await expect(f.executor.prepare(input, signal)).rejects.toMatchObject({
-        code: 'BAD_REQUEST',
-      })
-      expect(input.dispatched).not.toHaveBeenCalled()
+    // Sealed as such a turn sealed it: its AAD binds the `git` of the manifest.
+    const priorBase = { ...baseOf(1), git }
+    const prefix = turnSnapshotPrefix(labels.sessionId, 1)
+    const homeKey = `${prefix}${snapshotPartFiles.home}`
+    const sealed = sealSnapshotPart(priorBase, 'home', f.priorHome, keyOf())
+    f.memory.objects.set(homeKey, sealed.body)
+    const encryption = {
+      algorithm: 'aes-256-gcm' as const,
+      keyId: workspaceTransitKey(labels.workspaceId),
+      wrappedKey: 'vault:v1:wrapped',
+      iv: sealed.sealed.iv,
+      tag: sealed.sealed.tag,
     }
-    expect(f.sandboxes.create).not.toHaveBeenCalled()
+    const manifest: SnapshotManifest = {
+      ...priorBase,
+      parts: (['home', 'untracked', 'patch'] as const).map((name) => ({
+        name,
+        key: `${prefix}${snapshotPartFiles[name]}`,
+        sha256: name === 'home' ? sealed.sealed.sha256 : '0'.repeat(64),
+        sizeBytes: name === 'home' ? sealed.sealed.sizeBytes : 1,
+        encryption,
+      })),
+    }
+    await f.executor.prepare(
+      f.input({
+        restore: { ...f.restore, manifest, parts: { home: f.presigned('GET', homeKey) } },
+      }),
+      signal,
+    )
+    // Only the home part is fetched; the working copy of the old turn stays in S3.
+    expect(f.transfer.get).toHaveBeenCalledTimes(1)
+    expect(f.transfer.get.mock.calls[0]![0].url).toContain('/turns/0001/home.tar.zst')
+    const extracts = f.calls.filter((spec) => spec.argv.includes('--extract'))
+    expect(extracts.map((spec) => spec.argv.find((arg) => arg.startsWith('--directory=')))).toEqual(
+      ['--directory=/agent-home/opencode'],
+    )
+    expect(ranGit(f.calls)).toBe(false)
   })
 
   it('captures the home part alone and seals it under a base without git', async () => {
@@ -336,19 +342,9 @@ describe('a turn without a repository on the local executor (plan 57, Б4)', () 
     expect(Buffer.from(opened.home).equals(Buffer.from(f.thisHome))).toBe(true)
   })
 
-  it('refuses a capture with a base, a working set without one, and a seal of the other kind', async () => {
+  it('refuses to seal a base with git', async () => {
     const f = await fixture()
     const execution = await f.executor.prepare(f.input(), signal)
-    const before = f.calls.length
-    await expect(execution.capture({ home, baseSha: 'b'.repeat(40) })).rejects.toMatchObject({
-      code: 'CONFLICT',
-    })
-    for (const extra of [{ sandboxBaseSha: 'd'.repeat(40) }, { addOnlyPaths: [] }])
-      await expect(execution.capture({ home, ...extra })).rejects.toMatchObject({
-        code: 'BAD_REQUEST',
-      })
-    expect(f.calls.length).toBe(before)
-
     await execution.capture({ home })
     const withGit = {
       ...baseOf(2),
@@ -365,55 +361,6 @@ describe('a turn without a repository on the local executor (plan 57, Б4)', () 
     ).rejects.toMatchObject({ code: 'CONFLICT' })
     expect(f.transfer.put).not.toHaveBeenCalled()
   })
-
-  it('refuses a capture without a base after a bundle was imported', async () => {
-    const f = await fixture()
-    const execution = await f.executor.prepare(f.input({ bundle: f.bundle }), signal)
-    expect(f.importBundle).toHaveBeenCalledTimes(1)
-    const before = f.calls.length
-    await expect(execution.capture({ home })).rejects.toMatchObject({ code: 'CONFLICT' })
-    expect(f.calls.length).toBe(before)
-  })
-
-  it('exports no working tree of it, until its container is removed', async () => {
-    const f = await fixture()
-    const execution = await f.executor.prepare(f.input(), signal)
-    const request = {
-      assignmentId: '00000000-0000-4000-8000-0000000000aa',
-      containerId: f.sandbox.id,
-      labels,
-      baseSha: 'b'.repeat(40),
-    }
-    await expect(f.executor.exportWorkingTree(request, signal)).rejects.toMatchObject({
-      code: 'CONFLICT',
-    })
-    await execution.destroy('completed')
-    // A later container with the same id is another turn's; the record went with the removal.
-    await expect(f.executor.exportWorkingTree(request, signal)).resolves.toEqual({
-      archive: new Uint8Array([1]),
-      deletes: [],
-    })
-
-    // The same once recovery removes the container instead.
-    await f.executor.prepare(f.input(), signal)
-    await expect(f.executor.exportWorkingTree(request, signal)).rejects.toMatchObject({
-      code: 'CONFLICT',
-    })
-    const removal = await f.executor.adopt(
-      {
-        assignmentId: request.assignmentId,
-        fence,
-        containerId: f.sandbox.id,
-        labels,
-        purpose: 'removal',
-      },
-      signal,
-    )
-    await removal!.destroy('failed')
-    await expect(f.executor.exportWorkingTree(request, signal)).resolves.toMatchObject({
-      deletes: [],
-    })
-  })
 })
 
 describe('files of the client on the local executor', () => {
@@ -427,14 +374,17 @@ describe('files of the client on the local executor', () => {
     },
   })
 
-  it('writes each file at its path, read-only, after the bundle and before the driver files', async () => {
+  /** The turn of a chat: its lease is its own id (К14). */
+  const inChat = (input: TurnPrepareInput): TurnPrepareInput => ({
+    ...input,
+    fence: { ...input.fence, siteId: labels.taskId },
+    sandbox: { ...input.sandbox, labels: { ...labels, siteId: labels.taskId } },
+  })
+
+  it('writes each file at its path, read-only, before the driver files', async () => {
     const f = await fixture()
     const menu = Buffer.from('%PDF-1.7 synthetic menu')
-    await f.executor.prepare(
-      f.input({ bundle: f.bundle, inbox: [file(pathOf('Меню.pdf'), menu)] }),
-      signal,
-    )
-    expect(f.importBundle).toHaveBeenCalledOnce()
+    await f.executor.prepare(inChat(f.input({ inbox: [file(pathOf('Меню.pdf'), menu)] })), signal)
     expect(f.writes).toEqual([
       pathOf('Меню.pdf'),
       '/agent-home/opencode/.config/opencode/opencode.json',
@@ -444,7 +394,7 @@ describe('files of the client on the local executor', () => {
     expect(options).toEqual({ mode: 0o444 })
   })
 
-  it('refuses files for a turn on a site without a repository before any container', async () => {
+  it('refuses files for a turn under another lease before any container', async () => {
     const f = await fixture()
     await expect(
       f.executor.prepare(f.input({ inbox: [file(pathOf('a.pdf'), Buffer.from('abc'))] }), signal),
@@ -452,19 +402,12 @@ describe('files of the client on the local executor', () => {
     expect(f.sandboxes.create).not.toHaveBeenCalled()
   })
 
-  it('writes the files of a chat without a site into its empty sandbox (К16)', async () => {
+  it('writes the files of a chat into its empty sandbox (К16)', async () => {
     const f = await fixture()
-    const plain = f.input({ inbox: [file(pathOf('Смета.pdf'), Buffer.from('%PDF chat'))] })
     await f.executor.prepare(
-      {
-        ...plain,
-        // Its lease is its own id: that is all that tells this turn from one on a site.
-        fence: { ...plain.fence, siteId: labels.taskId },
-        sandbox: { ...plain.sandbox, labels: { ...labels, siteId: labels.taskId } },
-      },
+      inChat(f.input({ inbox: [file(pathOf('Смета.pdf'), Buffer.from('%PDF chat'))] })),
       signal,
     )
-    expect(f.importBundle).not.toHaveBeenCalled()
     expect(f.writes[0]).toBe(pathOf('Смета.pdf'))
     expect(vi.mocked(f.sandbox.fs.write).mock.calls[0]![2]).toEqual({ mode: 0o444 })
   })
@@ -476,10 +419,7 @@ describe('files of the client on the local executor', () => {
     const f = await fixture()
     await expect(
       f.executor.prepare(
-        f.input({
-          bundle: f.bundle,
-          inbox: [file(pathOf('a.pdf'), Buffer.from('abc'), sizeBytes)],
-        }),
+        inChat(f.input({ inbox: [file(pathOf('a.pdf'), Buffer.from('abc'), sizeBytes)] })),
         signal,
       ),
     ).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })

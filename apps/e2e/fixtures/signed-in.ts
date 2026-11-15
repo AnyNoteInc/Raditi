@@ -5,7 +5,6 @@ import { authConfigFromEnv, createAuth, latestConsents, requiredConsentRows } fr
 import { createPrismaClient } from '@repo/db'
 
 import { authEnv, baseURL, databaseUrl } from './billing-stand.ts'
-import { startSiteFiles, type SiteFiles } from './site-files.ts'
 
 // A signed-in user for the pages under (protected), made through the server API of @repo/auth
 // on the database of the run, not by clicking through the forms: the sign-up records the required
@@ -44,12 +43,10 @@ interface Accounts {
   create(): Promise<{ user: SignedInUser; cookies: BrowserCookie[] }>
   /**
    * Removes the user with the sessions, the password, the consents and the memberships, and
-   * every workspace the user created with what a test bought or added in it: sites with what
-   * the wizard made them with — where their files are, the references of their accesses, the
-   * stage of their first import and its event —, orders, a subscription, the accounts of
-   * credits with their ledger, the audit and the letters about the orders — and what a task of
-   * the workspace left: its reserves, its model calls and the claim of its site on the gift.
-   * The secrets of the accesses stay in the OpenBao of the run, which goes with it.
+   * every workspace the user created with what a test bought or added in it: orders, a
+   * subscription, the accounts of credits with their ledger, the audit and the letters about the
+   * orders, the files nobody sent — and what a task of the workspace left: its reserves and its
+   * model calls. A secret written to the OpenBao of the run goes with it.
    */
   remove(userId: string): Promise<void>
 }
@@ -84,10 +81,7 @@ function browserCookie(header: string): BrowserCookie {
   }
 }
 
-export const test = base.extend<
-  { signedInUser: SignedInUser },
-  { accounts: Accounts; siteFiles: SiteFiles }
->({
+export const test = base.extend<{ signedInUser: SignedInUser }, { accounts: Accounts }>({
   accounts: [
     // eslint-disable-next-line no-empty-pattern -- Playwright wants a destructuring pattern here.
     async ({}, use) => {
@@ -110,7 +104,7 @@ export const test = base.extend<
       const auth = createAuth({ config: authConfigFromEnv(authEnv), prisma, notifier })
 
       const remove = async (userId: string) => {
-        // A payment or a first site gives the user a workspace. Orders, subscriptions and the
+        // A payment or a first chat or file gives the user a workspace. Orders, subscriptions and the
         // accounts of credits hold it with Restrict keys, and the ledger holds the accounts and
         // the orders: what refers goes first, the user last.
         const workspaces = await prisma.workspace.findMany({
@@ -129,37 +123,15 @@ export const test = base.extend<
           await prisma.creditLedger.deleteMany({ where: { account: owned } })
           await prisma.creditHold.deleteMany({ where: { account: owned } })
           await prisma.billingAccount.deleteMany({ where: owned })
-          // The tasks a test queued (fixtures/credits.ts): a site whose gift a reserve claimed,
-          // the model calls of the tasks and their turn keys, then the tasks; the turn rows go
-          // with them.
-          await prisma.giftSiteClaim.deleteMany({ where: owned })
+          // The tasks a test queued (fixtures/credits.ts): the model calls of the tasks and their
+          // turn keys, then the tasks; the turn rows go with them.
           await prisma.tokenUsage.deleteMany({ where: { task: owned } })
           await prisma.llmCall.deleteMany({ where: { key: { task: owned } } })
           await prisma.llmKey.deleteMany({ where: { task: owned } })
           await prisma.task.deleteMany({ where: owned })
-          // A file nobody sent stays with its site (tests/site/chats.spec.ts).
+          // A file nobody sent (tests/site/chats.spec.ts).
           await prisma.attachment.deleteMany({ where: owned })
-          // A site the wizard added (fixtures/site-files.ts): its first import — the stage, its
-          // event in the outbox, a version it may have saved — and where its files and its
-          // database are, then the references of its accesses.
-          const sites = await prisma.site.findMany({ where: owned, select: { id: true } })
-          if (sites.length > 0) {
-            await prisma.outboxEvent.deleteMany({
-              where: {
-                OR: sites.map(({ id }) => ({
-                  dedupeKey: { startsWith: `site-provisioning:${id}:` },
-                })),
-              },
-            })
-          }
-          await prisma.siteInitialVersion.deleteMany({ where: { site: owned } })
-          await prisma.gitRepository.deleteMany({ where: { site: owned } })
-          await prisma.siteProvisioningStage.deleteMany({ where: { site: owned } })
-          await prisma.siteDatabaseSchema.deleteMany({ where: { site: owned } })
-          await prisma.siteCodeSource.deleteMany({ where: { site: owned } })
-          await prisma.siteDatabase.deleteMany({ where: { site: owned } })
-          await prisma.credentialRef.deleteMany({ where: { OR: [owned, { site: owned }] } })
-          await prisma.site.deleteMany({ where: owned })
+          await prisma.credentialRef.deleteMany({ where: owned })
           await prisma.order.deleteMany({ where: owned })
           await prisma.subscription.deleteMany({ where: owned })
           await prisma.auditLog.deleteMany({ where: owned })
@@ -220,21 +192,6 @@ export const test = base.extend<
         })
       }
       await prisma.$disconnect()
-    },
-    { scope: 'worker' },
-  ],
-
-  // The site a test adds through the wizard: one server for the worker, started when a test
-  // first asks for it.
-  siteFiles: [
-    // eslint-disable-next-line no-empty-pattern -- Playwright wants a destructuring pattern here.
-    async ({}, use) => {
-      const files = await startSiteFiles()
-      try {
-        await use(files)
-      } finally {
-        await files.close()
-      }
     },
     { scope: 'worker' },
   ],

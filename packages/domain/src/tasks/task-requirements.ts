@@ -26,6 +26,9 @@ export const BROWSER_ONLY: TaskRequirements = Object.freeze({ repository: false,
 /** A chat that needs neither: no project and no browser configured (plan 61, §1). */
 export const PLAIN_CHAT: TaskRequirements = Object.freeze({ repository: false, browser: false })
 
-/** The requirements of a plan; one without the field is older than them: a repository task. */
+/**
+ * The requirements of a plan; one without the field needs nothing. A plan older than the field
+ * had a repository and a workspace, which its schema refuses since plan 83.
+ */
 export const requirementsOf = (plan: { requirements?: TaskRequirements }): TaskRequirements =>
-  plan.requirements ?? REPOSITORY_ONLY
+  plan.requirements ?? PLAIN_CHAT

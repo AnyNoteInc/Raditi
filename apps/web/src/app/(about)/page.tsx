@@ -1,3 +1,4 @@
+import { signupGiftCredits } from '@repo/domain/billing/credit-numbers'
 import { brandColors } from '@repo/ui/theme/tokens'
 import type { Metadata, Viewport } from 'next'
 
@@ -8,9 +9,8 @@ import { env } from '@/env'
 import { getLandingPlans } from '@/server/landing-plans'
 import { getLandingViewer } from '@/server/landing-viewer'
 
-const TITLE = 'Радити — ИИ-помощник для сайта: напишите в чат, сайт поправим'
-const DESCRIPTION =
-  'Радити меняет сайт по сообщению в чате: цены, тексты, фото, акции. WordPress, Joomla, OpenCart, MODX, 1С-Битрикс. Подключим бесплатно, 50 кредитов в подарок.'
+const TITLE = 'Радити — ИИ-помощник на каждый день: напишите в чат, Радити сделает'
+const DESCRIPTION = `Радити — ИИ-помощник на каждый день: найдёт и сравнит, напишет письмо или пост, соберёт таблицу, сделает страницу. ${signupGiftCredits} кредитов в подарок.`
 
 export const metadata: Metadata = {
   title: { absolute: TITLE },

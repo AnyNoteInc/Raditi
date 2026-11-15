@@ -2,12 +2,7 @@ import type { Server } from 'node:http'
 
 import { Logger, type BeforeApplicationShutdown, type OnApplicationBootstrap } from '@nestjs/common'
 import { throttledLogger } from '@repo/observability'
-import type {
-  BrowserSessionRuntime,
-  CloudBrowserFactory,
-  SiteAdapter,
-  SiteStack,
-} from '@repo/domain'
+import type { BrowserSessionRuntime, CloudBrowserFactory } from '@repo/domain'
 import type { Registry } from '@prometheus-io/client'
 
 import { AttachmentFiles, type InboxStorage } from '../attachments/attachments.ts'
@@ -28,7 +23,6 @@ export interface BrowserWorkerParts {
   runtime: BrowserSessionRuntime | null
   browsers: CloudBrowserFactory
   inbox: InboxStorage
-  adapters: (stack: SiteStack) => SiteAdapter
   registry: Registry
   /** Seams of the tests; the worker's own numbers otherwise. */
   timings?: Partial<typeof sessionTimingDefaults> & { sweepMs?: number; pingMs?: number }
@@ -63,7 +57,6 @@ export class BrowserWorker implements OnApplicationBootstrap, BeforeApplicationS
       store: parts.store,
       files: new AttachmentFiles(parts.store, parts.inbox),
       screenshots: new TaskScreenshots(parts.store, parts.inbox),
-      adapters: parts.adapters,
       metrics,
       now,
       warn,
@@ -73,8 +66,6 @@ export class BrowserWorker implements OnApplicationBootstrap, BeforeApplicationS
         idleMinutes: config.session.idleMinutes,
         maxHours: config.session.maxHours,
         maxSessions: config.session.maxSessions,
-        extraHosts: config.extraHosts,
-        localSites: config.localSites,
         platformHosts: config.platformHosts,
         pageDomain: config.pageDomain,
         stream: { maxFps: config.stream.maxFps, quality: config.stream.quality },

@@ -108,7 +108,6 @@ describe('the browser worker app', () => {
         body: JSON.stringify({
           sessionId: row.id,
           taskId: row.taskId,
-          siteId: row.siteId,
           takeControl: true,
           ...extra,
         }),
@@ -142,7 +141,6 @@ describe('the browser worker app', () => {
     const state = await client.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: row.siteId,
       takeControl: true,
     })
     expect(state).toMatchObject({ session: row.id, status: 'ready', controller: 'agent' })
@@ -184,7 +182,6 @@ describe('the browser worker app', () => {
     await client.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: row.siteId,
       takeControl: true,
     })
     const user = randomUUID()

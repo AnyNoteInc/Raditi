@@ -35,8 +35,8 @@ describe('task requirements', () => {
     expect(siteTaskRequirementsSchema.safeParse(PLAIN_CHAT).success).toBe(false)
   })
 
-  it('reads a plan without requirements as a repository task, as before them', () => {
-    expect(requirementsOf({})).toEqual({ repository: true, browser: false })
+  it('reads a plan without requirements as one that needs nothing (plan 83)', () => {
+    expect(requirementsOf({})).toEqual({ repository: false, browser: false })
     expect(requirementsOf({ requirements: BROWSER_ONLY })).toBe(BROWSER_ONLY)
     const both = { repository: true, browser: true }
     expect(requirementsOf({ requirements: both })).toBe(both)

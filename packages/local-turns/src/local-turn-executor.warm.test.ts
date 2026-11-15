@@ -27,7 +27,6 @@ function warmSide() {
     parser: () => ({ parseEvent: () => [] }),
     transport: side.snapshot,
     transfer: side.transfer,
-    importBundle: side.importBundle,
     warm,
   })
   return { ...side, warm, executor }
@@ -76,8 +75,7 @@ describe('warm containers of the local executor', () => {
     expect(side.sandboxes.create).toHaveBeenCalledOnce()
     expect(second.created).toHaveBeenCalledWith(execution)
     expect(execution.containerId).toBe(side.sandbox.id)
-    // The base and the files of the turn are laid out again, its own secret among them.
-    expect(side.importBundle).toHaveBeenCalledTimes(2)
+    // The files of the turn are laid out again, its own secret among them.
     expect(vi.mocked(side.sandbox.fs.write).mock.calls.length - writes).toBe(2)
     // Taken, it is extended to the deadline of turn 2, as a new container would be created with
     // it, and its agent has no time limit (docs/plan/70-turn-without-time-limit.md, ВР10).
@@ -85,20 +83,8 @@ describe('warm containers of the local executor', () => {
     await execution.launch()
     expect(vi.mocked(side.sandbox.exec).mock.lastCall![0].timeoutMs).toBeUndefined()
 
-    // The preview and recovery of turn 2 find it by the id the assignment names, under the
-    // labels of turn 1 it was created with.
-    const { leaseEpoch: _epoch, ...turnLabels } = second.sandbox.labels
-    await expect(
-      side.executor.exportWorkingTree(
-        {
-          assignmentId: second.assignmentId,
-          containerId: side.sandbox.id,
-          labels: turnLabels,
-          baseSha: 'b'.repeat(40),
-        },
-        signal,
-      ),
-    ).resolves.toBeDefined()
+    // Recovery of turn 2 finds it by the id the assignment names, under the labels of turn 1
+    // it was created with.
     const adopted = await side.executor.adopt(
       {
         assignmentId: second.assignmentId,

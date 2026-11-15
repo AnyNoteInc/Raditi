@@ -98,7 +98,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         kind: 'quota',
         price: '0.00',
         creditsPerMonth: 1,
-        maxSites: 1,
         pageSites,
         pageCustomNames,
         isActive: false,
@@ -144,9 +143,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
       data: {
         id: uuidv7(),
         workspaceId: workspace.id,
-        siteId: null,
         title: 'Синтетический чат',
-        needsRepository: false,
         needsBrowser: false,
         createdById,
       },
@@ -1686,8 +1683,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         data: {
           id: uuidv7(),
           workspaceId: ids.workspaceId,
-          siteId: null,
-          needsRepository: false,
           needsBrowser: false,
         },
       })
@@ -1768,8 +1763,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         data: {
           id: uuidv7(),
           workspaceId: ids.workspaceId,
-          siteId: null,
-          needsRepository: false,
           needsBrowser: false,
         },
       })

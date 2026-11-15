@@ -1,6 +1,6 @@
 'use client'
 
-import { chatCommands, type ChatCommandId } from '@repo/domain/release/chat-commands'
+import type { ChatCommandId } from '@repo/domain/release/chat-commands'
 import { feedFailureText } from '@repo/domain/tasks/client-feed-failures'
 import type { ReasoningEffort } from '@repo/domain/llm/model-class'
 import {
@@ -8,7 +8,6 @@ import {
   feedInputText,
   feedQuestionText,
   feedStateText,
-  feedVersionText,
   taskAnsweredLabel,
   taskFailedLabel,
   taskRewoundLabel,
@@ -41,8 +40,6 @@ import {
 import { AppIcon } from '@/components/application/app-icon'
 import { PanelToggle } from '@/components/application/cabinet-panel'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
-import { siteHref } from '@/components/site/site-nav'
-import { SiteFiles } from '@/components/site/site-files'
 import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
@@ -54,31 +51,22 @@ import { callErrorCode, callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
 import { useChatDetails, useChatThinking } from './chat-details'
 import { rememberEffort } from './chat-effort'
-import type { ChatProject } from './chat-types'
 import {
-  agentNotesText,
   cancelText,
-  chatsText,
   clientCommandText,
   composerText,
   queueText,
   dialogText,
   effortText,
   listText,
-  releaseStatusText,
-  releaseText,
   taskWayText,
-  undoText,
 } from './chat-texts'
 import { useClientCommands } from './client-commands'
 import { Composer, offScreen } from './composer'
 import { DialogMenuButton, dialogListKey, RemoveDialogConfirm, RenameField } from './dialog-actions'
 import { DialogNotFound } from './dialog-not-found'
 import {
-  changesMark,
-  changesToolOf,
   closedTools,
-  isChangesTool,
   movesFocus,
   toolsDot,
   toolsReducer,
@@ -89,32 +77,20 @@ import {
   type ToolOpener,
 } from './dialog-tools'
 import { EffortMenu, type EffortMenuHandle } from './effort-menu'
-import { ProjectMark } from './project-mark'
 import { FeedList, LiveBlock, type FeedActions } from './feed-list'
 import {
-  candidateMessage,
-  initAnswerIds,
-  liveCandidateRow,
   liveSteps,
   openQuestion,
-  projectClosed,
   redoneAfter,
   requestShown,
-  retryFailure,
   stopRequested,
-  undoFailedAfter,
-  updateRowsOf,
   withoutRedoneRewinds,
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
-import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
-import { AgentNotesDialog } from './agent-notes-dialog'
-import { ReleaseDialog } from './release-dialog'
 import { RESULTS_ROOM, ResultsCard, ResultsToggle, useResultsCard } from './results-card'
 import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
 import { ToolsPanel } from './tools-panel'
 import { TurnActivity } from './turn-activity'
-import { UndoDialog } from './undo-dialog'
 import { useAttachments } from './use-attachments'
 import { useBrowserLaunch } from './use-browser-launch'
 import { useDocumentArrivals } from './use-document-arrivals'
@@ -133,7 +109,6 @@ import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
 import { requestHistoryOf } from './prompt-history'
 import { QueueCards, useChatQueue } from './queue-cards'
-import { useMentionFiles } from './use-mention-files'
 import { useWaitingTitle } from './use-waiting-title'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
@@ -147,19 +122,17 @@ const EDIT_WAIT_MS = 120_000
 const EDIT_WAIT_STEP_MS = 1_500
 
 // One chat (docs/plan/53-chat-preview-release.md, R9; feed design, «Экраны, которых нет на
-// макетах»): its head, its rows, the live block and the field. How it works follows from the
-// requirements the server gave it (docs/plan/61-chats-first.md, §5.6), never from a mode: a chat
-// with the repository has the preview, files, records and checks of its changes, a chat with a
-// browser has the browser (docs/plan/57-browser-tasks.md), a chat may have both or neither. Its
-// tools open beside it only when the client asks for one (docs/plan/59-dialog-tools-panel.md): by
-// «+» in the corner, «Посмотреть изменения», `/preview` and «Взять управление»; by themselves only
-// once, when the browser of the chat starts while the client looks at it. From `lg` they stand at
+// макетах»): its head, its rows, the live block and the field. A chat has no project
+// (docs/plan/83-remove-projects.md): a chat with a browser has the browser
+// (docs/plan/57-browser-tasks.md), any chat the documents of the agent. Its tools open beside it
+// only when the client asks for one (docs/plan/59-dialog-tools-panel.md): by «+» in the corner and
+// «Взять управление»; by themselves only once, when the browser of the chat starts while the
+// client looks at it. From `lg` they stand at
 // the right edge; below, in place of the dialog, «К чату» leading back to it.
 
 /**
  * What a focused element of the feed keeps clear above it (WCAG 2.4.11): below `lg` the head of
- * the dialog sticks to the top of the window — a line of 44px, below `md` 96px when the link of
- * its project takes a second one — and a step of 16px, as the landing keeps its anchors from under
+ * the dialog sticks to the top of the window — a line of 44px — and a step of 16px, as the landing keeps its anchors from under
  * its header (DESIGN.md, «Шапка»). The room is a margin of the rows and not a padding of the
  * scroller: with a padding, the head itself would count as hidden, and Tab onto it would scroll
  * the page. From `lg` the head stands over the area the feed scrolls in, never over it.
@@ -187,41 +160,14 @@ function focusTakenByOpening(dialog: Element | null): Element | null {
 }
 
 /** What a press of the client sends: one id per press, kept for its repeats. */
-type Press =
-  | 'message'
-  | 'continue'
-  | 'retry'
-  | 'cancel'
-  | 'reset'
-  | 'update'
-  | 'resume'
-  | 'init'
-  | 'compact'
-  | 'undoTurn'
-  | 'redoTurn'
-
-/** A release or an undo of it that is under way: its words in the head of the dialog. */
-function releaseProgress(head: FeedHeadState): string | null {
-  const undo = head.undo?.run ?? null
-  if (undo !== null && undo.outcome === null) {
-    const words = releaseStatusText[undo.status]
-    return words ? undoText.progress(feedVersionText(head.undo!.version), words) : null
-  }
-  const release = head.release
-  if (release === null || release.outcome !== null) return null
-  const words = releaseStatusText[release.status]
-  return words ? releaseText.progress(feedVersionText(release.version), words) : null
-}
+type Press = 'message' | 'continue' | 'cancel' | 'resume' | 'compact' | 'undoTurn' | 'redoTurn'
 
 /**
- * The head of a dialog (owner's request of 26.10.2026): one quiet line — its name, a release under
- * way beside it, its menu («Переименовать», «Удалить») and, while the panel of its tools is closed,
- * «+» of the tools in the corner (docs/plan/59, И4). The name is written in place of itself. In
- * the middle stands the link to the project of the chat, when it has one; on a phone it takes a
- * line of its own under the name.
+ * The head of a dialog (owner's request of 26.10.2026): one quiet line — its name, its menu
+ * («Переименовать», «Удалить») and, while the panel of its tools is closed, «+» of the tools in the
+ * corner (docs/plan/59, И4). The name is written in place of itself.
  */
 function DialogHead({
-  project,
   taskId,
   title,
   head,
@@ -229,7 +175,6 @@ function DialogHead({
   tools,
   results = null,
 }: {
-  project: ChatProject | null
   taskId: string
   title: string
   head: FeedHeadState | null
@@ -239,21 +184,14 @@ function DialogHead({
   /** The icon that hides and shows «Результаты»; null — the chat has none to show. */
   results?: ReactNode
 }) {
-  // «Отменить выпуск» is offered now: deleting the dialog takes it away too.
-  const undoable =
-    head?.commands.some((command) => command.id === 'undo' && command.available) === true
   const [renaming, setRenaming] = useState(false)
   const [removing, setRemoving] = useState(false)
-  const progress = head === null ? null : releaseProgress(head)
   return (
     <Box
       component="header"
       sx={{
         display: 'grid',
-        gridTemplateColumns: {
-          xs: 'minmax(0, 1fr) auto',
-          md: 'minmax(0, 1fr) auto minmax(0, 1fr)',
-        },
+        gridTemplateColumns: 'minmax(0, 1fr) auto',
         alignItems: 'center',
         columnGap: 1.5,
         rowGap: 1,
@@ -310,52 +248,12 @@ function DialogHead({
             >
               {title}
             </Typography>
-            {progress ? (
-              <Typography
-                component="span"
-                variant="body2"
-                color="text.secondary"
-                sx={{ flex: 'none', fontSize: 13 }}
-              >
-                {nbsp(progress)}
-              </Typography>
-            ) : null}
           </Box>
         )}
       </Box>
-      {project !== null ? (
-        <Box
-          component={Link}
-          href={siteHref(project.id)}
-          aria-label={chatsText.openProject(project.name)}
-          sx={{
-            gridColumn: { xs: '1 / -1', md: 2 },
-            gridRow: { xs: 2, md: 1 },
-            justifySelf: { xs: 'start', md: 'center' },
-            maxWidth: '100%',
-            minWidth: 0,
-            minHeight: 44,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 1,
-            px: { md: 1.5 },
-            borderRadius: '999px',
-            fontSize: 14,
-            color: 'text.secondary',
-            textDecoration: 'none',
-            whiteSpace: 'nowrap',
-            '&:hover': { color: 'text.primary' },
-          }}
-        >
-          <ProjectMark name={project.name} />
-          <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {project.name}
-          </Box>
-        </Box>
-      ) : null}
       <Box
         sx={{
-          gridColumn: { xs: 2, md: 3 },
+          gridColumn: 2,
           gridRow: 1,
           display: 'flex',
           alignItems: 'center',
@@ -374,13 +272,7 @@ function DialogHead({
         {tools}
       </Box>
       {removing ? (
-        <RemoveDialogConfirm
-          taskId={taskId}
-          withSite={project !== null}
-          undoable={undoable}
-          open
-          onClose={() => setRemoving(false)}
-        />
+        <RemoveDialogConfirm taskId={taskId} open onClose={() => setRemoving(false)} />
       ) : null}
     </Box>
   )
@@ -391,14 +283,11 @@ function DialogHead({
  * shown; whatever the client writes or presses is read back at once.
  */
 export function DialogView({
-  project,
   taskId,
   title,
   browserStreamUrl = null,
   speech = false,
 }: {
-  /** The project of the chat, from `task.get`; null — a chat without one. */
-  project: ChatProject | null
   taskId: string
   title: string | null
   /**
@@ -409,8 +298,6 @@ export function DialogView({
   /** Dictation is set up here (docs/plan/75-chat-input-output.md, ВВ16). */
   speech?: boolean
 }) {
-  const siteId = project?.id ?? null
-  const siteUrl = project?.url ?? null
   const trpc = useTRPC()
   const queryClient = useQueryClient()
   const { state, refresh } = useDialogFeed(taskId)
@@ -426,13 +313,8 @@ export function DialogView({
   // From `lg` the tools stand beside the dialog; below, an open one takes its place (И14).
   const theme = useTheme()
   const wide = useMediaQuery(theme.breakpoints.up('lg'))
-  // The client's calls for the preview: every choice of it is one (И10); a stopped one wakes only
-  // on a call made after it stopped.
-  const previewCalls = usePreviewCalls(head?.preview?.status ?? null)
   // Said to a screen reader: the server took a new level, the file of the chat was saved.
   const [note, setNote] = useState('')
-  /** The answer to `/init` in «Сохранить в подсказки агенту»; null — closed. */
-  const [notesText, setNotesText] = useState<string | null>(null)
   const effortMenu = useRef<EffortMenuHandle>(null)
   const { details } = useChatDetails()
   const { thinking } = useChatThinking()
@@ -441,15 +323,6 @@ export function DialogView({
     effort: ReasoningEffort
     over: ReasoningEffort | undefined
   } | null>(null)
-  const [releaseOpen, setReleaseOpen] = useState(false)
-  // `/release` of changes the site moved past: «Обновить» first, then the release of what it made.
-  // What the dialog showed when it was pressed: the revision it carries on and the updates of it
-  // the feed had told — a new one says the update recorded no revision.
-  const [releaseAfterUpdate, setReleaseAfterUpdate] = useState<{
-    revision: number
-    updates: number
-  } | null>(null)
-  const [undoOpen, setUndoOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
   // Why the server refused the last thing written or pressed: one sentence under the field.
   const [fieldError, setFieldError] = useState<string | null>(null)
@@ -479,12 +352,11 @@ export function DialogView({
     observer.observe(box)
     return () => observer.disconnect()
   }, [])
-  const clientCommands = useClientCommands({ projectId: siteId, taskId, anchor: field })
+  const clientCommands = useClientCommands({ taskId, anchor: field })
   // The words `/undo` gave back, and what the field holds now: a draft is never written over.
   const [undoneWords, setUndoneWords] = useState<string | null>(null)
-  // The press that gave them, and how many times a press that failed took its words away: they
-  // leave the field then, or sending them would ask again over the turn that stayed (§5.14).
-  const [undonePress, setUndonePress] = useState<string | null>(null)
+  // How many times `/redo` took the words away: they leave the field then, or sending them would
+  // ask again over the turn that came back (§5.14).
   const [wordsTaken, setWordsTaken] = useState(0)
   // The press of `/redo` whose turn takes those words back: they leave the field once it is.
   const [redoPress, setRedoPress] = useState<string | null>(null)
@@ -534,21 +406,12 @@ export function DialogView({
       .publish(() => publishFile.mutateAsync({ taskId, fileId, target }))
       .finally(() => setPublishing(null))
   }
-  const reset = useMutation(trpc.preview.reset.mutationOptions())
-  const update = useMutation(trpc.candidate.update.mutationOptions())
-  const retry = useMutation(trpc.task.retry.mutationOptions())
   const resumeAgent = useMutation(trpc.task.resumeAgent.mutationOptions())
-  const init = useMutation(trpc.task.init.mutationOptions())
   const compact = useMutation(trpc.task.compact.mutationOptions())
   const undoTurn = useMutation(trpc.task.undoTurn.mutationOptions())
   const redoTurn = useMutation(trpc.task.redoTurn.mutationOptions())
-  if (
-    undoneWords !== null &&
-    ((undonePress !== null && undoFailedAfter(rows, undonePress)) ||
-      (redoPress !== null && redoneAfter(rows, redoPress)))
-  ) {
+  if (undoneWords !== null && redoPress !== null && redoneAfter(rows, redoPress)) {
     setUndoneWords(null)
-    setUndonePress(null)
     setRedoPress(null)
     setWordsTaken((times) => times + 1)
   }
@@ -557,19 +420,12 @@ export function DialogView({
     undoTurn.isPending ||
     redoTurn.isPending ||
     proceed.isPending ||
-    retry.isPending ||
     cancel.isPending ||
-    reset.isPending ||
-    update.isPending ||
     resumeAgent.isPending ||
-    init.isPending ||
     compact.isPending
 
-  // What the chat works with (docs/plan/61-chats-first.md, §5.6): the two do not exclude each other.
-  const withRepository = head?.task.requirements.repository === true
+  // What the chat works with (docs/plan/61-chats-first.md, §5.6).
   const withBrowser = head?.task.requirements.browser === true
-  // `@` names a file of the chat's working copy (docs/plan/78-file-mentions.md).
-  const mentions = useMentionFiles(withRepository ? siteId : null, taskId)
   const browserLive = withBrowser && sessionLive(head?.browser ?? null)
   // The stream goes while the tab of the browser is on the screen, beside the dialog or in its
   // place; a press of «Взять управление» or «Продолжить работу агента» opens it for that press alone
@@ -644,7 +500,7 @@ export function DialogView({
   // The chat counts as watching the browser (И18; owner's answer of 30.10.2026): while the dialog
   // is on the screen its browser does not close for idle, the panel open or not.
   useBrowserWatching({ taskId, enabled: browserLive })
-  const attachments = useAttachments(siteId)
+  const attachments = useAttachments()
   // The names of the files the messages sent: read once a message has one.
   const sentIds = rows.flatMap((row) =>
     row.type === 'feed.request' && 'attachments' in row && Array.isArray(row.attachments)
@@ -654,12 +510,6 @@ export function DialogView({
   const sentFiles = useQuery({
     ...trpc.attachment.list.queryOptions({ taskId }),
     enabled: sentIds.length > 0,
-  })
-  // The notes of the project are read once there is an answer to `/init` to keep among them.
-  const notesRows = initAnswerIds(rows)
-  const agentNotes = useQuery({
-    ...trpc.project.agentNotes.queryOptions({ id: siteId ?? '' }),
-    enabled: siteId !== null && notesRows.size > 0,
   })
   // A message sent since the list was read names files it does not have yet — this tab's own or
   // one from another tab: the list is read again. Once for the same missing files: one still
@@ -694,10 +544,6 @@ export function DialogView({
 
   const status = head?.task.status
   const question = openQuestion(rows, status)
-  const candidateRow = liveCandidateRow(rows, head)
-  const closedProject = projectClosed(head)
-  // The failure «Попробовать ещё» answers: the server offers it (docs/plan/53).
-  const retryRow = retryFailure(rows, head)
   const terminal = status !== undefined && terminalTaskStatuses.includes(status)
   // `/cancel` was taken while the agent works: core stops it, and it is not asked twice — the
   // agent is still at work until then, as the list says of the command. A chat with a browser is
@@ -705,18 +551,8 @@ export function DialogView({
   // or presses meanwhile.
   const stopping =
     !terminal && (stopRequested(rows, status, withBrowser) || cancel.data?.state === 'stopping')
-  // «Отменить выпуск» is listed only in a dialog that installed a version, «Попробовать ещё» only
-  // while it is offered (critique of the plan: a refusal in every other dialog would be noise).
-  // Without the repository — no project, or a project without its files — a chat has neither the
-  // commands of the site nor anything to retry (docs/plan/61-chats-first.md, К27).
-  const verdicts = (head?.commands ?? []).filter(
-    (command) =>
-      (withRepository || chatCommands[command.id].needs !== 'repository') &&
-      (command.id !== 'undo' || command.refusal !== 'no_release') &&
-      // A driver without the compaction: the command is not there, closed or not (§5.14).
-      command.refusal !== 'no_compaction' &&
-      (command.id !== 'retry' || (command.available && retryRow !== null)),
-  )
+  // A driver without the compaction: the command is not there, closed or not (§5.14).
+  const verdicts = (head?.commands ?? []).filter((command) => command.refusal !== 'no_compaction')
   const commands = stopping
     ? verdicts.map((command) =>
         command.id === 'cancel'
@@ -724,7 +560,6 @@ export function DialogView({
           : command,
       )
     : verdicts
-  const resetVerdict = commands.find((command) => command.id === 'reset')
 
   // A dialog whose status changed: the list follows it, the credits it set aside or gave back
   // are read again, and no press of before is repeated.
@@ -739,59 +574,10 @@ export function DialogView({
     shownStatus.current = status
   }, [status, queryClient, trpc])
 
-  // The changes are read again when their numbers in the head move: a check that ends, a
-  // candidate the site moved on under. The panel and the release show what the head says.
-  const candidate = head?.candidate ?? null
-  const candidateMark =
-    candidate === null
-      ? null
-      : [
-          candidate.id,
-          candidate.revision,
-          candidate.status,
-          candidate.checks.pending,
-          candidate.checks.passed,
-          candidate.checks.failed,
-          candidate.checks.stale,
-        ].join(':')
-  const candidateRevision = candidate?.revision
-  const shownCandidate = useRef<string | null>(null)
-  useEffect(() => {
-    if (candidateMark === null || candidateRevision === undefined) return
-    if (shownCandidate.current !== null && shownCandidate.current !== candidateMark)
-      void queryClient.invalidateQueries({
-        queryKey: trpc.candidate.get.queryKey({ taskId, revision: candidateRevision }),
-      })
-    shownCandidate.current = candidateMark
-  }, [candidateMark, candidateRevision, queryClient, taskId, trpc])
-  // `/release` of changes the site moved past waits for its «Обновить»: the next revision, made
-  // current, opens its release; a conflict or a failure — a row of the update — or the end of the
-  // dialog ends the wait, and the row says why. Never a revision some later pass makes.
-  // State adjusted while rendering, not in an effect: the head that says so is this render's.
-  if (releaseAfterUpdate) {
-    const updates = updateRowsOf(rows)
-    if (
-      status === 'awaiting_approval' &&
-      candidate?.status === 'current' &&
-      candidate.revision > releaseAfterUpdate.revision
-    ) {
-      setReleaseAfterUpdate(null)
-      setReleaseOpen(true)
-    } else if (updates > releaseAfterUpdate.updates || terminal || status === 'awaiting_user')
-      setReleaseAfterUpdate(null)
-  }
-  // A tab of the changes on the screen — beside the dialog or in its place — shows the client this
-  // revision: «+» bears no dot for it (И13). A revision that comes after is new again.
-  const changesShown = shown && isChangesTool(tools.active)
-  const changesNow = changesMark(candidate)
-  useEffect(() => {
-    if (changesShown && changesNow !== null) dispatchTools({ type: 'seen', changes: changesNow })
-  }, [changesShown, changesNow])
-  // The live region says the status as it changes: a question, a result, a failure, changes to
-  // look at and the end of a release each come with a status of their own. Not every stage and
-  // not the timer. A failure after which the dialog kept its changes leaves the status «Ждёт
-  // вашего решения» as it was: the failure is said instead, by its own sentence and the one about
-  // the kept changes — not under the status «Не получилось», which the dialog does not have.
+  // The live region says the status as it changes: a question, a result and a failure each come
+  // with a status of their own. Not every stage and not the timer. A failure after which an old
+  // chat kept its changes leaves the status «Ждёт вашего решения» as it was: the failure is said
+  // instead.
   const last = rows.at(-1)
   const keptFailure =
     status === 'awaiting_approval' &&
@@ -847,25 +633,21 @@ export function DialogView({
   }
 
   /**
-   * The one way a tool opens at the client's press (docs/plan/59, И9): «+», «Посмотреть изменения»,
-   * `/preview` and «Взять управление» — never the words of the agent; the launch of the browser is
-   * an action of its own (`launched`). An open tool is shown again, never twice. Choosing the preview is the client's call to show it,
-   * every time (И10). An explicit opening puts the focus on the tab of the tool, unless the action
+   * The one way a tool opens at the client's press (docs/plan/59, И9): «+» and «Взять управление» —
+   * never the words of the agent; the launch of the browser is an action of its own (`launched`).
+   * An open tool is shown again, never twice. An explicit opening puts the focus on the tab of the tool, unless the action
    * keeps a place of its own and that place stays in sight: below `lg` the first tool takes the
    * place of the dialog, and the button pressed there goes out of sight with it (И14).
    */
   function openTool(tool: DialogTool, { by }: { by: ToolOpener }) {
-    if (tool === 'preview') previewCalls.call()
     const covers = !wide && !shown
     dispatchTools({ type: 'open', tool, by })
     leaveFullscreenFor(tool)
     if (movesFocus(by, { covers })) focusSoon(toolTabId(tool))
   }
 
-  /** The browser and the documents go over the content: no other tab has its button back. */
-  function leaveFullscreenFor(tool: DialogTool) {
-    if (tool !== 'browser' && tool !== 'documents') setFullscreen(false)
-  }
+  /** The browser and the documents go over the content: both are the tools there are. */
+  function leaveFullscreenFor(_tool: DialogTool) {}
 
   /** A tab chosen on the strip of the panel. */
   function showTool(tool: DialogTool) {
@@ -928,8 +710,7 @@ export function DialogView({
   // these very words): they are in the dialog, and the field is cleared like after a first send.
   async function send(text: string, attachmentIds: readonly string[] = []): Promise<boolean> {
     setFieldError(null)
-    // Files go with the messages of any chat: to the browser's pages, or into the copy of the
-    // site the agent works on.
+    // Files go with the messages of any chat: to the browser's pages, or to the agent's inbox.
     const files = [...attachmentIds]
     // While the agent works the words wait in the queue (ВВ1); a pass that ended meanwhile takes
     // them as a message.
@@ -946,7 +727,7 @@ export function DialogView({
         return true
       } catch (failure) {
         if (callErrorCode(failure) !== 'TASK_NOT_BUSY') {
-          setFieldError(sendErrorText(failure, { withProject: project !== null }))
+          setFieldError(sendErrorText(failure))
           refresh()
           return false
         }
@@ -964,7 +745,7 @@ export function DialogView({
       refresh()
       return true
     } catch (failure) {
-      setFieldError(sendErrorText(failure, { withProject: project !== null }))
+      setFieldError(sendErrorText(failure))
       refresh()
       return false
     }
@@ -995,15 +776,12 @@ export function DialogView({
   async function pressUndoTurn() {
     setFieldError(null)
     try {
-      const { words, requestEventId } = await undoTurn.mutateAsync({
+      const { words } = await undoTurn.mutateAsync({
         taskId,
         requestId: pressId('undoTurn'),
       })
       pressed('undoTurn')
-      if (words !== null && fieldText.current.trim() === '') {
-        setUndoneWords(words)
-        setUndonePress(requestEventId)
-      }
+      if (words !== null && fieldText.current.trim() === '') setUndoneWords(words)
     } catch (failure) {
       setFieldError(callErrorText(failure))
     }
@@ -1012,8 +790,8 @@ export function DialogView({
 
   /**
    * «Изменить» of the last message, sent changed (ВВ25): `/undo` takes its turn back, then the new
-   * words go as a message. In a chat with the repository core takes the turn back by a job, and the
-   * words wait for it (TASK_REWINDING). Words that could not go stay in the field, nothing is lost.
+   * words go as a message; while the turn is still being taken back they wait for it
+   * (TASK_REWINDING). Words that could not go stay in the field, nothing is lost.
    */
   async function sendEdited(text: string): Promise<boolean> {
     setFieldError(null)
@@ -1035,7 +813,7 @@ export function DialogView({
         return true
       } catch (failure) {
         if (callErrorCode(failure) !== 'TASK_REWINDING' || waited >= EDIT_WAIT_MS) {
-          setFieldError(sendErrorText(failure, { withProject: project !== null }))
+          setFieldError(sendErrorText(failure))
           // The turn is taken back already: the new words wait in the field to be sent by hand.
           const kept = fieldText.current.trim() === ''
           if (kept) setUndoneWords(text)
@@ -1060,24 +838,6 @@ export function DialogView({
       })
       pressed('redoTurn')
       if (words !== null && words === undoneWords) setRedoPress(requestEventId)
-    } catch (failure) {
-      setFieldError(callErrorText(failure))
-    }
-    refresh()
-  }
-
-  /** «Попробовать ещё» of a failure: one id per press of that failure, kept for its repeats. */
-  async function pressRetry(failureEventId: string) {
-    setFieldError(null)
-    try {
-      await retry.mutateAsync({
-        taskId,
-        requestId: pressId('retry', failureEventId),
-        failureEventId,
-      })
-      pressed('retry')
-      // The retry gave the reserve back and set a new one aside.
-      void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
     } catch (failure) {
       setFieldError(callErrorText(failure))
     }
@@ -1160,43 +920,9 @@ export function DialogView({
     }
   }
 
-  /** «Сохранить в подсказки агенту»: the notes are read anew, what the window shows is current. */
-  async function openNotes(text: string) {
-    setFieldError(null)
-    try {
-      await queryClient.fetchQuery({
-        ...trpc.project.agentNotes.queryOptions({ id: siteId ?? '' }),
-        staleTime: 0,
-      })
-      setNotesText(text)
-    } catch (failure) {
-      setFieldError(callErrorText(failure))
-    }
-  }
-
   function runCommand(id: ChatCommandId): string | undefined {
     setFieldError(null)
     switch (id) {
-      case 'release':
-        if (head?.candidate?.status === 'stale') {
-          setReleaseAfterUpdate({ revision: head.candidate.revision, updates: updateRowsOf(rows) })
-          void press('update', update.mutateAsync).then((ok) => {
-            if (!ok) setReleaseAfterUpdate(null)
-          })
-        } else setReleaseOpen(true)
-        return
-      case 'preview':
-        openTool('preview', { by: 'command' })
-        return
-      case 'reset':
-        void press('reset', reset.mutateAsync)
-        return
-      case 'update':
-        void press('update', update.mutateAsync)
-        return
-      case 'init':
-        void press('init', init.mutateAsync)
-        return
       case 'compact':
         void press('compact', compact.mutateAsync)
         return
@@ -1206,15 +932,9 @@ export function DialogView({
       case 'turn_redo':
         void pressRedoTurn()
         return
-      case 'retry':
-        if (retryRow !== null) void pressRetry(retryRow.id)
-        return
       case 'cancel':
         setCancelError(null)
         setCancelOpen(true)
-        return
-      case 'undo':
-        setUndoOpen(true)
         return
       case 'models':
         effortMenu.current?.open()
@@ -1239,15 +959,7 @@ export function DialogView({
   }
 
   const actions: FeedActions = {
-    onRetry: (failureEventId) => void pressRetry(failureEventId),
     onStop: () => runCommand('cancel'),
-    onRelease: () => runCommand('release'),
-    onUpdate: () => runCommand('update'),
-    onUndo: () => runCommand('undo'),
-    // The first tool of the changes that holds anything; never the preview (И10).
-    onShowChanges: () => {
-      if (head !== null) openTool(changesToolOf(head), { by: 'changes' })
-    },
     onOpenDocument: (fileId) => {
       const document = documentOfFile(chatDocuments, fileId)
       if (document === null) return
@@ -1262,20 +974,11 @@ export function DialogView({
       shown && tools.active === 'documents' && documentTarget
         ? agentDocOfEntry(documentTarget.name)
         : null,
-    // A closed project is read: nothing that carries the work on is offered (К39), «Остановить» is.
-    ...(closedProject
-      ? {}
-      : {
-          onContinue: () => void press('continue', proceed.mutateAsync),
-          onTakeControl: takeControl,
-          onResumeAgent: resumeWork,
-          // «Изменить»: the words are changed in place, and only «Отправить» takes the turn back (ВВ25).
-          onEditLast: sendEdited,
-        }),
-    // A press the server would refuse is not drawn: an owner or an admin, of a project that is open.
-    ...(!closedProject && project?.closed !== true && agentNotes.data?.canManage
-      ? { onSaveNotes: (text: string) => void openNotes(text), notesRows }
-      : {}),
+    onContinue: () => void press('continue', proceed.mutateAsync),
+    onTakeControl: takeControl,
+    onResumeAgent: resumeWork,
+    // «Изменить»: the words are changed in place, and only «Отправить» takes the turn back (ВВ25).
+    onEditLast: sendEdited,
     // The client holds the control of a browser that is there: a closed session holds nothing.
     controlling: head?.browser?.controller === 'user' && browserLive,
     browserLive,
@@ -1296,7 +999,6 @@ export function DialogView({
   if (state.missing) return <DialogNotFound />
 
   const shownTitle = head?.task.title ?? title ?? listText.untitled
-  const releasing = status === 'deploying' || status === 'verifying'
   const awaitingClient = status === 'awaiting_user' || status === 'awaiting_approval'
   // Once the head says another level than the one chosen over, the head is right.
   const effort =
@@ -1320,17 +1022,16 @@ export function DialogView({
     verdicts: commands,
     onRun: runCommand,
     onOpen: refresh,
-    plain: !withRepository,
+    plain: true,
   }
-  // The reminder of the field names the «Переменные» of a project, and none without one
-  // (docs/plan/61-chats-first.md, §5.11): an ended chat reads it from its closed field too.
-  const noSecrets =
-    project === null ? taskWayText.noSecretsPlain : withBrowser ? taskWayText.noSecrets : undefined
+  // The reminder of the field names «Настройки → Переменные» (docs/plan/83-remove-projects.md,
+  // БП4): an ended chat reads it from its closed field too.
+  const noSecrets = taskWayText.noSecrets
   let composer
   if (head === null) composer = null
   else if (terminal) {
-    // A closed dialog keeps the commands it still has — «Отменить выпуск», the preview — behind
-    // the button of the field, which takes no words (R9: commands work with the field closed).
+    // A closed dialog keeps the commands it still has behind the button of the field, which takes
+    // no words (R9: commands work with the field closed).
     composer = (
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5 }}>
         <Box sx={{ alignSelf: 'stretch' }}>
@@ -1348,7 +1049,7 @@ export function DialogView({
         </Box>
         <Button
           component={Link}
-          href={newChatHref(siteId)}
+          href={newChatHref()}
           variant="outlined"
           startIcon={<AppIcon name="plus" size={18} />}
           sx={{ borderRadius: '999px' }}
@@ -1367,36 +1068,26 @@ export function DialogView({
       (status === 'awaiting_user' &&
         (question === null || question.kind === 'agent' || question.kind === 'browser'))
     const revising = status === 'awaiting_approval' && question === null
-    // A paused, disconnected or archived project takes no words (docs/plan/61-chats-first.md,
-    // К39). The field stays closed rather than gone: a turn already under way can still be stopped.
-    // The feed says it live; the word of the page is as of its load, before the first feed.
-    const closedField = closedProject || project?.closed === true
     // While the agent works the field stays open: the words wait in the queue (ВВ1).
     const working = status === 'queued' || status === 'preparing' || status === 'running'
     const disabledReason = stopping
       ? composerText.stopping
-      : closedField
-        ? chatsText.closedProject
-        : answering || revising || working
-          ? null
-          : releasing
-            ? composerText.releasing
-            : feedInputText.disabled
+      : answering || revising || working
+        ? null
+        : feedInputText.disabled
     // While the agent works «Остановить» stands in place of «Отправить» (`/cancel`) — until words
     // are written: then the button puts them in the queue.
     const cancelVerdict = commands.find((command) => command.id === 'cancel')
     composer = (
       <Composer
         placeholder={
-          closedField
-            ? chatsText.closedProject
-            : working
-              ? queueText.placeholder
-              : answering && !answered
-                ? feedQuestionText.placeholder
-                : revising
-                  ? composerText.revisionPlaceholder
-                  : composerText.newPlaceholder
+          working
+            ? queueText.placeholder
+            : answering && !answered
+              ? feedQuestionText.placeholder
+              : revising
+                ? composerText.revisionPlaceholder
+                : composerText.newPlaceholder
         }
         // An answer of the agent asks nothing: the field is the field of a new message.
         sendLabel={
@@ -1419,7 +1110,6 @@ export function DialogView({
         onTextChange={fieldTextChanged}
         history={requestHistory}
         speech={speech}
-        mentions={mentions}
         {...(working
           ? {
               stop: {
@@ -1457,7 +1147,6 @@ export function DialogView({
         return (
           <BrowserPane
             taskId={taskId}
-            siteId={siteId}
             head={head}
             stream={stream}
             configured={browserStreamUrl !== null}
@@ -1466,7 +1155,6 @@ export function DialogView({
             onFullscreen={setFullscreen}
             onTake={takeControl}
             onResume={resumeWork}
-            readOnly={closedProject}
             onStop={() => runCommand('cancel')}
             stopping={stopping}
             canStop={
@@ -1477,22 +1165,6 @@ export function DialogView({
             busy={busy}
             answered={answered}
             rewound={rewound}
-          />
-        )
-      case 'preview':
-        return (
-          <PreviewTab
-            taskId={taskId}
-            preview={head?.preview ?? null}
-            calls={previewCalls}
-            onReopen={() => {
-              previewCalls.call()
-              // «Открыть предпросмотр» goes with the frame it opens: the focus waits on the tab.
-              focusSoon(toolTabId('preview'))
-            }}
-            canReset={resetVerdict?.available === true}
-            onReset={() => runCommand('reset')}
-            resetting={reset.isPending}
           />
         )
       case 'documents':
@@ -1529,24 +1201,6 @@ export function DialogView({
             )}
           </DocRevisions.Provider>
         )
-      case 'terminal':
-        // The files of the agent's working copy, and the client's edit of one (06.11.2026).
-        return siteId === null ? null : (
-          <Box sx={{ p: 2 }}>
-            <SiteFiles siteId={siteId} taskId={taskId} ended={terminal} onEdited={refresh} />
-          </Box>
-        )
-      case 'files':
-      case 'database':
-      case 'checks':
-        return (
-          <CandidateTab
-            taskId={taskId}
-            candidate={head?.candidate ?? null}
-            tool={tool}
-            ended={terminal}
-          />
-        )
     }
   }
 
@@ -1560,13 +1214,8 @@ export function DialogView({
         flexDirection: 'column',
         minWidth: 0,
         // What sticks over the top of the window below `lg`, as measured, and a step: the head of
-        // one line of 44px, or below `md` with the line of the project under it, 8px between them
-        // (`HEAD_ROOM`). Nothing over the feed from `lg`.
-        [HEAD_ROOM]: {
-          xs: `${(project === null ? 44 : 96) + ROOM_STEP}px`,
-          md: `${44 + ROOM_STEP}px`,
-          lg: '0px',
-        },
+        // one line of 44px (`HEAD_ROOM`). Nothing over the feed from `lg`.
+        [HEAD_ROOM]: { xs: `${44 + ROOM_STEP}px`, lg: '0px' },
         // A window lower than 420px sticks no head (below).
         '@media (max-height: 420px)': { [HEAD_ROOM]: '0px' },
       }}
@@ -1599,7 +1248,6 @@ export function DialogView({
         }}
       >
         <DialogHead
-          project={project}
           taskId={taskId}
           title={shownTitle}
           head={head}
@@ -1709,10 +1357,7 @@ export function DialogView({
             <FeedList
               head={head}
               rows={rows}
-              siteUrl={siteUrl}
               openQuestionId={question?.id ?? null}
-              liveCandidateId={candidateRow?.id ?? null}
-              retryId={retryRow?.id ?? null}
               actions={actions}
               filesOf={sentFilesOf}
               details={details || thinking}
@@ -1724,7 +1369,6 @@ export function DialogView({
               head={head}
               steps={liveSteps(rows, head)}
               stopping={stopping}
-              withSite={siteUrl !== null}
               activity={
                 head.task.status === 'running' && head.task.turnNo > 0 ? (
                   <TurnActivity
@@ -1736,7 +1380,7 @@ export function DialogView({
                 ) : undefined
               }
               browser={
-                withBrowser && !closedProject
+                withBrowser
                   ? {
                       controlling: head.browser?.controller === 'user' && browserLive,
                       onResume: resumeWork,
@@ -1819,41 +1463,6 @@ export function DialogView({
         content={toolContent}
       />
 
-      <ReleaseDialog
-        taskId={taskId}
-        open={releaseOpen}
-        agentMessage={candidateMessage(rows, candidateRow)}
-        onClose={() => setReleaseOpen(false)}
-        onReleased={() => {
-          setReleaseOpen(false)
-          refresh()
-        }}
-      />
-      {head?.undo ? (
-        <UndoDialog
-          taskId={taskId}
-          releaseId={head.undo.releaseId}
-          version={head.undo.version}
-          open={undoOpen}
-          onClose={() => setUndoOpen(false)}
-          onConfirmed={() => {
-            setUndoOpen(false)
-            refresh()
-          }}
-        />
-      ) : null}
-      {notesText !== null && siteId !== null ? (
-        <AgentNotesDialog
-          siteId={siteId}
-          text={notesText}
-          current={agentNotes.data?.notes ?? null}
-          onClose={() => setNotesText(null)}
-          onSaved={() => {
-            setNotesText(null)
-            setNote(agentNotesText.saved)
-          }}
-        />
-      ) : null}
       <ConfirmDialog
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}
@@ -1866,12 +1475,7 @@ export function DialogView({
         onConfirm={() => void confirmCancel()}
       >
         <Typography sx={{ mt: 1.5 }}>
-          {nbsp(
-            cancelText.body({
-              changes: candidate !== null,
-              onSite: project !== null && withBrowser,
-            }),
-          )}
+          {nbsp(cancelText.body({ changes: false, onSite: false }))}
         </Typography>
       </ConfirmDialog>
     </Box>

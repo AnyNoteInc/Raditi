@@ -170,7 +170,7 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
       WITH owned AS MATERIALIZED (
         SELECT lease.site_id, clock_timestamp() AS instant FROM site_leases lease
         JOIN tasks task ON task.id = lease.holder_task_id
-          AND lease.site_id IN (task.id, task.site_id)
+          AND lease.site_id = task.id
         WHERE lease.site_id = ${fence.siteId}::uuid AND lease.holder_task_id = ${fence.taskId}::uuid
           AND lease.epoch = ${fence.epoch} AND lease.operation = 'turn'::"LeaseOperation"
           AND NOT lease.held_for_operator AND lease.expires_at > clock_timestamp()
@@ -363,7 +363,6 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
         SELECT lease.site_id FROM site_leases lease JOIN a ON a.site_id = lease.site_id
         WHERE lease.holder_task_id = a.task_id AND lease.epoch = ${fence.epoch}
           AND lease.operation = 'turn'::"LeaseOperation" AND lease.held_for_operator
-          AND lease.inflight_mcp_call_id IS NULL
           AND lease.epoch < 2147483647
         FOR UPDATE OF lease
       ), lease AS (
@@ -421,7 +420,6 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
       UPDATE site_leases lease SET holder_task_id = NULL, operation = NULL, acquired_at = NULL,
         expires_at = NULL, held_for_operator = false, updated_at = clock_timestamp()
       WHERE lease.held_for_operator AND lease.operation = 'turn'::"LeaseOperation"
-        AND lease.inflight_mcp_call_id IS NULL
         AND EXISTS (SELECT 1 FROM turn_assignments a
           WHERE a.site_id = lease.site_id AND a.task_id = lease.holder_task_id
             AND a.lease_epoch = lease.epoch AND a.finished_at IS NOT NULL)

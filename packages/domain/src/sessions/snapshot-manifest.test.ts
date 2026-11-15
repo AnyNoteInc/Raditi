@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { publicationLimits } from '../git/publication.ts'
-import { sessionStateSchema, snapshotLimits } from './session-state.ts'
+import { sessionStateSchema } from './session-state.ts'
 import {
   snapshotHasRepository,
   snapshotManifestSchema,
@@ -225,6 +224,4 @@ describe('pre-turn snapshot plan', () => {
         .success,
     ).toBe(false)
   })
-  it('shares one patch limit between the snapshot and the publication', () =>
-    expect(publicationLimits.patchBytes).toBe(snapshotLimits.patchBytes))
 })

@@ -23,7 +23,10 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 
 import { bootstrapLocalVault, localVaultRequest } from '../../vault/bootstrap.mjs'
-import { OPENBAO_IMAGE } from './stand.mjs'
+
+/** OpenBao of infra/dev, infra/vault and the browser run of billing, by digest. */
+export const OPENBAO_IMAGE =
+  'ghcr.io/openbao/openbao:2.7.0@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315'
 
 /** The AppRole web logs in with, named after its first policy (infra/vault/policies). */
 export const SITES_WRITER = 'sites-writer'

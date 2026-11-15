@@ -1,12 +1,10 @@
 import { Module } from '@nestjs/common'
 import { createBrowserWorkerClient } from '@repo/browser-link'
 import type { PrismaClient } from '@repo/db'
-import type { SecretStore } from '@repo/domain'
-import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
+import { PRISMA } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
 import { CORE_CONFIG } from '../config/config.tokens.ts'
-import { readSiteSignIn } from '../site-env/site-env-values.ts'
 import { BrowserSessions } from './browser-sessions.ts'
 import { BrowserSessionsProcessor } from './browser-sessions.processor.ts'
 
@@ -20,11 +18,7 @@ import { BrowserSessionsProcessor } from './browser-sessions.processor.ts'
   providers: [
     {
       provide: BrowserSessions,
-      useFactory: (
-        config: CoreConfig,
-        prisma: PrismaClient,
-        secrets: SecretStore,
-      ): BrowserSessions | null =>
+      useFactory: (config: CoreConfig, prisma: PrismaClient): BrowserSessions | null =>
         config.browser
           ? new BrowserSessions({
               db: prisma,
@@ -32,10 +26,9 @@ import { BrowserSessionsProcessor } from './browser-sessions.processor.ts'
                 baseUrl: config.browser.url,
                 token: config.browser.token,
               }),
-              signIn: (siteId) => readSiteSignIn(prisma, secrets, siteId),
             })
           : null,
-      inject: [CORE_CONFIG, PRISMA, SECRET_STORE],
+      inject: [CORE_CONFIG, PRISMA],
     },
     BrowserSessionsProcessor,
   ],

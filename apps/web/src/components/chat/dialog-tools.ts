@@ -4,7 +4,7 @@ import type { AppIconName } from '@/components/application/app-icon'
 
 import { agentBrowserStatus, sessionLive } from './browser-pane-model'
 import { browserText, toolText } from './chat-texts'
-import type { BrowserHead, CandidateHead, PreviewHead } from './chat-types'
+import type { BrowserHead } from './chat-types'
 import type { FeedHeadState } from './feed-state'
 
 // The tools of a dialog (docs/plan/59-dialog-tools-panel.md, И1–И20 and the owner's answers of
@@ -14,36 +14,19 @@ import type { FeedHeadState } from './feed-state'
 // launch of the browser to `toolsReducer`. Nothing here is kept between two showings of a dialog:
 // each one starts with the panel closed (И1).
 
-export const dialogTools = [
-  'preview',
-  'files',
-  'database',
-  'checks',
-  'terminal',
-  'browser',
-  'documents',
-] as const
+// A chat has no project (docs/plan/83-remove-projects.md): no preview, no changes, no files of a
+// working copy — the browser of the chat and the documents of the agent are its tools.
+export const dialogTools = ['browser', 'documents'] as const
 export type DialogTool = (typeof dialogTools)[number]
-/** The tools of the changes: what the candidate of the dialog holds. */
-export type ChangesTool = Extract<DialogTool, 'files' | 'database' | 'checks'>
-const changesTools: readonly ChangesTool[] = ['files', 'database', 'checks']
-/** A tool of the changes: its tab reads the candidate and says it has been seen (И11, И13). */
-export const isChangesTool = (tool: DialogTool | null): tool is ChangesTool =>
-  tool === 'files' || tool === 'database' || tool === 'checks'
 /**
- * Who opened a tool (И9): «+», «Посмотреть изменения», `/preview` and «Взять управление». The
- * launch of the browser is no opener: it is an action of its own (`launch`), with rules of its own.
+ * Who opened a tool (И9): «+» and «Взять управление». The launch of the browser is no opener: it
+ * is an action of its own (`launch`), with rules of its own.
  */
-export const toolOpeners = ['menu', 'changes', 'command', 'take'] as const
+export const toolOpeners = ['menu', 'take'] as const
 export type ToolOpener = (typeof toolOpeners)[number]
 
 /** The icon of a tool, in the menu and on its tab. */
 export const toolIcons: Readonly<Record<DialogTool, AppIconName>> = Object.freeze({
-  preview: 'eye',
-  files: 'file',
-  database: 'database',
-  checks: 'check',
-  terminal: 'terminal',
   browser: 'globe',
   documents: 'document',
 })
@@ -71,27 +54,12 @@ export const movesFocus = (
 export const dialogEnded = (head: FeedHeadState): boolean =>
   terminalTaskStatuses.includes(head.task.status)
 
-/** A preview the client can use: being made, ready, stopped for its age or failed. */
-const usedPreviews: ReadonlySet<PreviewHead['status']> = new Set([
-  'pending',
-  'building',
-  'ready',
-  'failed',
-  'expired',
-])
-
-/** The platform makes previews here (it knows their origin), and this one can be shown. */
-const offersPreview = (preview: PreviewHead | null): boolean =>
-  preview !== null && preview.origin !== null && usedPreviews.has(preview.status)
-
 /**
  * The tools «+» offers the chat, in the order of the menu (docs/plan/61-chats-first.md, §5.11): a
- * chat with the repository has the preview while one can be shown and what its changes hold, with
- * no changes not a word of them (К19); a chat with a browser has it, whatever its state, ended too.
- * A chat of one kind has none of the other's, whatever its head says: the requirements decide.
+ * chat with a browser has it, whatever its state, ended too; the documents once there is one.
  */
 export function dialogToolsOf(head: FeedHeadState, documents = 0): DialogTool[] {
-  const { repository, browser } = head.task.requirements
+  const { browser } = head.task.requirements
   return dialogTools.filter((tool) => {
     switch (tool) {
       // The pages and text documents the agent made (docs/plan/67-agent-documents.md, Д4): in a
@@ -100,31 +68,8 @@ export function dialogToolsOf(head: FeedHeadState, documents = 0): DialogTool[] 
         return documents > 0
       case 'browser':
         return browser
-      case 'preview':
-        return repository && offersPreview(head.preview)
-      case 'files':
-      case 'database':
-      case 'checks':
-        return repository && candidateCount(tool, head.candidate) > 0
-      // The files of the agent's working copy, to look at and to change (06.11.2026): once the
-      // agent took the chat — a new chat starts with the field alone (И1).
-      case 'terminal':
-        return repository && head.task.turnNo >= 1
     }
   })
-}
-
-/** What a tool of the changes holds: the files and media, the records of the site, the checks. */
-export function candidateCount(tool: ChangesTool, candidate: CandidateHead | null): number {
-  if (candidate === null) return 0
-  if (tool === 'checks') {
-    const { pending, passed, failed, stale } = candidate.checks
-    return pending + passed + failed + stale
-  }
-  const counts = candidate.counts
-  if (counts === null) return 0
-  if (tool === 'database') return counts.records
-  return counts.files.added + counts.files.modified + counts.files.deleted + counts.media
 }
 
 /**
@@ -146,10 +91,8 @@ function browserMark(
 
 /**
  * The mark on the right of the tile of a tool (И5): «Открыто» for an open one; the number of the
- * files and media or of the records, the checks passed of all — a tile of the changes stands only
- * where they hold something (`dialogToolsOf`); who drives the browser, in the word of its panel
- * (`answered`: the agent answered and asked nothing; `rewound`: `/undo` left it so). The preview
- * has none.
+ * documents; who drives the browser, in the word of its panel (`answered`: the agent answered and
+ * asked nothing; `rewound`: `/undo` left it so).
  */
 export function toolMark(
   tool: DialogTool,
@@ -163,49 +106,8 @@ export function toolMark(
 ): string | null {
   if (open) return toolText.mark.open
   if (tool === 'documents') return String(documents)
-  if (tool === 'preview' || tool === 'terminal') return null
-  if (tool === 'browser') return browserMark(head.browser, head, { answered, rewound })
-  const count = candidateCount(tool, head.candidate)
-  return tool === 'checks'
-    ? toolText.mark.checks(head.candidate?.checks.passed ?? 0, count)
-    : String(count)
+  return browserMark(head.browser, head, { answered, rewound })
 }
-
-/**
- * The tool «Посмотреть изменения» opens (И10): the first of the files, the records and the checks
- * that holds anything, among those the dialog has; the files, with what they say before the
- * changes, when none does.
- */
-export function changesToolOf(head: FeedHeadState): ChangesTool {
-  const offered = dialogToolsOf(head)
-  return (
-    changesTools.find(
-      (tool) => offered.includes(tool) && candidateCount(tool, head.candidate) > 0,
-    ) ?? 'files'
-  )
-}
-
-/** What a tab of the changes says in place of them: a sentence and a quieter one under it. */
-export interface ToolEmptyText {
-  title: string
-  note: string | null
-}
-
-/**
- * What a tab of the changes says while the dialog has no candidate (И6): the changes are yet to
- * come, or the dialog has ended without them. null — there is one: the tab shows what it holds.
- */
-export function changesEmptyText(
-  tool: ChangesTool,
-  { ended, candidate }: { ended: boolean; candidate: CandidateHead | null },
-): ToolEmptyText | null {
-  if (candidate !== null) return null
-  return (ended ? toolText.ended : toolText.empty)[tool]
-}
-
-/** The changes as the client saw them: `id:revision` of the candidate; null — none. */
-export const changesMark = (candidate: CandidateHead | null): string | null =>
-  candidate === null ? null : `${candidate.id}:${candidate.revision}`
 
 // ---------------------------------------------------------------------------------------------
 // The panel beside the dialog
@@ -228,11 +130,6 @@ export interface ToolsState {
    */
   launchSpent: boolean
   /**
-   * `id:revision` of the candidate the client last had a tab of the changes on the screen at, in
-   * this showing (И13).
-   */
-  seenChanges: string | null
-  /**
    * The client closed «Документы» (or the whole panel) after they opened by themselves: a new
    * document does not open them again in this showing (docs/plan/67-agent-documents.md, Д4).
    */
@@ -247,7 +144,6 @@ export const closedTools: ToolsState = Object.freeze({
   active: null,
   away: false,
   launchSpent: false,
-  seenChanges: null,
   documentsSpent: false,
   documentsUnseen: false,
 }) as ToolsState
@@ -271,8 +167,6 @@ export type ToolsAction =
    * itself, and with the panel on the screen it only joins the tabs (`toolsReducer`).
    */
   | { type: 'launch' }
-  /** A tab of the changes is on the screen at these changes (`changesMark`). */
-  | { type: 'seen'; changes: string }
   /**
    * A document of the agent came while the client looks at the chat (docs/plan/67, Д4): from `lg`
    * («opens») «Документы» open on it, or join the tabs of a panel on the screen beside the tool the
@@ -354,9 +248,6 @@ export function toolsReducer(state: ToolsState, action: ToolsAction): ToolsState
         away: false,
         launchSpent: true,
       }
-    case 'seen':
-      if (state.seenChanges === action.changes) return state
-      return { ...state, seenChanges: action.changes }
     case 'documentArrived': {
       if (toolsShown(state) && state.active === 'documents') return state
       if (!action.opens || state.documentsSpent)
@@ -402,14 +293,11 @@ const browserWaits = (session: BrowserHead | null): boolean =>
 
 /**
  * The dot on «+» while the tools are not on the screen (И13): the browser waits for the client, or
- * the changes are of a revision the client has not had on the screen in this showing — the one
- * there at the start too. The panel never opens for it.
+ * a document came that was not seen. The panel never opens for it.
  */
 export function toolsDot(head: FeedHeadState, tools: ToolsState): ToolsDot | null {
   if (toolsShown(tools)) return null
   if (browserWaits(head.browser)) return 'browser'
-  const changes = changesMark(head.candidate)
-  if (changes !== null && changes !== tools.seenChanges) return 'changes'
   return tools.documentsUnseen ? 'documents' : null
 }
 

@@ -8,7 +8,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { SYNTHETIC_ZAI_KEY } from '../llm-verify/fake-zai.mjs'
-import { customerOf } from '../release-verify/runtime.mjs'
+import { customerOf } from './runtime.mjs'
 import { STAND_PROFILES, operatorEnvironment, standRatesFile } from './stand.mjs'
 
 /**
@@ -110,8 +110,8 @@ export async function switchOnModel(rt, { db, copy, context, vault, directory })
  * `PUT /api/attachments/<id>` with the session, the cabinet's Origin and the length.
  * Returns the id and the answer of the upload.
  */
-export async function uploadFile(client, { siteId, name, type, bytes, size = bytes.byteLength }) {
-  const started = await client.call('mutation', 'attachment.start', { siteId, name, size, type })
+export async function uploadFile(client, { name, type, bytes, size = bytes.byteLength }) {
+  const started = await client.call('mutation', 'attachment.start', { name, size, type })
   if (!started.ok) return { id: null, started, upload: null }
   const { attachmentId, uploadPath } = started.data
   const upload = await client.request(uploadPath, {
@@ -121,4 +121,69 @@ export async function uploadFile(client, { siteId, name, type, bytes, size = byt
   })
   const text = await upload.text().catch(() => '')
   return { id: attachmentId, uploadPath, started, upload: { status: upload.status, text } }
+}
+
+/**
+ * A paid tariff «Агентство» for the current period, as a settled payment leaves it: the order,
+ * the subscription and the credits of the period granted by `grantTariffCredits`. The money path
+ * itself is `pnpm verify:billing`'s. Two paid packs lie beside the tariff: the scenarios start
+ * many chats and hold several of them at once.
+ */
+export async function grantTariff({ db, billing }, { workspaceId, userId }) {
+  const plan = await db.plan.findFirstOrThrow({ where: { slug: 'agency' } })
+  const pack = await db.plan.findFirstOrThrow({ where: { slug: 'pack' } })
+  const start = new Date(Date.now() - 60 * 60_000)
+  const end = new Date(start.getTime() + 30 * 24 * 60 * 60_000)
+  await db.$transaction(async (tx) => {
+    const subscription = await tx.subscription.create({
+      data: {
+        workspaceId,
+        planId: plan.id,
+        status: 'active',
+        currentPeriodStart: start,
+        currentPeriodEnd: end,
+        periodAnchor: start,
+      },
+    })
+    const order = await tx.order.create({
+      data: {
+        workspaceId,
+        userId,
+        planId: plan.id,
+        subscriptionId: subscription.id,
+        kind: 'subscription',
+        amount: plan.price,
+        status: 'paid',
+        idempotenceKey: `browser-task-verify-${randomBytes(6).toString('hex')}`,
+        periodStart: start,
+        periodEnd: end,
+        paidAt: start,
+      },
+    })
+    await billing.grantTariffCredits(tx, {
+      workspaceId,
+      orderId: order.id,
+      credits: plan.creditsPerMonth,
+    })
+    for (let bought = 0; bought < 2; bought += 1) {
+      const packOrder = await tx.order.create({
+        data: {
+          workspaceId,
+          userId,
+          planId: pack.id,
+          kind: 'pack',
+          amount: pack.price,
+          status: 'paid',
+          idempotenceKey: `browser-task-verify-${randomBytes(6).toString('hex')}`,
+          paidAt: start,
+        },
+      })
+      await billing.grantPackCredits(tx, {
+        workspaceId,
+        orderId: packOrder.id,
+        credits: pack.packCredits,
+      })
+    }
+  })
+  return plan
 }

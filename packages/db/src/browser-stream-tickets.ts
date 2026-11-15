@@ -4,7 +4,6 @@ import { browserSessionTimings, browserStreamTicketSchema } from '@repo/domain'
 import { z } from 'zod'
 
 import { Prisma } from './generated/prisma/client.ts'
-import { browserClosedSiteStatuses } from './browser-sessions.ts'
 import { uuidv7 } from './uuidv7.ts'
 
 // The way into the stream of a task's browser (docs/plan/57-browser-tasks.md, Б12): the cabinet
@@ -23,18 +22,15 @@ const ticketHash = (ticket: string): string =>
 
 /**
  * Who may watch and drive a session (Б12): it still holds a browser and its deadline has not
- * passed, the user is a member of the task's workspace, the task is not deleted, and the site — a
- * chat without a project has none — is not closed.
+ * passed, the user is a member of the task's workspace and the task is not deleted.
  */
 function viewerAllowed(sessionId: string, userId: string): Prisma.Sql {
   return Prisma.sql`EXISTS (
     SELECT 1 FROM browser_sessions b
       JOIN tasks t ON t.id = b.task_id
-      LEFT JOIN sites s ON s.id = b.site_id
       JOIN members m ON m.workspace_id = t.workspace_id AND m.user_id = ${userId}::uuid
      WHERE b.id = ${sessionId}::uuid AND t.deleted_at IS NULL
-       AND b.status IN ('starting', 'ready') AND b.expires_at > clock_timestamp()
-       AND (b.site_id IS NULL OR s.status::text <> ALL (${[...browserClosedSiteStatuses]}::text[])))`
+       AND b.status IN ('starting', 'ready') AND b.expires_at > clock_timestamp())`
 }
 
 /** viewerAllowed() now: what the gateway asks after it spent a ticket, and at every recheck. */

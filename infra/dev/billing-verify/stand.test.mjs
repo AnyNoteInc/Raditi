@@ -43,7 +43,7 @@ import {
   moscowDate,
   rubles,
 } from './scenario-kit.mjs'
-import { SITES_WRITER, WEB_POLICIES, prepareSitesWriter } from './openbao.mjs'
+import { OPENBAO_IMAGE, SITES_WRITER, WEB_POLICIES, prepareSitesWriter } from './openbao.mjs'
 import { scenarioIds } from './scenarios.mjs'
 import {
   BUILD_OUTPUT,
@@ -55,7 +55,6 @@ import {
   LETTER_MIRROR,
   LETTER_MIRROR_SQL,
   LETTER_READER,
-  OPENBAO_IMAGE,
   PAST_DUE_DAYS,
   POSTGRES_IMAGE,
   REDIS_IMAGE,
@@ -64,9 +63,6 @@ import {
   RUN_STAGING_PREFIX,
   SCENARIOS,
   SHOP_ID,
-  SITE_FILES,
-  SITE_ROOT,
-  SITE_USER,
   STAND_LABEL,
   TICK_SECONDS,
   buildDirectory,
@@ -109,8 +105,6 @@ import {
   treeEntry,
   trpcOutcome,
   trpcQueryUrl,
-  vaultContainerArgs,
-  vaultEnvFile,
   webEnvironment,
 } from './stand.mjs'
 import { lockCopy } from './verify-billing.mjs'
@@ -141,11 +135,6 @@ const shared = {
   redisUrl: 'redis://default:synthetic@127.0.0.1:46379',
   fakeApiUrl: 'http://127.0.0.1:44110/v3',
   secrets,
-  vault: {
-    address: 'http://127.0.0.1:48200',
-    roleId: '0199a000-0000-7000-8000-00000000a11e',
-    secretId: 'synthetic-secret-id-of-sites-writer',
-  },
 }
 
 // ─── Options ──────────────────────────────────────────────────────────────────
@@ -178,15 +167,13 @@ test('the stand takes --no-build, --keep and --only, and nothing that names a da
 
 // ─── Containers ───────────────────────────────────────────────────────────────
 
-test('PostgreSQL, Redis and OpenBao are the images of the app VM and of the other stands, by digest', () => {
+test('PostgreSQL and Redis are the images of the app VM and of the other stands, by digest; OpenBao of the browser run', () => {
   for (const image of [POSTGRES_IMAGE, REDIS_IMAGE])
     assert.match(image, /^[a-z]+:[\w.-]+@sha256:[a-f0-9]{64}$/)
-  // OpenBao of infra/dev and of the other stands that start one, pinned by the digest the
-  // content workflow pulls.
+  // OpenBao of infra/dev, pinned by digest: the browser run of billing starts it (openbao.mjs).
   assert.match(OPENBAO_IMAGE, /^ghcr\.io\/openbao\/openbao:2\.7\.0@sha256:[a-f0-9]{64}$/)
   assert.ok(read('infra/dev/docker-compose.yml').includes('image: ghcr.io/openbao/openbao:2.7.0\n'))
   assert.ok(read('infra/vault/verify-local.mjs').includes(`'${OPENBAO_IMAGE.split('@')[0]}'`))
-  assert.ok(read('.github/workflows/wordpress-content.yml').includes(OPENBAO_IMAGE))
   // infra/app/env.example names the same digests behind the mirror of the platform registry.
   const app = read('infra/app/env.example')
   assert.ok(app.includes(`POSTGRES_IMAGE=git.raditi.ru/mirror/${POSTGRES_IMAGE}\n`))
@@ -198,18 +185,16 @@ test('PostgreSQL, Redis and OpenBao are the images of the app VM and of the othe
   const readme = read('infra/dev/billing-verify/README.md')
   assert.deepEqual(
     [...readme.matchAll(/^ {2}docker pull (\S+)$/gm)].map(([, image]) => image),
-    [POSTGRES_IMAGE, REDIS_IMAGE, OPENBAO_IMAGE],
+    [POSTGRES_IMAGE, REDIS_IMAGE],
   )
 })
 
 test('a container is the run’s own: its name, its label, loopback only, nothing pulled, no host path', () => {
   const postgres = postgresContainerArgs({ run: RUN, envFile: '/tmp/run/postgres.env' })
   const redis = redisContainerArgs({ run: RUN, envFile: '/tmp/run/redis.env' })
-  const vault = vaultContainerArgs({ run: RUN, envFile: '/tmp/run/vault.env' })
   for (const [args, service, port] of [
     [postgres, 'postgres', '5432'],
     [redis, 'redis', '6379'],
-    [vault, 'vault', '8200'],
   ]) {
     assert.deepEqual(args.slice(0, 3), ['run', '-d', '--pull=never'])
     assert.deepEqual(values(args, '--name'), [`raditi-billing-verify-${RUN}-${service}`])
@@ -229,9 +214,6 @@ test('a container is the run’s own: its name, its label, loopback only, nothin
   // As in infra/dev and infra/app: BullMQ must never lose a key to eviction.
   assert.match(server, /--maxmemory-policy noeviction/)
   assert.match(server, /--save "" --appendonly no/)
-  // OpenBao runs as its image starts it — dev mode, data in memory, no capability added.
-  assert.equal(vault.at(-1), OPENBAO_IMAGE)
-  assert.ok(!vault.includes('--cap-add'))
 })
 
 test('no password is an argument of a process: each comes from an env file of the run', () => {
@@ -243,18 +225,12 @@ test('no password is an argument of a process: each comes from an env file of th
     `POSTGRES_USER=raditi\nPOSTGRES_DB=raditi\nPOSTGRES_PASSWORD=${password}\n`,
   )
   assert.equal(redisEnvFile(password), `REDIS_PASSWORD=${password}\n`)
-  assert.equal(
-    vaultEnvFile(password),
-    `BAO_DEV_ROOT_TOKEN_ID=${password}\nBAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200\n`,
-  )
-  const vault = vaultContainerArgs({ run: RUN, envFile: '/tmp/run/vault.env' })
   // The shell of the container reads the variable; the host only ever sees its name.
   assert.match(redis.at(-1), /--requirepass "\$REDIS_PASSWORD"$/)
-  for (const args of [postgres, redis, vault]) assert.ok(!args.join(' ').includes(password))
+  for (const args of [postgres, redis]) assert.ok(!args.join(' ').includes(password))
   for (const envFile of ['postgres.env', './redis.env', '', undefined]) {
     assert.throws(() => postgresContainerArgs({ run: RUN, envFile }), /absolute path/)
     assert.throws(() => redisContainerArgs({ run: RUN, envFile }), /absolute path/)
-    assert.throws(() => vaultContainerArgs({ run: RUN, envFile }), /absolute path/)
   }
 })
 
@@ -387,9 +363,7 @@ test('the copy loses the folders of files the tree has lost, deepest first, and 
   // after the files: a folder removed before its files are gone is not empty, and stays.
   for (const file of [
     'infra/dev/billing-verify/verify-billing.mjs',
-    'infra/dev/release-verify/verify-release.mjs',
     'infra/dev/browser-task-verify/build.mjs',
-    'infra/dev/stack-verify/verify-stack.mjs',
   ])
     assert.match(
       read(file),
@@ -713,9 +687,9 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     YOOKASSA_API_URL: shared.fakeApiUrl,
     YOOKASSA_WEBHOOK_ALLOWLIST: '127.0.0.1,::1',
     BILLING_PAST_DUE_DAYS: '7',
-    VAULT_ADDR: shared.vault.address,
-    VAULT_ROLE_ID: shared.vault.roleId,
-    VAULT_SECRET_ID: shared.vault.secretId,
+    // A throwaway address, as core's: nothing of the scenarios writes a secret (plan 83).
+    VAULT_ADDR: 'http://127.0.0.1:9',
+    VAULT_DEV_ROOT_TOKEN: secrets.unused,
   })
   // The product's own readers take it.
   assert.deepEqual(webEnvFromEnv(env), {
@@ -724,8 +698,6 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     metricsToken: secrets.metrics,
     redisUrl: undefined,
     pastDueDays: PAST_DUE_DAYS,
-    // The stand gives web no preview settings: previews are off there.
-    preview: null,
     // Nor a browser stream: browser tasks are off there too.
     browserStreamUrl: null,
     // Nor Web Push (docs/plan/75-chat-input-output.md, ВВ8).
@@ -747,12 +719,8 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     autopayments: true,
   })
   assert.equal('YOOKASSA_AUTOPAYMENTS' in env, false)
-  // Web logs in to the stand's OpenBao by an AppRole, as in production: no root token.
-  assert.deepEqual(vaultConfigFromEnv(env), {
-    addr: shared.vault.address,
-    appRole: { roleId: shared.vault.roleId, secretId: shared.vault.secretId },
-  })
-  assert.equal('VAULT_DEV_ROOT_TOKEN' in env, false)
+  // The settings of Vault parse, and name the discard port of loopback, where nothing listens.
+  assert.equal(vaultConfigFromEnv(env).addr, 'http://127.0.0.1:9')
 })
 
 test('web’s AppRole holds the policies `sites-writer` and `workspace-provisioner`, on the mounts and policies of infra/vault', async () => {
@@ -794,13 +762,19 @@ test('web’s AppRole holds the policies `sites-writer` and `workspace-provision
   const role = written.find(({ path }) => path === `auth/approle/role/${SITES_WRITER}`)
   assert.deepEqual(role.body.token_policies, [SITES_WRITER, 'workspace-provisioner'])
   assert.equal(role.body.token_no_default_policy, true)
-  // The policy itself: write with CAS, read the metadata of sites and keep one version of each of
-  // their keys (docs/plan/53-chat-preview-release.md, Р13; «Удалить проект») — nothing else.
+  // The policy itself: write with CAS, read the metadata and keep one version of each key — of
+  // the variables of a workspace (БП4) and of the keys of its MCP servers (БП11) — nothing else;
+  // no key of a site since plan 83, БП13.
   assert.deepEqual(
     [...read('infra/vault/policies/sites-writer.hcl').matchAll(/^path "([^"]+)"/gm)].map(
       ([, path]) => path,
     ),
-    ['kv/data/sites/*', 'kv/metadata/sites/+/*'],
+    [
+      'kv/data/workspaces/+/env/*',
+      'kv/metadata/workspaces/+/env/*',
+      'kv/data/workspaces/+/mcp/*',
+      'kv/metadata/workspaces/+/mcp/*',
+    ],
   )
   // And the Transit key of a workspace, made before its first task (docs/plan/57, Б32) — only.
   assert.deepEqual(
@@ -809,30 +783,6 @@ test('web’s AppRole holds the policies `sites-writer` and `workspace-provision
     ),
     ['transit/keys/+'],
   )
-})
-
-test('the site customers add is a synthetic WordPress: the markers of the platform, one file to read', async () => {
-  const { wordpressAdapter } = await import(
-    new URL('../../../packages/site-adapters/src/wordpress.ts', import.meta.url).href
-  )
-  const top = new Set(
-    Object.keys(SITE_FILES).map((path) => {
-      assert.ok(path.startsWith(`${SITE_ROOT}/`), path)
-      return path.slice(SITE_ROOT.length + 1).split('/')[0]
-    }),
-  )
-  for (const marker of wordpressAdapter.rootMarkers()) assert.ok(top.has(marker), marker)
-  assert.ok(Object.keys(SITE_FILES).some((path) => path === `${SITE_ROOT}/index.php`))
-  // Nothing a secret check would look for: no wp-config.php, no password in a file.
-  assert.ok(!Object.keys(SITE_FILES).some((path) => path.endsWith('wp-config.php')))
-  assert.match(SITE_USER, /^[a-z]+$/)
-  // The server is the test server of @repo/site-connections, started by the stand itself, and
-  // its password is a random secret of the run, blanked in the logs it keeps.
-  const stand = read('infra/dev/billing-verify/verify-billing.mjs')
-  assert.match(stand, /packages\/site-connections\/src\/testing\/sftp-server\.ts/)
-  assert.match(stand, /sitePassword: randomBytes\(18\)\.toString\('base64url'\)/)
-  assert.match(stand, /users: \[\{ username: SITE_USER, password: secrets\.sitePassword \}\]/)
-  assert.match(stand, /secrets\.vaultSecretId = sitesWriter\.secretId/)
 })
 
 test('core gets PostgreSQL and Redis of the stand; S3 and Vault are throwaway values it only parses', () => {
@@ -990,9 +940,6 @@ test('the cleanup stops writers first, the containers after them, and frees the 
   // The clients of the stand itself let go of the containers before those are removed.
   assert.ok(at('database client') < at('postgres container'))
   assert.ok(at('queue client') < at('redis container'))
-  // Web checks the files of a site and writes to Vault: the server of the site and OpenBao go
-  // after it.
-  assert.ok(at('web') < at('site server') && at('web') < at('vault container'))
   // The logs of the run are removed after the processes that write them have stopped; those
   // of a failed run are kept aside in between: whole, and before their directory goes.
   assert.ok(at('web') < at('run directory') && at('core') < at('run directory'))
@@ -1662,10 +1609,9 @@ test('the gift of the registration is the product’s, and the stand asks for it
   const start = payment.indexOf("scenarios['signup-gift'] = async (t) => {")
   assert.notEqual(start, -1)
   const gift = payment.slice(start, payment.indexOf('\n}\n', start))
-  // The first site is added through the wizard's procedures (`addSite`), and its request sent
-  // again finds it.
-  assert.match(gift, /await addSite\(t, customer, \{/)
-  assert.match(gift, /customer\.mutate\('project\.create', request\)/)
+  // The first file of a chat makes the workspace (`firstFile`), and a second one finds it.
+  assert.match(gift, /const attachment = await firstFile\(t, customer\)/)
+  assert.match(gift, /const second = await firstFile\(t, customer, /)
   assert.match(gift, /customer\.mutate\('billing\.startCheckout', \{/)
   assert.match(gift, /const onlooker = await t\.customer\(\)/)
   assert.doesNotMatch(gift, /onlooker\.mutate/)
@@ -1944,7 +1890,7 @@ test('what a letter is made of is kept by a mirror of the outbox in the stand’
   const stand = read('infra/dev/billing-verify/verify-billing.mjs')
   const made = stand.indexOf('for (const statement of LETTER_MIRROR_SQL) await db.query(statement)')
   assert.ok(made > stand.indexOf("for (const script of ['db:deploy', 'db:seed'])"))
-  assert.ok(made < stand.indexOf("stage = 'starting the site, the fake ЮKassa, web and core'"))
+  assert.ok(made < stand.indexOf("stage = 'starting the fake ЮKassa, web and core'"))
   // The scenarios read it, and nothing of them writes to it.
   const kit = read('infra/dev/billing-verify/scenario-kit.mjs')
   assert.match(kit, /FROM \$\{LETTER_MIRROR\} WHERE \$\{where\} ORDER BY seq`/)

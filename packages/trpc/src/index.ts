@@ -2,16 +2,8 @@
 export { CONSENT_REQUIRED } from './errors.ts'
 export { appRouter, createCaller, type AppRouter } from './router.ts'
 export { createContext, type BillingContext } from './trpc.ts'
-// `/preview/open` of web (plan 53, Р19): a ticket for the exact host of a preview.
-export { issuePreviewTicket, openPreview } from './services/chat/previews.ts'
 // What the procedures of a dialog reach outside the database; the app builds it (plan 53).
-export {
-  releaseConfirmKey,
-  type ChatContext,
-  type SiteSecretWriter,
-} from './services/chat/context.ts'
-// The screenshot of a check of a candidate, for the route of web that serves it (plan 53, Р22).
-export { readCheckScreenshot } from './services/chat/candidates.ts'
+export { type ChatContext, type ChatSecretWriter } from './services/chat/context.ts'
 // A snapshot the agent took of a task's browser for the client (`web_screenshot`).
 export { readTaskFile, type ChatFile } from './services/chat/files.ts'
 // The documents of a chat and the tokens of the domain of pages (docs/plan/67-agent-documents.md).
@@ -24,7 +16,6 @@ export {
 } from './services/chat/page-tokens.ts'
 export { cabinetDocMarkdown } from './services/pages.ts'
 export { readTaskScreenshot } from './services/chat/screenshots.ts'
-export { readSiteBackupDownload } from './services/site-history.ts'
 
 export { readChatNotification } from './services/notifications.ts'
 export type {
@@ -32,7 +23,7 @@ export type {
   McpServerProbe,
   McpServerServices,
 } from './services/mcp-server-auth.ts'
-export { checkSkillSignIn, connectSignedInServer } from './services/site-agent-skills.ts'
+export { checkSkillSignIn, connectSignedInServer } from './services/agent-skills.ts'
 // The updates of the bot of the chat in Telegram, handed by core to web (docs/plan/80-telegram.md).
 export {
   handleTelegramTopicGone,

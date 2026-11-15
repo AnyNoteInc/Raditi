@@ -21,14 +21,11 @@ const scope = {
   keyId: '01960000-0000-7000-8000-000000000001',
   taskId: '01960000-0000-7000-8000-000000000002',
   workspaceId: '01960000-0000-7000-8000-000000000003',
-  siteId: '01960000-0000-7000-8000-000000000004',
   sessionId: 'synthetic',
   turn: 1,
   firstEpoch: 1,
   epoch: 1,
-  stack: 'wordpress' as const,
-  url: 'https://site.example.test',
-  preview: null,
+  requirements: { repository: false, browser: false },
 }
 const access: McpAccessStore = { authenticate: async (value) => (value === token ? scope : null) }
 

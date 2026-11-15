@@ -81,7 +81,6 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
     await db.llmKey.deleteMany({ where: { subscriptionAccountId: accountId } })
     if (workspaceId) {
       await db.task.deleteMany({ where: { workspaceId } })
-      await db.site.deleteMany({ where: { workspaceId } })
       await db.workspace.delete({ where: { id: workspaceId } })
       workspaceId = undefined
     }
@@ -286,11 +285,8 @@ describe.skipIf(!enabled)('pool health durable snapshots and bounded SQL', () =>
   async function callJournal() {
     const workspace = await db.workspace.create({ data: { name: 'Synthetic health journal' } })
     workspaceId = workspace.id
-    const site = await db.site.create({
-      data: { workspaceId, name: 'Synthetic', url: 'https://health.invalid', stack: 'wordpress' },
-    })
     const task = await db.task.create({
-      data: { workspaceId, siteId: site.id, status: 'running', modelClass: 'standard' },
+      data: { workspaceId, status: 'running', modelClass: 'standard' },
     })
     const model = await db.llmModel.create({
       data: {

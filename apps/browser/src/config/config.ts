@@ -8,25 +8,21 @@ import {
   DIGEST_PINNED_IMAGE,
   envProblems,
   envVar,
-  formatEgressHost,
   isProduction,
   pagesBaseDomainSchema,
   parseEgressHost,
-  previewImageSchema,
-  previewRuntimes,
   type AppEnv,
-  type BrowserLocalSite,
   type Env,
-  type PreviewRuntimeKind,
 } from '@repo/domain'
 import { ConfigError } from '@repo/app-bootstrap'
 import { ipLiteral } from '@repo/ip-address'
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
 import {
-  browserSessionRuntimeLimits,
   egressRefusedSubnetsVar,
-  localSiteRoute,
+  sessionImageSchema,
+  sessionRuntimes,
   type DockerBrowserSessionConfig,
+  type SessionRuntimeKind,
 } from '@repo/sandbox-providers'
 import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { z } from 'zod'
@@ -74,10 +70,6 @@ export interface BrowserWorkerConfig {
    * only): the worker starts, and every session it is asked for is unavailable.
    */
   runtime: DockerBrowserSessionConfig | null
-  /** BROWSER_EXTRA_HOSTS: `host:port` every session may reach besides its site's. */
-  extraHosts: readonly string[]
-  /** BROWSER_LOCAL_SITES (outside production): exact origins reached at fixed targets. */
-  localSites: readonly BrowserLocalSite[]
   /**
    * BROWSER_PLATFORM_HOSTS: names of the platform (the cabinet, previews, Gitea), each with
    * everything under it, which no page of any session reaches (docs/plan/61-chats-first.md, К37).
@@ -104,7 +96,7 @@ export interface BrowserWorkerConfig {
 const bounded = (bounds: { min: number; max: number }, fallback: number) =>
   envVar(z.coerce.number().int().min(bounds.min).max(bounds.max).default(fallback))
 
-const image = envVar(previewImageSchema.optional())
+const image = envVar(sessionImageSchema.optional())
 
 const ownEnvSchema = z.object({
   // Required, never defaulted: a missing APP_ENV must not switch the production checks off.
@@ -130,7 +122,7 @@ const ownEnvSchema = z.object({
       .regex(/^\S+$/, 'must not contain whitespace (it is sent as a Bearer token)')
       .optional(),
   ),
-  BROWSER_RUNTIME: envVar(z.enum(previewRuntimes).optional()),
+  BROWSER_RUNTIME: envVar(z.enum(sessionRuntimes).optional()),
   // A local Unix socket only, never DOCKER_HOST or TCP.
   BROWSER_DOCKER_SOCKET: envVar(
     z
@@ -145,8 +137,6 @@ const ownEnvSchema = z.object({
     z.string().regex(DIGEST_PINNED_IMAGE, 'expected an image pinned by digest').optional(),
   ),
   SANDBOX_EGRESS_REFUSED_SUBNETS: egressRefusedSubnetsVar,
-  BROWSER_EXTRA_HOSTS: envVar(z.string().optional()),
-  BROWSER_LOCAL_SITES: envVar(z.string().optional()),
   BROWSER_PLATFORM_HOSTS: envVar(z.string().optional()),
   PAGES_BASE_DOMAIN: envVar(pagesBaseDomainSchema.optional()),
   BROWSER_PAGE_ADDRESSES: envVar(z.string().optional()),
@@ -170,21 +160,6 @@ const BROWSER_STORAGE_VARIABLES = [
   'S3_FORCE_PATH_STYLE',
   'S3_BUCKET_INBOX',
 ] as const
-
-/** BROWSER_EXTRA_HOSTS: comma-separated public `host[:port]`, each as the egress proxy spells it. */
-function parseExtraHosts(text: string | undefined, problems: string[]): string[] {
-  const hosts: string[] = []
-  for (const part of (text ?? '').split(',').map((item) => item.trim())) {
-    if (part === '') continue
-    const parsed = parseEgressHost(part)
-    if (parsed === null) {
-      problems.push('BROWSER_EXTRA_HOSTS: expected public host names with an optional port')
-      return []
-    }
-    hosts.push(formatEgressHost(parsed))
-  }
-  return [...new Set(hosts)]
-}
 
 /**
  * BROWSER_PLATFORM_HOSTS: comma-separated public DNS names, no port: a name closes its host on
@@ -211,51 +186,6 @@ function parsePlatformHosts(
       'BROWSER_PLATFORM_HOSTS: required in production (the names of the platform no browser opens)',
     )
   return [...new Set(hosts)]
-}
-
-/**
- * BROWSER_LOCAL_SITES: a JSON object `{"http://name[:port]": "host:port"}` — the exact origin of a
- * disposable local site and the fixed target its egress proxy forwards to, without DNS (Б11).
- * Never in production. Problems name the variable, never a value.
- */
-function parseLocalSites(
-  text: string | undefined,
-  production: boolean,
-  problems: string[],
-): BrowserLocalSite[] {
-  if (text === undefined) return []
-  if (production) {
-    problems.push('BROWSER_LOCAL_SITES: refused in production (local sites are for stands only)')
-    return []
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    parsed = null
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    problems.push('BROWSER_LOCAL_SITES: expected a JSON object of origins and host:port targets')
-    return []
-  }
-  const sites: BrowserLocalSite[] = []
-  for (const [origin, target] of Object.entries(parsed)) {
-    const site = { origin, target: String(target) }
-    if (typeof target !== 'string' || localSiteRoute(site) === null) {
-      problems.push(
-        'BROWSER_LOCAL_SITES: each key must be an http:// origin with a host name, each value a host:port',
-      )
-      return []
-    }
-    sites.push(site)
-  }
-  if (sites.length > browserSessionRuntimeLimits.localSites) {
-    problems.push(
-      `BROWSER_LOCAL_SITES: at most ${browserSessionRuntimeLimits.localSites} local sites`,
-    )
-    return []
-  }
-  return sites
 }
 
 /**
@@ -299,7 +229,7 @@ export function loadBrowserConfig(env: Env): BrowserWorkerConfig {
     buckets: { inbox: read.buckets.inbox },
   }
 
-  const runtimeKind: PreviewRuntimeKind = own.BROWSER_RUNTIME ?? (production ? 'runsc' : 'runc')
+  const runtimeKind: SessionRuntimeKind = own.BROWSER_RUNTIME ?? (production ? 'runsc' : 'runc')
   // Page scripts of the open internet run in this Chromium: gVisor is the boundary (rule 5).
   if (production && runtimeKind !== 'runsc')
     problems.push('BROWSER_RUNTIME: production browsers run under gVisor (runsc)')
@@ -352,10 +282,7 @@ export function loadBrowserConfig(env: Env): BrowserWorkerConfig {
         : {}),
     }
   }
-  const extraHosts = parseExtraHosts(own.BROWSER_EXTRA_HOSTS, problems)
-  const localSites = parseLocalSites(own.BROWSER_LOCAL_SITES, production, problems)
   const platformHosts = parsePlatformHosts(own.BROWSER_PLATFORM_HOSTS, production, problems)
-  if (runtime && localSites.length > 0) runtime.localSites = true
 
   if (problems.length > 0 || db === undefined || storage === undefined)
     throw new ConfigError(problems, 'browser')
@@ -368,8 +295,6 @@ export function loadBrowserConfig(env: Env): BrowserWorkerConfig {
     db,
     storage,
     runtime,
-    extraHosts,
-    localSites,
     platformHosts,
     pageDomain: own.PAGES_BASE_DOMAIN ?? null,
     session: {

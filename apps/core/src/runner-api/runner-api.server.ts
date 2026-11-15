@@ -13,7 +13,6 @@ import {
   runnerReconcileRequestSchema,
   runnerReportSchema,
   outboxLimits,
-  snapshotLimits,
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
 import { ZodError } from 'zod'
@@ -24,20 +23,18 @@ import type { RunnerAuthenticator } from './runner-auth.ts'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const ASSIGNMENT = new RegExp(
-  `^${RUNNER_API_PREFIX}/assignments/(${UUID})/(bundle|keys/(restore|seal)|candidate/(patch|untracked|outbox)|inbox/(0|[1-9][0-9]?))$`,
+  `^${RUNNER_API_PREFIX}/assignments/(${UUID})/(keys/(restore|seal)|candidate/(outbox)|inbox/(0|[1-9][0-9]?))$`,
 )
 const candidateLimits: Record<CandidatePart, number> = {
-  patch: snapshotLimits.patchBytes,
-  untracked: snapshotLimits.archiveBytes,
   outbox: outboxLimits.archiveBytes,
 }
-/** Headers of a response never let a proxy or client keep keys, bundles or commands. */
+/** Headers of a response never let a proxy or client keep keys, files or commands. */
 const NO_STORE = { 'cache-control': 'no-store' }
 
 class TooLarge extends Error {}
 
 /**
- * A body of the size core announced — the base bundle, a file of the client: one that differs
+ * A body of the size core announced — a file of the client: one that differs
  * from it is cut off, never completed.
  */
 async function sendSized(
@@ -226,7 +223,7 @@ export class RunnerApiServer implements OnApplicationShutdown {
     }
     const match = ASSIGNMENT.exec(path)
     if (!match) throw RunnerApiError.of('NOT_FOUND')
-    const [, assignmentId, resource, purpose, part, place] = match as unknown as [
+    const [, assignmentId, , purpose, part, place] = match as unknown as [
       string,
       string,
       string,
@@ -234,13 +231,6 @@ export class RunnerApiServer implements OnApplicationShutdown {
       CandidatePart | undefined,
       string | undefined,
     ]
-    if (method === 'GET' && resource === 'bundle') {
-      await sendSized(
-        response,
-        await this.hub.bundle(runnerId, assignmentId, binaryHeaders(request)),
-      )
-      return
-    }
     if (method === 'GET' && place !== undefined) {
       const file = await this.hub.inboxFile(
         runnerId,

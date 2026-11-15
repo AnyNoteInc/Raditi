@@ -34,12 +34,6 @@ function plan(taskId: string, sessionId: string, siteId: string): TurnPlan {
     input: { prompt: 'Synthetic turn', attachments: [] },
     driverId: 'opencode',
     driverVersion: '1.0.0',
-    workspace: {
-      repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
-      branch: `agent/${taskId}`,
-      expectedBaseSha: 'b'.repeat(40),
-      protectedPaths: [],
-    },
     committedAt: '2026-09-27T00:00:00.000Z',
   }
 }
@@ -120,16 +114,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
   })
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
-      const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
-      const chats = await db.task.findMany({
-        where: { workspaceId, siteId: null },
-        select: { id: true },
-      })
+      const chats = await db.task.findMany({ where: { workspaceId }, select: { id: true } })
       await db.siteLease.deleteMany({
-        where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
+        where: { siteId: { in: chats.map(({ id }) => id) } },
       })
       await db.task.deleteMany({ where: { workspaceId } })
-      await db.site.deleteMany({ where: { workspaceId } })
       await db.workspace.delete({ where: { id: workspaceId } })
     }
   })
@@ -140,17 +129,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
   async function fixture(executor: 'local' | 'runner' = 'runner') {
     const workspace = await db.workspace.create({ data: { name: 'Synthetic assignment check' } })
     workspaces.push(workspace.id)
-    const site = await db.site.create({
-      data: {
-        workspaceId: workspace.id,
-        name: 'Assignment test',
-        url: 'https://assignment.invalid',
-        stack: 'wordpress',
-      },
-    })
-    const task = await db.task.create({ data: { workspaceId: workspace.id, siteId: site.id } })
+    const task = await db.task.create({ data: { workspaceId: workspace.id } })
     const lease = (await leases.acquire({
-      siteId: site.id,
+      siteId: task.id,
       taskId: task.id,
       operation: 'turn',
       ttlMs: 60_000,
@@ -160,10 +141,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
       sessionId: 'session1',
       turn: 1,
       executor,
-      plan: plan(task.id, 'session1', site.id),
+      plan: plan(task.id, 'session1', task.id),
       remainingMs: 30_000,
     }
-    return { lease, input, siteId: site.id, taskId: task.id }
+    return { lease, input, siteId: task.id, taskId: task.id }
   }
 
   /** A chat without a project under the lease of its own id, and what opens its turn. */
@@ -171,7 +152,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     const workspace = await db.workspace.create({ data: { name: 'Synthetic assignment check' } })
     workspaces.push(workspace.id)
     const task = await db.task.create({
-      data: { workspaceId: workspace.id, needsRepository: false, needsBrowser: false },
+      data: { workspaceId: workspace.id, needsBrowser: false },
     })
     const lease = (await leases.acquire({
       siteId: task.id,
@@ -271,12 +252,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
     const soon = new Date(Date.now() + 60_000)
     const live = await db.browserSession.create({
-      data: { taskId, siteId, workspaceId, status: 'ready', readyAt: new Date(), expiresAt: soon },
+      data: { taskId, workspaceId, status: 'ready', readyAt: new Date(), expiresAt: soon },
     })
     const closed = await db.browserSession.create({
       data: {
         taskId,
-        siteId,
         workspaceId,
         status: 'closed',
         closedAt: new Date(),

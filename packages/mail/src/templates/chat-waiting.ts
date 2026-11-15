@@ -7,7 +7,7 @@ import type { ChatWaitingKind, MailData, RenderedEmail } from './schemas.ts'
 const subjects: Record<ChatWaitingKind, string> = {
   answered: 'Агент ответил в вашем чате',
   question: 'Агент задал вопрос в вашем чате',
-  ready: 'Изменения для сайта готовы',
+  ready: 'Агент закончил работу в вашем чате',
   failed: 'Агент не смог закончить работу',
   limit: 'Работа агента остановилась',
 }
@@ -15,7 +15,7 @@ const subjects: Record<ChatWaitingKind, string> = {
 const lines: Record<ChatWaitingKind, string> = {
   answered: 'Агент закончил работу и ответил в чате.',
   question: 'Агенту нужен ваш ответ, чтобы продолжить.',
-  ready: 'Агент подготовил изменения. Посмотрите их в чате и выпустите на сайт командой /release.',
+  ready: 'Агент закончил работу. Посмотрите результат в чате.',
   failed: 'Работа остановилась из-за сбоя. Напишите в чате «продолжи» — агент попробует снова.',
   limit: 'Кредиты или недельный лимит закончились. Подробности — в чате.',
 }

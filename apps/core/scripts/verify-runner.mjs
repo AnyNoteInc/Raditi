@@ -5,15 +5,15 @@
 // the synthetic agent prints the rows of the sample driver's CLI (OpenCode), writes its session
 // files and may wait at a gate. Scenarios:
 //   1. two full turns of one session: turn 2 restores turn 1's snapshot through presigned GETs;
-//      each home is sealed by the runner through a presigned PUT; core publishes;
+//      each home is sealed by the runner through a presigned PUT;
 //   2. core killed -9 while the agent's output is journaled: a new core's recovery resumes it;
-//   3. the runner killed -9 there: the turn is given up, its container removed, the site freed;
+//   3. the runner killed -9 there: the turn is given up, its container removed, its lease freed;
 //   4. both killed: recovery resumes on the restarted runner with the turn's credentials;
 //   5. the turn cancelled: before its prepare went out — a runner slot reserved, the key being
 //      issued — the site is free at once; when a poll has just taken the prepare, the site stays
 //      with the turn until the container the runner creates is removed;
-//   6. core killed after the checkpoint with the runner away: nothing is published until the
-//      runner is back and the container removed;
+//   6. core killed after the checkpoint with the runner away: the checkpoint is finished only
+//      once the runner is back and the container removed;
 //   7. core killed before the prepare went out, a runner slot reserved: the next core closes the
 //      turn and frees the site at once, not at the turn's deadline;
 // and a stale epoch or a runner session that is gone is refused. Core runs the stores of the
@@ -24,14 +24,12 @@
 //   pnpm --filter core verify:runner
 // G3: the driver supervisor launcher creates disposable platform services and enters --opencode.
 // That mode runs the two-turn scenario with the real CLI and local LLM/MCP fixtures, including
-// encrypted snapshot restore and trusted publication, then a chat without a project whose last
-// request is undone (docs/plan/61-chats-first.md, §5.14): it leases by its own id, two turns, and
-// a third that goes back to the snapshot of the first through the runner's links. Then chats with
-// the repository: `/undo` and the turn that replaces the undone one, with the branch pinned where
-// the undone turn found it; `/undo` of a first turn, which found no branch; `/redo`, and the turn
-// that goes on from the turn brought back. Crash scenarios still use the P2 agent.
+// encrypted snapshot restore, then a chat whose last request is undone
+// (docs/plan/61-chats-first.md, §5.14): it leases by its own id, two turns, and a third that goes
+// back to the snapshot of the first through the runner's links. Crash scenarios still use the P2
+// agent. Every turn is a chat's: no repository (docs/plan/83-remove-projects.md).
 //
-// Needs: the local infrastructure from .env; P2_GITLEAKS_BINARY (gitleaks 8.30.1);
+// Needs: the local infrastructure from .env;
 // P2_RUNNER_DOCKER_SOCKET, the VM's Docker socket on this host; images built in that daemon and
 // pinned by digest: P2_SANDBOX_IMAGE (runtime), P2_RUNNER_NODE_IMAGE (base: Node and tini, which runs
 // this repository's build instead of the orchestrator image), SANDBOX_GATEWAY_IMAGE, SANDBOX_NETWORK_GUARD_IMAGE. The VM reaches
@@ -48,7 +46,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { zstdDecompressSync } from 'node:zlib'
 
-import { createPrismaClient, redoDialog, rewindDialog } from '@repo/db'
+import { createPrismaClient } from '@repo/db'
 import { attachmentKey, snapshotPartFiles, turnInboxPath, turnSnapshotPrefix } from '@repo/domain'
 import { createDockerSandboxProvider } from '@repo/sandbox-providers'
 import { createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
@@ -113,9 +111,7 @@ const local = (url) => ['localhost', '127.0.0.1', '[::1]'].includes(new URL(url)
 for (const endpoint of [storageConfig.endpoint, vaultConfig.addr, env.DATABASE_URL ?? ''])
   assert(local(endpoint), 'PostgreSQL, S3 and Vault must be the local development ones')
 assert(vaultConfig.token && !vaultConfig.appRole, 'Local OpenBao in dev mode is expected')
-const gitleaks = env.P2_GITLEAKS_BINARY
 const socket = env.P2_RUNNER_DOCKER_SOCKET
-assert(gitleaks && isAbsolute(gitleaks), 'P2_GITLEAKS_BINARY must be an absolute path')
 assert(socket && isAbsolute(socket), 'P2_RUNNER_DOCKER_SOCKET must be an absolute socket path')
 const images = {
   sandbox: env.P2_SANDBOX_IMAGE,
@@ -195,7 +191,6 @@ const dockerCommand = (args, options = {}) =>
   })
 const docker = async (...args) => (await dockerCommand(args)).stdout.trim()
 const lines = (text) => text.split('\n').filter(Boolean)
-const git = async (...args) => (await command('git', args)).stdout
 
 async function freePort() {
   const server = createServer()
@@ -212,7 +207,7 @@ const turnCredentials = new Map()
 const cores = []
 const runners = []
 
-/** A core process; `kill()` is kill -9, the database, S3, Git and the VM outlive it. */
+/** A core process; `kill()` is kill -9, the database, S3 and the VM outlive it. */
 async function startCore() {
   const log = await open(join(work, `core-${cores.length + 1}.log`), 'a')
   const child = fork(join(scripts, 'verify-runner-core.mjs'), [], {
@@ -221,7 +216,6 @@ async function startCore() {
       NODE_ENV: 'test',
       NO_COLOR: '1',
       S3_RUNNER_ENDPOINT: s3RunnerEndpoint,
-      // Publication clones a killed core leaves behind go with the work directory.
       TMPDIR: join(work, 'tmp'),
     },
     stdio: ['ignore', log.fd, log.fd, 'ipc'],
@@ -232,8 +226,6 @@ async function startCore() {
     config: {
       port,
       root: work,
-      remote: join(work, 'remote.git'),
-      gitleaks,
       workspaceId: site.workspaceId,
       runnerId,
       runnerTokens,
@@ -423,7 +415,7 @@ const assignmentOf = (taskId, turn) =>
     where: { taskId, ...(turn === undefined ? {} : { turnNo: turn }) },
     orderBy: { firstEpoch: 'desc' },
   })
-const leaseOf = (scope = site.id) => db.siteLease.findUnique({ where: { siteId: scope } })
+const leaseOf = (scope) => db.siteLease.findUnique({ where: { siteId: scope } })
 /** The product row of a turn: its status follows the assignment's outcome and its reason. */
 const taskTurnOf = (taskId, turn = 1) =>
   db.taskTurn.findUnique({ where: { taskId_turnNo: { taskId, turnNo: turn } } })
@@ -433,22 +425,6 @@ const running = async (container) =>
   (await docker('inspect', '--format', '{{.State.Running}}', container)) === 'true'
 const openGate = (container) =>
   docker('exec', '--user', '10001:10001', container, 'sh', '-c', `: > ${GATE}`)
-const branchHead = async (taskId) =>
-  (
-    await command(
-      'git',
-      [
-        '--git-dir',
-        join(work, 'remote.git'),
-        'rev-parse',
-        '--verify',
-        '-q',
-        `refs/heads/agent/${taskId}`,
-      ],
-      { allowFailure: true },
-    )
-  ).stdout.trim()
-
 /** Waits until the agent's first output is journaled and returns its epoch and container. */
 async function untilOutput(taskId) {
   const entry = await waitFor(
@@ -495,23 +471,16 @@ function expectEvents(entries) {
   )
 }
 
-/** Completed, published and removed; the site is free again. */
-async function expectCompleted(taskId, turn, headSha) {
+/** Completed and removed; the chat's lease is free again. */
+async function expectCompleted(taskId, turn) {
   const assignment = await assignmentOf(taskId, turn)
   assert.equal(assignment.outcome, 'completed')
   assert.equal(assignment.executor, 'runner')
   assert.equal(assignment.runnerId, runnerId)
-  assert.equal((await leaseOf()).holderTaskId, null)
+  assert.equal((await leaseOf(taskId)).holderTaskId, null)
   assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', taskId), [])
-  const head = await branchHead(taskId)
-  if (headSha) assert.equal(head, headSha)
   const taskTurn = await taskTurnOf(taskId, turn)
-  assert.deepEqual(
-    [taskTurn.status, taskTurn.headSha, taskTurn.failureReason],
-    ['completed', head, null],
-  )
-  const text = await git('--git-dir', join(work, 'remote.git'), 'show', `${head}:index.php`)
-  assert(text.endsWith(`turn ${turn}\n`), 'The agent change is published')
+  assert.deepEqual([taskTurn.status, taskTurn.failureReason], ['completed', null])
   return assignment
 }
 
@@ -520,10 +489,8 @@ async function homeEntries(reference) {
   const loaded = await snapshots.load(reference)
   if (realCli) {
     // The persisted snapshot and journal may carry neither the old nor the new turn keys.
-    // A checkpoint without a repository is its home alone.
-    const { home, untracked, patch } = loaded.archives
-    const bytes = (untracked ? [home, untracked] : [home]).map((part) => zstdDecompressSync(part))
-    if (patch) bytes.push(Buffer.from(patch))
+    // A checkpoint is its home alone.
+    const bytes = [zstdDecompressSync(loaded.archives.home)]
     bytes.push(Buffer.from(JSON.stringify(loaded.manifest)))
     for (const values of turnCredentials.values())
       for (const secret of Object.values(values))
@@ -548,22 +515,15 @@ async function homeEntries(reference) {
 const homeFiles = async (reference) => [...(await homeEntries(reference)).keys()]
 
 // --- Turns ---------------------------------------------------------------------------------------
-async function createTask() {
-  const task = await db.task.create({ data: { workspaceId: site.workspaceId, siteId: site.id } })
-  return { taskId: task.id, sessionId: `verify-${randomBytes(6).toString('hex')}` }
-}
-
 /**
- * A chat without a project (docs/plan/61-chats-first.md, §5.3): no site, its id of version 7, and
- * it leases by that id, which is what its turns carry as their site (`leaseScopeOf`).
+ * A chat (docs/plan/61-chats-first.md, §5.3): its id of version 7, and it leases by that id,
+ * which is what its turns carry as their site (`leaseScopeOf`).
  */
 async function createChat() {
   const task = await db.task.create({
     data: {
       id: randomUUIDv7(),
       workspaceId: site.workspaceId,
-      siteId: null,
-      needsRepository: false,
       needsBrowser: false,
     },
   })
@@ -573,7 +533,7 @@ async function createChat() {
 
 function turnRequest(
   { taskId, sessionId },
-  { turn, baseSha, previous, gated, withoutRepository, compaction, chat },
+  { turn, previous, gated, withoutRepository, compaction, chat },
 ) {
   const action = compaction ? 'compact' : withoutRepository?.action
   const context = {
@@ -628,7 +588,7 @@ function turnRequest(
       image: images.sandbox,
       labels: {
         workspaceId: site.workspaceId,
-        siteId: withoutRepository ? taskId : site.id,
+        siteId: taskId,
         taskId,
         sessionId,
         turn,
@@ -648,20 +608,9 @@ function turnRequest(
       ...(action ? { action } : {}),
     },
     driverVersion,
-    ...(withoutRepository
-      ? { requirements: { repository: false, browser: false } }
-      : {
-          workspace: {
-            repo: { provider: 'gitea', owner: 'verify', name: 'site' },
-            branch: `agent/${taskId}`,
-            expectedBaseSha: baseSha,
-            ...(chat?.pin === undefined ? {} : { expectedBranchSha: chat.pin }),
-            protectedPaths: [],
-          },
-        }),
+    requirements: { repository: false, browser: false },
     committedAt: new Date().toISOString(),
     ...(previous ? { previous } : {}),
-    ...(chat?.replaces ? { replacesTurn: chat.replaces } : {}),
     ...(withoutRepository?.rewound ? { rewound: true } : {}),
   }
 }
@@ -767,62 +716,11 @@ try {
     fixture = await startOpencodeRunnerFixture()
     gatewayConfig.llmUpstream = `http://${hostAddress}:${fixture.port}`
     gatewayConfig.mcpUpstream = gatewayConfig.llmUpstream
-    assert.equal((await command(gitleaks, ['version'])).stdout.trim(), '8.30.1')
   }
 
   work = await mkdtemp(join(tmpdir(), 'raditi-runner-verify-'))
   await mkdir(join(work, 'tmp'))
   port = await freePort()
-  // The site's Git remote: one commit on main; each task publishes to agent/<task>.
-  const remote = join(work, 'remote.git')
-  const seed = join(work, 'seed')
-  await git('init', '--quiet', '--bare', '--initial-branch=main', remote)
-  await git('init', '--quiet', '--initial-branch=main', seed)
-  await writeFile(join(seed, 'index.php'), "<?php echo 'hello';\n")
-  if (realCli) {
-    // The site's own OpenCode files. None may reach a request (the fixture refuses the texts),
-    // and the plugin must not be imported into the CLI: it would leave a file that the
-    // publication of the turn carries to the site. The wrapper keeps these paths out of the
-    // working copy while the CLI runs and puts them back, so they stay in the published tree.
-    await mkdir(join(seed, '.opencode/plugin'), { recursive: true })
-    await mkdir(join(seed, '.opencode/agent'), { recursive: true })
-    await writeFile(
-      join(seed, '.opencode/plugin/hostile.js'),
-      "import { writeFileSync } from 'node:fs'\nwriteFileSync('/workspace/repo/hostile-plugin-ran.txt', 'ran')\nexport const Hostile = async () => ({})\n",
-    )
-    await writeFile(
-      join(seed, '.opencode/agent/raditi.md'),
-      '---\ndescription: Synthetic hostile agent\nmode: primary\n---\nHOSTILE_PROJECT_AGENT\n',
-    )
-    await writeFile(
-      join(seed, 'opencode.json'),
-      JSON.stringify({
-        model: 'hostile/hostile-model',
-        instructions: ['hostile-rule.md'],
-        permission: { webfetch: 'allow', bash: 'ask' },
-        mcp: { raditi: { type: 'remote', url: 'http://sandbox-gw:8080/mcp/disabled/project' } },
-        plugin: ['./.opencode/plugin/hostile.js'],
-      }),
-    )
-    await writeFile(join(seed, 'hostile-rule.md'), 'HOSTILE_PROJECT_RULE\n')
-    await writeFile(join(seed, 'AGENTS.md'), 'HOSTILE_PROJECT_AGENTS_MD\n')
-  }
-  await git('-C', seed, 'add', '.')
-  await git(
-    '-C',
-    seed,
-    '-c',
-    'user.name=Verify',
-    '-c',
-    'user.email=verify@example.test',
-    'commit',
-    '--quiet',
-    '-m',
-    'Synthetic site',
-  )
-  await git('-C', seed, 'push', '--quiet', remote, 'HEAD:main')
-  const mainSha = (await git('-C', seed, 'rev-parse', 'HEAD')).trim()
-
   // A TaskTurn names its driver. A seeded database has the row; a migrated one gets it here.
   if (!(await db.agentDriver.findUnique({ where: { id: driverId } }))) {
     await db.agentDriver.create({
@@ -831,14 +729,8 @@ try {
     driverCreated = true
   }
   const workspace = await db.workspace.create({ data: { name: 'Synthetic runner verification' } })
-  site = await db.site.create({
-    data: {
-      workspaceId: workspace.id,
-      name: 'Runner verification',
-      url: 'https://runner-verify.invalid',
-      stack: 'wordpress',
-    },
-  })
+  // The workspace of the chats of this run (no project: docs/plan/83-remove-projects.md).
+  site = { workspaceId: workspace.id }
   const mounts = await vault('sys/mounts')
   if (!mounts.data['transit/']) await vault('sys/mounts/transit', { type: 'transit' })
   await vault(`transit/keys/ws-${workspace.id}`, { type: 'aes256-gcm96' })
@@ -873,25 +765,25 @@ try {
   // 1. Two full turns: restore of turn 1 in turn 2, sealing and presigned transfers on the VM.
   {
     const started = Date.now()
-    const task = await createTask()
+    const task = await createChat()
     sessions.push(task.sessionId)
     const first = await core.request('run', {
-      request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: false }),
+      request: turnRequest(task, { turn: 1, gated: false }),
     })
     assert.equal(first.result.client_message, 'Изменение готово к проверке.')
-    await expectCompleted(task.taskId, 1, first.manifest.git.headSha)
+    assert.equal(first.manifest.git, undefined, 'A checkpoint holds no git')
+    await expectCompleted(task.taskId, 1)
     const second = await core.request('run', {
       request: turnRequest(task, {
         turn: 2,
-        baseSha: first.manifest.git.headSha,
         previous: reference(task, 1, first.manifest),
         gated: false,
       }),
     })
-    await expectCompleted(task.taskId, 2, second.manifest.git.headSha)
+    await expectCompleted(task.taskId, 2)
     const entries = await journal(task.taskId)
     assert(entries.some((entry) => entry.phase === 'restored' && entry.nativeSessionId))
-    // The agent of turn 2 exits non-zero unless turn 1's session and change were restored.
+    // The agent of turn 2 exits non-zero unless turn 1's session was restored.
     const files = await homeFiles(reference(task, 2, second.manifest))
     if (realCli) {
       assert.deepEqual(fixture.observations().problems, [], 'Fixture rejected a request')
@@ -930,11 +822,10 @@ try {
           'quiesced',
           'checkpointed',
           'destroyed',
-          'publishing',
           'completed',
         ])
           assert(phaseNames.includes(phase), `Turn ${turn} has no ${phase} evidence`)
-        assert(phaseNames.indexOf('destroyed') < phaseNames.indexOf('publishing'))
+        assert(!phaseNames.includes('publishing'), `Turn ${turn} published`)
         const events = turnEntries.flatMap((entry) => entry.events ?? [])
         for (const type of [
           'started',
@@ -956,39 +847,7 @@ try {
           assert(!persisted.includes(secret), 'Journal or assignment contains a turn credential')
       await homeFiles(reference(task, 1, first.manifest))
 
-      // `/compact` in a chat with the repository (docs/plan/61-chats-first.md, §5.14): the working
-      // copy comes up, the session goes into a summary, and the tree it published is the one it found.
-      const compacted = await core.request('run', {
-        request: turnRequest(task, {
-          turn: 3,
-          baseSha: second.manifest.git.headSha,
-          previous: reference(task, 2, second.manifest),
-          compaction: {
-            prompt: 'An action of the platform.',
-            fixture: { summary: 'raditi-repository-summary', remembered: ['/init '] },
-          },
-        }),
-      })
-      assert.deepEqual(
-        [compacted.result.change_type, compacted.result.files_changed],
-        ['none', []],
-        'A compaction changes nothing',
-      )
-      assert.match(compacted.result.client_message, /сжата/)
-      assert.equal(compacted.manifest.driver.nativeSessionId, nativeId)
-      const compactedAssignment = await assignmentOf(task.taskId, 3)
-      assert.deepEqual(
-        [compactedAssignment.outcome, compactedAssignment.executor],
-        ['completed', 'runner'],
-      )
-      const head = await branchHead(task.taskId)
-      assert.equal(head, compacted.manifest.git.headSha)
-      assert.equal((await taskTurnOf(task.taskId, 3)).headSha, head)
-      // Every turn publishes a commit of its own; this one holds the tree it found.
-      const treeOf = (sha) => git('--git-dir', remote, 'rev-parse', `${sha}^{tree}`)
-      assert.equal(await treeOf(head), await treeOf(second.manifest.git.headSha))
       assert.deepEqual(fixture.observations().problems, [], 'Fixture rejected a request')
-      fixture.assertCompacted()
     } else {
       // The home of a turn is the session state the driver names and nothing the agent wrote
       // beside it: neither its log nor the configuration of the turn.
@@ -1000,47 +859,8 @@ try {
       for (const file of opencodeHome.include)
         assert.equal(kept.get(file).toString(), 'turn 1\nturn 2\n', file)
     }
-    const tree = await git(
-      '--git-dir',
-      remote,
-      'ls-tree',
-      '--name-only',
-      second.manifest.git.headSha,
-    )
-    assert.deepEqual(
-      lines(tree).sort(),
-      [
-        // No hostile-plugin-ran.txt: the plugin of the repository was never imported.
-        ...(realCli ? ['.opencode', 'AGENTS.md', 'hostile-rule.md', 'opencode.json'] : []),
-        'index.php',
-        'turn-1.txt',
-        'turn-2.txt',
-      ].sort(),
-    )
-    if (realCli) {
-      // The wrapper took the site's own OpenCode files out of the working copy for both turns
-      // and put them back: the published tree holds them as they were, and nothing of the CLI
-      // (its .gitignore, a package it installs) beside them.
-      const own = ['.opencode', 'opencode.json', 'AGENTS.md', 'hostile-rule.md']
-      const head = second.manifest.git.headSha
-      assert.deepEqual(
-        lines(await git('--git-dir', remote, 'ls-tree', '-r', '--name-only', head, '--', ...own)),
-        [
-          '.opencode/agent/raditi.md',
-          '.opencode/plugin/hostile.js',
-          'AGENTS.md',
-          'hostile-rule.md',
-          'opencode.json',
-        ],
-      )
-      assert.equal(
-        await git('--git-dir', remote, 'diff', '--name-only', mainSha, head, '--', ...own),
-        '',
-        "The turns changed the site's own OpenCode files",
-      )
-    }
     verified.push(
-      `${realCli ? `real ${driverName} exec/resume, rotated keys and ${firstEffort} → high; ` : ''}full turns on runsc with restore of the previous snapshot, runner-sealed home through presigned PUT, core publication (${Math.round((Date.now() - started) / 1000)} s)`,
+      `${realCli ? `real ${driverName} exec/resume, rotated keys and ${firstEffort} → high; ` : ''}full turns on runsc with restore of the previous snapshot, runner-sealed home through presigned PUT (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 
@@ -1080,7 +900,6 @@ try {
       })
     const kept = [words[0], answers[0]]
     const undone = [words[1], answers[1]]
-    const siteLease = await leaseOf()
     const first = await chatTurn(1, {})
     const firstCheckpoint = reference(task, 1, first.manifest)
     const second = await chatTurn(2, { previous: firstCheckpoint, remembered: kept })
@@ -1175,9 +994,7 @@ try {
     for (const text of undone)
       assert(!session.includes(text), 'The session holds what the undone turn left')
 
-    assert.equal(await branchHead(task.taskId), '', 'A chat without a project publishes nothing')
     assert.equal((await leaseOf(task.taskId)).holderTaskId, null, 'The chat let its lease go')
-    assert.equal((await leaseOf())?.epoch, siteLease?.epoch, 'The chat took no lease of the site')
     assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
     verified.push(
       `real ${driverName} chat without a project: under the lease of its own id, turn 3 after an undone turn 2 restored the snapshot of turn 1 through the runner's links, the session and the provider know nothing of turn 2; turn 4 compacted the session on the runner and turn 5 went on from its summary (${Math.round((Date.now() - started) / 1000)} s)`,
@@ -1203,7 +1020,6 @@ try {
       data: {
         id,
         workspaceId: site.workspaceId,
-        siteId: null,
         taskId: task.taskId,
         source: 'web',
         status: 'bound',
@@ -1247,199 +1063,14 @@ try {
     )
   }
 
-  // `/undo` and `/redo` in a chat with the repository (docs/plan/61-chats-first.md, §5.14), as
-  // production runs them: the turn that replaces the undone one goes through the pull runner under
-  // gVisor. The branch moves by the real `rewindBranch`, the turn by the real `rewindDialog`; only
-  // the plan is written here, as the planner writes it, and the assignment store checks it.
-  if (realCli) {
-    const started = Date.now()
-    const repo = { provider: 'gitea', owner: 'verify', name: 'site' }
-    const branchOf = (task) => `agent/${task.taskId}`
-    const tasks = []
-    /** A chat that waits with its turns: words and answers of its own, one per turn. */
-    const openChat = async (name) => {
-      const task = await createTask()
-      sessions.push(task.sessionId)
-      tasks.push(task)
-      const wordsOf = (turn) => `raditi-${name}-words-${turn}`
-      const answerOf = (turn) => `Ответ raditi-${name}-${turn}`
-      const said = (turn) => [wordsOf(turn), answerOf(turn)]
-      const ran = async (turn, plan, session = {}) => {
-        const outcome = await core.request('run', {
-          request: turnRequest(task, {
-            ...plan,
-            turn,
-            chat: {
-              prompt: wordsOf(turn),
-              pin: plan.pin,
-              replaces: plan.replaces,
-              fixture: { answer: answerOf(turn), ...session },
-            },
-          }),
-        })
-        assert.equal(outcome.result.client_message, answerOf(turn))
-        await expectCompleted(task.taskId, turn, outcome.manifest.git.headSha)
-        // Waits for its next words, as the settlement of a pass leaves it.
-        await db.task.update({ where: { id: task.taskId }, data: { status: 'awaiting_user' } })
-        return outcome
-      }
-      return { task, said, ran }
-    }
-    const moved = (step, task, turnNo) =>
-      db.$transaction((tx) => step(tx, { taskId: task.taskId, turnNo, to: 'awaiting_user' }))
-    /** `/undo` of the chat's last turn: its commit held, the branch back, the turn undone. */
-    const undo = async (task, turnNo, head, found) => {
-      await core.request('holdUndone', {
-        input: { repo, branch: branchOf(task), sha: head },
-      })
-      await core.request('rewindBranch', {
-        input: { repo, branch: branchOf(task), from: head, to: found },
-      })
-      assert(await moved(rewindDialog, task, turnNo), 'The chat waits at its last turn')
-      assert.equal(await branchHead(task.taskId), found ?? '', 'The branch went back')
-      assert.notEqual((await taskTurnOf(task.taskId, turnNo)).undoneAt, null)
-    }
-    const parentOf = async (sha) => (await git('--git-dir', remote, 'rev-parse', `${sha}^`)).trim()
-    const sessionHolds = async (task, turn, manifest) =>
-      Buffer.concat([...(await homeEntries(reference(task, turn, manifest))).values()])
-    const restoredTurns = async (taskId) =>
-      (await journal(taskId))
-        .filter((entry) => entry.phase === 'restored' && entry.nativeSessionId)
-        .map((entry) => entry.turn)
-
-    // Two turns; the second undone; the turn that replaces it: the branch pinned where the undone
-    // turn found it, the checkpoint that turn started from, not one word of it.
-    {
-      const { task, said, ran } = await openChat('undo')
-      const first = await ran(1, { baseSha: mainSha })
-      const firstHead = first.manifest.git.headSha
-      const firstCheckpoint = reference(task, 1, first.manifest)
-      const second = await ran(
-        2,
-        { baseSha: firstHead, previous: firstCheckpoint },
-        { remembered: said(1), holds: [1] },
-      )
-      await undo(task, 2, second.manifest.git.headSha, firstHead)
-      const third = await ran(
-        3,
-        { baseSha: firstHead, previous: firstCheckpoint, replaces: 2, pin: firstHead },
-        { remembered: said(1), forgotten: said(2), holds: [1], lacks: [2] },
-      )
-      const head = third.manifest.git.headSha
-      assert.equal(await branchHead(task.taskId), head)
-      assert.equal(await parentOf(head), firstHead, 'The replacement stands on the kept turn')
-      const { plan } = await assignmentOf(task.taskId, 3)
-      assert.deepEqual(
-        [plan.replacesTurn, plan.workspace.expectedBranchSha, plan.previous.turn],
-        [2, firstHead, 1],
-      )
-      assert.deepEqual(await restoredTurns(task.taskId), [2, 3])
-      const nativeId = first.manifest.driver.nativeSessionId
-      assert.equal(third.manifest.driver.nativeSessionId, nativeId, 'The kept session goes on')
-      const control = await sessionHolds(task, 2, second.manifest)
-      const session = await sessionHolds(task, 3, third.manifest)
-      for (const text of said(2)) {
-        assert(control.includes(text), 'The search reads a session')
-        assert(!session.includes(text), 'The session holds what the undone turn left')
-      }
-      for (const text of said(1)) assert(session.includes(text), 'The kept turn stays')
-      fixture.assertChatComplete(task.taskId, 3)
-    }
-
-    // The first turn undone: it found no branch, so the branch goes and the pin says so; the
-    // replacement starts a new session from `main`.
-    {
-      const { task, said, ran } = await openChat('first')
-      const first = await ran(1, { baseSha: mainSha })
-      await undo(task, 1, first.manifest.git.headSha, null)
-      const second = await ran(
-        2,
-        { baseSha: mainSha, replaces: 1, pin: null },
-        { forgotten: said(1), lacks: [1] },
-      )
-      const head = second.manifest.git.headSha
-      assert.equal(await branchHead(task.taskId), head)
-      assert.equal(await parentOf(head), mainSha, 'The replacement stands on main')
-      const { plan } = await assignmentOf(task.taskId, 2)
-      assert.deepEqual([plan.replacesTurn, plan.workspace.expectedBranchSha], [1, null])
-      assert.equal(plan.previous, undefined)
-      assert.deepEqual(await restoredTurns(task.taskId), [])
-      assert.notEqual(
-        second.manifest.driver.nativeSessionId,
-        first.manifest.driver.nativeSessionId,
-        'A first turn undone leaves no session to go on from',
-      )
-      const session = await sessionHolds(task, 2, second.manifest)
-      for (const text of said(1))
-        assert(!session.includes(text), 'The session holds what the undone turn left')
-      fixture.assertChatComplete(task.taskId, 2)
-    }
-
-    // `/redo`: the turn counts again, the branch is back at its head, and the next ordinary turn
-    // goes on from its checkpoint, not from the one before.
-    {
-      const { task, said, ran } = await openChat('redo')
-      const first = await ran(1, { baseSha: mainSha })
-      const firstHead = first.manifest.git.headSha
-      const second = await ran(
-        2,
-        { baseSha: firstHead, previous: reference(task, 1, first.manifest) },
-        { remembered: said(1), holds: [1] },
-      )
-      const secondHead = second.manifest.git.headSha
-      await undo(task, 2, secondHead, firstHead)
-      assert(
-        (await git('--git-dir', remote, 'for-each-ref', '--format=%(objectname)')).includes(
-          secondHead,
-        ),
-        'The undone commit stays on the remote',
-      )
-      await core.request('rewindBranch', {
-        input: { repo, branch: branchOf(task), from: firstHead, to: secondHead },
-      })
-      assert(await moved(redoDialog, task, 2), 'The chat waits at the undone turn')
-      assert.equal(await branchHead(task.taskId), secondHead, 'The branch is back at the head')
-      assert.equal((await taskTurnOf(task.taskId, 2)).undoneAt, null, 'The turn counts again')
-      const third = await ran(
-        3,
-        { baseSha: secondHead, previous: reference(task, 2, second.manifest) },
-        { remembered: [...said(1), ...said(2)], holds: [1, 2] },
-      )
-      const head = third.manifest.git.headSha
-      assert.equal(
-        await parentOf(head),
-        secondHead,
-        'The next turn stands on the turn brought back',
-      )
-      assert.deepEqual(await restoredTurns(task.taskId), [2, 3])
-      assert.equal(
-        third.manifest.driver.nativeSessionId,
-        first.manifest.driver.nativeSessionId,
-        'The session of the turn brought back goes on',
-      )
-      fixture.assertChatComplete(task.taskId, 3)
-    }
-
-    assert.deepEqual(fixture.observations().problems, [], 'Fixture rejected a request')
-    for (const task of tasks)
-      for (const assignment of await db.turnAssignment.findMany({ where: { taskId: task.taskId } }))
-        assert.deepEqual(
-          [assignment.outcome, assignment.executor, assignment.runnerId],
-          ['completed', 'runner', runnerId],
-        )
-    verified.push(
-      `real ${driverName} chats with the repository on the runner: a replacement of an undone turn restored the checkpoint that turn started from, with the branch pinned where it found it; a first turn undone left no branch and the replacement a new session; \`/redo\` brought the branch and the turn back and the next turn went on from its checkpoint; no word of an undone turn reached the provider or a later session (${Math.round((Date.now() - started) / 1000)} s)`,
-    )
-  }
-
   if (!realCli) {
     // 2. kill -9 of core during the output: a new core's recovery resumes the agent.
     {
       const started = Date.now()
-      const task = await createTask()
+      const task = await createChat()
       sessions.push(task.sessionId)
       const run = core.request('run', {
-        request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
+        request: turnRequest(task, { turn: 1, gated: true }),
       })
       run.catch(() => {})
       const { epoch, assignment } = await untilOutput(task.taskId)
@@ -1480,12 +1111,11 @@ try {
       await expectCompleted(task.taskId, 1)
       const entries = await journal(task.taskId)
       expectEvents(entries)
-      assert.deepEqual(phases(entries, resumed.fence.epoch).slice(-6), [
+      assert.deepEqual(phases(entries, resumed.fence.epoch).slice(-5), [
         'quiesced',
         'checkpointing',
         'checkpointed',
         'destroyed',
-        'publishing',
         'completed',
       ])
       assert(
@@ -1502,17 +1132,17 @@ try {
       })
       assert.deepEqual([finished.status, finished.body], [409, { error: 'LEASE_LOST' }])
       verified.push(
-        `kill -9 of core during output: resumed from the journal cursor under epoch ${resumed.fence.epoch}, every event once, published; stale epoch → 409 FENCE_SUPERSEDED, another session → 409 SESSION_RETIRED, a finished turn → 409 LEASE_LOST (${Math.round((Date.now() - started) / 1000)} s)`,
+        `kill -9 of core during output: resumed from the journal cursor under epoch ${resumed.fence.epoch}, every event once, completed; stale epoch → 409 FENCE_SUPERSEDED, another session → 409 SESSION_RETIRED, a finished turn → 409 LEASE_LOST (${Math.round((Date.now() - started) / 1000)} s)`,
       )
     }
 
     // 3. kill -9 of the runner during the output: core gives the turn up, recovery removes it.
     {
       const started = Date.now()
-      const task = await createTask()
+      const task = await createChat()
       sessions.push(task.sessionId)
       const run = core.request('run', {
-        request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
+        request: turnRequest(task, { turn: 1, gated: true }),
       })
       run.catch(() => {})
       const { epoch, assignment } = await untilOutput(task.taskId)
@@ -1536,8 +1166,7 @@ try {
         ['failed', 'run_failed', true, epoch],
       )
       assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
-      assert.equal((await leaseOf()).holderTaskId, null)
-      assert.equal(await branchHead(task.taskId), '', 'Nothing of the lost turn is published')
+      assert.equal((await leaseOf(task.taskId)).holderTaskId, null)
       assert.equal((await taskTurnOf(task.taskId)).status, 'lost')
       const zombie = await report({
         runnerSession: assignment.runnerSession,
@@ -1546,7 +1175,7 @@ try {
       })
       assert.deepEqual([zombie.status, zombie.body], [409, { error: 'SESSION_RETIRED' }])
       verified.push(
-        `kill -9 of the runner during output: the turn lost without publication, its container removed through the restarted runner, the site freed only after that; the old session → 409 SESSION_RETIRED (${Math.round((Date.now() - started) / 1000)} s)`,
+        `kill -9 of the runner during output: the turn lost, its container removed through the restarted runner, the site freed only after that; the old session → 409 SESSION_RETIRED (${Math.round((Date.now() - started) / 1000)} s)`,
       )
     }
 
@@ -1554,10 +1183,10 @@ try {
     //    credentials the stand-in for P3 kept.
     {
       const started = Date.now()
-      const task = await createTask()
+      const task = await createChat()
       sessions.push(task.sessionId)
       const run = core.request('run', {
-        request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
+        request: turnRequest(task, { turn: 1, gated: true }),
       })
       run.catch(() => {})
       const { epoch, assignment } = await untilOutput(task.taskId)
@@ -1597,7 +1226,7 @@ try {
       await expectCompleted(task.taskId, 1)
       expectEvents(await journal(task.taskId))
       verified.push(
-        `kill -9 of core and the runner during output: resumed on the new runner session with recovered credentials, the old session → 409 SESSION_RETIRED, published (${Math.round((Date.now() - started) / 1000)} s)`,
+        `kill -9 of core and the runner during output: resumed on the new runner session with recovered credentials, the old session → 409 SESSION_RETIRED, completed (${Math.round((Date.now() - started) / 1000)} s)`,
       )
     }
 
@@ -1608,13 +1237,13 @@ try {
     //    the turn (vacating) until the late container is removed.
     {
       const started = Date.now()
-      const early = await createTask()
+      const early = await createChat()
       sessions.push(early.sessionId)
       await core.request('cancelAt', { taskId: early.taskId, point: 'issue' })
       // Resolves once the supervisor settled the turn: nothing is left to wait for.
       await assert.rejects(
         core.request('run', {
-          request: turnRequest(early, { turn: 1, baseSha: mainSha, gated: true }),
+          request: turnRequest(early, { turn: 1, gated: true }),
         }),
         { code: 'TURN_INTERRUPTED', message: 'cancelled' },
       )
@@ -1630,17 +1259,17 @@ try {
         [unclaimed.outcome, unclaimed.runnerId, unclaimed.runnerSession, unclaimed.containerId],
         ['failed', null, null, null],
       )
-      assert.equal((await leaseOf()).holderTaskId, null, 'The site is free at once')
+      assert.equal((await leaseOf(early.taskId)).holderTaskId, null, 'The lease is free at once')
       assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', early.taskId), [])
       assert.equal((await taskTurnOf(early.taskId)).status, 'cancelled')
 
-      const task = await createTask()
+      const task = await createChat()
       sessions.push(task.sessionId)
       // The reserved slot was given back with the first turn: this one gets it.
       await core.request('cancelAt', { taskId: task.taskId, point: 'dispatch' })
       await assert.rejects(
         core.request('run', {
-          request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: true }),
+          request: turnRequest(task, { turn: 1, gated: true }),
         }),
         { code: 'TURN_INTERRUPTED', message: 'cancelled' },
       )
@@ -1650,7 +1279,7 @@ try {
       let seen = false
       await waitFor(async () => {
         // The lease first: a container that exists after the site was freed breaks the rule.
-        const lease = await leaseOf()
+        const lease = await leaseOf(task.taskId)
         const containers = await turnContainers('io.raditi.sandbox.taskId', task.taskId)
         if (containers.length > 0) {
           seen = true
@@ -1672,8 +1301,7 @@ try {
         ],
       )
       assert.equal((await assignmentOf(task.taskId)).outcome, 'failed')
-      assert.equal((await leaseOf()).holderTaskId, null)
-      assert.equal(await branchHead(task.taskId), '', 'Nothing of the cancelled turn is published')
+      assert.equal((await leaseOf(task.taskId)).holderTaskId, null)
       assert.equal((await taskTurnOf(task.taskId)).status, 'cancelled')
       verified.push(
         `cancel before the prepare went out (a runner slot reserved, the key being issued): leased → failed, no runner bound, the site free at once; cancel when a poll took the prepare: vacating without a release, the late container removed through the runner, then the site freed${seen ? ' (held while the container was seen)' : ''} (${Math.round((Date.now() - started) / 1000)} s)`,
@@ -1681,15 +1309,15 @@ try {
     }
 
     // 6. core killed -9 right after the checkpoint is journaled, the runner killed too and kept
-    //    away: recovery holds the site and publishes nothing until the runner is back and the
+    //    away: recovery holds the lease and finishes nothing until the runner is back and the
     //    turn's container is removed through it.
     {
       const started = Date.now()
-      const task = await createTask()
+      const task = await createChat()
       sessions.push(task.sessionId)
       await core.request('crashAfter', { taskId: task.taskId, phase: 'checkpointed' })
       const run = core.request('run', {
-        request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: false }),
+        request: turnRequest(task, { turn: 1, gated: false }),
       })
       run.catch(() => {})
       await core.exited
@@ -1717,23 +1345,18 @@ try {
       const waiting = await journal(task.taskId)
       assert.equal(awaiting(waiting).length, 1, 'The wait is journaled once')
       assert(waiting.every((entry) => entry.fence.epoch === epoch))
-      const held = await leaseOf()
+      const held = await leaseOf(task.taskId)
       assert.deepEqual(
         [held.holderTaskId, held.epoch, held.heldForOperator],
         [task.taskId, epoch, true],
       )
       const open = await assignmentOf(task.taskId)
       assert.deepEqual([open.outcome, open.recoveryAttempts], [null, 0])
-      assert.equal(
-        await branchHead(task.taskId),
-        '',
-        'Nothing is published while the runner is away',
-      )
       assert(await exists(), 'The container waits for the runner')
       runner = await startRunner()
       await waitFor(
         async () => (await assignmentOf(task.taskId)).outcome,
-        'the checkpoint published',
+        'the checkpoint finished',
       )
       assert(!(await exists()), 'The container is removed')
       const done = await expectCompleted(task.taskId, 1)
@@ -1747,12 +1370,11 @@ try {
         [
           ['checkpointed', null, epoch],
           ['destroyed', containerId, epoch],
-          ['publishing', null, epoch],
-          ['publication_recovered', null, epoch],
+          ['checkpoint_recovered', null, epoch],
         ],
       )
       verified.push(
-        `kill -9 of core after the checkpoint with the runner away: the site held, one recovery{awaiting_runner}, no attempt and nothing published over four passes; the returned runner removed the container by its id, then the checkpoint was published under epoch ${recovered} (${Math.round((Date.now() - started) / 1000)} s)`,
+        `kill -9 of core after the checkpoint with the runner away: the site held, one recovery{awaiting_runner}, no attempt and nothing finished over four passes; the returned runner removed the container by its id, then the checkpoint was finished under epoch ${recovered} (${Math.round((Date.now() - started) / 1000)} s)`,
       )
     }
 
@@ -1762,17 +1384,17 @@ try {
     //    turn's own deadline is ten minutes away.
     {
       const started = Date.now()
-      const task = await createTask()
+      const task = await createChat()
       sessions.push(task.sessionId)
       await core.request('crashAfter', { taskId: task.taskId, phase: 'issue' })
       const run = core.request('run', {
-        request: turnRequest(task, { turn: 1, baseSha: mainSha, gated: false }),
+        request: turnRequest(task, { turn: 1, gated: false }),
       })
       run.catch(() => {})
       await core.exited
       const left = await assignmentOf(task.taskId)
       assert.deepEqual([left.outcome, left.runnerId, left.containerId], [null, null, null])
-      assert.equal((await leaseOf()).holderTaskId, task.taskId)
+      assert.equal((await leaseOf(task.taskId)).holderTaskId, task.taskId)
       assert.deepEqual(phases(await journal(task.taskId), left.leaseEpoch), ['leased'])
       core = await startCore()
       await waitFor(
@@ -1788,12 +1410,11 @@ try {
       const last = (await journal(task.taskId)).at(-1)
       assert.deepEqual([last.phase, last.reason, last.outcome], ['failed', 'run_failed', 'lost'])
       await waitFor(
-        async () => (await leaseOf()).holderTaskId === null,
+        async () => (await leaseOf(task.taskId)).holderTaskId === null,
         'the site to be freed',
         10_000,
       )
       assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
-      assert.equal(await branchHead(task.taskId), '', 'Nothing of the lost turn is published')
       assert.equal((await taskTurnOf(task.taskId)).status, 'lost')
       // The runner outlived core and takes the next turn from the new one: its slot was not lost.
       await runnerSession(core)
@@ -1803,22 +1424,22 @@ try {
     }
   }
   // Nothing of the turns is left in the VM: containers, gateway networks, host firewall rules.
-  for (const scope of [site.id, ...chats]) {
+  for (const scope of chats) {
     assert.deepEqual(await turnContainers('io.raditi.sandbox.siteId', scope), [])
     assert.deepEqual(await turnContainers('io.raditi.gateway.siteId', scope), [])
-  }
-  assert.deepEqual(
-    lines(
-      await docker(
-        'network',
-        'ls',
-        '--quiet',
-        '--filter',
-        `label=io.raditi.gateway.siteId=${site.id}`,
+    assert.deepEqual(
+      lines(
+        await docker(
+          'network',
+          'ls',
+          '--quiet',
+          '--filter',
+          `label=io.raditi.gateway.siteId=${scope}`,
+        ),
       ),
-    ),
-    [],
-  )
+      [],
+    )
+  }
   assert.deepEqual(await firewall(), rulesBefore)
   assert.deepEqual(await helpers(), helpersBefore)
   await core.request('close')
@@ -1864,12 +1485,12 @@ try {
   if (site) {
     // Whatever a failed scenario left: removed through the provider, gateway and rule included.
     await settle('sandboxes', async () => {
-      for (const scope of [site.id, ...chats])
+      for (const scope of chats)
         for (const info of await sandboxes.list({ siteId: scope }))
           await (await sandboxes.getForRemoval(info.id))?.destroy('failed')
     })
     await settle('gateway leftovers', async () => {
-      for (const scope of [site.id, ...chats]) {
+      for (const scope of chats) {
         const left = await turnContainers('io.raditi.gateway.siteId', scope)
         if (left.length) await docker('rm', '--force', ...left)
         const networks = lines(
@@ -1900,9 +1521,8 @@ try {
         }))
         await writeFile(join(work, 'journal.json'), JSON.stringify(rows, null, 2))
       }
-      await db.siteLease.deleteMany({ where: { siteId: { in: [site.id, ...chats] } } })
+      await db.siteLease.deleteMany({ where: { siteId: { in: chats } } })
       await db.task.deleteMany({ where: { workspaceId: site.workspaceId } })
-      await db.site.delete({ where: { id: site.id } })
       await db.workspace.delete({ where: { id: site.workspaceId } })
       if (driverCreated) await db.agentDriver.delete({ where: { id: driverId } })
     })

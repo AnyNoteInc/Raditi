@@ -161,7 +161,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         kind: 'pack',
         price: '1990.00',
         creditsPerMonth: null,
-        maxSites: null,
         packCredits: pack,
       })
       const order = await fixtures.order({

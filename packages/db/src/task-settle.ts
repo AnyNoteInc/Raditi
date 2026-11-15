@@ -1,39 +1,20 @@
-import { createHash } from 'node:crypto'
-
 import {
-  assertCandidateTransition,
   assertTransition,
   badRequest,
-  candidateCheckKinds,
-  candidateFactsSchema,
-  candidateFilesSchema,
-  candidateMediaSchema,
   conflict,
-  dbPlanSchema,
-  dbPlanViewSchema,
   feedRowSchema,
   modelClassSchema,
   taskWaitingReasons,
   terminalTaskStatuses,
-  versionBumps,
-  versionTagSchema,
-  type CandidateCheckKind,
-  type CandidateFacts,
-  type CandidateFiles,
-  type CandidateMedia,
-  type DbPlan,
-  type DbPlanView,
   type FeedRow,
   type ModelClass,
   type TaskStatus,
   type TaskWaitingReason,
-  type VersionBump,
 } from '@repo/domain'
 import { z } from 'zod'
 
-import { enqueuePreviewSync } from './chat-outbox.ts'
 import { insertFeedEvent } from './feed-events.ts'
-import { Prisma } from './generated/prisma/client.ts'
+import type { Prisma } from './generated/prisma/client.ts'
 
 // The moves of a pass of the agent (docs/plan/53-chat-preview-release.md, R3; spec §7 «Очередь
 // и сериализация»; docs/research/2026-10-client-feed/feed-design.md, «Обработчик хода»). Each is
@@ -318,8 +299,8 @@ const rewindSchema = z.strictObject({
 })
 
 /**
- * The status of a chat that waits at `turnNo`, with no turn assigned and no release in work: the
- * one move of `/undo` and `/redo`. false — the chat is elsewhere, and nothing is written.
+ * The status of a chat that waits at `turnNo`, with no turn assigned: the one move of `/undo` and
+ * `/redo`. false — the chat is elsewhere, and nothing is written.
  */
 async function moveWaitingChat(
   tx: Pick<Tx, '$queryRaw'>,
@@ -335,9 +316,6 @@ async function moveWaitingChat(
       AND t.turn_no = ${turnNo}
       AND NOT EXISTS (
         SELECT 1 FROM turn_assignments a WHERE a.task_id = t.id AND a.finished_at IS NULL)
-      AND NOT EXISTS (
-        SELECT 1 FROM site_releases r
-        WHERE r.task_id = t.id AND r.status NOT IN ('installed', 'rolled_back', 'failed'))
     RETURNING t.id`
   return moved.length === 1
 }
@@ -389,8 +367,7 @@ const cancelWaitingSchema = z.strictObject({
 
 /**
  * A dialog whose reserve ran out while it waited is cancelled (Р8): from the status the caller
- * saw, under its attempt, and never while a release of it has not ended — the sweeper of
- * reserves skips those, and so does this statement. The `feed.cancelled` row is written with
+ * saw, under its attempt. The `feed.cancelled` row is written with
  * the move; `expireTaskHolds` joins the same transaction after it.
  */
 export async function cancelWaitingTask(
@@ -411,9 +388,6 @@ export async function cancelWaitingTask(
     UPDATE tasks t SET status = 'cancelled', waiting = NULL, finished_at = now(),
       updated_at = now()
     WHERE t.id = ${taskId}::uuid AND t.status = ${from}::"TaskStatus" AND t.attempt = ${attempt}
-      AND NOT EXISTS (
-        SELECT 1 FROM site_releases r
-        WHERE r.task_id = t.id AND r.status NOT IN ('installed', 'rolled_back', 'failed'))
     RETURNING (SELECT tt.id FROM task_turns tt
       WHERE tt.task_id = t.id AND tt.turn_no = t.turn_no) AS turn_id`
   const row = moved[0]
@@ -422,323 +396,4 @@ export async function cancelWaitingTask(
   for (const entry of feed)
     eventIds.push(await insertFeedEvent(tx, { taskId, turnId: row.turn_id, row: entry }))
   return { moved: true, eventIds, turnId: row.turn_id }
-}
-
-const finishEmptiedSchema = z.strictObject({
-  taskId: id,
-  attempt: attemptSchema,
-  turnNo: turnNoSchema,
-})
-
-/**
- * «Обновить» found the whole change of the dialog on `main` already (docs/plan/53-chat-preview-
- * release.md, R3): nothing is left to release, so the dialog ends `done`, as a pass without
- * changes ends a dialog without a candidate (Р7). From `awaiting_approval` under the attempt and
- * the turn number the caller saw, never with a release in work; `chargeTask` joins the same
- * transaction after it. false — the dialog was elsewhere, and nothing is written.
- */
-export async function finishEmptiedDialog(
-  tx: Pick<Tx, '$queryRaw'>,
-  input: { taskId: string; attempt: number; turnNo: number },
-): Promise<boolean> {
-  const parsed = finishEmptiedSchema.safeParse(input)
-  if (!parsed.success) throw badRequest('Invalid end of an emptied dialog')
-  const { taskId, attempt, turnNo } = parsed.data
-  assertTransition('awaiting_approval', 'done')
-  const moved = await tx.$queryRaw<Array<{ id: string }>>`
-    UPDATE tasks t SET status = 'done', waiting = NULL, finished_at = now(), updated_at = now()
-    WHERE t.id = ${taskId}::uuid AND t.status = 'awaiting_approval' AND t.attempt = ${attempt}
-      AND t.turn_no = ${turnNo}
-      AND NOT EXISTS (
-        SELECT 1 FROM site_releases r
-        WHERE r.task_id = t.id AND r.status NOT IN ('installed', 'rolled_back', 'failed'))
-    RETURNING t.id`
-  return moved.length === 1
-}
-
-// ---------------------------------------------------------------------------------------------
-// The candidate of a pass that changed something
-// ---------------------------------------------------------------------------------------------
-
-const sha1 = z.string().regex(/^[0-9a-f]{40}$/)
-const sha256 = z.string().regex(/^[0-9a-f]{64}$/)
-
-const candidateSchema = z.strictObject({
-  taskId: id,
-  /**
-   * The next revision of the dialog, read by the caller before it wrote the artifacts of the
-   * revision: one more than the highest. Another writer of the same revision fails on the
-   * UNIQUE (task_id, revision) and rolls its transaction back.
-   */
-  revision: z.number().int().min(1).max(999_999),
-  /** The turn whose head the candidate is; after «Обновить» the turn it was moved at. */
-  turnNo: z.number().int().min(1).max(999_999),
-  baseSha: sha1,
-  baseTree: sha1,
-  /** The installed version the base stands on; null — none is known. */
-  baseVersion: versionTagSchema.nullable(),
-  headSha: sha1,
-  files: candidateFilesSchema,
-  media: candidateMediaSchema,
-  dbPlan: dbPlanSchema,
-  dbPlanSha256: sha256,
-  /**
-   * What the client reads of the plan (docs/plan/53, «Операции БД и миграции»), built by core with
-   * the revision: it describes this very plan. Absent or null — an empty plan, or a caller of
-   * before descriptions; a release refuses a plan without one.
-   */
-  dbView: dbPlanViewSchema.nullable().optional(),
-  /**
-   * The variables of the site, each with the version its row named, when the builder read the
-   * values the description is checked against (Р13). A row added or changed since may hold a
-   * value the description was not checked for: it is recorded without the description. Absent —
-   * none were read.
-   */
-  dbViewVariables: z
-    .array(z.strictObject({ name: z.string().min(1).max(64), keyVersion: z.number().int() }))
-    .max(1000)
-    .optional(),
-  proposedBump: z.enum(versionBumps),
-  proposedVersion: versionTagSchema,
-  facts: candidateFactsSchema,
-  /** Checks the new revision starts with, `pending`. */
-  checks: z
-    .array(z.enum(candidateCheckKinds))
-    .max(candidateCheckKinds.length)
-    .refine((kinds) => new Set(kinds).size === kinds.length),
-  /**
-   * What the site had installed when the candidate was built — `sites.installed_sha` and the
-   * tree of that commit —, null when nothing was. The candidate stands on the installed version
-   * only if its base has that tree (Р15, Р27).
-   */
-  installed: z.strictObject({ sha: sha1, tree: sha1 }).nullable(),
-})
-
-export interface CandidateRecordInput {
-  taskId: string
-  revision: number
-  turnNo: number
-  baseSha: string
-  baseTree: string
-  baseVersion: string | null
-  headSha: string
-  files: CandidateFiles
-  media: CandidateMedia
-  dbPlan: DbPlan
-  dbPlanSha256: string
-  dbView?: DbPlanView | null
-  /** The variables of the site with their versions when the description was checked. */
-  dbViewVariables?: readonly { name: string; keyVersion: number }[]
-  proposedBump: VersionBump
-  proposedVersion: string
-  facts: CandidateFacts
-  checks: readonly CandidateCheckKind[]
-  /** `sites.installed_sha` as the builder saw it and its tree; null — nothing was installed. */
-  installed: { sha: string; tree: string } | null
-}
-
-export interface RecordedCandidate {
-  id: string
-  revision: number
-  /** The candidate it replaced, or null for the first one of the dialog. */
-  supersededId: string | null
-  /**
-   * `stale` — the candidate does not stand on what the site has installed: a release of another
-   * dialog installed after its base was taken (Р15). Its dialog needs «Обновить» to release it.
-   */
-  status: 'current' | 'stale'
-}
-
-/**
- * The dialog's standing candidate — `current`, or `stale` after a release elsewhere — becomes
- * `superseded`: a newer revision replaces it, or the pass undid every change of the dialog.
- * Returns its id, or null when none stood.
- */
-export async function supersedeStandingCandidate(
-  tx: Pick<Tx, '$queryRaw' | 'taskCandidate'>,
-  taskId: string,
-): Promise<string | null> {
-  const standing = await tx.$queryRaw<Array<{ id: string; status: 'current' | 'stale' }>>`
-    SELECT id, status::text AS status FROM task_candidates
-    WHERE task_id = ${id.parse(taskId)}::uuid AND status IN ('current', 'stale')
-    ORDER BY revision DESC FOR UPDATE`
-  for (const row of standing) assertCandidateTransition(row.status, 'superseded')
-  if (standing.length > 0)
-    await tx.taskCandidate.updateMany({
-      where: { id: { in: standing.map((row) => row.id) } },
-      // Nobody shows or releases a superseded revision: the values of its plan go with it.
-      data: {
-        status: 'superseded',
-        supersededAt: new Date(),
-        dbView: Prisma.DbNull,
-        dbViewSha256: null,
-      },
-    })
-  return standing[0]?.id ?? null
-}
-
-/** The revision the next candidate of a task gets: one more than the highest it has had. */
-export async function nextCandidateRevision(
-  db: Pick<Tx, 'taskCandidate'>,
-  taskId: string,
-): Promise<number> {
-  const { _max: max } = await db.taskCandidate.aggregate({
-    where: { taskId: id.parse(taskId) },
-    _max: { revision: true },
-  })
-  return (max.revision ?? 0) + 1
-}
-
-/**
- * The next revision of the dialog's candidate (Р5, Р22): the one that stood — `current`, or
- * `stale` after a release elsewhere — becomes `superseded`, the new one is `current` when it
- * stands on what the site has installed and `stale` when it does not (Р15), its preview revision
- * is its own revision and its checks start `pending`. Call it in the transaction of the move
- * that shows it; the partial UNIQUE «one current per task» guards the rest.
- *
- * Staleness is decided here, not left to the release that installs: a pass that records after
- * the install, on a base taken before it, would never be marked (markSiteCandidatesStale ran
- * already, markStaleCandidates leaves candidates younger than the install). The site's row is
- * read FOR SHARE first: an install (`installRelease` writes it before it marks the candidates of
- * the site) either committed and is seen here, or waits for this transaction and then sees the
- * new row.
- */
-export async function recordCandidate(
-  tx: Pick<Tx, '$queryRaw' | 'taskCandidate' | 'candidateCheck'>,
-  input: CandidateRecordInput,
-): Promise<RecordedCandidate> {
-  const parsed = candidateSchema.safeParse(input)
-  if (!parsed.success) throw badRequest('Invalid candidate')
-  const candidate = parsed.data
-  let view = candidate.dbView ?? null
-  if (
-    view !== null &&
-    (view.planSha256 !== candidate.dbPlanSha256 || candidate.dbPlan.length === 0)
-  )
-    throw badRequest('Invalid candidate')
-  // The lock a change of a variable takes too (`takeBackDescriptions` of @repo/trpc): either it
-  // committed and its row is seen below, or it waits and then finds this description.
-  const site = await tx.$queryRaw<Array<{ id: string; installed_sha: string | null }>>`
-    SELECT s.id, s.installed_sha FROM sites s JOIN tasks t ON t.site_id = s.id
-    WHERE t.id = ${candidate.taskId}::uuid
-    FOR SHARE OF s`
-  if (view !== null && site[0]) {
-    const checked = new Set(
-      (candidate.dbViewVariables ?? []).map((row) => `${row.name}\u0000${row.keyVersion}`),
-    )
-    const rows = await tx.$queryRaw<Array<{ name: string; key_version: number }>>`
-      SELECT name, key_version FROM site_env_vars WHERE site_id = ${site[0].id}::uuid`
-    // A value set after the builder read them: the description was not checked for it (Р13).
-    if (rows.some((row) => !checked.has(`${row.name}\u0000${row.key_version}`))) view = null
-  }
-  // The text the confirmation of a release is bound to: JSONB keeps no order of keys.
-  const viewText = view === null ? null : JSON.stringify(view)
-  const installedNow = site[0]?.installed_sha ?? null
-  const status: RecordedCandidate['status'] =
-    installedNow === null ||
-    (candidate.installed !== null &&
-      candidate.installed.sha === installedNow &&
-      candidate.installed.tree === candidate.baseTree)
-      ? 'current'
-      : 'stale'
-  const supersededId = await supersedeStandingCandidate(tx, candidate.taskId)
-  const revision = candidate.revision
-  const created = await tx.taskCandidate.create({
-    data: {
-      taskId: candidate.taskId,
-      revision,
-      turnNo: candidate.turnNo,
-      status,
-      baseSha: candidate.baseSha,
-      baseTree: candidate.baseTree,
-      baseVersion: candidate.baseVersion,
-      headSha: candidate.headSha,
-      files: candidate.files as Prisma.InputJsonValue,
-      media: candidate.media as Prisma.InputJsonValue,
-      dbPlan: candidate.dbPlan as Prisma.InputJsonValue,
-      dbPlanSha256: candidate.dbPlanSha256,
-      proposedBump: candidate.proposedBump,
-      proposedVersion: candidate.proposedVersion,
-      facts: candidate.facts as Prisma.InputJsonValue,
-      previewRevision: revision,
-      ...(viewText === null
-        ? {}
-        : {
-            dbView: JSON.parse(viewText) as Prisma.InputJsonValue,
-            dbViewSha256: createHash('sha256').update(viewText).digest('hex'),
-          }),
-    },
-    select: { id: true },
-  })
-  if (candidate.checks.length > 0)
-    await tx.candidateCheck.createMany({
-      data: candidate.checks.map((kind) => ({
-        candidateId: created.id,
-        revision,
-        kind,
-        status: 'pending' as const,
-      })),
-    })
-  return { id: created.id, revision, supersededId, status }
-}
-
-// ---------------------------------------------------------------------------------------------
-// The preview follows the dialog (Р22)
-// ---------------------------------------------------------------------------------------------
-
-const turnOfTask = z.strictObject({ taskId: id, turnNo: z.number().int().min(1).max(999_999) })
-
-/**
- * The database writes of a failed or cancelled turn leave the plan (Р22): its rows of
- * `preview_db_operations` are marked `excluded`, so the compacted plan and the rebuilt preview
- * no longer hold them. Returns how many rows were marked now.
- */
-export async function excludeTurnDbOperations(
-  tx: Pick<Tx, 'previewDbOperation'>,
-  input: { taskId: string; turnNo: number },
-): Promise<number> {
-  const { taskId, turnNo } = turnOfTask.parse(input)
-  const { count } = await tx.previewDbOperation.updateMany({
-    where: { taskId, turnNo, excluded: false },
-    data: { excluded: true },
-  })
-  return count
-}
-
-/**
- * `/redo`: the database writes of the turn `/undo` took come back into the plan. No turn was
- * written after it, and a turn that completed had none excluded until then. How many rows came back.
- */
-export async function includeTurnDbOperations(
-  tx: Pick<Tx, 'previewDbOperation'>,
-  input: { taskId: string; turnNo: number },
-): Promise<number> {
-  const { taskId, turnNo } = turnOfTask.parse(input)
-  const { count } = await tx.previewDbOperation.updateMany({
-    where: { taskId, turnNo, excluded: true },
-    data: { excluded: false },
-  })
-  return count
-}
-
-const syncSchema = z.strictObject({ taskId: id, revision: z.number().int().min(0).max(999_999) })
-
-/**
- * Asks the manager of previews to bring the dialog's preview to `revision` (0 — the base): the
- * enqueue counter of the row is raised and `preview.sync` goes to the outbox with it, in the
- * caller's transaction. false — the dialog has no preview, or it is destroyed.
- */
-export async function requestPreviewSync(
-  tx: Pick<Tx, '$queryRaw' | 'outboxEvent'>,
-  input: { taskId: string; revision: number },
-): Promise<boolean> {
-  const { taskId, revision } = syncSchema.parse(input)
-  const rows = await tx.$queryRaw<Array<{ id: string; enqueues: number }>>`
-    UPDATE preview_environments SET enqueues = enqueues + 1, updated_at = now()
-    WHERE task_id = ${taskId}::uuid AND status <> 'destroyed'
-    RETURNING id, enqueues`
-  const row = rows[0]
-  if (!row) return false
-  await enqueuePreviewSync(tx, { previewId: row.id, revision, seq: row.enqueues })
-  return true
 }

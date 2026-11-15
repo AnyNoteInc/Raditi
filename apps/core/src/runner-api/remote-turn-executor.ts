@@ -4,7 +4,6 @@ import {
   assertTurnInbox,
   badRequest,
   conflict,
-  DomainError,
   isDomainError,
   leaseLost,
   presignedGetSchema,
@@ -14,7 +13,6 @@ import {
   runnerUnavailable,
   sandboxSpecSchema,
   sessionStateSchema,
-  snapshotHasRepository,
   snapshotSealBaseSchema,
   turnMayHoldInbox,
   type CapturedTurn,
@@ -25,7 +23,6 @@ import {
   type SealedTurnPart,
   type SessionState,
   type SiteLeaseStore,
-  type SnapshotPartName,
   type TurnAdoptInput,
   type TurnAgentExec,
   type TurnAssignmentRunner,
@@ -38,7 +35,6 @@ import {
   type TurnRestoreSource,
   type TurnSealInput,
   type TurnTakeover,
-  type TurnWorkingTree,
 } from '@repo/domain'
 
 import type { ExecStream } from './exec-stream.ts'
@@ -68,19 +64,9 @@ const wire = ({ method, url, headers }: PresignedRequest) => ({
 })
 const get = (request: PresignedRequest) => presignedGetSchema.parse(wire(request))
 
-/**
- * The presigned GETs of exactly the parts the restored manifest names: all three, or `home`
- * alone for a turn without a repository (docs/plan/57-browser-tasks.md, Б5).
- */
+/** The presigned GET of the home part: the only one a turn restores (TurnRestoreSource). */
 function restoreParts(restore: TurnRestoreSource) {
-  const part = (name: SnapshotPartName) => {
-    const request = restore.parts[name]
-    if (!request) throw badRequest('A restore part is missing')
-    return get(request)
-  }
-  return snapshotHasRepository(restore.manifest)
-    ? { home: part('home'), untracked: part('untracked'), patch: part('patch') }
-    : { home: part('home') }
+  return { home: get(restore.parts.home) }
 }
 
 /**
@@ -147,16 +133,8 @@ export class RemoteTurnExecutor implements TurnExecutor {
   async prepare(input: TurnPrepareInput, signal: AbortSignal): Promise<TurnExecution> {
     if (input.sandbox.secrets.length !== 0)
       throw badRequest('Turn secrets are installed only after restore')
-    // Refused here as the runner's schema refuses it, before a runner is reserved (plan 57, Б5).
-    if (
-      input.restore &&
-      snapshotHasRepository(input.restore.manifest) !== (input.bundle !== undefined)
-    )
-      throw badRequest('The snapshot and the bundle disagree on the repository')
-    assertTurnInbox(
-      input.inbox ?? [],
-      turnMayHoldInbox(input.bundle !== undefined, input.sandbox.labels),
-    )
+    // Refused here as the runner's schema refuses it, before a runner is reserved.
+    assertTurnInbox(input.inbox ?? [], turnMayHoldInbox(input.sandbox.labels))
     const restore = input.restore
       ? { manifest: input.restore.manifest, parts: restoreParts(input.restore) }
       : undefined
@@ -185,8 +163,6 @@ export class RemoteTurnExecutor implements TurnExecutor {
       remainingMs,
     })
     const execution = new RemoteTurnExecution(this.hub, this.leases, live, 'turn')
-    execution.repository = input.bundle !== undefined
-    const bundle = input.bundle
     await this.hub.send(
       live,
       {
@@ -197,18 +173,6 @@ export class RemoteTurnExecutor implements TurnExecutor {
           secrets: [],
         }),
         remainingMs: Math.max(1, remainingMs),
-        // Without one the turn has no repository: the runner makes the working directory empty.
-        ...(bundle
-          ? {
-              bundle: {
-                baseSha: bundle.baseSha,
-                ...(bundle.sandboxBaseSha ? { sandboxBaseSha: bundle.sandboxBaseSha } : {}),
-                branch: bundle.branch,
-                sha256: bundle.sha256,
-                sizeBytes: bundle.sizeBytes,
-              },
-            }
-          : {}),
         ...(restore ? { restore } : {}),
         // The paths and sizes only: the runner fetches each file from core by its place here.
         ...(input.inbox?.length
@@ -226,8 +190,6 @@ export class RemoteTurnExecutor implements TurnExecutor {
         signal,
         // The runner gets what is left when its poll takes the prepare, not what was left here.
         deadline: started + input.remainingMs,
-        // Served at runnerBundlePath() only when there is one: else that path is closed.
-        ...(bundle ? { bundle } : {}),
         // Served at runnerInboxPath() while the prepare is open.
         ...(input.inbox?.length ? { inbox: input.inbox } : {}),
         ...(input.restore ? { dataKey: input.restore.dataKey } : {}),
@@ -316,20 +278,6 @@ export class RemoteTurnExecutor implements TurnExecutor {
     if (!session) return null
     return { runnerSession: session, holdsCredentials: session === assignment.runner.session }
   }
-
-  /**
-   * Previews run on core's own Docker until M10 (plan 53, «Что не входит»): the runner protocol
-   * has no step for a working tree yet.
-   */
-  exportWorkingTree(): Promise<TurnWorkingTree> {
-    return Promise.reject(
-      new DomainError(
-        'NOT_SUPPORTED',
-        'A working tree of a turn on a runner VM is not exported yet',
-        501,
-      ),
-    )
-  }
 }
 
 /**
@@ -338,14 +286,7 @@ export class RemoteTurnExecutor implements TurnExecutor {
  */
 class RemoteTurnExecution implements TurnExecution {
   #homeBytes: number | undefined
-  /** Whether the home part waiting for seal() came with the parts of a repository. */
-  #capturedRepository: boolean | undefined
   readonly #epoch: number
-  /**
-   * Whether the prepare of this owner imported a repository; unknown for an adopted container
-   * (plan 57, Б5). A capture of the other kind is refused before the runner is asked.
-   */
-  repository: boolean | undefined
 
   constructor(
     private readonly hub: RunnerHub,
@@ -409,69 +350,30 @@ class RemoteTurnExecution implements TurnExecution {
     )
   }
 
-  /**
-   * Without `baseSha` — a turn without a repository (plan 57, Б5) — the runner captures home
-   * alone: no candidate part is accepted from it and the answer names none.
-   */
-  async capture(input: {
-    home: SessionState
-    baseSha?: string
-    sandboxBaseSha?: string
-    addOnlyPaths?: readonly string[]
-  }): Promise<CapturedTurn> {
+  /** The runner captures home alone; the agent's files for the client come with it. */
+  async capture(input: { home: SessionState }): Promise<CapturedTurn> {
     this.#allow('turn', 'work')
     // Refused here as the local capture refuses it, before the runner is asked.
     const home = sessionStateSchema.safeParse(input.home)
     if (!home.success) throw badRequest('Invalid snapshot session state')
-    const withBase = input.baseSha !== undefined
-    if (!withBase && (input.sandboxBaseSha !== undefined || input.addOnlyPaths !== undefined))
-      throw badRequest('A working set needs the base of the capture')
-    if (this.repository !== undefined && this.repository !== withBase)
-      throw conflict(
-        withBase
-          ? 'Capture names a base, but the sandbox got no repository'
-          : 'Capture names no base, but the sandbox got a repository',
-      )
-    // The agent's files for the client (docs/plan/66, В8) come with either kind of capture.
+    // The agent's files for the client (docs/plan/66, В8).
     const candidates: CandidateParts = {}
-    const outbox = () => (candidates.outbox ? { outbox: candidates.outbox.bytes } : {})
-    if (!withBase) {
-      const captured = await this.hub.send(
-        this.live,
-        { type: 'capture', home: home.data },
-        { answers: ['captured'], replyMs: runnerReplyMs.capture, candidates, epoch: this.#epoch },
-      )
-      this.#homeBytes = captured.homeBytes
-      this.#capturedRepository = false
-      return { homeBytes: captured.homeBytes, ...outbox() }
-    }
     const captured = await this.hub.send(
       this.live,
-      {
-        type: 'capture',
-        home: home.data,
-        baseSha: input.baseSha,
-        ...(input.sandboxBaseSha ? { sandboxBaseSha: input.sandboxBaseSha } : {}),
-        ...(input.addOnlyPaths?.length ? { addOnlyPaths: [...input.addOnlyPaths] } : {}),
-      },
+      { type: 'capture', home: home.data },
       { answers: ['captured'], replyMs: runnerReplyMs.capture, candidates, epoch: this.#epoch },
     )
-    // The hub checked both uploads against the report.
     this.#homeBytes = captured.homeBytes
-    this.#capturedRepository = true
     return {
-      patch: candidates.patch!.bytes,
-      untracked: candidates.untracked!.bytes,
       homeBytes: captured.homeBytes,
-      ...outbox(),
+      ...(candidates.outbox ? { outbox: candidates.outbox.bytes } : {}),
     }
   }
 
   async seal({ base, dataKey, put }: TurnSealInput): Promise<SealedTurnPart> {
     this.#allow('turn', 'work')
     if (this.#homeBytes === undefined) throw conflict('Nothing was captured to seal')
-    if (snapshotHasRepository(base) !== this.#capturedRepository)
-      throw conflict('The snapshot and the capture disagree on the repository')
+    if (base.git !== undefined) throw conflict('A turn has no repository to seal')
     const sealed = await this.hub.send(
       this.live,
       {

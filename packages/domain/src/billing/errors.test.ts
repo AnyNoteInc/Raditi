@@ -17,7 +17,6 @@ import {
   billingPaymentInProgress,
   billingPaymentsNotConfigured,
   billingPlanNotFound,
-  billingPlanSiteLimit,
   billingSubscriptionExists,
   billingSubscriptionPastDue,
   billingTaskNeedsSubscription,
@@ -42,7 +41,6 @@ const factories = [
   ['BILLING_PAYMENT_IN_PROGRESS', 409, billingPaymentInProgress],
   ['BILLING_NOTHING_TO_CHANGE', 409, billingNothingToChange],
   ['BILLING_AUTO_RENEWAL_UNAVAILABLE', 409, billingAutoRenewalUnavailable],
-  ['BILLING_PLAN_SITE_LIMIT', 409, billingPlanSiteLimit],
   ['BILLING_TASK_NEEDS_SUBSCRIPTION', 402, billingTaskNeedsSubscription],
   ['BILLING_NOT_ENOUGH_CREDITS', 402, billingNotEnoughCredits],
   ['BILLING_DAILY_LIMIT_REACHED', 409, billingDailyLimitReached],
@@ -64,7 +62,7 @@ describe('billing errors', () => {
     const produced = factories.map(([, , factory]) => factory().code)
     expect(produced).toEqual([...billingErrorCodes])
     expect(new Set(billingErrorCodes).size).toBe(billingErrorCodes.length)
-    expect(billingErrorCodes).toHaveLength(19)
+    expect(billingErrorCodes).toHaveLength(18)
   })
 
   it('prefixes every code with BILLING_ and writes it in upper snake case', () => {

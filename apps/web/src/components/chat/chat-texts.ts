@@ -1,6 +1,4 @@
-import type { CandidateCheckStatus, ReleaseStatus } from '@repo/domain'
-import { CLOSED_PROJECT_TEXT } from '@repo/domain/release/chat-commands'
-import { previewPanelText, taskRewoundLabel } from '@repo/domain/tasks/client-feed-labels'
+import { taskRewoundLabel } from '@repo/domain/tasks/client-feed-labels'
 
 import { plural } from '@/lib/plural'
 
@@ -129,13 +127,6 @@ const checkKindLabel: Readonly<Record<string, string>> = Object.freeze({
 /** The name of a check; a kind added later — «Проверка». */
 export const checkKindText = (kind: string): string => ownText(checkKindLabel, kind) ?? 'Проверка'
 
-export const checkStatusLabel: Readonly<Record<CandidateCheckStatus, string>> = Object.freeze({
-  pending: 'Идёт',
-  passed: 'Пройдена',
-  failed: 'Не пройдена',
-  stale: 'Устарела: изменения поменялись после неё',
-})
-
 export const checksText = Object.freeze({
   none: 'Проверок пока нет.',
   /** The screenshot the agent's browser took when it checked the changes (Р22). */
@@ -166,16 +157,6 @@ export function runtimeMatchText(match: {
 /** Where the cabinet reads the screenshot of a check (apps/web/src/app/api/tasks/…). */
 export const checkScreenshotUrl = (taskId: string, checkId: string): string =>
   `/api/tasks/${encodeURIComponent(taskId)}/checks/${encodeURIComponent(checkId)}/screenshot`
-
-/** The progress of a release while it is in work, by its status. */
-export const releaseStatusText: Readonly<Partial<Record<ReleaseStatus, string>>> = Object.freeze({
-  approved: 'Готовим выпуск',
-  publishing: 'Сохраняем новую версию',
-  published: 'Новая версия сохранена',
-  deploying: 'Устанавливаем на сайт',
-  verifying: 'Проверяем сайт',
-  rolling_back: 'Возвращаем сайт как было',
-})
 
 /** The step a release reports, in words; another step — none (read with `ownText`). */
 export const releaseStepText: Readonly<Record<string, string>> = Object.freeze({
@@ -394,7 +375,6 @@ export const chatsText = Object.freeze({
   /** Where the pill of the project stands locked: a file is bound to its site. */
   lockedProject: 'Чтобы сменить проект, уберите прикреплённые файлы.',
   openProject: (name: string) => `Открыть проект «${name}»`,
-  closedProject: CLOSED_PROJECT_TEXT,
   unavailableProject: 'Сейчас этот проект недоступен для чата. Попробуйте ещё раз немного позже.',
   importingProject: 'Файлы сайта ещё загружаются.',
   importFailedProject: 'Файлы сайта не загрузились.',
@@ -572,14 +552,9 @@ export const dialogMenuText = Object.freeze({
   remove: 'Удалить',
   name: 'Название чата',
   removeTitle: 'Удалить чат?',
-  /** What the deletion leads to; a chat without a project has no site to speak of. */
-  removeBody: (withSite: boolean) =>
-    withSite
-      ? 'Чат пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся. То, что агент уже сделал на сайте, останется.'
-      : 'Чат пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся.',
-  /** The dialog's release can still be undone: the button goes with the dialog. */
-  removeUndo:
-    'Кнопка «Отменить выпуск» этого чата тоже пропадёт: вернуть прежнюю версию можно будет только новым чатом.',
+  /** What the deletion leads to. */
+  removeBody:
+    'Чат пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся.',
   removeConfirm: 'Удалить',
   removeKeep: 'Оставить',
 })
@@ -589,15 +564,12 @@ export const taskWayText = Object.freeze({
   insecure:
     'В браузере агент работает только с сайтами, которые открываются по защищённому адресу. Адрес сайта в кабинете поменять нельзя: добавьте сайт заново с адресом, который начинается с https://.',
   /**
-   * The reminder under the field of a task in the browser: the admin's sign-in is saved in the
-   * site's variables (Б36) or typed in the browser's own window, never in the chat.
+   * The reminder under the field: keys and passwords go to «Настройки → Переменные», where every
+   * chat of the workspace gets them (docs/plan/83-remove-projects.md, БП4); a sign-in to a site is
+   * typed in the browser's own window, never in the chat.
    */
   noSecrets:
-    'Не отправляйте в чат пароли и ключи: вход в админку сохраните в разделе «Переменные» или войдите сами в окне браузера',
-  /** The same reminder in a chat without a project: it has no «Переменные» to point to. */
-  noSecretsPlain: 'Не отправляйте в чат пароли и ключи',
-  /** The refusal `TASK_TEXT_HAS_SECRET` in a chat without a project, by the same reasoning. */
-  secretRefusedPlain: 'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат.',
+    'Не отправляйте в чат пароли и ключи: сохраните их в «Настройки → Переменные» или войдите сами в окне браузера',
 })
 
 /** The browser of a task beside its dialog (docs/plan/57-browser-tasks.md, Б12–Б17, Б27, Б29). */
@@ -733,7 +705,6 @@ export const toolText = Object.freeze({
   /** Why «+» bears the dot, the most pressing first (И13). */
   dot: Object.freeze({
     browser: 'браузер ждёт вас',
-    changes: 'есть новые изменения',
     documents: 'есть новый документ',
   }),
   /** The landmark beside the dialog (И20). */
@@ -753,21 +724,11 @@ export const toolText = Object.freeze({
   /** The name of a tool on its tab. */
   tab: Object.freeze({
     browser: browserText.view,
-    preview: previewPanelText.preview,
-    files: previewPanelText.files,
-    database: previewPanelText.database,
-    checks: previewPanelText.checks,
-    terminal: 'Изменения',
     documents: 'Документы',
   }),
   /** The name of a tool in the menu. */
   item: Object.freeze({
     browser: browserText.view,
-    preview: previewPanelText.preview,
-    files: 'Файлы и изменения',
-    database: previewPanelText.database,
-    checks: previewPanelText.checks,
-    terminal: 'Изменения',
     documents: 'Документы',
   }),
   /** The marks on the right of the tiles (И5); a browser that holds a session says who drives it. */
@@ -777,28 +738,8 @@ export const toolText = Object.freeze({
     notYet: 'пока нет',
     /** The dialog has ended without it. */
     none: 'нет',
-    /** The checks of the changes: those passed of all. */
-    checks: (passed: number, all: number) => `${passed} из ${all}`,
     /** The session of the browser holds none any more. */
     browserClosed: 'Закрыт',
-  }),
-  /** What a tab of the changes says while there are none yet (И6). */
-  empty: Object.freeze({
-    files: Object.freeze({
-      title: 'Изменений пока нет.',
-      note: 'Они появятся здесь, когда агент закончит работу.',
-    }),
-    database: Object.freeze({ title: 'Изменений в базе данных пока нет.', note: null }),
-    checks: Object.freeze({ title: checksText.none, note: null }),
-  }),
-  /** What it says in a dialog that has ended without them (И6). */
-  ended: Object.freeze({
-    files: Object.freeze({
-      title: 'Чат закрыт: изменений для показа здесь нет.',
-      note: 'Выпущенные версии — в разделе «Изменения».',
-    }),
-    database: Object.freeze({ title: 'Чат закрыт: изменений в базе данных нет.', note: null }),
-    checks: Object.freeze({ title: 'Чат закрыт: проверок нет.', note: null }),
   }),
 })
 

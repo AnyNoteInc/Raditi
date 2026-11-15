@@ -25,9 +25,15 @@ import {
   treeDigest,
   treeEntry,
 } from '../billing-verify/stand.mjs'
-import { callerEnv } from '../release-verify/runtime.mjs'
-import { localDigestReference } from '../release-verify/stand.mjs'
-import { APP_OUTPUTS, BUILD_STEPS, BUILT_IMAGES, WEB_BUILD_STEP, WEB_OUTPUT } from './stand.mjs'
+import { callerEnv } from './runtime.mjs'
+import {
+  APP_OUTPUTS,
+  BUILD_STEPS,
+  BUILT_IMAGES,
+  WEB_BUILD_STEP,
+  WEB_OUTPUT,
+  localDigestReference,
+} from './stand.mjs'
 
 const exists = (path) =>
   access(path).then(

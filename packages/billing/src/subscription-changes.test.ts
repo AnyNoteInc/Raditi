@@ -1122,7 +1122,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL changes of a tariff', () => {
         creditsPerDay: 10,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: 3,
         ...data,
       })
 
@@ -1235,7 +1234,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL changes of a tariff', () => {
               creditsPerDay: null,
               creditsPer5h: null,
               creditsPerWeek: null,
-              maxSites: null,
               packCredits: 10,
               isActive: false,
             })
@@ -1292,33 +1290,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL changes of a tariff', () => {
         renewalNoticePeriodEnd: PERIOD_END,
       })
       expect(state.actions).toEqual([planChangeSchedule])
-    })
-
-    it('is refused when the workspace has more sites than the tariff takes', async () => {
-      const s = await subscribed()
-      const small = await bigger({ name: 'Меньше', maxSites: 1 })
-      const fits = await bigger({ maxSites: 2 })
-      for (const host of ['one', 'two']) {
-        await db.site.create({
-          data: {
-            workspaceId: s.workspaceId,
-            name: host,
-            url: `https://${host}-${s.workspaceId}.example.ru`,
-            stack: 'wordpress',
-            // Every site counts, whatever its status.
-            status: host === 'one' ? 'active' : 'onboarding',
-          },
-        })
-      }
-
-      await expect(
-        schedulePlanChange(s.deps, { userId: s.userId, planSlug: small.slug }),
-      ).rejects.toMatchObject({ code: 'BILLING_PLAN_SITE_LIMIT' })
-      expect((await written(s)).subscription.nextPlanId).toBeNull()
-
-      // Exactly as many as the tariff takes is not «more».
-      await schedulePlanChange(s.deps, { userId: s.userId, planSlug: fits.slug })
-      expect((await written(s)).subscription.nextPlanId).toBe(fits.id)
     })
 
     it.each([

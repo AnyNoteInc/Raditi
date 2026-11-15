@@ -57,19 +57,16 @@ test('the limits of a live run are the numbers of the plan', () => {
     // The default of the owner's question П30: a live check of the result within 20 requests.
     results: { requests: 20, minutes: 10 },
     compaction: { requests: 10, minutes: 5 },
-    // Six calls of the key of the pass of `/init`, the role holds them (LLM_MAX_CALLS_PER_KEY).
-    init: { requests: 11, minutes: 5 },
   })
   assert.deepEqual(PROVIDER, { host: 'api.z.ai', port: 443 })
 })
 
-test('a stand takes --live, --measure, --results, --compact, --init, --rehearsal, --no-build and --keep, and nothing else', () => {
+test('a stand takes --live, --measure, --results, --compact, --rehearsal, --no-build and --keep, and nothing else', () => {
   const plain = {
     live: false,
     measure: false,
     results: false,
     compact: false,
-    init: false,
     api: false,
     rehearsal: false,
     noBuild: false,
@@ -120,18 +117,6 @@ test('a stand takes --live, --measure, --results, --compact, --init, --rehearsal
     compact: true,
     noBuild: true,
   })
-  // One pass on the words of `/init`, live and rehearsed (docs/plan/61-chats-first.md, 61.25).
-  assert.deepEqual(standMode(['--live', '--init'], { stand: 'gateway' }), {
-    ...plain,
-    live: true,
-    init: true,
-  })
-  assert.deepEqual(standMode(['--rehearsal', '--init', '--no-build'], { stand: 'gateway' }), {
-    ...plain,
-    rehearsal: true,
-    init: true,
-    noBuild: true,
-  })
   // The acceptance on the pay-per-token API, live and rehearsed (П15).
   assert.deepEqual(standMode(['--live', '--api', '--keep=/private/x'], { stand: 'gateway' }), {
     ...plain,
@@ -178,14 +163,6 @@ test('a stand takes --live, --measure, --results, --compact, --init, --rehearsal
     [['--rehearsal', '--compact', '--results'], 'gateway'],
     [['--live', '--compact', '--api'], 'gateway'],
     [['--live', '--compact'], 'content'],
-    // So is the pass of `/init`.
-    [['--init'], 'gateway'],
-    [['--init', '--no-build'], 'gateway'],
-    [['--live', '--init', '--measure'], 'gateway'],
-    [['--rehearsal', '--init', '--results'], 'gateway'],
-    [['--live', '--init', '--api'], 'gateway'],
-    [['--live', '--init', '--compact'], 'gateway'],
-    [['--live', '--init'], 'content'],
     [['--live', '--api'], 'content'],
     [['--rehearsal', '--api'], 'content'],
     [['--keep=/private/x'], 'gateway'],
@@ -1551,7 +1528,6 @@ test('the codes and signals of the provider are read from the log lines the role
 const node = dirname(process.execPath)
 const stands = {
   gateway: 'apps/core/scripts/verify-llm-gateway.mjs',
-  content: 'apps/core/scripts/verify-agent-content.mjs',
 }
 // PATH holds node alone: a stand that got past its refusals would fail on `docker`, not exit 2.
 const started = (script, args, env) =>
@@ -1640,20 +1616,16 @@ for (const [flag, title, noOption] of [
   [
     '--results',
     'the measurement of results refuses and cleans up like the acceptance',
-    // Without --live or --rehearsal it is no option of the stand, and never one of the content stand.
-    [
-      [stands.gateway, ['--results']],
-      [stands.content, ['--live', '--results']],
-    ],
+    // Without --live or --rehearsal it is no option of the stand.
+    [[stands.gateway, ['--results']]],
   ],
   [
     '--api',
     'the run on the API takes ZAI_API_KEY and refuses like the acceptance',
-    // Without --live or --rehearsal, with a measurement, or on the content stand it is no option.
+    // Without --live or --rehearsal, or with a measurement, it is no option.
     [
       [stands.gateway, ['--api']],
       [stands.gateway, ['--live', '--api', '--measure']],
-      [stands.content, ['--live', '--api']],
     ],
   ],
 ])
@@ -1680,7 +1652,6 @@ test('a signal sent to the command of a stand reaches the stand: its package lin
   const orchestrator = JSON.parse(
     await readFile(join(repository, 'apps/core/package.json'), 'utf8'),
   ).scripts
-  assert.equal(root['verify:agent-content'], `exec node ${stands.content}`)
   assert.equal(root['verify:llm-gateway'], 'pnpm --filter core verify:llm-gateway')
   assert.equal(orchestrator['verify:llm-gateway'], 'exec node scripts/verify-llm-gateway.mjs')
   for (const script of Object.values(stands)) {
@@ -1696,13 +1667,7 @@ test('a signal sent to the command of a stand reaches the stand: its package lin
 })
 
 test('no script of the stands and no document of theirs names the flags that never existed', async () => {
-  for (const file of [
-    stands.gateway,
-    stands.content,
-    'infra/dev/llm-verify/README.md',
-    'infra/dev/site-verify/README.md',
-    'infra/egress/README.md',
-  ]) {
+  for (const file of [stands.gateway, 'infra/dev/llm-verify/README.md', 'infra/egress/README.md']) {
     const source = await readFile(join(repository, file), 'utf8')
     assert.equal(/--real\b|--record\b|--key-file\b/.test(source), false, file)
   }

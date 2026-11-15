@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer'
 import { performance } from 'node:perf_hooks'
 
 import {
@@ -34,7 +33,6 @@ const labels = {
   turn: 1,
 }
 const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
-const baseSha = 'b'.repeat(40)
 const DEADLINE_LABEL = 'io.raditi.sandbox.deadline'
 
 /** mulberry32: the same delays on every run of the suite. */
@@ -76,12 +74,7 @@ const request = (hardTimeoutMs: number): TurnRequest => ({
   },
   input: { prompt: 'Synthetic turn', attachments: [] },
   driverVersion: '1.0.0',
-  workspace: {
-    repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
-    branch: `agent/${labels.taskId}`,
-    expectedBaseSha: baseSha,
-    protectedPaths: [],
-  },
+  requirements: { repository: false, browser: false },
   committedAt: '2026-09-28T00:00:00.000Z',
 })
 
@@ -211,7 +204,6 @@ describe('turn deadline chain (spec §8 «Срок контейнера и ар�
           parser: () => driver,
           transport: { capture: vi.fn(), restore: vi.fn() },
           transfer: { get: vi.fn(), put: vi.fn() },
-          importBundle: vi.fn(async () => {}),
         }),
         maxTurns: 1,
         logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -229,21 +221,6 @@ describe('turn deadline chain (spec §8 «Срок контейнера и ар�
         }),
         driver,
         live: new LiveTurns(),
-        workspace: {
-          buildBaseBundle: async () => {
-            await sleep(random() * 5_000)
-            return {
-              baseSha,
-              branch: `agent/${labels.taskId}`,
-              sha256: '0'.repeat(64),
-              sizeBytes: 1,
-              read: async function* () {
-                yield Buffer.from('b')
-              },
-            }
-          },
-          preparePublication: vi.fn(),
-        },
         snapshots: { save: vi.fn(), load: vi.fn(), restoreSource: vi.fn() },
       })
       // What the plan asks is the first lease only: the supervisor gives the container what its

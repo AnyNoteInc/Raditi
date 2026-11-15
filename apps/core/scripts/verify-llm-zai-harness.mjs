@@ -68,35 +68,28 @@ export const resultFor = (summary, files = []) => ({
 
 /**
  * The harness of one group: `offer` is one of ZAI_OFFERS, `workspaceId` the workspace its tasks
- * belong to, `name` what its sites and markers are called. `refs`, `refusals` and `outputs`
+ * belong to (its caller may also pass a `name`). `refs`, `refusals` and `outputs`
  * collect what the group checks at its end: the turns issued, every refusal the sandbox
  * received as the CLI printed it, and everything the CLI printed.
  */
-export async function createZaiHarness(ctx, { offer, workspaceId, name }) {
+export async function createZaiHarness(ctx, { offer, workspaceId }) {
   const { db, core, stack, cli, control, secretMarkers, promptMarker, metricsToken } = ctx
   const zai = (body) => control('zai', body)
   const refs = []
   const refusals = []
   const outputs = []
 
-  /** A new task with its site lease; `continued` continues a task under the same lease. */
+  /** A new chat with its lease; `continued` continues a task under the same lease. */
   const task = async (overrides, continued) => {
     let taskId = continued?.ref.taskId
     if (!taskId) {
-      const site = await db.site.create({
-        data: {
-          workspaceId,
-          name: `${name} site`,
-          url: `https://${randomUUID()}.invalid`,
-          stack: 'wordpress',
-        },
-      })
+      // A chat without a project (plan 83): its lease is held under its own id.
       const record = await db.task.create({
-        data: { workspaceId, siteId: site.id, status: 'running', modelClass: 'standard' },
+        data: { workspaceId, status: 'running', modelClass: 'standard' },
       })
       await db.siteLease.create({
         data: {
-          siteId: site.id,
+          siteId: record.id,
           holderTaskId: record.id,
           epoch: 1,
           operation: 'turn',

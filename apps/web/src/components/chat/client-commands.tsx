@@ -85,12 +85,9 @@ function ThemeMenu({ anchor, onClose }: { anchor: HTMLElement; onClose: () => vo
  * reach what the screen holds. `/help` is the field's.
  */
 export function useClientCommands({
-  projectId,
   taskId = null,
   anchor,
 }: {
-  /** The project a new chat keeps. */
-  projectId: string | null
   /** The chat `/usage`, `/status` and `/context` tell of; null — a new chat. */
   taskId?: string | null
   /** What the menu of `/themes` stands over. */
@@ -108,7 +105,7 @@ export function useClientCommands({
   function run(id: PageCommandId): string | undefined {
     switch (id) {
       case 'new':
-        router.push(newChatHref(projectId))
+        router.push(newChatHref())
         return undefined
       case 'sessions':
         router.push(CHATS_HREF)

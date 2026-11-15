@@ -1,21 +1,16 @@
 import type { Env } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
-import {
-  ConfigError,
-  DEV_PAGES_COOKIE_SECRET,
-  DEV_PREVIEW_SESSION_SECRET,
-  loadPreviewConfig,
-} from './config.ts'
+import { ConfigError, DEV_PAGES_COOKIE_SECRET, loadPreviewConfig } from './config.ts'
 
 const WORKER_TOKEN = 'worker-token-0123456789abcdef0123456789abcdef'
+const worker = { BROWSER_WORKER_URL: 'http://127.0.0.1:8086', BROWSER_WORKER_TOKEN: WORKER_TOKEN }
 
 const devEnv = (overrides: Env = {}): Env => ({
   APP_ENV: 'development',
   APP_URL: 'http://localhost:3000',
   DATABASE_URL: 'postgresql://raditi:raditi@localhost:5432/raditi',
-  PREVIEW_BASE_DOMAIN: 'localhost',
-  PREVIEW_PUBLIC_PORT: '8090',
+  PAGES_BASE_DOMAIN: 'pages.localhost',
   ...overrides,
 })
 
@@ -23,8 +18,8 @@ const prodEnv = (overrides: Env = {}): Env => ({
   APP_ENV: 'production',
   APP_URL: 'https://raditi.ru',
   DATABASE_URL: 'postgresql://raditi:secret@db.internal:5432/raditi',
-  PREVIEW_BASE_DOMAIN: 'preview.raditi-sites.ru',
-  PREVIEW_SESSION_SECRET: 's'.repeat(32),
+  PAGES_BASE_DOMAIN: 'pages.raditi.ru',
+  PAGES_COOKIE_SECRET: 'c'.repeat(32),
   ...overrides,
 })
 
@@ -39,77 +34,53 @@ function problemsOf(env: Env): readonly string[] {
 }
 
 describe('loadPreviewConfig', () => {
-  it('starts the gateway with its port, address, the dev secret and the database', () => {
-    expect(loadPreviewConfig(devEnv())).toEqual({
+  it('starts with the pages, the cabinet and the database', () => {
+    expect(loadPreviewConfig(devEnv({ PAGES_PUBLIC_PORT: '8092' }))).toEqual({
       appEnv: 'development',
-      port: 8090,
-      address: { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 },
-      sessionSecret: DEV_PREVIEW_SESSION_SECRET,
       appUrl: 'http://localhost:3000',
       db: { databaseUrl: 'postgresql://raditi:raditi@localhost:5432/raditi' },
-      // This machine and Docker's bridges (browser-relays.ts).
-      browserRelays: [
-        { address: '127.0.0.1', prefix: 32, family: 'ipv4' },
-        { address: '::1', prefix: 128, family: 'ipv6' },
-        { address: '172.16.0.0', prefix: 12, family: 'ipv4' },
-      ],
-      host: '127.0.0.1',
       browserStream: null,
+      pages: {
+        baseDomain: 'pages.localhost',
+        publicPort: 8092,
+        cookieSecret: DEV_PAGES_COOKIE_SECRET,
+        abuseEmail: null,
+        port: 8092,
+        host: '127.0.0.1',
+      },
+    })
+  })
+
+  it('needs one listener at least: the pages or the stream of a browser (plan 83)', () => {
+    expect(problemsOf(devEnv({ PAGES_BASE_DOMAIN: undefined }))).toEqual([
+      'PAGES_BASE_DOMAIN: the preview role serves the pages or the stream of a browser (BROWSER_WORKER_URL); neither is set',
+    ])
+    expect(loadPreviewConfig(devEnv({ PAGES_BASE_DOMAIN: undefined, ...worker }))).toMatchObject({
       pages: null,
+      browserStream: { port: 8091 },
     })
-    expect(problemsOf(devEnv({ PREVIEW_BASE_DOMAIN: '' }))).toEqual([
-      'PREVIEW_BASE_DOMAIN: required for the preview role',
-    ])
-    expect(problemsOf(devEnv({ PREVIEW_SESSION_SECRET: 'short' }))).toEqual([
-      'PREVIEW_SESSION_SECRET: must be at least 32 bytes',
-    ])
-    expect(problemsOf(devEnv({ PREVIEW_GATEWAY_PORT: 'http' }))[0]).toMatch(/^PREVIEW_GATEWAY_PORT/)
   })
 
-  it('listens where PREVIEW_GATEWAY_HOST says: loopback in dev, every address in production', () => {
-    // A Linux stand: the relay of the agent's browser reaches the host on the bridge's gateway.
-    expect(loadPreviewConfig(devEnv({ PREVIEW_GATEWAY_HOST: '172.17.0.1' })).host).toBe(
-      '172.17.0.1',
+  it('requires the address of the cabinet', () => {
+    expect(problemsOf(devEnv({ APP_URL: '' }))).toEqual(['APP_URL: required for the preview role'])
+  })
+
+  it('reads none of the settings of the gateway of previews any more (plan 83)', () => {
+    const config = loadPreviewConfig(
+      devEnv({
+        PREVIEW_BASE_DOMAIN: '',
+        PREVIEW_SESSION_SECRET: 'short',
+        PREVIEW_GATEWAY_PORT: 'http',
+        PREVIEW_GATEWAY_HOST: 'localhost',
+        PREVIEW_BROWSER_RELAYS: 'nope',
+        GITEA_URL: 'not a url',
+      }),
     )
-    expect(loadPreviewConfig(prodEnv()).host).toBeUndefined()
-    expect(problemsOf(devEnv({ PREVIEW_GATEWAY_HOST: 'localhost' }))).toEqual([
-      'PREVIEW_GATEWAY_HOST: must be an IP address',
-    ])
+    expect(config).not.toHaveProperty('address')
+    expect(config).not.toHaveProperty('port')
   })
 
-  it('starts the gateway in production with a secret of its own', () => {
-    expect(loadPreviewConfig(prodEnv())).toMatchObject({
-      appEnv: 'production',
-      port: 8090,
-      address: { scheme: 'https', baseDomain: 'preview.raditi-sites.ru' },
-    })
-    const problems = problemsOf(prodEnv({ PREVIEW_SESSION_SECRET: '' }))
-    expect(problems).toEqual(['PREVIEW_SESSION_SECRET: required in production'])
-    const short = problemsOf(prodEnv({ PREVIEW_SESSION_SECRET: 'tiny-secret' }))
-    expect(short.join('\n')).not.toContain('tiny-secret')
-    expect(problemsOf(prodEnv({ PREVIEW_BASE_DOMAIN: 'app.raditi.ru' }))[0]).toMatch(/APP_URL/)
-  })
-
-  it('reads the sources of the agent browser from PREVIEW_BROWSER_RELAYS', () => {
-    expect(
-      loadPreviewConfig(devEnv({ PREVIEW_BROWSER_RELAYS: '192.168.65.0/24' })).browserRelays,
-    ).toEqual([{ address: '192.168.65.0', prefix: 24, family: 'ipv4' }])
-    expect(() => loadPreviewConfig(devEnv({ PREVIEW_BROWSER_RELAYS: 'nope' }))).toThrow(
-      /PREVIEW_BROWSER_RELAYS: must be a comma-separated list of IP CIDRs/,
-    )
-  })
-
-  it('requires the address of the cabinet it frames', () => {
-    expect(problemsOf(devEnv({ APP_URL: '' }))).toEqual([
-      'APP_URL: required for the preview role (the cabinet that frames a preview)',
-    ])
-  })
-
-  it('opens the stream of a task browser only with the worker and its token', () => {
-    const worker = {
-      BROWSER_WORKER_URL: 'http://127.0.0.1:8086',
-      BROWSER_WORKER_TOKEN: WORKER_TOKEN,
-    }
+  it('opens the stream of a chat browser only with the worker and its token', () => {
     expect(loadPreviewConfig(devEnv(worker)).browserStream).toEqual({
       port: 8091,
       host: '127.0.0.1',
@@ -155,15 +126,6 @@ describe('loadPreviewConfig', () => {
     )
     expect(weak[0]).toMatch(/^BROWSER_WORKER_TOKEN: must be 32 to 4096 visible ASCII/)
     expect(weak.join('\n')).not.toContain('short-token')
-    // The rule of core, mcp and the worker too: over the bound is refused here as there.
-    const long = 'w'.repeat(4097)
-    const tooLong = problemsOf(
-      devEnv({ BROWSER_WORKER_URL: 'http://127.0.0.1:8086', BROWSER_WORKER_TOKEN: long }),
-    )
-    expect(tooLong).toEqual([
-      'BROWSER_WORKER_TOKEN: must be 32 to 4096 visible ASCII characters without spaces',
-    ])
-    expect(tooLong.join('\n')).not.toContain(long)
     const withPath = problemsOf(
       devEnv({
         BROWSER_WORKER_URL: 'http://user:pass@127.0.0.1:8086/v1',
@@ -172,40 +134,16 @@ describe('loadPreviewConfig', () => {
     )
     expect(withPath[0]).toMatch(/^BROWSER_WORKER_URL: must be an http\(s\) origin/)
     expect(withPath.join('\n')).not.toContain('pass')
-    expect(
-      problemsOf(
-        devEnv({
-          BROWSER_WORKER_URL: 'http://127.0.0.1:8086',
-          BROWSER_WORKER_TOKEN: WORKER_TOKEN,
-          BROWSER_STREAM_PORT: '8090',
-        }),
-      ),
-    ).toEqual(['BROWSER_STREAM_PORT: must differ from PREVIEW_GATEWAY_PORT'])
+    expect(problemsOf(devEnv({ ...worker, PAGES_PORT: '8091' }))).toEqual([
+      'PAGES_PORT: must differ from BROWSER_STREAM_PORT',
+    ])
     expect(problemsOf(devEnv({ BROWSER_STREAM_HOST: 'localhost' }))).toEqual([
       'BROWSER_STREAM_HOST: must be an IP address',
     ])
   })
 
-  it('opens the pages only with PAGES_BASE_DOMAIN, on their own port', () => {
-    expect(loadPreviewConfig(devEnv()).pages).toBeNull()
-    expect(
-      loadPreviewConfig(devEnv({ PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PUBLIC_PORT: '8092' }))
-        .pages,
-    ).toEqual({
-      baseDomain: 'pages.localhost',
-      publicPort: 8092,
-      cookieSecret: DEV_PAGES_COOKIE_SECRET,
-      abuseEmail: null,
-      port: 8092,
-      host: '127.0.0.1',
-    })
-    const production = loadPreviewConfig(
-      prodEnv({
-        PAGES_BASE_DOMAIN: 'pages.raditi.ru',
-        PAGES_COOKIE_SECRET: 'c'.repeat(32),
-        PAGES_ABUSE_EMAIL: 'abuse@raditi.ru',
-      }),
-    ).pages
+  it('opens the pages in production on every address, without a port in the host', () => {
+    const production = loadPreviewConfig(prodEnv({ PAGES_ABUSE_EMAIL: 'abuse@raditi.ru' })).pages
     expect(production).toMatchObject({
       baseDomain: 'pages.raditi.ru',
       host: undefined,
@@ -214,39 +152,24 @@ describe('loadPreviewConfig', () => {
     expect(production).not.toHaveProperty('publicPort')
   })
 
-  it('refuses pages that would share a host with the cabinet or the previews, or run open in production', () => {
-    expect(problemsOf(prodEnv({ PAGES_BASE_DOMAIN: 'pages.raditi.ru' }))).toContain(
+  it('refuses pages that would share a host with the cabinet, or run open in production', () => {
+    expect(problemsOf(prodEnv({ PAGES_COOKIE_SECRET: undefined }))).toContain(
       'PAGES_COOKIE_SECRET: at least 32 characters in production',
     )
-    expect(
-      problemsOf(
-        prodEnv({
-          PAGES_BASE_DOMAIN: 'pages.raditi.ru',
-          PAGES_COOKIE_SECRET: 'c'.repeat(32),
-          PAGES_PUBLIC_PORT: '8092',
-        }),
-      ),
-    ).toContain('PAGES_PUBLIC_PORT: not in production (a page host carries no port there)')
-    expect(
-      problemsOf(prodEnv({ PAGES_BASE_DOMAIN: 'raditi.ru', PAGES_COOKIE_SECRET: 'c'.repeat(32) })),
-    ).toContain('PAGES_BASE_DOMAIN: must not be the host of APP_URL or above it')
-    expect(
-      problemsOf(
-        prodEnv({ PAGES_BASE_DOMAIN: 'raditi-sites.ru', PAGES_COOKIE_SECRET: 'c'.repeat(32) }),
-      ),
-    ).toContain('PAGES_BASE_DOMAIN: must not be PREVIEW_BASE_DOMAIN or above it')
-    expect(
-      problemsOf(devEnv({ PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PORT: '8090' })),
-    ).toContain('PAGES_PORT: must differ from PREVIEW_GATEWAY_PORT')
-    for (const secret of [DEV_PAGES_COOKIE_SECRET, 's'.repeat(32)])
-      expect(
-        problemsOf(prodEnv({ PAGES_BASE_DOMAIN: 'pages.raditi.ru', PAGES_COOKIE_SECRET: secret })),
-      ).toContain(
-        'PAGES_COOKIE_SECRET: a secret of its own in production, not the dev value or the preview one',
-      )
-    expect(problemsOf(devEnv({ PAGES_COOKIE_SECRET: 'x'.repeat(40) }))).toContain(
-      'PAGES_COOKIE_SECRET: needs PAGES_BASE_DOMAIN',
+    expect(problemsOf(prodEnv({ PAGES_PUBLIC_PORT: '8092' }))).toContain(
+      'PAGES_PUBLIC_PORT: not in production (a page host carries no port there)',
     )
+    expect(problemsOf(prodEnv({ PAGES_BASE_DOMAIN: 'raditi.ru' }))).toContain(
+      'PAGES_BASE_DOMAIN: must not be the host of APP_URL or above it',
+    )
+    expect(problemsOf(prodEnv({ PAGES_COOKIE_SECRET: DEV_PAGES_COOKIE_SECRET }))).toContain(
+      'PAGES_COOKIE_SECRET: a secret of its own in production, not the dev value',
+    )
+    expect(
+      problemsOf(
+        devEnv({ PAGES_BASE_DOMAIN: undefined, ...worker, PAGES_COOKIE_SECRET: 'x'.repeat(40) }),
+      ),
+    ).toContain('PAGES_COOKIE_SECRET: needs PAGES_BASE_DOMAIN')
     expect(problemsOf(devEnv({ PAGES_BASE_DOMAIN: 'Pages.Localhost' }))[0]).toMatch(
       /^PAGES_BASE_DOMAIN/,
     )
@@ -262,7 +185,7 @@ describe('loadPreviewConfig', () => {
           TURN_EXECUTOR: 'unused',
           BILLING_TICK_SECONDS: 'unused',
         }),
-      ).port,
-    ).toBe(8090)
+      ).pages?.port,
+    ).toBe(8092)
   })
 })

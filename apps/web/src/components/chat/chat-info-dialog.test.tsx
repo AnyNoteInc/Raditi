@@ -26,7 +26,6 @@ const info = {
   status: {
     title: null,
     status: 'Агент работает',
-    project: null,
     model: 'GLM-5.3',
     effort: 'max',
     queued: 0,

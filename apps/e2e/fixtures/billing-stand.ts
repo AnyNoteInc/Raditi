@@ -48,7 +48,7 @@ export const fakeYookassa = {
 } as const
 
 /**
- * The OpenBao web writes the access of a new site to (infra/dev/billing-verify/openbao.mjs): a
+ * The OpenBao web writes the variables of a workspace to (infra/dev/billing-verify/openbao.mjs): a
  * disposable container on loopback, started by the config. Web logs in by an AppRole with the
  * policies `sites-writer` and `workspace-provisioner`, as in production; the pair is synthetic
  * and opens nothing else.

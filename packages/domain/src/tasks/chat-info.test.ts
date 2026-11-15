@@ -17,7 +17,6 @@ const info: ChatInfo = {
   status: {
     title: 'Новость о скидках',
     status: 'Агент работает',
-    project: 'Пекарня',
     model: 'GLM-5.3',
     effort: 'high',
     queued: 2,
@@ -50,7 +49,6 @@ describe('/usage, /status and /context', () => {
     expect(chatInfoLines('status', info).lines).toEqual([
       'Чат «Новость о скидках».',
       'Агент работает.',
-      'Проект «Пекарня».',
       'Модель — GLM-5.3, размышление — высокое.',
       'В очереди 2 сообщения — агент возьмёт их, когда закончит.',
       'Браузер агента открыт.',
@@ -61,13 +59,12 @@ describe('/usage, /status and /context', () => {
         status: {
           ...info.status!,
           title: null,
-          project: null,
           model: null,
           queued: 0,
           browser: false,
         },
       }).lines,
-    ).toEqual(['Агент работает.', 'Без проекта.', 'Размышление — высокое.'])
+    ).toEqual(['Агент работает.', 'Размышление — высокое.'])
     expect(chatInfoLines('status', { ...info, status: null }).lines).toEqual([
       'Чат ещё не начат: напишите, что сделать.',
     ])

@@ -10,7 +10,6 @@ import { useLayoutEffect, type ReactNode, type RefObject } from 'react'
 import { AppIcon } from '@/components/application/app-icon'
 import { toolText } from './chat-texts'
 import {
-  isChangesTool,
   toolIcons,
   toolPanelId,
   toolTabId,
@@ -31,16 +30,6 @@ import { PaneResizer } from './pane-resizer'
 // a sign and a name each, closed by the cross at its end or by Delete —, and from `lg` «Скрыть
 // панель» and «+» outside the tabs: a tablist holds its tabs alone (axe), and MUI takes every child
 // of `Tabs` for a tab.
-
-/**
- * A tool that holds a connection of its own stays mounted while its tab is open, hidden behind
- * another one: the preview keeps its frame, so choosing it again spends no new ticket (И11); the
- * browser keeps its last picture, its stream going only while its tab is shown. A tab of the
- * changes reads them only while it is on the screen; what it read stays in the cache.
- */
-// «Документы» keep their place and their frame between the tabs (docs/plan/67, Д4).
-const keepsMounted = (tool: DialogTool): boolean =>
-  tool === 'browser' || tool === 'preview' || tool === 'documents'
 
 const tabSx = {
   minHeight: 44,
@@ -309,12 +298,12 @@ export function ToolsPanel({
                 minWidth: 0,
                 display: shown ? 'flex' : 'none',
                 flexDirection: 'column',
-                // The tabs of the changes scroll and keep the paddings of their lists.
-                overflowY: isChangesTool(tool) ? 'auto' : 'hidden',
-                ...(isChangesTool(tool) ? { p: { xs: 2, sm: 2.5 } } : {}),
+                overflowY: 'hidden',
               }}
             >
-              {shown || keepsMounted(tool) ? content(tool) : null}
+              {/* Every tool stays mounted while its tab is open, hidden behind another one: the
+                  browser keeps its last picture, «Документы» their place (docs/plan/67, Д4). */}
+              {content(tool)}
             </Box>
           )
         })}

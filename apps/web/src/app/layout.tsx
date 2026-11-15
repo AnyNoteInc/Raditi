@@ -20,7 +20,7 @@ export const generateMetadata = (): Metadata => ({
   metadataBase: new URL(env.web().appUrl),
   title: { default: 'Радити', template: '%s — Радити' },
   description:
-    'Радити — поддержка сайтов для малого бизнеса: напишите в чат, что поменять на сайте. Сервис готовится к запуску.',
+    'Радити — ИИ-помощник на каждый день: напишите в чат, что нужно сделать. Сервис готовится к запуску.',
   applicationName: 'Радити',
 })
 

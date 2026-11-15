@@ -59,8 +59,8 @@ describe('turn journal boundary', () => {
 
 describe('feedStepsOf', () => {
   it('tells the client of the work and of saving it, by the phase alone', () => {
-    expect(feedStepsOf('running')).toEqual(['code', 'work'])
-    expect(feedStepsOf('resumed')).toEqual(['code', 'work'])
+    expect(feedStepsOf('running')).toEqual(['work'])
+    expect(feedStepsOf('resumed')).toEqual(['work'])
     expect(feedStepsOf('quiesced')).toEqual(['save'])
     for (const phase of ['leased', 'output', 'checkpointed', 'completed', 'failed'] as const)
       expect(feedStepsOf(phase)).toEqual([])
@@ -205,10 +205,9 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
   })
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
-      const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
-      await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
+      const chats = await db.task.findMany({ where: { workspaceId }, select: { id: true } })
+      await db.siteLease.deleteMany({ where: { siteId: { in: chats.map(({ id }) => id) } } })
       await db.task.deleteMany({ where: { workspaceId } })
-      await db.site.deleteMany({ where: { workspaceId } })
       await db.workspace.delete({ where: { id: workspaceId } })
     }
   })
@@ -216,23 +215,15 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     await db.$disconnect()
   })
 
-  async function fixture(requirements: { needsRepository?: boolean; needsBrowser?: boolean } = {}) {
+  async function fixture(requirements: { needsBrowser?: boolean } = {}) {
     const ws = await db.workspace.create({ data: { name: 'Synthetic turn journal verification' } })
     workspaces.push(ws.id)
-    const site = await db.site.create({
-      data: {
-        workspaceId: ws.id,
-        name: 'Journal test',
-        url: 'https://journal.invalid',
-        stack: 'wordpress',
-      },
-    })
     const task = await db.task.create({
-      data: { workspaceId: ws.id, siteId: site.id, ...requirements },
+      data: { workspaceId: ws.id, ...requirements },
     })
     const leases = new PostgresSiteLeaseStore(db)
     const fence = (await leases.acquire({
-      siteId: site.id,
+      siteId: task.id,
       taskId: task.id,
       operation: 'turn',
       ttlMs: 60_000,
@@ -248,7 +239,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     const nextEpoch = async () => {
       await leases.free(fence)
       return (await leases.acquire({
-        siteId: site.id,
+        siteId: task.id,
         taskId: task.id,
         operation: 'turn',
         ttlMs: 60_000,
@@ -334,7 +325,6 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     expect(await db.taskTurn.findUniqueOrThrow({ where: { id: turn.id } })).toMatchObject({
       status: 'running',
       nativeSessionId: 'synthetic-native-session',
-      headSha: 'c'.repeat(40),
       snapshotPrefix: 'sessions/synthetic/turns/0001/',
       finishedAt: null,
     })
@@ -352,7 +342,6 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     ).rejects.toMatchObject({ code: 'LEASE_LOST' })
     expect(await db.taskTurn.findUniqueOrThrow({ where: { id: turn.id } })).toMatchObject({
       nativeSessionId: 'synthetic-native-session',
-      headSha: 'c'.repeat(40),
     })
     await f.leases.free(next)
   })
@@ -386,7 +375,6 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
       orderBy: { id: 'asc' },
     })
     expect(stages.map((row) => [row.clientVisible, row.turnId, row.payload])).toEqual([
-      [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'code' }],
       [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'work' }],
       [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'save' }],
     ])
@@ -454,13 +442,13 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
         where: { taskId: f.task.id, type: 'feed.step' },
         orderBy: { id: 'asc' },
       })
-      expect(stages.map((row) => (row.payload as { step: string }).step)).toEqual(['code', 'work'])
+      expect(stages.map((row) => (row.payload as { step: string }).step)).toEqual(['work'])
     }
     // Thirteen fixtures and ANALYZE of a table the suites running beside it fill: seconds under load.
   }, 30_000)
 
   it('tells of the code only a task that has a repository (docs/plan/61, §5.8)', async () => {
-    const f = await fixture({ needsRepository: false, needsBrowser: true })
+    const f = await fixture({ needsBrowser: true })
     await db.taskTurn.create({
       data: {
         taskId: f.task.id,

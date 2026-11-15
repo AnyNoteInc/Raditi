@@ -590,7 +590,6 @@ export function billingFixtures(db: PrismaClient) {
           price: '4900.00',
           creditsPerMonth: 30,
           creditsPerDay: null,
-          maxSites: 1,
           isActive: false,
           ...data,
         },
@@ -633,23 +632,15 @@ export function billingFixtures(db: PrismaClient) {
     },
 
     /**
-     * A queued task of the workspace, on a site of its own: what a reserve is placed for. Its
+     * A queued chat of the workspace: what a reserve is placed for. Its
      * model runs in the class `standard` unless told otherwise, as a new task of the queue.
      */
     async task(
       workspaceId: string,
       data: Partial<Prisma.TaskUncheckedCreateInput> = {},
     ): Promise<{ taskId: string }> {
-      const site = await db.site.create({
-        data: {
-          workspaceId,
-          name: 'Billing verification',
-          url: `https://${randomUUID()}.example.ru`,
-          stack: 'wordpress',
-        },
-      })
       const task = await db.task.create({
-        data: { workspaceId, siteId: site.id, modelClass: 'standard', ...data },
+        data: { workspaceId, modelClass: 'standard', ...data },
       })
       return { taskId: task.id }
     },
@@ -665,15 +656,7 @@ export function billingFixtures(db: PrismaClient) {
         const account = await tx.billingAccount.findUniqueOrThrow({
           where: { workspaceId_unit: { workspaceId, unit } },
         })
-        const site = await tx.site.create({
-          data: {
-            workspaceId,
-            name: 'Billing verification',
-            url: `https://${randomUUID()}.example.ru`,
-            stack: 'wordpress',
-          },
-        })
-        const task = await tx.task.create({ data: { workspaceId, siteId: site.id } })
+        const task = await tx.task.create({ data: { workspaceId } })
         await tx.billingAccount.update({
           where: { id: account.id },
           data: { held: { increment: new Money(credits) } },
@@ -748,16 +731,13 @@ export function billingFixtures(db: PrismaClient) {
       await db.creditLedger.deleteMany({ where: { account: workspaces } })
       await db.creditHold.deleteMany({ where: { account: workspaces } })
       await db.billingAccount.deleteMany({ where: workspaces })
-      // The sites whose gift a reserve of these workspaces claimed.
-      await db.giftSiteClaim.deleteMany({ where: workspaces })
       // The model calls of the tasks; their turn rows go with the tasks.
       await db.tokenUsage.deleteMany({ where: { task: workspaces } })
       await db.llmCall.deleteMany({ where: { key: { task: workspaces } } })
       await db.llmKey.deleteMany({ where: { task: workspaces } })
       await db.task.deleteMany({ where: workspaces })
-      // Files no message sent hold their site; bound ones went with their tasks.
+      // Files no message sent; bound ones went with their tasks.
       await db.attachment.deleteMany({ where: workspaces })
-      await db.site.deleteMany({ where: workspaces })
       await db.order.deleteMany({ where: workspaces })
       await db.subscription.deleteMany({ where: workspaces })
       await db.auditLog.deleteMany({ where: workspaces })

@@ -129,7 +129,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     // The gift of the registration is untouched: tasks are taken on it after the tariff.
     await expect(dialog).toContainText(
       new RegExp(
-        sentence`С ${DAY} новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок сохранятся.`,
+        sentence`С ${DAY} новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. Чаты и страницы сохранятся.`,
       ),
     )
     // The dialog is reached and left from the keyboard: the focus is inside it and comes back.
@@ -151,7 +151,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     const said = block.getByRole('status')
     await expect(said).toContainText(
       new RegExp(
-        `^${sentence`Автопродление отключено. Тариф и 200 кредитов по тарифу доступны до ${DATE}. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок сохранятся.`}$`,
+        `^${sentence`Автопродление отключено. Тариф и 200 кредитов по тарифу доступны до ${DATE}. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Чаты и страницы сохранятся.`}$`,
       ),
       SLOW,
     )
@@ -281,7 +281,8 @@ test('a customer schedules another tariff for the next period and takes the choi
     await expect(dialog).toContainText(
       'Неистраченные кредиты тарифа переходят на следующий месяц, один раз.',
     )
-    await expect(dialog).toContainText('1 000 кредитов в месяц · до 3 сайтов на WordPress')
+    await expect(dialog).toContainText('1 000 кредитов в месяц')
+    await expect(dialog).not.toContainText('сайт')
     await expect(dialog).toContainText('9 990 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444')
     await dialog.getByRole('button', { name: 'Не менять' }).click()
     await expect(dialog).toBeHidden()
@@ -532,13 +533,13 @@ test('a customer whose tariff is over sees when it ended and chooses a tariff ag
     await expect(block).toContainText(new RegExp(sentence`Закончился ${DAY}`), SLOW)
     // The gift of the registration outlives the tariff, and tasks are taken on it.
     await expect(block).toContainText(
-      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок на месте.',
+      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Чаты и страницы на месте.',
     )
     // What the gift is enough for is said once — under the heading of the page.
     await expect(block).not.toContainText('Выберите тариф')
     await expect(
       page.getByText(
-        'У вас 50 подарочных кредитов — их хватит на десять небольших правок или на три-пять задач побольше. Когда кредиты закончатся, понадобится тариф.',
+        'У вас 50 подарочных кредитов — их хватит на десять небольших задач или на три-пять задач побольше. Когда кредиты закончатся, понадобится тариф.',
       ),
     ).toBeVisible()
     await expect(page.getByRole('main')).not.toContainText('не принимаются')

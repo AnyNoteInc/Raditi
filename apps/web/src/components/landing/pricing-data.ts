@@ -20,7 +20,6 @@ export interface LandingPlan {
   /** The windows of the work (plan 71); null — no such limit. */
   creditsPer5h: number | null
   creditsPerWeek: number | null
-  maxSites: number
 }
 
 export interface LandingPack {

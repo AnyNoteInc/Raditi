@@ -189,7 +189,6 @@ describe.skipIf(!databaseUrl)('the migration of the numbers of credits', () => {
             creditsPer5h: plan.creditsPer5h,
             creditsPerWeek: plan.creditsPerWeek,
             packCredits: plan.packCredits,
-            maxSites: plan.maxSites,
             pageSites: plan.pageSites,
             pageCustomNames: plan.pageCustomNames,
             sortOrder: plan.sortOrder,

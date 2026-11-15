@@ -1,6 +1,6 @@
 import { posix } from 'node:path'
 
-import type { AppEnv, PreviewRuntimeKind } from '@repo/domain'
+import type { AppEnv } from '@repo/domain'
 import type Docker from 'dockerode'
 
 import {
@@ -17,9 +17,10 @@ import {
   SERVICE_USER,
   tmpfs,
   TOOLS,
+  subnetAddress,
   type NetworkPlace,
-} from '../preview/containers.ts'
-import { subnetAddress } from '../preview/resources.ts'
+  type SessionRuntimeKind,
+} from './kit.ts'
 import {
   BROWSER_LABEL,
   browserSessionAddresses,
@@ -190,7 +191,7 @@ export function forwarderContainer(input: {
 export function browserContainer(input: {
   place: BrowserSessionPlace
   image: string
-  runtime: PreviewRuntimeKind
+  runtime: SessionRuntimeKind
   limits: { cpu: number; memoryMiB: number; pids: number; shmMiB: number }
 }): Docker.ContainerCreateOptions {
   const addresses = sessionAddresses(input.place.network)
