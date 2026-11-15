@@ -1261,10 +1261,14 @@ const noFiles = (ids: readonly string[]): SentFile[] =>
 function WorkingLine({ turn, seconds, label }: { turn: number; seconds: number; label: string }) {
   return (
     <Box
-      sx={{ display: 'flex', alignItems: 'baseline', gap: 1, minWidth: 0 }}
+      sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}
       role="status"
       aria-label={label}
     >
+      {/* The moving mark of Радити beside the phrase (owner, 15.11.2026). */}
+      <Box aria-hidden="true" sx={{ display: 'flex', flexShrink: 0 }}>
+        <BrandProgress size={20} variant="spiral" />
+      </Box>
       <Typography
         component="span"
         aria-hidden="true"
@@ -1384,7 +1388,8 @@ export function LiveBlock({
         } else {
           // What the agent does stands in the feed as it comes, no folding and no scrolling of its
           // own (owner's request of 09.11.2026); under it a word of what it is doing and the time,
-          // in place of «Агент работает», the moving mark and the stages (owner, 14.11.2026). The
+          // in place of «Агент работает» and the stages (owner, 14.11.2026), with the moving mark of
+          // Радити beside it (owner, 15.11.2026). The
           // finished turn folds it under «Агент работал …».
           return (
             <Box
