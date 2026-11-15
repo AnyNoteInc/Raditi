@@ -72,7 +72,6 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       await db.llmKey.deleteMany({ where: tasks })
       await db.creditHold.deleteMany({ where: tasks })
       await db.task.deleteMany({ where: { workspaceId: f.workspaceId } })
-      await db.site.deleteMany({ where: { workspaceId: f.workspaceId } })
       await db.subscription.deleteMany({ where: { workspaceId: f.workspaceId } })
       await db.billingAccount.deleteMany({ where: { workspaceId: f.workspaceId } })
       await db.workspace.delete({ where: { id: f.workspaceId } })
@@ -111,18 +110,9 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     })
     const tracked: (typeof fixtures)[number] = { workspaceId: workspace.id }
     fixtures.push(tracked)
-    const site = await db.site.create({
-      data: {
-        workspaceId: workspace.id,
-        name: 'Synthetic',
-        url: 'https://gateway.invalid',
-        stack: 'wordpress',
-      },
-    })
     const task = await db.task.create({
       data: {
         workspaceId: workspace.id,
-        siteId: site.id,
         status: 'running',
         modelClass: 'standard',
       },
@@ -835,7 +825,6 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       const paying = await db.task.create({
         data: {
           workspaceId: f.task.workspaceId,
-          siteId: f.task.siteId,
           status: 'running',
           modelClass: 'standard',
         },
@@ -878,7 +867,6 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       const onPack = await db.task.create({
         data: {
           workspaceId: f.task.workspaceId,
-          siteId: f.task.siteId,
           status: 'running',
           modelClass: 'standard',
         },

@@ -538,7 +538,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       expect(await db.llmKey.count({ where: { taskId: task.id } })).toBe(0)
     })
 
-    it.each(['expired', 'epoch', 'holder', 'held', 'operation'])(
+    it.each(['expired', 'epoch', 'holder', 'held'])(
       'rejects the %s lease of a chat before creating secrets',
       async (reason) => {
         const f = await fixture()
@@ -548,7 +548,6 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
           epoch: { epoch: 2 },
           holder: { holderTaskId: null, operation: null, expiresAt: null },
           held: { heldForOperator: true },
-          operation: { operation: 'deploy' as const },
         }
         await db.siteLease.update({
           where: { siteId: task.id },
@@ -761,7 +760,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(await db.taskAccountBinding.count({ where: { taskId: f.task.id } })).toBe(1)
   })
 
-  it.each(['expired', 'epoch', 'holder', 'held', 'operation'])(
+  it.each(['expired', 'epoch', 'holder', 'held'])(
     'rejects the %s lease before creating secrets',
     async (reason) => {
       const f = await fixture()
@@ -770,7 +769,6 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
         epoch: { epoch: 2 },
         holder: { holderTaskId: null, operation: null, expiresAt: null },
         held: { heldForOperator: true },
-        operation: { operation: 'deploy' as const },
       }
       await db.siteLease.update({
         where: { siteId: f.task.id },

@@ -205,10 +205,9 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
   })
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
-      const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
-      await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
+      const chats = await db.task.findMany({ where: { workspaceId }, select: { id: true } })
+      await db.siteLease.deleteMany({ where: { siteId: { in: chats.map(({ id }) => id) } } })
       await db.task.deleteMany({ where: { workspaceId } })
-      await db.site.deleteMany({ where: { workspaceId } })
       await db.workspace.delete({ where: { id: workspaceId } })
     }
   })
@@ -216,23 +215,15 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     await db.$disconnect()
   })
 
-  async function fixture(requirements: { needsRepository?: boolean; needsBrowser?: boolean } = {}) {
+  async function fixture(requirements: { needsBrowser?: boolean } = {}) {
     const ws = await db.workspace.create({ data: { name: 'Synthetic turn journal verification' } })
     workspaces.push(ws.id)
-    const site = await db.site.create({
-      data: {
-        workspaceId: ws.id,
-        name: 'Journal test',
-        url: 'https://journal.invalid',
-        stack: 'wordpress',
-      },
-    })
     const task = await db.task.create({
-      data: { workspaceId: ws.id, siteId: site.id, ...requirements },
+      data: { workspaceId: ws.id, ...requirements },
     })
     const leases = new PostgresSiteLeaseStore(db)
     const fence = (await leases.acquire({
-      siteId: site.id,
+      siteId: task.id,
       taskId: task.id,
       operation: 'turn',
       ttlMs: 60_000,
@@ -248,7 +239,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     const nextEpoch = async () => {
       await leases.free(fence)
       return (await leases.acquire({
-        siteId: site.id,
+        siteId: task.id,
         taskId: task.id,
         operation: 'turn',
         ttlMs: 60_000,

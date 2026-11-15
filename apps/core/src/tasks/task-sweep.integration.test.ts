@@ -407,12 +407,11 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     async (_, kind, site) => {
       const past = new Date(Date.now() - 60_000)
       const { taskId } = await dialog('awaiting_user', 1, past, kind)
-      const { workspaceId, siteId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+      const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
       await db.browserSession.create({
         data: {
           taskId,
           workspaceId,
-          siteId,
           status: 'ready',
           readyAt: new Date(),
           expiresAt: new Date(Date.now() + 3_600_000),
@@ -448,7 +447,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     } as unknown as AgentDriver
 
     /** The plan a turn without a repository was assigned with. */
-    const planOf = (task: { id: string; siteId: string | null; workspaceId: string }) =>
+    const planOf = (task: { id: string; workspaceId: string }) =>
       toTurnPlan(
         {
           sandbox: {

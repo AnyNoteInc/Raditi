@@ -45,7 +45,6 @@ describe.skipIf(!enabled)(
       for (const workspaceId of workspaces.splice(0)) {
         const chats = await db.task.findMany({ where: { workspaceId }, select: { id: true } })
         await db.siteLease.deleteMany({ where: { siteId: { in: chats.map(({ id }) => id) } } })
-        await db.mcpCall.deleteMany({ where: { turn: { task: { workspaceId } } } })
         await db.task.deleteMany({ where: { workspaceId } })
         await db.workspace.delete({ where: { id: workspaceId } })
       }
@@ -131,12 +130,9 @@ describe.skipIf(!enabled)(
       await assignments.recordContainer({ id: assignment.id, epoch: 1, containerId: 'container1' })
       await journal.record(entry(3, 'running', { execId: 'exec1' }))
       const turn = await db.taskTurn.findFirstOrThrow({ where: { taskId: task.id } })
-      const call = await db.mcpCall.create({
-        data: { turnId: turn.id, tool: 'synthetic', idempotencyKey: randomUUID() },
-      })
       await db.siteLease.update({
         where: { siteId: scope },
-        data: { inflightMcpCallId: call.id, heldForOperator: true },
+        data: { heldForOperator: true },
       })
       await journal.record(
         entry(4, 'failed', { execId: 'exec1', reason: 'lease_lost', outcome: 'failed' }),

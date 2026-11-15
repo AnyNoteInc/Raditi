@@ -1669,15 +1669,6 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
   it.each([
     ['another operation owns it', false, null, 'SITE_BUSY'],
     ['it waits for an operator', true, null, 'SITE_HELD'],
-    // A release held for the operator (Р31): the site waits for `releases:resolve`, so does the
-    // turn — the dialog is not ended for it.
-    [
-      'a release held for the operator stands',
-      true,
-      '00000000-0000-4000-8000-00000000000a',
-      'SITE_BUSY',
-    ],
-    ['a release barrier stands', false, '00000000-0000-4000-8000-00000000000a', 'SITE_BUSY'],
     ['the lease lookup fails', undefined, null, 'SITE_BUSY'],
   ] as const)('tells the client why a site is refused: %s', async (_, held, release, code) => {
     const f = fixture()
@@ -1687,7 +1678,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       f.leases.inspect.mockResolvedValueOnce({
         siteId: labels.siteId,
         taskId: '00000000-0000-4000-8000-000000000009',
-        operation: release ? 'deploy' : 'turn',
+        operation: 'turn',
         epoch: 7,
         expiresAt: new Date(),
         serverNow: new Date(),

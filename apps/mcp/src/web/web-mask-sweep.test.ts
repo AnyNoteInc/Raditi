@@ -10,7 +10,7 @@ import { WebMaskSweep } from './web-mask-sweep.ts'
 const HOUR = 60 * 60_000
 
 /** A database with `tasks` due: each page of the listing gives the next list. */
-function fakeDb(pages: Array<Array<{ id: string; siteId: string | null }>>) {
+function fakeDb(pages: Array<Array<{ id: string }>>) {
   const queries: Prisma.Sql[] = []
   const listed = [...pages]
   const due = new Map(pages.flat().map((task) => [task.id, task]))
@@ -32,8 +32,7 @@ function fakeDb(pages: Array<Array<{ id: string; siteId: string | null }>>) {
   return { db: db as unknown as Pick<PrismaClient, '$transaction'>, tx, spy: db, queries }
 }
 
-const site = randomUUID()
-const task = () => ({ id: randomUUID(), siteId: site })
+const task = () => ({ id: randomUUID() })
 
 describe('the sweep of contact maps', () => {
   beforeEach(() => {

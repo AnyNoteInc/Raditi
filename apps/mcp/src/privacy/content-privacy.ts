@@ -4,8 +4,6 @@ import {
   badRequest,
   contactMarkerPattern,
   DomainError,
-  type PublishedContentFields,
-  type PublishedContentPatch,
   type SecretStore,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -69,7 +67,7 @@ export class ContentPrivacy {
    * text in another. Any texts of one read go together: the fields of an object, or what the
    * agent's browser shows of a page (its text, its links, its console).
    */
-  async mask<Fields extends Readonly<Record<string, string>> = PublishedContentFields>(
+  async mask<Fields extends Readonly<Record<string, string>> = Readonly<Record<string, string>>>(
     scope: { siteId: string; taskId: string },
     fields: Fields,
   ): Promise<Fields> {
@@ -131,7 +129,7 @@ export class ContentPrivacy {
    * number reads as a phone depends on what stands around it: every restored contact must be
    * one the next read hides again, by the same search and the same map, or nothing is written.
    */
-  async rehydrate<Patch extends Readonly<Record<string, string>> = PublishedContentPatch>(
+  async rehydrate<Patch extends Readonly<Record<string, string>> = Readonly<Record<string, string>>>(
     scope: { siteId: string; taskId: string },
     patch: Patch,
   ): Promise<Patch> {

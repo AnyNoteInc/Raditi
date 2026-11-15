@@ -1,11 +1,8 @@
 import {
   AGENT_TURN_CANCEL_JOB,
   AGENT_TURN_JOB,
-  CANDIDATE_EDIT_JOB,
   CHAT_NOTIFY_JOB,
   QUEUE_DRAIN_JOB,
-  CANDIDATE_REBASE_JOB,
-  CANDIDATE_REWIND_JOB,
 } from '@repo/domain'
 import { UnrecoverableError, type Job } from 'bullmq'
 import { describe, expect, it, vi } from 'vitest'
@@ -50,9 +47,9 @@ describe('TurnsProcessor', () => {
     const { processor: worker } = processor()
     const EDIT = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61'
     for (const [name, data] of [
-      [CANDIDATE_REBASE_JOB, { taskId: TASK, requestEventId: '9' }],
-      [CANDIDATE_REWIND_JOB, { taskId: TASK, requestEventId: '10' }],
-      [CANDIDATE_EDIT_JOB, { taskId: TASK, editId: EDIT }],
+      ['candidate.rebase', { taskId: TASK, requestEventId: '9' }],
+      ['candidate.rewind', { taskId: TASK, requestEventId: '10' }],
+      ['candidate.edit', { taskId: TASK, editId: EDIT }],
     ] as const)
       await expect(worker.process(job(name, data))).rejects.toBeInstanceOf(UnrecoverableError)
   })
