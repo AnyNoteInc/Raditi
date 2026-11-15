@@ -2,12 +2,7 @@ import type { Page } from '@playwright/test'
 
 import { expect, test } from '../../fixtures/signed-in.ts'
 
-import {
-  addAnsweredChat,
-  addLongDialog,
-  hideDevIndicator,
-  priceDialogClass,
-} from './site.ts'
+import { addAnsweredChat, addLongDialog, hideDevIndicator, priceDialogClass } from './site.ts'
 
 // The ways through «Чаты» (docs/plan/61-chats-first.md, 61.12; no projects since plan 83): `/undo`,
 // `/thinking`, the commands of a chat and the addresses of no chat. No core works in this run: a
