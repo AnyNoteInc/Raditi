@@ -29,7 +29,8 @@
     "./browser/stream-codec": "./src/browser/stream-codec.ts",
     "./browser/stream-messages": "./src/browser/stream-messages.ts",
     "./pages/origin": "./src/pages/origin.ts",
-    "./projects": "./src/projects/index.ts"
+    "./projects": "./src/projects/index.ts",
+    "./memory": "./src/memory/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

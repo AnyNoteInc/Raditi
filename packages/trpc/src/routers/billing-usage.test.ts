@@ -45,6 +45,7 @@ const user: User = {
   lastName: null,
   email: 'usage-test@example.ru',
   emailVerified: true,
+  agentMemory: true,
   image: null,
   createdAt: NOW,
   updatedAt: NOW,

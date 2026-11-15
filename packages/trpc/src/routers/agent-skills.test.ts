@@ -17,6 +17,7 @@ const user: User = {
   lastName: null,
   email: 'site-skills-test@example.ru',
   emailVerified: true,
+  agentMemory: true,
   image: null,
   createdAt: now,
   updatedAt: now,

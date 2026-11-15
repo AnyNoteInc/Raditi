@@ -1,5 +1,6 @@
 import {
   archiveProject,
+  memoryCounts,
   createProject,
   listProjects,
   readProject,
@@ -31,7 +32,7 @@ import { consentedProcedure, router } from '../trpc.ts'
 // «Проекты» (docs/plan/84-projects.md, §4.4; slice 84.4): the projects of the user, in their
 // personal workspace (ПР1). Only the author sees and changes a project: any other answers
 // PROJECT_NOT_FOUND, as one that does not exist. The files of the context are `projectFile.*` (slice 84.8);
-// the memory, the repository and the tasks of a project come with their own slices.
+// the memory is `projectMemory.*` (slice 84.13); the repository and the tasks come with their own slices.
 
 /** A project that exists answers by its id as PostgreSQL prints it. */
 const projectRef = z.uuid().transform((id) => id.toLowerCase())
@@ -81,6 +82,8 @@ const projectOutput = z.strictObject({
     limitBytes: z.number().int(),
     first: z.array(projectFileItem),
   }),
+  /** «Память» (ПР18): active entries and those that wait for the client. */
+  memory: z.strictObject({ active: z.number().int().min(0), proposed: z.number().int().min(0) }),
 })
 
 export const projectRouter = router({
@@ -112,7 +115,15 @@ export const projectRouter = router({
         projectId: input.projectId,
         userId: ctx.user.id,
       })
-      return { ...project, files: await projectFilesOverview(ctx.prisma, project.id) }
+      const [files, memory] = await Promise.all([
+        projectFilesOverview(ctx.prisma, project.id),
+        memoryCounts(ctx.prisma, {
+          workspaceId: _workspace,
+          userId: ctx.user.id,
+          projectId: project.id,
+        }),
+      ])
+      return { ...project, files, memory }
     }),
 
   /**

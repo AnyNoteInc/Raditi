@@ -14,6 +14,7 @@ const user: User = {
   lastName: null,
   email: 'profile-test@example.ru',
   emailVerified: true,
+  agentMemory: true,
   image: '/api/profile/avatar/example',
   createdAt: now,
   updatedAt: now,

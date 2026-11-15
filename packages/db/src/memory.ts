@@ -461,3 +461,320 @@ export async function closeStaleMemoryReservations(
       closed.push({ ...row, kind: row.kind as MemoryChangeKind })
   return closed
 }
+
+// ── The client's side (slice 84.13): the windows «Память» of a project and of the account. ─────
+// Only the owner of a memory sees and changes it; an entry of someone else, of a project in the
+// trash or of another project answers MEMORY_NOT_FOUND, as one that is not there. Every change
+// grows the version, so that the end of a pass of the agent that read it before refuses its own.
+
+/** An entry as the window «Память» shows it. */
+export interface MemoryRow {
+  id: string
+  kind: MemoryKind
+  text: string
+  status: MemoryStatus
+  author: MemoryAuthor
+  version: number
+  /** A proposal of the agent over an active entry: its new text, or to forget it. */
+  pendingAction: MemoryPendingAction | null
+  pendingText: string | null
+  /** The chat it came from, while that chat is shown. */
+  source: { taskId: string; title: string | null } | null
+  confirmed: boolean
+  createdAt: Date
+  updatedAt: Date
+}
+
+const memoryRowSelect = {
+  id: true,
+  kind: true,
+  text: true,
+  status: true,
+  author: true,
+  version: true,
+  pendingAction: true,
+  pendingText: true,
+  confirmedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  sourceTask: { select: { id: true, title: true, deletedAt: true } },
+} as const
+
+type MemoryRowRecord = Prisma.MemoryEntryGetPayload<{ select: typeof memoryRowSelect }>
+
+const memoryRowOf = (row: MemoryRowRecord): MemoryRow => ({
+  id: row.id,
+  kind: row.kind as MemoryKind,
+  text: row.text,
+  status: row.status as MemoryStatus,
+  author: row.author as MemoryAuthor,
+  version: row.version,
+  pendingAction: row.pendingAction as MemoryPendingAction | null,
+  pendingText: row.pendingText,
+  source:
+    row.sourceTask && row.sourceTask.deletedAt === null
+      ? { taskId: row.sourceTask.id, title: row.sourceTask.title }
+      : null,
+  confirmed: row.confirmedAt !== null,
+  createdAt: row.createdAt,
+  updatedAt: row.updatedAt,
+})
+
+/** Every entry of one memory, newest first: at most 40 of them. */
+export async function listMemory(
+  db: Pick<PrismaClient, 'memoryEntry'>,
+  scope: MemoryScope,
+): Promise<MemoryRow[]> {
+  const rows = await db.memoryEntry.findMany({
+    where: scopeWhere(scope),
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: memoryLimits.entries * 2,
+    select: memoryRowSelect,
+  })
+  return rows.map(memoryRowOf)
+}
+
+/** How many entries a memory has: active ones and those waiting for the client («N ждут…»). */
+export async function memoryCounts(
+  db: Pick<PrismaClient, 'memoryEntry'>,
+  scope: MemoryScope,
+): Promise<{ active: number; proposed: number }> {
+  const [active, proposed] = await Promise.all([
+    db.memoryEntry.count({ where: { ...scopeWhere(scope), status: 'active' } }),
+    db.memoryEntry.count({
+      where: {
+        ...scopeWhere(scope),
+        OR: [{ status: 'proposed' }, { pendingAction: { not: null } }],
+      },
+    }),
+  ])
+  return { active, proposed }
+}
+
+/** «Добавить запись»: the client's own note, active at once, counted against the 40. */
+export async function addMemoryEntry(
+  db: Db,
+  input: { scope: MemoryScope; kind: MemoryKind; text: string },
+): Promise<MemoryRow> {
+  const text = memoryTextOf(input.text)
+  return db.$transaction(async (tx) => {
+    await lockMemory(tx, input.scope)
+    if ((await tx.memoryEntry.count({ where: scopeWhere(input.scope) })) >= memoryLimits.entries)
+      throw memoryFull()
+    const now = new Date()
+    const row = await tx.memoryEntry.create({
+      data: {
+        id: uuidv7(),
+        ...scopeWhere(input.scope),
+        kind: input.kind,
+        text,
+        status: 'active',
+        author: 'client',
+        confirmedAt: now,
+      },
+      select: memoryRowSelect,
+    })
+    return memoryRowOf(row)
+  })
+}
+
+/**
+ * The entry of the user, locked for its change: of the account, or of a project of theirs that is
+ * not in the trash. Anything else — MEMORY_NOT_FOUND.
+ */
+async function ownEntry(tx: Tx, userId: string, entryId: string) {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT e.id FROM memory_entries e
+    LEFT JOIN projects p ON p.id = e.project_id
+    WHERE e.id = ${entryId}::uuid AND e.user_id = ${userId}::uuid
+      AND (e.project_id IS NULL OR (p.deleted_at IS NULL AND p.created_by_id = ${userId}::uuid))
+    FOR UPDATE OF e`
+  if (rows.length === 0) throw memoryEntryNotFound()
+  return tx.memoryEntry.findUniqueOrThrow({
+    where: { id: entryId },
+    select: {
+      id: true,
+      workspaceId: true,
+      projectId: true,
+      version: true,
+      status: true,
+      text: true,
+      pendingAction: true,
+      pendingText: true,
+    },
+  })
+}
+
+/**
+ * «Изменить»: the client's text — and its kind — at the version they saw. The entry becomes
+ * active and confirmed: from now on the agent changes it only by a proposal; a proposal it had
+ * over the entry is dropped.
+ */
+export async function editMemoryEntry(
+  db: Db,
+  input: {
+    userId: string
+    entryId: string
+    text: string
+    kind?: MemoryKind
+    expectedVersion: number
+  },
+): Promise<MemoryRow> {
+  const text = memoryTextOf(input.text)
+  return db.$transaction(async (tx) => {
+    const entry = await ownEntry(tx, input.userId, input.entryId)
+    if (entry.version !== input.expectedVersion) throw memoryVersionChanged()
+    const row = await tx.memoryEntry.update({
+      where: { id: entry.id },
+      data: {
+        text,
+        ...(input.kind === undefined ? {} : { kind: input.kind }),
+        status: 'active',
+        confirmedAt: new Date(),
+        pendingAction: null,
+        pendingText: null,
+        version: { increment: 1 },
+      },
+      select: memoryRowSelect,
+    })
+    return memoryRowOf(row)
+  })
+}
+
+/** What «Сохранить» or «Не надо» did. */
+export type MemoryDecision = 'saved' | 'updated' | 'forgotten' | 'dropped'
+
+/**
+ * «Сохранить» (ПР18): a note the agent proposed becomes active and confirmed; its new text of an
+ * active entry replaces the old one; its «Предложено забыть» deletes the entry. At the version the
+ * client saw: what they did not read is never saved. An entry with nothing to decide — refused.
+ */
+export async function confirmMemoryEntry(
+  db: Db,
+  input: { userId: string; entryId: string; expectedVersion: number },
+): Promise<{ decision: MemoryDecision; entry: MemoryRow | null }> {
+  return db.$transaction(async (tx) => {
+    const entry = await ownEntry(tx, input.userId, input.entryId)
+    if (entry.version !== input.expectedVersion) throw memoryVersionChanged()
+    if (entry.pendingAction === 'forget') {
+      await tx.memoryEntry.delete({ where: { id: entry.id } })
+      await auditMemory(tx, input.userId, entry, 'memory.entry.forget')
+      return { decision: 'forgotten', entry: null }
+    }
+    if (entry.status !== 'proposed' && entry.pendingAction !== 'update')
+      throw memoryVersionChanged()
+    const row = await tx.memoryEntry.update({
+      where: { id: entry.id },
+      data: {
+        ...(entry.pendingAction === 'update' && entry.pendingText !== null
+          ? { text: entry.pendingText }
+          : {}),
+        status: 'active',
+        confirmedAt: new Date(),
+        pendingAction: null,
+        pendingText: null,
+        version: { increment: 1 },
+      },
+      select: memoryRowSelect,
+    })
+    return {
+      decision: entry.pendingAction === 'update' ? 'updated' : 'saved',
+      entry: memoryRowOf(row),
+    }
+  })
+}
+
+/**
+ * «Не надо» (ПР18): a note the agent proposed is deleted; its proposal over an active entry is
+ * dropped and the entry keeps its text.
+ */
+export async function rejectMemoryEntry(
+  db: Db,
+  input: { userId: string; entryId: string; expectedVersion: number },
+): Promise<{ decision: 'dropped'; entry: MemoryRow | null }> {
+  return db.$transaction(async (tx) => {
+    const entry = await ownEntry(tx, input.userId, input.entryId)
+    if (entry.version !== input.expectedVersion) throw memoryVersionChanged()
+    if (entry.status === 'proposed') {
+      await tx.memoryEntry.delete({ where: { id: entry.id } })
+      return { decision: 'dropped', entry: null }
+    }
+    if (entry.pendingAction === null) throw memoryVersionChanged()
+    const row = await tx.memoryEntry.update({
+      where: { id: entry.id },
+      data: { pendingAction: null, pendingText: null, version: { increment: 1 } },
+      select: memoryRowSelect,
+    })
+    return { decision: 'dropped', entry: memoryRowOf(row) }
+  })
+}
+
+/** «Удалить» (ПР28): forever; the audit keeps that it was, never its text. */
+export async function removeMemoryEntry(
+  db: Db,
+  input: { userId: string; entryId: string },
+): Promise<void> {
+  await db.$transaction(async (tx) => {
+    const entry = await ownEntry(tx, input.userId, input.entryId)
+    await tx.memoryEntry.delete({ where: { id: entry.id } })
+    await auditMemory(tx, input.userId, entry, 'memory.entry.remove')
+  })
+}
+
+/** «Очистить память» (ПР28): every entry of one memory, forever. */
+export async function clearMemory(
+  db: Db,
+  input: { scope: MemoryScope },
+): Promise<{ removed: number }> {
+  return db.$transaction(async (tx) => {
+    await lockMemory(tx, input.scope)
+    const { count } = await tx.memoryEntry.deleteMany({ where: scopeWhere(input.scope) })
+    await tx.auditLog.create({
+      data: {
+        actorType: 'user',
+        actorId: input.scope.userId,
+        workspaceId: input.scope.workspaceId,
+        action: 'memory.clear',
+        targetType: input.scope.projectId === null ? 'account_memory' : 'project',
+        targetId: input.scope.projectId ?? input.scope.userId,
+        meta: { removed: count },
+      },
+    })
+    return { removed: count }
+  })
+}
+
+function auditMemory(
+  tx: Tx,
+  userId: string,
+  entry: { id: string; workspaceId: string; projectId: string | null },
+  action: string,
+) {
+  return tx.auditLog.create({
+    data: {
+      actorType: 'user',
+      actorId: userId,
+      workspaceId: entry.workspaceId,
+      action,
+      targetType: 'memory_entry',
+      targetId: entry.id,
+      meta: { projectId: entry.projectId },
+    },
+  })
+}
+
+/** One entry of the user, for a row of the feed that offers «Сохранить»; null — gone or not theirs. */
+export async function readMemoryEntry(
+  db: Pick<PrismaClient, 'memoryEntry'>,
+  input: { userId: string; entryId: string },
+): Promise<MemoryRow | null> {
+  const row = await db.memoryEntry.findFirst({
+    where: {
+      id: input.entryId,
+      userId: input.userId,
+      OR: [{ projectId: null }, { project: { deletedAt: null, createdById: input.userId } }],
+    },
+    select: memoryRowSelect,
+  })
+  return row ? memoryRowOf(row) : null
+}
