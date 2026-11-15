@@ -7,6 +7,7 @@ import {
   feedInputText,
   feedTooLongText,
   isDomainError,
+  projectRefusalTexts,
   taskRefusalDetailsSchema,
   type AttachmentRefusal,
   type ChatCommandRefusal,
@@ -65,6 +66,8 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   CONFLICT: UNAVAILABLE_MESSAGE,
   NOT_IMPLEMENTED: 'Эта возможность ещё в разработке',
   [CONSENT_REQUIRED]: CONSENT_REQUIRED_MESSAGE,
+  // Projects and the project of a chat (docs/plan/84-projects.md, §4.4): the domain's texts.
+  ...projectRefusalTexts,
   // Tariffs and their payment: what the customer can do next. Why a bank declined a payment
   // is told by the order itself (paymentFailureText of @repo/billing), not by these.
   BILLING_PAYMENTS_NOT_CONFIGURED: 'Оплата сейчас недоступна. Попробуйте ещё раз немного позже',

@@ -7,6 +7,7 @@ import { consentRouter } from './routers/consent.ts'
 import { documentRouter } from './routers/document.ts'
 import { healthRouter } from './routers/health.ts'
 import { pagesRouter } from './routers/pages.ts'
+import { projectRouter } from './routers/project.ts'
 import { taskRouter } from './routers/task.ts'
 import { userRouter } from './routers/user.ts'
 import { workspaceEnvRouter } from './routers/workspace-env.ts'
@@ -29,6 +30,8 @@ export const appRouter = router({
   document: documentRouter,
   // «Страницы»: the published pages of the user's workspaces (docs/plan/69-pages.md).
   pages: pagesRouter,
+  // «Проекты»: chats of one matter with their instructions (docs/plan/84-projects.md).
+  project: projectRouter,
   // «Настройки → Переменные»: the variables every chat of a workspace gets (plan 83, БП4).
   workspaceEnv: workspaceEnvRouter,
   // «Настройки → Навыки агента»: the MCP servers of the workspace's agent (plan 81; plan 83, БП11).

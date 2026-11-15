@@ -19,6 +19,7 @@ function dialog(id: string, status: DialogListItem['status'], createdAt: string)
     pinned: false,
     archived: false,
     telegram: false,
+    project: null,
   }
 }
 

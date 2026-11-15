@@ -9,7 +9,9 @@ import {
   enqueueAgentTurn,
   enqueueTurnCancel,
   insertFeedEvent,
+  projectForChat,
   redoTurn,
+  touchProjectActivity,
   undoTurn,
   type Prisma,
   type PrismaClient,
@@ -94,6 +96,11 @@ export interface CreateDialogInput {
   attachments?: readonly string[]
   /** How hard the model thinks (owner's request of 26.10.2026); absent — `high`, as before. */
   effort?: ReasoningEffort
+  /**
+   * The project the chat starts in (docs/plan/84-projects.md, ПР2, ПР30), lowercase; null or
+   * absent — a chat without a project.
+   */
+  projectId?: string | null
   now: Date
 }
 
@@ -134,6 +141,10 @@ async function ensureWorkspaceKey(chat: ChatContext, workspaceId: string): Promi
  * lease (К14). Rule 1 stands: the personal workspace has the data class of this environment, so
  * outside production it is synthetic (`findPersonalWorkspace`). The Transit key of the workspace
  * is made before the transaction (Б32): a failure of Vault writes nothing — no task, no reserve.
+ *
+ * A chat in a project (docs/plan/84-projects.md, ПР2, ПР30) goes to the workspace of the project —
+ * a live one of the user, out of «Архив» (PROJECT_NOT_FOUND, PROJECT_ARCHIVED, checked again under
+ * the transaction) — and the project rises in «Недавние».
  */
 export async function createDialog(
   db: PrismaClient,
@@ -157,7 +168,11 @@ export async function createDialog(
   const earlier = await sameDialog(db, { taskId, userId })
   if (earlier !== null) return earlier
 
-  const { id: workspaceId } = await personalWorkspaceOf(db, { userId, appEnv: chat.appEnv })
+  const projectId = input.projectId?.toLowerCase() ?? null
+  const workspaceId =
+    projectId === null
+      ? (await personalWorkspaceOf(db, { userId, appEnv: chat.appEnv })).id
+      : (await projectForChat(db, projectId, userId)).workspaceId
   const browser = browserConfigured({ chat })
   await ensureWorkspaceKey(chat, workspaceId)
   const modelClass = modelClassOfEffort(input.effort ?? 'high')
@@ -167,6 +182,8 @@ export async function createDialog(
     // refused before anything is written, as «Попробовать ещё» refuses it.
     if (!(await modelClassPriced(tx, { modelClass, backends: llmBackendIds, now })))
       throw taskNotAccepted('class_unavailable')
+    // Archived or put into the trash meanwhile: refused in the client's words, not by the trigger.
+    if (projectId !== null) await projectForChat(tx, projectId, userId)
     // ON CONFLICT DO NOTHING: a repeat that raced the first delivery waits for it here and
     // writes nothing; an error would abort the transaction instead.
     const inserted = await tx.task.createMany({
@@ -180,6 +197,7 @@ export async function createDialog(
           billable: true,
           title: dialogTitle(text),
           needsBrowser: browser,
+          projectId,
         },
       ],
       skipDuplicates: true,
@@ -207,6 +225,7 @@ export async function createDialog(
       row: { type: 'feed.request', payload },
     })
     await enqueueAgentTurn(tx, { taskId, attempt: 1, requestEventId: String(requestEventId) })
+    if (projectId !== null) await touchProjectActivity(tx, projectId, now)
     return { taskId, created: true }
   }, WRITE)
 }

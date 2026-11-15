@@ -364,7 +364,8 @@ export const projectBusyStatuses: readonly TaskStatus[] = ['queued', 'preparing'
  * which the next message queues it). TASK_PROJECT_BUSY while a pass of the chat is queued or runs:
  * `mcp` reads the scope of a turn from the database on every call. The project must be a live one
  * of the user, out of «Архив», in the chat's own workspace — a project of another workspace is
- * PROJECT_NOT_FOUND here, and the trigger `tasks_project_workspace` refuses it below.
+ * PROJECT_NOT_FOUND here, and the trigger `tasks_project_workspace` refuses it below. The order of
+ * the chat in the list does not change.
  */
 export async function moveChatToProject(
   tx: Tx,
@@ -386,7 +387,9 @@ export async function moveChatToProject(
     const project = await projectForChat(tx, projectId, input.userId)
     if (project.workspaceId !== task.workspaceId) throw projectNotFound()
   }
-  await tx.task.update({ where: { id: task.id }, data: { projectId } })
+  // SQL, not the model: a move leaves `updated_at` — the order of the list — as the chat's own work
+  // left it.
+  await tx.$executeRaw`UPDATE tasks SET project_id = ${projectId}::uuid WHERE id = ${task.id}::uuid`
   if (projectId !== null) await touchProjectActivity(tx, projectId, input.now)
   return { projectId, moved: true }
 }
