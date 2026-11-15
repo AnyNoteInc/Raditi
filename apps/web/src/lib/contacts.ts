@@ -6,7 +6,7 @@
 export const SITE_PHONE = { tel: '+79190483683', text: '+7 919 048-36-83' } as const
 
 /** The mail of the support (the owner, 08.11.2026), as «Сведения об операторе» give it. */
-export const SITE_EMAIL = 'elena.67reg@gmail.com'
+export const SITE_EMAIL = 'luferovaea@yandex.ru'
 
 /**
  * Who provides the service, in the column «Контакты» of the footer, as AnyNote names its seller.
