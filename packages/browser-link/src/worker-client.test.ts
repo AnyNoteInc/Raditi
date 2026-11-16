@@ -166,6 +166,19 @@ describe('the HTTP client of the browser worker', () => {
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual(click)
   })
 
+  it('sends a read-only action of a scheduled run and passes its refusal (plan 82, Зп28)', async () => {
+    const { client, calls } = workerWith(() => json({ ok: false, code: 'BROWSER_READ_ONLY' }))
+    const error = await rejection(client.action(sessionId, { ...click, readOnly: true }))
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ ...click, readOnly: true })
+    expect(error.code).toBe('BROWSER_READ_ONLY')
+    expect(error.httpStatus).toBe(403)
+    expect(error.details).toEqual({ operation: 'action', failure: 'refused' })
+    // Anything but a flag never leaves the client.
+    const bad = { ...click, readOnly: 'yes' } as unknown as typeof click
+    expect((await rejection(client.action(sessionId, bad))).code).toBe('BAD_REQUEST')
+    expect(calls).toHaveLength(1)
+  })
+
   it('passes a snapshot for the client as its number, and refuses one that carries more', async () => {
     const shot = {
       taskId: click.taskId,

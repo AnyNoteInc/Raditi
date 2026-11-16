@@ -19,6 +19,7 @@ export default function robots(): MetadataRoute.Robots {
         '/api/',
         '/app',
         '/chats',
+        '/scheduled',
         '/projects',
         '/profile',
         '/settings',

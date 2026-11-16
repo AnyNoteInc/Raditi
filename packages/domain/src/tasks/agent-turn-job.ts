@@ -93,6 +93,12 @@ export const chatNotifyJobSchema = z.strictObject({
   /** The attempt and the turn of the pass that ended: one notification per ending. */
   attempt: z.number().int().min(1),
   turnNo: z.number().int().min(0),
+  /**
+   * `task_events.id` of the `feed.request` the pass answered: whether it went without its client
+   * is decided by it (docs/plan/82-scheduled-tasks.md, Зп27). Absent — an ending the sweep wrote,
+   * or a job written before the field: the whole feed is read.
+   */
+  requestEventId: feedEventIdSchema.optional(),
 })
 export type ChatNotifyJob = z.infer<typeof chatNotifyJobSchema>
 

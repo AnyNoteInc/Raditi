@@ -76,9 +76,11 @@ for (const [name, width, height] of viewports) {
       await expectChatsCurrent(page)
       const links = page.getByRole('navigation', { name: 'Основная навигация' }).getByRole('link')
       await expect(links.nth(0)).toHaveAccessibleName('Чаты')
-      // «Страницы» stands between «Чаты» and «Проекты» (docs/plan/69-pages.md, Ст30).
-      await expect(links.nth(1)).toHaveAccessibleName('Страницы')
-      await expect(links.nth(2)).toHaveAccessibleName('Проекты')
+      // The scheduled tasks after «Чаты» (docs/plan/82-scheduled-tasks.md, Зп1), then «Страницы»
+      // (Зп60).
+      await expect(links).toHaveCount(3)
+      await expect(links.nth(1)).toHaveAccessibleName('Запланированные задачи')
+      await expect(links.nth(2)).toHaveAccessibleName('Страницы')
     })
 
     if (width >= 900) {
@@ -128,12 +130,15 @@ test('«Новый чат» stays within reach under a long list on a phone', as
   await page.goto('/chats')
   await expect(chats(page).getByText(EMPTY_LIST)).toBeVisible()
 
-  // The run has no chats: the list is made long here, inside its own body.
-  await chats(page).evaluate((list) => {
-    const filler = document.createElement('div')
-    filler.style.height = '3000px'
-    list.lastElementChild?.append(filler)
-  })
+  // The run has no chats: the list is made long here, inside its own body — after the words of
+  // the empty list. Not at the end of the column: «Архив» stands there, after the action.
+  await chats(page)
+    .getByText(EMPTY_LIST)
+    .evaluate((words) => {
+      const filler = document.createElement('div')
+      filler.style.height = '3000px'
+      words.after(filler)
+    })
   const scrollable = await page.evaluate(
     () => document.documentElement.scrollHeight - window.innerHeight,
   )

@@ -69,8 +69,12 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
     if (!session) throw new Error('not held')
     return { row, state, session, browser: browsers.last }
   }
-  const act = (row: { id: string; taskId: string }, action: BrowserAction) =>
-    manager.act(row.id, { taskId: row.taskId, assignmentId: randomUUID(), action })
+  /** One action of the agent; `readOnly` — of a pass of a scheduled run without its client. */
+  const act = (
+    row: { id: string; taskId: string },
+    action: BrowserAction,
+    request: { readOnly?: boolean } = {},
+  ) => manager.act(row.id, { taskId: row.taskId, assignmentId: randomUUID(), action, ...request })
   return {
     store,
     runtime,

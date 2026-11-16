@@ -247,3 +247,66 @@ describe('the letter of a chat that waits (docs/plan/75, ВВ9)', () => {
     }
   })
 })
+
+describe('the letter of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп38, Зп39)', () => {
+  const task = 'https://raditi.ru/scheduled/0199a3f2-0000-7000-8000-000000000002'
+
+  it('says a pass of a run is of a scheduled task, and keeps a chat of the client as it was', () => {
+    const plain = renderTemplate('chat-waiting', { ...samples['chat-waiting'], kind: 'question' })
+    expect(plain.subject).toBe('Агент задал вопрос в вашем чате')
+    const question = renderTemplate('chat-waiting', {
+      ...samples['chat-waiting'],
+      kind: 'question',
+      scheduled: true,
+    })
+    expect(question.subject).toBe('Запланированной задаче нужен ваш ответ')
+    expect(question.html).toContain('Открыть чат')
+    const failed = renderTemplate('chat-waiting', {
+      ...samples['chat-waiting'],
+      kind: 'failed',
+      scheduled: true,
+    })
+    expect(failed.subject).toBe('Запланированная задача не выполнена')
+    expect(failed.text).toContain(samples['chat-waiting'].url)
+  })
+
+  it('links a notice of the task itself to its page, in our own words alone', () => {
+    const subjects = {
+      not_started: 'Запланированная задача не запустилась',
+      paused: 'Запланированная задача приостановлена',
+      missed: 'Запланированная задача пропустила запуск',
+    } as const
+    for (const [kind, subject] of Object.entries(subjects) as [keyof typeof subjects, string][]) {
+      const out = renderTemplate('chat-waiting', {
+        kind,
+        url: task,
+        settingsUrl: 'https://raditi.ru/settings',
+      })
+      expect(out.subject).toBe(subject)
+      expect(out.text).toContain(`Открыть задачу: ${task}`)
+      expect(out.html).toContain('Открыть задачу')
+      expect(out.html).not.toContain('Открыть чат')
+    }
+  })
+
+  it('takes no name of a task: the letter has no field for the words of the client (ВВ9)', () => {
+    expect(() =>
+      renderTemplate('chat-waiting', {
+        kind: 'paused',
+        url: task,
+        settingsUrl: 'https://raditi.ru/settings',
+        // @ts-expect-error — a name is not a field of the letter
+        name: 'Проверка сайта',
+      }),
+    ).not.toThrow()
+    const out = renderTemplate('chat-waiting', {
+      kind: 'paused',
+      url: task,
+      settingsUrl: 'https://raditi.ru/settings',
+      // @ts-expect-error — a name is not a field of the letter
+      name: 'Проверка сайта',
+    })
+    expect(out.text).not.toContain('Проверка сайта')
+    expect(out.html).not.toContain('Проверка сайта')
+  })
+})

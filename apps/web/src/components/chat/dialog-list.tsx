@@ -27,6 +27,7 @@ import {
   RenameField,
   usePinArchive,
 } from './dialog-actions'
+import { ScheduleSign } from './schedule-mark'
 import { StatusMark } from './status-mark'
 
 export { dialogListKey }
@@ -146,6 +147,8 @@ function DialogLink({ item, current, now }: { item: DialogListItem; current: boo
       }}
     >
       <Box component="span" sx={{ display: 'flex', alignItems: 'baseline', gap: 1, minWidth: 0 }}>
+        {/* A run of a scheduled task: a stopwatch before its name (docs/plan/82, Зп43). */}
+        {item.schedule ? <ScheduleSign schedule={item.schedule} /> : null}
         <Typography
           component="span"
           sx={{

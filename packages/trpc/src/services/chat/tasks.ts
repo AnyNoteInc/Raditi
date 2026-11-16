@@ -9,6 +9,9 @@ import {
   enqueueAgentTurn,
   enqueueTurnCancel,
   insertFeedEvent,
+  lockWaitingRun,
+  recordRunOutcomeInTx,
+  scheduledRunClosed,
   redoTurn,
   undoTurn,
   type Prisma,
@@ -17,7 +20,10 @@ import {
 import {
   conflict,
   feedEndedSiteOf,
+  feedLimits,
+  hasVisibleText,
   llmBackendIds,
+  looksLikeSecret,
   maxTaskAttempts,
   modelClassOfEffort,
   taskHoldExpiry,
@@ -55,6 +61,9 @@ import {
   taskNotAccepted,
   taskNothingToContinue,
   taskNothingToResume,
+  taskTextEmpty,
+  taskTextHasSecret,
+  taskTextTooLong,
   workspaceKeyUnavailable,
 } from './refusals.ts'
 import { dialogTitle, requestPayload, requestText } from './request-text.ts'
@@ -97,6 +106,19 @@ export interface CreateDialogInput {
   attachments?: readonly string[]
   /** How hard the model thinks (owner's request of 26.10.2026); absent — `high`, as before. */
   effort?: ReasoningEffort
+  /**
+   * The name of the chat, set by the client (`title_source = 'client'`): the agent never renames
+   * it. Absent — the first line of the words, which the agent may rename on its first pass. A run
+   * of a scheduled task names its chat by the task (docs/plan/82-scheduled-tasks.md, Зп17).
+   */
+  title?: string
+  /**
+   * The run of a scheduled task this chat is of (docs/plan/82-scheduled-tasks.md, Зп20, Зп27):
+   * the transaction that makes the chat takes the run's task first and writes the run `started`
+   * with it, so a chat of a run is never seen without its run — every guard of a pass without its
+   * client finds it — nor made after the run was closed (`SCHEDULE_RUN_CLOSED`, nothing written).
+   */
+  scheduledRunId?: string
   now: Date
 }
 
@@ -146,6 +168,7 @@ export async function createDialog(
   const { userId, now } = input
   const taskId = input.taskId.toLowerCase()
   const text = requestText(input.text)
+  const title = input.title === undefined ? null : clientTitle(input.title)
   const attachments = input.attachments ?? []
   const payload = requestPayload({
     v: 1,
@@ -166,6 +189,9 @@ export async function createDialog(
   const modelClass = modelClassOfEffort(input.effort ?? 'high')
 
   return db.$transaction(async (tx) => {
+    // The task of the run first, as the tick takes it; a run closed meanwhile gets no chat.
+    if (input.scheduledRunId !== undefined && !(await lockWaitingRun(tx, input.scheduledRunId)))
+      throw scheduledRunClosed()
     // The pass would fail `unavailable` without a profile of the chosen class or its price:
     // refused before anything is written, as «Попробовать ещё» refuses it.
     if (!(await modelClassPriced(tx, { modelClass, backends: llmBackendIds, now })))
@@ -181,7 +207,9 @@ export async function createDialog(
           status: 'queued',
           modelClass,
           billable: true,
-          title: dialogTitle(text),
+          ...(title === null
+            ? { title: dialogTitle(text) }
+            : { title, titleSource: 'client' as const }),
           needsBrowser: browser,
         },
       ],
@@ -191,6 +219,15 @@ export async function createDialog(
       const raced = await sameDialog(tx, { taskId, userId })
       if (raced === null) throw taskNotFound()
       return raced
+    }
+    if (input.scheduledRunId !== undefined) {
+      const bound = await recordRunOutcomeInTx(
+        tx,
+        input.scheduledRunId,
+        { status: 'started', taskId },
+        now,
+      )
+      if (!bound.recorded) throw scheduledRunClosed()
     }
     await placeCreditHold(tx, {
       workspaceId,
@@ -212,6 +249,18 @@ export async function createDialog(
     await enqueueAgentTurn(tx, { taskId, attempt: 1, requestEventId: String(requestEventId) })
     return { taskId, created: true }
   }, WRITE)
+}
+
+/**
+ * The name a caller gives a new chat, by the rules of a rename (`dialogName` of `task.rename`): one
+ * line, spaces collapsed, at most the length of a title, refused in the client's words.
+ */
+function clientTitle(name: string): string {
+  const line = name.replace(/\s+/gu, ' ').trim()
+  if (!hasVisibleText(line)) throw taskTextEmpty()
+  if (line.length > feedLimits.title) throw taskTextTooLong()
+  if (looksLikeSecret(line)) throw taskTextHasSecret()
+  return line
 }
 
 /**

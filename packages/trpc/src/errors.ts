@@ -7,6 +7,16 @@ import {
   feedInputText,
   feedTooLongText,
   isDomainError,
+  scheduleForbidden,
+  scheduledRunReasons,
+  scheduledRunReasonText,
+  scheduleInPast,
+  scheduleLimitReached,
+  scheduleChangeLimitReached,
+  scheduleNotFound,
+  scheduleRunBusy,
+  scheduleTemplatePlaceholder,
+  scheduleTooOften,
   taskRefusalDetailsSchema,
   type AttachmentRefusal,
   type ChatCommandRefusal,
@@ -168,6 +178,16 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   PAGE_FORBIDDEN: 'Менять страницы может владелец или администратор рабочего пространства',
   PAGE_VERSION_CHANGED:
     'У этой страницы уже появилась новая версия. Посмотрите её и опубликуйте ещё раз, если нужно',
+  // «Запланированные задачи» (docs/plan/82-scheduled-tasks.md): the domain words them for the client already.
+  SCHEDULE_NOT_FOUND: scheduleNotFound().message,
+  SCHEDULE_FORBIDDEN: scheduleForbidden().message,
+  SCHEDULE_TOO_OFTEN: scheduleTooOften().message,
+  SCHEDULE_IN_PAST: scheduleInPast().message,
+  SCHEDULE_TEMPLATE_PLACEHOLDER: scheduleTemplatePlaceholder().message,
+  SCHEDULE_RUN_BUSY: scheduleRunBusy().message,
+  SCHEDULE_LIMIT: scheduleLimitReached().message,
+  SCHEDULE_CHANGE_LIMIT: scheduleChangeLimitReached().message,
+  SCHEDULE_RUN_REFUSED: 'Задача не запустилась. Попробуйте ещё раз немного позже',
   // The Transit key of the workspace was not made before the task (docs/plan/57, Б32).
   WORKSPACE_KEY_UNAVAILABLE:
     'Не удалось начать задание из-за технического сбоя. Попробуйте ещё раз немного позже',
@@ -352,6 +372,15 @@ const detail = (details: unknown, field: string): string | null => {
   return typeof value === 'string' ? value : null
 }
 
+/** `details.limit` of a refusal, when it is a whole number of at least one. */
+const limitOf = (details: unknown): number | null => {
+  const limit =
+    typeof details === 'object' && details !== null
+      ? (details as Record<string, unknown>).limit
+      : undefined
+  return typeof limit === 'number' && Number.isSafeInteger(limit) && limit >= 1 ? limit : null
+}
+
 /** Why a check of an MCP server failed (plan 81), in words that say what to do. */
 const SKILL_CHECK_TEXT: Readonly<Record<string, string>> = {
   unauthorized: 'Сервер не принял ключ. Проверьте имя заголовка и ключ и попробуйте снова',
@@ -366,6 +395,26 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
   AGENT_SKILL_CHECK_FAILED: (details) =>
     SKILL_CHECK_TEXT[detail(details, 'reason') ?? ''] ??
     MESSAGE_BY_DOMAIN_CODE.AGENT_SKILL_CHECK_FAILED!,
+  // The scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп16, Зп24, Зп31): the number of the
+  // limit, and why «Запустить сейчас» did not start, in the words of the list of runs.
+  SCHEDULE_LIMIT: (details) => {
+    const limit = limitOf(details)
+    return limit === null
+      ? MESSAGE_BY_DOMAIN_CODE.SCHEDULE_LIMIT!
+      : scheduleLimitReached(limit).message
+  },
+  SCHEDULE_CHANGE_LIMIT: (details) => {
+    const limit = limitOf(details)
+    return limit === null
+      ? MESSAGE_BY_DOMAIN_CODE.SCHEDULE_CHANGE_LIMIT!
+      : scheduleChangeLimitReached(limit).message
+  },
+  SCHEDULE_RUN_REFUSED: (details) => {
+    const reason = reasonOf(details)
+    return reason !== null && (scheduledRunReasons as readonly string[]).includes(reason)
+      ? `Задача не запустилась: ${scheduledRunReasonText[reason as keyof typeof scheduledRunReasonText]}`
+      : MESSAGE_BY_DOMAIN_CODE.SCHEDULE_RUN_REFUSED!
+  },
   // A publication of the client (docs/plan/69-pages.md, Ст25, Ст32): why, in words that say
   // what to do — never the content itself.
   PAGE_CONTENT_REFUSED: (details) =>

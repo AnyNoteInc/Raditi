@@ -70,8 +70,9 @@ function FoundRow({ item, onOpen }: { item: DialogListItem; onOpen: () => void }
           },
         }}
       >
+        {/* A run of a scheduled task shows its stopwatch (docs/plan/82, Зп43). */}
         <Box component="span" sx={{ display: 'flex', color: 'text.secondary' }}>
-          <AppIcon name="chat" size={16} />
+          <AppIcon name={item.schedule ? 'timer' : 'chat'} size={16} />
         </Box>
         <Box
           component="span"

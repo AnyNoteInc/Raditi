@@ -24,6 +24,8 @@ import {
 } from './pass-settlement.ts'
 import { QueueDrain } from './queue-drain.ts'
 import { ChatNotify } from './chat-notify.ts'
+import { NotificationDelivery } from './notification-delivery.ts'
+import { ScheduleNotify } from '../schedules/schedule-notify.ts'
 
 // The end of a pass of a chat on PostgreSQL with the credits of @repo/billing: the move, its feed
 // rows and the money in one transaction (no chat has a site, docs/plan/83-remove-projects.md). Only on a disposable database
@@ -1228,19 +1230,33 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     })
     const pushes: { endpoint: string; payload: string }[] = []
     const sender = (answer: 'sent' | 'gone' = 'sent') => ({
+      publicKey: 'K'.repeat(87),
       send: vi.fn(async (target: { endpoint: string }, payload: string) => {
         pushes.push({ endpoint: target.endpoint, payload })
         return answer
       }),
     })
-    const notify = (push: ReturnType<typeof sender> | null, now = NOW) =>
-      new ChatNotify({
+    const notify = (push: ReturnType<typeof sender> | null, now = NOW) => {
+      const delivery = new NotificationDelivery({
         db,
         appUrl: 'https://raditi.example',
         push,
         logger: { log: vi.fn(), warn: vi.fn() },
         now: () => now,
       })
+      return new ChatNotify({
+        db,
+        delivery,
+        schedules: new ScheduleNotify({
+          db,
+          delivery,
+          logger: { log: vi.fn(), warn: vi.fn() },
+          now: () => now,
+        }),
+        logger: { log: vi.fn(), warn: vi.fn() },
+        now: () => now,
+      })
+    }
 
     it('is due 45 seconds after the ending, then tells the author by a letter and a push with no words', async () => {
       const task = await dialog()
@@ -1264,11 +1280,27 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
       expect(await notify(push).run(job)).toBe('sent')
       const sent = pushes.find((one) => one.endpoint.endsWith(task.taskId))
-      // The push names the notification and nothing of the chat (rule 1).
-      expect(Object.keys(JSON.parse(sent!.payload))).toEqual(['id'])
+      // The push names the notification and nothing of the chat (rule 1; docs/plan/82, Зп40).
+      expect(JSON.parse(sent!.payload)).toEqual({
+        id: expect.any(String),
+        path: `/chats/${task.taskId}`,
+        kind: 'answered',
+        scheduled: false,
+        tag: `chat:${task.taskId}`,
+        at: NOW.getTime(),
+      })
       expect(await letters(task.taskId)).toHaveLength(1)
+      // The same job again — a repeat of BullMQ: the row of its pass is there, nothing goes twice.
+      const pushed = pushes.length
+      expect(await notify(push, new Date(NOW.getTime() + 60_000)).run(job)).toBe('repeated')
+      expect(pushes).toHaveLength(pushed)
+      expect(await db.chatNotification.count({ where: { taskId: task.taskId } })).toBe(1)
       // A second ending in the same half hour: the push again, no second letter.
-      expect(await notify(push, new Date(NOW.getTime() + 60_000)).run(job)).toBe('sent')
+      await db.task.update({ where: { id: task.taskId }, data: { turnNo: 2 } })
+      expect(await notify(push, new Date(NOW.getTime() + 60_000)).run({ ...job, turnNo: 2 })).toBe(
+        'sent',
+      )
+      expect(pushes).toHaveLength(pushed + 1)
       expect(await letters(task.taskId)).toHaveLength(1)
     })
 
@@ -1379,6 +1411,220 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
       expect(await notify(sender('gone')).run(job)).toBe('skipped')
       expect(await db.pushSubscription.count({ where: { userId: task.userId } })).toBe(0)
+    })
+
+    describe('of a run of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп22, Зп38, Зп39)', () => {
+      const schedules: string[] = []
+      afterEach(async () => {
+        // Runs hold their chats (Restrict): they go with their tasks before the chats do.
+        await db.scheduledTask.deleteMany({ where: { id: { in: schedules.splice(0) } } })
+        await db.outboxEvent.deleteMany({ where: { topic: 'telegram' } })
+      })
+
+      /** The chat of `task` made the chat of a run of a scheduled task of its author. */
+      async function runOf(
+        task: { userId: string; workspaceId: string; taskId: string },
+        notify = true,
+      ) {
+        await db.task.update({ where: { id: task.taskId }, data: { createdById: task.userId } })
+        const schedule = await db.scheduledTask.create({
+          data: {
+            workspaceId: task.workspaceId,
+            createdById: task.userId,
+            name: 'Проверка сайта',
+            instructions: 'Поменяйте телефон в шапке',
+            effort: 'high',
+            triggers: [{ kind: 'daily', time: '09:00' }],
+            timezone: 'Europe/Moscow',
+            nextRunAt: new Date(NOW.getTime() + 86_400_000),
+            notify,
+            createdVia: 'manual',
+          },
+        })
+        schedules.push(schedule.id)
+        const run = await db.scheduledRun.create({
+          data: {
+            scheduledTaskId: schedule.id,
+            dueAt: NOW,
+            trigger: 'schedule',
+            status: 'started',
+            taskId: task.taskId,
+            startedAt: NOW,
+            name: schedule.name,
+            instructions: schedule.instructions,
+            effort: schedule.effort,
+          },
+        })
+        await db.channelIdentity.create({
+          data: { userId: task.userId, channel: 'telegram', externalId: telegramIdOf(task) },
+        })
+        await db.user.update({ where: { id: task.userId }, data: { emailVerified: true } })
+        await db.pushSubscription.create({
+          data: {
+            userId: task.userId,
+            endpoint: `https://fcm.googleapis.com/fcm/send/run-${task.taskId}`,
+            p256dh: 'p'.repeat(87),
+            auth: 'a'.repeat(22),
+          },
+        })
+        return { scheduleId: schedule.id, runId: run.id }
+      }
+      /** A chat id of Telegram is a number: one of this chat's own. */
+      const telegramIdOf = (task: { taskId: string }) =>
+        String(BigInt(`0x${task.taskId.replaceAll('-', '').slice(-12)}`))
+      const told = (task: { taskId: string }) =>
+        db.outboxEvent.findMany({
+          where: { topic: 'telegram', payload: { path: ['chatId'], equals: telegramIdOf(task) } },
+          select: { payload: true },
+        })
+      const pushOf = (task: { taskId: string }) =>
+        pushes
+          .filter((one) => one.endpoint.endsWith(`run-${task.taskId}`))
+          .map((one) => JSON.parse(one.payload))
+
+      it('tells a pass without its client in the words of a scheduled task, with no letter of it', async () => {
+        const task = await dialog()
+        const run = await runOf(task)
+        await settlement().settle(ref(task), completed({ change_type: 'none' }))
+        const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
+        expect(await notify(sender()).run(job)).toBe('sent')
+        expect(pushOf(task)).toEqual([
+          {
+            id: expect.any(String),
+            path: `/chats/${task.taskId}`,
+            kind: 'answered',
+            scheduled: true,
+            tag: `schedule:${run.scheduleId}`,
+            at: expect.any(Number),
+          },
+        ])
+        expect(await told(task)).toEqual([
+          {
+            payload: expect.objectContaining({
+              text: 'Запланированная задача выполнена — «Проверка сайта».',
+            }),
+          },
+        ])
+        // «Выполнена» goes by push and the bot; a letter only of a question or a failure (Зп39).
+        expect(await letters(task.taskId)).toHaveLength(0)
+        const notice = await db.chatNotification.findFirstOrThrow({
+          where: { taskId: task.taskId },
+        })
+        expect(notice).toMatchObject({
+          scheduledTaskId: run.scheduleId,
+          scheduledRunId: run.runId,
+          attempt: 1,
+          turnNo: 1,
+          kind: 'answered',
+        })
+      })
+
+      it('keeps «выполнена» quiet with the switch of the task off, never a question', async () => {
+        const task = await dialog()
+        await runOf(task, false)
+        await settlement().settle(ref(task), completed({ change_type: 'none' }))
+        const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
+        expect(await notify(sender()).run(job)).toBe('skipped')
+        expect(await db.chatNotification.count({ where: { taskId: task.taskId } })).toBe(0)
+        expect(await notify(sender()).run({ ...job, kind: 'question' })).toBe('sent')
+        expect(await letters(task.taskId)).toHaveLength(1)
+        expect((await letters(task.taskId))[0]?.payload).toMatchObject({
+          kind: 'question',
+          scheduled: true,
+        })
+      })
+
+      it('pauses the task once when the gate refused its run, and tells only that (Зп22)', async () => {
+        const task = await dialog()
+        const run = await runOf(task)
+        await settlement().settle(ref(task), { kind: 'refused', code: 'not_accepted' })
+        const job = { taskId: task.taskId, kind: 'failed' as const, attempt: 1, turnNo: 1 }
+        expect(await notify(sender()).run(job)).toBe('sent')
+        expect(
+          await db.scheduledTask.findUniqueOrThrow({
+            where: { id: run.scheduleId },
+            select: { enabled: true, nextRunAt: true, pausedReason: true },
+          }),
+        ).toEqual({ enabled: false, nextRunAt: null, pausedReason: 'not_accepted' })
+        const notices = await db.chatNotification.findMany({
+          where: { scheduledTaskId: run.scheduleId },
+          select: { kind: true, taskId: true, scheduledRunId: true },
+        })
+        expect(notices).toEqual([{ kind: 'paused', taskId: null, scheduledRunId: run.runId }])
+        expect(pushOf(task)).toEqual([
+          expect.objectContaining({ kind: 'paused', path: `/scheduled/${run.scheduleId}` }),
+        ])
+        // A repeat of the job: the task is paused already and its notice was sent.
+        expect(await notify(sender()).run(job)).toBe('repeated')
+        expect(
+          await db.chatNotification.count({ where: { scheduledTaskId: run.scheduleId } }),
+        ).toBe(1)
+      })
+
+      // A cancel or an interrupt the client wrote while the pass ran is for the passes after it.
+      it('tells of a pass by the request it answered, not by the words written since (Зп27)', async () => {
+        const task = await dialog()
+        await runOf(task)
+        const answered = await db.taskEvent.findFirstOrThrow({
+          where: { taskId: task.taskId, type: 'feed.request' },
+          orderBy: { id: 'desc' },
+          select: { id: true },
+        })
+        await settlement().settle(ref(task), completed({ change_type: 'none' }))
+        await insertFeedEvent(db, {
+          taskId: task.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'answer',
+              authorId: task.userId,
+              requestId: randomUUID(),
+              answersEventId: '1',
+              text: 'Остановитесь',
+            },
+          },
+        })
+        const job = {
+          taskId: task.taskId,
+          kind: 'answered' as const,
+          attempt: 1,
+          turnNo: 1,
+          requestEventId: String(answered.id),
+        }
+        expect(await notify(sender()).run(job)).toBe('sent')
+        expect(pushOf(task)).toEqual([expect.objectContaining({ scheduled: true })])
+      })
+
+      it('is an ordinary chat from the first words of its client on (Зп27)', async () => {
+        const task = await dialog()
+        await runOf(task)
+        await insertFeedEvent(db, {
+          taskId: task.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'answer',
+              authorId: task.userId,
+              requestId: randomUUID(),
+              answersEventId: '1',
+              text: 'Спасибо, а ещё поменяйте почту',
+            },
+          },
+        })
+        await settlement().settle(ref(task), completed({ change_type: 'none' }))
+        const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
+        expect(await notify(sender()).run(job)).toBe('sent')
+        expect(pushOf(task)).toEqual([expect.objectContaining({ scheduled: false })])
+        expect(await told(task)).toEqual([
+          {
+            payload: expect.objectContaining({
+              text: expect.stringMatching(/^Агент ответил — чат «/u),
+            }),
+          },
+        ])
+      })
     })
   })
 })

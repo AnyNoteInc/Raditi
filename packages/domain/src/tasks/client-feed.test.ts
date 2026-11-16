@@ -184,6 +184,19 @@ const file = {
   sizeBytes: 12_345,
 }
 
+const scheduleChange = {
+  v: 1,
+  action: 'created',
+  scheduleId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7de1',
+  name: 'Проверка сайта',
+  instructions: 'Открой сайт kofe.ru и пройди главную.\nСкажи, если что-то не так.',
+  triggers: [{ kind: 'weekdays', time: '09:00' }],
+  timezone: 'Europe/Moscow',
+  nextRunAt: '2026-11-16T06:00:00.000Z',
+  effort: 'low',
+  notify: true,
+}
+
 const samples: Record<FeedEventType, Record<string, unknown>[]> = {
   'feed.request': [
     first,
@@ -291,6 +304,27 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
   'feed.doc_left': [
     { v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', sections: 2, reason: 'refused' },
   ],
+  'feed.schedule_change': [
+    scheduleChange,
+    {
+      ...scheduleChange,
+      action: 'paused',
+      triggers: [
+        { kind: 'daily', time: '09:00' },
+        { kind: 'weekly', time: '12:00', days: [6] },
+      ],
+      timezone: 'Asia/Novosibirsk',
+      nextRunAt: null,
+      effort: 'max',
+      notify: false,
+    },
+    { ...scheduleChange, action: 'deleted', triggers: [], nextRunAt: null },
+  ],
+  'feed.schedule_left': [
+    { v: 1, action: 'create', name: 'Отзывы за неделю', reason: 'limit' },
+    { v: 1, action: 'update', name: 'Цены конкурентов', reason: 'placeholder' },
+    { v: 1, action: 'delete', name: null, reason: 'not_found' },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -327,6 +361,8 @@ describe('feed vocabulary', () => {
       'feed.doc',
       'feed.doc_touch',
       'feed.doc_left',
+      'feed.schedule_change',
+      'feed.schedule_left',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -434,6 +470,10 @@ describe('free text is allowed in four fields, the agent words of a browser ques
       'feed.request.text',
       'feed.result.message',
       'feed.result.objects[].title',
+      // The words of a scheduled task as core checked them (docs/plan/82, Зп35): shown as text.
+      'feed.schedule_change.instructions',
+      'feed.schedule_change.name',
+      'feed.schedule_left.name',
     ])
   })
 
@@ -1288,6 +1328,17 @@ describe('reading stored rows', () => {
       'feed.doc': [{ v: 1, docId: 'документ' }],
       'feed.doc_touch': [{ v: 1, docId: 'документ', revision: 1 }],
       'feed.doc_left': [{ v: 1, docId: 'документ', sections: 1, reason: 'refused' }],
+      'feed.schedule_change': [
+        { ...scheduleChange, scheduleId: 'задача' },
+        { ...scheduleChange, name: '' },
+        { ...scheduleChange, nextRunAt: 'завтра' },
+        { ...scheduleChange, notify: 'да' },
+        { ...scheduleChange, instructions: undefined },
+      ],
+      'feed.schedule_left': [
+        { v: 1, action: 'create', name: '', reason: 'limit' },
+        { v: 1, action: 'create', reason: 'limit' },
+      ],
     }
     for (const type of feedEventTypes)
       for (const payload of broken[type])

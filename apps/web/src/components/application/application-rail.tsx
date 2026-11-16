@@ -11,21 +11,39 @@ import { AppIcon, type AppIconName } from './app-icon'
 import type { ApplicationUser } from './user-avatar'
 import { UserMenu } from './user-menu'
 
+/** A section of the rail: its label under the icon, and the name of its link when it says more. */
+interface RailSection {
+  href: string
+  label: string
+  /** The accessible name of the link; absent — its label. */
+  name?: string
+  icon: AppIconName
+}
+
 /** The sections of the cabinet, in the order of the rail (docs/plan/61-chats-first.md, К3). */
-const sections: readonly { href: string; label: string; icon: AppIconName }[] = [
+const sections: readonly RailSection[] = [
   { href: '/chats', label: 'Чаты', icon: 'chat' },
-  // Between «Чаты» and «Проекты» (owner's answer of 13.11.2026, docs/plan/69-pages.md, Ст30).
+  // After «Чаты» and before «Страницы» (owner's request of 15.11.2026, docs/plan/82, Зп1). The
+  // label is «Задачи»: «Расписание» is 65 px at 11 px of Golos Text, over the 60 px of an item.
+  { href: '/scheduled', label: 'Задачи', name: 'Запланированные задачи', icon: 'timer' },
+  // After «Чаты» (owner's answer of 13.11.2026, docs/plan/69-pages.md, Ст30); the last section
+  // (docs/plan/82, Зп60).
   { href: '/pages', label: 'Страницы', icon: 'pages' },
-  { href: '/projects', label: 'Проекты', icon: 'projects' },
 ]
+
+/**
+ * A window this low — a phone on its side — shows the rail without labels and closer together,
+ * and scrolls it if it still does not fit: the account menu at its foot stays in reach (Зп1).
+ */
+const LOW = '@media (max-height: 480px)'
 
 const within = (pathname: string, href: string) =>
   pathname === href || pathname.startsWith(`${href}/`)
 
 /**
- * The rail of the cabinet: the mark, «Чаты», «Страницы» and «Проекты», the credits over the account menu. Its
- * width is `--app-rail-width` of the shell, which stands it in. The current section follows the
- * address.
+ * The rail of the cabinet: the mark, «Чаты», «Задачи» (the scheduled tasks) and «Страницы», the
+ * credits over the account menu. Its width is `--app-rail-width` of the shell, which
+ * stands it in. The current section follows the address.
  */
 export function ApplicationRail({
   user,
@@ -50,12 +68,17 @@ export function ApplicationRail({
         alignItems: 'center',
         // From `md` the rail lies on the ground of the page, beside the cards (docs/plan/64, Н1).
         bgcolor: { xs: 'background.default', md: 'transparent' },
-        borderRight: { xs: 1, md: 0 },
-        borderColor: 'divider',
+        // A whole value: a responsive `borderRight: 1` takes the colour of the text, not the rule's.
+        borderRight: { xs: '1px solid var(--mui-palette-divider)', md: 'none' },
         zIndex: 1100,
         pt: 1.5,
         pl: 'env(safe-area-inset-left)',
         pb: 'max(12px, env(safe-area-inset-bottom))',
+        overflowX: 'hidden',
+        overflowY: 'auto',
+        overscrollBehavior: 'contain',
+        scrollbarWidth: 'none',
+        [LOW]: { pt: 1, pb: 'max(8px, env(safe-area-inset-bottom))' },
       }}
     >
       <Box
@@ -66,10 +89,12 @@ export function ApplicationRail({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
+          flexShrink: 0,
           width: 44,
           height: 44,
           mb: 3,
           borderRadius: 2,
+          [LOW]: { mb: 1 },
         }}
       >
         <BrandMark size={30} withWordmark={false} />
@@ -77,18 +102,26 @@ export function ApplicationRail({
       <Box
         component="nav"
         aria-label="Основная навигация"
-        sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.75 }}
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 0.75,
+          flexShrink: 0,
+          [LOW]: { gap: 0.25 },
+        }}
       >
-        {sections.map(({ href, label, icon }) => {
+        {sections.map(({ href, label, name, icon }) => {
           const current = within(pathname, href)
           return (
             <Box
               key={href}
               component={Link}
               href={href}
-              aria-label={label}
+              aria-label={name ?? label}
               aria-current={current ? 'page' : undefined}
               sx={{
+                flexShrink: 0,
                 width: { xs: 48, sm: 60 },
                 minHeight: { xs: 48, sm: 56 },
                 display: 'flex',
@@ -110,6 +143,7 @@ export function ApplicationRail({
                   fontWeight: 600,
                   '& svg': { color: 'primary.main' },
                 },
+                [LOW]: { minHeight: 44 },
               }}
             >
               <AppIcon name={icon} />
@@ -117,7 +151,7 @@ export function ApplicationRail({
               <Box
                 component="span"
                 aria-hidden="true"
-                sx={{ display: { xs: 'none', sm: 'block' } }}
+                sx={{ display: { xs: 'none', sm: 'block' }, [LOW]: { display: 'none' } }}
               >
                 {label}
               </Box>
@@ -130,6 +164,8 @@ export function ApplicationRail({
         sx={{
           mt: 'auto',
           pt: 2,
+          flexShrink: 0,
+          [LOW]: { pt: 1 },
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',

@@ -7,7 +7,9 @@ import {
   dropAbandonedPages,
   insertFeedEvent,
   purgeExpiredPages,
+  recordRunOutcome,
   stalePageReservations,
+  stalePendingRuns,
   type PrismaClient,
   type waitingTaskStatuses,
 } from '@repo/db'
@@ -17,6 +19,7 @@ import {
   agentTurnRetryJobId,
   feedEndedSiteOf,
   isDomainError,
+  scheduleLimits,
   type FeedCreditsState,
   type JobQueue,
   type ObjectStorage,
@@ -35,6 +38,7 @@ import { collectExpiredAttachments, expiredAttachmentsIn } from './attachment-co
 import type { LivePasses } from './live-passes.ts'
 import type { PageMetrics } from '../pages/page-metrics.ts'
 import type { PagePublications } from './page-publications.ts'
+import type { ScheduleChanges } from './schedule-changes.ts'
 import {
   CHARGE_LATER_EVENT,
   type PassEnding,
@@ -87,6 +91,11 @@ export interface TaskSweepDependencies {
   pages?: Pick<PagePublications, 'left'> | null
   /** The metrics of the sites of pages, counted again after each sweep of them (73.12). */
   pageMetrics?: Pick<PageMetrics, 'refresh'> | null
+  /**
+   * The changes of the scheduled tasks no end of a turn reached (docs/plan/82-scheduled-tasks.md,
+   * Зп33): closed and told once the turn is over. Absent — not swept.
+   */
+  schedules?: Pick<ScheduleChanges, 'sweep'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -120,6 +129,8 @@ export class TaskSweep {
       ['browsers', () => this.sweepBrowsers()],
       ['attachments', () => this.collectAttachments()],
       ['pages', () => this.sweepPages()],
+      ['schedules', () => this.sweepSchedules()],
+      ['manual runs', () => this.closeStaleManualRuns()],
     ] as const) {
       try {
         await pass()
@@ -453,6 +464,45 @@ export class TaskSweep {
     // The numbers of the sites are a reading, never a reason to stop the sweep.
     await this.deps.pageMetrics?.refresh().catch(() => this.#logger.warn('page_metrics_failed'))
     return stale.length
+  }
+
+  /**
+   * The changes of the scheduled tasks a turn reserved and no end of it applied (Зп33): a pass
+   * still at work in this process keeps them for its own end.
+   */
+  async sweepSchedules(): Promise<number> {
+    const { schedules, live } = this.deps
+    if (!schedules) return 0
+    return schedules.sweep((taskId) => live.has(taskId))
+  }
+
+  /**
+   * Runs of «Запустить сейчас» a web left waiting — it stopped between writing the run and its
+   * answer — close here, «Не запустилась: сбой платформы», without a notice (Зп24): a run that
+   * waits holds its task up as «Выполняется», and every scheduled moment would be skipped beside
+   * it. Here, not in the tick of the schedules: the button works through web alone, whether this
+   * core runs the schedules or not. Returns how many.
+   */
+  async closeStaleManualRuns(): Promise<number> {
+    const { db } = this.deps
+    const now = this.#now()
+    const olderThan = new Date(now.getTime() - scheduleLimits.manualPendingSweepMinutes * 60_000)
+    let closed = 0
+    for (const run of await stalePendingRuns(db, olderThan, BATCH, 'manual')) {
+      try {
+        const recorded = await recordRunOutcome(
+          db,
+          run.id,
+          { status: 'refused', reason: 'platform' },
+          now,
+        )
+        if (recorded.recorded) closed++
+      } catch (error) {
+        this.#warn(`task sweep manual run=${run.id}`, logged(error))
+      }
+    }
+    if (closed > 0) this.#logger.log(`task_sweep_manual_runs count=${closed}`)
+    return closed
   }
 
   /**

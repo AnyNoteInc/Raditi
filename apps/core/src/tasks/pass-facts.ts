@@ -1,5 +1,5 @@
 import { attemptCreditBudget } from '@repo/billing'
-import { classProfile, taskAttachments, type PrismaClient } from '@repo/db'
+import { classProfile, passUnattended, taskAttachments, type PrismaClient } from '@repo/db'
 import {
   modelClassSchema,
   readFeedRow,
@@ -70,6 +70,8 @@ export async function readPassFacts(
       },
       // The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2).
       createdBy: { select: { agentInstructions: { select: { text: true } } } },
+      // The run of a scheduled task the chat is (docs/plan/82-scheduled-tasks.md, Зп27, Зп29).
+      scheduledRun: { select: { name: true } },
     },
   })
   if (!task) return null
@@ -179,6 +181,13 @@ export async function readPassFacts(
     : { kind: 'quota' }
 
   const attachments = attachmentFactsOf(await taskAttachments(deps.db, task.id))
+  // A pass of a run before the first words of its client goes without them (Зп27, Зп29), decided
+  // by the request it answers: a cancel or an interrupt written since is for the passes after it.
+  const unattended =
+    task.scheduledRun &&
+    (await passUnattended(db, task.id, { requestEventId: input.requestEventId }))
+      ? { name: task.scheduledRun.name }
+      : null
   return {
     task: {
       id: task.id,
@@ -189,6 +198,7 @@ export async function readPassFacts(
     },
     requirements,
     clientInstructions: task.createdBy?.agentInstructions?.text ?? null,
+    ...(unattended ? { unattended } : {}),
     ...(attachments.length ? { attachments } : {}),
     requests,
     committedAt: answered.createdAt,

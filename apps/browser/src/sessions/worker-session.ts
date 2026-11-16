@@ -188,6 +188,13 @@ const writes = (event: BrowserInputEvent): boolean =>
 const INPUT_BACKLOG = 256
 
 /**
+ * Questions of a page whose «OK» confirms what it asks — «Удалить навсегда?» — or sends what is
+ * typed into it: refused to a pass without the client (docs/plan/82-scheduled-tasks.md, Зп28,
+ * Зп50). An alert's «OK» only closes it, and leaving a page with unsaved changes saves nothing.
+ */
+const CONFIRMING_DIALOGS: ReadonlySet<BrowserDialog['kind']> = new Set(['confirm', 'prompt'])
+
+/**
  * Keys that press the button they land on — the one the reference names, or the one that has the
  * focus: a commit as much as a click is. With any modifier: Shift+Enter presses a button too.
  */
@@ -235,6 +242,15 @@ export class WorkerSession {
   #observation: Observation | null = null
   #observationSeq = 0
   #pendingCommit: PendingCommit | null = null
+  /**
+   * The agent's latest action came from a pass of a scheduled run without its client (Зп28, Зп50):
+   * until an action says otherwise, the pages send nothing but reads, on any site
+   * (`CloudBrowserConnection.readsOnly`) — a request that comes after the action that caused it
+   * (an editor's autosave) as well.
+   */
+  #readOnly = false
+  /** Requests the read-only rule denied, ever: an action that saw one refused is told so. */
+  #readOnlyRefusals = 0
   #wrote = false
   #lastActivity: number
   #lastTouch = Number.NEGATIVE_INFINITY
@@ -343,6 +359,10 @@ export class WorkerSession {
         startUrl: spec.startUrl,
         viewport: this.#viewport,
         policy: spec.policy,
+        readsOnly: () => this.#readOnly,
+        onReadOnlyRefusal: () => {
+          this.#readOnlyRefusals += 1
+        },
         onEvent: (event) => this.#event(event),
       })
       if (!this.live) {
@@ -938,12 +958,19 @@ export class WorkerSession {
   /**
    * One action of the agent (`POST …/actions`): in its turn after the ones before it, refused
    * when the client controls the browser. The answer comes within `actionBudgetMs`; the next
-   * action waits until this one has really finished in the page.
+   * action waits until this one has really finished in the page. `readOnly` — a pass of a
+   * scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28, Зп50): a file sent to
+   * a page and a page's question confirmed are refused (`BROWSER_READ_ONLY`), and from this action
+   * on — until one says otherwise — the pages send nothing but reads, on any site: a form a key or
+   * a link sends, an editor's XHR, a link with a secret in its query.
    */
-  act(action: BrowserAction): Promise<BrowserToolResult> {
+  act(action: BrowserAction, options: { readOnly?: boolean } = {}): Promise<BrowserToolResult> {
+    const readOnly = options.readOnly === true
     const queuedAt = this.#context.now()
     return new Promise<BrowserToolResult>((resolve, reject) => {
       const run = async () => {
+        // In the order of the actions: the pass of this one is the pass the pages now serve.
+        this.#readOnly = readOnly
         const outcome: { result: 'ok' | BrowserTaskCode } = { result: 'ok' }
         const settle = (error: unknown) => {
           // The first outcome stands: a timeout already answered is not answered again.
@@ -968,10 +995,19 @@ export class WorkerSession {
             () => settle(browserTaskError('BROWSER_TIMEOUT')),
             this.#context.settings.actionBudgetMs,
           )
+          const refusals = this.#readOnlyRefusals
           try {
-            resolve(await this.#perform(browser, action))
+            resolve(await this.#perform(browser, action, readOnly))
           } catch (error) {
-            settle(error)
+            // The page went nowhere because what it sent was a write of a pass without the
+            // client: the agent is told that, not that the site is closed to it.
+            settle(
+              readOnly &&
+                this.#readOnlyRefusals > refusals &&
+                browserCodeOf(error) === 'BROWSER_ACTION_DENIED'
+                ? browserTaskError('BROWSER_READ_ONLY')
+                : error,
+            )
           } finally {
             clearTimeout(timer)
             this.#apply(browserAgentActionSettled(this.#control))
@@ -1006,7 +1042,11 @@ export class WorkerSession {
     })
   }
 
-  async #perform(browser: CloudBrowserSession, action: BrowserAction): Promise<BrowserToolResult> {
+  async #perform(
+    browser: CloudBrowserSession,
+    action: BrowserAction,
+    readOnly: boolean,
+  ): Promise<BrowserToolResult> {
     switch (action.tool) {
       case 'web_observe': {
         if (action.ref !== undefined && !this.#observation?.refs.has(action.ref))
@@ -1084,6 +1124,8 @@ export class WorkerSession {
         )
       }
       case 'web_upload': {
+        // A file reaches a site the moment a page takes it: nobody to ask.
+        if (readOnly) throw browserTaskError('BROWSER_READ_ONLY')
         const ref = action.ref === undefined ? undefined : this.#ref(action.observation, action.ref)
         const files = await this.#context.files.read({
           taskId: this.taskId,
@@ -1098,6 +1140,8 @@ export class WorkerSession {
         return this.#outcome('web_upload', result, { uploaded: result.uploaded ?? files.length })
       }
       case 'web_dialog':
+        if (readOnly && action.accept && this.#dialog && CONFIRMING_DIALOGS.has(this.#dialog.kind))
+          throw browserTaskError('BROWSER_READ_ONLY')
         if (action.accept) this.#markWrote()
         return this.#outcome('web_dialog', await browser.act(action))
       case 'web_wait': {

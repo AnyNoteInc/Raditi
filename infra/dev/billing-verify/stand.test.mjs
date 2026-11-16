@@ -706,6 +706,8 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     pageViews: null,
     mcpServerProbe: { refusedSubnets: [], allowLoopback: false },
     pages: null,
+    // Nor scheduled tasks (docs/plan/82-scheduled-tasks.md): core has no intake there.
+    scheduleIntakeSecret: null,
   })
   // No captcha: a customer of the stand signs up over HTTP.
   assert.equal(authConfigFromEnv(env).captcha, null)

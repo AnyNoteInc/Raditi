@@ -362,6 +362,9 @@ function secrets() {
   const metricsToken = `${hex(16)}#${hex(16)}`
   const s3 = { S3_ACCESS_KEY_ID: `verify-${hex(8)}`, S3_SECRET_ACCESS_KEY: hex() }
   const vault = { VAULT_ROLE_ID: randomUUID(), VAULT_SECRET_ID: randomUUID() }
+  // compose gives core SCHEDULE_INTAKE_URL always, and core refuses an address without its secret
+  // (docs/plan/82-scheduled-tasks.md, §4.4): one random secret, shared with web, as on the server.
+  const scheduleIntake = { SCHEDULE_INTAKE_SECRET: randomBytes(32).toString('base64url') }
   const web = {
     DATABASE_URL: `postgresql://raditi:${pg.raditi}@postgres:5432/raditi`,
     REDIS_URL: `redis://:${redis.password}@redis:6379`,
@@ -370,6 +373,7 @@ function secrets() {
     SMARTCAPTCHA_SERVER_KEY: `ysc2_${pair}${hex(10)}`,
     ...s3,
     ...vault,
+    ...scheduleIntake,
     METRICS_TOKEN: metricsToken,
   }
   const core = {
@@ -377,6 +381,7 @@ function secrets() {
     REDIS_URL: `redis://:${redis.password}@redis:6379`,
     ...s3,
     ...vault,
+    ...scheduleIntake,
     METRICS_TOKEN: metricsToken,
     SENDSAY_API_KEY: hex(16),
   }

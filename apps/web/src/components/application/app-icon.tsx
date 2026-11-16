@@ -1,8 +1,6 @@
 import type { CSSProperties } from 'react'
 
 const paths = {
-  projects:
-    'M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Zm0 0V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2',
   profile: 'M20 21v-2a6 6 0 0 0-6-6h-4a6 6 0 0 0-6 6v2M16 5a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',
   /** «Страницы»: a sheet with its lines (docs/plan/69-pages.md, Ст30). */
   pages: 'M6 3h8l4 4v14H6V3ZM14 3v4h4M9 12h6M9 16h6',
@@ -85,6 +83,21 @@ const paths = {
   square: 'M8 8h8v8H8Z',
   /** How the list of chats is shown (docs/plan/61-chats-first.md, К23). */
   group: 'M4 6h16M7 12h10M10 18h4',
+  /** «Расписание»: a stopwatch (docs/plan/82-scheduled-tasks.md, Зп1). */
+  timer:
+    'M10 2h4M12 2v4M19.5 13.5a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0ZM12 13.5l3-3M18.5 7 20 5.5',
+  // Templates of scheduled tasks (docs/plan/82-scheduled-tasks.md, §4.6).
+  /** A line of a heartbeat: checking that something keeps working. */
+  pulse: 'M3 12h4l3-8 4 16 3-8h4',
+  /** A lamp: an idea. */
+  bulb: 'M9 18h6M10 21h4M9.5 15.5c0-1-.5-1.7-1.2-2.4a6 6 0 1 1 7.4 0c-.7.7-1.2 1.4-1.2 2.4',
+  /** Binoculars: looking at others. */
+  binoculars:
+    'M10 16a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Zm11 0a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0ZM10 16h4M3.3 14.6l2.2-8.1a1.5 1.5 0 0 1 3 0v6M20.7 14.6l-2.2-8.1a1.5 1.5 0 0 0-3 0v6',
+  /** «Что это за раздел» beside the title of a section: a circle with «i». */
+  info: 'M12 16v-5M12 8h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+  /** A funnel: the filters of a list. */
+  filter: 'M3 5h18l-7 8v6l-4 2v-8L3 5Z',
   /** «Размышление»: how hard the model thinks (owner's request of 29.10.2026); Lucide «brain», ISC. */
   brain:
     'M12 5a3 3 0 1 0-6 .1 4 4 0 0 0-2.5 5.8 4 4 0 0 0 .6 6.6A4 4 0 1 0 12 18ZM12 5a3 3 0 1 1 6 .1 4 4 0 0 1 2.5 5.8 4 4 0 0 1-.6 6.6A4 4 0 1 1 12 18ZM15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4M17.6 6.5a3 3 0 0 0 .4-1.4M6 5.1a3 3 0 0 0 .4 1.4M3.5 10.9a4 4 0 0 1 .6-.4M19.9 10.5a4 4 0 0 1 .6.4M6 18a4 4 0 0 1-2-.5M20 17.5a4 4 0 0 1-2 .5',

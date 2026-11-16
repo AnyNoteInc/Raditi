@@ -428,6 +428,30 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
       ],
     },
   },
+  // docs/plan/82-scheduled-tasks.md, Зп33, Зп35: a scheduled task the agent created, and a change
+  // of one it could not make.
+  {
+    name: 'schedule_change v1 created',
+    type: 'feed.schedule_change',
+    payload: {
+      v: 1,
+      action: 'created',
+      scheduleId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7de1',
+      name: 'Курс валют',
+      instructions:
+        'Пришли курс доллара, евро и юаня по ЦБ на сегодня и насколько он изменился со вчера.',
+      triggers: [{ kind: 'weekdays', time: '09:00' }],
+      timezone: 'Europe/Moscow',
+      nextRunAt: '2026-11-16T06:00:00.000Z',
+      effort: 'low',
+      notify: true,
+    },
+  },
+  {
+    name: 'schedule_left v1 limit',
+    type: 'feed.schedule_left',
+    payload: { v: 1, action: 'create', name: 'Идеи для постов', reason: 'limit' },
+  },
   {
     name: 'failure v1 with objects',
     type: 'feed.failure',

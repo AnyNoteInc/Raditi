@@ -53,17 +53,33 @@ export const telegramSendJobSchema = z.strictObject({
 })
 export type TelegramSendJob = z.infer<typeof telegramSendJobSchema>
 
-/** A pass of a chat bound to Telegram ended: core sends its rows there. */
+/**
+ * The rows of the feed told on their own (`eventId`), never with the rows of their pass: core
+ * writes them after the pass was settled and its rows were sent — the cards of the changes of the
+ * scheduled tasks a turn asked for (docs/plan/82-scheduled-tasks.md, Зп33, Зп35).
+ */
+export const telegramRowsToldAlone = ['feed.schedule_change', 'feed.schedule_left'] as const
+
+/**
+ * A pass of a chat bound to Telegram ended: core sends its rows there. `eventId` — one row of the
+ * pass written after it ended (`telegramRowsToldAlone`): only it is sent, once.
+ */
 export const telegramDeliverJobSchema = z.strictObject({
   taskId: z.uuid(),
   kind: z.enum(chatNotifyKinds),
   attempt: z.number().int().min(1),
   turnNo: z.number().int().min(0),
+  eventId: z
+    .string()
+    .regex(/^[1-9]\d{0,18}$/)
+    .optional(),
 })
 export type TelegramDeliverJob = z.infer<typeof telegramDeliverJobSchema>
 
 export const telegramDeliverDedupeKey = (job: TelegramDeliverJob): string =>
-  `${TELEGRAM_DELIVER_JOB}:${job.taskId}:${job.attempt}:${job.turnNo}:${job.kind}`
+  job.eventId === undefined
+    ? `${TELEGRAM_DELIVER_JOB}:${job.taskId}:${job.attempt}:${job.turnNo}:${job.kind}`
+    : `${TELEGRAM_DELIVER_JOB}:${job.taskId}:event:${job.eventId}`
 
 /** A chat started in Telegram gets its own topic when the bot has topics in private chats. */
 export const telegramTopicJobSchema = z.strictObject({ taskId: z.uuid() })

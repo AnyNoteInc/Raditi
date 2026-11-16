@@ -23,9 +23,44 @@ import {
   RELEASE_ID,
   requestRow,
   resultRow,
+  SCHEDULE_ID,
+  scheduleChangeRow,
+  scheduleLeftRow,
   stepRow,
   verdicts,
 } from './testing'
+
+// The cards of scheduled tasks read tRPC: their own tests show them (feed-schedule.test.tsx); here
+// they say only what the list gave them (docs/plan/82-scheduled-tasks.md, Зп35, Зп36).
+vi.mock('./feed-schedule', () => ({
+  FeedScheduleChange: ({
+    row,
+    push,
+    onEdit,
+  }: {
+    row: { id: string; name: string; scheduleId: string }
+    push?: boolean
+    onEdit?: (task: { id: string }) => void
+  }) => (
+    <p data-schedule-card={row.id} data-push={push ? 'yes' : 'no'}>
+      {row.name}
+      {onEdit ? (
+        <button type="button" onClick={() => onEdit({ id: row.scheduleId })}>
+          Изменить
+        </button>
+      ) : null}
+    </p>
+  ),
+  FeedScheduleLeft: ({ row, onSetUp }: { row: { id: string }; onSetUp?: () => void }) => (
+    <p data-schedule-left={row.id}>
+      {onSetUp ? (
+        <button type="button" onClick={onSetUp}>
+          Настроить вручную
+        </button>
+      ) : null}
+    </p>
+  ),
+}))
 
 const NBSP = /\u00a0/g
 const text = (element: HTMLElement) => (element.textContent ?? '').replace(NBSP, ' ')
@@ -829,6 +864,51 @@ describe('«Изменить» of the last message (docs/plan/75, ВВ25)', () =
     ] as unknown as Parameters<typeof lastMessageId>[0]
     expect(lastMessageId(rows)).toBe('c')
     expect(lastMessageId([])).toBeNull()
+  })
+})
+
+describe('scheduled tasks in the feed (docs/plan/82-scheduled-tasks.md, Зп35, Зп36)', () => {
+  it('draws the card of each change and offers notifications on the newest only', () => {
+    const { feed } = showFeed(
+      [
+        requestRow('1'),
+        scheduleChangeRow('2'),
+        scheduleChangeRow('3', { action: 'updated', name: 'Отчёт' }),
+        scheduleChangeRow('4', { action: 'deleted', nextRunAt: null, name: 'Старая' }),
+        scheduleLeftRow('5'),
+        resultRow('6', 1, 'Задача появится, как только я закончу ответ.'),
+      ],
+      headOf({ status: 'awaiting_user' }),
+    )
+    const cards = [...feed.querySelectorAll('[data-schedule-card]')]
+    expect(
+      cards.map((card) => [
+        card.getAttribute('data-schedule-card'),
+        card.getAttribute('data-push'),
+      ]),
+    ).toEqual([
+      ['2', 'no'],
+      ['3', 'yes'],
+      ['4', 'no'],
+    ])
+    expect(feed.querySelector('[data-schedule-left="5"]')).not.toBeNull()
+    // Without a window to open, the cards offer none.
+    expect(within(feed).queryByRole('button', { name: 'Изменить' })).toBeNull()
+  })
+
+  it('hands «Изменить» and «Настроить вручную» to the window of the chat', () => {
+    const onEditSchedule = vi.fn()
+    const onNewSchedule = vi.fn()
+    const { feed } = showFeed(
+      [scheduleChangeRow('1'), scheduleLeftRow('2')],
+      headOf({ status: 'awaiting_user' }),
+      {},
+      { onEditSchedule, onNewSchedule },
+    )
+    fireEvent.click(within(feed).getByRole('button', { name: 'Изменить' }))
+    expect(onEditSchedule).toHaveBeenCalledWith({ id: SCHEDULE_ID })
+    fireEvent.click(within(feed).getByRole('button', { name: 'Настроить вручную' }))
+    expect(onNewSchedule).toHaveBeenCalledOnce()
   })
 })
 

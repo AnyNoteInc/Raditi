@@ -401,6 +401,41 @@ export const listText = Object.freeze({
   loading: 'Загружаем чаты',
 })
 
+/**
+ * Scheduled tasks in the chats (docs/plan/82-scheduled-tasks.md, Зп35, Зп43): the label of a chat
+ * of a run, the sign of its row in the list and the cards of the feed.
+ */
+export const scheduleChatText = Object.freeze({
+  /** How the run began: under the name of its chat, «По расписанию · <название задачи>». */
+  trigger: Object.freeze({ schedule: 'По расписанию', manual: 'Запуск вручную' }),
+  /** The stopwatch of a row of the list, to a screen reader. */
+  listSign: Object.freeze({
+    schedule: 'Запуск запланированной задачи по расписанию',
+    manual: 'Запуск запланированной задачи вручную',
+  }),
+  /** The card of a task the agent created or changed. */
+  card: (name: string) => `Запланированная задача «${name}»`,
+  nextRun: (when: string) => `Следующий запуск: ${when}`,
+  paused: 'На паузе',
+  effort: (level: string) => `Размышление: ${level}`,
+  notifyOn: 'Уведомит, когда выполнится',
+  notifyOff: 'Без уведомления о выполнении',
+  showInstructions: 'Показать инструкцию',
+  hideInstructions: 'Скрыть инструкцию',
+  runNow: 'Запустить сейчас',
+  edit: 'Изменить',
+  openTask: 'Открыть задачу',
+  /**
+   * The names of the card's buttons to a screen reader: the words shown, then the task — the
+   * last message has «Изменить» of its own, and a chat may hold several cards.
+   */
+  runNowLabel: (name: string) => `Запустить сейчас задачу «${name}»`,
+  editLabel: (name: string) => `Изменить задачу «${name}»`,
+  openTaskLabel: (name: string) => `Открыть задачу «${name}»`,
+  /** A change the agent could not make: the client sets the task up in «Расписание» (Зп35). */
+  setUpByHand: 'Настроить вручную',
+})
+
 export const dialogText = Object.freeze({
   notFound: 'Такого чата нет',
   notFoundHint: 'Возможно, его открыли по старой ссылке. Все чаты — в списке.',

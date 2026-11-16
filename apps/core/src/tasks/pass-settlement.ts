@@ -100,6 +100,11 @@ export interface PassRef {
   attempt: number
   /** `tasks.turn_no` now: the number a turn this pass opened got, or the one it was claimed at. */
   turnNo: number
+  /**
+   * The `feed.request` the pass answered, when its job is known — not to the sweep: the notice
+   * of its ending tells by it whether the client was there (docs/plan/82, Зп27).
+   */
+  requestEventId?: string
 }
 
 /**
@@ -350,7 +355,11 @@ export class PassSettlement {
     const job = { taskId: pass.taskId, kind, attempt: pass.attempt, turnNo: pass.turnNo }
     // A chat bound to Telegram gets the rows of the pass there at once (docs/plan/80-telegram.md).
     await enqueueTelegramDeliver(tx, job)
-    return enqueueChatNotify(tx, job, now)
+    return enqueueChatNotify(
+      tx,
+      pass.requestEventId === undefined ? job : { ...job, requestEventId: pass.requestEventId },
+      now,
+    )
   }
 
   /** The queue of a dialog that waits goes now: «Отправить сейчас» found no pass to stop. */

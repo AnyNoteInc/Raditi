@@ -9,3 +9,9 @@ export const chatHref = (taskId: string) => `${CHATS_HREF}/${taskId}`
 
 /** A new chat, with this project chosen in its picker when one is named. */
 export const newChatHref = () => NEW_CHAT_HREF
+
+/** «Расписание»: the scheduled tasks of the client (docs/plan/82-scheduled-tasks.md, Зп1). */
+export const SCHEDULED_HREF = '/scheduled'
+
+/** A scheduled task: the label of a chat of its run and the card of the feed lead to it. */
+export const scheduledTaskHref = (scheduleId: string) => `${SCHEDULED_HREF}/${scheduleId}`

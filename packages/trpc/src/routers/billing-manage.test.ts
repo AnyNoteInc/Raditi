@@ -73,6 +73,7 @@ const user: User = {
   email: 'manage-test@example.ru',
   emailVerified: true,
   image: null,
+  timezone: null,
   createdAt: NOW,
   updatedAt: NOW,
 }

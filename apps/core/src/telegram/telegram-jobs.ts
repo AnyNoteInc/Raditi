@@ -5,6 +5,7 @@ import {
   agentEventSchema,
   feedRowMarkdown,
   readFeedRow,
+  telegramRowsToldAlone,
   type FeedItem,
   type TelegramButton,
   type AgentEvent,
@@ -101,7 +102,11 @@ export class TelegramFailure extends Error {
 
 const rawUpdates = z.array(z.looseObject({ update_id: z.number().int().nonnegative() }))
 
-/** The rows of a pass Telegram is told of: what the agent says, never the client's own words. */
+/**
+ * The rows of a pass Telegram is told of: what the agent says, never the client's own words. The
+ * cards of the scheduled tasks a turn asked for come after the pass was settled and are told alone
+ * (`telegramRowsToldAlone`, a deliver job of their own).
+ */
 const TOLD: ReadonlySet<string> = new Set([
   'feed.result',
   'feed.question',
@@ -323,11 +328,16 @@ export class TelegramJobs {
     await this.#send(job.chatId, threadId, escapeTelegramHtml(job.text), job.buttons)
   }
 
-  /** The rows of a pass that ended, in the words of the cabinet, to the chat bound in Telegram. */
+  /**
+   * The rows of a pass that ended, in the words of the cabinet, to the chat bound in Telegram; a
+   * row told on its own (`eventId`), written after them, alone. The rows told alone are never sent
+   * with their pass: a slow pass would send them twice.
+   */
   async deliver(job: TelegramDeliverJob): Promise<'sent' | 'skipped'> {
     const { prisma } = this.#deps
     const place = await this.#placeOf(job.taskId)
     if (place === null) return 'skipped'
+    if (job.eventId !== undefined) return this.#deliverRow(job, job.eventId, place)
     const turn = await prisma.taskTurn.findUnique({
       where: { taskId_turnNo: { taskId: job.taskId, turnNo: job.turnNo } },
       select: { id: true },
@@ -366,6 +376,47 @@ export class TelegramJobs {
         url: this.#chatLink(job.taskId),
       },
     ])
+    return this.#sendParts(place, parts, buttons)
+  }
+
+  /**
+   * A row of a chat told on its own (`telegramRowsToldAlone`): the card of a scheduled task the
+   * turn set up, or the one it could not (docs/plan/82-scheduled-tasks.md, Зп33, Зп35). The message
+   * of the work is not touched: the pass it belonged to cleared it, and a next one may stand now.
+   */
+  async #deliverRow(
+    job: TelegramDeliverJob,
+    eventId: string,
+    place: { chatId: string; threadId: number | undefined },
+  ): Promise<'sent' | 'skipped'> {
+    const event = await this.#deps.prisma.taskEvent.findFirst({
+      where: {
+        id: BigInt(eventId),
+        taskId: job.taskId,
+        clientVisible: true,
+        type: { in: [...telegramRowsToldAlone] },
+      },
+      select: { id: true, type: true, payload: true, createdAt: true },
+    })
+    if (event === null) return 'skipped'
+    const row: FeedItem = {
+      ...readFeedRow(event.type, event.payload),
+      id: String(event.id),
+      at: event.createdAt.toISOString(),
+    }
+    const markdown = feedRowMarkdown(row, false)
+    const parts = markdown === null ? [] : markdownToTelegramParts(markdown)
+    if (parts.length === 0) return 'skipped'
+    return this.#sendParts(place, parts, [
+      [{ text: telegramJobText.open, url: this.#chatLink(job.taskId) }],
+    ])
+  }
+
+  async #sendParts(
+    place: { chatId: string; threadId: number | undefined },
+    parts: readonly string[],
+    buttons: readonly (readonly TelegramButton[])[],
+  ): Promise<'sent' | 'skipped'> {
     for (const [index, part] of parts.entries()) {
       const last = index === parts.length - 1
       if (

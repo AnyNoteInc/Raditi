@@ -5,6 +5,7 @@ import {
   feedCursorSchema,
   feedTaskHeadSchema,
   reasoningEffortSchema,
+  scheduledRunTriggers,
   serverCommandIds,
   taskStatuses,
   type FeedItem,
@@ -97,6 +98,16 @@ const feedOutput = z.strictObject({
   more: z.boolean(),
 })
 
+/**
+ * «По расписанию · <name>» or «Запуск вручную · <name>» of a chat of a run (Зп43): `id` null — the
+ * task was deleted, the label stays without a link (Зп23).
+ */
+const scheduleLabelOutput = z.strictObject({
+  id: z.uuid().nullable(),
+  name: z.string(),
+  trigger: z.enum(scheduledRunTriggers),
+})
+
 /** A chat of the list, of its head of pinned chats and of a search. */
 const dialogListItemOutput = z.strictObject({
   id: z.uuid(),
@@ -116,6 +127,8 @@ const dialogListItemOutput = z.strictObject({
   archived: z.boolean(),
   /** The chat goes on in Telegram too (docs/plan/80-telegram.md, 80.6). */
   telegram: z.boolean(),
+  /** The chat is a run of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп43). */
+  schedule: scheduleLabelOutput.nullable(),
 })
 
 const credits = z.number().int().nonnegative()
@@ -451,6 +464,7 @@ export const taskRouter = router({
       feedTaskHeadSchema.extend({
         createdAt: z.date(),
         updatedAt: z.date(),
+        schedule: scheduleLabelOutput.nullable(),
       }),
     )
     .query(({ ctx, input }) => readDialogHead(ctx.prisma, { ...input, userId: ctx.user.id })),

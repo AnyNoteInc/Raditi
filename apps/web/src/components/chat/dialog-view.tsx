@@ -40,6 +40,7 @@ import {
 import { AppIcon } from '@/components/application/app-icon'
 import { PanelToggle } from '@/components/application/cabinet-panel'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
+import { ScheduleDialog, type ScheduleDialogOpening } from '@/components/scheduled/schedule-dialog'
 import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
@@ -51,6 +52,7 @@ import { callErrorCode, callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
 import { useChatDetails, useChatThinking } from './chat-details'
 import { rememberEffort } from './chat-effort'
+import type { ChatScheduleLabel, ScheduledTaskItem } from './chat-types'
 import {
   cancelText,
   clientCommandText,
@@ -88,6 +90,7 @@ import {
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
 import { RESULTS_ROOM, ResultsCard, ResultsToggle, useResultsCard } from './results-card'
+import { ScheduleMark } from './schedule-mark'
 import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
 import { ToolsPanel } from './tools-panel'
 import { TurnActivity } from './turn-activity'
@@ -168,6 +171,7 @@ type Press = 'message' | 'continue' | 'cancel' | 'resume' | 'compact' | 'undoTur
  * corner (docs/plan/59, И4). The name is written in place of itself.
  */
 function DialogHead({
+  schedule,
   taskId,
   title,
   head,
@@ -175,6 +179,8 @@ function DialogHead({
   tools,
   results = null,
 }: {
+  /** The task this chat is a run of (docs/plan/82-scheduled-tasks.md, Зп43); null — none. */
+  schedule: ChatScheduleLabel | null
   taskId: string
   title: string
   head: FeedHeadState | null
@@ -224,30 +230,34 @@ function DialogHead({
             }}
           />
         ) : (
-          <Box
-            sx={{
-              flex: '1 1 auto',
-              minWidth: 0,
-              display: 'flex',
-              alignItems: 'baseline',
-              gap: 1.5,
-            }}
-          >
-            <Typography
-              component="h1"
-              title={title}
+          <Box sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <Box
               sx={{
+                flex: '1 1 auto',
                 minWidth: 0,
-                fontSize: 15,
-                fontWeight: 500,
-                lineHeight: 1.4,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 1.5,
               }}
             >
-              {title}
-            </Typography>
+              <Typography
+                component="h1"
+                title={title}
+                sx={{
+                  minWidth: 0,
+                  fontSize: 15,
+                  fontWeight: 500,
+                  lineHeight: 1.4,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {title}
+              </Typography>
+            </Box>
+            {/* A run of a scheduled task: how it began and its task, under the name (Зп43). */}
+            {schedule !== null ? <ScheduleMark schedule={schedule} chatTitle={title} /> : null}
           </Box>
         )}
       </Box>
@@ -283,11 +293,23 @@ function DialogHead({
  * shown; whatever the client writes or presses is read back at once.
  */
 export function DialogView({
+  schedule = null,
+  userId = null,
   taskId,
   title,
   browserStreamUrl = null,
   speech = false,
 }: {
+  /**
+   * The scheduled task the chat is a run of, from `task.get` (docs/plan/82-scheduled-tasks.md,
+   * Зп43); null — an ordinary chat.
+   */
+  schedule?: ChatScheduleLabel | null
+  /**
+   * The signed-in client: the window of a scheduled task keeps its draft by them; null — the cards
+   * of the feed open no window and lead to «Расписание» instead.
+   */
+  userId?: string | null
   taskId: string
   title: string | null
   /**
@@ -315,6 +337,8 @@ export function DialogView({
   const wide = useMediaQuery(theme.breakpoints.up('lg'))
   // Said to a screen reader: the server took a new level, the file of the chat was saved.
   const [note, setNote] = useState('')
+  /** The window of a scheduled task the cards of the feed open (Зп35); null — closed. */
+  const [scheduleOpening, setScheduleOpening] = useState<ScheduleDialogOpening | null>(null)
   const effortMenu = useRef<EffortMenuHandle>(null)
   const { details } = useChatDetails()
   const { thinking } = useChatThinking()
@@ -984,6 +1008,14 @@ export function DialogView({
     browserLive,
     busy,
     stopping,
+    // The window of a scheduled task over the chat (docs/plan/82-scheduled-tasks.md, Зп35).
+    ...(userId !== null
+      ? {
+          onEditSchedule: (task: ScheduledTaskItem) =>
+            setScheduleOpening({ kind: 'edit', schedule: task }),
+          onNewSchedule: () => setScheduleOpening({ kind: 'new' }),
+        }
+      : {}),
   }
   const sentFilesOf = (ids: readonly string[]): SentFile[] =>
     ids.map((id) => {
@@ -1248,6 +1280,7 @@ export function DialogView({
         }}
       >
         <DialogHead
+          schedule={schedule}
           taskId={taskId}
           title={shownTitle}
           head={head}
@@ -1463,6 +1496,13 @@ export function DialogView({
         content={toolContent}
       />
 
+      {userId !== null ? (
+        <ScheduleDialog
+          opening={scheduleOpening}
+          userId={userId}
+          onClose={() => setScheduleOpening(null)}
+        />
+      ) : null}
       <ConfirmDialog
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}

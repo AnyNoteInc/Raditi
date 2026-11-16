@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-
 import {
   enqueueTelegramProgress,
   enqueueTelegramSend,
@@ -31,6 +29,7 @@ import { removeDialog } from '../chat/dialog-manage.ts'
 import { readChatInfo } from '../chat/info.ts'
 import { queueDialogWords } from '../chat/queue.ts'
 import { loadLatestConsents } from '../consents.ts'
+import { deterministicUuidV7 } from '../deterministic-uuid.ts'
 import { takeTelegramLink, unlinkTelegram } from './link.ts'
 import { telegramText } from './texts.ts'
 
@@ -82,14 +81,7 @@ export const TELEGRAM_CHATS_LISTED = 8
  * is recognised as the chat it started.
  */
 export function updateUuid(salt: string, at: Date): string {
-  const hash = createHash('sha256').update(`telegram:${salt}`).digest()
-  const bytes = Buffer.alloc(16)
-  bytes.writeUIntBE(Math.max(0, Math.min(at.getTime(), 2 ** 48 - 1)), 0, 6)
-  hash.copy(bytes, 6, 0, 10)
-  bytes[6] = 0x70 | (bytes[6]! & 0x0f)
-  bytes[8] = 0x80 | (bytes[8]! & 0x3f)
-  const hex = bytes.toString('hex')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  return deterministicUuidV7('telegram', salt, at)
 }
 
 /** The time part of the ids of presses (they carry no time of their own). */

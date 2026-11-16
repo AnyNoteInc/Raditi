@@ -25,10 +25,14 @@ import {
   type FeedBrowserHead,
   requestRow,
   resultRow,
+  SCHEDULE_ID,
+  scheduleChangeRow,
+  scheduleLeftRow,
   SESSION_ID,
   stepRow,
   TASK_ID,
   verdicts,
+  AUTHOR_ID,
 } from './testing'
 
 type Press = { taskId: string; requestId: string }
@@ -132,6 +136,40 @@ const client = vi.hoisted(() => ({
     },
     remove: { mutate: vi.fn() },
   },
+}))
+
+// The cards of scheduled tasks and their window read tRPC of their own: their tests show them
+// (feed-schedule.test.tsx, the tests of «Расписание»). Here — only that the chat opens the window.
+vi.mock('./feed-schedule', () => ({
+  FeedScheduleChange: ({ onEdit }: { onEdit?: (task: { id: string }) => void }) =>
+    onEdit ? (
+      <button type="button" onClick={() => onEdit({ id: 'task-of-the-card' })}>
+        Изменить задачу из ленты
+      </button>
+    ) : null,
+  FeedScheduleLeft: ({ onSetUp }: { onSetUp?: () => void }) =>
+    onSetUp ? (
+      <button type="button" onClick={onSetUp}>
+        Настроить вручную
+      </button>
+    ) : null,
+}))
+vi.mock('@/components/scheduled/schedule-dialog', () => ({
+  ScheduleDialog: ({
+    opening,
+    onClose,
+  }: {
+    opening: { kind: 'new' } | { kind: 'edit'; schedule: { id: string } } | null
+    onClose: () => void
+  }) =>
+    opening === null ? null : (
+      <div role="dialog" aria-label="Окно задачи">
+        {opening.kind === 'edit' ? `Изменить ${opening.schedule.id}` : 'Новая задача'}
+        <button type="button" onClick={onClose}>
+          Закрыть окно задачи
+        </button>
+      </div>
+    ),
 }))
 
 vi.mock('@/trpc/client', () => ({
@@ -739,6 +777,83 @@ function showAnswers(...answers: (DialogFeed | Promise<DialogFeed>)[]) {
   queueAnswers(...answers)
   mountDialog()
 }
+
+describe('a chat of a run of a scheduled task (docs/plan/82-scheduled-tasks.md)', () => {
+  // Зп43: a chat of a run says so under its name.
+  it('says under its name that it is a run of a scheduled task, with a link to the task', async () => {
+    // The chat of a run takes the name of its task (Зп17).
+    calls.feed.mockResolvedValue(waiting({ task: { title: 'Курс валют' } }))
+    const schedule = { id: SCHEDULE_ID, name: 'Курс валют', trigger: 'schedule' } as const
+    const client = new QueryClient()
+    const view = (
+      label: typeof schedule | { id: null; name: string; trigger: 'manual' } | null,
+    ) => (
+      <QueryClientProvider client={client}>
+        <DialogView schedule={label} taskId={TASK_ID} title="Курс валют" />
+      </QueryClientProvider>
+    )
+    const { rerender } = render(view(schedule))
+    await screen.findByText('Поменял цену капучино на 290 ₽.')
+    const head = screen.getByRole('banner')
+    const mark = within(head).getByRole('link', { name: 'По расписанию · Курс валют' })
+    expect(mark.getAttribute('href')).toBe(`/scheduled/${SCHEDULE_ID}`)
+    // The chat is named as its task: the name, right above, is not said again under it.
+    expect(mark.textContent).toBe('По расписанию')
+    // A deleted task leaves its name, without a link (Зп23).
+    rerender(view({ id: null, name: 'Курс валют', trigger: 'manual' }))
+    expect(within(head).getByText('Запуск вручную')).toBeTruthy()
+    expect(within(head).queryByRole('link', { name: /Курс валют/ })).toBeNull()
+    rerender(view(null))
+    expect(within(head).queryByText(/Курс валют ·|· Курс валют/)).toBeNull()
+  })
+
+  it('names the task under a chat of a run that was renamed', async () => {
+    calls.feed.mockResolvedValue(waiting({ task: { title: 'Курс на понедельник' } }))
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView
+          schedule={{ id: SCHEDULE_ID, name: 'Курс валют', trigger: 'schedule' }}
+          taskId={TASK_ID}
+          title="Курс на понедельник"
+        />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Поменял цену капучино на 290 ₽.')
+    const mark = within(screen.getByRole('banner')).getByRole('link', {
+      name: 'По расписанию · Курс валют',
+    })
+    expect(mark.textContent).toBe('По расписанию · Курс валют')
+  })
+
+  it('opens the window of a scheduled task from the cards of its feed (Зп35)', async () => {
+    calls.feed.mockResolvedValue(
+      waiting({
+        events: [requestRow('1'), scheduleChangeRow('2'), scheduleLeftRow('3')],
+        cursor: '3',
+      }),
+    )
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView userId={AUTHOR_ID} taskId={TASK_ID} title="Отчёт" />
+      </QueryClientProvider>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Изменить задачу из ленты' }))
+    const window = screen.getByRole('dialog', { name: 'Окно задачи' })
+    expect(window.textContent).toContain('Изменить task-of-the-card')
+    fireEvent.click(within(window).getByRole('button', { name: 'Закрыть окно задачи' }))
+    expect(screen.queryByRole('dialog', { name: 'Окно задачи' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить вручную' }))
+    expect(screen.getByRole('dialog', { name: 'Окно задачи' }).textContent).toContain(
+      'Новая задача',
+    )
+  })
+
+  it('opens no window of a task where it does not know the client', async () => {
+    showDialog(waiting({ events: [requestRow('1'), scheduleChangeRow('2')], cursor: '2' }))
+    await screen.findByText('Поменяйте цену капучино на 290 ₽')
+    expect(screen.queryByRole('button', { name: 'Изменить задачу из ленты' })).toBeNull()
+  })
+})
 
 describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => {
   const NEITHER = { repository: false, browser: false }

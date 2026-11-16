@@ -45,6 +45,9 @@ const GENERATED = {
     BROWSER_WORKER_TOKEN: hex(32),
     // The bot of the chat (docs/plan/80-telegram.md): core posts its updates to web with it
     TELEGRAM_WEBHOOK_SECRET: b64url(32),
+    // The runs of scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп19): core posts each to web
+    // with it; web and core both get it
+    SCHEDULE_INTAKE_SECRET: b64url(32),
   },
   'app/browser': {
     METRICS_TOKEN: hex(32),
@@ -186,6 +189,8 @@ function serviceFiles(kv, roles) {
           TELEGRAM_WEBHOOK_SECRET: core.TELEGRAM_BOT_TOKEN
             ? core.TELEGRAM_WEBHOOK_SECRET
             : undefined,
+          // web takes the runs of scheduled tasks core hands it (docs/plan/82-scheduled-tasks.md)
+          SCHEDULE_INTAKE_SECRET: core.SCHEDULE_INTAKE_SECRET,
           ...s3(web),
           ...approle('web'),
         }),
@@ -206,6 +211,7 @@ function serviceFiles(kv, roles) {
             ? core.TELEGRAM_WEBHOOK_SECRET
             : undefined,
           WEB_PUSH_PRIVATE_KEY: core.WEB_PUSH_PRIVATE_KEY,
+          SCHEDULE_INTAKE_SECRET: core.SCHEDULE_INTAKE_SECRET,
           BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,
           ...s3(core),
           ...approle('core'),

@@ -14,6 +14,19 @@ import {
 } from '../pages/feed.ts'
 import { pagePathSchema } from '../pages/path.ts'
 import { pageSlugSchema } from '../pages/slug.ts'
+import {
+  feedScheduleChangePayloadSchema,
+  feedScheduleLeftPayloadSchema,
+  scheduleChangeActions,
+  scheduleLeftActions,
+  scheduleLeftReasons,
+} from '../schedule/feed.ts'
+import {
+  canonicalTimezone,
+  DEFAULT_SCHEDULE_TIMEZONE,
+  scheduleTriggerListSchema,
+  type ScheduleTrigger,
+} from '../schedule/triggers.ts'
 
 import { attachmentLimits } from '../attachments/rules.ts'
 import {
@@ -22,7 +35,7 @@ import {
   browserScreenshotLimits,
   browserSessionLimits,
 } from '../browser/session.ts'
-import { reasoningEffortSchema } from '../llm/model-class.ts'
+import { reasoningEffortSchema, reasoningEfforts } from '../llm/model-class.ts'
 import { agentOutputLimits } from '../ports/agent-driver.ts'
 import { historicFeedCommandIds } from '../release/chat-commands.ts'
 import { releaseOutcomes, versionBumps, versionTagSchema } from './feed-history.ts'
@@ -91,6 +104,10 @@ export const feedEventTypes = [
   'feed.doc',
   'feed.doc_touch',
   'feed.doc_left',
+  // A scheduled task the agent created, changed, paused, resumed or deleted at the end of its
+  // turn, and one it could not (docs/plan/82-scheduled-tasks.md, Зп33, Зп35).
+  'feed.schedule_change',
+  'feed.schedule_left',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -886,6 +903,8 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.doc': feedDocPayloadSchema,
   'feed.doc_touch': feedDocTouchPayloadSchema,
   'feed.doc_left': feedDocLeftPayloadSchema,
+  'feed.schedule_change': feedScheduleChangePayloadSchema,
+  'feed.schedule_left': feedScheduleLeftPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -926,6 +945,8 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.doc', feedDocPayloadSchema),
       row('feed.doc_touch', feedDocTouchPayloadSchema),
       row('feed.doc_left', feedDocLeftPayloadSchema),
+      row('feed.schedule_change', feedScheduleChangePayloadSchema),
+      row('feed.schedule_left', feedScheduleLeftPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1261,6 +1282,42 @@ const readDocLeft = z.object({
   reason: known(['refused'] as const, 'refused' as const),
 })
 
+/**
+ * The schedules of a row as stored: a kind this code does not know makes them null — the card
+ * says the schedule without its words — never the row unreadable.
+ */
+const readTriggers = z.unknown().transform((triggers): ScheduleTrigger[] | null => {
+  const parsed = scheduleTriggerListSchema.safeParse(triggers)
+  return parsed.success ? parsed.data : null
+})
+
+const readScheduleChange = z.object({
+  // An action this code does not know says the less: the task changed.
+  action: known(scheduleChangeActions, 'updated' as const),
+  scheduleId: z.uuid(),
+  name: z.string().min(1).max(500),
+  instructions: z.string().min(1).max(limits.requestText),
+  triggers: readTriggers,
+  // A zone this engine does not know is shown as Moscow: a text never fails on it.
+  timezone: z
+    .string()
+    .max(64)
+    .transform((timezone) =>
+      canonicalTimezone(timezone) === null ? DEFAULT_SCHEDULE_TIMEZONE : timezone,
+    ),
+  nextRunAt: z.iso.datetime({ offset: true }).nullable(),
+  effort: known(reasoningEfforts, 'high' as const),
+  notify: z.boolean(),
+})
+
+const readScheduleLeft = z.object({
+  // An action this code does not know is told as a change of the task.
+  action: known(scheduleLeftActions, 'update' as const),
+  name: z.string().min(1).max(500).nullable(),
+  // A reason this code does not know says the less: the answer broke off.
+  reason: known(scheduleLeftReasons, 'failed' as const),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1323,6 +1380,8 @@ export type FeedEvent =
   | ({ type: 'feed.doc' } & z.infer<typeof readDoc>)
   | ({ type: 'feed.doc_touch' } & z.infer<typeof readDocTouch>)
   | ({ type: 'feed.doc_left' } & z.infer<typeof readDocLeft>)
+  | ({ type: 'feed.schedule_change' } & z.infer<typeof readScheduleChange>)
+  | ({ type: 'feed.schedule_left' } & z.infer<typeof readScheduleLeft>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1481,6 +1540,14 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   },
   'feed.doc_left': {
     1: (payload) => readWith(readDocLeft, payload, (data) => ({ type: 'feed.doc_left', ...data })),
+  },
+  'feed.schedule_change': {
+    1: (payload) =>
+      readWith(readScheduleChange, payload, (data) => ({ type: 'feed.schedule_change', ...data })),
+  },
+  'feed.schedule_left': {
+    1: (payload) =>
+      readWith(readScheduleLeft, payload, (data) => ({ type: 'feed.schedule_left', ...data })),
   },
 }
 

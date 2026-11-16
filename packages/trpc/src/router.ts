@@ -7,6 +7,7 @@ import { consentRouter } from './routers/consent.ts'
 import { documentRouter } from './routers/document.ts'
 import { healthRouter } from './routers/health.ts'
 import { pagesRouter } from './routers/pages.ts'
+import { scheduleRouter } from './routers/schedule.ts'
 import { taskRouter } from './routers/task.ts'
 import { userRouter } from './routers/user.ts'
 import { workspaceEnvRouter } from './routers/workspace-env.ts'
@@ -33,6 +34,8 @@ export const appRouter = router({
   workspaceEnv: workspaceEnvRouter,
   // «Настройки → Навыки агента»: the MCP servers of the workspace's agent (plan 81; plan 83, БП11).
   agentSkills: agentSkillsRouter,
+  // «Запланированные задачи»: the scheduled tasks of the user (docs/plan/82-scheduled-tasks.md).
+  schedule: scheduleRouter,
 })
 
 export type AppRouter = typeof appRouter

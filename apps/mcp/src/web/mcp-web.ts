@@ -278,7 +278,13 @@ export class McpWebService {
     try {
       return await this.#deps.worker.action(
         admission.session.id,
-        { taskId: scope.taskId, assignmentId: admission.assignmentId, action },
+        {
+          taskId: scope.taskId,
+          assignmentId: admission.assignmentId,
+          action,
+          // A pass of a scheduled run without its client only reads, on any site (plan 82, Зп50).
+          ...(scope.unattended ? { readOnly: true } : {}),
+        },
         { signal: AbortSignal.timeout(budgetMs) },
       )
     } catch (error) {

@@ -4,6 +4,7 @@ import {
   browserNavigationAllowed,
   browserPageAddress,
   browserPlatformHost,
+  isSecretParameterName,
   type BrowserController,
   type BrowserTaskPolicy,
   type BrowserPageRequest,
@@ -34,6 +35,13 @@ export interface PageRules {
   /** `PAGES_BASE_DOMAIN`: a published page of the agent under it opens (docs/plan/69-pages.md, Ст26). */
   pageDomain: string | null
   policy: BrowserTaskPolicy
+  /**
+   * A pass of a scheduled run without its client holds the browser (docs/plan/82-scheduled-
+   * tasks.md, Зп50): the pages send only reads (`readOnlyDenied`). Absent — never.
+   */
+  readsOnly?: () => boolean
+  /** Told of each request that rule denied. */
+  onReadOnlyRefusal?: () => void
 }
 
 /** What the route does with a request: lets it go, or aborts it with Chromium's error. */
@@ -138,6 +146,26 @@ function methodsOf(method: string, headers: Readonly<Record<string, string>>): s
 }
 
 /**
+ * What a pass of a scheduled run without its client may not send, on any site (docs/plan/82-
+ * scheduled-tasks.md, Зп28, Зп50): nobody is there to confirm it. A request is denied when
+ * - it may write: any method but GET, HEAD and OPTIONS, its own or one its headers ask the server
+ *   to run it as (`methodsOf`) — a form, an XHR of an editor, an autosave;
+ * - it is a document a frame goes to, by GET, with a parameter of its query named like a secret
+ *   (`isSecretParameterName`: a nonce, a token, a key) — an action by a link: deactivate, trash,
+ *   approve, unsubscribe. A subresource with such a parameter — a picture, a script, a map's key —
+ *   reads and goes: on the open web the pages load keys of their services so.
+ * A page that reads by POST — a search, a GraphQL query, a button of consent to cookies — shows
+ * less in such a pass, and the agent says what it could not read.
+ */
+function readOnlyDenied(url: URL, methods: readonly string[], navigation: boolean): boolean {
+  if (methods.some((method) => !READS.has(method.trim().toUpperCase()))) return true
+  if (!navigation) return false
+  for (const [name, value] of url.searchParams)
+    if (value !== '' && isSecretParameterName(name)) return true
+  return false
+}
+
+/**
  * A request of a page: to a host of the session, and nothing the stack's policy denies to who
  * holds the browser (`by`, the agent's when absent; Б37) — nor a write of a page of another site,
  * whose saves the task does not count (Ч6) — or on to another site from where it may be reached
@@ -159,11 +187,21 @@ export function requestVerdict(
 ): RequestVerdict {
   const url = URL.parse(request.url)
   if (!url) return 'blockedbyclient'
+  const methods = methodsOf(request.method, request.headers ?? {})
+  // A pass without its client only reads, on the site and on every other alike (Зп50); the client
+  // at the controls is not limited.
+  if (
+    by !== 'user' &&
+    denies(() => rules.readsOnly?.() === true) &&
+    readOnlyDenied(url, methods, request.navigation)
+  ) {
+    rules.onReadOnlyRefusal?.()
+    return 'accessdenied'
+  }
   const navigates = request.navigation && place.main
   if (!originAllowed(url, rules))
     return reaches(url, rules, place, navigates) ? 'continue' : 'blockedbyclient'
   const path = pathOf(url)
-  const methods = methodsOf(request.method, request.headers ?? {})
   if (onAnotherSite(place, rules) && methods.some((method) => !READS.has(method)))
     return 'accessdenied'
   for (const method of methods) {

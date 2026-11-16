@@ -215,12 +215,76 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
           firstEpoch: 1,
           epoch: 1,
           requirements: { repository: false, browser },
+          // No scheduled run started this chat (docs/plan/82-scheduled-tasks.md, Зп27).
+          unattended: false,
         })
       } finally {
         await turn.cleanup()
       }
     },
   )
+
+  it('keeps a pass of a scheduled run without its client so while the client presses «Остановить» (plan 82, Зп27)', async () => {
+    const turn = await chatTurnOf(true)
+    const user = await db.user.create({
+      data: { name: 'Synthetic', email: `mcp-${randomBytes(8).toString('hex')}@example.test` },
+    })
+    const schedule = await db.scheduledTask.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        createdById: user.id,
+        name: 'Курс валют',
+        instructions: 'Пришли курс доллара по ЦБ на сегодня.',
+        effort: 'low',
+        triggers: [{ kind: 'daily', time: '08:00' }],
+        timezone: 'Europe/Moscow',
+        createdVia: 'manual',
+      },
+    })
+    const feedRequest = (payload: object) =>
+      db.taskEvent.create({
+        data: { taskId: turn.task.id, type: 'feed.request', clientVisible: true, payload },
+      })
+    try {
+      const instructions = await feedRequest({ v: 1, kind: 'text', text: 'Пришли курс доллара.' })
+      await db.scheduledRun.create({
+        data: {
+          scheduledTaskId: schedule.id,
+          dueAt: instructions.createdAt,
+          trigger: 'schedule',
+          status: 'started',
+          taskId: turn.task.id,
+          startedAt: instructions.createdAt,
+          name: schedule.name,
+          instructions: schedule.instructions,
+          effort: schedule.effort,
+        },
+      })
+      // The pass answers the instructions: its plan keeps their instant, as the planner writes it.
+      await db.turnAssignment.update({
+        where: { id: turn.assignment.id },
+        data: { plan: { committedAt: instructions.createdAt.toISOString() } },
+      })
+      expect(await store.authenticate(turn.token)).toMatchObject({ unattended: true })
+      // «Остановить» and «Отправить сейчас» while it runs: the agent of this pass saw neither.
+      await feedRequest({ v: 1, kind: 'command', command: 'cancel' })
+      await feedRequest({ v: 1, kind: 'interrupt', text: 'Ответьте мне.' })
+      expect(await store.authenticate(turn.token)).toMatchObject({ unattended: true })
+      // The pass that answers the client's words is an ordinary chat's.
+      const words = await feedRequest({ v: 1, kind: 'text', text: 'Продолжайте.' })
+      await db.turnAssignment.update({
+        where: { id: turn.assignment.id },
+        data: { plan: { committedAt: words.createdAt.toISOString() } },
+      })
+      expect(await store.authenticate(turn.token)).toMatchObject({ unattended: false })
+    } finally {
+      await db.scheduledRun.deleteMany({ where: { taskId: turn.task.id } })
+      await db.taskEvent.deleteMany({ where: { taskId: turn.task.id } })
+      await turn.cleanup()
+      await db.scheduledTask.delete({ where: { id: schedule.id } })
+      await db.user.delete({ where: { id: user.id } })
+    }
+  })
 
   it('admits two chats at once, each by its own lease', async () => {
     const one = await chatTurnOf(false)

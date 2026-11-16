@@ -258,14 +258,18 @@ export class SessionManager {
     return { checkpoints: await session.verify() }
   }
 
-  /** `POST /v1/sessions/:id/actions`: the session must be the task's. */
+  /**
+   * `POST /v1/sessions/:id/actions`: the session must be the task's. `readOnly` — a pass of a
+   * scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28): no upload, no confirmed question,
+   * and the pages send nothing but reads from this action on, on any site (Зп50).
+   */
   async act(sessionId: string, request: BrowserActionRequest): Promise<BrowserToolResult> {
     const session = this.session(sessionId.toLowerCase())
     if (!session || session.taskId !== request.taskId.toLowerCase()) {
       this.#deps.metrics.action(request.action.tool, 'BROWSER_SESSION_UNAVAILABLE')
       throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
     }
-    return session.act(request.action)
+    return session.act(request.action, { readOnly: request.readOnly === true })
   }
 
   /** `GET /v1/sessions`. */

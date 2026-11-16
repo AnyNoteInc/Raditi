@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from '@repo/db'
-import type { TaskStatus } from '@repo/domain'
+import type { ScheduledRunTrigger, TaskStatus } from '@repo/domain'
 
 /** Dialogs of one page of the list. */
 export const DIALOG_PAGE = 50
@@ -35,6 +35,19 @@ export interface DialogListItem {
   archived: boolean
   /** The chat goes on in Telegram too (docs/plan/80-telegram.md, 80.6): the agent answers there. */
   telegram: boolean
+  /**
+   * The chat is a run of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп43): «По расписанию ·
+   * <name>» or «Запуск вручную · <name>», a link to the task; `id` null — the task was deleted,
+   * the label stays without a link (Зп23).
+   */
+  schedule: DialogSchedule | null
+}
+
+/** The scheduled task a chat is a run of (Зп43). */
+export interface DialogSchedule {
+  id: string | null
+  name: string
+  trigger: ScheduledRunTrigger
 }
 
 export interface DialogPage {
@@ -71,23 +84,51 @@ const ENDING = Prisma.sql`(SELECT e.type FROM task_events e
       WHERE r.task_id = t.id AND r.type = 'feed.redo' AND r.id > e.id))
   ORDER BY e.id DESC LIMIT 1)`
 
-/** `DialogListItem.answered` of the row `t`. */
-const ANSWERED = Prisma.sql`(t.status = 'awaiting_user'
+/** `DialogListItem.answered` of the row `t`. Read by the runs of scheduled tasks too (Зп5). */
+export const ANSWERED = Prisma.sql`(t.status = 'awaiting_user'
   AND COALESCE(${ENDING} IN ('feed.result', 'feed.rewind'), false))`
 
 /** `DialogListItem.rewound` of the row `t`. */
 const REWOUND = Prisma.sql`(t.status = 'awaiting_user' AND COALESCE(${ENDING} = 'feed.rewind', false))`
 
-/**
- * `DialogListItem.failed` of the row `t`: of the rows that end a pass — a candidate too, which a
- * pass after a failure may bring — the newest is a failure.
- */
-const FAILED = Prisma.sql`(t.status IN ('awaiting_user', 'awaiting_approval')
-  AND COALESCE((SELECT e.type FROM task_events e
+/** The newest of the rows of `t` that end a pass — a candidate too, which a pass after a failure may bring. */
+const PASS_ENDING = (column: Prisma.Sql) => Prisma.sql`(SELECT ${column} FROM task_events e
     WHERE e.task_id = t.id
       AND e.type IN ('feed.result', 'feed.question', 'feed.failure', 'feed.candidate',
         'feed.rewind', 'feed.redo')
-    ORDER BY e.id DESC LIMIT 1) = 'feed.failure', false))`
+    ORDER BY e.id DESC LIMIT 1)`
+
+/**
+ * `DialogListItem.failed` of the row `t`: of the rows that end a pass — a candidate too, which a
+ * pass after a failure may bring — the newest is a failure. Read by the runs of scheduled tasks.
+ */
+export const FAILED = Prisma.sql`(t.status IN ('awaiting_user', 'awaiting_approval')
+  AND COALESCE(${PASS_ENDING(Prisma.sql`e.type`)} = 'feed.failure', false))`
+
+/**
+ * The open chat `t` stopped at a limit (docs/plan/82-scheduled-tasks.md, Зп5): the newest row that
+ * ends a pass is the platform's question about credits (`feed.question` of the kind `ceiling`) or
+ * a failure for the weekly limit (`usage_limit`). `credits`, `weekly_limit`, `limit` (another
+ * ceiling or window), or null — it did not stop.
+ */
+export const STOPPED = Prisma.sql`(CASE WHEN t.status IN ('awaiting_user', 'awaiting_approval')
+  THEN ${PASS_ENDING(Prisma.sql`CASE
+    WHEN e.type = 'feed.question' AND e.payload->>'kind' = 'ceiling' THEN
+      CASE WHEN e.payload->>'reason' IN ('credits', 'gift') THEN 'credits' ELSE 'limit' END
+    WHEN e.type = 'feed.failure' AND e.payload->>'code' = 'usage_limit' THEN
+      CASE WHEN e.payload->'window'->>'kind' = 'week' THEN 'weekly_limit' ELSE 'limit' END
+    END`)} END)`
+
+/**
+ * The scheduled task the chat `t` is a run of (Зп43): its id while it is not deleted, its name —
+ * of the task while it is there, else of the run —, and how the run started. null — not a run.
+ */
+const SCHEDULE = Prisma.sql`(SELECT json_build_object(
+    'id', CASE WHEN st.deleted_at IS NULL THEN st.id END,
+    'name', CASE WHEN st.deleted_at IS NULL THEN st.name ELSE r.name END,
+    'trigger', r.trigger)
+  FROM scheduled_runs r JOIN scheduled_tasks st ON st.id = r.scheduled_task_id
+  WHERE r.task_id = t.id)`
 
 /**
  * One page of the chats of the workspaces of `userId`, the latest changed first. A page per
@@ -119,7 +160,8 @@ export function dialogPageQuery(input: {
       ${REWOUND} AS rewound,
       ${FAILED} AS failed,
       t.pinned_at IS NOT NULL AS pinned, t.archived_at IS NOT NULL AS archived,
-      EXISTS (SELECT 1 FROM chat_sessions c WHERE c.id = t.chat_session_id AND c.channel = 'telegram') AS telegram
+      EXISTS (SELECT 1 FROM chat_sessions c WHERE c.id = t.chat_session_id AND c.channel = 'telegram') AS telegram,
+      ${SCHEDULE} AS schedule
     FROM members m
     CROSS JOIN LATERAL (
       SELECT t.id, t.title, t.status, t.created_at, t.updated_at, t.pinned_at, t.archived_at,
@@ -169,6 +211,7 @@ interface DialogRow {
   pinned: boolean
   archived: boolean
   telegram: boolean
+  schedule: DialogSchedule | null
   created_at: Date
   updated_at: Date
   updated_us: bigint
@@ -186,6 +229,7 @@ const itemOf = (row: DialogRow): DialogListItem => ({
   pinned: row.pinned,
   archived: row.archived,
   telegram: row.telegram,
+  schedule: row.schedule,
 })
 
 /** What every query of the list says of the chat `t`. */
@@ -195,7 +239,8 @@ const ITEM = Prisma.sql`t.id, t.title, t.status::text AS status, t.created_at, t
   ${REWOUND} AS rewound,
   ${FAILED} AS failed,
   t.pinned_at IS NOT NULL AS pinned, t.archived_at IS NOT NULL AS archived,
-  EXISTS (SELECT 1 FROM chat_sessions c WHERE c.id = t.chat_session_id AND c.channel = 'telegram') AS telegram`
+  EXISTS (SELECT 1 FROM chat_sessions c WHERE c.id = t.chat_session_id AND c.channel = 'telegram') AS telegram,
+  ${SCHEDULE} AS schedule`
 
 /** The chats of the user's workspaces. */
 const OF_USER = (userId: string) =>

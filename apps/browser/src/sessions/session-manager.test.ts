@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import {
   attachmentKey,
   isDomainError,
+  PageBrowserError,
   type BrowserClientMessage,
   type BrowserCloseReason,
   type BrowserSessionState,
@@ -593,6 +594,97 @@ describe('the agent’s actions', () => {
     await act(row, { tool: 'web_type', text: 'следующий проход' })
     await settle()
     expect(store.wrote).toBe(2)
+  })
+
+  it('only reads in a pass of a scheduled run without its client (plan 82, Зп28, Зп50)', async () => {
+    const { ensuredWithoutSite, act, counts, store, inbox } = setup()
+    const { row, browser } = await ensuredWithoutSite()
+    const readOnly = { readOnly: true }
+    const reads = () => browser.connection.readsOnly?.()
+    // Before any action of a pass without its client, the pages send what they send.
+    expect(reads()).toBe(false)
+    await act(row, { tool: 'web_open', url: 'https://shop.example.com/cart' }, readOnly)
+    // From this action on, every request of every page reads only (page-rules asks it).
+    expect(reads()).toBe(true)
+    browser.tree = '- button "Оформить заказ" [ref=e5]\n- textbox "Промокод" [ref=e6]'
+    await act(row, { tool: 'web_observe' }, readOnly)
+    // A click whose form the route refused is told as a read-only pass, not as a closed site.
+    browser.onAct = async (action) => {
+      if (action.tool !== 'web_click') return
+      browser.connection.onReadOnlyRefusal?.()
+      throw new PageBrowserError('denied')
+    }
+    expect(
+      await codeOf(act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' }, readOnly)),
+    ).toBe('BROWSER_READ_ONLY')
+    // A page that refused for another reason is that refusal, as ever.
+    browser.onAct = async (action) => {
+      if (action.tool === 'web_click') throw new PageBrowserError('denied')
+    }
+    expect(
+      await codeOf(act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' }, readOnly)),
+    ).toBe('BROWSER_ACTION_DENIED')
+    browser.onAct = async () => undefined
+    // No file reaches a page: it would be sent the moment the page takes it.
+    const id = randomUUID()
+    const workspaceId = randomUUID()
+    store.attachments.set(id, {
+      id,
+      taskId: row.taskId,
+      workspaceId,
+      s3Key: attachmentKey(workspaceId, id),
+      fileName: 'report.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 2,
+    })
+    inbox.objects.set(attachmentKey(workspaceId, id), new Uint8Array([1, 2]))
+    expect(await codeOf(act(row, { tool: 'web_upload', attachmentIds: [id] }, readOnly))).toBe(
+      'BROWSER_READ_ONLY',
+    )
+    expect(inbox.read).toEqual([])
+    // «Удалить навсегда?»: the page's question is not confirmed, only dismissed.
+    browser.emit({
+      kind: 'dialog',
+      dialog: { id: 'd1', kind: 'confirm', message: 'Удалить навсегда?' },
+    })
+    expect(await codeOf(act(row, { tool: 'web_dialog', accept: true }, readOnly))).toBe(
+      'BROWSER_READ_ONLY',
+    )
+    await act(row, { tool: 'web_dialog', accept: false }, readOnly)
+    // An alert's «OK» only closes it.
+    browser.emit({ kind: 'dialog', dialog: { id: 'd2', kind: 'alert', message: 'Готово' } })
+    await act(row, { tool: 'web_dialog', accept: true }, readOnly)
+    // A prompt sends what is typed into it: not confirmed either, only dismissed.
+    browser.emit({
+      kind: 'dialog',
+      dialog: { id: 'd3', kind: 'prompt', message: 'Введите код из письма' },
+    })
+    expect(await codeOf(act(row, { tool: 'web_dialog', accept: true }, readOnly))).toBe(
+      'BROWSER_READ_ONLY',
+    )
+    await act(row, { tool: 'web_dialog', accept: false }, readOnly)
+    // Leaving a page with unsaved changes saves nothing: «Leave» goes.
+    browser.emit({ kind: 'dialog', dialog: { id: 'd4', kind: 'beforeunload', message: '' } })
+    await act(row, { tool: 'web_dialog', accept: true }, readOnly)
+    // Reading, following a link and typing into a field go on.
+    await act(row, { tool: 'web_fill', observation: 'o1', ref: 'e6', text: 'КОФЕ' }, readOnly)
+    expect(browser.acted.filter((action) => action.tool === 'web_dialog')).toEqual([
+      { tool: 'web_dialog', accept: false },
+      { tool: 'web_dialog', accept: true },
+      { tool: 'web_dialog', accept: false },
+      { tool: 'web_dialog', accept: true },
+    ])
+    expect(counts.actions.filter((action) => action.endsWith('BROWSER_READ_ONLY'))).toEqual([
+      'web_click:BROWSER_READ_ONLY',
+      'web_upload:BROWSER_READ_ONLY',
+      'web_dialog:BROWSER_READ_ONLY',
+      'web_dialog:BROWSER_READ_ONLY',
+    ])
+    // Once the client answered, the next pass sends what it sends.
+    await act(row, { tool: 'web_observe' })
+    expect(reads()).toBe(false)
+    await act(row, { tool: 'web_upload', attachmentIds: [id] })
+    expect(browser.acted.at(-1)).toMatchObject({ tool: 'web_upload' })
   })
 
   it('uploads only attachments bound to the session’s task, read from the inbox', async () => {
