@@ -222,7 +222,7 @@ export function CiChangeCard({ taskId }: { taskId: string }) {
               variant="contained"
               disabled={busy}
               onClick={() => void allow()}
-              sx={{ minHeight: 36 }}
+              sx={{ minHeight: 44 }}
             >
               {ciCardText.allow}
             </Button>
@@ -231,7 +231,7 @@ export function CiChangeCard({ taskId }: { taskId: string }) {
               color="inherit"
               disabled={busy}
               onClick={() => void refuse()}
-              sx={{ minHeight: 36 }}
+              sx={{ minHeight: 44 }}
             >
               {ciCardText.decline}
             </Button>

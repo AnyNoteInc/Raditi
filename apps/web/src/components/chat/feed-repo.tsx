@@ -50,8 +50,7 @@ export const repoCardText = Object.freeze({
   confirmTitleMr: 'Открыть запрос на слияние?',
   confirmBody:
     'Изменения уйдут в ветку вашего репозитория, и ваша сборка запустится на ней, как на ветке любого разработчика. В основную ветку агент ничего не отправляет.',
-  rewinds:
-    'Вы отменили часть изменений командой /undo: в ветку уйдёт коммит, который их возвращает.',
+  rewinds: 'Вы отменили часть изменений: в ветку уйдут правки, которые их убирают.',
   mrTitle: 'Название запроса',
   mrDescription: 'Описание',
   draft: 'Черновик',
@@ -203,7 +202,7 @@ function PushButton({ taskId, label }: { taskId: string; label: string }) {
         variant="contained"
         disabled={busy}
         onClick={() => void open()}
-        sx={{ minHeight: 36 }}
+        sx={{ minHeight: 44 }}
       >
         {label}
       </Button>
@@ -280,7 +279,7 @@ function DiffButton({ taskId, headSha }: { taskId: string; headSha: string }) {
   })
   return (
     <>
-      <Button size="small" color="inherit" onClick={() => setOpen(true)} sx={{ minHeight: 36 }}>
+      <Button size="small" color="inherit" onClick={() => setOpen(true)} sx={{ minHeight: 44 }}>
         {repoCardText.view}
       </Button>
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md">

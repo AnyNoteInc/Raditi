@@ -113,7 +113,8 @@ export const projectPageText = Object.freeze({
   instructionsEmpty: 'Агент читает их в каждом чате проекта',
   instructionsLabel: 'Инструкции проекта',
   instructionsHint: 'Как отвечать, что учитывать, чего не делать. Без паролей и ключей.',
-  instructionsCount: (count: number, limit: number) => `${count} из ${limit}`,
+  instructionsCount: (count: number, limit: number) =>
+    `${count.toLocaleString('ru-RU')} из ${limit.toLocaleString('ru-RU')}`,
   instructionsTitle: 'Инструкции проекта',
   privacy: 'Приватный',
   privacyHint: 'Видите только вы',
@@ -140,8 +141,11 @@ export const projectPickerText = Object.freeze({
   loading: 'Загружаем проект…',
   headingLoading: 'Новый чат в проекте',
   placeholder: 'Сообщение в новый чат проекта',
+  /** The same words as the page of the project (ревью P10): what of it applies to the chat. */
   applies: (instructions: boolean) =>
-    instructions ? 'Агент учтёт инструкции и цель проекта' : 'Агент учтёт цель проекта',
+    instructions
+      ? 'Агент учитывает инструкции, цель, контекст и память проекта'
+      : 'Агент учитывает цель, контекст и память проекта',
   openProject: 'Открыть проект',
 })
 

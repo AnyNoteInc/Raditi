@@ -2,6 +2,7 @@
 
 import {
   gitConnectionReasonTexts,
+  gitServerHostOf,
   repoProviderBrands,
   type GitConnectionReason,
 } from '@repo/domain/repo'
@@ -581,6 +582,27 @@ function ConnectForm({
           <Typography sx={{ fontSize: 12.5, color: 'text.secondary', mt: -1 }}>
             {repoText.tokenAdvice}
           </Typography>
+          {(() => {
+            const server = gitServerHostOf(host)
+            return server ? (
+              <Box
+                component="a"
+                href={repoText.tokenPage(server)}
+                target="_blank"
+                rel="noreferrer noopener"
+                sx={{
+                  alignSelf: 'flex-start',
+                  minHeight: 44,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  fontSize: 13,
+                  color: 'primary.main',
+                }}
+              >
+                {repoText.tokenHow}
+              </Box>
+            ) : null
+          })()}
         </Box>
       ) : null}
 

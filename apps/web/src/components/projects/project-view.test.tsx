@@ -240,7 +240,7 @@ describe('the page of a project (docs/plan/84-projects.md, ПР6)', () => {
     fireEvent.change(within(window_).getByRole('textbox', { name: 'Инструкции проекта' }), {
       target: { value: 'Пишем на «вы».' },
     })
-    expect(within(window_).getByText('14 из 8000')).toBeTruthy()
+    expect(within(window_).getByText(/^14 из 8\s000$/)).toBeTruthy()
     fireEvent.click(within(window_).getByRole('button', { name: 'Сохранить' }))
     await waitFor(() =>
       expect(calls.setInstructions).toHaveBeenCalledWith(

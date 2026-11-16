@@ -25,7 +25,7 @@ import { callErrorText } from './call-error'
 export const mergeCardText = Object.freeze({
   title: (target: string) => `Принять запрос в основную ветку ${target}?`,
   onlyYou: 'Подтверждаете только вы',
-  commit: 'Коммит',
+  commit: 'Версия',
   checks: (state: keyof typeof checksStateWords) => checksStateWords[state],
   after: repoMergeTexts.afterMerge,
   deleteBranch: (branch: string) => `Удалить ветку ${branch} после принятия`,
@@ -160,7 +160,7 @@ export function MergeCard({
               variant="contained"
               disabled={busy}
               onClick={() => void accept('now')}
-              sx={{ minHeight: 36 }}
+              sx={{ minHeight: 44 }}
             >
               {mergeCardText.now}
             </Button>
@@ -170,7 +170,7 @@ export function MergeCard({
                 variant="outlined"
                 disabled={busy}
                 onClick={() => void accept('when_green')}
-                sx={{ minHeight: 36 }}
+                sx={{ minHeight: 44 }}
               >
                 {mergeCardText.whenGreen}
               </Button>
@@ -180,7 +180,7 @@ export function MergeCard({
               color="inherit"
               disabled={busy}
               onClick={() => setHidden(true)}
-              sx={{ minHeight: 36 }}
+              sx={{ minHeight: 44 }}
             >
               {mergeCardText.later}
             </Button>
