@@ -104,7 +104,7 @@ describe('MCP token access', () => {
       ...extra,
     })
     const $queryRaw = vi.fn()
-    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
     $queryRaw.mockResolvedValueOnce([memoryRow({})])
     expect((await store.authenticate(token))?.memory).toEqual({ userId, projectId })
     $queryRaw.mockResolvedValueOnce([memoryRow({ projectId: null, projectGone: null })])
@@ -128,7 +128,7 @@ describe('MCP token access', () => {
       hiddenPaths: [],
     }
     const $queryRaw = vi.fn()
-    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
     $queryRaw.mockResolvedValueOnce([{ ...row(base), repository }])
     const access = await store.authenticate(token)
     expect(access?.requirements.repository).toBe(true)
