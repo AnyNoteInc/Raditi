@@ -190,6 +190,7 @@ export const taskProviders: Provider[] = [
       browser: BrowserSessions | null,
       inbox: ObjectStorage,
       registry: Registry,
+      workspace: GitWorkspaceService | null,
     ) => {
       const pageMetrics = new PageMetrics(prisma)
       pageMetrics.register(registry)
@@ -207,6 +208,18 @@ export const taskProviders: Provider[] = [
         projects: new ProjectTrash({ db: prisma, storage: inbox }),
         memory: new MemoryChanges({ db: prisma, logger: new Logger('MemoryChanges') }),
         schedules: new ScheduleChanges({ db: prisma, logger: new Logger('ScheduleChanges') }),
+        // The card of a commit recovery published (docs/plan/84-projects.md, ПР12).
+        repositories: workspace
+          ? {
+              workspace,
+              // The object storage of the platform: the diff goes to raditi-artifacts.
+              changes: new RepoChanges({
+                db: prisma,
+                storage: inbox,
+                logger: new Logger('RepoChanges'),
+              }),
+            }
+          : null,
       })
     },
     inject: [
@@ -219,6 +232,7 @@ export const taskProviders: Provider[] = [
       BrowserSessions,
       OBJECT_STORAGE,
       METRICS_REGISTRY,
+      { token: GIT_WORKSPACE, optional: true },
     ],
   },
   {
