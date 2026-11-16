@@ -4,6 +4,8 @@ import {
   repoActionText,
   repoPushRefusalTexts,
   repoRefusalTexts,
+  type CiRefusal,
+  type CiStatus,
   type RepoActionKind,
   type RepoActionState,
 } from '@repo/domain/repo'
@@ -17,9 +19,11 @@ import Link from '@mui/material/Link'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import NextLink from 'next/link'
 import { useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { CiStatusChip, RUNS_POLL_MS, runHref } from '@/components/projects/repo-runs'
 import { useTRPC } from '@/trpc/client'
 
 import { callErrorText } from './call-error'
@@ -56,6 +60,9 @@ export const repoCardText = Object.freeze({
   diffLoading: 'Загружаем изменения…',
   proposal: 'Агент предлагает открыть запрос на слияние',
   failed: 'Не получилось — попробуйте ещё раз.',
+  build: 'Сборка',
+  merged: 'Принято в основную ветку',
+  mergedTakenBack: repoPushRefusalTexts.REPO_ALREADY_MERGED,
   more: (n: number) => `и ещё ${n}`,
 })
 
@@ -79,17 +86,57 @@ export function repoErrorText(code: string | null | undefined): string {
   return text ? `${text}.` : repoCardText.failed
 }
 
-/** The chat's branch as core keeps it: refreshed while a press is on its way. */
+/** A sent branch whose build has not shown up is looked at for this long (no CI — no build). */
+const AWAIT_RUN_MS = 10 * 60_000
+
+/**
+ * The chat's branch as core keeps it: refreshed while a press is on its way, and while its build or
+ * its merge request may still change (ПР17; slice 84.21) — core polls the provider, the card reads
+ * what core wrote. No reload, no webhook.
+ */
 function useBranch(taskId: string | undefined) {
   const trpc = useTRPC()
+  const [since] = useState(() => Date.now())
   return useQuery({
     ...trpc.projectRepo.branch.queryOptions({ taskId: taskId ?? '' }),
     enabled: Boolean(taskId),
     refetchInterval: (query) => {
-      const state = query.state.data?.lastAction?.state
-      return state === 'queued' || state === 'running' ? 2000 : false
+      const view = query.state.data
+      const state = view?.lastAction?.state
+      if (state === 'queued' || state === 'running') return 2000
+      if (!view || view.state === 'merged' || view.state === 'closed') return false
+      const run = view.lastRun?.status
+      if (run === 'pending' || run === 'running') return RUNS_POLL_MS
+      if (
+        view.mergeRequest &&
+        (view.mergeRequest.state === 'open' || view.mergeRequest.state === 'draft')
+      )
+        return RUNS_POLL_MS
+      if (view.sent && view.lastRun === null && Date.now() - since < AWAIT_RUN_MS)
+        return RUNS_POLL_MS
+      return false
     },
   })
+}
+
+/** «Сборка: Идёт» of the chat's branch at the client, linking to the build in «Репозиторий». */
+function BuildLine({
+  projectId,
+  run,
+}: {
+  projectId: string
+  run: { id: string; status: CiStatus; refusal: CiRefusal | null }
+}) {
+  return (
+    <Box data-feed-repo-build={run.status} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+        {repoCardText.build}:
+      </Typography>
+      <Link component={NextLink} href={runHref(projectId, run.id)} underline="none">
+        <CiStatusChip status={run.status} refusal={run.refusal} />
+      </Link>
+    </Box>
+  )
 }
 
 /** «Отправить в ветку» and «Открыть запрос на слияние»: the card's token, then the press. */
@@ -342,6 +389,7 @@ export function FeedRepoChanges({
         view?.canPush &&
         !view.sent &&
         !pressing &&
+        !(view.state === 'merged' && view.rewinds) &&
         view.ciChange === 'none' ? (
           <PushButton
             taskId={taskId}
@@ -354,9 +402,14 @@ export function FeedRepoChanges({
             {repoCardText.sending}
           </Typography>
         ) : null}
-        {current && view?.sent ? (
+        {current && view?.sent && view.state !== 'merged' ? (
           <Typography variant="body2" sx={{ color: 'text.secondary' }}>
             {repoCardText.sent}
+          </Typography>
+        ) : null}
+        {current && view?.state === 'merged' && !view.rewinds ? (
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            {repoCardText.merged}
           </Typography>
         ) : null}
         {view?.mergeRequest ? (
@@ -365,6 +418,15 @@ export function FeedRepoChanges({
           </Link>
         ) : null}
       </Box>
+      {current && view?.lastRun ? (
+        <BuildLine projectId={view.projectId} run={view.lastRun} />
+      ) : null}
+      {/* `/undo` after the merge request was accepted (ПР25). */}
+      {current && view?.state === 'merged' && view.rewinds ? (
+        <Typography role="status" variant="body2" data-feed-repo-merged="">
+          {repoCardText.mergedTakenBack}.
+        </Typography>
+      ) : null}
       {/* Build settings go only by their own card (ПР16). */}
       {taskId && current && view?.canPush && !view.sent && !pressing ? (
         view.ciChange === 'needed' ? (

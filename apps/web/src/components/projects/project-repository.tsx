@@ -22,6 +22,7 @@ import { callErrorText } from '@/components/chat/call-error'
 import { useTRPC } from '@/trpc/client'
 
 import type { ProjectDetails } from './project-types'
+import { RepositoryRunsLine } from './repo-runs'
 import { repoText } from './repo-texts'
 
 // The repository of a project in the cabinet (docs/plan/84-projects.md, ПР6, ПР9, ПР10, §4.8;
@@ -148,6 +149,8 @@ export function ProjectRepositoryRow({
         {how}
         {repo.mirrorState === 'syncing' ? ' · Получаем репозиторий…' : ''}
       </Typography>
+      {/* The state of the repository under its row (ПР17): the newest build and «Сборки». */}
+      {repo.mirrorState === 'ready' ? <RepositoryRunsLine projectId={project.id} /> : null}
       {repo.refusal ? (
         <Alert
           severity="warning"

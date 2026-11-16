@@ -106,6 +106,8 @@ async function takesBack(
 }
 
 export interface ChatBranchView {
+  /** The project of the chat: its page of builds is `/projects/<id>/repository`. */
+  projectId: string
   branch: string
   state: RepoBranchState
   /** The head of the chat in Радити; null — every change was taken back. */
@@ -141,7 +143,7 @@ export async function readChatBranch(
   db: PrismaClient,
   input: { userId: string; taskId: string },
 ): Promise<ChatBranchView | null> {
-  const { task, repo } = await ownChat(db, input.userId, input.taskId.toLowerCase())
+  const { task, project, repo } = await ownChat(db, input.userId, input.taskId.toLowerCase())
   if (repo === null) return null
   const branch = await chatBranch(db, task.id)
   if (branch === null || branch.projectRepositoryId !== repo.id) return null
@@ -171,6 +173,7 @@ export async function readChatBranch(
     select: { id: true, kind: true, state: true, error: true },
   })
   return {
+    projectId: project.id,
     branch: branch.branch,
     state: branch.state,
     headSha: head,

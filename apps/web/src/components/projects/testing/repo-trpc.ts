@@ -13,6 +13,7 @@ export interface RepoAnswers {
   detach?: (input: unknown) => unknown
   retry?: (input: unknown) => unknown
   refresh?: (input: unknown) => unknown
+  runs?: (input: { projectId: string }) => unknown
 }
 
 const query = (key: string, fn: (input: never) => unknown) => ({
@@ -37,6 +38,10 @@ export function repoTrpc(answers: RepoAnswers = {}) {
       attach: mutation(answers.attach ?? vi.fn(async () => ({ projectRepositoryId: 'x' }))),
       detach: mutation(answers.detach ?? vi.fn(async () => ({ detached: true }))),
       retry: mutation(answers.retry ?? vi.fn(async () => ({ queued: true }))),
+      runs: query(
+        'projectRepo.runs',
+        answers.runs ?? (() => ({ items: [], next: null, polledAt: null, refreshing: false })),
+      ),
     },
     gitConnection: {
       pathKey: () => ['gitConnection'],

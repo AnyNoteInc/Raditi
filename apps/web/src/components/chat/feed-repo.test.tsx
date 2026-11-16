@@ -72,6 +72,7 @@ const row = {
   })),
 }
 const view = (over: Record<string, unknown> = {}) => ({
+  projectId: '0199a3f2-0000-7000-8000-00000000b001',
   branch: row.branch,
   state: 'local',
   headSha: HEAD,
@@ -79,6 +80,8 @@ const view = (over: Record<string, unknown> = {}) => ({
   canPush: true,
   ciChange: 'none',
   mergeRequest: null,
+  lastRun: null,
+  rewinds: false,
   lastAction: null,
   ...over,
 })
@@ -236,5 +239,57 @@ describe('the card «Агент хочет изменить настройки �
       expect(screen.queryByRole('button', { name: 'Открыть запрос на слияние' })).toBeNull()
       cleanup()
     }
+  })
+})
+
+describe('the build of the branch in the chat (plan 84, 84.21)', () => {
+  it('shows the status of the build and reads it again while it goes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const sent = { sent: true, state: 'pushed', mergeRequest: null }
+      calls.branch
+        .mockResolvedValueOnce(
+          view({ ...sent, lastRun: { id: '482', status: 'running', refusal: null, url: 'x' } }),
+        )
+        .mockResolvedValue(
+          view({ ...sent, lastRun: { id: '482', status: 'failed', refusal: null, url: 'x' } }),
+        )
+      wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+      expect(await screen.findByText('Идёт')).toBeTruthy()
+      const link = screen.getByRole('link', { name: 'Идёт' })
+      expect(link.getAttribute('href')).toBe(
+        '/projects/0199a3f2-0000-7000-8000-00000000b001/repository/runs/482',
+      )
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await screen.findByText('Упала')).toBeTruthy()
+      expect(calls.branch).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a build gitlab.com did not start says why, not «Упала»', async () => {
+    calls.branch.mockResolvedValue(
+      view({
+        sent: true,
+        state: 'pushed',
+        lastRun: { id: '483', status: 'failed', refusal: 'account_unverified', url: 'x' },
+      }),
+    )
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    expect(await screen.findByText(/GitLab просит подтвердить учётную запись/)).toBeTruthy()
+    expect(screen.queryByText('Упала')).toBeNull()
+  })
+
+  it('after /undo of a merged branch says the changes are in the main branch (ПР25)', async () => {
+    calls.branch.mockResolvedValue(view({ state: 'merged', rewinds: true, sent: false }))
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    expect(
+      await screen.findByText(
+        'Изменения уже приняты в основную ветку — отменить их можно новым запросом на слияние.',
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Отправить в ветку' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Открыть запрос на слияние' })).toBeNull()
   })
 })

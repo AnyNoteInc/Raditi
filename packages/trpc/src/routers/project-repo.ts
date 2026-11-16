@@ -174,6 +174,7 @@ export const projectRepoRouter = router({
     .output(
       z
         .strictObject({
+          projectId: z.uuid(),
           branch: z.string(),
           state: z.enum(repoBranchStates),
           headSha: sha.nullable(),

@@ -115,3 +115,6 @@ export type GitConnectionState = (typeof gitConnectionStates)[number]
 /** `git_connection_repositories.visibility`. */
 export const gitRepoVisibilities = ['public', 'internal', 'private'] as const
 export type GitRepoVisibility = (typeof gitRepoVisibilities)[number]
+
+// The words of builds read their statuses by these (the cabinet imports `@repo/domain/repo`).
+export type { CiRefusal, CiStatus } from '../ports/git-provider.ts'
