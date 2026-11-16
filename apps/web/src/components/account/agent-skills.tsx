@@ -1,6 +1,10 @@
 'use client'
 
-import { agentSkillNameSchema, parseAgentSkillUrl } from '@repo/domain/agent/skills'
+import {
+  agentSkillNameSchema,
+  isGitMcpServerUrl,
+  parseAgentSkillUrl,
+} from '@repo/domain/agent/skills'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -40,6 +44,9 @@ export const skillsText = Object.freeze({
   nameHelp: 'Латинские буквы, цифры и дефис, например docs',
   url: 'Адрес сервера MCP',
   urlHelp: 'Полный адрес с путём, например https://mcp.example.com/v1/mcp. Ключ в адрес не пишите',
+  /** At the address of a GitLab or GitHub server (docs/plan/84-projects.md, ПР27). */
+  gitServer:
+    'Для кода проекта лучше подключить репозиторий в проекте: там агент не примет изменения без вас. Слияние, сборки, настройки, участников и удаление через этот навык Радити не выполняет.',
   add: 'Добавить',
   auth: 'Авторизация',
   authNone: 'Нет',
@@ -500,6 +507,14 @@ export function AgentSkills({ initial }: { initial: SkillsView }) {
                 sx={{ flex: '3 1 320px', minWidth: 0 }}
               />
             </Box>
+            {(() => {
+              const kept = parseAgentSkillUrl(url.trim())
+              return kept !== null && isGitMcpServerUrl(kept) ? (
+                <Alert severity="info" role="note">
+                  {skillsText.gitServer}
+                </Alert>
+              ) : null
+            })()}
             <RadioGroup
               row
               aria-label={skillsText.auth}

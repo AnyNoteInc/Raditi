@@ -165,6 +165,73 @@ export function parseAgentSkillUrl(text: string): string | null {
   return kept.length <= agentSkillLimits.urlChars ? kept : null
 }
 
+/**
+ * The MCP servers of the code hostings the platform knows (docs/plan/84-projects.md, ПР27): GitLab
+ * (gitlab.com and a server of the client's own — its MCP lives at `/api/v4/mcp`) and GitHub's
+ * (`api.githubcopilot.com`). Their tools can merge, run builds and change the repository's
+ * settings past every card of the chat (rule 4), so the relay refuses those tools in every chat,
+ * and the form of «Навыки агента» warns at such an address.
+ */
+export function isGitMcpServerUrl(url: string): boolean {
+  const parsed = URL.parse(url)
+  if (parsed === null) return false
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, '')
+  const path = parsed.pathname.toLowerCase().replace(/\/+$/, '')
+  if (host === 'api.githubcopilot.com' || host.endsWith('.githubcopilot.com')) return true
+  return path === '/api/v4/mcp' || path.startsWith('/api/v4/mcp/')
+}
+
+/**
+ * The tools of a git MCP server the relay refuses (ПР27): merging and approving, running,
+ * retrying and cancelling builds and jobs, CI variables, settings, members, protection, deploy
+ * keys and tokens, webhooks, commits and branches written past the chat's branch, and every
+ * deletion. Read by the words of the tool's name, whatever
+ * their separator (`merge_pull_request`, `retryPipeline`): an action word first, a word of what
+ * only the owner may touch anywhere, and a build named with anything but reading it.
+ */
+const GIT_MCP_DENIED_ACTIONS = new Set([
+  'merge',
+  'approve',
+  'unapprove',
+  'run',
+  'rerun',
+  'retry',
+  'cancel',
+  'play',
+  'trigger',
+  'manage',
+  'delete',
+  'remove',
+  'destroy',
+  'erase',
+  'archive',
+  'unarchive',
+  'transfer',
+  'protect',
+  'unprotect',
+  'dispatch',
+  'push',
+])
+const GIT_MCP_DENIED_OBJECTS =
+  /^(variables?|secrets?|settings?|members?|collaborators?|permissions?|protections?|protected|deploy\w*|tokens?|keys?|hooks?|webhooks?|visibility|environments?)$/
+/** Builds, and the code itself: written only by the chat's own branch and the client's button. */
+const GIT_MCP_BUILDS =
+  /^(pipelines?|jobs?|workflows?|runs?|builds?|deployments?|files?|commits?|branch(es)?|refs?|tags?|releases?|push)$/
+const GIT_MCP_READS = new Set(['get', 'list', 'search', 'read', 'show', 'find'])
+
+export function gitMcpToolDenied(name: string): boolean {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+  const [first] = words
+  if (first === undefined) return true
+  if (GIT_MCP_DENIED_ACTIONS.has(first)) return true
+  if (words.some((word) => GIT_MCP_DENIED_OBJECTS.test(word))) return true
+  return !GIT_MCP_READS.has(first) && words.some((word) => GIT_MCP_BUILDS.test(word))
+}
+
 export const agentSkillUrlSchema = z
   .string()
   .max(agentSkillLimits.urlChars)

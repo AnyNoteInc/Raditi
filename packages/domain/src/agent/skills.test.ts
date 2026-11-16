@@ -6,6 +6,8 @@ import {
   agentSkillNameSchema,
   agentSkillUrlSchema,
   CONTEXT7_MCP_URL,
+  gitMcpToolDenied,
+  isGitMcpServerUrl,
   parseAgentSkillUrl,
   SKILL_RELAY_PATH,
   skillRelayPath,
@@ -154,5 +156,52 @@ describe('agent skills', () => {
     expect(agentSkillHeaderValueSchema.safeParse('Bearer sk_live_123').success).toBe(true)
     for (const bad of ['short', 'line\r\nInjected: 1', ' padded-value ', 'ключ-ключ-ключ'])
       expect(agentSkillHeaderValueSchema.safeParse(bad).success, bad).toBe(false)
+  })
+
+  it('knows the MCP servers of code hostings by host and path (ПР27)', () => {
+    expect(isGitMcpServerUrl('https://gitlab.com/api/v4/mcp')).toBe(true)
+    expect(isGitMcpServerUrl('https://git.example.ru/api/v4/mcp/')).toBe(true)
+    expect(isGitMcpServerUrl('https://api.githubcopilot.com/mcp/')).toBe(true)
+    expect(isGitMcpServerUrl('https://mcp.context7.com/mcp')).toBe(false)
+    expect(isGitMcpServerUrl('https://example.com/api/v4/mcpx')).toBe(false)
+  })
+
+  it('refuses the tools of a git server that merge, run builds or touch settings (ПР27)', () => {
+    for (const name of [
+      'merge_pull_request',
+      'merge_merge_request',
+      'approveMergeRequest',
+      'manage_pipeline',
+      'retry_pipeline',
+      'cancel_workflow_run',
+      'run_workflow',
+      'play_job',
+      'create_pipeline',
+      'update_project_settings',
+      'set_ci_variable',
+      'get_variable',
+      'add_project_member',
+      'delete_file',
+      'delete_branch',
+      'create_or_update_file',
+      'push_files',
+      'create_deploy_key',
+      '',
+    ])
+      expect(gitMcpToolDenied(name), name).toBe(true)
+    for (const name of [
+      'get_merge_request',
+      'get_merge_request_diffs',
+      'list_pipelines',
+      'get_pipeline_jobs',
+      'get_file_contents',
+      'search_repositories',
+      'create_issue',
+      'create_merge_request',
+      'create_workitem_note',
+      'semantic_code_search',
+      'list_commits',
+    ])
+      expect(gitMcpToolDenied(name), name).toBe(false)
   })
 })
