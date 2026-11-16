@@ -250,6 +250,13 @@ export {
   type UnsentBranch,
   type PendingRepoProposal,
 } from './repo-work.ts'
+export {
+  ciRunOf,
+  ciRunsOf,
+  requestCiLog,
+  type CiLogAnswer,
+  type CiRunRow,
+} from './repo-ci.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
 export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'

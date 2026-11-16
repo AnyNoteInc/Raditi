@@ -631,6 +631,8 @@ model ProjectRepository {
   secretsFound   Json?     @map("secrets_found")
   /// ci_config_path and the files of `include: local` of the default branch (ПР16).
   ciPaths        Json?     @map("ci_paths")
+  /// When `git.poll` last read its builds and merge requests (claimed by CAS, slice 84.21).
+  ciPolledAt     DateTime? @map("ci_polled_at") @db.Timestamptz(6)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -641,6 +643,9 @@ model ProjectRepository {
   branches      ProjectRepoBranch[]
   mergeRequests ProjectMergeRequest[]
   actions       RepoAction[]
+  ciRuns        ProjectCiRun[]
+  ciLogs        ProjectCiLog[]
+  deployActions ProjectDeployAction[]
 
   @@index([workspaceId])
   @@index([connectionId])
@@ -756,6 +761,69 @@ model RepoAction {
   @@index([projectRepositoryId, createdAt])
   @@index([taskId])
   @@map("repo_actions")
+}
+
+/// The builds of a project repository as `git.poll` of core read them (docs/plan/84-projects.md,
+/// ПР17, §4.1; slice 84.21): a cache of the newest REPO_CI_RUNS_KEPT, the truth is the provider's.
+model ProjectCiRun {
+  projectRepositoryId String    @map("project_repository_id") @db.Uuid
+  providerRunId       String    @map("provider_run_id") @db.VarChar(40)
+  ref                 String    @db.VarChar(255)
+  sha                 String    @db.Char(40)
+  name                String    @db.VarChar(200)
+  event               String?   @db.VarChar(40)
+  /// ciStatuses of @repo/domain (CHECK).
+  status              String    @db.VarChar(8)
+  /// ciRefusals: `account_unverified` — gitlab.com did not start it (ПР17).
+  refusal             String?   @db.VarChar(24)
+  webUrl              String    @map("web_url") @db.VarChar(500)
+  /// repoCiJobsSchema: up to 100 jobs; null — not read yet.
+  jobs                Json?
+  createdAt           DateTime  @map("created_at") @db.Timestamptz(6)
+  startedAt           DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt          DateTime? @map("finished_at") @db.Timestamptz(6)
+  syncedAt            DateTime  @map("synced_at") @db.Timestamptz(6)
+
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+
+  @@id([projectRepositoryId, providerRunId])
+  @@index([projectRepositoryId, createdAt(sort: Desc)], map: "project_ci_runs_newest_idx")
+  @@map("project_ci_runs")
+}
+
+/// The tail of the log of a job for 24 hours (ПР17): ANSI taken out, values and keys masked.
+model ProjectCiLog {
+  projectRepositoryId String    @map("project_repository_id") @db.Uuid
+  providerJobId       String    @map("provider_job_id") @db.VarChar(40)
+  /// repoCiLogStates (CHECK): `loading` until core has fetched it.
+  state               String    @db.VarChar(8)
+  text                String?
+  truncated           Boolean   @default(false)
+  requestedAt         DateTime  @map("requested_at") @db.Timestamptz(6)
+  fetchedAt           DateTime? @map("fetched_at") @db.Timestamptz(6)
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz(6)
+
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+
+  @@id([projectRepositoryId, providerJobId])
+  @@index([expiresAt])
+  @@map("project_ci_logs")
+}
+
+/// The manual jobs (and, with Э10, `workflow_dispatch`) of the head of the default branch (ПР15, ПР17).
+model ProjectDeployAction {
+  projectRepositoryId String   @map("project_repository_id") @db.Uuid
+  ref                 String   @db.VarChar(255)
+  sha                 String   @db.Char(40)
+  kind                String   @db.VarChar(16)
+  providerActionId    String   @map("provider_action_id") @db.VarChar(200)
+  name                String   @db.VarChar(200)
+  syncedAt            DateTime @map("synced_at") @db.Timestamptz(6)
+
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+
+  @@id([projectRepositoryId, kind, providerActionId])
+  @@map("project_deploy_actions")
 }
 
 model Task {
