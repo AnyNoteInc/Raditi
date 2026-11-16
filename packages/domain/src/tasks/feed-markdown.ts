@@ -24,6 +24,8 @@ import {
   feedPageChangeText,
   feedMemoryChangeText,
   feedMemoryLeftText,
+  feedRepoChangesText,
+  feedRepoLeftText,
   feedPageLeftText,
   feedPageText,
   feedFilesChangedText,
@@ -272,6 +274,10 @@ function rowBlock(row: FeedItem, withSite: boolean, h: Heading = heading): strin
       return block([h(feedExportText.agent, row.at), feedMemoryChangeText(row)])
     case 'feed.memory_left':
       return block([h(feedExportText.agent, row.at), feedMemoryLeftText(row)])
+    case 'feed.repo_changes':
+      return block([h(feedExportText.agent, row.at), feedRepoChangesText(row)])
+    case 'feed.repo_left':
+      return block([h(feedExportText.agent, row.at), feedRepoLeftText(row)])
     case 'feed.rewind':
       return feedRewindText(row)
     case 'feed.redo':

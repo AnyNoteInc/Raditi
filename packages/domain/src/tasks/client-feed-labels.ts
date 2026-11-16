@@ -22,6 +22,7 @@ import type {
   TaskWaitingReason,
 } from './client-feed.ts'
 import type { TaskStatus } from './task-status.ts'
+import { repoLeftTexts } from '../repo/feed.ts'
 
 /**
  * What the platform itself says in a dialog — the catalogue the feed design calls
@@ -338,6 +339,29 @@ export function feedMemoryLeftText(row: {
     failed: 'попросите агента повторить',
   }[row.reason]
   return `${head}: ${why}.`
+}
+
+/**
+ * What a turn left in the chat's branch (`feed.repo_changes`, docs/plan/84-projects.md, ПР26): the
+ * line of the card «Изменения в ветке» — the branch and «N файлов · +A −D».
+ */
+export function feedRepoChangesText(row: {
+  branch: string
+  files: number
+  additions: number
+  deletions: number
+}): string {
+  const files = pluralRu(row.files, 'файл', 'файла', 'файлов')
+  return `Изменения в ветке ${row.branch}: ${row.files} ${files} · +${row.additions} −${row.deletions}`
+}
+
+/** Changes a turn did not keep (`feed.repo_left`, ПР12): the paths without values. */
+export function feedRepoLeftText(row: {
+  reason: keyof typeof repoLeftTexts
+  paths?: readonly string[]
+}): string {
+  const paths = row.paths?.length ? `: ${row.paths.join(', ')}` : ''
+  return `${repoLeftTexts[row.reason]}${paths}.`
 }
 
 /** A document the agent set up (`feed.doc`, Ст22), until the card of slice 69.9. */

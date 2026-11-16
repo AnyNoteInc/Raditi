@@ -264,6 +264,32 @@ describe('turn plan', () => {
     expect(requirementsOf(turnPlanSchema.parse(stored))).toEqual(PLAIN_CHAT)
   })
 
+  it('keeps the repository of a turn of a project (docs/plan/84-projects.md, §4.3)', () => {
+    const repo: TurnRequest = {
+      ...request(),
+      requirements: REPOSITORY_ONLY,
+      repository: repositoryBlock(),
+    }
+    const plan = turnPlanSchema.parse(
+      JSON.parse(JSON.stringify(toTurnPlan(withoutTurnCredentials(repo), 'opencode'))),
+    )
+    expect(plan.repository).toEqual(repositoryBlock())
+    expect(withTurnCredentials(plan, { llmApiKey: 'k', mcpToken: 't' }).repository).toEqual(
+      repositoryBlock(),
+    )
+    // A token or an address of the repository is never kept in the plan.
+    for (const extra of [{ token: 'glpat-x' }, { cloneUrl: 'https://gitlab.com/a/b.git' }])
+      expect(
+        turnPlanSchema.safeParse({ ...plan, repository: { ...plan.repository, ...extra } }).success,
+      ).toBe(false)
+    expect(
+      turnPlanSchema.safeParse({
+        ...plan,
+        repository: { ...plan.repository, hiddenPaths: Array(201).fill('.env') },
+      }).success,
+    ).toBe(false)
+  })
+
   it('keeps a turn of a chat with the browser: its requirements carried both ways', () => {
     const browser: TurnRequest = { ...request(), requirements: BROWSER_ONLY }
     const unkeyed = withoutTurnCredentials(browser)
@@ -301,7 +327,8 @@ describe('turn plan', () => {
 
   it.each([
     ['«rewound» that is not true', { requirements: BROWSER_ONLY, rewound: false }, ['rewound']],
-    ['a repository', { requirements: REPOSITORY_ONLY }, ['requirements']],
+    ['a repository without its block', { requirements: REPOSITORY_ONLY }, []],
+    ['a block of a repository it does not need', { repository: repositoryBlock() }, []],
     ['an unknown need', { requirements: { ...PLAIN_CHAT, database: true } }, ['requirements']],
   ])('refuses %s', (_label, change, path) => {
     const plan = { ...toTurnPlan(request(), 'opencode'), ...change }
@@ -490,3 +517,19 @@ describe('files of the project in a turn (docs/plan/84-projects.md, ПР8)', () 
       )
   })
 })
+
+function repositoryBlock() {
+  return {
+    projectId: '0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b',
+    projectRepositoryId: '0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2c',
+    provider: 'gitlab' as const,
+    baseSha: 'b'.repeat(40),
+    sandboxBaseSha: 'd'.repeat(40),
+    branch: 'raditi/chat-0193a1b2c3d4',
+    mode: 'write' as const,
+    expectedRef: null,
+    bundleSha256: 'e'.repeat(64),
+    bundleBytes: 1024,
+    hiddenPaths: ['.env'],
+  }
+}

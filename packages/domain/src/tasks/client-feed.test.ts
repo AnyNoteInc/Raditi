@@ -307,6 +307,26 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     },
   ],
   'feed.memory_left': [{ v: 1, action: 'save', reason: 'secret' }],
+  'feed.repo_changes': [
+    {
+      v: 1,
+      branch: 'raditi/chat-0193a1b2c3d4',
+      baseSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      headSha: 'cccccccccccccccccccccccccccccccccccccccc',
+      diffSha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      files: 2,
+      additions: 5,
+      deletions: 1,
+      list: [{ path: 'src/a.ts', additions: 4, deletions: 1 }],
+      ciTouched: false,
+      pushed: false,
+      mergeRequest: null,
+    },
+  ],
+  'feed.repo_left': [
+    { v: 1, reason: 'secret_found', paths: ['config.js'] },
+    { v: 1, reason: 'failed' },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -345,6 +365,8 @@ describe('feed vocabulary', () => {
       'feed.doc_left',
       'feed.memory_change',
       'feed.memory_left',
+      'feed.repo_changes',
+      'feed.repo_left',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -451,6 +473,10 @@ describe('free text is allowed in four fields, the agent words of a browser ques
       'feed.question.message',
       'feed.question.questions[].options[]',
       'feed.question.questions[].text',
+      // The paths and the branch of a repository: what git names, read back through feedText.
+      'feed.repo_changes.branch',
+      'feed.repo_changes.list[].path',
+      'feed.repo_left.paths[]',
       'feed.request.text',
       'feed.result.message',
       'feed.result.objects[].title',
@@ -1307,6 +1333,8 @@ describe('reading stored rows', () => {
         },
       ],
       'feed.memory_left': [{ v: 1, action: 'save' }],
+      'feed.repo_changes': [{ v: 1, branch: 'b', headSha: 'нет', files: 1 }],
+      'feed.repo_left': [{ v: 1 }],
     }
     for (const type of feedEventTypes)
       for (const payload of broken[type])
@@ -1610,7 +1638,7 @@ describe('task head', () => {
 })
 
 describe('failure catalogue', () => {
-  it('lists the fourteen codes of the design', () => {
+  it('lists the fourteen codes of the design and three of a repository (docs/plan/84, ПР12)', () => {
     expect(feedFailureCodes).toEqual([
       'technical',
       'timeout',
@@ -1626,6 +1654,9 @@ describe('failure catalogue', () => {
       'content_refused',
       'unavailable',
       'not_accepted',
+      'repo_too_large',
+      'repo_unreachable',
+      'repo_reauth',
     ])
   })
 
@@ -1651,6 +1682,8 @@ describe('failure catalogue', () => {
       'site_held',
       'content_refused',
       'not_accepted',
+      'repo_too_large',
+      'repo_reauth',
     ])
   })
 

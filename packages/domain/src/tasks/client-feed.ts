@@ -19,6 +19,11 @@ import {
   memoryLeftReasons,
 } from '../memory/feed.ts'
 import { memoryChangeKinds, memoryKinds } from '../memory/schemas.ts'
+import {
+  feedRepoChangesPayloadSchema,
+  feedRepoLeftPayloadSchema,
+  repoLeftReasons,
+} from '../repo/feed.ts'
 import { pagePathSchema } from '../pages/path.ts'
 import { pageSlugSchema } from '../pages/slug.ts'
 
@@ -103,6 +108,10 @@ export const feedEventTypes = [
   // keep (docs/plan/84-projects.md, ПР18).
   'feed.memory_change',
   'feed.memory_left',
+  // What a turn of a chat with a repository left in its branch, and changes it did not keep
+  // (docs/plan/84-projects.md, ПР12, ПР26).
+  'feed.repo_changes',
+  'feed.repo_left',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -887,6 +896,8 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.doc_left': feedDocLeftPayloadSchema,
   'feed.memory_change': feedMemoryChangePayloadSchema,
   'feed.memory_left': feedMemoryLeftPayloadSchema,
+  'feed.repo_changes': feedRepoChangesPayloadSchema,
+  'feed.repo_left': feedRepoLeftPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -929,6 +940,8 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.doc_left', feedDocLeftPayloadSchema),
       row('feed.memory_change', feedMemoryChangePayloadSchema),
       row('feed.memory_left', feedMemoryLeftPayloadSchema),
+      row('feed.repo_changes', feedRepoChangesPayloadSchema),
+      row('feed.repo_left', feedRepoLeftPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1277,6 +1290,43 @@ const readMemoryLeft = z.object({
   reason: known(memoryLeftReasons, 'failed' as const),
 })
 
+// The changes of a turn in the chat's branch (ПР26): the card shows the branch, the counts and up
+// to ten files; a file that cannot be read is left out, a broken count makes the row unreadable.
+const readRepoFile = z.object({
+  path: shownText(4096),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+})
+const readRepoChanges = z.object({
+  branch: shownText(255),
+  baseSha: z.string().regex(/^[0-9a-f]{40}$/),
+  headSha: z.string().regex(/^[0-9a-f]{40}$/),
+  diffSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  files: z.number().int().nonnegative(),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  list: z
+    .array(z.unknown())
+    .max(50)
+    .transform((rows) =>
+      rows.flatMap((row) => {
+        const file = readRepoFile.safeParse(row)
+        return file.success ? [file.data] : []
+      }),
+    ),
+  ciTouched: z.boolean(),
+  pushed: z.boolean(),
+  mergeRequest: z
+    .object({ number: z.number().int().positive(), url: z.url({ protocol: /^https$/ }).max(500) })
+    .nullable()
+    .catch(null),
+})
+// A reason this code does not know reads as the plain «не сохранены — попробуйте ещё раз».
+const readRepoLeft = z.object({
+  reason: known(repoLeftReasons, 'failed' as const),
+  paths: z.array(shownText(4096)).max(50).optional(),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1341,6 +1391,8 @@ export type FeedEvent =
   | ({ type: 'feed.doc_left' } & z.infer<typeof readDocLeft>)
   | ({ type: 'feed.memory_change' } & z.infer<typeof readMemoryChange>)
   | ({ type: 'feed.memory_left' } & z.infer<typeof readMemoryLeft>)
+  | ({ type: 'feed.repo_changes' } & z.infer<typeof readRepoChanges>)
+  | ({ type: 'feed.repo_left' } & z.infer<typeof readRepoLeft>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1507,6 +1559,14 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   'feed.memory_left': {
     1: (payload) =>
       readWith(readMemoryLeft, payload, (data) => ({ type: 'feed.memory_left', ...data })),
+  },
+  'feed.repo_changes': {
+    1: (payload) =>
+      readWith(readRepoChanges, payload, (data) => ({ type: 'feed.repo_changes', ...data })),
+  },
+  'feed.repo_left': {
+    1: (payload) =>
+      readWith(readRepoLeft, payload, (data) => ({ type: 'feed.repo_left', ...data })),
   },
 }
 

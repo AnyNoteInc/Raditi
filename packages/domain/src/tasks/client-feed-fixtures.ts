@@ -380,6 +380,30 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
     type: 'feed.memory_left',
     payload: { v: 1, action: 'save', reason: 'secret' },
   },
+  // docs/plan/84-projects.md, ПР12, ПР26: what a turn left in the chat's branch, and changes not kept.
+  {
+    name: 'repo_changes v1',
+    type: 'feed.repo_changes',
+    payload: {
+      v: 1,
+      branch: 'raditi/chat-0193a1b2c3d4',
+      baseSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      headSha: 'cccccccccccccccccccccccccccccccccccccccc',
+      diffSha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      files: 1,
+      additions: 3,
+      deletions: 0,
+      list: [{ path: 'README.md', additions: 3, deletions: 0 }],
+      ciTouched: false,
+      pushed: false,
+      mergeRequest: null,
+    },
+  },
+  {
+    name: 'repo_left v1 secret',
+    type: 'feed.repo_left',
+    payload: { v: 1, reason: 'secret_found', paths: ['config.js'] },
+  },
   {
     name: 'request v1 resume',
     type: 'feed.request',

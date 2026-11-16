@@ -10,6 +10,7 @@ import {
   isCoreStopping,
   parseRunnerToken,
   runnerApiErrors,
+  runnerBundlePath,
   runnerCandidatePath,
   runnerCommandSchema,
   runnerConflictSchema,
@@ -270,7 +271,7 @@ describe('runner commands', () => {
       },
     ],
     [
-      'a base bundle (a turn has no repository)',
+      'a base bundle without the root commit of its sandbox',
       {
         ...prepare(),
         bundle: { baseSha: 'b'.repeat(40), branch: 'agent/t', sha256: digest, sizeBytes: 1 },
@@ -303,25 +304,12 @@ describe('runner commands', () => {
       { ...sealCommand(), base: { ...sealCommand().base, parts: manifest.parts } },
     ],
     [
-      'a seal base with git',
-      {
-        ...sealCommand(),
-        base: {
-          ...sealCommand().base,
-          git: {
-            ...manifest.git,
-            publication: { taskId: ids.task, committedAt: manifest.createdAt },
-          },
-        },
-      },
-    ],
-    [
-      'a capture against a base',
+      'a capture against a base that is not a SHA',
       {
         ...envelope,
         type: 'capture',
-        home: { root: '/agent-home/opencode', include: [], exclude: [] },
-        baseSha: 'b'.repeat(40),
+        home: manifest.home,
+        baseSha: 'main',
       },
     ],
     [
@@ -341,6 +329,43 @@ describe('runner commands', () => {
     ],
   ])('refuses %s', (_label, cmd) => {
     expect(runnerCommandSchema.safeParse(cmd).success).toBe(false)
+  })
+
+  it('takes the bundle, the capture against a base and the git of a seal (docs/plan/84, ПР12)', () => {
+    const bundle = {
+      baseSha: 'b'.repeat(40),
+      sandboxBaseSha: 'd'.repeat(40),
+      branch: 'raditi/chat-0193a1b2c3d4',
+      sha256: digest,
+      sizeBytes: 1,
+    }
+    const withBundle = runnerCommandSchema.safeParse({ ...prepare(), bundle })
+    expect(withBundle.error?.issues ?? []).toEqual([])
+    expect(
+      runnerCommandSchema.safeParse({
+        ...envelope,
+        type: 'capture',
+        home: manifest.home,
+        baseSha: 'd'.repeat(40),
+      }).success,
+    ).toBe(true)
+    expect(
+      runnerCommandSchema.safeParse({
+        ...sealCommand(),
+        base: {
+          ...sealCommand().base,
+          git: {
+            provider: 'gitlab',
+            branch: 'raditi/chat-0193a1b2c3d4',
+            baseSha: 'b'.repeat(40),
+            sandboxBaseSha: 'd'.repeat(40),
+            headSha: 'c'.repeat(40),
+            publication: { taskId: ids.task, committedAt: manifest.createdAt },
+          },
+        },
+      }).success,
+    ).toBe(true)
+    expect(runnerBundlePath(ids.assignment)).toBe(`/runner/v1/assignments/${ids.assignment}/bundle`)
   })
 })
 
@@ -481,7 +506,7 @@ describe('runner reports', () => {
       expect(runnerReportSchema.safeParse(value).success, value.type).toBe(true)
   })
 
-  it('reports a capture of home alone, never with candidate parts (plan 83)', () => {
+  it('reports a capture with both candidate parts or neither (docs/plan/84, ПР12)', () => {
     const captured = {
       ...base,
       type: 'captured',
@@ -492,7 +517,7 @@ describe('runner reports', () => {
     const patch = { sha256: digest, sizeBytes: 0 }
     expect(runnerReportSchema.safeParse({ ...captured, patch }).success).toBe(false)
     expect(runnerReportSchema.safeParse({ ...captured, patch, untracked: patch }).success).toBe(
-      false,
+      true,
     )
   })
 

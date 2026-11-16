@@ -22,6 +22,10 @@ export const repoLinkInvalid = (): DomainError =>
 export const repoLinkPrivate = (): DomainError =>
   new DomainError('REPO_LINK_PRIVATE', 'The repository is private or does not exist', 409)
 
+/** The repository could not be fetched for a pass (ПР12, «Сбой подготовки»): tried again later. */
+export const repoUnreachable = (): DomainError =>
+  new DomainError('REPO_UNREACHABLE', 'The repository could not be fetched', 503)
+
 export const repoTooLarge = (): DomainError =>
   new DomainError('REPO_TOO_LARGE', 'The repository is larger than 64 MiB without history', 409)
 
