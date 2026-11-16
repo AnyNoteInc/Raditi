@@ -8,6 +8,7 @@ import {
   checksStateWords,
   pullRequestStateWords,
   repoBranchStateWords,
+  repoProviderBrands,
   repoProviderOffers,
   type CiRefusal,
   type CiStatus,
@@ -212,11 +213,12 @@ function RepositoryCard({
     initialData: project.repository,
   })
   if (!repo) return <Alert severity="info">{runText.noRepository}</Alert>
-  const label = repo.provider === 'github' ? 'GitHub' : 'GitLab'
+  const brand = repoProviderBrands[repo.provider]
+  const label = brand.label
   return (
     <Box sx={{ ...card, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5 }}>
       <Box sx={{ display: 'flex', color: 'text.secondary' }} aria-hidden>
-        <AppIcon name={repo.provider === 'github' ? 'github' : 'gitlab'} size={20} />
+        <AppIcon name={brand.icon} size={20} />
       </Box>
       <Box sx={{ flex: '1 1 240px', minWidth: 0 }}>
         <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>{project.name}</Typography>
@@ -546,7 +548,7 @@ export function RunView({
       state.state.data && active(state.state.data.run.status) ? RUNS_POLL_MS : false,
   })
   const [open, setOpen] = useState<RepoCiJob | null>(null)
-  const label = project.repository?.provider === 'github' ? 'GitHub' : 'GitLab'
+  const label = repoProviderBrands[project.repository?.provider ?? 'gitlab'].label
   const data = query.data
   return (
     <Box

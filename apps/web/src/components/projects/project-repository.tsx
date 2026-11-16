@@ -1,6 +1,10 @@
 'use client'
 
-import { gitConnectionReasonTexts, type GitConnectionReason } from '@repo/domain/repo'
+import {
+  gitConnectionReasonTexts,
+  repoProviderBrands,
+  type GitConnectionReason,
+} from '@repo/domain/repo'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -117,7 +121,7 @@ export function ProjectRepositoryRow({
     <Box data-project-repository="" sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
         <Box sx={{ display: 'flex', color: 'text.secondary' }} aria-hidden>
-          <AppIcon name={repo.provider === 'github' ? 'github' : 'gitlab'} size={16} />
+          <AppIcon name={repoProviderBrands[repo.provider].icon} size={16} />
         </Box>
         <Typography
           component="span"
@@ -919,7 +923,7 @@ export function useRepositoryWindows(project: Pick<ProjectDetails, 'id' | 'name'
     return () => clearTimeout(later)
   }, [])
   const newest = signedIn
-    ? (connections.data?.connections.filter((c) => c.kind === 'gitlab_oauth').at(-1)?.id ?? null)
+    ? (connections.data?.connections.filter((c) => c.signsIn).at(-1)?.id ?? null)
     : null
   const shownPick = picking ?? newest
   const closePick = () => {

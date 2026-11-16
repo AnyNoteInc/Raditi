@@ -8,6 +8,7 @@ import {
   gitConnectionNotFound,
   gitConnectionSecretPath,
   gitConnectUnavailable,
+  gitConnectionSignsIn,
   gitHostRefused,
   gitlabComTokenRefused,
   githubHost,
@@ -61,6 +62,8 @@ export const gitServicesOf = (services: GitServices | null | undefined): GitServ
 export interface GitConnectionView {
   id: string
   kind: GitConnectionKind
+  /** A sign-in on the provider's page (gitConnectionSignsIn): the return picks the newest. */
+  signsIn: boolean
   host: string
   /** null while core has not checked it yet. */
   login: string | null
@@ -86,6 +89,7 @@ type ViewRow = Prisma.GitConnectionGetPayload<{ select: typeof viewSelect }>
 const viewOf = (row: ViewRow): GitConnectionView => ({
   id: row.id,
   kind: row.kind as GitConnectionKind,
+  signsIn: gitConnectionSignsIn[row.kind as GitConnectionKind],
   host: row.host,
   login: row.accountId === row.id ? null : row.accountLogin,
   state: row.state as GitConnectionState,
