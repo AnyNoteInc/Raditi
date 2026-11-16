@@ -18,6 +18,7 @@ import {
   preparedRunSchema,
   SANDBOX_INBOX,
   SANDBOX_OUT,
+  SANDBOX_PROJECT,
   SANDBOX_SECRETS_DIR,
   turnCredentials,
   turnInputSchema,
@@ -189,6 +190,8 @@ describe('OpenCode driver: prepared files and argv', () => {
       external_directory: {
         '*': 'deny',
         [`${SANDBOX_INBOX}/*`]: 'allow',
+        [SANDBOX_PROJECT]: 'allow',
+        [`${SANDBOX_PROJECT}/*`]: 'allow',
         [`${SANDBOX_OUT}/*`]: 'allow',
         '/tmp': 'allow',
         '/tmp/*': 'allow',
@@ -199,6 +202,8 @@ describe('OpenCode driver: prepared files and argv', () => {
     expect(Object.keys(value.permission.external_directory)).toEqual([
       '*',
       `${SANDBOX_INBOX}/*`,
+      SANDBOX_PROJECT,
+      `${SANDBOX_PROJECT}/*`,
       `${SANDBOX_OUT}/*`,
       '/tmp',
       '/tmp/*',
@@ -254,10 +259,13 @@ describe('OpenCode driver: prepared files and argv', () => {
     for (const flag of ['--headless', '--isolated', '--no-sandbox']) expect(command).toContain(flag)
     // The model reads no pixels (N22): a screenshot answers without its image.
     expect(command[command.indexOf('--image-responses') + 1]).toBe('omit')
-    // Besides the inbox, outbox and /tmp, the agent reads only the snapshots the skill writes.
+    // Besides the inbox, the project, outbox and /tmp, the agent reads only the snapshots the
+    // skill writes.
     expect(value.permission.external_directory).toEqual({
       '*': 'deny',
       [`${SANDBOX_INBOX}/*`]: 'allow',
+      [SANDBOX_PROJECT]: 'allow',
+      [`${SANDBOX_PROJECT}/*`]: 'allow',
       [`${SANDBOX_OUT}/*`]: 'allow',
       '/tmp': 'allow',
       '/tmp/*': 'allow',
