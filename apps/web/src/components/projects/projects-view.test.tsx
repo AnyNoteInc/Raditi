@@ -112,6 +112,14 @@ describe('«Проекты» (docs/plan/84-projects.md, ПР4)', () => {
     ).toBe('Отчёты и таблицы')
   })
 
+  it('says a return from GitLab that this browser did not start (ревью P16)', async () => {
+    window.history.replaceState(null, '', '/projects?git=expired')
+    lists({})
+    show()
+    expect(await screen.findByText('Начните подключение из Радити ещё раз.')).toBeTruthy()
+    expect(window.location.search).toBe('')
+  })
+
   it('creates a project under an id of the browser and opens its page', async () => {
     lists({})
     show()

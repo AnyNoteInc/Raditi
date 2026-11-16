@@ -14,7 +14,7 @@ import Typography from '@mui/material/Typography'
 import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
@@ -22,6 +22,7 @@ import { useTRPC } from '@/trpc/client'
 import { ProjectMenuButton, ProjectStarButton, useProjectActions } from './project-actions'
 import { ProjectCreateDialog } from './project-create-dialog'
 import { projectHref, projectsText, projectUpdatedText } from './project-texts'
+import { repoText } from './repo-texts'
 import type { ProjectListItem } from './project-types'
 import { ProjectsEmpty } from './projects-empty'
 
@@ -47,6 +48,19 @@ export function ProjectsView() {
   const [sort, setSort] = useState<ProjectListSort>('recent')
   const [search, setSearch] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
+  // A return from gitlab.com that this browser did not start lands here (ревью P16): it is said.
+  useEffect(() => {
+    const later = setTimeout(() => {
+      const params = new URLSearchParams(window.location.search)
+      const git = params.get('git')
+      if (git === null) return
+      if (git in repoText.outcome) setNotice(repoText.outcome[git as keyof typeof repoText.outcome])
+      params.delete('git')
+      const rest = params.toString()
+      window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`)
+    }, 0)
+    return () => clearTimeout(later)
+  }, [])
   const [creating, setCreating] = useState<{
     initial: { name: string; goal: string } | null
   } | null>(null)
