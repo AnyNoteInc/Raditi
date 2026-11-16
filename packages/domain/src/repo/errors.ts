@@ -7,6 +7,13 @@ import { DomainError } from '../errors.ts'
 export const gitHostRefused = (): DomainError =>
   new DomainError('GIT_HOST_REFUSED', 'The address of the git server is refused', 400)
 
+/**
+ * gitlab.com by a personal token while «Подключить GitLab.com» is not offered (docs/plan/84,
+ * ПР29): the code of the client would go abroad before the documents of 84.16а.
+ */
+export const gitlabComTokenRefused = (): DomainError =>
+  new DomainError('GIT_GITLAB_COM_TOKEN', 'gitlab.com is not connected by a token now', 400)
+
 /** The provider refused the stored sign-in for good: the client signs in again. */
 export const gitConnectionReauth = (): DomainError =>
   new DomainError('GIT_CONNECTION_REAUTH', 'The sign-in with the provider has to be renewed', 409)
@@ -74,6 +81,8 @@ export const repoNotMergeable = (): DomainError =>
 /** What the client reads for each refusal above (§4.4), without a final period. */
 export const repoRefusalTexts = Object.freeze({
   GIT_HOST_REFUSED: 'Этот адрес недоступен: сервер должен быть в интернете по https',
+  GIT_GITLAB_COM_TOKEN:
+    'GitLab.com скоро можно будет подключить. Сейчас по токену подключается только свой сервер GitLab',
   GIT_CONNECTION_REAUTH: 'Нужно войти в GitLab заново',
   GIT_CONNECTION_IN_USE: 'Подключение используют проекты',
   REPO_LINK_INVALID: 'Это не ссылка на репозиторий GitHub или GitLab',

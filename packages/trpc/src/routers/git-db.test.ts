@@ -231,6 +231,18 @@ describe.skipIf(!databaseUrl)('PostgreSQL: git connections and project repositor
     expect(await db.gitConnection.count({ where: { host: 'gitlab.private.example.ru' } })).toBe(0)
   })
 
+  it('gitlab.com takes no token while «Подключить GitLab.com» is not offered (ПР29)', async () => {
+    const { caller, vault, checkHost } = await owner({ gitlabComConfigured: false })
+    for (const host of ['gitlab.com', 'https://gitlab.com/', 'www.gitlab.com']) {
+      const refused = await refusal(() =>
+        caller.gitConnection.addToken({ host, token: 'glpat-synthetic' }),
+      )
+      expect(refused.code).toBe('GIT_GITLAB_COM_TOKEN')
+    }
+    expect(checkHost).not.toHaveBeenCalled()
+    expect(vault.keys.size).toBe(0)
+  })
+
   it('a link whose host resolves to a private address is refused, a project is not made', async () => {
     const { caller } = await owner()
     const projectId = v7()
