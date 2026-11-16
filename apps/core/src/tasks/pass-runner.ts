@@ -101,7 +101,7 @@ export interface PassRunnerDependencies {
    */
   repositories?: Pick<RepoTurnPreparer, 'prepare'>
   /** What a turn with a repository left, told in the chat (§4.3, step 8). */
-  repoChanges?: Pick<RepoChanges, 'apply'>
+  repoChanges?: Pick<RepoChanges, 'apply' | 'fail'>
   /** WORKSPACE_TURN_LIMIT (plan 70, ВР13); DEFAULT_WORKSPACE_TURN_LIMIT when absent. */
   workspaceTurnLimit?: number
   /** The places for turns of the platform (plan 70, ВР17); absent — no bound but the pool's. */
@@ -378,8 +378,10 @@ export class PassRunner {
       ending.turn !== null
     ) {
       await this.deps.chatFiles?.failPages(job.taskId, ending.turn)
-      // What it asked of the memory is never applied (§4.3, step 9).
+      // What it asked of the memory is never applied (§4.3, step 9), nor its proposal of a merge
+      // request shown.
       await this.deps.memoryChanges?.fail(job.taskId, ending.turn)
+      await this.deps.repoChanges?.fail(job.taskId, ending.turn)
     }
     // After the answer of the turn, so that its files stand below it in the chat. A turn without
     // files still settles the pages it named (docs/plan/69-pages.md, Ст6).
@@ -404,12 +406,11 @@ export class PassRunner {
     // Then the changes of the repository (§4.3, step 8): the card «Изменения в ветке», or why
     // they were not kept. The commit itself was published by the turn (ПР12).
     if (ending.kind === 'completed' && answer === 'moved' && repository && plan.request.repository)
-      await this.deps.repoChanges?.apply(
-        job.taskId,
-        ending.turn,
-        repository,
-        plan.request.repository.branch,
-      )
+      await this.deps.repoChanges?.apply(job.taskId, ending.turn, repository, {
+        projectRepositoryId: plan.request.repository.projectRepositoryId,
+        branch: plan.request.repository.branch,
+        mode: plan.request.repository.mode,
+      })
     if (ending.kind === 'busy') {
       // Another end of the task came first (a cancel, which wakes nobody): this one ended it.
       if (answer !== 'moved') return 'ended'

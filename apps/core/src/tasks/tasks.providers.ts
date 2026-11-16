@@ -117,7 +117,7 @@ export const taskProviders: Provider[] = [
         // The repository of the chat's project (docs/plan/84-projects.md, ПР12, ПР26).
         ...(gitJobs && workspace
           ? {
-              repositories: new RepoTurnPreparer({ git: gitJobs, workspace }),
+              repositories: new RepoTurnPreparer({ db: prisma, git: gitJobs, workspace }),
               repoChanges: new RepoChanges({
                 db: prisma,
                 storage,

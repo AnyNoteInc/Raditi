@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./connect": "./src/connect.ts"
+    "./connect": "./src/connect.ts",
+    "./testing": "./src/testing/fake-send.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

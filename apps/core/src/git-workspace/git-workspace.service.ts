@@ -12,6 +12,7 @@ import {
   HIDDEN_FILE_STUB,
   HIDDEN_PATHS_LIMIT,
   isSecretFileName,
+  isAgentBranch,
   isDomainError,
   mirrorLimits,
   notFound,
@@ -23,6 +24,8 @@ import {
   publicationTooLarge,
   repoBranchSchema,
   repoChatRef,
+  repoNotAllowed,
+  repoProtectedBranch,
   repoPublicationSchema,
   repositoryTooLarge,
   repositoryUnsupported,
@@ -110,6 +113,35 @@ export interface RepoBundleInput {
   hiddenPaths?: readonly string[]
 }
 
+export interface RepoPushInput {
+  projectRepositoryId: string
+  chatId: string
+  /** The remote with an access to write, issued for this one push. */
+  remote: RepoRemote
+  /** `raditi/…` of the chat (isAgentBranch); never the main branch. */
+  branch: string
+  defaultBranch: string
+  /** The commit of the chat in the mirror the client was shown (chatBranchHead). */
+  head: string
+  /**
+   * What the branch at the client held after the last push: `remote` — its head, `mirror` — the
+   * commit of the chat whose changes it carried. null — the branch was never sent.
+   */
+  sent: { remote: string; mirror: string } | null
+  /** The trusted time of the press: a commit put on top is the same for the same input. */
+  committedAt: string
+}
+
+export type RepoPushResult =
+  /** Pushed: `rebased` — the client added commits, and the changes went on top of them. */
+  | { kind: 'pushed'; sha: string; rebased: boolean }
+  /** The branch never sent is there at the client already: another name is needed. */
+  | { kind: 'name_taken' }
+  /** The client changed the branch, and the changes do not go on top (ПР13). */
+  | { kind: 'conflict' }
+  /** The branch moved at the client between the check and the push: the press is tried again. */
+  | { kind: 'raced' }
+
 export interface RepoCandidate {
   baseSha: string
   headSha: string
@@ -142,8 +174,9 @@ interface RawChange {
   newOid: string
 }
 
-const BOT_NAME = 'Raditi Bot'
-const BOT_EMAIL = 'bot@raditi.ru'
+// The author of every commit of the platform in a client's repository (docs/plan/84, ПР13).
+const BOT_NAME = 'Радити'
+const BOT_EMAIL = 'noreply@raditi.ru'
 const GITLEAKS_CONFIG = '[extend]\nuseDefault = true\n'
 const GITLEAKS_FINDING_EXIT = 99
 const ZERO_SHA = '0'.repeat(40)
@@ -464,6 +497,166 @@ export class GitWorkspaceService {
         yield Buffer.from(bytes)
       },
     }
+  }
+
+  /**
+   * Moves the chat's ref of the mirror to `to` (null — removes it) while it is `from` (ПР25:
+   * `/undo` and `/redo` take the chat's commits back and forth; the client's branch moves only by
+   * a button). false — the ref was not `from`.
+   */
+  async moveChatRef(
+    projectRepositoryId: string,
+    chatId: string,
+    from: string | null,
+    to: string | null,
+  ): Promise<boolean> {
+    for (const sha of [from, to])
+      if (sha !== null && !publicationShaSchema.safeParse(sha).success)
+        throw badRequest('Invalid chat ref')
+    const mirror = mirrorPath(this.#root, projectRepositoryId)
+    if (!(await this.isMirror(mirror))) return false
+    const ref = repoChatRef(chatId)
+    return this.#mirrors.run(mirror, () =>
+      this.operation(async (op) => {
+        if ((await this.refOf(op, mirror, ref)) !== (from ?? '')) return false
+        if (from === to) return true
+        if (to !== null && !(await this.commitsIn(op, mirror, [to]))[0])
+          throw notFound('The commit is not in the repository of this project')
+        const result = await this.command(
+          op,
+          to === null
+            ? ['update-ref', '-d', ref, from ?? ZERO_SHA]
+            : ['update-ref', ref, to, from ?? ZERO_SHA],
+          { env: { GIT_DIR: mirror } },
+        )
+        return result.code === 0
+      }),
+    )
+  }
+
+  /**
+   * Sends the chat's branch to the client (ПР13), only after a button: the head of the chat
+   * fast-forwards the branch when the branch at the client is one of its commits; when the client
+   * added commits (or the chat went back by `/undo`) the change since the last push goes on top of
+   * the branch at the client by a three-way merge without a working tree, as one commit of the
+   * platform; one that does not go on top is a conflict, and nothing is sent. Every push carries the
+   * head it expects at the client (`--force-with-lease`); never a tag, never another branch.
+   */
+  async pushChatBranch(input: RepoPushInput): Promise<RepoPushResult> {
+    if (
+      !isAgentBranch(input.branch, input.defaultBranch) ||
+      !publicationShaSchema.safeParse(input.head).success ||
+      (input.sent !== null &&
+        (!publicationShaSchema.safeParse(input.sent.remote).success ||
+          !publicationShaSchema.safeParse(input.sent.mirror).success)) ||
+      !Number.isFinite(Date.parse(input.committedAt))
+    )
+      throw repoProtectedBranch()
+    const mirror = mirrorPath(this.#root, input.projectRepositoryId)
+    const remote = await this.remote(input.remote)
+    return this.#mirrors.run(mirror, () =>
+      this.operation(async (op) => {
+        await this.privateRepository(op, mirror, input.head)
+        const heads = await this.remoteHeads(op, remote, [input.branch])
+        const there = heads.get(input.branch) ?? null
+        if (input.sent === null && there !== null) return { kind: 'name_taken' }
+        let sha = input.head
+        let rebased = false
+        if (there !== null && there !== input.head) {
+          if (!(await this.commitsIn(op, mirror, [there]))[0])
+            await this.fetchInto(op, mirror, remote, [input.branch], heads, undefined)
+          const ahead = await this.command(op, ['merge-base', '--is-ancestor', there, input.head])
+          if (ahead.code !== 0) {
+            if (ahead.code !== 1) throw failed()
+            const merged = await this.mergeOnTop(op, {
+              base: input.sent?.mirror ?? input.head,
+              theirs: there,
+              ours: input.head,
+              chatId: input.chatId,
+              committedAt: input.committedAt,
+            })
+            if (merged === null) return { kind: 'conflict' }
+            if (merged === there) return { kind: 'pushed', sha: there, rebased: true }
+            sha = merged
+            rebased = true
+          }
+        }
+        const pushed = await this.command(
+          op,
+          [
+            'push',
+            '--porcelain',
+            '--quiet',
+            '--no-verify',
+            '--no-recurse-submodules',
+            `--force-with-lease=refs/heads/${input.branch}:${there ?? ''}`,
+            '--',
+            remote.url,
+            `${sha}:refs/heads/${input.branch}`,
+          ],
+          { env: remote.auth, remote, maxBytes: 64 * 1024 },
+        )
+        if (pushed.code !== 0) {
+          const now = (await this.remoteHeads(op, remote, [input.branch])).get(input.branch) ?? null
+          if (now !== there) return { kind: 'raced' }
+          throw repoNotAllowed('push')
+        }
+        if (rebased) {
+          // The commit put on top goes into the mirror too: the next turn may start from it.
+          const out = join(op.root, 'pushed')
+          await sharedDirectory(out)
+          await this.git(op, ['pack-objects', '--revs', '--quiet', join(out, 'pack')], {
+            input: Buffer.from(`${sha}\n^${input.head}\n^${there}\n`),
+            maxBytes: 1024,
+          })
+          await this.movePacks(out, join(mirror, 'objects', 'pack'))
+        }
+        await this.git(op, ['update-ref', `refs/heads/${input.branch}`, sha], {
+          env: { GIT_DIR: mirror },
+        })
+        return { kind: 'pushed', sha, rebased }
+      }),
+    )
+  }
+
+  /**
+   * The changes from `base` to `ours`, on top of `theirs`: `git merge-tree --write-tree` in the
+   * repository of the operation, one commit of the platform with the parent `theirs`. null — they
+   * conflict; `theirs` itself — nothing is left to put on top.
+   */
+  private async mergeOnTop(
+    op: Operation,
+    input: { base: string; theirs: string; ours: string; chatId: string; committedAt: string },
+  ): Promise<string | null> {
+    const merged = await this.command(
+      op,
+      [
+        'merge-tree',
+        '--write-tree',
+        '--no-messages',
+        '--name-only',
+        `--merge-base=${input.base}`,
+        input.theirs,
+        input.ours,
+      ],
+      { maxBytes: listBytes(publicationLimits.files) },
+    )
+    if (merged.code === 1) return null
+    if (merged.code !== 0) throw failed()
+    const tree = this.sha(Buffer.from(text(merged.stdout).split('\n')[0] ?? ''))
+    const theirsTree = this.sha(
+      (await this.git(op, ['rev-parse', '--verify', `${input.theirs}^{tree}`])).stdout,
+    )
+    if (tree === theirsTree) return input.theirs
+    const message = `Raditi chat ${input.chatId}\n\nRaditi-Chat: ${input.chatId}\n`
+    return this.sha(
+      (
+        await this.git(op, ['commit-tree', tree, '-p', input.theirs], {
+          input: Buffer.from(message),
+          env: botIdentity(input.committedAt),
+        })
+      ).stdout,
+    )
   }
 
   /**

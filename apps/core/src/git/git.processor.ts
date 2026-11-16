@@ -1,6 +1,7 @@
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq'
 import { Inject, Logger } from '@nestjs/common'
 import {
+  gitActionPayloadSchema,
   gitConnectionSyncPayloadSchema,
   gitJobNames,
   gitRepoAttachPayloadSchema,
@@ -10,7 +11,8 @@ import { errorMessage, throttledLogger } from '@repo/observability'
 import { UnrecoverableError, type Job } from 'bullmq'
 
 import type { GitJobs } from './git-jobs.ts'
-import { GIT_JOBS, GIT_QUEUE } from './git.tokens.ts'
+import { GIT_JOBS, GIT_QUEUE, REPO_ACTIONS } from './git.tokens.ts'
+import type { RepoActions } from './repo-actions.ts'
 
 /**
  * Works the queue `git` (docs/plan/84-projects.md, §4.3): the check of a connection, the branches
@@ -22,14 +24,17 @@ import { GIT_JOBS, GIT_QUEUE } from './git.tokens.ts'
 export class GitProcessor extends WorkerHost {
   readonly #logger = new Logger(GitProcessor.name)
   readonly #jobs: Pick<GitJobs, 'syncConnection' | 'inspectRepository' | 'attachRepository'>
+  readonly #actions: Pick<RepoActions, 'run'>
   readonly #warn = throttledLogger((line) => this.#logger.warn(line))
 
   constructor(
     @Inject(GIT_JOBS)
     jobs: Pick<GitJobs, 'syncConnection' | 'inspectRepository' | 'attachRepository'>,
+    @Inject(REPO_ACTIONS) actions: Pick<RepoActions, 'run'>,
   ) {
     super()
     this.#jobs = jobs
+    this.#actions = actions
   }
 
   async process(job: Job): Promise<void> {
@@ -48,6 +53,12 @@ export class GitProcessor extends WorkerHost {
         const data = gitRepoAttachPayloadSchema.safeParse(job.data)
         if (!data.success) throw new UnrecoverableError('Invalid git.repo.attach job')
         return this.#jobs.attachRepository(data.data.projectRepositoryId)
+      }
+      // A press of the client on a card of a repository (docs/plan/84-projects.md, ПР13, ПР15).
+      case gitJobNames.action: {
+        const data = gitActionPayloadSchema.safeParse(job.data)
+        if (!data.success) throw new UnrecoverableError('Invalid git.action job')
+        return this.#actions.run(data.data.actionId)
       }
       default:
         throw new UnrecoverableError(`Unknown git job "${job.name}"`)

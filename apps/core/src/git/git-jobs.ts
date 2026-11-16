@@ -116,7 +116,11 @@ export class GitJobs {
    * tells the client: REPOSITORY_TOO_LARGE, GIT_CONNECTION_REAUTH, or REPO_UNREACHABLE for
    * anything else — a provider that does not answer, a repository gone, a connection not `ok`.
    */
-  async fetchForTurn(projectRepositoryId: string): Promise<{ sha: string; label: string }> {
+  async fetchForTurn(
+    projectRepositoryId: string,
+    /** The chat's branch at the client, once it was sent (ПР13): its head is fetched too. */
+    chatBranch: string | null = null,
+  ): Promise<{ sha: string; label: string; chatHead: string | null }> {
     const repo = await this.#o.prisma.projectRepository.findUnique({
       where: { id: projectRepositoryId },
       select: {
@@ -157,7 +161,7 @@ export class GitJobs {
         const heads = await this.#o.workspace.fetch({
           projectRepositoryId,
           remote: { cloneUrl: info.cloneUrl, pin: { host: ref.host, address }, access },
-          branches: [repo.defaultBranch],
+          branches: chatBranch ? [repo.defaultBranch, chatBranch] : [repo.defaultBranch],
           sizeBytes: info.sizeBytes,
         })
         const sha = heads.get(repo.defaultBranch) ?? null
@@ -166,7 +170,11 @@ export class GitJobs {
           where: { id: projectRepositoryId },
           data: { lastFetchedSha: sha, fetchedAt: this.#now() },
         })
-        return { sha, label: provider.support.label }
+        return {
+          sha,
+          label: provider.support.label,
+          chatHead: chatBranch ? (heads.get(chatBranch) ?? null) : null,
+        }
       } finally {
         await access.revoke?.().catch(() => undefined)
       }

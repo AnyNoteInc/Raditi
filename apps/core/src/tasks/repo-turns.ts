@@ -1,13 +1,25 @@
 import { createHash } from 'node:crypto'
 
-import { insertFeedEvent, type PrismaClient } from '@repo/db'
+import {
+  chatBranch,
+  chatBranchHead,
+  closeRepoProposal,
+  ensureChatBranch,
+  failRepoTurn,
+  insertFeedEvent,
+  pendingRepoProposals,
+  unsentBranch,
+  type PrismaClient,
+} from '@repo/db'
 import {
   isDomainError,
   repoChatBranch,
+  repoProposalPayloadSchema,
   repoUnreachable,
   type FeedRepoChangesPayload,
   type ObjectStorage,
   type RepoLeftReason,
+  type RepoMode,
 } from '@repo/domain'
 
 import type { GitJobs } from '../git/git-jobs.ts'
@@ -22,7 +34,9 @@ import type { PassRepository, PassRepositoryRow } from './turn-planner.ts'
 // that look like secrets named and the bundle built. After a completed turn: what it left in the
 // chat's branch is told by `feed.repo_changes`, its diff kept in `raditi-artifacts`, and changes
 // the checks refused by `feed.repo_left`. Nothing here sends anything to the client's repository:
-// that is a button of the client (ПР13, slice 84.19).
+// that is a button of the client (ПР13). The head of the chat is the commit of its last turn that
+// stands — `/undo` and `/redo` only mark turns, and the ref of the mirror follows them here (ПР25);
+// a branch the client was sent is the base while the chat added nothing since (ПР13, §4.3, step 3).
 
 /** At most this many files of the change are listed on the card (ПР26: «до 10 файлов»). */
 export const REPO_CARD_FILES = 10
@@ -67,8 +81,12 @@ export function diffStat(patch: Uint8Array): DiffFileStat[] {
 }
 
 export interface RepoTurnPreparerDependencies {
+  db: Pick<PrismaClient, 'task' | 'taskTurn' | 'projectRepoBranch'>
   git: Pick<GitJobs, 'fetchForTurn'>
-  workspace: Pick<GitWorkspaceService, 'readChatRef' | 'hiddenFiles' | 'buildBaseBundle'>
+  workspace: Pick<
+    GitWorkspaceService,
+    'readChatRef' | 'moveChatRef' | 'hiddenFiles' | 'buildBaseBundle'
+  >
 }
 
 /** The files a sandbox never gets are found once per commit of a repository: a few are kept. */
@@ -89,12 +107,34 @@ export class RepoTurnPreparer {
    */
   async prepare(chatId: string, row: PassRepositoryRow): Promise<PassRepository> {
     try {
-      const { workspace } = this.#deps
-      const { sha: head, label } = await this.#deps.git.fetchForTurn(row.projectRepositoryId)
-      const chatRef = await workspace.readChatRef(row.projectRepositoryId, chatId)
-      const baseSha = chatRef ?? head
+      const { db, workspace } = this.#deps
+      const own = await chatBranch(db, chatId)
+      const branchRow = own?.projectRepositoryId === row.projectRepositoryId ? own : null
+      const sent = branchRow?.remoteSha != null ? branchRow : null
+      const {
+        sha: head,
+        label,
+        chatHead: remoteHead,
+      } = await this.#deps.git.fetchForTurn(row.projectRepositoryId, sent?.branch ?? null)
+      let chatRef = await workspace.readChatRef(row.projectRepositoryId, chatId)
+      // The turns that stand name the head; before any card the ref of the mirror does (84.18).
+      const carded =
+        (await db.taskTurn.count({ where: { taskId: chatId, headSha: { not: null } } })) > 0
+      const standing = carded ? ((await chatBranchHead(db, chatId))?.headSha ?? null) : chatRef
+      if (carded && chatRef !== standing) {
+        await workspace
+          .moveChatRef(row.projectRepositoryId, chatId, chatRef, standing)
+          .catch(() => false)
+        chatRef = await workspace.readChatRef(row.projectRepositoryId, chatId)
+      }
+      // A branch sent and not changed in Радити since: the client's commits on it come in too.
+      const baseSha =
+        sent && remoteHead && standing === sent.mirrorSha ? remoteHead : (standing ?? head)
       const hiddenPaths = await this.#hiddenOf(row, baseSha)
-      const branch = repoChatBranch(chatId)
+      const task = branchRow
+        ? null
+        : await db.task.findUnique({ where: { id: chatId }, select: { title: true } })
+      const branch = branchRow?.branch ?? repoChatBranch(chatId, task?.title ?? null)
       const bundle = await workspace.buildBaseBundle({
         projectRepositoryId: row.projectRepositoryId,
         baseSha,
@@ -138,8 +178,25 @@ export class RepoTurnPreparer {
   }
 }
 
+/** What `RepoChanges` reads of the plan of the turn. */
+export interface RepoChangesTurn {
+  projectRepositoryId: string
+  /** The branch the plan named: the chat's own row's name wins once it exists. */
+  branch: string
+  mode: RepoMode
+}
+
 export interface RepoChangesDependencies {
-  db: Pick<PrismaClient, '$transaction' | 'taskEvent' | 'taskTurn'>
+  db: Pick<
+    PrismaClient,
+    | '$transaction'
+    | '$queryRaw'
+    | 'task'
+    | 'taskEvent'
+    | 'taskTurn'
+    | 'projectRepoBranch'
+    | 'repoReservation'
+  >
   storage: Pick<ObjectStorage, 'put'>
   logger?: { log(message: string): void; warn(message: string): void }
 }
@@ -160,7 +217,71 @@ export class RepoChanges {
     taskId: string,
     turn: number,
     outcome: TurnRepositoryOutcome,
-    branch: string,
+    plan: RepoChangesTurn,
+  ): Promise<void> {
+    try {
+      await this.#changes(taskId, turn, outcome, plan)
+    } finally {
+      await this.#proposals(taskId, turn, plan)
+    }
+  }
+
+  /** The proposals of a failed or cancelled pass: closed, never shown (§4.3, step 9). */
+  async fail(taskId: string, turn: number): Promise<void> {
+    await failRepoTurn(this.#deps.db, taskId, turn).catch(() => {
+      this.#deps.logger?.warn(`repo_proposals_fail_failed task=${taskId} turn=${turn}`)
+    })
+  }
+
+  /**
+   * `repo_request_merge` of the turn (ПР14): the card «Агент предлагает открыть запрос на слияние»
+   * while the chat's branch has something to send and the repository takes writes; otherwise the
+   * proposal is closed refused. The merge request itself opens only by the client's button.
+   */
+  async #proposals(taskId: string, turn: number, plan: RepoChangesTurn): Promise<void> {
+    const { db, logger } = this.#deps
+    try {
+      const pending = await pendingRepoProposals(db, taskId, turn)
+      if (!pending.length) return
+      const turnRow = await db.taskTurn.findFirst({
+        where: { taskId, turnNo: turn },
+        select: { id: true },
+      })
+      const branch = await chatBranch(db, taskId)
+      const something =
+        plan.mode === 'write' &&
+        branch !== null &&
+        ((await unsentBranch(db, taskId)) !== null || branch.remoteSha !== null)
+      for (const proposal of pending) {
+        const payload = repoProposalPayloadSchema.safeParse(proposal.payload)
+        if (!something || !payload.success) {
+          await closeRepoProposal(db, proposal.id, 'refused', something ? 'invalid' : 'nothing')
+          continue
+        }
+        await db.$transaction(async (tx) => {
+          if (!(await closeRepoProposal(tx, proposal.id, 'done', 'shown'))) return
+          await insertFeedEvent(tx, {
+            taskId,
+            turnId: turnRow?.id ?? null,
+            row: {
+              type: 'feed.repo_proposal',
+              payload: { v: 1, reservedId: proposal.id, ...payload.data },
+            },
+          })
+        })
+      }
+    } catch (error) {
+      logger?.warn(
+        `repo_proposals_failed task=${taskId} turn=${turn} reason=${isDomainError(error) ? error.code : 'unknown'}`,
+      )
+    }
+  }
+
+  async #changes(
+    taskId: string,
+    turn: number,
+    outcome: TurnRepositoryOutcome,
+    plan: RepoChangesTurn,
   ): Promise<void> {
     const { db, storage, logger } = this.#deps
     try {
@@ -196,9 +317,9 @@ export class RepoChanges {
           contentType: 'text/x-diff',
           sizeBytes: outcome.patch.byteLength,
         })
-      const payload: FeedRepoChangesPayload = {
+      const task = await db.task.findUnique({ where: { id: taskId }, select: { title: true } })
+      const payload: Omit<FeedRepoChangesPayload, 'branch'> = {
         v: 1,
-        branch,
         baseSha: outcome.baseSha,
         headSha: outcome.headSha,
         diffSha256,
@@ -220,10 +341,28 @@ export class RepoChanges {
             where: { id: turnId },
             data: { baseSha: outcome.baseSha, headSha: outcome.headSha },
           })
+        // The chat's branch row comes with its first card, its name free in the repository (ПР13).
+        const branch = await ensureChatBranch(tx, {
+          taskId,
+          projectRepositoryId: plan.projectRepositoryId,
+          title: task?.title ?? null,
+          baseSha: outcome.baseSha,
+        })
+        await tx.projectRepoBranch.update({
+          where: { taskId },
+          data: {
+            diffstat: {
+              files: payload.files,
+              additions: payload.additions,
+              deletions: payload.deletions,
+              list: payload.list,
+            },
+          },
+        })
         await insertFeedEvent(tx, {
           taskId,
           turnId,
-          row: { type: 'feed.repo_changes', payload },
+          row: { type: 'feed.repo_changes', payload: { ...payload, branch: branch.branch } },
         })
       })
       logger?.log(`repo_changes task=${taskId} turn=${turn} files=${files.length}`)

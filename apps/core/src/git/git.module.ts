@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 import { Logger, Module } from '@nestjs/common'
@@ -15,8 +16,15 @@ import type { GitWorkspaceService } from '../git-workspace/git-workspace.service
 import { GitAuthSource } from './git-auth-source.ts'
 import { GitJobs } from './git-jobs.ts'
 import { GitProcessor } from './git.processor.ts'
-import { GIT_JOBS } from './git.tokens.ts'
+import { GIT_JOBS, REPO_ACTIONS } from './git.tokens.ts'
+import { RepoActions } from './repo-actions.ts'
 import { publicHostResolver } from './public-host.ts'
+
+const GIT_SERVICES = Symbol('GIT_SERVICES')
+interface GitServices {
+  jobs: GitJobs
+  actions: RepoActions
+}
 
 /** Where web sends the client back from gitlab.com; GitLab wants it again on a refresh. */
 export const gitlabCallbackPath = '/api/git/gitlab/callback'
@@ -31,7 +39,7 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
   imports: [GitWorkspaceModule],
   providers: [
     {
-      provide: GIT_JOBS,
+      provide: GIT_SERVICES,
       inject: [PRISMA, SECRET_STORE, CORE_CONFIG, GIT_WORKSPACE],
       useFactory: (
         prisma: PrismaClient,
@@ -72,21 +80,48 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
               }
             : null,
         })
-        return new GitJobs({
-          prisma,
-          auth,
-          resolvePublic,
-          provider: ({ kind, host, address }) =>
-            createGitProvider({
-              kind,
-              host,
-              transport: pinned(host, address),
-              endpoints: config.gitApps.endpoints,
-            }),
-          workspace,
-          logger: { log: (line) => logger.log(line), warn: (line) => logger.warn(line) },
-        })
+        const provider = ({
+          kind,
+          host,
+          address,
+        }: {
+          kind: 'github' | 'gitlab'
+          host: string
+          address: string
+        }) =>
+          createGitProvider({
+            kind,
+            host,
+            transport: pinned(host, address),
+            endpoints: config.gitApps.endpoints,
+          })
+        const lines = {
+          log: (line: string) => logger.log(line),
+          warn: (line: string) => logger.warn(line),
+        }
+        const secret = config.gitApps.repoConfirmSecret
+        return {
+          jobs: new GitJobs({ prisma, auth, resolvePublic, provider, workspace, logger: lines }),
+          actions: new RepoActions({
+            prisma,
+            auth,
+            resolvePublic,
+            provider,
+            workspace,
+            // The HMAC of the cards (ПР15): web signs, core checks again before the provider.
+            mac: secret
+              ? (material) => createHmac('sha256', secret).update(material).digest('base64url')
+              : null,
+            logger: lines,
+          }),
+        }
       },
+    },
+    { provide: GIT_JOBS, inject: [GIT_SERVICES], useFactory: (git: GitServices) => git.jobs },
+    {
+      provide: REPO_ACTIONS,
+      inject: [GIT_SERVICES],
+      useFactory: (git: GitServices) => git.actions,
     },
     GitProcessor,
   ],
