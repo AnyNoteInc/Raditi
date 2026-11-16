@@ -12,6 +12,7 @@ import { TRPCError } from '@trpc/server'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { dropGitJobsOf } from '../testing/git-jobs.ts'
 import type { ChatContext } from '../services/chat/context.ts'
 import { connectGitlabOAuth, type GitServices } from '../services/git/connections.ts'
 
@@ -89,7 +90,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: git connections and project repositor
       select: { id: true },
     })
     const owned = { workspaceId: { in: workspaces.map(({ id }) => id) } }
-    await db.outboxEvent.deleteMany({ where: { topic: 'git' } })
+    await dropGitJobsOf(db, owned.workspaceId.in)
     await db.projectRepository.deleteMany({ where: owned })
     await db.gitConnection.deleteMany({ where: owned })
     await db.credentialRef.deleteMany({ where: owned })
@@ -204,7 +205,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: git connections and project repositor
       createdById: user.id,
     })
     expect(row.credentialRef).toMatchObject({ kind: 'git_connection', vaultPath: path })
-    const job = await db.outboxEvent.findFirstOrThrow({ where: { topic: 'git' } })
+    // Other files of this suite queue jobs of `git` on the same base at the same time.
+    const job = await db.outboxEvent.findFirstOrThrow({
+      where: { topic: 'git', payload: { path: ['connectionId'], equals: connectionId } },
+    })
     expect(job).toMatchObject({ type: 'git.connection.sync', payload: { connectionId } })
     // Nothing of the token is in the base, the outbox or the answer of the list.
     const list = await caller.gitConnection.list()
@@ -261,7 +265,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL: git connections and project repositor
       refusal: null,
     })
     const job = await db.outboxEvent.findFirstOrThrow({
-      where: { topic: 'git', type: 'git.repo.attach' },
+      where: {
+        topic: 'git',
+        type: 'git.repo.attach',
+        payload: { path: ['projectRepositoryId'], equals: repo!.id },
+      },
     })
     expect(job.payload).toEqual({ projectRepositoryId: repo!.id })
     // Core asked the provider anonymously and was told nothing is there.

@@ -12,6 +12,7 @@ import { TRPCError } from '@trpc/server'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { dropGitJobsOf, gitJobsOf } from '../testing/git-jobs.ts'
 import type { ChatContext } from '../services/chat/context.ts'
 import type { GitServices } from '../services/git/connections.ts'
 
@@ -61,7 +62,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the builds of a repository (plan 84, 
       select: { id: true },
     })
     const owned = { workspaceId: { in: workspaces.map(({ id }) => id) } }
-    await db.outboxEvent.deleteMany({ where: { topic: 'git' } })
+    await dropGitJobsOf(db, owned.workspaceId.in)
     await db.repoAction.deleteMany({ where: { createdById: { in: users } } })
     await db.taskEvent.deleteMany({ where: { task: owned } })
     await db.taskTurn.deleteMany({ where: { task: owned } })
@@ -235,7 +236,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the builds of a repository (plan 84, 
         },
       },
     })
-    return { user, caller, task, head, branch, projectRepositoryId }
+    return { user, caller, task, head, branch, projectRepositoryId, workspaceId }
   }
 
   async function run(
@@ -305,10 +306,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the builds of a repository (plan 84, 
     ])
     expect(first.refreshing).toBe(true)
     await f.caller.projectRepo.runs({ projectId: f.task.projectId! })
-    const polls = await db.outboxEvent.findMany({ where: { topic: 'git', type: 'git.poll' } })
+    const polls = await gitJobsOf(db, [f.workspaceId], 'git.poll')
     expect(polls.map((p) => p.payload)).toEqual([{ projectRepositoryId: f.projectRepositoryId }])
     // Core polled a moment ago: a look asks nothing.
-    await db.outboxEvent.deleteMany({ where: { topic: 'git' } })
+    await dropGitJobsOf(db, [f.workspaceId])
     await db.projectRepository.update({
       where: { id: f.projectRepositoryId },
       data: { ciPolledAt: new Date() },
@@ -316,7 +317,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the builds of a repository (plan 84, 
     expect((await f.caller.projectRepo.runs({ projectId: f.task.projectId! })).refreshing).toBe(
       false,
     )
-    expect(await db.outboxEvent.count({ where: { topic: 'git' } })).toBe(0)
+    expect(await gitJobsOf(db, [f.workspaceId])).toEqual([])
     // A page of one, then the next.
     const page = await f.caller.projectRepo.runs({ projectId: f.task.projectId!, limit: 1 })
     expect(page.items.map((r) => r.id)).toEqual(['482'])
@@ -344,7 +345,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the builds of a repository (plan 84, 
     const ask = { projectId: f.task.projectId!, runId: '482', jobId: '4822' }
     expect(await f.caller.projectRepo.jobLog(ask)).toEqual({ state: 'loading' })
     expect(await f.caller.projectRepo.jobLog(ask)).toEqual({ state: 'loading' })
-    expect(await db.outboxEvent.count({ where: { topic: 'git', type: 'git.log' } })).toBe(1)
+    expect(await gitJobsOf(db, [f.workspaceId], 'git.log')).toHaveLength(1)
     await db.projectCiLog.update({
       where: {
         projectRepositoryId_providerJobId: {

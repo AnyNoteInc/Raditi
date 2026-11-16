@@ -18,6 +18,7 @@ import { TRPCError } from '@trpc/server'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { dropGitJobsOf } from '../testing/git-jobs.ts'
 import type { ChatContext } from '../services/chat/context.ts'
 import type { GitServices } from '../services/git/connections.ts'
 
@@ -67,7 +68,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the push of a chat branch (plan 84, 8
       select: { id: true },
     })
     const owned = { workspaceId: { in: workspaces.map(({ id }) => id) } }
-    await db.outboxEvent.deleteMany({ where: { topic: 'git' } })
+    await dropGitJobsOf(db, owned.workspaceId.in)
     await db.repoAction.deleteMany({ where: { createdById: { in: users } } })
     await db.taskEvent.deleteMany({ where: { task: owned } })
     await db.taskTurn.deleteMany({ where: { task: owned } })

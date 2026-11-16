@@ -12,6 +12,7 @@ import { TRPCError } from '@trpc/server'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { dropGitJobsOf, gitJobsOf } from '../testing/git-jobs.ts'
 import type { ChatContext } from '../services/chat/context.ts'
 import type { GitServices } from '../services/git/connections.ts'
 
@@ -62,7 +63,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: merge and deploy cards (plan 84, 84.2
       select: { id: true },
     })
     const owned = { workspaceId: { in: workspaces.map(({ id }) => id) } }
-    await db.outboxEvent.deleteMany({ where: { topic: 'git' } })
+    await dropGitJobsOf(db, owned.workspaceId.in)
     await db.repoAction.deleteMany({ where: { createdById: { in: users } } })
     await db.task.deleteMany({ where: owned })
     await db.projectRepository.deleteMany({ where: owned })
@@ -197,14 +198,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: merge and deploy cards (plan 84, 84.2
         ...options.mr,
       },
     })
-    return { user, caller, projectId, projectRepositoryId, task }
+    return { user, caller, projectId, projectRepositoryId, task, workspaceId }
   }
 
-  const gitActions = () =>
-    db.outboxEvent.findMany({
-      where: { topic: 'git', type: 'git.action' },
-      select: { payload: true },
-    })
+  /** The jobs `git.action` of the presses of this fixture (other files queue theirs meanwhile). */
+  const gitActions = async (f: { workspaceId: string }) =>
+    (await gitJobsOf(db, [f.workspaceId], 'git.action')).map(({ payload }) => ({ payload }))
 
   it('binds the token to the request, its target and its head, and writes the press once', async () => {
     const f = await fixture()
@@ -247,7 +246,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: merge and deploy cards (plan 84, 84.2
       },
       tokenSha256: createHash('sha256').update(prepared.confirmToken).digest('hex'),
     })
-    expect(await gitActions()).toEqual([{ payload: { actionId } }])
+    expect(await gitActions(f)).toEqual([{ payload: { actionId } }])
     // Once: the same token again is «Это уже подтверждено», and nothing more is queued.
     expect(
       await refusal(() =>
@@ -258,7 +257,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: merge and deploy cards (plan 84, 84.2
         }),
       ),
     ).toBe('REPO_CONFIRM_USED')
-    expect(await gitActions()).toHaveLength(1)
+    expect(await gitActions(f)).toHaveLength(1)
     expect(await f.caller.projectRepo.action({ projectId: f.projectId, actionId })).toMatchObject({
       kind: 'merge',
       state: 'queued',
@@ -301,7 +300,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: merge and deploy cards (plan 84, 84.2
     expect(await press(`${prepared.confirmToken.split('.')[0]}.forged`)).toBe(
       'REPO_CONFIRM_INVALID',
     )
-    expect(await gitActions()).toHaveLength(0)
+    expect(await gitActions(f)).toHaveLength(0)
   })
 
   it('offers no card for a request that cannot be merged now, or to anyone but the author', async () => {
@@ -333,12 +332,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: merge and deploy cards (plan 84, 84.2
     expect(await f.caller.projectRepo.prepareDeploy({ projectId: f.projectId })).toEqual({
       state: 'loading',
     })
-    expect(
-      await db.outboxEvent.findMany({
-        where: { topic: 'git', type: 'git.poll' },
-        select: { payload: true },
-      }),
-    ).toEqual([{ payload: { projectRepositoryId: f.projectRepositoryId } }])
+    expect(await gitJobsOf(db, [f.workspaceId], 'git.poll')).toEqual([
+      { type: 'git.poll', payload: { projectRepositoryId: f.projectRepositoryId } },
+    ])
     await db.projectRepository.update({
       where: { id: f.projectRepositoryId },
       data: { ciPolledAt: new Date() },
