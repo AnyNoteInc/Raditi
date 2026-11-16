@@ -1129,7 +1129,6 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     ['workspace', { workspaceId: '00000000-0000-4000-8000-000000000009' }],
     ['session', { sessionId: 'other-session' }],
     ['turn', { turn: 2 }],
-    ['image', { image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'e'.repeat(64)}` }],
     ['driver', { driver: { id: otherDriverId, version: '1.0.0' } }],
     ['driver version', { driver: { id: sampleDriverId, version: '2.0.0' } }],
   ])('rejects a foreign previous checkpoint (%s) before acquiring a lease', async (_, change) => {
@@ -1824,6 +1823,33 @@ describe.each(executorKinds)('TurnSupervisor in a chat: no repository (%s execut
       Record<string, Uint8Array>,
     ]
     expect(Object.keys(archives)).toEqual(['home'])
+  })
+
+  it('continues the checkpoint a previous sandbox image sealed: a release changes the image', async () => {
+    const older = `registry.invalid/raditi/${sampleDriverId}@sha256:${'e'.repeat(64)}`
+    const first = fixture()
+    withoutRepository(first)
+    first.request.sandbox = { ...first.request.sandbox, image: older }
+    const store = realSnapshots(first)
+    await capturesHome(first, 'native session')
+    expect((await first.run()).manifest.image).toBe(older)
+    const f = fixture()
+    withoutRepository(f)
+    realSnapshots(f, store)
+    await capturesHome(f, 'second session')
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image: older,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    }
+    const finished = await f.run()
+    expect(finished.manifest.image).toBe(image)
+    expect(f.transport.restore).toHaveBeenCalledOnce()
   })
 
   it('after `/undo` restores the checkpoint the undone turn started from, not turn n−1', async () => {

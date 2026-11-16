@@ -285,6 +285,59 @@ describe('planTurn of a chat (docs/plan/83-remove-projects.md)', () => {
     expect(next.request.input.prompt).toBe('И добавьте доставку')
   })
 
+  it('continues the session on the image of a new release: the checkpoint keeps its own', async () => {
+    const newer = `registry.invalid/raditi/${sampleDriverId}@sha256:${'b'.repeat(64)}`
+    const next = await planned(
+      facts({
+        task: { ...facts().task, turnNo: 1 },
+        turns: new Map([[1, finished(1, 'completed')]]),
+        requests: [
+          request(10, 'first', 'Посчитайте смету', 0),
+          request(12, 'answer', 'И добавьте доставку', 20),
+        ],
+      }),
+      env({ driver: { ...driver, image: newer } }),
+    )
+    expect(next.request.sandbox.image).toBe(newer)
+    expect(next.request.previous).toEqual(checkpointOf(1))
+  })
+
+  it('starts a new session told every word when a release brings another CLI version', async () => {
+    const requests = [
+      request(10, 'first', 'Посчитайте смету', 0),
+      request(12, 'answer', 'И добавьте доставку', 20),
+    ]
+    const newer = env({ driver: { ...driver, cliVersion: '1.1.0' } })
+    const next = await planned(
+      facts({
+        task: { ...facts().task, turnNo: 1 },
+        turns: new Map([[1, finished(1, 'completed')]]),
+        requests,
+      }),
+      newer,
+    )
+    expect(next.request).not.toHaveProperty('previous')
+    expect(next.request.input.prompt).toBe('Посчитайте смету\n\nИ добавьте доставку')
+    const undone = await planned(
+      facts({
+        task: { ...facts().task, turnNo: 2 },
+        turns: new Map([
+          [1, finished(1, 'completed')],
+          [2, finished(2, 'completed', { previous: checkpointOf(1), undone: true })],
+        ]),
+        requests: [
+          request(10, 'first', 'Посчитайте смету', 0),
+          request(11, 'answer', 'Уберите доставку', 15),
+          request(12, 'command', null, 25, 'turn_undo'),
+          request(13, 'answer', 'Лучше округлите суммы', 30),
+        ],
+      }),
+      newer,
+    )
+    expect(undone.request.rewound).toBe(true)
+    expect(undone.request).not.toHaveProperty('previous')
+  })
+
   it('starts a new session after an unsuccessful turn: nothing is replaced', async () => {
     const plan = await planned(
       facts({

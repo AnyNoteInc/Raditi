@@ -485,13 +485,20 @@ function startOf(facts: PassFacts, driver: AgentDriver): Start | null {
   if (last.undone) {
     const previous = last.plan?.previous
     if (!last.plan) return null
-    if (!previous) return { rewound: true, since: null }
+    if (!previous || !sameCli(previous, driver)) return { rewound: true, since: null }
     return { previous, rewound: true, since: facts.turns.get(previous.turn)?.startedAt ?? null }
   }
   if (last.status !== 'completed') return { since: null }
   const previous = snapshotOf(facts, driver, last)
-  return previous ? { previous, since: last.startedAt } : null
+  if (!previous) return null
+  // A release that brings another version of the CLI cannot restore its session: the chat goes
+  // on in a new one, told every word of the client, rather than failing each pass for good.
+  return sameCli(previous, driver) ? { previous, since: last.startedAt } : { since: null }
 }
+
+/** The checkpoint was sealed by the CLI the turn runs: its session can be restored. */
+const sameCli = (previous: SnapshotReference, driver: AgentDriver): boolean =>
+  previous.driver.id === driver.id && previous.driver.version === driver.cliVersion
 
 /**
  * The plan of one pass, or why there is none. The budget comes first: a key that cannot
