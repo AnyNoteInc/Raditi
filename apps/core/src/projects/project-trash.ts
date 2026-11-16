@@ -4,9 +4,11 @@ import {
   deleteProjectFileRow,
   listExpiredProjectFiles,
   lockProjectChats,
+  pauseSchedulesOfGoneProject,
   projectBusyStatuses,
   projectFileKeys,
   projectsDueForPurge,
+  projectsWithRunningSchedules,
   purgeProject,
   stopProjectChats,
   type PrismaClient,
@@ -39,6 +41,8 @@ export interface ProjectTrashSweep {
   purged: number | null
   /** Files no project took, collected after their day (ПР8). */
   collected: number
+  /** Scheduled tasks of projects in «Архив» or the trash stopped on this sweep (ПР19). */
+  paused: number
 }
 
 /**
@@ -53,9 +57,11 @@ export interface ProjectTrashSweep {
  * - files of the context no project took within their day are collected, and the files of a
  *   project being purged go before it: their objects in raditi-inbox, then their rows (ПР8).
  *
- * The pause of the scheduled tasks of a project in the trash (ПР19, `project_gone`) comes with
- * the scheduled tasks (Э5): its place is `stopChats`. Every write is conditional under the lock of
- * its rows, so two cores sweep side by side.
+ * - the scheduled tasks of a project in «Архив» or in the trash that still run are stopped
+ *   (`project_gone`, ПР19) — the second line after «В архив» and «Удалить», which stop them in
+ *   their own transaction.
+ *
+ * Every write is conditional under the lock of its rows, so two cores sweep side by side.
  */
 export class ProjectTrash {
   readonly #logger: { log(message: string): void; warn(message: string): void }
@@ -69,6 +75,7 @@ export class ProjectTrash {
 
   async sweep(): Promise<ProjectTrashSweep> {
     const stopped = await this.stopChats()
+    const paused = await this.pauseSchedules()
     const collected = await this.collectFiles()
     const now = this.#now().getTime()
     const due = this.#purgedAt === null || now - this.#purgedAt >= PROJECT_PURGE_EVERY_MS
@@ -76,11 +83,20 @@ export class ProjectTrash {
     // A chat still stopping, or more projects than a batch: the next minute goes on.
     if (purge && !purge.more) this.#purgedAt = now
     const purged = purge?.purged ?? null
-    if (stopped > 0 || (purged ?? 0) > 0 || collected > 0)
+    if (stopped > 0 || (purged ?? 0) > 0 || collected > 0 || paused > 0)
       this.#logger.log(
-        `project_trash stopped=${stopped} purged=${purged ?? 0} files_collected=${collected}`,
+        `project_trash stopped=${stopped} purged=${purged ?? 0} files_collected=${collected} schedules_paused=${paused}`,
       )
-    return { stopped, purged, collected }
+    return { stopped, purged, collected, paused }
+  }
+
+  /** The scheduled tasks of projects put away that still run, stopped a project at a time (ПР19). */
+  async pauseSchedules(): Promise<number> {
+    const { db } = this.deps
+    let paused = 0
+    for (const id of await projectsWithRunningSchedules(db, BATCH))
+      paused += await pauseSchedulesOfGoneProject(db, id)
+    return paused
   }
 
   /**

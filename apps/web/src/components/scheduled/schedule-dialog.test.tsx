@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ScheduleDialog, type ScheduleDialogOpening } from './schedule-dialog'
 import { NOW, scheduleDetail } from './testing'
 
-const { create, update, costHint, listSchedules, push } = vi.hoisted(() => ({
+const { create, update, costHint, listSchedules, push, listProjects } = vi.hoisted(() => ({
   create: vi.fn(async (input: { name: string }) => ({
     id: '019f2a00-0000-7000-8000-0000000000f1',
     ...input,
@@ -23,6 +23,7 @@ const { create, update, costHint, listSchedules, push } = vi.hoisted(() => ({
   })),
   listSchedules: vi.fn(async () => ({ schedules: [] as unknown[], timezone: 'Europe/Moscow' })),
   push: vi.fn(),
+  listProjects: vi.fn(async () => ({ items: [] as unknown[] })),
 }))
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }))
@@ -43,6 +44,7 @@ const mutation = (fn: (input: never) => Promise<unknown>) => ({
 
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
+    project: { list: query('project.list', listProjects) },
     schedule: {
       list: query('schedule.list', listSchedules),
       get: query('schedule.get', async () => null),
@@ -124,6 +126,7 @@ describe('«Новая запланированная задача» (plan 82, �
           triggers: [{ kind: 'daily', time: '10:30' }],
           timezone: 'Europe/Moscow',
           notify: true,
+          projectId: null,
           templateSlug: null,
         },
         expect.anything(),
@@ -523,6 +526,37 @@ describe('«Изменить задачу»', () => {
     const block = within(dialog).getByRole('group', { name: 'Время запуска 1' })
     fireEvent.change(within(block).getByLabelText('Время'), { target: { value: '10:00' } })
     expect(block).toHaveTextContent('Это время уже прошло — выберите другое')
+  })
+
+  it('moves a task to another project by the pill, and sends the project only when it changed (ПР19)', async () => {
+    listProjects.mockResolvedValue({
+      items: [
+        {
+          id: '019f2a00-0000-7000-8000-00000000aa01',
+          name: 'Колос',
+          goal: null,
+          starred: false,
+          archived: false,
+          chats: 0,
+          hasInstructions: false,
+          activityAt: NOW,
+          createdAt: NOW,
+          purgeAfter: null,
+        },
+      ],
+    })
+    const schedule = scheduleDetail()
+    const { dialog } = show({ kind: 'edit', schedule })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Без проекта' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /Колос/ }))
+    expect(within(dialog).getByRole('button', { name: 'Проект: Колос' })).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }))
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(
+        { scheduleId: schedule.id, projectId: '019f2a00-0000-7000-8000-00000000aa01' },
+        expect.anything(),
+      ),
+    )
   })
 
   it('sends only what changed', async () => {

@@ -113,7 +113,7 @@ export function planAverageTasks(creditsPerMonth: number): string | null {
 
 /**
  * The sites of pages of a tariff, beside its credits (docs/plan/73-pages-sites.md, Дер37):
- * «До 2 сайтов из страниц»; null — the tariff gives none of its own.
+ * «До 20 сайтов из страниц»; null — the tariff gives none of its own.
  */
 export function planPageSites(pageSites: number | null): string | null {
   if (pageSites === null || pageSites <= 0) return null

@@ -766,4 +766,40 @@ describe('a pass of a run of a scheduled task (docs/plan/82-scheduled-tasks.md, 
     expect(plan.unattended).toBe(true)
     expect(plain.unattended).toBe(false)
   })
+
+  it('runs as a chat of its project: its instructions, memory and repository, nothing sent (ПР19)', async () => {
+    const words = [request(10, 'first', 'Проверь последние сборки и пришли сводку', 0)]
+    const project = { name: 'Сайт пекарни', goal: 'Зимнее меню', instructions: 'Пишите на «вы».' }
+    const memory = [
+      {
+        id: '01960000-0000-7000-8000-0000000000e1',
+        kind: 'fact' as const,
+        text: 'Сборка идёт в GitLab',
+        updatedAt: at(5),
+      },
+    ]
+    const plan = await planned(
+      facts({ requests: words, unattended: { name: 'Сборки' }, project, memory, repository: REPO }),
+    )
+    const { instructions } = plan.request.context
+    expect(instructions).toContain(projectSection(project))
+    expect(instructions).toContain(memorySection(memory))
+    expect(instructions).toContain('## The repository')
+    expect(plan.request.repository).toMatchObject({ projectId: REPO.projectId })
+    const run = instructions.slice(instructions.indexOf('## A run of a scheduled task'))
+    expect(run).toContain('waits for the client as a proposal')
+    expect(run).toMatch(/Send no branch, open, accept or\s+merge no merge request, start no deploy/)
+    expect(run).toContain('change no CI file')
+    expect(run).toContain('raditi_repo_request_merge')
+    // A chat of a project without a repository: the memory line, no word of a repository.
+    const noRepo = await planned(
+      facts({ requests: words, unattended: { name: 'Сборки' }, project }),
+    )
+    const plainRun = noRepo.request.context.instructions
+    expect(plainRun).toContain('waits for the client as a proposal')
+    expect(plainRun).not.toContain('Send no branch')
+    // An ordinary chat of the project is not told any of it.
+    const live = await planned(facts({ requests: words, project, repository: REPO }))
+    expect(live.request.context.instructions).not.toContain('Send no branch')
+  })
 })

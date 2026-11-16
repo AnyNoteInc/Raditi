@@ -629,7 +629,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         inbox: inboxFacts,
         variables: facts.variables ?? [],
         repository: repository !== null,
-      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${memorySection(facts.memory)}`,
+      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${memorySection(facts.memory)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),

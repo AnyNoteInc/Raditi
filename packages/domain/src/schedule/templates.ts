@@ -17,13 +17,26 @@ export const scheduleTemplateSlugs = [
   'post-ideas',
   'holidays',
 ] as const
-export type ScheduleTemplateSlug = (typeof scheduleTemplateSlugs)[number]
+
+/**
+ * The templates of a project (docs/plan/84-projects.md, ПР19, slice 84.14): the window opened in a
+ * project offers them before the six. Two read the repository of the project, and the window shows
+ * them only to a project that has one; the instructions never ask what a run without its client
+ * may not do — send a branch, open a merge request, accept, deploy.
+ */
+export const scheduleProjectTemplateSlugs = ['build-check', 'merge-requests', 'week-plan'] as const
+
+export type ScheduleTemplateSlug =
+  (typeof scheduleTemplateSlugs)[number] | (typeof scheduleProjectTemplateSlugs)[number]
 
 /** The icon of a template, by its name in the icons of the cabinet (`app-icon.tsx`). */
-export type ScheduleTemplateIcon = 'results' | 'binoculars' | 'pulse' | 'search' | 'bulb' | 'clock'
+export type ScheduleTemplateIcon =
+  'results' | 'binoculars' | 'pulse' | 'search' | 'bulb' | 'clock' | 'runs' | 'gitlab'
 
 export interface ScheduleTemplate {
   slug: ScheduleTemplateSlug
+  /** Of a project only; `repository` — of a project with a repository. Absent — of any task. */
+  needs?: 'project' | 'repository'
   name: string
   icon: ScheduleTemplateIcon
   instructions: string
@@ -97,9 +110,55 @@ export const scheduleTemplates: readonly ScheduleTemplate[] = Object.freeze([
   },
 ] satisfies ScheduleTemplate[])
 
-/** The template of a slug; undefined — none of §4.6. */
+export const scheduleProjectTemplates: readonly ScheduleTemplate[] = Object.freeze([
+  {
+    slug: 'build-check',
+    needs: 'repository',
+    name: 'Проверка сборок по утрам',
+    icon: 'runs',
+    instructions:
+      'Проверь последние сборки в репозитории. Если какая-то упала — разберись по журналу, исправь и подготовь изменения — запрос на слияние открою я сам. Пришли короткую сводку.',
+    triggers: [{ kind: 'weekdays', time: '09:00' }],
+    effort: 'high',
+  },
+  {
+    slug: 'merge-requests',
+    needs: 'repository',
+    name: 'Сводка запросов на слияние',
+    icon: 'gitlab',
+    instructions:
+      'Пришли короткую сводку открытых запросов на слияние: что в каждом меняется, прошла ли сборка и что мешает принять. Ничего не принимай и не меняй.',
+    triggers: [{ kind: 'weekly', time: '10:00', days: [1] }],
+    effort: 'high',
+  },
+  {
+    slug: 'week-plan',
+    needs: 'project',
+    name: 'План на неделю',
+    icon: 'bulb',
+    instructions:
+      'Посмотри цель, инструкции и файлы проекта и предложи план работ на эту неделю: три-пять дел по порядку и что для каждого нужно от меня.',
+    triggers: [{ kind: 'weekly', time: '09:00', days: [1] }],
+    effort: 'high',
+  },
+] satisfies ScheduleTemplate[])
+
+/** The templates the window of a project offers: of its project first, then the six (ПР19). */
+export function scheduleTemplatesOfProject(project: {
+  repository: boolean
+}): readonly ScheduleTemplate[] {
+  return [
+    ...scheduleProjectTemplates.filter(
+      (template) => template.needs !== 'repository' || project.repository,
+    ),
+    ...scheduleTemplates,
+  ]
+}
+
+/** The template of a slug; undefined — none of §4.6 and of a project. */
 export const scheduleTemplateOf = (slug: string): ScheduleTemplate | undefined =>
-  scheduleTemplates.find((template) => template.slug === slug)
+  scheduleTemplates.find((template) => template.slug === slug) ??
+  scheduleProjectTemplates.find((template) => template.slug === slug)
 
 /** The instructions still hold a place of a template for the client's words (Зп59). */
 export const hasScheduleTemplatePlaceholder = (instructions: string): boolean =>

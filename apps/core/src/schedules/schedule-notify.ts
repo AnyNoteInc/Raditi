@@ -29,7 +29,10 @@ export const SCHEDULE_REPEAT_NOTICE_MS = 24 * 60 * 60_000
 export type ScheduleNotifyAnswer = DeliveryAnswer | 'none'
 
 /** Why a task paused, told after «Запланированная задача приостановлена». */
-const pauseReasonText: Readonly<Record<Exclude<SchedulePausedReason, 'completed'>, string>> = {
+/** The pauses a notice tells: `project_gone` is the client's own «В архив» or «Удалить» (ПР19). */
+type ToldPause = Extract<SchedulePausedReason, 'not_accepted' | 'refused'>
+
+const pauseReasonText: Readonly<Record<ToldPause, string>> = {
   not_accepted: 'задачи пока не принимаются',
   refused: 'три отказа подряд',
 }
@@ -76,7 +79,7 @@ export class ScheduleNotify {
   async paused(input: {
     scheduleId: string
     runId: string
-    reason: Exclude<SchedulePausedReason, 'completed'>
+    reason: ToldPause
     /** The refusal that made the third of a row, for «приостановлена: <причина>». */
     because?: ScheduledRunReason | null
   }): Promise<ScheduleNotifyAnswer> {
@@ -134,7 +137,9 @@ export class ScheduleNotify {
       return reason === 'missed' ? this.#missed(task, runId) : this.#log(runId, 'missed', 'none')
     if (run.status !== 'refused') return 'none'
     const paused = recorded ? recorded.paused : pausedBy(task, reason)
-    if (paused !== null && paused !== 'completed')
+    // Its project went into «Архив» or the trash by the client's own press: nothing to tell (ПР19).
+    if (paused === 'project_gone') return this.#log(runId, 'paused', 'none')
+    if (paused === 'not_accepted' || paused === 'refused')
       return this.paused({ scheduleId: task.id, runId, reason: paused, because: reason })
     if (await this.#toldBefore(task.id, reason)) return this.#log(runId, 'not_started', 'repeated')
     return this.#send(task, runId, 'not_started', scheduledRunReasonText[reason])
@@ -225,6 +230,7 @@ export function pausedBy(
   reason: ScheduledRunReason,
 ): SchedulePausedReason | null {
   if (task.enabled || task.pausedReason === null) return null
+  if (reason === 'project_gone' && task.pausedReason === 'project_gone') return 'project_gone'
   if (
     task.pausedReason === 'refused' &&
     isClientRefusalReason(reason) &&

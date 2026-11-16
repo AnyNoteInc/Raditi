@@ -94,6 +94,22 @@ describe('schedule_create', () => {
   })
 })
 
+describe('the project of a task set up in a chat (docs/plan/84-projects.md, ПР19)', () => {
+  it('is this chat, none, or left out — nothing else', () => {
+    for (const project of ['this_chat', 'none'])
+      expect(scheduleCreateArgumentsSchema.safeParse({ ...create, project }).success).toBe(true)
+    expect(scheduleCreateArgumentsSchema.safeParse({ ...create, project: id }).success).toBe(false)
+    // A change never moves a task to another project.
+    expect(
+      scheduleUpdateArgumentsSchema.safeParse({
+        scheduleId: id,
+        project: 'none',
+        confirmedByClient: true,
+      }).success,
+    ).toBe(false)
+  })
+})
+
 describe('the schedules of a tool call', () => {
   const tooOften = (triggers: unknown) => {
     const parsed = scheduleToolTriggersSchema.safeParse(triggers)

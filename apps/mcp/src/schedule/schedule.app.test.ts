@@ -85,6 +85,7 @@ function reservedOf(input: Parameters<McpScheduleStore['reserve']>[0]): Reserved
       scheduleId: change.scheduleId ?? null,
       fields: null,
       nextRunAt: null,
+      needsClient: false,
       cancelled: change.reservedId !== undefined,
     }
   const timezone = change.timezone ?? 'Europe/Moscow'
@@ -101,11 +102,13 @@ function reservedOf(input: Parameters<McpScheduleStore['reserve']>[0]): Reserved
       timezone,
       notify: change.notify ?? true,
       enabled: change.kind === 'update' ? (change.enabled ?? true) : true,
+      projectId: null,
     },
     nextRunAt:
       triggers[0]?.kind === 'once'
         ? new Date(now.getTime() + 30 * 60_000)
         : new Date('2026-11-16T06:00:00Z'),
+    needsClient: false,
     cancelled: false,
   }
 }
@@ -115,6 +118,7 @@ function fakeStore() {
     author: vi.fn<McpScheduleStore['author']>(async () => ({
       userId: authorId,
       timezone: 'Europe/Moscow',
+      projectId: null,
     })),
     list: vi.fn<McpScheduleStore['list']>(async () => [listed()]),
     pending: vi.fn<McpScheduleStore['pending']>(async () => []),
@@ -266,6 +270,7 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
       'instructions',
       'name',
       'notify',
+      'project',
       'timezone',
       'triggers',
     ])
@@ -406,13 +411,14 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     expect(store.list).toHaveBeenCalledWith({
       userId: authorId,
       workspaceId: browserChat.workspaceId,
+      projectId: null,
     })
     expect(store.pending).toHaveBeenCalledWith(browserChat.taskId, 3)
   })
 
   it('lists the tasks in a chat without the browser alike, in Moscow without a zone', async () => {
     const store = fakeStore()
-    store.author.mockResolvedValue({ userId: authorId, timezone: null })
+    store.author.mockResolvedValue({ userId: authorId, timezone: null, projectId: null })
     store.list.mockResolvedValue([
       listed({
         enabled: false,
@@ -439,6 +445,7 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     expect(store.list).toHaveBeenCalledWith({
       userId: authorId,
       workspaceId: plainChat.workspaceId,
+      projectId: null,
     })
     // A chat whose author is gone has nobody's tasks.
     store.author.mockResolvedValueOnce(null)
@@ -496,6 +503,43 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
       change: { kind: 'create', ...change },
       now: NOW,
     })
+  })
+
+  it('lists and sets up the tasks of the project of a chat of a project (docs/plan/84, ПР19)', async () => {
+    const store = fakeStore()
+    const projectId = '01960000-0000-7000-8000-0000000000aa'
+    store.author.mockResolvedValue({ userId: authorId, timezone: 'Europe/Moscow', projectId })
+    const { server } = await start(browserChat, store)
+    await post(server, call('schedule_list', {}))
+    expect(store.list).toHaveBeenCalledWith({
+      userId: authorId,
+      workspaceId: browserChat.workspaceId,
+      projectId,
+    })
+    // A task of a project with a repository waits for the client: the agent is told so.
+    store.reserve.mockImplementationOnce(async (input) => ({
+      ...reservedOf(input),
+      fields: { ...reservedOf(input).fields!, enabled: false, projectId },
+      nextRunAt: null,
+      needsClient: true,
+    }))
+    const res = answer(
+      await post(server, call('schedule_create', { ...create, project: 'this_chat' })),
+    )
+    expect(res.value).toMatchObject({ ok: true, enabled: false, needsClient: true })
+    expect(res.value.warnings).toEqual([
+      expect.stringMatching(/Задача появится/),
+      expect.stringMatching(/Включить задачу/),
+    ])
+    const { confirmedByClient: _confirmed, ...change } = create
+    expect(store.reserve).toHaveBeenLastCalledWith(
+      expect.objectContaining({ change: { kind: 'create', ...change, project: 'this_chat' } }),
+    )
+    // Only the two values: an id of a project is refused before the store.
+    const calls = store.reserve.mock.calls.length
+    const bad = await post(server, call('schedule_create', { ...create, project: projectId }))
+    expect(bad.body.result?.content).toBeUndefined()
+    expect(store.reserve.mock.calls.length).toBe(calls)
   })
 
   it('passes a single run from now on for the server to count, in the zone of the task', async () => {

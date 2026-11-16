@@ -12,6 +12,7 @@ import {
 import type { Prisma, PrismaClient, TaskStatus } from './generated/prisma/client.ts'
 import { lockProjectChats, stopProjectChats } from './project-trash.ts'
 import { chatHasRepoBranch } from './repo-work.ts'
+import { lockProjectSchedules, pauseProjectSchedules } from './scheduled-tasks.ts'
 
 // The projects of a workspace (docs/plan/84-projects.md, ПР1, ПР2, ПР4, ПР20; slice 84.3). Only the
 // author of a project sees and changes it, while they are a member of its workspace: every
@@ -306,12 +307,28 @@ export function starProject(
   return changeProject(db, input, { starredAt: input.starred ? input.now : null })
 }
 
-/** «В архив» / «Из архива» (ПР20): the chats stay, a new chat does not start in it. */
-export function archiveProject(
-  db: Pick<Tx, 'project'>,
+/**
+ * «В архив» / «Из архива» (ПР20): the chats stay, a new chat does not start in it. «В архив» stops
+ * the scheduled tasks of the project in the same transaction (ПР19, `project_gone`): its tasks are
+ * locked first, then its row FOR UPDATE, the order a change of a task takes them in. «Из архива»
+ * turns none on again — the client does.
+ */
+export async function archiveProject(
+  db: PrismaClient,
   input: { projectId: string; userId: string; archived: boolean; now: Date },
 ): Promise<void> {
-  return changeProject(db, input, { archivedAt: input.archived ? input.now : null })
+  if (!input.archived) return changeProject(db, input, { archivedAt: null })
+  await db.$transaction(async (tx) => {
+    await lockProjectSchedules(tx, input.projectId)
+    await lockProjectRow(tx, input.projectId)
+    await changeProject(tx, input, { archivedAt: input.now })
+    await pauseProjectSchedules(tx, input.projectId)
+  })
+}
+
+/** The row of a project FOR UPDATE: a task being turned on in it (FOR KEY SHARE) waits. */
+async function lockProjectRow(tx: Tx, projectId: string): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM projects WHERE id = ${projectId}::uuid FOR UPDATE`
 }
 
 /**
@@ -319,8 +336,8 @@ export function archiveProject(
  * no longer shows. A project already there keeps its day of purging. In the same transaction its
  * chats whose pass is queued or runs are stopped, as «Удалить диалог» stops one (slice 84.5): the
  * press of `cancel` by the author and `turn.cancel` for core. A chat that waits for its client
- * stays as it is — it does nothing, and «Вернуть» gives it back open. The pause of the scheduled
- * tasks of the project (ПР19, `project_gone`) comes with them (Э5).
+ * stays as it is — it does nothing, and «Вернуть» gives it back open. The scheduled tasks of the
+ * project stop with them (ПР19, `project_gone`): locked after the chats and before the project.
  */
 export async function trashProject(
   db: PrismaClient,
@@ -331,8 +348,11 @@ export async function trashProject(
   if (project.purgeAfter !== null) return { purgeAfter: project.purgeAfter }
   const purgeAfter = projectPurgeAfter(input.now)
   const trashed = await db.$transaction(async (tx) => {
-    // The chats before the project: the order a pass locks them in (lockProjectChats).
+    // The chats before the project: the order a pass locks them in (lockProjectChats); the tasks
+    // before it too, the order a change of a task takes them in (ПР19).
     const chats = await lockProjectChats(tx, project.id)
+    await lockProjectSchedules(tx, project.id)
+    await lockProjectRow(tx, project.id)
     const { count } = await tx.project.updateMany({
       where: { id: project.id, deletedAt: null },
       data: { deletedAt: input.now, purgeAfter },
@@ -340,6 +360,7 @@ export async function trashProject(
     // Deleted meanwhile by another request of the author: it stopped the chats, its day stands.
     if (count !== 1) return false
     await stopProjectChats(tx, { chats, statuses: projectBusyStatuses, authorId: input.userId })
+    await pauseProjectSchedules(tx, project.id)
     return true
   })
   if (trashed) return { purgeAfter }

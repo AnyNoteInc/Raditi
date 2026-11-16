@@ -33,7 +33,7 @@ describe('plans (docs/business.md §6)', () => {
         creditsPer5h: null,
         creditsPerWeek: 73,
         packCredits: null,
-        pageSites: 2,
+        pageSites: 20,
         pageCustomNames: false,
       },
       {
@@ -46,7 +46,7 @@ describe('plans (docs/business.md §6)', () => {
         creditsPer5h: null,
         creditsPerWeek: 350,
         packCredits: null,
-        pageSites: 10,
+        pageSites: 100,
         pageCustomNames: true,
       },
       {
@@ -59,7 +59,7 @@ describe('plans (docs/business.md §6)', () => {
         creditsPer5h: null,
         creditsPerWeek: 700,
         packCredits: null,
-        pageSites: 20,
+        pageSites: 200,
         pageCustomNames: true,
       },
       {
@@ -134,7 +134,7 @@ describe('Appendix 1 of the public offer', () => {
         // The windows of the work (plan 71): «до 20 Кредитов за 5 часов и 55 в неделю».
         // Only the week since the owner's answer of 13.11.2026: «до 55 Кредитов в неделю».
         `(?:до (?:${whole} Кредит(?:|а|ов) за 5 часов и )?${whole}(?: Кредит(?:|а|ов))? в неделю; )?` +
-        // Sites of pages (docs/plan/73-pages-sites.md, Дер37): «до 10 сайтов из страниц со своим
+        // Sites of pages (docs/plan/73-pages-sites.md, Дер37): «до 100 сайтов из страниц со своим
         // именем». Sites of the customer went with projects (docs/plan/83-remove-projects.md).
         String.raw`(?:до )?(\d+) сайт(?:|а|ов) из страниц( со своим именем)?$`,
     ),

@@ -7,9 +7,12 @@ import {
   type MigratedSchema,
 } from '../prisma/migrated-schema.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
+import { purgeProject } from './project-trash.ts'
+import { archiveProject, trashProject } from './projects.ts'
 import {
   applyScheduleChange,
   claimDueSchedule,
+  confirmScheduledTask,
   createScheduledTask,
   deleteScheduledTask,
   dropPendingRun,
@@ -19,7 +22,9 @@ import {
   lockWaitingRun,
   passUnattended,
   pauseSchedule,
+  pauseSchedulesOfGoneProject,
   pendingScheduleChanges,
+  projectsWithRunningSchedules,
   readScheduledTask,
   recordRunOutcome,
   recordRunOutcomeInTx,
@@ -1182,6 +1187,402 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
         (await db.scheduleReservation.findUniqueOrThrow({ where: { id: live.reservationId } }))
           .outcome,
       ).toBe('failed')
+    })
+  })
+
+  describe('the tasks of a project (docs/plan/84-projects.md, ПР19)', () => {
+    /** A project of the user in their workspace; with `repository` — a repository read by link. */
+    async function project(who: Owner, options: { repository?: boolean } = {}) {
+      const created = await db.project.create({
+        data: {
+          id: uuidv7(),
+          workspaceId: who.workspaceId,
+          createdById: who.userId,
+          name: 'Сайт пекарни',
+        },
+      })
+      if (options.repository)
+        await db.projectRepository.create({
+          data: {
+            id: uuidv7(),
+            projectId: created.id,
+            workspaceId: who.workspaceId,
+            provider: 'gitlab',
+            host: 'gitlab.com',
+            path: 'kolos/site',
+            webUrl: 'https://gitlab.com/kolos/site',
+            defaultBranch: 'main',
+            mode: 'read',
+          },
+        })
+      return created.id
+    }
+
+    /** A chat of the user in a project. */
+    async function projectChat(who: Owner, projectId: string) {
+      const taskId = await chat(who)
+      await db.task.update({ where: { id: taskId }, data: { projectId } })
+      return taskId
+    }
+
+    const agentCreate = (extra: Record<string, unknown> = {}) => ({
+      kind: 'create' as const,
+      name: 'Проверка сборок',
+      instructions: 'Проверь последние сборки и пришли сводку.',
+      triggers: [{ kind: 'weekdays', time: '09:00' }] as ScheduleTrigger[],
+      ...extra,
+    })
+
+    it('binds a task to a project of its creator, lists it by project, refuses another', async () => {
+      const who = await owner()
+      const projectId = await project(who)
+      const task = await createScheduledTask(db, input(who, { projectId }))
+      expect(task.projectId).toBe(projectId)
+      const without = await createScheduledTask(db, input(who))
+      const ofProject = await listScheduledTasks(db, { userId: who.userId, projectId })
+      expect(ofProject.map((row) => row.id)).toEqual([task.id])
+      expect(ofProject[0]!.project).toMatchObject({ id: projectId, name: 'Сайт пекарни' })
+      expect(
+        (await listScheduledTasks(db, { userId: who.userId, projectId: null })).map((r) => r.id),
+      ).toEqual([without.id])
+      // Another's project is never told apart from none.
+      const stranger = await owner()
+      const theirs = await project(stranger)
+      expect(await codeOf(createScheduledTask(db, input(who, { projectId: theirs })))).toBe(
+        'PROJECT_NOT_FOUND',
+      )
+      // A move to another project of its own, and to none.
+      const second = await project(who)
+      const moved = await updateScheduledTask(db, {
+        scheduleId: without.id,
+        userId: who.userId,
+        patch: { projectId: second },
+        now: monday,
+      })
+      expect(moved.projectId).toBe(second)
+      expect(
+        await codeOf(
+          updateScheduledTask(db, {
+            scheduleId: without.id,
+            userId: who.userId,
+            patch: { projectId: theirs },
+            now: monday,
+          }),
+        ),
+      ).toBe('PROJECT_NOT_FOUND')
+    })
+
+    it('stops the tasks of a project put into «Архив», and turns none on there', async () => {
+      const who = await owner()
+      const projectId = await project(who)
+      const task = await createScheduledTask(db, input(who, { projectId }))
+      const completed = await createScheduledTask(
+        db,
+        input(who, {
+          projectId,
+          triggers: [{ kind: 'once', date: '2026-11-16', time: '09:00' }],
+        }),
+      )
+      await db.scheduledTask.update({
+        where: { id: completed.id },
+        data: { enabled: false, nextRunAt: null, pausedReason: 'completed' },
+      })
+      await archiveProject(db, { projectId, userId: who.userId, archived: true, now: monday })
+      const paused = await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })
+      expect(paused).toMatchObject({
+        enabled: false,
+        nextRunAt: null,
+        pausedReason: 'project_gone',
+      })
+      // A task that completed keeps its own reason.
+      expect(
+        (await db.scheduledTask.findUniqueOrThrow({ where: { id: completed.id } })).pausedReason,
+      ).toBe('completed')
+      expect(
+        await codeOf(
+          setScheduledTaskEnabled(db, {
+            scheduleId: task.id,
+            userId: who.userId,
+            enabled: true,
+            now: monday,
+          }),
+        ),
+      ).toBe('SCHEDULE_PROJECT_GONE')
+      expect(await codeOf(createScheduledTask(db, input(who, { projectId })))).toBe(
+        'SCHEDULE_PROJECT_GONE',
+      )
+      // «Из архива» turns nothing on; the client does.
+      await archiveProject(db, { projectId, userId: who.userId, archived: false, now: monday })
+      expect((await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).enabled).toBe(
+        false,
+      )
+      const resumed = await setScheduledTaskEnabled(db, {
+        scheduleId: task.id,
+        userId: who.userId,
+        enabled: true,
+        now: monday,
+      })
+      expect(resumed).toMatchObject({ enabled: true, pausedReason: null })
+    })
+
+    it('stops the tasks of a project in the trash; the purge deletes them, the runs stay', async () => {
+      const who = await owner()
+      const projectId = await project(who)
+      const task = await createScheduledTask(db, input(who, { projectId }))
+      // A run written before: its snapshot keeps the project.
+      const claim = await db.$transaction((tx) =>
+        claimDueSchedule(tx, task.id, at('2026-11-16T06:00:30Z')),
+      )
+      expect(claim?.startRunId).toBeTruthy()
+      const run = await db.scheduledRun.findUniqueOrThrow({ where: { id: claim!.startRunId! } })
+      expect(run.projectId).toBe(projectId)
+
+      const { purgeAfter } = await trashProject(db, { projectId, userId: who.userId, now: monday })
+      expect(
+        (await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).pausedReason,
+      ).toBe('project_gone')
+      const purged = await purgeProject(db, { projectId, now: new Date(purgeAfter.getTime() + 1) })
+      expect(purged.state).toBe('purged')
+      const after = await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })
+      expect(after.deletedAt).not.toBeNull()
+      expect(after.projectId).toBeNull()
+      expect((await db.scheduledRun.findUniqueOrThrow({ where: { id: run.id } })).projectId).toBe(
+        null,
+      )
+    })
+
+    it('the sweep stops what a race left running in a project put away', async () => {
+      const who = await owner()
+      const projectId = await project(who)
+      const task = await createScheduledTask(db, input(who, { projectId }))
+      // As if «В архив» came by another path: the project only.
+      await db.project.update({ where: { id: projectId }, data: { archivedAt: monday } })
+      expect(await projectsWithRunningSchedules(db, 100)).toContain(projectId)
+      expect(await pauseSchedulesOfGoneProject(db, projectId)).toBe(1)
+      expect(
+        (await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).pausedReason,
+      ).toBe('project_gone')
+      expect(await projectsWithRunningSchedules(db, 100)).not.toContain(projectId)
+    })
+
+    it('stops a task at once on a run refused for its project, by a series for its sign-in', async () => {
+      const who = await owner()
+      const projectId = await project(who)
+      const gone = await createScheduledTask(db, input(who, { projectId }))
+      const write = async (scheduleId: string, minute: number) => {
+        const id = uuidv7()
+        const task = await db.scheduledTask.findUniqueOrThrow({ where: { id: scheduleId } })
+        await db.scheduledRun.create({
+          data: {
+            id,
+            scheduledTaskId: scheduleId,
+            dueAt: new Date(monday.getTime() + minutes(minute)),
+            trigger: 'schedule',
+            name: task.name,
+            instructions: task.instructions,
+            effort: task.effort,
+            projectId,
+          },
+        })
+        return id
+      }
+      const first = await recordRunOutcome(db, await write(gone.id, 1), {
+        status: 'refused',
+        reason: 'project_gone',
+      })
+      expect(first.paused).toBe('project_gone')
+      const reauth = await createScheduledTask(db, input(who, { projectId }))
+      const outcomes = []
+      for (const minute of [1, 2, 3])
+        outcomes.push(
+          await recordRunOutcome(db, await write(reauth.id, minute), {
+            status: 'refused',
+            reason: 'project_unavailable',
+          }),
+        )
+      expect(outcomes.map((outcome) => outcome.paused)).toEqual([null, null, 'refused'])
+    })
+
+    it('lets the agent of a chat of a project change only the tasks of that project', async () => {
+      const who = await owner()
+      const projectId = await project(who)
+      const inProject = await projectChat(who, projectId)
+      const plain = await chat(who)
+      const ofProject = await createScheduledTask(db, input(who, { projectId }))
+      const ofNone = await createScheduledTask(db, input(who))
+      const turn = (taskId: string) => ({
+        workspaceId: who.workspaceId,
+        taskId,
+        turnNo: 1,
+        now: monday,
+      })
+      // The other side's task is not there for the chat.
+      expect(
+        await codeOf(
+          reserveScheduleChange(db, {
+            ...turn(inProject),
+            change: { kind: 'update', scheduleId: ofNone.id, notify: false },
+          }),
+        ),
+      ).toBe('SCHEDULE_NOT_FOUND')
+      expect(
+        await codeOf(
+          reserveScheduleChange(db, {
+            ...turn(plain),
+            change: { kind: 'update', scheduleId: ofProject.id, notify: false },
+          }),
+        ),
+      ).toBe('SCHEDULE_NOT_FOUND')
+      // A project is the chat's: «none» in a chat of a project, «this_chat» without one — refused.
+      expect(
+        await codeOf(
+          reserveScheduleChange(db, {
+            ...turn(inProject),
+            change: agentCreate({ project: 'none' }),
+          }),
+        ),
+      ).toBe('BAD_REQUEST')
+      expect(
+        await codeOf(
+          reserveScheduleChange(db, {
+            ...turn(plain),
+            change: agentCreate({ project: 'this_chat' }),
+          }),
+        ),
+      ).toBe('BAD_REQUEST')
+      // A project without a repository: the task is on, of the project.
+      const reserved = await reserveScheduleChange(db, {
+        ...turn(inProject),
+        change: agentCreate({ project: 'this_chat' }),
+      })
+      expect(reserved).toMatchObject({ needsClient: false })
+      expect(reserved.fields).toMatchObject({ enabled: true, projectId })
+      const applied = await applyScheduleChange(db, {
+        reservationId: reserved.reservationId,
+        workspaceId: who.workspaceId,
+        taskId: inProject,
+        now: monday,
+      })
+      expect(applied.schedule).toMatchObject({ projectId, enabled: true, pausedReason: null })
+    })
+
+    it('keeps a task the agent set up in a project with a repository off until the client', async () => {
+      const who = await owner()
+      const projectId = await project(who, { repository: true })
+      const taskId = await projectChat(who, projectId)
+      const turn = { workspaceId: who.workspaceId, taskId, turnNo: 1, now: monday }
+      const reserved = await reserveScheduleChange(db, { ...turn, change: agentCreate() })
+      expect(reserved).toMatchObject({ needsClient: true })
+      expect(reserved.fields).toMatchObject({ enabled: false, projectId })
+      expect(reserved.nextRunAt).toBeNull()
+      // An amend of the reservation does not turn it on either.
+      expect(
+        await codeOf(
+          reserveScheduleChange(db, {
+            ...turn,
+            change: { kind: 'update', reservedId: reserved.reservationId, enabled: true },
+          }),
+        ),
+      ).toBe('SCHEDULE_NEEDS_CLIENT')
+      const { schedule } = await applyScheduleChange(db, {
+        reservationId: reserved.reservationId,
+        workspaceId: who.workspaceId,
+        taskId,
+        now: monday,
+      })
+      expect(schedule).toMatchObject({
+        enabled: false,
+        nextRunAt: null,
+        pausedReason: 'unconfirmed',
+        projectId,
+      })
+      // The tick never runs it.
+      expect(await dueScheduleIds(db, at('2026-11-20T06:00:00Z'), 100)).not.toContain(schedule.id)
+      // The agent never turns it on.
+      expect(
+        await codeOf(
+          reserveScheduleChange(db, {
+            ...turn,
+            turnNo: 2,
+            change: { kind: 'update', scheduleId: schedule.id, enabled: true },
+          }),
+        ),
+      ).toBe('SCHEDULE_NEEDS_CLIENT')
+      // A card that signed another state turns nothing on.
+      expect(
+        await codeOf(
+          confirmScheduledTask(db, {
+            scheduleId: schedule.id,
+            userId: who.userId,
+            signed: () => false,
+            now: monday,
+          }),
+        ),
+      ).toBe('SCHEDULE_CONFIRM_CHANGED')
+      const confirmed = await confirmScheduledTask(db, {
+        scheduleId: schedule.id,
+        userId: who.userId,
+        signed: (task) => task.id === schedule.id,
+        now: monday,
+      })
+      expect(confirmed).toMatchObject({ enabled: true, pausedReason: null })
+      expect(confirmed.nextRunAt).toEqual(at('2026-11-16T06:00:00Z'))
+      // Once on, the card is spent.
+      expect(
+        await codeOf(
+          confirmScheduledTask(db, {
+            scheduleId: schedule.id,
+            userId: who.userId,
+            signed: () => true,
+            now: monday,
+          }),
+        ),
+      ).toBe('SCHEDULE_CONFIRM_CHANGED')
+
+      // The agent changes its words: the task is off again until the client turns it on.
+      const change = await reserveScheduleChange(db, {
+        ...turn,
+        turnNo: 3,
+        change: {
+          kind: 'update',
+          scheduleId: schedule.id,
+          instructions: 'Проверь сборки и отправь ветку в репозиторий.',
+        },
+      })
+      expect(change).toMatchObject({ needsClient: true })
+      expect(change.fields).toMatchObject({ enabled: false })
+      const after = await applyScheduleChange(db, {
+        reservationId: change.reservationId,
+        workspaceId: who.workspaceId,
+        taskId,
+        now: monday,
+      })
+      expect(after.schedule).toMatchObject({ enabled: false, pausedReason: 'unconfirmed' })
+      // A change of the name or of the notices alone leaves it as it is.
+      const named = await reserveScheduleChange(db, {
+        ...turn,
+        turnNo: 4,
+        change: { kind: 'update', scheduleId: schedule.id, name: 'Сборки по утрам' },
+      })
+      const renamed = await applyScheduleChange(db, {
+        reservationId: named.reservationId,
+        workspaceId: who.workspaceId,
+        taskId,
+        now: monday,
+      })
+      expect(renamed.schedule).toMatchObject({
+        name: 'Сборки по утрам',
+        enabled: false,
+        pausedReason: 'unconfirmed',
+      })
+      // The client may turn it on by the switch of the cabinet as well: it is theirs.
+      const switched = await setScheduledTaskEnabled(db, {
+        scheduleId: schedule.id,
+        userId: who.userId,
+        enabled: true,
+        now: monday,
+      })
+      expect(switched).toMatchObject({ enabled: true, pausedReason: null })
     })
   })
 })

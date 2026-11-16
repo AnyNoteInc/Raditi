@@ -28,7 +28,9 @@ import {
  * (Зп59), a run ahead, five changes a turn — and applied by core when the turn ends (Зп33). Who the
  * caller is, its workspace, chat, turn come from the admitted turn, never from the arguments. In a
  * pass of a scheduled run without its client nothing is changed (Зп32): the role offers only
- * `schedule_list` there.
+ * `schedule_list` there. A chat of a project lists and changes the tasks of its project, a chat
+ * without one the tasks without one; a task the agent sets up or changes in a chat of a project
+ * with a repository waits, off, for the client's «Включить задачу» (docs/plan/84-projects.md, ПР19).
  */
 
 /** A task as the store lists it. */
@@ -56,9 +58,18 @@ export interface McpPendingScheduleChange {
 }
 
 export interface McpScheduleStore {
-  /** The author of the chat and the zone of their browser; null — the chat has no author. */
-  author(taskId: string): Promise<{ userId: string; timezone: string | null } | null>
-  list(input: { userId: string; workspaceId: string }): Promise<McpListedSchedule[]>
+  /**
+   * The author of the chat, the zone of their browser and the project of the chat; null — the
+   * chat has no author.
+   */
+  author(
+    taskId: string,
+  ): Promise<{ userId: string; timezone: string | null; projectId: string | null } | null>
+  list(input: {
+    userId: string
+    workspaceId: string
+    projectId: string | null
+  }): Promise<McpListedSchedule[]>
   pending(taskId: string, turnNo: number): Promise<McpPendingScheduleChange[]>
   /** Throws a DomainError with the code and the words of its refusal. */
   reserve(input: {
@@ -98,6 +109,8 @@ function parsedOr<S extends z.ZodType>(
 }
 
 const LIVE = 'when this turn ends'
+const NEEDS_CLIENT =
+  'It stays off: in a chat of a project with a repository only the client turns a task on, by the button «Включить задачу» under your answer. Tell the client so — never that it will run by itself.'
 const NOT_YET =
   'Not saved yet: it goes live when this turn ends. Tell the client «Задача появится, как только я закончу ответ» — never that it is created, changed or deleted already.'
 
@@ -190,7 +203,11 @@ export class McpScheduleService {
       const now = this.#now()
       const timezone = zoneOf(author.timezone)
       const [schedules, pending] = await Promise.all([
-        this.#store.list({ userId: author.userId, workspaceId: scope.workspaceId }),
+        this.#store.list({
+          userId: author.userId,
+          workspaceId: scope.workspaceId,
+          projectId: author.projectId,
+        }),
         this.#store.pending(scope.taskId, scope.turn),
       ])
       return bounded({
@@ -321,6 +338,7 @@ function answerOf(reserved: ReservedScheduleChange, now: Date): McpScheduleAnswe
     nextRunText:
       reserved.nextRunAt === null ? null : runMomentText(reserved.nextRunAt, fields.timezone, now),
     live: LIVE,
-    warnings: [NOT_YET],
+    ...(reserved.needsClient ? { needsClient: true } : {}),
+    warnings: reserved.needsClient ? [NOT_YET, NEEDS_CLIENT] : [NOT_YET],
   }
 }

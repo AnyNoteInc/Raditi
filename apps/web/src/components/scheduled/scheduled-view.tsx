@@ -30,13 +30,16 @@ import { ScheduleDialog, type ScheduleDialogOpening } from './schedule-dialog'
 import { takeScheduleNotice } from './schedule-notice'
 import {
   chatDraftOf,
+  inProjectFilter,
   inScheduleTag,
   matchesSearch,
+  projectsOfSchedules,
   scheduleOrders,
   scheduleTags,
   sortSchedules,
   type ScheduleItem,
   type ScheduleOrder,
+  type ScheduleProjectFilter,
   type ScheduleTag,
 } from './schedule-model'
 import { ScheduleRow } from './schedule-row'
@@ -236,6 +239,7 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
   const [opening, setOpening] = useState<ScheduleDialogOpening | null>(null)
   const opener = useRef<HTMLElement | null>(null)
   const [tag, setTag] = useState<ScheduleTag>('all')
+  const [projectFilter, setProjectFilter] = useState<ScheduleProjectFilter>('all')
   const [order, setOrder] = useState<ScheduleOrder>('next')
   const [search, setSearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -280,12 +284,24 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
   const searchable = all.length > SEARCH_ABOVE
   const query = searchable && searchOpen ? search : ''
   const shownTag = filterOpen ? tag : 'all'
-  const fits = (item: ScheduleItem) => matchesSearch(item, query)
+  // The projects of the filter (Зп3, ПР19): when the tasks are of two or more of them.
+  const ofProjects = projectsOfSchedules(all)
+  const projectChoices = ofProjects.projects.length + (ofProjects.none ? 1 : 0)
+  const byProject = projectChoices > 1
+  const projectKnown =
+    projectFilter === 'all' ||
+    (projectFilter === 'none'
+      ? ofProjects.none
+      : ofProjects.projects.some((each) => each.id === projectFilter.id))
+  const shownProject: ScheduleProjectFilter =
+    filterOpen && byProject && projectKnown ? projectFilter : 'all'
+  const fits = (item: ScheduleItem) =>
+    matchesSearch(item, query) && inProjectFilter(item, shownProject)
   const shown = sortSchedules(
     all.filter((item) => fits(item) && inScheduleTag(item, shownTag)),
     order,
   )
-  const filtered = shownTag !== 'all' || query.trim() !== ''
+  const filtered = shownTag !== 'all' || shownProject !== 'all' || query.trim() !== ''
   const used = new Set(
     all.flatMap((item) => (item.templateSlug === null ? [] : [item.templateSlug])),
   )
@@ -300,6 +316,7 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
   }
   function reset() {
     setTag('all')
+    setProjectFilter('all')
     setSearch('')
     searchInput.current?.focus()
   }
@@ -472,6 +489,43 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
               </Button>
             ))}
           </Box>
+          {byProject ? (
+            <Box
+              role="group"
+              aria-label={scheduledTexts.projectGroup}
+              sx={[chipRowSx, { mt: 1 }]}
+              data-project-filter=""
+            >
+              {[
+                { key: 'all', label: scheduledTexts.allProjects, value: 'all' as const },
+                ...ofProjects.projects.map((each) => ({
+                  key: each.id,
+                  label: each.name,
+                  value: { id: each.id },
+                })),
+                ...(ofProjects.none
+                  ? [{ key: 'none', label: scheduledTexts.noProject, value: 'none' as const }]
+                  : []),
+              ].map((choice) => {
+                const pressed =
+                  typeof choice.value === 'string'
+                    ? shownProject === choice.value
+                    : typeof shownProject === 'object' && shownProject.id === choice.value.id
+                return (
+                  <Button
+                    key={choice.key}
+                    aria-pressed={pressed}
+                    onClick={() => setProjectFilter(choice.value)}
+                    variant={pressed ? 'contained' : 'outlined'}
+                    size="small"
+                    sx={pillSx}
+                  >
+                    {choice.label}
+                  </Button>
+                )
+              })}
+            </Box>
+          ) : null}
         </Box>
       ) : null}
 
