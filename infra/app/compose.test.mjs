@@ -640,11 +640,13 @@ test('the single server gives preview a network that reaches the browser worker'
   )
   const block = /\n {2}preview:\n([\s\S]*?)\n {2}[a-z][a-z-]*:\n/.exec(server)?.[1] ?? ''
   assert.match(block, /BROWSER_WORKER_URL: http:\/\/10\.10\.0\.10:8086/)
-  const listed = /\n {4}networks: \[([^\]]*)\]/.exec(block)?.[1].split(',').map((n) => n.trim())
+  const listed = /\n {4}networks: \[([^\]]*)\]/
+    .exec(block)?.[1]
+    .split(',')
+    .map((n) => n.trim())
   assert.ok(listed?.length, 'preview names its networks')
   const declared = server.slice(server.indexOf('\nnetworks:\n'))
-  const internal = (name) =>
-    new RegExp(`\\n {2}${name}: \\{ internal: true \\}`).test(declared)
+  const internal = (name) => new RegExp(`\\n {2}${name}: \\{ internal: true \\}`).test(declared)
   for (const name of listed) assert.match(declared, new RegExp(`\\n {2}${name}:`))
   assert.ok(
     listed.some((name) => !internal(name)),
