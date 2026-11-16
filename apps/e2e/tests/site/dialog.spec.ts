@@ -509,19 +509,21 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
   })
 
   await test.step('the edge of the panel moves with the arrows and is kept', async () => {
+    // Since #107 the list of chats stays beside the panel, and at 1280 px the panel is already as
+    // wide as the chat column beside it allows: the edge is moved to the right, narrowing it.
     const before = (await box(pane(page))).width
     await separator(page).focus()
-    await page.keyboard.press('ArrowLeft')
-    await page.keyboard.press('ArrowLeft')
-    await expect.poll(async () => (await box(pane(page))).width).toBeGreaterThan(before)
-    const wider = (await box(pane(page))).width
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    await expect.poll(async () => (await box(pane(page))).width).toBeLessThan(before)
+    const moved = (await box(pane(page))).width
     await page.reload()
     await expect(loginCard(page)).toBeVisible()
     // A reload starts with the chat alone again; the width waits for the next opening.
     await expectChatAlone(page)
     await chooseTool(page, /^Браузер/)
     await expectBrowserShown(page)
-    expect(Math.abs((await box(pane(page))).width - wider)).toBeLessThanOrEqual(1)
+    expect(Math.abs((await box(pane(page))).width - moved)).toBeLessThanOrEqual(1)
     const fieldBox = await box(message(page))
     expect(fieldBox.x + fieldBox.width).toBeLessThanOrEqual((await box(pane(page))).x)
   })
