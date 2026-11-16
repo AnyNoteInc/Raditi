@@ -171,7 +171,13 @@ export async function startGitWorker(options: GitWorkerOptions): Promise<GitWork
     server.listen(socket, () => resolve())
   })
   // core and the worker share a group (docs/plan/84-projects.md, ПР33): nobody else connects.
-  await chmod(socket, 0o660)
+  // Some bind mounts (Docker Desktop) refuse chmod on a socket: the umask 007 of main.ts has
+  // closed it to others already, and a socket open to others is refused.
+  await chmod(socket, 0o660).catch(() => {})
+  if (((await lstat(socket)).mode & 0o007) !== 0) {
+    server.close()
+    throw refused('The socket of the worker is open to other users')
+  }
   return {
     socket,
     close: () =>
