@@ -140,6 +140,13 @@ export const ciStatuses = [
 ] as const
 export type CiStatus = (typeof ciStatuses)[number]
 
+/**
+ * Why a job did not run though nothing in it failed (ПР17): `account_unverified` — gitlab.com did
+ * not start it on its own runners until the account is verified. Said in its own words, not «Упала».
+ */
+export const ciRefusals = ['account_unverified'] as const
+export type CiRefusal = (typeof ciRefusals)[number]
+
 export interface CiRun {
   id: string
   name: string
@@ -148,7 +155,11 @@ export interface CiRun {
   status: CiStatus
   url: string
   createdAt: Date | null
+  startedAt?: Date | null
   finishedAt: Date | null
+  /** What started it, as the provider names it (`push`, `merge_request_event`, `web`…). */
+  event?: string | null
+  refusal?: CiRefusal | null
 }
 
 export interface CiJob {
@@ -159,6 +170,9 @@ export interface CiJob {
   stage: string | null
   status: CiStatus
   url: string
+  startedAt?: Date | null
+  finishedAt?: Date | null
+  refusal?: CiRefusal | null
 }
 
 /** A deploy the client can start on the head of the default branch (ПР15, ПР17). */

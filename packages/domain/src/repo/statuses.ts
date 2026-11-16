@@ -59,13 +59,16 @@ export const checksStateWords = Object.freeze({
   failure: 'сборка не прошла',
 } satisfies Record<ChecksState, string>)
 
-/** The word of a pipeline or of one of its jobs (owner's answer of 15.11.2026, §8, question 11). */
+/**
+ * The word of a pipeline or of one of its jobs (owner's answer of 15.11.2026, §8, question 11; the
+ * words of ПР17).
+ */
 export const ciStatusWords = Object.freeze({
-  pending: 'Ждёт',
+  pending: 'Ждёт запуска',
   running: 'Идёт',
-  manual: 'Ждёт запуска',
+  manual: 'Ждёт ручного запуска',
   success: 'Прошла',
-  failed: 'Не прошла',
+  failed: 'Упала',
   canceled: 'Отменена',
   skipped: 'Пропущена',
 } satisfies Record<CiStatus, string>)

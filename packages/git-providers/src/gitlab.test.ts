@@ -301,6 +301,53 @@ describe('gitlab pipelines', () => {
     expect(calls[0]!.limits.tailBytes).toBe(32768)
   })
 
+  it('says a job gitlab.com did not start for an unverified account, with its times', async () => {
+    const { provider } = setup({
+      [`GET ${P}/pipelines/9`]: {
+        status: 200,
+        body: {
+          id: 9,
+          sha: head,
+          ref: 'raditi/x-1',
+          status: 'failed',
+          source: 'push',
+          started_at: '2026-11-16T10:00:00Z',
+          failure_reason: 'user_not_verified',
+        },
+      },
+      [`GET ${P}/pipelines/9/jobs`]: {
+        status: 200,
+        body: [
+          {
+            id: 12,
+            name: 'unit-tests',
+            stage: 'test',
+            status: 'failed',
+            started_at: '2026-11-16T10:00:01Z',
+            finished_at: '2026-11-16T10:01:13Z',
+            failure_reason: 'user_not_verified',
+          },
+          {
+            id: 11,
+            name: 'lint',
+            stage: 'test',
+            status: 'failed',
+            failure_reason: 'script_failure',
+          },
+        ],
+      },
+    })
+    const run = await provider.getRun(auth, repo, '9')
+    expect(run).toMatchObject({ status: 'failed', event: 'push', refusal: 'account_unverified' })
+    expect(run!.startedAt).toEqual(new Date('2026-11-16T10:00:00Z'))
+    const jobs = await provider.listJobs(auth, repo, '9')
+    expect(jobs.map((j) => [j.id, j.refusal])).toEqual([
+      ['12', 'account_unverified'],
+      ['11', null],
+    ])
+    expect(jobs[0]!.finishedAt).toEqual(new Date('2026-11-16T10:01:13Z'))
+  })
+
   it('maps statuses and offers the manual jobs of the newest pipeline, one address for both requests', async () => {
     let n = 0
     const resolve = vi.fn(async () => `203.0.113.${++n}`)

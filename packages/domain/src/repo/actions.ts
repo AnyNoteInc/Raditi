@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { DomainError } from '../errors.ts'
 import { repoCiRefusalTexts } from './ci.ts'
+import { repoCiRunTexts } from './ci-runs.ts'
 import { mergeRequestDescriptionMaxLength } from './merge-request-text.ts'
 
 // What a button of the client does with the repository of a project, and what the agent may ask
@@ -90,6 +91,7 @@ export const repoPushRefusalTexts = Object.freeze({
   REPO_CI_CHANGE:
     'Изменения затрагивают настройки сборки — отправьте их кнопкой «Разрешить и отправить» на карточке настроек сборки',
   ...repoCiRefusalTexts,
+  REPO_ACTION_LOST: repoCiRunTexts.REPO_ACTION_LOST,
   REPO_CONFIRM_INVALID: 'Карточка устарела — откройте её снова',
   REPO_PROPOSAL_LIMIT: 'Запрос на слияние в этом ходе уже предложен',
   REPO_MR_CHANGED:

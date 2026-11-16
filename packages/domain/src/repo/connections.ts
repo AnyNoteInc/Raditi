@@ -95,6 +95,12 @@ export const gitJobNames = Object.freeze({
   action: 'git.action',
   /** The diff of the build settings of a chat's branch and its CI Lint (ПР16; slice 84.20). */
   ciLint: 'git.ci_lint',
+  /** The tick of the poll of builds and merge requests, or one repository (ПР17; slice 84.21). */
+  poll: 'git.poll',
+  /** The tail of the log of a job (ПР17; slice 84.21). */
+  log: 'git.log',
+  /** The manual jobs of the head of the default branch (ПР15, ПР17; slice 84.21). */
+  deployActions: 'git.repo.deploy_actions',
 })
 
 export const gitConnectionSyncPayloadSchema = z.strictObject({ connectionId: z.uuid() })

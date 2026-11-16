@@ -12,6 +12,7 @@ import {
   repoWebUrl,
   sameHostUrl,
   type CiJob,
+  type CiRefusal,
   type CiRun,
   type CiStatus,
   type DeployAction,
@@ -87,7 +88,9 @@ const pipelineSchema = z.looseObject({
   source: z.string().nullish(),
   web_url: z.unknown().optional(),
   created_at: z.string().nullish(),
+  started_at: z.string().nullish(),
   finished_at: z.string().nullish(),
+  failure_reason: z.string().nullish(),
 })
 
 const jobSchema = z.looseObject({
@@ -96,6 +99,9 @@ const jobSchema = z.looseObject({
   stage: z.string().nullish(),
   status: z.string(),
   web_url: z.unknown().optional(),
+  started_at: z.string().nullish(),
+  finished_at: z.string().nullish(),
+  failure_reason: z.string().nullish(),
   pipeline: z.looseObject({ id: z.number().int(), sha: z.string().nullish() }).nullish(),
 })
 
@@ -125,6 +131,15 @@ export function gitlabCiStatus(status: string): CiStatus {
       // created, waiting_for_resource, preparing, pending, scheduled, waiting_for_callback
       return 'pending'
   }
+}
+
+/**
+ * A job or a pipeline gitlab.com did not start because the account is not verified (ПР17): the
+ * failure reason `user_not_verified` (https://docs.gitlab.com/ci/debugging/, «Identity
+ * verification is required in order to run CI jobs»). Checked only against fakes.
+ */
+export function gitlabCiRefusal(reason: string | null | undefined): CiRefusal | null {
+  return reason === 'user_not_verified' ? 'account_unverified' : null
 }
 
 export function createGitlabProvider(config: GitlabProviderConfig): GitProvider {
@@ -243,7 +258,10 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
       status: gitlabCiStatus(p.status),
       url: sameHostUrl(host, p.web_url, `${repoWebUrl(repo)}/-/pipelines/${p.id}`),
       createdAt: dateOf(p.created_at),
+      startedAt: dateOf(p.started_at),
       finishedAt: dateOf(p.finished_at),
+      event: p.source ?? null,
+      refusal: gitlabCiRefusal(p.failure_reason),
     }
   }
 
@@ -257,6 +275,9 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
       stage: job.stage ?? null,
       status: gitlabCiStatus(job.status),
       url: sameHostUrl(host, job.web_url, `${repoWebUrl(repo)}/-/jobs/${job.id}`),
+      startedAt: dateOf(job.started_at),
+      finishedAt: dateOf(job.finished_at),
+      refusal: gitlabCiRefusal(job.failure_reason),
     }))
   }
 
