@@ -373,14 +373,16 @@ export class TurnSupervisor {
     if (!plan.success) throw badRequest('Invalid turn snapshot metadata')
     if (request.previous) {
       // A reference that fails its schema — one that names a driver the platform does not
-      // have, say — is refused like any other checkpoint this turn cannot continue.
+      // have, say — is refused like any other checkpoint this turn cannot continue. The image
+      // may differ: a release brings a new sandbox image, and the session of the CLI belongs to
+      // the driver and its version, not to the image (the chat of 16.11.2026 failed every pass
+      // after v1.61.0). The reference keeps the image the checkpoint was sealed with.
       const { data: prior } = snapshotReferenceSchema.safeParse(request.previous)
       if (
         !prior ||
         prior.workspaceId !== labels.workspaceId ||
         prior.sessionId !== labels.sessionId ||
         (request.rewound ? prior.turn >= labels.turn - 1 : prior.turn !== labels.turn - 1) ||
-        prior.image !== request.sandbox.image ||
         prior.driver.id !== this.deps.driver.id ||
         prior.driver.version !== request.driverVersion
       )
