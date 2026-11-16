@@ -4,12 +4,14 @@ import {
   projectNotFound,
   projectPurgeAfter,
   taskProjectBusy,
+  taskProjectHasBranch,
   type ProjectListSort,
   type ProjectListView,
 } from '@repo/domain'
 
 import type { Prisma, PrismaClient, TaskStatus } from './generated/prisma/client.ts'
 import { lockProjectChats, stopProjectChats } from './project-trash.ts'
+import { chatHasRepoBranch } from './repo-work.ts'
 
 // The projects of a workspace (docs/plan/84-projects.md, ПР1, ПР2, ПР4, ПР20; slice 84.3). Only the
 // author of a project sees and changes it, while they are a member of its workspace: every
@@ -398,6 +400,9 @@ export async function moveChatToProject(
   })
   if (current.projectId === projectId) return { projectId, moved: false }
   if (projectBusyStatuses.includes(task.status)) throw taskProjectBusy()
+  // The agent worked in the repository of the project from this chat (ПР2): its branch and its
+  // commits belong to that repository, so the chat stays where it is.
+  if (await chatHasRepoBranch(tx, task.id)) throw taskProjectHasBranch()
   if (projectId !== null) {
     const project = await projectForChat(tx, projectId, input.userId)
     if (project.workspaceId !== task.workspaceId) throw projectNotFound()

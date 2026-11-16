@@ -234,6 +234,18 @@ export {
   type MemoryScope,
   type PendingMemoryChange,
 } from './memory.ts'
+export {
+  chatBranch,
+  chatBranchHead,
+  chatHasRepoBranch,
+  closeRepoProposal,
+  ensureChatBranch,
+  failRepoTurn,
+  pendingRepoProposals,
+  reserveRepoProposal,
+  type ChatBranchRow,
+  type PendingRepoProposal,
+} from './repo-work.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
 export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'

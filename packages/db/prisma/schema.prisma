@@ -59,6 +59,7 @@ model User {
   projectsCreated         Project[]             @relation("ProjectCreator")
   projectFilesUploaded    ProjectFile[]         @relation("ProjectFileUploader")
   gitConnections          GitConnection[]       @relation("GitConnectionCreator")
+  repoActions             RepoAction[]          @relation("RepoActionCreator")
   memoryEntries           MemoryEntry[]
 
   @@map("users")
@@ -198,6 +199,7 @@ model Workspace {
   memoryReservations MemoryReservation[]
   gitConnections     GitConnection[]
   projectRepos       ProjectRepository[]
+  repoReservations   RepoReservation[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -636,9 +638,124 @@ model ProjectRepository {
   workspace  Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   connection GitConnection? @relation(fields: [connectionId], references: [id], onDelete: Restrict)
 
+  branches      ProjectRepoBranch[]
+  mergeRequests ProjectMergeRequest[]
+  actions       RepoAction[]
+
   @@index([workspaceId])
   @@index([connectionId])
   @@map("project_repositories")
+}
+
+/// The branch of the agent of one chat in the repository of its project (docs/plan/84-projects.md,
+/// ПР13): written by the first card «Изменения в ветке», sent to the client only by a button. A
+/// chat's own branch is found by `task_id`, never by the name. State — repoBranchStates (CHECK).
+model ProjectRepoBranch {
+  taskId              String   @id @map("task_id") @db.Uuid
+  projectRepositoryId String   @map("project_repository_id") @db.Uuid
+  /// raditi/<word>-<last 8 of the chat id>[-n] (CHECK project_repo_branches_branch_check).
+  branch              String   @db.VarChar(255)
+  /// The head of the main branch the chat's first change was based on.
+  baseSha             String   @map("base_sha") @db.Char(40)
+  /// The head of the chat in the mirror whose changes the branch at the client holds; NULL — not sent.
+  mirrorSha           String?  @map("mirror_sha") @db.Char(40)
+  /// The head of the branch at the client after the last push; NULL — not sent.
+  remoteSha           String?  @map("remote_sha") @db.Char(40)
+  /// { files, additions, deletions, list ≤ 50 } of the last card.
+  diffstat            Json?
+  ciDiffSha256        String?  @map("ci_diff_sha256") @db.Char(64)
+  ciConfirmedSha256   String?  @map("ci_confirmed_sha256") @db.Char(64)
+  ciLint              Json?    @map("ci_lint")
+  state               String   @default("local") @db.VarChar(8)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  task       Task              @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([projectRepositoryId, branch])
+  @@map("project_repo_branches")
+}
+
+/// The merge requests of a repository the platform opened or reads (ПР14): a cache — core reads
+/// the truth at the provider. State and checks — pullRequestStates and checksStates (CHECKs).
+model ProjectMergeRequest {
+  id                  String   @id @db.Uuid
+  projectRepositoryId String   @map("project_repository_id") @db.Uuid
+  taskId              String?  @map("task_id") @db.Uuid
+  /// The number of a pull request or the iid of a merge request.
+  number              Int
+  sourceBranch        String   @map("source_branch") @db.VarChar(255)
+  targetBranch        String   @map("target_branch") @db.VarChar(255)
+  title               String   @db.VarChar(255)
+  state               String   @db.VarChar(8)
+  headSha             String   @map("head_sha") @db.Char(40)
+  mergeSha            String?  @map("merge_sha") @db.Char(40)
+  checks              String   @default("none") @db.VarChar(8)
+  autoMerge           Boolean  @default(false) @map("auto_merge")
+  webUrl              String   @map("web_url") @db.VarChar(500)
+  syncedAt            DateTime @map("synced_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+  task       Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@unique([projectRepositoryId, number])
+  @@index([taskId])
+  @@map("project_merge_requests")
+}
+
+/// What the agent proposes of the repository in a turn (ПР14): `repo_request_merge` reserves, core
+/// shows it at the end of the pass as `feed.repo_proposal`. Kind — request_merge (CHECK).
+model RepoReservation {
+  id          String    @id @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  taskId      String    @map("task_id") @db.Uuid
+  turnNo      Int       @map("turn_no")
+  kind        String    @db.VarChar(16)
+  /// repoProposalPayloadSchema: { title, description, draft }.
+  payload     Json
+  /// done, refused or failed (CHECK); NULL — open.
+  outcome     String?   @db.VarChar(8)
+  reason      String?   @db.VarChar(24)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  closedAt    DateTime? @map("closed_at") @db.Timestamptz(6)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, turnNo], map: "repo_reservations_open_idx", where: raw("outcome IS NULL"))
+  @@index([workspaceId])
+  @@map("repo_reservations")
+}
+
+/// What the client pressed, and only that (ПР13, ПР15): every row holds the token of its card, and
+/// core checks its HMAC again before it calls the provider — a row inserted without a press does not
+/// run. Kind — repoActionKinds, state — repoActionStates (CHECKs).
+model RepoAction {
+  id                  String    @id @db.Uuid
+  projectRepositoryId String    @map("project_repository_id") @db.Uuid
+  taskId              String?   @map("task_id") @db.Uuid
+  /// The one who pressed.
+  createdById         String    @map("created_by_id") @db.Uuid
+  kind                String    @db.VarChar(10)
+  /// repoActionArgsSchema: the token of the card and what the client wrote on it.
+  args                Json
+  /// One press, one row (ПР13, ПР15).
+  tokenSha256         String    @unique @map("token_sha256") @db.Char(64)
+  state               String    @default("queued") @db.VarChar(8)
+  error               String?   @db.VarChar(40)
+  result              Json?
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  finishedAt          DateTime? @map("finished_at") @db.Timestamptz(6)
+
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+  task       Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  createdBy  User              @relation("RepoActionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([projectRepositoryId, createdAt])
+  @@index([taskId])
+  @@map("repo_actions")
 }
 
 model Task {
@@ -702,14 +819,14 @@ model Task {
   /// When the contact map the `web_*` tools wrote for this task was removed (К38).
   webMasksPurgedAt     DateTime? @map("web_masks_purged_at") @db.Timestamptz(6)
 
-  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  chatSession        ChatSession?        @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
-  createdBy          User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  revertsTask        Task?               @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
-  project            Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  revertedBy         Task[]              @relation("TaskReverts")
-  telegramCurrentOf  ChannelIdentity[]   @relation("ChannelCurrentTask")
-  pricingRule        PricingRule?        @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
+  workspace          Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  chatSession        ChatSession?          @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
+  createdBy          User?                 @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  revertsTask        Task?                 @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
+  project            Project?              @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  revertedBy         Task[]                @relation("TaskReverts")
+  telegramCurrentOf  ChannelIdentity[]     @relation("ChannelCurrentTask")
+  pricingRule        PricingRule?          @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
   turns              TaskTurn[]
   events             TaskEvent[]
   queuedMessages     TaskQueuedMessage[]
@@ -731,6 +848,10 @@ model Task {
   chatDocuments      ChatDocument[]
   memorySources      MemoryEntry[]
   memoryReservations MemoryReservation[]
+  repoBranch         ProjectRepoBranch?
+  mergeRequests      ProjectMergeRequest[]
+  repoReservations   RepoReservation[]
+  repoActions        RepoAction[]
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([workspaceId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_workspace_updated_idx")
