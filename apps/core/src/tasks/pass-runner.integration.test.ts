@@ -536,6 +536,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       await passes.run(dialog.job)
       expect(memoryChanges.apply).toHaveBeenCalledWith(dialog.taskId, 1, refusesText, {
         remember: false,
+        unattended: false,
         evidence,
         repository: false,
       })
