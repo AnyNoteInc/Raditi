@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  gitConnectionProviders,
   gitConnectionReasonTexts,
   gitServerHostOf,
   repoProviderBrands,
@@ -454,7 +455,14 @@ function ConnectForm({
             {connections.map((connection) => (
               <ButtonBase
                 key={connection.id}
-                onClick={() => onConnection(connection.id)}
+                // A connection whose sign-in is to be renewed is not picked (ревью P17): its press
+                // opens its way again — the sign-in of gitlab.com, or the token of its server.
+                onClick={() => {
+                  if (connection.state === 'ok') return onConnection(connection.id)
+                  if (connection.signsIn) return setWay('gitlab')
+                  setWay('gitlab-self')
+                  setHost(connection.host)
+                }}
                 sx={{
                   justifyContent: 'flex-start',
                   gap: 1,
@@ -467,12 +475,17 @@ function ConnectForm({
                   '&.Mui-focusVisible': { outline: '2px solid', outlineColor: 'primary.main' },
                 }}
               >
-                <AppIcon name="gitlab" size={16} />
+                <AppIcon
+                  name={repoProviderBrands[gitConnectionProviders[connection.kind]].icon}
+                  size={16}
+                />
                 <Box component="span" sx={{ fontSize: 14 }}>
                   {repoText.account(connection.login, connection.host)}
                 </Box>
                 <Box component="span" sx={{ ml: 'auto', fontSize: 12.5, color: 'text.secondary' }}>
-                  {repoText.connectionState[connection.state]}
+                  {connection.state === 'reauth_needed'
+                    ? repoText.signInAgain
+                    : repoText.connectionState[connection.state]}
                 </Box>
               </ButtonBase>
             ))}
