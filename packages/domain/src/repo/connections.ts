@@ -119,6 +119,11 @@ export const gitJobNames = Object.freeze({
   log: 'git.log',
   /** The manual jobs of the head of the default branch (ПР15, ПР17; slice 84.21). */
   deployActions: 'git.repo.deploy_actions',
+  /**
+   * The mirror and the bundles of a repository whose row is gone — detached, or its project purged:
+   * written in the transaction that deleted the row (docs/plan/84-projects.md, ПР20, §4.2).
+   */
+  repoForget: 'git.repo.forget',
 })
 
 export const gitConnectionSyncPayloadSchema = z.strictObject({ connectionId: z.uuid() })
@@ -127,6 +132,7 @@ export const gitRepoInspectPayloadSchema = z.strictObject({
   providerRepoId: z.string().regex(/^[1-9][0-9]{0,39}$/),
 })
 export const gitRepoAttachPayloadSchema = z.strictObject({ projectRepositoryId: z.uuid() })
+export const gitRepoForgetPayloadSchema = z.strictObject({ projectRepositoryId: z.uuid() })
 
 /** Why a connection is not `ok`: `git_connections.state_reason`. */
 export const gitConnectionReasons = [

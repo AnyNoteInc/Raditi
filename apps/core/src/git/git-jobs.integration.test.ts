@@ -144,6 +144,7 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
       patch: Buffer.alloc(0) as Buffer | null,
       config: null as Buffer | null,
     }))
+    const dropMirror = vi.fn(async (_id: string) => {})
     const resolvePublic = vi.fn(async () => '203.0.113.7')
     const provider = vi.fn(() => fake.provider)
     const made = new GitJobs({
@@ -151,10 +152,24 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
       auth: { grantFor: async () => ({ kind: 'token', token: 'synthetic-token' }) },
       resolvePublic,
       provider,
-      workspace: { fetch, findSecrets, buildSettingsChange, removeOrphans: vi.fn(async () => 0) },
+      workspace: {
+        fetch,
+        findSecrets,
+        buildSettingsChange,
+        dropMirror,
+        removeOrphans: vi.fn(async () => 0),
+      },
       logger: quiet,
     })
-    return { jobs: made, calls: fake.calls, fetch, findSecrets, resolvePublic, provider }
+    return {
+      jobs: made,
+      calls: fake.calls,
+      fetch,
+      findSecrets,
+      resolvePublic,
+      provider,
+      dropMirror,
+    }
   }
 
   it('a sync names the account and lists the repositories; a repeat drops the ones gone', async () => {
@@ -262,6 +277,17 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
     })
     return id
   }
+
+  it('`git.repo.forget` removes the mirror of a repository whose row is gone, and only then', async () => {
+    const own = await owner()
+    const id = await linkRepository(own)
+    const run = jobs({})
+    await run.jobs.forgetRepository(id)
+    expect(run.dropMirror).not.toHaveBeenCalled()
+    await db.projectRepository.delete({ where: { id } })
+    await run.jobs.forgetRepository(id)
+    expect(run.dropMirror).toHaveBeenCalledWith(id)
+  })
 
   it('an open link is fetched: ready, its head, the files like secrets and the own CI path', async () => {
     const own = await owner()

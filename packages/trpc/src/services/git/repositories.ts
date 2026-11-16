@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   enqueueOutbox,
+  enqueueRepoForget,
   lockProjectChats,
   pauseAgentSchedulesForRepository,
   projectOwnedBy,
@@ -317,7 +318,13 @@ export async function detachRepo(
     // The chats first, as a pass and the trash lock them (project-trash.ts).
     const chats = await lockProjectChats(tx, project.id)
     if (chats.some((chat) => busyStatuses.has(chat.status))) throw taskProjectBusy()
+    const repos = await tx.projectRepository.findMany({
+      where: { projectId: project.id },
+      select: { id: true },
+    })
     await tx.projectRepository.deleteMany({ where: { projectId: project.id } })
+    // Core removes the mirror and the bundles of what was detached (ПР20).
+    for (const repo of repos) await enqueueRepoForget(tx, repo.id)
   }, WRITE)
 }
 

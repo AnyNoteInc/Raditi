@@ -74,7 +74,8 @@ describe('projects stand', () => {
 
   it('runs a scenario with what it needs first', () => {
     assert.deepEqual(scenariosToRun(['I']), ['S', 'A', 'K', 'E', 'F', 'H', 'I'])
-    assert.deepEqual(scenariosToRun(['M']), ['S', 'M'])
+    assert.deepEqual(scenariosToRun(['M']), ['S', 'A', 'M'])
+    assert.deepEqual(scenariosToRun(['L']), ['S', 'A', 'K', 'E', 'L'])
   })
 
   it('builds under names of its own', () => {

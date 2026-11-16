@@ -486,10 +486,17 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     async function closedTurn(
       phases: Array<[TurnEvidence['phase'], object?]>,
       action?: TurnAction,
+      repository?: Record<string, unknown>,
     ) {
       const created = await dialog('running', 1, undefined, { browser: true })
       const { taskId, task } = created
-      const plan = planOf(task)
+      const base = planOf(task)
+      // A plan of a turn with a repository: the same, with the block its schema requires.
+      const plan = (
+        repository
+          ? { ...base, requirements: { repository: true, browser: true }, repository }
+          : base
+      ) as typeof base
       await db.turnAssignment.create({
         data: {
           taskId,
@@ -600,6 +607,85 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       )
       const [row] = await db.taskEvent.findMany({ where: { taskId, type: 'feed.result' } })
       expect(row!.payload).toMatchObject({ next: 'awaiting_user', site: 'none' })
+    })
+
+    it('ends a turn whose publication recovery finished: the answer, and the card of its commit (ПР12)', async () => {
+      const events: AgentEvent[] = [
+        { type: 'started', nativeSessionId: 'native1' },
+        { type: 'message', text: JSON.stringify(turnResult) },
+        { type: 'completed' },
+      ]
+      const repository = {
+        projectId: randomUUID(),
+        projectRepositoryId: randomUUID(),
+        provider: 'gitlab',
+        baseSha: 'a'.repeat(40),
+        sandboxBaseSha: 'b'.repeat(40),
+        branch: 'raditi/chat-1',
+        mode: 'write',
+        expectedRef: null,
+        bundleSha256: 'c'.repeat(64),
+        bundleBytes: 100,
+        hiddenPaths: [],
+      }
+      const recovered = { baseSha: 'a'.repeat(40), candidateHeadSha: 'd'.repeat(40) }
+      const { taskId } = await closedTurn(
+        [
+          ['running'],
+          ['output', { cursor: { stdout: 10, stderr: 0 }, events }],
+          ['checkpointing'],
+          ['checkpointed', recovered],
+          ['destroyed', recovered],
+          ['publishing', recovered],
+          ['publication_recovered', recovered],
+        ],
+        undefined,
+        repository,
+      )
+      const patch = Buffer.from('diff --git a/hours.md b/hours.md\n')
+      const buildSettingsChange = vi.fn(async () => ({ paths: [], patch, config: null }))
+      const apply = vi.fn(async () => {})
+      const swept = new TaskSweep({
+        db,
+        settlement: new PassSettlement({ db, logger: quiet }),
+        live: new LivePasses(),
+        journal: new TaskEventTurnJournal(db),
+        drivers: { has: () => true, get: () => driver } as unknown as AgentDriverRegistry,
+        queue,
+        browser: { verify: vi.fn(async () => false), sweep: vi.fn() } as never,
+        repositories: { workspace: { buildSettingsChange }, changes: { apply } },
+        logger: quiet,
+      })
+
+      expect(await swept.settleOrphans()).toBe(1)
+
+      // The answer reaches the client, as after any turn: the publication was not a failure.
+      expect(await db.taskEvent.count({ where: { taskId, type: 'feed.failure' } })).toBe(0)
+      expect(await db.taskEvent.count({ where: { taskId, type: 'feed.result' } })).toBe(1)
+      // The head stands from the settlement itself (ревью C1), not only from the card.
+      expect(
+        await db.taskTurn.findFirstOrThrow({
+          where: { taskId, turnNo: 1 },
+          select: { baseSha: true, headSha: true },
+        }),
+      ).toEqual({ baseSha: recovered.baseSha, headSha: recovered.candidateHeadSha })
+      expect(buildSettingsChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectRepositoryId: repository.projectRepositoryId,
+          from: recovered.baseSha,
+          to: recovered.candidateHeadSha,
+        }),
+      )
+      expect(apply).toHaveBeenCalledExactlyOnceWith(
+        taskId,
+        1,
+        { baseSha: recovered.baseSha, headSha: recovered.candidateHeadSha, patch, buildPaths: [] },
+        {
+          projectRepositoryId: repository.projectRepositoryId,
+          branch: 'raditi/chat-1',
+          mode: 'write',
+        },
+      )
     })
 
     it('ends a compaction that recovery finished by the line of the platform: its text is no result', async () => {

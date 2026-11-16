@@ -20,10 +20,12 @@ import {
   agentTurnRetryJobId,
   feedEndedSiteOf,
   isDomainError,
+  publicationLimits,
   scheduleLimits,
   type FeedCreditsState,
   type JobQueue,
   type ObjectStorage,
+  type TurnPlan,
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
 
@@ -41,7 +43,9 @@ import type { PageMetrics } from '../pages/page-metrics.ts'
 import type { MemoryChanges } from './memory-changes.ts'
 import type { ProjectTrash } from '../projects/project-trash.ts'
 import type { PagePublications } from './page-publications.ts'
+import type { RepoChanges } from './repo-turns.ts'
 import type { ScheduleChanges } from './schedule-changes.ts'
+import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
 import {
   CHARGE_LATER_EVENT,
   type PassEnding,
@@ -68,6 +72,13 @@ export const PAGE_SWEEP_AFTER_MS = 24 * 60 * 60_000
 const BATCH = 50
 
 type Waiting = (typeof waitingTaskStatuses)[number]
+
+/** The commit recovery published under the chat's ref for a turn, and the repository of its plan. */
+interface RecoveredPublication {
+  repository: NonNullable<TurnPlan['repository']>
+  baseSha: string
+  headSha: string
+}
 
 export interface TaskSweepDependencies {
   db: PrismaClient
@@ -109,6 +120,15 @@ export interface TaskSweepDependencies {
    * Зп33): closed and told once the turn is over. Absent — not swept.
    */
   schedules?: Pick<ScheduleChanges, 'sweep'> | null
+  /**
+   * The repository of a chat whose turn recovery published (docs/plan/84-projects.md, ПР12): the
+   * card «Изменения в ветке» of the commit recovery put under the chat's ref, its diff read from
+   * the mirror. Absent — no trusted git: such a turn is only answered.
+   */
+  repositories?: {
+    changes: Pick<RepoChanges, 'apply'>
+    workspace: Pick<GitWorkspaceService, 'buildSettingsChange'>
+  } | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -235,10 +255,45 @@ export class TaskSweep {
       return answer
     }
     if (!assignment?.finishedAt) return null
-    const ending = await this.#endingOf(assignment)
+    const { ending, published } = await this.#endingOf(assignment)
     // As the live handler: what a task in the browser saved is read first (Б23).
     if (task.needs_browser) await this.deps.browser?.verify(task.id)
-    return this.deps.settlement.settle(ref, ending)
+    const answer = await this.deps.settlement.settle(ref, ending)
+    if (answer === 'moved' && ending.kind === 'completed' && published)
+      await this.#tellPublished(task.id, ending.turn, published)
+    return answer
+  }
+
+  /**
+   * The card of the commit recovery published for a turn (`publication_recovered`): as the live
+   * handler shows it, from the diff of the base and the commit in the mirror. Without it the next
+   * turn would take the chat's ref back to the head the cards name and drop that commit.
+   */
+  async #tellPublished(taskId: string, turn: number, published: RecoveredPublication) {
+    const repositories = this.deps.repositories
+    if (!repositories) return
+    const { repository, baseSha, headSha } = published
+    try {
+      const change = await repositories.workspace.buildSettingsChange({
+        projectRepositoryId: repository.projectRepositoryId,
+        from: baseSha,
+        to: headSha,
+        isBuildPath: () => true,
+        maxBytes: publicationLimits.patchBytes,
+      })
+      await repositories.changes.apply(
+        taskId,
+        turn,
+        { baseSha, headSha, patch: change.patch ?? new Uint8Array(), buildPaths: [] },
+        {
+          projectRepositoryId: repository.projectRepositoryId,
+          branch: repository.branch,
+          mode: repository.mode,
+        },
+      )
+    } catch (error) {
+      this.#warn(`task sweep recovered publication task=${taskId}`, logged(error))
+    }
   }
 
   /** How a closed turn ended, from its journal; a journal that contradicts itself is technical. */
@@ -250,9 +305,9 @@ export class TaskSweep {
     firstEpoch: number
     leaseEpoch: number
     plan: unknown
-  }): Promise<PassEnding> {
+  }): Promise<{ ending: PassEnding; published?: RecoveredPublication }> {
     const turn = assignment.turnNo
-    const technical: PassEnding = { kind: 'failed', turn }
+    const technical = { ending: { kind: 'failed', turn } as PassEnding }
     let entries: JournaledEvidence[]
     try {
       entries = await this.deps.journal.replay({
@@ -283,25 +338,46 @@ export class TaskSweep {
     if (replayed.lastPhase === 'completed') {
       const result = entries.findLast((entry) => entry.phase === 'completed')?.result
       if (!result) return technical
-      return { kind: 'completed', turn, result }
+      return { ending: { kind: 'completed', turn, result } }
     }
-    // Recovery finished the checkpoint of the turn (Б6), but does not keep its result: it is read
-    // from the output.
-    if (replayed.lastPhase === 'checkpoint_recovered') {
+    // Recovery finished the checkpoint of the turn (Б6), or the publication of its commit into the
+    // mirror (ПР12), but does not keep its result: it is read from the output.
+    if (
+      replayed.lastPhase === 'checkpoint_recovered' ||
+      replayed.lastPhase === 'publication_recovered'
+    ) {
       if (!plan || !this.deps.drivers.has(plan.driverId)) return technical
+      let result
       try {
-        const result = readTurnResult(
+        result = readTurnResult(
           this.deps.drivers.get(plan.driverId),
           replayed.events,
           plan.input.action,
         )
-        return { kind: 'completed', turn, result }
       } catch {
-        return { kind: 'failed', turn, errorCode: 'TURN_OUTPUT_REJECTED' }
+        return { ending: { kind: 'failed', turn, errorCode: 'TURN_OUTPUT_REJECTED' } }
       }
+      const ending: PassEnding = { kind: 'completed', turn, result }
+      const recovered = entries.findLast((entry) => entry.phase === 'publication_recovered')
+      const headSha = recovered?.candidateHeadSha
+      const baseSha = recovered?.baseSha
+      if (
+        replayed.lastPhase === 'publication_recovered' &&
+        plan.repository &&
+        headSha &&
+        baseSha &&
+        headSha !== baseSha
+      )
+        // The head stands from the settlement of this pass, as the live end writes it (ревью C1):
+        // the next pass, which the drain may start before the card is written, reads it.
+        return {
+          ending: { ...ending, repoHead: { baseSha, headSha } },
+          published: { repository: plan.repository, baseSha, headSha },
+        }
+      return { ending }
     }
     if (replayed.lastPhase === 'failed' && replayed.reason)
-      return { kind: 'failed', turn, journalReason: replayed.reason }
+      return { ending: { kind: 'failed', turn, journalReason: replayed.reason } }
     return technical
   }
 

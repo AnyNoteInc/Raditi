@@ -9,7 +9,12 @@ export {
   type CreatePrismaClientOptions,
   type DbConfig,
 } from './client.ts'
-export { enqueueOutbox, type OutboxMessage, type OutboxWriter } from './outbox.ts'
+export {
+  enqueueOutbox,
+  enqueueRepoForget,
+  type OutboxMessage,
+  type OutboxWriter,
+} from './outbox.ts'
 export {
   lockUsageWindows,
   openReservedWindowCredits,

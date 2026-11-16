@@ -90,6 +90,8 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
     [COM_HOST]: { users: new Map(), projects: new Map() },
   }
   const codes = new Map()
+  /** Tokens of an own server that answers every API request with a redirect. */
+  const redirects = new Set()
   const requests = []
   const pushes = []
   const lints = []
@@ -172,7 +174,7 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
       name: deploy ? 'Основная ветка' : `Ветка ${ref}`,
       createdAt: new Date().toISOString(),
       started: Date.now(),
-      runMs: 2000,
+      runMs: project.slowRefs?.get(ref) ?? 2000,
       failureReason: project.unverified ? 'user_not_verified' : null,
       jobs: [
         {
@@ -362,7 +364,10 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
     const entry = { host, method: req.method, path: url.pathname, git: service, auth: !!user }
     requests.push(entry)
     if (!project) return json(res, 404, { message: '404 Project Not Found' })
-    if (user === null || !project.members.has(user.id)) {
+    const anonymousRead =
+      user === null && service === 'git-upload-pack' && project.visibility === 'public'
+    entry.anonymous = anonymousRead
+    if (!anonymousRead && (user === null || !project.members.has(user.id))) {
       entry.status = 401
       res.writeHead(401, { 'www-authenticate': 'Basic realm="GitLab"' })
       return res.end()
@@ -379,7 +384,7 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
         CONTENT_TYPE: req.headers['content-type'] ?? '',
         HTTP_CONTENT_ENCODING: req.headers['content-encoding'] ?? '',
         GIT_PROTOCOL: req.headers['git-protocol'] ?? '',
-        REMOTE_USER: user.username,
+        REMOTE_USER: user?.username ?? 'anonymous',
         REMOTE_ADDR: '127.0.0.1',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -416,7 +421,7 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
       const after = await headsOf(project.bare, home)
       const updates = Object.entries(after).filter(([branch, sha]) => before[branch] !== sha)
       const deleted = Object.keys(before).filter((branch) => !(branch in after))
-      pushes.push({ host, path: project.path, user: user.username, updates, deleted })
+      pushes.push({ host, path: project.path, user: user?.username ?? null, updates, deleted })
       for (const [branch, sha] of updates)
         makePipeline(project, {
           ref: branch,
@@ -441,7 +446,25 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
       entry.status = status
       return json(res, status, body, headers)
     }
-    if (user === null) return answer(401, { message: '401 Unauthorized' })
+    // A token of a server that sends its client elsewhere: a client that follows comes back
+    // here with `redirected=1`, which the scenarios look for.
+    if (bearer !== null && redirects.has(bearer)) {
+      entry.status = 302
+      entry.redirected = url.searchParams.get('redirected') === '1'
+      res.writeHead(302, { location: `https://${host}/api/v4${path}?redirected=1` })
+      return res.end()
+    }
+    if (user === null) {
+      // Without a token: a public project only, as GitLab answers an open link (§4.3).
+      const at = /^\/projects\/([^/]+)$/.exec(path)
+      const key = at ? decodeURIComponent(at[1]) : null
+      const open = [...hosts[host].projects.values()].find(
+        (p) => (String(p.id) === key || p.path === key) && p.visibility === 'public',
+      )
+      if (req.method === 'GET' && open) return answer(200, projectJson(host, open, open.size))
+      if (key !== null) return answer(404, { message: '404 Project Not Found' })
+      return answer(401, { message: '401 Unauthorized' })
+    }
     if (req.method === 'GET' && path === '/user')
       return answer(200, { id: user.id, username: user.username, name: user.username })
     if (req.method === 'GET' && path === '/projects') {
@@ -619,14 +642,26 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
     oauthRefusals,
     codes,
     /** A user of `host` reached by `token` (an own server) or signing in by OAuth (gitlab.com). */
-    addUser(host, { username, token = null, signsIn = false }) {
+    addUser(host, { username, token = null, signsIn = false, redirect = false }) {
       const user = { id: nextId(), username, signsIn }
+      if (redirect && token) redirects.add(token)
       if (token) hosts[host].users.set(token, user)
       if (signsIn) hosts[host].users.set(`signs-in-${user.id}`, user)
       return user
     },
     /** A project with one commit of `files` on its main branch, and its members. */
-    async addProject(host, { path, files, members, defaultBranch = 'main', logSecret }) {
+    async addProject(
+      host,
+      {
+        path,
+        files,
+        members,
+        defaultBranch = 'main',
+        logSecret,
+        size = 4096,
+        visibility = 'private',
+      },
+    ) {
       const work = await mkdtemp(join(root, 'work-'))
       for (const [name, content] of Object.entries(files)) {
         await mkdir(dirname(join(work, name)), { recursive: true })
@@ -646,8 +681,10 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
         bare,
         projectRoot: join(root, 'repos', host),
         defaultBranch,
-        visibility: 'private',
-        size: 4096,
+        visibility,
+        size,
+        /** ref → how long its pipelines run, ms (2 s by default). */
+        slowRefs: new Map(),
         members: new Set(members.map((user) => user.id)),
         mergeRequests: [],
         pipelines: [],
@@ -674,15 +711,46 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
       return out.stdout.trim().split(' ').slice(1)
     },
     /** A commit of the client on `branch` (a race with the agent's push). */
-    async commitAsClient(project, branch, name, content) {
+    async commitAsClient(
+      project,
+      branch,
+      name,
+      content,
+      { newBranch = null, pipeline = true } = {},
+    ) {
       const work = await mkdtemp(join(root, 'client-'))
       await runGit(['clone', '-q', '-b', branch, project.bare, work], { cwd: root, home })
+      if (newBranch) await runGit(['checkout', '-q', '-b', newBranch], { cwd: work, home })
+      await mkdir(dirname(join(work, name)), { recursive: true })
       await writeFile(join(work, name), content)
       await runGit(['add', '-A'], { cwd: work, home })
       await runGit(['commit', '-q', '-m', 'Правка клиента'], { cwd: work, home })
-      await runGit(['push', '-q', 'origin', branch], { cwd: work, home })
+      // Straight into the bare repository, as the client's own push; GitLab makes its pipeline.
+      await runGit(['push', '-q', 'origin', `HEAD:refs/heads/${newBranch ?? branch}`], {
+        cwd: work,
+        home,
+      })
       const sha = (await runGit(['rev-parse', 'HEAD'], { cwd: work, home })).stdout.trim()
       await rm(work, { recursive: true, force: true })
+      const ref = newBranch ?? branch
+      if (pipeline)
+        makePipeline(project, {
+          ref,
+          sha,
+          source: 'push',
+          deploy: ref === project.defaultBranch,
+        })
+      return sha
+    },
+    /** The client moves `branch` back to `sha` (a force push of its own), without a pipeline. */
+    async resetBranch(project, branch, sha) {
+      await runGit(['update-ref', `refs/heads/${branch}`, sha], { cwd: project.bare, home })
+    },
+    /** «Retry» of the client: a new pipeline on the current head of `ref`, no new commit. */
+    async rerunPipeline(project, ref) {
+      const sha = (await headsOf(project.bare, home))[ref]
+      if (!sha) throw new Error(`no branch ${ref}`)
+      makePipeline(project, { ref, sha, source: 'web', deploy: ref === project.defaultBranch })
       return sha
     },
     isSha: (value) => sha40.test(value),

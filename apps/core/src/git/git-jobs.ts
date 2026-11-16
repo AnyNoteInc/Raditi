@@ -69,7 +69,7 @@ export interface GitJobsOptions {
   provider: GitProviderFactory
   workspace: Pick<
     GitWorkspaceService,
-    'fetch' | 'findSecrets' | 'buildSettingsChange' | 'removeOrphans'
+    'fetch' | 'findSecrets' | 'buildSettingsChange' | 'dropMirror' | 'removeOrphans'
   >
   /** Where the diff of the build settings of a branch is kept for the card (`git.ci_lint`). */
   storage?: Pick<ObjectStorage, 'put'>
@@ -377,6 +377,21 @@ export class GitJobs {
       where: { connectionId_providerRepoId: { connectionId, providerRepoId } },
       data: { branches: kept, syncedAt: this.#now() },
     })
+  }
+
+  /**
+   * `git.repo.forget`: the mirror and the bundles of a repository whose row the transaction that
+   * wrote this job deleted. A row of that id still there — the job came before its commit could be
+   * seen, or never should have — keeps them.
+   */
+  async forgetRepository(projectRepositoryId: string): Promise<void> {
+    const row = await this.#o.prisma.projectRepository.findUnique({
+      where: { id: projectRepositoryId },
+      select: { id: true },
+    })
+    if (row !== null) return
+    await this.#o.workspace.dropMirror(projectRepositoryId)
+    this.#o.logger.log(`git.repo.forget ${projectRepositoryId}: mirror removed`)
   }
 
   /** `git.repo.attach`. */
