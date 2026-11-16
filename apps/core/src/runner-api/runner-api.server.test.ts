@@ -250,11 +250,11 @@ describe('RunnerApiServer', () => {
     const { assignment, preparing, command } = await f.prepare(key)
     expect(command.type).toBe('prepare')
     expect(JSON.stringify(command)).toContain('X-Amz-Signature')
-    // No base bundle: a turn has no repository (plan 83).
+    // No base bundle: this turn has no repository — the path is closed (docs/plan/84, ПР12).
     const bundle = await f.call(`/runner/v1/assignments/${assignment.id}/bundle`, {
       headers: f.binary(command),
     })
-    expect(bundle.status).toBe(404)
+    expect(bundle.status).toBe(410)
 
     const missing = await f.call(runnerKeyPath(assignment.id, 'restore'))
     expect(missing.status).toBe(400)
@@ -521,7 +521,8 @@ describe('RunnerApiServer', () => {
         headers: { ...f.binary(capture!), 'content-type': 'application/octet-stream' },
         body: Buffer.from('untrusted'),
       })
-      expect(put.status).toBe(404)
+      // A capture without a base takes no candidate (docs/plan/84, ПР12).
+      expect(put.status).toBe(410)
     }
     // The agent's files for the client go up with the capture (docs/plan/66, В8).
     const outbox = Buffer.from('outbox archive')

@@ -26,6 +26,7 @@ import {
   type SiteLeaseStore,
   type TurnAssignmentOutcome,
   type TurnAssignmentStore,
+  type TurnBundleSource,
   type TurnFileRoot,
   type TurnInboxFile,
   type TurnEvidence,
@@ -100,6 +101,7 @@ interface OpenCommand {
   resolve(report: RunnerReport): void
   reject(error: unknown): void
   cleanup(): void
+  readonly bundle?: TurnBundleSource
   readonly inbox?: readonly TurnInboxFile[]
   readonly projectFiles?: readonly TurnInboxFile[]
   readonly dataKey?: () => Promise<Uint8Array>
@@ -109,6 +111,10 @@ interface OpenCommand {
   readonly onVacated?: () => void
   created?: Promise<void>
 }
+
+/** A capture with a base: its turn has a repository, and the runner uploads its candidate. */
+const capturesCandidate = (command: RunnerCommand): boolean =>
+  command.type === 'capture' && command.baseSha !== undefined
 
 /** A turn that waits for a runner session with a free slot. */
 interface PendingReservation {
@@ -130,6 +136,8 @@ export interface SendOptions<T extends RunnerReportType> {
    * work is counted when a poll takes it; one that ran out by then is never delivered.
    */
   deadline?: number
+  /** Served at runnerBundlePath() while a prepare is open (docs/plan/84-projects.md, ПР12). */
+  bundle?: TurnBundleSource
   /** Served at runnerInboxPath() while a prepare is open, by their place in its command. */
   inbox?: readonly TurnInboxFile[]
   /** Served at runnerFilePath(…, 'project', n) while a prepare is open (docs/plan/84, ПР8). */
@@ -465,6 +473,7 @@ export class RunnerHub implements OnApplicationShutdown {
         const index = session.queue.findIndex((queued) => queued.commandId === command.commandId)
         if (index >= 0) session.queue.splice(index, 1)
       },
+      ...(options.bundle ? { bundle: options.bundle } : {}),
       ...(options.inbox ? { inbox: options.inbox } : {}),
       ...(options.projectFiles ? { projectFiles: options.projectFiles } : {}),
       ...(options.dataKey ? { dataKey: options.dataKey } : {}),
@@ -716,8 +725,14 @@ export class RunnerHub implements OnApplicationShutdown {
       case 'captured': {
         const open = this.#answering(live, report.commandId, ['capture'])
         if (!open) return
-        // The outbox of the agent (docs/plan/66, В8) may come, exactly as uploaded.
+        // Parts exactly when the capture named a base (docs/plan/84-projects.md, ПР12): a turn
+        // without a repository answers with home alone, and one with a repository with both
+        // uploads. The outbox of the agent (docs/plan/66, В8) may come with either.
         const parts: CandidatePart[] = ['outbox']
+        if (!capturesCandidate(open.command)) {
+          if (report.patch !== undefined || report.untracked !== undefined)
+            throw RunnerApiError.of('BAD_REQUEST')
+        } else parts.push('patch', 'untracked')
         for (const part of parts) {
           const uploaded = open.candidates?.[part]
           const reported = report[part]
@@ -814,6 +829,18 @@ export class RunnerHub implements OnApplicationShutdown {
     return { remove }
   }
 
+  /** The base bundle of an open prepare, after a strict lease check. */
+  async bundle(
+    runnerId: string,
+    assignmentId: string,
+    headers: RunnerBinaryHeaders,
+  ): Promise<TurnBundleSource> {
+    const { live, open } = await this.#binary(runnerId, assignmentId, headers, 'prepare')
+    if (!open.bundle) throw RunnerApiError.of('COMMAND_CLOSED')
+    await this.#assertLease(live)
+    return open.bundle
+  }
+
   /**
    * A file of an open prepare, by its place in the command's `inbox` — or, for `root: 'project'`,
    * its `projectFiles` (docs/plan/84-projects.md, ПР8) — after a strict lease check.
@@ -872,8 +899,10 @@ export class RunnerHub implements OnApplicationShutdown {
   ): Promise<(bytes: Uint8Array) => void> {
     const { open } = await this.#binary(runnerId, assignmentId, headers, 'capture')
     const parts = open.candidates
-    // Only the outbox of the agent (docs/plan/66, В8).
-    if (!parts || part !== 'outbox') throw RunnerApiError.of('COMMAND_CLOSED')
+    // A capture without a base takes no candidate: its turn has no repository. The outbox of
+    // the agent goes with either kind (docs/plan/66, В8).
+    if (!parts || (part !== 'outbox' && !capturesCandidate(open.command)))
+      throw RunnerApiError.of('COMMAND_CLOSED')
     return (bytes) => {
       if (!open.settled) parts[part] = { bytes, sha256: sha256(bytes) }
     }

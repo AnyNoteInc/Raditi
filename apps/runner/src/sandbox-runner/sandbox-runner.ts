@@ -30,6 +30,7 @@ import {
   type SiteLeaseFence,
   type SnapshotPartName,
   type TurnAgentExec,
+  type TurnBundleSource,
   type TurnFileRoot,
   type TurnInboxFile,
   type TurnExecution,
@@ -135,9 +136,20 @@ export function runnerFailureCode(
 }
 
 const passes = {
-  prepare: ['CONFLICT', 'DRIVER_PREPARE_INVALID', 'SNAPSHOT_LOAD_FAILED'],
+  prepare: [
+    'CONFLICT',
+    'DRIVER_PREPARE_INVALID',
+    'SNAPSHOT_LOAD_FAILED',
+    'REPOSITORY_TOO_LARGE',
+    'REPOSITORY_UNSUPPORTED',
+  ],
   output: ['TURN_OUTPUT_REJECTED', 'TURN_OUTPUT_TOO_LARGE'],
-  capture: ['SNAPSHOT_CREDENTIAL', 'SNAPSHOT_NOT_WRITTEN', 'SNAPSHOT_TOO_LARGE'],
+  capture: [
+    'SNAPSHOT_CREDENTIAL',
+    'SNAPSHOT_NOT_WRITTEN',
+    'SNAPSHOT_TOO_LARGE',
+    'PUBLICATION_TOO_LARGE',
+  ],
   seal: ['SNAPSHOT_TOO_LARGE'],
 } satisfies Record<string, RunnerFailureCode[]>
 
@@ -508,6 +520,9 @@ export class SandboxRunner {
           remainingMs: Math.max(1, Math.floor(held.deadline - performance.now())),
           ...(restore ? { restore } : {}),
           ...(command.inbox ? { inbox: this.#inboxFiles(held, fence, command.inbox) } : {}),
+          // Without a bundle the turn has no repository: nothing is fetched and the working
+          // directory is made empty (docs/plan/84-projects.md, ПР12).
+          ...(command.bundle ? { bundle: this.#bundleSource(held, fence, command.bundle) } : {}),
           // The files of the chat's project, fetched the same way (docs/plan/84-projects.md, ПР8).
           ...(command.projectFiles
             ? { projectFiles: this.#inboxFiles(held, fence, command.projectFiles, 'project') }
@@ -559,6 +574,15 @@ export class SandboxRunner {
       if (held.abort.signal.aborted) return
       await answer({ type: 'failed', code })
     }
+  }
+
+  /** The base bundle of a turn with a repository, fetched from core as the import reads it. */
+  #bundleSource(
+    held: Held,
+    fence: RunnerCommandFence,
+    bundle: NonNullable<Command<'prepare'>['bundle']>,
+  ): TurnBundleSource {
+    return { ...bundle, read: () => this.#bundle(held, fence, bundle.sizeBytes) }
   }
 
   /**
@@ -765,7 +789,8 @@ export class SandboxRunner {
   }
 
   /**
-   * Home stays here until seal. The agent's files for the client (`outbox`,
+   * Home stays here until seal. The candidate parts of a capture with `baseSha`
+   * (docs/plan/84-projects.md, ПР12) and the agent's files for the client (`outbox`,
    * docs/plan/66-chat-visuals.md, В8) go to core as untrusted data.
    */
   async #capture(held: Held, command: Command<'capture'>): Promise<void> {
@@ -773,8 +798,19 @@ export class SandboxRunner {
     const fence = this.#fence(command)
     try {
       if (!held.execution) throw new Error('No container')
-      const captured = await held.execution.capture({ home: command.home })
+      const captured = await held.execution.capture({
+        home: command.home,
+        ...(command.baseSha ? { baseSha: command.baseSha } : {}),
+      })
       const parts: Array<readonly [CandidatePart, Uint8Array]> = []
+      if (command.baseSha === undefined) {
+        if (captured.patch !== undefined || captured.untracked !== undefined)
+          throw new Error('A capture without a base returned candidate parts')
+      } else {
+        const { patch, untracked } = captured
+        if (!patch || !untracked) throw new Error('A capture with a base returned no candidate')
+        parts.push(['patch', patch], ['untracked', untracked])
+      }
       if (captured.outbox) parts.push(['outbox', captured.outbox])
       for (const [part, bytes] of parts) {
         const uploaded = await this.#call(held, () =>
@@ -1037,6 +1073,30 @@ export class SandboxRunner {
     const key = await this.#call(held, () => this.deps.transport.key(held.id, purpose, fence))
     if (!key.ok) throw new Error('No data key')
     return key.value
+  }
+
+  /**
+   * The base bundle, fetched whole and retried like any other call to core: the importer checks
+   * its size and SHA-256 anyway. Each chunk is let go once the importer took it.
+   */
+  async *#bundle(
+    held: Held,
+    fence: RunnerCommandFence,
+    sizeBytes: number,
+  ): AsyncIterable<Uint8Array> {
+    const read = await this.#call(
+      held,
+      async () => {
+        const chunks: Uint8Array[] = []
+        for await (const chunk of this.deps.transport.bundle(held.id, fence, sizeBytes))
+          chunks.push(chunk)
+        return chunks.reverse()
+      },
+      held.abort.signal,
+    )
+    if (!read.ok) throw new Error('No base bundle')
+    const chunks = read.value
+    while (chunks.length > 0) yield chunks.pop()!
   }
 
   /** A file of the client, fetched whole and retried like any other call to core. */

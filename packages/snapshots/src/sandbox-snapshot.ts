@@ -6,6 +6,8 @@ import {
   isSnapshotCredential,
   isTooLarge,
   OUTBOX_MANIFEST_ENTRY,
+  publicationShaSchema,
+  publicationTooLarge,
   outboxFileNameSchema,
   outboxLimits,
   type OutboxManifest,
@@ -22,7 +24,12 @@ import {
 } from '@repo/domain'
 
 import { execBounded, SANDBOX_EXEC_TIMEOUT_MS } from './exec.ts'
-import { validateSnapshotArchives, type HomeOnlyArchives } from './archive-validation.ts'
+import {
+  snapshotEntryPath,
+  validateSnapshotArchives,
+  type HomeOnlyArchives,
+  type SnapshotArchives,
+} from './archive-validation.ts'
 import { outboxTooLarge, packOutbox, readOutboxArchive } from './outbox.ts'
 
 export type { HomeOnlyArchives, SnapshotArchives, TurnArchives } from './archive-validation.ts'
@@ -31,6 +38,8 @@ const commandFailed = () =>
   sandboxCommandFailed('Snapshot sandbox command failed or exceeded its limits')
 const LIST_BYTES = snapshotLimits.entries * (snapshotLimits.path + 1)
 const homeTooLarge = () => snapshotTooLarge('Agent session state exceeds the snapshot limits')
+// The agent's session state versus its changes to the repository: both 413s, told apart for the client.
+const changesTooLarge = () => publicationTooLarge('Agent changes exceed the snapshot limits')
 
 /** The records of a NUL-terminated list; a last one without its NUL is dropped. */
 function splitNul(bytes: Uint8Array): Uint8Array[] {
@@ -106,6 +115,80 @@ export class SandboxSnapshotTransport {
     const homeState = this.#state(state)
     const home = await this.#home(sandbox, homeState)
     return this.#validated(homeState, { home }, credentials, envValues)
+  }
+
+  /**
+   * The session and the changes of a turn with a repository (docs/plan/84-projects.md, ПР12): the
+   * home archive as `capture`, the patch of the working tree against `baseSha` — the commit the
+   * bundle checked the sandbox out at — and its new files that no ignore file hides. The home part
+   * is refused when it holds a credential or a value, as `capture`; the patch and the new files are
+   * only checked for their form here: what they say is judged by the publication, which keeps them
+   * out of the snapshot when it refuses them.
+   */
+  async captureRepository(
+    sandbox: Sandbox,
+    state: SessionState,
+    baseSha: string,
+    credentials: readonly string[] = [],
+    envValues: readonly string[] = [],
+  ): Promise<SnapshotArchives> {
+    if (!publicationShaSchema.safeParse(baseSha).success)
+      throw badRequest('Snapshot capture requires the trusted base commit')
+    const homeState = this.#state(state)
+    const home = await this.#home(sandbox, homeState)
+    await this.#checkNoSymlinkAncestors(sandbox, SANDBOX_WORKDIR)
+    const names = await this.#untracked(sandbox, [
+      'git',
+      '-c',
+      'core.fsmonitor=false',
+      'ls-files',
+      '--others',
+      '--exclude-standard',
+      '-z',
+    ])
+    if (names.length > snapshotLimits.entries) throw changesTooLarge()
+    const untracked = await this.#archive(sandbox, SANDBOX_WORKDIR, names, [], {
+      noRecursion: true,
+      tooLarge: changesTooLarge,
+    })
+    const patch = await this.#exec(
+      sandbox,
+      [
+        'git',
+        '--no-replace-objects',
+        '-c',
+        'core.fsmonitor=false',
+        'diff',
+        '--binary',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--no-renames',
+        baseSha,
+        '--',
+      ],
+      snapshotLimits.patchBytes,
+      { cwd: SANDBOX_WORKDIR, tooLarge: changesTooLarge },
+    )
+    await this.#validated(homeState, { home }, credentials, envValues)
+    return this.#validated(homeState, { home, untracked, patch: patch.stdout }, [], [])
+  }
+
+  /** The NUL list of untracked files one `ls-files` prints, each a checked entry path. */
+  async #untracked(sandbox: Sandbox, argv: string[]): Promise<string[]> {
+    const list = await this.#exec(sandbox, argv, LIST_BYTES, {
+      cwd: SANDBOX_WORKDIR,
+      tooLarge: changesTooLarge,
+    })
+    try {
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(list.stdout)
+      if (text !== '' && !text.endsWith('\0')) throw commandFailed()
+      const names = text === '' ? [] : text.slice(0, -1).split('\0')
+      if (new Set(names).size !== names.length) throw commandFailed()
+      names.forEach((name) => snapshotEntryPath(name))
+      return names
+    } catch {
+      throw commandFailed()
+    }
   }
 
   /**
@@ -250,7 +333,7 @@ export class SandboxSnapshotTransport {
     })
   }
 
-  async #validated<P extends HomeOnlyArchives>(
+  async #validated<P extends HomeOnlyArchives | SnapshotArchives>(
     homeState: SessionState,
     parts: P,
     credentials: readonly string[],
@@ -267,22 +350,33 @@ export class SandboxSnapshotTransport {
 
   /**
    * The session of turn n−1 into a fresh, quiescent sandbox. Nothing of the working directory is
-   * restored: it is only made, and must be empty — whatever is there was not the turn's.
+   * restored: without a repository it is only made, and must be empty — whatever is there was not
+   * the turn's; with one (`workdir: 'repository'`) it holds the bundle just imported, which the
+   * home archive never reaches (docs/plan/84-projects.md, ПР12).
    */
-  async restore(sandbox: Sandbox, state: SessionState, parts: { home: Uint8Array }): Promise<void> {
+  async restore(
+    sandbox: Sandbox,
+    state: SessionState,
+    parts: { home: Uint8Array },
+    options: { workdir?: 'empty' | 'repository' } = {},
+  ): Promise<void> {
     const homeState = this.#state(state)
     // Only the owned, checked copy reaches the sandbox.
     const checked = await validateSnapshotArchives(homeState, { home: parts.home })
     // Existing symlink ancestors are dangerous even when every archive entry is a regular file.
     await this.#checkDestination(sandbox, homeState.root)
-    await this.#checkDestination(sandbox, SANDBOX_WORKDIR)
-    await this.#exec(sandbox, ['mkdir', '--parents', '--', SANDBOX_WORKDIR], 0)
-    const entries = await this.#exec(
-      sandbox,
-      ['find', '-P', SANDBOX_WORKDIR, '-mindepth', '1', '-print', '-quit'],
-      snapshotLimits.path + 1,
-    )
-    if (entries.stdout.byteLength > 0) throw commandFailed()
+    if (options.workdir === 'repository')
+      await this.#checkNoSymlinkAncestors(sandbox, SANDBOX_WORKDIR)
+    else {
+      await this.#checkDestination(sandbox, SANDBOX_WORKDIR)
+      await this.#exec(sandbox, ['mkdir', '--parents', '--', SANDBOX_WORKDIR], 0)
+      const entries = await this.#exec(
+        sandbox,
+        ['find', '-P', SANDBOX_WORKDIR, '-mindepth', '1', '-print', '-quit'],
+        snapshotLimits.path + 1,
+      )
+      if (entries.stdout.byteLength > 0) throw commandFailed()
+    }
     await this.#exec(sandbox, ['mkdir', '--parents', '--', homeState.root], 0)
     await this.#exec(
       sandbox,

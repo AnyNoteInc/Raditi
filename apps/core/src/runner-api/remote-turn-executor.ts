@@ -165,6 +165,8 @@ export class RemoteTurnExecutor implements TurnExecutor {
       remainingMs,
     })
     const execution = new RemoteTurnExecution(this.hub, this.leases, live, 'turn')
+    execution.repository = input.bundle !== undefined
+    const bundle = input.bundle
     await this.hub.send(
       live,
       {
@@ -176,6 +178,18 @@ export class RemoteTurnExecutor implements TurnExecutor {
         }),
         remainingMs: Math.max(1, remainingMs),
         ...(restore ? { restore } : {}),
+        // Without one the turn has no repository: the runner makes the working directory empty.
+        ...(bundle
+          ? {
+              bundle: {
+                baseSha: bundle.baseSha,
+                sandboxBaseSha: bundle.sandboxBaseSha,
+                branch: bundle.branch,
+                sha256: bundle.sha256,
+                sizeBytes: bundle.sizeBytes,
+              },
+            }
+          : {}),
         // The paths and sizes only: the runner fetches each file from core by its place here.
         ...(input.inbox?.length
           ? { inbox: input.inbox.map(({ path, sizeBytes }) => ({ path, sizeBytes })) }
@@ -197,6 +211,8 @@ export class RemoteTurnExecutor implements TurnExecutor {
         signal,
         // The runner gets what is left when its poll takes the prepare, not what was left here.
         deadline: started + input.remainingMs,
+        // Served at runnerBundlePath() only when there is one: else that path is closed.
+        ...(bundle ? { bundle } : {}),
         // Served at runnerInboxPath() while the prepare is open.
         ...(input.inbox?.length ? { inbox: input.inbox } : {}),
         // …and those of the project at runnerFilePath(…, 'project', n).
@@ -295,6 +311,13 @@ export class RemoteTurnExecutor implements TurnExecutor {
  */
 class RemoteTurnExecution implements TurnExecution {
   #homeBytes: number | undefined
+  /** Whether the home part waiting for seal() came with the parts of a repository. */
+  #capturedRepository: boolean | undefined
+  /**
+   * Whether the prepare of this owner imported a repository; unknown for an adopted container.
+   * A capture of the other kind is refused before the runner is asked.
+   */
+  repository: boolean | undefined
   readonly #epoch: number
 
   constructor(
@@ -359,22 +382,37 @@ class RemoteTurnExecution implements TurnExecution {
     )
   }
 
-  /** The runner captures home alone; the agent's files for the client come with it. */
-  async capture(input: { home: SessionState }): Promise<CapturedTurn> {
+  /**
+   * Without `baseSha` the runner captures home alone and no candidate part is accepted from it;
+   * with it the patch and the new files come too (docs/plan/84-projects.md, ПР12). The agent's
+   * files for the client come with either kind.
+   */
+  async capture(input: { home: SessionState; baseSha?: string }): Promise<CapturedTurn> {
     this.#allow('turn', 'work')
     // Refused here as the local capture refuses it, before the runner is asked.
     const home = sessionStateSchema.safeParse(input.home)
     if (!home.success) throw badRequest('Invalid snapshot session state')
-    // The agent's files for the client (docs/plan/66, В8).
+    const withBase = input.baseSha !== undefined
+    if (this.repository !== undefined && this.repository !== withBase)
+      throw conflict(
+        withBase
+          ? 'Capture names a base, but the sandbox got no repository'
+          : 'Capture names no base, but the sandbox got a repository',
+      )
     const candidates: CandidateParts = {}
     const captured = await this.hub.send(
       this.live,
-      { type: 'capture', home: home.data },
+      { type: 'capture', home: home.data, ...(withBase ? { baseSha: input.baseSha } : {}) },
       { answers: ['captured'], replyMs: runnerReplyMs.capture, candidates, epoch: this.#epoch },
     )
     this.#homeBytes = captured.homeBytes
+    this.#capturedRepository = withBase
+    // The hub checked the uploads against the report.
     return {
       homeBytes: captured.homeBytes,
+      ...(withBase
+        ? { patch: candidates.patch!.bytes, untracked: candidates.untracked!.bytes }
+        : {}),
       ...(candidates.outbox ? { outbox: candidates.outbox.bytes } : {}),
     }
   }
@@ -382,7 +420,8 @@ class RemoteTurnExecution implements TurnExecution {
   async seal({ base, dataKey, put }: TurnSealInput): Promise<SealedTurnPart> {
     this.#allow('turn', 'work')
     if (this.#homeBytes === undefined) throw conflict('Nothing was captured to seal')
-    if (base.git !== undefined) throw conflict('A turn has no repository to seal')
+    if ((base.git !== undefined) !== this.#capturedRepository)
+      throw conflict('The snapshot and the capture disagree on the repository')
     const sealed = await this.hub.send(
       this.live,
       {

@@ -64,6 +64,9 @@ export function scriptedCore(
       if (!file) throw new RunnerCallError('inbox', 409)
       yield Buffer.from(file)
     },
+    bundle: async function* () {
+      yield Buffer.from('synthetic bundle')
+    },
     key: vi.fn(async (): Promise<Uint8Array> => new Uint8Array(32).fill(7)),
     candidate: vi.fn(async () => {}),
   } satisfies RunnerTransport
