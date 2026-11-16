@@ -69,8 +69,17 @@ export interface McpRepoStore {
   runs(input: { projectRepositoryId: string; ref?: string; limit: number }): Promise<McpRepoRun[]>
   /** The main branch of the turn's repository, or null when it is gone. */
   defaultBranch(input: { projectRepositoryId: string; projectId: string }): Promise<string | null>
-  /** The kept log, or `loading` after the job of core is asked for (`requestCiLog`). */
-  log(input: { projectRepositoryId: string; runId: string; jobId: string }): Promise<McpRepoLog>
+  /**
+   * The kept log, or `loading` after the job of core is asked for (`requestCiLog`) — only of a
+   * build of the chat's branch `ref` or of a merge request from it (ревью, безопасность 8): a job
+   * of the main branch may deploy, and its log may print what masking does not know.
+   */
+  log(input: {
+    projectRepositoryId: string
+    runId: string
+    jobId: string
+    ref: string
+  }): Promise<McpRepoLog>
   /** One more log of this turn: false — REPO_LOGS_PER_TURN is reached. */
   admitLog(taskId: string, turnNo: number): Promise<boolean>
 }
@@ -169,6 +178,7 @@ export class McpRepoService {
         projectRepositoryId: repo.projectRepositoryId,
         runId: parsed.data.runId,
         jobId: parsed.data.jobId,
+        ref: repo.branch,
       })
       if (log.state === 'loading') throw repoLogLoading()
       if (log.state === 'failed') throw repoLogFailed()
