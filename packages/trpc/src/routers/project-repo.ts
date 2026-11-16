@@ -9,6 +9,7 @@ import {
   repoBranchStates,
   repoMirrorStates,
   repoModes,
+  repoMergeModes,
   repoProviderKinds,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -24,6 +25,13 @@ import {
   readTurnDiff,
 } from '../services/git/branches.ts'
 import { gitServicesOf } from '../services/git/connections.ts'
+import {
+  confirmDeploy,
+  confirmMerge,
+  prepareDeploy,
+  prepareMerge,
+  readRepoAction,
+} from '../services/git/merge.ts'
 import {
   attachConnected,
   attachLink,
@@ -187,6 +195,8 @@ export const projectRepoRouter = router({
               state: z.string(),
               checks: z.string(),
               url: z.string(),
+              headSha: sha,
+              autoMerge: z.boolean(),
             })
             .nullable(),
           lastRun: z
@@ -330,6 +340,120 @@ export const projectRepoRouter = router({
     .output(z.strictObject({ declined: z.literal(true) }))
     .mutation(({ ctx, input }) =>
       declineCiChange(ctx.prisma, { userId: ctx.user.id, taskId: input.taskId }),
+    ),
+
+  /**
+   * The card «Принять запрос в основную ветку?» (ПР15; slice 84.22): the merge request as core last
+   * read it and the token bound to it, its target branch and its head, for ten minutes.
+   */
+  prepareMerge: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef, number: z.number().int().positive() }))
+    .output(
+      z.strictObject({
+        number: z.number().int(),
+        title: z.string(),
+        source: z.string(),
+        target: z.string(),
+        headSha: sha,
+        checks: z.enum(checksStates),
+        url: z.string(),
+        deleteBranch: z.boolean(),
+        whenGreen: z.boolean(),
+        confirmToken: z.string(),
+        expiresAt: z.date(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      prepareMerge(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        projectId: input.projectId,
+        number: input.number,
+        now: new Date(),
+      }),
+    ),
+
+  /** «Принять в основную ветку» or «Принять, когда сборка пройдёт»: written once, core merges. */
+  confirmMerge: consentedProcedure
+    .input(
+      z.strictObject({
+        confirmToken: z.string().min(1).max(2048),
+        mode: z.enum(repoMergeModes),
+        deleteBranch: z.boolean(),
+      }),
+    )
+    .output(z.strictObject({ actionId: z.uuid() }))
+    .mutation(({ ctx, input }) =>
+      confirmMerge(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        confirmToken: input.confirmToken,
+        mode: input.mode,
+        deleteBranch: input.deleteBranch,
+        now: new Date(),
+      }),
+    ),
+
+  /**
+   * «Выкатить» on P-repo (ПР15): the manual jobs of the head of the main branch, a token for each;
+   * `loading` until core has read the repository.
+   */
+  prepareDeploy: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef }))
+    .output(
+      z.discriminatedUnion('state', [
+        z.strictObject({ state: z.literal('loading') }),
+        z.strictObject({
+          state: z.literal('ready'),
+          ref: z.string(),
+          sha: sha.nullable(),
+          actions: z.array(
+            z.strictObject({
+              id: z.string(),
+              kind: z.enum(['manual_job', 'workflow_dispatch']),
+              name: z.string(),
+              confirmToken: z.string(),
+            }),
+          ),
+          expiresAt: z.date(),
+        }),
+      ]),
+    )
+    .mutation(({ ctx, input }) =>
+      prepareDeploy(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        projectId: input.projectId,
+        now: new Date(),
+      }),
+    ),
+
+  /** The press of «Выкатить»: written once, core reads the head again and plays the job. */
+  confirmDeploy: consentedProcedure
+    .input(z.strictObject({ confirmToken: z.string().min(1).max(2048) }))
+    .output(z.strictObject({ actionId: z.uuid() }))
+    .mutation(({ ctx, input }) =>
+      confirmDeploy(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        confirmToken: input.confirmToken,
+        now: new Date(),
+      }),
+    ),
+
+  /** How far core got with a press of the author (P-repo reads it after «Выкатить»). */
+  action: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef, actionId: z.uuid() }))
+    .output(
+      z.strictObject({
+        id: z.uuid(),
+        kind: z.enum(repoActionKinds),
+        state: z.enum(repoActionStates),
+        error: z.string().nullable(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      readRepoAction(ctx.prisma, {
+        userId: ctx.user.id,
+        projectId: input.projectId,
+        actionId: input.actionId.toLowerCase(),
+      }),
     ),
 
   /**

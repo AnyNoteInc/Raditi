@@ -122,7 +122,16 @@ export interface ChatBranchView {
    * configuration lives in another project, nothing is sent.
    */
   ciChange: 'none' | 'needed' | 'declined' | 'foreign'
-  mergeRequest: { number: number; state: string; checks: string; url: string } | null
+  mergeRequest: {
+    number: number
+    state: string
+    checks: string
+    url: string
+    /** The head core last read: the card of a merge is prepared again when it moves (ПР15). */
+    headSha: string
+    /** The provider merges it once the build passes («Принять, когда сборка пройдёт»). */
+    autoMerge: boolean
+  } | null
   /**
    * The newest build of the branch at the client as core polled it (ПР17): the card shows its
    * status and is read again while it goes — no reload, no webhook.
@@ -161,7 +170,14 @@ export async function readChatBranch(
   const mr = await db.projectMergeRequest.findFirst({
     where: { projectRepositoryId: repo.id, sourceBranch: branch.branch },
     orderBy: { number: 'desc' },
-    select: { number: true, state: true, checks: true, webUrl: true },
+    select: {
+      number: true,
+      state: true,
+      checks: true,
+      webUrl: true,
+      headSha: true,
+      autoMerge: true,
+    },
   })
   const lastRun =
     branch.remoteSha === null
@@ -184,7 +200,14 @@ export async function readChatBranch(
       repo.connection.createdById === input.userId,
     ciChange,
     mergeRequest: mr
-      ? { number: mr.number, state: mr.state, checks: mr.checks, url: mr.webUrl }
+      ? {
+          number: mr.number,
+          state: mr.state,
+          checks: mr.checks,
+          url: mr.webUrl,
+          headSha: mr.headSha,
+          autoMerge: mr.autoMerge,
+        }
       : null,
     lastRun,
     rewinds:
