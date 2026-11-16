@@ -647,6 +647,9 @@ importers:
       '@repo/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@repo/git-providers':
+        specifier: workspace:*
+        version: link:../../packages/git-providers
       '@repo/ip-address':
         specifier: workspace:*
         version: link:../../packages/ip-address
@@ -1201,6 +1204,9 @@ importers:
       '@repo/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@repo/git-providers':
+        specifier: workspace:*
+        version: link:../../packages/git-providers
       '@repo/ip-address':
         specifier: workspace:*
         version: link:../../packages/ip-address

@@ -1,5 +1,13 @@
 // Git provider adapters (docs/plan/84-projects.md, ПР11, §4.5). Sign-in lives in ./connect.
 export {
+  coreGitAppsFromEnv,
+  DEV_REPO_CONFIRM_SECRET,
+  type GitAppsConfig,
+  type GithubAppCoreCredentials,
+  type GithubAppKey,
+  type GitlabOauthCredentials,
+} from './config.ts'
+export {
   createGitProvider,
   type CreateGitProviderInput,
   type GitProviderEndpoints,

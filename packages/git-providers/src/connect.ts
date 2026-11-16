@@ -18,6 +18,14 @@ import { createGitTransport, type GitTransport, type GitTransportOptions } from 
 
 export { createGitTransport }
 export type { GitTransport, GitTransportOptions }
+// web's part of the variables of the git apps (§4.5)
+export {
+  DEV_REPO_CONFIRM_SECRET,
+  webGitAppsFromEnv,
+  type GitAppsConfig,
+  type GithubAppWebCredentials,
+  type GitlabOauthCredentials,
+} from './config.ts'
 
 export interface GitConnectConfig {
   transport: GitTransport

@@ -3,6 +3,11 @@ import { ConfigError } from '@repo/app-bootstrap'
 import { browserWorkerOrigin } from '@repo/browser-link'
 import { dbConfigFromEnv, type DbConfig } from '@repo/db'
 import {
+  coreGitAppsFromEnv,
+  type GitAppsConfig,
+  type GithubAppCoreCredentials,
+} from '@repo/git-providers'
+import {
   appEnvSchema,
   browserWorkerTokenSchema,
   envProblems,
@@ -117,6 +122,12 @@ export interface CoreConfig {
    * core shares with its git worker; GIT_CA_FILE and GIT_ALLOW_LOOPBACK only outside production.
    */
   git: GitEnvConfig
+  /**
+   * The apps of the repositories of projects (docs/plan/84-projects.md, §4.2, §4.5): the OAuth app
+   * on gitlab.com (renewal of tokens), the GitHub App's installation tokens (Э10), the secret of
+   * the cards core checks again (ПР15) and, outside production, the fakes of a stand.
+   */
+  gitApps: GitAppsConfig<GithubAppCoreCredentials>
 }
 
 /** Where core reaches the browser worker's internal API. Holds its token: never log it. */
@@ -382,6 +393,7 @@ export function loadConfig(env: Env): CoreConfig {
 
   const git = gitEnvConfig(env)
   problems.push(...git.problems)
+  const gitApps = section(() => coreGitAppsFromEnv(env))
 
   if (problems.length > 0) throw new ConfigError(problems, 'core')
 
@@ -418,6 +430,7 @@ export function loadConfig(env: Env): CoreConfig {
     },
     browser,
     git: git.config,
+    gitApps: present(gitApps),
   }
 }
 

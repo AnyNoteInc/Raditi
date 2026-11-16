@@ -11,6 +11,8 @@ import type { GitTransport } from './transport.ts'
 export interface GitProviderEndpoints {
   /** Stands only, `https://localhost:<port>`: GITHUB_API_URL. */
   githubApiUrl?: string
+  /** Stands only, `https://localhost:<port>`: GITHUB_WEB_URL (the sign-in pages of github.com, Э10). */
+  githubWebUrl?: string
   /** Stands only, `https://localhost:<port>`: GITLAB_COM_URL. */
   gitlabComUrl?: string
 }
