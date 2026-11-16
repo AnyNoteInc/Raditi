@@ -368,7 +368,12 @@ export class TaskSweep {
         baseSha &&
         headSha !== baseSha
       )
-        return { ending, published: { repository: plan.repository, baseSha, headSha } }
+        // The head stands from the settlement of this pass, as the live end writes it (ревью C1):
+        // the next pass, which the drain may start before the card is written, reads it.
+        return {
+          ending: { ...ending, repoHead: { baseSha, headSha } },
+          published: { repository: plan.repository, baseSha, headSha },
+        }
       return { ending }
     }
     if (replayed.lastPhase === 'failed' && replayed.reason)

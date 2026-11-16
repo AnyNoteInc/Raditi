@@ -662,6 +662,13 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       // The answer reaches the client, as after any turn: the publication was not a failure.
       expect(await db.taskEvent.count({ where: { taskId, type: 'feed.failure' } })).toBe(0)
       expect(await db.taskEvent.count({ where: { taskId, type: 'feed.result' } })).toBe(1)
+      // The head stands from the settlement itself (ревью C1), not only from the card.
+      expect(
+        await db.taskTurn.findFirstOrThrow({
+          where: { taskId, turnNo: 1 },
+          select: { baseSha: true, headSha: true },
+        }),
+      ).toEqual({ baseSha: recovered.baseSha, headSha: recovered.candidateHeadSha })
       expect(buildSettingsChange).toHaveBeenCalledWith(
         expect.objectContaining({
           projectRepositoryId: repository.projectRepositoryId,
