@@ -10,7 +10,15 @@ import {
 import { z } from 'zod'
 
 import { chatContextOf } from '../services/chat/context.ts'
-import { confirmPush, preparePush, readChatBranch, readTurnDiff } from '../services/git/branches.ts'
+import {
+  confirmCiChange,
+  confirmPush,
+  declineCiChange,
+  prepareCiChange,
+  preparePush,
+  readChatBranch,
+  readTurnDiff,
+} from '../services/git/branches.ts'
 import { gitServicesOf } from '../services/git/connections.ts'
 import {
   attachConnected,
@@ -137,6 +145,7 @@ export const projectRepoRouter = router({
           headSha: sha.nullable(),
           sent: z.boolean(),
           canPush: z.boolean(),
+          ciChange: z.enum(['none', 'needed', 'declined', 'foreign']),
           mergeRequest: z
             .strictObject({ number: z.number().int(), state: z.string(), url: z.string() })
             .nullable(),
@@ -215,6 +224,63 @@ export const projectRepoRouter = router({
         ...(input.mergeRequest ? { mergeRequest: input.mergeRequest } : {}),
         now: new Date(),
       }),
+    ),
+
+  /**
+   * The card «Агент хочет изменить настройки сборки» (ПР16): the diff of the build settings and CI
+   * Lint as core kept them, and the token of that very diff; `loading` until core has read them.
+   */
+  prepareCiChange: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(
+      z.discriminatedUnion('state', [
+        z.strictObject({ state: z.literal('loading') }),
+        z.strictObject({
+          state: z.literal('ready'),
+          branch: z.string(),
+          headSha: sha,
+          files: z.array(fileStat.extend({ diff: z.string() })),
+          ciDiffSha256: z.string().nullable(),
+          lint: z.strictObject({ valid: z.boolean(), errors: z.array(z.string()) }).nullable(),
+          opensMergeRequest: z.boolean(),
+          proposal: mergeRequestInput.nullable(),
+          confirmToken: z.string(),
+          expiresAt: z.date(),
+        }),
+      ]),
+    )
+    .mutation(({ ctx, input }) =>
+      prepareCiChange(ctx.prisma, chatContextOf(ctx).storage(), ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        taskId: input.taskId,
+        now: new Date(),
+      }),
+    ),
+
+  /** «Разрешить и отправить» (ПР16): written once, and core sends the branch. */
+  confirmCiChange: consentedProcedure
+    .input(
+      z.strictObject({
+        confirmToken: z.string().min(1).max(2048),
+        mergeRequest: mergeRequestInput.optional(),
+      }),
+    )
+    .output(z.strictObject({ actionId: z.uuid() }))
+    .mutation(({ ctx, input }) =>
+      confirmCiChange(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        confirmToken: input.confirmToken,
+        ...(input.mergeRequest ? { mergeRequest: input.mergeRequest } : {}),
+        now: new Date(),
+      }),
+    ),
+
+  /** «Не отправлять» (ПР16): this change of build settings is not sent. */
+  declineCiChange: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(z.strictObject({ declined: z.literal(true) }))
+    .mutation(({ ctx, input }) =>
+      declineCiChange(ctx.prisma, { userId: ctx.user.id, taskId: input.taskId }),
     ),
 
   /** «Основная ветка» of P-git-repo-pick. */

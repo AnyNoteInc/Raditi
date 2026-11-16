@@ -11,11 +11,17 @@ import {
 import {
   gitConnectUnavailable,
   gitJobNames,
+  readRepoCiPaths,
   readRepoConfirmToken,
   REPO_CONFIRM_TTL_SECONDS,
   REPO_DIFF_KEPT_BYTES,
   repoChanged,
   repoCiChangeNeedsCard,
+  repoCiConfigForeign,
+  repoCiDeclined,
+  repoCiDiffKey,
+  repoCiDiffTooLarge,
+  repoCiLintSchema,
   repoConfirmInvalid,
   repoConfirmUsed,
   repoDiffKey,
@@ -23,11 +29,14 @@ import {
   repoProposalPayloadSchema,
   repoReadOnly,
   signRepoConfirmToken,
+  splitDiffByFile,
   gitConnectionReauth,
   type ObjectStorage,
+  type RepoCiLint,
   type RepoActionKind,
   type RepoActionState,
   type RepoBranchState,
+  type RepoConfirmKind,
   type RepoConfirmMac,
 } from '@repo/domain'
 
@@ -39,7 +48,10 @@ import { WRITE } from '../chat/dialog-lock.ts'
 // turn, and the two steps of «Отправить в ветку» and «Открыть запрос на слияние» — `preparePush`
 // binds a token to the head of the chat and the diff of its card, `confirmPush` writes the press
 // (`repo_actions` with the token itself) and the job of core, which checks the token again. Web
-// never reaches the provider.
+// never reaches the provider. A change of build settings goes by its own card instead (ПР16; slice
+// 84.20): `prepareCiChange` shows the diff of those files `git.ci_lint` of core kept and CI Lint,
+// `{ state: 'loading' }` until it has, and binds the token to the SHA-256 of that diff;
+// `confirmCiChange` is «Разрешить и отправить», `declineCiChange` «Не отправлять».
 
 type Tx = Prisma.TransactionClient
 
@@ -63,6 +75,7 @@ async function ownChat(
       defaultBranch: true,
       mode: true,
       webUrl: true,
+      ciPaths: true,
       connection: { select: { state: true, createdById: true } },
     },
   })
@@ -78,6 +91,12 @@ export interface ChatBranchView {
   sent: boolean
   /** The client may press: the repository takes writes by the author's connection. */
   canPush: boolean
+  /**
+   * What waits to be sent touches build settings (ПР16): `needed` — only by the card «Агент хочет
+   * изменить настройки сборки»; `declined` — the client said «Не отправлять» to it; `foreign` — the
+   * configuration lives in another project, nothing is sent.
+   */
+  ciChange: 'none' | 'needed' | 'declined' | 'foreign'
   mergeRequest: { number: number; state: string; url: string } | null
   /** The last press and how far core got. */
   lastAction: {
@@ -98,6 +117,15 @@ export async function readChatBranch(
   if (branch === null || branch.projectRepositoryId !== repo.id) return null
   const unsent = await unsentBranch(db, task.id)
   const head = unsent?.head.headSha ?? branch.mirrorSha
+  const foreign = readRepoCiPaths(repo.ciPaths).foreign
+  const lint = unsent?.ciTouched ? await ciLintOf(db, task.id, unsent.head.headSha) : null
+  const ciChange = foreign
+    ? 'foreign'
+    : !unsent?.ciTouched
+      ? 'none'
+      : lint?.declined
+        ? 'declined'
+        : 'needed'
   const mr = await db.projectMergeRequest.findFirst({
     where: { projectRepositoryId: repo.id, sourceBranch: branch.branch },
     orderBy: { number: 'desc' },
@@ -117,6 +145,7 @@ export async function readChatBranch(
       repo.mode === 'write' &&
       repo.connection?.state === 'ok' &&
       repo.connection.createdById === input.userId,
+    ciChange,
     mergeRequest: mr ? { number: mr.number, state: mr.state, url: mr.webUrl } : null,
     lastAction: action
       ? {
@@ -207,7 +236,8 @@ export async function preparePush(
   if (branch === null || branch.projectRepositoryId !== repo.id) throw repoNothingToPush()
   const unsent = await unsentBranch(db, task.id)
   if (unsent === null) throw repoNothingToPush()
-  // A change of build settings goes only with the card of ПР16 (slice 84.20).
+  if (readRepoCiPaths(repo.ciPaths).foreign) throw repoCiConfigForeign()
+  // A change of build settings goes only by its own card (ПР16): `prepareCiChange`.
   if (unsent.ciTouched) throw repoCiChangeNeedsCard()
   const open = await db.projectMergeRequest.findFirst({
     where: {
@@ -294,8 +324,23 @@ export async function confirmPush(
     now: Date
   },
 ): Promise<{ actionId: string }> {
+  return confirmPress(db, mac, input, 'push')
+}
+
+/** A press of a card of the chat's branch: `push` («Отправить в ветку») or `ci_change` (ПР16). */
+async function confirmPress(
+  db: PrismaClient,
+  mac: RepoConfirmMac | null | undefined,
+  input: {
+    userId: string
+    confirmToken: string
+    mergeRequest?: { title: string; description: string; draft: boolean; reservedId: string | null }
+    now: Date
+  },
+  kind: Extract<RepoConfirmKind, 'push' | 'ci_change'>,
+): Promise<{ actionId: string }> {
   const claims = readRepoConfirmToken(input.confirmToken, macOf(mac), input.now)
-  if (claims.kind !== 'push' || claims.userId !== input.userId || claims.taskId === null)
+  if (claims.kind !== kind || claims.userId !== input.userId || claims.taskId === null)
     throw repoConfirmInvalid()
   if (claims.opensMergeRequest !== Boolean(input.mergeRequest)) throw repoConfirmInvalid()
   const mergeRequest = input.mergeRequest
@@ -323,7 +368,7 @@ export async function confirmPush(
           projectRepositoryId: repo.id,
           taskId: task.id,
           createdById: input.userId,
-          kind: claims.opensMergeRequest ? 'open_mr' : 'push',
+          kind: kind === 'ci_change' ? 'ci_push' : claims.opensMergeRequest ? 'open_mr' : 'push',
           args: { token: input.confirmToken, mergeRequest },
           tokenSha256,
         },
@@ -341,4 +386,167 @@ export async function confirmPush(
       throw repoConfirmUsed()
     throw error
   }
+}
+
+// --- the card of build settings (ПР16) --------------------------------------------------------
+
+/** What `git.ci_lint` of core left for this head of the chat; null — not yet (or another head). */
+async function ciLintOf(
+  db: Pick<Tx, 'projectRepoBranch'>,
+  taskId: string,
+  headSha: string,
+): Promise<RepoCiLint | null> {
+  const row = await db.projectRepoBranch.findUnique({
+    where: { taskId },
+    select: { ciLint: true },
+  })
+  const lint = repoCiLintSchema.safeParse(row?.ciLint)
+  return lint.success && lint.data.headSha === headSha ? lint.data : null
+}
+
+export type PreparedCiChange =
+  | { state: 'loading' }
+  | {
+      state: 'ready'
+      branch: string
+      headSha: string
+      files: { path: string; additions: number; deletions: number; diff: string }[]
+      ciDiffSha256: string | null
+      lint: { valid: boolean; errors: string[] } | null
+      opensMergeRequest: boolean
+      proposal: PreparedPush['proposal']
+      confirmToken: string
+      expiresAt: Date
+    }
+
+/** One job of core a minute at most asks again for a head that has no result yet. */
+const CI_LINT_RETRY_MS = 60_000
+
+/**
+ * `projectRepo.prepareCiChange` (ПР16): the diff of the build settings of what waits to be sent and
+ * CI Lint, as `git.ci_lint` of core kept them, and the token bound to the SHA-256 of that diff.
+ * `{ state: 'loading' }` — core has not read this head yet: its job is asked for (web never calls
+ * the provider). The diff is read from `raditi-artifacts` and checked against its SHA-256.
+ */
+export async function prepareCiChange(
+  db: PrismaClient,
+  storage: Pick<ObjectStorage, 'get'>,
+  mac: RepoConfirmMac | null | undefined,
+  input: { userId: string; taskId: string; now: Date },
+): Promise<PreparedCiChange> {
+  const sign = macOf(mac)
+  const { task, project, repo } = await ownChat(db, input.userId, input.taskId.toLowerCase())
+  assertWritable(repo, input.userId)
+  if (readRepoCiPaths(repo.ciPaths).foreign) throw repoCiConfigForeign()
+  const branch = await chatBranch(db, task.id)
+  if (branch === null || branch.projectRepositoryId !== repo.id) throw repoNothingToPush()
+  const unsent = await unsentBranch(db, task.id)
+  if (unsent === null || !unsent.ciTouched) throw repoNothingToPush()
+  const head = unsent.head.headSha
+  const lint = await ciLintOf(db, task.id, head)
+  if (lint === null) {
+    await enqueueOutbox(db, {
+      topic: 'git',
+      type: gitJobNames.ciLint,
+      payload: { taskId: task.id, headSha: head },
+      dedupeKey: `git.ci_lint:${task.id}:${head}:${Math.floor(input.now.getTime() / CI_LINT_RETRY_MS)}`,
+    })
+    return { state: 'loading' }
+  }
+  if (lint.declined) throw repoCiDeclined()
+  if (lint.tooLarge) throw repoCiDiffTooLarge()
+  let patch = ''
+  if (lint.ciDiffSha256 !== null) {
+    const object = await storage.get('artifacts', repoCiDiffKey(task.id, head))
+    if (!object) throw repoChanged()
+    const chunks: Uint8Array[] = []
+    let length = 0
+    for await (const chunk of object) {
+      length += chunk.byteLength
+      if (length > REPO_DIFF_KEPT_BYTES) throw repoCiDiffTooLarge()
+      chunks.push(chunk)
+    }
+    const bytes = Buffer.concat(chunks, length)
+    if (createHash('sha256').update(bytes).digest('hex') !== lint.ciDiffSha256) throw repoChanged()
+    patch = bytes.toString('utf8')
+  }
+  const stats = new Map(lint.files.map((file) => [file.path, file]))
+  const files = splitDiffByFile(patch).map((file) => ({
+    path: file.path,
+    additions: stats.get(file.path)?.additions ?? 0,
+    deletions: stats.get(file.path)?.deletions ?? 0,
+    diff: file.diff,
+  }))
+  const open = await db.projectMergeRequest.findFirst({
+    where: {
+      projectRepositoryId: repo.id,
+      sourceBranch: branch.branch,
+      state: { in: ['open', 'draft'] },
+    },
+    select: { number: true },
+  })
+  const opensMergeRequest = open === null
+  const proposal = opensMergeRequest ? await proposalOf(db, task.id, task.title) : null
+  const expiresAt = Math.floor(input.now.getTime() / 1000) + REPO_CONFIRM_TTL_SECONDS
+  const confirmToken = signRepoConfirmToken(
+    {
+      kind: 'ci_change',
+      userId: input.userId,
+      projectId: project.id,
+      projectRepositoryId: repo.id,
+      taskId: task.id,
+      number: null,
+      targetBranch: branch.branch,
+      headSha: head,
+      diffSha256: unsent.card?.diffSha256 ?? null,
+      ciDiffSha256: lint.ciDiffSha256,
+      opensMergeRequest,
+      deploy: null,
+      nonce: randomBytes(16).toString('hex'),
+      expiresAt,
+    },
+    sign,
+  )
+  return {
+    state: 'ready',
+    branch: branch.branch,
+    headSha: head,
+    files,
+    ciDiffSha256: lint.ciDiffSha256,
+    lint: lint.lint,
+    opensMergeRequest,
+    proposal,
+    confirmToken,
+    expiresAt: new Date(expiresAt * 1000),
+  }
+}
+
+/** `projectRepo.confirmCiChange` — «Разрешить и отправить» (ПР16): a row `ci_push` and the job. */
+export function confirmCiChange(
+  db: PrismaClient,
+  mac: RepoConfirmMac | null | undefined,
+  input: Parameters<typeof confirmPush>[2],
+): Promise<{ actionId: string }> {
+  return confirmPress(db, mac, input, 'ci_change')
+}
+
+/**
+ * `projectRepo.declineCiChange` — «Не отправлять» (ПР16): the change of build settings of this head
+ * is not sent; nothing waits to be sent until the agent takes those files back.
+ */
+export async function declineCiChange(
+  db: PrismaClient,
+  input: { userId: string; taskId: string },
+): Promise<{ declined: true }> {
+  const { task, repo } = await ownChat(db, input.userId, input.taskId.toLowerCase())
+  if (repo === null) throw repoNothingToPush()
+  const unsent = await unsentBranch(db, task.id)
+  if (unsent === null || !unsent.ciTouched) throw repoNothingToPush()
+  const lint = await ciLintOf(db, task.id, unsent.head.headSha)
+  if (lint === null) throw repoChanged()
+  await db.projectRepoBranch.updateMany({
+    where: { taskId: task.id, projectRepositoryId: repo.id },
+    data: { ciLint: { ...lint, declined: true } },
+  })
+  return { declined: true }
 }

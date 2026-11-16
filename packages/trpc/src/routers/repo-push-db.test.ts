@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 
 import {
   createPrismaClient,
@@ -10,6 +10,7 @@ import {
 import {
   legalDocuments,
   readRepoConfirmToken,
+  repoCiDiffKey,
   type ObjectStorage,
   type SecretStore,
 } from '@repo/domain'
@@ -86,10 +87,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the push of a chat branch (plan 84, 8
     await db.$disconnect()
   })
 
+  // `raditi-artifacts` as core leaves it: the diffs of the build settings (ПР16).
+  const kept = new Map<string, Buffer>()
   const chatContext: ChatContext = {
     appEnv: 'test',
     browser: null,
-    storage: () => ({}) as ObjectStorage,
+    storage: () =>
+      ({
+        get: async (_bucket: string, key: string) => {
+          const bytes = kept.get(key)
+          return bytes
+            ? (async function* () {
+                yield bytes
+              })()
+            : null
+        },
+      }) as unknown as ObjectStorage,
     secrets: () => ({}) as SecretStore,
   }
 
@@ -132,7 +145,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the push of a chat branch (plan 84, 8
   }
 
   /** A project of the user with a connected repository, a chat in it and one card of a turn. */
-  async function fixture(options: { mode?: 'read' | 'write'; ciTouched?: boolean } = {}) {
+  async function fixture(
+    options: { mode?: 'read' | 'write'; ciTouched?: boolean; ciPaths?: object } = {},
+  ) {
     const user = await person()
     const caller = callerOf(user)
     const projectId = v7()
@@ -174,6 +189,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the push of a chat branch (plan 84, 8
         defaultBranch: 'main',
         mode: options.mode ?? 'write',
         mirrorState: 'ready',
+        ...(options.ciPaths ? { ciPaths: options.ciPaths } : {}),
       },
     })
     const task = await db.task.create({
@@ -339,5 +355,150 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the push of a chat branch (plan 84, 8
     expect(await refusal(() => g.caller.projectRepo.preparePush({ taskId: g.task.id }))).toBe(
       'REPO_NOTHING_TO_PUSH',
     )
+  })
+
+  // The card «Агент хочет изменить настройки сборки» (ПР16; slice 84.20).
+  describe('a change of build settings', () => {
+    const ciPatch =
+      'diff --git a/.gitlab-ci.yml b/.gitlab-ci.yml\n--- a/.gitlab-ci.yml\n+++ b/.gitlab-ci.yml\n@@ -1 +1 @@\n-lint: a\n+lint: b\n' +
+      'diff --git a/CODEOWNERS b/CODEOWNERS\n--- /dev/null\n+++ b/CODEOWNERS\n@@ -0,0 +1 @@\n+* @kolos\n'
+    const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
+
+    /** What `git.ci_lint` of core leaves for the head of the chat. */
+    async function linted(f: Awaited<ReturnType<typeof fixture>>, patch = ciPatch) {
+      kept.set(repoCiDiffKey(f.task.id, f.head), Buffer.from(patch))
+      await db.projectRepoBranch.update({
+        where: { taskId: f.task.id },
+        data: {
+          ciDiffSha256: sha256(patch),
+          ciLint: {
+            v: 1,
+            headSha: f.head,
+            fromSha: 'b'.repeat(40),
+            ciDiffSha256: sha256(patch),
+            files: [
+              { path: '.gitlab-ci.yml', additions: 1, deletions: 1 },
+              { path: 'CODEOWNERS', additions: 1, deletions: 0 },
+            ],
+            tooLarge: false,
+            lint: { valid: false, errors: ['jobs:lint script can not be empty'] },
+            includes: [],
+            declined: false,
+          },
+        },
+      })
+    }
+
+    it('is loading until core has read it, then shows the diff and binds the token to it', async () => {
+      const f = await fixture({ ciTouched: true })
+      expect(await f.caller.projectRepo.branch({ taskId: f.task.id })).toMatchObject({
+        ciChange: 'needed',
+      })
+      expect(await f.caller.projectRepo.prepareCiChange({ taskId: f.task.id })).toEqual({
+        state: 'loading',
+      })
+      // Web asks core for the diff and the lint; it never reaches the provider itself.
+      expect(
+        await db.outboxEvent.count({
+          where: {
+            topic: 'git',
+            type: 'git.ci_lint',
+            payload: { equals: { taskId: f.task.id, headSha: f.head } },
+          },
+        }),
+      ).toBe(1)
+      await linted(f)
+      const ready = await f.caller.projectRepo.prepareCiChange({ taskId: f.task.id })
+      if (ready.state !== 'ready') throw new Error('not ready')
+      expect(ready).toMatchObject({
+        branch: f.branch.branch,
+        headSha: f.head,
+        ciDiffSha256: sha256(ciPatch),
+        lint: { valid: false, errors: ['jobs:lint script can not be empty'] },
+        opensMergeRequest: true,
+      })
+      expect(ready.files.map((file) => [file.path, file.additions, file.deletions])).toEqual([
+        ['.gitlab-ci.yml', 1, 1],
+        ['CODEOWNERS', 1, 0],
+      ])
+      expect(ready.files[1]!.diff).toContain('+* @kolos')
+      expect(readRepoConfirmToken(ready.confirmToken, mac, new Date())).toMatchObject({
+        kind: 'ci_change',
+        headSha: f.head,
+        diffSha256: 'd'.repeat(64),
+        ciDiffSha256: sha256(ciPatch),
+      })
+      // «Отправить в ветку» is not the way, and the card's token opens no other press.
+      expect(await refusal(() => f.caller.projectRepo.preparePush({ taskId: f.task.id }))).toBe(
+        'REPO_CI_CHANGE',
+      )
+      const mergeRequest = { title: 'Новое меню', description: '', draft: false, reservedId: null }
+      expect(
+        await refusal(() =>
+          f.caller.projectRepo.confirmPush({ confirmToken: ready.confirmToken, mergeRequest }),
+        ),
+      ).toBe('REPO_CONFIRM_INVALID')
+      const { actionId } = await f.caller.projectRepo.confirmCiChange({
+        confirmToken: ready.confirmToken,
+        mergeRequest,
+      })
+      expect(await db.repoAction.findUniqueOrThrow({ where: { id: actionId } })).toMatchObject({
+        kind: 'ci_push',
+        state: 'queued',
+        createdById: f.user.id,
+      })
+      expect(
+        await db.outboxEvent.count({
+          where: { topic: 'git', type: 'git.action', payload: { equals: { actionId } } },
+        }),
+      ).toBe(1)
+      expect(
+        await refusal(() =>
+          f.caller.projectRepo.confirmCiChange({ confirmToken: ready.confirmToken, mergeRequest }),
+        ),
+      ).toBe('REPO_CONFIRM_USED')
+    })
+
+    it('refuses a diff that is not the one core kept, a declined one, and another project', async () => {
+      const f = await fixture({ ciTouched: true })
+      await linted(f)
+      kept.set(repoCiDiffKey(f.task.id, f.head), Buffer.from(`${ciPatch}+more\n`))
+      expect(await refusal(() => f.caller.projectRepo.prepareCiChange({ taskId: f.task.id }))).toBe(
+        'REPO_CHANGED',
+      )
+      await linted(f)
+      expect(await f.caller.projectRepo.declineCiChange({ taskId: f.task.id })).toEqual({
+        declined: true,
+      })
+      expect(await f.caller.projectRepo.branch({ taskId: f.task.id })).toMatchObject({
+        ciChange: 'declined',
+      })
+      expect(await refusal(() => f.caller.projectRepo.prepareCiChange({ taskId: f.task.id }))).toBe(
+        'REPO_CI_DECLINED',
+      )
+      const stranger = callerOf(await person())
+      expect(await refusal(() => stranger.projectRepo.declineCiChange({ taskId: f.task.id }))).toBe(
+        'NOT_FOUND',
+      )
+
+      // `ci_config_path` on another project: nothing is sent, not even a branch without build paths.
+      const foreign = { v: 1, configPath: null, foreign: true, includes: [] }
+      const g = await fixture({ ciPaths: foreign })
+      expect(await g.caller.projectRepo.branch({ taskId: g.task.id })).toMatchObject({
+        ciChange: 'foreign',
+      })
+      expect(await refusal(() => g.caller.projectRepo.preparePush({ taskId: g.task.id }))).toBe(
+        'REPO_CI_CONFIG_FOREIGN',
+      )
+      const h = await fixture({ ciTouched: true, ciPaths: foreign })
+      expect(await refusal(() => h.caller.projectRepo.prepareCiChange({ taskId: h.task.id }))).toBe(
+        'REPO_CI_CONFIG_FOREIGN',
+      )
+      // A branch without build settings has no such card.
+      const plain = await fixture()
+      expect(
+        await refusal(() => plain.caller.projectRepo.prepareCiChange({ taskId: plain.task.id })),
+      ).toBe('REPO_NOTHING_TO_PUSH')
+    })
   })
 })
