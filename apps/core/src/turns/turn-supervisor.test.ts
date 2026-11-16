@@ -1,5 +1,12 @@
 import { Buffer } from 'node:buffer'
+import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { promisify } from 'node:util'
+import { zstdCompressSync } from 'node:zlib'
 
 import { Logger } from '@nestjs/common'
 import {
@@ -40,8 +47,10 @@ import {
   type TurnExecutor,
   type TurnRestoreSource,
   type TurnResult,
+  HIDDEN_FILE_STUB,
   withoutTurnCredentials,
 } from '@repo/domain'
+import { pack } from 'tar-stream'
 import { createOpencodeDriver } from '@repo/agent-drivers'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { newTurnKeys } from '@repo/turn-keys'
@@ -61,7 +70,12 @@ import { loopbackTransport } from '../testing/runner-loopback.ts'
 import { SandboxRunner } from '../testing/runner-side.ts'
 import { MemoryTurnAssignments } from '../testing/turn-assignments.ts'
 import { MemoryTurnCredentials, testTurnCredentialPolicy } from '../testing/turn-credentials.ts'
+import { startGitWorker, type GitWorkerServer } from '../git-worker/server.ts'
+import { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
+import { GitWorkerClient } from '../git-workspace/worker-client.ts'
 import { LiveTurns } from './live-turns.ts'
+import { TurnPublicationRecovery } from './turn-recovery.ts'
+import { REPO_BUNDLE_TIME } from './turn-repository.ts'
 
 import {
   TurnSupervisor,
@@ -382,10 +396,14 @@ function turnFixture(kind: string) {
     }),
   }
   const assignments = new MemoryTurnAssignments(leases)
-  const executor = executors[kind]!(
-    { sandboxes, parser: () => driver, transport, transfer },
-    { leases, assignments },
-  )
+  // One object both executors keep: a test may give it the import of a bundle.
+  const sandboxSide: LocalTurnExecutorDependencies = {
+    sandboxes,
+    parser: () => driver,
+    transport,
+    transfer,
+  }
+  const executor = executors[kind]!(sandboxSide, { leases, assignments })
   const live = new LiveTurns()
   const credentials = new MemoryTurnCredentials({
     llmApiKey: request.context.llm.apiKey,
@@ -421,6 +439,7 @@ function turnFixture(kind: string) {
     assignments,
     sandboxes,
     transfer,
+    sandboxSide,
     stdout: (value: string) => {
       stdout = value
     },
@@ -1883,9 +1902,10 @@ describe.each(executorKinds)('TurnSupervisor in a chat: no repository (%s execut
     await expect(firstTurn.run()).rejects.toThrow('Only a later turn is rewound')
     expect(firstTurn.leases.acquire).not.toHaveBeenCalled()
 
+    // A turn that needs a repository but names none (docs/plan/84-projects.md, §4.3).
     const repository = fixture()
     repository.request.requirements = { repository: true, browser: false }
-    await expect(repository.run()).rejects.toThrow('A turn has no repository')
+    await expect(repository.run()).rejects.toThrow('A turn has its repository exactly when')
     expect(repository.leases.acquire).not.toHaveBeenCalled()
   })
 
@@ -2083,6 +2103,401 @@ describe.each(executorKinds)(
         message: 'Files of a project need the inbox of core',
       })
       expect(plain.leases.acquire).not.toHaveBeenCalled()
+    })
+  },
+)
+
+// --- A turn with a repository (docs/plan/84-projects.md, ПР12, ПР32, ПР35, §4.3) ------------------
+//
+// Real git in a real git worker over its socket, as git-workspace.service.test.ts: the turn's
+// bundle, its candidate and its publication into the mirror. The sandbox side is the fake above,
+// whose working copy a real clone of the bundle stands in for: its patch and new files are what a
+// capture of the sandbox would take.
+
+const execute = promisify(execFile)
+const gitRoots: string[] = []
+const gitWorkers: GitWorkerServer[] = []
+const gitEnv = (cwd: string) => ({
+  PATH: process.env.PATH,
+  HOME: cwd,
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_AUTHOR_NAME: 'Fixture',
+  GIT_AUTHOR_EMAIL: 'fixture@example.test',
+  GIT_COMMITTER_NAME: 'Fixture',
+  GIT_COMMITTER_EMAIL: 'fixture@example.test',
+})
+const fixtureGit = async (cwd: string, ...args: string[]) =>
+  (await execute('git', args, { cwd, encoding: 'buffer', env: gitEnv(cwd) })).stdout
+
+afterEach(async () => {
+  await Promise.all(gitWorkers.splice(0).map((worker) => worker.close()))
+  await Promise.all(gitRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+})
+
+/** A remote with one commit on main, a fake gitleaks, a worker and the mirror fetched. */
+async function gitFixture(files: Record<string, string>) {
+  const root = await mkdtemp(join(tmpdir(), 'raditi-turn-repo-'))
+  gitRoots.push(root)
+  const remote = join(root, 'remote.git')
+  const work = join(root, 'work')
+  await fixtureGit(root, 'init', '--bare', '--initial-branch=main', remote)
+  await fixtureGit(root, 'init', '--initial-branch=main', work)
+  for (const [name, content] of Object.entries(files)) {
+    await mkdir(join(work, name, '..'), { recursive: true })
+    await writeFile(join(work, name), content)
+  }
+  await fixtureGit(work, 'add', '.')
+  await fixtureGit(work, 'commit', '-m', 'first')
+  await fixtureGit(work, 'push', remote, 'HEAD:refs/heads/main')
+  const baseSha = (await fixtureGit(work, 'rev-parse', 'HEAD')).toString().trim()
+  const scanner = join(root, 'scanner.mjs')
+  await writeFile(
+    scanner,
+    `#!${process.execPath}
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+const args = process.argv.slice(2)
+const data = readdirSync(args[1]).map((name) => readFileSync(join(args[1], name), 'latin1')).join('\\n')
+const finding = Number(args.find((arg) => arg.startsWith('--exit-code='))?.slice(12) ?? 1)
+process.exit(data.includes('synthetic-secret-marker') ? finding : 0)
+`,
+    { mode: 0o700 },
+  )
+  const mirrorDir = join(root, 'mirrors')
+  await mkdir(mirrorDir, { mode: 0o770 })
+  const worker = await startGitWorker({
+    root: mirrorDir,
+    allowLoopback: false,
+    refusedSubnets: [],
+    allowFileProtocol: true,
+    gitleaksBinary: scanner,
+  })
+  gitWorkers.push(worker)
+  const service = new GitWorkspaceService({
+    runner: new GitWorkerClient(worker.socket),
+    mirrorDir,
+    transport: { kind: 'local-test', root },
+  })
+  const projectRepositoryId = '0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2c'
+  await service.fetch({
+    projectRepositoryId,
+    remote: {
+      cloneUrl: remote,
+      access: {
+        auth: { kind: 'anonymous' },
+        basic: null,
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    },
+    branches: ['main'],
+    sizeBytes: null,
+  })
+  return { root, baseSha, service, projectRepositoryId }
+}
+
+async function tarZstOf(files: Record<string, string>) {
+  const stream = pack()
+  for (const [name, content] of Object.entries(files)) stream.entry({ name, mode: 0o644 }, content)
+  stream.finalize()
+  const chunks: Buffer[] = []
+  for await (const chunk of stream) chunks.push(chunk as Buffer)
+  return zstdCompressSync(Buffer.concat(chunks))
+}
+
+const repoChat = 'raditi/chat-000000000000'
+
+/**
+ * A turn of a chat of a project with a repository: its plan names the repository and the bundle
+ * the trusted git builds of it; the sandbox's working copy is a clone of that bundle, changed by
+ * `edit`, and its capture takes the patch and new files of that clone.
+ */
+async function repositoryTurn(
+  kind: string,
+  options: {
+    files?: Record<string, string>
+    hiddenPaths?: string[]
+    edit?: (work: string) => Promise<void>
+    untracked?: Record<string, string>
+  } = {},
+) {
+  const f = turnFixture(kind)
+  const g = await gitFixture(
+    options.files ?? {
+      'index.js': 'hello\n',
+      '.env': 'TOKEN=real-value\n',
+      '.gitlab-ci.yml': 'x\n',
+    },
+  )
+  const hiddenPaths = options.hiddenPaths ?? ['.env']
+  const bundle = await g.service.buildBaseBundle({
+    projectRepositoryId: g.projectRepositoryId,
+    baseSha: g.baseSha,
+    branch: repoChat,
+    committedAt: REPO_BUNDLE_TIME,
+    hiddenPaths,
+  })
+  f.request.requirements = { repository: true, browser: false }
+  f.request.repository = {
+    projectId: '0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b',
+    projectRepositoryId: g.projectRepositoryId,
+    provider: 'gitlab',
+    baseSha: g.baseSha,
+    sandboxBaseSha: bundle.sandboxBaseSha,
+    branch: repoChat,
+    mode: 'write',
+    expectedRef: null,
+    bundleSha256: bundle.sha256,
+    bundleBytes: bundle.sizeBytes,
+    hiddenPaths,
+  }
+  f.deps.repository = g.service
+  // The sandbox: the bundle core served is checked out and changed as the agent would.
+  const imported: Buffer[] = []
+  const work = join(g.root, 'sandbox')
+  f.sandboxSide.importBundle = vi.fn(async (_sandbox, source) => {
+    f.order.push('import')
+    const chunks: Buffer[] = []
+    for await (const chunk of source.read()) chunks.push(Buffer.from(chunk))
+    imported.push(Buffer.concat(chunks))
+    const path = join(g.root, 'base.bundle')
+    await writeFile(path, Buffer.concat(chunks))
+    await fixtureGit(g.root, 'clone', '--quiet', '--branch', 'raditi-base', path, work)
+    await fixtureGit(work, 'checkout', '--quiet', '-b', source.branch)
+    await options.edit?.(work)
+  })
+  const transport = f.transport as typeof f.transport & {
+    captureRepository: Mock<
+      NonNullable<LocalTurnExecutorDependencies['transport']['captureRepository']>
+    >
+  }
+  transport.captureRepository = vi.fn(async (_sandbox, _home, baseSha) => {
+    f.order.push('capture')
+    const patch = await fixtureGit(work, 'diff', '--binary', '--no-renames', baseSha, '--')
+    return {
+      home: Buffer.from('home'),
+      patch: new Uint8Array(patch),
+      untracked: await tarZstOf(options.untracked ?? {}),
+    }
+  })
+  const saved: { metadata: SnapshotMetadata; parts: SnapshotParts<SealedElsewhere> }[] = []
+  f.snapshots.save.mockImplementation(async (metadata, parts) => {
+    f.order.push('save')
+    // At the snapshot the chat's ref is still where it was: the publication comes after it.
+    f.order.push(
+      `ref:${(await g.service.readChatRef(g.projectRepositoryId, labels.taskId)) ?? 'none'}`,
+    )
+    saved.push({ metadata, parts })
+    return {
+      ...metadata,
+      schemaVersion: 1,
+      createdAt: f.request.committedAt,
+      parts: [],
+    } as SnapshotManifest
+  })
+  return { f, g, bundle, imported, saved }
+}
+
+describe.each(executorKinds)(
+  'TurnSupervisor with a repository (%s executor, docs/plan/84-projects.md, ПР12)',
+  { timeout: 60_000 },
+  (kind) => {
+    it('imports the bundle, snapshots the candidate, then publishes it into the chat ref', async () => {
+      const { f, g, bundle, imported, saved } = await repositoryTurn(kind, {
+        edit: async (work) => writeFile(join(work, 'index.js'), 'hello, world\n'),
+        untracked: { 'src/new.js': 'new\n' },
+      })
+      const finished = await f.run()
+      // The bundle the runner or the local executor imported is the one the plan names.
+      expect(imported).toHaveLength(1)
+      expect(createHash('sha256').update(imported[0]!).digest('hex')).toBe(bundle.sha256)
+      const head = finished.repository!.headSha!
+      expect(finished.repository).toMatchObject({ baseSha: g.baseSha, buildPaths: [] })
+      expect(finished.repository!.refusal).toBeUndefined()
+      expect(Buffer.from(finished.repository!.patch).toString()).toContain('+hello, world')
+      expect(Buffer.from(finished.repository!.patch).toString()).toContain('src/new.js')
+      // Snapshot before publication: its git names the candidate, its patch is the candidate's.
+      expect(f.order.indexOf('ref:none')).toBeGreaterThan(-1)
+      expect(saved[0]!.metadata.git).toMatchObject({
+        provider: 'gitlab',
+        branch: repoChat,
+        baseSha: g.baseSha,
+        sandboxBaseSha: bundle.sandboxBaseSha,
+        headSha: head,
+        publication: { taskId: labels.taskId },
+      })
+      expect(Buffer.from(saved[0]!.parts.patch as Uint8Array)).toEqual(
+        Buffer.from(finished.repository!.patch),
+      )
+      const phases = f.evidence.map((entry) => entry.phase)
+      expect(phases.indexOf('checkpointed')).toBeLessThan(phases.indexOf('publishing'))
+      expect(phases.at(-1)).toBe('completed')
+      expect(await g.service.readChatRef(g.projectRepositoryId, labels.taskId)).toBe(head)
+      expect(finished.result.client_message).toBe(result.client_message)
+    })
+
+    it('marks a change of a CI file, and publishes it', async () => {
+      const { f, g } = await repositoryTurn(kind, {
+        edit: async (work) => writeFile(join(work, '.gitlab-ci.yml'), 'changed\n'),
+      })
+      const finished = await f.run()
+      expect(finished.repository!.buildPaths).toEqual(['.gitlab-ci.yml'])
+      expect(await g.service.readChatRef(g.projectRepositoryId, labels.taskId)).toBe(
+        finished.repository!.headSha,
+      )
+    })
+
+    it.each([
+      [
+        'a secret',
+        {
+          edit: async (work: string) =>
+            writeFile(join(work, 'index.js'), 'synthetic-secret-marker\n'),
+        },
+        'secret_found',
+      ],
+      [
+        'a value of a variable',
+        { edit: async (work: string) => writeFile(join(work, 'index.js'), 'client-value-8c1d\n') },
+        'client_value',
+      ],
+      [
+        'a change of a hidden file',
+        { edit: async (work: string) => writeFile(join(work, '.env'), 'TOKEN=other\n') },
+        'failed',
+      ],
+      ['a path under .git', { untracked: { '.git/config': 'x\n' } }, 'failed'],
+    ] as const)(
+      'publishes nothing with %s, and the answer arrives',
+      async (_label, change, refusal) => {
+        const { f, g, saved } = await repositoryTurn(kind, change)
+        f.credentials.siteValues = async () => ['client-value-8c1d']
+        const finished = await f.run()
+        expect(finished.result.client_message).toBe(result.client_message)
+        expect(finished.repository).toMatchObject({ headSha: null, refusal })
+        // The snapshot names the base as its head and no publication; its patch is empty.
+        expect(saved[0]!.metadata.git).toMatchObject({ headSha: g.baseSha })
+        expect(saved[0]!.metadata.git).not.toHaveProperty('publication')
+        expect((saved[0]!.parts.patch as Uint8Array).byteLength).toBe(0)
+        expect(f.evidence.map((entry) => entry.phase)).not.toContain('publishing')
+        expect(await g.service.readChatRef(g.projectRepositoryId, labels.taskId)).toBeNull()
+      },
+    )
+
+    it('gives the sandbox a stub in place of a file that looks like a secret (ПР35)', async () => {
+      const { f, g, bundle } = await repositoryTurn(kind)
+      await f.run()
+      const clone = join(g.root, 'stub-check')
+      const path = join(g.root, 'check.bundle')
+      const chunks: Buffer[] = []
+      for await (const chunk of bundle.read()) chunks.push(Buffer.from(chunk))
+      await writeFile(path, Buffer.concat(chunks))
+      await fixtureGit(g.root, 'clone', '--quiet', '--branch', 'raditi-base', path, clone)
+      expect(await readFile(join(clone, '.env'), 'utf8')).toBe(HIDDEN_FILE_STUB)
+      expect(await readFile(join(clone, 'index.js'), 'utf8')).toBe('hello\n')
+    })
+
+    it('finishes the publication after core died between the snapshot and it', async () => {
+      const { f, g, saved } = await repositoryTurn(kind, {
+        edit: async (work) => writeFile(join(work, 'index.js'), 'after a crash\n'),
+      })
+      // Core dies right after `checkpointed` and the removal: `publishing` is never written.
+      const record = f.journal.record.getMockImplementation()!
+      f.journal.record.mockImplementation(async (entry: TurnEvidence) => {
+        if (entry.phase === 'publishing') throw new Error('core was killed')
+        return record(entry)
+      })
+      await expect(f.run()).rejects.toThrow('core was killed')
+      expect(await g.service.readChatRef(g.projectRepositoryId, labels.taskId)).toBeNull()
+      const [assignment] = await f.assignments.unfinished()
+      expect(assignment).toBeDefined()
+      const snapshot = saved[0]!
+      const loaded = {
+        manifest: {
+          ...snapshot.metadata,
+          schemaVersion: 1 as const,
+          createdAt: f.request.committedAt,
+          parts: [],
+        } as SnapshotManifest,
+        archives: {
+          home: Buffer.from('home'),
+          patch: snapshot.parts.patch as Uint8Array,
+          untracked: snapshot.parts.untracked as Uint8Array,
+        },
+      }
+      f.journal.record.mockImplementation(record)
+      const recovered = await new TurnPublicationRecovery({
+        leases: f.leases,
+        executor: f.deps.executor,
+        assignments: f.assignments,
+        snapshots: { ...f.snapshots, load: vi.fn(async () => loaded) },
+        journal: f.journal,
+        repository: g.service,
+      }).recover({
+        assignmentId: assignment!.id,
+        heldFence: assignment!.fence,
+        snapshot: {
+          workspaceId: labels.workspaceId,
+          sessionId: labels.sessionId,
+          turn: 1,
+          image,
+          driver: { id: sampleDriverId, version: '1.0.0' },
+          home,
+        },
+        plan: assignment!.plan,
+        removal: 'expired',
+        remainingMs: 0,
+        labels: { ...labels, leaseEpoch: 1 },
+      })
+      expect(recovered.headSha).toBe(snapshot.metadata.git!.headSha)
+      expect(await g.service.readChatRef(g.projectRepositoryId, labels.taskId)).toBe(
+        snapshot.metadata.git!.headSha,
+      )
+      expect(f.evidence.map((entry) => entry.phase)).toContain('publication_recovered')
+    })
+
+    it('restores a checkpoint without a repository only when the plan says the repository came (ПР32)', async () => {
+      const first = await repositoryTurn(kind)
+      const previous = {
+        workspaceId: labels.workspaceId,
+        sessionId: labels.sessionId,
+        turn: 1,
+        image,
+        driver: { id: sampleDriverId, version: '1.0.0' },
+        home,
+      }
+      const asSecond = (f: Fixture) => {
+        f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+        f.request.context = { ...f.request.context, turn: 2 }
+        f.request.previous = previous
+        f.snapshots.restoreSource.mockResolvedValue({
+          manifest: {
+            ...previous,
+            schemaVersion: 1,
+            createdAt: f.request.committedAt,
+            parts: [],
+          } as unknown as SnapshotManifest,
+          parts: {
+            home: {
+              method: 'GET',
+              url: 'https://s3.invalid/home',
+              headers: {},
+              expiresAt: new Date(Date.now() + 60_000),
+            },
+          },
+          dataKey: async () => new Uint8Array(32),
+        })
+      }
+      asSecond(first.f)
+      await expect(first.f.run()).rejects.toThrow('Previous checkpoint differs from the repository')
+      const second = await repositoryTurn(kind)
+      asSecond(second.f)
+      second.f.request.repository = { ...second.f.request.repository!, repositoryChanged: true }
+      // Past the check: the turn goes on to its prepare, which this fake checkpoint then fails.
+      await expect(second.f.run()).rejects.not.toThrow('Previous checkpoint differs')
+      // The dry run and the driver's own prepare: the checkpoint was let through.
+      expect(second.f.order.filter((step) => step === 'prepare')).toHaveLength(2)
+      expect(first.f.order.filter((step) => step === 'prepare')).toHaveLength(1)
     })
   },
 )

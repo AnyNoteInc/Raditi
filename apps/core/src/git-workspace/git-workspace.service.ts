@@ -9,10 +9,14 @@ import {
   envValueBytes,
   envValueInChange,
   forbidden,
+  HIDDEN_FILE_STUB,
+  HIDDEN_PATHS_LIMIT,
+  isSecretFileName,
   isDomainError,
   mirrorLimits,
   notFound,
   publicationChangeOf,
+  publicationForbidden,
   publicationLimits,
   publicationSecret,
   publicationShaSchema,
@@ -99,6 +103,11 @@ export interface RepoBundleInput {
   branch: string
   /** The trusted time of the turn: the root commit is the same for the same input. */
   committedAt: string
+  /**
+   * Files of `baseSha` the sandbox gets as a stub (docs/plan/84-projects.md, ПР35): those that
+   * look like a secret. A path the tree has not, or not as a regular file, is left as it is.
+   */
+  hiddenPaths?: readonly string[]
 }
 
 export interface RepoCandidate {
@@ -148,6 +157,18 @@ export const scanCopy = (blob: Buffer): Buffer => Buffer.concat([SCAN_PREFIX, bl
 
 const failed = () =>
   new DomainError('GIT_OPERATION_FAILED', 'Trusted repository operation failed', 502)
+
+/** The agent changed a file the sandbox held as a stub (ПР35): its change is never kept. */
+const hiddenChanged = () =>
+  publicationForbidden('Publication changes a file hidden from the sandbox')
+
+/** A hidden path as the scan or the name rule gives it: relative, no `..`, no control bytes. */
+const isPublicationPathLike = (path: string): boolean =>
+  typeof path === 'string' &&
+  path.length > 0 &&
+  !path.startsWith('/') &&
+  !path.split('/').some((part) => part === '' || part === '.' || part === '..') &&
+  ![...path].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)
 
 /** The platform's bot: the author and committer of every trusted commit, at a fixed instant. */
 const botIdentity = (at: string) => {
@@ -360,6 +381,33 @@ export class GitWorkspaceService {
   }
 
   /**
+   * The files of the tree of `sha` a sandbox never gets (ПР35): those whose name looks like a
+   * secret (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `*.p12`) and those gitleaks flags. Paths only. A
+   * tree with more of them than one sandbox may hide is refused (REPOSITORY_UNSUPPORTED).
+   */
+  async hiddenFiles(projectRepositoryId: string, sha: string): Promise<string[]> {
+    if (!publicationShaSchema.safeParse(sha).success) throw badRequest('Invalid repository head')
+    const mirror = mirrorPath(this.#root, projectRepositoryId)
+    const named = await this.#mirrors.run(mirror, () =>
+      this.operation(async (op) => {
+        await this.privateRepository(op, mirror, sha)
+        const listing = await this.git(op, ['ls-tree', '-rz', '--full-tree', '--name-only', sha], {
+          maxBytes: listBytes(publicationLimits.repositoryFiles),
+        })
+        return text(listing.stdout)
+          .replace(/\0$/, '')
+          .split('\0')
+          .filter((path) => path !== '' && isSecretFileName(path))
+      }),
+    )
+    const found = await this.findSecrets(projectRepositoryId, sha, HIDDEN_PATHS_LIMIT)
+    const hidden = [...new Set([...named, ...found])].sort()
+    if (hidden.length > HIDDEN_PATHS_LIMIT)
+      throw repositoryUnsupported('Too many files of the repository look like secrets')
+    return hidden
+  }
+
+  /**
    * The base of a turn (ПР12): one root commit of the tree of `baseSha`, without a parent, made by
    * the bot at `committedAt`, in a bundle with the single ref `refs/heads/raditi-base`. The commit
    * must be in the mirror of this very repository — the mirror is checked before the cache, and
@@ -377,9 +425,7 @@ export class GitWorkspaceService {
       this.operation(async (op) => {
         await this.privateRepository(op, mirror, input.baseSha)
         await this.checkTree(op, input.baseSha)
-        const tree = this.sha(
-          (await this.git(op, ['rev-parse', '--verify', `${input.baseSha}^{tree}`])).stdout,
-        )
+        const tree = await this.sandboxTree(op, input.baseSha, input.hiddenPaths ?? [])
         const head = this.sha(
           (
             await this.git(op, ['commit-tree', tree], {
@@ -432,6 +478,8 @@ export class GitWorkspaceService {
       untracked: Uint8Array
       credentials: readonly string[]
       refusedValues?: readonly string[]
+      /** The files the sandbox held as a stub (ПР35): a change of one is refused. */
+      hiddenPaths?: readonly string[]
     },
   ): Promise<RepoCandidate> {
     const {
@@ -439,8 +487,10 @@ export class GitWorkspaceService {
       untracked: rawUntracked,
       credentials: rawCredentials,
       refusedValues = [],
+      hiddenPaths = [],
       ...rest
     } = input
+    const hidden = new Set(hiddenPaths)
     const parsed = repoPublicationSchema.safeParse(rest)
     if (!parsed.success) throw badRequest('Invalid publication metadata')
     const metadata = parsed.data
@@ -463,13 +513,15 @@ export class GitWorkspaceService {
     const files = await untrackedFiles(Buffer.from(rawUntracked))
     if (files.length > publicationLimits.files)
       throw publicationTooLarge('Publication changes too many files')
-    for (const file of files)
+    for (const file of files) {
       publicationChangeOf({
         path: file.path,
         oldMode: '000000',
         newMode: file.mode,
         sizeBytes: file.bytes.byteLength,
       })
+      if (hidden.has(file.path)) throw hiddenChanged()
+    }
     const mirror = mirrorPath(this.#root, metadata.projectRepositoryId)
     const op = await this.#mirrors.run(mirror, async () => {
       const created = await this.newOperation()
@@ -489,7 +541,9 @@ export class GitWorkspaceService {
         if (/\b(?:120000|160000)\b|mode change |^ (?:copy|rename) /m.test(headers))
           throw turnOutputRejected('Publication contains a link, submodule or permission change')
         const stats = await this.apply(op, ['--numstat', '-z'], patch)
-        const patched = this.checkNumstat(stats.stdout)
+        const patchedPaths = this.checkNumstat(stats.stdout)
+        if ([...patchedPaths].some((path) => hidden.has(path))) throw hiddenChanged()
+        const patched = patchedPaths.size
         if (patched + files.length > publicationLimits.files)
           throw publicationTooLarge('Publication changes too many files')
         await this.checkPostimages(op, patch)
@@ -569,6 +623,34 @@ export class GitWorkspaceService {
   }
 
   // --- the steps -------------------------------------------------------------------------
+
+  /**
+   * The tree a sandbox gets of `baseSha` (ПР35): the same, but each hidden file a regular file of
+   * HIDDEN_FILE_STUB. Built in the index of the operation, never on a disk.
+   */
+  private async sandboxTree(
+    op: Operation,
+    baseSha: string,
+    hiddenPaths: readonly string[],
+  ): Promise<string> {
+    if (!hiddenPaths.length)
+      return this.sha((await this.git(op, ['rev-parse', '--verify', `${baseSha}^{tree}`])).stdout)
+    if (hiddenPaths.length > publicationLimits.files || !hiddenPaths.every(isPublicationPathLike))
+      throw badRequest('Invalid hidden paths')
+    await this.git(op, ['read-tree', baseSha])
+    const index = await this.index(op)
+    const hidden = [...new Set(hiddenPaths)].filter((path) => {
+      const entry = index.get(path)
+      return entry !== undefined && (entry.mode === '100644' || entry.mode === '100755')
+    })
+    if (hidden.length) {
+      const [stub] = await this.hashBlobs(op, [Buffer.from(HIDDEN_FILE_STUB)])
+      await this.git(op, ['update-index', '-z', '--index-info'], {
+        input: Buffer.from(hidden.map((path) => `100644 ${stub}\t${path}\0`).join('')),
+      })
+    }
+    return this.sha((await this.git(op, ['write-tree'])).stdout)
+  }
 
   /** The commit in the mirror under the chat's ref: by CAS against `expectedRef`, after the fence. */
   private async publish(
@@ -851,8 +933,8 @@ export class GitWorkspaceService {
     })
   }
 
-  /** Returns the number of paths the patch changes. */
-  private checkNumstat(output: Uint8Array): number {
+  /** Returns the paths the patch changes. */
+  private checkNumstat(output: Uint8Array): Set<string> {
     const raw = text(output, () => turnOutputRejected('Invalid patch statistics'))
     if (raw && !raw.endsWith('\0')) throw turnOutputRejected('Invalid patch statistics')
     const paths = new Set<string>()
@@ -865,7 +947,7 @@ export class GitWorkspaceService {
       paths.add(match[1]!)
       publicationChangeOf({ path: match[1]!, oldMode: '000000', newMode: '000000', sizeBytes: 0 })
     }
-    return paths.size
+    return paths
   }
 
   /**

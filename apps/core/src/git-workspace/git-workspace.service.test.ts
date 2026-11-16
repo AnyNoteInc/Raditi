@@ -6,7 +6,12 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { zstdCompressSync } from 'node:zlib'
 
-import { isSnapshotCredential, type IssuedGitAccess, type TurnBundleSource } from '@repo/domain'
+import {
+  HIDDEN_FILE_STUB,
+  isSnapshotCredential,
+  type IssuedGitAccess,
+  type TurnBundleSource,
+} from '@repo/domain'
 import { bundleHead } from '@repo/local-turns'
 import { pack } from 'tar-stream'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -531,6 +536,75 @@ describe('GitWorkspaceService', { timeout: 60_000 }, () => {
         await expect(f.service.findSecrets(randomUUID(), f.baseSha)).rejects.toMatchObject({
           code: 'NOT_FOUND',
         })
+      })
+    })
+
+    // docs/plan/84-projects.md, ПР35 (slice 84.18).
+    describe('hidden files', () => {
+      it('hides files named like a secret and those gitleaks flags', async () => {
+        const f = await fixture({
+          files: {
+            'index.js': 'hello\n',
+            '.env': 'A=1\n',
+            'deploy/server.pem': 'cert\n',
+            'src/keys.ts': 'export const k = "synthetic-secret-marker"\n',
+          },
+        })
+        await f.fetchMain()
+        expect(await f.service.hiddenFiles(f.projectRepositoryId, f.baseSha)).toEqual([
+          '.env',
+          'deploy/server.pem',
+          'src/keys.ts',
+        ])
+      })
+
+      it('stubs them in the sandbox tree and refuses a change of one', async () => {
+        const f = await fixture({ files: { 'index.js': 'hello\n', '.env': 'A=1\n' } })
+        await f.fetchMain()
+        const bundle = await f.service.buildBaseBundle({
+          projectRepositoryId: f.projectRepositoryId,
+          baseSha: f.baseSha,
+          branch: 'raditi/chat-1',
+          committedAt: '2000-01-01T00:00:00.000Z',
+          hiddenPaths: ['.env', 'missing.key'],
+        })
+        const work = await checkout(f.root, bundle)
+        expect(await readFile(join(work, '.env'), 'utf8')).toBe(HIDDEN_FILE_STUB)
+        // The same tree and time give the same commit: the bundle comes from the cache.
+        const again = await f.service.buildBaseBundle({
+          projectRepositoryId: f.projectRepositoryId,
+          baseSha: f.baseSha,
+          branch: 'raditi/chat-2',
+          committedAt: '2000-01-01T00:00:00.000Z',
+          hiddenPaths: ['.env'],
+        })
+        expect(again.sandboxBaseSha).toBe(bundle.sandboxBaseSha)
+        const changed = async (edit: (work: string) => Promise<void>, untracked?: Uint8Array) => {
+          await edit(work)
+          const patch = await git(work, 'diff', '--binary', '--no-renames', bundle.sandboxBaseSha)
+          const candidate = f.service.preparePublication({
+            projectRepositoryId: f.projectRepositoryId,
+            baseSha: f.baseSha,
+            ...turn(randomUUID()),
+            expectedRef: null,
+            patch,
+            untracked: untracked ?? emptyUntrackedArchive(),
+            credentials: [],
+            hiddenPaths: ['.env'],
+          })
+          await git(work, 'checkout', '--', '.')
+          return candidate
+        }
+        await expect(
+          changed(async (w) => writeFile(join(w, '.env'), 'B=2\n')),
+        ).rejects.toMatchObject({ code: 'PUBLICATION_FORBIDDEN' })
+        await expect(changed(async (w) => rm(join(w, '.env')))).rejects.toMatchObject({
+          code: 'PUBLICATION_FORBIDDEN',
+        })
+        // A change of another file lands on the real base: the hidden file keeps its value there.
+        const kept = await changed(async (w) => writeFile(join(w, 'index.js'), 'changed\n'))
+        candidates.push(kept)
+        expect(Buffer.from(kept.patch).toString()).not.toContain('.env')
       })
     })
   })

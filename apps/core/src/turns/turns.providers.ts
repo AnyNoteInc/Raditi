@@ -32,6 +32,8 @@ import { TurnRuntime } from './turn-runtime.ts'
 import { TurnSupervisor } from './turn-supervisor.ts'
 import { TURN_EXECUTOR, WARM_SANDBOXES } from './turns.tokens.ts'
 import { CoreWarmSandboxes } from './warm-turn-sandboxes.ts'
+import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
+import { GIT_WORKSPACE } from '../git-workspace/git-workspace.tokens.ts'
 
 type RecoveryAssignments = ConstructorParameters<typeof TurnExecRecovery>[0]['assignments']
 
@@ -101,6 +103,7 @@ export const turnEngineProviders: Provider[] = [
       credentials: TurnCredentialSource,
       prisma: PrismaClient,
       storage: ObjectStorage,
+      repository: GitWorkspaceService | null,
     ): TurnSupervisor | null => {
       const [driver] = drivers.list()
       if (!driver) return null
@@ -115,6 +118,8 @@ export const turnEngineProviders: Provider[] = [
         credentials,
         inbox: new TaskInboxFiles(prisma, storage),
         projectFiles: new TaskProjectFiles(prisma, storage),
+        // The trusted git of the repositories of projects (docs/plan/84-projects.md, ПР12).
+        repository,
       })
     },
     inject: [
@@ -128,6 +133,7 @@ export const turnEngineProviders: Provider[] = [
       TURN_CREDENTIALS,
       PRISMA,
       OBJECT_STORAGE,
+      { token: GIT_WORKSPACE, optional: true },
     ],
   },
   {
@@ -141,11 +147,13 @@ export const turnEngineProviders: Provider[] = [
       drivers: AgentDriverRegistry,
       live: LiveTurns,
       credentials: TurnCredentialSource,
+      repository: GitWorkspaceService | null,
     ): TurnExecRecovery =>
       new TurnExecRecovery({
         leases,
         assignments,
         executor,
+        repository,
         journal,
         driver: (id) => drivers.get(id),
         snapshots,
@@ -161,6 +169,7 @@ export const turnEngineProviders: Provider[] = [
       AGENT_DRIVERS,
       LiveTurns,
       TURN_CREDENTIALS,
+      { token: GIT_WORKSPACE, optional: true },
     ],
   },
   {
