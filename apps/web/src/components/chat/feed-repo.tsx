@@ -23,12 +23,14 @@ import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
 import { callErrorText } from './call-error'
+import { CiChangeCard, CiChangeNote } from './feed-repo-ci'
 
 // The chat's branch in the repository of its project (docs/plan/84-projects.md, ПР13, ПР14, ПР26;
 // P-chat): the card «Изменения в ветке» — the branch, «N файлов · +A −D», up to ten files,
 // «Посмотреть изменения» and «Открыть запрос на слияние» or «Отправить в ветку»; the agent's
 // proposal of a merge request; what a press did. Nothing reaches the client's repository but by a
-// press: the card asks for a token bound to what it shows, and core checks it again.
+// press: the card asks for a token bound to what it shows, and core checks it again. A change of
+// build settings has its own card under it (feed-repo-ci.tsx, ПР16).
 
 export const repoCardText = Object.freeze({
   title: 'Изменения в ветке',
@@ -335,7 +337,12 @@ export function FeedRepoChanges({
         ) : null}
       </Box>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
-        {taskId && current && view?.canPush && !view.sent && !pressing ? (
+        {taskId &&
+        current &&
+        view?.canPush &&
+        !view.sent &&
+        !pressing &&
+        view.ciChange === 'none' ? (
           <PushButton
             taskId={taskId}
             label={view.mergeRequest ? repoCardText.push : repoCardText.openMergeRequest}
@@ -358,6 +365,14 @@ export function FeedRepoChanges({
           </Link>
         ) : null}
       </Box>
+      {/* Build settings go only by their own card (ПР16). */}
+      {taskId && current && view?.canPush && !view.sent && !pressing ? (
+        view.ciChange === 'needed' ? (
+          <CiChangeCard taskId={taskId} />
+        ) : view.ciChange === 'declined' || view.ciChange === 'foreign' ? (
+          <CiChangeNote state={view.ciChange} />
+        ) : null
+      ) : null}
     </Box>
   )
 }
@@ -385,7 +400,12 @@ export function FeedRepoProposal({
           {description}
         </Typography>
       ) : null}
-      {taskId && view?.canPush && !view.sent && !view.mergeRequest && !pressing ? (
+      {taskId &&
+      view?.canPush &&
+      !view.sent &&
+      !view.mergeRequest &&
+      !pressing &&
+      view.ciChange === 'none' ? (
         <Box>
           <PushButton taskId={taskId} label={repoCardText.openMergeRequest} />
         </Box>

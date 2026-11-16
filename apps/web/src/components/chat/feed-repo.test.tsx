@@ -17,6 +17,9 @@ const calls = vi.hoisted(() => ({
   branch: vi.fn<() => Promise<unknown>>(),
   prepare: vi.fn<(input: unknown) => Promise<unknown>>(),
   confirm: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({ actionId: 'a' })),
+  prepareCi: vi.fn<(input: unknown) => Promise<unknown>>(),
+  confirmCi: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({ actionId: 'c' })),
+  declineCi: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({ declined: true })),
   diff: vi.fn(async () => ({
     patch: 'diff --git a/menu.html b/menu.html\n+зима\n',
     truncated: false,
@@ -35,6 +38,9 @@ vi.mock('@/trpc/client', () => ({
       },
       preparePush: { mutationOptions: () => ({ mutationFn: calls.prepare }) },
       confirmPush: { mutationOptions: () => ({ mutationFn: calls.confirm }) },
+      prepareCiChange: { mutationOptions: () => ({ mutationFn: calls.prepareCi }) },
+      confirmCiChange: { mutationOptions: () => ({ mutationFn: calls.confirmCi }) },
+      declineCiChange: { mutationOptions: () => ({ mutationFn: calls.declineCi }) },
     },
   }),
 }))
@@ -71,6 +77,7 @@ const view = (over: Record<string, unknown> = {}) => ({
   headSha: HEAD,
   sent: false,
   canPush: true,
+  ciChange: 'none',
   mergeRequest: null,
   lastAction: null,
   ...over,
@@ -154,5 +161,80 @@ describe('the card «Изменения в ветке» (plan 84, 84.19)', () =>
     expect(screen.getByText(/ветку изменили в репозитории/)).toBeTruthy()
     expect(repoErrorText('SOMETHING_ELSE')).toBe('Не получилось — попробуйте ещё раз.')
     expect(statLine({ files: 1, additions: 2, deletions: 0 })).toBe('1 файл · +2 −0')
+  })
+})
+
+// docs/plan/84-projects.md, ПР16 (slice 84.20): P-chat-merge, the lower card.
+describe('the card «Агент хочет изменить настройки сборки» (plan 84, 84.20)', () => {
+  const ready = {
+    state: 'ready',
+    branch: row.branch,
+    headSha: HEAD,
+    files: [
+      {
+        path: '.gitlab-ci.yml',
+        additions: 3,
+        deletions: 1,
+        diff: 'diff --git a/.gitlab-ci.yml b/.gitlab-ci.yml\n-  script: npm run lint\n+  script:\n',
+      },
+    ],
+    ciDiffSha256: 'e'.repeat(64),
+    lint: { valid: false, errors: ['jobs:lint script can not be empty'] },
+    opensMergeRequest: true,
+    proposal: { title: 'Зимнее меню', description: 'Цены', draft: false, reservedId: null },
+    confirmToken: 'token-of-the-ci-card',
+    expiresAt: new Date(),
+  }
+
+  it('offers no «Отправить в ветку»; waits for core, then shows the diff and sends by the card', async () => {
+    calls.branch.mockResolvedValue(view({ ciChange: 'needed' }))
+    calls.prepareCi.mockResolvedValueOnce({ state: 'loading' }).mockResolvedValue(ready)
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    await screen.findByText('Агент хочет изменить настройки сборки')
+    expect(screen.queryByRole('button', { name: 'Открыть запрос на слияние' })).toBeNull()
+    expect(await screen.findByText('Проверяем изменение настроек сборки…')).toBeTruthy()
+    await screen.findByText('.gitlab-ci.yml', {}, { timeout: 4000 })
+    expect(screen.getByText('+3 −1')).toBeTruthy()
+    expect(screen.getByText(/script: npm run lint/)).toBeTruthy()
+    expect(screen.getByText('jobs:lint script can not be empty')).toBeTruthy()
+    expect(screen.getByText('Откроется запрос на слияние «Зимнее меню».')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Разрешить и отправить' }))
+    await waitFor(() =>
+      expect(calls.confirmCi).toHaveBeenCalledWith(
+        {
+          confirmToken: 'token-of-the-ci-card',
+          mergeRequest: {
+            title: 'Зимнее меню',
+            description: 'Цены',
+            draft: false,
+            reservedId: null,
+          },
+        },
+        expect.anything(),
+      ),
+    )
+    expect(calls.confirm).not.toHaveBeenCalled()
+  })
+
+  it('«Не отправлять» declines it; a declined change and a configuration elsewhere are said', async () => {
+    calls.branch.mockResolvedValue(view({ ciChange: 'needed' }))
+    calls.prepareCi.mockResolvedValue(ready)
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Не отправлять' }))
+    await waitFor(() =>
+      expect(calls.declineCi).toHaveBeenCalledWith({ taskId: TASK }, expect.anything()),
+    )
+    cleanup()
+    for (const [state, words] of [
+      ['declined', /Вы не разрешили изменить настройки сборки/],
+      ['foreign', /лежат в другом репозитории/],
+    ] as const) {
+      calls.branch.mockResolvedValue(view({ ciChange: state }))
+      wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+      expect(await screen.findByText(words)).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Разрешить и отправить' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Открыть запрос на слияние' })).toBeNull()
+      cleanup()
+    }
   })
 })
