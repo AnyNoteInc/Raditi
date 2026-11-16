@@ -32,6 +32,8 @@ export const mergeCardText = Object.freeze({
   now: 'Принять в основную ветку',
   whenGreen: 'Принять, когда сборка пройдёт',
   later: 'Не сейчас',
+  /** The card folded by «Не сейчас» (ревью P15): one press opens it again. */
+  unfold: 'Принять запрос в основную ветку…',
   open: 'Открыть запрос',
   loading: 'Готовим карточку…',
   again: 'Обновить карточку',
@@ -97,7 +99,22 @@ export function MergeCard({
     void queryClient.invalidateQueries({ queryKey: trpc.projectRepo.branch.queryKey({ taskId }) })
   }
 
-  if (hidden) return null
+  if (hidden)
+    return (
+      <Box>
+        <Button
+          size="small"
+          color="inherit"
+          onClick={() => {
+            setHidden(false)
+            setRound((value) => value + 1)
+          }}
+          sx={{ minHeight: 44 }}
+        >
+          {mergeCardText.unfold}
+        </Button>
+      </Box>
+    )
   const busy = confirm.isPending
   return (
     <Box

@@ -367,6 +367,16 @@ describe('the card «Принять запрос в основную ветку�
     )
   })
 
+  it('«Не сейчас» folds the card into one button that opens it again (ревью P15)', async () => {
+    calls.branch.mockResolvedValue(view({ sent: true, state: 'pushed', mergeRequest: openRequest }))
+    calls.prepareMerge.mockResolvedValue(prepared)
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Не сейчас' }))
+    expect(screen.queryByText('Принять запрос в основную ветку main?')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Принять запрос в основную ветку…' }))
+    expect(await screen.findByText('Принять запрос в основную ветку main?')).toBeTruthy()
+  })
+
   it('«Принять, когда сборка пройдёт» only where the provider waits for the build', async () => {
     calls.branch.mockResolvedValue(view({ sent: true, state: 'pushed', mergeRequest: openRequest }))
     calls.prepareMerge.mockResolvedValue({ ...prepared, whenGreen: false })
