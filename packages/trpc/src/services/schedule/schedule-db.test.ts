@@ -1,4 +1,4 @@
-import { randomInt, randomUUID } from 'node:crypto'
+import { createHmac, randomInt, randomUUID } from 'node:crypto'
 
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { placeReserve, settleTaskCharge, underPrivateCreditRate } from '@repo/billing/testing'
@@ -39,6 +39,8 @@ const requiredConsents = legalDocuments.flatMap((document) =>
 )
 const VAPID = 'B'.repeat(87)
 const HOUR = 3_600_000
+const SECRET = 'synthetic-repo-confirm-secret-of-the-schedule-test'
+const mac = (material: string) => createHmac('sha256', SECRET).update(material).digest('base64url')
 
 /** Vault as `sites-writer` and `workspace-provisioner` see it; `failing` — Transit refuses. */
 function memoryVault() {
@@ -167,6 +169,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     await db.creditHold.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
     await db.task.deleteMany({ where: owned })
+    await db.projectRepository.deleteMany({ where: owned })
+    await db.gitConnection.deleteMany({ where: owned })
+    await db.credentialRef.deleteMany({ where: owned })
+    await db.project.deleteMany({ where: owned })
     await db.auditLog.deleteMany({ where: owned })
     await db.workspace.deleteMany({ where: { id: owned.workspaceId } })
     await db.user.deleteMany({ where: { id: { in: users } } })
@@ -246,6 +252,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       },
       billing: null,
       chat,
+      git: {
+        appEnv: 'test',
+        secrets: { kvWrite: async () => ({ version: 1 }), kvMetadata: async () => null },
+        checkHost: async () => {},
+        gitlabComConfigured: false,
+        confirmMac: mac,
+      },
     })
   }
 
@@ -897,6 +910,217 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
       // Another user reads none of them.
       await expect(readChatNotification(db, (await person()).id, paused.id)).rejects.toMatchObject({
         code: 'NOT_FOUND',
+      })
+    })
+  })
+
+  describe('the tasks of a project (docs/plan/84-projects.md, ПР19)', () => {
+    /** A project of the client; `connection` — its repository by a connection in that state. */
+    async function projectOf(
+      owner: User,
+      options: { connection?: 'ok' | 'reauth_needed' } = {},
+    ): Promise<string> {
+      const projectId = deterministicUuidV7('schedule-project', randomUUID(), new Date())
+      await callerOf(owner).project.create({ projectId, name: 'Сайт пекарни' })
+      if (options.connection) {
+        const { workspaceId } = await db.project.findUniqueOrThrow({ where: { id: projectId } })
+        const connectionId = randomUUID()
+        const ref = await db.credentialRef.create({
+          data: {
+            workspaceId,
+            kind: 'git_connection',
+            vaultPath: `kv/workspaces/${workspaceId}/git/${connectionId}`,
+          },
+        })
+        await db.gitConnection.create({
+          data: {
+            id: connectionId,
+            workspaceId,
+            createdById: owner.id,
+            kind: 'gitlab_token',
+            host: 'gitlab.example.ru',
+            accountLogin: 'kolos',
+            accountId: `acc-${connectionId.slice(0, 8)}`,
+            credentialRefId: ref.id,
+            state: options.connection,
+          },
+        })
+        await db.projectRepository.create({
+          data: {
+            id: randomUUID(),
+            projectId,
+            workspaceId,
+            connectionId,
+            provider: 'gitlab',
+            host: 'gitlab.example.ru',
+            providerRepoId: '42',
+            path: 'kolos/site',
+            webUrl: 'https://gitlab.example.ru/kolos/site',
+            defaultBranch: 'main',
+            mode: 'write',
+            mirrorState: 'ready',
+          },
+        })
+      }
+      return projectId
+    }
+
+    /** A task of the project and a run of its schedule, as the tick writes them. */
+    async function projectRun(owner: User, projectId: string) {
+      const task = await callerOf(owner).schedule.create({
+        name: 'Сводка запросов',
+        instructions: 'Пришли сводку открытых запросов на слияние',
+        effort: 'low',
+        triggers: [{ kind: 'daily', time: '09:00' }],
+        timezone: 'Europe/Moscow',
+        projectId,
+      })
+      const run = await db.scheduledRun.create({
+        data: {
+          scheduledTaskId: task.id,
+          dueAt: new Date(Math.floor(Date.now() / 60_000) * 60_000),
+          trigger: 'schedule',
+          status: 'pending',
+          name: task.name,
+          instructions: task.instructions,
+          effort: task.effort,
+          projectId,
+        },
+      })
+      return { task, run }
+    }
+
+    it('lists a task of a project with it, by the project, and stops it with «В архив»', async () => {
+      const { owner } = await newClient()
+      const caller = callerOf(owner)
+      const projectId = await projectOf(owner)
+      const { task } = await projectRun(owner, projectId)
+      expect(task.project).toEqual({ id: projectId, name: 'Сайт пекарни', gone: false })
+      await caller.schedule.create({
+        name: 'Курс валют',
+        instructions: 'Пришли курс доллара',
+        triggers: [],
+        timezone: 'Europe/Moscow',
+      })
+      expect((await caller.schedule.list({ projectId })).schedules.map((s) => s.id)).toEqual([
+        task.id,
+      ])
+      expect((await caller.schedule.list({ projectId: null })).schedules).toHaveLength(1)
+      expect((await caller.schedule.list()).schedules).toHaveLength(2)
+
+      await caller.project.archive({ projectId, archived: true })
+      const [archived] = (await caller.schedule.list({ projectId })).schedules
+      expect(archived).toMatchObject({
+        enabled: false,
+        pausedReason: 'project_gone',
+        project: { id: projectId, gone: true },
+      })
+      await expect(
+        caller.schedule.setEnabled({ scheduleId: task.id, enabled: true }),
+      ).rejects.toMatchObject({
+        message: 'Проект задачи в архиве или удалён — верните его, чтобы включить задачу',
+      })
+      // A task cannot be set up in a project of «Архив», nor in another's.
+      await expect(
+        caller.schedule.create({
+          name: 'Ещё',
+          instructions: 'Пришли сводку',
+          triggers: [],
+          timezone: 'Europe/Moscow',
+          projectId,
+        }),
+      ).rejects.toMatchObject({ cause: { code: 'SCHEDULE_PROJECT_GONE' } })
+    })
+
+    it('pauses the tasks of a project put into the trash', async () => {
+      const { owner } = await newClient()
+      const caller = callerOf(owner)
+      const projectId = await projectOf(owner)
+      const { task } = await projectRun(owner, projectId)
+      await caller.project.remove({ projectId })
+      expect(
+        (await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).pausedReason,
+      ).toBe('project_gone')
+    })
+
+    it('starts a run as a new chat of the project of the run', async () => {
+      const { owner } = await newClient()
+      const projectId = await projectOf(owner)
+      const { run } = await projectRun(owner, projectId)
+      const answer = await start(run.id)
+      const taskId = scheduledChatId(run)
+      expect(answer).toEqual({ outcome: 'started', taskId })
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        projectId,
+        title: 'Сводка запросов',
+        titleSource: 'client',
+      })
+    })
+
+    it('refuses a run of a project put away, and stops its task at once', async () => {
+      const { owner } = await newClient()
+      const projectId = await projectOf(owner)
+      const { task, run } = await projectRun(owner, projectId)
+      // Put away after the run was written: as if a race with the tick.
+      await db.project.update({ where: { id: projectId }, data: { archivedAt: new Date() } })
+      expect(await start(run.id)).toEqual({ outcome: 'refused', reason: 'project_gone' })
+      expect(await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({
+        enabled: false,
+        pausedReason: 'project_gone',
+      })
+      expect(await db.task.count({ where: { id: scheduledChatId(run) } })).toBe(0)
+    })
+
+    it('refuses a run while the sign-in with GitLab has to be renewed', async () => {
+      const { owner } = await newClient()
+      const projectId = await projectOf(owner, { connection: 'reauth_needed' })
+      const { task, run } = await projectRun(owner, projectId)
+      expect(await start(run.id)).toEqual({ outcome: 'refused', reason: 'project_unavailable' })
+      expect(await db.scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({
+        enabled: true,
+        refusalStreak: 1,
+        lastRefusalReason: 'project_unavailable',
+      })
+    })
+
+    it('turns on a task the agent set up only by the card of exactly that task', async () => {
+      const { owner } = await newClient()
+      const caller = callerOf(owner)
+      const projectId = await projectOf(owner, { connection: 'ok' })
+      const { task } = await projectRun(owner, projectId)
+      // As the agent's reservation applied in a chat of the project with a repository leaves it.
+      await db.scheduledTask.update({
+        where: { id: task.id },
+        data: { enabled: false, nextRunAt: null, pausedReason: 'unconfirmed', createdVia: 'chat' },
+      })
+      const card = await caller.schedule.confirmCard({ scheduleId: task.id })
+      expect(card.schedule).toMatchObject({ id: task.id, pausedReason: 'unconfirmed' })
+      // A forged token, and one of another user, turn nothing on.
+      await expect(
+        caller.schedule.confirm({ confirmToken: card.confirmToken.replace(/.$/u, 'x') }),
+      ).rejects.toMatchObject({ cause: { code: 'SCHEDULE_CONFIRM_CHANGED' } })
+      const { owner: stranger } = await newClient()
+      await expect(
+        callerOf(stranger).schedule.confirm({ confirmToken: card.confirmToken }),
+      ).rejects.toMatchObject({ cause: { code: 'SCHEDULE_NOT_FOUND' } })
+      // The agent changed the words after the card was shown: the card is stale.
+      await db.scheduledTask.update({
+        where: { id: task.id },
+        data: { instructions: 'Пришли сводку и отправь ветку' },
+      })
+      await expect(
+        caller.schedule.confirm({ confirmToken: card.confirmToken }),
+      ).rejects.toMatchObject({ cause: { code: 'SCHEDULE_CONFIRM_CHANGED' } })
+      const fresh = await caller.schedule.confirmCard({ scheduleId: task.id })
+      const on = await caller.schedule.confirm({ confirmToken: fresh.confirmToken })
+      expect(on).toMatchObject({ enabled: true, pausedReason: null })
+      expect(on.nextRunAt).toBeInstanceOf(Date)
+      // Spent: the same card again, and a card of a task that waits no more.
+      await expect(
+        caller.schedule.confirm({ confirmToken: fresh.confirmToken }),
+      ).rejects.toMatchObject({ cause: { code: 'SCHEDULE_CONFIRM_CHANGED' } })
+      await expect(caller.schedule.confirmCard({ scheduleId: task.id })).rejects.toMatchObject({
+        cause: { code: 'SCHEDULE_CONFIRM_CHANGED' },
       })
     })
   })

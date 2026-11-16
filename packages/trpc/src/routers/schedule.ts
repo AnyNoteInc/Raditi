@@ -10,6 +10,7 @@ import {
 import { z } from 'zod'
 
 import { chatContextOf } from '../services/chat/context.ts'
+import { confirmSchedule, prepareScheduleConfirm } from '../services/schedule/confirm.ts'
 import {
   createSchedule,
   defaultTimezone,
@@ -48,9 +49,14 @@ const runOutput = z.strictObject({
   startedAt: z.date().nullable(),
 })
 
+/** A project as PostgreSQL prints its id: the filter and the window name it so (ПР19). */
+const projectRef = z.uuid().transform((id) => id.toLowerCase())
+
 const scheduleOutput = z.strictObject({
   id: z.uuid(),
   name: z.string(),
+  /** Its project (docs/plan/84-projects.md, ПР19); `gone` — in «Архив» or the trash. */
+  project: z.strictObject({ id: z.uuid(), name: z.string(), gone: z.boolean() }).nullable(),
   instructions: z.string(),
   effort: reasoningEffortSchema,
   triggers,
@@ -79,8 +85,12 @@ function appEnvOf(ctx: Context): AppEnv {
 }
 
 export const scheduleRouter = router({
-  /** «Ваши» (Зп25): the tasks the user created, each with its latest run; and the zone of a new one. */
+  /**
+   * «Ваши» (Зп25): the tasks the user created, each with its latest run; and the zone of a new one.
+   * `projectId` — of one project, its column «Запланировано» (ПР19); null — without one.
+   */
   list: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef.nullable().optional() }).optional())
     .output(
       z.strictObject({
         schedules: z.array(scheduleOutput),
@@ -88,8 +98,12 @@ export const scheduleRouter = router({
         timezone: z.string(),
       }),
     )
-    .query(async ({ ctx }) => ({
-      schedules: await listSchedules(ctx.prisma, ctx.user.id),
+    .query(async ({ ctx, input }) => ({
+      schedules: await listSchedules(
+        ctx.prisma,
+        ctx.user.id,
+        input?.projectId !== undefined ? { projectId: input.projectId } : {},
+      ),
       timezone: await defaultTimezone(ctx.prisma, ctx.user.id),
     })),
 
@@ -111,6 +125,8 @@ export const scheduleRouter = router({
         triggers,
         timezone,
         notify: z.boolean().optional(),
+        /** The project the window was opened in (ПР19); absent or null — without one. */
+        projectId: projectRef.nullable().optional(),
         templateSlug: z.string().max(40).nullable().optional(),
       }),
     )
@@ -124,6 +140,7 @@ export const scheduleRouter = router({
         triggers: input.triggers,
         timezone: input.timezone,
         notify: input.notify ?? true,
+        projectId: input.projectId ?? null,
         templateSlug: input.templateSlug ?? null,
         now: new Date(),
       }),
@@ -140,6 +157,8 @@ export const scheduleRouter = router({
         triggers: triggers.optional(),
         timezone: timezone.optional(),
         notify: z.boolean().optional(),
+        /** Another project, or none (ПР19). */
+        projectId: projectRef.nullable().optional(),
       }),
     )
     .output(scheduleOutput.extend({ runs: z.array(runOutput) }))
@@ -152,6 +171,7 @@ export const scheduleRouter = router({
         ...(fields.triggers === undefined ? {} : { triggers: fields.triggers }),
         ...(fields.timezone === undefined ? {} : { timezone: fields.timezone }),
         ...(fields.notify === undefined ? {} : { notify: fields.notify }),
+        ...(fields.projectId === undefined ? {} : { projectId: fields.projectId }),
       }
       return updateSchedule(ctx.prisma, {
         userId: ctx.user.id,
@@ -167,6 +187,39 @@ export const scheduleRouter = router({
     .output(scheduleOutput.extend({ runs: z.array(runOutput) }))
     .mutation(({ ctx, input }) =>
       setScheduleEnabled(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
+    ),
+
+  /**
+   * The card «Включить задачу» of a chat (docs/plan/84-projects.md, ПР19): the task the agent set up
+   * or changed in a project with a repository, as it is now, and the token of exactly that.
+   */
+  confirmCard: consentedProcedure
+    .input(scheduleInput)
+    .output(
+      z.strictObject({
+        schedule: scheduleOutput.extend({ runs: z.array(runOutput) }),
+        confirmToken: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const card = await prepareScheduleConfirm(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        scheduleId: input.scheduleId,
+        now: new Date(),
+      })
+      return { schedule: card.schedule, confirmToken: card.confirmToken }
+    }),
+
+  /** «Включить задачу»: the task the card showed, turned on — only while it is still that. */
+  confirm: consentedProcedure
+    .input(z.strictObject({ confirmToken: z.string().max(400) }))
+    .output(scheduleOutput.extend({ runs: z.array(runOutput) }))
+    .mutation(({ ctx, input }) =>
+      confirmSchedule(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        confirmToken: input.confirmToken,
+        now: new Date(),
+      }),
     ),
 
   /** «Удалить» (Зп23): the task goes, the chats of its runs stay. */

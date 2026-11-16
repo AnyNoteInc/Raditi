@@ -431,12 +431,14 @@ model Project {
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  workspace  Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  createdBy  User               @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  tasks      Task[]
-  files      ProjectFile[]
-  memory     MemoryEntry[]
-  repository ProjectRepository?
+  workspace      Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  createdBy      User               @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  tasks          Task[]
+  files          ProjectFile[]
+  memory         MemoryEntry[]
+  repository     ProjectRepository?
+  scheduledTasks ScheduledTask[]
+  scheduledRuns  ScheduledRun[]
 
   @@index([workspaceId, createdById, activityAt(sort: Desc)], map: "projects_owner_activity_idx", where: raw("deleted_at IS NULL"))
   @@index([purgeAfter], map: "projects_purge_idx", where: raw("deleted_at IS NOT NULL"))
@@ -2654,6 +2656,9 @@ model ScheduledTask {
   id                String    @id @default(uuid(7)) @db.Uuid
   workspaceId       String    @map("workspace_id") @db.Uuid
   createdById       String    @map("created_by_id") @db.Uuid
+  /// The project of its creator a run starts its chat in (docs/plan/84-projects.md, ПР19); NULL —
+  /// without one. A purged project leaves the task deleted (ON DELETE SET NULL after).
+  projectId         String?   @map("project_id") @db.Uuid
   /// One line, 1–80 characters (scheduleNameSchema).
   name              String    @db.VarChar(80)
   /// 1–4000 characters (scheduleInstructionsSchema), never a password or a key (Зп26).
@@ -2694,6 +2699,7 @@ model ScheduledTask {
 
   workspace     Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdBy     User                  @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  project       Project?              @relation(fields: [projectId], references: [id], onDelete: SetNull)
   sourceTask    Task?                 @relation("ScheduledTaskSource", fields: [sourceTaskId], references: [id], onDelete: SetNull)
   runs          ScheduledRun[]
   reservations  ScheduleReservation[]
@@ -2703,6 +2709,7 @@ model ScheduledTask {
   @@index([workspaceId])
   @@index([createdById, workspaceId])
   @@index([sourceTaskId])
+  @@index([projectId], map: "scheduled_tasks_project_id_idx", where: raw("(project_id IS NOT NULL)"))
   @@map("scheduled_tasks")
 }
 
@@ -2725,6 +2732,9 @@ model ScheduledRun {
   name            String    @db.VarChar(80)
   instructions    String
   effort          String    @db.VarChar(8)
+  /// The project of the task when the run was written: its chat starts in it (ПР19); NULL — none,
+  /// or purged since.
+  projectId       String?   @map("project_id") @db.Uuid
   /// Due moments the row stands for when it says «Пропущено» (reason missed); 0 — otherwise.
   missedCount     Int       @default(0) @map("missed_count")
   /// The latest due moment a row of missed runs stands for («Пропущены запуски с … по …»), written
@@ -2737,10 +2747,12 @@ model ScheduledRun {
 
   scheduledTask ScheduledTask      @relation(fields: [scheduledTaskId], references: [id], onDelete: Cascade)
   task          Task?              @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  project       Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
   notifications ChatNotification[]
 
   @@unique([scheduledTaskId, dueAt, trigger])
   @@index([scheduledTaskId, createdAt])
+  @@index([projectId], map: "scheduled_runs_project_id_idx", where: raw("(project_id IS NOT NULL)"))
   @@index([status, createdAt], map: "scheduled_runs_pending_idx", where: raw("((status)::text = 'pending'::text)"))
   @@map("scheduled_runs")
 }

@@ -199,7 +199,7 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
     // Core closed it; the next sweep purges: the project row is gone, only deleted chats stay.
     await db.$executeRaw`UPDATE tasks SET status = 'cancelled' WHERE id = ${queued}::uuid`
     const swept = await purging.sweep()
-    expect(swept).toEqual({ stopped: 0, purged: 1, collected: 0 })
+    expect(swept).toEqual({ stopped: 0, purged: 1, collected: 0, paused: 0 })
     expect(await db.project.count({ where: { id: projectId } })).toBe(0)
     const left = await db.task.findMany({
       where: { id: { in: chats } },
@@ -212,7 +212,7 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
     }
     // A repeat finds nothing to purge; within the hour the sweep does not purge again.
     expect(await purging.purge()).toEqual({ purged: 0, more: false })
-    expect(await purging.sweep()).toEqual({ stopped: 0, purged: null, collected: 0 })
+    expect(await purging.sweep()).toEqual({ stopped: 0, purged: null, collected: 0, paused: 0 })
   })
 
   it('a project restored before the purge took it is kept', async () => {

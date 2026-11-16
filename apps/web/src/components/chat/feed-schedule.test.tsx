@@ -62,6 +62,7 @@ function task(patch: Partial<ScheduledTaskItem> = {}): ScheduledTaskItem {
   return {
     id: SCHEDULE_ID,
     name: 'Сводка курсов',
+    project: null,
     instructions: 'Пришли курс доллара, евро и юаня по ЦБ и насколько он изменился со вчера.',
     effort: 'low',
     triggers: [{ kind: 'weekdays', time: '08:00' }],

@@ -90,6 +90,14 @@ const id = z.uuid()
 /** `schedule_list`: the author's own tasks, the time and the zone of the client (Зп54). */
 export const scheduleListArgumentsSchema = z.strictObject({})
 
+/**
+ * Where a task set up in a chat goes (docs/plan/84-projects.md, ПР19): `this_chat` — the project of
+ * the chat, `none` — no project; left out — as the chat is. A chat of a project sets up tasks of
+ * it, a chat without one tasks without one: the other value is refused.
+ */
+export const scheduleToolProjects = ['this_chat', 'none'] as const
+export type ScheduleToolProject = (typeof scheduleToolProjects)[number]
+
 /** `schedule_create`: a new task, once the client confirmed its name, words and schedule (Зп34). */
 export const scheduleCreateArgumentsSchema = z.strictObject({
   name: scheduleNameSchema,
@@ -98,6 +106,7 @@ export const scheduleCreateArgumentsSchema = z.strictObject({
   triggers: scheduleToolTriggersSchema,
   timezone: scheduleTimezoneSchema.optional(),
   notify: z.boolean().optional(),
+  project: z.enum(scheduleToolProjects).optional(),
   confirmedByClient: z.literal(true),
 })
 export type ScheduleCreateArguments = z.infer<typeof scheduleCreateArgumentsSchema>

@@ -16,7 +16,11 @@ export type ScheduledRunTrigger = (typeof scheduledRunTriggers)[number]
 export const scheduledRunStatuses = ['pending', 'started', 'refused', 'skipped'] as const
 export type ScheduledRunStatus = (typeof scheduledRunStatuses)[number]
 
-/** Why a run did not start a chat (Зп14, Зп21, Зп48, §4.3). */
+/**
+ * Why a run did not start a chat (Зп14, Зп21, Зп48, §4.3). `project_gone` — the project of the task
+ * is in «Архив» or in the trash; `project_unavailable` — the sign-in with GitLab of its repository
+ * has to be renewed (docs/plan/84-projects.md, ПР19).
+ */
 export const scheduledRunReasons = [
   'no_credits',
   'needs_tariff',
@@ -29,6 +33,8 @@ export const scheduledRunReasons = [
   'missed',
   'paused',
   'platform',
+  'project_gone',
+  'project_unavailable',
 ] as const
 export type ScheduledRunReason = (typeof scheduledRunReasons)[number]
 
@@ -45,23 +51,39 @@ export const scheduledRunReasonText: Readonly<Record<ScheduledRunReason, string>
   missed: 'платформа была недоступна',
   paused: 'задача была на паузе',
   platform: 'сбой платформы',
+  project_gone: 'проект в архиве или удалён',
+  project_unavailable: 'нужно войти в GitLab заново',
 })
 
-/** Refusals for a reason of the client: three in a row pause the task (Зп22). */
+/**
+ * Refusals for a reason of the client: three in a row pause the task (Зп22); a sign-in with GitLab
+ * to renew among them (docs/plan/84-projects.md, ПР19).
+ */
 export const clientRefusalReasons = [
   'no_credits',
   'needs_tariff',
   'weekly_limit',
   'daily_limit',
   'consent',
+  'project_unavailable',
 ] as const satisfies readonly ScheduledRunReason[]
 export type ClientRefusalReason = (typeof clientRefusalReasons)[number]
 
 export const isClientRefusalReason = (reason: string): reason is ClientRefusalReason =>
   (clientRefusalReasons as readonly string[]).includes(reason)
 
-/** Why a task is off without the client's word (Зп15, Зп22, Зп48). */
-export const schedulePausedReasons = ['completed', 'not_accepted', 'refused'] as const
+/**
+ * Why a task is off without the client's word (Зп15, Зп22, Зп48). `project_gone` — its project went
+ * into «Архив» or the trash; `unconfirmed` — the agent set it up in a chat of a project with a
+ * repository, and only the client turns it on (docs/plan/84-projects.md, ПР19).
+ */
+export const schedulePausedReasons = [
+  'completed',
+  'not_accepted',
+  'refused',
+  'project_gone',
+  'unconfirmed',
+] as const
 export type SchedulePausedReason = (typeof schedulePausedReasons)[number]
 
 /** The state of a task that stopped by itself, in its row of the list (Зп5); «Завершена» takes its date. */
@@ -70,6 +92,8 @@ export const schedulePausedReasonText: Readonly<Record<SchedulePausedReason, str
     completed: 'Завершена',
     not_accepted: 'Остановлена: задачи пока не принимаются',
     refused: 'Остановлена после трёх отказов подряд',
+    project_gone: 'Остановлена: проект в архиве или удалён',
+    unconfirmed: 'Ждёт, пока вы её включите',
   })
 
 // ---------------------------------------------------------------------------------------------

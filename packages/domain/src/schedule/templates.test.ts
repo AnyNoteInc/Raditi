@@ -11,6 +11,9 @@ import {
 } from './run-states.ts'
 import {
   hasScheduleTemplatePlaceholder,
+  scheduleProjectTemplates,
+  scheduleProjectTemplateSlugs,
+  scheduleTemplatesOfProject,
   scheduleTemplateOf,
   scheduleTemplatePlaceholderRange,
   scheduleTemplates,
@@ -18,6 +21,40 @@ import {
 } from './templates.ts'
 import { scheduleText } from './text.ts'
 import { scheduleTriggersSchema } from './triggers.ts'
+
+describe('the templates of a project (docs/plan/84-projects.md, ПР19, 84.14)', () => {
+  it('are three tasks the window would save, two of them of a repository', () => {
+    expect(scheduleProjectTemplates.map((template) => template.slug)).toEqual([
+      ...scheduleProjectTemplateSlugs,
+    ])
+    for (const template of scheduleProjectTemplates) {
+      expect(scheduleNameSchema.safeParse(template.name).success).toBe(true)
+      expect(scheduleInstructionsSchema.safeParse(template.instructions).success).toBe(true)
+      expect(scheduleTriggersSchema.safeParse(template.triggers).success).toBe(true)
+      expect(hasScheduleTemplatePlaceholder(template.instructions)).toBe(false)
+      expect(scheduleTemplateOf(template.slug)).toBe(template)
+    }
+    expect(
+      scheduleProjectTemplates.filter((t) => t.needs === 'repository').map((t) => t.slug),
+    ).toEqual(['build-check', 'merge-requests'])
+  })
+
+  it('never ask a run without its client to open, accept or deploy', () => {
+    const builds = scheduleTemplateOf('build-check')!.instructions
+    expect(builds).toContain('исправь и подготовь изменения — запрос на слияние открою я сам')
+    for (const template of scheduleProjectTemplates)
+      expect(template.instructions).not.toMatch(/открой запрос|прими|выкат|разверн/iu)
+  })
+
+  it('are offered in a project, the repository ones only with a repository', () => {
+    const without = scheduleTemplatesOfProject({ repository: false }).map((t) => t.slug)
+    expect(without[0]).toBe('week-plan')
+    expect(without).not.toContain('build-check')
+    expect(without).toContain('currency-rates')
+    const withRepo = scheduleTemplatesOfProject({ repository: true }).map((t) => t.slug)
+    expect(withRepo.slice(0, 3)).toEqual(['build-check', 'merge-requests', 'week-plan'])
+  })
+})
 
 describe('the templates of «Шаблоны» (§4.6, Зп58)', () => {
   it('are the six of the plan, each one a task the window would save', () => {

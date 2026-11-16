@@ -8,6 +8,7 @@ import {
   scheduleListArgumentsSchema,
   scheduleNameSchema,
   scheduleTimezoneSchema,
+  scheduleToolProjects,
   scheduleToolTriggerSchema,
   scheduleUpdateArgumentsSchema,
 } from '@repo/domain'
@@ -48,6 +49,11 @@ const timezone = scheduleTimezoneSchema.describe(
   'An IANA zone, e.g. Europe/Moscow; without it — the zone schedule_list gives',
 )
 const notify = z.boolean().describe('Notify the client when a run is done; default true')
+const project = z
+  .enum(scheduleToolProjects)
+  .describe(
+    'Where the task goes: "this_chat" — the project of this chat, every run a new chat of it; "none" — no project. Left out — as this chat is: a chat of a project sets up tasks of it, a chat without one tasks without one',
+  )
 const confirmedByClient = z
   .literal(true)
   .describe(
@@ -68,6 +74,7 @@ export const scheduleCreateToolArgumentsSchema = z
     triggers,
     timezone: timezone.optional(),
     notify: notify.optional(),
+    project: project.optional(),
     confirmedByClient,
   })
   .refine((args) => scheduleArgumentsAdmitted(scheduleCreateArgumentsSchema, args), {

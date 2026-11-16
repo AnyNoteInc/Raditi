@@ -20,10 +20,18 @@ export function postgresScheduleStore(db: Db): McpScheduleStore {
     author: async (taskId) => {
       const chat = await db.task.findUnique({
         where: { id: taskId },
-        select: { createdById: true, createdBy: { select: { timezone: true } } },
+        select: {
+          createdById: true,
+          projectId: true,
+          createdBy: { select: { timezone: true } },
+        },
       })
       return chat?.createdById
-        ? { userId: chat.createdById, timezone: chat.createdBy?.timezone ?? null }
+        ? {
+            userId: chat.createdById,
+            timezone: chat.createdBy?.timezone ?? null,
+            projectId: chat.projectId,
+          }
         : null
     },
     list: async (input) =>

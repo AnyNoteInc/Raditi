@@ -81,9 +81,17 @@ describe('the runs', () => {
       'missed',
       'paused',
       'platform',
+      'project_gone',
+      'project_unavailable',
     ])
     expect(Object.keys(scheduledRunReasonText)).toEqual([...scheduledRunReasons])
-    expect(schedulePausedReasons).toEqual(['completed', 'not_accepted', 'refused'])
+    expect(schedulePausedReasons).toEqual([
+      'completed',
+      'not_accepted',
+      'refused',
+      'project_gone',
+      'unconfirmed',
+    ])
     expect(Object.keys(schedulePausedReasonText)).toEqual([...schedulePausedReasons])
   })
 
@@ -93,6 +101,10 @@ describe('the runs', () => {
     expect(scheduledRunReasonText.previous_running).toBe('предыдущий запуск ещё шёл')
     expect(scheduledRunReasonText.platform).toBe('сбой платформы')
     expect(schedulePausedReasonText.refused).toBe('Остановлена после трёх отказов подряд')
+    // A project put away, a task the agent set up that waits for the client (docs/plan/84, ПР19).
+    expect(scheduledRunReasonText.project_unavailable).toBe('нужно войти в GitLab заново')
+    expect(schedulePausedReasonText.project_gone).toBe('Остановлена: проект в архиве или удалён')
+    expect(schedulePausedReasonText.unconfirmed).toBe('Ждёт, пока вы её включите')
     for (const text of Object.values(scheduledRunReasonText)) expect(text).toMatch(/^[а-яё]/u)
   })
 
@@ -103,8 +115,11 @@ describe('the runs', () => {
       'weekly_limit',
       'daily_limit',
       'consent',
+      'project_unavailable',
     ])
     expect(isClientRefusalReason('consent')).toBe(true)
+    // A project put away stops the task at once, not by a series (ПР19).
+    expect(isClientRefusalReason('project_gone')).toBe(false)
     expect(isClientRefusalReason('platform')).toBe(false)
     expect(isClientRefusalReason('credits_held')).toBe(false)
   })

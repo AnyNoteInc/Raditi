@@ -162,6 +162,22 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
     expect(rows).toEqual([])
   })
 
+  it('binds a task and a run to a project, which a purge leaves them without (ПР19)', async () => {
+    const { rows } = await schema.db.query<{ table_name: string; delete_rule: string }>(
+      `SELECT c.table_name, r.delete_rule
+       FROM information_schema.referential_constraints r
+       JOIN information_schema.table_constraints c
+         ON c.constraint_name = r.constraint_name AND c.constraint_schema = r.constraint_schema
+       WHERE r.constraint_schema = current_schema()
+         AND r.constraint_name IN ('scheduled_tasks_project_id_fkey', 'scheduled_runs_project_id_fkey')
+       ORDER BY c.table_name`,
+    )
+    expect(rows).toEqual([
+      { table_name: 'scheduled_runs', delete_rule: 'SET NULL' },
+      { table_name: 'scheduled_tasks', delete_rule: 'SET NULL' },
+    ])
+  })
+
   it('lists in its CHECKs exactly the values of the domain', async () => {
     expect(await listed('scheduled_tasks', 'scheduled_tasks_effort_check')).toEqual([
       ...reasoningEfforts,
