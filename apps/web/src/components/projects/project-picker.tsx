@@ -13,6 +13,7 @@ import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import { useQuery } from '@tanstack/react-query'
+import { useRouter } from 'next/navigation'
 import { useId, useRef, useState, type KeyboardEvent } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
@@ -20,7 +21,7 @@ import { fieldControl } from '@/components/chat/composer'
 import { useTRPC } from '@/trpc/client'
 
 import { ProjectCreateDialog } from './project-create-dialog'
-import { projectPickerText } from './project-texts'
+import { projectHref, projectPickerText } from './project-texts'
 import { pickedOf, type PickedProject, type ProjectListItem } from './project-types'
 
 /**
@@ -55,6 +56,7 @@ export function ProjectPicker({
   disabled?: boolean
 }) {
   const phone = useMediaQuery(useTheme().breakpoints.down('sm'))
+  const router = useRouter()
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [creating, setCreating] = useState(false)
   const open = anchor !== null
@@ -271,8 +273,14 @@ export function ProjectPicker({
       <ProjectCreateDialog
         open={creating}
         onClose={() => setCreating(false)}
-        onCreated={(project) => {
+        onCreated={(project, then) => {
           setCreating(false)
+          // «Подключить GitLab» in the window is an intent (ПР5; ревью P5): the sign-in leaves the
+          // page, so the project's page opens «Подключить репозиторий».
+          if (then?.connectRepository) {
+            router.push(`${projectHref(project.id)}?connect=repository`)
+            return
+          }
           onChange(project)
         }}
       />
