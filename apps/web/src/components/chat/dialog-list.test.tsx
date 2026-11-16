@@ -168,10 +168,10 @@ describe('the list of dialogs', () => {
       pinned: [],
       items: [
         dialog('5', {
-          title: 'Заявки за сутки',
+          title: 'Сводка курсов',
           status: 'awaiting_user',
           answered: true,
-          schedule: { id: null, name: 'Заявки за сутки', trigger: 'schedule' },
+          schedule: { id: null, name: 'Сводка курсов', trigger: 'schedule' },
         }),
         dialog('6', { title: 'Про сайт' }),
       ],

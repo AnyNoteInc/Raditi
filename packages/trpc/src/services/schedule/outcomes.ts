@@ -46,8 +46,8 @@ const stopCauseOf = (stopped: RunChatState['stopped']): ScheduledRunStopCause | 
  * The state of one run (Зп5, Зп47). Its chat: `undefined` — not read (none, or gone from the
  * database), told as deleted. A chat at work is «Выполняется»; one that ended is done or not; an
  * open one waits for the client, failed or stopped at a limit — the newest row that ends a pass
- * says which. A chat has no candidate and no release (docs/plan/83-remove-projects.md, БП2): a
- * status of a release, should a reader meet one, is told as the nearest of these.
+ * says which. A status no chat reaches now — `awaiting_approval`, `deploying`, `verifying`,
+ * `rolled_back` — should a reader meet one, is told as the nearest of these (Зп47).
  */
 export function runStateOf(run: RunRow, chat: RunChatState | undefined): ScheduledRunState {
   switch (run.status) {

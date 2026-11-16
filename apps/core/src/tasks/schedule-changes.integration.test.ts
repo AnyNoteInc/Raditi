@@ -21,8 +21,8 @@ describe('scheduleLeftReasonOf', () => {
     expect(scheduleLeftReasonOf('SCHEDULE_LIMIT')).toBe('limit')
     expect(scheduleLeftReasonOf('SCHEDULE_NOT_FOUND')).toBe('not_found')
     expect(scheduleLeftReasonOf('NOT_FOUND')).toBe('not_found')
-    // A place of a template left unfilled is a task that does not fit (Зп59).
-    expect(scheduleLeftReasonOf('SCHEDULE_TEMPLATE_PLACEHOLDER')).toBe('invalid')
+    // A place of a template left unfilled, told as it is (Зп59).
+    expect(scheduleLeftReasonOf('SCHEDULE_TEMPLATE_PLACEHOLDER')).toBe('placeholder')
     expect(scheduleLeftReasonOf('TASK_TEXT_HAS_SECRET')).toBe('text_refused')
     expect(scheduleLeftReasonOf('SCHEDULE_TOO_OFTEN')).toBe('invalid')
     expect(scheduleLeftReasonOf('SCHEDULE_IN_PAST')).toBe('invalid')

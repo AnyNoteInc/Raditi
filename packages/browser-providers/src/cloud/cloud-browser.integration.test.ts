@@ -201,11 +201,33 @@ const PAGES: Record<string, string> = {
 /** Another site the site sends the browser to (docs/plan/60-browser-foreign-redirects.md). */
 const PAY = 'https://pay.example.com'
 
+/**
+ * A shop of the open web (docs/plan/82-scheduled-tasks.md, Зп50): a picture with the key of its
+ * service, a plain link and one with a token, a form that orders and a button whose XHR saves.
+ */
+const SHOP = html(
+  'Магазин',
+  `<h1>Магазин</h1>
+   <img src="/pixel.gif?key=abc" alt="Карта" width="10" height="10">
+   <a href="/catalog?q=кофе">Каталог</a>
+   <a href="/unsubscribe?token=abc">Отписаться</a>
+   <form method="post" action="/order"><input type="submit" value="Оформить заказ"></form>
+   <button type="button" id="save">Сохранить</button><p id="out">ждём</p>
+   <script>
+     document.getElementById('save').addEventListener('click', () =>
+       fetch('/autosave', { method: 'POST', body: 'draft=1' }).then(
+         () => { document.getElementById('out').textContent = 'сохранено' },
+         () => { document.getElementById('out').textContent = 'не сохранено' }))
+   </script>`,
+)
+
 /** The page of the other site: a button of its own, a path the site's policy closes, a way back. */
 function paySite(hits: string[], back: () => string) {
   return (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', PAY)
     hits.push(`${req.method} ${req.headers.host} ${url.pathname}`)
+    if (url.pathname === '/shop')
+      return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(SHOP)
     const page = html(
       'Оплата',
       `<h1>Оплата заказа ${url.searchParams.get('order') ?? ''}</h1>
@@ -889,6 +911,85 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     )
     expect(browser.tabs()[0]?.url).not.toContain('pay.example.com')
     expect((await browser.observe({})).tree).not.toContain('Оплата заказа')
+  }, 60_000)
+
+  it('only reads in a pass of a scheduled run without its client, on any site (plan 82, Зп50)', async () => {
+    const state = { readOnly: true, refused: 0 }
+    events = []
+    session = await factory.open({
+      endpoint: server.wsEndpoint(),
+      allowedHosts: [],
+      localSites: [],
+      openWeb: true,
+      platformHosts: ['raditi.ru'],
+      pageDomain: null,
+      startUrl: null,
+      viewport: { width: 1280, height: 800 },
+      policy: OPEN_WEB_POLICY,
+      readsOnly: () => state.readOnly,
+      onReadOnlyRefusal: () => {
+        state.refused += 1
+      },
+      onEvent: (event) => events.push(event),
+    })
+    const browser = session
+    /** Whether the other site was asked `METHOD /path`. */
+    const asked = (method: string, path: string) =>
+      payHits.includes(`${method} pay.example.com ${path}`)
+    payHits.length = 0
+    await browser.act({ tool: 'web_open', url: `${PAY}/shop` })
+    // A picture with the key of its service reads, and loads.
+    await until(() => (asked('GET', '/pixel.gif') ? true : undefined))
+    let tree = (await browser.observe({})).tree
+    expect(tree).toContain('Магазин')
+    // The page's XHR that would save never leaves the browser.
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'button', 'Сохранить') })
+    expect(await browser.act({ tool: 'web_wait', ms: 3_000, text: 'не сохранено' })).toMatchObject({
+      matched: true,
+    })
+    // Nor the form a button sends, nor a link with a token in its query: the page goes nowhere
+    // (and shows Chromium's error page, as after any refused navigation).
+    for (const [role, name, path] of [
+      ['button', 'Оформить заказ', '/order'],
+      ['link', 'Отписаться', '/unsubscribe'],
+    ] as const) {
+      await browser.act({ tool: 'web_open', url: `${PAY}/shop` })
+      tree = (await browser.observe({})).tree
+      await expect(
+        browser.act({ tool: 'web_click', ref: refOf(tree, role, name) }),
+        name,
+      ).rejects.toSatisfy((error) => codeOf(error) === 'denied')
+      expect(browser.tabs()[0]?.url, name).not.toContain(path)
+    }
+    // A plain link opens.
+    await browser.act({ tool: 'web_open', url: `${PAY}/shop` })
+    tree = (await browser.observe({})).tree
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'link', 'Каталог') })
+    await until(() => (browser.tabs()[0]?.url.startsWith(`${PAY}/catalog?q=`) ? true : undefined))
+    expect([
+      asked('POST', '/autosave'),
+      asked('POST', '/order'),
+      asked('GET', '/unsubscribe'),
+    ]).toEqual([false, false, false])
+    expect(state.refused).toBeGreaterThanOrEqual(3)
+
+    // The client at the controls is not limited: what the page sends goes.
+    await browser.act({ tool: 'web_open', url: `${PAY}/shop` })
+    browser.setController('user')
+    let shop = (await browser.observe({})).tree
+    await browser.act({ tool: 'web_click', ref: refOf(shop, 'button', 'Сохранить') })
+    expect(await browser.act({ tool: 'web_wait', ms: 3_000, text: 'сохранено' })).toMatchObject({
+      matched: true,
+    })
+    expect(asked('POST', '/autosave')).toBe(true)
+    // Nor is a pass the client watches.
+    browser.setController('agent')
+    state.readOnly = false
+    const refused = state.refused
+    shop = (await browser.observe({})).tree
+    await browser.act({ tool: 'web_click', ref: refOf(shop, 'button', 'Оформить заказ') })
+    await until(() => (asked('POST', '/order') ? true : undefined))
+    expect(state.refused).toBe(refused)
   }, 60_000)
 
   // The error page of a navigation the network refused commits after the action has ended: the

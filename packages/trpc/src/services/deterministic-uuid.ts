@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
  * rest from SHA-256 of `<namespace>:<salt>`. The same thing gives the same id, so a chat started
  * for it is recognised as the chat it started when it is handed again: an update of the bot of
  * Telegram (docs/plan/80-telegram.md), a run of a scheduled task (docs/plan/82-scheduled-tasks.md,
- * Зп20). A chat without a project takes only ids of this version (К14).
+ * Зп20). A chat takes only ids of this version (`tasks_chat_id_check`, К14).
  */
 export function deterministicUuidV7(namespace: string, salt: string, at: Date): string {
   const hash = createHash('sha256').update(`${namespace}:${salt}`).digest()

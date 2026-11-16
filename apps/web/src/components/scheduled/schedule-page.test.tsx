@@ -121,6 +121,11 @@ describe('the page of a scheduled task (plan 82, Зп6)', () => {
     expect(screen.getByText('Следующий запуск: завтра в 9:00')).toBeInTheDocument()
     const facts = screen.getAllByRole('term')[0]?.closest('dl')
     if (!(facts instanceof HTMLElement)) throw new Error('no facts')
+    expect(
+      within(facts)
+        .getAllByRole('term')
+        .map((term) => term.textContent),
+    ).toEqual(['Инструкция', 'Когда запускается', 'Размышление', 'Уведомления', 'Стоимость'])
     expect(facts).toHaveTextContent('Откройте сайт и пройдите главную и важные страницы.')
     expect(facts).toHaveTextContent('По будням в 9:00')
     expect(facts).toHaveTextContent('Низкое')
@@ -213,19 +218,6 @@ describe('the page of a scheduled task (plan 82, Зп6)', () => {
     expect(cost.closest('[data-cost-tone]')).toHaveAttribute('data-cost-tone', 'value')
     // As the other values of the facts: 15 px.
     expect(getComputedStyle(cost).fontSize).toBe('15px')
-  })
-
-  it('names no project among the facts of a task (Зп57)', async () => {
-    getSchedule.mockResolvedValue(scheduleDetail())
-    show()
-    await screen.findByRole('heading', { level: 1, name: 'Проверка сайта' })
-    const facts = screen.getAllByRole('term')[0]?.closest('dl')
-    if (!(facts instanceof HTMLElement)) throw new Error('no facts')
-    expect(within(facts).queryByText('Проект')).toBeNull()
-    expect(facts).not.toHaveTextContent(/Кофейня/)
-    await within(facts).findByText(/в среднем около 11/)
-    for (const [context] of costHint.mock.calls as unknown as [{ queryKey: [string, object] }][])
-      expect(context.queryKey[1]).not.toHaveProperty('siteId')
   })
 
   it('lists the runs: when, how, what came of it, its chat; missed in a row as one line', async () => {

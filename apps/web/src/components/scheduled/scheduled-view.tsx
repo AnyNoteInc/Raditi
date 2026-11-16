@@ -280,7 +280,6 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
   const searchable = all.length > SEARCH_ABOVE
   const query = searchable && searchOpen ? search : ''
   const shownTag = filterOpen ? tag : 'all'
-  // The buttons of the states alone: a task has no project to filter by (Зп57).
   const fits = (item: ScheduleItem) => matchesSearch(item, query)
   const shown = sortSchedules(
     all.filter((item) => fits(item) && inScheduleTag(item, shownTag)),
@@ -450,8 +449,9 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
         />
       ) : null}
 
+      {/* The buttons of the states (Зп3, Зп57); the margins of the row are its own on a phone. */}
       {tools && filterOpen ? (
-        <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+        <Box sx={{ mt: 2 }}>
           <Box role="group" aria-label={scheduledTexts.showGroup} sx={chipRowSx}>
             {scheduleTags.map((each) => (
               <Button

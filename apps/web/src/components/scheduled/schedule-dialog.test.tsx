@@ -100,10 +100,10 @@ describe('«Новая запланированная задача» (plan 82, �
     const { dialog, onClose, onSaved } = show({ kind: 'new' })
     expect(dialog).toHaveAccessibleName('Новая запланированная задача')
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Название' }), {
-      target: { value: 'Сводка заявок' },
+      target: { value: 'Сводка курсов' },
     })
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Что сделать агенту' }), {
-      target: { value: 'Соберите заявки за сутки' },
+      target: { value: 'Пришли курс доллара по ЦБ' },
     })
     const block = within(dialog).getByRole('group', { name: 'Время запуска 1' })
     expect(within(block).getByRole('combobox', { name: 'Как часто' })).toHaveTextContent(
@@ -118,8 +118,8 @@ describe('«Новая запланированная задача» (plan 82, �
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith(
         {
-          name: 'Сводка заявок',
-          instructions: 'Соберите заявки за сутки',
+          name: 'Сводка курсов',
+          instructions: 'Пришли курс доллара по ЦБ',
           effort: 'high',
           triggers: [{ kind: 'daily', time: '10:30' }],
           timezone: 'Europe/Moscow',
@@ -130,7 +130,7 @@ describe('«Новая запланированная задача» (plan 82, �
       ),
     )
     await waitFor(() => expect(onClose).toHaveBeenCalled())
-    expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ name: 'Сводка заявок' }), true)
+    expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ name: 'Сводка курсов' }), true)
   })
 
   it('warns that the task runs without the client, and says its cost', async () => {
@@ -141,7 +141,6 @@ describe('«Новая запланированная задача» (plan 82, �
       /На сайтах он только читает — ничего не отправляет, не сохраняет и не покупает/,
     )
     expect(dialog).toHaveTextContent(/подготовит и спросит вас в чате запуска/)
-    expect(dialog).not.toHaveTextContent(/админк|предпросмотр|выпуск/)
     // What the platform refuses in such a run (Зп28, Зп32): pages and the keyed skills too, the
     // skills in plain words.
     expect(dialog).toHaveTextContent(/страницы из раздела «Страницы» не публикует и не меняет/)
@@ -257,7 +256,7 @@ describe('«Новая запланированная задача» (plan 82, �
     const name = within(dialog).getByRole('textbox', { name: 'Название' })
     fireEvent.change(name, { target: { value: 'Kx9mP2vLq7wZ' } })
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Что сделать агенту' }), {
-      target: { value: 'Соберите заявки' },
+      target: { value: 'Пришли курс доллара' },
     })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Создать' }))
     expect(name).toHaveAccessibleDescription('Похоже, в названии пароль или ключ — уберите его')
@@ -298,7 +297,7 @@ describe('«Новая запланированная задача» (plan 82, �
         },
       ),
     )
-    fireEvent.change(field, { target: { value: 'Соберите заявки' } })
+    fireEvent.change(field, { target: { value: 'Пришли курс доллара' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Создать' }))
     expect(
       await within(dialog).findByText(
@@ -313,13 +312,13 @@ describe('«Новая запланированная задача» (plan 82, �
       target: { value: 'Сводка' },
     })
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Что сделать агенту' }), {
-      target: { value: 'Соберите заявки' },
+      target: { value: 'Пришли курс доллара' },
     })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Вместо этого настроить в чате' }))
     expect(push).toHaveBeenCalledWith('/chats/new')
     expect(JSON.parse(sessionStorage.getItem('raditi-new-chat-draft') ?? '{}')).toEqual({
       userId: USER,
-      text: 'Помогите настроить запланированную задачу «Сводка»: Соберите заявки; Ежедневно в 9:00',
+      text: 'Помогите настроить запланированную задачу «Сводка»: Пришли курс доллара; Ежедневно в 9:00',
     })
   })
 
@@ -421,13 +420,28 @@ describe('«Новая запланированная задача» (plan 82, �
 })
 
 describe('a template (Зп9)', () => {
-  it('fills a template in with «Размышление» on the left, and no project to choose (Зп55)', async () => {
+  it('fills a template in with its level of «Размышление» (Зп55, Зп58)', async () => {
     const { dialog } = show({ kind: 'new', template: template('currency-rates') })
     expect(within(dialog).getByRole('textbox', { name: 'Название' })).toHaveValue('Курс валют')
     expect(within(dialog).getByRole('button', { name: 'Размышление: Низкое' })).toBeInTheDocument()
-    expect(within(dialog).queryByRole('button', { name: /^Проект/ })).toBeNull()
-    expect(within(dialog).queryByRole('link', { name: /проект/i })).toBeNull()
     expect(within(dialog).getByRole('button', { name: 'Создать' })).toBeEnabled()
+  })
+
+  // The level is the task's; whether a chat shows the thoughts of its agent is not (Зп7).
+  it('chooses the level of the task, without the switch of the thoughts of a chat', async () => {
+    const { dialog } = show({ kind: 'new', template: template('currency-rates') })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Размышление: Низкое' }))
+    const menu = await screen.findByRole('menu', { name: 'Размышление' })
+    expect(
+      within(menu)
+        .getAllByRole('menuitemradio')
+        .map((item) => item.getAttribute('aria-checked')),
+    ).toEqual(['true', 'false', 'false'])
+    expect(within(menu).queryByRole('menuitemcheckbox')).toBeNull()
+    fireEvent.click(within(menu).getAllByRole('menuitemradio')[2]!)
+    expect(
+      await within(dialog).findByRole('button', { name: 'Размышление: Максимальное' }),
+    ).toBeInTheDocument()
   })
 
   // Зп59: the place to fill in is chosen to be written over, said quietly, then as an error.
@@ -496,12 +510,12 @@ describe('«Изменить задачу»', () => {
     const { dialog } = show({ kind: 'edit', schedule })
     expect(dialog).not.toHaveTextContent('Это время уже прошло')
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Название' }), {
-      target: { value: 'Проверка перед выпуском' },
+      target: { value: 'Сводка к планёрке' },
     })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }))
     await waitFor(() =>
       expect(update).toHaveBeenCalledWith(
-        { scheduleId: schedule.id, name: 'Проверка перед выпуском' },
+        { scheduleId: schedule.id, name: 'Сводка к планёрке' },
         expect.anything(),
       ),
     )

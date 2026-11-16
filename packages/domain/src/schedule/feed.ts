@@ -23,8 +23,8 @@ export type ScheduleLeftAction = (typeof scheduleLeftActions)[number]
 
 /**
  * Why it did not: no rights in the workspace, the limit of enabled tasks, no such task any more,
- * a password or a key in the words, a schedule that does not fit (too often, in the past), or the
- * answer of the agent broke off.
+ * a password or a key in the words, a schedule that does not fit (too often, in the past), a place
+ * of a template left in the words, `[впишите …]` (Зп59), or the answer of the agent broke off.
  */
 export const scheduleLeftReasons = [
   'forbidden',
@@ -33,6 +33,7 @@ export const scheduleLeftReasons = [
   'text_refused',
   'name_refused',
   'invalid',
+  'placeholder',
   'failed',
 ] as const
 export type ScheduleLeftReason = (typeof scheduleLeftReasons)[number]
@@ -46,8 +47,7 @@ const instructions = scheduleInstructionsSchema.refine(
 
 /**
  * `feed.schedule_change` v1 — a task of the chat's author created, changed, paused, resumed or
- * deleted. A task has no project (Зп44): the rows written before carry `siteId`, which the reader
- * of the feed drops.
+ * deleted.
  */
 export const feedScheduleChangePayloadSchema = z.strictObject({
   v: version,

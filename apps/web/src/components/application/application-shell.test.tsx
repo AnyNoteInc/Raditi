@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApplicationShell } from './application-shell'
 
-// «Проекты» left the rail with projects (docs/plan/83-remove-projects.md; plan 82, Зп60): the
-// section of the rail is «Страницы» here, the crumbs say what the shell is given.
+// The section of the rail is «Страницы» here (plan 82, Зп60); the crumbs say what the shell is
+// given.
 vi.mock('next/navigation', () => ({ usePathname: () => '/pages' }))
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
 vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))

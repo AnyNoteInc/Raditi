@@ -30,7 +30,7 @@ beforeEach(() => {
 describe('the rail of the cabinet', () => {
   it('stands «Чаты», the scheduled tasks and «Страницы», and the mark leads to the chats', () => {
     const all = links()
-    // «Проекты» went with projects (docs/plan/83-remove-projects.md, БП1; plan 82, Зп60).
+    // The three sections of the cabinet (plan 82, Зп60).
     expect(all).toHaveLength(3)
     const [chats, scheduled, pages] = all
     expect(chats).toHaveAccessibleName('Чаты')
@@ -64,7 +64,7 @@ describe('the rail of the cabinet', () => {
     )
   })
 
-  it.each(['/chatsy', '/scheduledx', '/projects'])(
+  it.each(['/chatsy', '/scheduledx'])(
     'marks nothing outside its sections, nor on a name that only starts like one: %s',
     (pathname) => {
       mocks.pathname = pathname

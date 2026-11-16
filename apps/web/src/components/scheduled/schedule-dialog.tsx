@@ -425,12 +425,16 @@ function ScheduleFormBody({
                   '&::placeholder': { color: 'text.secondary', opacity: 1 },
                 }}
               />
-              {/* «Размышление» on the left of the frame: a task has no project (Зп55). */}
+              {/*
+                «Размышление» at the left of the frame (Зп55), its menu down; without the switch of
+                the thoughts of a chat, which is not the task's.
+              */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <EffortMenu
                   value={form.effort}
                   onChange={(effort) => change({ effort })}
                   placement="down"
+                  thinkingSwitch={false}
                 />
               </Box>
             </Box>

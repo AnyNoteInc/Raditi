@@ -53,7 +53,7 @@ test('the stopwatch of the rail stands after «Чаты» and before «Стра�
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/chats')
   const links = rail(page).getByRole('link')
-  // «Проекты» went with projects (docs/plan/83-remove-projects.md, БП1; Зп60).
+  // The three sections of the rail (Зп60).
   await expect(links).toHaveCount(3)
   await expect(links.nth(0)).toHaveAccessibleName('Чаты')
   await expect(links.nth(1)).toHaveAccessibleName('Запланированные задачи')
@@ -241,6 +241,7 @@ test('a template opens the window on its place to fill in, and makes a task once
     ).toBe('[впишите адрес сайта]')
     await expect(dialog.getByText('Замените текст в квадратных скобках своим')).toBeVisible()
     await expect(dialog.getByRole('button', { name: 'Размышление: Низкое' })).toBeVisible()
+    // No picker of a project beside it (Зп55).
     await expect(dialog.getByRole('button', { name: /^Проект/ })).toHaveCount(0)
     const create = dialog.getByRole('button', { name: 'Создать' })
     await expect(create).toBeEnabled()

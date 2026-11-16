@@ -69,12 +69,21 @@ describe('the runs', () => {
   it('have their triggers, statuses and reasons', () => {
     expect(scheduledRunTriggers).toEqual(['schedule', 'manual'])
     expect(scheduledRunStatuses).toEqual(['pending', 'started', 'refused', 'skipped'])
+    expect(scheduledRunReasons).toEqual([
+      'no_credits',
+      'needs_tariff',
+      'credits_held',
+      'weekly_limit',
+      'daily_limit',
+      'consent',
+      'text_refused',
+      'previous_running',
+      'missed',
+      'paused',
+      'platform',
+    ])
     expect(Object.keys(scheduledRunReasonText)).toEqual([...scheduledRunReasons])
-    // A task has no project to lose, nor a creator who loses rights in their own workspace (Зп48).
     expect(schedulePausedReasons).toEqual(['completed', 'not_accepted', 'refused'])
-    expect(scheduledRunReasons).not.toContain('project_unavailable')
-    expect(scheduledRunReasons).not.toContain('project_gone')
-    expect(scheduledRunReasons).not.toContain('member_gone')
     expect(Object.keys(schedulePausedReasonText)).toEqual([...schedulePausedReasons])
   })
 
@@ -222,7 +231,7 @@ describe('the notices', () => {
     expect(notificationKinds.map((kind) => scheduledNoticeTitle(kind))).toEqual([
       'Запланированная задача выполнена',
       'Запланированной задаче нужен ваш ответ',
-      // No candidate is made any more: a `ready`, should it come, is a task done (Зп62).
+      // A `ready`, should it come, is a task done (Зп62).
       'Запланированная задача выполнена',
       'Запланированная задача не выполнена',
       'Запланированная задача остановилась',

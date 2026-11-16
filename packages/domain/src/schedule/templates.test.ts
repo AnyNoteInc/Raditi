@@ -58,10 +58,13 @@ describe('the templates of «Шаблоны» (§4.6, Зп58)', () => {
     })
   })
 
-  it('ask nothing of a project, and write as the client asks in a chat', () => {
+  it('ask as the client asks in a chat, and speak to the client on «вы» in a hint', () => {
     for (const template of scheduleTemplates) {
-      expect(template).not.toHaveProperty('project')
+      // «Найди…», «Пришли…»: the request of the client to the agent, as on the landing.
+      expect(template.instructions).toMatch(/^[А-ЯЁ][а-яё]*[ий] /u)
+      // None needs a project or a site's admin (Зп58).
       expect(`${template.instructions} ${template.hint ?? ''}`).not.toMatch(/проект|админк/iu)
+      if (template.hint !== undefined) expect(template.hint).toMatch(/(?:^|\s)ваш/u)
     }
   })
 

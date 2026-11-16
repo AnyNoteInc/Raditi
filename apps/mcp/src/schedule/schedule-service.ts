@@ -22,13 +22,13 @@ import {
 
 /**
  * The scheduled tasks for the agent (docs/plan/82-scheduled-tasks.md, Зп31–Зп34, Зп54): the tasks
- * of the chat's author, in the workspace of the chat — their personal one; a task has no project.
- * Reading
- * is at once; a creation, a change and a deletion are reserved now, checked for everything that can
- * be checked — the rights, the 20 with the reservations open, the words, a run ahead, five changes
- * a turn — and applied by core when the turn ends (Зп33). Who the caller is, its workspace, chat,
- * turn come from the admitted turn, never from the arguments. In a pass of a scheduled
- * run without its client nothing is changed (Зп32): the role offers only `schedule_list` there.
+ * of the chat's author, in the workspace of the chat — their personal one. Reading is at once; a
+ * creation, a change and a deletion are reserved now, checked for everything that can be checked —
+ * the rights, the 20 with the reservations open, the words, a place of a template left unfilled
+ * (Зп59), a run ahead, five changes a turn — and applied by core when the turn ends (Зп33). Who the
+ * caller is, its workspace, chat, turn come from the admitted turn, never from the arguments. In a
+ * pass of a scheduled run without its client nothing is changed (Зп32): the role offers only
+ * `schedule_list` there.
  */
 
 /** A task as the store lists it. */

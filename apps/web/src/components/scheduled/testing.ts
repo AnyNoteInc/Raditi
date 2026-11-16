@@ -5,7 +5,6 @@ import type { ScheduleDetail, ScheduleItem, ScheduleRun } from './schedule-model
 
 export const NOW = new Date('2026-11-15T09:00:00.000Z')
 export const SCHEDULE_ID = '019f2a00-0000-7000-8000-000000000001'
-export const SITE_ID = '019f2a00-0000-7000-8000-0000000000a1'
 export const CHAT_ID = '019f2a00-0000-7000-8000-0000000000c1'
 
 export function scheduleRun(patch: Partial<ScheduleRun> = {}): ScheduleRun {

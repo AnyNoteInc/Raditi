@@ -30,7 +30,7 @@ import { NOW, scheduleDetail, scheduleItem, scheduleRun } from './testing'
 
 const MSK = 'Europe/Moscow'
 const at = (iso: string) => new Date(iso)
-const site = (template: string) => {
+const templateOf = (template: string) => {
   const found = scheduleTemplateOf(template)
   if (found === undefined) throw new Error(`no template ${template}`)
   return found
@@ -73,7 +73,7 @@ describe('the filters, the search and the order of «Ваши» (Зп3)', () => 
   it('finds by the name and by the instructions, without regard to case', () => {
     expect(matchesSearch(on, 'бЕта')).toBe(true)
     expect(matchesSearch(on, 'главную')).toBe(true)
-    expect(matchesSearch(on, 'заявки')).toBe(false)
+    expect(matchesSearch(on, 'курс')).toBe(false)
   })
 
   it('puts the nearest run first, tasks without one after them by name', () => {
@@ -225,16 +225,15 @@ describe('the fields of the window (Зп7, Зп8)', () => {
     expect(formNextRun(manual, NOW)).toBeNull()
   })
 
-  it('fills a template in, with no project to choose (Зп58)', () => {
-    const rates = formOfTemplate(site('currency-rates'), MSK, NOW)
+  it('fills a template in (Зп58)', () => {
+    const rates = formOfTemplate(templateOf('currency-rates'), MSK, NOW)
     expect(rates).toMatchObject({
       name: 'Курс валют',
       effort: 'low',
       templateSlug: 'currency-rates',
     })
-    expect(rates).not.toHaveProperty('siteId')
     expect(triggersOfForm(rates)).toEqual([{ kind: 'weekdays', time: '09:00' }])
-    expect(triggersOfForm(formOfTemplate(site('holidays'), MSK, NOW))).toEqual([
+    expect(triggersOfForm(formOfTemplate(templateOf('holidays'), MSK, NOW))).toEqual([
       { kind: 'monthly', time: '10:00', day: 25 },
     ])
   })
@@ -348,7 +347,7 @@ describe('what stops «Создать» (Зп8, Зп9, Зп11, Зп15)', () => {
       pausedReason: 'completed',
     })
     const saved = formOfSchedule(task, NOW)
-    const renamed = { ...saved, name: 'Проверка перед выпуском' }
+    const renamed = { ...saved, name: 'Сводка к планёрке' }
     expect(hasProblems(formProblems(renamed, NOW, { ...options, submitted: true, saved }))).toBe(
       false,
     )
@@ -388,7 +387,7 @@ describe('what stops «Создать» (Зп8, Зп9, Зп11, Зп15)', () => {
       instructions: 'Напишите, что сделать агенту',
     })
     for (const slug of ['competitors', 'site-check', 'reviews']) {
-      const template = formOfTemplate(site(slug), MSK, NOW)
+      const template = formOfTemplate(templateOf(slug), MSK, NOW)
       // Quiet before «Создать», an error of the field after it.
       expect(formProblems(template, NOW, options).instructions).toBeUndefined()
       expect(formProblems(template, NOW, { ...options, submitted: true }).instructions).toBe(

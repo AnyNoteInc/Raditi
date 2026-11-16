@@ -404,7 +404,6 @@ export class TelegramJobs {
       id: String(event.id),
       at: event.createdAt.toISOString(),
     }
-    // A chat has no site (docs/plan/83-remove-projects.md; docs/plan/82, Зп62).
     const markdown = feedRowMarkdown(row, false)
     const parts = markdown === null ? [] : markdownToTelegramParts(markdown)
     if (parts.length === 0) return 'skipped'

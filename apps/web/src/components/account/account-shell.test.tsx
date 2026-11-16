@@ -19,8 +19,6 @@ describe('AccountShell', () => {
     const rail = screen.getByRole('navigation', { name: 'Основная навигация' })
     expect(within(rail).getByRole('link', { name: 'Чаты' })).toHaveAttribute('href', '/chats')
     expect(within(rail).getByRole('link', { name: 'Страницы' })).toHaveAttribute('href', '/pages')
-    // «Проекты» went with projects (docs/plan/83-remove-projects.md, БП1; plan 82, Зп60).
-    expect(within(rail).queryByRole('link', { name: 'Проекты' })).toBeNull()
     expect(screen.getByRole('main')).toHaveTextContent('Профиль')
     expect(screen.getAllByRole('link')[0]).toHaveAttribute('href', '#account-content')
   })

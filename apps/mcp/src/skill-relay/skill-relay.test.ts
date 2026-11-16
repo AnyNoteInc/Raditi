@@ -11,7 +11,7 @@ import type { RelayedServer, RelayOutcome, SkillServerStore } from './skill-serv
 import { upstreamResolver } from './upstream.ts'
 
 const TOKEN = `mcp_${'a'.repeat(64)}`
-const SITE = '0199a000-0000-7000-8000-000000000001'
+const WORKSPACE = '0199a000-0000-7000-8000-000000000001'
 const SECRET = 'sk_live_0123456789abcdef'
 
 const servers: Server[] = []
@@ -98,7 +98,7 @@ async function stand(
       token === TOKEN
         ? ({
             keyId: '0199a000-0000-7000-8000-0000000000aa',
-            workspaceId: options.workspaceId ?? SITE,
+            workspaceId: options.workspaceId ?? WORKSPACE,
             unattended: options.unattended ?? false,
           } as McpTurnAccess)
         : null,
@@ -275,7 +275,7 @@ describe('SkillRelay', () => {
     expect(header.recorded).toEqual([
       expect.objectContaining({ state: 'failed', error: 'unauthorized' }),
     ])
-    expect(header.forget).toHaveBeenCalledWith(SITE, 'menu')
+    expect(header.forget).toHaveBeenCalledWith(WORKSPACE, 'menu')
     const oauth = await stand({
       server: { authKind: 'oauth', headerName: null },
       secret: { secret: { accessToken: 'oauth-access-token-1' }, version: 1 },
@@ -354,12 +354,23 @@ describe('SkillRelay', () => {
       '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
       notification,
     ])
+    // A key said twice: the server gets the message as it was judged, written again — never a
+    // body it might read as the call its first `method` names.
+    const twice = '{"jsonrpc":"2.0","id":8,"method":"tools/call","method":"tools/list"}'
+    expect((await call('/mcp/skill/menu', { body: twice })).status).toBe(200)
+    expect(seen.at(-1)!.body).toBe('{"jsonrpc":"2.0","id":8,"method":"tools/list"}')
+    const last = '{"jsonrpc":"2.0","id":9,"method":"tools/list","method":"tools/call"}'
+    expect(JSON.parse((await call('/mcp/skill/menu', { body: last })).body)).toMatchObject({
+      id: 9,
+      result: { isError: true },
+    })
+    expect(seen).toHaveLength(3)
     // A body above the limit is refused, declared or not, and none of it reaches the server.
     expect((await call('/mcp/skill/menu', { body: 'x'.repeat(4 * 1024 * 1024 + 1) })).status).toBe(
       413,
     )
     expect(await chunked('/mcp/skill/menu', 5)).toBe(413)
-    expect(seen).toHaveLength(2)
+    expect(seen).toHaveLength(3)
     // The refusal is the pass's, not the server's: nothing is recorded of the server.
     expect(recorded.filter((outcome) => outcome.state !== 'ok')).toEqual([])
     // Once the client wrote, the same call goes to the server.

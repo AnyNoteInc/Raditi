@@ -323,6 +323,7 @@ export const feedScheduleLeftReasonText: Readonly<Record<ScheduleLeftReason, str
     text_refused: 'в инструкции нельзя оставлять пароли и ключи',
     name_refused: 'в названии нельзя оставлять пароли и ключи',
     invalid: 'расписание не подходит',
+    placeholder: 'в инструкции остался текст в квадратных скобках',
     failed: 'ответ агента оборвался',
   })
 

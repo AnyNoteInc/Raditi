@@ -173,11 +173,10 @@ export function FeedScheduleChange({
     )
 
   const state = stateLine(row, task, now)
-  // No line of a project: a task has none (Зп57).
   const details = [
     effortWord(row.effort),
     row.notify ? scheduleChatText.notifyOn : scheduleChatText.notifyOff,
-  ].filter((part): part is string => part !== null)
+  ]
 
   return (
     <Box

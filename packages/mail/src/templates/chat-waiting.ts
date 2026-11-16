@@ -33,7 +33,7 @@ const lines: Record<ChatKind, string> = {
 const scheduledSubjects: Record<ChatWaitingKind, string> = {
   answered: 'Запланированная задача выполнена',
   question: 'Запланированной задаче нужен ваш ответ',
-  // No pass brings changes any more (docs/plan/83-remove-projects.md, БП2; Зп62).
+  // The kind of the chats, kept as they keep it (Зп62): a task done.
   ready: 'Запланированная задача выполнена',
   failed: 'Запланированная задача не выполнена',
   limit: 'Запланированная задача остановилась',

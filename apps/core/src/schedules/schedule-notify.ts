@@ -18,10 +18,9 @@ import type {
 // The notices of a scheduled task itself (docs/plan/82-scheduled-tasks.md, Зп22, Зп38, Зп39): a
 // run that did not start, a task that paused, a run the platform missed. They open the page of
 // the task, not a chat; the push says the kind, the cabinet the name and the reason. A run of
-// «Запустить сейчас» is told in the cabinet by its own words and never here (Зп24). A task has no
-// project to lose (Зп48, Зп49). A refusal for the reason told last is
-// told once until the task starts again, or once a day; a missed run once a day; a notice of one
-// kind is sent once per run whoever asks again.
+// «Запустить сейчас» is told in the cabinet by its own words and never here (Зп24). A refusal for
+// the reason told last is told once until the task starts again, or once a day; a missed run once
+// a day; a notice of one kind is sent once per run whoever asks again.
 
 /** A refusal for the same reason, a missed run: told again after this long at the earliest. */
 export const SCHEDULE_REPEAT_NOTICE_MS = 24 * 60 * 60_000

@@ -24,7 +24,7 @@ const CHAT_TITLES = Object.freeze({
 const SCHEDULED_TITLES = Object.freeze({
   answered: 'Запланированная задача выполнена',
   question: 'Запланированной задаче нужен ваш ответ',
-  // No pass brings changes any more (docs/plan/83-remove-projects.md; plan 82, Зп62).
+  // The kind of the chats, kept as they keep it (plan 82, Зп62): a task done.
   ready: 'Запланированная задача выполнена',
   failed: 'Запланированная задача не выполнена',
   limit: 'Запланированная задача остановилась',

@@ -51,7 +51,7 @@ describe('the state of a run of a scheduled task (docs/plan/82, Зп5)', () => {
   })
 
   it('tells a run that started by the state of its chat, as the list of chats does', () => {
-    // A status of a release no chat reaches any more is told as the nearest (Зп47).
+    // A status no chat reaches now is told as the nearest (Зп47).
     for (const status of ['queued', 'preparing', 'running', 'deploying', 'verifying'] as const)
       expect(runStateOf(started, chat({ status }))).toEqual({ kind: 'running' })
     expect(runStateOf(started, chat({ status: 'done' }))).toEqual({ kind: 'done' })

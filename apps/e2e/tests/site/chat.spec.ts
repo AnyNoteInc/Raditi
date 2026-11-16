@@ -76,8 +76,8 @@ for (const [name, width, height] of viewports) {
       await expectChatsCurrent(page)
       const links = page.getByRole('navigation', { name: 'Основная навигация' }).getByRole('link')
       await expect(links.nth(0)).toHaveAccessibleName('Чаты')
-      // The scheduled tasks after «Чаты» (docs/plan/82-scheduled-tasks.md, Зп1), then «Страницы»;
-      // no «Проекты» (docs/plan/83-remove-projects.md, БП1; plan 82, Зп60).
+      // The scheduled tasks after «Чаты» (docs/plan/82-scheduled-tasks.md, Зп1), then «Страницы»
+      // (Зп60).
       await expect(links).toHaveCount(3)
       await expect(links.nth(1)).toHaveAccessibleName('Запланированные задачи')
       await expect(links.nth(2)).toHaveAccessibleName('Страницы')

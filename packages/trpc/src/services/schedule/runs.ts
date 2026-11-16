@@ -57,8 +57,7 @@ export interface StartedRun {
 /**
  * Why `createDialog` refused the chat of a run (§4.3, Зп48): a reason of the client or of the
  * platform — recorded, the delivery done — or `retry`: a failure that may pass, so the run keeps
- * waiting and core delivers it again. A chat has no project (docs/plan/83-remove-projects.md,
- * БП1): `TASK_NOT_ACCEPTED` and NOT_FOUND are faults of the platform.
+ * waiting and core delivers it again. `TASK_NOT_ACCEPTED` and NOT_FOUND are faults of the platform.
  */
 export function refusalReasonOf(error: unknown): ScheduledRunReason | 'retry' {
   if (!isDomainError(error)) return 'retry'
@@ -150,9 +149,9 @@ async function record(
  * `started` with it; (в) it came late — a later run of the task waits or started, or its moment is
  * older than the catch-up limit — `skipped/missed`; its task was deleted, or switched off since a
  * run of its schedule was written — `skipped/paused`; (г) the creator has documents to accept —
- * `refused/consent` (Зп48); (д) `createDialog` from the snapshot, named by the task — a chat
- * without a project in the creator's personal workspace, where the task is (Зп45) — it writes the
- * run `started` with its chat, or makes nothing when the run was closed meanwhile; (е) the outcome:
+ * `refused/consent` (Зп48); (д) `createDialog` from the snapshot, named by the task — a chat in
+ * the creator's personal workspace, where the task is (Зп45) — it writes the run `started` with
+ * its chat, or makes nothing when the run was closed meanwhile; (е) the outcome:
  * what the run holds then.
  *
  * Throws only for a failure that may pass — Vault, a refusal of 503, what is not a DomainError — so

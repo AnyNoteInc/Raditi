@@ -62,12 +62,8 @@ export function scheduleLeftReasonOf(code: string): ScheduleLeftReason {
   if (code === 'SCHEDULE_LIMIT') return 'limit'
   if (code === 'SCHEDULE_NOT_FOUND' || code === 'NOT_FOUND') return 'not_found'
   if (code.startsWith('TASK_TEXT_')) return 'text_refused'
-  if (
-    code === 'SCHEDULE_TOO_OFTEN' ||
-    code === 'SCHEDULE_IN_PAST' ||
-    code === 'SCHEDULE_TEMPLATE_PLACEHOLDER' ||
-    code === 'BAD_REQUEST'
-  )
+  if (code === 'SCHEDULE_TEMPLATE_PLACEHOLDER') return 'placeholder'
+  if (code === 'SCHEDULE_TOO_OFTEN' || code === 'SCHEDULE_IN_PAST' || code === 'BAD_REQUEST')
     return 'invalid'
   return 'failed'
 }

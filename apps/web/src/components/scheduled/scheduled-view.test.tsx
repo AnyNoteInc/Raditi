@@ -157,8 +157,6 @@ describe('before the first task (Зп4)', () => {
     expect(screen.getByRole('button', { name: 'Курс валют' })).toHaveAccessibleDescription(
       /По\sбудням\sв\s9:00/,
     )
-    // Зп58: none of the six is marked as needing a project.
-    expect(screen.queryByText('Нужен проект')).toBeNull()
     // No tools over an empty list.
     expect(screen.queryByRole('button', { name: 'Фильтр задач' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Порядок задач' })).toBeNull()
@@ -216,8 +214,6 @@ describe('a task of «Ваши» (Зп5)', () => {
       `/scheduled/${SCHEDULE_ID}`,
     )
     expect(row).toHaveTextContent('По будням в 9:00')
-    // A task has no project (Зп57).
-    expect(row).not.toHaveTextContent(/проект/i)
     expect(row).toHaveTextContent(/Следующий запуск: (завтра|.*) в 9:00/)
     expect(row).toHaveTextContent(/Выполнена · .* в 9:00/)
     const toggle = within(row).getByRole('switch', { name: 'Включить задачу «Проверка сайта»' })
@@ -331,7 +327,7 @@ describe('the tools of «Ваши» (Зп3)', () => {
   const many = Array.from({ length: 7 }, (_, index) =>
     scheduleItem({
       id: `019f2a00-0000-7000-8000-00000000010${index}`,
-      name: index === 0 ? 'Заявки за сутки' : `Задача ${index}`,
+      name: index === 0 ? 'Сводка курсов' : `Задача ${index}`,
       enabled: index % 2 === 0,
       nextRunAt: index % 2 === 0 ? new Date(`2026-11-1${6 + (index % 3)}T06:00:00.000Z`) : null,
       lastRun: index === 3 ? scheduleRun({ state: { kind: 'failed' } }) : null,
@@ -343,7 +339,7 @@ describe('the tools of «Ваши» (Зп3)', () => {
     show(<ScheduledView userId={USER} tab="yours" />)
     fireEvent.click(await screen.findByRole('button', { name: 'Найти задачу' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Поиск задач' }), {
-      target: { value: 'заявки' },
+      target: { value: 'курсов' },
     })
     const rows = within(
       screen.getByRole('list', { name: 'Ваши запланированные задачи' }),
@@ -364,7 +360,7 @@ describe('the tools of «Ваши» (Зп3)', () => {
     expect(screen.queryByRole('button', { name: 'Найти задачу' })).toBeNull()
   })
 
-  it('filters by state with counts, and by nothing else (Зп57)', async () => {
+  it('filters by state with counts (Зп3, Зп57)', async () => {
     list(many)
     show(<ScheduledView userId={USER} tab="yours" />)
     fireEvent.click(await screen.findByRole('button', { name: 'Фильтр задач' }))
@@ -374,7 +370,6 @@ describe('the tools of «Ваши» (Зп3)', () => {
         .getAllByRole('button')
         .map((each) => each.textContent),
     ).toEqual(['Все7', 'Включены4', 'На паузе3', 'Завершены0', 'С ошибкой1'])
-    expect(screen.queryByRole('group', { name: 'Проект' })).toBeNull()
     // On a phone the row is one line that scrolls sideways, its chips of their own width.
     const phone = mediaStyleOf(states, PHONE_MEDIA)
     expect(phone).toContain('flex-wrap:nowrap')
@@ -414,7 +409,7 @@ describe('the tools of «Ваши» (Зп3)', () => {
       .getAllByRole('heading', { level: 3 })
       .map((each) => each.textContent)
     expect(names[0]).toBe('Задача 1')
-    expect(names.at(-1)).toBe('Заявки за сутки')
+    expect(names.at(-1)).toBe('Сводка курсов')
   })
 })
 

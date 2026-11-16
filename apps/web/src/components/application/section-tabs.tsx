@@ -5,8 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 // The tabs of the third layer of a section (docs/plan/64-cabinet-navigation.md, Н5, Н6): each a
-// page of its own. Kept from the sections of a project, which went with projects
-// (docs/plan/83-remove-projects.md, БП1), for «Запланированные задачи» (docs/plan/82, Зп2).
+// page of its own: «Ваши» and «Шаблоны» of «Запланированные задачи» (docs/plan/82, Зп2).
 
 /**
  * One tab of a section. It is the current one while the page under the section's root is one of

@@ -47,9 +47,7 @@ describe('schedule_create', () => {
     expect(scheduleCreateArgumentsSchema.safeParse({ ...create, workspaceId: id }).success).toBe(
       false,
     )
-    // A task has no project (Зп54): the field is refused as any key the tool does not know.
-    for (const project of [id, 'this_chat', 'none'])
-      expect(scheduleCreateArgumentsSchema.safeParse({ ...create, project }).success).toBe(false)
+    expect(scheduleCreateArgumentsSchema.safeParse({ ...create, extra: true }).success).toBe(false)
     expect(scheduleCreateArgumentsSchema.safeParse({ ...create, effort: 'medium' }).success).toBe(
       false,
     )
@@ -199,7 +197,7 @@ describe('schedule_update and schedule_delete', () => {
     expect(
       scheduleUpdateArgumentsSchema.safeParse({
         scheduleId: id,
-        project: 'none',
+        workspaceId: id,
         confirmedByClient: true,
       }).success,
     ).toBe(false)

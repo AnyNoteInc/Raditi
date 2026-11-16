@@ -3,7 +3,7 @@ import type { ScheduleTrigger } from './triggers.ts'
 
 /**
  * The templates of «Шаблоны» (docs/plan/82-scheduled-tasks.md, §4.6, Зп9, Зп58): six everyday
- * errands, none of which needs a project, a file or a write on a site. A click opens the window
+ * errands, none of which needs a file or a write on a site. A click opens the window
  * with the fields filled in, nothing is created before «Создать». The instructions are written as
  * the client's own request in the chat, as «Что можно поручить» of the landing; the words of the
  * platform to the client are in the brackets of a place to fill in, and in the hint.

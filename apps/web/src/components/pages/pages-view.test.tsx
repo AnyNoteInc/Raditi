@@ -320,7 +320,7 @@ describe('«Страницы» before the first page (plan 73, Дер6)', () => 
 
 describe('the heading «Страницы» (plan 73, Дер7)', () => {
   // The shell gives the padding: «Страницы» adds none of its own, so its heading stands where the
-  // heading of «Запланированные задачи» and «Проекты», its neighbours on the rail, does.
+  // heading of «Запланированные задачи», its neighbour on the rail, does.
   it('adds no padding of its own to the shell', async () => {
     show(<PagesView userId={USER} />)
     const heading = await screen.findByRole('heading', { level: 1 })

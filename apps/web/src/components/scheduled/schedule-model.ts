@@ -428,7 +428,7 @@ const manualDraft = (timezone: string, now: Date): TriggerDraft => ({
   frequency: 'manual',
 })
 
-/** The window of a template (Зп9, Зп58): its fields; a task has no project (Зп44). */
+/** The window of a template (Зп9, Зп58): its fields. */
 export function formOfTemplate(
   template: ScheduleTemplate,
   timezone: string,

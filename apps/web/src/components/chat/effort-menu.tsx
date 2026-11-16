@@ -37,7 +37,8 @@ export interface EffortMenuHandle {
  * the switch of `/thinking` (owner's request of 15.11.2026): it is this viewer's choice, open
  * whatever the level, and the menu stays open on it. `placement` — where the menu opens: up from
  * the field at the bottom of the chat, down from a field at the top of a window
- * (docs/plan/82-scheduled-tasks.md, Зп7).
+ * (docs/plan/82-scheduled-tasks.md, Зп7). The window of a scheduled task has no switch
+ * (`thinkingSwitch`): the level is the task's, how a chat shows its thoughts is not.
  */
 export function EffortMenu({
   value,
@@ -46,6 +47,7 @@ export function EffortMenu({
   lockedText = effortText.locked,
   handle,
   placement = 'up',
+  thinkingSwitch = true,
 }: {
   value: ReasoningEffort
   onChange: (effort: ReasoningEffort) => void
@@ -54,6 +56,8 @@ export function EffortMenu({
   lockedText?: string
   handle?: Ref<EffortMenuHandle>
   placement?: 'up' | 'down'
+  /** Whether the menu ends with the switch of `/thinking`, which is of the chats. */
+  thinkingSwitch?: boolean
 }) {
   const down = placement === 'down'
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
@@ -143,29 +147,31 @@ export function EffortMenu({
             </Box>
           </MenuItem>
         ))}
-        <Divider component="li" role="presentation" sx={{ my: 0.5 }} />
-        <MenuItem
-          role="menuitemcheckbox"
-          aria-checked={thinking}
-          onClick={() => toggleThinking()}
-          sx={{ gap: 1.5, py: 0.5 }}
-        >
-          <ListItemText
-            primary={effortText.showThinking}
-            secondary={effortText.showThinkingHint}
-            slotProps={{
-              primary: { sx: { fontSize: 14, fontWeight: 500 } },
-              secondary: { sx: { fontSize: 13 } },
-            }}
-          />
-          <Switch
-            size="small"
-            checked={thinking}
-            tabIndex={-1}
-            slotProps={{ input: { 'aria-hidden': true } }}
-            sx={{ pointerEvents: 'none' }}
-          />
-        </MenuItem>
+        {thinkingSwitch ? <Divider component="li" role="presentation" sx={{ my: 0.5 }} /> : null}
+        {thinkingSwitch ? (
+          <MenuItem
+            role="menuitemcheckbox"
+            aria-checked={thinking}
+            onClick={() => toggleThinking()}
+            sx={{ gap: 1.5, py: 0.5 }}
+          >
+            <ListItemText
+              primary={effortText.showThinking}
+              secondary={effortText.showThinkingHint}
+              slotProps={{
+                primary: { sx: { fontSize: 14, fontWeight: 500 } },
+                secondary: { sx: { fontSize: 13 } },
+              }}
+            />
+            <Switch
+              size="small"
+              checked={thinking}
+              tabIndex={-1}
+              slotProps={{ input: { 'aria-hidden': true } }}
+              sx={{ pointerEvents: 'none' }}
+            />
+          </MenuItem>
+        ) : null}
       </Menu>
     </>
   )

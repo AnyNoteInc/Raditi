@@ -37,8 +37,8 @@ export function scheduledNoticeTitle(kind: NotificationKind, cause?: NoticeLimit
     case 'question':
       return 'Запланированной задаче нужен ваш ответ'
     case 'ready':
-      // No pass has a candidate any more (docs/plan/83-remove-projects.md, БП2; Зп62): a `ready`
-      // of a pass without the client, should it come, says the task was done.
+      // The kind of the chats, kept as they keep it (Зп62): of a pass without the client, should
+      // it come, it says the task was done.
       return 'Запланированная задача выполнена'
     case 'failed':
       return 'Запланированная задача не выполнена'

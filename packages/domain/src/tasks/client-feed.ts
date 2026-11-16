@@ -1306,7 +1306,6 @@ const readScheduleChange = z.object({
       canonicalTimezone(timezone) === null ? DEFAULT_SCHEDULE_TIMEZONE : timezone,
     ),
   nextRunAt: z.iso.datetime({ offset: true }).nullable(),
-  // A row written before plan 83 names a project too (`siteId`): dropped, as any other key.
   effort: known(reasoningEfforts, 'high' as const),
   notify: z.boolean(),
 })

@@ -61,8 +61,8 @@ const now = new Date('2026-11-15T12:00:00.000Z')
 function task(patch: Partial<ScheduledTaskItem> = {}): ScheduledTaskItem {
   return {
     id: SCHEDULE_ID,
-    name: 'Заявки за сутки',
-    instructions: 'Соберите заявки с форм за прошедшие сутки и пришлите короткую сводку.',
+    name: 'Сводка курсов',
+    instructions: 'Пришли курс доллара, евро и юаня по ЦБ и насколько он изменился со вчера.',
     effort: 'low',
     triggers: [{ kind: 'weekdays', time: '08:00' }],
     timezone: 'Europe/Moscow',
@@ -89,7 +89,7 @@ function show(node: React.ReactNode) {
   return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>)
 }
 
-const card = (name = 'Заявки за сутки') =>
+const card = (name = 'Сводка курсов') =>
   screen.findByRole('article', { name: `Запланированная задача «${name}»` })
 
 beforeEach(() => {
@@ -103,14 +103,14 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} />)
     const shown = within(await card())
     expect(shown.getByRole('heading', { level: 2, name: 'Запланированная задача создана' }))
-    const link = await shown.findByRole('link', { name: 'Заявки за сутки' })
+    const link = await shown.findByRole('link', { name: 'Сводка курсов' })
     expect(link.getAttribute('href')).toBe(`/scheduled/${SCHEDULE_ID}`)
     expect(shown.getByText('По будням в 8:00')).toBeTruthy()
     expect(shown.getByText('Следующий запуск: завтра в 8:00')).toBeTruthy()
     expect(shown.getByText('Размышление: низкое · Уведомит, когда выполнится')).toBeTruthy()
     // Short instructions stand in the card as written.
     expect(
-      shown.getByText('Соберите заявки с форм за прошедшие сутки и пришлите короткую сводку.'),
+      shown.getByText('Пришли курс доллара, евро и юаня по ЦБ и насколько он изменился со вчера.'),
     ).toBeTruthy()
     expect(shown.queryByRole('button', { name: 'Показать инструкцию' })).toBeNull()
   })
@@ -131,7 +131,7 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     expect(hide.getAttribute('aria-controls')).toBe(words.id)
   })
 
-  it('names the level and a task that does not notify, and no project (Зп57)', async () => {
+  it('names the level and a task that does not notify', async () => {
     list.mockResolvedValue({
       schedules: [task({ effort: 'max', notify: false })],
       timezone: 'Europe/Moscow',
@@ -146,7 +146,6 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     expect(
       await shown.findByText('Размышление: максимальное · Без уведомления о выполнении'),
     ).toBeTruthy()
-    expect(shown.queryByText(/проект/i)).toBeNull()
   })
 
   it('tells the next run as the task has it now, or why it does not run', async () => {
@@ -180,10 +179,10 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     const shown = within(await card())
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     expect(shown.queryByRole('link')).toBeNull()
-    expect(shown.getByText('Заявки за сутки')).toBeTruthy()
+    expect(shown.getByText('Сводка курсов')).toBeTruthy()
     expect(shown.getByText('Следующий запуск: завтра в 8:00')).toBeTruthy()
     expect(
-      shown.queryByRole('button', { name: 'Запустить сейчас задачу «Заявки за сутки»' }),
+      shown.queryByRole('button', { name: 'Запустить сейчас задачу «Сводка курсов»' }),
     ).toBeNull()
     expect(shown.getByText('Размышление: низкое · Уведомит, когда выполнится')).toBeTruthy()
   })
@@ -204,12 +203,12 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
   it('opens the task, and names each of its buttons by it (Зп35)', async () => {
     show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} onEdit={vi.fn()} />)
     const shown = within(await card())
-    const open = await shown.findByRole('link', { name: 'Открыть задачу «Заявки за сутки»' })
+    const open = await shown.findByRole('link', { name: 'Открыть задачу «Сводка курсов»' })
     expect(open.getAttribute('href')).toBe(`/scheduled/${SCHEDULE_ID}`)
     expect(open.textContent).toBe('Открыть задачу')
     // The words shown stand first in the name: «Изменить» of the last message is another one.
     expect(shown.getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(
-      ['Изменить задачу «Заявки за сутки»', 'Запустить сейчас задачу «Заявки за сутки»'],
+      ['Изменить задачу «Сводка курсов»', 'Запустить сейчас задачу «Сводка курсов»'],
     )
     expect(shown.getByRole('button', { name: /^Изменить задачу/ }).textContent).toBe('Изменить')
   })
@@ -219,7 +218,7 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} />)
     const shown = within(await card())
     fireEvent.click(
-      await shown.findByRole('button', { name: 'Запустить сейчас задачу «Заявки за сутки»' }),
+      await shown.findByRole('button', { name: 'Запустить сейчас задачу «Сводка курсов»' }),
     )
     await waitFor(() => expect(push).toHaveBeenCalledWith(`/chats/${RUN_CHAT_ID}`))
     expect(runNow).toHaveBeenCalledWith({ scheduleId: SCHEDULE_ID }, expect.anything())
@@ -229,17 +228,17 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     const onEdit = vi.fn()
     show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} onEdit={onEdit} />)
     const shown = within(await card())
-    fireEvent.click(await shown.findByRole('button', { name: 'Изменить задачу «Заявки за сутки»' }))
+    fireEvent.click(await shown.findByRole('button', { name: 'Изменить задачу «Сводка курсов»' }))
     expect(onEdit).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ id: SCHEDULE_ID, name: 'Заявки за сутки' }),
+      expect.objectContaining({ id: SCHEDULE_ID, name: 'Сводка курсов' }),
     )
   })
 
   it('offers no window where the chat has none to open', async () => {
     show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} />)
     const shown = within(await card())
-    await shown.findByRole('button', { name: 'Запустить сейчас задачу «Заявки за сутки»' })
-    expect(shown.queryByRole('button', { name: 'Изменить задачу «Заявки за сутки»' })).toBeNull()
+    await shown.findByRole('button', { name: 'Запустить сейчас задачу «Сводка курсов»' })
+    expect(shown.queryByRole('button', { name: 'Изменить задачу «Сводка курсов»' })).toBeNull()
   })
 
   it('tells why the task did not start, in the server’s words, and stays', async () => {
@@ -247,7 +246,7 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} />)
     const shown = within(await card())
     fireEvent.click(
-      await shown.findByRole('button', { name: 'Запустить сейчас задачу «Заявки за сутки»' }),
+      await shown.findByRole('button', { name: 'Запустить сейчас задачу «Сводка курсов»' }),
     )
     expect((await shown.findByRole('alert')).textContent).toBe('Задача уже выполняется.')
     expect(push).not.toHaveBeenCalled()
@@ -285,7 +284,7 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
         push
       />,
     )
-    expect(screen.getByText('Запланированная задача удалена: «Заявки за сутки»')).toBeTruthy()
+    expect(screen.getByText('Запланированная задача удалена: «Сводка курсов»')).toBeTruthy()
     expect(screen.queryByRole('article')).toBeNull()
     expect(screen.queryByRole('button')).toBeNull()
     expect(list).not.toHaveBeenCalled()
@@ -309,7 +308,7 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     show(<FeedScheduleChange row={scheduleChangeRow('1', { triggers: null })} now={now} />)
     const shown = within(await card())
     expect(shown.queryByText(/По будням/)).toBeNull()
-    expect(await shown.findByRole('link', { name: 'Заявки за сутки' })).toBeTruthy()
+    expect(await shown.findByRole('link', { name: 'Сводка курсов' })).toBeTruthy()
   })
 })
 
@@ -320,6 +319,17 @@ describe('a change of a task that did not come true (Зп35)', () => {
     expect(screen.getByText('Задачу не удалось сохранить: ответ агента оборвался.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Настроить вручную' }))
     expect(onSetUp).toHaveBeenCalledOnce()
+  })
+
+  it('tells a place of a template left unfilled in the words of the domain (Зп59)', () => {
+    show(
+      <FeedScheduleLeft row={scheduleLeftRow('1', { reason: 'placeholder' })} onSetUp={vi.fn()} />,
+    )
+    expect(
+      screen.getByText(
+        'Задачу не удалось сохранить: в инструкции остался текст в квадратных скобках.',
+      ),
+    ).toBeTruthy()
   })
 
   it('tells why and leads to «Расписание» where the chat has no window to open', () => {

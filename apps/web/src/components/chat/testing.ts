@@ -172,7 +172,6 @@ export function agentCommandRow(id: string, command: FeedAgentCommandId = 'init'
   }
 }
 
-/** A pass that failed and left the chat open: the client writes «продолжи» (28.10.2026). */
 /** A scheduled task the agent created at the end of a turn (docs/plan/82-scheduled-tasks.md, Зп35). */
 export const SCHEDULE_ID = '0199a3f2-0000-7000-8000-0000000000a7'
 
@@ -186,8 +185,8 @@ export function scheduleChangeRow(
     type: 'feed.schedule_change',
     action: 'created',
     scheduleId: SCHEDULE_ID,
-    name: 'Заявки за сутки',
-    instructions: 'Соберите заявки с форм за прошедшие сутки и пришлите короткую сводку.',
+    name: 'Сводка курсов',
+    instructions: 'Пришли курс доллара, евро и юаня по ЦБ и насколько он изменился со вчера.',
     triggers: [{ kind: 'weekdays', time: '08:00' }],
     timezone: 'Europe/Moscow',
     nextRunAt: '2026-11-16T05:00:00.000Z',
@@ -207,12 +206,13 @@ export function scheduleLeftRow(
     at: nextAt(),
     type: 'feed.schedule_left',
     action: 'create',
-    name: 'Идеи для новостей',
+    name: 'Идеи для постов',
     reason: 'limit',
     ...patch,
   }
 }
 
+/** A pass that failed and left the chat open: the client writes «продолжи» (28.10.2026). */
 export function failureRow(id: string, turn: number): FeedRow {
   return {
     id,

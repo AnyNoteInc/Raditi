@@ -22,7 +22,6 @@ const runSign: Readonly<Record<ScheduledRunState['kind'], { icon: AppIconName; t
     running: { icon: 'clock', tone: 'text.secondary' },
     done: { icon: 'check', tone: 'text.primary' },
     waiting: { icon: 'chat', tone: 'primary.main' },
-    ready: { icon: 'eye', tone: 'primary.main' },
     failed: { icon: 'warning', tone: 'error.main' },
     stopped: { icon: 'warning', tone: 'error.main' },
     chat_deleted: { icon: 'trash', tone: 'text.secondary' },

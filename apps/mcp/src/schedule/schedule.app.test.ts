@@ -5,6 +5,7 @@ import {
   DomainError,
   resolveScheduleToolTriggers,
   scheduleLimitReached,
+  scheduleTemplatePlaceholder,
   type ScheduleTrigger,
 } from '@repo/domain'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
@@ -34,7 +35,7 @@ const authorId = '01960000-0000-7000-8000-0000000000a3'
 // 15 November 2026, 10:05 in Moscow.
 const NOW = new Date('2026-11-15T07:05:00Z')
 
-/** A chat with the browser: the turn the role admitted. A chat has no project (Зп44, Зп54). */
+/** A chat with the browser: the turn the role admitted, in its author's personal workspace. */
 const browserChat: McpTurnAccess = {
   keyId: '01960000-0000-7000-8000-000000000021',
   taskId: '01960000-0000-7000-8000-000000000022',
@@ -426,7 +427,6 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
     const { server } = await start(plainChat, store)
     const res = answer(await post(server, call('schedule_list', {})))
     expect(res.value).toMatchObject({ timezone: 'Europe/Moscow' })
-    expect(res.value).not.toHaveProperty('project')
     expect(res.value.schedules).toEqual([
       expect.objectContaining({
         state: 'completed',
@@ -527,10 +527,7 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
       { ...create, confirmedByClient: undefined },
       { ...create, confirmedByClient: false },
       { ...create, workspaceId: browserChat.workspaceId },
-      // A task has no project (Зп54): the field is no argument of the tool.
-      { ...create, siteId: browserChat.workspaceId },
-      { ...create, project: 'none' },
-      { ...create, project: 'this_chat' },
+      { ...create, chatId: browserChat.taskId },
     ])
       expect((await post(server, call('schedule_create', args))).status, JSON.stringify(args)).toBe(
         400,
@@ -555,6 +552,28 @@ describe('the scheduled tasks through the gateway (plan 82, Зп31–Зп34)', (
       expect(res).toMatchObject({ status: 200, isError: true, value: { ok: false, code } })
       results.push(res.value)
     }
+    // Instructions with the place of a template left for the client's words (Зп59): the store
+    // refuses them, and the agent hears it as its tool's result — on a creation and a change.
+    const unfilled = 'Открой сайт [впишите адрес сайта] и проверь главную.'
+    for (const body of [
+      call('schedule_create', { ...create, instructions: unfilled }),
+      call('schedule_update', { scheduleId, instructions: unfilled, confirmedByClient: true }),
+    ]) {
+      store.reserve.mockRejectedValueOnce(scheduleTemplatePlaceholder())
+      expect(answer(await post(server, body))).toMatchObject({
+        status: 200,
+        isError: true,
+        value: {
+          ok: false,
+          code: 'SCHEDULE_TEMPLATE_PLACEHOLDER',
+          message: 'Замените текст в квадратных скобках своим',
+        },
+      })
+    }
+    expect(store.reserve.mock.calls.slice(-2).map((each) => each[0].change)).toEqual([
+      expect.objectContaining({ kind: 'create', instructions: unfilled }),
+      { kind: 'update', scheduleId, instructions: unfilled },
+    ])
     // The words of the refusal as the domain has them: the client's, which the agent retells.
     expect(results[0]).toEqual({
       ok: false,

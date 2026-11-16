@@ -321,7 +321,8 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { ...scheduleChange, action: 'deleted', triggers: [], nextRunAt: null },
   ],
   'feed.schedule_left': [
-    { v: 1, action: 'create', name: 'Заявки за сутки', reason: 'limit' },
+    { v: 1, action: 'create', name: 'Отзывы за неделю', reason: 'limit' },
+    { v: 1, action: 'update', name: 'Цены конкурентов', reason: 'placeholder' },
     { v: 1, action: 'delete', name: null, reason: 'not_found' },
   ],
 }

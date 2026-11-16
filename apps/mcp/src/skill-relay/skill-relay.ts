@@ -136,12 +136,17 @@ function bodyOf(req: IncomingMessage, limit: number): Promise<Buffer | 'over' | 
 /**
  * What a POST of a pass without its client asks of the server: `call` with the id of the tool
  * call it is, `relay` for anything else of the protocol (initialize, tools/list, a notification, an
- * answer to the server), `refuse` for what cannot be read — a body that is not JSON, or a batch
- * that holds a tool call (the protocol of the CLI sends no batch).
+ * answer to the server) with the body the server gets — the message as it was read, written
+ * again, so a server that reads a repeated key otherwise than JSON.parse (the first `method`, not
+ * the last) sees exactly what was judged —, `refuse` for what cannot be read — a body that is not
+ * JSON, or a batch that holds a tool call (the protocol of the CLI sends no batch).
  */
 function unattendedPost(
   body: Buffer,
-): { kind: 'call'; id: string | number | null } | { kind: 'relay' } | { kind: 'refuse' } {
+):
+  | { kind: 'call'; id: string | number | null }
+  | { kind: 'relay'; body: Buffer }
+  | { kind: 'refuse' } {
   let message: unknown
   try {
     message = JSON.parse(body.toString('utf8'))
@@ -152,8 +157,9 @@ function unattendedPost(
     typeof value === 'object' &&
     value !== null &&
     (value as { method?: unknown }).method === 'tools/call'
-  if (Array.isArray(message)) return message.some(calls) ? { kind: 'refuse' } : { kind: 'relay' }
-  if (!calls(message)) return { kind: 'relay' }
+  const relay = () => ({ kind: 'relay', body: Buffer.from(JSON.stringify(message)) }) as const
+  if (Array.isArray(message)) return message.some(calls) ? { kind: 'refuse' } : relay()
+  if (!calls(message)) return relay()
   const id = rpcId.safeParse((message as { id?: unknown }).id)
   return { kind: 'call', id: id.success ? id.data : null }
 }
@@ -241,7 +247,7 @@ export class SkillRelay {
           this.#logger.log(`refused skill=${name} outcome=unattended`)
           return toolRefusal(res, asked.id)
         }
-        body = read
+        body = asked.body
       }
       await this.#relay(req, res, { workspaceId, name, server, body })
     } finally {

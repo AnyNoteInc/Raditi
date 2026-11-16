@@ -362,7 +362,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
         instructions: task.instructions,
         effort: 'low',
       })
-      expect(run).not.toHaveProperty('siteId')
       const events = await db.outboxEvent.findMany({
         where: { dedupeKey: scheduleStartDedupeKey({ runId: run.id }) },
       })
@@ -897,7 +896,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks (plan 82)', () => {
       const reserved = await reserveScheduleChange(db, { ...turn, change: create() })
       expect(reserved).toMatchObject({ kind: 'create', scheduleId: null, cancelled: false })
       expect(reserved.fields).toMatchObject({ effort: 'high', timezone: MSK })
-      expect(reserved.fields).not.toHaveProperty('siteId')
       // 8:00 of Monday is now itself: the next weekday.
       expect(reserved.nextRunAt).toEqual(at('2026-11-17T05:00:00Z'))
       expect(await db.scheduledTask.count({ where: { workspaceId: who.workspaceId } })).toBe(0)

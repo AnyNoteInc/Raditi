@@ -4,9 +4,8 @@
 -- its fields (Зп14, Зп19–Зп24), the changes the agent reserved in a turn (Зп33); the zone of the
 -- client's browser (Зп12), the VAPID key a browser subscribed under (Зп41), and notices of a
 -- scheduled task — of a pass without its client and of the task itself, which may have no chat
--- (Зп38–Зп41): one notice of a kind per pass of a chat and per run. A task has no project
--- (docs/plan/82-scheduled-tasks.md, Зп44, Зп63; docs/plan/83-remove-projects.md, БП1): it is of
--- its creator's personal workspace, and neither it nor a run names a site.
+-- (Зп38–Зп41): one notice of a kind per pass of a chat and per run. A task is of its creator's
+-- personal workspace (Зп44, Зп63).
 --
 -- The value lists of the CHECKs are the arrays of @repo/domain (prisma/scheduled-tasks.test.ts
 -- holds them equal): scheduledRunTriggers, scheduledRunStatuses, scheduledRunReasons,

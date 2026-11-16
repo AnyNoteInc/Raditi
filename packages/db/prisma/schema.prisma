@@ -2195,9 +2195,9 @@ model LlmTurnCost {
 // Every write of a task takes its row FOR UPDATE; the 20 enabled tasks of a workspace (Зп16) are
 // counted under the workspace's row FOR NO KEY UPDATE, taken before the task's.
 
-/// A scheduled task (Зп11–Зп16, Зп25, Зп44): of its creator's personal workspace, without a
-/// project (docs/plan/83-remove-projects.md, БП1). Its instructions are what the agent gets as the
-/// client's message of each run; who may change it — its creator.
+/// A scheduled task (Зп11–Зп16, Зп25, Зп44): of its creator's personal workspace. Its
+/// instructions are what the agent gets as the client's message of each run; who may change it —
+/// its creator.
 model ScheduledTask {
   id                String    @id @default(uuid(7)) @db.Uuid
   workspaceId       String    @map("workspace_id") @db.Uuid

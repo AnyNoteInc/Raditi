@@ -343,7 +343,7 @@ describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)',
     ])
     // A pass of a scheduled run without its client: the list alone.
     expect(mcpToolFamiliesOf({ ...access, unattended: true }, security)).toEqual(['schedule'])
-    // A chat without the browser has them alike: a task has no project (Зп54).
+    // A chat without the browser has them alike (Зп54).
     const chat = { ...access, requirements: { repository: false, browser: false } }
     expect(mcpToolFamiliesOf(chat, security)).toEqual(['schedule', 'schedule_changes'])
     expect(mcpToolFamiliesOf(access, base)).toEqual([])
@@ -383,7 +383,7 @@ describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)',
   it('admits the list to the family schedule and the changes to schedule_changes alone', () => {
     expect(mcpBodyAllowed(call('schedule_list'), ['schedule'])).toBe(true)
     expect(mcpBodyAllowed(call('schedule_list', {}), ['schedule'])).toBe(true)
-    expect(mcpBodyAllowed(call('schedule_list', { siteId: access.taskId }), ['schedule'])).toBe(
+    expect(mcpBodyAllowed(call('schedule_list', { userId: access.taskId }), ['schedule'])).toBe(
       false,
     )
     expect(mcpBodyAllowed(call('schedule_list', {}), ['pages'])).toBe(false)
@@ -414,6 +414,17 @@ describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)',
       // The list's family never calls a change: a pass without the client has only that.
       expect(mcpBodyAllowed(body, ['schedule', 'pages', 'web'])).toBe(false)
     }
+    // The place of a template left for the client's words is the store's refusal, a result of
+    // the tool (Зп59), not a request refused as a whole.
+    expect(
+      mcpBodyAllowed(
+        call('schedule_create', {
+          ...create,
+          instructions: 'Открой сайт [впишите адрес сайта] и проверь главную.',
+        }),
+        ['schedule_changes'],
+      ),
+    ).toBe(true)
     // Runs closer than an hour are the tool's own refusal, not a request refused as a whole.
     expect(
       mcpBodyAllowed(
@@ -428,10 +439,9 @@ describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)',
       ),
     ).toBe(true)
     const refused = [
-      // Who and where are never arguments, and a task has no project (Зп54).
+      // Who and where are never arguments (Зп54).
       call('schedule_create', { ...create, workspaceId: access.workspaceId }),
-      call('schedule_create', { ...create, project: 'none' }),
-      call('schedule_create', { ...create, project: 'this_chat' }),
+      call('schedule_create', { ...create, chatId: access.taskId }),
       call('schedule_create', { ...create, confirmedByClient: false }),
       call('schedule_create', { ...create, confirmedByClient: undefined }),
       call('schedule_create', { ...create, name: ' Проверка' }),

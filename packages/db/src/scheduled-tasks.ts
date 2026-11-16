@@ -232,12 +232,6 @@ async function lockWorkspace(tx: Tx, workspaceId: string): Promise<boolean> {
   return rows.length > 0
 }
 
-/** Several workspaces in the order of their ids: two moves the other way never wait on each other. */
-async function lockWorkspaces(tx: Tx, workspaceIds: readonly string[]): Promise<void> {
-  for (const id of [...new Set(workspaceIds)].sort())
-    if (!(await lockWorkspace(tx, id))) throw scheduleNotFound()
-}
-
 /** A task under its row lock; null — none. */
 async function lockSchedule(tx: Tx, scheduleId: string): Promise<ScheduledTask | null> {
   const rows = await tx.$queryRaw<{ id: string }[]>`
@@ -305,7 +299,7 @@ async function checkRoom(tx: Tx, workspaceId: string, except?: string): Promise<
 export interface ScheduledTaskInput {
   /** The creator: an owner or an administrator of the workspace (Зп25). */
   userId: string
-  /** The creator's personal workspace (Зп44): a task has no project. */
+  /** The creator's personal workspace (Зп44). */
   workspaceId: string
   name: string
   instructions: string
@@ -491,8 +485,7 @@ export async function updateScheduledTask(
       where: { id: input.scheduleId },
       select: { workspaceId: true },
     })
-    if (!before) throw scheduleNotFound()
-    await lockWorkspaces(tx, [before.workspaceId])
+    if (!before || !(await lockWorkspace(tx, before.workspaceId))) throw scheduleNotFound()
     const task = await ownSchedule(tx, input.scheduleId, input.userId)
     return (await changeInTx(tx, task, input.patch, input.now)).row
   })
@@ -508,8 +501,7 @@ export async function setScheduledTaskEnabled(
       where: { id: input.scheduleId },
       select: { workspaceId: true },
     })
-    if (!before) throw scheduleNotFound()
-    await lockWorkspaces(tx, [before.workspaceId])
+    if (!before || !(await lockWorkspace(tx, before.workspaceId))) throw scheduleNotFound()
     const task = await ownSchedule(tx, input.scheduleId, input.userId)
     if (task.enabled === input.enabled) return task
     return (await changeInTx(tx, task, { enabled: input.enabled }, input.now)).row

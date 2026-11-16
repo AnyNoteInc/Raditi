@@ -48,7 +48,7 @@ import { scheduleRunRefused, startRun } from './runs.ts'
 // rights, the 20 of a workspace, the schedules and the zone — are of `@repo/db` and `@repo/domain`;
 // here the words of the instructions are checked as the words of a chat (Зп26), a place of a
 // template left unfilled (Зп59), and the workspace a task goes to: the creator's personal one
-// (Зп25, Зп44) — a task has no project.
+// (Зп25, Зп44).
 
 const DAY_MS = 24 * 60 * 60 * 1000
 

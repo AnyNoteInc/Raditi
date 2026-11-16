@@ -18,7 +18,7 @@ import {
  * The arguments of the `schedule` tools of the mcp role (docs/plan/82-scheduled-tasks.md, Зп31–Зп34),
  * as the model sends them; the policy of the role parses them too. Strict objects: an unknown key
  * is a refusal, not a guess. Who changes what — the workspace and the author — comes from the
- * admission of the call, never from here. A task has no project (Зп44, Зп54).
+ * admission of the call, never from here (Зп44, Зп54).
  */
 
 /** «Один раз» from now (Зп15): the server counts the moment, not the model. */

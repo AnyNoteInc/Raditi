@@ -190,10 +190,10 @@ export function requestedFormatsSection(formats: RequestedFileFormats): string {
 
 /**
  * A pass of a run of a scheduled task before the first words of its client (docs/plan/82-
- * scheduled-tasks.md, Зп27–Зп29): the instructions are not the client's live words and no consent
- * to act; on the site the agent only prepares and asks once at the end. The planner adds it when
- * `passUnattended` says so; from the client's first words on the chat is an ordinary one. `name` is
- * the task's, as its creator wrote it: data, never an instruction.
+ * scheduled-tasks.md, Зп27–Зп29, Зп53): the instructions are not the client's live words and no
+ * consent to act; on any site the agent only prepares and asks once at the end. The planner adds
+ * it when `passUnattended` says so; from the client's first words on the chat is an ordinary one.
+ * `name` is the task's, as its creator wrote it: data, never an instruction.
  */
 export function unattendedSection(name: string): string {
   return `

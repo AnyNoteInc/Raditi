@@ -21,10 +21,7 @@ import { uuidv7 } from '../src/uuidv7.ts'
 import { createMigratedSchema, type MigratedSchema } from './migrated-schema.ts'
 
 const databaseUrl = process.env.DATABASE_URL
-/**
- * The last migration before the scheduled tasks (Зп63): they come after the migrations of plan 83,
- * which removed projects, so a task and a run name no site.
- */
+/** The last migration before the scheduled tasks (Зп63). */
 const before = '20261116200000_llm_model_context_tokens'
 const at = new Date('2026-11-16T09:00:00Z')
 type Values = Record<string, unknown>
@@ -33,7 +30,7 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
   let schema: MigratedSchema
   const workspaceId = randomUUID()
   const userId = randomUUID()
-  // A chat without a project: its id is a UUID of version 7 (tasks_chat_id_check).
+  // A chat: its id is a UUID of version 7 (tasks_chat_id_check).
   const taskId = uuidv7()
   const earlierNotice = randomUUID()
   // A client who had turned push off under the old switch, and one who had it on (Зп37).
@@ -156,7 +153,7 @@ describe.skipIf(!databaseUrl)('the migration of scheduled tasks', () => {
     await schema?.drop()
   })
 
-  it('names no project in a task or a run (Зп44, Зп63)', async () => {
+  it('names no site in a task or a run (Зп44, Зп63)', async () => {
     const { rows } = await schema.db.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.columns
        WHERE table_schema = current_schema() AND column_name = 'site_id'

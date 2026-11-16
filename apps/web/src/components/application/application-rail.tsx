@@ -26,8 +26,8 @@ const sections: readonly RailSection[] = [
   // After «Чаты» and before «Страницы» (owner's request of 15.11.2026, docs/plan/82, Зп1). The
   // label is «Задачи»: «Расписание» is 65 px at 11 px of Golos Text, over the 60 px of an item.
   { href: '/scheduled', label: 'Задачи', name: 'Запланированные задачи', icon: 'timer' },
-  // After «Чаты» (owner's answer of 13.11.2026, docs/plan/69-pages.md, Ст30). «Проекты» went with
-  // projects (docs/plan/83-remove-projects.md, БП1; docs/plan/82, Зп60).
+  // After «Чаты» (owner's answer of 13.11.2026, docs/plan/69-pages.md, Ст30); the last section
+  // (docs/plan/82, Зп60).
   { href: '/pages', label: 'Страницы', icon: 'pages' },
 ]
 

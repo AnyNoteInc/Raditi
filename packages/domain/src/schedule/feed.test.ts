@@ -65,16 +65,6 @@ describe('feed.schedule_change', () => {
     expect(refused({ effort: 'medium' })).toBe(false)
     expect(refused({ extra: true })).toBe(false)
     expect(refused({ nextRunAt: null, triggers: [] })).toBe(true)
-    // A task has no project (Зп44): the writer names none.
-    expect(refused({ siteId: null })).toBe(false)
-  })
-
-  it('reads a row written before plan 83 without the project it named', () => {
-    const older = { ...change, siteId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7de2' }
-    expect(readFeedRow('feed.schedule_change', older)).toEqual({
-      type: 'feed.schedule_change',
-      ...shownChange,
-    })
   })
 
   it('reads what a newer writer may have stored as the less it knows', () => {
@@ -90,6 +80,8 @@ describe('feed.schedule_change', () => {
     expect(read({ nextRunAt: '2026-11-16T09:00:00+03:00' })).toMatchObject({
       nextRunAt: '2026-11-16T09:00:00+03:00',
     })
+    // A key this code does not know is dropped: the row reads as the rest of it.
+    expect(read({ extra: true })).toEqual({ type: 'feed.schedule_change', ...shownChange })
     expect(read({ scheduleId: 'задача' })).toEqual({ type: 'unreadable' })
     expect(readFeedRow('feed.schedule_change', { ...change, v: 2 })).toEqual({ type: 'newer' })
   })
@@ -140,6 +132,7 @@ describe('the words of the rows', () => {
       'Задачу не удалось сохранить: в инструкции нельзя оставлять пароли и ключи',
       'Задачу не удалось сохранить: в названии нельзя оставлять пароли и ключи',
       'Задачу не удалось сохранить: расписание не подходит',
+      'Задачу не удалось сохранить: в инструкции остался текст в квадратных скобках',
       'Задачу не удалось сохранить: ответ агента оборвался',
     ])
     // The labels import types only: the number is written in the words and held here.
@@ -159,7 +152,7 @@ describe('the rows in the export of a chat', () => {
     const text = feedMarkdown({
       title: 'Расписание',
       rows: [row('feed.schedule_change', change)],
-      withSite: true,
+      withSite: false,
     })
     expect(text).toContain('Запланированная задача создана')
     expect(text).toContain('«Проверка сайта»')
@@ -172,7 +165,7 @@ describe('the rows in the export of a chat', () => {
   it('tells a deleted task by its name only', () => {
     const text = feedRowMarkdown(
       row('feed.schedule_change', { ...change, action: 'deleted', nextRunAt: null }),
-      true,
+      false,
     )
     expect(text).toBe('**Запланированная задача удалена**\n\n«Проверка сайта»')
   })
@@ -184,14 +177,14 @@ describe('the rows in the export of a chat', () => {
         triggers: [{ kind: 'yearly' }],
         nextRunAt: null,
       }),
-      true,
+      false,
     )
     expect(text).not.toContain('По будням')
     expect(text).toContain('Инструкция:')
   })
 
   it('tells a change that did not come true', () => {
-    expect(feedRowMarkdown(row('feed.schedule_left', left), true)).toBe(
+    expect(feedRowMarkdown(row('feed.schedule_left', left), false)).toBe(
       'Задачу не удалось сохранить: включено 20 задач — больше нельзя',
     )
   })

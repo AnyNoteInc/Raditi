@@ -5,8 +5,7 @@ import { scheduledRunReasons, scheduledRunReasonText } from './runs.ts'
 /**
  * What came of a run of a scheduled task, as its row in the list and on the page of the task say
  * it (docs/plan/82-scheduled-tasks.md, Зп5, Зп6): a run that started is told by the state of its
- * chat — by the same rules as the list of chats —, one that did not by its reason. A chat has no
- * candidate and no `/release` (docs/plan/83-remove-projects.md, БП2; Зп47).
+ * chat — by the same rules as the list of chats —, one that did not by its reason (Зп47).
  */
 
 /** What stopped the chat of a run at its limit: credits, or the weekly limit of the workspace. */

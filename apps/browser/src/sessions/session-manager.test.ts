@@ -654,15 +654,30 @@ describe('the agent’s actions', () => {
     // An alert's «OK» only closes it.
     browser.emit({ kind: 'dialog', dialog: { id: 'd2', kind: 'alert', message: 'Готово' } })
     await act(row, { tool: 'web_dialog', accept: true }, readOnly)
+    // A prompt sends what is typed into it: not confirmed either, only dismissed.
+    browser.emit({
+      kind: 'dialog',
+      dialog: { id: 'd3', kind: 'prompt', message: 'Введите код из письма' },
+    })
+    expect(await codeOf(act(row, { tool: 'web_dialog', accept: true }, readOnly))).toBe(
+      'BROWSER_READ_ONLY',
+    )
+    await act(row, { tool: 'web_dialog', accept: false }, readOnly)
+    // Leaving a page with unsaved changes saves nothing: «Leave» goes.
+    browser.emit({ kind: 'dialog', dialog: { id: 'd4', kind: 'beforeunload', message: '' } })
+    await act(row, { tool: 'web_dialog', accept: true }, readOnly)
     // Reading, following a link and typing into a field go on.
     await act(row, { tool: 'web_fill', observation: 'o1', ref: 'e6', text: 'КОФЕ' }, readOnly)
     expect(browser.acted.filter((action) => action.tool === 'web_dialog')).toEqual([
+      { tool: 'web_dialog', accept: false },
+      { tool: 'web_dialog', accept: true },
       { tool: 'web_dialog', accept: false },
       { tool: 'web_dialog', accept: true },
     ])
     expect(counts.actions.filter((action) => action.endsWith('BROWSER_READ_ONLY'))).toEqual([
       'web_click:BROWSER_READ_ONLY',
       'web_upload:BROWSER_READ_ONLY',
+      'web_dialog:BROWSER_READ_ONLY',
       'web_dialog:BROWSER_READ_ONLY',
     ])
     // Once the client answered, the next pass sends what it sends.

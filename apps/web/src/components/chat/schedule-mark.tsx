@@ -8,7 +8,7 @@ import { scheduleChatText } from './chat-texts'
 import type { ChatScheduleLabel } from './chat-types'
 import { offScreen } from './composer'
 
-/** «По расписанию · Заявки за сутки» of a chat of a run (docs/plan/82-scheduled-tasks.md, Зп43). */
+/** «По расписанию · Сводка курсов» of a chat of a run (docs/plan/82-scheduled-tasks.md, Зп43). */
 export const scheduleLabelText = (schedule: ChatScheduleLabel): string =>
   `${scheduleChatText.trigger[schedule.trigger]} · ${schedule.name}`
 
