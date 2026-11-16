@@ -218,6 +218,24 @@ describe('the repository of a chat through the gateway (plan 84, 84.19)', () => 
   })
 })
 
+describe('the agent never merges and never deploys (plan 84, 84.22, ПР15)', () => {
+  it('no tool of a turn with a repository on write merges, accepts, plays or deploys', async () => {
+    const { server } = await start()
+    const listed = await names(server)
+    expect(listed).toEqual(
+      expect.arrayContaining(['repo_status', 'repo_request_merge', 'repo_runs', 'repo_job_log']),
+    )
+    // `repo_request_merge` only reserves a proposal: the client opens it with a button.
+    expect(
+      listed.filter((name) => /merge|deploy|play|accept|release|rollout|pipeline/i.test(name)),
+    ).toEqual(['repo_request_merge'])
+    for (const name of ['repo_merge', 'repo_deploy', 'repo_accept', 'repo_play', 'repo_push']) {
+      const res = await post(server, call(name, {}))
+      expect(res.status).toBe(400)
+    }
+  })
+})
+
 describe('the builds of a chat through the gateway (plan 84, 84.21)', () => {
   it('offers repo_runs and repo_job_log to a turn with a repository', async () => {
     const { server } = await start()

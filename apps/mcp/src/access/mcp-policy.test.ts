@@ -343,8 +343,12 @@ describe('MCP request policy', () => {
         'repo',
       ]),
     ).toBe(false)
-    for (const name of ['repo_push', 'repo_merge', 'repo_deploy'])
-      expect(mcpBodyAllowed(page(name, {}), ['repo'])).toBe(false)
+    // Merge and deploy are presses of the client only (84.22, ПР15): no call of any shape passes.
+    for (const name of ['repo_push', 'repo_merge', 'repo_deploy', 'repo_accept', 'repo_play'])
+      for (const args of [{}, { number: 7 }, { number: 7, mode: 'now' }, { jobId: '1' }])
+        expect(
+          mcpBodyAllowed(page(name, args), ['repo', 'memory', 'web', 'pages', 'docs', 'search']),
+        ).toBe(false)
     // The builds (84.21): reads only, strict arguments; no rerun, no cancel.
     expect(mcpBodyAllowed(page('repo_runs', { branch: 'chat', limit: 3 }), ['repo'])).toBe(true)
     expect(mcpBodyAllowed(page('repo_runs', { branch: 'feature' }), ['repo'])).toBe(false)
