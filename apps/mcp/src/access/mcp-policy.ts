@@ -40,7 +40,9 @@ import {
   memoryUpdateArgumentsSchema,
 } from '../memory/memory-arguments.ts'
 import {
+  repoJobLogArgumentsSchema,
   repoRequestMergeArgumentsSchema,
+  repoRunsArgumentsSchema,
   repoStatusArgumentsSchema,
 } from '../repo/repo-arguments.ts'
 import { webSearchArgumentsSchema } from '../search/search-arguments.ts'
@@ -110,6 +112,8 @@ const memoryCall = z.discriminatedUnion('name', [
 const repoCall = z.discriminatedUnion('name', [
   call('repo_status', repoStatusArgumentsSchema.optional()),
   call('repo_request_merge', repoRequestMergeArgumentsSchema),
+  call('repo_runs', repoRunsArgumentsSchema.optional()),
+  call('repo_job_log', repoJobLogArgumentsSchema),
 ])
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),

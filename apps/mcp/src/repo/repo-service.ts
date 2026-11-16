@@ -1,8 +1,16 @@
 import {
   isDomainError,
+  repoJobLogArgumentsSchema,
+  repoLogFailed,
+  repoLogLimit,
+  repoLogLoading,
   repoReadOnly,
   repoRequestMergeArgumentsSchema,
+  repoRunsArgumentsSchema,
   repoStatusArgumentsSchema,
+  tailOf,
+  type CiRefusal,
+  type CiStatus,
   type RepoProposalPayload,
 } from '@repo/domain'
 
@@ -26,6 +34,26 @@ export interface McpRepoStatus {
   mergeRequest: { number: number; state: string; checks: string; url: string } | null
 }
 
+/** A build as core polled it (ПР17): what `repo_runs` gives the agent. */
+export interface McpRepoRun {
+  id: string
+  name: string
+  ref: string
+  sha: string
+  status: CiStatus
+  refusal: CiRefusal | null
+  jobs: {
+    id: string
+    name: string
+    stage: string | null
+    status: CiStatus
+    refusal: CiRefusal | null
+  }[]
+}
+
+export type McpRepoLog =
+  { state: 'loading' } | { state: 'failed' } | { state: 'ready'; text: string; truncated: boolean }
+
 export interface McpRepoStore {
   status(input: {
     taskId: string
@@ -38,6 +66,13 @@ export interface McpRepoStore {
     turnNo: number
     proposal: RepoProposalPayload
   }): Promise<{ reservationId: string }>
+  runs(input: { projectRepositoryId: string; ref?: string; limit: number }): Promise<McpRepoRun[]>
+  /** The main branch of the turn's repository, or null when it is gone. */
+  defaultBranch(input: { projectRepositoryId: string; projectId: string }): Promise<string | null>
+  /** The kept log, or `loading` after the job of core is asked for (`requestCiLog`). */
+  log(input: { projectRepositoryId: string; runId: string; jobId: string }): Promise<McpRepoLog>
+  /** One more log of this turn: false — REPO_LOGS_PER_TURN is reached. */
+  admitLog(taskId: string, turnNo: number): Promise<boolean>
 }
 
 export type McpRepoAnswer =
@@ -84,6 +119,64 @@ export class McpRepoService {
           pushed: status.state !== 'local',
           ...(status.mergeRequest ? { mergeRequest: status.mergeRequest } : {}),
         },
+      }
+    } catch (error) {
+      return refusal(error)
+    }
+  }
+
+  /**
+   * `repo_runs` (ПР17): the newest builds of the chat's branch, of the main one or of both, as core
+   * polled them — from the database, never from the provider.
+   */
+  async runs(access: McpTurnAccess, args: unknown = {}): Promise<McpRepoAnswer> {
+    const parsed = repoRunsArgumentsSchema.safeParse(args ?? {})
+    if (!parsed.success) return badRequest("branch is 'chat' or 'default'; limit is 1 to 10")
+    const repo = access.repository
+    if (!repo) return gone
+    try {
+      let ref: string | undefined
+      if (parsed.data.branch === 'chat') ref = repo.branch
+      if (parsed.data.branch === 'default') {
+        const main = await this.#store.defaultBranch(repo)
+        if (main === null) return gone
+        ref = main
+      }
+      const runs = await this.#store.runs({
+        projectRepositoryId: repo.projectRepositoryId,
+        limit: parsed.data.limit ?? 5,
+        ...(ref === undefined ? {} : { ref }),
+      })
+      return { ok: true, value: { runs } }
+    } catch (error) {
+      return refusal(error)
+    }
+  }
+
+  /**
+   * `repo_job_log` (ПР17): the tail of a job's log as core keeps it — ANSI taken out, values and
+   * keys masked. `REPO_LOG_LOADING` while core fetches it: the agent calls again. A log given
+   * counts against REPO_LOGS_PER_TURN; a refusal of loading does not.
+   */
+  async jobLog(access: McpTurnAccess, args: unknown): Promise<McpRepoAnswer> {
+    const parsed = repoJobLogArgumentsSchema.safeParse(args)
+    if (!parsed.success)
+      return badRequest('Give runId and jobId of repo_runs; tailBytes 1024 to 32768')
+    const repo = access.repository
+    if (!repo) return gone
+    try {
+      const log = await this.#store.log({
+        projectRepositoryId: repo.projectRepositoryId,
+        runId: parsed.data.runId,
+        jobId: parsed.data.jobId,
+      })
+      if (log.state === 'loading') throw repoLogLoading()
+      if (log.state === 'failed') throw repoLogFailed()
+      if (!(await this.#store.admitLog(access.taskId, access.turn))) throw repoLogLimit()
+      const tail = tailOf(log.text, parsed.data.tailBytes ?? 32768)
+      return {
+        ok: true,
+        value: { ok: true, text: tail.text, truncated: log.truncated || tail.truncated },
       }
     } catch (error) {
       return refusal(error)

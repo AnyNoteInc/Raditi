@@ -1,6 +1,13 @@
 import { Module } from '@nestjs/common'
-import { chatBranch, reserveRepoProposal, type PrismaClient } from '@repo/db'
-import type { RepoBranchState } from '@repo/domain'
+import {
+  admitInWindow,
+  chatBranch,
+  ciRunsOf,
+  requestCiLog,
+  reserveRepoProposal,
+  type PrismaClient,
+} from '@repo/db'
+import { REPO_LOGS_PER_TURN, type RepoBranchState } from '@repo/domain'
 import { PRISMA } from '@repo/service-runtime'
 
 import { McpRepoController } from './mcp-repo.controller.ts'
@@ -11,7 +18,7 @@ import { MCP_REPO } from './repo.tokens.ts'
  * The store of the repository: rows of the role's database only. What it says of a merge request
  * is the cache core keeps (`project_merge_requests`), never an answer of the provider.
  */
-export function postgresRepoStore(db: PrismaClient): McpRepoStore {
+export function postgresRepoStore(db: PrismaClient, now: () => number = Date.now): McpRepoStore {
   return {
     status: async ({ taskId, projectRepositoryId, projectId }) => {
       const repo = await db.projectRepository.findUnique({
@@ -40,6 +47,43 @@ export function postgresRepoStore(db: PrismaClient): McpRepoStore {
       }
     },
     reserve: (input) => reserveRepoProposal(db, input),
+    runs: async (input) =>
+      (await ciRunsOf(db, input)).map((run) => ({
+        id: run.id,
+        name: run.name,
+        ref: run.ref,
+        sha: run.sha,
+        status: run.status,
+        refusal: run.refusal,
+        jobs: (run.jobs ?? []).map((job) => ({
+          id: job.id,
+          name: job.name,
+          stage: job.stage,
+          status: job.status,
+          refusal: job.refusal,
+        })),
+      })),
+    defaultBranch: async ({ projectRepositoryId, projectId }) => {
+      const repo = await db.projectRepository.findUnique({
+        where: { id: projectRepositoryId },
+        select: { projectId: true, defaultBranch: true },
+      })
+      return repo === null || repo.projectId !== projectId ? null : repo.defaultBranch
+    },
+    // The job of core that fetches a log is an event of the outbox, as `web_*` asks for a browser.
+    log: async (input) => {
+      const answer = await requestCiLog(db, { ...input, now: new Date(now()) })
+      return answer.state === 'ready'
+        ? { state: 'ready', text: answer.text, truncated: answer.truncated }
+        : answer
+    },
+    admitLog: (taskId, turnNo) =>
+      admitInWindow(db, {
+        key: `repo-logs:${taskId}:${turnNo}`,
+        limit: REPO_LOGS_PER_TURN,
+        windowMs: 24 * 60 * 60 * 1000,
+        now: now(),
+      }),
   }
 }
 

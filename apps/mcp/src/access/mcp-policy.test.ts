@@ -345,5 +345,16 @@ describe('MCP request policy', () => {
     ).toBe(false)
     for (const name of ['repo_push', 'repo_merge', 'repo_deploy'])
       expect(mcpBodyAllowed(page(name, {}), ['repo'])).toBe(false)
+    // The builds (84.21): reads only, strict arguments; no rerun, no cancel.
+    expect(mcpBodyAllowed(page('repo_runs', { branch: 'chat', limit: 3 }), ['repo'])).toBe(true)
+    expect(mcpBodyAllowed(page('repo_runs', { branch: 'feature' }), ['repo'])).toBe(false)
+    expect(mcpBodyAllowed(page('repo_job_log', { runId: '1', jobId: '2' }), ['repo'])).toBe(true)
+    expect(
+      mcpBodyAllowed(page('repo_job_log', { runId: '1', jobId: '2', tailBytes: 10 ** 6 }), [
+        'repo',
+      ]),
+    ).toBe(false)
+    for (const name of ['repo_rerun', 'repo_cancel', 'repo_run_start'])
+      expect(mcpBodyAllowed(page(name, {}), ['repo'])).toBe(false)
   })
 })

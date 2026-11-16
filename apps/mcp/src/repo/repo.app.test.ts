@@ -10,7 +10,7 @@ import { AppModule } from '../app.module.ts'
 import { MCP_ENDPOINT } from '../server/mcp-runtime.ts'
 import { mountMcp } from '../server/mount-mcp.ts'
 import { fakeInfra, testMcpConfig } from '../testing/fakes.ts'
-import { McpRepoService, type McpRepoStore } from './repo-service.ts'
+import { McpRepoService, type McpRepoLog, type McpRepoStore } from './repo-service.ts'
 import { MCP_REPO } from './repo.tokens.ts'
 
 // The repository of a chat's project through the gateway (docs/plan/84-projects.md, ПР13, ПР14,
@@ -63,6 +63,32 @@ function fakeStore() {
     reserve: vi.fn(async (_input: Parameters<McpRepoStore['reserve']>[0]) => ({
       reservationId: '01960000-0000-7000-8000-0000000000e9',
     })),
+    runs: vi.fn(async (_input: Parameters<McpRepoStore['runs']>[0]) => [
+      {
+        id: '482',
+        name: '#482',
+        ref: repository.branch,
+        sha: 'b'.repeat(40),
+        status: 'failed' as const,
+        refusal: null,
+        jobs: [
+          {
+            id: '4822',
+            name: 'unit-tests',
+            stage: 'test',
+            status: 'failed' as const,
+            refusal: null,
+          },
+        ],
+      },
+    ]),
+    defaultBranch: vi.fn(async () => 'main' as string | null),
+    log: vi.fn(async (_input: Parameters<McpRepoStore['log']>[0]): Promise<McpRepoLog> => ({
+      state: 'ready',
+      text: 'x'.repeat(2000) + '\nERROR: Job failed',
+      truncated: false,
+    })),
+    admitLog: vi.fn(async (_taskId: string, _turn: number) => true),
   } satisfies McpRepoStore
 }
 
@@ -189,5 +215,65 @@ describe('the repository of a chat through the gateway (plan 84, 84.19)', () => 
         await post(limited.server, call('repo_request_merge', { title: 'а', description: '' })),
       ),
     ).toMatchObject({ code: 'REPO_PROPOSAL_LIMIT' })
+  })
+})
+
+describe('the builds of a chat through the gateway (plan 84, 84.21)', () => {
+  it('offers repo_runs and repo_job_log to a turn with a repository', async () => {
+    const { server } = await start()
+    expect(await names(server)).toEqual(expect.arrayContaining(['repo_runs', 'repo_job_log']))
+  })
+
+  it("reads the chat's builds or the main branch's from the rows of the platform", async () => {
+    const { server, store } = await start()
+    const runs = answer(await post(server, call('repo_runs', { branch: 'chat', limit: 3 })))
+    expect((runs.runs as { id: string }[]).map((run) => run.id)).toEqual(['482'])
+    expect(store.runs).toHaveBeenLastCalledWith({
+      projectRepositoryId: repository.projectRepositoryId,
+      ref: repository.branch,
+      limit: 3,
+    })
+    await post(server, call('repo_runs', { branch: 'default' }))
+    expect(store.runs).toHaveBeenLastCalledWith({
+      projectRepositoryId: repository.projectRepositoryId,
+      ref: 'main',
+      limit: 5,
+    })
+    expect((await post(server, call('repo_runs', { limit: 11 }))).status).toBe(400)
+  })
+
+  it('answers REPO_LOG_LOADING first, then the log on the second call', async () => {
+    const store = fakeStore()
+    store.log.mockResolvedValueOnce({ state: 'loading' })
+    const { server } = await start(base, store)
+    const args = { runId: '482', jobId: '4822', tailBytes: 1024 }
+    expect(answer(await post(server, call('repo_job_log', args)))).toEqual({
+      code: 'REPO_LOG_LOADING',
+      message: 'The log is being fetched; call again in a few seconds.',
+    })
+    expect(store.admitLog).not.toHaveBeenCalled()
+    const ready = answer(await post(server, call('repo_job_log', args)))
+    expect(ready).toMatchObject({ ok: true, truncated: true })
+    expect(String(ready.text).endsWith('ERROR: Job failed')).toBe(true)
+    expect(new TextEncoder().encode(String(ready.text)).byteLength).toBeLessThanOrEqual(1024)
+    expect(store.log).toHaveBeenLastCalledWith({
+      projectRepositoryId: repository.projectRepositoryId,
+      runId: '482',
+      jobId: '4822',
+    })
+  })
+
+  it('refuses the sixth log of a turn', async () => {
+    const store = fakeStore()
+    let given = 0
+    store.admitLog.mockImplementation(async () => ++given <= 5)
+    const { server } = await start(base, store)
+    const args = { runId: '482', jobId: '4822' }
+    for (let i = 0; i < 5; i++)
+      expect(answer(await post(server, call('repo_job_log', args)))).toMatchObject({ ok: true })
+    expect(answer(await post(server, call('repo_job_log', args)))).toMatchObject({
+      code: 'REPO_LOG_LIMIT',
+    })
+    expect(store.admitLog).toHaveBeenCalledWith(base.taskId, 2)
   })
 })

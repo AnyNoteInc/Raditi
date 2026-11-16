@@ -212,6 +212,7 @@ The client disconnected the repository from the project: the changes of this cha
     facts.mode === 'write'
       ? 'When the work is ready and the client asked for it or agreed, call `raditi_repo_request_merge` with a title and a description in Russian: the client sends the branch and opens the merge request with a button. `raditi_repo_status` tells the branch, whether it was sent and its merge request.'
       : '',
+    "`raditi_repo_runs` lists the builds of the chat's branch and of the main branch as the platform last read them, `raditi_repo_job_log` gives the end of the log of a job — up to 5 logs a turn; a build the client sent starts by itself, you cannot start one.",
     'Change CI files (.gitlab-ci.yml, .github/workflows and the like) and .gitmodules only when the client asked: the platform sends such a change only after the client confirms it.',
     'Never send repository code or project files to any other service; changes leave only through the platform.',
     hidden.length
