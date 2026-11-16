@@ -94,3 +94,21 @@ export function mergeRequestLabel(
   if (!Number.isSafeInteger(number) || number < 1) throw new RangeError('Not a request number')
   return support.requestRef(number)
 }
+
+/** `git_connections.kind` (ПР10): the GitHub App, the OAuth app on gitlab.com, a token of a server. */
+export const gitConnectionKinds = ['github_app', 'gitlab_oauth', 'gitlab_token'] as const
+export type GitConnectionKind = (typeof gitConnectionKinds)[number]
+
+/** `git_connections.state` (ПР10): `suspended` — the one who connected it left the workspace. */
+export const gitConnectionStates = [
+  'checking',
+  'ok',
+  'reauth_needed',
+  'refused',
+  'suspended',
+] as const
+export type GitConnectionState = (typeof gitConnectionStates)[number]
+
+/** `git_connection_repositories.visibility`. */
+export const gitRepoVisibilities = ['public', 'internal', 'private'] as const
+export type GitRepoVisibility = (typeof gitRepoVisibilities)[number]
