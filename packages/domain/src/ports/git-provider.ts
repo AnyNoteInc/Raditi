@@ -209,6 +209,11 @@ export interface GitProvider {
   /** Null when the repository is not there or the access does not see it. */
   getRepository(auth: GitAuth, repo: RepoRef): Promise<RepositoryInfo | null>
   listBranches(auth: GitAuth, repo: RepoRef, query?: string): Promise<string[]>
+  /**
+   * The head of one branch at the provider; null when there is no such branch. A deploy reads the
+   * main branch again before it plays a job (ПР15). Only where `support.manualJobs`.
+   */
+  branchHead?(auth: GitAuth, repo: RepoRef, branch: string): Promise<string | null>
   openPullRequest(auth: GitAuth, repo: RepoRef, input: OpenPullRequestInput): Promise<PullRequest>
   getPullRequest(auth: GitAuth, repo: RepoRef, number: number): Promise<PullRequest | null>
   /**
