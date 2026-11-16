@@ -1034,6 +1034,7 @@ export function DialogView({
   }
 
   const actions: FeedActions = {
+    taskId,
     onStop: () => runCommand('cancel'),
     onOpenDocument: (fileId) => {
       const document = documentOfFile(chatDocuments, fileId)

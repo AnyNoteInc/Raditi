@@ -117,6 +117,12 @@ const TOLD: ReadonlySet<string> = new Set([
   // saved in the cabinet, the button «Открыть в кабинете» leads there.
   'feed.memory_change',
   'feed.memory_left',
+  // The repository of a chat's project (docs/plan/84-projects.md, ПР2, ПР13): one line each, the
+  // card and its buttons are in the cabinet.
+  'feed.repo_changes',
+  'feed.repo_left',
+  'feed.repo_proposal',
+  'feed.repo_action',
 ])
 
 export const telegramJobText = {
