@@ -25,13 +25,15 @@ import { callErrorText } from './call-error'
 export const mergeCardText = Object.freeze({
   title: (target: string) => `Принять запрос в основную ветку ${target}?`,
   onlyYou: 'Подтверждаете только вы',
-  commit: 'Коммит',
+  commit: 'Версия',
   checks: (state: keyof typeof checksStateWords) => checksStateWords[state],
   after: repoMergeTexts.afterMerge,
   deleteBranch: (branch: string) => `Удалить ветку ${branch} после принятия`,
   now: 'Принять в основную ветку',
   whenGreen: 'Принять, когда сборка пройдёт',
   later: 'Не сейчас',
+  /** The card folded by «Не сейчас» (ревью P15): one press opens it again. */
+  unfold: 'Принять запрос в основную ветку…',
   open: 'Открыть запрос',
   loading: 'Готовим карточку…',
   again: 'Обновить карточку',
@@ -97,7 +99,22 @@ export function MergeCard({
     void queryClient.invalidateQueries({ queryKey: trpc.projectRepo.branch.queryKey({ taskId }) })
   }
 
-  if (hidden) return null
+  if (hidden)
+    return (
+      <Box>
+        <Button
+          size="small"
+          color="inherit"
+          onClick={() => {
+            setHidden(false)
+            setRound((value) => value + 1)
+          }}
+          sx={{ minHeight: 44 }}
+        >
+          {mergeCardText.unfold}
+        </Button>
+      </Box>
+    )
   const busy = confirm.isPending
   return (
     <Box
@@ -160,7 +177,7 @@ export function MergeCard({
               variant="contained"
               disabled={busy}
               onClick={() => void accept('now')}
-              sx={{ minHeight: 36 }}
+              sx={{ minHeight: 44 }}
             >
               {mergeCardText.now}
             </Button>
@@ -170,7 +187,7 @@ export function MergeCard({
                 variant="outlined"
                 disabled={busy}
                 onClick={() => void accept('when_green')}
-                sx={{ minHeight: 36 }}
+                sx={{ minHeight: 44 }}
               >
                 {mergeCardText.whenGreen}
               </Button>
@@ -180,7 +197,7 @@ export function MergeCard({
               color="inherit"
               disabled={busy}
               onClick={() => setHidden(true)}
-              sx={{ minHeight: 36 }}
+              sx={{ minHeight: 44 }}
             >
               {mergeCardText.later}
             </Button>

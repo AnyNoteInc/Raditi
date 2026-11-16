@@ -5,7 +5,12 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
 import { Logger } from '@nestjs/common'
-import { AGENT_SKILL_TOKEN_RENEW_MS, SKILL_RELAY_PATH } from '@repo/domain'
+import {
+  AGENT_SKILL_TOKEN_RENEW_MS,
+  gitMcpToolDenied,
+  isGitMcpServerUrl,
+  SKILL_RELAY_PATH,
+} from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
 import { MCP_TOKEN_PATTERN } from '@repo/turn-keys'
 
@@ -32,7 +37,10 @@ import { RelayRefusal, type upstreamResolver } from './upstream.ts'
 // its client (docs/plan/82-scheduled-tasks.md, Зп27, Зп28, Зп51) calls no tool of such a server: the
 // owner's key would let it write to the owner's service with nobody to confirm it, and the relay
 // cannot tell a tool that reads from one that writes. Its CLI may still start a session and list
-// the tools; each call is answered as that tool's refusal (`MCP_UNATTENDED_REFUSAL`).
+// the tools; each call is answered as that tool's refusal (`MCP_UNATTENDED_REFUSAL`). The MCP
+// server of a code hosting (docs/plan/84-projects.md, ПР27) has its tools of merging, builds,
+// settings, members and deletion refused in every chat (`GIT_MCP_REFUSAL`): they would go past the
+// cards of the chat, which only the client presses (rule 4).
 
 export const skillRelayLimits = Object.freeze({
   requestBytes: 4 * 1024 * 1024,
@@ -97,9 +105,20 @@ export const relayText = Object.freeze({
     `Адрес MCP-сервера «${name}» ведёт во внутреннюю сеть, туда Радити не ходит.`,
 })
 
+/** The refusal of a tool of a code hosting the relay does not let through (ПР27). */
+export const GIT_MCP_REFUSAL = Object.freeze({
+  code: 'GIT_TOOL_FORBIDDEN',
+  message:
+    'Raditi does not run this tool of a GitLab or GitHub server: merging, builds, CI variables, settings, members, commits past the chat branch and deletion go only by the client, through the cards of the chat or the hosting itself. Tell the client in plain words; for the code of a project, suggest connecting the repository in the project.',
+})
+
 /** The JSON-RPC answer of a refused tool call: 200 and the result the agent reads. */
-function toolRefusal(res: ServerResponse, id: string | number | null) {
-  const body = JSON.stringify(mcpToolRefusalBody(id, MCP_UNATTENDED_REFUSAL))
+function toolRefusal(
+  res: ServerResponse,
+  id: string | number | null,
+  refusal: Readonly<{ code: string; message: string }> = MCP_UNATTENDED_REFUSAL,
+) {
+  const body = JSON.stringify(mcpToolRefusalBody(id, refusal))
   res.writeHead(200, {
     'content-type': 'application/json',
     'cache-control': 'no-store',
@@ -134,15 +153,18 @@ function bodyOf(req: IncomingMessage, limit: number): Promise<Buffer | 'over' | 
 }
 
 /**
- * What a POST of a pass without its client asks of the server: `call` with the id of the tool
- * call it is, `relay` for anything else of the protocol (initialize, tools/list, a notification, an
- * answer to the server) with the body the server gets — the message as it was read, written
- * again, so a server that reads a repeated key otherwise than JSON.parse (the first `method`, not
- * the last) sees exactly what was judged —, `refuse` for what cannot be read — a body that is not
- * JSON, or a batch that holds a tool call (the protocol of the CLI sends no batch).
+ * What a POST the relay reads whole asks of the server: `call` with the id of a tool call it
+ * refuses, `relay` for anything else of the protocol (initialize, tools/list, a notification, an
+ * answer to the server, a tool call it lets through) with the body the server gets — the message
+ * as it was read, written again, so a server that reads a repeated key otherwise than JSON.parse
+ * (the first `method`, not the last) sees exactly what was judged —, `refuse` for what cannot be
+ * read — a body that is not JSON, or a batch that holds a refused tool call (the protocol of the
+ * CLI sends no batch). `refused` tells a tool call that goes nowhere: every one for a pass
+ * without its client, the denied tools of a code hosting (ПР27).
  */
-function unattendedPost(
+function judgedPost(
   body: Buffer,
+  refused: (tool: unknown) => boolean,
 ):
   | { kind: 'call'; id: string | number | null }
   | { kind: 'relay'; body: Buffer }
@@ -156,7 +178,8 @@ function unattendedPost(
   const calls = (value: unknown) =>
     typeof value === 'object' &&
     value !== null &&
-    (value as { method?: unknown }).method === 'tools/call'
+    (value as { method?: unknown }).method === 'tools/call' &&
+    refused((value as { params?: { name?: unknown } }).params?.name)
   const relay = () => ({ kind: 'relay', body: Buffer.from(JSON.stringify(message)) }) as const
   if (Array.isArray(message)) return message.some(calls) ? { kind: 'refuse' } : relay()
   if (!calls(message)) return relay()
@@ -234,18 +257,26 @@ export class SkillRelay {
     this.#active.set(access.keyId, active + 1)
     try {
       let body: Buffer | undefined
-      // A pass without its client: the body is read whole, and a tool call goes nowhere.
-      if (access.unattended === true && req.method === 'POST') {
+      // A pass without its client, or a server of a code hosting: the body is read whole, and a
+      // tool call it may not make goes nowhere.
+      const unattended = access.unattended === true
+      const git = isGitMcpServerUrl(server.url)
+      if ((unattended || git) && req.method === 'POST') {
         if (Number(req.headers['content-length']) > skillRelayLimits.requestBytes)
           return failure(res, 413, 'Request body is too large')
         const read = await bodyOf(req, skillRelayLimits.requestBytes)
         if (read === 'lost') return failure(res, 400, 'Invalid MCP request')
         if (read === 'over') return failure(res, 413, 'Request body is too large')
-        const asked = unattendedPost(read)
+        const asked = judgedPost(
+          read,
+          (tool) => unattended || typeof tool !== 'string' || gitMcpToolDenied(tool),
+        )
         if (asked.kind === 'refuse') return failure(res, 400, 'Invalid MCP request')
         if (asked.kind === 'call') {
-          this.#logger.log(`refused skill=${name} outcome=unattended`)
-          return toolRefusal(res, asked.id)
+          this.#logger.log(
+            `refused skill=${name} outcome=${unattended ? 'unattended' : 'git_tool'}`,
+          )
+          return toolRefusal(res, asked.id, unattended ? MCP_UNATTENDED_REFUSAL : GIT_MCP_REFUSAL)
         }
         body = asked.body
       }

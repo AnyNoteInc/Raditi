@@ -11,14 +11,19 @@ export const repoText = Object.freeze({
   githubHint: 'Установите приложение «Радити» в свой GitHub и выберите репозитории',
   gitlabCom: 'GitLab.com',
   gitlabComHint: 'Вход через GitLab',
-  ownServer: 'Свой сервер GitLab',
+  ownServer: 'Свой сервер GitLab — по токену',
+  signInAgain: 'Войти заново',
   ownServerHint: 'Адрес вашего сервера и токен доступа',
   soon: 'Скоро',
   serverAddress: 'Адрес сервера',
   serverPlaceholder: 'https://git.example.ru',
   token: 'Токен доступа проекта',
   tokenHint:
-    'Нужны права api и write_repository. Токен хранится в защищённом хранилище и не попадает к агенту.',
+    'Создайте его в GitLab с правами «api» и «write_repository». Токен хранится в защищённом хранилище и не попадает к агенту.',
+  /** The page of the server where a token is made, its rights chosen (ревью P13). */
+  tokenHow: 'Как создать токен',
+  tokenPage: (host: string) =>
+    `https://${host}/-/user_settings/personal_access_tokens?name=${encodeURIComponent('Радити')}&scopes=api,write_repository`,
   tokenAdvice: 'Токен с правом api открывает все ваши проекты — лучше токен одного проекта',
   showToken: 'Показать токен',
   hideToken: 'Скрыть токен',
@@ -30,7 +35,7 @@ export const repoText = Object.freeze({
     'Менять настройки сборки и принимать в основную ветку — только после вашего подтверждения',
   ],
   ciVariables:
-    'Сборка ветки агента видит переменные, доступные всем веткам; ключи выкладки держите защищёнными',
+    'Сборка в ветке агента получает переменные сборки, открытые для всех веток. Ключи выкладки сделайте защищёнными — тогда она их не получит',
   yours: 'Ваши подключения',
   cancel: 'Отмена',
   check: 'Проверить и подключить',

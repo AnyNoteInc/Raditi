@@ -327,6 +327,28 @@ describe.skipIf(!databaseUrl)('PostgreSQL: merge and deploy cards (plan 84, 84.2
     ).toBe('GIT_CONNECT_UNAVAILABLE')
   })
 
+  it('offers no card when the branch has commits Радити did not send (ревью, безопасность 4)', async () => {
+    const f = await fixture()
+    await db.projectRepoBranch.create({
+      data: {
+        taskId: f.task.id,
+        projectRepositoryId: f.projectRepositoryId,
+        branch: 'raditi/novoe-menyu-12345678',
+        baseSha: 'c'.repeat(40),
+        mirrorSha: 'd'.repeat(40),
+        remoteSha: 'e'.repeat(40),
+        state: 'pushed',
+      },
+    })
+    expect(
+      await refusal(() => f.caller.projectRepo.prepareMerge({ projectId: f.projectId, number: 7 })),
+    ).toBe('REPO_FOREIGN_COMMITS')
+    await db.projectRepoBranch.update({ where: { taskId: f.task.id }, data: { remoteSha: head } })
+    await expect(
+      f.caller.projectRepo.prepareMerge({ projectId: f.projectId, number: 7 }),
+    ).resolves.toMatchObject({ number: 7 })
+  })
+
   it('«Выкатить»: loading until core polled, then a token per manual job of the head of main', async () => {
     const f = await fixture()
     expect(await f.caller.projectRepo.prepareDeploy({ projectId: f.projectId })).toEqual({

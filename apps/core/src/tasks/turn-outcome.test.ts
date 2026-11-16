@@ -37,8 +37,9 @@ describe('feedFailureOf', () => {
     expect(feedFailureOf({ errorCode: 'PUBLICATION_SECRET', policyFlagged: false })).toBe(
       'secret_found',
     )
+    // Its own words, not those of a repository too large (ревью C12).
     expect(feedFailureOf({ errorCode: 'REPOSITORY_UNSUPPORTED', policyFlagged: false })).toBe(
-      'repo_too_large',
+      'repo_unsupported',
     )
     // The repository of a pass (docs/plan/84-projects.md, ПР12, «Сбой подготовки»).
     expect(feedFailureOf({ errorCode: 'REPOSITORY_TOO_LARGE', policyFlagged: false })).toBe(

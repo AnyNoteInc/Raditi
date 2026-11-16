@@ -1723,7 +1723,7 @@ describe('task head', () => {
 })
 
 describe('failure catalogue', () => {
-  it('lists the fourteen codes of the design and three of a repository (docs/plan/84, ПР12)', () => {
+  it('lists the fourteen codes of the design and four of a repository (docs/plan/84, ПР12)', () => {
     expect(feedFailureCodes).toEqual([
       'technical',
       'timeout',
@@ -1740,6 +1740,7 @@ describe('failure catalogue', () => {
       'unavailable',
       'not_accepted',
       'repo_too_large',
+      'repo_unsupported',
       'repo_unreachable',
       'repo_reauth',
     ])
@@ -1768,6 +1769,7 @@ describe('failure catalogue', () => {
       'content_refused',
       'not_accepted',
       'repo_too_large',
+      'repo_unsupported',
       'repo_reauth',
     ])
   })

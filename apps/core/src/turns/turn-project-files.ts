@@ -34,6 +34,9 @@ export class TaskProjectFiles implements TurnProjectFiles {
     for (const path of paths) {
       const name = turnProjectFileName(path)
       const row = name === null ? null : await chatProjectFile(this.db, { taskId, name })
+      // A file the client removed since the plan was made is left out, the turn goes on without
+      // it (ревью C6); a path that was never the project's is refused.
+      if (row === null && name !== null) continue
       if (
         row === null ||
         row.name !== name ||

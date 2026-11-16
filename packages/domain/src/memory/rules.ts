@@ -21,7 +21,8 @@ const asks = [
   word(
     String.raw`(?:запиши|запишите|сохрани|сохраните|занеси|занесите|добавь|добавьте|внеси|внесите)\s+(?:(?:это|себе|пожалуйста|у\s+себя)\s+){0,2}в\s+памят(?:ь|и)`,
   ),
-  word(String.raw`(?<!(?:do\s+not|don't|dont)\s)remember`),
+  // A question — «do you remember…?», «remember?» — asks nothing (ревью, безопасность 3).
+  word(String.raw`(?<!(?:do\s+not|don't|dont|you)\s)remember(?![^.!\n]*\?)`),
 ]
 
 /**

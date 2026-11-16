@@ -150,6 +150,18 @@ describe('«Навыки агента» of a site', () => {
     expect(calls.add).not.toHaveBeenCalled()
   })
 
+  it('warns at the address of a GitLab or GitHub server (ПР27)', () => {
+    show(view())
+    fireEvent.change(screen.getByLabelText(skillsText.url), {
+      target: { value: 'https://docs.example.org/mcp' },
+    })
+    expect(screen.queryByText(skillsText.gitServer)).toBeNull()
+    fireEvent.change(screen.getByLabelText(skillsText.url), {
+      target: { value: 'https://gitlab.com/api/v4/mcp' },
+    })
+    expect(screen.getByRole('note').textContent).toBe(skillsText.gitServer)
+  })
+
   it('shows a member the skills without a way to change them', () => {
     show(view({ canManage: false }))
     expect(screen.getByText(skillsText.readOnly)).toBeTruthy()

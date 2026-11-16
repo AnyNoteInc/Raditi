@@ -86,6 +86,8 @@ describe('askedToRemember', () => {
     'напомни мне завтра',
     'памятка для клиентов',
     "don't remember this",
+    'Do you remember what we discussed?',
+    'remember the price?',
     'вспомни прошлую задачу',
   ])('«%s» does not', (words) => {
     expect(askedToRemember(words)).toBe(false)
@@ -184,6 +186,8 @@ describe('memoryPassEvidence', () => {
       'skill',
       'task',
       'context7_query-docs',
+      'page_read',
+      'doc_read',
     ])
       expect(memoryPassEvidence([tool(name)]).outside, name).toBe(true)
     expect(

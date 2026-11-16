@@ -12,6 +12,7 @@ import { moveChatToProject } from './projects.ts'
 import {
   chatBranchHead,
   ensureChatBranch,
+  closeStaleRepoProposals,
   failRepoTurn,
   pendingRepoProposals,
   reserveRepoProposal,
@@ -184,6 +185,39 @@ describe.skipIf(!databaseUrl)(
       ])
       expect(await failRepoTurn(db, task.id, 1)).toBe(1)
       expect(await pendingRepoProposals(db, task.id, 1)).toEqual([])
+    })
+
+    it('closes a proposal of a lost pass a day on, never one of a turn still assigned (ревью C11)', async () => {
+      const own = await owner()
+      const lost = await chat(own.workspaceId, own.projectId)
+      const live = await chat(own.workspaceId, own.projectId)
+      const proposal = { title: 'Меню', description: '', draft: false }
+      for (const task of [lost, live])
+        await reserveRepoProposal(db, {
+          workspaceId: own.workspaceId,
+          taskId: task.id,
+          turnNo: 1,
+          proposal,
+        })
+      await db.turnAssignment.create({
+        data: {
+          taskId: live.id,
+          siteId: live.id,
+          sessionId: live.id,
+          turnNo: 1,
+          executor: 'local',
+          plan: {},
+          firstEpoch: 1,
+          leaseEpoch: 1,
+          deadlineAt: new Date(Date.now() + 60_000),
+        },
+      })
+      expect(await closeStaleRepoProposals(db, new Date(Date.now() + 1000))).toBeGreaterThanOrEqual(
+        1,
+      )
+      expect(await pendingRepoProposals(db, lost.id, 1)).toEqual([])
+      expect(await pendingRepoProposals(db, live.id, 1)).toHaveLength(1)
+      await db.turnAssignment.deleteMany({ where: { taskId: live.id } })
     })
 
     it('reads the head of the branch past the turns /undo took back (ПР25)', async () => {

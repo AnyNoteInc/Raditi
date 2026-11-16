@@ -139,6 +139,24 @@ describe('the repository of a project (84.17)', () => {
     )
   })
 
+  it('offers «Войти заново» on a repository whose sign-in is to be renewed (ревью P3)', async () => {
+    const refused = repository({
+      provider: 'gitlab',
+      mode: 'write',
+      connection: {
+        id: CONNECTION_ID,
+        kind: 'gitlab_oauth',
+        login: 'elena.k',
+        state: 'reauth_needed',
+      },
+      refusal: { code: 'GIT_CONNECTION_REAUTH', message: 'Нужно войти в GitLab заново' },
+    })
+    calls.get.mockResolvedValue(refused)
+    wrap(<ProjectContext project={kolos(refused)} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Войти заново' }))
+    expect(await screen.findByRole('dialog', { name: 'Подключить репозиторий' })).toBeTruthy()
+  })
+
   it('says a private link in the words of REPO_LINK_PRIVATE, and offers «Отключить»', async () => {
     const refused = repository({
       mirrorState: 'unreachable',
@@ -157,6 +175,10 @@ describe('the repository of a project (84.17)', () => {
     ).toBeTruthy()
     expect(screen.getByText('Репозиторий: kolos/site')).toBeTruthy()
     expect(screen.getByText('по открытой ссылке · только чтение')).toBeTruthy()
+    // «Открыть» leads to the page of the repository in Радити (ревью P6).
+    expect(
+      screen.getByRole('link', { name: 'Открыть репозиторий kolos/site' }).getAttribute('href'),
+    ).toBe(`/projects/${PROJECT_ID}/repository`)
     // With a repository the menu offers no second one.
     const menu = await openMenu()
     expect(
@@ -258,6 +280,8 @@ describe('the repository of a project (84.17)', () => {
     const connect = await screen.findByRole('dialog', { name: 'Подключить репозиторий' })
     const gitlab = await within(connect).findByRole('radio', { name: /^GitLab\.com/ })
     await waitFor(() => expect(gitlab.getAttribute('aria-disabled')).toBe('false'))
+    // The window opens on the sign-in, not on the token of an own server (ревью P2).
+    expect(within(connect).getByRole('button', { name: 'Войти через GitLab' })).toBeTruthy()
     fireEvent.click(gitlab)
     expect(within(connect).getByRole('button', { name: 'Войти через GitLab' })).toBeTruthy()
   })

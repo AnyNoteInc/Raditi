@@ -104,7 +104,13 @@ describe.skipIf(!enabled)('the builds of a repository for the agent with Postgre
     expect(
       await store.defaultBranch({ projectRepositoryId: repo.id, projectId: randomUUID() }),
     ).toBeNull()
-    const ask = { projectRepositoryId: repo.id, runId: '7', jobId: '71' }
+    const ask = { projectRepositoryId: repo.id, runId: '7', jobId: '71', ref: 'raditi/menu-1' }
+    // A build of the main branch may deploy: its log is not the agent's (ревью, безопасность 8).
+    await expect(store.log(ask)).rejects.toMatchObject({ code: 'REPO_RUN_NOT_FOUND' })
+    await db.projectCiRun.updateMany({
+      where: { projectRepositoryId: repo.id, providerRunId: '7' },
+      data: { ref: 'raditi/menu-1' },
+    })
     expect(await store.log(ask)).toEqual({ state: 'loading' })
     expect(
       await db.outboxEvent.count({

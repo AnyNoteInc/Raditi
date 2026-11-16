@@ -5,7 +5,7 @@ import { ENV_VALUE_MASK } from '@repo/domain'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { McpAccessStore, McpTurnAccess } from '../access/mcp-access.ts'
-import { relayText, secretValuesOf, SkillRelay } from './skill-relay.ts'
+import { GIT_MCP_REFUSAL, relayText, secretValuesOf, SkillRelay } from './skill-relay.ts'
 import type { SkillSecretRead } from './skill-secrets.ts'
 import type { RelayedServer, RelayOutcome, SkillServerStore } from './skill-servers.ts'
 import { upstreamResolver } from './upstream.ts'
@@ -48,6 +48,8 @@ async function stand(
     resolveTo?: string
     /** A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп27). */
     unattended?: boolean
+    /** The path of the server's address: `/api/v4/mcp` is GitLab's (ПР27). */
+    path?: string
   } = {},
 ) {
   const seen: Seen[] = []
@@ -82,7 +84,7 @@ async function stand(
       return options.server === null
         ? null
         : {
-            url: `http://upstream.example.com:${upstreamPort}/v1/mcp`,
+            url: `http://upstream.example.com:${upstreamPort}${options.path ?? '/v1/mcp'}`,
             authKind: 'header' as const,
             headerName: 'X-Api-Key',
             state: 'ok' as const,
@@ -377,6 +379,51 @@ describe('SkillRelay', () => {
     const attended = await stand()
     expect((await attended.call('/mcp/skill/menu', { body: toolCall })).status).toBe(200)
     expect(attended.seen.map((entry) => entry.body)).toEqual([toolCall])
+  })
+
+  it('refuses the tools of a code hosting that merge, run builds or change settings in every chat (ПР27)', async () => {
+    const callOf = (id: number, name: string) =>
+      JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: {} } })
+    const { call, seen } = await stand({ path: '/api/v4/mcp' })
+    // The session starts and the tools are listed; a tool that reads goes to the server.
+    expect((await call('/mcp/skill/menu')).status).toBe(200)
+    const read = callOf(3, 'get_merge_request_diffs')
+    expect((await call('/mcp/skill/menu', { body: read })).status).toBe(200)
+    // Merging, a build run, a variable: never sent, the tool's refusal in the agent's words.
+    for (const [id, name] of [
+      [4, 'merge_merge_request'],
+      [5, 'manage_pipeline'],
+      [6, 'set_ci_variable'],
+    ] as const) {
+      const refused = await call('/mcp/skill/menu', { body: callOf(id, name) })
+      expect(refused.status).toBe(200)
+      const answer = JSON.parse(refused.body)
+      expect(answer).toMatchObject({ jsonrpc: '2.0', id, result: { isError: true } })
+      expect(JSON.parse(answer.result.content[0].text)).toMatchObject({
+        ok: false,
+        code: GIT_MCP_REFUSAL.code,
+      })
+    }
+    // A batch that holds one is refused whole; a call without a name is no guess either.
+    expect(
+      (await call('/mcp/skill/menu', { body: `[${read},${callOf(7, 'merge_pull_request')}]` }))
+        .status,
+    ).toBe(400)
+    const nameless = '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{}}'
+    expect(JSON.parse((await call('/mcp/skill/menu', { body: nameless })).body)).toMatchObject({
+      id: 8,
+      result: { isError: true },
+    })
+    expect(seen.map((entry) => entry.body)).toEqual([
+      '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+      read,
+    ])
+    // Another server's tool of the same name is the owner's business.
+    const other = await stand()
+    expect(
+      (await other.call('/mcp/skill/menu', { body: callOf(9, 'merge_merge_request') })).status,
+    ).toBe(200)
+    expect(other.seen).toHaveLength(1)
   })
 
   it('masks the key after its scheme and as JSON escapes it', async () => {

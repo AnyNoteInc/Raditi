@@ -278,6 +278,8 @@ describe('the builds of a chat through the gateway (plan 84, 84.21)', () => {
       projectRepositoryId: repository.projectRepositoryId,
       runId: '482',
       jobId: '4822',
+      // Only of the chat's branch (ревью, безопасность 8).
+      ref: repository.branch,
     })
   })
 

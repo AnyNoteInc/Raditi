@@ -113,7 +113,8 @@ export const projectPageText = Object.freeze({
   instructionsEmpty: 'Агент читает их в каждом чате проекта',
   instructionsLabel: 'Инструкции проекта',
   instructionsHint: 'Как отвечать, что учитывать, чего не делать. Без паролей и ключей.',
-  instructionsCount: (count: number, limit: number) => `${count} из ${limit}`,
+  instructionsCount: (count: number, limit: number) =>
+    `${count.toLocaleString('ru-RU')} из ${limit.toLocaleString('ru-RU')}`,
   instructionsTitle: 'Инструкции проекта',
   privacy: 'Приватный',
   privacyHint: 'Видите только вы',
@@ -140,8 +141,11 @@ export const projectPickerText = Object.freeze({
   loading: 'Загружаем проект…',
   headingLoading: 'Новый чат в проекте',
   placeholder: 'Сообщение в новый чат проекта',
+  /** The same words as the page of the project (ревью P10): what of it applies to the chat. */
   applies: (instructions: boolean) =>
-    instructions ? 'Агент учтёт инструкции и цель проекта' : 'Агент учтёт цель проекта',
+    instructions
+      ? 'Агент учитывает инструкции, цель, контекст и память проекта'
+      : 'Агент учитывает цель, контекст и память проекта',
   openProject: 'Открыть проект',
 })
 
@@ -156,7 +160,7 @@ export const contextText = Object.freeze({
   addContext: 'Добавить контекст',
   addTitle: 'Добавить в контекст',
   addLabel: 'Добавить в контекст проекта',
-  createHint: 'Файлы и тексты. Агент читает их в каждом чате проекта.',
+  createHint: 'Файлы, тексты и репозиторий. Агент читает их в каждом чате проекта.',
   dropHint: 'Перетащите файлы сюда',
   device: 'Загрузить с устройства',
   deviceHint: 'Документы, таблицы, фото и код',
@@ -171,6 +175,8 @@ export const contextText = Object.freeze({
   github: 'Подключить GitHub',
   githubHint: 'Код, запросы на слияние и сборки',
   soon: 'Скоро',
+  /** A way of a repository in a project that has one (ПР6; ревью P1). */
+  oneRepository: 'В проекте один репозиторий — сначала отключите текущий',
   limits: 'Файлы до 20 МБ, всего до 100 МБ на проект',
   lead: 'Агент видит эти материалы в каждом чате проекта и сам находит в них нужное. Картинки он не видит — может только поставить их на страницу; PDF, таблицы и тексты читает.',
   used: (percent: number) => `Занято ${percent} % места`,
