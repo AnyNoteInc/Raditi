@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -19,6 +19,11 @@ const calls = vi.hoisted(() => ({
   run: vi.fn<(input: unknown) => Promise<unknown>>(),
   jobLog: vi.fn<(input: unknown) => Promise<unknown>>(),
   work: vi.fn<() => Promise<unknown>>(),
+  prepareDeploy: vi.fn<(input: unknown) => Promise<unknown>>(),
+  confirmDeploy: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({
+    actionId: '0199a3f2-0000-7000-8000-00000000c0aa',
+  })),
+  action: vi.fn<() => Promise<unknown>>(),
 }))
 
 vi.mock('next/link', () => ({
@@ -53,6 +58,11 @@ vi.mock('@/trpc/client', () => ({
       },
       work: {
         queryOptions: (input: unknown) => ({ queryKey: ['work', input], queryFn: calls.work }),
+      },
+      prepareDeploy: { mutationOptions: () => ({ mutationFn: calls.prepareDeploy }) },
+      confirmDeploy: { mutationOptions: () => ({ mutationFn: calls.confirmDeploy }) },
+      action: {
+        queryOptions: (input: unknown) => ({ queryKey: ['action', input], queryFn: calls.action }),
       },
     },
   }),
@@ -185,6 +195,84 @@ describe('P-pipeline (plan 84, 84.21)', () => {
         'GitLab просит подтвердить учётную запись, чтобы запускать сборки на своих серверах: подтвердите её в GitLab или подключите свой раннер',
       ),
     ).toBeTruthy()
+  })
+})
+
+describe('«Выкатить» on P-repo (plan 84, 84.22)', () => {
+  const quiet = () => {
+    calls.work.mockResolvedValue({ mergeRequests: [], branches: [] })
+    calls.runs.mockResolvedValue({ items: [], next: null, polledAt: new Date(), refreshing: false })
+  }
+
+  it('waits for core, names the commit of the main branch and plays the chosen job by its token', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      quiet()
+      calls.get.mockResolvedValue(repository)
+      calls.prepareDeploy.mockResolvedValueOnce({ state: 'loading' }).mockResolvedValue({
+        state: 'ready',
+        ref: 'main',
+        sha: 'a1b2c3d'.padEnd(40, '0'),
+        actions: [
+          { id: '4812', kind: 'manual_job', name: 'deploy-production', confirmToken: 'tok-prod' },
+          { id: '4813', kind: 'manual_job', name: 'deploy-staging', confirmToken: 'tok-stage' },
+        ],
+        expiresAt: new Date(),
+      })
+      calls.action.mockResolvedValue({
+        id: '0199a3f2-0000-7000-8000-00000000c0aa',
+        kind: 'deploy',
+        state: 'done',
+        error: null,
+      })
+      wrap(<RepositoryView project={project} />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Выкатить' }))
+      expect(await screen.findByText('Читаем сборки основной ветки…')).toBeTruthy()
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(await screen.findByText('Выкатится коммит a1b2c3d.')).toBeTruthy()
+      expect(screen.getByText(/Отката платформа не делает/)).toBeTruthy()
+      fireEvent.click(screen.getByRole('radio', { name: 'deploy-staging' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Запустить выкладку' }))
+      await waitFor(() =>
+        expect(calls.confirmDeploy).toHaveBeenCalledWith(
+          { confirmToken: 'tok-stage' },
+          expect.anything(),
+        ),
+      )
+      expect(await screen.findByText(/Выкладка запущена/)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('offers nothing to play when the newest build of main has no manual jobs', async () => {
+    quiet()
+    calls.get.mockResolvedValue(repository)
+    calls.prepareDeploy.mockResolvedValue({
+      state: 'ready',
+      ref: 'main',
+      sha: null,
+      actions: [],
+      expiresAt: new Date(),
+    })
+    wrap(<RepositoryView project={project} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Выкатить' }))
+    expect(await screen.findByText(/нет ручных заданий выкладки/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Запустить выкладку' })).toBeNull()
+  })
+
+  it('no «Выкатить» for a repository read by a link or on GitHub', async () => {
+    for (const repo of [
+      { ...repository, mode: 'read' as const, connection: null },
+      { ...repository, provider: 'github' as const, host: 'github.com' },
+    ]) {
+      quiet()
+      calls.get.mockResolvedValue(repo)
+      wrap(<RepositoryView project={{ ...project, repository: repo }} />)
+      await screen.findByText(repo.path)
+      expect(screen.queryByRole('button', { name: 'Выкатить' })).toBeNull()
+      cleanup()
+    }
   })
 })
 

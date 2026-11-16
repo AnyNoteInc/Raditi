@@ -20,6 +20,8 @@ const calls = vi.hoisted(() => ({
   prepareCi: vi.fn<(input: unknown) => Promise<unknown>>(),
   confirmCi: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({ actionId: 'c' })),
   declineCi: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({ declined: true })),
+  prepareMerge: vi.fn<(input: unknown) => Promise<unknown>>(),
+  confirmMerge: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({ actionId: 'm' })),
   diff: vi.fn(async () => ({
     patch: 'diff --git a/menu.html b/menu.html\n+зима\n',
     truncated: false,
@@ -41,6 +43,8 @@ vi.mock('@/trpc/client', () => ({
       prepareCiChange: { mutationOptions: () => ({ mutationFn: calls.prepareCi }) },
       confirmCiChange: { mutationOptions: () => ({ mutationFn: calls.confirmCi }) },
       declineCiChange: { mutationOptions: () => ({ mutationFn: calls.declineCi }) },
+      prepareMerge: { mutationOptions: () => ({ mutationFn: calls.prepareMerge }) },
+      confirmMerge: { mutationOptions: () => ({ mutationFn: calls.confirmMerge }) },
     },
   }),
 }))
@@ -291,5 +295,107 @@ describe('the build of the branch in the chat (plan 84, 84.21)', () => {
     ).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Отправить в ветку' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Открыть запрос на слияние' })).toBeNull()
+  })
+})
+
+// docs/plan/84-projects.md, ПР15 (slice 84.22): P-chat-merge, the upper card.
+describe('the card «Принять запрос в основную ветку» (plan 84, 84.22)', () => {
+  const MR_HEAD = 'e'.repeat(40)
+  const openRequest = {
+    number: 37,
+    state: 'open',
+    checks: 'success',
+    url: 'https://gitlab.com/kolos/site/-/merge_requests/37',
+    headSha: MR_HEAD,
+    autoMerge: false,
+  }
+  const prepared = {
+    number: 37,
+    title: 'Новое меню',
+    source: row.branch,
+    target: 'main',
+    headSha: MR_HEAD,
+    checks: 'success',
+    url: openRequest.url,
+    deleteBranch: true,
+    whenGreen: true,
+    confirmToken: 'token-of-the-merge-card',
+    expiresAt: new Date(),
+  }
+
+  it('shows the request, its commit and the even words of a deploy, and accepts by its token', async () => {
+    calls.branch.mockResolvedValue(view({ sent: true, state: 'pushed', mergeRequest: openRequest }))
+    calls.prepareMerge.mockResolvedValue(prepared)
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    expect(await screen.findByText('Принять запрос в основную ветку main?')).toBeTruthy()
+    expect(calls.prepareMerge).toHaveBeenCalledWith(
+      { projectId: '0199a3f2-0000-7000-8000-00000000b001', number: 37 },
+      expect.anything(),
+    )
+    expect(screen.getByText('eeeeeee')).toBeTruthy()
+    expect(
+      screen.getByText(/После принятия сборка вашего репозитория может выкатить изменения/),
+    ).toBeTruthy()
+    expect(screen.queryByText(/выкатит сайт/)).toBeNull()
+    expect(screen.getByText('Подтверждаете только вы')).toBeTruthy()
+    // «Удалить ветку … после принятия» is on by default; the client takes it off.
+    const box = screen.getByRole('checkbox', { name: `Удалить ветку ${row.branch} после принятия` })
+    expect((box as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(box)
+    fireEvent.click(screen.getByRole('button', { name: 'Принять, когда сборка пройдёт' }))
+    await waitFor(() =>
+      expect(calls.confirmMerge).toHaveBeenCalledWith(
+        { confirmToken: 'token-of-the-merge-card', mode: 'when_green', deleteBranch: false },
+        expect.anything(),
+      ),
+    )
+  })
+
+  it('«Принять, когда сборка пройдёт» only where the provider waits for the build', async () => {
+    calls.branch.mockResolvedValue(view({ sent: true, state: 'pushed', mergeRequest: openRequest }))
+    calls.prepareMerge.mockResolvedValue({ ...prepared, whenGreen: false })
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Принять в основную ветку' }))
+    await waitFor(() =>
+      expect(calls.confirmMerge).toHaveBeenCalledWith(
+        { confirmToken: 'token-of-the-merge-card', mode: 'now', deleteBranch: true },
+        expect.anything(),
+      ),
+    )
+    expect(screen.queryByRole('button', { name: 'Принять, когда сборка пройдёт' })).toBeNull()
+  })
+
+  it('no card on unsent changes, a draft, a read-only repository; a wait is said instead', async () => {
+    for (const over of [
+      { sent: false, state: 'pushed', mergeRequest: openRequest },
+      { sent: true, state: 'pushed', mergeRequest: { ...openRequest, state: 'draft' } },
+      { sent: true, state: 'pushed', mergeRequest: openRequest, canPush: false },
+    ]) {
+      calls.branch.mockResolvedValue(view(over))
+      wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+      await screen.findByText(row.branch)
+      expect(screen.queryByText('Принять запрос в основную ветку main?')).toBeNull()
+      cleanup()
+    }
+    calls.branch.mockResolvedValue(
+      view({ sent: true, state: 'pushed', mergeRequest: { ...openRequest, autoMerge: true } }),
+    )
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    expect(await screen.findByText('Примем в основную ветку, когда сборка пройдёт.')).toBeTruthy()
+    expect(calls.prepareMerge).not.toHaveBeenCalled()
+  })
+
+  it('says what a merge did, and why it did not', () => {
+    wrap(<FeedRepoAction kind="merge" state="waiting" />)
+    expect(screen.getByText('Примем в основную ветку, когда сборка пройдёт.')).toBeTruthy()
+    cleanup()
+    wrap(<FeedRepoAction kind="merge" state="done" />)
+    expect(screen.getByText('Принято в основную ветку.')).toBeTruthy()
+    cleanup()
+    wrap(<FeedRepoAction kind="merge" state="failed" error="REPO_MR_TARGET_CHANGED" />)
+    expect(screen.getByText(/теперь ведёт в другую ветку/)).toBeTruthy()
+    cleanup()
+    wrap(<FeedRepoAction kind="merge" state="failed" error="REPO_CHANGED" />)
+    expect(screen.getByText('Изменения обновились — посмотрите ещё раз.')).toBeTruthy()
   })
 })

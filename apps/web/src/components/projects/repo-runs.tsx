@@ -8,6 +8,7 @@ import {
   checksStateWords,
   pullRequestStateWords,
   repoBranchStateWords,
+  repoProviderOffers,
   type CiRefusal,
   type CiStatus,
   type RepoCiJob,
@@ -26,6 +27,7 @@ import { callErrorText } from '@/components/chat/call-error'
 import { useTRPC } from '@/trpc/client'
 
 import type { ProjectDetails } from './project-types'
+import { DeployButton } from './repo-deploy'
 import { repoText } from './repo-texts'
 
 // The repository of a project and its builds (docs/plan/84-projects.md, ПР17, §4.8; slice 84.21;
@@ -242,6 +244,12 @@ function RepositoryCard({
       >
         {runText.openAt(label)}
       </Button>
+      {/* «Выкатить» (ПР15): a manual job of the head of the main branch, by the author's connection. */}
+      {repo.mode === 'write' &&
+      repo.connection?.state === 'ok' &&
+      repoProviderOffers[repo.provider].manualJobs ? (
+        <DeployButton projectId={project.id} />
+      ) : null}
     </Box>
   )
 }

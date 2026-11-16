@@ -28,6 +28,7 @@ import { useTRPC } from '@/trpc/client'
 
 import { callErrorText } from './call-error'
 import { CiChangeCard, CiChangeNote } from './feed-repo-ci'
+import { MergeCard } from './feed-repo-merge'
 
 // The chat's branch in the repository of its project (docs/plan/84-projects.md, ПР13, ПР14, ПР26;
 // P-chat): the card «Изменения в ветке» — the branch, «N файлов · +A −D», up to ten files,
@@ -43,6 +44,7 @@ export const repoCardText = Object.freeze({
   view: 'Посмотреть изменения',
   sent: 'Отправлено в ветку',
   sending: 'Отправляем…',
+  merging: 'Принимаем в основную ветку…',
   mergeRequest: 'Запрос на слияние',
   confirmTitlePush: 'Отправить изменения в ветку?',
   confirmTitleMr: 'Открыть запрос на слияние?',
@@ -62,6 +64,7 @@ export const repoCardText = Object.freeze({
   failed: 'Не получилось — попробуйте ещё раз.',
   build: 'Сборка',
   merged: 'Принято в основную ветку',
+  waitingMerge: 'Примем в основную ветку, когда сборка пройдёт.',
   mergedTakenBack: repoPushRefusalTexts.REPO_ALREADY_MERGED,
   more: (n: number) => `и ещё ${n}`,
 })
@@ -399,7 +402,7 @@ export function FeedRepoChanges({
         {taskId ? <DiffButton taskId={taskId} headSha={row.headSha} /> : null}
         {current && pressing ? (
           <Typography role="status" variant="body2" sx={{ color: 'text.secondary' }}>
-            {repoCardText.sending}
+            {view?.lastAction?.kind === 'merge' ? repoCardText.merging : repoCardText.sending}
           </Typography>
         ) : null}
         {current && view?.sent && view.state !== 'merged' ? (
@@ -420,6 +423,22 @@ export function FeedRepoChanges({
       </Box>
       {current && view?.lastRun ? (
         <BuildLine projectId={view.projectId} run={view.lastRun} />
+      ) : null}
+      {/* «Принять в основную ветку» (ПР15): only a press of the client, never the agent. */}
+      {taskId && current && view?.canPush && view.sent && !pressing && view.state === 'pushed' ? (
+        view.mergeRequest?.autoMerge ||
+        (view.lastAction?.kind === 'merge' && view.lastAction.state === 'waiting') ? (
+          <Typography role="status" variant="body2" data-feed-repo-waiting="">
+            {repoCardText.waitingMerge}
+          </Typography>
+        ) : view.mergeRequest?.state === 'open' ? (
+          <MergeCard
+            taskId={taskId}
+            projectId={view.projectId}
+            number={view.mergeRequest.number}
+            headSha={view.mergeRequest.headSha}
+          />
+        ) : null
       ) : null}
       {/* `/undo` after the merge request was accepted (ПР25). */}
       {current && view?.state === 'merged' && view.rewinds ? (
