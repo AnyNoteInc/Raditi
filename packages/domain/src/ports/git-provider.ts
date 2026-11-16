@@ -35,6 +35,12 @@ export interface GitProviderSupport {
   ciLint: boolean
   /** The provider merges by itself once the pipeline passes (GitLab `auto_merge` with `sha`). */
   autoMerge: boolean
+  /**
+   * The platform waits for the checks itself and merges once they passed (GitHub, ПР15, §4.5):
+   * «сборка прошла» — every required check of the target branch and every check suite of the head
+   * finished successfully; without required checks the wait is not offered. Needs `headChecks`.
+   */
+  checksWait: boolean
   /** Manual jobs a deploy can start (GitLab `when: manual`). */
   manualJobs: boolean
   /** Workflows a deploy can start (GitHub `workflow_dispatch`). */
@@ -73,6 +79,44 @@ export interface GitConnect {
   refreshAccess(app: OAuthApp, refreshToken: string): Promise<GitTokens | { reauth: true }>
   /** Who signed in, by the access token just received: the account a connection acts as. */
   signedInUser(app: OAuthApp, accessToken: string): Promise<{ login: string; id: string }>
+  /**
+   * An installation of an app, checked by the user's own token (ПР10; GitHub, Э10): the
+   * `installation_id` of a return can be forged, so it counts only when the user sees it among
+   * their installations. Only the repositories where this user may push are returned. null — the
+   * user does not see this installation. Only where the provider has installations.
+   */
+  verifyInstallation?(
+    userToken: string,
+    installationId: string,
+  ): Promise<VerifiedInstallation | null>
+}
+
+/** An installation as its user sees it (`verifyInstallation`). */
+export interface VerifiedInstallation {
+  installationId: string
+  /** The account the installation is on: an organisation or the user. */
+  account: { login: string; id: string }
+  /** Who checked it: the person the connection acts for. */
+  user: { login: string; id: string }
+  /** The repositories of the installation where `user` has the right to push. */
+  repositories: RepositoryInfo[]
+}
+
+/**
+ * What one person may do in a repository (ПР10), as the provider says: core checks it before every
+ * push, request, merge and deploy of a connection that acts for an installation, not for a person.
+ */
+export interface RepoPersonRights {
+  push: boolean
+  /** May merge into a protected branch (GitHub `maintain` or `admin`). */
+  maintain: boolean
+}
+
+/** What protects a branch (ПР10, ПР15): its required checks name what «сборка прошла» waits for. */
+export interface BranchRules {
+  protected: boolean
+  /** The names of the required checks: check runs or commit statuses. */
+  requiredChecks: string[]
 }
 
 /** The access of one operation. */
@@ -195,13 +239,32 @@ export interface OpenPullRequestInput {
 export interface GitProvider {
   readonly kind: RepoProviderKind
   readonly support: GitProviderSupport
+  /**
+   * The access of one operation. `repo` null — an operation on the whole account of the grant (a
+   * sync of a connection's repositories); otherwise the access is narrowed to this repository
+   * where the provider can. `workflows` — the access may change build workflows (ПР16, `ci_push`).
+   */
   issueCredentials(
     grant: GitGrant,
-    repo: RepoRef,
+    repo: RepoRef | null,
     access: 'read' | 'write',
     opts: { ttlSeconds: number; workflows?: boolean },
   ): Promise<IssuedGitAccess>
   whoAmI(auth: GitAuth): Promise<{ login: string; id: string }>
+  /** The rights of a person, by their provider id (ПР10). Only where a grant acts for an app. */
+  personRights?(auth: GitAuth, repo: RepoRef, userId: string): Promise<RepoPersonRights>
+  /** The protection of a branch and its required checks (ПР10, ПР15). */
+  branchRules?(auth: GitAuth, repo: RepoRef, branch: string): Promise<BranchRules>
+  /**
+   * Whether the build of `sha` passed by the definition of ПР15: the required checks and every
+   * check suite of the head. Only where `support.checksWait`.
+   */
+  headChecks?(
+    auth: GitAuth,
+    repo: RepoRef,
+    sha: string,
+    required: readonly string[],
+  ): Promise<'pending' | 'success' | 'failure'>
   listRepositories(
     auth: GitAuth,
     page?: string,

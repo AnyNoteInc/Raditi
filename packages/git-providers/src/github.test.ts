@@ -84,22 +84,22 @@ describe('GitHub, anonymous reading', () => {
     })
   })
 
-  it('writes and tokens wait for the GitHub App', async () => {
+  it("a stored token is not GitHub's way: writing goes by the GitHub App", async () => {
     const { provider, calls } = setup({})
-    await expect(
-      provider.openPullRequest(anonymous, repo, {
-        head: 'a',
-        base: 'main',
-        title: 't',
-        body: '',
-        draft: false,
-      }),
-    ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' })
     await expect(
       provider.issueCredentials({ kind: 'token', token: 't' }, repo, 'write', { ttlSeconds: 60 }),
     ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' })
+    await expect(
+      provider.issueCredentials(anonymous, repo, 'write', { ttlSeconds: 60 }),
+    ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' })
     expect(calls).toHaveLength(0)
-    expect(provider.support).toMatchObject({ autoMerge: false, ciLint: false, label: 'GitHub' })
+    expect(provider.support).toMatchObject({
+      autoMerge: false,
+      checksWait: true,
+      workflowDispatch: true,
+      ciLint: false,
+      label: 'GitHub',
+    })
     expect(provider.support.requestRef(3)).toBe('#3')
   })
 
@@ -124,10 +124,12 @@ describe('GitHub, anonymous reading', () => {
       const { support, branchHead } = createGitProvider({ kind, host, transport })
       expect(repoProviderOffers[kind]).toEqual({
         autoMerge: support.autoMerge,
+        checksWait: support.checksWait,
         manualJobs: support.manualJobs,
+        workflowDispatch: support.workflowDispatch,
       })
       // A deploy reads the head of the main branch again before it plays a job.
-      if (support.manualJobs) expect(branchHead).toBeTypeOf('function')
+      if (support.manualJobs || support.workflowDispatch) expect(branchHead).toBeTypeOf('function')
     }
   })
 

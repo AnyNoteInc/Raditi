@@ -16,7 +16,7 @@ export function authHeaders(auth: GitAuth): Record<string, string> {
 }
 
 export interface JsonCall {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE'
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   url: URL
   auth: GitAuth
   body?: unknown

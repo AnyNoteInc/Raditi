@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import { repoActionArgsSchema, repoPushRefusalTexts } from './actions.ts'
-import { repoMergeArgsSchema, repoMergeTexts, repoProviderOffers } from './merge.ts'
+import {
+  repoMergeArgsSchema,
+  repoMergeTexts,
+  repoOffersDeploy,
+  repoOffersWhenGreen,
+  repoProviderOffers,
+} from './merge.ts'
 
 // «Принять в основную ветку» and «Выкатить» (docs/plan/84-projects.md, ПР15; slice 84.22).
 describe('merge and deploy of a repository', () => {
@@ -34,7 +40,21 @@ describe('merge and deploy of a repository', () => {
   })
 
   it('offers a wait for the build and manual jobs only where the provider has them', () => {
-    expect(repoProviderOffers.gitlab).toEqual({ autoMerge: true, manualJobs: true })
-    expect(repoProviderOffers.github).toEqual({ autoMerge: false, manualJobs: false })
+    expect(repoProviderOffers.gitlab).toEqual({
+      autoMerge: true,
+      checksWait: false,
+      manualJobs: true,
+      workflowDispatch: false,
+    })
+    expect(repoProviderOffers.github).toEqual({
+      autoMerge: false,
+      checksWait: true,
+      manualJobs: false,
+      workflowDispatch: true,
+    })
+    expect(repoOffersWhenGreen(repoProviderOffers.github)).toBe(true)
+    expect(repoOffersWhenGreen(repoProviderOffers.gitlab)).toBe(true)
+    expect(repoOffersDeploy(repoProviderOffers.github)).toBe(true)
+    expect(repoOffersDeploy(repoProviderOffers.gitlab)).toBe(true)
   })
 })

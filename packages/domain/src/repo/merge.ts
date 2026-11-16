@@ -9,7 +9,10 @@ import type { RepoProviderKind } from '../ports/git-provider.ts'
 // manual job of the head of the main branch, which core reads again before it plays it. The
 // platform promises no rollback: «Отменить можно новым запросом на слияние».
 
-/** «Принять в основную ветку» — now; «Принять, когда сборка пройдёт» — GitLab `auto_merge`. */
+/**
+ * «Принять в основную ветку» — now; «Принять, когда сборка пройдёт» — GitLab `auto_merge`, or the
+ * platform's own wait for the checks where the provider has none (GitHub, ПР15).
+ */
 export const repoMergeModes = ['now', 'when_green'] as const
 export type RepoMergeMode = (typeof repoMergeModes)[number]
 
@@ -23,15 +26,40 @@ export type RepoMergeArgs = z.infer<typeof repoMergeArgsSchema>
 
 /**
  * What a card may offer of a provider before core reaches its adapter (web never does): the same
- * values as `support.autoMerge` and `support.manualJobs` of the adapters — a table by kind, not a
- * comparison of the kind (rule 8); a test of `@repo/git-providers` holds them equal.
+ * values as `support.autoMerge`, `support.checksWait`, `support.manualJobs` and
+ * `support.workflowDispatch` of the adapters — a table by kind, not a comparison of the kind
+ * (rule 8); a test of `@repo/git-providers` holds them equal.
  */
-export const repoProviderOffers: Readonly<
-  Record<RepoProviderKind, { readonly autoMerge: boolean; readonly manualJobs: boolean }>
-> = Object.freeze({
-  github: Object.freeze({ autoMerge: false, manualJobs: false }),
-  gitlab: Object.freeze({ autoMerge: true, manualJobs: true }),
-})
+export interface RepoProviderOffer {
+  readonly autoMerge: boolean
+  readonly checksWait: boolean
+  readonly manualJobs: boolean
+  readonly workflowDispatch: boolean
+}
+
+export const repoProviderOffers: Readonly<Record<RepoProviderKind, RepoProviderOffer>> =
+  Object.freeze({
+    github: Object.freeze({
+      autoMerge: false,
+      checksWait: true,
+      manualJobs: false,
+      workflowDispatch: true,
+    }),
+    gitlab: Object.freeze({
+      autoMerge: true,
+      checksWait: false,
+      manualJobs: true,
+      workflowDispatch: false,
+    }),
+  })
+
+/** «Принять, когда сборка пройдёт» is offered: the provider merges, or the platform waits itself. */
+export const repoOffersWhenGreen = (offer: RepoProviderOffer): boolean =>
+  offer.autoMerge || offer.checksWait
+
+/** «Выкатить» is offered: a manual job or a `workflow_dispatch` of the head of the main branch. */
+export const repoOffersDeploy = (offer: RepoProviderOffer): boolean =>
+  offer.manualJobs || offer.workflowDispatch
 
 // --- refusals ---------------------------------------------------------------------------------
 
@@ -50,6 +78,17 @@ export const repoForeignCommits = (): DomainError =>
 export const repoAutoMergeOff = (): DomainError =>
   new DomainError('REPO_AUTO_MERGE_OFF', 'The merge request was not merged after its build', 409)
 
+/**
+ * «Принять, когда сборка пройдёт» where the platform waits (ПР15): the main branch requires no check,
+ * so nothing would say the build passed — a workflow of the agent's own branch could report success.
+ */
+export const repoNoRequiredChecks = (): DomainError =>
+  new DomainError('REPO_NO_REQUIRED_CHECKS', 'The target branch requires no checks', 409)
+
+/** The build of the head the client confirmed did not pass: the platform does not merge it. */
+export const repoChecksFailed = (): DomainError =>
+  new DomainError('REPO_CHECKS_FAILED', 'The checks of the head did not pass', 409)
+
 /** The manual job of the card is not one of the newest build of the main branch any more. */
 export const repoDeployGone = (): DomainError =>
   new DomainError('REPO_DEPLOY_GONE', 'The deploy job is not there any more', 409)
@@ -62,6 +101,9 @@ export const repoMergeRefusalTexts = Object.freeze({
     'Запрос на слияние теперь ведёт в другую ветку — изменения не приняты. Посмотрите запрос в репозитории',
   REPO_AUTO_MERGE_OFF:
     'Изменения не приняты: ожидание сборки сняли или запрос закрыли. Откройте запрос в репозитории',
+  REPO_NO_REQUIRED_CHECKS:
+    'У основной ветки нет обязательных проверок — «Принять, когда сборка пройдёт» недоступно. Примите изменения сразу или настройте проверки в репозитории',
+  REPO_CHECKS_FAILED: 'Сборка не прошла — изменения не приняты. Посмотрите сборку в репозитории',
   REPO_DEPLOY_GONE:
     'Этого задания выкладки больше нет у последней сборки основной ветки — откройте «Выкатить» снова',
 } satisfies Record<string, string>)
@@ -73,4 +115,7 @@ export const repoMergeTexts = Object.freeze({
     'После принятия сборка вашего репозитория может выкатить изменения — так, как она настроена. Отменить можно новым запросом на слияние.',
   deployBody:
     'Запустится ручное задание вашей сборки на основной ветке — выкладку делает ваша сборка, так, как она настроена. Отката платформа не делает: отменить можно новым запросом на слияние.',
+  /** GitHub (slice 84.25): a workflow started by `workflow_dispatch`, not a job of a build. */
+  deployWorkflowBody:
+    'Запустится выбранный процесс GitHub Actions на основной ветке — выкладку делает он, так, как он настроен. Отката платформа не делает: отменить можно новым запросом на слияние.',
 })
