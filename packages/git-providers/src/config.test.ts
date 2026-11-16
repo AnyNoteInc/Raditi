@@ -84,7 +84,10 @@ describe('the variables of the git apps (docs/plan/84-projects.md, §4.5)', () =
     [{ GITHUB_APP_SLUG: 'Raditi App' }, /GITHUB_APP_SLUG: must be the slug/],
     [{ REPO_CONFIRM_SECRET: 'short' }, /REPO_CONFIRM_SECRET: must be at least 32/],
     [{ REPO_CONFIRM_SECRET: `${secret} x` }, /REPO_CONFIRM_SECRET: must be one word/],
-    [{ GITLAB_COM_URL: 'https://localhost:9443' }, /GITLAB_COM_URL: only outside production/],
+    [
+      { RADITI_FAKE_GITLAB_COM_URL: 'https://localhost:9443' },
+      /RADITI_FAKE_GITLAB_COM_URL: only outside production/,
+    ],
   ])('web refuses %o in production', (vars, problem) => {
     expect(() => webGitAppsFromEnv({ APP_ENV: 'production', ...vars })).toThrow(problem)
   })
@@ -92,8 +95,14 @@ describe('the variables of the git apps (docs/plan/84-projects.md, §4.5)', () =
   it.each([
     [{ GITHUB_APP_ID: '1' }, /GITHUB_APP_PRIVATE_KEY_FILE: set .* together/],
     [{ GITHUB_APP_ID: 'abc', GITHUB_APP_PRIVATE_KEY_FILE: '/k.pem' }, /GITHUB_APP_ID: must be/],
-    [{ GITHUB_API_URL: 'https://api.github.com' }, /GITHUB_API_URL: must be https:\/\/localhost/],
-    [{ GITHUB_WEB_URL: 'http://localhost:9443' }, /GITHUB_WEB_URL: must be https:\/\/localhost/],
+    [
+      { RADITI_FAKE_GITHUB_API_URL: 'https://api.github.com' },
+      /RADITI_FAKE_GITHUB_API_URL: must be https:\/\/localhost/,
+    ],
+    [
+      { RADITI_FAKE_GITHUB_WEB_URL: 'http://localhost:9443' },
+      /RADITI_FAKE_GITHUB_WEB_URL: must be https:\/\/localhost/,
+    ],
   ])('core refuses %o', (vars, problem) => {
     expect(() => coreGitAppsFromEnv({ APP_ENV: 'development', ...vars })).toThrow(problem)
   })
@@ -119,9 +128,9 @@ describe('the variables of the git apps (docs/plan/84-projects.md, §4.5)', () =
     expect(
       webGitAppsFromEnv({
         APP_ENV: 'test',
-        GITHUB_API_URL: 'https://localhost:9441',
-        GITHUB_WEB_URL: 'https://localhost:9442',
-        GITLAB_COM_URL: 'https://localhost:9443',
+        RADITI_FAKE_GITHUB_API_URL: 'https://localhost:9441',
+        RADITI_FAKE_GITHUB_WEB_URL: 'https://localhost:9442',
+        RADITI_FAKE_GITLAB_COM_URL: 'https://localhost:9443',
       }).endpoints,
     ).toEqual({
       githubApiUrl: 'https://localhost:9441',

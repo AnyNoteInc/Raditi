@@ -817,12 +817,12 @@ describe('loadConfig — the apps of the repositories of projects (docs/plan/84-
       prodEnv({
         GITLAB_OAUTH_CLIENT_ID: 'gl-id',
         REPO_CONFIRM_SECRET: 'short',
-        GITLAB_COM_URL: 'https://localhost:9443',
+        RADITI_FAKE_GITLAB_COM_URL: 'https://localhost:9443',
       }),
     ).join('; ')
     expect(problems).toMatch(/GITLAB_OAUTH_CLIENT_SECRET: set GITLAB_OAUTH_CLIENT_ID/)
     expect(problems).toMatch(/REPO_CONFIRM_SECRET: must be at least 32 characters/)
-    expect(problems).toMatch(/GITLAB_COM_URL: only outside production/)
+    expect(problems).toMatch(/RADITI_FAKE_GITLAB_COM_URL: only outside production/)
     expect(problems).not.toMatch(/gl-id|short/)
   })
 })

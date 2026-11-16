@@ -9,11 +9,11 @@ import type { GitTransport } from './transport.ts'
 // never compare the kind themselves (docs/plan/84-projects.md, ПР11).
 
 export interface GitProviderEndpoints {
-  /** Stands only, `https://localhost:<port>`: GITHUB_API_URL. */
+  /** Stands only, `https://localhost:<port>`: RADITI_FAKE_GITHUB_API_URL. */
   githubApiUrl?: string
-  /** Stands only, `https://localhost:<port>`: GITHUB_WEB_URL (the sign-in pages of github.com, Э10). */
+  /** Stands only, `https://localhost:<port>`: RADITI_FAKE_GITHUB_WEB_URL (the sign-in pages of github.com, Э10). */
   githubWebUrl?: string
-  /** Stands only, `https://localhost:<port>`: GITLAB_COM_URL. */
+  /** Stands only, `https://localhost:<port>`: RADITI_FAKE_GITLAB_COM_URL. */
   gitlabComUrl?: string
 }
 

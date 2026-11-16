@@ -68,9 +68,9 @@ const shared = {
   GITLAB_OAUTH_CLIENT_ID: secret,
   GITLAB_OAUTH_CLIENT_SECRET: secret,
   REPO_CONFIRM_SECRET: secret,
-  GITHUB_API_URL: endpoint,
-  GITHUB_WEB_URL: endpoint,
-  GITLAB_COM_URL: endpoint,
+  RADITI_FAKE_GITHUB_API_URL: endpoint,
+  RADITI_FAKE_GITHUB_WEB_URL: endpoint,
+  RADITI_FAKE_GITLAB_COM_URL: endpoint,
 }
 
 type Shared = {
@@ -78,9 +78,9 @@ type Shared = {
   GITLAB_OAUTH_CLIENT_ID?: string | undefined
   GITLAB_OAUTH_CLIENT_SECRET?: string | undefined
   REPO_CONFIRM_SECRET?: string | undefined
-  GITHUB_API_URL?: string | undefined
-  GITHUB_WEB_URL?: string | undefined
-  GITLAB_COM_URL?: string | undefined
+  RADITI_FAKE_GITHUB_API_URL?: string | undefined
+  RADITI_FAKE_GITHUB_WEB_URL?: string | undefined
+  RADITI_FAKE_GITLAB_COM_URL?: string | undefined
 }
 
 /** Every name of a group or none of them. */
@@ -104,7 +104,11 @@ function sharedProblems(env: Shared, ctx: z.RefinementCtx): void {
       message: 'must be at least 32 characters',
     })
   if (isProduction(env.APP_ENV))
-    for (const name of ['GITHUB_API_URL', 'GITHUB_WEB_URL', 'GITLAB_COM_URL'] as const)
+    for (const name of [
+      'RADITI_FAKE_GITHUB_API_URL',
+      'RADITI_FAKE_GITHUB_WEB_URL',
+      'RADITI_FAKE_GITLAB_COM_URL',
+    ] as const)
       if (env[name] !== undefined)
         ctx.addIssue({ code: 'custom', path: [name], message: 'only outside production' })
 }
@@ -118,9 +122,9 @@ function sharedConfig(env: Shared): Omit<GitAppsConfig<never>, 'githubApp'> {
         : null,
     repoConfirmSecret: env.REPO_CONFIRM_SECRET ?? (production ? null : DEV_REPO_CONFIRM_SECRET),
     endpoints: {
-      ...(env.GITHUB_API_URL ? { githubApiUrl: env.GITHUB_API_URL } : {}),
-      ...(env.GITHUB_WEB_URL ? { githubWebUrl: env.GITHUB_WEB_URL } : {}),
-      ...(env.GITLAB_COM_URL ? { gitlabComUrl: env.GITLAB_COM_URL } : {}),
+      ...(env.RADITI_FAKE_GITHUB_API_URL ? { githubApiUrl: env.RADITI_FAKE_GITHUB_API_URL } : {}),
+      ...(env.RADITI_FAKE_GITHUB_WEB_URL ? { githubWebUrl: env.RADITI_FAKE_GITHUB_WEB_URL } : {}),
+      ...(env.RADITI_FAKE_GITLAB_COM_URL ? { gitlabComUrl: env.RADITI_FAKE_GITLAB_COM_URL } : {}),
     },
   }
 }

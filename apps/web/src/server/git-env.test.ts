@@ -49,15 +49,15 @@ describe('webGitEnvFromEnv (docs/plan/84-projects.md, 84.16)', () => {
       webGitEnvFromEnv({
         APP_ENV: 'test',
         GIT_ALLOW_LOOPBACK: '1',
-        GITLAB_COM_URL: 'https://localhost:9443',
+        RADITI_FAKE_GITLAB_COM_URL: 'https://localhost:9443',
       }),
     ).toMatchObject({ allowLoopback: true, endpoints: { gitlabComUrl: 'https://localhost:9443' } })
     expect(() => webGitEnvFromEnv({ APP_ENV: 'production', GIT_ALLOW_LOOPBACK: '1' })).toThrow(
       /GIT_ALLOW_LOOPBACK: only outside production/,
     )
     expect(() =>
-      webGitEnvFromEnv({ APP_ENV: 'production', GITHUB_API_URL: 'https://localhost:9441' }),
-    ).toThrow(/GITHUB_API_URL: only outside production/)
+      webGitEnvFromEnv({ APP_ENV: 'production', RADITI_FAKE_GITHUB_API_URL: 'https://localhost:9441' }),
+    ).toThrow(/RADITI_FAKE_GITHUB_API_URL: only outside production/)
     expect(() => webGitEnvFromEnv({ APP_ENV: 'production', GITHUB_APP_SLUG: 'raditi' })).toThrow(
       /GITHUB_APP_WEBHOOK_SECRET: set/,
     )
