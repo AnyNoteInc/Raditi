@@ -634,6 +634,31 @@ describe('GitWorkspaceService', { timeout: 60_000 }, () => {
     })
   })
 
+  it('removes the mirror and bundles of a repository no project has, and keeps the rest (ревью C3)', async () => {
+    const f = await fixture()
+    await f.fetchMain()
+    await f.service.buildBaseBundle({
+      projectRepositoryId: f.projectRepositoryId,
+      baseSha: f.baseSha,
+      branch: 'raditi/chat',
+      committedAt: '2026-11-16T10:00:00.000Z',
+    })
+    const mirror = join(f.mirrorDir, 'repos', `${f.projectRepositoryId}.git`)
+    const bundles = join(f.mirrorDir, 'bundles', f.projectRepositoryId)
+    expect(await f.service.removeOrphans(async (ids) => new Set(ids))).toBe(0)
+    expect((await readdir(bundles)).length).toBeGreaterThan(0)
+    let asked: readonly string[] = []
+    expect(
+      await f.service.removeOrphans(async (ids) => {
+        asked = ids
+        return new Set()
+      }),
+    ).toBe(1)
+    expect(asked).toEqual([f.projectRepositoryId])
+    await expect(readdir(mirror)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readdir(bundles)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   // docs/plan/84-projects.md, ПР16 (slice 84.20).
   describe('buildSettingsChange', () => {
     it('names the changed build paths, their diff and the configuration at the head', async () => {

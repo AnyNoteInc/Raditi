@@ -1,6 +1,12 @@
 'use client'
 
-import { gitConnectionReasonTexts, type GitConnectionReason } from '@repo/domain/repo'
+import {
+  gitConnectionProviders,
+  gitConnectionReasonTexts,
+  gitServerHostOf,
+  repoProviderBrands,
+  type GitConnectionReason,
+} from '@repo/domain/repo'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -15,6 +21,7 @@ import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import Link from 'next/link'
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
@@ -22,7 +29,7 @@ import { callErrorText } from '@/components/chat/call-error'
 import { useTRPC } from '@/trpc/client'
 
 import type { ProjectDetails } from './project-types'
-import { RepositoryRunsLine } from './repo-runs'
+import { repositoryHref, RepositoryRunsLine } from './repo-runs'
 import { repoText } from './repo-texts'
 
 // The repository of a project in the cabinet (docs/plan/84-projects.md, ПР6, ПР9, ПР10, §4.8;
@@ -88,9 +95,12 @@ export function useProjectRepository(project: Pick<ProjectDetails, 'id' | 'repos
 export function ProjectRepositoryRow({
   project,
   compact = false,
+  onSignIn,
 }: {
   project: Pick<ProjectDetails, 'id' | 'repository'>
   compact?: boolean
+  /** «Войти заново» of a connection whose sign-in is to be renewed (ревью P3). */
+  onSignIn?: () => void
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
@@ -117,7 +127,7 @@ export function ProjectRepositoryRow({
     <Box data-project-repository="" sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
         <Box sx={{ display: 'flex', color: 'text.secondary' }} aria-hidden>
-          <AppIcon name={repo.provider === 'github' ? 'github' : 'gitlab'} size={16} />
+          <AppIcon name={repoProviderBrands[repo.provider].icon} size={16} />
         </Box>
         <Typography
           component="span"
@@ -133,12 +143,11 @@ export function ProjectRepositoryRow({
           {repoText.row}: {repo.path}
         </Typography>
         <Box sx={{ flex: '1 1 auto' }} />
+        {/* The page of the repository in Радити (ревью P6); it opens the provider's itself. */}
         <Button
           size="small"
-          component="a"
-          href={repo.webUrl}
-          target="_blank"
-          rel="noreferrer noopener"
+          component={Link}
+          href={repositoryHref(project.id)}
           aria-label={repoText.openLabel(repo.path)}
           sx={{ minHeight: 44, flex: 'none' }}
         >
@@ -155,7 +164,11 @@ export function ProjectRepositoryRow({
         <Alert
           severity="warning"
           action={
-            repo.mirrorState === 'failed' ? (
+            repo.refusal.code === 'GIT_CONNECTION_REAUTH' && onSignIn ? (
+              <Button color="inherit" size="small" onClick={onSignIn} sx={{ minHeight: 44 }}>
+                {repoText.signInAgain}
+              </Button>
+            ) : repo.mirrorState === 'failed' || repo.mirrorState === 'unreachable' ? (
               <Button
                 color="inherit"
                 size="small"
@@ -326,7 +339,8 @@ function ConnectForm({
   const list = useQuery(trpc.gitConnection.list.queryOptions())
   const addToken = useMutation(trpc.gitConnection.addToken.mutationOptions())
   const available = list.data?.available
-  const [way, setWay] = useState<Way>('gitlab-self')
+  // GitLab.com by its sign-in when it is offered (ревью P2), else an own server by a token.
+  const [way, setWay] = useState<Way>('gitlab')
   const [host, setHost] = useState('')
   const [token, setToken] = useState('')
   const [shown, setShown] = useState(false)
@@ -441,7 +455,14 @@ function ConnectForm({
             {connections.map((connection) => (
               <ButtonBase
                 key={connection.id}
-                onClick={() => onConnection(connection.id)}
+                // A connection whose sign-in is to be renewed is not picked (ревью P17): its press
+                // opens its way again — the sign-in of gitlab.com, or the token of its server.
+                onClick={() => {
+                  if (connection.state === 'ok') return onConnection(connection.id)
+                  if (connection.signsIn) return setWay('gitlab')
+                  setWay('gitlab-self')
+                  setHost(connection.host)
+                }}
                 sx={{
                   justifyContent: 'flex-start',
                   gap: 1,
@@ -454,12 +475,17 @@ function ConnectForm({
                   '&.Mui-focusVisible': { outline: '2px solid', outlineColor: 'primary.main' },
                 }}
               >
-                <AppIcon name="gitlab" size={16} />
+                <AppIcon
+                  name={repoProviderBrands[gitConnectionProviders[connection.kind]].icon}
+                  size={16}
+                />
                 <Box component="span" sx={{ fontSize: 14 }}>
                   {repoText.account(connection.login, connection.host)}
                 </Box>
                 <Box component="span" sx={{ ml: 'auto', fontSize: 12.5, color: 'text.secondary' }}>
-                  {repoText.connectionState[connection.state]}
+                  {connection.state === 'reauth_needed'
+                    ? repoText.signInAgain
+                    : repoText.connectionState[connection.state]}
                 </Box>
               </ButtonBase>
             ))}
@@ -569,6 +595,27 @@ function ConnectForm({
           <Typography sx={{ fontSize: 12.5, color: 'text.secondary', mt: -1 }}>
             {repoText.tokenAdvice}
           </Typography>
+          {(() => {
+            const server = gitServerHostOf(host)
+            return server ? (
+              <Box
+                component="a"
+                href={repoText.tokenPage(server)}
+                target="_blank"
+                rel="noreferrer noopener"
+                sx={{
+                  alignSelf: 'flex-start',
+                  minHeight: 44,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  fontSize: 13,
+                  color: 'primary.main',
+                }}
+              >
+                {repoText.tokenHow}
+              </Box>
+            ) : null
+          })()}
         </Box>
       ) : null}
 
@@ -919,7 +966,7 @@ export function useRepositoryWindows(project: Pick<ProjectDetails, 'id' | 'name'
     return () => clearTimeout(later)
   }, [])
   const newest = signedIn
-    ? (connections.data?.connections.filter((c) => c.kind === 'gitlab_oauth').at(-1)?.id ?? null)
+    ? (connections.data?.connections.filter((c) => c.signsIn).at(-1)?.id ?? null)
     : null
   const shownPick = picking ?? newest
   const closePick = () => {

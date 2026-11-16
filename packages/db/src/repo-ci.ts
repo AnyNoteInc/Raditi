@@ -119,10 +119,18 @@ export type CiLogAnswer =
  */
 export async function requestCiLog(
   db: Db,
-  input: { projectRepositoryId: string; runId: string; jobId: string; now: Date },
+  input: {
+    projectRepositoryId: string
+    runId: string
+    jobId: string
+    now: Date
+    /** Only a run of these refs (the agent's: its chat's branch); absent — any (the cabinet). */
+    refs?: readonly string[]
+  },
 ): Promise<CiLogAnswer> {
   const { projectRepositoryId, jobId, now } = input
-  const run = await ciRunOf(db, input)
+  const found = await ciRunOf(db, input)
+  const run = found && (!input.refs || input.refs.includes(found.ref)) ? found : null
   const job = run?.jobs?.find((item) => item.id === jobId) ?? null
   if (job === null) throw repoRunNotFound()
   const key = { projectRepositoryId_providerJobId: { projectRepositoryId, providerJobId: jobId } }

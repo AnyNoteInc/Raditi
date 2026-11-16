@@ -28,6 +28,7 @@ import {
   type RepoRef,
   type RepositoryInfo,
 } from '@repo/domain'
+import { errorMessage } from '@repo/observability'
 
 import { GIT_CREDENTIAL_TTL_SECONDS } from '../git-workspace/git-auth.ts'
 import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
@@ -53,6 +54,8 @@ import type { ResolvePublicHost } from './public-host.ts'
 export const GIT_SYNC_PAGES = 10
 /** Branches a repository keeps for the choice (CHECK of `git_connection_repositories`). */
 export const GIT_BRANCHES_KEPT = 100
+/** A first fetch still `syncing` after this stopped with its core (ревью C10). */
+export const REPO_SYNC_STUCK_MS = 30 * 60_000
 
 export interface GitProviderFactory {
   (input: { kind: RepoProviderKind; host: string; address: string }): GitProvider
@@ -66,7 +69,7 @@ export interface GitJobsOptions {
   provider: GitProviderFactory
   workspace: Pick<
     GitWorkspaceService,
-    'fetch' | 'findSecrets' | 'buildSettingsChange' | 'dropMirror'
+    'fetch' | 'findSecrets' | 'buildSettingsChange' | 'dropMirror' | 'removeOrphans'
   >
   /** Where the diff of the build settings of a branch is kept for the card (`git.ci_lint`). */
   storage?: Pick<ObjectStorage, 'put'>
@@ -139,6 +142,43 @@ export class GitJobs {
       select: connectionSelect,
     })
     return row === null ? null : { ...row, kind: row.kind as GitConnectionKind }
+  }
+
+  /**
+   * The upkeep of the tick of `git.poll` (ревью C3, C10): a repository whose first fetch stopped
+   * — its job is one attempt, a core that died left it `syncing` — is `failed` after
+   * `REPO_SYNC_STUCK_MS`, so «Обновить» is offered; the mirrors and bundles of repositories that
+   * are no longer a project's go from the volume. Each part fails alone.
+   */
+  async sweep(): Promise<{ stuck: number; removed: number }> {
+    const { prisma } = this.#o
+    let stuck = 0
+    let removed = 0
+    try {
+      stuck = (
+        await prisma.projectRepository.updateMany({
+          where: {
+            mirrorState: 'syncing',
+            updatedAt: { lt: new Date(this.#now().getTime() - REPO_SYNC_STUCK_MS) },
+          },
+          data: { mirrorState: 'failed' },
+        })
+      ).count
+    } catch (error) {
+      this.#o.logger.warn(`git_sweep_stuck_failed ${errorMessage(error)}`)
+    }
+    try {
+      removed = await this.#o.workspace.removeOrphans(async (ids) => {
+        const rows = await prisma.projectRepository.findMany({
+          where: { id: { in: [...ids] } },
+          select: { id: true },
+        })
+        return new Set(rows.map((row) => row.id))
+      })
+    } catch (error) {
+      this.#o.logger.warn(`git_sweep_orphans_failed ${errorMessage(error)}`)
+    }
+    return { stuck, removed }
   }
 
   /**
@@ -339,7 +379,6 @@ export class GitJobs {
     })
   }
 
-  /** `git.repo.attach`. */
   /**
    * `git.repo.forget`: the mirror and the bundles of a repository whose row the transaction that
    * wrote this job deleted. A row of that id still there — the job came before its commit could be
@@ -355,6 +394,7 @@ export class GitJobs {
     this.#o.logger.log(`git.repo.forget ${projectRepositoryId}: mirror removed`)
   }
 
+  /** `git.repo.attach`. */
   async attachRepository(projectRepositoryId: string): Promise<void> {
     const repo = await this.#o.prisma.projectRepository.findUnique({
       where: { id: projectRepositoryId },
@@ -597,9 +637,15 @@ export class GitJobs {
       includes,
       declined: false,
     }
-    await prisma.projectRepoBranch.updateMany({
-      where: { taskId },
-      data: { ciLint: row, ciDiffSha256 },
+    // Only while this head is still the chat's (ревью C7): an older lint that ends after a newer
+    // one never overwrites it. The head is read again under the branch's row lock.
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT task_id FROM project_repo_branches WHERE task_id = ${taskId}::uuid FOR UPDATE`
+      if ((await chatBranchHead(tx, taskId))?.headSha !== headSha) return
+      await tx.projectRepoBranch.updateMany({
+        where: { taskId },
+        data: { ciLint: row, ciDiffSha256 },
+      })
     })
   }
 }

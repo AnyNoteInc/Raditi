@@ -48,7 +48,7 @@ const errorCodes: Readonly<Record<string, FeedFailureCode>> = Object.freeze({
   PUBLICATION_SECRET: 'secret_found',
   // The repository of the chat's project could not be prepared (docs/plan/84-projects.md, ПР12).
   REPOSITORY_TOO_LARGE: 'repo_too_large',
-  REPOSITORY_UNSUPPORTED: 'repo_too_large',
+  REPOSITORY_UNSUPPORTED: 'repo_unsupported',
   REPO_UNREACHABLE: 'repo_unreachable',
   REPO_TOO_LARGE: 'repo_too_large',
   GIT_CONNECTION_REAUTH: 'repo_reauth',

@@ -34,6 +34,7 @@ import {
   repoCiLintSchema,
   repoConfirmInvalid,
   repoDeployGone,
+  repoForeignCommits,
   repoMergeTargetChanged,
   repoNothingToPush,
   repoNotMergeable,
@@ -404,6 +405,16 @@ export class RepoActions {
       throw repoMergeTargetChanged()
     if (read.sourceBranch !== cached.sourceBranch || read.headSha !== claims.headSha)
       throw repoChanged()
+    // A chat's branch: the head is the commit Радити sent, nothing pushed past it (ревью,
+    // безопасность 4).
+    if (row.taskId !== null) {
+      const branch = await prisma.projectRepoBranch.findUnique({
+        where: { taskId: row.taskId },
+        select: { remoteSha: true, branch: true },
+      })
+      if (branch?.branch === read.sourceBranch && branch.remoteSha !== read.headSha)
+        throw repoForeignCommits()
+    }
     if (read.state === 'draft') throw repoNotMergeable()
     const merged = await provider.mergePullRequest(auth, info.ref, number, {
       expectedHeadSha: claims.headSha,
@@ -492,7 +503,7 @@ export class RepoActions {
     if (task?.projectId !== project.id) throw repoConfirmInvalid()
     // What the card showed must be what stands now: the head of the chat and the diff of its card.
     const unsent = await unsentBranch(prisma, taskId)
-    if (unsent === null) throw repoNothingToPush()
+    if (unsent === null) return this.#mergeRequestOnly(row, claims, taskId)
     if (
       unsent.head.headSha !== claims.headSha ||
       (unsent.card?.diffSha256 ?? null) !== claims.diffSha256
@@ -506,6 +517,18 @@ export class RepoActions {
     }
     if (claims.kind === 'ci_change') await this.#checkCiChange(taskId, repo, claims)
     let branch = await chatBranch(prisma, taskId)
+    // The card's flag is read again from the commits themselves (ревью, безопасность 2): an
+    // ordinary «Отправить» sends nothing of the build settings, whatever the card was told.
+    if (claims.kind !== 'ci_change' && branch !== null) {
+      const change = await workspace.buildSettingsChange({
+        projectRepositoryId: repo.id,
+        from: branch.mirrorSha ?? branch.baseSha,
+        to: unsent.head.headSha,
+        isBuildPath: buildPathsOf(repo),
+        maxBytes: 0,
+      })
+      if (change.paths.length) throw repoCiChangeNeedsCard()
+    }
     if (
       branch === null ||
       branch.projectRepositoryId !== repo.id ||
@@ -582,6 +605,49 @@ export class RepoActions {
         head: pushed.sha,
       })
     return { ...pushed, mergeRequest }
+  }
+
+  /**
+   * The merge request of a branch sent already (ревью C5): the push went, the merge request did
+   * not open. Nothing is pushed: the head the token names is what the client was sent.
+   */
+  async #mergeRequestOnly(
+    row: ActionRow,
+    claims: RepoConfirmClaims,
+    taskId: string,
+  ): Promise<{ sha: string; rebased: boolean; mergeRequest: PullRequest | null }> {
+    const { prisma } = this.#o
+    const { repo, connection } = await this.#writableRepository(row, claims)
+    const branch = await chatBranch(prisma, taskId)
+    if (
+      !claims.opensMergeRequest ||
+      claims.diffSha256 !== null ||
+      branch === null ||
+      branch.projectRepositoryId !== repo.id ||
+      branch.branch !== claims.targetBranch ||
+      branch.state !== 'pushed' ||
+      branch.mirrorSha !== claims.headSha ||
+      branch.remoteSha === null
+    )
+      throw repoNothingToPush()
+    const open = await prisma.projectMergeRequest.findFirst({
+      where: {
+        projectRepositoryId: repo.id,
+        sourceBranch: branch.branch,
+        state: { in: ['open', 'draft', 'merged'] },
+      },
+      select: { number: true },
+    })
+    if (open !== null) throw repoNothingToPush()
+    const { provider, auth, info } = await this.#operation({ ...repo, connection })
+    const mergeRequest = await this.#openMergeRequest(provider, auth, info.ref, row, {
+      repositoryId: repo.id,
+      taskId,
+      branch: branch.branch,
+      target: repo.defaultBranch,
+      head: branch.remoteSha,
+    })
+    return { sha: branch.remoteSha, rebased: false, mergeRequest }
   }
 
   /**

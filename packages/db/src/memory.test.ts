@@ -353,6 +353,35 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the memory (plan 84, 84.11)', () => {
     ).toMatchObject({ outcome: 'failed', reason: 'failed' })
   })
 
+  it('leaves the reservations of a turn still assigned to it, however old (ревью C8)', async () => {
+    const { projectId, chat, scope } = await owner()
+    const task = await chat(projectId)
+    const kept = await reserve(task.id, scope(projectId), {
+      kind: 'save',
+      entryKind: 'fact',
+      text: 'Долгий ход',
+    })
+    await db.turnAssignment.create({
+      data: {
+        taskId: task.id,
+        siteId: task.id,
+        sessionId: task.id,
+        turnNo: 1,
+        executor: 'local',
+        plan: {},
+        firstEpoch: 1,
+        leaseEpoch: 1,
+        deadlineAt: new Date(Date.now() + 60_000),
+      },
+    })
+    const closed = await closeStaleMemoryReservations(db, new Date(Date.now() + 1000), 100)
+    expect(closed.map((row) => row.id)).not.toContain(kept.reservationId)
+    expect(
+      await db.memoryReservation.findUniqueOrThrow({ where: { id: kept.reservationId } }),
+    ).toMatchObject({ outcome: null })
+    await db.turnAssignment.deleteMany({ where: { taskId: task.id } })
+  })
+
   it('refuses a change asked in another memory than the chat is in now, and fails a failed turn at once', async () => {
     const { projectId, chat, scope } = await owner()
     const task = await chat(projectId)

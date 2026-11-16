@@ -50,8 +50,7 @@ export const repoCardText = Object.freeze({
   confirmTitleMr: 'Открыть запрос на слияние?',
   confirmBody:
     'Изменения уйдут в ветку вашего репозитория, и ваша сборка запустится на ней, как на ветке любого разработчика. В основную ветку агент ничего не отправляет.',
-  rewinds:
-    'Вы отменили часть изменений командой /undo: в ветку уйдёт коммит, который их возвращает.',
+  rewinds: 'Вы отменили часть изменений: в ветку уйдут правки, которые их убирают.',
   mrTitle: 'Название запроса',
   mrDescription: 'Описание',
   draft: 'Черновик',
@@ -67,6 +66,12 @@ export const repoCardText = Object.freeze({
   waitingMerge: 'Примем в основную ветку, когда сборка пройдёт.',
   mergedTakenBack: repoPushRefusalTexts.REPO_ALREADY_MERGED,
   more: (n: number) => `и ещё ${n}`,
+  /** Why the card has no buttons (ревью P3). */
+  blocked: {
+    reauth: 'Отправить нельзя: нужно войти в GitLab заново',
+    other_member: 'Отправить нельзя: репозиторий подключил другой участник',
+  },
+  openProject: 'Открыть проект',
 })
 
 const pluralFiles = (n: number) => {
@@ -197,7 +202,7 @@ function PushButton({ taskId, label }: { taskId: string; label: string }) {
         variant="contained"
         disabled={busy}
         onClick={() => void open()}
-        sx={{ minHeight: 36 }}
+        sx={{ minHeight: 44 }}
       >
         {label}
       </Button>
@@ -274,7 +279,7 @@ function DiffButton({ taskId, headSha }: { taskId: string; headSha: string }) {
   })
   return (
     <>
-      <Button size="small" color="inherit" onClick={() => setOpen(true)} sx={{ minHeight: 36 }}>
+      <Button size="small" color="inherit" onClick={() => setOpen(true)} sx={{ minHeight: 44 }}>
         {repoCardText.view}
       </Button>
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="md">
@@ -424,6 +429,17 @@ export function FeedRepoChanges({
       {current && view?.lastRun ? (
         <BuildLine projectId={view.projectId} run={view.lastRun} />
       ) : null}
+      {current && view?.pushBlocked && !view.sent ? (
+        <Typography role="status" variant="body2" data-feed-repo-blocked="">
+          {repoCardText.blocked[view.pushBlocked]}.{' '}
+          <Link
+            href={`/projects/${view.projectId}`}
+            sx={{ display: 'inline-flex', minHeight: 44, alignItems: 'center' }}
+          >
+            {repoCardText.openProject}
+          </Link>
+        </Typography>
+      ) : null}
       {/* «Принять в основную ветку» (ПР15): only a press of the client, never the agent. */}
       {taskId && current && view?.canPush && view.sent && !pressing && view.state === 'pushed' ? (
         view.mergeRequest?.autoMerge ||
@@ -438,6 +454,11 @@ export function FeedRepoChanges({
             number={view.mergeRequest.number}
             headSha={view.mergeRequest.headSha}
           />
+        ) : view.mergeRequest === null ? (
+          // Sent, and its merge request did not open (ревью C5): it opens alone, nothing is sent.
+          <Box>
+            <PushButton taskId={taskId} label={repoCardText.openMergeRequest} />
+          </Box>
         ) : null
       ) : null}
       {/* `/undo` after the merge request was accepted (ПР25). */}
@@ -483,7 +504,7 @@ export function FeedRepoProposal({
       ) : null}
       {taskId &&
       view?.canPush &&
-      !view.sent &&
+      (!view.sent || view.state === 'pushed') &&
       !view.mergeRequest &&
       !pressing &&
       view.ciChange === 'none' ? (

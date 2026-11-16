@@ -8,7 +8,9 @@ import {
   gitConnectionNotFound,
   gitConnectionSecretPath,
   gitConnectUnavailable,
+  gitConnectionSignsIn,
   gitHostRefused,
+  gitlabComTokenRefused,
   githubHost,
   gitJobNames,
   gitlabComHost,
@@ -60,6 +62,8 @@ export const gitServicesOf = (services: GitServices | null | undefined): GitServ
 export interface GitConnectionView {
   id: string
   kind: GitConnectionKind
+  /** A sign-in on the provider's page (gitConnectionSignsIn): the return picks the newest. */
+  signsIn: boolean
   host: string
   /** null while core has not checked it yet. */
   login: string | null
@@ -85,6 +89,7 @@ type ViewRow = Prisma.GitConnectionGetPayload<{ select: typeof viewSelect }>
 const viewOf = (row: ViewRow): GitConnectionView => ({
   id: row.id,
   kind: row.kind as GitConnectionKind,
+  signsIn: gitConnectionSignsIn[row.kind as GitConnectionKind],
   host: row.host,
   login: row.accountId === row.id ? null : row.accountLogin,
   state: row.state as GitConnectionState,
@@ -285,6 +290,12 @@ export async function addTokenConnection(
   const host = gitServerHostOf(input.host)
   // GitHub takes no token here: its way is the GitHub App (Э10).
   if (host === null || host === githubHost) throw gitHostRefused()
+  // gitlab.com takes a token only once it is offered at all (ПР29): before 84.16а its way is closed.
+  if (
+    (host === gitlabComHost || host.endsWith(`.${gitlabComHost}`)) &&
+    !gitlabComOffered(services.appEnv, services.gitlabComConfigured)
+  )
+    throw gitlabComTokenRefused()
   await services.checkHost(host)
   return writeConnection(db, services, {
     userId: input.userId,

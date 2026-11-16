@@ -22,6 +22,9 @@ export const feedFailureCodes = [
   // The repository of the chat's project could not be prepared for the pass
   // (docs/plan/84-projects.md, ПР12, «Сбой подготовки»): it did not start, its reserve went back.
   'repo_too_large',
+  // Its tree has what the platform does not take (ревью C12): a path not in UTF-8, an entry of
+  // another kind, more files like secrets than a sandbox may hide.
+  'repo_unsupported',
   'repo_unreachable',
   'repo_reauth',
 ] as const
@@ -60,6 +63,8 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
   not_accepted:
     'Задачи для этого сайта пока не принимаются. Напишите нам — расскажем, когда это изменится.',
   repo_too_large: 'Репозиторий больше 64 МБ без истории — агент с ним не работает.',
+  repo_unsupported:
+    'С этим репозиторием агент не работает: Радити не может прочитать часть его содержимого, или в нём слишком много паролей и ключей.',
   repo_unreachable: 'Не удалось получить репозиторий — попробуем в следующем сообщении.',
   repo_reauth:
     'Нужно заново войти туда, где лежит репозиторий: откройте проект и подключите репозиторий ещё раз.',
@@ -105,6 +110,7 @@ export const feedFailureRetry: Readonly<Record<FeedFailureCode, boolean>> = Obje
   unavailable: true,
   not_accepted: false,
   repo_too_large: false,
+  repo_unsupported: false,
   repo_unreachable: true,
   repo_reauth: false,
 })

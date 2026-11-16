@@ -71,8 +71,20 @@ export function postgresRepoStore(db: PrismaClient, now: () => number = Date.now
       return repo === null || repo.projectId !== projectId ? null : repo.defaultBranch
     },
     // The job of core that fetches a log is an event of the outbox, as `web_*` asks for a browser.
-    log: async (input) => {
-      const answer = await requestCiLog(db, { ...input, now: new Date(now()) })
+    log: async ({ ref, ...input }) => {
+      // The chat's branch and the pipelines of its merge requests (ревью, безопасность 8).
+      const requests = await db.projectMergeRequest.findMany({
+        where: { projectRepositoryId: input.projectRepositoryId, sourceBranch: ref },
+        select: { number: true },
+      })
+      const refs = [
+        ref,
+        ...requests.flatMap(({ number }) => [
+          `refs/merge-requests/${number}/head`,
+          `refs/merge-requests/${number}/merge`,
+        ]),
+      ]
+      const answer = await requestCiLog(db, { ...input, refs, now: new Date(now()) })
       return answer.state === 'ready'
         ? { state: 'ready', text: answer.text, truncated: answer.truncated }
         : answer

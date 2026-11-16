@@ -40,10 +40,22 @@ describe('the files a sandbox never gets (docs/plan/84-projects.md, ПР35)', ()
 })
 
 describe('the variables of the form of a git token (ПР22)', () => {
-  it.each(['ghp_abc', 'github_pat_11ABC', 'gho_x', 'ghs_x', 'glpat-xyz', 'gloas-xyz', '  glpat-x'])(
-    'knows %s',
-    (value) => expect(looksLikeGitToken(value)).toBe(true),
-  )
+  it.each([
+    'ghp_abc',
+    'github_pat_11ABC',
+    'gho_x',
+    'ghs_x',
+    'glpat-xyz',
+    'gloas-xyz',
+    '  glpat-x',
+    // Inside a value (ревью, безопасность 7): a header, JSON, an address; deploy and job tokens.
+    'Bearer glpat-abcdef123',
+    '{"token":"glpat-abcdef123"}',
+    'https://oauth2:glpat-abcdef123@gitlab.com/kolos/site.git',
+    'https://deploy:secret@git.example.ru/kolos/site.git',
+    'gldt-abcdef',
+    'glcbt-abcdef',
+  ])('knows %s', (value) => expect(looksLikeGitToken(value)).toBe(true))
   it.each(['sk-live-123', 'postgres://u:p@h/db', 'glp', 'my ghp_ token'])(
     'lets %s through',
     (value) => expect(looksLikeGitToken(value)).toBe(false),

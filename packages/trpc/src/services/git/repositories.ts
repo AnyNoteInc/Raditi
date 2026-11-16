@@ -4,6 +4,7 @@ import {
   enqueueOutbox,
   enqueueRepoForget,
   lockProjectChats,
+  pauseAgentSchedulesForRepository,
   projectOwnedBy,
   type Prisma,
   type PrismaClient,
@@ -210,6 +211,7 @@ export async function attachLink(
 ): Promise<{ projectRepositoryId: string }> {
   const ref = await checkedLink(services, input.publicUrl)
   return db.$transaction(async (tx) => {
+    await pauseAgentSchedulesForRepository(tx, input.projectId)
     const project = await liveProject(tx, input.userId, input.projectId)
     return attachLinkInTransaction(tx, {
       projectId: project.id,
@@ -235,6 +237,7 @@ export async function attachConnected(
 ): Promise<{ projectRepositoryId: string }> {
   if (!repoBranchSchema.safeParse(input.defaultBranch).success) throw repoNotInConnection()
   return db.$transaction(async (tx) => {
+    await pauseAgentSchedulesForRepository(tx, input.projectId)
     const project = await liveProject(tx, input.userId, input.projectId)
     const connection = await tx.gitConnection.findFirst({
       where: {

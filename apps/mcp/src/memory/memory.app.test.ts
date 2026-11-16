@@ -178,6 +178,8 @@ describe('the memory of a chat through the gateway (plan 84, 84.12)', () => {
           author: 'client',
           version: 2,
           memory: 'account',
+          // Read in a chat of a project, changed only in the account's memory (ревью C9).
+          readOnly: true,
           pending: 'update',
           updatedAt: '2026-11-15T10:00:00.000Z',
         },

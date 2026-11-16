@@ -17,6 +17,7 @@ import NextLink from 'next/link'
 import { useId, useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { callErrorText } from '@/components/chat/call-error'
 import {
   ScheduleNoticeBar,
   useScheduleActions,
@@ -122,9 +123,28 @@ export function ProjectSchedulesRow({
           </Button>
         )}
       </Box>
-      {items.length === 0 ? (
+      {/* A list that did not come is said, with «Ещё раз» (ревью P8); while it comes — a wheel. */}
+      {list.error ? (
+        <Alert
+          severity="error"
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => void list.refetch()}
+              sx={{ minHeight: 44 }}
+            >
+              {projectScheduleTexts.retry}
+            </Button>
+          }
+        >
+          {callErrorText(list.error)}
+        </Alert>
+      ) : list.isPending ? (
+        <CircularProgress size={18} aria-label={projectScheduleTexts.loading} />
+      ) : items.length === 0 ? (
         <Typography sx={{ color: 'text.secondary', fontSize: 14 }}>
-          {list.isPending ? null : projectScheduleTexts.empty}
+          {projectScheduleTexts.empty}
         </Typography>
       ) : (
         <Box

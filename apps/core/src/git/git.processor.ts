@@ -31,7 +31,12 @@ export class GitProcessor extends WorkerHost {
   readonly #logger = new Logger(GitProcessor.name)
   readonly #jobs: Pick<
     GitJobs,
-    'syncConnection' | 'inspectRepository' | 'attachRepository' | 'forgetRepository' | 'lintBranch'
+    | 'syncConnection'
+    | 'inspectRepository'
+    | 'attachRepository'
+    | 'forgetRepository'
+    | 'lintBranch'
+    | 'sweep'
   >
   readonly #actions: Pick<RepoActions, 'run' | 'sweep'>
   readonly #ci: Pick<RepoCi, 'tick' | 'poll' | 'fetchLog' | 'syncDeployActions'>
@@ -46,6 +51,7 @@ export class GitProcessor extends WorkerHost {
       | 'attachRepository'
       | 'forgetRepository'
       | 'lintBranch'
+      | 'sweep'
     >,
     @Inject(REPO_ACTIONS) actions: Pick<RepoActions, 'run' | 'sweep'>,
     @Inject(REPO_CI) ci: Pick<RepoCi, 'tick' | 'poll' | 'fetchLog' | 'syncDeployActions'>,
@@ -100,8 +106,13 @@ export class GitProcessor extends WorkerHost {
           await this.#ci.poll(data.data.projectRepositoryId)
           return
         }
-        await this.#actions.sweep()
-        await this.#ci.tick()
+        // Each part of the tick goes whatever another did (ревью C13).
+        for (const [part, run] of [
+          ['actions', () => this.#actions.sweep()],
+          ['ci', () => this.#ci.tick()],
+          ['repositories', () => this.#jobs.sweep()],
+        ] as const)
+          await run().catch((error: unknown) => this.#warn(`git.poll ${part}`, error))
         return
       }
       case gitJobNames.log: {

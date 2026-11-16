@@ -225,7 +225,7 @@ test('the pill of the field picks the project of a new chat, keeping the words a
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(
     'Новый чат в проекте «Сайт пекарни «Колос»»',
   )
-  await expect(page.getByText('Агент учтёт цель проекта')).toBeVisible()
+  await expect(page.getByText('Агент учитывает цель, контекст и память проекта')).toBeVisible()
   await expect(message(page)).toHaveValue('Сверь цены в прайсе с сайтом')
   await expect(page.getByRole('list', { name: 'Файлы к сообщению' })).toContainText('Прайс.pdf')
 

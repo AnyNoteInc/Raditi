@@ -236,7 +236,9 @@ describe('new chat', () => {
         'Новый чат в проекте «Сайт пекарни «Колос»»',
       )
       expect(screen.getByText('Обновить сайт к зиме')).toBeTruthy()
-      expect(screen.getByText('Агент учтёт инструкции и цель проекта')).toBeTruthy()
+      expect(
+        screen.getByText('Агент учитывает инструкции, цель, контекст и память проекта'),
+      ).toBeTruthy()
       expect(screen.getByRole('link', { name: 'Открыть проект' }).getAttribute('href')).toBe(
         `/projects/${KOLOS}`,
       )
@@ -276,7 +278,7 @@ describe('new chat', () => {
       expect(
         await screen.findByRole('button', { name: 'Проект: Интернет-магазин чая' }),
       ).toBeTruthy()
-      expect(screen.getByText('Агент учтёт цель проекта')).toBeTruthy()
+      expect(screen.getByText('Агент учитывает цель, контекст и память проекта')).toBeTruthy()
     })
 
     it('starts without a project when `?project=` names none of the user’s', async () => {
@@ -302,7 +304,7 @@ describe('new chat', () => {
       expect(screen.getByRole('button', { name: 'Загружаем проект…' })).toBeTruthy()
       expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Новый чат в проекте')
       expect(screen.queryByRole('button', { name: 'Без проекта' })).toBeNull()
-      expect(screen.queryByText(/Агент учтёт/)).toBeNull()
+      expect(screen.queryByText(/Агент учитывает/)).toBeNull()
       write('Сверь цены в прайсе с сайтом')
       fireEvent.click(send())
       await waitFor(() => expect(create).toHaveBeenCalledTimes(1))

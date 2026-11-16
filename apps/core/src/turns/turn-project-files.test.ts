@@ -80,7 +80,14 @@ describe('TaskProjectFiles', () => {
   it.each([
     ['of a chat without a project now', taskRow({ project: false })],
     ['of a project in the trash', taskRow({ deleted: true })],
-    ['not in the project', taskRow({ file: null })],
+    ['removed from the project since the plan', taskRow({ file: null })],
+  ])('leaves out a file %s, reading nothing (ревью C6)', async (_label, found) => {
+    const f = fixture(found)
+    expect(await f.files.files(taskId, [path])).toEqual([])
+    expect(f.get).not.toHaveBeenCalled()
+  })
+
+  it.each([
     ['stored under another key', taskRow({ file: { s3Key: `inbox/${workspaceId}/${id}` } })],
     ['larger than a file may be', taskRow({ file: { sizeBytes: 20 * 1024 * 1024 + 1 } })],
   ])('refuses a file %s, reading nothing', async (_label, found) => {

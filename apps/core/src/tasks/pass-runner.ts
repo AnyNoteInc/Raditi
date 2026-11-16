@@ -356,7 +356,16 @@ export class PassRunner {
       refusesText = completed.refusesText
       evidence = completed.evidence
       repository = completed.repository
-      ending = { kind: 'completed', turn: plan.turn, result: completed.result }
+      const repoHead =
+        repository && !repository.refusal && repository.headSha && plan.request.repository
+          ? { baseSha: repository.baseSha, headSha: repository.headSha }
+          : null
+      ending = {
+        kind: 'completed',
+        turn: plan.turn,
+        result: completed.result,
+        ...(repoHead ? { repoHead } : {}),
+      }
     } catch (error) {
       cause = causeOf(error)
       const outcome = await this.#endingOf(error, ref, plan.turn, controller.signal)

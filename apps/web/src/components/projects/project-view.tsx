@@ -74,6 +74,18 @@ export function ProjectView({
     const later = setTimeout(() => setHistory(readPromptHistory(userId)), 0)
     return () => clearTimeout(later)
   }, [userId])
+  // «Проект создан» after the window of a new project (ревью P11): `?created=1` of «Проекты».
+  useEffect(() => {
+    const later = setTimeout(() => {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('created') === null) return
+      setNotice(projectPageText.created)
+      params.delete('created')
+      const rest = params.toString()
+      window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`)
+    }, 0)
+    return () => clearTimeout(later)
+  }, [])
 
   return (
     <Box sx={{ width: '100%', maxWidth: 1200, mx: 'auto', ...riseIn }}>
@@ -101,12 +113,21 @@ export function ProjectView({
         sx={{
           mt: 1,
           display: 'grid',
-          gap: { xs: 4, lg: 6 },
+          gap: { xs: 3, lg: 6 },
           gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) 340px' },
           alignItems: 'start',
         }}
       >
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+        {/* On a phone the column of the project stands between the field and the chats (ревью
+            P4): the main column gives its rows to the grid, and the chats go last. */}
+        <Box
+          sx={{
+            display: { xs: 'contents', lg: 'flex' },
+            flexDirection: 'column',
+            gap: 3,
+            minWidth: 0,
+          }}
+        >
           <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
             <Box sx={{ flex: '1 1 auto', minWidth: 0 }}>
               <Typography
@@ -186,7 +207,7 @@ export function ProjectView({
             {clientCommands.menu}
           </Box>
 
-          <Box component="section" aria-labelledby={chatsId}>
+          <Box component="section" aria-labelledby={chatsId} sx={{ order: { xs: 2, lg: 0 } }}>
             <Typography id={chatsId} component="h2" sx={{ fontSize: 16, fontWeight: 600, mb: 1.5 }}>
               {projectPageText.chats}
               {project.chats > 0 ? (
@@ -203,6 +224,7 @@ export function ProjectView({
           component="aside"
           aria-label={projectsText.title}
           sx={{
+            order: { xs: 1, lg: 0 },
             border: 1,
             borderColor: 'divider',
             borderRadius: '14px',

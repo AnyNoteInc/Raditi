@@ -450,7 +450,12 @@ export async function closeStaleMemoryReservations(
   limit = 100,
 ): Promise<{ id: string; taskId: string; turnNo: number; kind: MemoryChangeKind }[]> {
   const stale = await db.memoryReservation.findMany({
-    where: { outcome: null, createdAt: { lt: before } },
+    // A turn has no time limit (plan 70): one still assigned ends its own (ревью C8).
+    where: {
+      outcome: null,
+      createdAt: { lt: before },
+      task: { turnAssignments: { none: { finishedAt: null } } },
+    },
     orderBy: { createdAt: 'asc' },
     take: limit,
     select: { id: true, taskId: true, turnNo: true, kind: true },

@@ -33,6 +33,24 @@ export function gitlabComOffered(appEnv: AppEnv, configured: boolean): boolean {
 export const gitConnectionProviders: Readonly<Record<GitConnectionKind, RepoProviderKind>> =
   Object.freeze({ github_app: 'github', gitlab_oauth: 'gitlab', gitlab_token: 'gitlab' })
 
+/**
+ * Which kinds of connection are a sign-in on the provider's page (OAuth): the window that comes
+ * back from it picks the newest of them (rule 8: a table, never a comparison of the kind).
+ */
+export const gitConnectionSignsIn: Readonly<Record<GitConnectionKind, boolean>> = Object.freeze({
+  github_app: false,
+  gitlab_oauth: true,
+  gitlab_token: false,
+})
+
+/** The name and the icon of each provider the client reads (rule 8: data, never a comparison). */
+export const repoProviderBrands: Readonly<
+  Record<RepoProviderKind, Readonly<{ label: string; icon: 'github' | 'gitlab' }>>
+> = Object.freeze({
+  github: Object.freeze({ label: 'GitHub', icon: 'github' }),
+  gitlab: Object.freeze({ label: 'GitLab', icon: 'gitlab' }),
+})
+
 /** Where the tokens of a connection live: one version, CAS (§4.2). */
 export const gitConnectionSecretPath = (workspaceId: string, connectionId: string): string =>
   `kv/workspaces/${workspaceId}/git/${connectionId}`

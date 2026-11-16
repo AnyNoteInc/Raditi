@@ -35,6 +35,7 @@ import {
   type IssuedGitAccess,
   type RepoPublication,
   type TurnBundleSource,
+  projectRepositoryIdSchema,
 } from '@repo/domain'
 import { BASE_BUNDLE_REF, bundleHead } from '@repo/local-turns'
 
@@ -318,8 +319,44 @@ export class GitWorkspaceService {
    * Removes the mirror and the bundles of a repository whose row is gone (`git.repo.forget`):
    * detached, or its project purged (ПР20). Under the lock of the mirror, so no operation of it is
    * half way; a repeat finds nothing and does nothing. The volume's quota counts what is left.
+   * The `git.poll` sweep (`removeOrphans`) is the net for a job that was lost: both remove through
+   * `#removeRepository`, so whichever comes second finds nothing.
    */
   async dropMirror(projectRepositoryId: string): Promise<void> {
+    await this.#removeRepository(projectRepositoryId)
+  }
+
+  /**
+   * The mirrors and bundles of repositories that are no longer a project's (ревью C3): detached,
+   * or purged with their project. Each goes under its own lock; what cannot be removed now stays
+   * for the next sweep. Returns how many repositories were removed.
+   */
+  async removeOrphans(
+    knownOf: (ids: readonly string[]) => Promise<ReadonlySet<string>>,
+  ): Promise<number> {
+    const ids = new Set<string>()
+    for (const name of await readdir(join(this.#root, 'repos')).catch(() => [] as string[])) {
+      const id = name.endsWith('.git') ? name.slice(0, -4) : ''
+      if (projectRepositoryIdSchema.safeParse(id).success) ids.add(id)
+    }
+    for (const id of await readdir(join(this.#root, 'bundles')).catch(() => [] as string[]))
+      if (projectRepositoryIdSchema.safeParse(id).success) ids.add(id)
+    // The rows are read after the folders: a repository attached meanwhile has its row already.
+    const known = ids.size ? await knownOf([...ids]) : new Set<string>()
+    let removed = 0
+    for (const id of ids) {
+      if (known.has(id)) continue
+      const gone = await this.#removeRepository(id).then(
+        () => true,
+        () => false,
+      )
+      if (gone) removed++
+    }
+    return removed
+  }
+
+  /** The mirror and the bundles of one repository, under the lock of its mirror. */
+  async #removeRepository(projectRepositoryId: string): Promise<void> {
     const mirror = mirrorPath(this.#root, projectRepositoryId)
     await this.#mirrors.run(mirror, async () => {
       await rm(mirror, { recursive: true, force: true })

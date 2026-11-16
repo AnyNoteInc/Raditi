@@ -54,12 +54,25 @@ export const GIT_TOKEN_PREFIXES = Object.freeze([
   'ghr_',
   'glpat-',
   'gloas-',
+  'gldt-',
+  'glcbt-',
+  'glptt-',
+  'glrt-',
 ] as const)
 
-/** Whether the value of a variable looks like a token of git (ПР22). */
+const tokenAnywhere = new RegExp(
+  `(?:^|[^A-Za-z0-9_-])(?:${GIT_TOKEN_PREFIXES.map((prefix) => prefix.replace(/[-_]/g, '\\$&')).join('|')})[A-Za-z0-9_-]+`,
+)
+/** Credentials in an address git reads: `https://user:secret@host/…` (ревью, безопасность 7). */
+const credentialsInUrl = /(?:https?|git|ssh):\/\/[^\s/@:]+:[^\s/@]+@/i
+
+/**
+ * Whether the value of a variable holds a token of git (ПР22): a known prefix anywhere in it —
+ * after `Bearer`, in JSON, in an address —, or credentials written into an address (ревью,
+ * безопасность 7). A token of a self-managed GitLab with its own prefix is not known by its form.
+ */
 export function looksLikeGitToken(value: string): boolean {
-  const trimmed = value.trim()
-  return GIT_TOKEN_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
+  return tokenAnywhere.test(value) || credentialsInUrl.test(value)
 }
 
 const cyrillicLatin: Readonly<Record<string, string>> = Object.freeze({

@@ -66,8 +66,17 @@ export const ORPHANED_PASS_EVENT = 'pass.orphaned'
 export const CHARGE_LATER_EVENT = 'billing.charge_later'
 
 export type PassEnding =
-  /** The turn completed with its result; it publishes nothing (docs/plan/57, Б4). */
-  | { kind: 'completed'; turn: number; result: TurnResult }
+  /**
+   * The turn completed with its result; it publishes nothing (docs/plan/57, Б4). A turn with a
+   * repository that published a commit names it: the head of the turn is written with the move,
+   * before the queue of the chat can start the next pass (docs/plan/84-projects.md, ПР25).
+   */
+  | {
+      kind: 'completed'
+      turn: number
+      result: TurnResult
+      repoHead?: { baseSha: string; headSha: string }
+    }
   /** The turn, or the pass before its turn, failed. */
   | {
       kind: 'failed'
@@ -462,6 +471,13 @@ export class PassSettlement {
       })
       if (!moved.moved) throw new NotMoved()
       await this.#assertNotCancelled(tx, pass.taskId)
+      // The commit the turn left in the chat's ref stands from here: the next pass, which the
+      // drain below may start before the card is written, reads it as the head (ПР25, ревью C1).
+      if (ending.repoHead)
+        await tx.taskTurn.updateMany({
+          where: { taskId: pass.taskId, turnNo: turn },
+          data: { baseSha: ending.repoHead.baseSha, headSha: ending.repoHead.headSha },
+        })
       // The help, the control, the answer and the next words all follow a charged pass (Б25).
       if (context.task.billable) await this.#chargePass(tx, pass, now)
       // The words the client queued while it worked go next (docs/plan/75, ВВ2).

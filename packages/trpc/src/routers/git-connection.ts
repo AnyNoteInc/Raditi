@@ -22,6 +22,7 @@ const connectionRef = z.uuid().transform((id) => id.toLowerCase())
 const connectionItem = z.strictObject({
   id: z.uuid(),
   kind: z.enum(gitConnectionKinds),
+  signsIn: z.boolean(),
   host: z.string(),
   login: z.string().nullable(),
   state: z.enum(gitConnectionStates),

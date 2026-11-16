@@ -98,6 +98,9 @@ export class McpMemoryService {
             author: entry.author,
             version: entry.version,
             memory: entry.projectId === null ? 'account' : 'project',
+            // A note of the account in a chat of a project is read here, changed only in the
+            // account's memory (ревью C9): memory_update and memory_forget do not reach it.
+            ...(entry.projectId !== memory.projectId ? { readOnly: true } : {}),
             ...(entry.pendingAction ? { pending: entry.pendingAction } : {}),
             updatedAt: entry.updatedAt.toISOString(),
           })),

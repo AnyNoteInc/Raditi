@@ -193,6 +193,8 @@ export const projectScheduleTexts = Object.freeze({
   open: 'Посмотреть',
   openLabel: 'Посмотреть запланированные задачи проекта',
   empty: 'Задачи, которые агент выполняет сам по расписанию.',
+  loading: 'Загружаем запланированные задачи',
+  retry: 'Ещё раз',
   line: (name: string, when: string) => `${name} · ${when}`,
   more: (count: number) => `и ещё ${count} ${plural(count, 'задача', 'задачи', 'задач')}`,
   lead: 'Задачи запускаются сами, без вас. Каждый запуск — новый чат в этом проекте.',

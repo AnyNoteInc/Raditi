@@ -188,6 +188,7 @@ export const projectRepoRouter = router({
           headSha: sha.nullable(),
           sent: z.boolean(),
           canPush: z.boolean(),
+          pushBlocked: z.enum(['reauth', 'other_member']).nullable(),
           ciChange: z.enum(['none', 'needed', 'declined', 'foreign']),
           mergeRequest: z
             .strictObject({

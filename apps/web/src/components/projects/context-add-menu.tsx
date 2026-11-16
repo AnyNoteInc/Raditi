@@ -36,6 +36,7 @@ export function ContextAddMenu({
   title,
   onLink,
   onGitlab,
+  repositoryAttached = false,
 }: {
   onFiles: (files: ChosenFile[]) => void
   onText: () => void
@@ -43,6 +44,11 @@ export function ContextAddMenu({
   onLink?: () => void
   /** «Подключить GitLab» (ПР10); absent — «Скоро». */
   onGitlab?: () => void
+  /**
+   * The project has its repository already (ПР6: one a project): the ways of a repository say
+   * how to change it instead of «Скоро» (ревью P1).
+   */
+  repositoryAttached?: boolean
   /** `pill` — «Добавить контекст» of the window of a new project; `text` — «Добавить» of a row. */
   variant: 'pill' | 'text'
   disabled?: boolean
@@ -146,22 +152,37 @@ export function ContextAddMenu({
           handler()
         }
       : undefined
-  const repository = [
+  const taken = repositoryAttached ? contextText.oneRepository : undefined
+  const repository: readonly {
+    icon: AppIconName
+    title: string
+    hint: string
+    onClick: (() => void) | undefined
+    note: string | undefined
+  }[] = [
     {
       icon: 'github',
       title: contextText.githubLink,
-      hint: contextText.githubLinkHint,
-      onClick: choose(onLink),
+      hint: taken ?? contextText.githubLinkHint,
+      onClick: taken ? undefined : choose(onLink),
+      note: taken,
     },
     {
       icon: 'gitlab',
       title: contextText.gitlab,
-      hint: contextText.gitlabHint,
-      onClick: choose(onGitlab),
+      hint: taken ?? contextText.gitlabHint,
+      onClick: taken ? undefined : choose(onGitlab),
+      note: taken,
     },
     // The GitHub App with writing is Э10 (ПР31).
-    { icon: 'github', title: contextText.github, hint: contextText.githubHint, onClick: undefined },
-  ] as const
+    {
+      icon: 'github',
+      title: contextText.github,
+      hint: contextText.githubHint,
+      onClick: undefined,
+      note: undefined,
+    },
+  ]
 
   const limits = (
     <Typography sx={{ px: 2, pt: 1, pb: 1.5, fontSize: 12.5, color: 'text.secondary' }}>
@@ -207,7 +228,8 @@ export function ContextAddMenu({
                 icon={item.icon}
                 title={item.title}
                 hint={item.hint}
-                soon={item.onClick === undefined}
+                soon={item.onClick === undefined && item.note === undefined}
+                disabled={item.onClick === undefined}
                 {...(item.onClick ? { onClick: item.onClick } : {})}
               />
             ))}
@@ -261,7 +283,8 @@ export function ContextAddMenu({
             icon={item.icon}
             title={item.title}
             hint={item.hint}
-            soon={item.onClick === undefined}
+            soon={item.onClick === undefined && item.note === undefined}
+            disabled={item.onClick === undefined}
             {...(item.onClick ? { onClick: item.onClick } : {})}
           />
         ))}
@@ -293,6 +316,7 @@ function Row({
   title,
   hint,
   soon = false,
+  disabled = soon,
   onClick,
 }: {
   icon: AppIconName
@@ -300,10 +324,12 @@ function Row({
   hint?: string
   /** The repository's ways: not yet, shown so the client knows they will come. */
   soon?: boolean
+  /** Not now, with the reason in its hint. */
+  disabled?: boolean
   onClick?: () => void
 }): ReactNode {
   return (
-    <MenuItem disabled={soon} onClick={onClick} sx={{ minHeight: 44, alignItems: 'center' }}>
+    <MenuItem disabled={disabled} onClick={onClick} sx={{ minHeight: 44, alignItems: 'center' }}>
       <ListItemIcon>
         <AppIcon name={icon} size={18} />
       </ListItemIcon>

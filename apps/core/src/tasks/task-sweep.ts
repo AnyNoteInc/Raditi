@@ -4,6 +4,7 @@ import { chargeTask, expireTaskHolds } from '@repo/billing'
 import {
   cancelWaitingTask,
   clearStaleUncheckedSections,
+  closeStaleRepoProposals,
   dropAbandonedPages,
   insertFeedEvent,
   purgeExpiredPages,
@@ -554,8 +555,12 @@ export class TaskSweep {
   /** Changes of memory of turns that never ended, a day on (PAGE_SWEEP_AFTER_MS). */
   async sweepMemory(): Promise<number> {
     const { memory } = this.deps
+    const before = new Date(this.#now().getTime() - PAGE_SWEEP_AFTER_MS)
+    // And the proposals of a merge request of such turns (ревью C11).
+    const proposals = await closeStaleRepoProposals(this.deps.db, before)
+    if (proposals > 0) this.#logger.log(`task_sweep_repo_proposals failed=${proposals}`)
     if (!memory) return 0
-    const closed = await memory.sweep(new Date(this.#now().getTime() - PAGE_SWEEP_AFTER_MS))
+    const closed = await memory.sweep(before)
     if (closed > 0) this.#logger.log(`task_sweep_memory failed=${closed}`)
     return closed
   }

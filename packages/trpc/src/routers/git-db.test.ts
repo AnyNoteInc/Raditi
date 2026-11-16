@@ -231,6 +231,54 @@ describe.skipIf(!databaseUrl)('PostgreSQL: git connections and project repositor
     expect(await db.gitConnection.count({ where: { host: 'gitlab.private.example.ru' } })).toBe(0)
   })
 
+  it('gitlab.com takes no token while «Подключить GitLab.com» is not offered (ПР29)', async () => {
+    const { caller, vault, checkHost } = await owner({ gitlabComConfigured: false })
+    for (const host of ['gitlab.com', 'https://gitlab.com/', 'www.gitlab.com']) {
+      const refused = await refusal(() =>
+        caller.gitConnection.addToken({ host, token: 'glpat-synthetic' }),
+      )
+      expect(refused.code).toBe('GIT_GITLAB_COM_TOKEN')
+    }
+    expect(checkHost).not.toHaveBeenCalled()
+    expect(vault.keys.size).toBe(0)
+  })
+
+  it('a repository attached stops the tasks the agent set up in the project (ревью, безопасность 5)', async () => {
+    const { caller, user, project } = await owner()
+    const projectId = await project()
+    const { workspaceId } = await db.project.findUniqueOrThrow({ where: { id: projectId } })
+    const task = (createdVia: 'chat' | 'manual') =>
+      db.scheduledTask.create({
+        data: {
+          workspaceId,
+          projectId,
+          createdById: user.id,
+          name: createdVia,
+          instructions: 'Проверьте сайт',
+          effort: 'high',
+          triggers: [{ kind: 'daily', time: '09:00' }],
+          timezone: 'Europe/Moscow',
+          nextRunAt: new Date(Date.now() + 86_400_000),
+          createdVia,
+        },
+      })
+    const agents = await task('chat')
+    const clients = await task('manual')
+    await caller.projectRepo.attach({ projectId, publicUrl: 'https://gitlab.com/kolos/site' })
+    expect(
+      await db.scheduledTask.findUniqueOrThrow({
+        where: { id: agents.id },
+        select: { enabled: true, nextRunAt: true, pausedReason: true },
+      }),
+    ).toEqual({ enabled: false, nextRunAt: null, pausedReason: 'unconfirmed' })
+    expect(
+      await db.scheduledTask.findUniqueOrThrow({
+        where: { id: clients.id },
+        select: { enabled: true, pausedReason: true },
+      }),
+    ).toEqual({ enabled: true, pausedReason: null })
+  })
+
   it('a link whose host resolves to a private address is refused, a project is not made', async () => {
     const { caller } = await owner()
     const projectId = v7()

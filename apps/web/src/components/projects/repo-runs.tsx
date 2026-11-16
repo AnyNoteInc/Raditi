@@ -8,6 +8,7 @@ import {
   checksStateWords,
   pullRequestStateWords,
   repoBranchStateWords,
+  repoProviderBrands,
   repoProviderOffers,
   type CiRefusal,
   type CiStatus,
@@ -75,6 +76,7 @@ export const runText = Object.freeze({
   logAsIs: 'Журнал показан как есть, на языке сборки',
   logEmpty: 'Журнал пуст.',
   retry: 'Ещё раз',
+  workLoading: 'Загружаем…',
   noJobs: 'Заданий сборки ещё нет.',
   lastRun: 'Последняя сборка',
   allRunsLink: 'Сборки',
@@ -212,11 +214,12 @@ function RepositoryCard({
     initialData: project.repository,
   })
   if (!repo) return <Alert severity="info">{runText.noRepository}</Alert>
-  const label = repo.provider === 'github' ? 'GitHub' : 'GitLab'
+  const brand = repoProviderBrands[repo.provider]
+  const label = brand.label
   return (
     <Box sx={{ ...card, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5 }}>
       <Box sx={{ display: 'flex', color: 'text.secondary' }} aria-hidden>
-        <AppIcon name={repo.provider === 'github' ? 'github' : 'gitlab'} size={20} />
+        <AppIcon name={brand.icon} size={20} />
       </Box>
       <Box sx={{ flex: '1 1 240px', minWidth: 0 }}>
         <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>{project.name}</Typography>
@@ -302,6 +305,28 @@ export function RepositoryView({
   const trpc = useTRPC()
   const [tab, setTab] = useState<'runs' | 'requests' | 'branches'>('runs')
   const work = useQuery(trpc.projectRepo.work.queryOptions({ projectId: project.id }))
+  // The tabs of merge requests and branches say they load or failed (ревью P7).
+  const workState = work.error ? (
+    <Alert
+      severity="error"
+      action={
+        <Button
+          color="inherit"
+          size="small"
+          onClick={() => void work.refetch()}
+          sx={{ minHeight: 44 }}
+        >
+          {runText.retry}
+        </Button>
+      }
+    >
+      {callErrorText(work.error)}
+    </Alert>
+  ) : work.data ? null : (
+    <Typography role="status" sx={{ color: 'text.secondary' }}>
+      {runText.workLoading}
+    </Typography>
+  )
   return (
     <Box
       sx={{
@@ -328,54 +353,56 @@ export function RepositoryView({
       {tab === 'runs' ? <RunsList projectId={project.id} /> : null}
       {tab === 'requests' ? (
         <Box sx={card}>
-          {work.data && work.data.mergeRequests.length > 0 ? (
-            <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none', display: 'grid', gap: 1.5 }}>
-              {work.data.mergeRequests.map((mr) => (
-                <Box
-                  component="li"
-                  key={mr.number}
-                  sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}
-                >
-                  <Link href={mr.url} target="_blank" rel="noreferrer">
-                    {mr.title}
-                  </Link>
-                  <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
-                    {pullRequestStateWords[mr.state]} · {checksStateWords[mr.checks]}
-                    {mr.chat ? ` · ${runText.fromChat(mr.chat.title)}` : ''}
-                  </Typography>
-                </Box>
-              ))}
-            </Box>
-          ) : (
-            <Typography sx={{ color: 'text.secondary' }}>{runText.noRequests}</Typography>
-          )}
+          {workState ??
+            (work.data && work.data.mergeRequests.length > 0 ? (
+              <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none', display: 'grid', gap: 1.5 }}>
+                {work.data.mergeRequests.map((mr) => (
+                  <Box
+                    component="li"
+                    key={mr.number}
+                    sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}
+                  >
+                    <Link href={mr.url} target="_blank" rel="noreferrer">
+                      {mr.title}
+                    </Link>
+                    <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+                      {pullRequestStateWords[mr.state]} · {checksStateWords[mr.checks]}
+                      {mr.chat ? ` · ${runText.fromChat(mr.chat.title)}` : ''}
+                    </Typography>
+                  </Box>
+                ))}
+              </Box>
+            ) : (
+              <Typography sx={{ color: 'text.secondary' }}>{runText.noRequests}</Typography>
+            ))}
         </Box>
       ) : null}
       {tab === 'branches' ? (
         <Box sx={card}>
-          {work.data && work.data.branches.length > 0 ? (
-            <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none', display: 'grid', gap: 1.5 }}>
-              {work.data.branches.map((branch) => (
-                <Box
-                  component="li"
-                  key={branch.branch}
-                  sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}
-                >
-                  <Typography sx={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 14 }}>
-                    {branch.branch}
-                  </Typography>
-                  <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
-                    {repoBranchStateWords[branch.state]} ·{' '}
-                    <Link href={`/chats/${branch.chat.id}`}>
-                      {runText.fromChat(branch.chat.title)}
-                    </Link>
-                  </Typography>
-                </Box>
-              ))}
-            </Box>
-          ) : (
-            <Typography sx={{ color: 'text.secondary' }}>{runText.noBranches}</Typography>
-          )}
+          {workState ??
+            (work.data && work.data.branches.length > 0 ? (
+              <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none', display: 'grid', gap: 1.5 }}>
+                {work.data.branches.map((branch) => (
+                  <Box
+                    component="li"
+                    key={branch.branch}
+                    sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}
+                  >
+                    <Typography sx={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 14 }}>
+                      {branch.branch}
+                    </Typography>
+                    <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+                      {repoBranchStateWords[branch.state]} ·{' '}
+                      <Link href={`/chats/${branch.chat.id}`}>
+                        {runText.fromChat(branch.chat.title)}
+                      </Link>
+                    </Typography>
+                  </Box>
+                ))}
+              </Box>
+            ) : (
+              <Typography sx={{ color: 'text.secondary' }}>{runText.noBranches}</Typography>
+            ))}
         </Box>
       ) : null}
     </Box>
@@ -546,7 +573,7 @@ export function RunView({
       state.state.data && active(state.state.data.run.status) ? RUNS_POLL_MS : false,
   })
   const [open, setOpen] = useState<RepoCiJob | null>(null)
-  const label = project.repository?.provider === 'github' ? 'GitHub' : 'GitLab'
+  const label = repoProviderBrands[project.repository?.provider ?? 'gitlab'].label
   const data = query.data
   return (
     <Box
@@ -849,7 +876,7 @@ export function RepositoryRunsLine({ projectId }: { projectId: string }) {
         sx={{
           fontSize: 13,
           color: 'primary.main',
-          minHeight: 32,
+          minHeight: 44,
           display: 'inline-flex',
           alignItems: 'center',
         }}

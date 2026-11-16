@@ -731,6 +731,21 @@ export async function pauseProjectSchedules(tx: Tx, projectId: string): Promise<
 }
 
 /**
+ * A repository attached to a project (ревью, безопасность 5; ПР19): the tasks the agent set up in
+ * its chats stop and wait for «Включить задачу» — they would run unattended with the private code
+ * from now on, and the client never said these words in a project with a repository. Locks the
+ * tasks before the project's row, as `lockProjectSchedules` says. Returns how many.
+ */
+export async function pauseAgentSchedulesForRepository(tx: Tx, projectId: string): Promise<number> {
+  await lockProjectSchedules(tx, projectId)
+  const paused = await tx.scheduledTask.updateMany({
+    where: { projectId, deletedAt: null, createdVia: 'chat', enabled: true },
+    data: { enabled: false, nextRunAt: null, pausedReason: 'unconfirmed' },
+  })
+  return paused.count
+}
+
+/**
  * The purge of a project (ПР20): its tasks are deleted, as «Удалить» of each would; the runs keep
  * their rows and lose the project with it (ON DELETE SET NULL). In the purge's transaction.
  */
