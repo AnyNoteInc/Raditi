@@ -204,4 +204,10 @@ describe('agent skills', () => {
     ])
       expect(gitMcpToolDenied(name), name).toBe(false)
   })
+
+  it('gives a skill no name of a family of the platform tools (ревью, безопасность 3)', () => {
+    for (const name of ['page', 'doc', 'memory', 'repo', 'web'])
+      expect(agentSkillNameSchema.safeParse(name).success, name).toBe(false)
+    expect(agentSkillNameSchema.safeParse('docs').success).toBe(true)
+  })
 })

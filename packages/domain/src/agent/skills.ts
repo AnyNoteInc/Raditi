@@ -25,10 +25,27 @@ export const agentSkillLimits = Object.freeze({
  * tools there (`<name>_<tool>`). Lower-case letters, digits and inner hyphens; never one the
  * platform's own server could share a prefix with.
  */
+/** The families of the platform's own tools (`<family>_<tool>`); no skill takes their name. */
+const platformToolFamilies = new Set([
+  'memory',
+  'site',
+  'page',
+  'doc',
+  'web',
+  'repo',
+  'search',
+  'schedule',
+  'browser',
+  'wp',
+])
+
 export const agentSkillNameSchema = z
   .string()
   .regex(/^[a-z](?:[a-z0-9-]{0,30}[a-z0-9])?$/, 'expected lower-case letters, digits and hyphens')
   .refine((name) => !name.startsWith('raditi'), 'a name of the platform')
+  // The CLI reports the platform's tools without their prefix (`page_read`): a skill of the same
+  // family would pass for one of them (ревью, безопасность 3: память читает инструменты по имени).
+  .refine((name) => !platformToolFamilies.has(name), 'a family of the platform tools')
 
 /** The platform's own skills, by name. */
 export const builtinAgentSkillNames = ['context7', 'playwright'] as const

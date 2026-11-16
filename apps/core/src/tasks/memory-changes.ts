@@ -29,6 +29,14 @@ import {
 
 type Refuses = (text: string) => 'turn_key' | 'client_value' | null
 
+/**
+ * The internal row of `task_events` a chat gets once a pass of it took in something from outside
+ * or ran a command (`{ v: 1, turn }`, never shown): the session of the agent goes on across passes,
+ * so what came in once stays in its context, and no later note of the chat is active at once
+ * (ревью, безопасность 3; ПР18).
+ */
+export const MEMORY_OUTSIDE_EVENT = 'memory.outside'
+
 export interface MemoryChangesDependencies {
   db: Pick<PrismaClient, '$transaction' | 'memoryReservation' | 'task' | 'taskEvent' | 'taskTurn'>
   logger?: { log(message: string): void; warn(message: string): void }
@@ -65,6 +73,15 @@ export class MemoryChanges {
   ): Promise<void> {
     const { db, logger } = this.#deps
     try {
+      const earlier = await db.taskEvent.findFirst({
+        where: { taskId, type: MEMORY_OUTSIDE_EVENT },
+        select: { id: true },
+      })
+      const now = pass.evidence === undefined || pass.evidence.outside || pass.evidence.commands
+      if (now && earlier === null)
+        await db.taskEvent.create({
+          data: { taskId, type: MEMORY_OUTSIDE_EVENT, payload: { v: 1, turn } },
+        })
       const changes = await pendingMemoryChanges(db, taskId, turn)
       if (changes.length === 0) return
       const turnId = await this.#turnId(taskId, turn)
@@ -76,7 +93,7 @@ export class MemoryChanges {
       const memory = await chatMemory(db, taskId)
       const conditions: MemoryPassConditions = {
         asked: pass.remember,
-        outside: pass.evidence?.outside ?? true,
+        outside: (pass.evidence?.outside ?? true) || earlier !== null,
         commands: pass.evidence?.commands ?? true,
         repository: pass.repository ?? false,
         unattended: pass.unattended ?? false,

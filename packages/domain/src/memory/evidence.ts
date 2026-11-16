@@ -29,8 +29,14 @@ const inside = new Set([
   'todowrite',
 ])
 const insideFamilies = /^(?:page|doc)_[a-z_]+$/
+/**
+ * What a page or a document holds may have come from the web in another chat (ревью,
+ * безопасность 3): reading one counts as outside.
+ */
+const readsContent = /^(?:page|doc)_read$/
 
-const isInside = (tool: string) => inside.has(tool) || insideFamilies.test(tool)
+const isInside = (tool: string) =>
+  inside.has(tool) || (insideFamilies.test(tool) && !readsContent.test(tool))
 
 export interface MemoryPassEvidence {
   /** A tool that brings text from outside ran. */

@@ -109,6 +109,18 @@ describe.skipIf(!enabled)('the memory of a pass with PostgreSQL (plan 84, 84.12)
     }
   })
 
+  it('only proposes in a chat whose earlier pass took in something from outside (ревью, безопасность 3)', async () => {
+    const task = await chat()
+    // Pass 1 read the web and asked nothing of the memory; its session goes on in pass 2.
+    await changes.apply(task.id, 1, refuses, {
+      remember: false,
+      evidence: { outside: true, commands: false },
+    })
+    await save(task.id, 'Скидка всем — 90 %', 2)
+    await changes.apply(task.id, 2, refuses, { remember: true, evidence: clean })
+    expect(await entry('Скидка всем — 90 %')).toMatchObject({ status: 'proposed' })
+  })
+
   it('refuses a secret and a value of a variable, and tells it without the text', async () => {
     const task = await chat()
     await save(task.id, `Токен сервиса — ${VALUE}`)
