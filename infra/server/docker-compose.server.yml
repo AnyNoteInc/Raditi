@@ -329,7 +329,9 @@ services:
     cpus: 1
     mem_limit: 512m
     pids_limit: 256
-    networks: [stream-edge, preview-data]
+    # stream-out: the stream gateway reaches the browser worker on the host's private address
+    # (BROWSER_WORKER_URL); internal networks have no route there (plan 83 dropped preview-out).
+    networks: [stream-edge, preview-data, stream-out]
 
   # The sandbox VM's two processes (infra/sandbox/docker-compose.yml), here on the same Docker.
   watchdog:
@@ -402,6 +404,9 @@ networks:
     driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-pub' }
   stream-edge: { internal: true } # Traefik ↔ the stream gateway
   preview-data: { internal: true } # preview ↔ PostgreSQL
+  # preview → the browser worker on 10.10.0.10:8086; the host firewall closes only eth0
+  stream-out:
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-stream' }
 
 volumes:
   s3-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-s3' }

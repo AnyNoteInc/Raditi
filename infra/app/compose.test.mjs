@@ -629,3 +629,25 @@ test('the single server routes the root of the domain of pages to web, reads onl
   // The origin of the root is PAGES_BASE_DOMAIN's (docs/plan/69-pages.md, Ст3), never a variable.
   assert.doesNotMatch(server, /PAGES_ORIGIN/)
 })
+
+// The stream gateway of the cloud browser (preview) dials BROWSER_WORKER_URL — the browser worker
+// on the host's private address. An internal network has no route there: with only internal
+// networks every viewer hung on «Подключаемся к браузеру…» (16.11.2026, after plan 83).
+test('the single server gives preview a network that reaches the browser worker', () => {
+  const server = readFileSync(
+    new URL('../server/docker-compose.server.yml', import.meta.url),
+    'utf8',
+  )
+  const block = /\n {2}preview:\n([\s\S]*?)\n {2}[a-z][a-z-]*:\n/.exec(server)?.[1] ?? ''
+  assert.match(block, /BROWSER_WORKER_URL: http:\/\/10\.10\.0\.10:8086/)
+  const listed = /\n {4}networks: \[([^\]]*)\]/.exec(block)?.[1].split(',').map((n) => n.trim())
+  assert.ok(listed?.length, 'preview names its networks')
+  const declared = server.slice(server.indexOf('\nnetworks:\n'))
+  const internal = (name) =>
+    new RegExp(`\\n {2}${name}: \\{ internal: true \\}`).test(declared)
+  for (const name of listed) assert.match(declared, new RegExp(`\\n {2}${name}:`))
+  assert.ok(
+    listed.some((name) => !internal(name)),
+    `preview has only internal networks: ${listed.join(', ')}`,
+  )
+})
