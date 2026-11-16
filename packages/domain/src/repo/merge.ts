@@ -39,6 +39,13 @@ export const repoProviderOffers: Readonly<
 export const repoMergeTargetChanged = (): DomainError =>
   new DomainError('REPO_MR_TARGET_CHANGED', 'The target branch of the merge request changed', 409)
 
+/**
+ * The head of a chat's merge request is not the commit Радити sent (ревью, безопасность 4):
+ * someone pushed to the branch since, and the client never saw those commits on the card.
+ */
+export const repoForeignCommits = (): DomainError =>
+  new DomainError('REPO_FOREIGN_COMMITS', 'The branch has commits Raditi did not send', 409)
+
 /** The wait for the build was taken off, or the request closed, before the provider merged it. */
 export const repoAutoMergeOff = (): DomainError =>
   new DomainError('REPO_AUTO_MERGE_OFF', 'The merge request was not merged after its build', 409)
@@ -49,6 +56,8 @@ export const repoDeployGone = (): DomainError =>
 
 /** The words of the refusals of a merge and a deploy the client reads, without a final period. */
 export const repoMergeRefusalTexts = Object.freeze({
+  REPO_FOREIGN_COMMITS:
+    'В ветке есть коммиты не из Радити — посмотрите их в запросе на слияние в репозитории',
   REPO_MR_TARGET_CHANGED:
     'Запрос на слияние теперь ведёт в другую ветку — изменения не приняты. Посмотрите запрос в репозитории',
   REPO_AUTO_MERGE_OFF:

@@ -14,6 +14,7 @@ import {
   repoConfirmInvalid,
   repoConfirmUsed,
   repoDeployGone,
+  repoForeignCommits,
   repoMergeTargetChanged,
   repoNotMergeable,
   repoProviderOffers,
@@ -123,6 +124,15 @@ export async function prepareMerge(
   if (mr.state === 'merged') throw repoAlreadyMerged()
   if (mr.state !== 'open') throw repoNotMergeable()
   if (mr.targetBranch !== repo.defaultBranch) throw repoMergeTargetChanged()
+  // The merge request of a chat merges only the commit Радити sent there (ревью, безопасность 4).
+  if (mr.taskId !== null) {
+    const branch = await db.projectRepoBranch.findUnique({
+      where: { taskId: mr.taskId },
+      select: { remoteSha: true, branch: true },
+    })
+    if (branch?.branch === mr.sourceBranch && branch.remoteSha !== mr.headSha)
+      throw repoForeignCommits()
+  }
   const expiresAt = expiry(input.now)
   const confirmToken = signRepoConfirmToken(
     {

@@ -34,6 +34,7 @@ import {
   repoCiLintSchema,
   repoConfirmInvalid,
   repoDeployGone,
+  repoForeignCommits,
   repoMergeTargetChanged,
   repoNothingToPush,
   repoNotMergeable,
@@ -404,6 +405,16 @@ export class RepoActions {
       throw repoMergeTargetChanged()
     if (read.sourceBranch !== cached.sourceBranch || read.headSha !== claims.headSha)
       throw repoChanged()
+    // A chat's branch: the head is the commit Радити sent, nothing pushed past it (ревью,
+    // безопасность 4).
+    if (row.taskId !== null) {
+      const branch = await prisma.projectRepoBranch.findUnique({
+        where: { taskId: row.taskId },
+        select: { remoteSha: true, branch: true },
+      })
+      if (branch?.branch === read.sourceBranch && branch.remoteSha !== read.headSha)
+        throw repoForeignCommits()
+    }
     if (read.state === 'draft') throw repoNotMergeable()
     const merged = await provider.mergePullRequest(auth, info.ref, number, {
       expectedHeadSha: claims.headSha,
