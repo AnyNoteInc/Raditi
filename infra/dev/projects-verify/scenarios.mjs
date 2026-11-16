@@ -371,15 +371,14 @@ async function scenarioC(stand) {
   rt.begin('C', 'память: «запомните», предложение после команды, секрет, правка записи клиента')
   const owner = state.owner
   const asked = marker('zapomnit')
-  await say(
-    stand,
-    state.chatA,
-    'Запомните, пожалуйста: по понедельникам мы закрыты.',
-    'rememberAsked',
-    {
-      note: `По понедельникам кофейня закрыта (${asked}).`,
-    },
-  )
+  // A chat of its own: the first chat ran commands in A (pdftotext), and once a chat took in
+  // something from outside or ran a command, every note of it is only proposed (ревью Б3).
+  const chatC = await newChat(stand, {
+    text: 'Запомните, пожалуйста: по понедельникам мы закрыты.',
+    projectId: state.projectId,
+    program: 'rememberAsked',
+    ctx: { note: `По понедельникам кофейня закрыта (${asked}).` },
+  })
   const saved = await rt.until(
     'the note to be applied at the end of the pass',
     async () =>
@@ -398,7 +397,7 @@ async function scenarioC(stand) {
   const proposedMark = marker('predlozheno')
   const facts = await say(
     stand,
-    state.chatA,
+    chatC.taskId,
     'Посмотрите заметки проекта.',
     'rememberAfterCommand',
     {
@@ -449,16 +448,33 @@ async function scenarioC(stand) {
     'the next turn has both notes in its section «Memory»',
   )
 
+  // The command marked the chat: «запомните» in a later pass of it, with no command, is proposed.
+  const laterMark = marker('pozzhe')
+  await say(stand, chatC.taskId, 'Запомните: по средам у нас живая музыка.', 'rememberAsked', {
+    note: `По средам живая музыка (${laterMark}).`,
+  })
+  const later = await rt.until(
+    'the later note to be applied',
+    async () =>
+      db.memoryEntry.findFirst({
+        where: { projectId: state.projectId, text: { contains: laterMark } },
+      }),
+    { timeoutMs: 30_000, intervalMs: 500 },
+  )
+  rt.check(
+    later.status === 'proposed',
+    `«запомните» in a later pass of a chat that ran a command is only proposed (${later.status})`,
+  )
+
   // «Запомните» in the client's words, but the pass fetched a page of the web first: proposed only.
   const fetchedMark = marker('posle-webfetch')
-  const fetched = await say(
-    stand,
-    state.chatA,
-    'Запомните: летнее меню начинается в июне.',
-    'rememberAfterFetch',
-    { url: 'https://example.com/', note: `Летнее меню с июня (${fetchedMark}).` },
-  )
-  void fetched
+  // A fresh chat again: the fetch alone must make the note a proposal.
+  await newChat(stand, {
+    text: 'Запомните: летнее меню начинается в июне.',
+    projectId: state.projectId,
+    program: 'rememberAfterFetch',
+    ctx: { url: 'https://example.com/', note: `Летнее меню с июня (${fetchedMark}).` },
+  })
   const afterFetch = await rt.until(
     'the note after the fetch to be applied',
     async () =>
@@ -1273,6 +1289,7 @@ async function scenarioF(stand) {
     'the push on top',
   )
   const headF = (await gitlab.heads(state.ownProject))[first.branch]
+  state.headF = headF
   const parentsF = await gitlab.parents(state.ownProject, first.branch)
   const opening = await gitlab.show(state.ownProject, first.branch, 'opening.md')
   rt.check(
@@ -1585,16 +1602,24 @@ async function scenarioI(stand) {
   )
   state.mainAfter = heads.main
 
-  // «Принять, когда сборка пройдёт» of the second chat's request: the client's new commit has a
-  // build that runs; the press waits for it, and GitLab merges after it passed.
-  state.ownProject.slowRefs.set(state.branchF, 30_000)
-  const greenHead = await gitlab.commitAsClient(
-    state.ownProject,
-    state.branchF,
-    'client-note-2.md',
-    'Ещё заметка клиента\n',
-  )
+  // The second chat's request ends at the client's commit of F: commits Радити did not send are
+  // refused before any card (ревью Б4).
   const mrF = state.ownProject.mergeRequests.find((item) => item.source === state.branchF)
+  const foreign = await owner.call('mutation', 'projectRepo.prepareMerge', {
+    projectId: state.projectId,
+    number: mrF.iid,
+  })
+  rt.check(
+    !foreign.ok && foreign.domainCode === 'REPO_FOREIGN_COMMITS',
+    `a request whose head is a commit of the client is refused (${foreign.domainCode})`,
+    foreign,
+  )
+
+  // «Принять, когда сборка пройдёт»: the client takes the commit back to the head Радити sent and
+  // restarts its build; the press waits for it, and GitLab merges after it passed.
+  await gitlab.resetBranch(state.ownProject, state.branchF, state.headF)
+  state.ownProject.slowRefs.set(state.branchF, 30_000)
+  const greenHead = await gitlab.rerunPipeline(state.ownProject, state.branchF)
   const waitCard = await rt.until(
     'the card of the second request with its build running',
     async () => {

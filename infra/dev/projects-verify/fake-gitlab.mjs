@@ -742,6 +742,17 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
         })
       return sha
     },
+    /** The client moves `branch` back to `sha` (a force push of its own), without a pipeline. */
+    async resetBranch(project, branch, sha) {
+      await runGit(['update-ref', `refs/heads/${branch}`, sha], { cwd: project.bare, home })
+    },
+    /** «Retry» of the client: a new pipeline on the current head of `ref`, no new commit. */
+    async rerunPipeline(project, ref) {
+      const sha = (await headsOf(project.bare, home))[ref]
+      if (!sha) throw new Error(`no branch ${ref}`)
+      makePipeline(project, { ref, sha, source: 'web', deploy: ref === project.defaultBranch })
+      return sha
+    },
     isSha: (value) => sha40.test(value),
     close: async () => {
       for (const server of servers) {
