@@ -258,6 +258,8 @@ describe('the repository of a project (84.17)', () => {
     const connect = await screen.findByRole('dialog', { name: 'Подключить репозиторий' })
     const gitlab = await within(connect).findByRole('radio', { name: /^GitLab\.com/ })
     await waitFor(() => expect(gitlab.getAttribute('aria-disabled')).toBe('false'))
+    // The window opens on the sign-in, not on the token of an own server (ревью P2).
+    expect(within(connect).getByRole('button', { name: 'Войти через GitLab' })).toBeTruthy()
     fireEvent.click(gitlab)
     expect(within(connect).getByRole('button', { name: 'Войти через GitLab' })).toBeTruthy()
   })

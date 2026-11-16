@@ -330,7 +330,8 @@ function ConnectForm({
   const list = useQuery(trpc.gitConnection.list.queryOptions())
   const addToken = useMutation(trpc.gitConnection.addToken.mutationOptions())
   const available = list.data?.available
-  const [way, setWay] = useState<Way>('gitlab-self')
+  // GitLab.com by its sign-in when it is offered (ревью P2), else an own server by a token.
+  const [way, setWay] = useState<Way>('gitlab')
   const [host, setHost] = useState('')
   const [token, setToken] = useState('')
   const [shown, setShown] = useState(false)

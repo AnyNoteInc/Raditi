@@ -11,7 +11,7 @@ export const repoText = Object.freeze({
   githubHint: 'Установите приложение «Радити» в свой GitHub и выберите репозитории',
   gitlabCom: 'GitLab.com',
   gitlabComHint: 'Вход через GitLab',
-  ownServer: 'Свой сервер GitLab',
+  ownServer: 'Свой сервер GitLab — по токену',
   ownServerHint: 'Адрес вашего сервера и токен доступа',
   soon: 'Скоро',
   serverAddress: 'Адрес сервера',
