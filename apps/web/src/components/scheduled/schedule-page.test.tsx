@@ -50,6 +50,7 @@ const mutation = (fn: (input: never) => Promise<unknown>) => ({
 
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
+    project: { list: query('project.list', async () => ({ items: [] })) },
     schedule: {
       list: query('schedule.list', async () => ({ schedules: [], timezone: 'Europe/Moscow' })),
       get: query('schedule.get', getSchedule),
@@ -125,7 +126,15 @@ describe('the page of a scheduled task (plan 82, Зп6)', () => {
       within(facts)
         .getAllByRole('term')
         .map((term) => term.textContent),
-    ).toEqual(['Инструкция', 'Когда запускается', 'Размышление', 'Уведомления', 'Стоимость'])
+    ).toEqual([
+      'Инструкция',
+      'Когда запускается',
+      'Проект',
+      'Размышление',
+      'Уведомления',
+      'Стоимость',
+    ])
+    expect(facts).toHaveTextContent('Без проекта')
     expect(facts).toHaveTextContent('Откройте сайт и пройдите главную и важные страницы.')
     expect(facts).toHaveTextContent('По будням в 9:00')
     expect(facts).toHaveTextContent('Низкое')

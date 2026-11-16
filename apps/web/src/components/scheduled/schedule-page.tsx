@@ -398,6 +398,22 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
               </Box>
             )}
           </Fact>
+          <Fact term={schedulePageTexts.project}>
+            {data.project === null ? (
+              scheduleRowTexts.noProject
+            ) : data.project.gone ? (
+              scheduleRowTexts.goneName(data.project.name)
+            ) : (
+              <Link
+                component={NextLink}
+                href={`/projects/${data.project.id}`}
+                color="inherit"
+                underline="hover"
+              >
+                {data.project.name}
+              </Link>
+            )}
+          </Fact>
           <Fact term={schedulePageTexts.effort}>{effortText[data.effort]}</Fact>
           <Fact term={schedulePageTexts.notify}>
             {data.notify ? schedulePageTexts.notifyOn : schedulePageTexts.notifyOff}

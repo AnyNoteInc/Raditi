@@ -14,8 +14,10 @@ import { SCHEDULE_ID, scheduleChangeRow, scheduleLeftRow } from './testing'
 
 const RUN_CHAT_ID = '0199a3f2-0000-7000-8000-0000000000a8'
 
-const { list, runNow, push, browserPush } = vi.hoisted(() => ({
+const { list, runNow, push, browserPush, confirmCard, confirm } = vi.hoisted(() => ({
   list: vi.fn<() => Promise<{ schedules: unknown[]; timezone: string }>>(),
+  confirmCard: vi.fn<(input: { scheduleId: string }) => Promise<unknown>>(),
+  confirm: vi.fn<(input: { confirmToken: string }) => Promise<unknown>>(),
   runNow: vi.fn<(input: { scheduleId: string }) => Promise<{ taskId: string }>>(),
   push: vi.fn(),
   browserPush: { current: null as unknown as BrowserPush },
@@ -34,6 +36,14 @@ vi.mock('@/trpc/client', () => ({
           options: UseMutationOptions<{ taskId: string }, Error, { scheduleId: string }>,
         ) => ({ ...options, mutationFn: runNow }),
       },
+      get: { queryKey: (input: unknown) => ['schedule.get', input] },
+      confirmCard: {
+        queryOptions: (input: { scheduleId: string }) => ({
+          queryKey: ['schedule.confirmCard', input],
+          queryFn: () => confirmCard(input),
+        }),
+      },
+      confirm: { mutationOptions: () => ({ mutationFn: confirm }) },
     },
   }),
 }))
@@ -114,6 +124,40 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
       shown.getByText('Пришли курс доллара, евро и юаня по ЦБ и насколько он изменился со вчера.'),
     ).toBeTruthy()
     expect(shown.queryByRole('button', { name: 'Показать инструкцию' })).toBeNull()
+  })
+
+  it('offers «Включить задачу» of a task that waits for the client, with the token of what it shows (ПР19)', async () => {
+    const waiting = task({ enabled: false, pausedReason: 'unconfirmed', nextRunAt: null })
+    list.mockResolvedValue({ schedules: [waiting], timezone: 'Europe/Moscow' })
+    confirmCard.mockResolvedValue({
+      schedule: { ...waiting, runs: [] },
+      confirmToken: 'token-of-the-card',
+    })
+    confirm.mockResolvedValue({ ...waiting, enabled: true, pausedReason: null, runs: [] })
+    show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} />)
+    const shown = within(await card())
+    expect(await shown.findByText('Ждёт, пока вы её включите')).toBeTruthy()
+    const box = await shown.findByText(
+      'Задачу настроил агент. Она запустится без вас, поэтому включить её можете только вы — проверьте текст и расписание.',
+    )
+    const confirmBox = box.closest('[data-schedule-confirm]') as HTMLElement
+    expect(confirmBox).toHaveTextContent('Сводка курсов')
+    expect(confirmBox).toHaveTextContent('По будням в 8:00')
+    expect(confirmCard).toHaveBeenCalledWith({ scheduleId: SCHEDULE_ID })
+    fireEvent.click(within(confirmBox).getByRole('button', { name: 'Включить задачу' }))
+    await waitFor(() =>
+      expect(confirm).toHaveBeenCalledWith(
+        { confirmToken: 'token-of-the-card' },
+        expect.anything(),
+      ),
+    )
+  })
+
+  it('shows no «Включить задачу» for a task the client turns on themselves', async () => {
+    show(<FeedScheduleChange row={scheduleChangeRow('1')} now={now} />)
+    await card()
+    expect(confirmCard).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Включить задачу' })).toBeNull()
   })
 
   it('folds long instructions under «Показать инструкцию»', async () => {

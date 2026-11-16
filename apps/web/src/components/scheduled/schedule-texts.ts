@@ -28,6 +28,11 @@ export const scheduledTexts = Object.freeze({
   retry: 'Повторить',
   loading: 'Загрузка задач',
   list: 'Ваши запланированные задачи',
+  // The filter of the projects (Зп3; docs/plan/84-projects.md, ПР19): only when the tasks are of
+  // more than one.
+  projectGroup: 'Проект',
+  allProjects: 'Все проекты',
+  noProject: 'Без проекта',
 })
 
 /** The filter buttons of «Ваши» (Зп3). */
@@ -73,6 +78,12 @@ export const scheduleRowTexts = Object.freeze({
   pausedNotice: 'Задача приостановлена',
   resumed: 'Задача включена',
   close: 'Закрыть',
+  /** The project of a task (ПР19). */
+  project: (name: string) => `Проект: ${name}`,
+  noProject: 'Без проекта',
+  /** Its project is in «Архив» or the trash. */
+  goneName: (name: string) => `${name} (в архиве или удалён)`,
+  projectGone: (name: string) => `Проект: ${name} (в архиве или удалён)`,
 })
 
 /** The page of one task (Зп6). */
@@ -114,6 +125,7 @@ export const schedulePageTexts = Object.freeze({
   stale: 'Не удалось обновить задачу — на странице то, что было известно раньше.',
   loading: 'Загрузка задачи',
   more: 'Ещё действия',
+  project: 'Проект',
 })
 
 /** The window «Новая запланированная задача» and «Изменить задачу» (Зп7, Зп8, Зп12, Зп28, Зп30). */
@@ -161,6 +173,47 @@ export const scheduleDialogTexts = Object.freeze({
   save: 'Сохранить',
   created: 'Задача создана',
   saved: 'Изменения сохранены',
+  /** The window opened in a project (ПР19, P-schedule). */
+  fixedProject: (name: string) => `Проект: ${name}`,
+  fixedProjectTail: ', задача закреплена за этим проектом',
+  // In a project with a repository, beside the warning (ПР19, P-schedule).
+  repositoryWarning:
+    'Задача выполняется без вас: агент не принимает изменения в основную ветку, не выкатывает и не меняет настройки сборки — он подготовит изменения, а запрос на слияние вы откроете сами.',
+  projectRun:
+    'Каждый запуск — новый чат в этом проекте: агент учтёт его инструкции, контекст и память.',
+  templates: 'Начать с шаблона',
+  templatesLabel: 'Шаблоны задач проекта',
+})
+
+/** «Запланировано» of the column of a project and its window (ПР19, P-schedule-list). */
+export const projectScheduleTexts = Object.freeze({
+  title: 'Запланировано',
+  add: 'Добавить',
+  addLabel: 'Добавить запланированную задачу в проект',
+  open: 'Посмотреть',
+  openLabel: 'Посмотреть запланированные задачи проекта',
+  empty: 'Задачи, которые агент выполняет сам по расписанию.',
+  line: (name: string, when: string) => `${name} · ${when}`,
+  more: (count: number) => `и ещё ${count} ${plural(count, 'задача', 'задачи', 'задач')}`,
+  lead: 'Задачи запускаются сами, без вас. Каждый запуск — новый чат в этом проекте.',
+  none: 'В этом проекте пока нет запланированных задач.',
+  lastRuns: 'Последний запуск',
+  allIn: 'Все задачи рабочего пространства — в разделе',
+  allLink: '«Задачи»',
+  close: 'Закрыть',
+  failed: 'Не удалось загрузить задачи. Попробуйте ещё раз.',
+  archived: 'Проект в архиве — верните его, чтобы добавить задачу.',
+})
+
+/** «Включить задачу» of the chat (ПР19). */
+export const scheduleConfirmTexts = Object.freeze({
+  title: 'Включить задачу',
+  lead: 'Задачу настроил агент. Она запустится без вас, поэтому включить её можете только вы — проверьте текст и расписание.',
+  instructions: 'Что сделать агенту',
+  schedule: 'Когда запускать',
+  confirm: 'Включить задачу',
+  confirmed: 'Задача включена',
+  changed: 'Задача изменилась — посмотрите её ещё раз.',
 })
 
 /** «Стоимость» of the window and of the page (Зп30). */

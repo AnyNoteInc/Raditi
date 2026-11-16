@@ -55,6 +55,7 @@ const query = (key: string, fn: (input?: unknown) => Promise<unknown>) => ({
 
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
+    project: { list: query('project.list', async () => ({ items: [] })) },
     schedule: {
       list: query('schedule.list', listSchedules),
       get: query('schedule.get', async () => null),
@@ -389,6 +390,46 @@ describe('the tools of «Ваши» (Зп3)', () => {
     expect(rows).toHaveLength(3)
     fireEvent.click(within(states).getByRole('button', { name: 'Завершены0' }))
     expect(screen.getByText('Ничего не нашлось.')).toBeInTheDocument()
+  })
+
+  it('names the project of each task and filters by it when there are two or more (ПР19)', async () => {
+    const kolos = { id: '019f2a00-0000-7000-8000-00000000aa01', name: 'Колос', gone: false }
+    const old = { id: '019f2a00-0000-7000-8000-00000000aa02', name: 'Архивный', gone: true }
+    list([
+      scheduleItem({ id: '019f2a00-0000-7000-8000-0000000000b1', name: 'Сборки', project: kolos }),
+      scheduleItem({ id: '019f2a00-0000-7000-8000-0000000000b2', name: 'Отчёт', project: old }),
+      scheduleItem({ id: '019f2a00-0000-7000-8000-0000000000b3', name: 'Курс валют' }),
+    ])
+    show(<ScheduledView userId={USER} tab="yours" />)
+    const rows = await screen.findByRole('list', { name: 'Ваши запланированные задачи' })
+    expect(rows).toHaveTextContent('Проект: Колос')
+    expect(rows).toHaveTextContent('Проект: Архивный (в архиве или удалён)')
+    expect(rows).toHaveTextContent('Без проекта')
+    fireEvent.click(screen.getByRole('button', { name: 'Фильтр задач' }))
+    const projects = screen.getByRole('group', { name: 'Проект' })
+    expect(
+      within(projects)
+        .getAllByRole('button')
+        .map((each) => each.textContent),
+    ).toEqual(['Все проекты', 'Архивный', 'Колос', 'Без проекта'])
+    fireEvent.click(within(projects).getByRole('button', { name: 'Колос' }))
+    const shown = within(
+      screen.getByRole('list', { name: 'Ваши запланированные задачи' }),
+    ).getAllByRole('listitem')
+    expect(shown.map((row) => within(row).getByRole('heading').textContent)).toEqual(['Сборки'])
+    fireEvent.click(within(projects).getByRole('button', { name: 'Без проекта' }))
+    expect(
+      within(screen.getByRole('list', { name: 'Ваши запланированные задачи' }))
+        .getAllByRole('heading')
+        .map((each) => each.textContent),
+    ).toEqual(['Курс валют'])
+  })
+
+  it('has no filter of projects when the tasks are of one', async () => {
+    list(many)
+    show(<ScheduledView userId={USER} tab="yours" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Фильтр задач' }))
+    expect(screen.queryByRole('group', { name: 'Проект' })).toBeNull()
   })
 
   it('orders by the next run, by name or the newest first', async () => {

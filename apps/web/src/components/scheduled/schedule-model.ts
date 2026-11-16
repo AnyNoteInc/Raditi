@@ -139,6 +139,44 @@ export function lastRunText(item: ScheduleItem, now: Date): string | null {
   return `${scheduledRunStateText(run.state)} · ${runMomentText(run.dueAt, item.timezone, now)}`
 }
 
+/**
+ * The project of a task in a line (docs/plan/84-projects.md, ПР19): «Проект: X», marked when it is
+ * in «Архив» or the trash, or «Без проекта».
+ */
+export function projectLineOf(item: Pick<ScheduleItem, 'project'>): string {
+  if (item.project === null) return scheduleRowTexts.noProject
+  return item.project.gone
+    ? scheduleRowTexts.projectGone(item.project.name)
+    : scheduleRowTexts.project(item.project.name)
+}
+
+/** The filter of the projects (Зп3, ПР19): a project's id, or `none` — without one. */
+export type ScheduleProjectFilter = 'all' | 'none' | { id: string }
+
+export function inProjectFilter(item: ScheduleItem, filter: ScheduleProjectFilter): boolean {
+  if (filter === 'all') return true
+  if (filter === 'none') return item.project === null
+  return item.project?.id === filter.id
+}
+
+/**
+ * The projects the tasks are of, by name, and whether some have none: the filter is shown only
+ * when there are two or more of these values.
+ */
+export function projectsOfSchedules(items: readonly ScheduleItem[]): {
+  projects: { id: string; name: string }[]
+  none: boolean
+} {
+  const byId = new Map<string, string>()
+  let none = false
+  for (const item of items)
+    if (item.project === null) none = true
+    else byId.set(item.project.id, item.project.name)
+  const projects = [...byId].map(([id, name]) => ({ id, name }))
+  projects.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+  return { projects, none }
+}
+
 /** The schedules in words, with the zone when it is not Moscow. */
 export const scheduleWords = (item: { triggers: ScheduleTrigger[]; timezone: string }): string =>
   scheduleText(item.triggers, item.timezone)

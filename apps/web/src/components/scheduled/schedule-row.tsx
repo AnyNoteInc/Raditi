@@ -11,7 +11,13 @@ import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 
 import { ScheduleMoreMenu, ScheduleSwitch, type ScheduleActions } from './schedule-actions'
-import { lastRunText, scheduleStateText, scheduleWords, type ScheduleItem } from './schedule-model'
+import {
+  lastRunText,
+  projectLineOf,
+  scheduleStateText,
+  scheduleWords,
+  type ScheduleItem,
+} from './schedule-model'
 import { scheduleRowTexts } from './schedule-texts'
 
 type Tone = 'text.secondary' | 'text.primary' | 'error.main' | 'primary.main'
@@ -72,8 +78,11 @@ export function ScheduleRow({
   onEdit,
   onDeleted,
   moreRef,
+  showProject = true,
 }: {
   item: ScheduleItem
+  /** «Проект: …» or «Без проекта» (ПР19); the column of a project says it by itself. */
+  showProject?: boolean
   now: Date
   actions: ScheduleActions
   onEdit: (item: ScheduleItem, opener: HTMLElement | null) => void
@@ -161,6 +170,15 @@ export function ScheduleRow({
         <Typography variant="body2" sx={{ color: 'text.secondary', overflowWrap: 'anywhere' }}>
           {nbsp(scheduleWords(item))}
         </Typography>
+        {showProject ? (
+          <Typography
+            variant="body2"
+            data-schedule-project=""
+            sx={{ color: 'text.secondary', overflowWrap: 'anywhere' }}
+          >
+            {projectLineOf(item)}
+          </Typography>
+        ) : null}
         <Box
           sx={{
             mt: 1,
