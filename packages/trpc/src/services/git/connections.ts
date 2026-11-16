@@ -15,6 +15,7 @@ import {
   gitJobNames,
   gitlabComHost,
   gitlabComOffered,
+  githubOffered,
   gitServerHostOf,
   workspaceEnvVarTombstone,
   type AppEnv,
@@ -22,6 +23,7 @@ import {
   type GitConnectionState,
   type RepoConfirmMac,
   type SecretStore,
+  type VerifiedInstallation,
 } from '@repo/domain'
 
 import { personalWorkspaceOf, WRITE } from '../chat/dialog-lock.ts'
@@ -47,6 +49,8 @@ export interface GitServices {
   checkHost(host: string): Promise<void>
   /** Raditi's OAuth app on gitlab.com is configured (GITLAB_OAUTH_CLIENT_*). */
   gitlabComConfigured: boolean
+  /** Raditi's GitHub App is configured for web (GITHUB_APP_SLUG and the rest, slice 84.25). */
+  githubConfigured?: boolean
   /**
    * HMAC-SHA256 by REPO_CONFIRM_SECRET, in base64url: the cards of a repository (ПР13, ПР15).
    * null or absent — no card is offered; core checks every token again.
@@ -138,8 +142,8 @@ export async function listConnections(
   return {
     connections: rows.map(viewOf),
     available: {
-      // The GitHub App with writing is Э10 (ПР31): «Скоро».
-      github: false,
+      // The GitHub App (slice 84.25): offered once it is configured, «Скоро» until then.
+      github: services ? githubOffered(services.githubConfigured === true) : false,
       gitlabCom: services ? gitlabComOffered(input.appEnv, services.gitlabComConfigured) : false,
       ownServer: Boolean(services),
     },
@@ -391,4 +395,106 @@ export async function removeConnection(
   }, WRITE)
   // The row is gone first: a token nobody refers to is harmless while its erasure is retried.
   await eraseTokens(services, path, now)
+}
+
+/**
+ * The return from the installation of the GitHub App (`/api/git/github/callback`, ПР10; slice
+ * 84.25): an installation web checked by the user's own token — the `installation_id` of the
+ * return alone proves nothing. The connection keeps no token: core issues one per operation from
+ * the app's key. It acts for the person who checked it (`github_user_id`), and offers only the
+ * repositories that person may push to; core checks the right again before every action. A second
+ * return of the same installation by the same user refreshes its repositories.
+ */
+export async function connectGithubApp(
+  db: PrismaClient,
+  services: GitServices,
+  input: {
+    userId: string
+    installation: VerifiedInstallation
+    ip: string | null
+    now?: Date
+  },
+): Promise<{ connectionId: string }> {
+  if (!githubOffered(services.githubConfigured === true)) throw gitConnectUnavailable()
+  const now = input.now ?? new Date()
+  const { installation } = input
+  const { id: workspaceId } = await personalWorkspaceOf(db, {
+    userId: input.userId,
+    appEnv: services.appEnv,
+  })
+  const connectionId = await db.$transaction(async (tx) => {
+    const earlier = await tx.gitConnection.findFirst({
+      where: {
+        workspaceId,
+        createdById: input.userId,
+        kind: 'github_app',
+        host: githubHost,
+        accountId: installation.account.id,
+      },
+      select: { id: true },
+    })
+    if (earlier === null && (await lockRoom(tx, workspaceId)) >= gitConnectionLimits.perWorkspace)
+      throw gitConnectionLimit()
+    const id = earlier?.id ?? randomUUID()
+    const fields = {
+      accountLogin: installation.account.login.slice(0, 100),
+      accountId: installation.account.id,
+      installationId: BigInt(installation.installationId),
+      githubUserId: installation.user.id,
+      state: 'ok',
+      stateReason: null,
+      checkedAt: now,
+    }
+    if (earlier === null)
+      await tx.gitConnection.create({
+        data: {
+          id,
+          workspaceId,
+          createdById: input.userId,
+          kind: 'github_app',
+          host: githubHost,
+          ...fields,
+        },
+      })
+    else await tx.gitConnection.update({ where: { id }, data: fields })
+    const seen = installation.repositories.map((item) => item.ref.providerRepoId)
+    await tx.gitConnectionRepository.deleteMany({
+      where: { connectionId: id, providerRepoId: { notIn: seen } },
+    })
+    for (const item of installation.repositories) {
+      const row = {
+        path: item.ref.path,
+        name: item.ref.path.split('/').at(-1)!.slice(0, 200),
+        visibility: item.private ? 'private' : 'public',
+        defaultBranch: item.defaultBranch,
+        canPush: true,
+        canHook: false,
+        syncedAt: now,
+      }
+      await tx.gitConnectionRepository.upsert({
+        where: {
+          connectionId_providerRepoId: {
+            connectionId: id,
+            providerRepoId: item.ref.providerRepoId,
+          },
+        },
+        create: { connectionId: id, providerRepoId: item.ref.providerRepoId, ...row },
+        update: row,
+      })
+    }
+    await tx.auditLog.create({
+      data: {
+        actorType: 'user',
+        actorId: input.userId,
+        workspaceId,
+        action: 'workspace.git_connection.connect',
+        targetType: 'git_connection',
+        targetId: id,
+        meta: { kind: 'github_app', host: githubHost, installation: installation.installationId },
+        ip: input.ip,
+      },
+    })
+    return id
+  }, WRITE)
+  return { connectionId }
 }

@@ -9,6 +9,7 @@ import {
   pullRequestStateWords,
   repoBranchStateWords,
   repoProviderBrands,
+  repoOffersDeploy,
   repoProviderOffers,
   type CiRefusal,
   type CiStatus,
@@ -247,10 +248,11 @@ function RepositoryCard({
       >
         {runText.openAt(label)}
       </Button>
-      {/* «Выкатить» (ПР15): a manual job of the head of the main branch, by the author's connection. */}
+      {/* «Выкатить» (ПР15): a manual job or a `workflow_dispatch` of the head of the main branch,
+          by the author's connection. */}
       {repo.mode === 'write' &&
       repo.connection?.state === 'ok' &&
-      repoProviderOffers[repo.provider].manualJobs ? (
+      repoOffersDeploy(repoProviderOffers[repo.provider]) ? (
         <DeployButton projectId={project.id} />
       ) : null}
     </Box>

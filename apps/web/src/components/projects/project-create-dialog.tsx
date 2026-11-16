@@ -11,7 +11,7 @@ import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
@@ -92,6 +92,9 @@ function CreateForm({
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
+  // «Подключить GitHub» once the GitHub App is offered here (84.25): the window after «Создать».
+  const githubOffered =
+    useQuery(trpc.gitConnection.list.queryOptions()).data?.available.github === true
   const create = useMutation(trpc.project.create.mutationOptions())
   const [name, setName] = useState(initial?.name ?? '')
   const [goal, setGoal] = useState(initial?.goal ?? '')
@@ -225,6 +228,7 @@ function CreateForm({
               onText={() => setWriting(true)}
               onLink={() => setLinking(true)}
               onGitlab={() => setConnectRepository(true)}
+              {...(githubOffered ? { onGithub: () => setConnectRepository(true) } : {})}
               repositoryAttached={link !== null || connectRepository}
             />
             <Typography sx={{ flex: '1 1 200px', fontSize: 13, color: 'text.secondary' }}>

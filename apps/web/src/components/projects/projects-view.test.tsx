@@ -43,6 +43,17 @@ vi.mock('@/trpc/client', () => ({
       restore: mutation(calls.restore),
       update: mutation(calls.update),
     },
+    gitConnection: {
+      list: {
+        queryOptions: () => ({
+          queryKey: ['gitConnection.list'],
+          queryFn: async () => ({
+            connections: [],
+            available: { github: false, gitlabCom: false, ownServer: true },
+          }),
+        }),
+      },
+    },
   }),
   useTRPCClient: () => ({
     projectFile: {

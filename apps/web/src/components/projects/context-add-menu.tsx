@@ -23,7 +23,7 @@ import { chosenFiles, type ChosenFile } from './use-context-uploads'
  * «Добавить контекст» and «Добавить» of «Контекст» (docs/plan/84-projects.md, §4.8; P-create-menu,
  * P-context-menu, P-phone-sheet): «Загрузить с устройства» with «Файлы…» and «Папку…», «Добавить
  * текстовое содержимое», and the repository's three ways: «Ссылка на GitHub» and «Подключить GitLab»
- * since slice 84.17, when the page gives them a handler, «Подключить GitHub» marked «Скоро» until Э10.
+ * since slice 84.17, when the page gives them a handler, and «Подключить GitHub» — «Скоро» until the GitHub App is offered (84.25).
  * Under them — the bounds of the files. On a phone it is a sheet from the bottom, and «Загрузить с
  * устройства» opens the files at once.
  */
@@ -36,6 +36,7 @@ export function ContextAddMenu({
   title,
   onLink,
   onGitlab,
+  onGithub,
   repositoryAttached = false,
 }: {
   onFiles: (files: ChosenFile[]) => void
@@ -44,6 +45,8 @@ export function ContextAddMenu({
   onLink?: () => void
   /** «Подключить GitLab» (ПР10); absent — «Скоро». */
   onGitlab?: () => void
+  /** «Подключить GitHub» (ПР10, slice 84.25): only once the GitHub App is offered; absent — «Скоро». */
+  onGithub?: () => void
   /**
    * The project has its repository already (ПР6: one a project): the ways of a repository say
    * how to change it instead of «Скоро» (ревью P1).
@@ -174,13 +177,13 @@ export function ContextAddMenu({
       onClick: taken ? undefined : choose(onGitlab),
       note: taken,
     },
-    // The GitHub App with writing is Э10 (ПР31).
+    // The GitHub App (slice 84.25): «Скоро» until it is offered here.
     {
       icon: 'github',
       title: contextText.github,
-      hint: contextText.githubHint,
-      onClick: undefined,
-      note: undefined,
+      hint: onGithub ? (taken ?? contextText.githubHint) : contextText.githubHint,
+      onClick: taken ? undefined : choose(onGithub),
+      note: onGithub ? taken : undefined,
     },
   ]
 

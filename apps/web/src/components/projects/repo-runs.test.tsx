@@ -270,22 +270,33 @@ describe('«Выкатить» on P-repo (plan 84, 84.22)', () => {
     })
     wrap(<RepositoryView project={project} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Выкатить' }))
-    expect(await screen.findByText(/нет ручных заданий выкладки/)).toBeTruthy()
+    expect(await screen.findByText(/нет ручных заданий выкладки и процессов/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Запустить выкладку' })).toBeNull()
   })
 
-  it('no «Выкатить» for a repository read by a link or on GitHub', async () => {
-    for (const repo of [
-      { ...repository, mode: 'read' as const, connection: null },
-      { ...repository, provider: 'github' as const, host: 'github.com' },
-    ]) {
-      quiet()
-      calls.get.mockResolvedValue(repo)
-      wrap(<RepositoryView project={{ ...project, repository: repo }} />)
-      await screen.findByText(repo.path)
-      expect(screen.queryByRole('button', { name: 'Выкатить' })).toBeNull()
-      cleanup()
-    }
+  it('no «Выкатить» for a repository read by a link', async () => {
+    const repo = { ...repository, mode: 'read' as const, connection: null }
+    quiet()
+    calls.get.mockResolvedValue(repo)
+    wrap(<RepositoryView project={{ ...project, repository: repo }} />)
+    await screen.findByText(repo.path)
+    expect(screen.queryByRole('button', { name: 'Выкатить' })).toBeNull()
+  })
+
+  it('«Выкатить» on GitHub starts a workflow of the main branch, said in its own words (84.25)', async () => {
+    const repo = { ...repository, provider: 'github' as const, host: 'github.com' }
+    quiet()
+    calls.get.mockResolvedValue(repo)
+    calls.prepareDeploy.mockResolvedValue({
+      state: 'ready',
+      ref: 'main',
+      sha: 'c'.repeat(40),
+      actions: [{ id: '3', kind: 'workflow_dispatch', name: 'Deploy', confirmToken: 't' }],
+      expiresAt: new Date(),
+    })
+    wrap(<RepositoryView project={{ ...project, repository: repo }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Выкатить' }))
+    expect(await screen.findByText(/процесс GitHub Actions на основной ветке/)).toBeTruthy()
   })
 })
 

@@ -17,6 +17,8 @@ import {
   repoForeignCommits,
   repoMergeTargetChanged,
   repoNotMergeable,
+  repoOffersDeploy,
+  repoOffersWhenGreen,
   repoProviderOffers,
   repoReadOnly,
   signRepoConfirmToken,
@@ -88,7 +90,10 @@ export interface PreparedMerge {
   url: string
   /** «Удалить ветку … после принятия» — on by default (ПР15). */
   deleteBranch: boolean
-  /** «Принять, когда сборка пройдёт»: only a provider with `autoMerge` (GitLab). */
+  /**
+   * «Принять, когда сборка пройдёт»: a provider with `autoMerge` (GitLab), or one the platform waits
+   * for itself (GitHub, `checksWait`; core refuses it without required checks, ПР15).
+   */
   whenGreen: boolean
   confirmToken: string
   expiresAt: Date
@@ -162,7 +167,7 @@ export async function prepareMerge(
     checks: mr.checks as ChecksState,
     url: mr.webUrl,
     deleteBranch: true,
-    whenGreen: repoProviderOffers[provider].autoMerge,
+    whenGreen: repoOffersWhenGreen(repoProviderOffers[provider]),
     confirmToken,
     expiresAt: new Date(expiresAt * 1000),
   }
@@ -189,7 +194,7 @@ async function writePress(
       )
       if (project.id !== input.claims.projectId || repo.id !== input.claims.projectRepositoryId)
         throw repoChanged()
-      if (input.merge?.mode === 'when_green' && !repoProviderOffers[provider].autoMerge)
+      if (input.merge?.mode === 'when_green' && !repoOffersWhenGreen(repoProviderOffers[provider]))
         throw gitNotSupported('a merge when green')
       if ((await tx.repoAction.count({ where: { tokenSha256 } })) > 0) throw repoConfirmUsed()
       const actionId = randomUUID()
@@ -275,7 +280,8 @@ export async function prepareDeploy(
 ): Promise<PreparedDeploy> {
   const sign = macOf(mac)
   const { project, repo, provider } = await writableRepository(db, input.userId, input.projectId)
-  if (!repoProviderOffers[provider].manualJobs) throw gitNotSupported('a deploy job')
+  const offer = repoProviderOffers[provider]
+  if (!repoOffersDeploy(offer)) throw gitNotSupported('a deploy job')
   const minute = Math.floor(input.now.getTime() / DEPLOY_RESYNC_MS)
   if (repo.mirrorState === 'ready')
     await enqueueOutbox(db, {
@@ -294,11 +300,16 @@ export async function prepareDeploy(
   // One build, one head: the jobs of the newest read.
   const sha = rows[0]?.sha ?? null
   const expiresAt = expiry(input.now)
+  // The kinds the provider offers (ПР15): manual jobs of GitLab, `workflow_dispatch` of GitHub.
+  const kinds = new Set<string>([
+    ...(offer.manualJobs ? ['manual_job'] : []),
+    ...(offer.workflowDispatch ? ['workflow_dispatch'] : []),
+  ])
   const actions = rows
-    .filter((row) => row.sha === sha && row.kind === 'manual_job')
+    .filter((row) => row.sha === sha && kinds.has(row.kind))
     .map((row) => ({
       id: row.providerActionId,
-      kind: 'manual_job' as const,
+      kind: row.kind as 'manual_job' | 'workflow_dispatch',
       name: row.name,
       confirmToken: signRepoConfirmToken(
         {
@@ -313,7 +324,11 @@ export async function prepareDeploy(
           diffSha256: null,
           ciDiffSha256: null,
           opensMergeRequest: false,
-          deploy: { kind: 'manual_job', id: row.providerActionId, ref: repo.defaultBranch },
+          deploy: {
+            kind: row.kind as 'manual_job' | 'workflow_dispatch',
+            id: row.providerActionId,
+            ref: repo.defaultBranch,
+          },
           nonce: nonce(),
           expiresAt,
         },

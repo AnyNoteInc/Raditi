@@ -15,12 +15,38 @@ export const GIT_SIGN_IN_PATH = '/api/git/gitlab'
 export const GIT_SIGN_IN_TTL_MS = 10 * 60_000
 const KEY_INFO = 'raditi-git-sign-in-v1'
 
+/** The installation of the GitHub App between its return and the sign-in of its user (84.25). */
+export const GITHUB_SIGN_IN_COOKIE = 'raditi_github_sign_in'
+export const GITHUB_SIGN_IN_PATH = '/api/git/github'
+
+/** Which sign-in a cookie is of: its name and the path of its routes. */
+export interface GitSignInRoute {
+  name: string
+  path: string
+}
+export const gitlabSignInRoute: GitSignInRoute = {
+  name: GIT_SIGN_IN_COOKIE,
+  path: GIT_SIGN_IN_PATH,
+}
+export const githubSignInRoute: GitSignInRoute = {
+  name: GITHUB_SIGN_IN_COOKIE,
+  path: GITHUB_SIGN_IN_PATH,
+}
+
 export const sealedGitSignInSchema = z.strictObject({
   userId: z.string().min(1).max(128),
   projectId: z.uuid(),
   state: z.string().min(16).max(128),
   verifier: z.string().min(43).max(128),
   expiresAt: z.number().int(),
+  /**
+   * GitHub: the installation its return named, kept until the user signs in and the installation
+   * is checked by their own token (ПР10) — it proves nothing by itself.
+   */
+  installationId: z
+    .string()
+    .regex(/^[1-9][0-9]{0,19}$/)
+    .optional(),
 })
 export type SealedGitSignIn = z.infer<typeof sealedGitSignInSchema>
 
@@ -57,10 +83,14 @@ export function openGitSignIn(
   }
 }
 
-export function gitSignInCookie(value: string | null, secure: boolean): string {
+export function gitSignInCookie(
+  value: string | null,
+  secure: boolean,
+  route: GitSignInRoute = gitlabSignInRoute,
+): string {
   const parts = [
-    `${GIT_SIGN_IN_COOKIE}=${value ?? ''}`,
-    `Path=${GIT_SIGN_IN_PATH}`,
+    `${route.name}=${value ?? ''}`,
+    `Path=${route.path}`,
     'HttpOnly',
     'SameSite=Lax',
     `Max-Age=${value === null ? 0 : GIT_SIGN_IN_TTL_MS / 1000}`,
@@ -69,10 +99,13 @@ export function gitSignInCookie(value: string | null, secure: boolean): string {
   return parts.join('; ')
 }
 
-export function gitSignInCookieOf(headers: Headers): string | undefined {
+export function gitSignInCookieOf(
+  headers: Headers,
+  route: GitSignInRoute = gitlabSignInRoute,
+): string | undefined {
   for (const part of (headers.get('cookie') ?? '').split(';')) {
     const [name, ...rest] = part.trim().split('=')
-    if (name === GIT_SIGN_IN_COOKIE) return rest.join('=')
+    if (name === route.name) return rest.join('=')
   }
   return undefined
 }

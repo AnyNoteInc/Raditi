@@ -14,7 +14,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { createCaller } from '../router.ts'
 import { dropGitJobsOf } from '../testing/git-jobs.ts'
 import type { ChatContext } from '../services/chat/context.ts'
-import { connectGitlabOAuth, type GitServices } from '../services/git/connections.ts'
+import {
+  connectGithubApp,
+  connectGitlabOAuth,
+  type GitServices,
+} from '../services/git/connections.ts'
 
 // The git connections of a user and the repository of a project on PostgreSQL
 // (docs/plan/84-projects.md, ПР9, ПР10, §4.4; slice 84.17): the routers `gitConnection` and
@@ -514,6 +518,83 @@ describe.skipIf(!databaseUrl)('PostgreSQL: git connections and project repositor
         },
       ),
     ).rejects.toMatchObject({ code: 'GIT_CONNECT_UNAVAILABLE' })
+  })
+
+  it('the GitHub App: only the installation checked by the user, only repositories they push to (84.25)', async () => {
+    const { user, caller, vault, git, project } = await owner()
+    const off = await caller.gitConnection.list()
+    expect(off.available.github).toBe(false)
+    await expect(
+      connectGithubApp(db, git, {
+        userId: user.id,
+        installation: {
+          installationId: '77',
+          account: { login: 'acme', id: '500' },
+          user: { login: 'elena-k', id: '9' },
+          repositories: [],
+        },
+        ip: null,
+      }),
+    ).rejects.toMatchObject({ code: 'GIT_CONNECT_UNAVAILABLE' })
+    const github = { ...git, githubConfigured: true }
+    const repo = (id: string, path: string) => ({
+      ref: { provider: 'github' as const, host: 'github.com', path, providerRepoId: id },
+      defaultBranch: 'main',
+      private: true,
+      webUrl: `https://github.com/${path}`,
+      cloneUrl: `https://github.com/${path}.git`,
+      sizeBytes: 10_240,
+    })
+    const first = await connectGithubApp(db, github, {
+      userId: user.id,
+      installation: {
+        installationId: '77',
+        account: { login: 'acme', id: '500' },
+        user: { login: 'elena-k', id: '9' },
+        repositories: [repo('42', 'acme/site'), repo('43', 'acme/shop')],
+      },
+      ip: '203.0.113.5',
+    })
+    const row = await db.gitConnection.findUniqueOrThrow({ where: { id: first.connectionId } })
+    expect(row).toMatchObject({
+      kind: 'github_app',
+      host: 'github.com',
+      accountLogin: 'acme',
+      accountId: '500',
+      installationId: 77n,
+      githubUserId: '9',
+      state: 'ok',
+      credentialRefId: null,
+    })
+    // No token of GitHub goes anywhere: the connection keeps none.
+    expect(vault.keys.size).toBe(0)
+    // The repositories of the choice: those the check offered, and the second return drops the rest.
+    const again = await connectGithubApp(db, github, {
+      userId: user.id,
+      installation: {
+        installationId: '77',
+        account: { login: 'acme', id: '500' },
+        user: { login: 'elena-k', id: '9' },
+        repositories: [repo('42', 'acme/site')],
+      },
+      ip: null,
+    })
+    expect(again.connectionId).toBe(first.connectionId)
+    const listed = await db.gitConnectionRepository.findMany({
+      where: { connectionId: first.connectionId },
+    })
+    expect(listed.map((item) => item.path)).toEqual(['acme/site'])
+    // A repository the user may not push to is not offered, so it cannot be attached.
+    const projectId = await project()
+    await expect(
+      caller.projectRepo.attach({
+        projectId,
+        connectionId: first.connectionId,
+        providerRepoId: '43',
+        defaultBranch: 'main',
+      }),
+    ).rejects.toMatchObject({ message: expect.any(String) })
+    expect(await db.projectRepository.count({ where: { projectId } })).toBe(0)
   })
 
   it('a repository is not taken away while a chat of the project is at work', async () => {
