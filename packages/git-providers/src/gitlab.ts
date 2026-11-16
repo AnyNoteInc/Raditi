@@ -344,6 +344,22 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
       return parsed.data.map((b) => b.name)
     },
 
+    async branchHead(auth, repo, branch) {
+      // `search` matches parts of names; `^name$` anchors it, and the exact name is still compared
+      // (https://docs.gitlab.com/api/branches/#list-repository-branches).
+      const response = await request(fresh(), 'GET', auth, repo, '/repository/branches', {
+        query: { per_page: '100', search: `^${branch}$` },
+      })
+      const parsed = z
+        .array(z.looseObject({ name: z.string(), commit: z.looseObject({ id: z.string() }) }))
+        .safeParse(jsonOf(response))
+      if (!parsed.success) throw gitProviderFailed('branches of an unexpected form')
+      const found = parsed.data.find((b) => b.name === branch)
+      if (found === undefined) return null
+      if (!shaPattern.test(found.commit.id)) throw gitProviderFailed('a branch without a head')
+      return found.commit.id
+    },
+
     async openPullRequest(auth, repo, input) {
       // A draft is a title prefix on GitLab (https://docs.gitlab.com/user/project/merge_requests/drafts/).
       const response = await request(fresh(), 'POST', auth, repo, '/merge_requests', {

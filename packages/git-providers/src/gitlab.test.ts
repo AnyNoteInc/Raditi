@@ -262,6 +262,33 @@ describe('gitlab merge requests', () => {
   })
 })
 
+describe('gitlab branches', () => {
+  it('reads the head of one branch by its exact name (ПР15)', async () => {
+    const { provider, calls } = setup({
+      [`GET ${P}/repository/branches`]: {
+        status: 200,
+        body: [
+          { name: 'main-old', commit: { id: 'b'.repeat(40) } },
+          { name: 'main', commit: { id: head } },
+        ],
+      },
+    })
+    expect(await provider.branchHead!(auth, repo, 'main')).toBe(head)
+    expect(calls[0]!.url.searchParams.get('search')).toBe('^main$')
+    expect(await provider.branchHead!(auth, repo, 'release')).toBeNull()
+  })
+
+  it('a head that is not a SHA is a failure, not a head', async () => {
+    const { provider } = setup({
+      [`GET ${P}/repository/branches`]: {
+        status: 200,
+        body: [{ name: 'main', commit: { id: 'HEAD' } }],
+      },
+    })
+    expect(await code(provider.branchHead!(auth, repo, 'main'))).toBe('GIT_PROVIDER_FAILED')
+  })
+})
+
 describe('gitlab pipelines', () => {
   it('lints a configuration with a dry run and reads the local includes', async () => {
     const { provider, calls } = setup({

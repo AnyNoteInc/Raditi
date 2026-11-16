@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { DomainError, type RepoRef } from '@repo/domain'
+import { DomainError, repoProviderOffers, type RepoRef } from '@repo/domain'
 
 import { createGitProvider, gitProviderCiPaths } from './create-git-provider.ts'
 import { fakeSend } from './testing/fake-send.ts'
@@ -112,6 +112,22 @@ describe('GitHub, anonymous reading', () => {
       const provider = createGitProvider({ kind, host, transport })
       expect(gitProviderCiPaths(kind)).toEqual(provider.support.ciPaths)
       expect(gitProviderCiPaths(kind)).toContain('CODEOWNERS')
+    }
+  })
+
+  it('what a card offers of each provider is what its adapter supports (ПР15)', () => {
+    const transport = createGitTransport({ resolvePublic: async () => '203.0.113.1' })
+    for (const [kind, host] of [
+      ['github', 'github.com'],
+      ['gitlab', 'gitlab.example.ru'],
+    ] as const) {
+      const { support, branchHead } = createGitProvider({ kind, host, transport })
+      expect(repoProviderOffers[kind]).toEqual({
+        autoMerge: support.autoMerge,
+        manualJobs: support.manualJobs,
+      })
+      // A deploy reads the head of the main branch again before it plays a job.
+      if (support.manualJobs) expect(branchHead).toBeTypeOf('function')
     }
   })
 
