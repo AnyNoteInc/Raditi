@@ -57,6 +57,7 @@ const projectSchema = z.looseObject({
   visibility: z.string().nullish(),
   web_url: z.unknown().optional(),
   statistics: z.looseObject({ repository_size: z.number().nonnegative().nullish() }).nullish(),
+  ci_config_path: z.string().max(255).nullish(),
 })
 
 const pipelineRefSchema = z.looseObject({ id: z.number().int(), status: z.string() }).nullish()
@@ -197,6 +198,7 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
       webUrl: sameHostUrl(host, project.web_url, repoWebUrl(ref)),
       cloneUrl: repoCloneUrl(ref),
       sizeBytes: typeof size === 'number' ? size : null,
+      ciConfigPath: project.ci_config_path ? project.ci_config_path : null,
     }
   }
 

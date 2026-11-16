@@ -81,3 +81,24 @@ describe('GitLab sign-in', () => {
     expect(() => setup({ status: 200, body: {} }, 'https://evil.example')).toThrow(DomainError)
   })
 })
+
+describe('GitLab sign-in: who signed in', () => {
+  it('reads the user of the access token', async () => {
+    const { send, calls } = fakeSend({
+      'GET /api/v4/user': { status: 200, body: { id: 42, username: 'elena.k', email: 'x' } },
+    })
+    const transport = createGitTransport({ resolvePublic: async () => '203.0.113.5', send })
+    const connect = createGitConnect('gitlab', { transport })
+    expect(await connect.signedInUser(app, 'access')).toEqual({ login: 'elena.k', id: '42' })
+    expect(calls[0]!.url.toString()).toBe('https://gitlab.com/api/v4/user')
+    expect(calls[0]!.headers.authorization).toBe('Bearer access')
+  })
+
+  it('a refused token is a failure, never an empty user', async () => {
+    const { send } = fakeSend({ 'GET /api/v4/user': { status: 401, body: { message: 'x' } } })
+    const transport = createGitTransport({ resolvePublic: async () => '203.0.113.5', send })
+    await expect(
+      createGitConnect('gitlab', { transport }).signedInUser(app, 'access'),
+    ).rejects.toMatchObject({ code: 'GIT_PROVIDER_FAILED' })
+  })
+})

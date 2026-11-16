@@ -76,6 +76,7 @@ describe('gitlab repository', () => {
       webUrl: 'https://gitlab.example.ru/group/sub/project',
       cloneUrl: 'https://gitlab.example.ru/group/sub/project.git',
       sizeBytes: 1234,
+      ciConfigPath: null,
     })
     expect(calls[0]!.url.host).toBe(host)
     expect(calls[0]!.headers.authorization).toBeUndefined()

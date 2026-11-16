@@ -46,16 +46,18 @@ export function createGitConnect(kind: 'github' | 'gitlab', config: GitConnectCo
     return {
       exchangeCode: () => Promise.reject(gitNotSupported('the GitHub App sign-in before Э10')),
       refreshAccess: () => Promise.reject(gitNotSupported('the GitHub App sign-in before Э10')),
+      signedInUser: () => Promise.reject(gitNotSupported('the GitHub App sign-in before Э10')),
     }
   const override = parseEndpointOverride(config.gitlabComUrl)
 
-  const tokenUrl = (app: OAuthApp): URL => {
+  const urlOf = (app: OAuthApp, pathname: string): URL => {
     const origin =
       app.host === gitlabComHost && override !== null ? override : new URL(`https://${app.host}`)
     const url = new URL(origin)
-    url.pathname = '/oauth/token'
+    url.pathname = pathname
     return url
   }
+  const tokenUrl = (app: OAuthApp): URL => urlOf(app, '/oauth/token')
 
   const post = async (app: OAuthApp, form: Record<string, string>) => {
     const response = await config.transport.session().request({
@@ -114,6 +116,26 @@ export function createGitConnect(kind: 'github' | 'gitlab', config: GitConnectCo
       )
         return { reauth: true }
       return tokensOf(body, status)
+    },
+    async signedInUser(app, accessToken) {
+      // `GET /api/v4/user` — the one call of the sign-in besides the token (the whitelist of ПР10).
+      const response = await config.transport.session().request({
+        method: 'GET',
+        url: urlOf(app, '/api/v4/user'),
+        headers: { accept: 'application/json', authorization: `Bearer ${accessToken}` },
+      })
+      let body: unknown = null
+      try {
+        body = JSON.parse(response.body.toString('utf8'))
+      } catch {
+        // judged below
+      }
+      const user = z
+        .looseObject({ id: z.number().int().positive(), username: z.string().min(1).max(100) })
+        .safeParse(body)
+      if (response.status !== 200 || !user.success)
+        throw gitProviderFailed('the user of the sign-in', response.status)
+      return { login: user.data.username, id: String(user.data.id) }
     },
   }
 }

@@ -71,6 +71,8 @@ export interface GitTokens {
 export interface GitConnect {
   exchangeCode(app: OAuthApp, code: string, verifier: string): Promise<GitTokens>
   refreshAccess(app: OAuthApp, refreshToken: string): Promise<GitTokens | { reauth: true }>
+  /** Who signed in, by the access token just received: the account a connection acts as. */
+  signedInUser(app: OAuthApp, accessToken: string): Promise<{ login: string; id: string }>
 }
 
 /** The access of one operation. */
@@ -103,6 +105,11 @@ export interface RepositoryInfo {
   cloneUrl: string
   /** Bytes the provider reports, null when it does not say (ПР12). */
   sizeBytes: number | null
+  /**
+   * The path of the build configuration of this repository when the provider names one of its
+   * own files (GitLab `ci_config_path`, ПР16); null or absent — the provider's default.
+   */
+  ciConfigPath?: string | null
 }
 
 export type PullRequestState = 'open' | 'draft' | 'merged' | 'closed'
