@@ -287,6 +287,7 @@ export {
   chatBranchHead,
   chatHasRepoBranch,
   closeRepoProposal,
+  closeStaleRepoProposals,
   ensureChatBranch,
   failRepoTurn,
   pendingRepoProposals,

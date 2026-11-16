@@ -183,6 +183,25 @@ export async function failRepoTurn(
   return closed.count
 }
 
+/**
+ * The proposals of passes that never ended — lost with their turn — older than `before`, of a
+ * task with no turn assigned now (ревью C11): closed failed, never shown. The count.
+ */
+export async function closeStaleRepoProposals(
+  db: Pick<PrismaClient, 'repoReservation'>,
+  before: Date,
+): Promise<number> {
+  const closed = await db.repoReservation.updateMany({
+    where: {
+      outcome: null,
+      createdAt: { lt: before },
+      task: { turnAssignments: { none: { finishedAt: null } } },
+    },
+    data: { outcome: 'failed', reason: 'failed', closedAt: new Date() },
+  })
+  return closed.count
+}
+
 // --- what a push would send (ПР13, ПР26) -------------------------------------------------------
 
 /** One card «Изменения в ветке» of a turn still standing. */
