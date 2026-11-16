@@ -4,6 +4,7 @@
 # No `# syntax=` line: Docker's built-in frontend already has cache mounts, and it pulls nothing
 # from Docker Hub. Mirrors keep upstream digests, so a mirror is just another NODE_IMAGE.
 ARG NODE_IMAGE=node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1
+ARG GITLEAKS_IMAGE=ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
 
 FROM ${NODE_IMAGE} AS toolchain
 # Node 26 ships no corepack: pnpm is pinned like devEngines
@@ -41,11 +42,19 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     rm -rf node_modules apps/*/node_modules packages/*/node_modules \
  && pnpm install --frozen-lockfile --prod --prefer-offline --store-dir /pnpm/store
 
+FROM ${GITLEAKS_IMAGE} AS gitleaks
+
 FROM ${NODE_IMAGE} AS runtime
-# No git and no gitleaks since a turn has no repository (docs/plan/83-remove-projects.md).
+# git and gitleaks for the git worker of the repositories of projects, the second entry of this
+# image (docs/plan/84-projects.md, ПР33): `node dist/git-worker/main.js`. git is pinned to the
+# security release of Debian trixie and the build fails below 2.47.3 (the worker pins addresses
+# with http.curloptResolve and parses packs of other servers).
+ARG GIT_VERSION=1:2.47.3-0+deb13u1
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates "git=${GIT_VERSION}" \
+ && rm -rf /var/lib/apt/lists/* \
+ && git --version | awk '{ split($3, v, "."); exit !(v[1] > 2 || (v[1] == 2 && (v[2] > 47 || (v[2] == 47 && v[3] >= 3)))) }'
+COPY --from=gitleaks /usr/bin/gitleaks /usr/local/bin/gitleaks
 # Root-owned: the process cannot rewrite its own code
 COPY --from=prod /repo /app
 ENV NODE_ENV=production

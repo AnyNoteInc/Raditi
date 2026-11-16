@@ -72,15 +72,33 @@ for (const [app, text] of Object.entries(dockerfiles)) {
 }
 
 for (const app of ['core', 'llm', 'mcp', 'preview', 'runner', 'browser']) {
-  test(`${app}: its own image prunes and builds its own app, and carries no git or gitleaks`, () => {
+  test(`${app}: its own image prunes and builds its own app`, () => {
     const code = instructions(dockerfiles[app]).join('\n')
     assert.match(code, new RegExp(`turbo prune ${app} --docker`))
     assert.match(code, new RegExp(`pnpm --filter ${app} build`))
     assert.match(code, new RegExp(`WORKDIR /app/apps/${app}$`, 'm'))
-    // No process publishes to git or scans for secrets since plan 83: none holds such tools.
+  })
+}
+
+for (const app of ['llm', 'mcp', 'preview', 'runner', 'browser']) {
+  test(`${app}: its image carries no git or gitleaks`, () => {
+    const code = instructions(dockerfiles[app]).join('\n')
+    // Only the git worker of core runs git and gitleaks (docs/plan/84-projects.md, ПР33).
     assert.doesNotMatch(code, /gitleaks|apt-get install[^\n]*\bgit\b/)
   })
 }
+
+test('core: git and gitleaks at pinned versions, for its git worker', () => {
+  const runtime = stage(dockerfiles.core, 'runtime').join('\n')
+  assert.match(dockerfiles.core, /^ARG GIT_VERSION=1:2\.47\.\d+-\S+$/m)
+  assert.match(runtime, /apt-get install[^\n]*"git=\$\{GIT_VERSION\}"/)
+  assert.match(runtime, /git --version \| awk .*v\[3\] >= 3/)
+  assert.match(
+    dockerfiles.core,
+    /^ARG GITLEAKS_IMAGE=ghcr\.io\/gitleaks\/gitleaks:v8\.30\.1@sha256:[0-9a-f]{64}$/m,
+  )
+  assert.match(runtime, /COPY --from=gitleaks \/usr\/bin\/gitleaks \/usr\/local\/bin\/gitleaks/)
+})
 
 test('core: migrate runs the Prisma CLI of @repo/db as its own uid', () => {
   const migrate = stage(dockerfiles.core, 'migrate')

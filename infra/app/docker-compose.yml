@@ -86,11 +86,13 @@ services:
         chown 10003:10003 /v/redis-data && chmod 0700 /v/redis-data
         mkdir -p /v/core-work/tmp /v/core-work/home
         chown -R 10002:10002 /v/core-work && chmod 0700 /v/core-work
+        chown 10002:10002 /v/git-mirror && chmod 0770 /v/git-mirror
     volumes:
       - acme:/v/acme
       - pgdata:/v/pgdata
       - redis-data:/v/redis-data
       - core-work:/v/core-work
+      - git-mirror:/v/git-mirror
 
   # Static configuration only as flags (no /etc/traefik/traefik.*, no TRAEFIK_*): a changed flag
   # recreates the container on `up -d`. Routes come from the file provider; no Docker socket. The
@@ -263,9 +265,10 @@ services:
       # Core reads the updates of the bot of the chat and hands each to web: Telegram does not reach
       # the server, and core shares no network with web, so through the edge (docs/plan/80-telegram.md)
       TELEGRAM_INTAKE_URL: https://${APP_DOMAIN}/api/webhooks/telegram
-      # Publication clones (git-workspace.service.ts) go to core's own volume, not to RAM
       TMPDIR: /work/tmp
       HOME: /work/home
+      # The mirrors of the repositories of projects, shared with git-worker (docs/plan/84-projects.md, ПР33)
+      GIT_MIRROR_DIR: /git
     extra_hosts: *vault-host
     ports:
       # The runner API only, only on the private address: plain HTTP to the sandbox VMs
@@ -273,6 +276,7 @@ services:
     volumes:
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/core' }
       - core-work:/work
+      - git-mirror:/git
     healthcheck:
       test:
         - CMD
@@ -287,6 +291,35 @@ services:
     pids_limit: 1024
     networks: [core-data, core-egress]
 
+  # git and gitleaks over the repositories of clients (docs/plan/84-projects.md, ПР33): the second
+  # entry of the core image, without core's secrets — no /run/raditi, no Vault, no database or
+  # Redis. Only the volume of the mirrors, shared with core (one group, its own uid); core talks to
+  # it over the socket on that volume. Its own egress network: it fetches from the providers.
+  git-worker:
+    <<: *node
+    image: ${CORE_IMAGE:?Set the digest-pinned core image}
+    user: '10010:10002'
+    command: ['dist/git-worker/main.js']
+    depends_on:
+      volume-init: { condition: service_completed_successfully }
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      GIT_MIRROR_DIR: /git
+      SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:?Set SANDBOX_EGRESS_REFUSED_SUBNETS}
+    volumes:
+      - git-mirror:/git
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - require('node:fs').statSync('/git/worker.sock').isSocket() || process.exit(1)
+      <<: *node-health
+    cpus: 1
+    mem_limit: 1g
+    pids_limit: 256
+    networks: [git-egress]
   llm:
     <<: *node
     image: ${LLM_IMAGE:?Set the digest-pinned llm image}
@@ -446,6 +479,9 @@ networks:
     driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-web' }
   core-egress:
     driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-core' }
+  # git-worker only: the providers of the repositories (docs/plan/84-projects.md, ПР33)
+  git-egress:
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-git' }
   # Dedicated bridges are matched by the early host firewall, even before Docker creates them.
   llm-edge:
     internal: true
@@ -467,3 +503,5 @@ volumes:
   pgdata: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-pgdata' }
   redis-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-redis' }
   core-work: {}
+  # A cache: the mirrors and bundles of the repositories of projects (losing it costs a fetch)
+  git-mirror: { name: '${VOLUME_PREFIX:-raditi-app}-git-mirror' }
