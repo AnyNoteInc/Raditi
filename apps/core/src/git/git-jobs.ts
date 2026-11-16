@@ -622,9 +622,15 @@ export class GitJobs {
       includes,
       declined: false,
     }
-    await prisma.projectRepoBranch.updateMany({
-      where: { taskId },
-      data: { ciLint: row, ciDiffSha256 },
+    // Only while this head is still the chat's (ревью C7): an older lint that ends after a newer
+    // one never overwrites it. The head is read again under the branch's row lock.
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT task_id FROM project_repo_branches WHERE task_id = ${taskId}::uuid FOR UPDATE`
+      if ((await chatBranchHead(tx, taskId))?.headSha !== headSha) return
+      await tx.projectRepoBranch.updateMany({
+        where: { taskId },
+        data: { ciLint: row, ciDiffSha256 },
+      })
     })
   }
 }
