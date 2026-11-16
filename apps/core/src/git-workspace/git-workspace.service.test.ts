@@ -608,4 +608,65 @@ describe('GitWorkspaceService', { timeout: 60_000 }, () => {
       })
     })
   })
+
+  // docs/plan/84-projects.md, ПР16 (slice 84.20).
+  describe('buildSettingsChange', () => {
+    it('names the changed build paths, their diff and the configuration at the head', async () => {
+      const f = await fixture({
+        files: { 'index.js': 'hello\n', '.gitlab-ci.yml': 'lint:\n  script: a\n' },
+      })
+      await f.fetchMain()
+      await writeFile(join(f.work, '.gitlab-ci.yml'), 'lint:\n  script: b\n')
+      await writeFile(join(f.work, 'CODEOWNERS'), '* @team\n')
+      await writeFile(join(f.work, 'index.js'), 'changed\n')
+      await git(f.work, 'add', '.')
+      await git(f.work, 'commit', '-m', 'third')
+      await git(f.work, 'push', f.remote, 'HEAD:refs/heads/main')
+      const head = await gitText(f.work, 'rev-parse', 'HEAD')
+      await f.fetchMain()
+      const isBuildPath = (path: string) => path === '.gitlab-ci.yml' || path === 'CODEOWNERS'
+      const change = await f.service.buildSettingsChange({
+        projectRepositoryId: f.projectRepositoryId,
+        from: f.baseSha,
+        to: head,
+        isBuildPath,
+        maxBytes: 1024 * 1024,
+        configPath: '.gitlab-ci.yml',
+      })
+      expect(change.paths).toEqual(['.gitlab-ci.yml', 'CODEOWNERS'])
+      const patch = change.patch!.toString()
+      expect(patch).toContain('+  script: b')
+      expect(patch).toContain('+* @team')
+      expect(patch).not.toContain('index.js')
+      expect(change.config!.toString()).toBe('lint:\n  script: b\n')
+      // Above the limit the diff is not given at all; no build path — an empty diff.
+      const big = await f.service.buildSettingsChange({
+        projectRepositoryId: f.projectRepositoryId,
+        from: f.baseSha,
+        to: head,
+        isBuildPath,
+        maxBytes: 16,
+      })
+      expect(big.patch).toBeNull()
+      const none = await f.service.buildSettingsChange({
+        projectRepositoryId: f.projectRepositoryId,
+        from: f.baseSha,
+        to: head,
+        isBuildPath: () => false,
+        maxBytes: 1024,
+        configPath: 'missing.yml',
+      })
+      expect(none).toEqual({ paths: [], patch: Buffer.alloc(0), config: null })
+      await expect(
+        f.service.buildSettingsChange({
+          projectRepositoryId: randomUUID(),
+          from: f.baseSha,
+          to: head,
+          isBuildPath,
+          maxBytes: 1024,
+        }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      expect(await readdir(join(f.mirrorDir, 'ops'))).toEqual([])
+    })
+  })
 })

@@ -441,6 +441,89 @@ export class GitWorkspaceService {
   }
 
   /**
+   * The change of build settings between two commits of the mirror (ПР16, slice 84.20): the paths
+   * `git diff-tree` names between them that `isBuildPath` takes, their diff — null above
+   * `maxBytes`: what cannot be shown is not sent — and, when asked, the file of the configuration
+   * at `to` for CI Lint (null when the tree has none or it is above `configBytes`). Nothing is
+   * written to the mirror.
+   */
+  async buildSettingsChange(input: {
+    projectRepositoryId: string
+    from: string
+    to: string
+    isBuildPath: (path: string) => boolean
+    maxBytes: number
+    configPath?: string | null
+    configBytes?: number
+  }): Promise<{ paths: string[]; patch: Buffer | null; config: Buffer | null }> {
+    if (
+      !publicationShaSchema.safeParse(input.from).success ||
+      !publicationShaSchema.safeParse(input.to).success
+    )
+      throw badRequest('Invalid commits of a change')
+    const mirror = mirrorPath(this.#root, input.projectRepositoryId)
+    return this.#mirrors.run(mirror, () =>
+      this.operation(async (op) => {
+        await this.privateRepository(op, mirror, input.to)
+        if (!(await this.commitsIn(op, mirror, [input.from]))[0])
+          throw notFound('The commit is not in the repository of this project')
+        const listing = await this.git(
+          op,
+          ['diff-tree', '-r', '-z', '--no-renames', '--name-only', input.from, input.to],
+          { maxBytes: listBytes(publicationLimits.repositoryFiles) },
+        )
+        const paths = text(listing.stdout)
+          .split('\0')
+          .filter((path) => path !== '' && input.isBuildPath(path))
+          .sort()
+        let patch: Buffer | null = Buffer.alloc(0)
+        if (paths.length) {
+          try {
+            patch = (
+              await this.git(
+                op,
+                [
+                  'diff',
+                  '--no-color',
+                  '--binary',
+                  '--full-index',
+                  '--no-renames',
+                  '--no-ext-diff',
+                  '--no-textconv',
+                  input.from,
+                  input.to,
+                  '--',
+                  // The worker reads every pathspec literally (GIT_LITERAL_PATHSPECS).
+                  ...paths,
+                ],
+                { maxBytes: input.maxBytes },
+              )
+            ).stdout
+          } catch (error) {
+            if (!isDomainError(error) || error.code !== 'PROCESS_OUTPUT_LIMIT') throw error
+            patch = null
+          }
+        }
+        let config: Buffer | null = null
+        if (input.configPath) {
+          const entry = await this.git(op, ['ls-tree', '-z', input.to, '--', input.configPath])
+          const match = TREE_ROW.exec(text(entry.stdout).replace(/\0$/, ''))
+          if (match && (match[1] === '100644' || match[1] === '100755')) {
+            const oid = match[3]!
+            // A file above the limit of a file is not linted either: CI Lint is a help, not a gate.
+            const [size] = await this.blobSizes(op, [oid], repositoryTooLarge).catch(() => [])
+            if (size !== undefined && size <= (input.configBytes ?? 256 * 1024))
+              await this.readBlobs(op, new Map([[oid, size]]), (_, blob) => {
+                config = Buffer.from(blob)
+              })
+          }
+        }
+        return { paths, patch, config }
+      }),
+    )
+  }
+
+  /**
    * The base of a turn (ПР12): one root commit of the tree of `baseSha`, without a parent, made by
    * the bot at `committedAt`, in a bundle with the single ref `refs/heads/raditi-base`. The commit
    * must be in the mirror of this very repository — the mirror is checked before the cache, and
