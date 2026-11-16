@@ -35,6 +35,7 @@ import {
   type IssuedGitAccess,
   type RepoPublication,
   type TurnBundleSource,
+  projectRepositoryIdSchema,
 } from '@repo/domain'
 import { BASE_BUNDLE_REF, bundleHead } from '@repo/local-turns'
 
@@ -312,6 +313,39 @@ export class GitWorkspaceService {
         return new Map(branches.map((branch) => [branch, heads.get(branch) ?? null]))
       }),
     )
+  }
+
+  /**
+   * The mirrors and bundles of repositories that are no longer a project's (ревью C3): detached,
+   * or purged with their project. Each goes under its own lock; what cannot be removed now stays
+   * for the next sweep. Returns how many repositories were removed.
+   */
+  async removeOrphans(
+    knownOf: (ids: readonly string[]) => Promise<ReadonlySet<string>>,
+  ): Promise<number> {
+    const ids = new Set<string>()
+    for (const name of await readdir(join(this.#root, 'repos')).catch(() => [] as string[])) {
+      const id = name.endsWith('.git') ? name.slice(0, -4) : ''
+      if (projectRepositoryIdSchema.safeParse(id).success) ids.add(id)
+    }
+    for (const id of await readdir(join(this.#root, 'bundles')).catch(() => [] as string[]))
+      if (projectRepositoryIdSchema.safeParse(id).success) ids.add(id)
+    // The rows are read after the folders: a repository attached meanwhile has its row already.
+    const known = ids.size ? await knownOf([...ids]) : new Set<string>()
+    let removed = 0
+    for (const id of ids) {
+      if (known.has(id)) continue
+      const mirror = mirrorPath(this.#root, id)
+      const gone = await this.#mirrors
+        .run(mirror, async () => {
+          await rm(mirror, { recursive: true, force: true })
+          await this.#bundles.forget(id)
+          return true
+        })
+        .catch(() => false)
+      if (gone) removed++
+    }
+    return removed
   }
 
   /** Whether the mirror of this repository holds the commit. */

@@ -155,7 +155,7 @@ export function ProjectRepositoryRow({
         <Alert
           severity="warning"
           action={
-            repo.mirrorState === 'failed' ? (
+            repo.mirrorState === 'failed' || repo.mirrorState === 'unreachable' ? (
               <Button
                 color="inherit"
                 size="small"

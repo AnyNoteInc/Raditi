@@ -151,7 +151,7 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
       auth: { grantFor: async () => ({ kind: 'token', token: 'synthetic-token' }) },
       resolvePublic,
       provider,
-      workspace: { fetch, findSecrets, buildSettingsChange },
+      workspace: { fetch, findSecrets, buildSettingsChange, removeOrphans: vi.fn(async () => 0) },
       logger: quiet,
     })
     return { jobs: made, calls: fake.calls, fetch, findSecrets, resolvePublic, provider }
@@ -292,6 +292,17 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
     }
     expect(fetched.remote.pin).toEqual({ host: 'gitlab.example.ru', address: '203.0.113.7' })
     expect(fetched.branches).toEqual(['trunk'])
+  })
+
+  it('a first fetch left `syncing` by a core that stopped is `failed` after half an hour (ревью C10)', async () => {
+    const stuck = await linkRepository(await owner())
+    const fresh = await linkRepository(await owner())
+    await db.$executeRaw`UPDATE project_repositories SET updated_at = now() - interval '31 minutes' WHERE id = ${stuck}::uuid`
+    expect((await jobs({}).jobs.sweep()).stuck).toBeGreaterThanOrEqual(1)
+    const state = async (id: string) =>
+      (await db.projectRepository.findUniqueOrThrow({ where: { id } })).mirrorState
+    expect(await state(stuck)).toBe('failed')
+    expect(await state(fresh)).toBe('syncing')
   })
 
   it('a `ci_config_path` on another project is kept as such: nothing will be sent (ПР16)', async () => {
