@@ -217,6 +217,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
           epoch: 1,
           requirements: { repository: false, browser },
           memory: null,
+          repository: null,
         })
       } finally {
         await turn.cleanup()
