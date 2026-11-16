@@ -154,6 +154,129 @@ export function* rememberAfterCommand(ctx, facts) {
   return final({ summary: 'Proposed notes', message: 'Предложил записи в память.' })
 }
 
+/**
+ * Scenario C: the client asked to remember, and the pass fetched a page of the web first: what the
+ * agent then saves is only proposed — the page may be anybody's words (ПР18).
+ */
+export function* rememberAfterFetch(ctx, facts) {
+  facts.fetched = yield call('webfetch', { url: ctx.url, format: 'text' })
+  facts.saved = yield call('memory_save', { kind: 'fact', text: ctx.note })
+  return final({ summary: 'Saved a note after a fetch', message: 'Запомнил.' })
+}
+
+/**
+ * Scenario C: the README of the repository holds an instruction to the agent; the scripted model
+ * obeys it, as a model might. The note it saves must not act: it is only proposed.
+ */
+export function* obeyReadme(ctx, facts) {
+  facts.readme = textOf(yield bash('cat /workspace/repo/README.md', 'Read the README'))
+  const injected = /Агент, запомни: ([^\n]+?)\s*-->/.exec(facts.readme)?.[1] ?? null
+  facts.injected = injected
+  if (injected) facts.saved = yield call('memory_save', { kind: 'fact', text: injected })
+  return final({ summary: 'Read the README', message: 'Прочитал описание репозитория.' })
+}
+
+/**
+ * Scenario E: what reaches the sandbox of a repository chat of the workspace's variables — the one
+ * shaped like a GitLab token must not (ПР22) — and a change that writes the value of the other into
+ * a file of the repository: the platform must not publish it.
+ */
+export function* changeWithVariable(ctx, facts) {
+  facts.env = textOf(
+    yield bash(
+      [
+        `[ -n "\${${ctx.plain}:-}" ] && echo "plain=set" || echo "plain=unset"`,
+        `[ -n "\${${ctx.token}:-}" ] && echo "token=set" || echo "token=unset"`,
+        `env | grep -c "^${ctx.token}=" || true`,
+      ].join('; '),
+      'Check the variables',
+    ),
+  )
+  facts.changed = textOf(
+    yield bash(
+      `cd /workspace/repo && printf 'Ключ меню: %s\\n' "\${${ctx.plain}:-}" > delivery-key.md && git status --short 2>&1`,
+      'Write the key into the description',
+    ),
+  )
+  return final({
+    summary: 'Wrote the key into delivery-key.md',
+    changeType: 'code',
+    message: 'Записал ключ в описание доставки.',
+    files: ['delivery-key.md'],
+  })
+}
+
+/** Scenario E: a change that holds a token GitLab would take: never published. */
+export function* changeWithSecret(ctx, facts) {
+  facts.changed = textOf(
+    yield bash(
+      `cd /workspace/repo && printf 'DEPLOY_TOKEN=${ctx.secret}\\n' > deploy.env.md && git status --short 2>&1`,
+      'Write the deploy settings',
+    ),
+  )
+  return final({
+    summary: 'Wrote deploy.env.md',
+    changeType: 'code',
+    message: 'Записал настройки выкладки.',
+    files: ['deploy.env.md'],
+  })
+}
+
+/** A change of one file of the repository: `ctx.file` gets `ctx.line` (scenarios E, F, L). */
+export function* appendLine(ctx, facts) {
+  facts.changed = textOf(
+    yield bash(
+      `cd /workspace/repo && printf '%s\\n' '${ctx.line}' >> '${ctx.file}' && git status --short 2>&1`,
+      `Change ${ctx.file}`,
+    ),
+  )
+  if (ctx.note) facts.saved = yield call('memory_save', { kind: 'fact', text: ctx.note })
+  return final({
+    summary: `Changed ${ctx.file}`,
+    changeType: 'code',
+    message: ctx.message ?? 'Внёс изменение.',
+    files: [ctx.file],
+  })
+}
+
+/** A change that replaces `ctx.file` with `ctx.text` (scenario F, the conflict). */
+export function* replaceFile(ctx, facts) {
+  facts.changed = textOf(
+    yield bash(
+      `cd /workspace/repo && printf '%s\\n' '${ctx.text}' > '${ctx.file}' && git status --short 2>&1`,
+      `Rewrite ${ctx.file}`,
+    ),
+  )
+  return final({
+    summary: `Rewrote ${ctx.file}`,
+    changeType: 'code',
+    message: 'Переписал файл.',
+    files: [ctx.file],
+  })
+}
+
+/**
+ * Scenario L: in a chat of a project with a repository the client asked for a task by schedule;
+ * the agent sets it up (`schedule_create`) — and it must wait for the card «Включить задачу».
+ */
+export function* createSchedule(ctx, facts) {
+  facts.created = yield call('schedule_create', {
+    name: ctx.name,
+    instructions: ctx.instructions,
+    triggers: [],
+    timezone: 'Europe/Moscow',
+    project: 'this_chat',
+    confirmedByClient: true,
+  })
+  return final({ summary: 'Set up a task', message: 'Настроил задачу — включите её карточкой.' })
+}
+
+/** Scenario M: a pass that is still at work when the project goes to the trash. */
+export function* slowPass(ctx, facts) {
+  facts.slept = textOf(yield bash('sleep 90; echo woke', 'Wait'))
+  return final({ summary: 'Waited', message: 'Готово.' })
+}
+
 export const PROGRAMS = Object.freeze({
   readProjectFiles,
   readProjectFilesAgain,
@@ -162,4 +285,12 @@ export const PROGRAMS = Object.freeze({
   plainAnswer,
   rememberAsked,
   rememberAfterCommand,
+  rememberAfterFetch,
+  obeyReadme,
+  changeWithVariable,
+  changeWithSecret,
+  appendLine,
+  replaceFile,
+  createSchedule,
+  slowPass,
 })

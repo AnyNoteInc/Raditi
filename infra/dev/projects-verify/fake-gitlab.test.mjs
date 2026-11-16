@@ -182,11 +182,90 @@ describe(
       const play = await call('POST', `/api/v4/projects/${project.id}/jobs/${jobs.json[0].id}/play`)
       assert.equal(play.status, 200)
       assert.equal(fake.played.length, 1)
-      // A project of another host is not found by this one's user.
+      // A project of another host is not found by this one's user: as anonymous, a private one
+      // is not there (404), the rest of the API asks for a token (401).
       assert.equal(
         (await call('GET', `/api/v4/projects/${project.id}`, { host: COM_HOST })).status,
-        401,
+        404,
       )
+      assert.equal((await call('GET', '/api/v4/user', { host: COM_HOST })).status, 401)
+    })
+
+    it('reads an open project without a token, redirects a redirecting server, runs slow refs', async () => {
+      const owner = fake.addUser(OWN_HOST, { username: 'vladelec', token: `${token}-2` })
+      const open = await fake.addProject(OWN_HOST, {
+        path: 'stand/open',
+        files: { 'README.md': 'Открыто\n' },
+        members: [],
+        visibility: 'public',
+      })
+      const closed = await fake.addProject(OWN_HOST, {
+        path: 'stand/closed',
+        files: { 'README.md': 'Закрыто\n' },
+        members: [owner],
+        size: 2 * 1024 ** 3,
+      })
+      const anonymous = await call('GET', `/api/v4/projects/${encodeURIComponent('stand/open')}`, {
+        auth: null,
+      })
+      assert.equal(anonymous.status, 200)
+      assert.equal(anonymous.json.visibility, 'public')
+      assert.equal(
+        (
+          await call('GET', `/api/v4/projects/${encodeURIComponent('stand/closed')}`, {
+            auth: null,
+          })
+        ).status,
+        404,
+      )
+      const big = await call('GET', `/api/v4/projects/${closed.id}`, { auth: `${token}-2` })
+      assert.equal(big.json.statistics.repository_size, 2 * 1024 ** 3)
+      const env = { GIT_SSL_CAINFO: join(dir, 'cert.pem') }
+      const resolve = ['-c', `http.curloptResolve=${OWN_HOST}:${port}:127.0.0.1`]
+      const work = join(dir, 'open')
+      await runGit(
+        [...resolve, 'clone', '-q', `https://${OWN_HOST}:${port}/stand/open.git`, work],
+        {
+          cwd: dir,
+          env,
+        },
+      )
+      assert.ok(
+        fake.requests.some(
+          (entry) => entry.path === '/stand/open.git/git-upload-pack' && entry.anonymous,
+        ),
+      )
+      await writeFile(join(work, 'x.md'), 'x\n')
+      await runGit(['add', '-A'], { cwd: work })
+      await runGit(['commit', '-q', '-m', 'x'], { cwd: work })
+      const push = await runGit([...resolve, 'push', '-q', 'origin', 'HEAD:main'], {
+        cwd: work,
+        env,
+        allowFailure: true,
+      })
+      assert.notEqual(push.code, 0, 'an open project takes no anonymous push')
+
+      const redirecting = `${token}-redirect`
+      fake.addUser(OWN_HOST, { username: 'redirect', token: redirecting, redirect: true })
+      const moved = await call('GET', '/api/v4/user', { auth: redirecting })
+      assert.equal(moved.status, 302)
+      assert.match(moved.headers.location, /redirected=1/)
+
+      closed.slowRefs.set('feature', 60_000)
+      const sha = await fake.commitAsClient(closed, 'main', 'docs/a.md', 'a\n', {
+        newBranch: 'feature',
+      })
+      assert.equal((await fake.heads(closed)).feature, sha)
+      const runs = await call('GET', `/api/v4/projects/${closed.id}/pipelines?ref=feature`, {
+        auth: `${token}-2`,
+      })
+      assert.equal(runs.json[0].status, 'running')
+      closed.unverified = true
+      await fake.commitAsClient(closed, 'feature', 'docs/b.md', 'b\n')
+      const refused = await call('GET', `/api/v4/projects/${closed.id}/pipelines?ref=feature`, {
+        auth: `${token}-2`,
+      })
+      assert.equal(refused.json[0].failure_reason, 'user_not_verified')
     })
 
     it('signs in with PKCE and refuses another verifier', async () => {

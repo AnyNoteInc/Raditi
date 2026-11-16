@@ -57,7 +57,8 @@ export const PROJECTS_BUILD = Object.freeze({
 /**
  * The scenarios in their order (README, «Сценарии») and what each needs first. S signs the owner
  * up and switches the model on; A makes the project the others use; D and K connect GitLab; E
- * attaches the repository the rest works on.
+ * attaches the repository the rest works on; F opens the second chat whose request I merges when
+ * its build passes; M puts projects into the trash and purges them.
  */
 export const SCENARIO_IDS = Object.freeze([
   'S',
@@ -72,6 +73,7 @@ export const SCENARIO_IDS = Object.freeze([
   'H',
   'I',
   'J',
+  'L',
   'N',
   'M',
 ])
@@ -88,8 +90,9 @@ const NEEDS = Object.freeze({
   H: ['S', 'A', 'K', 'E', 'F'],
   I: ['S', 'A', 'K', 'E', 'F', 'H'],
   J: ['S', 'A', 'K', 'E', 'F', 'H', 'I'],
+  L: ['S', 'A', 'K', 'E'],
   N: ['S'],
-  M: ['S'],
+  M: ['S', 'A'],
 })
 
 export function scenariosToRun(only) {

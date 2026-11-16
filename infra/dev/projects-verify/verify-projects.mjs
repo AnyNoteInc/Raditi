@@ -103,6 +103,7 @@ async function copyModules(copy) {
     billing: await load('packages/billing/src/index.ts'),
     domain: await load('packages/domain/src/index.ts'),
     ids: await load('packages/db/src/uuidv7.ts'),
+    storage: await load('packages/storage/src/index.ts'),
   }
 }
 
@@ -300,7 +301,29 @@ async function main(options, owned) {
     'PASS the git worker, llm, mcp and core of their builds and web of `next build`, each its own process; core and web with the fake of gitlab.com (RADITI_FAKE_GITLAB_COM_URL) and GIT_ALLOW_LOOPBACK',
   )
 
+  // A core started again — after SIGKILL or a stop — with the same environment: its log is
+  // core-<n>.log, and the scenarios go on with it (E kills it before a publication, M restarts it
+  // for the purge of the trash, which runs at the start of a core).
+  let coreStarts = 1
+  const restartCore = async ({ kill = false, killed = () => {} } = {}) => {
+    const old = processes.core
+    if (kill) {
+      process.kill(old.pid, 'SIGKILL')
+      await old.exited
+      killed()
+    } else await old.stop()
+    coreStarts += 1
+    processes.core = await start(
+      `core-${coreStarts}`,
+      ['dist/main.js'],
+      app('core'),
+      projectAppEnvironment('core', context),
+      `http://127.0.0.1:${ports.core}/health`,
+    )
+  }
+
   await runScenarios({
+    restartCore,
     rt,
     db,
     modules,
@@ -402,11 +425,24 @@ async function cleanup(owned) {
         ['ps', '-aq'],
         ['network', 'ls', '-q'],
       ])
-        platformLeft.push(
-          ...lines((await rt.docker([...kind, '--filter', filter], quiet)).output).map(
-            (id) => `${kind[0]} ${id}`,
-          ),
-        )
+        for (const id of lines((await rt.docker([...kind, '--filter', filter], quiet)).output)) {
+          // What it is, for the line of the failure: its name, its labels of the platform, its state.
+          const what = (
+            await rt.docker(
+              [
+                kind[0] === 'ps' ? 'inspect' : 'network',
+                ...(kind[0] === 'ps' ? [] : ['inspect']),
+                '--format',
+                kind[0] === 'ps'
+                  ? '{{.Name}} {{.State.Status}} {{.Created}} {{json .Config.Labels}}'
+                  : '{{.Name}} {{.Created}}',
+                id,
+              ],
+              quiet,
+            )
+          ).output.trim()
+          platformLeft.push(`${kind[0]} ${id} ${what.slice(0, 600)}`)
+        }
   for (const service of [...(owned.processes ?? [])].reverse()) await service.stop().catch(() => {})
   await owned.model?.close().catch(() => {})
   await owned.gitlab?.close().catch(() => {})
