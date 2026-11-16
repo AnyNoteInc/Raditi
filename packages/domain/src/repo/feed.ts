@@ -60,7 +60,11 @@ export const feedRepoActionPayloadSchema = z.strictObject({
   state: z.enum(repoActionStates),
   number: z.number().int().positive().optional(),
   url: httpsUrl.optional(),
-  error: z.string().min(1).max(64).optional(),
+  /** The code of a refusal (`REPO_CHANGED`…): the card says it in the client's words. */
+  error: z
+    .string()
+    .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
+    .optional(),
 })
 export type FeedRepoActionPayload = z.infer<typeof feedRepoActionPayloadSchema>
 

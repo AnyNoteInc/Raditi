@@ -22,7 +22,12 @@ import type {
   TaskWaitingReason,
 } from './client-feed.ts'
 import type { TaskStatus } from './task-status.ts'
-import { repoLeftTexts } from '../repo/feed.ts'
+import {
+  repoActionText,
+  repoLeftTexts,
+  type RepoActionKind,
+  type RepoActionState,
+} from '../repo/feed.ts'
 
 /**
  * What the platform itself says in a dialog — the catalogue the feed design calls
@@ -362,6 +367,17 @@ export function feedRepoLeftText(row: {
 }): string {
   const paths = row.paths?.length ? `: ${row.paths.join(', ')}` : ''
   return `${repoLeftTexts[row.reason]}${paths}.`
+}
+
+/** The agent proposes a merge request (`feed.repo_proposal`, ПР14). */
+export function feedRepoProposalText(row: { title: string }): string {
+  return `Агент предлагает открыть запрос на слияние: «${row.title}»`
+}
+
+/** What a button of the client did (`feed.repo_action`, ПР13). */
+export function feedRepoActionText(row: { kind: RepoActionKind; state: RepoActionState }): string {
+  // The row has no adapter to write the number with (`!37`, `#37`, ПР3): the card links it.
+  return `${repoActionText(row, null)}.`
 }
 
 /** A document the agent set up (`feed.doc`, Ст22), until the card of slice 69.9. */

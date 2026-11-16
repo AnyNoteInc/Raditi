@@ -327,6 +327,31 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { v: 1, reason: 'secret_found', paths: ['config.js'] },
     { v: 1, reason: 'failed' },
   ],
+  'feed.repo_proposal': [
+    {
+      v: 1,
+      reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd1',
+      title: 'Зимнее меню',
+      description: 'Цены по прайсу.',
+      draft: false,
+    },
+  ],
+  'feed.repo_action': [
+    {
+      v: 1,
+      actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd2',
+      kind: 'push',
+      state: 'done',
+    },
+    {
+      v: 1,
+      actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd3',
+      kind: 'open_mr',
+      state: 'done',
+      number: 37,
+      url: 'https://gitlab.example.ru/kolos/site/-/merge_requests/37',
+    },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -367,6 +392,8 @@ describe('feed vocabulary', () => {
       'feed.memory_left',
       'feed.repo_changes',
       'feed.repo_left',
+      'feed.repo_proposal',
+      'feed.repo_action',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -477,6 +504,9 @@ describe('free text is allowed in four fields, the agent words of a browser ques
       'feed.repo_changes.branch',
       'feed.repo_changes.list[].path',
       'feed.repo_left.paths[]',
+      // The agent's title and description of a merge request (ПР14): the client reads them as text.
+      'feed.repo_proposal.description',
+      'feed.repo_proposal.title',
       'feed.request.text',
       'feed.result.message',
       'feed.result.objects[].title',
@@ -1335,6 +1365,10 @@ describe('reading stored rows', () => {
       'feed.memory_left': [{ v: 1, action: 'save' }],
       'feed.repo_changes': [{ v: 1, branch: 'b', headSha: 'нет', files: 1 }],
       'feed.repo_left': [{ v: 1 }],
+      'feed.repo_proposal': [{ v: 1, reservedId: 'нет', title: 'а' }],
+      'feed.repo_action': [
+        { v: 1, actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd2', kind: 'rerun' },
+      ],
     }
     for (const type of feedEventTypes)
       for (const payload of broken[type])

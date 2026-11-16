@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  isAgentBranch,
   isSecretFileName,
   looksLikeGitToken,
+  repoBranchWord,
   repoChatBranch,
   repositorySection,
   type RepositorySectionFacts,
@@ -49,10 +51,37 @@ describe('the variables of the form of a git token (ПР22)', () => {
 })
 
 describe('the branch of a chat', () => {
-  it('is a branch of raditi/ named by the chat', () => {
-    const branch = repoChatBranch('0193A1B2-C3D4-7E5F-8A6B-7C8D9E0F1A2B')
-    expect(branch).toBe('raditi/chat-0193a1b2c3d4')
+  it('is raditi/<word>-<last 8 of the chat id> (ПР13)', () => {
+    const branch = repoChatBranch('0193A1B2-C3D4-7E5F-8A6B-7C8D9E0F1A2B', 'Новое меню')
+    expect(branch).toBe('raditi/novoe-menyu-9e0f1a2b')
     expect(repoBranchSchema.safeParse(branch).success).toBe(true)
+    expect(repoChatBranch('0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b')).toBe('raditi/chat-9e0f1a2b')
+    expect(repoChatBranch('0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b', 'Меню', 2)).toBe(
+      'raditi/menyu-9e0f1a2b-2',
+    )
+  })
+
+  it('differs for two chats of one minute: their ids share the first characters, not the last', () => {
+    const a = repoChatBranch('0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b', 'Меню')
+    const b = repoChatBranch('0193a1b2-c3d4-7a11-9b22-001122334455', 'Меню')
+    expect(a).not.toBe(b)
+  })
+
+  it('makes a word of Latin letters and digits, at most 40, from any title', () => {
+    expect(repoBranchWord('Ускорить главную страницу!')).toBe('uskorit-glavnuyu-stranitsu')
+    expect(repoBranchWord('  /../ @main ')).toBe('main')
+    expect(repoBranchWord('🎄')).toBe('chat')
+    expect(repoBranchWord('a'.repeat(80))).toHaveLength(40)
+    expect(repoBranchWord(null)).toBe('chat')
+  })
+
+  it('lets the trusted code push only to a branch of the agent', () => {
+    expect(isAgentBranch('raditi/menyu-9e0f1a2b', 'main')).toBe(true)
+    expect(isAgentBranch('main', 'main')).toBe(false)
+    expect(isAgentBranch('raditi/a', 'raditi/a')).toBe(false)
+    expect(isAgentBranch('feature/x', 'main')).toBe(false)
+    expect(isAgentBranch('raditi/../main', 'main')).toBe(false)
+    expect(isAgentBranch('raditi/x y', 'main')).toBe(false)
   })
 })
 

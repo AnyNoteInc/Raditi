@@ -404,6 +404,30 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
     type: 'feed.repo_left',
     payload: { v: 1, reason: 'secret_found', paths: ['config.js'] },
   },
+  // ПР13, ПР14: the agent's proposal of a merge request, and what a button did.
+  {
+    name: 'repo_proposal v1',
+    type: 'feed.repo_proposal',
+    payload: {
+      v: 1,
+      reservedId: '0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b',
+      title: 'Зимнее меню',
+      description: 'Цены по прайсу и блок «Зимние пироги».',
+      draft: false,
+    },
+  },
+  {
+    name: 'repo_action v1 open_mr',
+    type: 'feed.repo_action',
+    payload: {
+      v: 1,
+      actionId: '0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2c',
+      kind: 'open_mr',
+      state: 'done',
+      number: 37,
+      url: 'https://gitlab.example.ru/kolos/site/-/merge_requests/37',
+    },
+  },
   {
     name: 'request v1 resume',
     type: 'feed.request',

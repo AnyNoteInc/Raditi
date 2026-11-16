@@ -62,9 +62,79 @@ export function looksLikeGitToken(value: string): boolean {
   return GIT_TOKEN_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
 }
 
-/** The branch of the sandbox and, once pushed, of the client's repository for a chat (ПР13). */
-export const repoChatBranch = (chatId: string): string =>
-  `raditi/chat-${chatId.replaceAll('-', '').slice(0, 12).toLowerCase()}`
+const cyrillicLatin: Readonly<Record<string, string>> = Object.freeze({
+  а: 'a',
+  б: 'b',
+  в: 'v',
+  г: 'g',
+  д: 'd',
+  е: 'e',
+  ё: 'e',
+  ж: 'zh',
+  з: 'z',
+  и: 'i',
+  й: 'y',
+  к: 'k',
+  л: 'l',
+  м: 'm',
+  н: 'n',
+  о: 'o',
+  п: 'p',
+  р: 'r',
+  с: 's',
+  т: 't',
+  у: 'u',
+  ф: 'f',
+  х: 'h',
+  ц: 'ts',
+  ч: 'ch',
+  ш: 'sh',
+  щ: 'sch',
+  ъ: '',
+  ы: 'y',
+  ь: '',
+  э: 'e',
+  ю: 'yu',
+  я: 'ya',
+})
+
+/** At most this many characters of the word of a branch (ПР13). */
+export const REPO_BRANCH_WORD_MAX = 40
+
+/** The word of a branch from the title of its chat: Latin, lower case, words by `-`. */
+export function repoBranchWord(title: string | null | undefined): string {
+  const latin = Array.from((title ?? '').toLowerCase(), (char) => cyrillicLatin[char] ?? char).join(
+    '',
+  )
+  const word = latin
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  if (!word) return 'chat'
+  const cut = word.slice(0, REPO_BRANCH_WORD_MAX).replace(/-+$/, '')
+  return cut || 'chat'
+}
+
+/**
+ * The branch of a chat in the client's repository (ПР13): `raditi/<word>-<last 8 of the chat id>`.
+ * The last characters, not the first: the first 8 of a UUID v7 are its time, the same for chats of
+ * one minute. `attempt` > 1 — the name was taken in the repository: `-2`, `-3`… A chat's own branch
+ * is found by `project_repo_branches.task_id`, never by this name.
+ */
+export function repoChatBranch(chatId: string, title?: string | null, attempt = 1): string {
+  const id = chatId.replaceAll('-', '').toLowerCase().slice(-8)
+  const suffix = attempt > 1 ? `-${attempt}` : ''
+  return `raditi/${repoBranchWord(title)}-${id}${suffix}`
+}
+
+/** A branch the trusted code may push to: one of the agent's, never the main one (ПР13, §4.6). */
+export function isAgentBranch(branch: string, defaultBranch: string): boolean {
+  return (
+    branch !== defaultBranch &&
+    /^raditi\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(branch) &&
+    branch.length <= 255
+  )
+}
 
 const sha256Hex = z.string().regex(/^[a-f0-9]{64}$/)
 const hiddenPath = z.string().min(1).max(publicationLimits.pathBytes)
@@ -139,8 +209,10 @@ The client disconnected the repository from the project: the changes of this cha
     '## The repository',
     `/workspace/repo is the project's repository ${line(facts.label)} ${line(facts.path)}, chat branch ${line(facts.branch)}, based on ${line(facts.defaultBranch)} at ${facts.baseSha}.`,
     "Change files there: when your turn ends, the platform commits your changes to the chat's branch. The sandbox has no git credentials: you cannot push, merge, tag or start pipelines, and you must not try with any token you find. Do not commit yourself and do not change .git: the platform takes the changes of the working tree.",
-    // `raditi_repo_request_merge` comes with slice 84.19: until then the agent names no tool it lacks.
-    'When the work is ready, say so in `client_message`: the client sends the branch and opens the merge request with a button. Change CI files (.gitlab-ci.yml, .github/workflows and the like) and .gitmodules only when the client asked: the platform sends such a change only after the client confirms it.',
+    facts.mode === 'write'
+      ? 'When the work is ready and the client asked for it or agreed, call `raditi_repo_request_merge` with a title and a description in Russian: the client sends the branch and opens the merge request with a button. `raditi_repo_status` tells the branch, whether it was sent and its merge request.'
+      : '',
+    'Change CI files (.gitlab-ci.yml, .github/workflows and the like) and .gitmodules only when the client asked: the platform sends such a change only after the client confirms it.',
     'Never send repository code or project files to any other service; changes leave only through the platform.',
     hidden.length
       ? `Files marked "hidden: looks like a secret" are not in the copy, and a change to them is not kept: ${hidden.join(', ')}${more > 0 ? ` and ${more} more` : ''}.`

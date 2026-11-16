@@ -91,6 +91,8 @@ export const gitJobNames = Object.freeze({
   connectionSync: 'git.connection.sync',
   repoInspect: 'git.repo.inspect',
   repoAttach: 'git.repo.attach',
+  /** A row of `repo_actions` a button of the client wrote (ПР13, ПР15; slice 84.19). */
+  action: 'git.action',
 })
 
 export const gitConnectionSyncPayloadSchema = z.strictObject({ connectionId: z.uuid() })

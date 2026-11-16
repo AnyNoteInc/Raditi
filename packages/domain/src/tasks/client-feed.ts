@@ -20,8 +20,12 @@ import {
 } from '../memory/feed.ts'
 import { memoryChangeKinds, memoryKinds } from '../memory/schemas.ts'
 import {
+  feedRepoActionPayloadSchema,
   feedRepoChangesPayloadSchema,
   feedRepoLeftPayloadSchema,
+  feedRepoProposalPayloadSchema,
+  repoActionKinds,
+  repoActionStates,
   repoLeftReasons,
 } from '../repo/feed.ts'
 import { pagePathSchema } from '../pages/path.ts'
@@ -112,6 +116,9 @@ export const feedEventTypes = [
   // (docs/plan/84-projects.md, ПР12, ПР26).
   'feed.repo_changes',
   'feed.repo_left',
+  // The agent proposes a merge request, and what a button of the client did (ПР13, ПР14).
+  'feed.repo_proposal',
+  'feed.repo_action',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -898,6 +905,8 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.memory_left': feedMemoryLeftPayloadSchema,
   'feed.repo_changes': feedRepoChangesPayloadSchema,
   'feed.repo_left': feedRepoLeftPayloadSchema,
+  'feed.repo_proposal': feedRepoProposalPayloadSchema,
+  'feed.repo_action': feedRepoActionPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -942,6 +951,8 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.memory_left', feedMemoryLeftPayloadSchema),
       row('feed.repo_changes', feedRepoChangesPayloadSchema),
       row('feed.repo_left', feedRepoLeftPayloadSchema),
+      row('feed.repo_proposal', feedRepoProposalPayloadSchema),
+      row('feed.repo_action', feedRepoActionPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1326,6 +1337,30 @@ const readRepoLeft = z.object({
   reason: known(repoLeftReasons, 'failed' as const),
   paths: z.array(shownText(4096)).max(50).optional(),
 })
+// The agent's proposal of a merge request (ПР14): the card shows its title and description.
+const readRepoProposal = z.object({
+  reservedId: z.uuid(),
+  title: shownText(120),
+  description: z.string().max(4000).catch(''),
+  draft: z.boolean().catch(false),
+})
+// What a button did (ПР13): a kind or a state this code does not know is not shown as done.
+const readRepoAction = z.object({
+  actionId: z.uuid(),
+  kind: z.enum(repoActionKinds),
+  state: known(repoActionStates, 'failed' as const),
+  number: z.number().int().positive().optional().catch(undefined),
+  url: z
+    .url({ protocol: /^https$/ })
+    .max(500)
+    .optional()
+    .catch(undefined),
+  error: z
+    .string()
+    .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
+    .optional()
+    .catch(undefined),
+})
 
 const readCancelled = z.object({
   turn: turnNo.nullable(),
@@ -1393,6 +1428,8 @@ export type FeedEvent =
   | ({ type: 'feed.memory_left' } & z.infer<typeof readMemoryLeft>)
   | ({ type: 'feed.repo_changes' } & z.infer<typeof readRepoChanges>)
   | ({ type: 'feed.repo_left' } & z.infer<typeof readRepoLeft>)
+  | ({ type: 'feed.repo_proposal' } & z.infer<typeof readRepoProposal>)
+  | ({ type: 'feed.repo_action' } & z.infer<typeof readRepoAction>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1567,6 +1604,14 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   'feed.repo_left': {
     1: (payload) =>
       readWith(readRepoLeft, payload, (data) => ({ type: 'feed.repo_left', ...data })),
+  },
+  'feed.repo_proposal': {
+    1: (payload) =>
+      readWith(readRepoProposal, payload, (data) => ({ type: 'feed.repo_proposal', ...data })),
+  },
+  'feed.repo_action': {
+    1: (payload) =>
+      readWith(readRepoAction, payload, (data) => ({ type: 'feed.repo_action', ...data })),
   },
 }
 
