@@ -15,10 +15,16 @@ import {
   isDomainError,
   neutraliseMergeRequestDescription,
   neutraliseMergeRequestTitle,
+  readRepoCiPaths,
   readRepoConfirmToken,
+  REPO_DIFF_KEPT_BYTES,
   repoActionArgsSchema,
   repoChanged,
   repoCiChangeNeedsCard,
+  repoCiConfigForeign,
+  repoCiDeclined,
+  repoCiDiffTooLarge,
+  repoCiLintSchema,
   repoConfirmInvalid,
   repoNothingToPush,
   repoPushConflict,
@@ -36,6 +42,7 @@ import {
 
 import { GIT_CREDENTIAL_TTL_SECONDS } from '../git-workspace/git-auth.ts'
 import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
+import { buildPathsOf } from './build-paths.ts'
 import type { GitAuthSource } from './git-auth-source.ts'
 import type { GitProviderFactory } from './git-jobs.ts'
 import type { ResolvePublicHost } from './public-host.ts'
@@ -48,7 +55,9 @@ import type { ResolvePublicHost } from './public-host.ts'
 // access of the connection to write, the push with the head it expects at the client (on top of
 // commits the client added; a conflict is said in the chat), the merge request with a title and
 // a description made harmless and read again after it was opened. `RepoChanges` never writes such
-// a row: every push is a press.
+// a row: every push is a press. A branch whose change touches build settings goes only by the card
+// «Агент хочет изменить настройки сборки» (`ci_push`, ПР16; slice 84.20): its token names the
+// SHA-256 of the diff of those files, and core makes that diff again before it sends anything.
 
 /** Names of a branch tried at the client when the chat's own is taken there. */
 const NAME_TRIES = 5
@@ -58,7 +67,10 @@ export interface RepoActionsOptions {
   auth: Pick<GitAuthSource, 'grantFor'>
   resolvePublic: ResolvePublicHost
   provider: GitProviderFactory
-  workspace: Pick<GitWorkspaceService, 'pushChatBranch' | 'moveChatRef' | 'readChatRef'>
+  workspace: Pick<
+    GitWorkspaceService,
+    'pushChatBranch' | 'moveChatRef' | 'readChatRef' | 'buildSettingsChange'
+  >
   /** HMAC by REPO_CONFIRM_SECRET; null — no secret: no action runs. */
   mac: RepoConfirmMac | null
   logger: { log(line: string): void; warn(line: string): void }
@@ -139,10 +151,12 @@ export class RepoActions {
     const args = repoActionArgsSchema.safeParse(row.args)
     if (!args.success) throw repoConfirmInvalid()
     const claims = readRepoConfirmToken(args.data.token, this.#o.mac, this.#now())
-    const kind = claims.opensMergeRequest ? 'open_mr' : 'push'
+    // A press of «Разрешить и отправить» is `ci_push`, whatever else it opens (ПР16).
+    const kind =
+      claims.kind === 'ci_change' ? 'ci_push' : claims.opensMergeRequest ? 'open_mr' : 'push'
     if (
       tokenSha256(args.data.token) !== row.tokenSha256 ||
-      claims.kind !== 'push' ||
+      (claims.kind !== 'push' && claims.kind !== 'ci_change') ||
       row.kind !== kind ||
       claims.userId !== row.createdById ||
       claims.projectRepositoryId !== row.projectRepositoryId ||
@@ -174,6 +188,7 @@ export class RepoActions {
         providerRepoId: true,
         defaultBranch: true,
         mode: true,
+        ciPaths: true,
         connection: {
           select: {
             id: true,
@@ -204,7 +219,13 @@ export class RepoActions {
       (unsent.card?.diffSha256 ?? null) !== claims.diffSha256
     )
       throw repoChanged()
-    if (unsent.ciTouched) throw repoCiChangeNeedsCard()
+    // A configuration of another project or an address: what the build runs cannot be shown.
+    if (readRepoCiPaths(repo.ciPaths).foreign) throw repoCiConfigForeign()
+    if (unsent.ciTouched !== (claims.kind === 'ci_change')) {
+      if (unsent.ciTouched) throw repoCiChangeNeedsCard()
+      throw repoChanged()
+    }
+    if (claims.kind === 'ci_change') await this.#checkCiChange(taskId, repo, claims)
     let branch = await chatBranch(prisma, taskId)
     if (
       branch === null ||
@@ -234,8 +255,10 @@ export class RepoActions {
     const info = await provider.getRepository(auth, ref)
     if (info === null) throw gitAccessDenied()
     await this.#cancelAutoMerge(provider, auth, info.ref, repo.id, branch.branch)
+    // GitHub (Э10): `workflows` only in the token of a press the card of build settings allowed.
     const access = await provider.issueCredentials(grant, info.ref, 'write', {
       ttlSeconds: GIT_CREDENTIAL_TTL_SECONDS,
+      workflows: claims.kind === 'ci_change',
     })
     let pushed: { sha: string; rebased: boolean } | null = null
     try {
@@ -272,7 +295,13 @@ export class RepoActions {
     const sentBranch = branch.branch
     await prisma.projectRepoBranch.updateMany({
       where: { taskId, projectRepositoryId: repo.id },
-      data: { mirrorSha: unsent.head.headSha, remoteSha: pushed.sha, state: 'pushed' },
+      data: {
+        mirrorSha: unsent.head.headSha,
+        remoteSha: pushed.sha,
+        state: 'pushed',
+        // What the client allowed of the build settings (ПР16).
+        ...(claims.kind === 'ci_change' ? { ciConfirmedSha256: claims.ciDiffSha256 } : {}),
+      },
     })
     // The ref of the mirror follows the head the client sent (ПР25: `/undo` moved only the turns).
     const current = await workspace.readChatRef(repo.id, taskId).catch(() => null)
@@ -289,6 +318,39 @@ export class RepoActions {
         head: pushed.sha,
       })
     return { ...pushed, mergeRequest }
+  }
+
+  /**
+   * The card of build settings showed what stands now (ПР16): `git.ci_lint` of this head, not
+   * declined and not too large, and the diff of the build paths since the last push, made again
+   * here from the mirror, has the SHA-256 the token names.
+   */
+  async #checkCiChange(
+    taskId: string,
+    repo: { id: string; provider: string; ciPaths: unknown },
+    claims: RepoConfirmClaims,
+  ): Promise<void> {
+    const branch = await this.#o.prisma.projectRepoBranch.findUnique({
+      where: { taskId },
+      select: { baseSha: true, mirrorSha: true, ciLint: true },
+    })
+    const lint = repoCiLintSchema.safeParse(branch?.ciLint)
+    if (branch === null || !lint.success || lint.data.headSha !== claims.headSha)
+      throw repoChanged()
+    if (lint.data.declined) throw repoCiDeclined()
+    if (lint.data.tooLarge) throw repoCiDiffTooLarge()
+    const change = await this.#o.workspace.buildSettingsChange({
+      projectRepositoryId: repo.id,
+      from: branch.mirrorSha ?? branch.baseSha,
+      to: claims.headSha,
+      isBuildPath: buildPathsOf(repo, lint.data.includes),
+      maxBytes: REPO_DIFF_KEPT_BYTES,
+    })
+    if (change.patch === null) throw repoCiDiffTooLarge()
+    const sha256 = change.paths.length
+      ? createHash('sha256').update(change.patch).digest('hex')
+      : null
+    if (sha256 !== claims.ciDiffSha256) throw repoChanged()
   }
 
   /** «Отправить в ветку» first takes the provider's wait for the pipeline off (ПР15). */
@@ -415,7 +477,7 @@ export class RepoActions {
           payload: {
             v: 1,
             actionId: row.id,
-            kind: row.kind === 'open_mr' ? 'open_mr' : 'push',
+            kind: row.kind === 'open_mr' || row.kind === 'ci_push' ? row.kind : 'push',
             state,
             ...(mr ? { number: mr.number, url: mr.url } : {}),
             ...(error ? { error: error.replace(/[^A-Z0-9_]/g, '_').slice(0, 64) } : {}),

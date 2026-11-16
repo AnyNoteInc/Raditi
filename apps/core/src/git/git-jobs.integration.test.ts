@@ -294,6 +294,28 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
     expect(fetched.branches).toEqual(['trunk'])
   })
 
+  it('a `ci_config_path` on another project is kept as such: nothing will be sent (ПР16)', async () => {
+    const own = await owner()
+    const id = await linkRepository(own)
+    const run = jobs({
+      getRepository: async () =>
+        info({ private: false, ciConfigPath: '.gitlab-ci.yml@kolos/templates:main' }),
+      issueCredentials: async () => ({
+        auth: { kind: 'anonymous' },
+        basic: null,
+        expiresAt: new Date(Date.now() + 60_000),
+      }),
+    })
+    run.fetch.mockResolvedValueOnce(new Map([['main', SHA]]))
+    await run.jobs.attachRepository(id)
+    expect((await db.projectRepository.findUniqueOrThrow({ where: { id } })).ciPaths).toEqual({
+      v: 1,
+      configPath: null,
+      foreign: true,
+      includes: [],
+    })
+  })
+
   it('a private or missing link is `unreachable` (REPO_LINK_PRIVATE), nothing is fetched', async () => {
     const own = await owner()
     const id = await linkRepository(own)
