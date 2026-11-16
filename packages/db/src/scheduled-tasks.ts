@@ -1282,6 +1282,8 @@ export async function reserveScheduleChange(
         data: {
           workspaceId: chat.workspaceId,
           ...turn,
+          // The moment the agent asked (Зп15) is the clock of the turn, not of the database.
+          createdAt: now,
           kind: 'create',
           payload: payload as unknown as Prisma.InputJsonValue,
         },
@@ -1335,6 +1337,8 @@ export async function reserveScheduleChange(
         data: {
           workspaceId: chat.workspaceId,
           ...turn,
+          // The moment the agent asked (Зп15) is the clock of the turn, not of the database.
+          createdAt: now,
           kind: 'update',
           scheduleId: task.id,
           payload: payload as unknown as Prisma.InputJsonValue,
@@ -1376,6 +1380,8 @@ export async function reserveScheduleChange(
       data: {
         workspaceId: chat.workspaceId,
         ...turn,
+        // The moment the agent asked (Зп15) is the clock of the turn, not of the database.
+        createdAt: now,
         kind: 'delete',
         scheduleId: task.id,
         payload: payload as unknown as Prisma.InputJsonValue,
