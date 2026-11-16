@@ -29,6 +29,7 @@ describe('MCP token access', () => {
       ...base,
       requirements: { repository: false, browser: false },
       memory: null,
+      repository: null,
     })
     expect(JSON.stringify($queryRaw.mock.calls)).not.toContain(token)
     expect(JSON.stringify($queryRaw.mock.calls)).toContain(
@@ -44,6 +45,7 @@ describe('MCP token access', () => {
       ...base,
       requirements: { repository: false, browser: true },
       memory: null,
+      repository: null,
     })
     $queryRaw.mockResolvedValueOnce([row(scope(), null)])
     await expect(store.authenticate(token)).rejects.toMatchObject({
@@ -73,6 +75,36 @@ describe('MCP token access', () => {
       $queryRaw.mockResolvedValueOnce([memoryRow(off)])
       expect((await store.authenticate(token))?.memory, JSON.stringify(off)).toBeNull()
     }
+  })
+
+  it('carries the repository the plan of the turn names, and nothing of a broken one (plan 84, 84.19)', async () => {
+    const base = scope()
+    const repository = {
+      projectId: randomUUID(),
+      projectRepositoryId: randomUUID(),
+      provider: 'gitlab',
+      mode: 'write',
+      branch: 'raditi/novoe-menyu-0000000a',
+      baseSha: 'a'.repeat(40),
+      sandboxBaseSha: 'b'.repeat(40),
+      hiddenPaths: [],
+    }
+    const $queryRaw = vi.fn()
+    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    $queryRaw.mockResolvedValueOnce([{ ...row(base), repository }])
+    const access = await store.authenticate(token)
+    expect(access?.requirements.repository).toBe(true)
+    expect(access?.repository).toEqual({
+      projectId: repository.projectId,
+      projectRepositoryId: repository.projectRepositoryId,
+      mode: 'write',
+      branch: repository.branch,
+      baseSha: repository.baseSha,
+    })
+    $queryRaw.mockResolvedValueOnce([{ ...row(base), repository: { ...repository, mode: 'all' } }])
+    await expect(store.authenticate(token)).rejects.toMatchObject({
+      code: 'MCP_ACCESS_SCOPE_INVALID',
+    })
   })
 
   it('looks up the token its issuer generates, by the hash its issuer stores', async () => {

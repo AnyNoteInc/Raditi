@@ -9,6 +9,7 @@ import { MemoryModule } from './memory/memory.module.ts'
 import { assertMcpNestToolAuthorization } from './server/mcp-runtime.ts'
 import { DocsModule } from './pages/docs.module.ts'
 import { PagesModule } from './pages/pages.module.ts'
+import { RepoModule } from './repo/repo.module.ts'
 import { SearchModule } from './search/search.module.ts'
 import { ServerModule } from './server/server.module.ts'
 import { SiteInfoModule } from './site-info/site-info.module.ts'
@@ -26,8 +27,9 @@ import { WebModule } from './web/web.module.ts'
  * in Vault (`subs/search/yandex`). The pages of the workspace (page_*, PagesModule,
  * docs/plan/69-pages.md) — where PAGES_BASE_DOMAIN is set; its documents (doc_*, DocsModule) —
  * always. The memory of a chat (memory_*, MemoryModule, docs/plan/84-projects.md, ПР18) — always,
- * offered to a turn whose chat has its memory on. The modules come in this order — site_info, web,
- * search, docs, pages, memory — and so do their tools.
+ * offered to a turn whose chat has its memory on. The repository of a chat's project (repo_*,
+ * RepoModule, §4.4) — always, offered to a turn whose plan names one. The modules come in this
+ * order — site_info, web, search, docs, pages, memory, repo — and so do their tools.
  */
 @Module({})
 export class AppModule {
@@ -51,6 +53,7 @@ export class AppModule {
         DocsModule,
         ...(config.pages ? [PagesModule] : []),
         MemoryModule,
+        RepoModule,
       ],
     }
   }

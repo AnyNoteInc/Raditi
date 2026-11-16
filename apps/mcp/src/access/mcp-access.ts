@@ -6,29 +6,49 @@ import { MCP_TOKEN_PATTERN, turnKeyHash } from '@repo/turn-keys'
 
 /**
  * What an admitted token gives (docs/plan/83-remove-projects.md, БП1): a turn of a chat, with no
- * site, repository or preview. Derived only from the admitted token and current assignment, never
- * from tool arguments. The turn holds the row of `site_leases` named by its own chat id.
+ * site or preview, and with the repository of its project when its plan names one
+ * (docs/plan/84-projects.md, §4.3). Derived only from the admitted token and current assignment,
+ * never from tool arguments. The turn holds the row of `site_leases` named by its own chat id.
  */
-export const mcpTurnAccessSchema = z.strictObject({
-  keyId: z.uuid(),
-  taskId: z.uuid(),
-  workspaceId: z.uuid(),
-  sessionId: z.string().min(1).max(64),
-  turn: z.number().int().positive(),
-  firstEpoch: z.number().int().positive(),
-  epoch: z.number().int().positive(),
-  /** Whether the chat has the cloud browser (`tasks.needs_browser`); never a repository. */
-  requirements: taskRequirementsSchema.refine((value) => !value.repository),
-  /**
-   * The memory of the chat (docs/plan/84-projects.md, ПР18): its author's, of its project or — null
-   * projectId — of the account; null or absent — off (`users.agent_memory`), no author, or the
-   * project in the trash. The family `memory` is offered only with it.
-   */
-  memory: z
-    .strictObject({ userId: z.uuid(), projectId: z.uuid().nullable() })
-    .nullable()
-    .optional(),
-})
+export const mcpTurnAccessSchema = z
+  .strictObject({
+    keyId: z.uuid(),
+    taskId: z.uuid(),
+    workspaceId: z.uuid(),
+    sessionId: z.string().min(1).max(64),
+    turn: z.number().int().positive(),
+    firstEpoch: z.number().int().positive(),
+    epoch: z.number().int().positive(),
+    /**
+     * Whether the chat has the cloud browser (`tasks.needs_browser`) and whether its turn has the
+     * repository of its project — read from the plan of the turn, never from the chat now (ПР2).
+     */
+    requirements: taskRequirementsSchema,
+    /**
+     * The memory of the chat (docs/plan/84-projects.md, ПР18): its author's, of its project or — null
+     * projectId — of the account; null or absent — off (`users.agent_memory`), no author, or the
+     * project in the trash. The family `memory` is offered only with it.
+     */
+    memory: z
+      .strictObject({ userId: z.uuid(), projectId: z.uuid().nullable() })
+      .nullable()
+      .optional(),
+    /**
+     * The repository of the turn, as its plan names it (docs/plan/84-projects.md, §4.3): the family
+     * `repo` is offered only with it. Its tokens never come here — `mcp` holds none (§4.6).
+     */
+    repository: z
+      .strictObject({
+        projectId: z.uuid(),
+        projectRepositoryId: z.uuid(),
+        mode: z.enum(['read', 'write']),
+        branch: z.string().min(1).max(255),
+        baseSha: z.string().regex(/^[0-9a-f]{40}$/),
+      })
+      .nullable()
+      .optional(),
+  })
+  .refine((access) => access.requirements.repository === Boolean(access.repository))
 export type McpTurnAccess = z.infer<typeof mcpTurnAccessSchema>
 
 export interface McpAccessStore {
@@ -53,7 +73,8 @@ export class PostgresMcpAccess implements McpAccessStore {
         k.session_id AS "sessionId", k.turn_no AS turn,
         k.first_epoch AS "firstEpoch", a.lease_epoch AS epoch, t.needs_browser AS "needsBrowser",
         u.id AS "authorId", u.agent_memory AS "agentMemory", t.project_id AS "projectId",
-        (p.deleted_at IS NOT NULL) AS "projectGone"
+        (p.deleted_at IS NOT NULL) AS "projectGone",
+        a.plan->'repository' AS "repository"
       FROM llm_keys k JOIN tasks t ON t.id = k.task_id
       LEFT JOIN users u ON u.id = t.created_by_id
       LEFT JOIN projects p ON p.id = t.project_id
@@ -83,13 +104,26 @@ export class PostgresMcpAccess implements McpAccessStore {
 /** The admission row with the task's need of a browser folded into its requirements. */
 function accessOf(row: unknown): unknown {
   if (!row || typeof row !== 'object') return row
-  const { needsBrowser, authorId, agentMemory, projectId, projectGone, ...access } = row as Record<
-    string,
-    unknown
-  >
+  const { needsBrowser, authorId, agentMemory, projectId, projectGone, repository, ...access } =
+    row as Record<string, unknown>
   const memory =
     typeof authorId === 'string' && agentMemory === true && projectGone !== true
       ? { userId: authorId, projectId: projectId ?? null }
       : null
-  return { ...access, requirements: { repository: false, browser: needsBrowser }, memory }
+  const repo =
+    repository && typeof repository === 'object'
+      ? (({ projectId: p, projectRepositoryId, mode, branch, baseSha }) => ({
+          projectId: p,
+          projectRepositoryId,
+          mode,
+          branch,
+          baseSha,
+        }))(repository as Record<string, unknown>)
+      : null
+  return {
+    ...access,
+    requirements: { repository: repo !== null, browser: needsBrowser },
+    memory,
+    repository: repo,
+  }
 }

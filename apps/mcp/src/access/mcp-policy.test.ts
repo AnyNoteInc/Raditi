@@ -318,5 +318,32 @@ describe('MCP request policy', () => {
     expect(mcpBodyAllowed(page('memory_forget', { id, expectedVersion: 0 }), ['memory'])).toBe(
       false,
     )
+
+    // The repository (plan 84, 84.19): only a turn whose plan names one; no push, merge or branch.
+    const repo = {
+      ...chat,
+      requirements: { repository: true, browser: false },
+      repository: {
+        projectId: id,
+        projectRepositoryId: id,
+        mode: 'write' as const,
+        branch: 'raditi/x-00000000',
+        baseSha: 'a'.repeat(40),
+      },
+    }
+    expect(mcpToolFamiliesOf(chat, { ...base, repoTools: true })).toEqual([])
+    expect(mcpToolFamiliesOf(repo, { ...base, repoTools: true })).toEqual(['repo'])
+    expect(mcpBodyAllowed(page('repo_status', {}), ['repo'])).toBe(true)
+    expect(mcpBodyAllowed(page('repo_status', {}), ['memory'])).toBe(false)
+    expect(
+      mcpBodyAllowed(page('repo_request_merge', { title: 'а', description: '' }), ['repo']),
+    ).toBe(true)
+    expect(
+      mcpBodyAllowed(page('repo_request_merge', { title: 'а', description: '', target: 'main' }), [
+        'repo',
+      ]),
+    ).toBe(false)
+    for (const name of ['repo_push', 'repo_merge', 'repo_deploy'])
+      expect(mcpBodyAllowed(page(name, {}), ['repo'])).toBe(false)
   })
 })
