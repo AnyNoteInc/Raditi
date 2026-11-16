@@ -528,4 +528,90 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the push of a chat branch (plan 84, 8
       ).toBe('REPO_NOTHING_TO_PUSH')
     })
   })
+
+  // The hint of the row of a chat of a project (docs/plan/84-projects.md, §4.8, ревью P9): one
+  // query of the list, not a read a row.
+  it('gives the list of chats the state of each chat branch: not sent, sent, its merge request', async () => {
+    const f = await fixture()
+    const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: f.task.id } })
+    const plain = await db.task.create({
+      data: {
+        id: v7(),
+        workspaceId,
+        projectId: f.task.projectId,
+        createdById: f.user.id,
+        status: 'awaiting_user',
+        title: 'Вопрос',
+      },
+    })
+    const repoOf = async (projectId?: string) => {
+      const page = await f.caller.task.list(projectId ? { projectId } : {})
+      return Object.fromEntries(page.items.map((item) => [item.id, item.repo]))
+    }
+
+    // The card is there, nothing sent; a chat that changed nothing has no hint.
+    expect(await repoOf(f.task.projectId!)).toEqual({
+      [f.task.id]: { state: 'local', sent: false, request: null },
+      [plain.id]: null,
+    })
+
+    // Sent, and its merge request opened: the newest of its branch is read.
+    await db.projectRepoBranch.update({
+      where: { taskId: f.task.id },
+      data: { state: 'pushed', mirrorSha: f.head, remoteSha: f.head },
+    })
+    for (const [number, state] of [
+      [2, 'closed'],
+      [3, 'open'],
+    ] as const)
+      await db.projectMergeRequest.create({
+        data: {
+          id: randomUUID(),
+          projectRepositoryId: f.projectRepositoryId,
+          taskId: f.task.id,
+          number,
+          sourceBranch: f.branch.branch,
+          targetBranch: 'main',
+          title: 'Меню',
+          state,
+          checks: 'none',
+          headSha: f.head,
+          webUrl: `https://gitlab.example.ru/kolos/site/-/merge_requests/${number}`,
+          syncedAt: new Date(),
+        },
+      })
+    const sent = { state: 'pushed', sent: true, request: { state: 'open' } }
+    expect((await repoOf(f.task.projectId!))[f.task.id]).toEqual(sent)
+    // The list of all chats says the same.
+    expect((await repoOf())[f.task.id]).toEqual(sent)
+
+    // A later turn of the chat changed more: it waits to be sent again.
+    await db.taskTurn.create({
+      data: {
+        taskId: f.task.id,
+        turnNo: 2,
+        status: 'completed',
+        driverId: 'opencode',
+        image,
+        baseSha: 'b'.repeat(40),
+        headSha: 'e'.repeat(40),
+      },
+    })
+    expect((await repoOf(f.task.projectId!))[f.task.id]).toMatchObject({ sent: false })
+    // `/undo` took it back: the sent head stands again.
+    await db.taskTurn.updateMany({
+      where: { taskId: f.task.id, turnNo: 2 },
+      data: { undoneAt: new Date() },
+    })
+    expect((await repoOf(f.task.projectId!))[f.task.id]).toMatchObject({ sent: true })
+
+    // The repository of the project was attached again: the branch of the former one says nothing.
+    await db.projectRepository.update({
+      where: { id: f.projectRepositoryId },
+      data: {
+        projectId: (await f.caller.project.create({ projectId: v7(), name: 'Другой' })).projectId,
+      },
+    })
+    expect((await repoOf(f.task.projectId!))[f.task.id]).toBeNull()
+  })
 })
