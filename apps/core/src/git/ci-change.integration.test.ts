@@ -42,7 +42,7 @@ const SECRET = 'synthetic-repo-confirm-secret-for-the-test-of-84-20'
 const mac = (material: string) => createHmac('sha256', SECRET).update(material).digest('base64url')
 const at = '2026-11-16T10:00:00.000Z'
 const host = 'gitlab.example.ru'
-const env = (cwd: string) => ({
+const gitEnv = (cwd: string) => ({
   PATH: process.env.PATH,
   HOME: cwd,
   GIT_CONFIG_NOSYSTEM: '1',
@@ -53,7 +53,7 @@ const env = (cwd: string) => ({
   GIT_COMMITTER_EMAIL: 'client@example.test',
 })
 const git = async (cwd: string, ...args: string[]) =>
-  (await execute('git', args, { cwd, encoding: 'buffer', env: env(cwd) })).stdout
+  (await execute('git', args, { cwd, encoding: 'buffer', env: gitEnv(cwd) })).stdout
 const gitText = async (cwd: string, ...args: string[]) =>
   (await git(cwd, ...args)).toString().trim()
 const anonymous: IssuedGitAccess = {
