@@ -13,7 +13,9 @@ import {
 } from '@repo/db'
 import {
   isDomainError,
+  REPO_DIFF_KEPT_BYTES,
   repoChatBranch,
+  repoDiffKey,
   repoProposalPayloadSchema,
   repoUnreachable,
   type FeedRepoChangesPayload,
@@ -40,12 +42,8 @@ import type { PassRepository, PassRepositoryRow } from './turn-planner.ts'
 
 /** At most this many files of the change are listed on the card (ПР26: «до 10 файлов»). */
 export const REPO_CARD_FILES = 10
-/** A diff larger than this is not kept for «Посмотреть изменения» (ПР26). */
-export const REPO_DIFF_KEPT_BYTES = 2 * 1024 * 1024
-
-/** The key of the diff of a turn in `raditi-artifacts`. */
-export const repoDiffKey = (taskId: string, turn: number): string =>
-  `repo-diffs/${taskId.toLowerCase()}/${turn}.diff`
+// The key and the limit of the diff of a turn are the domain's: web reads what core writes.
+export { REPO_DIFF_KEPT_BYTES, repoDiffKey } from '@repo/domain'
 
 /** One changed file of a unified diff of git: its path and counts (binary — 0 and 0). */
 export interface DiffFileStat {

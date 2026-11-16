@@ -18,6 +18,7 @@ import {
   type AppEnv,
   type GitConnectionKind,
   type GitConnectionState,
+  type RepoConfirmMac,
   type SecretStore,
 } from '@repo/domain'
 
@@ -44,6 +45,11 @@ export interface GitServices {
   checkHost(host: string): Promise<void>
   /** Raditi's OAuth app on gitlab.com is configured (GITLAB_OAUTH_CLIENT_*). */
   gitlabComConfigured: boolean
+  /**
+   * HMAC-SHA256 by REPO_CONFIRM_SECRET, in base64url: the cards of a repository (ПР13, ПР15).
+   * null or absent — no card is offered; core checks every token again.
+   */
+  confirmMac?: RepoConfirmMac | null
 }
 
 export const gitServicesOf = (services: GitServices | null | undefined): GitServices => {

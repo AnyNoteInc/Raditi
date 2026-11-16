@@ -1,6 +1,16 @@
-import { gitConnectionKinds, repoMirrorStates, repoModes, repoProviderKinds } from '@repo/domain'
+import {
+  gitConnectionKinds,
+  repoActionKinds,
+  repoActionStates,
+  repoBranchStates,
+  repoMirrorStates,
+  repoModes,
+  repoProviderKinds,
+} from '@repo/domain'
 import { z } from 'zod'
 
+import { chatContextOf } from '../services/chat/context.ts'
+import { confirmPush, preparePush, readChatBranch, readTurnDiff } from '../services/git/branches.ts'
 import { gitServicesOf } from '../services/git/connections.ts'
 import {
   attachConnected,
@@ -38,6 +48,19 @@ export const projectRepoView = z.strictObject({
   refusal: z.strictObject({ code: z.string(), message: z.string() }).nullable(),
   secretsFound: z.array(z.string()),
   fetchedAt: z.date().nullable(),
+})
+
+const sha = z.string().regex(/^[0-9a-f]{40}$/)
+const fileStat = z.strictObject({
+  path: z.string(),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+})
+const mergeRequestInput = z.strictObject({
+  title: z.string().trim().min(1).max(120),
+  description: z.string().max(4000),
+  draft: z.boolean(),
+  reservedId: z.uuid().nullable(),
 })
 
 export const projectRepoRouter = router({
@@ -98,6 +121,100 @@ export const projectRepoRouter = router({
     .output(projectRepoView.nullable())
     .query(({ ctx, input }) =>
       readProjectRepo(ctx.prisma, { userId: ctx.user.id, projectId: input.projectId }),
+    ),
+
+  /**
+   * The chat's branch for the card «Изменения в ветке» (ПР13, ПР26): its head, whether it waits to
+   * be sent, its merge request and the last press; null — the chat has no change in a repository.
+   */
+  branch: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(
+      z
+        .strictObject({
+          branch: z.string(),
+          state: z.enum(repoBranchStates),
+          headSha: sha.nullable(),
+          sent: z.boolean(),
+          canPush: z.boolean(),
+          mergeRequest: z
+            .strictObject({ number: z.number().int(), state: z.string(), url: z.string() })
+            .nullable(),
+          lastAction: z
+            .strictObject({
+              id: z.uuid(),
+              kind: z.enum(repoActionKinds),
+              state: z.enum(repoActionStates),
+              error: z.string().nullable(),
+            })
+            .nullable(),
+        })
+        .nullable(),
+    )
+    .query(({ ctx, input }) =>
+      readChatBranch(ctx.prisma, { userId: ctx.user.id, taskId: input.taskId }),
+    ),
+
+  /** «Посмотреть изменения» of a card: the diff of its turn, up to 2 MiB (ПР26). */
+  diff: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), turn: z.number().int().positive() }))
+    .output(z.strictObject({ patch: z.string().nullable(), truncated: z.boolean() }))
+    .query(({ ctx, input }) => {
+      return readTurnDiff(ctx.prisma, chatContextOf(ctx).storage(), {
+        userId: ctx.user.id,
+        taskId: input.taskId,
+        turn: input.turn,
+      })
+    }),
+
+  /**
+   * «Отправить в ветку» / «Открыть запрос на слияние», the first step (ПР13): what goes and the
+   * token bound to the head of the chat and the diff of its card, for ten minutes.
+   */
+  preparePush: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(
+      z.strictObject({
+        branch: z.string(),
+        headSha: sha,
+        diffSha256: z.string().nullable(),
+        stat: z.strictObject({
+          files: z.number().int(),
+          additions: z.number().int(),
+          deletions: z.number().int(),
+          list: z.array(fileStat),
+        }),
+        rewinds: z.boolean(),
+        opensMergeRequest: z.boolean(),
+        proposal: mergeRequestInput.nullable(),
+        confirmToken: z.string(),
+        expiresAt: z.date(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      preparePush(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        taskId: input.taskId,
+        now: new Date(),
+      }),
+    ),
+
+  /** The press itself (ПР13, ПР15): written once, and core sends the branch. */
+  confirmPush: consentedProcedure
+    .input(
+      z.strictObject({
+        confirmToken: z.string().min(1).max(2048),
+        mergeRequest: mergeRequestInput.optional(),
+      }),
+    )
+    .output(z.strictObject({ actionId: z.uuid() }))
+    .mutation(({ ctx, input }) =>
+      confirmPush(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        confirmToken: input.confirmToken,
+        ...(input.mergeRequest ? { mergeRequest: input.mergeRequest } : {}),
+        now: new Date(),
+      }),
     ),
 
   /** «Основная ветка» of P-git-repo-pick. */

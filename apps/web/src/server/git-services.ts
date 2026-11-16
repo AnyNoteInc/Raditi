@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { createHmac } from 'node:crypto'
 import type { LookupAddress } from 'node:dns'
 import { lookup } from 'node:dns/promises'
 
@@ -88,6 +89,14 @@ export function gitServices(): GitServices | null {
           }
         })(),
         gitlabComConfigured: config.git.gitlabOauth !== null,
+        // The cards of a repository (ПР13, ПР15): the same secret core checks every token by.
+        confirmMac: (() => {
+          const secret = config.git.repoConfirmSecret
+          return secret
+            ? (material: string) =>
+                createHmac('sha256', secret).update(material).digest('base64url')
+            : null
+        })(),
       },
     }
   }

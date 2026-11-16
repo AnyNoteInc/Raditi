@@ -41,6 +41,13 @@ export const repoProposalPayloadSchema = z.strictObject({
 })
 export type RepoProposalPayload = z.infer<typeof repoProposalPayloadSchema>
 
+/** The key of the diff of a turn in `raditi-artifacts` (ПР26): core writes it, web reads it. */
+export const repoDiffKey = (taskId: string, turn: number): string =>
+  `repo-diffs/${taskId.toLowerCase()}/${turn}.diff`
+
+/** A diff larger than this is not kept for «Посмотреть изменения» (ПР26). */
+export const REPO_DIFF_KEPT_BYTES = 2 * 1024 * 1024
+
 /** At most one proposal of a merge request a turn (§4.4). */
 export const REPO_PROPOSALS_PER_TURN = 1
 
