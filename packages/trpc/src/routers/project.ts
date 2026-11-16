@@ -26,7 +26,14 @@ import { z } from 'zod'
 
 import { chatContextOf } from '../services/chat/context.ts'
 import { personalWorkspaceOf, WRITE } from '../services/chat/dialog-lock.ts'
+import { gitServicesOf } from '../services/git/connections.ts'
+import {
+  attachLinkInTransaction,
+  checkedLink,
+  readProjectRepo,
+} from '../services/git/repositories.ts'
 import { bindFilesToProject, projectFilesOverview } from '../services/projects/files.ts'
+import { projectRepoView } from './project-repo.ts'
 import { consentedProcedure, router } from '../trpc.ts'
 
 // «Проекты» (docs/plan/84-projects.md, §4.4; slice 84.4): the projects of the user, in their
@@ -84,6 +91,8 @@ const projectOutput = z.strictObject({
   }),
   /** «Память» (ПР18): active entries and those that wait for the client. */
   memory: z.strictObject({ active: z.number().int().min(0), proposed: z.number().int().min(0) }),
+  /** The repository of the project (ПР9), null — none (84.17). */
+  repository: projectRepoView.nullable(),
 })
 
 export const projectRouter = router({
@@ -115,15 +124,16 @@ export const projectRouter = router({
         projectId: input.projectId,
         userId: ctx.user.id,
       })
-      const [files, memory] = await Promise.all([
+      const [files, memory, repository] = await Promise.all([
         projectFilesOverview(ctx.prisma, project.id),
         memoryCounts(ctx.prisma, {
           workspaceId: _workspace,
           userId: ctx.user.id,
           projectId: project.id,
         }),
+        readProjectRepo(ctx.prisma, { userId: ctx.user.id, projectId: project.id }),
       ])
-      return { ...project, files, memory }
+      return { ...project, files, memory, repository }
     }),
 
   /**
@@ -139,12 +149,22 @@ export const projectRouter = router({
         goal: projectGoalInputSchema.optional(),
         /** Files of the context uploaded in the window (ПР8): the project takes them all or none. */
         fileIds: projectFileIdsSchema.optional(),
+        /**
+         * «Ссылка на GitHub» (ПР5, ПР9): an open repository read by its link, saved with the
+         * project; core reads it after the answer (84.17).
+         */
+        publicRepositoryUrl: z.string().min(1).max(500).optional(),
       }),
     )
     .output(z.strictObject({ projectId: z.uuid(), created: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const name = projectNameOf(input.name)
       const goal = projectGoalOf(input.goal)
+      // The link is parsed and its host checked before anything is written (§4.6).
+      const link =
+        input.publicRepositoryUrl === undefined
+          ? null
+          : await checkedLink(gitServicesOf(ctx.git), input.publicRepositoryUrl)
       const { id: workspaceId } = await personalWorkspaceOf(ctx.prisma, {
         userId: ctx.user.id,
         appEnv: chatContextOf(ctx).appEnv,
@@ -166,6 +186,8 @@ export const projectRouter = router({
             userId: ctx.user.id,
             fileIds: input.fileIds,
           })
+        if (made.created && link !== null)
+          await attachLinkInTransaction(tx, { projectId: made.projectId, workspaceId, ref: link })
         return made
       }, WRITE)
     }),

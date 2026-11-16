@@ -7,6 +7,7 @@ import superjson from 'superjson'
 
 import { CONSENT_REQUIRED, formatError, toTRPCError } from './errors.ts'
 import type { ChatContext } from './services/chat/context.ts'
+import type { GitServices } from './services/git/connections.ts'
 import type { McpServerServices } from './services/mcp-server-auth.ts'
 import { loadLatestConsents } from './services/consents.ts'
 
@@ -51,6 +52,12 @@ export interface Context {
    * a server with a key cannot be added here; servers without one work as before.
    */
   mcpServers?: McpServerServices | null
+  /**
+   * What the git connections are written and checked through (docs/plan/84-projects.md, 84.17):
+   * a Vault store that can only write and the check of a host. Absent or null — repositories
+   * cannot be connected here; the rest works.
+   */
+  git?: GitServices | null
 }
 
 export interface CreateContextOptions {
@@ -66,6 +73,8 @@ export interface CreateContextOptions {
   chat?: ChatContext | null
   /** Defaults to null: servers with a key cannot be added. */
   mcpServers?: McpServerServices | null
+  /** Defaults to null: repositories cannot be connected. */
+  git?: GitServices | null
 }
 
 export async function createContext({
@@ -75,6 +84,7 @@ export async function createContext({
   billing = null,
   chat = null,
   mcpServers = null,
+  git = null,
 }: CreateContextOptions): Promise<Context> {
   const current = await getSessionFromHeaders(headers, auth)
   return {
@@ -85,6 +95,7 @@ export async function createContext({
     billing,
     chat,
     mcpServers,
+    git,
   }
 }
 

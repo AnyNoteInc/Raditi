@@ -7,7 +7,9 @@ import { consentRouter } from './routers/consent.ts'
 import { documentRouter } from './routers/document.ts'
 import { healthRouter } from './routers/health.ts'
 import { pagesRouter } from './routers/pages.ts'
+import { gitConnectionRouter } from './routers/git-connection.ts'
 import { projectRouter } from './routers/project.ts'
+import { projectRepoRouter } from './routers/project-repo.ts'
 import { projectFileRouter } from './routers/project-file.ts'
 import { projectMemoryRouter } from './routers/project-memory.ts'
 import { taskRouter } from './routers/task.ts'
@@ -38,6 +40,9 @@ export const appRouter = router({
   projectFile: projectFileRouter,
   // «Память» of a project and of the account (docs/plan/84-projects.md, ПР18, ПР28).
   projectMemory: projectMemoryRouter,
+  // The git connections of the user and the repository of a project (docs/plan/84-projects.md, 84.17).
+  gitConnection: gitConnectionRouter,
+  projectRepo: projectRepoRouter,
   // «Настройки → Переменные»: the variables every chat of a workspace gets (plan 83, БП4).
   workspaceEnv: workspaceEnvRouter,
   // «Настройки → Навыки агента»: the MCP servers of the workspace's agent (plan 81; plan 83, БП11).
