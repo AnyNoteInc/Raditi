@@ -25,6 +25,7 @@ import { readWorkspaceEnvValuesToRefuse } from '../workspace-env/workspace-env-v
 import type { GitAuthSource } from './git-auth-source.ts'
 import type { GitProviderFactory } from './git-jobs.ts'
 import type { ResolvePublicHost } from './public-host.ts'
+import { endWaitingMerges } from './repo-actions.ts'
 
 // The builds of the repositories of projects (docs/plan/84-projects.md, ПР15, ПР17, §4.3; slice
 // 84.21). In the first version core learns of them by polling — webhooks are Э10:
@@ -35,7 +36,7 @@ import type { ResolvePublicHost } from './public-host.ts'
 //   page (`projectRepo.runs`), coalesced the same way;
 // - a poll reads the newest runs in one request and the jobs only of runs that are new, changed or
 //   still going, then the open merge requests: a merged one marks the chat's branch `merged`
-//   (ПР25), a closed one `closed`;
+//   (ПР25), a closed one `closed`; a press «Принять, когда сборка пройдёт» that waits for it ends;
 // - `git.log` fetches the tail of a job's log, takes out ANSI, masks the values of the
 //   workspace's variables, the access of the operation and the forms of keys, and keeps it 24 h;
 // - `git.repo.deploy_actions` keeps the manual jobs of the head of the default branch (ПР15).
@@ -343,6 +344,12 @@ export class RepoCi {
           where: { id: request.id },
           data: { state: 'closed', syncedAt: now },
         })
+        await endWaitingMerges(prisma, {
+          projectRepositoryId: repo.id,
+          number: request.number,
+          merged: false,
+          now,
+        })
         continue
       }
       await prisma.$transaction(async (tx) => {
@@ -369,6 +376,15 @@ export class RepoCi {
           data: { state: pr.state },
         })
       })
+      // «Принять, когда сборка пройдёт» (ПР15; slice 84.22): the press waits until the provider
+      // merged the request — or ends when the wait was taken off or the request closed.
+      if (pr.state === 'merged' || pr.state === 'closed' || !pr.autoMerge)
+        await endWaitingMerges(prisma, {
+          projectRepositoryId: repo.id,
+          number: request.number,
+          merged: pr.state === 'merged',
+          now,
+        })
     }
   }
 

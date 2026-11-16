@@ -12,6 +12,7 @@ import {
 import {
   gitAccessDenied,
   gitConnectionReauth,
+  gitNotSupported,
   isAgentBranch,
   isDomainError,
   neutraliseMergeRequestDescription,
@@ -22,6 +23,9 @@ import {
   REPO_CONFIRM_TTL_SECONDS,
   REPO_DIFF_KEPT_BYTES,
   repoActionArgsSchema,
+  repoActionKinds,
+  repoAlreadyMerged,
+  repoAutoMergeOff,
   repoChanged,
   repoCiChangeNeedsCard,
   repoCiConfigForeign,
@@ -29,7 +33,10 @@ import {
   repoCiDiffTooLarge,
   repoCiLintSchema,
   repoConfirmInvalid,
+  repoDeployGone,
+  repoMergeTargetChanged,
   repoNothingToPush,
+  repoNotMergeable,
   repoPushConflict,
   repoReadOnly,
   type GitAuth,
@@ -37,7 +44,10 @@ import {
   type GitGrant,
   type GitProvider,
   type PullRequest,
+  type RepoActionArgs,
+  type RepoActionKind,
   type RepoConfirmClaims,
+  type RepoMergeArgs,
   type RepoConfirmMac,
   type RepoProviderKind,
   type RepoRef,
@@ -61,6 +71,12 @@ import type { ResolvePublicHost } from './public-host.ts'
 // a row: every push is a press. A branch whose change touches build settings goes only by the card
 // «Агент хочет изменить настройки сборки» (`ci_push`, ПР16; slice 84.20): its token names the
 // SHA-256 of the diff of those files, and core makes that diff again before it sends anything.
+// «Принять в основную ветку» (`merge`, ПР15; slice 84.22) reads the merge request again — its target
+// branch must still be the one the card showed and the main branch, its head the card's — and merges
+// with that head expected; «Принять, когда сборка пройдёт» leaves the row `waiting` until `git.poll`
+// reads the request merged, or the wait taken off. «Выкатить» (`deploy`) plays a manual job of the
+// newest build of the main branch only while the head of that branch is still the card's. Nothing
+// but a press of the client writes such a row: the agent and runs without a person never do (ПР19).
 
 /** A queued press older than this lost its job: it is put again while its token lives. */
 export const REPO_ACTION_REQUEUE_MS = 2 * 60_000
@@ -97,6 +113,13 @@ interface ActionRow {
   args: unknown
   tokenSha256: string
   state: string
+}
+
+/** What a press left: kept in `repo_actions.result`, and the request the chat links to. */
+interface ActionResult {
+  json: Record<string, string | number | boolean | null>
+  number?: number
+  url?: string
 }
 
 /** A refusal of the action that is said, not thrown. */
@@ -141,9 +164,27 @@ export class RepoActions {
     })
     if (taken.count === 0) return
     try {
-      const claims = this.#checkToken(row)
-      const result = await this.#push(row, claims)
-      await this.#finish(row, 'done', null, result)
+      const { claims, args } = this.#checkToken(row)
+      if (row.kind === 'merge') {
+        const merged = await this.#merge(row, claims, args.merge!)
+        await this.#finish(row, merged.waiting ? 'waiting' : 'done', null, merged)
+      } else if (row.kind === 'deploy')
+        await this.#finish(row, 'done', null, await this.#deploy(row, claims))
+      else {
+        const pushed = await this.#push(row, claims)
+        await this.#finish(row, 'done', null, {
+          json: {
+            sha: pushed.sha,
+            rebased: pushed.rebased,
+            ...(pushed.mergeRequest
+              ? { number: pushed.mergeRequest.number, url: pushed.mergeRequest.url }
+              : {}),
+          },
+          ...(pushed.mergeRequest
+            ? { number: pushed.mergeRequest.number, url: pushed.mergeRequest.url }
+            : {}),
+        })
+      }
     } catch (error) {
       const code =
         error instanceof Refused
@@ -216,35 +257,60 @@ export class RepoActions {
   }
 
   /** The token of the row, checked as web checked it, and its claims against the row (ПР15). */
-  #checkToken(row: ActionRow): RepoConfirmClaims {
+  #checkToken(row: ActionRow): { claims: RepoConfirmClaims; args: RepoActionArgs } {
     if (this.#o.mac === null) throw repoConfirmInvalid()
     const args = repoActionArgsSchema.safeParse(row.args)
     if (!args.success) throw repoConfirmInvalid()
     const claims = readRepoConfirmToken(args.data.token, this.#o.mac, this.#now())
-    // A press of «Разрешить и отправить» is `ci_push`, whatever else it opens (ПР16).
-    const kind =
-      claims.kind === 'ci_change' ? 'ci_push' : claims.opensMergeRequest ? 'open_mr' : 'push'
     if (
       tokenSha256(args.data.token) !== row.tokenSha256 ||
-      (claims.kind !== 'push' && claims.kind !== 'ci_change') ||
-      row.kind !== kind ||
       claims.userId !== row.createdById ||
       claims.projectRepositoryId !== row.projectRepositoryId ||
-      claims.taskId === null ||
       claims.taskId !== row.taskId ||
-      (args.data.mergeRequest !== null) !== claims.opensMergeRequest
+      row.kind !== kindOfClaims(claims)
     )
       throw repoConfirmInvalid()
-    return claims
+    const merge = args.data.merge ?? null
+    switch (claims.kind) {
+      case 'push':
+      case 'ci_change':
+        if (
+          claims.taskId === null ||
+          merge !== null ||
+          (args.data.mergeRequest !== null) !== claims.opensMergeRequest
+        )
+          throw repoConfirmInvalid()
+        break
+      case 'merge':
+        if (
+          claims.number === null ||
+          claims.targetBranch === null ||
+          claims.deploy !== null ||
+          merge === null ||
+          args.data.mergeRequest !== null
+        )
+          throw repoConfirmInvalid()
+        break
+      case 'deploy':
+        if (
+          claims.deploy === null ||
+          claims.targetBranch === null ||
+          merge !== null ||
+          args.data.mergeRequest !== null
+        )
+          throw repoConfirmInvalid()
+        break
+    }
+    return { claims, args: args.data }
   }
 
-  async #push(
-    row: ActionRow,
-    claims: RepoConfirmClaims,
-  ): Promise<{ sha: string; rebased: boolean; mergeRequest: PullRequest | null }> {
-    const { prisma, workspace } = this.#o
-    const taskId = claims.taskId!
-    // The one who pressed: still the author of the project and a member of its workspace.
+  /**
+   * The repository of the press as it stands now: the one who pressed is still the author of the
+   * project and a member of its workspace, the repository takes writes by that person's own
+   * connection, which is `ok`.
+   */
+  async #writableRepository(row: ActionRow, claims: RepoConfirmClaims) {
+    const { prisma } = this.#o
     const project = await projectOwnedBy(prisma, claims.projectId, claims.userId)
     if (project === null) throw repoConfirmInvalid()
     const repo = await prisma.projectRepository.findUnique({
@@ -276,6 +342,149 @@ export class RepoActions {
     if (repo.connection.state === 'reauth_needed') throw gitConnectionReauth()
     if (repo.connection.state !== 'ok' || repo.connection.createdById !== claims.userId)
       throw gitAccessDenied()
+    return { project, repo, connection: repo.connection }
+  }
+
+  /** The provider of the repository by the connection of the one who pressed, and its right. */
+  async #operation(repo: {
+    provider: string
+    host: string
+    path: string
+    providerRepoId: string | null
+    connection: { id: string; workspaceId: string; kind: string; host: string }
+  }) {
+    const ref: RepoRef = {
+      provider: repo.provider as RepoProviderKind,
+      host: repo.host,
+      path: repo.path,
+      ...(repo.providerRepoId === null ? {} : { providerRepoId: repo.providerRepoId }),
+    }
+    const grant: GitGrant = await this.#o.auth.grantFor({
+      id: repo.connection.id,
+      workspaceId: repo.connection.workspaceId,
+      kind: repo.connection.kind as GitConnectionKind,
+      host: repo.connection.host,
+    })
+    const address = await this.#o.resolvePublic(ref.host)
+    const provider = this.#o.provider({ kind: ref.provider, host: ref.host, address })
+    const auth: GitAuth =
+      grant.kind === 'token' ? { kind: 'bearer', token: grant.token } : { kind: 'anonymous' }
+    // The right of the one who connected it, at the provider, before anything is sent (ПР10).
+    const info = await provider.getRepository(auth, ref)
+    if (info === null) throw gitAccessDenied()
+    return { ref, grant, address, provider, auth, info }
+  }
+
+  /**
+   * «Принять в основную ветку» and «Принять, когда сборка пройдёт» (ПР15). The merge request is
+   * read again: its target must still be what the card showed and the main branch (a target the
+   * client changed after the card is refused), its source and its head the card's; the provider
+   * merges only with that head expected — a new head is its 409, REPO_CHANGED.
+   */
+  async #merge(
+    row: ActionRow,
+    claims: RepoConfirmClaims,
+    merge: RepoMergeArgs,
+  ): Promise<ActionResult & { waiting: boolean }> {
+    const { prisma } = this.#o
+    const { repo, connection } = await this.#writableRepository(row, claims)
+    const number = claims.number!
+    const cached = await prisma.projectMergeRequest.findUnique({
+      where: { projectRepositoryId_number: { projectRepositoryId: repo.id, number } },
+      select: { sourceBranch: true, taskId: true },
+    })
+    if (cached === null || cached.taskId !== row.taskId) throw repoConfirmInvalid()
+    const { provider, auth, info } = await this.#operation({ ...repo, connection })
+    const whenGreen = merge.mode === 'when_green'
+    if (whenGreen && !provider.support.autoMerge) throw gitNotSupported('a merge when green')
+    const read = await provider.getPullRequest(auth, info.ref, number)
+    if (read === null || read.state === 'closed') throw repoNotMergeable()
+    if (read.state === 'merged') throw repoAlreadyMerged()
+    if (read.targetBranch !== claims.targetBranch || read.targetBranch !== repo.defaultBranch)
+      throw repoMergeTargetChanged()
+    if (read.sourceBranch !== cached.sourceBranch || read.headSha !== claims.headSha)
+      throw repoChanged()
+    if (read.state === 'draft') throw repoNotMergeable()
+    const merged = await provider.mergePullRequest(auth, info.ref, number, {
+      expectedHeadSha: claims.headSha,
+      deleteBranch: merge.deleteBranch,
+      whenGreen,
+    })
+    const now = this.#now()
+    const mergeSha = merged.mergeSha ?? null
+    await prisma.$transaction(async (tx) => {
+      await tx.projectMergeRequest.updateMany({
+        where: { projectRepositoryId: repo.id, number },
+        data:
+          merged.state === 'merged'
+            ? { state: 'merged', mergeSha, autoMerge: false, syncedAt: now }
+            : { autoMerge: true, syncedAt: now },
+      })
+      if (merged.state === 'merged')
+        await tx.projectRepoBranch.updateMany({
+          where: {
+            projectRepositoryId: repo.id,
+            branch: read.sourceBranch,
+            state: { in: ['pushed', 'closed'] },
+            ...(row.taskId === null ? {} : { taskId: row.taskId }),
+          },
+          data: { state: 'merged' },
+        })
+    })
+    return {
+      waiting: merged.state === 'scheduled',
+      json: {
+        number,
+        url: read.url,
+        mode: merge.mode,
+        deleteBranch: merge.deleteBranch,
+        mergeSha,
+      },
+      number,
+      url: read.url,
+    }
+  }
+
+  /**
+   * «Выкатить» (ПР15): a manual job of the newest build of the main branch. The head of the main
+   * branch is read again first — moved since the card, REPO_CHANGED, so nothing unmerged and nothing
+   * the client did not see goes out — and the job must still be of a build of that head.
+   */
+  async #deploy(row: ActionRow, claims: RepoConfirmClaims): Promise<ActionResult> {
+    const { prisma } = this.#o
+    const { repo, connection } = await this.#writableRepository(row, claims)
+    const asked = claims.deploy!
+    if (claims.targetBranch !== repo.defaultBranch || asked.ref !== repo.defaultBranch)
+      throw repoChanged()
+    const { provider, auth, info } = await this.#operation({ ...repo, connection })
+    if (asked.kind !== 'manual_job' || !provider.support.manualJobs || !provider.branchHead)
+      throw gitNotSupported('this deploy')
+    const head = await provider.branchHead(auth, info.ref, repo.defaultBranch)
+    if (head !== claims.headSha) throw repoChanged()
+    const action = (await provider.listDeployActions(auth, info.ref, repo.defaultBranch)).find(
+      (item) => item.kind === asked.kind && item.id === asked.id,
+    )
+    if (action === undefined) throw repoDeployGone()
+    if (action.sha !== claims.headSha || action.ref !== repo.defaultBranch) throw repoChanged()
+    const started = await provider.startDeploy(auth, info.ref, action)
+    // The build and its jobs are read again: the played job is not a manual one any more.
+    for (const type of [gitJobNames.poll, gitJobNames.deployActions])
+      await enqueueOutbox(prisma, {
+        topic: 'git',
+        type,
+        payload: { projectRepositoryId: repo.id },
+        dedupeKey: `${type}:deploy:${row.id}`,
+      })
+    return { json: { sha: head, job: action.id, name: action.name, runId: started.runId } }
+  }
+
+  async #push(
+    row: ActionRow,
+    claims: RepoConfirmClaims,
+  ): Promise<{ sha: string; rebased: boolean; mergeRequest: PullRequest | null }> {
+    const { prisma, workspace } = this.#o
+    const taskId = claims.taskId!
+    const { project, repo, connection } = await this.#writableRepository(row, claims)
     const task = await prisma.task.findUnique({
       where: { id: taskId },
       select: { projectId: true, title: true },
@@ -305,25 +514,10 @@ export class RepoActions {
     )
       throw repoChanged()
 
-    const ref: RepoRef = {
-      provider: repo.provider as RepoProviderKind,
-      host: repo.host,
-      path: repo.path,
-      ...(repo.providerRepoId === null ? {} : { providerRepoId: repo.providerRepoId }),
-    }
-    const grant: GitGrant = await this.#o.auth.grantFor({
-      id: repo.connection.id,
-      workspaceId: repo.connection.workspaceId,
-      kind: repo.connection.kind as GitConnectionKind,
-      host: repo.connection.host,
+    const { ref, grant, address, provider, auth, info } = await this.#operation({
+      ...repo,
+      connection,
     })
-    const address = await this.#o.resolvePublic(ref.host)
-    const provider = this.#o.provider({ kind: ref.provider, host: ref.host, address })
-    const auth: GitAuth =
-      grant.kind === 'token' ? { kind: 'bearer', token: grant.token } : { kind: 'anonymous' }
-    // The right of the one who connected it, at the provider, before anything is sent (ПР10).
-    const info = await provider.getRepository(auth, ref)
-    if (info === null) throw gitAccessDenied()
     await this.#cancelAutoMerge(provider, auth, info.ref, repo.id, branch.branch)
     // GitHub (Э10): `workflows` only in the token of a press the card of build settings allowed.
     const access = await provider.issueCredentials(grant, info.ref, 'write', {
@@ -442,6 +636,13 @@ export class RepoActions {
         where: { projectRepositoryId: repositoryId, number },
         data: { autoMerge: false, syncedAt: this.#now() },
       })
+      // A press that waited for the build ends: what it would have merged is not the branch now.
+      await endWaitingMerges(this.#o.prisma, {
+        projectRepositoryId: repositoryId,
+        number,
+        merged: false,
+        now: this.#now(),
+      })
     }
   }
 
@@ -510,29 +711,21 @@ export class RepoActions {
   /** The row ends, and the chat reads what the button did (`feed.repo_action`, `feed.repo_left`). */
   async #finish(
     row: ActionRow,
-    state: 'done' | 'failed',
+    state: 'done' | 'failed' | 'waiting',
     error: string | null,
-    result: { sha: string; rebased: boolean; mergeRequest: PullRequest | null } | null,
+    result: ActionResult | null,
     from: 'queued' | 'running' = 'running',
   ): Promise<boolean> {
     const { prisma } = this.#o
-    const mr = result?.mergeRequest ?? null
     return prisma.$transaction(async (tx) => {
       const ended = await tx.repoAction.updateMany({
         where: { id: row.id, state: from },
         data: {
           state,
           error,
-          finishedAt: this.#now(),
-          ...(result
-            ? {
-                result: {
-                  sha: result.sha,
-                  rebased: result.rebased,
-                  ...(mr ? { number: mr.number, url: mr.url } : {}),
-                },
-              }
-            : {}),
+          // `waiting` has not ended: the provider merges once the build passes.
+          finishedAt: state === 'waiting' ? null : this.#now(),
+          ...(result ? { result: result.json } : {}),
         },
       })
       // Another sweeper or the job itself ended it first: the chat is told once.
@@ -550,9 +743,10 @@ export class RepoActions {
           payload: {
             v: 1,
             actionId: row.id,
-            kind: row.kind === 'open_mr' || row.kind === 'ci_push' ? row.kind : 'push',
+            kind: feedKindOf(row.kind),
             state,
-            ...(mr ? { number: mr.number, url: mr.url } : {}),
+            ...(result?.number === undefined ? {} : { number: result.number }),
+            ...(result?.url === undefined ? {} : { url: result.url }),
             ...(error ? { error: error.replace(/[^A-Z0-9_]/g, '_').slice(0, 64) } : {}),
           },
         },
@@ -560,4 +754,78 @@ export class RepoActions {
       return true
     })
   }
+}
+
+/** The kind of row a press of these claims writes (web writes it so, core checks it so). */
+function kindOfClaims(claims: RepoConfirmClaims): RepoActionKind {
+  switch (claims.kind) {
+    // A press of «Разрешить и отправить» is `ci_push`, whatever else it opens (ПР16).
+    case 'ci_change':
+      return 'ci_push'
+    case 'push':
+      return claims.opensMergeRequest ? 'open_mr' : 'push'
+    case 'merge':
+    case 'deploy':
+      return claims.kind
+  }
+}
+
+const feedKindOf = (kind: string): RepoActionKind =>
+  (repoActionKinds as readonly string[]).includes(kind) ? (kind as RepoActionKind) : 'push'
+
+/**
+ * The presses «Принять, когда сборка пройдёт» of one merge request that still wait (ПР15) end:
+ * `done` when the provider merged it (`git.poll` read it so), `failed` REPO_AUTO_MERGE_OFF when the
+ * wait was taken off — by «Отправить в ветку», in the repository, or the request closed. Each row
+ * ends by a conditional update, and the chat is told once.
+ */
+export async function endWaitingMerges(
+  prisma: PrismaClient,
+  input: { projectRepositoryId: string; number: number; merged: boolean; now: Date },
+): Promise<number> {
+  const waiting = await prisma.repoAction.findMany({
+    where: {
+      projectRepositoryId: input.projectRepositoryId,
+      kind: 'merge',
+      state: 'waiting',
+      result: { path: ['number'], equals: input.number },
+    },
+    select: { id: true, taskId: true, result: true },
+    take: 20,
+  })
+  let ended = 0
+  for (const row of waiting) {
+    const result = (row.result ?? {}) as Record<string, unknown>
+    const url = typeof result.url === 'string' ? result.url : undefined
+    const done = await prisma.$transaction(async (tx) => {
+      const changed = await tx.repoAction.updateMany({
+        where: { id: row.id, state: 'waiting' },
+        data: {
+          state: input.merged ? 'done' : 'failed',
+          error: input.merged ? null : repoAutoMergeOff().code,
+          finishedAt: input.now,
+        },
+      })
+      if (changed.count === 0) return false
+      if (row.taskId !== null)
+        await insertFeedEvent(tx, {
+          taskId: row.taskId,
+          row: {
+            type: 'feed.repo_action',
+            payload: {
+              v: 1,
+              actionId: row.id,
+              kind: 'merge',
+              state: input.merged ? 'done' : 'failed',
+              number: input.number,
+              ...(url ? { url } : {}),
+              ...(input.merged ? {} : { error: repoAutoMergeOff().code }),
+            },
+          },
+        })
+      return true
+    })
+    if (done) ended++
+  }
+  return ended
 }

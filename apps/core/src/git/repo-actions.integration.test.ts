@@ -229,6 +229,10 @@ describe.skipIf(!enabled)(
           status: 200,
           body: { ...opened, state: 'closed' },
         },
+        'POST /api/v4/projects/42/merge_requests/7/cancel_auto_merge': () => ({
+          status: 200,
+          body: { ...opened, merge_when_pipeline_succeeds: false },
+        }),
       })
       const provider = (input: { host: string; address: string }): GitProvider => {
         const real = createGitlabProvider({
@@ -526,6 +530,50 @@ describe.skipIf(!enabled)(
       expect(await f.press()).toMatchObject({ state: 'failed', error: 'REPO_PUSH_CONFLICT' })
       expect(await f.feed('feed.repo_left')).toEqual([{ v: 1, reason: 'conflict' }])
       expect(await gitText(f.remote, 'show', `refs/heads/${first.branch}:pies.txt`)).toBe('клиент')
+    })
+
+    it('«Отправить в ветку» first takes off a wait for the build, and that press ends (ПР15)', async () => {
+      const f = await fixture()
+      const h1 = await f.turn(1, f.mainSha, null, 'winter.txt')
+      expect((await f.press({}, { title: 'Меню', description: '', draft: false })).state).toBe(
+        'done',
+      )
+      // «Принять, когда сборка пройдёт» waits at the provider for request 7.
+      await db.projectMergeRequest.updateMany({
+        where: { projectRepositoryId: f.projectRepositoryId, number: 7 },
+        data: { autoMerge: true },
+      })
+      const waiting = await db.repoAction.create({
+        data: {
+          id: randomUUID(),
+          projectRepositoryId: f.projectRepositoryId,
+          taskId: f.task.id,
+          createdById: f.user.id,
+          kind: 'merge',
+          state: 'waiting',
+          args: {
+            token: 'kept',
+            mergeRequest: null,
+            merge: { mode: 'when_green', deleteBranch: true },
+          },
+          tokenSha256: 'e'.repeat(64),
+          result: { number: 7, url: `https://${host}/kolos/site/-/merge_requests/7` },
+        },
+      })
+      await f.turn(2, h1, h1, 'cakes.txt')
+      expect((await f.press()).state).toBe('done')
+      expect(
+        f.fake.calls.filter((call) =>
+          call.url.pathname.endsWith('/merge_requests/7/cancel_auto_merge'),
+        ),
+      ).toHaveLength(1)
+      expect(await db.repoAction.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({
+        state: 'failed',
+        error: 'REPO_AUTO_MERGE_OFF',
+      })
+      expect(await f.feed('feed.repo_action')).toContainEqual(
+        expect.objectContaining({ actionId: waiting.id, kind: 'merge', state: 'failed' }),
+      )
     })
 
     it('closes a merge request that came back other than asked (ПР14)', async () => {
