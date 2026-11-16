@@ -314,6 +314,19 @@ export class GitWorkspaceService {
     )
   }
 
+  /**
+   * Removes the mirror and the bundles of a repository whose row is gone (`git.repo.forget`):
+   * detached, or its project purged (ПР20). Under the lock of the mirror, so no operation of it is
+   * half way; a repeat finds nothing and does nothing. The volume's quota counts what is left.
+   */
+  async dropMirror(projectRepositoryId: string): Promise<void> {
+    const mirror = mirrorPath(this.#root, projectRepositoryId)
+    await this.#mirrors.run(mirror, async () => {
+      await rm(mirror, { recursive: true, force: true })
+      await this.#bundles.forget(projectRepositoryId)
+    })
+  }
+
   /** Whether the mirror of this repository holds the commit. */
   async hasCommit(projectRepositoryId: string, sha: string): Promise<boolean> {
     if (!publicationShaSchema.safeParse(sha).success) return false

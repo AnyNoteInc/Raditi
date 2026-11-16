@@ -271,6 +271,31 @@ describe('GitWorkspaceService', { timeout: 60_000 }, () => {
     expect(f.commands.filter((command) => command === 'git bundle')).toHaveLength(1)
   })
 
+  it('drops the mirror and the bundles of a repository that is gone, and nothing else (ПР20)', async () => {
+    const f = await fixture()
+    await f.fetchMain()
+    await f.service.buildBaseBundle({
+      projectRepositoryId: f.projectRepositoryId,
+      baseSha: f.baseSha,
+      branch: 'raditi/chat-1',
+      committedAt: '2026-11-16T10:00:00.000Z',
+    })
+    const other = randomUUID()
+    await f.service.fetch({
+      projectRepositoryId: other,
+      remote: f.source,
+      branches: ['main'],
+      sizeBytes: null,
+    })
+    await f.service.dropMirror(f.projectRepositoryId)
+    expect((await readdir(join(f.mirrorDir, 'repos'))).sort()).toEqual([`${other}.git`])
+    expect(await readdir(join(f.mirrorDir, 'bundles'))).toEqual([])
+    expect(await f.service.hasCommit(other, f.baseSha)).toBe(true)
+    expect(await f.service.hasCommit(f.projectRepositoryId, f.baseSha)).toBe(false)
+    // A repeat finds nothing and does nothing.
+    await f.service.dropMirror(f.projectRepositoryId)
+  })
+
   it('refuses the commit of another project, even one its cache holds', async () => {
     const a = await fixture()
     await a.fetchMain()

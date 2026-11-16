@@ -9,6 +9,7 @@ import {
   gitLogPayloadSchema,
   gitPollPayloadSchema,
   gitRepoAttachPayloadSchema,
+  gitRepoForgetPayloadSchema,
   gitRepoInspectPayloadSchema,
 } from '@repo/domain'
 import { errorMessage, throttledLogger } from '@repo/observability'
@@ -30,7 +31,7 @@ export class GitProcessor extends WorkerHost {
   readonly #logger = new Logger(GitProcessor.name)
   readonly #jobs: Pick<
     GitJobs,
-    'syncConnection' | 'inspectRepository' | 'attachRepository' | 'lintBranch'
+    'syncConnection' | 'inspectRepository' | 'attachRepository' | 'forgetRepository' | 'lintBranch'
   >
   readonly #actions: Pick<RepoActions, 'run' | 'sweep'>
   readonly #ci: Pick<RepoCi, 'tick' | 'poll' | 'fetchLog' | 'syncDeployActions'>
@@ -38,7 +39,14 @@ export class GitProcessor extends WorkerHost {
 
   constructor(
     @Inject(GIT_JOBS)
-    jobs: Pick<GitJobs, 'syncConnection' | 'inspectRepository' | 'attachRepository' | 'lintBranch'>,
+    jobs: Pick<
+      GitJobs,
+      | 'syncConnection'
+      | 'inspectRepository'
+      | 'attachRepository'
+      | 'forgetRepository'
+      | 'lintBranch'
+    >,
     @Inject(REPO_ACTIONS) actions: Pick<RepoActions, 'run' | 'sweep'>,
     @Inject(REPO_CI) ci: Pick<RepoCi, 'tick' | 'poll' | 'fetchLog' | 'syncDeployActions'>,
   ) {
@@ -64,6 +72,12 @@ export class GitProcessor extends WorkerHost {
         const data = gitRepoAttachPayloadSchema.safeParse(job.data)
         if (!data.success) throw new UnrecoverableError('Invalid git.repo.attach job')
         return this.#jobs.attachRepository(data.data.projectRepositoryId)
+      }
+      // The mirror of a repository that was detached or whose project was purged (ПР20).
+      case gitJobNames.repoForget: {
+        const data = gitRepoForgetPayloadSchema.safeParse(job.data)
+        if (!data.success) throw new UnrecoverableError('Invalid git.repo.forget job')
+        return this.#jobs.forgetRepository(data.data.projectRepositoryId)
       }
       // A press of the client on a card of a repository (docs/plan/84-projects.md, ПР13, ПР15).
       case gitJobNames.action: {

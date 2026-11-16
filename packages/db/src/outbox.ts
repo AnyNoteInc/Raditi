@@ -1,4 +1,4 @@
-import { queueNames, type QueueName } from '@repo/domain'
+import { gitJobNames, queueNames, type QueueName } from '@repo/domain'
 import { z } from 'zod'
 
 import type { Prisma } from './generated/prisma/client.ts'
@@ -38,4 +38,18 @@ export async function enqueueOutbox(db: OutboxWriter, message: OutboxMessage): P
     skipDuplicates: true,
   })
   return count === 1
+}
+
+/**
+ * `git.repo.forget` (docs/plan/84-projects.md, ПР20): in the transaction that deletes the row of a
+ * repository of a project — «Отключить репозиторий», the purge of its project — so that core
+ * removes its mirror and bundles from the volume once the row is gone.
+ */
+export function enqueueRepoForget(db: OutboxWriter, projectRepositoryId: string): Promise<boolean> {
+  return enqueueOutbox(db, {
+    topic: 'git',
+    type: gitJobNames.repoForget,
+    payload: { projectRepositoryId },
+    dedupeKey: `git.repo.forget:${projectRepositoryId}`,
+  })
 }

@@ -215,6 +215,40 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
     expect(await purging.sweep()).toEqual({ stopped: 0, purged: null, collected: 0, paused: 0 })
   })
 
+  it('the purge asks core to remove the mirror of the repository of the project (ПР20)', async () => {
+    const now = new Date(Date.now() - 31 * DAY)
+    const { userId, projectId } = await projectWith(['done'], now)
+    const project = await db.project.findUniqueOrThrow({ where: { id: projectId } })
+    const repositoryId = randomUUID()
+    await db.projectRepository.create({
+      data: {
+        id: repositoryId,
+        projectId,
+        workspaceId: project.workspaceId,
+        provider: 'gitlab',
+        host: 'gitlab.com',
+        path: 'kofeinya/sait',
+        webUrl: 'https://gitlab.com/kofeinya/sait',
+        defaultBranch: 'main',
+        mode: 'read',
+      },
+    })
+    await trashProject(db, { projectId, userId, now })
+    expect(await purgeProject(db, { projectId, now: new Date() })).toMatchObject({
+      state: 'purged',
+    })
+    expect(await db.projectRepository.count({ where: { id: repositoryId } })).toBe(0)
+    const forget = await db.outboxEvent.findFirstOrThrow({
+      where: { dedupeKey: `git.repo.forget:${repositoryId}` },
+    })
+    expect(forget).toMatchObject({
+      topic: 'git',
+      type: 'git.repo.forget',
+      payload: { projectRepositoryId: repositoryId },
+    })
+    await db.outboxEvent.delete({ where: { id: forget.id } })
+  })
+
   it('a project restored before the purge took it is kept', async () => {
     const now = new Date(Date.now() - 31 * DAY)
     const { userId, projectId } = await projectWith(['done'], now)

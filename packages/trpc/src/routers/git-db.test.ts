@@ -291,8 +291,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL: git connections and project repositor
         )
       ).code,
     ).toBe('PROJECT_HAS_REPOSITORY')
+    const detached = await db.projectRepository.findFirstOrThrow({ where: { projectId } })
     await caller.projectRepo.detach({ projectId })
     expect(await caller.projectRepo.get({ projectId })).toBeNull()
+    // Core removes its mirror once the row is gone (ПР20).
+    expect(
+      await db.outboxEvent.count({
+        where: { type: 'git.repo.forget', dedupeKey: `git.repo.forget:${detached.id}` },
+      }),
+    ).toBe(1)
   })
 
   it('a connection of another user is neither listed nor chosen', async () => {
