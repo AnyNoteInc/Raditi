@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { durationOf, RepositoryView, RunView, whenOf } from './repo-runs'
+import { durationOf, RepositoryView, RunView, runText, whenOf } from './repo-runs'
 
 // The repository and its builds in the cabinet (docs/plan/84-projects.md, ПР17, §4.8; slice 84.21;
 // P-repo, P-pipeline): Russian statuses, the client's names of stages, the log folded until it is
@@ -149,6 +149,19 @@ describe('P-repo (plan 84, 84.21)', () => {
     // «Упали» shows only the failed one.
     fireEvent.click(screen.getByRole('tab', { name: 'Упали 1' }))
     expect(screen.queryByText('Идёт')).toBeNull()
+  })
+})
+
+describe('the tabs of merge requests and branches (ревью P7)', () => {
+  it('say a failed read and read again by «Ещё раз»', async () => {
+    calls.get.mockResolvedValue(repository)
+    calls.runs.mockResolvedValue({ items: [], next: null, polledAt: new Date(), refreshing: false })
+    calls.work.mockRejectedValueOnce(new Error('down'))
+    calls.work.mockResolvedValue({ mergeRequests: [], branches: [] })
+    wrap(<RepositoryView project={project} />)
+    fireEvent.click(await screen.findByRole('tab', { name: /Запросы на слияние/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Ещё раз' }))
+    expect(await screen.findByText(runText.noRequests)).toBeTruthy()
   })
 })
 

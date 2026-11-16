@@ -175,6 +175,10 @@ describe('the repository of a project (84.17)', () => {
     ).toBeTruthy()
     expect(screen.getByText('Репозиторий: kolos/site')).toBeTruthy()
     expect(screen.getByText('по открытой ссылке · только чтение')).toBeTruthy()
+    // «Открыть» leads to the page of the repository in Радити (ревью P6).
+    expect(
+      screen.getByRole('link', { name: 'Открыть репозиторий kolos/site' }).getAttribute('href'),
+    ).toBe(`/projects/${PROJECT_ID}/repository`)
     // With a repository the menu offers no second one.
     const menu = await openMenu()
     expect(

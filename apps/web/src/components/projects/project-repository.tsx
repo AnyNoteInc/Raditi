@@ -19,6 +19,7 @@ import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import Link from 'next/link'
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
@@ -26,7 +27,7 @@ import { callErrorText } from '@/components/chat/call-error'
 import { useTRPC } from '@/trpc/client'
 
 import type { ProjectDetails } from './project-types'
-import { RepositoryRunsLine } from './repo-runs'
+import { repositoryHref, RepositoryRunsLine } from './repo-runs'
 import { repoText } from './repo-texts'
 
 // The repository of a project in the cabinet (docs/plan/84-projects.md, ПР6, ПР9, ПР10, §4.8;
@@ -140,12 +141,11 @@ export function ProjectRepositoryRow({
           {repoText.row}: {repo.path}
         </Typography>
         <Box sx={{ flex: '1 1 auto' }} />
+        {/* The page of the repository in Радити (ревью P6); it opens the provider's itself. */}
         <Button
           size="small"
-          component="a"
-          href={repo.webUrl}
-          target="_blank"
-          rel="noreferrer noopener"
+          component={Link}
+          href={repositoryHref(project.id)}
           aria-label={repoText.openLabel(repo.path)}
           sx={{ minHeight: 44, flex: 'none' }}
         >
