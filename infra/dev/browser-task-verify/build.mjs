@@ -41,12 +41,25 @@ const exists = (path) =>
     () => false,
   )
 
+/**
+ * What makes one stand's build its own: its name (the folder and the stamps of the copy), the
+ * prefix of its variables, the folder of the stand itself (never part of what the copy builds) and
+ * the images it builds. The projects stand (infra/dev/projects-verify) builds through the same
+ * code with a descriptor of its own.
+ */
+export const BROWSER_TASK_BUILD = Object.freeze({
+  name: 'browser-task-verify',
+  envPrefix: 'BROWSER_TASK_VERIFY',
+  own: 'infra/dev/browser-task-verify/',
+  images: BUILT_IMAGES,
+})
+
 /** Where the stand builds: outside the repository, kept between runs. */
-export function copyDirectory(root) {
-  const given = process.env.BROWSER_TASK_VERIFY_BUILD_DIR
-  const directory = resolve(given ? given : join(tmpdir(), 'raditi-browser-task-verify-build'))
-  if (!outside(root, directory))
-    throw new Error('BROWSER_TASK_VERIFY_BUILD_DIR must be outside the repository')
+export function copyDirectory(root, stand = BROWSER_TASK_BUILD) {
+  const variable = `${stand.envPrefix}_BUILD_DIR`
+  const given = process.env[variable]
+  const directory = resolve(given ? given : join(tmpdir(), `raditi-${stand.name}-build`))
+  if (!outside(root, directory)) throw new Error(`${variable} must be outside the repository`)
   return directory
 }
 
@@ -55,22 +68,21 @@ export function copyDirectory(root) {
  * is now: for work on the stand itself while the tree moves under it. Such a run proves nothing
  * about the tree, and says so. Any other value is refused, and so is the variable with a build.
  */
-export function staleCopyAllowed(env, options) {
-  const given = env.BROWSER_TASK_VERIFY_STALE_COPY
+export function staleCopyAllowed(env, options, stand = BROWSER_TASK_BUILD) {
+  const variable = `${stand.envPrefix}_STALE_COPY`
+  const given = env[variable]
   if (given === undefined || given === '') return false
-  if (given !== 'allow')
-    throw new Error('BROWSER_TASK_VERIFY_STALE_COPY takes one value, `allow`, or is left unset')
-  if (options.build)
-    throw new Error('BROWSER_TASK_VERIFY_STALE_COPY=allow goes with --no-build only')
+  if (given !== 'allow') throw new Error(`${variable} takes one value, \`allow\`, or is left unset`)
+  if (options.build) throw new Error(`${variable}=allow goes with --no-build only`)
   return true
 }
 
-async function treeListing(rt) {
+async function treeListing(rt, stand) {
   const listed = await rt.run('git', ['-C', rt.root, 'ls-files', '-co', '--exclude-standard', '-z'])
   const present = []
   const entries = []
   // The stand itself is no part of what the copy builds: editing it keeps the builds.
-  const own = (path) => path.startsWith('infra/dev/browser-task-verify/')
+  const own = (path) => path.startsWith(stand.own)
   for (const path of listed.output.split('\0').filter((path) => copyablePath(path) && !own(path))) {
     const entry = await lstat(join(rt.root, path)).catch(() => null)
     if (entry === null || entry.isDirectory()) continue
@@ -95,11 +107,11 @@ async function copyListing(copy, stamp) {
   return entries
 }
 
-const stampOf = (copy) => join(copy, COPY_MARKER, `browser-task-verify-${BUILD_STAMP}`)
-const imagesStampOf = (copy) => join(copy, COPY_MARKER, 'browser-task-verify-images.json')
+const stampOf = (copy, stand) => join(copy, COPY_MARKER, `${stand.name}-${BUILD_STAMP}`)
+const imagesStampOf = (copy, stand) => join(copy, COPY_MARKER, `${stand.name}-images.json`)
 
 /** The copy of the tree and its builds, or the check of an earlier one (`--no-build`). */
-export async function buildCopy(rt, copy, options) {
+export async function buildCopy(rt, copy, options, stand = BROWSER_TASK_BUILD) {
   const outputs = [...APP_OUTPUTS, ...(options.webDev ? [] : [WEB_OUTPUT.server])]
   if (options.build) {
     rt.setStage('copying the tree')
@@ -111,8 +123,8 @@ export async function buildCopy(rt, copy, options) {
         'The build directory holds files of someone else',
       )
     await mkdir(marker, { recursive: true })
-    await rm(stampOf(copy), { force: true })
-    const { present, entries } = await treeListing(rt)
+    await rm(stampOf(copy, stand), { force: true })
+    const { present, entries } = await treeListing(rt, stand)
     const manifest = join(marker, 'manifest')
     const previous = (await readFile(manifest, 'utf8').catch(() => '')).split('\0').filter(Boolean)
     await writeFile(manifest, manifestDuringCopy(previous, present).join('\0'))
@@ -145,7 +157,10 @@ export async function buildCopy(rt, copy, options) {
         recursive: true,
       })
     }
-    await writeFile(stampOf(copy), buildStamp({ builtAt: new Date().toISOString(), entries }))
+    await writeFile(
+      stampOf(copy, stand),
+      buildStamp({ builtAt: new Date().toISOString(), entries }),
+    )
     return { entries, stale: false }
   }
   rt.setStage('checking the builds of the copy')
@@ -154,13 +169,14 @@ export async function buildCopy(rt, copy, options) {
       await exists(join(copy, path)),
       `The copy has no build ${path}: run without --no-build`,
     )
-  const stamp = readBuildStamp(await readFile(stampOf(copy), 'utf8').catch(() => ''))
-  const { entries } = await treeListing(rt)
+  const stamp = readBuildStamp(await readFile(stampOf(copy, stand), 'utf8').catch(() => ''))
+  const { entries } = await treeListing(rt, stand)
   const stale = staleCopy(stamp, entries, stamp === null ? [] : await copyListing(copy, stamp))
   if (stale !== null) {
-    if (!staleCopyAllowed(process.env, options)) throw new Error(`--no-build is refused: ${stale}`)
+    if (!staleCopyAllowed(process.env, options, stand))
+      throw new Error(`--no-build is refused: ${stale}`)
     console.log(
-      `NOTE BROWSER_TASK_VERIFY_STALE_COPY=allow: the builds are not of the tree as it is now (${stale}); this run proves nothing about the tree`,
+      `NOTE ${stand.envPrefix}_STALE_COPY=allow: the builds are not of the tree as it is now (${stale}); this run proves nothing about the tree`,
     )
     return { entries: stamp?.entries ?? entries, stale: true }
   }
@@ -171,10 +187,16 @@ export async function buildCopy(rt, copy, options) {
 }
 
 /** The images of this tree under the stand's own names, by the digests the configuration takes. */
-export async function buildImages(rt, copy, options, { entries, stale }) {
+export async function buildImages(
+  rt,
+  copy,
+  options,
+  { entries, stale },
+  stand = BROWSER_TASK_BUILD,
+) {
   const digest = treeDigest(entries)
   if (options.build) {
-    for (const image of Object.values(BUILT_IMAGES)) {
+    for (const image of Object.values(stand.images)) {
       rt.setStage(`docker build ${image.tag}`)
       const started = Date.now()
       const context = join(rt.root, image.context ?? '.')
@@ -197,7 +219,7 @@ export async function buildImages(rt, copy, options, { entries, stale }) {
     }
   }
   const images = {}
-  for (const [name, image] of Object.entries(BUILT_IMAGES)) {
+  for (const [name, image] of Object.entries(stand.images)) {
     const inspected = await rt.docker(
       ['image', 'inspect', '--format', '{{json .RepoDigests}}', image.tag],
       { allowFailure: true },
@@ -206,9 +228,9 @@ export async function buildImages(rt, copy, options, { entries, stale }) {
       throw new Error(`The image ${image.tag} is missing: run without --no-build`)
     images[name] = localDigestReference(image.tag, inspected.output)
   }
-  if (options.build) await writeFile(imagesStampOf(copy), JSON.stringify({ digest, images }))
+  if (options.build) await writeFile(imagesStampOf(copy, stand), JSON.stringify({ digest, images }))
   else {
-    const stamp = JSON.parse(await readFile(imagesStampOf(copy), 'utf8').catch(() => '{}'))
+    const stamp = JSON.parse(await readFile(imagesStampOf(copy, stand), 'utf8').catch(() => '{}'))
     const same = stamp.digest === digest && JSON.stringify(stamp.images) === JSON.stringify(images)
     if (!same && !stale)
       throw new Error('--no-build is refused: the images were not built of the tree as it is now')

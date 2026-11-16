@@ -135,8 +135,8 @@ function declaredName(body, tool) {
 const USAGE = Object.freeze({ prompt: 12_000, cached: 6_000, completion: 300, reasoning: 40 })
 
 /** A program by its name, as a turn runs it: what it saw, whether it finished, why it broke. */
-export function usableProgram(name, ctx = {}) {
-  const program = PROGRAMS[name]
+export function usableProgram(name, ctx = {}, programs = PROGRAMS) {
+  const program = programs[name]
   if (!program) throw new Error(`No program ${name}`)
   return { name, program, ctx, facts: {}, finished: false, broken: null }
 }
@@ -200,7 +200,7 @@ export function programAnswer(current, body, onMove = () => {}) {
   }
 }
 
-export async function startModel({ key, cert, port, logFile = null }) {
+export async function startModel({ key, cert, port, logFile = null, programs = PROGRAMS }) {
   const state = createFakeZaiState({})
   const requests = []
   const moves = []
@@ -266,7 +266,7 @@ export async function startModel({ key, cert, port, logFile = null }) {
     moves,
     /** The program of the next turn (programs.mjs, by name) and what it is told besides the prompt. */
     script(name, ctx = {}) {
-      current = usableProgram(name, ctx)
+      current = usableProgram(name, ctx, programs)
       return current
     },
     current: () => current,

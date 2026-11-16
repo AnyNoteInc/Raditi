@@ -28,11 +28,15 @@ const publishedPort = (output) => {
 }
 
 /** The stand's own CA (two days) and one server certificate: the synthetic Z.ai. */
-export async function createCertificates(rt, directory) {
+export async function createCertificates(
+  rt,
+  directory,
+  { names = [], subject = 'raditi-browser-task-verify CA' } = {},
+) {
   const openssl = (...args) =>
     rt.run('openssl', args, { env: { PATH: process.env.PATH, HOME: directory }, timeoutMs: 30_000 })
   const file = (leaf) => join(directory, leaf)
-  const configs = certificateConfigs()
+  const configs = certificateConfigs(names)
   await writeFile(file('ca.ext'), configs.authority)
   await writeFile(file('server.ext'), configs.server)
   await mkdir(file('tls'), { mode: 0o755 })
@@ -45,7 +49,7 @@ export async function createCertificates(rt, directory) {
     '-key',
     file('ca-key.pem'),
     '-subj',
-    '/CN=raditi-browser-task-verify CA',
+    `/CN=${subject}`,
     '-out',
     file('ca.csr'),
   )
