@@ -2,7 +2,13 @@ import { Counter, type Registry } from '@prometheus-io/client'
 import { Logger, type Provider } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import type { PrismaClient } from '@repo/db'
-import type { JobQueue, ObjectStorage, SiteLeaseStore, TurnExecutor } from '@repo/domain'
+import type {
+  JobQueue,
+  ObjectStorage,
+  SiteLeaseStore,
+  TurnCredentialSource,
+  TurnExecutor,
+} from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
 import { PRISMA } from '@repo/service-runtime'
 
@@ -12,6 +18,7 @@ import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { AGENT_DRIVERS } from '../drivers/drivers.tokens.ts'
 import { OBJECT_STORAGE } from '../infra/infra.tokens.ts'
 import { SITE_LEASES } from '../leases/leases.tokens.ts'
+import { TURN_CREDENTIALS } from '../llm/llm.tokens.ts'
 import { JOB_QUEUE } from '../queue/queue.tokens.ts'
 import { TaskEventTurnJournal } from '../turns/turn-journal.ts'
 import { turnRuntimeOf } from '../turns/turn-runtime.ts'
@@ -191,6 +198,7 @@ export const taskProviders: Provider[] = [
       inbox: ObjectStorage,
       registry: Registry,
       workspace: GitWorkspaceService | null,
+      credentials: TurnCredentialSource,
     ) => {
       const pageMetrics = new PageMetrics(prisma)
       pageMetrics.register(registry)
@@ -208,6 +216,9 @@ export const taskProviders: Provider[] = [
         projects: new ProjectTrash({ db: prisma, storage: inbox }),
         memory: new MemoryChanges({ db: prisma, logger: new Logger('MemoryChanges') }),
         schedules: new ScheduleChanges({ db: prisma, logger: new Logger('ScheduleChanges') }),
+        // The changes of a turn whose end recovery reached (docs/plan/84-projects.md, §10).
+        pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
+        values: credentials,
         // The card of a commit recovery published (docs/plan/84-projects.md, ПР12).
         repositories: workspace
           ? {
@@ -233,6 +244,7 @@ export const taskProviders: Provider[] = [
       OBJECT_STORAGE,
       METRICS_REGISTRY,
       { token: GIT_WORKSPACE, optional: true },
+      TURN_CREDENTIALS,
     ],
   },
   {

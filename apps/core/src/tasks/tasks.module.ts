@@ -3,6 +3,7 @@ import { Module, type DynamicModule } from '@nestjs/common'
 import { BrowserModule } from '../browser/browser.module.ts'
 import { DriversModule } from '../drivers/drivers.module.ts'
 import { LeasesModule } from '../leases/leases.module.ts'
+import { LlmModule } from '../llm/llm.module.ts'
 import { GitModule } from '../git/git.module.ts'
 import { GitWorkspaceModule } from '../git-workspace/git-workspace.module.ts'
 import { taskProviders } from './tasks.providers.ts'
@@ -13,8 +14,9 @@ import { taskProviders } from './tasks.providers.ts'
  * engine of the process. A chat has no site and no repository (docs/plan/83-remove-projects.md).
  */
 @Module({
-  // GitModule and GitWorkspaceModule: the repository of a pass (docs/plan/84-projects.md, ПР12).
-  imports: [DriversModule, LeasesModule, BrowserModule, GitModule, GitWorkspaceModule],
+  // GitModule and GitWorkspaceModule: the repository of a pass (docs/plan/84-projects.md, ПР12);
+  // LlmModule: the values of the variables the sweep checks a recovered turn's changes by.
+  imports: [DriversModule, LeasesModule, LlmModule, BrowserModule, GitModule, GitWorkspaceModule],
   providers: taskProviders,
 })
 export class TasksModule {
