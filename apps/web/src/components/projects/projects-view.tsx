@@ -237,9 +237,13 @@ export function ProjectsView() {
         open={creating !== null}
         initial={creating?.initial ?? null}
         onClose={() => setCreating(null)}
-        onCreated={(project) => {
+        onCreated={(project, then) => {
           setCreating(null)
-          router.push(projectHref(project.id))
+          // «Подключить GitLab» in the window is an intent: the page opens «Подключить
+          // репозиторий» at once, because the sign-in leaves the page (ПР5).
+          router.push(
+            `${projectHref(project.id)}${then?.connectRepository ? '?connect=repository' : ''}`,
+          )
         }}
       />
       <Snackbar

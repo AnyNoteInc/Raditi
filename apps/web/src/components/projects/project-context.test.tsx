@@ -32,32 +32,36 @@ vi.mock('@/components/chat/attachment-upload', async (original) => ({
   uploadBytes: calls.upload,
 }))
 
-vi.mock('@/trpc/client', () => ({
-  useTRPC: () => ({
-    project: {
-      pathKey: () => ['project'],
-      create: { mutationOptions: () => ({ mutationFn: calls.create }) },
-    },
-    projectFile: {
-      pathKey: () => ['projectFile'],
-      list: {
-        queryOptions: (input: { projectId: string }) => ({
-          queryKey: ['projectFile.list', input],
-          queryFn: () => calls.list(input),
-        }),
+vi.mock('@/trpc/client', async () => {
+  const { repoTrpc } = await import('./testing/repo-trpc')
+  return {
+    useTRPC: () => ({
+      ...repoTrpc(),
+      project: {
+        pathKey: () => ['project'],
+        create: { mutationOptions: () => ({ mutationFn: calls.create }) },
       },
-      remove: { mutationOptions: () => ({ mutationFn: calls.removeBound }) },
-    },
-  }),
-  useTRPCClient: () => ({
-    projectFile: {
-      start: { mutate: calls.start },
-      bind: { mutate: calls.bind },
-      addText: { mutate: calls.addText },
-      remove: { mutate: calls.removeUnbound },
-    },
-  }),
-}))
+      projectFile: {
+        pathKey: () => ['projectFile'],
+        list: {
+          queryOptions: (input: { projectId: string }) => ({
+            queryKey: ['projectFile.list', input],
+            queryFn: () => calls.list(input),
+          }),
+        },
+        remove: { mutationOptions: () => ({ mutationFn: calls.removeBound }) },
+      },
+    }),
+    useTRPCClient: () => ({
+      projectFile: {
+        start: { mutate: calls.start },
+        bind: { mutate: calls.bind },
+        addText: { mutate: calls.addText },
+        remove: { mutate: calls.removeUnbound },
+      },
+    }),
+  }
+})
 
 const at = new Date('2026-11-12T10:00:00Z')
 const fileRow = (n: number, name: string, sizeBytes: number, kind: 'file' | 'text' = 'file') => ({
@@ -92,6 +96,7 @@ const kolos: ProjectDetails = {
   createdAt: at,
   files: { count: FILES.length, bytes: BYTES, limitBytes: 100 * MIB, first: FILES },
   memory: { active: 0, proposed: 0 },
+  repository: null,
 }
 
 function wrap(node: React.ReactNode) {
@@ -226,11 +231,14 @@ describe('«Контекст» of the page of a project (P-project, P-context)',
     const { container } = wrap(<ProjectContext project={kolos} />)
     fireEvent.click(screen.getByRole('button', { name: 'Добавить в контекст проекта' }))
     const menu = await screen.findByRole('menu', { name: 'Добавить в контекст' })
-    // The repository comes with its own slices: its ways are there, but not yet.
-    for (const name of [/Ссылка на GitHub/, /Подключить GitLab/, /Подключить GitHub/])
-      expect(within(menu).getByRole('menuitem', { name }).getAttribute('aria-disabled')).toBe(
-        'true',
-      )
+    // A link and GitLab since 84.17; the GitHub App is Э10: «Скоро».
+    for (const name of [/Ссылка на GitHub/, /Подключить GitLab/])
+      expect(within(menu).getByRole('menuitem', { name }).getAttribute('aria-disabled')).toBeNull()
+    expect(
+      within(menu)
+        .getByRole('menuitem', { name: /Подключить GitHub/ })
+        .getAttribute('aria-disabled'),
+    ).toBe('true')
     expect(within(menu).getByText('Файлы до 20 МБ, всего до 100 МБ на проект')).toBeTruthy()
     fireEvent.click(within(menu).getByRole('menuitem', { name: /Загрузить с устройства/ }))
     const device = await screen.findByRole('menu', { name: 'Загрузить с устройства' })

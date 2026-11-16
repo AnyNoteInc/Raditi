@@ -1,9 +1,11 @@
 'use client'
 
 import { projectLimits } from '@repo/domain/projects'
+import { parseRepositoryLink, repoRefusalTexts } from '@repo/domain/repo'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import Chip from '@mui/material/Chip'
 import Dialog from '@mui/material/Dialog'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
@@ -12,6 +14,7 @@ import useMediaQuery from '@mui/material/useMediaQuery'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 
+import { AppIcon } from '@/components/application/app-icon'
 import { callErrorText } from '@/components/chat/call-error'
 import { uuidv7 } from '@/components/chat/uuid'
 import { useTRPC } from '@/trpc/client'
@@ -21,6 +24,8 @@ import { ContextDropArea, ContextUploadChips } from './context-parts'
 import { ContextTextDialog } from './context-text-dialog'
 import { contextText, projectCreateText } from './project-texts'
 import type { PickedProject } from './project-types'
+import { LinkRefusal, RepoLinkDialog } from './project-repository'
+import { repoText } from './repo-texts'
 import { useContextUploads } from './use-context-uploads'
 
 /**
@@ -39,8 +44,11 @@ export function ProjectCreateDialog({
 }: {
   open: boolean
   onClose: () => void
-  /** The server took it: the new project, to open or to choose. */
-  onCreated: (project: PickedProject) => void
+  /**
+   * The server took it: the new project, to open or to choose; `connectRepository` — «Подключить
+   * GitLab» was chosen in the window (ПР5): the page opens «Подключить репозиторий».
+   */
+  onCreated: (project: PickedProject, then?: { connectRepository: boolean }) => void
   /** «Начать с примера» fills the form. */
   initial?: { name: string; goal: string } | null
 }) {
@@ -79,7 +87,7 @@ function CreateForm({
   initial,
 }: {
   onClose: () => void
-  onCreated: (project: PickedProject) => void
+  onCreated: (project: PickedProject, then?: { connectRepository: boolean }) => void
   initial: { name: string; goal: string } | null
 }) {
   const trpc = useTRPC()
@@ -95,6 +103,10 @@ function CreateForm({
   const contextId = useId()
   const uploads = useContextUploads({ projectId: null })
   const [writing, setWriting] = useState(false)
+  // «Ссылка на GitHub» is saved with the project; «Подключить GitLab» waits for it (ПР5).
+  const [link, setLink] = useState<string | null>(null)
+  const [linking, setLinking] = useState(false)
+  const [connectRepository, setConnectRepository] = useState(false)
   const discard = useRef(uploads.discardAll)
   useEffect(() => {
     discard.current = uploads.discardAll
@@ -121,16 +133,20 @@ function CreateForm({
         name: shownName,
         ...(goal.trim() === '' ? {} : { goal }),
         ...(uploads.readyIds.length === 0 ? {} : { fileIds: [...uploads.readyIds] }),
+        ...(link === null ? {} : { publicRepositoryUrl: link }),
       })
       pending.current = null
       uploads.keepAll()
       void queryClient.invalidateQueries({ queryKey: trpc.project.pathKey() })
-      onCreated({
-        id: created.projectId,
-        name: shownName,
-        goal: goal.trim() === '' ? null : goal.trim(),
-        hasInstructions: false,
-      })
+      onCreated(
+        {
+          id: created.projectId,
+          name: shownName,
+          goal: goal.trim() === '' ? null : goal.trim(),
+          hasInstructions: false,
+        },
+        { connectRepository: connectRepository && link === null },
+      )
     } catch (failure) {
       setError(callErrorText(failure))
     }
@@ -191,8 +207,26 @@ function CreateForm({
             onRetry={uploads.retry}
             onRemove={uploads.remove}
           />
+          {link !== null || connectRepository ? (
+            <Chip
+              icon={<AppIcon name={link !== null ? 'github' : 'gitlab'} size={16} />}
+              label={link ?? repoText.connectAfterCreate}
+              onDelete={() => {
+                setLink(null)
+                setConnectRepository(false)
+              }}
+              sx={{ alignSelf: 'flex-start', maxWidth: '100%' }}
+            />
+          ) : null}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.75, flexWrap: 'wrap' }}>
-            <ContextAddMenu variant="pill" onFiles={uploads.add} onText={() => setWriting(true)} />
+            <ContextAddMenu
+              variant="pill"
+              onFiles={uploads.add}
+              onText={() => setWriting(true)}
+              {...(link === null && !connectRepository
+                ? { onLink: () => setLinking(true), onGitlab: () => setConnectRepository(true) }
+                : {})}
+            />
             <Typography sx={{ flex: '1 1 200px', fontSize: 13, color: 'text.secondary' }}>
               {contextText.createHint}
             </Typography>
@@ -200,6 +234,19 @@ function CreateForm({
         </ContextDropArea>
       </Box>
       <ContextTextDialog open={writing} onClose={() => setWriting(false)} onAdd={uploads.addText} />
+      <RepoLinkDialog
+        open={linking}
+        onClose={() => setLinking(false)}
+        onAdd={async (url) => {
+          // The server checks it with the project; here only that it reads as a repository.
+          try {
+            parseRepositoryLink(url)
+          } catch {
+            throw new LinkRefusal(repoRefusalTexts.REPO_LINK_INVALID)
+          }
+          setLink(url)
+        }}
+      />
       {error ? <Alert severity="error">{error}</Alert> : null}
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
         <Button onClick={onClose} disabled={create.isPending} sx={{ minHeight: 44 }}>

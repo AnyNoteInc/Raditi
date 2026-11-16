@@ -31,62 +31,74 @@ const mutation = (fn: (input: never) => Promise<unknown>) => ({
 })
 const noop = { mutationOptions: () => ({ mutationFn: vi.fn() }) }
 
-vi.mock('@/trpc/client', () => ({
-  useTRPC: () => ({
-    project: {
-      pathKey: () => ['project'],
-      get: {
-        queryOptions: (input: { projectId: string }) => ({
-          queryKey: ['project.get', input],
-          queryFn: () => calls.get(input),
-        }),
+vi.mock('@/trpc/client', async () => {
+  const { repoTrpc } = await import('./testing/repo-trpc')
+  return {
+    useTRPC: () => ({
+      ...repoTrpc(),
+      project: {
+        pathKey: () => ['project'],
+        get: {
+          queryOptions: (input: { projectId: string }) => ({
+            queryKey: ['project.get', input],
+            queryFn: () => calls.get(input),
+          }),
+        },
+        list: {
+          queryOptions: () => ({
+            queryKey: ['project.list'],
+            queryFn: async () => ({ items: [] }),
+          }),
+        },
+        setInstructions: mutation(calls.setInstructions),
+        archive: mutation(calls.archive),
+        star: noop,
+        remove: noop,
+        restore: noop,
+        update: noop,
       },
-      list: {
-        queryOptions: () => ({ queryKey: ['project.list'], queryFn: async () => ({ items: [] }) }),
+      task: {
+        create: mutation(calls.create),
+        rename: noop,
+        remove: noop,
+        pin: noop,
+        archive: noop,
+        moveToProject: noop,
       },
-      setInstructions: mutation(calls.setInstructions),
-      archive: mutation(calls.archive),
-      star: noop,
-      remove: noop,
-      restore: noop,
-      update: noop,
-    },
-    task: {
-      create: mutation(calls.create),
-      rename: noop,
-      remove: noop,
-      pin: noop,
-      archive: noop,
-      moveToProject: noop,
-    },
-    projectFile: {
-      pathKey: () => ['projectFile'],
-      list: {
-        queryOptions: (input: { projectId: string }) => ({
-          queryKey: ['projectFile.list', input],
-          queryFn: async () => ({ files: [], bytes: 0, limitBytes: 100 * 1024 * 1024, percent: 0 }),
-        }),
+      projectFile: {
+        pathKey: () => ['projectFile'],
+        list: {
+          queryOptions: (input: { projectId: string }) => ({
+            queryKey: ['projectFile.list', input],
+            queryFn: async () => ({
+              files: [],
+              bytes: 0,
+              limitBytes: 100 * 1024 * 1024,
+              percent: 0,
+            }),
+          }),
+        },
+        remove: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
       },
-      remove: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
-    },
-    billing: {
-      usage: {
-        queryKey: () => ['billing', 'usage'],
-        queryOptions: () => ({ queryKey: ['billing', 'usage'], queryFn: async () => null }),
+      billing: {
+        usage: {
+          queryKey: () => ['billing', 'usage'],
+          queryOptions: () => ({ queryKey: ['billing', 'usage'], queryFn: async () => null }),
+        },
       },
-    },
-  }),
-  useTRPCClient: () => ({
-    task: { list: { query: calls.chats } },
-    attachment: { start: { mutate: vi.fn() }, remove: { mutate: vi.fn() } },
-    projectFile: {
-      start: { mutate: vi.fn() },
-      bind: { mutate: vi.fn() },
-      addText: { mutate: vi.fn() },
-      remove: { mutate: vi.fn(async () => ({})) },
-    },
-  }),
-}))
+    }),
+    useTRPCClient: () => ({
+      task: { list: { query: calls.chats } },
+      attachment: { start: { mutate: vi.fn() }, remove: { mutate: vi.fn() } },
+      projectFile: {
+        start: { mutate: vi.fn() },
+        bind: { mutate: vi.fn() },
+        addText: { mutate: vi.fn() },
+        remove: { mutate: vi.fn(async () => ({})) },
+      },
+    }),
+  }
+})
 
 const NOW = new Date()
 const kolos: ProjectDetails = {
@@ -102,6 +114,7 @@ const kolos: ProjectDetails = {
   createdAt: NOW,
   files: { count: 0, bytes: 0, limitBytes: 100 * 1024 * 1024, first: [] },
   memory: { active: 0, proposed: 0 },
+  repository: null,
 }
 
 function show(project: ProjectDetails = kolos) {

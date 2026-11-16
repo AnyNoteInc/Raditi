@@ -178,6 +178,8 @@ describe('API routes', () => {
     speech: /recognizeSpeech\(request, speechDependencies\)/,
     // A site, a name and an address of an MCP server (docs/plan/81-mcp-server-credentials.md).
     'mcp-oauth/start': /withBodyLimit\(MAX_MCP_SIGN_IN_BODY_BYTES,/,
+    // The id of a project for a sign-in on gitlab.com (docs/plan/84-projects.md, 84.17).
+    'git/gitlab/start': /withBodyLimit\(MAX_GIT_SIGN_IN_BODY_BYTES,/,
   }
 
   // Every way a route file exports a method that carries a body.

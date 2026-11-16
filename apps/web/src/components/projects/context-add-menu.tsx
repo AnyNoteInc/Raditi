@@ -22,9 +22,10 @@ import { chosenFiles, type ChosenFile } from './use-context-uploads'
 /**
  * «Добавить контекст» and «Добавить» of «Контекст» (docs/plan/84-projects.md, §4.8; P-create-menu,
  * P-context-menu, P-phone-sheet): «Загрузить с устройства» with «Файлы…» and «Папку…», «Добавить
- * текстовое содержимое», and the repository's three ways marked «Скоро» — the repository comes
- * with its own slices (84.17, Э10). Under them — the bounds of the files. On a phone it is a sheet
- * from the bottom, and «Загрузить с устройства» opens the files at once.
+ * текстовое содержимое», and the repository's three ways: «Ссылка на GitHub» and «Подключить GitLab»
+ * since slice 84.17, when the page gives them a handler, «Подключить GitHub» marked «Скоро» until Э10.
+ * Under them — the bounds of the files. On a phone it is a sheet from the bottom, and «Загрузить с
+ * устройства» opens the files at once.
  */
 export function ContextAddMenu({
   onFiles,
@@ -33,9 +34,15 @@ export function ContextAddMenu({
   disabled = false,
   label,
   title,
+  onLink,
+  onGitlab,
 }: {
   onFiles: (files: ChosenFile[]) => void
   onText: () => void
+  /** «Ссылка на GitHub» (ПР9); absent — «Скоро». */
+  onLink?: () => void
+  /** «Подключить GitLab» (ПР10); absent — «Скоро». */
+  onGitlab?: () => void
   /** `pill` — «Добавить контекст» of the window of a new project; `text` — «Добавить» of a row. */
   variant: 'pill' | 'text'
   disabled?: boolean
@@ -132,10 +139,28 @@ export function ContextAddMenu({
       </Button>
     )
 
+  const choose = (handler: (() => void) | undefined) =>
+    handler
+      ? () => {
+          close()
+          handler()
+        }
+      : undefined
   const repository = [
-    { icon: 'github', title: contextText.githubLink, hint: contextText.githubLinkHint },
-    { icon: 'gitlab', title: contextText.gitlab, hint: contextText.gitlabHint },
-    { icon: 'github', title: contextText.github, hint: contextText.githubHint },
+    {
+      icon: 'github',
+      title: contextText.githubLink,
+      hint: contextText.githubLinkHint,
+      onClick: choose(onLink),
+    },
+    {
+      icon: 'gitlab',
+      title: contextText.gitlab,
+      hint: contextText.gitlabHint,
+      onClick: choose(onGitlab),
+    },
+    // The GitHub App with writing is Э10 (ПР31).
+    { icon: 'github', title: contextText.github, hint: contextText.githubHint, onClick: undefined },
   ] as const
 
   const limits = (
@@ -177,7 +202,14 @@ export function ContextAddMenu({
             />
             <Row icon="text" title={contextText.text} hint={contextText.textHint} onClick={text} />
             {repository.map((item) => (
-              <Row key={item.title} icon={item.icon} title={item.title} hint={item.hint} soon />
+              <Row
+                key={item.title}
+                icon={item.icon}
+                title={item.title}
+                hint={item.hint}
+                soon={item.onClick === undefined}
+                {...(item.onClick ? { onClick: item.onClick } : {})}
+              />
             ))}
           </MenuList>
           {limits}
@@ -224,7 +256,14 @@ export function ContextAddMenu({
         </MenuItem>
         <Row icon="text" title={contextText.text} onClick={text} />
         {repository.map((item) => (
-          <Row key={item.title} icon={item.icon} title={item.title} hint={item.hint} soon />
+          <Row
+            key={item.title}
+            icon={item.icon}
+            title={item.title}
+            hint={item.hint}
+            soon={item.onClick === undefined}
+            {...(item.onClick ? { onClick: item.onClick } : {})}
+          />
         ))}
         {limits}
       </Menu>

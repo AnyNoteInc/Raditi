@@ -29,6 +29,7 @@ import {
 } from './context-parts'
 import { ContextTextDialog } from './context-text-dialog'
 import { contextText } from './project-texts'
+import { ProjectRepositoryRow, useRepositoryWindows } from './project-repository'
 import type { ProjectDetails } from './project-types'
 import { useContextUploads, type ContextUploads } from './use-context-uploads'
 
@@ -46,6 +47,7 @@ export const contextFileHref = (fileId: string) => `/api/project-files/${fileId}
  * bytes are in.
  */
 export function ProjectContext({ project }: { project: ProjectDetails }) {
+  const repository = useRepositoryWindows(project)
   const trpc = useTRPC()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -73,9 +75,34 @@ export function ProjectContext({ project }: { project: ProjectDetails }) {
           >
             {contextText.title}
           </Typography>
-          <ContextAddMenu variant="text" onFiles={uploads.add} onText={() => setWriting(true)} />
+          <ContextAddMenu
+            variant="text"
+            onFiles={uploads.add}
+            onText={() => setWriting(true)}
+            {...(project.repository === null
+              ? { onLink: repository.onLink, onGitlab: repository.onGitlab }
+              : {})}
+          />
         </Box>
-        {files.count === 0 ? (
+        {repository.notice ? (
+          <Alert severity="info" onClose={repository.clearNotice}>
+            {repository.notice}
+          </Alert>
+        ) : null}
+        {/* The repository is part of «Контекст» (ПР6): under its title, with its last state. */}
+        <ProjectRepositoryRow project={project} compact />
+        {files.count === 0 && project.repository !== null ? (
+          <Box>
+            <Button
+              size="small"
+              aria-haspopup="dialog"
+              onClick={() => setOpen(true)}
+              sx={{ minHeight: 44 }}
+            >
+              {contextText.open}
+            </Button>
+          </Box>
+        ) : files.count === 0 ? (
           <Typography sx={{ color: 'text.secondary', fontSize: 14 }}>
             {contextText.rowEmpty}
           </Typography>
@@ -147,6 +174,7 @@ export function ProjectContext({ project }: { project: ProjectDetails }) {
           />
         ) : null}
       </Box>
+      {repository.windows}
       <ContextDialog
         project={project}
         open={open}
@@ -173,7 +201,7 @@ export function ContextDialog({
   onWrite,
   onRemoved,
 }: {
-  project: Pick<ProjectDetails, 'id'>
+  project: Pick<ProjectDetails, 'id' | 'repository'>
   open: boolean
   onClose: () => void
   uploads: ContextUploads
@@ -248,6 +276,8 @@ export function ContextDialog({
             percent={list.data.percent}
           />
         ) : null}
+
+        <ProjectRepositoryRow project={project} />
 
         <Box component="section" aria-labelledby={listId}>
           <Typography id={listId} component="h3" sx={{ fontSize: 15, fontWeight: 600, mb: 1 }}>
