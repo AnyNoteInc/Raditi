@@ -223,9 +223,9 @@ function CreateForm({
               variant="pill"
               onFiles={uploads.add}
               onText={() => setWriting(true)}
-              {...(link === null && !connectRepository
-                ? { onLink: () => setLinking(true), onGitlab: () => setConnectRepository(true) }
-                : {})}
+              onLink={() => setLinking(true)}
+              onGitlab={() => setConnectRepository(true)}
+              repositoryAttached={link !== null || connectRepository}
             />
             <Typography sx={{ flex: '1 1 200px', fontSize: 13, color: 'text.secondary' }}>
               {contextText.createHint}

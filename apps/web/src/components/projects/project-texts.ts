@@ -171,6 +171,8 @@ export const contextText = Object.freeze({
   github: 'Подключить GitHub',
   githubHint: 'Код, запросы на слияние и сборки',
   soon: 'Скоро',
+  /** A way of a repository in a project that has one (ПР6; ревью P1). */
+  oneRepository: 'В проекте один репозиторий — сначала отключите текущий',
   limits: 'Файлы до 20 МБ, всего до 100 МБ на проект',
   lead: 'Агент видит эти материалы в каждом чате проекта и сам находит в них нужное. Картинки он не видит — может только поставить их на страницу; PDF, таблицы и тексты читает.',
   used: (percent: number) => `Занято ${percent} % места`,

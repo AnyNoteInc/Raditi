@@ -79,9 +79,9 @@ export function ProjectContext({ project }: { project: ProjectDetails }) {
             variant="text"
             onFiles={uploads.add}
             onText={() => setWriting(true)}
-            {...(project.repository === null
-              ? { onLink: repository.onLink, onGitlab: repository.onGitlab }
-              : {})}
+            onLink={repository.onLink}
+            onGitlab={repository.onGitlab}
+            repositoryAttached={project.repository !== null}
           />
         </Box>
         {repository.notice ? (
@@ -181,6 +181,8 @@ export function ProjectContext({ project }: { project: ProjectDetails }) {
         onClose={() => setOpen(false)}
         uploads={uploads}
         onWrite={() => setWriting(true)}
+        onLink={repository.onLink}
+        onGitlab={repository.onGitlab}
         onRemoved={refresh}
       />
       <ContextTextDialog open={writing} onClose={() => setWriting(false)} onAdd={uploads.addText} />
@@ -199,6 +201,8 @@ export function ContextDialog({
   onClose,
   uploads,
   onWrite,
+  onLink,
+  onGitlab,
   onRemoved,
 }: {
   project: Pick<ProjectDetails, 'id' | 'repository'>
@@ -206,6 +210,9 @@ export function ContextDialog({
   onClose: () => void
   uploads: ContextUploads
   onWrite: () => void
+  /** The ways of a repository of «Добавить» (ревью P1); absent — «Скоро». */
+  onLink?: () => void
+  onGitlab?: () => void
   onRemoved: () => void
 }) {
   const fullScreen = useMediaQuery(useTheme().breakpoints.down('sm'))
@@ -376,6 +383,9 @@ export function ContextDialog({
             title={contextText.add}
             onFiles={uploads.add}
             onText={onWrite}
+            {...(onLink ? { onLink } : {})}
+            {...(onGitlab ? { onGitlab } : {})}
+            repositoryAttached={project.repository !== null}
           />
           <Box sx={{ flex: '1 1 auto' }} />
           <Button variant="contained" onClick={onClose} sx={{ minHeight: 44 }}>

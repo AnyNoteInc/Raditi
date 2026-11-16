@@ -205,6 +205,31 @@ describe('«Контекст» of the page of a project (P-project, P-context)',
     expect(within(row).getByText('Занято 9 % места')).toBeTruthy()
   })
 
+  it('says a project has one repository instead of «Скоро» (ревью P1)', async () => {
+    const repository = {
+      id: '0199a3f2-0000-7000-8000-00000000c003',
+      provider: 'gitlab' as const,
+      host: 'gitlab.example.ru',
+      path: 'kolos/site',
+      webUrl: 'https://gitlab.example.ru/kolos/site',
+      defaultBranch: 'main',
+      mode: 'write' as const,
+      mirrorState: 'ready' as const,
+      connection: null,
+      refusal: null,
+      secretsFound: [],
+      fetchedAt: null,
+    }
+    wrap(<ProjectContext project={{ ...kolos, repository }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить в контекст проекта' }))
+    const menu = await screen.findByRole('menu')
+    expect(
+      within(menu).getAllByText('В проекте один репозиторий — сначала отключите текущий'),
+    ).toHaveLength(2)
+    // «Скоро» stays only for the GitHub App (Э10).
+    expect(within(menu).getAllByText('Скоро')).toHaveLength(1)
+  })
+
   it('opens the window: what the agent sees, the room, the files to download and to remove', async () => {
     wrap(<ProjectContext project={kolos} />)
     fireEvent.click(screen.getByRole('button', { name: 'Открыть контекст проекта' }))
