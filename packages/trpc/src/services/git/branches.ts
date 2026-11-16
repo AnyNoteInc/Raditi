@@ -301,7 +301,7 @@ export async function preparePush(
   const branch = await chatBranch(db, task.id)
   if (branch === null || branch.projectRepositoryId !== repo.id) throw repoNothingToPush()
   const unsent = await unsentBranch(db, task.id)
-  if (unsent === null) throw repoNothingToPush()
+  if (unsent === null) return mergeRequestOnly(db, sign, { ...input, task, project, repo, branch })
   // `/undo` after the merge request was accepted: the main branch has them already (ПР25).
   if (
     branch.state === 'merged' &&
@@ -350,6 +350,68 @@ export async function preparePush(
     rewinds: unsent.card === null,
     opensMergeRequest,
     proposal,
+    confirmToken,
+    expiresAt: new Date(expiresAt * 1000),
+  }
+}
+
+/**
+ * A branch sent whose merge request did not open — the provider refused it after the push, or it
+ * is not known (ревью C5): the button opens the merge request alone, nothing is pushed again.
+ * Anything else has nothing to send.
+ */
+async function mergeRequestOnly(
+  db: PrismaClient,
+  sign: ReturnType<typeof macOf>,
+  input: {
+    userId: string
+    now: Date
+    task: { id: string; title: string | null }
+    project: { id: string }
+    repo: { id: string }
+    branch: NonNullable<Awaited<ReturnType<typeof chatBranch>>>
+  },
+): Promise<PreparedPush> {
+  const { task, project, repo, branch } = input
+  if (branch.state !== 'pushed' || branch.mirrorSha === null || branch.remoteSha === null)
+    throw repoNothingToPush()
+  const open = await db.projectMergeRequest.findFirst({
+    where: {
+      projectRepositoryId: repo.id,
+      sourceBranch: branch.branch,
+      state: { in: ['open', 'draft', 'merged'] },
+    },
+    select: { number: true },
+  })
+  if (open !== null) throw repoNothingToPush()
+  const expiresAt = Math.floor(input.now.getTime() / 1000) + REPO_CONFIRM_TTL_SECONDS
+  const confirmToken = signRepoConfirmToken(
+    {
+      kind: 'push',
+      userId: input.userId,
+      projectId: project.id,
+      projectRepositoryId: repo.id,
+      taskId: task.id,
+      number: null,
+      targetBranch: branch.branch,
+      headSha: branch.mirrorSha,
+      diffSha256: null,
+      ciDiffSha256: null,
+      opensMergeRequest: true,
+      deploy: null,
+      nonce: randomBytes(16).toString('hex'),
+      expiresAt,
+    },
+    sign,
+  )
+  return {
+    branch: branch.branch,
+    headSha: branch.mirrorSha,
+    diffSha256: null,
+    stat: { files: 0, additions: 0, deletions: 0, list: [] },
+    rewinds: false,
+    opensMergeRequest: true,
+    proposal: await proposalOf(db, task.id, task.title),
     confirmToken,
     expiresAt: new Date(expiresAt * 1000),
   }

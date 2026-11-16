@@ -438,6 +438,11 @@ export function FeedRepoChanges({
             number={view.mergeRequest.number}
             headSha={view.mergeRequest.headSha}
           />
+        ) : view.mergeRequest === null ? (
+          // Sent, and its merge request did not open (ревью C5): it opens alone, nothing is sent.
+          <Box>
+            <PushButton taskId={taskId} label={repoCardText.openMergeRequest} />
+          </Box>
         ) : null
       ) : null}
       {/* `/undo` after the merge request was accepted (ПР25). */}
@@ -483,7 +488,7 @@ export function FeedRepoProposal({
       ) : null}
       {taskId &&
       view?.canPush &&
-      !view.sent &&
+      (!view.sent || view.state === 'pushed') &&
       !view.mergeRequest &&
       !pressing &&
       view.ciChange === 'none' ? (

@@ -347,6 +347,32 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the push of a chat branch (plan 84, 8
       where: { taskId: f.task.id },
       data: { mirrorSha: f.head, remoteSha: f.head, state: 'pushed' },
     })
+    // Sent, and its merge request never opened (ревью C5): the button opens it alone.
+    expect(await f.caller.projectRepo.preparePush({ taskId: f.task.id })).toMatchObject({
+      headSha: f.head,
+      diffSha256: null,
+      opensMergeRequest: true,
+      stat: { files: 0 },
+    })
+    const { projectRepositoryId, branch } = await db.projectRepoBranch.findUniqueOrThrow({
+      where: { taskId: f.task.id },
+    })
+    await db.projectMergeRequest.create({
+      data: {
+        id: randomUUID(),
+        projectRepositoryId,
+        taskId: f.task.id,
+        number: 3,
+        sourceBranch: branch,
+        targetBranch: 'main',
+        title: 'Меню',
+        state: 'open',
+        checks: 'none',
+        headSha: f.head,
+        webUrl: 'https://gitlab.example.ru/kolos/site/-/merge_requests/3',
+        syncedAt: new Date(),
+      },
+    })
     expect(await refusal(() => f.caller.projectRepo.preparePush({ taskId: f.task.id }))).toBe(
       'REPO_NOTHING_TO_PUSH',
     )

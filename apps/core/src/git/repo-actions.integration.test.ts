@@ -100,7 +100,8 @@ describe.skipIf(!enabled)(
     })
 
     /** A project with a connected GitLab repository of its author, a chat in it and one turn. */
-    async function fixture(options: { mr?: Record<string, unknown> } = {}) {
+    async function fixture(options: { mr?: Record<string, unknown>; mrFails?: number } = {}) {
+      let mrFails = options.mrFails ?? 0
       const root = await mkdtemp(join(tmpdir(), 'raditi-gitaction-'))
       roots.push(root)
       const remote = join(root, 'remote.git')
@@ -220,6 +221,7 @@ describe.skipIf(!enabled)(
       const fake = fakeSend({
         'GET /api/v4/projects/42': { status: 200, body: project42 },
         'POST /api/v4/projects/42/merge_requests': (request) => {
+          if (mrFails-- > 0) return { status: 500, body: { message: 'Internal error' } }
           const body = JSON.parse(request.body ?? '{}') as { source_branch: string }
           opened.source_branch = opened.source_branch || body.source_branch
           return { status: 201, body: opened }
@@ -426,6 +428,27 @@ describe.skipIf(!enabled)(
       ])
       // The main branch of the client is untouched.
       expect(await gitText(f.remote, 'rev-parse', 'refs/heads/main')).toBe(f.mainSha)
+    })
+
+    it('opens the merge request of a branch sent whose request did not open, sending nothing again (ревью C5)', async () => {
+      const f = await fixture({ mrFails: 1 })
+      const head = await f.turn(1, f.mainSha, null, 'winter.txt')
+      const mr = { title: 'Новое меню', description: '', draft: false }
+      const failed = await f.press({}, mr)
+      expect(failed.state).toBe('failed')
+      expect(
+        await db.projectRepoBranch.findUniqueOrThrow({ where: { taskId: f.task.id } }),
+      ).toMatchObject({ state: 'pushed', mirrorSha: head, remoteSha: head })
+      const pushes = f.fake.calls.length
+      const done = await f.press({ diffSha256: null, headSha: head }, mr)
+      expect(done).toMatchObject({ state: 'done', error: null })
+      expect(f.fake.calls.length).toBeGreaterThan(pushes)
+      expect(
+        await db.projectMergeRequest.findMany({
+          where: { projectRepositoryId: f.projectRepositoryId },
+        }),
+      ).toMatchObject([{ number: 7, sourceBranch: done.branch, state: 'open' }])
+      expect(await gitText(f.remote, 'rev-parse', `refs/heads/${done.branch}`)).toBe(head)
     })
 
     it('runs no row inserted without the token of a press (ПР15)', async () => {
