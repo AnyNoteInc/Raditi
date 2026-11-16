@@ -11,6 +11,7 @@ import {
 import {
   gitConnectUnavailable,
   gitJobNames,
+  repoAlreadyMerged,
   readRepoCiPaths,
   readRepoConfirmToken,
   REPO_CONFIRM_TTL_SECONDS,
@@ -31,6 +32,8 @@ import {
   signRepoConfirmToken,
   splitDiffByFile,
   gitConnectionReauth,
+  type CiRefusal,
+  type CiStatus,
   type ObjectStorage,
   type RepoCiLint,
   type RepoActionKind,
@@ -42,6 +45,7 @@ import {
 
 import { accessibleTask, taskNotFound } from '../chat/access.ts'
 import { WRITE } from '../chat/dialog-lock.ts'
+import { lastRunOf } from './runs.ts'
 
 // The chat's branch in the repository of its project, for the card «Изменения в ветке»
 // (docs/plan/84-projects.md, ПР13, ПР14, ПР26, §4.4; slice 84.19): what it holds, the diff of a
@@ -82,6 +86,25 @@ async function ownChat(
   return { task, project, repo }
 }
 
+/**
+ * `/undo` took back changes the client was sent (ПР25): the head of the chat is an earlier turn
+ * than the one whose head the branch at the client has — or none stands at all.
+ */
+async function takesBack(
+  db: Pick<Tx, 'taskTurn'>,
+  taskId: string,
+  sentSha: string | null,
+  headTurnNo: number | null,
+): Promise<boolean> {
+  if (sentSha === null) return false
+  const sent = await db.taskTurn.findFirst({
+    where: { taskId, headSha: sentSha },
+    orderBy: { turnNo: 'desc' },
+    select: { turnNo: true },
+  })
+  return sent !== null && (headTurnNo === null || headTurnNo < sent.turnNo)
+}
+
 export interface ChatBranchView {
   branch: string
   state: RepoBranchState
@@ -97,7 +120,14 @@ export interface ChatBranchView {
    * configuration lives in another project, nothing is sent.
    */
   ciChange: 'none' | 'needed' | 'declined' | 'foreign'
-  mergeRequest: { number: number; state: string; url: string } | null
+  mergeRequest: { number: number; state: string; checks: string; url: string } | null
+  /**
+   * The newest build of the branch at the client as core polled it (ПР17): the card shows its
+   * status and is read again while it goes — no reload, no webhook.
+   */
+  lastRun: { id: string; status: CiStatus; refusal: CiRefusal | null; url: string } | null
+  /** `/undo` took changes back since the branch was sent. */
+  rewinds: boolean
   /** The last press and how far core got. */
   lastAction: {
     id: string
@@ -129,8 +159,12 @@ export async function readChatBranch(
   const mr = await db.projectMergeRequest.findFirst({
     where: { projectRepositoryId: repo.id, sourceBranch: branch.branch },
     orderBy: { number: 'desc' },
-    select: { number: true, state: true, webUrl: true },
+    select: { number: true, state: true, checks: true, webUrl: true },
   })
+  const lastRun =
+    branch.remoteSha === null
+      ? null
+      : await lastRunOf(db, { projectRepositoryId: repo.id, branch: branch.branch, sha: null })
   const action = await db.repoAction.findFirst({
     where: { taskId: task.id, projectRepositoryId: repo.id },
     orderBy: { createdAt: 'desc' },
@@ -146,7 +180,13 @@ export async function readChatBranch(
       repo.connection?.state === 'ok' &&
       repo.connection.createdById === input.userId,
     ciChange,
-    mergeRequest: mr ? { number: mr.number, state: mr.state, url: mr.webUrl } : null,
+    mergeRequest: mr
+      ? { number: mr.number, state: mr.state, checks: mr.checks, url: mr.webUrl }
+      : null,
+    lastRun,
+    rewinds:
+      (unsent !== null && unsent.card === null) ||
+      (await takesBack(db, task.id, branch.mirrorSha, unsent?.head.turnNo ?? null)),
     lastAction: action
       ? {
           id: action.id,
@@ -236,6 +276,12 @@ export async function preparePush(
   if (branch === null || branch.projectRepositoryId !== repo.id) throw repoNothingToPush()
   const unsent = await unsentBranch(db, task.id)
   if (unsent === null) throw repoNothingToPush()
+  // `/undo` after the merge request was accepted: the main branch has them already (ПР25).
+  if (
+    branch.state === 'merged' &&
+    (unsent.card === null || (await takesBack(db, task.id, branch.mirrorSha, unsent.head.turnNo)))
+  )
+    throw repoAlreadyMerged()
   if (readRepoCiPaths(repo.ciPaths).foreign) throw repoCiConfigForeign()
   // A change of build settings goes only by its own card (ПР16): `prepareCiChange`.
   if (unsent.ciTouched) throw repoCiChangeNeedsCard()

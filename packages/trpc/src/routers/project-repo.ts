@@ -1,5 +1,9 @@
 import {
+  ciRefusals,
+  ciStatuses,
+  checksStates,
   gitConnectionKinds,
+  pullRequestStates,
   repoActionKinds,
   repoActionStates,
   repoBranchStates,
@@ -28,6 +32,7 @@ import {
   repositoryBranches,
   retryAttach,
 } from '../services/git/repositories.ts'
+import { readJobLog, readRepoWork, readRun, readRuns } from '../services/git/runs.ts'
 import { consentedProcedure, router } from '../trpc.ts'
 
 // The repository of a project (docs/plan/84-projects.md, ПР9, ПР10, §4.4; slice 84.17): attached
@@ -69,6 +74,35 @@ const mergeRequestInput = z.strictObject({
   description: z.string().max(4000),
   draft: z.boolean(),
   reservedId: z.uuid().nullable(),
+})
+
+const runId = z.string().regex(/^[1-9][0-9]{0,39}$/)
+const chatRef = z.strictObject({ id: z.uuid(), title: z.string().nullable() }).nullable()
+const runView = z.strictObject({
+  id: runId,
+  name: z.string(),
+  ref: z.string(),
+  sha,
+  event: z.string().nullable(),
+  status: z.enum(ciStatuses),
+  refusal: z.enum(ciRefusals).nullable(),
+  url: z.string(),
+  createdAt: z.date(),
+  startedAt: z.date().nullable(),
+  finishedAt: z.date().nullable(),
+  chat: chatRef,
+  stages: z.array(z.string()),
+})
+const jobView = z.strictObject({
+  id: runId,
+  name: z.string(),
+  stage: z.string().nullable(),
+  status: z.enum(ciStatuses),
+  manual: z.boolean(),
+  refusal: z.enum(ciRefusals).nullable(),
+  url: z.string(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
 })
 
 export const projectRepoRouter = router({
@@ -147,8 +181,22 @@ export const projectRepoRouter = router({
           canPush: z.boolean(),
           ciChange: z.enum(['none', 'needed', 'declined', 'foreign']),
           mergeRequest: z
-            .strictObject({ number: z.number().int(), state: z.string(), url: z.string() })
+            .strictObject({
+              number: z.number().int(),
+              state: z.string(),
+              checks: z.string(),
+              url: z.string(),
+            })
             .nullable(),
+          lastRun: z
+            .strictObject({
+              id: runId,
+              status: z.enum(ciStatuses),
+              refusal: z.enum(ciRefusals).nullable(),
+              url: z.string(),
+            })
+            .nullable(),
+          rewinds: z.boolean(),
           lastAction: z
             .strictObject({
               id: z.uuid(),
@@ -281,6 +329,108 @@ export const projectRepoRouter = router({
     .output(z.strictObject({ declined: z.literal(true) }))
     .mutation(({ ctx, input }) =>
       declineCiChange(ctx.prisma, { userId: ctx.user.id, taskId: input.taskId }),
+    ),
+
+  /**
+   * «Сборки (CI/CD)» of P-repo (ПР17; slice 84.21): the runs core polled, newest first; a look asks
+   * core to poll again when it has not for a minute (`refreshing`). Web never calls the provider.
+   */
+  runs: consentedProcedure
+    .input(
+      z.strictObject({
+        projectId: projectRef,
+        cursor: z.date().optional(),
+        limit: z.number().int().min(1).max(20).optional(),
+      }),
+    )
+    .output(
+      z.strictObject({
+        items: z.array(runView),
+        next: z.date().nullable(),
+        polledAt: z.date().nullable(),
+        refreshing: z.boolean(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      readRuns(ctx.prisma, {
+        userId: ctx.user.id,
+        projectId: input.projectId,
+        ...(input.cursor ? { before: input.cursor } : {}),
+        ...(input.limit ? { limit: input.limit } : {}),
+        now: new Date(),
+      }),
+    ),
+
+  /** A run with its stages and jobs (P-pipeline). */
+  run: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef, runId }))
+    .output(z.strictObject({ run: runView, jobs: z.array(jobView) }))
+    .query(({ ctx, input }) =>
+      readRun(ctx.prisma, {
+        userId: ctx.user.id,
+        projectId: input.projectId,
+        runId: input.runId,
+        now: new Date(),
+      }),
+    ),
+
+  /**
+   * The log of a job (ПР17): the tail core keeps for a day, ANSI taken out, values and keys masked;
+   * `loading` while core fetches it — ask again.
+   */
+  jobLog: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef, runId, jobId: runId }))
+    .output(
+      z.discriminatedUnion('state', [
+        z.strictObject({ state: z.literal('loading') }),
+        z.strictObject({ state: z.literal('failed') }),
+        z.strictObject({
+          state: z.literal('ready'),
+          text: z.string(),
+          truncated: z.boolean(),
+          fetchedAt: z.date(),
+        }),
+      ]),
+    )
+    .query(({ ctx, input }) =>
+      readJobLog(ctx.prisma, {
+        userId: ctx.user.id,
+        projectId: input.projectId,
+        runId: input.runId,
+        jobId: input.jobId,
+        now: new Date(),
+      }),
+    ),
+
+  /** «Запросы на слияние» and «Ветки агента» of P-repo. */
+  work: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef }))
+    .output(
+      z.strictObject({
+        mergeRequests: z.array(
+          z.strictObject({
+            number: z.number().int(),
+            title: z.string(),
+            state: z.enum(pullRequestStates),
+            checks: z.enum(checksStates),
+            sourceBranch: z.string(),
+            url: z.string(),
+            chat: chatRef,
+          }),
+        ),
+        branches: z.array(
+          z.strictObject({
+            branch: z.string(),
+            state: z.enum(repoBranchStates),
+            pushed: z.boolean(),
+            chat: z.strictObject({ id: z.uuid(), title: z.string().nullable() }),
+            updatedAt: z.date(),
+          }),
+        ),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      readRepoWork(ctx.prisma, { userId: ctx.user.id, projectId: input.projectId }),
     ),
 
   /** «Основная ветка» of P-git-repo-pick. */

@@ -84,7 +84,16 @@ export const repoCiChangeNeedsCard = (): DomainError =>
   new DomainError('REPO_CI_CHANGE', 'The changes touch build settings', 409)
 
 /** The words of the refusals of a push the client reads, without a final period. */
+/**
+ * `/undo` after the merge request was accepted (ПР25): the client's main branch has the changes
+ * already, and sending the branch would not take them out of it.
+ */
+export const repoAlreadyMerged = (): DomainError =>
+  new DomainError('REPO_ALREADY_MERGED', 'The changes are merged into the main branch', 409)
+
 export const repoPushRefusalTexts = Object.freeze({
+  REPO_ALREADY_MERGED:
+    'Изменения уже приняты в основную ветку — отменить их можно новым запросом на слияние',
   REPO_NOTHING_TO_PUSH: 'Отправлять пока нечего: в ветке чата нет новых изменений',
   REPO_PUSH_CONFLICT:
     'Изменения не отправлены: ветку изменили в репозитории, и они не легли поверх. Попросите агента повторить',

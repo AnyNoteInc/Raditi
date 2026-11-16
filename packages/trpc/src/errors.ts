@@ -9,6 +9,7 @@ import {
   isDomainError,
   memoryRefusalTexts,
   gitConnectionRefusalTexts,
+  repoCiRunTexts,
   repoPushRefusalTexts,
   repoRefusalTexts,
   projectFileRefusals,
@@ -81,6 +82,7 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   // The repository of a project and the git connections (84.17).
   ...repoRefusalTexts,
   ...repoPushRefusalTexts,
+  ...repoCiRunTexts,
   ...gitConnectionRefusalTexts,
   // Tariffs and their payment: what the customer can do next. Why a bank declined a payment
   // is told by the order itself (paymentFailureText of @repo/billing), not by these.
