@@ -20,6 +20,7 @@ import type { PrismaClient } from './generated/prisma/client.ts'
 import { PostgresSiteLeaseStore } from './site-leases.ts'
 import { undoTurn } from './task-settle.ts'
 import { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
+import { uuidv7 } from './uuidv7.ts'
 
 const databaseUrl = process.env.DATABASE_URL
 const image = `registry.invalid/raditi/opencode@sha256:${'a'.repeat(64)}`
@@ -59,7 +60,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
         where: { siteId: { in: chats.map(({ id }) => id) } },
       })
       await db.task.deleteMany({ where: { workspaceId } })
+      const projects = await db.project.findMany({ where: { workspaceId } })
+      await db.projectRepository.deleteMany({ where: { workspaceId } })
+      await db.project.deleteMany({ where: { workspaceId } })
       await db.workspace.delete({ where: { id: workspaceId } })
+      await db.user.deleteMany({ where: { id: { in: projects.map((p) => p.createdById) } } })
     }
   })
   afterAll(async () => {
@@ -205,6 +210,68 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
         }),
       ).toMatchObject({ status: 'running', baseSha: null })
       expect((await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).turnNo).toBe(2)
+    })
+
+    it('opens a turn with the repository of its own project only (plan 84, §4.3)', async () => {
+      const f = await fixture({ repository: true, browser: false })
+      const workspaceId = f.task.workspaceId
+      const user = await db.user.create({
+        data: { name: 'Synthetic', email: `${randomUUID()}@example.test` },
+      })
+      const project = async (name: string) => {
+        const row = await db.project.create({
+          data: { id: uuidv7(), workspaceId, createdById: user.id, name },
+        })
+        const repository = await db.projectRepository.create({
+          data: {
+            id: randomUUID(),
+            projectId: row.id,
+            workspaceId,
+            provider: 'gitlab',
+            host: 'gitlab.example.ru',
+            path: `kolos/${name}`,
+            webUrl: `https://gitlab.example.ru/kolos/${name}`,
+            defaultBranch: 'main',
+            mode: 'read',
+          },
+        })
+        return { projectId: row.id, projectRepositoryId: repository.id }
+      }
+      const own = await project('own')
+      const other = await project('other')
+      await db.task.update({ where: { id: f.task.id }, data: { projectId: own.projectId } })
+      const sha = (c: string) => c.repeat(40)
+      const withRepository = (ids: { projectId: string; projectRepositoryId: string }) => ({
+        ...f.input,
+        plan: {
+          ...f.plan,
+          repository: {
+            ...ids,
+            provider: 'gitlab' as const,
+            baseSha: sha('a'),
+            sandboxBaseSha: sha('b'),
+            branch: 'raditi/menu-12345678',
+            mode: 'read' as const,
+            expectedRef: null,
+            bundleSha256: 'c'.repeat(64),
+            bundleBytes: 1024,
+            hiddenPaths: [],
+          },
+        },
+      })
+      // A plan that claims a repository and names none (its schema refuses it), or names another
+      // project's.
+      await expect(store.open(f.input)).rejects.toThrow()
+      await expect(store.open(withRepository(other))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: "The repository of the turn is not of the task's project",
+      })
+      await expect(
+        store.open(withRepository({ ...own, projectRepositoryId: other.projectRepositoryId })),
+      ).rejects.toMatchObject({ code: 'CONFLICT' })
+      expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(0)
+      const opened = (await store.open(withRepository(own)))!
+      expect(opened.plan.repository?.projectRepositoryId).toBe(own.projectRepositoryId)
     })
 
     it('opens the turn of a chat without a site and writes its running turn', async () => {

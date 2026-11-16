@@ -36,7 +36,8 @@ const closureSchema = z.object({
  * The operational adapter remains available to the isolated executor PoCs.
  *
  * A turn meets the requirements of its task (docs/plan/57-browser-tasks.md, Б2, Б3), fixed when
- * the task was created. A turn has no repository (docs/plan/83-remove-projects.md): it continues
+ * the task was created. A turn has a repository only of its task's project (docs/plan/84-projects.md,
+ * §4.3; plan 83 had none): it continues
  * the completed turn before it by its snapshot, and after an unsuccessful one starts a new
  * session — it is never replaced. After `/undo` of the turn before
  * it (docs/plan/61-chats-first.md, §5.14) it starts where that turn started, one step back.
@@ -82,8 +83,23 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         terminalTaskStatuses.includes(task.status)
       )
         throw conflict('Product task is not available for a turn')
-      if (requirements.repository || task.needsBrowser !== requirements.browser)
+      if (
+        task.needsBrowser !== requirements.browser ||
+        requirements.repository !== !!plan.repository
+      )
         throw conflict('The turn plan does not meet the requirements of its task')
+      // A repository only of the task's own project (docs/plan/84-projects.md, §4.3, ПР12): the
+      // plan names its project and its row, and that row is the repository of that very project.
+      if (plan.repository) {
+        const repository = plan.repository
+        const owned =
+          task.projectId !== null &&
+          repository.projectId === task.projectId &&
+          (await tx.projectRepository.count({
+            where: { id: repository.projectRepositoryId, projectId: task.projectId },
+          })) === 1
+        if (!owned) throw conflict("The repository of the turn is not of the task's project")
+      }
       if (turn !== task.turnNo + 1) return null
       if (await tx.turnAssignment.count({ where: { taskId: task.id, finishedAt: null } }))
         return null
