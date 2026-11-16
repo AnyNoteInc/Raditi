@@ -82,6 +82,16 @@ describe('the commands of a chat (plan 83, БП7)', () => {
       expect(chatCommandAvailability(facts({ taskStatus }))).toHaveLength(serverCommandIds.length)
   })
 
+  it('tells of the chat on the page: `/usage`, `/status` and `/context` (15.11.2026)', () => {
+    for (const id of ['usage', 'status', 'context'] as const) {
+      expect(chatCommands[id].scope).toBe('client')
+      expect(serverCommandIds).not.toContain(id)
+    }
+    expect(chatCommands.status.description).toBe('Что сейчас с чатом: агент, модель, очередь.')
+    expect(chatCommands.status.description).not.toMatch(/проект|сайт/i)
+    expect(parseChatCommand('/usage')).toBe('usage')
+  })
+
   it('speaks to the client in Russian, without Latin words', () => {
     for (const text of [
       ...Object.values(chatCommandRefusalText),

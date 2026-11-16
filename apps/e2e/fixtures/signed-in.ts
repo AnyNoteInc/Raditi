@@ -128,6 +128,10 @@ export const test = base.extend<{ signedInUser: SignedInUser }, { accounts: Acco
           await prisma.tokenUsage.deleteMany({ where: { task: owned } })
           await prisma.llmCall.deleteMany({ where: { key: { task: owned } } })
           await prisma.llmKey.deleteMany({ where: { task: owned } })
+          // The scheduled tasks a test made (tests/site/scheduled.spec.ts): their runs hold the
+          // chats they started, and the tasks hold the user, both with Restrict.
+          await prisma.scheduledRun.deleteMany({ where: { scheduledTask: owned } })
+          await prisma.scheduledTask.deleteMany({ where: owned })
           await prisma.task.deleteMany({ where: owned })
           // The projects a test made (tests/site/projects.spec.ts), after their chats.
           await prisma.project.deleteMany({ where: owned })

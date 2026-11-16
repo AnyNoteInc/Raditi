@@ -32,8 +32,9 @@ export function CopyButton({ text, label = copyText.copy }: { text: string; labe
             .catch(() => undefined)
         }}
         sx={{
-          width: 36,
-          height: 36,
+          // A finger's target (DESIGN.md): the rows it stands in draw it in by their margins.
+          width: 44,
+          height: 44,
           color: 'text.secondary',
           '&:hover': { color: 'text.primary' },
         }}

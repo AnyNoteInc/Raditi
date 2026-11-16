@@ -9,72 +9,30 @@ import Typography from '@mui/material/Typography'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useState, type ReactNode } from 'react'
 
+import {
+  browserPushStateText,
+  browserPushText,
+  useBrowserPush,
+} from '@/components/notifications/use-browser-push'
 import { useTRPC } from '@/trpc/client'
 
 // «Уведомления» of the settings (docs/plan/75-chat-input-output.md, ВВ8, ВВ10): letters about the
 // work of the agent (on by default) and notifications in this browser (off until the client turns
 // them on here, which asks the browser's permission). A notification comes only when the client is
-// not looking at the chat.
+// not looking at the chat. The switch is of this browser only (docs/plan/82-scheduled-tasks.md,
+// Зп37): turning it off takes this browser's subscription away and leaves the others, which the
+// line «Ещё в N браузерах» counts.
 
 export const notificationText = Object.freeze({
   title: 'Уведомления',
   hint: 'Когда агент закончит работу, задаст вопрос или остановится, а вы не смотрите на чат.',
   push: 'В этом браузере',
   pushHint: 'Уведомление на экране компьютера или телефона.',
-  pushUnsupported: 'Этот браузер не показывает уведомления сайтов.',
-  pushUnavailable: 'Уведомления в браузере пока не настроены.',
-  pushDenied:
-    'Браузер запретил уведомления для Радити. Разрешите их в настройках сайта в браузере и включите снова.',
   email: 'Письма о работе агента',
   emailHint: 'Письмо на почту, не чаще одного в полчаса по одному чату.',
   failed: 'Не удалось сохранить настройку. Попробуйте ещё раз.',
   loading: 'Загружаем настройки уведомлений',
 })
-
-/** The key of VAPID, URL-safe base64, as `PushManager.subscribe` takes it. */
-function keyBytes(base64: string): Uint8Array<ArrayBuffer> {
-  const padded = (base64 + '='.repeat((4 - (base64.length % 4)) % 4))
-    .replace(/-/g, '+')
-    .replace(/_/g, '/')
-  const raw = atob(padded)
-  const bytes = new Uint8Array(new ArrayBuffer(raw.length))
-  for (let index = 0; index < raw.length; index++) bytes[index] = raw.charCodeAt(index)
-  return bytes
-}
-
-const pushSupported = () =>
-  typeof window !== 'undefined' &&
-  'serviceWorker' in navigator &&
-  'PushManager' in window &&
-  'Notification' in window
-
-/** The subscription of this browser, made with the key of the platform. */
-async function subscribeHere(publicKey: string) {
-  const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' })
-  await navigator.serviceWorker.ready
-  const existing = await registration.pushManager.getSubscription()
-  const subscription =
-    existing ??
-    (await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: keyBytes(publicKey),
-    }))
-  const json = subscription.toJSON()
-  return {
-    endpoint: subscription.endpoint,
-    p256dh: json.keys?.p256dh ?? '',
-    auth: json.keys?.auth ?? '',
-  }
-}
-
-async function unsubscribeHere(): Promise<string | null> {
-  const registration = await navigator.serviceWorker.getRegistration('/')
-  const subscription = await registration?.pushManager.getSubscription()
-  if (!subscription) return null
-  const endpoint = subscription.endpoint
-  await subscription.unsubscribe()
-  return endpoint
-}
 
 function Row({
   label,
@@ -118,36 +76,14 @@ export function NotificationSettings() {
   const queryClient = useQueryClient()
   const settings = useQuery(trpc.notification.settings.queryOptions())
   const save = useMutation(trpc.notification.setSettings.mutationOptions())
-  const subscribe = useMutation(trpc.notification.subscribe.mutationOptions())
-  const unsubscribe = useMutation(trpc.notification.unsubscribe.mutationOptions())
+  const push = useBrowserPush()
   const [problem, setProblem] = useState<string | null>(null)
-  const [working, setWorking] = useState(false)
   const ids = { push: useId(), pushHint: useId(), email: useId(), emailHint: useId() }
-  const refresh = () =>
-    void queryClient.invalidateQueries({ queryKey: trpc.notification.settings.queryKey() })
 
   async function togglePush(on: boolean) {
     setProblem(null)
-    const publicKey = settings.data?.publicKey
-    if (!pushSupported()) return setProblem(notificationText.pushUnsupported)
-    if (!publicKey) return setProblem(notificationText.pushUnavailable)
-    setWorking(true)
-    try {
-      if (on) {
-        const permission = await Notification.requestPermission()
-        if (permission !== 'granted') return setProblem(notificationText.pushDenied)
-        await subscribe.mutateAsync(await subscribeHere(publicKey))
-      } else {
-        const endpoint = await unsubscribeHere()
-        if (endpoint) await unsubscribe.mutateAsync({ endpoint })
-        await save.mutateAsync({ push: false })
-      }
-    } catch {
-      setProblem(notificationText.failed)
-    } finally {
-      setWorking(false)
-      refresh()
-    }
+    if (on) await push.enable()
+    else await push.disable()
   }
 
   async function toggleEmail(on: boolean) {
@@ -157,8 +93,12 @@ export function NotificationSettings() {
     } catch {
       setProblem(notificationText.failed)
     }
-    refresh()
+    void queryClient.invalidateQueries({ queryKey: trpc.notification.settings.queryKey() })
   }
+
+  const stateText = browserPushStateText(push.state, push.device)
+  const others = push.otherBrowsers ?? 0
+  const shownProblem = problem ?? push.problem
 
   return (
     <Box component="section" aria-labelledby="notifications-title" sx={{ p: { xs: 2.5, sm: 4 } }}>
@@ -168,7 +108,7 @@ export function NotificationSettings() {
       <Typography color="text.secondary" variant="body2" sx={{ mt: 0.5, maxWidth: 520 }}>
         {notificationText.hint}
       </Typography>
-      {settings.isPending ? (
+      {settings.isPending || push.state === 'loading' ? (
         <Box role="status" aria-label={notificationText.loading}>
           <Skeleton variant="rounded" height={44} sx={{ mt: 2 }} />
           <Skeleton variant="rounded" height={44} sx={{ mt: 2 }} />
@@ -177,11 +117,26 @@ export function NotificationSettings() {
         <>
           <Row
             label={{ id: ids.push, text: notificationText.push }}
-            hint={{ id: ids.pushHint, text: notificationText.pushHint }}
+            hint={{
+              id: ids.pushHint,
+              text: (
+                <>
+                  {stateText ?? notificationText.pushHint}
+                  {others > 0 ? (
+                    <>
+                      {' '}
+                      <Box component="span" sx={{ display: 'block', mt: 0.5 }}>
+                        {browserPushText.otherBrowsers(others)}
+                      </Box>
+                    </>
+                  ) : null}
+                </>
+              ),
+            }}
             control={
               <Switch
-                checked={(settings.data?.push ?? false) && (settings.data?.browsers ?? 0) > 0}
-                disabled={working || settings.isError}
+                checked={push.state === 'on'}
+                disabled={push.working || (push.state !== 'on' && push.state !== 'off')}
                 onChange={(_event, on) => void togglePush(on)}
                 slotProps={{
                   input: { 'aria-labelledby': ids.push, 'aria-describedby': ids.pushHint },
@@ -207,9 +162,9 @@ export function NotificationSettings() {
           />
         </>
       )}
-      {problem ? (
+      {shownProblem ? (
         <Alert role="alert" severity="warning" sx={{ mt: 2 }}>
-          {problem}
+          {shownProblem}
         </Alert>
       ) : null}
     </Box>

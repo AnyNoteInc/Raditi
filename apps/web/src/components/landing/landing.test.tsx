@@ -170,15 +170,18 @@ describe('landing texts', () => {
   })
 
   it('links every legal document and the map of the site from the foot of the page', () => {
+    const container = renderLanding(guest)
     const links = [
-      ...renderLanding(guest).querySelectorAll('footer nav[aria-label="Документы"] a'),
+      ...container.querySelectorAll('footer nav[aria-labelledby="footer-documents"] a'),
     ].map((link) => [link.textContent, link.getAttribute('href')])
 
-    expect(links).toEqual([
-      ...legalDocuments.map((document) => [document.title, `/terms/${document.slug}`]),
-      ['Карта сайта', '/sitemap.xml'],
-    ])
+    expect(links).toEqual(
+      legalDocuments.map((document) => [document.title, `/terms/${document.slug}`]),
+    )
     expect(legalDocuments.length).toBeGreaterThan(0)
+    expect(container.querySelector('footer a[href="/sitemap.xml"]')).toHaveTextContent(
+      /^Карта сайта$/,
+    )
   })
 
   it('promises a visitor whose session is unknown no gift and no registration', () => {
@@ -423,13 +426,14 @@ describe('landing texts', () => {
       'Вернём как было.',
       'После запуска',
       'Оплата откроется позже',
+      // The footer keeps the name and the way in alone (the owner, 15.11.2026).
+      'Ваш сайт в заботливых руках.',
     ]) {
       expect(text).not.toContain(gone)
     }
     for (const kept of [
       'Сначала покажу. Решаете вы.',
       'Оплату пока не принимаем: сервис готовится к запуску.',
-      'Ваши дела в заботливых руках.',
     ]) {
       expect(text).toContain(kept)
     }

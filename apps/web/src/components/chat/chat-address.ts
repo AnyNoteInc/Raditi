@@ -13,3 +13,9 @@ export const chatHref = (taskId: string) => `${CHATS_HREF}/${taskId}`
  */
 export const newChatHref = (projectId: string | null = null) =>
   projectId === null ? NEW_CHAT_HREF : `${NEW_CHAT_HREF}?project=${encodeURIComponent(projectId)}`
+
+/** «Расписание»: the scheduled tasks of the client (docs/plan/82-scheduled-tasks.md, Зп1). */
+export const SCHEDULED_HREF = '/scheduled'
+
+/** A scheduled task: the label of a chat of its run and the card of the feed lead to it. */
+export const scheduledTaskHref = (scheduleId: string) => `${SCHEDULED_HREF}/${scheduleId}`

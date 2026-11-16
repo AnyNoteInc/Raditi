@@ -3,6 +3,7 @@ import {
   chatMemory,
   classProfile,
   memoryEntriesOfPass,
+  passUnattended,
   readyProjectFiles,
   taskAttachments,
   type PrismaClient,
@@ -104,6 +105,8 @@ export async function readPassFacts(
           },
         },
       },
+      // The run of a scheduled task the chat is (docs/plan/82-scheduled-tasks.md, Зп27, Зп29).
+      scheduledRun: { select: { name: true } },
     },
   })
   if (!task) return null
@@ -222,6 +225,13 @@ export async function readPassFacts(
   // The memory of the chat (docs/plan/84-projects.md, ПР18): null — off for its author.
   const memory = await chatMemory(deps.db, task.id)
   const memoryEntries = memory ? await memoryEntriesOfPass(deps.db, memory) : null
+  // A pass of a run before the first words of its client goes without them (Зп27, Зп29), decided
+  // by the request it answers: a cancel or an interrupt written since is for the passes after it.
+  const unattended =
+    task.scheduledRun &&
+    (await passUnattended(db, task.id, { requestEventId: input.requestEventId }))
+      ? { name: task.scheduledRun.name }
+      : null
   return {
     task: {
       id: task.id,
@@ -236,6 +246,7 @@ export async function readPassFacts(
     repositoryRow: repositoryRowOf(task.project),
     ...(projectFiles.length ? { projectFiles } : {}),
     memory: memoryEntries,
+    ...(unattended ? { unattended } : {}),
     ...(attachments.length ? { attachments } : {}),
     requests,
     committedAt: answered.createdAt,

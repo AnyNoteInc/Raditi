@@ -52,7 +52,8 @@ const pane = (page: Page) => page.getByRole('complementary', { name: 'Инстр
 const openTabs = (page: Page) => page.getByRole('tablist', { name: 'Открытые инструменты' })
 const tab = (page: Page, name: string) => openTabs(page).getByRole('tab', { name, exact: true })
 const separator = (page: Page) => page.getByRole('separator', { name: 'Ширина панели' })
-const hide = (page: Page) => page.getByRole('button', { name: 'Скрыть панель' })
+// Inside the panel: the panel of the chats beside it has its own «Скрыть панель» (#107).
+const hide = (page: Page) => pane(page).getByRole('button', { name: 'Скрыть панель' })
 const toDialog = (page: Page) => page.getByRole('button', { name: 'К чату' })
 /** The cross of a tab: the pointer's way, hidden from a screen reader (Delete is the keyboard's). */
 const cross = (page: Page, name: string) =>
@@ -170,6 +171,9 @@ async function chooseTool(page: Page, name: RegExp) {
   await expect(toolsMenu(page)).toBeVisible()
   await toolsMenu(page).getByRole('menuitem', { name }).click()
   await expect(toolsMenu(page)).toHaveCount(0)
+  // The card leaves the tree of roles at once, the page as it fades: gone, it cannot lie half
+  // transparent over what axe reads next (its title of 3.66:1 under a slow machine).
+  await expect(page.locator('[data-tools-menu]')).toHaveCount(0)
 }
 
 /**
@@ -312,7 +316,8 @@ test('a chat without a project: no tools, no word of a site, no commands of the 
   await page.getByRole('button', { name: 'Команды' }).click()
   // No group «Сайт» and no `/retry` without the repository (К27).
   await expect(commands(page).getByRole('group')).toHaveCount(2)
-  await expect(commands(page).getByRole('option')).toHaveCount(12)
+  // With /usage, /status and /context of the chat (#105).
+  await expect(commands(page).getByRole('option')).toHaveCount(15)
   await expect(commands(page).getByText('Сайт', { exact: true })).toHaveCount(0)
   await commands(page)
     .getByRole('option', { name: /Отменить чат/ })
@@ -466,8 +471,8 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
     // Open, nothing is new behind «+».
     await expect(plus(page)).toHaveAccessibleName('Инструменты')
     await expect(separator(page)).toBeVisible()
-    await expect(dialogs(page)).toBeHidden()
-    await expect(back(page)).toBeVisible()
+    await expect(dialogs(page)).toBeVisible()
+    await expect(back(page)).toBeHidden()
     const paneBox = await box(pane(page))
     const fieldBox = await box(message(page))
     expect(paneBox.x + paneBox.width).toBeLessThanOrEqual(1280)
@@ -504,19 +509,21 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
   })
 
   await test.step('the edge of the panel moves with the arrows and is kept', async () => {
+    // Since #107 the list of chats stays beside the panel, and at 1280 px the panel is already as
+    // wide as the chat column beside it allows: the edge is moved to the right, narrowing it.
     const before = (await box(pane(page))).width
     await separator(page).focus()
-    await page.keyboard.press('ArrowLeft')
-    await page.keyboard.press('ArrowLeft')
-    await expect.poll(async () => (await box(pane(page))).width).toBeGreaterThan(before)
-    const wider = (await box(pane(page))).width
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    await expect.poll(async () => (await box(pane(page))).width).toBeLessThan(before)
+    const moved = (await box(pane(page))).width
     await page.reload()
     await expect(loginCard(page)).toBeVisible()
     // A reload starts with the chat alone again; the width waits for the next opening.
     await expectChatAlone(page)
     await chooseTool(page, /^Браузер/)
     await expectBrowserShown(page)
-    expect(Math.abs((await box(pane(page))).width - wider)).toBeLessThanOrEqual(1)
+    expect(Math.abs((await box(pane(page))).width - moved)).toBeLessThanOrEqual(1)
     const fieldBox = await box(message(page))
     expect(fieldBox.x + fieldBox.width).toBeLessThanOrEqual((await box(pane(page))).x)
   })
@@ -578,7 +585,8 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
 
   await test.step('the window of commands has no commands of the site', async () => {
     await page.getByRole('button', { name: 'Команды' }).click()
-    await expect(commands(page).getByRole('option')).toHaveCount(12)
+    // With /usage, /status and /context of the chat (#105).
+    await expect(commands(page).getByRole('option')).toHaveCount(15)
     await expect(commands(page).getByText('Сайт', { exact: true })).toHaveCount(0)
     await expect(commands(page).getByRole('option', { name: /Отменить чат/ })).toBeVisible()
     await page.keyboard.press('Escape')

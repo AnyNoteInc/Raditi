@@ -1,10 +1,12 @@
 import {
+  appEnvSchema,
   chatCommandRefusals,
   chatProjectSchema,
   FEED_REQUEST_TEXT_LIMIT,
   feedCursorSchema,
   feedTaskHeadSchema,
   reasoningEffortSchema,
+  scheduledRunTriggers,
   serverCommandIds,
   taskStatuses,
   type FeedItem,
@@ -40,6 +42,7 @@ import {
 } from '../services/chat/dialog-manage.ts'
 import { dialogCommands, dialogFacts } from '../services/chat/dialog-facts.ts'
 import { accessibleTask, taskNotFound } from '../services/chat/access.ts'
+import { readChatInfo } from '../services/chat/info.ts'
 import {
   cancelDialog,
   continueDialog,
@@ -97,6 +100,16 @@ const feedOutput = z.strictObject({
   more: z.boolean(),
 })
 
+/**
+ * «По расписанию · <name>» or «Запуск вручную · <name>» of a chat of a run (Зп43): `id` null — the
+ * task was deleted, the label stays without a link (Зп23).
+ */
+const scheduleLabelOutput = z.strictObject({
+  id: z.uuid().nullable(),
+  name: z.string(),
+  trigger: z.enum(scheduledRunTriggers),
+})
+
 /** A chat of the list, of its head of pinned chats and of a search. */
 const dialogListItemOutput = z.strictObject({
   id: z.uuid(),
@@ -118,6 +131,36 @@ const dialogListItemOutput = z.strictObject({
   archived: z.boolean(),
   /** The chat goes on in Telegram too (docs/plan/80-telegram.md, 80.6). */
   telegram: z.boolean(),
+  /** The chat is a run of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп43). */
+  schedule: scheduleLabelOutput.nullable(),
+})
+
+const credits = z.number().int().nonnegative()
+const chatInfoOutput = z.strictObject({
+  usage: z.strictObject({
+    plan: z.string().nullable(),
+    total: credits,
+    tariff: credits,
+    gift: credits,
+    pack: credits,
+    week: z
+      .strictObject({ limit: credits, used: credits, left: credits, resetsAt: z.date().nullable() })
+      .nullable(),
+    chat: credits.nullable(),
+  }),
+  status: z
+    .strictObject({
+      title: z.string().nullable(),
+      status: z.string().min(1),
+      model: z.string().nullable(),
+      effort: reasoningEffortSchema,
+      queued: credits,
+      browser: z.boolean(),
+    })
+    .nullable(),
+  context: z
+    .strictObject({ used: credits.nullable(), window: z.number().int().positive().nullable() })
+    .nullable(),
 })
 
 export const taskRouter = router({
@@ -448,6 +491,7 @@ export const taskRouter = router({
       feedTaskHeadSchema.extend({
         createdAt: z.date(),
         updatedAt: z.date(),
+        schedule: scheduleLabelOutput.nullable(),
       }),
     )
     .query(({ ctx, input }) => readDialogHead(ctx.prisma, { ...input, userId: ctx.user.id })),
@@ -457,6 +501,22 @@ export const taskRouter = router({
     .input(z.strictObject({ taskId: z.uuid() }))
     .output(z.strictObject({ fileName: z.string(), markdown: z.string() }))
     .query(({ ctx, input }) => readDialogExport(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /**
+   * `/usage`, `/status` and `/context` (owner's request of 15.11.2026): the credits, where the chat
+   * stands and how full the context of the agent is; taskId absent — a new chat, credits only.
+   */
+  info: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid().optional() }))
+    .output(chatInfoOutput)
+    .query(({ ctx, input }) =>
+      readChatInfo(ctx.prisma, {
+        userId: ctx.user.id,
+        taskId: input.taskId ?? null,
+        appEnv: ctx.chat?.appEnv ?? ctx.billing?.appEnv ?? appEnvSchema.parse(process.env.APP_ENV),
+        now: new Date(),
+      }),
+    ),
 
   /** The commands of the chat with the server's verdict on each (Р34). */
   commands: consentedProcedure

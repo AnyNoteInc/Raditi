@@ -7,7 +7,9 @@ import {
   dropAbandonedPages,
   insertFeedEvent,
   purgeExpiredPages,
+  recordRunOutcome,
   stalePageReservations,
+  stalePendingRuns,
   type PrismaClient,
   type waitingTaskStatuses,
 } from '@repo/db'
@@ -17,6 +19,7 @@ import {
   agentTurnRetryJobId,
   feedEndedSiteOf,
   isDomainError,
+  scheduleLimits,
   type FeedCreditsState,
   type JobQueue,
   type ObjectStorage,
@@ -37,6 +40,7 @@ import type { PageMetrics } from '../pages/page-metrics.ts'
 import type { MemoryChanges } from './memory-changes.ts'
 import type { ProjectTrash } from '../projects/project-trash.ts'
 import type { PagePublications } from './page-publications.ts'
+import type { ScheduleChanges } from './schedule-changes.ts'
 import {
   CHARGE_LATER_EVENT,
   type PassEnding,
@@ -99,6 +103,11 @@ export interface TaskSweepDependencies {
    * closed failed a day on. Absent — not swept.
    */
   memory?: Pick<MemoryChanges, 'sweep'> | null
+  /**
+   * The changes of the scheduled tasks no end of a turn reached (docs/plan/82-scheduled-tasks.md,
+   * Зп33): closed and told once the turn is over. Absent — not swept.
+   */
+  schedules?: Pick<ScheduleChanges, 'sweep'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -134,6 +143,8 @@ export class TaskSweep {
       ['pages', () => this.sweepPages()],
       ['projects', () => this.deps.projects?.sweep()],
       ['memory', () => this.sweepMemory()],
+      ['schedules', () => this.sweepSchedules()],
+      ['manual runs', () => this.closeStaleManualRuns()],
     ] as const) {
       try {
         await pass()
@@ -475,6 +486,45 @@ export class TaskSweep {
     if (!memory) return 0
     const closed = await memory.sweep(new Date(this.#now().getTime() - PAGE_SWEEP_AFTER_MS))
     if (closed > 0) this.#logger.log(`task_sweep_memory failed=${closed}`)
+    return closed
+  }
+
+  /**
+   * The changes of the scheduled tasks a turn reserved and no end of it applied (Зп33): a pass
+   * still at work in this process keeps them for its own end.
+   */
+  async sweepSchedules(): Promise<number> {
+    const { schedules, live } = this.deps
+    if (!schedules) return 0
+    return schedules.sweep((taskId) => live.has(taskId))
+  }
+
+  /**
+   * Runs of «Запустить сейчас» a web left waiting — it stopped between writing the run and its
+   * answer — close here, «Не запустилась: сбой платформы», without a notice (Зп24): a run that
+   * waits holds its task up as «Выполняется», and every scheduled moment would be skipped beside
+   * it. Here, not in the tick of the schedules: the button works through web alone, whether this
+   * core runs the schedules or not. Returns how many.
+   */
+  async closeStaleManualRuns(): Promise<number> {
+    const { db } = this.deps
+    const now = this.#now()
+    const olderThan = new Date(now.getTime() - scheduleLimits.manualPendingSweepMinutes * 60_000)
+    let closed = 0
+    for (const run of await stalePendingRuns(db, olderThan, BATCH, 'manual')) {
+      try {
+        const recorded = await recordRunOutcome(
+          db,
+          run.id,
+          { status: 'refused', reason: 'platform' },
+          now,
+        )
+        if (recorded.recorded) closed++
+      } catch (error) {
+        this.#warn(`task sweep manual run=${run.id}`, logged(error))
+      }
+    }
+    if (closed > 0) this.#logger.log(`task_sweep_manual_runs count=${closed}`)
     return closed
   }
 

@@ -1,3 +1,4 @@
+import { runMomentText, scheduleText } from '../schedule/text.ts'
 import { feedFailureTextOf } from './client-feed-failures.ts'
 import {
   feedApprovalSiteText,
@@ -42,6 +43,8 @@ import {
   feedReleaseText,
   feedReleaseTitle,
   feedRowText,
+  feedScheduleChangeTitle,
+  feedScheduleLeftText,
   feedUndoConfirmedText,
   feedUndoKeptText,
   feedUndoReasonText,
@@ -66,6 +69,8 @@ export const feedExportText = Object.freeze({
   files: (count: number) => `Прикреплено файлов: ${count}`,
   screenshot: (number: number) => `Снимок экрана № ${number}`,
   file: (name: string) => `Файл «${name}»`,
+  nextRun: (when: string) => `Следующий запуск: ${when}.`,
+  instructions: 'Инструкция:',
 })
 
 const moment = new Intl.DateTimeFormat('ru-RU', {
@@ -284,6 +289,28 @@ function rowBlock(row: FeedItem, withSite: boolean, h: Heading = heading): strin
       return block([h(feedExportText.agent, row.at), feedRepoProposalText(row)])
     case 'feed.repo_action':
       return block([h(feedExportText.agent, row.at), feedRepoActionText(row)])
+    // A scheduled task the agent changed (docs/plan/82-scheduled-tasks.md, Зп35): its schedule
+    // and next run as they were then, and its words as written.
+    case 'feed.schedule_change': {
+      const gone = row.action === 'deleted'
+      return block([
+        agent(feedScheduleChangeTitle[row.action]),
+        `«${row.name}»`,
+        gone
+          ? null
+          : sentences([
+              row.triggers === null ? null : `${scheduleText(row.triggers, row.timezone)}.`,
+              row.nextRunAt === null
+                ? null
+                : feedExportText.nextRun(
+                    runMomentText(new Date(row.nextRunAt), row.timezone, new Date(row.at)),
+                  ),
+            ]),
+        gone ? null : `${feedExportText.instructions}\n\n${row.instructions}`,
+      ])
+    }
+    case 'feed.schedule_left':
+      return block([h(feedExportText.agent, row.at), feedScheduleLeftText(row)])
     case 'feed.rewind':
       return feedRewindText(row)
     case 'feed.redo':

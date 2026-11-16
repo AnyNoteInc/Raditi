@@ -3,12 +3,16 @@ import { redirect } from 'next/navigation'
 import type { ReactNode } from 'react'
 
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
+import { CabinetBrowserBridge } from '@/components/notifications/cabinet-browser-bridge'
 import { hasRequiredConsents, requireSession, UNAVAILABLE } from '@/lib/access'
 import { TRPCReactProvider } from '@/trpc/client'
 
 export const metadata: Metadata = { robots: { index: false } }
 
-/** The cabinet: a session and the current editions of the required documents. */
+/**
+ * The cabinet: a session and the current editions of the required documents. The bridge listens
+ * for the service worker and remembers the zone of the browser (docs/plan/82, Зп12, Зп41).
+ */
 export default async function ProtectedLayout({ children }: { children: ReactNode }) {
   const session = await requireSession()
   if (session === UNAVAILABLE) return <ServiceUnavailable />
@@ -16,5 +20,10 @@ export default async function ProtectedLayout({ children }: { children: ReactNod
   if (consents === UNAVAILABLE) return <ServiceUnavailable />
   if (!consents) redirect('/onboarding/consents')
 
-  return <TRPCReactProvider userId={session.user.id}>{children}</TRPCReactProvider>
+  return (
+    <TRPCReactProvider userId={session.user.id}>
+      <CabinetBrowserBridge userId={session.user.id} />
+      {children}
+    </TRPCReactProvider>
+  )
 }

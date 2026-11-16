@@ -97,6 +97,14 @@ export const browserActionRequestSchema = z.strictObject({
   taskId: z.uuid(),
   assignmentId: z.uuid(),
   action: browserActionSchema,
+  /**
+   * A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп27, Зп28,
+   * Зп50): the worker refuses a file sent to a page and the acceptance of a confirm or a prompt
+   * dialog (`BROWSER_READ_ONLY`), and from this action on — until an action says otherwise — every
+   * request of the pages, on any site, that does more than read: a method that writes, or a
+   * document a frame goes to with a secret in its query. Absent — false.
+   */
+  readOnly: z.boolean().optional(),
 })
 export type BrowserActionRequest = z.infer<typeof browserActionRequestSchema>
 export const browserActionResponseSchema = z.discriminatedUnion('ok', [

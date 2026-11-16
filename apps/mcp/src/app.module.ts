@@ -10,6 +10,7 @@ import { assertMcpNestToolAuthorization } from './server/mcp-runtime.ts'
 import { DocsModule } from './pages/docs.module.ts'
 import { PagesModule } from './pages/pages.module.ts'
 import { RepoModule } from './repo/repo.module.ts'
+import { ScheduleModule } from './schedule/schedule.module.ts'
 import { SearchModule } from './search/search.module.ts'
 import { ServerModule } from './server/server.module.ts'
 import { SiteInfoModule } from './site-info/site-info.module.ts'
@@ -25,11 +26,13 @@ import { WebModule } from './web/web.module.ts'
  * docs/plan/57-browser-tasks.md, Б20) is there wherever the browser worker is configured
  * (BROWSER_WORKER_URL). The web search (search_web, SearchModule) is offered while its access is
  * in Vault (`subs/search/yandex`). The pages of the workspace (page_*, PagesModule,
- * docs/plan/69-pages.md) — where PAGES_BASE_DOMAIN is set; its documents (doc_*, DocsModule) —
- * always. The memory of a chat (memory_*, MemoryModule, docs/plan/84-projects.md, ПР18) — always,
- * offered to a turn whose chat has its memory on. The repository of a chat's project (repo_*,
- * RepoModule, §4.4) — always, offered to a turn whose plan names one. The modules come in this
- * order — site_info, web, search, docs, pages, memory, repo — and so do their tools.
+ * docs/plan/69-pages.md) — where PAGES_BASE_DOMAIN is set; its documents (doc_*, DocsModule) and
+ * the scheduled tasks of the chat's author (schedule_*, ScheduleModule,
+ * docs/plan/82-scheduled-tasks.md) — always. The memory of a chat (memory_*, MemoryModule,
+ * docs/plan/84-projects.md, ПР18) — always, offered to a turn whose chat has its memory on. The
+ * repository of a chat's project (repo_*, RepoModule, §4.4) — always, offered to a turn whose plan
+ * names one. The modules come in this order — site_info, web, search, docs, pages, memory, repo,
+ * schedule — and so do their tools.
  */
 @Module({})
 export class AppModule {
@@ -54,6 +57,7 @@ export class AppModule {
         ...(config.pages ? [PagesModule] : []),
         MemoryModule,
         RepoModule,
+        ScheduleModule,
       ],
     }
   }

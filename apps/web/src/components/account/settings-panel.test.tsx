@@ -77,12 +77,19 @@ vi.mock('@/trpc/client', () => ({
       settings: {
         queryOptions: () => ({
           queryKey: ['notification', 'settings'],
-          queryFn: async () => ({ push: false, email: true, browsers: 0, publicKey: null }),
+          queryFn: async () => ({
+            push: false,
+            email: true,
+            browsers: 0,
+            otherBrowsers: 0,
+            publicKey: null,
+          }),
         }),
         queryKey: () => ['notification', 'settings'],
       },
       setSettings: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
       subscribe: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
+      resubscribe: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
       unsubscribe: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
     },
     // «Telegram» (docs/plan/80-telegram.md): its own test covers it.

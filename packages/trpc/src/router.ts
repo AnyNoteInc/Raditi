@@ -12,6 +12,7 @@ import { projectRouter } from './routers/project.ts'
 import { projectRepoRouter } from './routers/project-repo.ts'
 import { projectFileRouter } from './routers/project-file.ts'
 import { projectMemoryRouter } from './routers/project-memory.ts'
+import { scheduleRouter } from './routers/schedule.ts'
 import { taskRouter } from './routers/task.ts'
 import { userRouter } from './routers/user.ts'
 import { workspaceEnvRouter } from './routers/workspace-env.ts'
@@ -47,6 +48,8 @@ export const appRouter = router({
   workspaceEnv: workspaceEnvRouter,
   // «Настройки → Навыки агента»: the MCP servers of the workspace's agent (plan 81; plan 83, БП11).
   agentSkills: agentSkillsRouter,
+  // «Запланированные задачи»: the scheduled tasks of the user (docs/plan/82-scheduled-tasks.md).
+  schedule: scheduleRouter,
 })
 
 export type AppRouter = typeof appRouter

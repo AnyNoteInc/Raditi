@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FeedPage } from '../chat/feed-page'
+import { mediaStyleOf, WIDE_MEDIA } from '../scheduled/testing'
 import { PagesView } from './pages-view'
 
 type Listed = {
@@ -318,27 +319,48 @@ describe('«Страницы» before the first page (plan 73, Дер6)', () => 
 })
 
 describe('the heading «Страницы» (plan 73, Дер7)', () => {
-  const about = /Страницы и сайты, которые агент сделал для вашего рабочего пространства/
-  it('says what the section is on a hover, a keyboard focus and a tap', async () => {
+  // The shell gives the padding: «Страницы» adds none of its own, so its heading stands where the
+  // heading of «Запланированные задачи», its neighbour on the rail, does.
+  it('adds no padding of its own to the shell', async () => {
     show(<PagesView userId={USER} />)
     const heading = await screen.findByRole('heading', { level: 1 })
+    let root: HTMLElement = heading
+    while (root.parentElement !== null && root.parentElement.parentElement !== document.body)
+      root = root.parentElement
+    expect(root.contains(heading)).toBe(true)
+    for (const media of [null, '(min-width:0px)', WIDE_MEDIA])
+      expect(mediaStyleOf(root, media)).not.toMatch(/padding/)
+    expect(mediaStyleOf(root, null)).toContain('max-width:1200px')
+  })
+
+  const about = /Страницы и сайты, которые агент сделал для вашего рабочего пространства/
+  it('says what the section is on a hover of the title, and by «i» on a focus and a click', async () => {
+    show(<PagesView userId={USER} />)
+    const heading = await screen.findByRole('heading', { level: 1 })
+    // «i» stands beside the heading, not in it: the name of the heading is the title alone.
+    expect(heading).toHaveAccessibleName('Страницы')
     const target = within(heading).getByText('Страницы')
+    const info = screen.getByRole('button', { name: 'Что это за раздел' })
+    expect(heading.contains(info)).toBe(false)
     expect(screen.queryByText(about)).toBeNull()
     fireEvent.mouseOver(target)
     expect(await screen.findByRole('tooltip')).toBeTruthy()
     expect(screen.getByRole('tooltip').textContent).toMatch(about)
-    await waitFor(() => expect(target.getAttribute('aria-describedby')).toBeTruthy())
     fireEvent.mouseLeave(target)
     await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
-    // A keyboard focus: MUI opens a tooltip on a focus that is visible.
+    // A keyboard focus of «i»: MUI opens a tooltip on a focus that is visible, and «i» is
+    // described by it.
     fireEvent.keyDown(document.body, { key: 'Tab' })
-    act(() => target.focus())
-    expect(await screen.findByRole('tooltip')).toBeTruthy()
-    act(() => target.blur())
+    act(() => info.focus())
+    const tooltip = await screen.findByRole('tooltip')
+    expect(info.getAttribute('aria-describedby')).toBe(tooltip.id)
+    act(() => info.blur())
     await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
-    fireEvent.click(target)
+    expect(info.getAttribute('aria-describedby')).toBeNull()
+    fireEvent.click(info)
     expect(await screen.findByRole('tooltip')).toBeTruthy()
-    expect(target.getAttribute('tabindex')).toBe('0')
+    // The title is not a second stop of the keyboard on the way to the same words.
+    expect(target.getAttribute('tabindex')).toBeNull()
   })
 })
 

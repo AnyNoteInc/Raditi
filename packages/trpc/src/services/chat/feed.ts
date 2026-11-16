@@ -10,12 +10,14 @@ import {
   type ChatCommandAvailability,
   type FeedItem,
   type FeedTaskHead,
+  type ScheduledRunTrigger,
   type TaskStatus,
 } from '@repo/domain'
 
 import { accessibleTask, taskNotFound } from './access.ts'
 import { feedBrowser, type FeedBrowser } from './browser.ts'
 import { dialogCommands, dialogFacts } from './dialog-facts.ts'
+import type { DialogSchedule } from './dialog-list.ts'
 import { movingRequest } from './dialog-state.ts'
 
 type Tx = Prisma.TransactionClient
@@ -221,7 +223,14 @@ export async function readDialogExport(
 export async function readDialogHead(
   db: PrismaClient,
   input: { userId: string; taskId: string },
-): Promise<FeedTaskHead & { createdAt: Date; updatedAt: Date }> {
+): Promise<
+  FeedTaskHead & {
+    createdAt: Date
+    updatedAt: Date
+    /** The scheduled task the chat is a run of (docs/plan/82-scheduled-tasks.md, Зп43). */
+    schedule: DialogSchedule | null
+  }
+> {
   return db.$transaction(
     async (tx) => {
       await tx.$executeRaw`SET TRANSACTION READ ONLY`
@@ -243,7 +252,30 @@ export async function readDialogHead(
       })
       if (task === null) throw taskNotFound()
       const head = await feedHead(tx, task)
-      return { ...head, createdAt: task.createdAt, updatedAt: task.updatedAt }
+      const run = await tx.scheduledRun.findUnique({
+        where: { taskId: task.id },
+        select: {
+          trigger: true,
+          name: true,
+          scheduledTask: { select: { id: true, name: true, deletedAt: true } },
+        },
+      })
+      return {
+        ...head,
+        // The label «По расписанию · <name>»: a link while the task is there (Зп23, Зп43).
+        schedule:
+          run === null
+            ? null
+            : run.scheduledTask.deletedAt === null
+              ? {
+                  id: run.scheduledTask.id,
+                  name: run.scheduledTask.name,
+                  trigger: run.trigger as ScheduledRunTrigger,
+                }
+              : { id: null, name: run.name, trigger: run.trigger as ScheduledRunTrigger },
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+      }
     },
     { isolationLevel: 'RepeatableRead' },
   )

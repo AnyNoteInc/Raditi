@@ -19,6 +19,14 @@ export type ActivityEvent = TurnActivityPage['events'][number]
 export type DialogListPage = Outputs['task']['list']
 export type DialogListItem = DialogListPage['items'][number]
 
+/**
+ * The task a chat is a run of (docs/plan/82-scheduled-tasks.md, Зп43): `id` null — the task was
+ * deleted, its name stays without a link.
+ */
+export type ChatScheduleLabel = NonNullable<Outputs['task']['get']['schedule']>
+/** A scheduled task of the client as `schedule.list` gives it: the cards of the feed read it. */
+export type ScheduledTaskItem = Outputs['schedule']['list']['schedules'][number]
+
 /** A file sent with the messages of a task, as `attachment.list` names it. */
 export type TaskAttachment = Outputs['attachment']['list'][number]
 /** The cloud browser of a task in the head of its feed (docs/plan/57, Б12–Б18). */

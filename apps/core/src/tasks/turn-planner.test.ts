@@ -750,3 +750,17 @@ describe('planTurn of a chat with a repository (docs/plan/84-projects.md, §4.3,
     expect(plan.request.context.instructions).not.toMatch(/connected the repository/)
   })
 })
+
+describe('a pass of a run of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп17, Зп29)', () => {
+  it('tells a pass without its client of its task, and asks no name of the chat', async () => {
+    const words = [request(10, 'first', 'Пришли курс доллара по ЦБ на сегодня', 0)]
+    const plan = await planned(facts({ requests: words, unattended: { name: 'Курс валют' } }))
+    const { instructions } = plan.request.context
+    expect(instructions).toContain('## A run of a scheduled task')
+    expect(instructions).toContain('«Курс валют» started this chat')
+    // The chat of a run has the name of its task (Зп17).
+    expect(instructions).not.toContain(CHAT_TITLE_SECTION)
+    const plain = await planned(facts({ requests: words }))
+    expect(plain.request.context.instructions).not.toContain('## A run of a scheduled task')
+  })
+})

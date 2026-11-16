@@ -11,7 +11,7 @@ import type { RelayedServer, RelayOutcome, SkillServerStore } from './skill-serv
 import { upstreamResolver } from './upstream.ts'
 
 const TOKEN = `mcp_${'a'.repeat(64)}`
-const SITE = '0199a000-0000-7000-8000-000000000001'
+const WORKSPACE = '0199a000-0000-7000-8000-000000000001'
 const SECRET = 'sk_live_0123456789abcdef'
 
 const servers: Server[] = []
@@ -46,6 +46,8 @@ async function stand(
     renewed?: SkillSecretRead | null
     workspaceId?: string
     resolveTo?: string
+    /** A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп27). */
+    unattended?: boolean
   } = {},
 ) {
   const seen: Seen[] = []
@@ -96,7 +98,8 @@ async function stand(
       token === TOKEN
         ? ({
             keyId: '0199a000-0000-7000-8000-0000000000aa',
-            workspaceId: options.workspaceId ?? SITE,
+            workspaceId: options.workspaceId ?? WORKSPACE,
+            unattended: options.unattended ?? false,
           } as McpTurnAccess)
         : null,
     ),
@@ -171,7 +174,34 @@ async function stand(
         req.end(body)
       },
     )
-  return { call, seen, recorded, store, forget }
+  /** A POST without a declared length: its body comes in chunks of 1 MiB. */
+  const chunked = (path: string, megabytes: number) =>
+    new Promise<number>((resolve) => {
+      const req = request(
+        {
+          host: '127.0.0.1',
+          port,
+          path,
+          method: 'POST',
+          headers: {
+            host: 'sandbox-gw',
+            authorization: `Bearer ${TOKEN}`,
+            'content-type': 'application/json',
+            'transfer-encoding': 'chunked',
+          },
+        },
+        (res) => {
+          res.resume()
+          res.on('end', () => resolve(res.statusCode ?? 0))
+        },
+      )
+      // The relay answers before the body is all there: what is left has nowhere to go.
+      req.on('error', () => undefined)
+      req.on('close', () => resolve(0))
+      for (let index = 0; index < megabytes; index++) req.write('x'.repeat(1024 * 1024))
+      req.end()
+    })
+  return { call, chunked, seen, recorded, store, forget }
 }
 
 describe('SkillRelay', () => {
@@ -245,7 +275,7 @@ describe('SkillRelay', () => {
     expect(header.recorded).toEqual([
       expect.objectContaining({ state: 'failed', error: 'unauthorized' }),
     ])
-    expect(header.forget).toHaveBeenCalledWith(SITE, 'menu')
+    expect(header.forget).toHaveBeenCalledWith(WORKSPACE, 'menu')
     const oauth = await stand({
       server: { authKind: 'oauth', headerName: null },
       secret: { secret: { accessToken: 'oauth-access-token-1' }, version: 1 },
@@ -288,6 +318,65 @@ describe('SkillRelay', () => {
     const body = 'x'.repeat(4 * 1024 * 1024 + 1)
     expect((await call('/mcp/skill/menu', { body })).status).toBe(413)
     expect(seen).toEqual([])
+  })
+
+  it('calls no tool of the server in a pass without its client, with the owner’s key (plan 82, Зп51)', async () => {
+    const toolCall = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'tools/call',
+      params: { name: 'menu_create_post', arguments: { title: 'Акция' } },
+    })
+    const { call, chunked, seen, recorded } = await stand({ unattended: true })
+    // The session starts and the tools are listed, as ever: through the relay, with the key.
+    const list = await call('/mcp/skill/menu')
+    expect(list.status).toBe(200)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.body).toBe('{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+    expect(seen[0]!.headers['x-api-key']).toBe(SECRET)
+    // A tool call never reaches the server: its tool's refusal, in the words of the role.
+    const refused = await call('/mcp/skill/menu', { body: toolCall })
+    expect(refused.status).toBe(200)
+    const answer = JSON.parse(refused.body)
+    expect(answer).toMatchObject({ jsonrpc: '2.0', id: 7, result: { isError: true } })
+    expect(JSON.parse(answer.result.content[0].text)).toMatchObject({
+      ok: false,
+      code: 'SCHEDULE_FORBIDDEN',
+      message: expect.stringMatching(/call no tool of the MCP servers of the workspace/),
+    })
+    expect(seen).toHaveLength(1)
+    // What cannot be read is no guess: a body that is not JSON, a batch that holds a call.
+    expect((await call('/mcp/skill/menu', { body: '{"method":"tools/call"' })).status).toBe(400)
+    expect((await call('/mcp/skill/menu', { body: `[${toolCall}]` })).status).toBe(400)
+    const notification = '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+    expect((await call('/mcp/skill/menu', { body: notification })).status).toBe(200)
+    expect(seen.map((entry) => entry.body)).toEqual([
+      '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+      notification,
+    ])
+    // A key said twice: the server gets the message as it was judged, written again — never a
+    // body it might read as the call its first `method` names.
+    const twice = '{"jsonrpc":"2.0","id":8,"method":"tools/call","method":"tools/list"}'
+    expect((await call('/mcp/skill/menu', { body: twice })).status).toBe(200)
+    expect(seen.at(-1)!.body).toBe('{"jsonrpc":"2.0","id":8,"method":"tools/list"}')
+    const last = '{"jsonrpc":"2.0","id":9,"method":"tools/list","method":"tools/call"}'
+    expect(JSON.parse((await call('/mcp/skill/menu', { body: last })).body)).toMatchObject({
+      id: 9,
+      result: { isError: true },
+    })
+    expect(seen).toHaveLength(3)
+    // A body above the limit is refused, declared or not, and none of it reaches the server.
+    expect((await call('/mcp/skill/menu', { body: 'x'.repeat(4 * 1024 * 1024 + 1) })).status).toBe(
+      413,
+    )
+    expect(await chunked('/mcp/skill/menu', 5)).toBe(413)
+    expect(seen).toHaveLength(3)
+    // The refusal is the pass's, not the server's: nothing is recorded of the server.
+    expect(recorded.filter((outcome) => outcome.state !== 'ok')).toEqual([])
+    // Once the client wrote, the same call goes to the server.
+    const attended = await stand()
+    expect((await attended.call('/mcp/skill/menu', { body: toolCall })).status).toBe(200)
+    expect(attended.seen.map((entry) => entry.body)).toEqual([toolCall])
   })
 
   it('masks the key after its scheme and as JSON escapes it', async () => {

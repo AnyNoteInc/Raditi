@@ -33,7 +33,10 @@ import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { QueueDrain } from './queue-drain.ts'
-import { ChatNotify, webPushSender } from './chat-notify.ts'
+import { ChatNotify } from './chat-notify.ts'
+import { NotificationDelivery, notificationDeliveryOf } from './notification-delivery.ts'
+import { ScheduleChanges } from './schedule-changes.ts'
+import { ScheduleNotify } from '../schedules/schedule-notify.ts'
 import { TaskSweep, TaskSweepRuntime } from './task-sweep.ts'
 import { TurnCapacity } from './turn-capacity.ts'
 import { TurnsProcessor } from './turns.processor.ts'
@@ -125,6 +128,8 @@ export const taskProviders: Provider[] = [
               }),
             }
           : {}),
+        // What a turn asked of the scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп33).
+        scheduleChanges: new ScheduleChanges({ db: prisma, logger: new Logger('ScheduleChanges') }),
         // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
         workspaceTurnLimit: config.workspaceTurnLimit,
         capacity: new TurnCapacity(executor),
@@ -148,17 +153,23 @@ export const taskProviders: Provider[] = [
     ],
   },
   {
-    // A chat that waits for its client who is not looking (docs/plan/75-chat-input-output.md, ВВ6).
+    // The channels of a notice: Web Push, letters, the bot (docs/plan/82-scheduled-tasks.md, Зп41).
+    provide: NotificationDelivery,
+    useFactory: (prisma: PrismaClient, config: CoreConfig) =>
+      notificationDeliveryOf(prisma, config),
+    inject: [PRISMA, CORE_CONFIG],
+  },
+  {
+    // A chat that waits for its client who is not looking (docs/plan/75-chat-input-output.md, ВВ6),
+    // and a pass of a scheduled run without its client (docs/plan/82, Зп38, Зп39).
     provide: ChatNotify,
-    useFactory: async (prisma: PrismaClient, config: CoreConfig) =>
+    useFactory: (prisma: PrismaClient, delivery: NotificationDelivery) =>
       new ChatNotify({
         db: prisma,
-        appUrl: config.billing.appUrl,
-        push: config.webPush
-          ? await webPushSender({ ...config.webPush, subject: config.billing.appUrl })
-          : null,
+        delivery,
+        schedules: new ScheduleNotify({ db: prisma, delivery }),
       }),
-    inject: [PRISMA, CORE_CONFIG],
+    inject: [PRISMA, NotificationDelivery],
   },
   {
     // The queue of a chat after its pass ended (docs/plan/75-chat-input-output.md, ВВ2).
@@ -195,6 +206,7 @@ export const taskProviders: Provider[] = [
         pageMetrics,
         projects: new ProjectTrash({ db: prisma, storage: inbox }),
         memory: new MemoryChanges({ db: prisma, logger: new Logger('MemoryChanges') }),
+        schedules: new ScheduleChanges({ db: prisma, logger: new Logger('ScheduleChanges') }),
       })
     },
     inject: [

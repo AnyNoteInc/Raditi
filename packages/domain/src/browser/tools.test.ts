@@ -293,6 +293,7 @@ describe('browserTaskCodes', () => {
       'BROWSER_CHECKPOINT_UNVERIFIED',
       'BROWSER_ATTACHMENT_UNKNOWN',
       'BROWSER_UPLOAD_REFUSED',
+      'BROWSER_READ_ONLY',
     ])
     expect(Object.keys(browserTaskCodes)).toEqual([...browserTaskCodeNames])
     for (const code of browserTaskCodeNames) {

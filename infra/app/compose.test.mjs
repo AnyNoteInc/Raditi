@@ -533,6 +533,24 @@ test('git-worker holds nothing of core: no secrets, Vault, database or Redis, on
   )
 })
 
+test('core that compose gives the intake of scheduled runs gets its secret too (docs/plan/82, §4.4)', () => {
+  // core refuses SCHEDULE_INTAKE_URL without SCHEDULE_INTAKE_SECRET («set both or neither»): every
+  // place that renders the secrets of core for this compose names the secret.
+  assert.ok(services.core.environment?.SCHEDULE_INTAKE_URL, 'compose gives core the address')
+  const example = readFileSync(new URL('./secrets.example/core/app.env', import.meta.url), 'utf8')
+  assert.match(example, /^SCHEDULE_INTAKE_SECRET=/m, 'secrets.example/core/app.env')
+  const verify = readFileSync(new URL('./verify-edge.mjs', import.meta.url), 'utf8')
+  const core = /const core = \{([\s\S]*?)\n {2}\}/.exec(verify)?.[1] ?? ''
+  const web = /const web = \{([\s\S]*?)\n {2}\}/.exec(verify)?.[1] ?? ''
+  assert.match(core, /\.\.\.scheduleIntake,/, 'verify-edge: the secrets of core')
+  assert.match(web, /\.\.\.scheduleIntake,/, 'verify-edge: the secrets of web')
+  assert.match(
+    verify,
+    /const scheduleIntake = \{ SCHEDULE_INTAKE_SECRET: /,
+    'verify-edge: the secret',
+  )
+})
+
 test('core gets time to finish its shutdown', () => {
   const [, seconds] = /^(\d+)s$/.exec(services.core.stop_grace_period) ?? []
   assert.ok(Number(seconds) >= 40)
@@ -639,4 +657,28 @@ test('the single server routes the root of the domain of pages to web, reads onl
   assert.match(server, /PAGES_ROOT_HOST: \$\{PAGES_ROOT_HOST:-\}/)
   // The origin of the root is PAGES_BASE_DOMAIN's (docs/plan/69-pages.md, Ст3), never a variable.
   assert.doesNotMatch(server, /PAGES_ORIGIN/)
+})
+
+// The stream gateway of the cloud browser (preview) dials BROWSER_WORKER_URL — the browser worker
+// on the host's private address. An internal network has no route there: with only internal
+// networks every viewer hung on «Подключаемся к браузеру…» (16.11.2026, after plan 83).
+test('the single server gives preview a network that reaches the browser worker', () => {
+  const server = readFileSync(
+    new URL('../server/docker-compose.server.yml', import.meta.url),
+    'utf8',
+  )
+  const block = /\n {2}preview:\n([\s\S]*?)\n {2}[a-z][a-z-]*:\n/.exec(server)?.[1] ?? ''
+  assert.match(block, /BROWSER_WORKER_URL: http:\/\/10\.10\.0\.10:8086/)
+  const listed = /\n {4}networks: \[([^\]]*)\]/
+    .exec(block)?.[1]
+    .split(',')
+    .map((n) => n.trim())
+  assert.ok(listed?.length, 'preview names its networks')
+  const declared = server.slice(server.indexOf('\nnetworks:\n'))
+  const internal = (name) => new RegExp(`\\n {2}${name}: \\{ internal: true \\}`).test(declared)
+  for (const name of listed) assert.match(declared, new RegExp(`\\n {2}${name}:`))
+  assert.ok(
+    listed.some((name) => !internal(name)),
+    `preview has only internal networks: ${listed.join(', ')}`,
+  )
 })

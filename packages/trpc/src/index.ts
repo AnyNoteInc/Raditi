@@ -18,6 +18,8 @@ export { cabinetDocMarkdown } from './services/pages.ts'
 export { readTaskScreenshot } from './services/chat/screenshots.ts'
 
 export { readChatNotification } from './services/notifications.ts'
+// The runs of scheduled tasks, handed by core to web (docs/plan/82-scheduled-tasks.md, §4.3).
+export { startScheduledRun } from './services/schedule/runs.ts'
 export type {
   McpServerCheck,
   McpServerProbe,

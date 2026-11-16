@@ -49,6 +49,7 @@ import {
   openTaskInstructions,
   CHAT_TITLE_SECTION,
   requestedFormatsSection,
+  unattendedSection,
 } from './turn-instructions.ts'
 
 // The planner of a pass (roadmap N11): what the turn supervisor is asked to run and under which
@@ -198,6 +199,12 @@ export interface PassFacts {
    * off for the author of the chat: no section, and the agent has no tools of it.
    */
   memory?: readonly MemorySectionEntry[] | null
+  /**
+   * The pass of a run of a scheduled task before the first words of its client (`passUnattended`,
+   * docs/plan/82-scheduled-tasks.md, Зп27, Зп29), with the name of its task; absent — an ordinary
+   * pass.
+   */
+  unattended?: { name: string } | null
   /**
    * The files bound to the chat, in the order they were sent: the latest go into the sandbox of
    * its turn (turnInboxOf). Absent or empty — none.
@@ -611,12 +618,13 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         reasoningEffort,
       },
       mcp: { url: `${SANDBOX_GATEWAY_URL}/mcp` },
+      // A run's chat has the name of its task, which the model never changes (docs/plan/82, Зп17).
       instructions: `${openTaskInstructions(internet, {
         browser,
         inbox: inboxFacts,
         variables: facts.variables ?? [],
         repository: repository !== null,
-      })}${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${memorySection(facts.memory)}`,
+      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${memorySection(facts.memory)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),

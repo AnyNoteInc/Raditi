@@ -16,6 +16,7 @@ const user: User = {
   emailVerified: true,
   agentMemory: true,
   image: '/api/profile/avatar/example',
+  timezone: null,
   createdAt: now,
   updatedAt: now,
 }

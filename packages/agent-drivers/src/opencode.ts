@@ -167,6 +167,9 @@ function permissionOf(context: Pick<RunContext, 'internet' | 'skills'>) {
       [`${SANDBOX_INBOX}/*`]: 'allow',
       // The files the agent makes for the client (docs/plan/66-chat-visuals.md, В11).
       [`${SANDBOX_OUT}/*`]: 'allow',
+      // Scratch files of the agent's scripts: the tmpfs of the turn, gone with its container.
+      '/tmp': 'allow',
+      '/tmp/*': 'allow',
       // The page snapshots the browser skill writes, which its answers name by path.
       ...(context.skills?.some((skill) => skill.kind === 'local')
         ? { [`${playwrightOutput}/*`]: 'allow' }

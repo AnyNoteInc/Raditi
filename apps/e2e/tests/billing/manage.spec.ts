@@ -539,7 +539,7 @@ test('a customer whose tariff is over sees when it ended and chooses a tariff ag
     await expect(block).not.toContainText('Выберите тариф')
     await expect(
       page.getByText(
-        'У вас 50 подарочных кредитов — их хватит на десять небольших правок или на три-пять задач побольше. Когда кредиты закончатся, понадобится тариф.',
+        'У вас 50 подарочных кредитов — их хватит на десять небольших задач или на три-пять задач побольше. Когда кредиты закончатся, понадобится тариф.',
       ),
     ).toBeVisible()
     await expect(page.getByRole('main')).not.toContainText('не принимаются')

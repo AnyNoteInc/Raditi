@@ -79,6 +79,7 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
     archived: false,
     telegram: false,
     project: null,
+    schedule: null,
     ...patch,
   }
 }
@@ -174,6 +175,29 @@ describe('the list of dialogs', () => {
     expect(plain(today.textContent)).not.toContain('Нужен ваш ответ')
     expect(plain(today.textContent)).not.toContain('Ответьте агенту')
     expect(screen.queryByRole('list', { name: 'Ждёт вашего решения' })).toBeNull()
+  })
+
+  // docs/plan/82-scheduled-tasks.md, Зп43: a run of a scheduled task has its stopwatch.
+  it('marks a chat of a run of a scheduled task with a stopwatch, and no other chat', async () => {
+    listPage.mockResolvedValue({
+      pinned: [],
+      items: [
+        dialog('5', {
+          title: 'Сводка курсов',
+          status: 'awaiting_user',
+          answered: true,
+          schedule: { id: null, name: 'Сводка курсов', trigger: 'schedule' },
+        }),
+        dialog('6', { title: 'Про сайт' }),
+      ],
+      nextCursor: null,
+    })
+    showList()
+    const today = await screen.findByRole('list', { name: 'Сегодня' })
+    const [run, other] = within(today).getAllByRole('link')
+    expect(plain(run!.textContent)).toContain('Запуск запланированной задачи по расписанию')
+    expect(run!.querySelector('[data-schedule-sign] svg')).not.toBeNull()
+    expect(other!.querySelector('[data-schedule-sign]')).toBeNull()
   })
 
   it('renames a dialog in place from the menu of its row, and deletes one after asking', async () => {

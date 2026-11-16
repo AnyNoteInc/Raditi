@@ -25,6 +25,7 @@ import type { DocSections } from './doc-sections.ts'
 import type { MemoryChanges } from './memory-changes.ts'
 import type { PageChanges } from './page-changes.ts'
 import type { RepoChanges, RepoTurnPreparer } from './repo-turns.ts'
+import type { ScheduleChanges } from './schedule-changes.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
 import type { TurnCapacity } from './turn-capacity.ts'
@@ -102,6 +103,11 @@ export interface PassRunnerDependencies {
   repositories?: Pick<RepoTurnPreparer, 'prepare'>
   /** What a turn with a repository left, told in the chat (§4.3, step 8). */
   repoChanges?: Pick<RepoChanges, 'apply' | 'fail'>
+  /**
+   * What the turn asked of the scheduled tasks of its author (docs/plan/82-scheduled-tasks.md,
+   * Зп33): applied after a completed turn, refused at once after one that failed or was cancelled.
+   */
+  scheduleChanges?: Pick<ScheduleChanges, 'apply' | 'failTurn'>
   /** WORKSPACE_TURN_LIMIT (plan 70, ВР13); DEFAULT_WORKSPACE_TURN_LIMIT when absent. */
   workspaceTurnLimit?: number
   /** The places for turns of the platform (plan 70, ВР17); absent — no bound but the pool's. */
@@ -161,7 +167,12 @@ export class PassRunner {
       return
     }
     const controller = this.deps.live.enter(job.taskId)
-    const ref: PassRef = { taskId: job.taskId, attempt: job.attempt, turnNo: claimed.turnNo }
+    const ref: PassRef = {
+      taskId: job.taskId,
+      attempt: job.attempt,
+      turnNo: claimed.turnNo,
+      requestEventId: job.requestEventId,
+    }
     // A live pass keeps its task out of `queued`, so the claim above cannot succeed beside one;
     // should it ever, that pass ends the task, never a second one.
     if (!controller) return
@@ -382,6 +393,8 @@ export class PassRunner {
       // request shown.
       await this.deps.memoryChanges?.fail(job.taskId, ending.turn)
       await this.deps.repoChanges?.fail(job.taskId, ending.turn)
+      // And the changes of the scheduled tasks it reserved (Зп33): «ответ агента оборвался».
+      await this.deps.scheduleChanges?.failTurn(job.taskId, ending.turn)
     }
     // After the answer of the turn, so that its files stand below it in the chat. A turn without
     // files still settles the pages it named (docs/plan/69-pages.md, Ст6).
@@ -393,8 +406,11 @@ export class PassRunner {
       })
     // Then the changes the turn asked of its pages, after their versions: a page renamed or moved
     // in the turn keeps the version the turn gave it (Дер23).
-    if (ending.kind === 'completed' && answer === 'moved' && refusesText)
+    if (ending.kind === 'completed' && answer === 'moved' && refusesText) {
       await this.deps.pageChanges?.apply(job.taskId, ending.turn, refusesText)
+      // The scheduled tasks the turn set up or changed, checked with what only the turn knew (Зп33).
+      await this.deps.scheduleChanges?.apply(job.taskId, ending.turn, refusesText)
+    }
     // Last, the notes of memory (docs/plan/84-projects.md, §4.3, step 8): «Запомнено» stands after
     // the answer. Without the values of the client they are closed failed, never applied unchecked.
     if (ending.kind === 'completed' && answer === 'moved')

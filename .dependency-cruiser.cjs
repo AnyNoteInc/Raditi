@@ -432,11 +432,14 @@ module.exports = {
     {
       name: 'mcp-profiles-apart',
       comment:
-        'The web tools of a chat (docs/plan/57-browser-tasks.md, Б20), the web search (spec §20, «Веб-поиск агента») and the pages of the workspace (docs/plan/69-pages.md, Ст20) are each its own module of the mcp app: no folder of them imports another (plan 56, §4.3).',
+        'The web tools of a chat (docs/plan/57-browser-tasks.md, Б20), the web search (spec §20, «Веб-поиск агента»), the pages of the workspace (docs/plan/69-pages.md, Ст20) and the scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп31) are each its own module of the mcp app: no folder of them imports another (plan 56, §4.3).',
       severity: 'error',
-      from: { path: '^apps/mcp/src/(web|search|pages|memory|repo)/', pathNot: '\\.test\\.ts$' },
+      from: {
+        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule)/',
+        pathNot: '\\.test\\.ts$',
+      },
       to: {
-        path: '^apps/mcp/src/(web|search|pages|memory|repo)/',
+        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule)/',
         pathNot: '^apps/mcp/src/$1/',
       },
     },
@@ -450,9 +453,9 @@ module.exports = {
         pathNot: '\\.test\\.ts$',
       },
       to: {
-        path: '^apps/mcp/src/(web|search|pages|memory|repo)/',
+        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule)/',
         pathNot:
-          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|memory/memory-arguments|repo/repo-arguments)\\.ts$',
+          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|memory/memory-arguments|repo/repo-arguments|schedule/schedule-arguments)\\.ts$',
       },
     },
     {
@@ -463,7 +466,7 @@ module.exports = {
       from: {
         path: [
           '^apps/mcp/src/common/',
-          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|memory/memory-arguments|repo/repo-arguments)\\.ts$',
+          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|memory/memory-arguments|repo/repo-arguments|schedule/schedule-arguments)\\.ts$',
         ],
         pathNot: '\\.test\\.ts$',
       },

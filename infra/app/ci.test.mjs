@@ -492,7 +492,6 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     'pnpm verify:llm-gateway --rehearsal --measure --no-build',
     'pnpm verify:llm-gateway --rehearsal --results --no-build',
     'pnpm verify:llm-gateway --rehearsal --compact --no-build',
-    'pnpm verify:llm-gateway --rehearsal --init --no-build',
     'pnpm verify:llm-gateway --rehearsal --api --no-build',
   ])
   // The options exist and mean what the steps take them for.
@@ -502,7 +501,6 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     '--measure',
     '--results',
     '--compact',
-    '--init',
     '--api',
     '--no-build',
   ])
@@ -1261,4 +1259,17 @@ test('the core of the smoke labels its turn containers apart from `pnpm dev`', (
   assert.ok(label, 'the smoke core sets SANDBOX_DEPLOYMENT')
   assert.notEqual(label, /^SANDBOX_DEPLOYMENT=(.*)$/m.exec(read('.env.example'))?.[1])
   assert.notEqual(label, 'local')
+})
+
+test('every folder the deploy copies to the server is in the repository', () => {
+  // v1.59.0 failed to deploy: deploy.yml still copied ci/, which plan 83 removed.
+  const sources = [
+    ...read('.github/workflows/deploy.yml').matchAll(
+      /^\s*rsync -a(?: --delete)? (\S+?)\/? "server:/gm,
+    ),
+  ]
+    .map(([, source]) => source)
+    .filter((source) => !source.startsWith('"$'))
+  assert.ok(sources.length >= 3, `the copies of deploy.yml: ${sources.join(', ')}`)
+  for (const source of sources) assert.ok(existsSync(join(root, source)), `${source} is missing`)
 })

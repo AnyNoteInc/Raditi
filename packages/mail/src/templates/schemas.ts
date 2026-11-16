@@ -9,9 +9,28 @@ const httpUrl = z.url({ protocol: /^https?$/ })
 const recipientName = z.string().max(255)
 const isoDateTime = z.iso.datetime({ offset: true })
 
-/** Why a chat waits for the client (docs/plan/75-chat-input-output.md, ВВ6). */
-export const chatWaitingKinds = ['answered', 'question', 'ready', 'failed', 'limit'] as const
+/**
+ * Why a chat waits for the client (docs/plan/75-chat-input-output.md, ВВ6), and, of a scheduled
+ * task, why it did not run (docs/plan/82-scheduled-tasks.md, Зп38, Зп39): it did not start, it
+ * paused, it missed a run — the notificationKinds of @repo/domain.
+ */
+export const chatWaitingKinds = [
+  'answered',
+  'question',
+  'ready',
+  'failed',
+  'limit',
+  'not_started',
+  'paused',
+  'missed',
+] as const
 export type ChatWaitingKind = (typeof chatWaitingKinds)[number]
+/** The kinds of a scheduled task itself: the letter opens the task, not a chat. */
+export const scheduledTaskLetterKinds = [
+  'not_started',
+  'paused',
+  'missed',
+] as const satisfies readonly ChatWaitingKind[]
 
 // Billing letters greet without a name and take their words from our own records, never from
 // what the customer typed. A value still stays on one line: it goes into a sentence and, in
@@ -90,9 +109,13 @@ export const mailDataSchemas = {
   }),
   // The agent of a chat waits for the client, who is not looking at it (docs/plan/75, ВВ9). No
   // words of the chat — not its name, not the agent's answer: a link to it and to the settings.
+  // A letter of a scheduled task (docs/plan/82, Зп39) names no task either: its name is the
+  // client's words.
   'chat-waiting': z.object({
     kind: z.enum(chatWaitingKinds),
-    /** The chat in the cabinet. */
+    /** Of a run of a scheduled task, or of the task itself; absent — a chat of the client. */
+    scheduled: z.boolean().optional(),
+    /** The chat in the cabinet; of a task itself — its page. */
     url: httpUrl,
     /** «Уведомления» of the settings, where the letters are turned off. */
     settingsUrl: httpUrl,

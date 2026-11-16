@@ -3,14 +3,17 @@
 import { reasoningEfforts, type ReasoningEffort } from '@repo/domain/llm/model-class'
 import Box from '@mui/material/Box'
 import ButtonBase from '@mui/material/ButtonBase'
+import Divider from '@mui/material/Divider'
 import ListItemText from '@mui/material/ListItemText'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
+import Switch from '@mui/material/Switch'
 import Typography from '@mui/material/Typography'
 import { useId, useImperativeHandle, useRef, useState, type Ref } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 
+import { useChatThinking } from './chat-details'
 import { effortText } from './chat-texts'
 import { fieldControl } from './composer'
 
@@ -28,9 +31,14 @@ export interface EffortMenuHandle {
 /**
  * «Размышление»: how hard the model thinks (owner's requests of 26.10.2026) — a quiet button in
  * the row of the field, the brain beside the level chosen (29.10.2026), and a menu of the three
- * under it. The same on a new dialog and in one that goes on, where the level holds from the
+ * over it. The same on a new dialog and in one that goes on, where the level holds from the
  * agent's next turn. `/models` opens the same menu (docs/plan/61-chats-first.md, §5.14), also while
- * the level cannot be changed: then it shows the level and says when it can.
+ * the level cannot be changed: then it shows the level and says when it can. Under the levels —
+ * the switch of `/thinking` (owner's request of 15.11.2026): it is this viewer's choice, open
+ * whatever the level, and the menu stays open on it. `placement` — where the menu opens: up from
+ * the field at the bottom of the chat, down from a field at the top of a window
+ * (docs/plan/82-scheduled-tasks.md, Зп7). The window of a scheduled task has no switch
+ * (`thinkingSwitch`): the level is the task's, how a chat shows its thoughts is not.
  */
 export function EffortMenu({
   value,
@@ -38,6 +46,8 @@ export function EffortMenu({
   disabled = false,
   lockedText = effortText.locked,
   handle,
+  placement = 'up',
+  thinkingSwitch = true,
 }: {
   value: ReasoningEffort
   onChange: (effort: ReasoningEffort) => void
@@ -45,11 +55,16 @@ export function EffortMenu({
   /** What the closed menu says of the level. */
   lockedText?: string
   handle?: Ref<EffortMenuHandle>
+  placement?: 'up' | 'down'
+  /** Whether the menu ends with the switch of `/thinking`, which is of the chats. */
+  thinkingSwitch?: boolean
 }) {
+  const down = placement === 'down'
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const menuId = useId()
   const open = anchor !== null
   const button = useRef<HTMLButtonElement>(null)
+  const { thinking, toggle: toggleThinking } = useChatThinking()
   useImperativeHandle(handle, () => ({ open: () => setAnchor(button.current) }), [])
   return (
     <>
@@ -86,10 +101,10 @@ export function EffortMenu({
         anchorEl={anchor}
         open={open}
         onClose={() => setAnchor(null)}
-        anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
-        transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        anchorOrigin={{ vertical: down ? 'bottom' : 'top', horizontal: 'left' }}
+        transformOrigin={{ vertical: down ? 'top' : 'bottom', horizontal: 'left' }}
         slotProps={{
-          paper: { sx: { borderRadius: '14px', minWidth: 260, mt: -1 } },
+          paper: { sx: { borderRadius: '14px', minWidth: 260, mt: down ? 1 : -1 } },
           list: { 'aria-label': effortText.label },
         }}
       >
@@ -132,6 +147,31 @@ export function EffortMenu({
             </Box>
           </MenuItem>
         ))}
+        {thinkingSwitch ? <Divider component="li" role="presentation" sx={{ my: 0.5 }} /> : null}
+        {thinkingSwitch ? (
+          <MenuItem
+            role="menuitemcheckbox"
+            aria-checked={thinking}
+            onClick={() => toggleThinking()}
+            sx={{ gap: 1.5, py: 0.5 }}
+          >
+            <ListItemText
+              primary={effortText.showThinking}
+              secondary={effortText.showThinkingHint}
+              slotProps={{
+                primary: { sx: { fontSize: 14, fontWeight: 500 } },
+                secondary: { sx: { fontSize: 13 } },
+              }}
+            />
+            <Switch
+              size="small"
+              checked={thinking}
+              tabIndex={-1}
+              slotProps={{ input: { 'aria-hidden': true } }}
+              sx={{ pointerEvents: 'none' }}
+            />
+          </MenuItem>
+        ) : null}
       </Menu>
     </>
   )

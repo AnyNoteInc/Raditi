@@ -1368,15 +1368,15 @@ async function endedLetterSays(t, letter) {
   )
   if (row === null) return { about: letter.key, expected: ['a tariff of the letter'] }
   const { plan, gift, pack } = row
-  let kept = 'Сайты'
-  if (pack > 0 && gift > 0) kept = 'Кредиты из пакета и подарочные, сайты'
-  else if (pack > 0) kept = 'Кредиты из пакета, сайты'
-  else if (gift > 0) kept = 'Подарочные кредиты, сайты'
+  let kept = 'Чаты и страницы'
+  if (pack > 0 && gift > 0) kept = 'Кредиты из пакета и подарочные, чаты и страницы'
+  else if (pack > 0) kept = 'Кредиты из пакета, чаты и страницы'
+  else if (gift > 0) kept = 'Подарочные кредиты, чаты и страницы'
   return {
     about: `subscription ${subscriptionId}`,
     expected: [
       `Тариф «${plan}» закончился ${moscowDate(letter.data.endedAt)}. Новые задачи ${tasksOnGift(gift + pack, 'сейчас не принимаются')}.`,
-      `${kept} и история правок сохраняются.${pack > 0 ? ` Кредитов из пакета осталось: ${counted(pack)}.` : ''}`,
+      `${kept} сохраняются.${pack > 0 ? ` Кредитов из пакета осталось: ${counted(pack)}.` : ''}`,
     ],
   }
 }

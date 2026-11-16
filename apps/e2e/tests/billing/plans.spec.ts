@@ -96,7 +96,7 @@ const DATE = String.raw`${DAY}\s\d{4}`
  * of the registration — promised before the first site or checkout, on the account after it.
  */
 const GIFT_LEAD =
-  'У вас 50 подарочных кредитов — их хватит на десять небольших правок или на три-пять задач побольше. Когда кредиты закончатся, понадобится тариф.'
+  'У вас 50 подарочных кредитов — их хватит на десять небольших задач или на три-пять задач побольше. Когда кредиты закончатся, понадобится тариф.'
 
 test('a customer picks a tariff, pays for it and sees it active', async ({
   page,
@@ -134,7 +134,7 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
     // What a task costs and what a tariff holds, in the numbers of the credits model: the
     // credits come from the seeds, the minimum, the examples and the average from the domain.
     await expect(page.getByRole('main')).toContainText(
-      'Задача стоит столько кредитов, сколько работы она потребовала: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
+      'Задача стоит столько кредитов, сколько работы она потребовала: короткий ответ, письмо или поиск — обычно 5 кредитов, документ, таблица или страница — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
     )
     // The terms of 13.11.2026: no tariff has a daily limit, and each card names the price of a
     // small edit in rubles — 5 credits at the price of a credit of the tariff.

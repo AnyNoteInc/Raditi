@@ -1281,8 +1281,16 @@ export type PageChange =
 /** At most this many pages a turn moves to the trash (rule 4, Дер27). */
 export const AGENT_DELETES_PER_TURN = 20
 
-/** Whether the author of a chat is now an owner or an administrator of its workspace (Дер24). */
-async function authorManages(tx: Tx, taskId: string, workspaceId: string): Promise<boolean> {
+/**
+ * Whether the author of a chat is now an owner or an administrator of the workspace (Дер24): who
+ * the changes its agent asks of the pages — and of the scheduled tasks (docs/plan/82-scheduled-
+ * tasks.md, Зп25) — are allowed to.
+ */
+export async function chatAuthorManages(
+  tx: Pick<Tx, 'task' | 'member'>,
+  taskId: string,
+  workspaceId: string,
+): Promise<boolean> {
   const task = await tx.task.findUnique({ where: { id: taskId }, select: { createdById: true } })
   if (!task?.createdById) return false
   const member = await tx.member.findFirst({
@@ -1358,7 +1366,7 @@ export async function reservePageChange(
   const { workspaceId, taskId, turnNo, change } = input
   return db.$transaction(async (tx) => {
     await lockWorkspaceOfChat(tx, workspaceId, taskId, pageNotFound)
-    if (!(await authorManages(tx, taskId, workspaceId))) throw pageForbidden()
+    if (!(await chatAuthorManages(tx, taskId, workspaceId))) throw pageForbidden()
     const page = await lockPage(tx, change.pageId, workspaceId)
     changeable(page)
     let pages = 1
@@ -1663,7 +1671,7 @@ export async function applyPageChange(
       throw pageNotFound()
     // The workspace first, as every change of its pages takes it: a return counts against it.
     await lockWorkspace(tx, input.workspaceId)
-    if (!(await authorManages(tx, input.taskId, input.workspaceId))) throw pageForbidden()
+    if (!(await chatAuthorManages(tx, input.taskId, input.workspaceId))) throw pageForbidden()
     const page = await lockPage(tx, row.pageId, input.workspaceId)
     changeable(page)
     const payload = (row.payload ?? {}) as {
@@ -1765,7 +1773,7 @@ export async function applyPageEdit(
       row.turnNo === null
     )
       throw pageNotFound()
-    if (!(await authorManages(tx, input.taskId, input.workspaceId))) throw pageForbidden()
+    if (!(await chatAuthorManages(tx, input.taskId, input.workspaceId))) throw pageForbidden()
     const page = await lockPage(tx, row.pageId, input.workspaceId)
     changeable(page)
     if (page.deletedAt) throw pageDeleted()
@@ -2067,7 +2075,7 @@ export async function reservePageFileDeletion(
 ): Promise<{ reservationId: string; slug: string; path: string }> {
   return db.$transaction(async (tx) => {
     await lockWorkspaceOfChat(tx, input.workspaceId, input.taskId, pageNotFound)
-    if (!(await authorManages(tx, input.taskId, input.workspaceId))) throw pageForbidden()
+    if (!(await chatAuthorManages(tx, input.taskId, input.workspaceId))) throw pageForbidden()
     const tree = await lockTree(tx, input.treeId, input.workspaceId)
     if (tree.takenDownBy === 'operator') throw pageNotFound()
     const file = await tx.pageFile.findUnique({

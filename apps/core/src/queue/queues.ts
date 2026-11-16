@@ -1,4 +1,4 @@
-import { queueNames, type QueueName } from '@repo/domain'
+import { queueNames, scheduleLimits, type QueueName } from '@repo/domain'
 import type { DefaultJobOptions } from 'bullmq'
 
 export function isQueueName(name: string): name is QueueName {
@@ -53,6 +53,16 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   // The checks, lists and first fetch of git connections and repositories (docs/plan/84-projects.md,
   // §4.3): a failed job is put again by the client's «Обновить» or its next look, never by BullMQ.
   git: lifecycleJobs,
+  // The starts of the runs of scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп19, Зп21): web
+  // away, a deploy or a fault of the platform is tried again — eight tries, from 30 s doubling,
+  // about an hour —, then the run is «Не запустилась: сбой платформы». Job data holds the id of
+  // the run only. The tick sets its own single attempt: the next one does the same work again.
+  schedules: {
+    attempts: scheduleLimits.startAttempts,
+    backoff: { type: 'exponential', delay: 30_000 },
+    removeOnComplete: { age: DAY, count: 1_000 },
+    removeOnFail: { age: 7 * DAY },
+  },
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

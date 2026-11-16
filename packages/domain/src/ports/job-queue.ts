@@ -24,6 +24,8 @@ export const queueNames = [
   // The git connections and repositories of projects: their checks, lists and first fetch
   // (docs/plan/84-projects.md, §4.3; slice 84.17).
   'git',
+  // The tick of the scheduled tasks and the starts of their runs (docs/plan/82-scheduled-tasks.md, Зп19).
+  'schedules',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

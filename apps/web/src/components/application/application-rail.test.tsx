@@ -28,13 +28,21 @@ beforeEach(() => {
 })
 
 describe('the rail of the cabinet', () => {
-  it('stands «Чаты», «Страницы», «Проекты», and the mark leads to the chats', () => {
-    const [chats, pages, projects] = links()
+  it('stands «Чаты», the scheduled tasks, «Страницы» and «Проекты», and the mark leads to the chats', () => {
+    const all = links()
+    // The four sections of the cabinet (plan 82, Зп60; plan 84).
+    expect(all).toHaveLength(4)
+    const [chats, scheduled, pages, projects] = all
     expect(chats).toHaveAccessibleName('Чаты')
     expect(chats).toHaveAttribute('href', '/chats')
-    // Between the chats and the projects (owner's answer of 13.11.2026, plan 69, Ст30).
+    // After the chats and before the pages (owner's request of 15.11.2026, plan 82, Зп1): the
+    // link says what the section is, its label is short.
+    expect(scheduled).toHaveAccessibleName('Запланированные задачи')
+    expect(scheduled).toHaveAttribute('href', '/scheduled')
+    expect(scheduled).toHaveTextContent('Задачи')
     expect(pages).toHaveAccessibleName('Страницы')
     expect(pages).toHaveAttribute('href', '/pages')
+    // The last section (docs/plan/84-projects.md).
     expect(projects).toHaveAccessibleName('Проекты')
     expect(projects).toHaveAttribute('href', '/projects')
     expect(screen.getByRole('link', { name: 'Радити — главная страница' })).toHaveAttribute(
@@ -47,9 +55,12 @@ describe('the rail of the cabinet', () => {
     ['/chats', 0],
     ['/chats/new', 0],
     ['/chats/0199a3f2-0000-7000-8000-000000000001', 0],
-    ['/pages', 1],
-    ['/projects', 2],
-    ['/projects/new', 2],
+    ['/scheduled', 1],
+    ['/scheduled/templates', 1],
+    ['/scheduled/0199a3f2-0000-7000-8000-000000000002', 1],
+    ['/pages', 2],
+    ['/projects', 3],
+    ['/projects/new', 3],
   ])('marks the section of %s, and only it', (pathname, current) => {
     mocks.pathname = pathname
     const all = links()
@@ -58,10 +69,13 @@ describe('the rail of the cabinet', () => {
     )
   })
 
-  it('marks nothing outside its sections, nor on a name that only starts like one', () => {
-    mocks.pathname = '/chatsy'
-    expect(links().every((link) => link.getAttribute('aria-current') === null)).toBe(true)
-  })
+  it.each(['/chatsy', '/scheduledx'])(
+    'marks nothing outside its sections, nor on a name that only starts like one: %s',
+    (pathname) => {
+      mocks.pathname = pathname
+      expect(links().every((link) => link.getAttribute('aria-current') === null)).toBe(true)
+    },
+  )
 
   it('stands the credits over the account menu', () => {
     links()

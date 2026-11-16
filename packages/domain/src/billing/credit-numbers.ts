@@ -48,9 +48,9 @@ const typical = (from: number, to: number): TypicalCredits => Object.freeze({ fr
 
 /**
  * The orientation list — the customer's way to tell what a request will cost before it is done:
- * - `small`: «поменять текст, цену, телефон или фото»;
- * - `block`: «добавить блок, баннер или страницу, поправить оформление»;
- * - `large`: «большая задача: несколько страниц, новая форма, сложная логика».
+ * - `small`: «короткий ответ, письмо или поиск»;
+ * - `block`: «документ, таблица или страница по ссылке»;
+ * - `large`: «большая задача: обзор многих сайтов, отчёт, сайт из нескольких страниц».
  */
 export const typicalTaskCredits = Object.freeze({
   small: typical(5, 5),
@@ -113,7 +113,7 @@ export interface GiftTaskCounts {
 
 /**
  * What a number of gift credits is enough for, for the sentence «их хватит на десять небольших
- * правок или на три-пять задач побольше»: 50 → 10 small edits, 3–5 larger tasks. Small edits at
+ * задач или на три-пять задач побольше»: 50 → 10 small edits, 3–5 larger tasks. Small edits at
  * their usual charge, rounded down; larger tasks from blocks at the bottom of their range,
  * rounded down, to tasks of the average charge (`averageTaskCount`). A promise, like every
  * count of tasks: the charge of a task comes from the work it took.

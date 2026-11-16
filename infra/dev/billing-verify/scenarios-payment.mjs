@@ -135,7 +135,7 @@ scenarios['signup-gift'] = async (t) => {
     'the first file: the welcome letter promised what was granted — «Мы дарим вам 50 кредитов, чтобы попробовать…»',
     otherWelcomes.length === 0 &&
       welcome?.text.includes(
-        `Мы дарим вам ${creditsCount(Number(granted[0].amount))}, чтобы попробовать: их хватит на десять небольших правок или на три-пять задач побольше.`,
+        `Мы дарим вам ${creditsCount(Number(granted[0].amount))}, чтобы попробовать: их хватит на десять небольших задач или на три-пять задач побольше.`,
       ),
     welcome,
   )
@@ -1290,7 +1290,7 @@ scenarios['pack-and-period-end'] = async (t) => {
         `Тариф «Старт» закончился ${moscowDate(dates.end)}. Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.`,
       ) &&
       endedLetter.text.includes(
-        'Кредиты из пакета и подарочные, сайты и история правок сохраняются. Кредитов из пакета осталось: 100.',
+        'Кредиты из пакета и подарочные, чаты и страницы сохраняются. Кредитов из пакета осталось: 100.',
       ),
     endedLetter,
   )

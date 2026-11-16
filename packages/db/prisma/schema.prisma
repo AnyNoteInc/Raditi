@@ -35,6 +35,9 @@ model User {
   image         String?  @db.VarChar(1024)
   /// «Агент запоминает важное» (docs/plan/84-projects.md, ПР18): off — no tools and no section.
   agentMemory   Boolean  @default(true) @map("agent_memory")
+  /// The zone of the client's browser, remembered by the cabinet (docs/plan/82-scheduled-tasks.md,
+  /// Зп12): a new scheduled task takes it. A name of the IANA database as Intl resolves it.
+  timezone      String?  @db.VarChar(64)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -61,6 +64,7 @@ model User {
   gitConnections          GitConnection[]       @relation("GitConnectionCreator")
   repoActions             RepoAction[]          @relation("RepoActionCreator")
   memoryEntries           MemoryEntry[]
+  scheduledTasks          ScheduledTask[]
 
   @@map("users")
 }
@@ -200,6 +204,8 @@ model Workspace {
   gitConnections     GitConnection[]
   projectRepos       ProjectRepository[]
   repoReservations   RepoReservation[]
+  scheduledTasks     ScheduledTask[]
+  scheduleChanges    ScheduleReservation[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -920,6 +926,11 @@ model Task {
   mergeRequests      ProjectMergeRequest[]
   repoReservations   RepoReservation[]
   repoActions        RepoAction[]
+  /// The run of a scheduled task this chat was started by (docs/plan/82-scheduled-tasks.md, Зп17).
+  scheduledRun       ScheduledRun?
+  /// Scheduled tasks its agent set up (Зп33), and the changes of them its turns reserved.
+  setUpSchedules     ScheduledTask[]       @relation("ScheduledTaskSource")
+  scheduleChanges    ScheduleReservation[]
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([workspaceId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_workspace_updated_idx")
@@ -1145,6 +1156,10 @@ model PushSubscription {
   endpoint   String    @unique
   p256dh     String
   auth       String
+  /// The public VAPID key the browser subscribed under (docs/plan/82-scheduled-tasks.md, Зп41): a
+  /// 403 of a push service drops the subscription only when the key is not the one of now. NULL —
+  /// subscribed before the column.
+  vapidKey   String?   @map("vapid_key") @db.VarChar(128)
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   lastUsedAt DateTime? @map("last_used_at") @db.Timestamptz(6)
 
@@ -1167,21 +1182,36 @@ model TaskPresence {
   @@map("task_presence")
 }
 
-/// A notification of a chat that waits (ВВ8, ВВ9); `kind` — answered, question, ready, failed or
-/// limit (CHECK chat_notifications_kind_check).
+/// A notification of a chat that waits (ВВ8, ВВ9) or of a scheduled task (docs/plan/82-scheduled-
+/// tasks.md, Зп38–Зп41); `kind` — notificationKinds of @repo/domain (CHECK
+/// chat_notifications_kind_check). A notice of a task itself — it did not start, it paused, it
+/// missed a run — may have no chat; every row has a chat or a task (CHECK
+/// chat_notifications_target_check). One notice of a kind per pass of a chat (attempt, turn_no)
+/// and per run: a repeat of the job inserts nothing and sends nothing.
 model ChatNotification {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  taskId    String   @map("task_id") @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  kind      String
-  emailed   Boolean  @default(false)
-  pushed    Int      @default(0)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id              String   @id @default(uuid(7)) @db.Uuid
+  taskId          String?  @map("task_id") @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  /// The scheduled task the notice is of, and its run; NULL — a chat with its client by it.
+  scheduledTaskId String?  @map("scheduled_task_id") @db.Uuid
+  scheduledRunId  String?  @map("scheduled_run_id") @db.Uuid
+  kind            String
+  /// The pass of the chat it tells of; NULL on the rows written before the columns.
+  attempt         Int?
+  turnNo          Int?     @map("turn_no")
+  emailed         Boolean  @default(false)
+  pushed          Int      @default(0)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task          Task?          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduledTask ScheduledTask? @relation(fields: [scheduledTaskId], references: [id], onDelete: Cascade)
+  scheduledRun  ScheduledRun?  @relation(fields: [scheduledRunId], references: [id], onDelete: Cascade)
 
+  @@unique([taskId, kind, attempt, turnNo], map: "chat_notifications_pass_key", where: raw("(task_id IS NOT NULL)"))
+  @@unique([scheduledRunId, kind], map: "chat_notifications_run_key", where: raw("(scheduled_run_id IS NOT NULL)"))
   @@index([taskId, userId, createdAt])
+  @@index([scheduledTaskId, createdAt])
   @@map("chat_notifications")
 }
 
@@ -1320,6 +1350,8 @@ model LlmModel {
   modelClass          ModelClass @map("model_class")
   /// Output tokens reserved before a call, not the provider's output cap (spec §17).
   reserveOutputTokens Int        @default(32000) @map("reserve_output_tokens")
+  /// Tokens one request may hold: what `/context` of a chat measures by; NULL — not known.
+  contextTokens       Int?       @map("context_tokens")
   enabled             Boolean    @default(true)
   createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -2608,6 +2640,137 @@ model LlmTurnCost {
   model LlmModel @relation(fields: [modelId], references: [id], onDelete: Cascade, map: "llm_turn_costs_model_fkey")
 
   @@map("llm_turn_costs")
+}
+
+// ─── Scheduled tasks (docs/plan/82-scheduled-tasks.md) ────────────────────────────────────────
+// The agent runs the client's instructions by itself on a schedule, each run a new chat (Зп17).
+// Every write of a task takes its row FOR UPDATE; the 20 enabled tasks of a workspace (Зп16) are
+// counted under the workspace's row FOR NO KEY UPDATE, taken before the task's.
+
+/// A scheduled task (Зп11–Зп16, Зп25, Зп44): of its creator's personal workspace. Its
+/// instructions are what the agent gets as the client's message of each run; who may change it —
+/// its creator.
+model ScheduledTask {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  workspaceId       String    @map("workspace_id") @db.Uuid
+  createdById       String    @map("created_by_id") @db.Uuid
+  /// One line, 1–80 characters (scheduleNameSchema).
+  name              String    @db.VarChar(80)
+  /// 1–4000 characters (scheduleInstructionsSchema), never a password or a key (Зп26).
+  instructions      String
+  /// «Размышление» of the runs: low, high or max (reasoningEfforts).
+  effort            String    @db.VarChar(8)
+  /// 0–5 schedules (scheduleTriggersSchema); none — «Только вручную».
+  triggers          Json
+  /// A zone of the IANA database as Intl resolves it (Зп12).
+  timezone          String    @db.VarChar(64)
+  enabled           Boolean   @default(true)
+  /// «Уведомлять, когда задача выполнится» (Зп39).
+  notify            Boolean   @default(true)
+  /// The next due moment; NULL — paused, or only by hand. Moved only by a change of the schedule
+  /// or the zone, by enabling, and by the tick (Зп13).
+  nextRunAt         DateTime? @map("next_run_at") @db.Timestamptz(6)
+  /// The due moment of the latest run written.
+  lastRunAt         DateTime? @map("last_run_at") @db.Timestamptz(6)
+  /// Why the task is off without the client's word (schedulePausedReasons); NULL — on, or paused
+  /// by the client.
+  pausedReason      String?   @map("paused_reason") @db.VarChar(16)
+  /// Refusals in a row for a reason of the client (Зп22); a run that started clears it.
+  refusalStreak     Int       @default(0) @map("refusal_streak")
+  /// The reason of the latest refusal: the same one is told once (Зп39).
+  lastRefusalReason String?   @map("last_refusal_reason") @db.VarChar(24)
+  /// When a notice of the task itself was last sent (Зп39).
+  lastNotifiedAt    DateTime? @map("last_notified_at") @db.Timestamptz(6)
+  /// manual, template or chat.
+  createdVia        String    @map("created_via") @db.VarChar(16)
+  /// The template it was made from (§4.6); only with created_via = template.
+  templateSlug      String?   @map("template_slug") @db.VarChar(40)
+  /// The chat it was set up in (Зп33); only with created_via = chat.
+  sourceTaskId      String?   @map("source_task_id") @db.Uuid
+  /// «Удалить» (Зп23): gone from the list; the chats of its runs stay.
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace     Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy     User                  @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  sourceTask    Task?                 @relation("ScheduledTaskSource", fields: [sourceTaskId], references: [id], onDelete: SetNull)
+  runs          ScheduledRun[]
+  reservations  ScheduleReservation[]
+  notifications ChatNotification[]
+
+  @@index([nextRunAt], map: "scheduled_tasks_due_idx", where: raw("(enabled AND (deleted_at IS NULL) AND (next_run_at IS NOT NULL))"))
+  @@index([workspaceId])
+  @@index([createdById, workspaceId])
+  @@index([sourceTaskId])
+  @@map("scheduled_tasks")
+}
+
+/// A run of a scheduled task (Зп14, Зп19–Зп24): by its schedule at a due moment, or «Запустить
+/// сейчас». The fields of the task are a snapshot of the moment it was written: a repeat of its
+/// start begins from them, not from the task edited since (Зп20). `pending` until web answers;
+/// then started with its chat, refused or skipped with a reason (scheduledRunReasons).
+model ScheduledRun {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  scheduledTaskId String    @map("scheduled_task_id") @db.Uuid
+  /// The due moment, to the minute; of the earliest one of a row of missed runs.
+  dueAt           DateTime  @map("due_at") @db.Timestamptz(6)
+  /// schedule or manual.
+  trigger         String    @db.VarChar(8)
+  /// pending, started, refused or skipped.
+  status          String    @default("pending") @db.VarChar(8)
+  reason          String?   @db.VarChar(24)
+  /// The chat of the run (CHECK scheduled_runs_task_check: exactly when started).
+  taskId          String?   @unique @map("task_id") @db.Uuid
+  name            String    @db.VarChar(80)
+  instructions    String
+  effort          String    @db.VarChar(8)
+  /// Due moments the row stands for when it says «Пропущено» (reason missed); 0 — otherwise.
+  missedCount     Int       @default(0) @map("missed_count")
+  /// The latest due moment a row of missed runs stands for («Пропущены запуски с … по …»), written
+  /// with the row by the tick; null — any other row, or one written without it.
+  missedUntil     DateTime? @map("missed_until") @db.Timestamptz(6)
+  /// Deliveries of `schedule.start` core made.
+  attempts        Int       @default(0)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt       DateTime? @map("started_at") @db.Timestamptz(6)
+
+  scheduledTask ScheduledTask      @relation(fields: [scheduledTaskId], references: [id], onDelete: Cascade)
+  task          Task?              @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  notifications ChatNotification[]
+
+  @@unique([scheduledTaskId, dueAt, trigger])
+  @@index([scheduledTaskId, createdAt])
+  @@index([status, createdAt], map: "scheduled_runs_pending_idx", where: raw("((status)::text = 'pending'::text)"))
+  @@map("scheduled_runs")
+}
+
+/// A change of the scheduled tasks the agent reserved in a turn (Зп33), as page_reservations: core
+/// applies it when the turn ended, checking everything again; a turn that failed refuses it.
+model ScheduleReservation {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  taskId      String    @map("task_id") @db.Uuid
+  turnNo      Int       @map("turn_no")
+  /// create, update or delete.
+  kind        String    @db.VarChar(8)
+  /// The task changed; of a creation — the task it made, once done.
+  scheduleId  String?   @map("schedule_id") @db.Uuid
+  /// The fields of a creation, the patch of an update, as checked when reserved.
+  payload     Json
+  /// NULL while it waits for the end of the turn; then done, refused or failed.
+  outcome     String?   @db.VarChar(8)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  closedAt    DateTime? @map("closed_at") @db.Timestamptz(6)
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  schedule  ScheduledTask? @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, turnNo], map: "schedule_reservations_open_idx", where: raw("(outcome IS NULL)"))
+  @@index([workspaceId])
+  @@index([scheduleId])
+  @@map("schedule_reservations")
 }
 
 /// Who named a dialog (`tasks.title_source`, owner's request of 15.11.2026).

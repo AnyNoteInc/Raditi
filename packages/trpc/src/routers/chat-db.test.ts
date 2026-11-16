@@ -2084,6 +2084,41 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect((await said()).at(-1)?.text).toMatch(/Сообщение в очереди/u)
     })
 
+    it('answers /usage, /status and /context in the words of the cabinet (15.11.2026)', async () => {
+      const from = chatId()
+      const { owner, caller } = await linked(from)
+      // No chat yet: the credits only, and the way to the page of usage.
+      await deliver(words(from, '/usage'))
+      const usage = (await said()).at(-1)!.text
+      expect(usage).toMatch(/^Использование\n\nОсталось \d+/u)
+      expect(usage).not.toMatch(/Этот чат/u)
+      expect(usage).toContain('https://raditi.example.ru/settings/usage')
+      await deliver(words(from, '/status'))
+      expect((await said()).at(-1)?.text).toBe(
+        'Состояние чата\n\nЧат ещё не начат: напишите, что сделать.',
+      )
+      await deliver(words(from, 'Поменяйте заголовок'))
+      const [task] = await db.task.findMany({
+        where: { createdById: owner.id },
+        select: { id: true },
+      })
+      taskIds.push(task!.id)
+      await deliver(words(from, '/status'))
+      expect((await said()).at(-1)?.text).toMatch(/Подготовка агента\.\nРазмышление/u)
+      await deliver(words(from, '/context'))
+      expect((await said()).at(-1)?.text).toBe(
+        'Контекст агента\n\nАгент в этом чате ещё не работал — контекст пуст.',
+      )
+      await deliver(words(from, '/usage'))
+      expect((await said()).at(-1)?.text).toMatch(/Этот чат: 0 кредитов\./u)
+      // The cabinet reads the same facts.
+      expect(await caller.task.info({ taskId: task!.id })).toMatchObject({
+        status: { queued: 0, browser: false },
+        context: { used: null },
+        usage: { chat: 0 },
+      })
+    })
+
     it('deletes the chat and its topic by /delete, by the cabinet and when the topic is gone', async () => {
       const from = chatId()
       const { owner, caller } = await linked(from)

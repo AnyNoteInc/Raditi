@@ -53,16 +53,19 @@ const scopeOf = (context: McpContext) => context.getRawRequest<McpRequest>()?.[M
 
 /**
  * The pages of a workspace (docs/plan/69-pages.md, Ст20; docs/plan/73-pages-sites.md, §6): the
- * family `pages`, declared to every turn where the pages are configured (`@ToolScopes(['pages'])`,
- * mcpToolFamiliesOf). A site is a host with pages at paths. Reading is at once; a publication and
- * every change are applied when the turn ends. Taking a page down, its password and emptying the
- * trash are the client's, in the cabinet: no tool for them.
+ * reads — the family `pages` — declared to every turn where the pages are configured, the
+ * publication and every change — `pages_changes` — only to a turn its client watches: a pass of a
+ * scheduled run without its client changes nothing its visitors see (`@ToolScopes`,
+ * mcpToolFamiliesOf; docs/plan/82-scheduled-tasks.md, Зп28, Зп32). A site is a host with pages at
+ * paths. Reading is at once; a publication and every change are applied when the turn ends. Taking
+ * a page down, its password and emptying the trash are the client's, in the cabinet: no tool for
+ * them.
  */
 @McpController()
 export class McpPagesController {
   constructor(@Inject(MCP_PAGES) private readonly pages: McpPagesService) {}
 
-  @ToolScopes(['pages'])
+  @ToolScopes(['pages_changes'])
   @Tool({
     name: 'page_publish',
     description:
@@ -118,7 +121,7 @@ export class McpPagesController {
     return answerOf(await this.pages.read(scope, args))
   }
 
-  @ToolScopes(['pages'])
+  @ToolScopes(['pages_changes'])
   @Tool({
     name: 'page_edit',
     description:
@@ -132,7 +135,7 @@ export class McpPagesController {
     return answerOf(await this.pages.edit(scope, args))
   }
 
-  @ToolScopes(['pages'])
+  @ToolScopes(['pages_changes'])
   @Tool({
     name: 'page_update',
     description:
@@ -146,7 +149,7 @@ export class McpPagesController {
     return answerOf(await this.pages.update(scope, args))
   }
 
-  @ToolScopes(['pages'])
+  @ToolScopes(['pages_changes'])
   @Tool({
     name: 'page_delete',
     description:
@@ -160,7 +163,7 @@ export class McpPagesController {
     return answerOf(await this.pages.delete(scope, args))
   }
 
-  @ToolScopes(['pages'])
+  @ToolScopes(['pages_changes'])
   @Tool({
     name: 'page_file_put',
     description:
@@ -188,7 +191,7 @@ export class McpPagesController {
     return answerOf(await this.pages.files(scope, args))
   }
 
-  @ToolScopes(['pages'])
+  @ToolScopes(['pages_changes'])
   @Tool({
     name: 'page_file_delete',
     description:
@@ -202,7 +205,7 @@ export class McpPagesController {
     return answerOf(await this.pages.deleteFile(scope, args))
   }
 
-  @ToolScopes(['pages'])
+  @ToolScopes(['pages_changes'])
   @Tool({
     name: 'page_restore',
     description:

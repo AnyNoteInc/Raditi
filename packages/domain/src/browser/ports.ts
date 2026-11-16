@@ -119,6 +119,15 @@ export interface CloudBrowserConnection {
   viewport: BrowserViewport
   /** The stack's policy (`SiteAdapter.browserTaskPolicy`), on every navigation and request. */
   policy: BrowserTaskPolicy
+  /**
+   * Whether the pages may send only reads now (docs/plan/82-scheduled-tasks.md, Зп28, Зп50): the
+   * agent's latest action came from a pass of a scheduled run without its client. Asked of every
+   * request of every page and frame, on any site, before anything else; the client at the controls
+   * is not limited. Absent — never.
+   */
+  readsOnly?: () => boolean
+  /** Told when that rule, not the policy, denied a request: the worker names the refusal. */
+  onReadOnlyRefusal?: () => void
   onEvent: (event: CloudBrowserEvent) => void
 }
 

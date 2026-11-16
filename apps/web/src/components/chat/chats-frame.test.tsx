@@ -52,6 +52,7 @@ const chat: DialogListPage['items'][number] = {
   archived: false,
   telegram: false,
   project: null,
+  schedule: null,
 }
 
 function showFrame(segment: string | null) {

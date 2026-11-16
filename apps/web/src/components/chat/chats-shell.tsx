@@ -9,13 +9,7 @@ import type { ApplicationUser } from '@/components/application/user-avatar'
 import type { CabinetPanelState } from '@/lib/cabinet-panel'
 
 import { NEW_CHAT_SEGMENT } from './chat-address'
-import {
-  PANE_DRAWN,
-  PANE_OPEN_MARK,
-  paneWidthCss,
-  SITE_PANE_WIDTH,
-  SITE_PANE_WIDTH_VAR,
-} from './pane-layout'
+import { PANE_DRAWN, paneWidthCss, SITE_PANE_WIDTH, SITE_PANE_WIDTH_VAR } from './pane-layout'
 
 /** The page draws the card of the tools beside a chat. */
 /** The room the card of the tools takes at the right edge from `lg`, with the gaps around it. */
@@ -27,7 +21,7 @@ const PANE_ROOM = `calc(${SITE_PANE_WIDTH} + ${2 * CABINET_GAP}px)`
  * content. At the root of the section a phone keeps the rail of 56; a new chat and an open one take
  * the whole phone screen, with their way back on top. From `lg` an open chat stands at the height
  * of the window and scrolls inside itself, and while the card of its tools is drawn at the right
- * edge, the list steps aside and the content leaves the card its room.
+ * edge, the content leaves the card its room; the list stays as the viewer left it («]»).
  */
 export function ChatsShell({
   user,
@@ -63,9 +57,6 @@ export function ChatsShell({
         paneWidth === null
           ? undefined
           : ({ [SITE_PANE_WIDTH_VAR]: paneWidthCss(paneWidth) } as CSSProperties)
-      }
-      sx={
-        chat ? { [`&[${PANE_OPEN_MARK}]`]: { '--cabinet-panel-space': { lg: '0px' } } } : undefined
       }
       contentSx={
         chat

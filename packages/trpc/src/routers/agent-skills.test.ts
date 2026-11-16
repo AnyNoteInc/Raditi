@@ -19,6 +19,7 @@ const user: User = {
   emailVerified: true,
   agentMemory: true,
   image: null,
+  timezone: null,
   createdAt: now,
   updatedAt: now,
 }

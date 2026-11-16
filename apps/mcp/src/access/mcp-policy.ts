@@ -14,7 +14,7 @@ import {
   docReadArgumentsSchema,
   docSectionMoveArgumentsSchema,
   docSectionRemoveArgumentsSchema,
-  docSectionWriteArgumentsSchema,
+  docSectionWriteShapeSchema,
 } from '@repo/domain'
 import { z } from 'zod'
 
@@ -45,6 +45,13 @@ import {
   repoRunsArgumentsSchema,
   repoStatusArgumentsSchema,
 } from '../repo/repo-arguments.ts'
+import {
+  scheduleArgumentsAdmitted,
+  scheduleCreateArgumentsSchema,
+  scheduleDeleteArgumentsSchema,
+  scheduleListArgumentsSchema,
+  scheduleUpdateArgumentsSchema,
+} from '../schedule/schedule-arguments.ts'
 import { webSearchArgumentsSchema } from '../search/search-arguments.ts'
 import type { McpTurnAccess } from './mcp-access.ts'
 
@@ -80,26 +87,31 @@ const webCall = z
 const searchCall = call('search_web', webSearchArgumentsSchema)
 const docsCall = z.discriminatedUnion('name', [
   call('doc_create', docCreateArgumentsSchema),
-  call('doc_section_write', docSectionWriteArgumentsSchema),
+  // The shape only: the tool itself says what is wrong with the text of a section.
+  call('doc_section_write', docSectionWriteShapeSchema),
   call('doc_section_remove', docSectionRemoveArgumentsSchema),
   call('doc_section_move', docSectionMoveArgumentsSchema),
   call('doc_read', docReadArgumentsSchema),
   call('doc_finish', docFinishArgumentsSchema),
 ])
 // The pages of the workspace (docs/plan/69-pages.md, Ст20; docs/plan/73-pages-sites.md, Дер23):
-// each tool its own branch, or the body is refused.
+// each tool its own branch, or the body is refused. The reads for every turn; what changes a page
+// or a site of pages — live for every visitor once the turn ends — only for a turn its client
+// watches (docs/plan/82-scheduled-tasks.md, Зп28, Зп32).
 const pagesCall = z.discriminatedUnion('name', [
-  call('page_publish', pagePublishToolArgumentsSchema),
   call('page_list', pageListArgumentsSchema.optional()),
   call('page_tree', pageTreeArgumentsSchema),
   call('page_read', pageReadArgumentsSchema),
+  call('page_files', pageFilesArgumentsSchema),
+])
+const pagesChangeCall = z.discriminatedUnion('name', [
+  call('page_publish', pagePublishToolArgumentsSchema),
   call('page_edit', pageEditArgumentsSchema),
   call('page_update', pageUpdateArgumentsSchema),
   call('page_delete', pageDeleteArgumentsSchema),
   call('page_restore', pageRestoreArgumentsSchema),
   call('page_file_put', pageFilePutArgumentsSchema),
   call('page_file_delete', pageFileDeleteArgumentsSchema),
-  call('page_files', pageFilesArgumentsSchema),
 ])
 // The memory of the chat (docs/plan/84-projects.md, §4.4): each tool its own branch.
 const memoryCall = z.discriminatedUnion('name', [
@@ -115,6 +127,23 @@ const repoCall = z.discriminatedUnion('name', [
   call('repo_runs', repoRunsArgumentsSchema.optional()),
   call('repo_job_log', repoJobLogArgumentsSchema),
 ])
+// The scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп31, Зп32): the list for every turn, the
+// changes only for a turn its client watches. A schedule with runs closer than an hour is the
+// tool's own refusal (`SCHEDULE_TOO_OFTEN`), not a request refused as a whole.
+const admittedBy = (schema: z.ZodType) =>
+  z.record(z.string(), z.unknown()).refine((args) => scheduleArgumentsAdmitted(schema, args))
+const scheduleCall = call('schedule_list', scheduleListArgumentsSchema.optional())
+const scheduleChangeCall = z.discriminatedUnion('name', [
+  call('schedule_create', admittedBy(scheduleCreateArgumentsSchema)),
+  call('schedule_update', admittedBy(scheduleUpdateArgumentsSchema)),
+  call('schedule_delete', admittedBy(scheduleDeleteArgumentsSchema)),
+])
+/** The names of the tools a pass without its client is not offered (`mcpToolFamiliesOf`). */
+const unattendedWithheldTools: ReadonlySet<string> = new Set(
+  [pagesChangeCall, scheduleChangeCall].flatMap((union) =>
+    union.options.map((option) => option.shape.name.value),
+  ),
+)
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),
   id: rpcId.optional(),
@@ -153,7 +182,8 @@ export interface McpSecurity {
   searchTools?: boolean
   /**
    * The pages of a workspace (docs/plan/69-pages.md, Ст20): every turn, with a site or without,
-   * where the pages are configured (PAGES_BASE_DOMAIN).
+   * where the pages are configured (PAGES_BASE_DOMAIN); their changes only where the client
+   * watches (docs/plan/82-scheduled-tasks.md, Зп28, Зп32).
    */
   pagesTools?: boolean
   /** The documents of a workspace (docs/plan/69-pages.md, Ст21): every turn, every composition. */
@@ -168,6 +198,11 @@ export interface McpSecurity {
    * whose plan names a repository. `mcp` holds no token of git: the tools read the database only.
    */
   repoTools?: boolean
+  /**
+   * The scheduled tasks of the chat's author (docs/plan/82-scheduled-tasks.md, Зп31): every turn,
+   * every composition; their changes only where the client watches (Зп32).
+   */
+  scheduleTools?: boolean
 }
 
 /** The security of the role's MCP endpoint, as the profiles of its configuration make it. */
@@ -182,6 +217,7 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
     memoryTools: true,
     repoTools: true,
     ...(config.pages ? { pagesTools: true } : {}),
+    scheduleTools: true,
   }
 }
 
@@ -189,9 +225,24 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
  * Tool families beside site_info; a request sees and calls only those of its scope. `web` — the
  * cloud browser of a chat (docs/plan/57-browser-tasks.md, Б20); `search` — the web search of any
  * turn, while its key is in Vault; `docs` — the documents of the workspace, any turn
- * (docs/plan/69-pages.md, Ст21); `pages` — its pages, while the pages are configured (Ст20).
+ * (docs/plan/69-pages.md, Ст21); `pages` — its pages read, while the pages are configured (Ст20);
+ * `pages_changes` — their publication and every change, only by a turn the client watches: they
+ * are live for every visitor once the turn ends (docs/plan/82-scheduled-tasks.md, Зп28, Зп32).
+ * `schedule` — the scheduled tasks of the chat's author, read by any turn; `schedule_changes` —
+ * their creation, change and deletion, only by a turn the client watches: a pass of a scheduled
+ * run without its client sees the lists alone (Зп31, Зп32).
  */
-export const mcpToolFamilies = ['web', 'search', 'docs', 'pages', 'memory', 'repo'] as const
+export const mcpToolFamilies = [
+  'web',
+  'search',
+  'docs',
+  'pages',
+  'pages_changes',
+  'memory',
+  'repo',
+  'schedule',
+  'schedule_changes',
+] as const
 export type McpToolFamily = (typeof mcpToolFamilies)[number]
 
 /** What a request of this scope is offered: `web` to a chat that needs a browser (Б20). */
@@ -200,11 +251,18 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
   if (security.webTools && access.requirements.browser) families.push('web')
   if (security.searchTools) families.push('search')
   if (security.docsTools) families.push('docs')
-  if (security.pagesTools) families.push('pages')
+  if (security.pagesTools) {
+    families.push('pages')
+    if (!access.unattended) families.push('pages_changes')
+  }
   // The memory of the chat while it is on (docs/plan/84-projects.md, ПР18).
   if (security.memoryTools && access.memory) families.push('memory')
   // The repository of the chat's project, as the plan of the turn names it (§4.4).
   if (security.repoTools && access.repository) families.push('repo')
+  if (security.scheduleTools) {
+    families.push('schedule')
+    if (!access.unattended) families.push('schedule_changes')
+  }
   return families
 }
 
@@ -233,8 +291,8 @@ export function mcpHeadersAllowed(
   }
 }
 
-/** Bound the parsed request before the SDK recurses; no source values enter error messages. */
-export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[] = []): boolean {
+/** The parsed request within its bounds, before the SDK recurses: no prototype keys. */
+function bounded(body: unknown): boolean {
   const pending = [{ value: body, depth: 1 }]
   let nodes = 0
   while (pending.length) {
@@ -246,6 +304,12 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       pending.push({ value: child, depth: depth + 1 })
     }
   }
+  return true
+}
+
+/** Bound the parsed request before the SDK recurses; no source values enter error messages. */
+export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[] = []): boolean {
+  if (!bounded(body)) return false
   const parsed = envelope.safeParse(body)
   if (!parsed.success) return false
   const request = parsed.data
@@ -262,8 +326,57 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       (families.includes('search') && searchCall.safeParse(request.params).success) ||
       (families.includes('docs') && docsCall.safeParse(request.params).success) ||
       (families.includes('pages') && pagesCall.safeParse(request.params).success) ||
+      (families.includes('pages_changes') && pagesChangeCall.safeParse(request.params).success) ||
       (families.includes('memory') && memoryCall.safeParse(request.params).success) ||
-      (families.includes('repo') && repoCall.safeParse(request.params).success)
+      (families.includes('repo') && repoCall.safeParse(request.params).success) ||
+      (families.includes('schedule') && scheduleCall.safeParse(request.params).success) ||
+      (families.includes('schedule_changes') &&
+        scheduleChangeCall.safeParse(request.params).success)
     )
   return true
+}
+
+/**
+ * What a call that needs the client's word answers in a pass without the client (docs/plan/82-
+ * scheduled-tasks.md, Зп32): nobody is there to have given it — whatever the instructions of the run
+ * say, they are no consent (Зп28). The same words answer a tool of an MCP server of the workspace
+ * through the relay (`SkillRelay`, Зп51). The agent reads the code and these words as the result of
+ * its tool.
+ */
+export const MCP_UNATTENDED_REFUSAL = Object.freeze({
+  code: 'SCHEDULE_FORBIDDEN',
+  message:
+    'This pass runs on a schedule without the client: nobody can confirm a change now. Change no scheduled task, publish or change no page, call no tool of the MCP servers of the workspace and delete nothing; prepare it and ask the client once at the end of your answer.',
+})
+
+const confirmingCall = z.object({
+  jsonrpc: z.literal('2.0'),
+  id: rpcId,
+  method: z.literal('tools/call'),
+  params: z.object({
+    name: z.string(),
+    arguments: z.record(z.string(), z.unknown()).refine((args) => 'confirmedByClient' in args),
+  }),
+})
+
+/** A well-formed call of a tool a pass without its client is not offered, by its name alone. */
+const withheldCall = z.object({
+  jsonrpc: z.literal('2.0'),
+  id: rpcId,
+  method: z.literal('tools/call'),
+  params: z.object({ name: z.string().refine((name) => unattendedWithheldTools.has(name)) }),
+})
+
+/**
+ * A well-formed call that needs the client's word (Зп32): of any tool whose arguments carry
+ * `confirmedByClient` — `schedule_*`, `page_delete`, `page_file_delete` — however they say it, or of
+ * a tool a pass without its client is not offered — the changes of the scheduled tasks and of the
+ * pages (`page_publish`, `page_edit` and the rest), whatever its arguments. In a pass without the
+ * client the guard answers it with `MCP_UNATTENDED_REFUSAL` before any tool sees it.
+ */
+export function mcpCallNeedsClient(body: unknown): boolean {
+  return (
+    bounded(body) &&
+    (confirmingCall.safeParse(body).success || withheldCall.safeParse(body).success)
+  )
 }

@@ -269,6 +269,8 @@ function checkedConnection(connection: CloudBrowserConnection): PageRules {
     platformHosts: connection.platformHosts,
     pageDomain: connection.pageDomain,
     policy: connection.policy,
+    ...(connection.readsOnly ? { readsOnly: connection.readsOnly } : {}),
+    ...(connection.onReadOnlyRefusal ? { onReadOnlyRefusal: connection.onReadOnlyRefusal } : {}),
   }
   const { startUrl } = connection
   if (

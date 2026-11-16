@@ -265,6 +265,9 @@ services:
       # Core reads the updates of the bot of the chat and hands each to web: Telegram does not reach
       # the server, and core shares no network with web, so through the edge (docs/plan/80-telegram.md)
       TELEGRAM_INTAKE_URL: https://${APP_DOMAIN}/api/webhooks/telegram
+      # The runs of scheduled tasks go to web the same way, its secret in app.env of both
+      # (docs/plan/82-scheduled-tasks.md, Зп19)
+      SCHEDULE_INTAKE_URL: https://${APP_DOMAIN}/api/webhooks/scheduled-runs
       TMPDIR: /work/tmp
       HOME: /work/home
       # The mirrors of the repositories of projects, shared with git-worker (docs/plan/84-projects.md, ПР33)

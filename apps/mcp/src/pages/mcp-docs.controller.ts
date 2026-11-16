@@ -7,10 +7,11 @@ import {
   docReadArgumentsSchema,
   docSectionMoveArgumentsSchema,
   docSectionRemoveArgumentsSchema,
-  docSectionWriteArgumentsSchema,
+  docSectionWriteShapeSchema,
   type DocCreateArguments,
+  type DocReadArguments,
   type DocFinishArguments,
-  type DocSectionWriteArguments,
+  type DocSectionWriteShape,
 } from '@repo/domain'
 
 import { MCP_REQUEST_ACCESS, type McpRequest } from '../access/mcp-request.ts'
@@ -71,10 +72,11 @@ export class McpDocsController {
     name: 'doc_section_write',
     description:
       'Write one section of a document by its id: its heading and its Markdown, headings inside it from ### down, lists only where the content is a list, tables for comparisons, no raw HTML. It replaces the section whole; with after it adds a new section after that id (null — first). One section a call: never send the whole document, never rebuild it from memory. Put findings here, not in the chat. Never a secret, a value of a variable, a key, or a dump or a whole table of a database; data of people (form entries, leads, orders, customers) only when the client asks for them. The client sees the section beside the chat a moment after you write it, once the platform checked it.',
-    parameters: docSectionWriteArgumentsSchema,
+    // Checked whole by the service, which names the problem: a heading level, a size, an id.
+    parameters: docSectionWriteShapeSchema,
     annotations: writes,
   })
-  async write(@Payload() args: DocSectionWriteArguments, @Ctx() context: McpContext) {
+  async write(@Payload() args: DocSectionWriteShape, @Ctx() context: McpContext) {
     const scope = this.#scope(context)
     return scope ? answerOf(await this.docs.write(scope, args)) : unauthorized
   }
@@ -110,7 +112,7 @@ export class McpDocsController {
   @Tool({
     name: 'doc_read',
     description:
-      'Read a document: every section with its id, state (pending or written), heading and text. Before doc_finish read it whole: check facts and figures against the sources, count the arithmetic again, make sure no placeholder is left.',
+      'Read a document: every section with its id, state (pending or written), heading and text. A long document comes in parts: while the answer has `more`, call doc_read again with from set to `more.from`. A section with cut: true is longer than one answer: never rewrite it from what you read. Before doc_finish read it whole: check facts and figures against the sources, count the arithmetic again, make sure no placeholder is left.',
     parameters: docReadArgumentsSchema,
     annotations: {
       readOnlyHint: true,
@@ -119,7 +121,7 @@ export class McpDocsController {
       openWorldHint: false,
     },
   })
-  async read(@Payload() args: { docId: string }, @Ctx() context: McpContext) {
+  async read(@Payload() args: DocReadArguments, @Ctx() context: McpContext) {
     const scope = this.#scope(context)
     return scope ? answerOf(await this.docs.read(scope, args)) : unauthorized
   }

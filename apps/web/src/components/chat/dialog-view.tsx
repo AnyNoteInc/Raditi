@@ -43,6 +43,7 @@ import { ConfirmDialog } from '@/components/billing/confirm-dialog'
 import { MoveToProjectDialog, useMoveToProject } from '@/components/projects/move-to-project'
 import { moveText, projectHref } from '@/components/projects/project-texts'
 import { useContextMentions } from '@/components/projects/use-context-mentions'
+import { ScheduleDialog, type ScheduleDialogOpening } from '@/components/scheduled/schedule-dialog'
 import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
@@ -54,6 +55,7 @@ import { callErrorCode, callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
 import { useChatDetails, useChatThinking } from './chat-details'
 import { rememberEffort } from './chat-effort'
+import type { ChatScheduleLabel, ScheduledTaskItem } from './chat-types'
 import {
   cancelText,
   clientCommandText,
@@ -91,6 +93,7 @@ import {
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
 import { RESULTS_ROOM, ResultsCard, ResultsToggle, useResultsCard } from './results-card'
+import { ScheduleMark } from './schedule-mark'
 import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
 import { ToolsPanel } from './tools-panel'
 import { TurnActivity } from './turn-activity'
@@ -171,6 +174,7 @@ type Press = 'message' | 'continue' | 'cancel' | 'resume' | 'compact' | 'undoTur
  * corner (docs/plan/59, И4). The name is written in place of itself.
  */
 function DialogHead({
+  schedule,
   taskId,
   title,
   head,
@@ -178,6 +182,8 @@ function DialogHead({
   tools,
   results = null,
 }: {
+  /** The task this chat is a run of (docs/plan/82-scheduled-tasks.md, Зп43); null — none. */
+  schedule: ChatScheduleLabel | null
   taskId: string
   title: string
   head: FeedHeadState | null
@@ -232,64 +238,68 @@ function DialogHead({
             }}
           />
         ) : (
-          <Box
-            sx={{
-              flex: '1 1 auto',
-              minWidth: 0,
-              display: 'flex',
-              alignItems: 'baseline',
-              gap: 1,
-            }}
-          >
-            {project !== null ? (
-              <Box
-                component="span"
-                sx={{ flex: '0 1 auto', minWidth: 0, display: 'flex', gap: 1, fontSize: 15 }}
-              >
-                <Box
-                  component={Link}
-                  href={projectHref(project.id)}
-                  title={project.name}
-                  data-chat-project=""
-                  sx={{
-                    minWidth: 0,
-                    maxWidth: { xs: 120, sm: 240 },
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    color: 'text.secondary',
-                    textDecoration: 'none',
-                    borderRadius: '6px',
-                    '&:hover': { color: 'text.primary', textDecoration: 'underline' },
-                    '&:focus-visible': {
-                      outline: '2px solid',
-                      outlineColor: 'primary.main',
-                      outlineOffset: 2,
-                    },
-                  }}
-                >
-                  {moveText.crumb(project.name)}
-                </Box>
-                <Box component="span" aria-hidden="true" sx={{ color: 'text.secondary' }}>
-                  /
-                </Box>
-              </Box>
-            ) : null}
-            <Typography
-              component="h1"
-              title={title}
+          <Box sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <Box
               sx={{
+                flex: '1 1 auto',
                 minWidth: 0,
-                fontSize: 15,
-                fontWeight: 500,
-                lineHeight: 1.4,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 1,
               }}
             >
-              {title}
-            </Typography>
+              {project !== null ? (
+                <Box
+                  component="span"
+                  sx={{ flex: '0 1 auto', minWidth: 0, display: 'flex', gap: 1, fontSize: 15 }}
+                >
+                  <Box
+                    component={Link}
+                    href={projectHref(project.id)}
+                    title={project.name}
+                    data-chat-project=""
+                    sx={{
+                      minWidth: 0,
+                      maxWidth: { xs: 120, sm: 240 },
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      color: 'text.secondary',
+                      textDecoration: 'none',
+                      borderRadius: '6px',
+                      '&:hover': { color: 'text.primary', textDecoration: 'underline' },
+                      '&:focus-visible': {
+                        outline: '2px solid',
+                        outlineColor: 'primary.main',
+                        outlineOffset: 2,
+                      },
+                    }}
+                  >
+                    {moveText.crumb(project.name)}
+                  </Box>
+                  <Box component="span" aria-hidden="true" sx={{ color: 'text.secondary' }}>
+                    /
+                  </Box>
+                </Box>
+              ) : null}
+              <Typography
+                component="h1"
+                title={title}
+                sx={{
+                  minWidth: 0,
+                  fontSize: 15,
+                  fontWeight: 500,
+                  lineHeight: 1.4,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {title}
+              </Typography>
+            </Box>
+            {/* A run of a scheduled task: how it began and its task, under the name (Зп43). */}
+            {schedule !== null ? <ScheduleMark schedule={schedule} chatTitle={title} /> : null}
           </Box>
         )}
       </Box>
@@ -359,11 +369,23 @@ function DialogHead({
  * shown; whatever the client writes or presses is read back at once.
  */
 export function DialogView({
+  schedule = null,
+  userId = null,
   taskId,
   title,
   browserStreamUrl = null,
   speech = false,
 }: {
+  /**
+   * The scheduled task the chat is a run of, from `task.get` (docs/plan/82-scheduled-tasks.md,
+   * Зп43); null — an ordinary chat.
+   */
+  schedule?: ChatScheduleLabel | null
+  /**
+   * The signed-in client: the window of a scheduled task keeps its draft by them; null — the cards
+   * of the feed open no window and lead to «Расписание» instead.
+   */
+  userId?: string | null
   taskId: string
   title: string | null
   /**
@@ -391,6 +413,8 @@ export function DialogView({
   const wide = useMediaQuery(theme.breakpoints.up('lg'))
   // Said to a screen reader: the server took a new level, the file of the chat was saved.
   const [note, setNote] = useState('')
+  /** The window of a scheduled task the cards of the feed open (Зп35); null — closed. */
+  const [scheduleOpening, setScheduleOpening] = useState<ScheduleDialogOpening | null>(null)
   const effortMenu = useRef<EffortMenuHandle>(null)
   const { details } = useChatDetails()
   const { thinking } = useChatThinking()
@@ -428,7 +452,7 @@ export function DialogView({
     observer.observe(box)
     return () => observer.disconnect()
   }, [])
-  const clientCommands = useClientCommands({ anchor: field })
+  const clientCommands = useClientCommands({ taskId, anchor: field })
   // The words `/undo` gave back, and what the field holds now: a draft is never written over.
   const [undoneWords, setUndoneWords] = useState<string | null>(null)
   // How many times `/redo` took the words away: they leave the field then, or sending them would
@@ -1022,6 +1046,9 @@ export function DialogView({
         return
       case 'new':
       case 'sessions':
+      case 'usage':
+      case 'status':
+      case 'context':
       case 'details':
       case 'thinking':
       case 'themes':
@@ -1060,6 +1087,14 @@ export function DialogView({
     browserLive,
     busy,
     stopping,
+    // The window of a scheduled task over the chat (docs/plan/82-scheduled-tasks.md, Зп35).
+    ...(userId !== null
+      ? {
+          onEditSchedule: (task: ScheduledTaskItem) =>
+            setScheduleOpening({ kind: 'edit', schedule: task }),
+          onNewSchedule: () => setScheduleOpening({ kind: 'new' }),
+        }
+      : {}),
   }
   const sentFilesOf = (ids: readonly string[]): SentFile[] =>
     ids.map((id) => {
@@ -1316,16 +1351,16 @@ export function DialogView({
           '@media (max-height: 420px)': { position: 'static' },
           bgcolor: 'background.paper',
           // From `lg` the head stands over the area of the feed, which scrolls under it, from edge
-          // to edge of the dialog. While the panel is closed it stands at the top of the window,
-          // «+» in the corner the strip of the panel's tabs takes when it opens (docs/plan/59, И4);
-          // while it is open, under «К чатам» of the list that gave the dialog its room.
-          mt: { lg: shown ? 0 : -3.5 },
+          // to edge of the dialog, at the top of the window — level with the strip of the panel's
+          // tabs while the panel is open, «+» in its corner while it is closed (docs/plan/59, И4).
+          mt: { lg: -3.5 },
           mx: { xs: -2, sm: -2.5, md: -4 },
           pl: { xs: 2, sm: 2.5, md: 4, lg: 3 },
           pr: { xs: 2, sm: 2.5, md: 4, lg: 0.75 },
         }}
       >
         <DialogHead
+          schedule={schedule}
           taskId={taskId}
           title={shownTitle}
           head={head}
@@ -1541,6 +1576,13 @@ export function DialogView({
         content={toolContent}
       />
 
+      {userId !== null ? (
+        <ScheduleDialog
+          opening={scheduleOpening}
+          userId={userId}
+          onClose={() => setScheduleOpening(null)}
+        />
+      ) : null}
       <ConfirmDialog
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}
