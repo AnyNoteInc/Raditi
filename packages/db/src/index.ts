@@ -242,8 +242,12 @@ export {
   ensureChatBranch,
   failRepoTurn,
   pendingRepoProposals,
+  repoChatBranchName,
   reserveRepoProposal,
+  unsentBranch,
+  type BranchCard,
   type ChatBranchRow,
+  type UnsentBranch,
   type PendingRepoProposal,
 } from './repo-work.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'

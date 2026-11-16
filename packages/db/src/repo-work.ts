@@ -182,3 +182,116 @@ export async function failRepoTurn(
   })
   return closed.count
 }
+
+// --- what a push would send (ПР13, ПР26) -------------------------------------------------------
+
+/** One card «Изменения в ветке» of a turn still standing. */
+export interface BranchCard {
+  turnNo: number
+  headSha: string
+  diffSha256: string
+  files: number
+  additions: number
+  deletions: number
+  list: { path: string; additions: number; deletions: number }[]
+  ciTouched: boolean
+}
+
+/**
+ * What «Отправить в ветку» of a chat sends: its head (chatBranchHead), the cards of the turns since
+ * the last push that still stand, and whether the head goes back past what was sent (`/undo`).
+ * null — nothing to send: no change stands, or the branch at the client has the head already.
+ * Web shows it and binds the token to it; core reads it again before it pushes.
+ */
+export interface UnsentBranch {
+  head: { turnNo: number; headSha: string }
+  /** The card of the head: the diff the client is shown and the token names; null — `/undo`. */
+  card: BranchCard | null
+  cards: BranchCard[]
+  files: number
+  additions: number
+  deletions: number
+  ciTouched: boolean
+}
+
+export async function unsentBranch(
+  db: Pick<Tx, 'taskTurn' | 'taskEvent' | 'projectRepoBranch'>,
+  taskId: string,
+): Promise<UnsentBranch | null> {
+  const head = await chatBranchHead(db, taskId)
+  if (head === null) return null
+  const branch = await chatBranch(db, taskId)
+  if (branch?.mirrorSha === head.headSha) return null
+  const turns = await db.taskTurn.findMany({
+    where: {
+      taskId,
+      status: 'completed',
+      rejectedAt: null,
+      undoneAt: null,
+      headSha: { not: null },
+    },
+    select: { id: true, turnNo: true, headSha: true },
+  })
+  const sentTurn =
+    branch?.mirrorSha == null
+      ? 0
+      : (turns.find((turn) => turn.headSha === branch.mirrorSha)?.turnNo ?? 0)
+  const standing = new Map(
+    turns.filter((turn) => turn.turnNo > sentTurn).map((turn) => [turn.id, turn]),
+  )
+  const events = await db.taskEvent.findMany({
+    where: { taskId, type: 'feed.repo_changes', turnId: { in: [...standing.keys()] } },
+    orderBy: { id: 'asc' },
+    select: { turnId: true, payload: true },
+  })
+  const cards: BranchCard[] = []
+  for (const event of events) {
+    const turn = event.turnId ? standing.get(event.turnId) : undefined
+    const payload = event.payload as Record<string, unknown> | null
+    if (!turn || !payload || payload.headSha !== turn.headSha) continue
+    cards.push({
+      turnNo: turn.turnNo,
+      headSha: turn.headSha!,
+      diffSha256: String(payload.diffSha256),
+      files: Number(payload.files) || 0,
+      additions: Number(payload.additions) || 0,
+      deletions: Number(payload.deletions) || 0,
+      list: Array.isArray(payload.list) ? (payload.list as BranchCard['list']).slice(0, 50) : [],
+      ciTouched: payload.ciTouched === true,
+    })
+  }
+  cards.sort((a, b) => a.turnNo - b.turnNo)
+  return {
+    head: { turnNo: head.turnNo, headSha: head.headSha },
+    card: cards.find((card) => card.headSha === head.headSha) ?? null,
+    cards,
+    files: cards.reduce((sum, card) => sum + card.files, 0),
+    additions: cards.reduce((sum, card) => sum + card.additions, 0),
+    deletions: cards.reduce((sum, card) => sum + card.deletions, 0),
+    ciTouched: cards.some((card) => card.ciTouched),
+  }
+}
+
+/**
+ * The next free name of the chat's branch after `after` (ПР13: «при совпадении имени — суффикс»):
+ * the name is taken at the client by a branch the platform did not make.
+ */
+export async function repoChatBranchName(
+  db: Pick<PrismaClient, '$queryRaw' | 'projectRepoBranch'>,
+  input: { taskId: string; title: string | null; after: string },
+): Promise<ChatBranchRow> {
+  const at = /-(\d+)$/.exec(input.after.slice(input.after.lastIndexOf('/')))
+  const current =
+    repoChatBranch(input.taskId, input.title, 1) === input.after ? 1 : Number(at?.[1] ?? 1)
+  for (let attempt = current + 1; attempt <= BRANCH_NAME_TRIES; attempt++) {
+    const branch = repoChatBranch(input.taskId, input.title, attempt)
+    const moved = await db.$queryRaw<{ task_id: string }[]>`
+      UPDATE project_repo_branches b SET branch = ${branch}, updated_at = now()
+      WHERE b.task_id = ${input.taskId}::uuid AND b.branch = ${input.after}
+        AND NOT EXISTS (SELECT 1 FROM project_repo_branches o
+          WHERE o.project_repository_id = b.project_repository_id AND o.branch = ${branch})
+      RETURNING b.task_id`
+    if (moved.length) return (await chatBranch(db, input.taskId))!
+  }
+  throw new Error('No free name of a branch for the chat')
+}
