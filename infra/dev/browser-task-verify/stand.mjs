@@ -295,8 +295,12 @@ export function openbaoArgs({ names, port }) {
   ]
 }
 
-/** The CA of the stand and its one server certificate (services.mjs, createCertificates). */
-export function certificateConfigs() {
+/**
+ * The CA of the stand and its one server certificate (services.mjs, createCertificates). `names`
+ * — the DNS names of the server certificate besides `localhost` (the projects stand adds the hosts
+ * its fake GitLab answers for).
+ */
+export function certificateConfigs(names = []) {
   return {
     authority: [
       'basicConstraints = critical, CA:true, pathlen:0',
@@ -309,7 +313,7 @@ export function certificateConfigs() {
       'basicConstraints = critical, CA:false',
       'keyUsage = critical, digitalSignature',
       'extendedKeyUsage = serverAuth',
-      'subjectAltName = IP:127.0.0.1, DNS:localhost',
+      `subjectAltName = IP:127.0.0.1, IP:::1, DNS:localhost${names.map((name) => `, DNS:${name}`).join('')}`,
       '',
     ].join('\n'),
   }

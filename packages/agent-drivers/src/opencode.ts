@@ -8,6 +8,7 @@ import {
   SANDBOX_AGENT_HOME,
   SANDBOX_INBOX,
   SANDBOX_OUT,
+  SANDBOX_PROJECT,
   SANDBOX_SECRETS_DIR,
   SANDBOX_WORKDIR,
   skillRelayPath,
@@ -165,6 +166,10 @@ function permissionOf(context: Pick<RunContext, 'internet' | 'skills'>) {
     external_directory: {
       '*': 'deny',
       [`${SANDBOX_INBOX}/*`]: 'allow',
+      // The files of the chat's project, the second root of the sandbox (docs/plan/84-projects.md,
+      // ПР8): read with any tool; what the agent changes there is not kept.
+      [SANDBOX_PROJECT]: 'allow',
+      [`${SANDBOX_PROJECT}/*`]: 'allow',
       // The files the agent makes for the client (docs/plan/66-chat-visuals.md, В11).
       [`${SANDBOX_OUT}/*`]: 'allow',
       // Scratch files of the agent's scripts: the tmpfs of the turn, gone with its container.

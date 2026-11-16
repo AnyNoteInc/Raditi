@@ -21,7 +21,7 @@ import { GitPollScheduler } from './git-poll-scheduler.ts'
 import { GIT_JOBS, REPO_ACTIONS, REPO_CI } from './git.tokens.ts'
 import { RepoActions } from './repo-actions.ts'
 import { RepoCi } from './repo-ci.ts'
-import { publicHostResolver } from './public-host.ts'
+import { fakedGitlabCom, publicHostResolver } from './public-host.ts'
 
 const GIT_SERVICES = Symbol('GIT_SERVICES')
 interface GitServices {
@@ -54,10 +54,14 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
       ) => {
         const logger = new Logger('Git')
         const ca = config.git.caFile ? readFileSync(config.git.caFile, 'utf8') : undefined
-        const resolvePublic = publicHostResolver({
-          refusedSubnets: config.gitRefusedSubnets,
-          allowLoopback: config.git.allowLoopback,
-        })
+        const gitlabComUrl = config.gitApps.endpoints.gitlabComUrl
+        const resolvePublic = fakedGitlabCom(
+          publicHostResolver({
+            refusedSubnets: config.gitRefusedSubnets,
+            allowLoopback: config.git.allowLoopback,
+          }),
+          gitlabComUrl,
+        )
         // The host of the operation goes to its checked address; a fake of a stand standing in
         // for it (`https://localhost:<port>`) is resolved and checked on its own.
         const pinned = (host: string, address: string) =>
@@ -66,7 +70,6 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
               name === host ? Promise.resolve(address) : resolvePublic(name),
             ...(ca ? { ca } : {}),
           })
-        const gitlabComUrl = config.gitApps.endpoints.gitlabComUrl
         const oauth = config.gitApps.gitlabOauth
         const auth = new GitAuthSource({
           prisma,
