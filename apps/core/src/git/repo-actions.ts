@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 
 import {
   chatBranch,
+  enqueueOutbox,
   insertFeedEvent,
   projectOwnedBy,
   repoChatBranchName,
@@ -17,6 +18,8 @@ import {
   neutraliseMergeRequestTitle,
   readRepoCiPaths,
   readRepoConfirmToken,
+  gitJobNames,
+  REPO_CONFIRM_TTL_SECONDS,
   REPO_DIFF_KEPT_BYTES,
   repoActionArgsSchema,
   repoChanged,
@@ -58,6 +61,14 @@ import type { ResolvePublicHost } from './public-host.ts'
 // a row: every push is a press. A branch whose change touches build settings goes only by the card
 // «Агент хочет изменить настройки сборки» (`ci_push`, ПР16; slice 84.20): its token names the
 // SHA-256 of the diff of those files, and core makes that diff again before it sends anything.
+
+/** A queued press older than this lost its job: it is put again while its token lives. */
+export const REPO_ACTION_REQUEUE_MS = 2 * 60_000
+/**
+ * A press still `running` this long after it was made lost its core: every request of a press is
+ * bounded (60 s a git command, the transport's time), so no live core holds one this long.
+ */
+export const REPO_ACTION_LOST_MS = 15 * 60_000
 
 /** Names of a branch tried at the client when the chat's own is taken there. */
 const NAME_TRIES = 5
@@ -143,6 +154,65 @@ export class RepoActions {
       this.#o.logger.warn(`git.action ${actionId}: ${code}`)
       await this.#finish(row, 'failed', code.slice(0, 40), null)
     }
+  }
+
+  /**
+   * The sweeper of presses (the open item of 84.19 and 84.20), on every tick of `git.poll`:
+   * - `queued` older than REPO_ACTION_REQUEUE_MS while its token lives — its job is put again
+   *   (the row is taken once, so a second delivery does nothing);
+   * - `queued` past the life of its token — `failed` REPO_CONFIRM_EXPIRED: it never ran;
+   * - `running` older than REPO_ACTION_LOST_MS — its core went away mid-way and nobody knows
+   *   whether the provider got it: `failed` REPO_ACTION_LOST, the chat says to look at the branch
+   *   and press again. It is not run again: its token has expired by then, and a push or a merge
+   *   request that did reach the provider must not be repeated blindly.
+   * Each step is a conditional update: two sweepers end a row once.
+   */
+  async sweep(): Promise<{ requeued: number; expired: number; lost: number }> {
+    const { prisma } = this.#o
+    const now = this.#now()
+    const ttl = new Date(now.getTime() - REPO_CONFIRM_TTL_SECONDS * 1000)
+    const select = {
+      id: true,
+      projectRepositoryId: true,
+      taskId: true,
+      createdById: true,
+      kind: true,
+      args: true,
+      tokenSha256: true,
+      state: true,
+    } as const
+    const waiting = await prisma.repoAction.findMany({
+      where: {
+        state: 'queued',
+        createdAt: { lt: new Date(now.getTime() - REPO_ACTION_REQUEUE_MS), gte: ttl },
+      },
+      select: { id: true },
+      take: 100,
+    })
+    for (const row of waiting)
+      await enqueueOutbox(prisma, {
+        topic: 'git',
+        type: gitJobNames.action,
+        payload: { actionId: row.id },
+        dedupeKey: `git.action.again:${row.id}:${Math.floor(now.getTime() / REPO_ACTION_REQUEUE_MS)}`,
+      })
+    let expired = 0
+    for (const row of (await prisma.repoAction.findMany({
+      where: { state: 'queued', createdAt: { lt: ttl } },
+      select,
+      take: 100,
+    })) as ActionRow[])
+      if (await this.#finish(row, 'failed', 'REPO_CONFIRM_EXPIRED', null, 'queued')) expired++
+    let lost = 0
+    for (const row of (await prisma.repoAction.findMany({
+      where: { state: 'running', createdAt: { lt: new Date(now.getTime() - REPO_ACTION_LOST_MS) } },
+      select,
+      take: 100,
+    })) as ActionRow[]) {
+      if (await this.#finish(row, 'failed', 'REPO_ACTION_LOST', null, 'running')) lost++
+      this.#o.logger.warn(`git.action ${row.id}: REPO_ACTION_LOST`)
+    }
+    return { requeued: waiting.length, expired, lost }
   }
 
   /** The token of the row, checked as web checked it, and its claims against the row (ПР15). */
@@ -443,12 +513,13 @@ export class RepoActions {
     state: 'done' | 'failed',
     error: string | null,
     result: { sha: string; rebased: boolean; mergeRequest: PullRequest | null } | null,
-  ): Promise<void> {
+    from: 'queued' | 'running' = 'running',
+  ): Promise<boolean> {
     const { prisma } = this.#o
     const mr = result?.mergeRequest ?? null
-    await prisma.$transaction(async (tx) => {
-      await tx.repoAction.updateMany({
-        where: { id: row.id, state: 'running' },
+    return prisma.$transaction(async (tx) => {
+      const ended = await tx.repoAction.updateMany({
+        where: { id: row.id, state: from },
         data: {
           state,
           error,
@@ -464,7 +535,9 @@ export class RepoActions {
             : {}),
         },
       })
-      if (row.taskId === null) return
+      // Another sweeper or the job itself ended it first: the chat is told once.
+      if (ended.count === 0) return false
+      if (row.taskId === null) return true
       if (error === 'REPO_PUSH_CONFLICT')
         await insertFeedEvent(tx, {
           taskId: row.taskId,
@@ -484,6 +557,7 @@ export class RepoActions {
           },
         },
       })
+      return true
     })
   }
 }

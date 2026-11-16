@@ -4,7 +4,10 @@ import {
   gitActionPayloadSchema,
   gitCiLintPayloadSchema,
   gitConnectionSyncPayloadSchema,
+  gitDeployActionsPayloadSchema,
   gitJobNames,
+  gitLogPayloadSchema,
+  gitPollPayloadSchema,
   gitRepoAttachPayloadSchema,
   gitRepoInspectPayloadSchema,
 } from '@repo/domain'
@@ -12,8 +15,9 @@ import { errorMessage, throttledLogger } from '@repo/observability'
 import { UnrecoverableError, type Job } from 'bullmq'
 
 import type { GitJobs } from './git-jobs.ts'
-import { GIT_JOBS, GIT_QUEUE, REPO_ACTIONS } from './git.tokens.ts'
+import { GIT_JOBS, GIT_QUEUE, REPO_ACTIONS, REPO_CI } from './git.tokens.ts'
 import type { RepoActions } from './repo-actions.ts'
+import type { RepoCi } from './repo-ci.ts'
 
 /**
  * Works the queue `git` (docs/plan/84-projects.md, §4.3): the check of a connection, the branches
@@ -28,17 +32,20 @@ export class GitProcessor extends WorkerHost {
     GitJobs,
     'syncConnection' | 'inspectRepository' | 'attachRepository' | 'lintBranch'
   >
-  readonly #actions: Pick<RepoActions, 'run'>
+  readonly #actions: Pick<RepoActions, 'run' | 'sweep'>
+  readonly #ci: Pick<RepoCi, 'tick' | 'poll' | 'fetchLog' | 'syncDeployActions'>
   readonly #warn = throttledLogger((line) => this.#logger.warn(line))
 
   constructor(
     @Inject(GIT_JOBS)
     jobs: Pick<GitJobs, 'syncConnection' | 'inspectRepository' | 'attachRepository' | 'lintBranch'>,
-    @Inject(REPO_ACTIONS) actions: Pick<RepoActions, 'run'>,
+    @Inject(REPO_ACTIONS) actions: Pick<RepoActions, 'run' | 'sweep'>,
+    @Inject(REPO_CI) ci: Pick<RepoCi, 'tick' | 'poll' | 'fetchLog' | 'syncDeployActions'>,
   ) {
     super()
     this.#jobs = jobs
     this.#actions = actions
+    this.#ci = ci
   }
 
   async process(job: Job): Promise<void> {
@@ -69,6 +76,29 @@ export class GitProcessor extends WorkerHost {
         const data = gitCiLintPayloadSchema.safeParse(job.data)
         if (!data.success) throw new UnrecoverableError('Invalid git.ci_lint job')
         return this.#jobs.lintBranch(data.data.taskId, data.data.headSha)
+      }
+      // The poll of builds and merge requests (ПР17; slice 84.21): the tick also ends the presses
+      // a core left behind; with a repository — the look of its page.
+      case gitJobNames.poll: {
+        const data = gitPollPayloadSchema.safeParse(job.data ?? {})
+        if (!data.success) throw new UnrecoverableError('Invalid git.poll job')
+        if (data.data.projectRepositoryId !== undefined) {
+          await this.#ci.poll(data.data.projectRepositoryId)
+          return
+        }
+        await this.#actions.sweep()
+        await this.#ci.tick()
+        return
+      }
+      case gitJobNames.log: {
+        const data = gitLogPayloadSchema.safeParse(job.data)
+        if (!data.success) throw new UnrecoverableError('Invalid git.log job')
+        return this.#ci.fetchLog(data.data.projectRepositoryId, data.data.jobId)
+      }
+      case gitJobNames.deployActions: {
+        const data = gitDeployActionsPayloadSchema.safeParse(job.data)
+        if (!data.success) throw new UnrecoverableError('Invalid git.repo.deploy_actions job')
+        return this.#ci.syncDeployActions(data.data.projectRepositoryId)
       }
       default:
         throw new UnrecoverableError(`Unknown git job "${job.name}"`)

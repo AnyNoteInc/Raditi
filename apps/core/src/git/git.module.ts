@@ -17,14 +17,17 @@ import type { GitWorkspaceService } from '../git-workspace/git-workspace.service
 import { GitAuthSource } from './git-auth-source.ts'
 import { GitJobs } from './git-jobs.ts'
 import { GitProcessor } from './git.processor.ts'
-import { GIT_JOBS, REPO_ACTIONS } from './git.tokens.ts'
+import { GitPollScheduler } from './git-poll-scheduler.ts'
+import { GIT_JOBS, REPO_ACTIONS, REPO_CI } from './git.tokens.ts'
 import { RepoActions } from './repo-actions.ts'
+import { RepoCi } from './repo-ci.ts'
 import { publicHostResolver } from './public-host.ts'
 
 const GIT_SERVICES = Symbol('GIT_SERVICES')
 interface GitServices {
   jobs: GitJobs
   actions: RepoActions
+  ci: RepoCi
 }
 
 /** Where web sends the client back from gitlab.com; GitLab wants it again on a refresh. */
@@ -124,6 +127,8 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
               : null,
             logger: lines,
           }),
+          // Builds and logs (ПР17; slice 84.21): polled, never written to.
+          ci: new RepoCi({ prisma, auth, resolvePublic, provider, secrets, logger: lines }),
         }
       },
     },
@@ -133,7 +138,9 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
       inject: [GIT_SERVICES],
       useFactory: (git: GitServices) => git.actions,
     },
+    { provide: REPO_CI, inject: [GIT_SERVICES], useFactory: (git: GitServices) => git.ci },
     GitProcessor,
+    GitPollScheduler,
   ],
   // The fetch of a pass of a chat with a repository (docs/plan/84-projects.md, §4.3, step 3).
   exports: [GIT_JOBS],
