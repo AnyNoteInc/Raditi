@@ -214,6 +214,31 @@ describe.skipIf(!enabled)('GitAuthSource with PostgreSQL (plan 84, 84.17)', () =
     expect(vault.keys.get(conn.path)!.data.refreshToken).toBe('refresh-revoked')
   })
 
+  it('a write Vault failed once is tried again: the spent refresh token is not lost (ревью C4)', async () => {
+    const vault = memoryVault()
+    const endpoint = tokenEndpoint()
+    const conn = await connection(vault)
+    let failures = 1
+    const flaky: typeof vault.secrets = {
+      kvRead: vault.secrets.kvRead,
+      kvWrite: async (path, data, options) => {
+        if (failures-- > 0) throw new Error('Vault is sealed')
+        return vault.secrets.kvWrite(path, data, options)
+      },
+    }
+    const source = new GitAuthSource({
+      prisma: first,
+      secrets: flaky,
+      connect: endpoint.connect,
+      gitlabOauth: app,
+    })
+    expect(await source.grantFor(conn)).toEqual({ kind: 'token', token: 'access-1' })
+    expect(vault.keys.get(conn.path)!.data).toMatchObject({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+    })
+  })
+
   it('a fresh pair is used as it is, without the token endpoint', async () => {
     const vault = memoryVault()
     const endpoint = tokenEndpoint()
