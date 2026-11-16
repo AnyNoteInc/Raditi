@@ -256,7 +256,7 @@ export function ProjectsView() {
           // «Подключить GitLab» in the window is an intent: the page opens «Подключить
           // репозиторий» at once, because the sign-in leaves the page (ПР5).
           router.push(
-            `${projectHref(project.id)}${then?.connectRepository ? '?connect=repository' : ''}`,
+            `${projectHref(project.id)}?created=1${then?.connectRepository ? '&connect=repository' : ''}`,
           )
         }}
       />

@@ -74,6 +74,18 @@ export function ProjectView({
     const later = setTimeout(() => setHistory(readPromptHistory(userId)), 0)
     return () => clearTimeout(later)
   }, [userId])
+  // «Проект создан» after the window of a new project (ревью P11): `?created=1` of «Проекты».
+  useEffect(() => {
+    const later = setTimeout(() => {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('created') === null) return
+      setNotice(projectPageText.created)
+      params.delete('created')
+      const rest = params.toString()
+      window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`)
+    }, 0)
+    return () => clearTimeout(later)
+  }, [])
 
   return (
     <Box sx={{ width: '100%', maxWidth: 1200, mx: 'auto', ...riseIn }}>

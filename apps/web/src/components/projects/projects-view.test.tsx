@@ -145,7 +145,7 @@ describe('«Проекты» (docs/plan/84-projects.md, ПР4)', () => {
       name: 'Сайт пекарни',
       goal: 'Новое меню',
     })
-    expect(calls.push).toHaveBeenCalledWith(`/projects/${input.projectId}`)
+    expect(calls.push).toHaveBeenCalledWith(`/projects/${input.projectId}?created=1`)
   })
 
   it('shows the cards with their chats and time, the tabs with counts, and «Корзина» under them', async () => {
