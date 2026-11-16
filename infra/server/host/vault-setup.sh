@@ -3,7 +3,7 @@
 # infra/vault/bootstrap.mjs, with the root token of /etc/raditi/openbao/root-token. Repeatable:
 # it writes the same roles and policy again and never prints a secret.
 #   web     sites-writer, workspace-provisioner
-#   core    core-turns, core-transit, core-workspace-env
+#   core    core-turns, core-transit, core-workspace-env, core-git
 #   llm     llm-subscriptions
 #   mcp     mcp-content
 #   renderer  raditi-renderer: reads kv/platform/*, issues the SecretIDs of the roles above
@@ -44,7 +44,7 @@ role() { # <name> <policies,...> <token ttl>
   echo "vault-setup: role $1 ($2)"
 }
 role web sites-writer,workspace-provisioner 1h
-role core core-turns,core-transit,core-workspace-env 1h
+role core core-turns,core-transit,core-workspace-env,core-git 1h
 role llm llm-subscriptions 1h
 role mcp mcp-content 1h
 role renderer raditi-renderer 15m

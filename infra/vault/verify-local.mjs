@@ -391,7 +391,8 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
 /**
  * Real rights of the workspace (docs/plan/83-remove-projects.md, БП4, БП11): web makes the key
  * of a workspace and writes its variables and the keys of its MCP servers, never reading them
- * back; `core` reads the variables for the agent's commands and seals the snapshots of turns;
+ * back, and the tokens of git connections (plan 84, ПР10); `core` reads the variables for the
+ * agent's commands, reads and renews the git tokens by CAS and seals the snapshots of turns;
  * `mcp` keeps the contact maps of chats, reads and renews the key of an MCP server and reads the
  * key of the web search. Every status below is an answer of the server, not of a policy parser.
  */
@@ -406,6 +407,8 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   const keyType = { type: 'aes256-gcm96' }
   const variable = `workspaces/${workspaceId}/env/PAYMENT_API_KEY`
   const server = `workspaces/${workspaceId}/mcp/menu`
+  // The tokens of a git connection (docs/plan/84-projects.md, ПР10, §4.2).
+  const connection = `workspaces/${workspaceId}/git/${randomUUID()}`
   const mask = `content-masks/${taskId}/${taskId}`
   const sub = 'zai-coding/synthetic-content'
 
@@ -476,7 +479,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   // set on the metadata before the first write — are written with CAS and removed by a version
   // without a value; never read back, never deleted.
   const writer = scopedTokens['sites-writer']
-  for (const path of [variable, server]) {
+  for (const path of [variable, server, connection]) {
     await expect(writer, `kv/metadata/${path}`, 204, post({ max_versions: '1' }))
     await expect(writer, `kv/data/${path}`, 200, write({ value: 'synthetic-1' }, 0))
     await expect(writer, `kv/data/${path}`, 400, write({ value: 'stale' }, 0))
@@ -497,6 +500,15 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     [`kv/data/${variable}`, {}],
     [`kv/data/${variable}?version=1`, {}],
     [`kv/data/${server}`, {}],
+    // A git token is never read back by web either, nor its history listed (ПР10).
+    [`kv/data/${connection}`, {}],
+    [`kv/data/${connection}?version=1`, {}],
+    [`kv/metadata/${connection}`, post({ max_versions: '2' })],
+    [`kv/metadata/workspaces/${workspaceId}/git`, { method: 'LIST' }],
+    [`kv/data/${connection}`, { method: 'DELETE' }],
+    [`kv/destroy/${connection}`, post({ versions: [1] })],
+    ['kv/data/platform/gitlab-oauth', {}],
+    ['kv/data/platform/github-app', {}],
     [`kv/data/${variable}`, { method: 'DELETE' }],
     [`kv/metadata/${variable}`, { method: 'DELETE' }],
     [`kv/destroy/${variable}`, post({ versions: [1] })],
@@ -532,11 +544,26 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
       [`transit/datakey/plaintext/${key}`, post({ bits: 256 })],
       [`kv/data/${variable}`, {}],
       [`kv/data/${server}`, {}],
+      [`kv/data/${connection}`, {}],
       [`kv/data/${variable}`, write({ value: 'synthetic-foreign' }, 2)],
       [`kv/data/${mask}`, {}],
     ]) {
       await expect(scopedTokens[policy], path, 403, options)
     }
+  }
+  // core-git opens the tokens of git connections and nothing else; no other core policy opens them.
+  for (const [path, options] of [
+    [`kv/data/${variable}`, {}],
+    [`kv/data/${server}`, {}],
+    [`kv/data/${mask}`, {}],
+    [`kv/data/workspaces/${workspaceId}/env/OTHER`, write({ value: 'by-core-git' }, 0)],
+    [`transit/datakey/plaintext/${key}`, post({ bits: 256 })],
+    [`turns/data/${turn}`, {}],
+  ]) {
+    await expect(scopedTokens['core-git'], path, 403, options)
+  }
+  for (const policy of ['core-transit', 'core-workspace-env', 'workspace-provisioner']) {
+    await expect(scopedTokens[policy], `kv/data/${connection}`, 403)
   }
 
   // AppRole logins of the two services. A SecretID works once.
@@ -544,7 +571,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     mcp: { name: 'raditi-verify-mcp', policies: ['mcp-content'] },
     core: {
       name: 'raditi-verify-core',
-      policies: ['core-turns', 'core-transit', 'core-workspace-env'],
+      policies: ['core-turns', 'core-transit', 'core-workspace-env', 'core-git'],
     },
   }
   await expect(rootToken, 'sys/auth/approle', 204, post({ type: 'approle' }))
@@ -637,6 +664,9 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     [`kv/metadata/workspaces/${workspaceId}/mcp`, { method: 'LIST' }],
     [`kv/destroy/${server}`, post({ versions: [1] })],
     [`kv/data/${variable}`, {}],
+    // mcp, where the sandbox goes, never sees a token of git (docs/plan/84-projects.md, §4.2).
+    [`kv/data/${connection}`, {}],
+    [`kv/data/${connection}`, write({ accessToken: 'synthetic-mcp' }, 1)],
     [`kv/data/sites/${randomUUID()}/wp`, {}],
     [`kv/data/previews/${randomUUID()}/wp`, {}],
     ['kv/metadata/workspaces', { method: 'LIST' }],
@@ -679,8 +709,27 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
   await expect(core, `kv/data/${variable}?version=1`, 404)
   const tombstone = await expect(core, `kv/data/${gone}`, 200)
   assert.ok(tombstone?.data?.data?.removed === removed, 'Removed variable differs')
+  // core: the tokens of a git connection — read, and a renewed GitLab token written by CAS on the
+  // version it read; it creates none and reads no metadata (docs/plan/84-projects.md, §4.2).
+  const gitToken = await expect(core, `kv/data/${connection}`, 200)
+  assert.ok(gitToken?.data?.data?.value === 'synthetic-1', 'Git connection token differs')
+  assert.equal(gitToken?.data?.metadata?.version, 1)
+  await expect(core, `kv/data/${connection}`, 400, write({ accessToken: 'stale' }, 0))
+  await expect(core, `kv/data/${connection}`, 200, write({ accessToken: 'synthetic-renewed' }, 1))
+  await expect(core, `kv/data/${connection}`, 400, write({ accessToken: 'lost-race' }, 1))
+  const renewed = await expect(rootToken, `kv/data/${connection}`, 200)
+  assert.equal(renewed?.data?.metadata?.version, 2)
+  assert.ok(renewed?.data?.data?.accessToken === 'synthetic-renewed', 'Renewed token differs')
+  // One version kept, as web set it: the token before the renewal is gone.
+  await expect(rootToken, `kv/data/${connection}?version=1`, 404)
   for (const [path, options] of [
     [`kv/data/${variable}`, write({ value: 'synthetic-core' }, 2)],
+    [`kv/data/workspaces/${workspaceId}/git/${randomUUID()}`, write({ token: 'by-core' }, 0)],
+    [`kv/data/${connection}`, { method: 'DELETE' }],
+    [`kv/metadata/${connection}`, {}],
+    [`kv/metadata/${connection}`, post({ max_versions: '1' })],
+    [`kv/metadata/workspaces/${workspaceId}/git`, { method: 'LIST' }],
+    [`kv/destroy/${connection}`, post({ versions: [2] })],
     [`kv/data/${variable}`, { method: 'DELETE' }],
     [`kv/metadata/${variable}`, {}],
     [`kv/metadata/workspaces/${workspaceId}/env`, { method: 'LIST' }],
@@ -688,6 +737,8 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     [`kv/data/sites/${randomUUID()}/wp`, {}],
     [`kv/data/sites/${randomUUID()}/db`, {}],
     ['kv/data/platform/gitea-org-owner', {}],
+    ['kv/data/platform/gitlab-oauth', {}],
+    ['kv/data/platform/github-app', {}],
     [`kv/data/previews/${randomUUID()}/db`, write({ v: '1' }, 0)],
     [`kv/data/${mask}`, {}],
     [`kv/data/${mask}`, write({ entries: '[]' }, 0)],
