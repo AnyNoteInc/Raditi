@@ -129,19 +129,23 @@ export async function readChatBranch(
   }
 }
 
-/** «Посмотреть изменения» of one card: the diff its turn left, when it was kept (≤ 2 МиБ). */
+/** «Посмотреть изменения» of one card, by its head: the diff its turn left, when kept (≤ 2 МиБ). */
 export async function readTurnDiff(
   db: PrismaClient,
   storage: Pick<ObjectStorage, 'get'>,
-  input: { userId: string; taskId: string; turn: number },
+  input: { userId: string; taskId: string; headSha: string },
 ): Promise<{ patch: string | null; truncated: boolean }> {
   const { task } = await ownChat(db, input.userId, input.taskId.toLowerCase())
   const card = await db.taskEvent.findFirst({
-    where: { taskId: task.id, type: 'feed.repo_changes', turn: { turnNo: input.turn } },
-    select: { id: true },
+    where: {
+      taskId: task.id,
+      type: 'feed.repo_changes',
+      payload: { path: ['headSha'], equals: input.headSha },
+    },
+    select: { turn: { select: { turnNo: true } } },
   })
-  if (card === null) throw taskNotFound()
-  const object = await storage.get('artifacts', repoDiffKey(task.id, input.turn))
+  if (!card?.turn) throw taskNotFound()
+  const object = await storage.get('artifacts', repoDiffKey(task.id, card.turn.turnNo))
   if (!object) return { patch: null, truncated: true }
   const chunks: Uint8Array[] = []
   let length = 0

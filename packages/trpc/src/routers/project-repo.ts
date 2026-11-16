@@ -157,13 +157,13 @@ export const projectRepoRouter = router({
 
   /** «Посмотреть изменения» of a card: the diff of its turn, up to 2 MiB (ПР26). */
   diff: consentedProcedure
-    .input(z.strictObject({ taskId: z.uuid(), turn: z.number().int().positive() }))
+    .input(z.strictObject({ taskId: z.uuid(), headSha: sha }))
     .output(z.strictObject({ patch: z.string().nullable(), truncated: z.boolean() }))
     .query(({ ctx, input }) => {
       return readTurnDiff(ctx.prisma, chatContextOf(ctx).storage(), {
         userId: ctx.user.id,
         taskId: input.taskId,
-        turn: input.turn,
+        headSha: input.headSha,
       })
     }),
 
