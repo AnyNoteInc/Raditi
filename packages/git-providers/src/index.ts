@@ -9,6 +9,7 @@ export {
 } from './config.ts'
 export {
   createGitProvider,
+  gitProviderCiPaths,
   type CreateGitProviderInput,
   type GitProviderEndpoints,
 } from './create-git-provider.ts'

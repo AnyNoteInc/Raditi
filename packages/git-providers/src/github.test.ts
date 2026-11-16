@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { DomainError, type RepoRef } from '@repo/domain'
 
-import { createGitProvider } from './create-git-provider.ts'
+import { createGitProvider, gitProviderCiPaths } from './create-git-provider.ts'
 import { fakeSend } from './testing/fake-send.ts'
 import { createGitTransport } from './transport.ts'
 
@@ -101,6 +101,18 @@ describe('GitHub, anonymous reading', () => {
     expect(calls).toHaveLength(0)
     expect(provider.support).toMatchObject({ autoMerge: false, ciLint: false, label: 'GitHub' })
     expect(provider.support.requestRef(3)).toBe('#3')
+  })
+
+  it('names the paths of build settings of each provider without an adapter (ПР16)', () => {
+    const transport = createGitTransport({ resolvePublic: async () => '203.0.113.1' })
+    for (const [kind, host] of [
+      ['github', 'github.com'],
+      ['gitlab', 'gitlab.example.ru'],
+    ] as const) {
+      const provider = createGitProvider({ kind, host, transport })
+      expect(gitProviderCiPaths(kind)).toEqual(provider.support.ciPaths)
+      expect(gitProviderCiPaths(kind)).toContain('CODEOWNERS')
+    }
   })
 
   it('GitHub lives on github.com only', () => {

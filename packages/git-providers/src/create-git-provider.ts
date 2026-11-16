@@ -1,8 +1,8 @@
 import { githubHost, gitHostRefused, type GitProvider, type RepoProviderKind } from '@repo/domain'
 
 import { parseEndpointOverride } from './api.ts'
-import { createGithubProvider } from './github.ts'
-import { createGitlabProvider } from './gitlab.ts'
+import { createGithubProvider, githubCiPaths } from './github.ts'
+import { createGitlabProvider, gitlabCiPaths } from './gitlab.ts'
 import type { GitTransport } from './transport.ts'
 
 // The one place that picks an adapter by kind (rule 8): core's GitAuthSource and web call this,
@@ -38,4 +38,12 @@ export function createGitProvider(input: CreateGitProviderInput): GitProvider {
     transport,
     baseUrl: host === 'gitlab.com' ? parseEndpointOverride(endpoints.gitlabComUrl) : null,
   })
+}
+
+/**
+ * The paths of build settings of a provider (`support.ciPaths`, ПР16) without an adapter: core
+ * marks a card «Изменения в ветке» as touching them before any operation on the provider.
+ */
+export function gitProviderCiPaths(kind: RepoProviderKind): readonly string[] {
+  return kind === 'github' ? githubCiPaths : gitlabCiPaths
 }
