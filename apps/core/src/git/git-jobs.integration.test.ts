@@ -139,6 +139,11 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
     const fake = fakeProvider(answers)
     const fetch = vi.fn(async (_input: unknown) => new Map([['main', SHA]]))
     const findSecrets = vi.fn(async () => ['config/prod.env'])
+    const buildSettingsChange = vi.fn(async () => ({
+      paths: [] as string[],
+      patch: Buffer.alloc(0) as Buffer | null,
+      config: null as Buffer | null,
+    }))
     const resolvePublic = vi.fn(async () => '203.0.113.7')
     const provider = vi.fn(() => fake.provider)
     const made = new GitJobs({
@@ -146,7 +151,7 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
       auth: { grantFor: async () => ({ kind: 'token', token: 'synthetic-token' }) },
       resolvePublic,
       provider,
-      workspace: { fetch, findSecrets },
+      workspace: { fetch, findSecrets, buildSettingsChange },
       logger: quiet,
     })
     return { jobs: made, calls: fake.calls, fetch, findSecrets, resolvePublic, provider }
@@ -279,7 +284,7 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
       providerRepoId: '7',
       defaultBranch: 'trunk',
       secretsFound: [{ path: 'config/prod.env', rule: 'gitleaks' }],
-      ciPaths: ['ci/pipeline.yml'],
+      ciPaths: { v: 1, configPath: 'ci/pipeline.yml', foreign: false, includes: [] },
     })
     const fetched = run.fetch.mock.calls[0]![0] as unknown as {
       remote: { pin: unknown; cloneUrl: string }

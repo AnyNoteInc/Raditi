@@ -4,6 +4,7 @@ import {
   chatBranch,
   chatBranchHead,
   closeRepoProposal,
+  enqueueOutbox,
   ensureChatBranch,
   failRepoTurn,
   insertFeedEvent,
@@ -12,6 +13,7 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import {
+  gitJobNames,
   isDomainError,
   REPO_DIFF_KEPT_BYTES,
   repoChatBranch,
@@ -24,10 +26,12 @@ import {
   type RepoMode,
 } from '@repo/domain'
 
+import { buildPathsOf } from '../git/build-paths.ts'
 import type { GitJobs } from '../git/git-jobs.ts'
 import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
 import type { TurnRepositoryOutcome } from '../turns/turn-attempt.ts'
 import { REPO_BUNDLE_TIME } from '../turns/turn-repository.ts'
+import { diffStat } from './diff-stat.ts'
 import type { PassRepository, PassRepositoryRow } from './turn-planner.ts'
 
 // A pass of a chat of a project with a repository (docs/plan/84-projects.md, ПР12, ПР26, ПР35,
@@ -45,38 +49,7 @@ export const REPO_CARD_FILES = 10
 // The key and the limit of the diff of a turn are the domain's: web reads what core writes.
 export { REPO_DIFF_KEPT_BYTES, repoDiffKey } from '@repo/domain'
 
-/** One changed file of a unified diff of git: its path and counts (binary — 0 and 0). */
-export interface DiffFileStat {
-  path: string
-  additions: number
-  deletions: number
-}
-
-/** The files of a patch of `git diff` and their counts, in its order. */
-export function diffStat(patch: Uint8Array): DiffFileStat[] {
-  const text = Buffer.from(patch).toString('utf8')
-  const files: DiffFileStat[] = []
-  let current: DiffFileStat | null = null
-  let inHunk = false
-  for (const line of text.split('\n')) {
-    if (line.startsWith('diff --git ')) {
-      const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line)
-      current = { path: match?.[2] ?? line.slice(11), additions: 0, deletions: 0 }
-      files.push(current)
-      inHunk = false
-      continue
-    }
-    if (!current) continue
-    if (line.startsWith('@@')) {
-      inHunk = true
-      continue
-    }
-    if (!inHunk) continue
-    if (line.startsWith('+')) current.additions += 1
-    else if (line.startsWith('-')) current.deletions += 1
-  }
-  return files
-}
+export { diffStat, type DiffFileStat } from './diff-stat.ts'
 
 export interface RepoTurnPreparerDependencies {
   db: Pick<PrismaClient, 'task' | 'taskTurn' | 'projectRepoBranch'>
@@ -193,6 +166,7 @@ export interface RepoChangesDependencies {
     | 'taskEvent'
     | 'taskTurn'
     | 'projectRepoBranch'
+    | 'projectRepository'
     | 'repoReservation'
   >
   storage: Pick<ObjectStorage, 'put'>
@@ -316,6 +290,15 @@ export class RepoChanges {
           sizeBytes: outcome.patch.byteLength,
         })
       const task = await db.task.findUnique({ where: { id: taskId }, select: { title: true } })
+      // Build settings by the provider's paths and the repository's own too (ПР16): CODEOWNERS,
+      // `ci_config_path`, the files of `include: local` — not only the domain's CI paths.
+      const repo = await db.projectRepository.findUnique({
+        where: { id: plan.projectRepositoryId },
+        select: { provider: true, ciPaths: true },
+      })
+      const isBuildPath = repo ? buildPathsOf(repo) : () => false
+      const ciTouched =
+        outcome.buildPaths.length > 0 || files.some((file) => isBuildPath(file.path))
       const payload: Omit<FeedRepoChangesPayload, 'branch'> = {
         v: 1,
         baseSha: outcome.baseSha,
@@ -329,7 +312,7 @@ export class RepoChanges {
           additions: file.additions,
           deletions: file.deletions,
         })),
-        ciTouched: outcome.buildPaths.length > 0,
+        ciTouched,
         pushed: false,
         mergeRequest: null,
       }
@@ -362,6 +345,16 @@ export class RepoChanges {
           turnId,
           row: { type: 'feed.repo_changes', payload: { ...payload, branch: branch.branch } },
         })
+        // What waits to be sent touches build settings: its diff and CI Lint are prepared for the
+        // card «Агент хочет изменить настройки сборки» (ПР16); nothing is sent by it.
+        const unsent = await unsentBranch(tx, taskId)
+        if (unsent?.ciTouched)
+          await enqueueOutbox(tx, {
+            topic: 'git',
+            type: gitJobNames.ciLint,
+            payload: { taskId, headSha: unsent.head.headSha },
+            dedupeKey: `git.ci_lint:${taskId}:${unsent.head.headSha}`,
+          })
       })
       logger?.log(`repo_changes task=${taskId} turn=${turn} files=${files.length}`)
     } catch (error) {

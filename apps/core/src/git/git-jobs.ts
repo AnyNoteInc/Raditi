@@ -1,16 +1,29 @@
-import { Prisma, type PrismaClient } from '@repo/db'
+import { createHash } from 'node:crypto'
+
+import { chatBranchHead, Prisma, type PrismaClient } from '@repo/db'
 import {
+  ciConfigPathOf,
+  ciIncludePaths,
+  DEFAULT_CI_CONFIG_PATH,
   gitConnectionProviders,
   gitConnectionReauth,
   isDomainError,
   repositoryTooLarge,
   repoUnreachable,
   mirrorLimits,
+  readRepoCiPaths,
+  REPO_CI_CONFIG_LINT_BYTES,
+  REPO_DIFF_KEPT_BYTES,
+  repoCiDiffKey,
+  repoCiLintSchema,
   type GitAuth,
   type GitConnectionKind,
   type GitConnectionReason,
   type GitGrant,
   type GitProvider,
+  type ObjectStorage,
+  type RepoCiLint,
+  type RepoCiPaths,
   type RepoProviderKind,
   type RepoRef,
   type RepositoryInfo,
@@ -18,6 +31,8 @@ import {
 
 import { GIT_CREDENTIAL_TTL_SECONDS } from '../git-workspace/git-auth.ts'
 import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
+import { diffStat } from '../tasks/diff-stat.ts'
+import { buildPathsOf } from './build-paths.ts'
 import type { GitAuthSource } from './git-auth-source.ts'
 import type { ResolvePublicHost } from './public-host.ts'
 
@@ -27,7 +42,11 @@ import type { ResolvePublicHost } from './public-host.ts'
 // - `git.repo.inspect` — the branches of one of them, for «Основная ветка»;
 // - `git.repo.attach` — the repository of a project: the provider's size, the first fetch by the
 //   git worker under the limits, gitleaks over the main branch (a warning, never a refusal) and
-//   the client's own paths of build settings (`ci_paths`). Done — `mirror_state = 'ready'`.
+//   the client's own paths of build settings (`ci_paths`: its `ci_config_path` and the files of
+//   `include: local` of the main branch by CI Lint). Done — `mirror_state = 'ready'`;
+// - `git.ci_lint` (slice 84.20) — the diff of the build settings of a chat's branch since its last
+//   push, kept in `raditi-artifacts`, with CI Lint where the provider has it, for the card «Агент
+//   хочет изменить настройки сборки» (ПР16).
 // Every operation resolves the host once; the API and git connect to that very address (§4.6).
 
 /** Pages of 50 repositories one sync reads at most (P-git-repo-pick shows what it has). */
@@ -45,7 +64,9 @@ export interface GitJobsOptions {
   resolvePublic: ResolvePublicHost
   /** An adapter whose every request of this operation goes to `address`. */
   provider: GitProviderFactory
-  workspace: Pick<GitWorkspaceService, 'fetch' | 'findSecrets'>
+  workspace: Pick<GitWorkspaceService, 'fetch' | 'findSecrets' | 'buildSettingsChange'>
+  /** Where the diff of the build settings of a branch is kept for the card (`git.ci_lint`). */
+  storage?: Pick<ObjectStorage, 'put'>
   logger: { log(line: string): void; warn(line: string): void }
   now?: () => Date
 }
@@ -78,10 +99,17 @@ const reasonOf = (error: unknown): GitConnectionReason => {
 
 /** A path of the client's own build settings, or null for one on another project or address. */
 export function ownCiPath(value: string | null | undefined): string | null {
-  if (!value) return null
-  if (value.includes('@') || value.includes('://') || value.startsWith('/')) return null
-  if (value.split('/').some((part) => part === '..' || part === '')) return null
-  return value.length <= 255 ? value : null
+  return ciConfigPathOf(value).path
+}
+
+/** `ci_paths` with the configuration path the provider names now; its includes kept. */
+const ciPathsWith = (
+  current: RepoCiPaths,
+  configPath: string | null | undefined,
+  includes = current.includes,
+): RepoCiPaths => {
+  const config = ciConfigPathOf(configPath)
+  return { v: 1, configPath: config.path, foreign: config.foreign, includes }
 }
 
 export class GitJobs {
@@ -129,6 +157,7 @@ export class GitJobs {
         path: true,
         providerRepoId: true,
         defaultBranch: true,
+        ciPaths: true,
         connection: { select: connectionSelect },
       },
     })
@@ -166,9 +195,11 @@ export class GitJobs {
         })
         const sha = heads.get(repo.defaultBranch) ?? null
         if (sha === null) throw repoUnreachable()
+        // `ci_config_path` is read at every preparation of a turn too (ПР16).
+        const ciPaths = ciPathsWith(readRepoCiPaths(repo.ciPaths), info.ciConfigPath)
         await this.#o.prisma.projectRepository.updateMany({
           where: { id: projectRepositoryId },
-          data: { lastFetchedSha: sha, fetchedAt: this.#now() },
+          data: { lastFetchedSha: sha, fetchedAt: this.#now(), ciPaths },
         })
         return {
           sha,
@@ -378,13 +409,21 @@ export class GitJobs {
           return
         }
         const secrets = await this.#o.workspace.findSecrets(projectRepositoryId, sha)
-        const ciPath = ownCiPath(info.ciConfigPath)
+        const own = ciPathsWith(readRepoCiPaths(null), info.ciConfigPath)
+        const includes = own.foreign
+          ? []
+          : await this.#mainIncludes(provider, auth, info.ref, {
+              projectRepositoryId,
+              sha,
+              branch,
+              configPath: own.configPath ?? DEFAULT_CI_CONFIG_PATH,
+            })
         await mark({
           mirrorState: 'ready',
           lastFetchedSha: sha,
           fetchedAt: this.#now(),
           secretsFound: secrets.map((path) => ({ path, rule: 'gitleaks' })),
-          ciPaths: ciPath === null ? Prisma.DbNull : [ciPath],
+          ciPaths: { ...own, includes },
         })
       } finally {
         await access.revoke?.().catch(() => undefined)
@@ -396,5 +435,153 @@ export class GitJobs {
         mirrorState: tooLargeCodes.has(code) ? 'too_large' : 'failed',
       })
     }
+  }
+
+  /**
+   * The files of `include: local` of the configuration of the main branch, by CI Lint where the
+   * provider has it (ПР16). Never fails the attachment: no lint — no includes.
+   */
+  async #mainIncludes(
+    provider: GitProvider,
+    auth: GitAuth,
+    ref: RepoRef,
+    at: { projectRepositoryId: string; sha: string; branch: string; configPath: string },
+  ): Promise<string[]> {
+    if (!provider.support.ciLint || !provider.lintCi) return []
+    try {
+      const { config } = await this.#o.workspace.buildSettingsChange({
+        projectRepositoryId: at.projectRepositoryId,
+        from: at.sha,
+        to: at.sha,
+        isBuildPath: () => false,
+        maxBytes: 1,
+        configPath: at.configPath,
+        configBytes: REPO_CI_CONFIG_LINT_BYTES,
+      })
+      if (config === null) return []
+      const lint = await provider.lintCi(auth, ref, config.toString('utf8'), at.branch)
+      return ciIncludePaths(lint.includes)
+    } catch (error) {
+      const code = isDomainError(error) ? error.code : 'unknown'
+      this.#o.logger.warn(`git.repo.attach ${at.projectRepositoryId}: lint ${code}`)
+      return []
+    }
+  }
+
+  /**
+   * `git.ci_lint` (ПР16): the change of build settings of the chat's branch at `headSha` since what
+   * the client was last sent (or since its base), its diff in `raditi-artifacts`, CI Lint of its
+   * configuration where the provider has it — its `include: local` files join the build paths —
+   * and the result in `project_repo_branches.ci_lint`. A job of another head does nothing. A lint
+   * that fails leaves `lint: null`: the card shows the diff without it.
+   */
+  async lintBranch(taskId: string, headSha: string): Promise<void> {
+    const { prisma, workspace, storage } = this.#o
+    const branch = await prisma.projectRepoBranch.findUnique({
+      where: { taskId },
+      select: {
+        projectRepositoryId: true,
+        branch: true,
+        baseSha: true,
+        mirrorSha: true,
+        remoteSha: true,
+        ciLint: true,
+      },
+    })
+    if (branch === null) return
+    if ((await chatBranchHead(prisma, taskId))?.headSha !== headSha) return
+    const done = repoCiLintSchema.safeParse(branch.ciLint)
+    if (done.success && done.data.headSha === headSha) return
+    const repo = await prisma.projectRepository.findUnique({
+      where: { id: branch.projectRepositoryId },
+      select: {
+        provider: true,
+        host: true,
+        path: true,
+        providerRepoId: true,
+        defaultBranch: true,
+        ciPaths: true,
+        connection: { select: connectionSelect },
+      },
+    })
+    if (repo === null) return
+    const ci = readRepoCiPaths(repo.ciPaths)
+    const configPath = ci.configPath ?? DEFAULT_CI_CONFIG_PATH
+    const fromSha = branch.mirrorSha ?? branch.baseSha
+    const change = (includes: readonly string[]) =>
+      workspace.buildSettingsChange({
+        projectRepositoryId: branch.projectRepositoryId,
+        from: fromSha,
+        to: headSha,
+        isBuildPath: buildPathsOf(repo, includes),
+        maxBytes: REPO_DIFF_KEPT_BYTES,
+        configPath,
+        configBytes: REPO_CI_CONFIG_LINT_BYTES,
+      })
+    let found = await change([])
+    let lint: RepoCiLint['lint'] = null
+    let includes: string[] = []
+    if (found.config !== null && !ci.foreign && repo.connection?.state === 'ok') {
+      try {
+        const kind = gitConnectionProviders[repo.connection.kind as GitConnectionKind]
+        const grant = await this.#o.auth.grantFor({
+          ...repo.connection,
+          kind: repo.connection.kind as GitConnectionKind,
+        })
+        const { provider, auth } = await this.#operation(kind, repo.host, grant)
+        if (provider.support.ciLint && provider.lintCi) {
+          const ref: RepoRef = {
+            provider: kind,
+            host: repo.host,
+            path: repo.path,
+            ...(repo.providerRepoId === null ? {} : { providerRepoId: repo.providerRepoId }),
+          }
+          // A branch never sent is not at the client yet: the lint runs on the main branch.
+          const result = await provider.lintCi(
+            auth,
+            ref,
+            found.config.toString('utf8'),
+            branch.remoteSha !== null ? branch.branch : repo.defaultBranch,
+          )
+          lint = { valid: result.valid, errors: result.errors.map((e) => e.slice(0, 1000)) }
+          includes = ciIncludePaths(result.includes)
+          if (includes.some((path) => !ci.includes.includes(path))) found = await change(includes)
+        }
+      } catch (error) {
+        const code = isDomainError(error) ? error.code : 'unknown'
+        this.#o.logger.warn(`git.ci_lint ${taskId}: lint ${code}`)
+      }
+    }
+    const patch = found.patch
+    const ciDiffSha256 =
+      patch === null || found.paths.length === 0
+        ? null
+        : createHash('sha256').update(patch).digest('hex')
+    if (patch !== null && patch.byteLength > 0) {
+      if (!storage) throw new Error('git.ci_lint needs the storage of artifacts')
+      await storage.put('artifacts', repoCiDiffKey(taskId, headSha), patch, {
+        contentType: 'text/x-diff',
+        sizeBytes: patch.byteLength,
+      })
+    }
+    const files =
+      patch === null
+        ? found.paths.map((path) => ({ path, additions: 0, deletions: 0 }))
+        : diffStat(patch)
+    const row: RepoCiLint = {
+      v: 1,
+      headSha,
+      fromSha,
+      ciDiffSha256,
+      files: files.slice(0, 50).map((file) => ({ ...file, path: file.path.slice(0, 4096) })),
+      tooLarge: patch === null,
+      lint,
+      includes,
+      declined: false,
+    }
+    await prisma.projectRepoBranch.updateMany({
+      where: { taskId },
+      data: { ciLint: row, ciDiffSha256 },
+    })
   }
 }

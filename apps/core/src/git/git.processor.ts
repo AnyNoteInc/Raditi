@@ -2,6 +2,7 @@ import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq'
 import { Inject, Logger } from '@nestjs/common'
 import {
   gitActionPayloadSchema,
+  gitCiLintPayloadSchema,
   gitConnectionSyncPayloadSchema,
   gitJobNames,
   gitRepoAttachPayloadSchema,
@@ -23,13 +24,16 @@ import type { RepoActions } from './repo-actions.ts'
 @Processor(GIT_QUEUE, { concurrency: 2 })
 export class GitProcessor extends WorkerHost {
   readonly #logger = new Logger(GitProcessor.name)
-  readonly #jobs: Pick<GitJobs, 'syncConnection' | 'inspectRepository' | 'attachRepository'>
+  readonly #jobs: Pick<
+    GitJobs,
+    'syncConnection' | 'inspectRepository' | 'attachRepository' | 'lintBranch'
+  >
   readonly #actions: Pick<RepoActions, 'run'>
   readonly #warn = throttledLogger((line) => this.#logger.warn(line))
 
   constructor(
     @Inject(GIT_JOBS)
-    jobs: Pick<GitJobs, 'syncConnection' | 'inspectRepository' | 'attachRepository'>,
+    jobs: Pick<GitJobs, 'syncConnection' | 'inspectRepository' | 'attachRepository' | 'lintBranch'>,
     @Inject(REPO_ACTIONS) actions: Pick<RepoActions, 'run'>,
   ) {
     super()
@@ -59,6 +63,12 @@ export class GitProcessor extends WorkerHost {
         const data = gitActionPayloadSchema.safeParse(job.data)
         if (!data.success) throw new UnrecoverableError('Invalid git.action job')
         return this.#actions.run(data.data.actionId)
+      }
+      // The diff of the build settings of a chat's branch and its CI Lint (ПР16, slice 84.20).
+      case gitJobNames.ciLint: {
+        const data = gitCiLintPayloadSchema.safeParse(job.data)
+        if (!data.success) throw new UnrecoverableError('Invalid git.ci_lint job')
+        return this.#jobs.lintBranch(data.data.taskId, data.data.headSha)
       }
       default:
         throw new UnrecoverableError(`Unknown git job "${job.name}"`)

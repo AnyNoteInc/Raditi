@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 
 import { Logger, Module } from '@nestjs/common'
 import type { PrismaClient } from '@repo/db'
-import { gitlabComHost, type SecretStore } from '@repo/domain'
+import { gitlabComHost, type ObjectStorage, type SecretStore } from '@repo/domain'
 import { createGitProvider, createGitTransport } from '@repo/git-providers'
 import { createGitConnect } from '@repo/git-providers/connect'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
@@ -12,6 +12,7 @@ import type { CoreConfig } from '../config/config.ts'
 import { CORE_CONFIG } from '../config/config.tokens.ts'
 import { GitWorkspaceModule } from '../git-workspace/git-workspace.module.ts'
 import { GIT_WORKSPACE } from '../git-workspace/git-workspace.tokens.ts'
+import { OBJECT_STORAGE } from '../infra/infra.tokens.ts'
 import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
 import { GitAuthSource } from './git-auth-source.ts'
 import { GitJobs } from './git-jobs.ts'
@@ -40,12 +41,13 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
   providers: [
     {
       provide: GIT_SERVICES,
-      inject: [PRISMA, SECRET_STORE, CORE_CONFIG, GIT_WORKSPACE],
+      inject: [PRISMA, SECRET_STORE, CORE_CONFIG, GIT_WORKSPACE, OBJECT_STORAGE],
       useFactory: (
         prisma: PrismaClient,
         secrets: SecretStore,
         config: CoreConfig,
         workspace: GitWorkspaceService,
+        storage: ObjectStorage,
       ) => {
         const logger = new Logger('Git')
         const ca = config.git.caFile ? readFileSync(config.git.caFile, 'utf8') : undefined
@@ -101,7 +103,15 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
         }
         const secret = config.gitApps.repoConfirmSecret
         return {
-          jobs: new GitJobs({ prisma, auth, resolvePublic, provider, workspace, logger: lines }),
+          jobs: new GitJobs({
+            prisma,
+            auth,
+            resolvePublic,
+            provider,
+            workspace,
+            storage,
+            logger: lines,
+          }),
           actions: new RepoActions({
             prisma,
             auth,
