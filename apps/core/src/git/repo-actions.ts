@@ -506,6 +506,18 @@ export class RepoActions {
     }
     if (claims.kind === 'ci_change') await this.#checkCiChange(taskId, repo, claims)
     let branch = await chatBranch(prisma, taskId)
+    // The card's flag is read again from the commits themselves (ревью, безопасность 2): an
+    // ordinary «Отправить» sends nothing of the build settings, whatever the card was told.
+    if (claims.kind !== 'ci_change' && branch !== null) {
+      const change = await workspace.buildSettingsChange({
+        projectRepositoryId: repo.id,
+        from: branch.mirrorSha ?? branch.baseSha,
+        to: unsent.head.headSha,
+        isBuildPath: buildPathsOf(repo),
+        maxBytes: 0,
+      })
+      if (change.paths.length) throw repoCiChangeNeedsCard()
+    }
     if (
       branch === null ||
       branch.projectRepositoryId !== repo.id ||

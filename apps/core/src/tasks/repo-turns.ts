@@ -302,7 +302,8 @@ export class RepoChanges {
       })
       const isBuildPath = repo ? buildPathsOf(repo) : () => false
       const ciTouched =
-        outcome.buildPaths.length > 0 || files.some((file) => isBuildPath(file.path))
+        outcome.buildPaths.length > 0 ||
+        files.some((file) => file.unreadable === true || isBuildPath(file.path))
       const payload: Omit<FeedRepoChangesPayload, 'branch'> = {
         v: 1,
         baseSha: outcome.baseSha,
