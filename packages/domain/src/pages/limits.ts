@@ -7,9 +7,10 @@ export const pageLimits = Object.freeze({
   contentBytes: 2 * 1024 * 1024,
   /**
    * Pages of a workspace, published or taken down; documents not yet published are not pages,
-   * nor are pages in the trash (docs/plan/73-pages-sites.md, Дер29: 300 since 14.11.2026, was 200).
+   * nor are pages in the trash (docs/plan/73-pages-sites.md, Дер29: 300 since 14.11.2026, was 200;
+   * 2 000 since 16.11.2026 at the owner's request, with 20, 100 and 200 sites on the tariffs).
    */
-  pagesPerWorkspace: 300,
+  pagesPerWorkspace: 2000,
   /** Live pages of one site, its home page with them (Дер29). */
   pagesPerTree: 100,
   /** Levels below the home page (Дер15): `/a/b/c/d/e/f/g/h` at most. */
