@@ -28,6 +28,7 @@ import { ProjectMenuButton, ProjectStarButton, useProjectActions } from './proje
 import { ProjectContext } from './project-context'
 import { ProjectInstructionsDialog } from './project-instructions'
 import { ProjectMemoryRow } from './project-memory'
+import { ProjectSchedulesRow } from './project-schedules'
 import { PROJECTS_HREF, projectPageText, projectsText } from './project-texts'
 import type { ProjectDetails } from './project-types'
 import { useContextMentions } from './use-context-mentions'
@@ -38,7 +39,7 @@ import { useContextMentions } from './use-context-mentions'
  * same `Composer` — that starts a chat in it, and «Чаты проекта». Beside them from `lg` — under
  * them below it — the column of the project: «Инструкции», «Контекст» (84.10) and «Приватный ·
  * Видите только вы»; `@` in the field names the files of the context (ПР24); «Память» (84.13)
- * opens its window. «Запланировано» comes with its slice (84.14).
+ * opens its window; «Запланировано» (84.14) — its scheduled tasks and «Добавить».
  */
 export function ProjectView({
   initial,
@@ -254,6 +255,9 @@ export function ProjectView({
           </Box>
           <Box sx={{ borderTop: 1, borderColor: 'divider' }}>
             <ProjectMemoryRow project={project} />
+          </Box>
+          <Box sx={{ borderTop: 1, borderColor: 'divider' }}>
+            <ProjectSchedulesRow project={project} userId={userId} />
           </Box>
           <Box
             sx={{

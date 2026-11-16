@@ -64,10 +64,19 @@ export interface ScheduleRunView {
   startedAt: Date | null
 }
 
+/** The project of a task (docs/plan/84-projects.md, ПР19): `gone` — in «Архив» or the trash. */
+export interface ScheduleProjectView {
+  id: string
+  name: string
+  gone: boolean
+}
+
 /** A scheduled task of its creator (Зп5–Зп7). */
 export interface ScheduleView {
   id: string
   name: string
+  /** Its project; null — none, or purged. */
+  project: ScheduleProjectView | null
   instructions: string
   effort: ReasoningEffort
   triggers: ScheduleTrigger[]
@@ -115,10 +124,20 @@ function runView(run: RunRowOfTask, state: ScheduledRunState): ScheduleRunView {
   }
 }
 
+function projectView(project: TaskRow['project']): ScheduleProjectView | null {
+  if (project === null) return null
+  return {
+    id: project.id,
+    name: project.name,
+    gone: project.archivedAt !== null || project.deletedAt !== null,
+  }
+}
+
 function taskView(row: TaskRow, lastRun: ScheduleRunView | null): ScheduleView {
   return {
     id: row.id,
     name: row.name,
+    project: projectView(row.project),
     instructions: row.instructions,
     effort: row.effort as ReasoningEffort,
     triggers: scheduleTriggersOf(row),
@@ -147,9 +166,22 @@ async function viewsOf(db: PrismaClient, rows: TaskRow[]): Promise<ScheduleView[
   })
 }
 
-/** «Ваши» (Зп25): the tasks the user created, the newest first, each with its latest run. */
-export async function listSchedules(db: PrismaClient, userId: string): Promise<ScheduleView[]> {
-  return viewsOf(db, await listScheduledTasks(db, { userId }))
+/**
+ * «Ваши» (Зп25): the tasks the user created, the newest first, each with its latest run; `projectId`
+ * — of one project (its column, ПР19), null — without one.
+ */
+export async function listSchedules(
+  db: PrismaClient,
+  userId: string,
+  filter: { projectId?: string | null } = {},
+): Promise<ScheduleView[]> {
+  return viewsOf(
+    db,
+    await listScheduledTasks(db, {
+      userId,
+      ...(filter.projectId !== undefined ? { projectId: filter.projectId } : {}),
+    }),
+  )
 }
 
 /** The page of a task (Зп6): it and its last 50 runs; another's or a deleted one — not found. */
@@ -189,6 +221,8 @@ export interface ScheduleInput {
   triggers: ScheduleTrigger[]
   timezone: string
   notify: boolean
+  /** A project of the creator (ПР19): the window opened in it; null — without one. */
+  projectId: string | null
   /** The window, or a template of «Шаблоны» it was opened with (Зп9). */
   templateSlug: string | null
   now: Date
@@ -208,6 +242,7 @@ export async function createSchedule(
   const row = await createScheduledTask(db, {
     userId: input.userId,
     workspaceId,
+    projectId: input.projectId,
     name: input.name,
     instructions,
     effort: input.effort,
@@ -228,6 +263,8 @@ export interface ScheduleChange {
   triggers?: ScheduleTrigger[]
   timezone?: string
   notify?: boolean
+  /** Another project of the creator, or none (ПР19). */
+  projectId?: string | null
 }
 
 /** «Сохранить» (Зп7, Зп13): only what is given changes. */
@@ -244,6 +281,7 @@ export async function updateSchedule(
   if (change.triggers !== undefined) patch.triggers = change.triggers
   if (change.timezone !== undefined) patch.timezone = change.timezone
   if (change.notify !== undefined) patch.notify = change.notify
+  if (change.projectId !== undefined) patch.projectId = change.projectId
   await updateScheduledTask(db, { scheduleId: input.scheduleId, userId, patch, now: input.now })
   return readSchedule(db, { userId, scheduleId: input.scheduleId })
 }

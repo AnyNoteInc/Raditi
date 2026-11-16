@@ -58,6 +58,32 @@ export const scheduleInPast = (): DomainError =>
 export const scheduleTemplatePlaceholder = (): DomainError =>
   new DomainError('SCHEDULE_TEMPLATE_PLACEHOLDER', 'Замените текст в квадратных скобках своим', 400)
 
+/**
+ * The project of a task is in «Архив» or in the trash (docs/plan/84-projects.md, ПР19): a task is
+ * not turned on there, nor set up in it.
+ */
+export const scheduleProjectGone = (): DomainError =>
+  new DomainError(
+    'SCHEDULE_PROJECT_GONE',
+    'Проект задачи в архиве или удалён — верните его, чтобы включить задачу',
+    409,
+  )
+
+/**
+ * The agent turns on no task it set up in a chat of a project with a repository: only the client
+ * does, by «Включить задачу» (docs/plan/84-projects.md, ПР19).
+ */
+export const scheduleNeedsClient = (): DomainError =>
+  new DomainError(
+    'SCHEDULE_NEEDS_CLIENT',
+    'Включить эту задачу может только клиент — кнопкой «Включить задачу» в чате',
+    403,
+  )
+
+/** «Включить задачу» of a card whose task changed, or was turned on or off, since it was shown. */
+export const scheduleConfirmChanged = (): DomainError =>
+  new DomainError('SCHEDULE_CONFIRM_CHANGED', 'Задача изменилась — посмотрите её ещё раз', 409)
+
 /** «Запустить сейчас» while a run of the task goes on (Зп24). */
 export const scheduleRunBusy = (): DomainError =>
   new DomainError('SCHEDULE_RUN_BUSY', 'Задача уже выполняется', 409)

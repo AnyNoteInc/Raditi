@@ -78,6 +78,12 @@ export function refusalReasonOf(error: unknown): ScheduledRunReason | 'retry' {
       return 'platform'
     case 'WORKSPACE_KEY_UNAVAILABLE':
       return 'retry'
+    // The project of the run went into «Архив» or the trash meanwhile (docs/plan/84, ПР19).
+    case 'PROJECT_NOT_FOUND':
+    case 'PROJECT_ARCHIVED':
+      return 'project_gone'
+    case 'GIT_CONNECTION_REAUTH':
+      return 'project_unavailable'
   }
   if (error.code.startsWith('TASK_TEXT_')) return 'text_refused'
   // 503 and any other failure of the server may pass: core asks again (8 attempts, Зп21).
@@ -111,6 +117,7 @@ const runSelect = {
   name: true,
   instructions: true,
   effort: true,
+  projectId: true,
   createdAt: true,
 } as const
 
@@ -149,8 +156,10 @@ async function record(
  * `started` with it; (в) it came late — a later run of the task waits or started, or its moment is
  * older than the catch-up limit — `skipped/missed`; its task was deleted, or switched off since a
  * run of its schedule was written — `skipped/paused`; (г) the creator has documents to accept —
- * `refused/consent` (Зп48); (д) `createDialog` from the snapshot, named by the task — a chat in
- * the creator's personal workspace, where the task is (Зп45) — it writes the run `started` with
+ * `refused/consent` (Зп48); its project put away — `refused/project_gone`, the sign-in with GitLab
+ * of its repository to renew — `refused/project_unavailable` (ПР19); (д) `createDialog` from the
+ * snapshot, named by the task — a chat in the creator's personal workspace, where the task is
+ * (Зп45), in the project of the run — it writes the run `started` with
  * its chat, or makes nothing when the run was closed meanwhile; (е) the outcome:
  * what the run holds then.
  *
@@ -214,6 +223,8 @@ export async function startRun(
   const userId = task.createdById
   if (missingRequiredConsents(await loadLatestConsents(db, userId)).length > 0)
     return refuse('consent')
+  const unavailable = await projectRefusal(db, run.projectId)
+  if (unavailable !== null) return refuse(unavailable)
 
   // (д)
   const effort = reasoningEffortSchema.catch('high').parse(run.effort)
@@ -226,6 +237,9 @@ export async function startRun(
         text: run.instructions,
         effort,
         title: run.name,
+        // A new chat of the project (docs/plan/84-projects.md, ПР19): it takes its instructions,
+        // its context, its memory and its repository as any chat of it does.
+        projectId: run.projectId,
         scheduledRunId: run.id,
         now,
       })
@@ -246,6 +260,31 @@ export async function startRun(
       (await recordedOf(db, run.id)) ??
       (await record(db, run.id, { status: 'started', taskId: created }, now)),
   }
+}
+
+/**
+ * Why the project of a run takes no chat now (docs/plan/84-projects.md, ПР19): it is in «Архив» or
+ * the trash — `project_gone`, which stops the task —, or the sign-in with GitLab of its repository
+ * has to be renewed — `project_unavailable`, a refusal of the client: three in a row stop the task
+ * (Зп22). null — none, or no project. `createDialog` checks the project again in its transaction.
+ */
+async function projectRefusal(
+  db: PrismaClient,
+  projectId: string | null,
+): Promise<ScheduledRunReason | null> {
+  if (projectId === null) return null
+  const project = await db.project.findUnique({
+    where: { id: projectId },
+    select: {
+      archivedAt: true,
+      deletedAt: true,
+      repository: { select: { connection: { select: { state: true } } } },
+    },
+  })
+  if (project === null || project.archivedAt !== null || project.deletedAt !== null)
+    return 'project_gone'
+  if (project.repository?.connection?.state === 'reauth_needed') return 'project_unavailable'
+  return null
 }
 
 /** The intake of web (`/api/webhooks/scheduled-runs`): the answer core gets for the run. */

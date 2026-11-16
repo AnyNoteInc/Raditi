@@ -152,9 +152,10 @@ test('a task by hand: every day at a time, paused and resumed, run now, its page
   })
 
   const row = list(page).getByRole('listitem').filter({ hasText: 'Сводка дня' })
-  await test.step('the row: the schedule, the next run, the switch — no project (Зп57)', async () => {
+  await test.step('the row: the schedule, the next run, the switch, «Без проекта» (ПР19)', async () => {
     await expect(row).toContainText('Ежедневно в 10:30')
-    await expect(row).not.toContainText(/проект/i)
+    // A task of no project says so (docs/plan/84-projects.md, ПР19; Зп57 before projects came back).
+    await expect(row).toContainText('Без проекта')
     await expect(row).toContainText(/Следующий запуск: (сегодня|завтра) в 10:30/)
     await expect(row).toContainText('Ещё не запускалась')
   })
@@ -241,8 +242,8 @@ test('a template opens the window on its place to fill in, and makes a task once
     ).toBe('[впишите адрес сайта]')
     await expect(dialog.getByText('Замените текст в квадратных скобках своим')).toBeVisible()
     await expect(dialog.getByRole('button', { name: 'Размышление: Низкое' })).toBeVisible()
-    // No picker of a project beside it (Зп55).
-    await expect(dialog.getByRole('button', { name: /^Проект/ })).toHaveCount(0)
+    // The pill of a project beside it, «Без проекта» by default (ПР19, ПР30).
+    await expect(dialog.getByRole('button', { name: 'Без проекта' })).toBeVisible()
     const create = dialog.getByRole('button', { name: 'Создать' })
     await expect(create).toBeEnabled()
     await create.click()

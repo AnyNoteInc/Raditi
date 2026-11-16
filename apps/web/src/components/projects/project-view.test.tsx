@@ -15,6 +15,7 @@ const calls = vi.hoisted(() => ({
   setInstructions: vi.fn(async (input: { text: string }) => ({ text: input.text })),
   archive: vi.fn(async (input: { archived: boolean }) => ({ archived: input.archived })),
   push: vi.fn<(href: string) => void>(),
+  schedules: vi.fn<(input: unknown) => Promise<unknown>>(),
 }))
 
 vi.mock('next/navigation', () => ({
@@ -56,6 +57,34 @@ vi.mock('@/trpc/client', async () => {
         remove: noop,
         restore: noop,
         update: noop,
+      },
+      schedule: {
+        list: {
+          queryKey: (input?: unknown) => ['schedule.list', input],
+          queryOptions: (input?: unknown) => ({
+            queryKey: ['schedule.list', input],
+            queryFn: () => calls.schedules(input),
+          }),
+        },
+        get: { queryKey: (input?: unknown) => ['schedule.get', input] },
+        setEnabled: noop,
+        runNow: noop,
+        delete: noop,
+        create: noop,
+        update: noop,
+        costHint: {
+          queryOptions: (input?: unknown) => ({
+            queryKey: ['schedule.costHint', input],
+            queryFn: async () => ({
+              averageCredits: 11,
+              runsPerWeek: 5,
+              creditsPerWeek: 55,
+              weeklyLimit: null,
+              overHalf: false,
+              nextRunAt: null,
+            }),
+          }),
+        },
       },
       task: {
         create: mutation(calls.create),
@@ -132,6 +161,7 @@ function show(project: ProjectDetails = kolos) {
 beforeEach(() => {
   vi.clearAllMocks()
   calls.chats.mockResolvedValue({ pinned: [], items: [], nextCursor: null })
+  calls.schedules.mockResolvedValue({ schedules: [], timezone: 'Europe/Moscow' })
 })
 afterEach(cleanup)
 
@@ -155,7 +185,11 @@ describe('the page of a project (docs/plan/84-projects.md, ПР6)', () => {
     ).toBeTruthy()
     expect(within(column).getByRole('heading', { name: 'Память' })).toBeTruthy()
     expect(within(column).getByText('Пока пусто. Скажите агенту «запомни…»')).toBeTruthy()
-    expect(within(column).queryByText('Запланировано')).toBeNull()
+    expect(within(column).getByRole('heading', { name: 'Запланировано' })).toBeTruthy()
+    expect(
+      await within(column).findByText('Задачи, которые агент выполняет сам по расписанию.'),
+    ).toBeTruthy()
+    expect(calls.schedules).toHaveBeenCalledWith({ projectId: PROJECT_ID })
     expect(column.textContent).toContain('Приватный · Видите только вы')
   })
 

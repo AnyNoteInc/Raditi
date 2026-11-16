@@ -24,6 +24,7 @@ export function scheduleItem(patch: Partial<ScheduleItem> = {}): ScheduleItem {
   return {
     id: SCHEDULE_ID,
     name: 'Проверка сайта',
+    project: null,
     instructions: 'Откройте сайт и пройдите главную и важные страницы.',
     effort: 'low',
     triggers: [{ kind: 'weekdays', time: '09:00' }],

@@ -5,6 +5,7 @@ import { terminalTaskStatuses } from '@repo/domain'
 import { insertFeedEvent } from './feed-events.ts'
 import type { Prisma, PrismaClient, TaskStatus } from './generated/prisma/client.ts'
 import { enqueueTurnCancel } from './task-commands-outbox.ts'
+import { deleteProjectSchedules, lockProjectSchedules } from './scheduled-tasks.ts'
 import { forgetTelegramChat } from './telegram-outbox.ts'
 
 // The trash of projects (docs/plan/84-projects.md, ПР20; slice 84.5). «Удалить» stops what the
@@ -122,6 +123,8 @@ export async function purgeProject(
 ): Promise<ProjectPurge> {
   return db.$transaction(async (tx) => {
     const chats = await lockProjectChats(tx, input.projectId)
+    // The tasks before the project, as «Удалить» takes them (ПР19).
+    await lockProjectSchedules(tx, input.projectId)
     const [project] = await tx.$queryRaw<Array<{ id: string; created_by_id: string }>>`
       SELECT id, created_by_id FROM projects
       WHERE id = ${input.projectId}::uuid AND deleted_at IS NOT NULL
@@ -141,6 +144,8 @@ export async function purgeProject(
       WHERE project_id = ${project.id}::uuid AND deleted_at IS NULL
       RETURNING id`
     for (const chat of deleted) await forgetTelegramChat(tx, chat.id)
+    // Its scheduled tasks go with it (ПР19), deleted; their runs stay without the project.
+    await deleteProjectSchedules(tx, project.id, input.now)
     // `tasks.project_id` is ON DELETE SET NULL: every chat of the project, deleted before or now,
     // stays without it.
     await tx.$executeRaw`DELETE FROM projects WHERE id = ${project.id}::uuid`

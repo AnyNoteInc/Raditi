@@ -4,6 +4,7 @@ import {
   hasScheduleTemplatePlaceholder,
   scheduleTemplatePlaceholderRange,
   scheduleTemplateOf,
+  scheduleProjectTemplates,
   timezoneChoices,
   timezoneLabel,
   timezoneSuffix,
@@ -42,6 +43,8 @@ import { keepChatDraft } from '@/components/chat/chat-draft'
 import { useRememberedEffort } from '@/components/chat/chat-effort'
 import { EffortMenu } from '@/components/chat/effort-menu'
 import { BrowserPushControl } from '@/components/notifications/browser-push-control'
+import { ProjectPicker } from '@/components/projects/project-picker'
+import type { PickedProject } from '@/components/projects/project-types'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
@@ -69,10 +72,29 @@ import { scheduleDialogTexts } from './schedule-texts'
 import { TriggerFields } from './trigger-fields'
 import { useNow } from './use-now'
 
-/** What the window opens with: a new task — by hand or from a template — or a task to change. */
+/**
+ * The project the window was opened in (docs/plan/84-projects.md, ПР19, P-schedule): the task is
+ * of it, said in a line instead of the pill; `repository` — the project has one.
+ */
+export interface FixedProject {
+  id: string
+  name: string
+  repository: boolean
+}
+
+/**
+ * What the window opens with: a new task — by hand or from a template — or a task to change; in a
+ * project, with the project fixed. Without one the pill of the project (ПР30) chooses it.
+ */
 export type ScheduleDialogOpening =
-  | { kind: 'new'; template?: ScheduleTemplate }
-  | { kind: 'edit'; schedule: ScheduleDetail | ScheduleItem }
+  | { kind: 'new'; template?: ScheduleTemplate; project?: FixedProject }
+  | { kind: 'edit'; schedule: ScheduleDetail | ScheduleItem; project?: FixedProject }
+
+/** The project of a task as the pill takes it: what the window knows of it is the name. */
+const pickedOfTask = (schedule: ScheduleDetail | ScheduleItem): PickedProject | null =>
+  schedule.project === null
+    ? null
+    : { id: schedule.project.id, name: schedule.project.name, goal: null, hasInstructions: false }
 
 type RefusedField = 'name' | 'instructions' | 'schedule'
 
@@ -164,12 +186,22 @@ function ScheduleFormBody({
   const now = useNow()
   const [rememberedEffort] = useRememberedEffort()
   const list = useQuery(trpc.schedule.list.queryOptions())
-  const template =
+  const fixed = opening.project
+  const [template, setTemplate] = useState<ScheduleTemplate | undefined>(() =>
     opening.kind === 'new'
       ? opening.template
       : opening.schedule.templateSlug === null
         ? undefined
-        : scheduleTemplateOf(opening.schedule.templateSlug)
+        : scheduleTemplateOf(opening.schedule.templateSlug),
+  )
+  // Of a project the window was not opened in: the pill (ПР30), «Без проекта» by default.
+  const wasPicked = opening.kind === 'edit' ? pickedOfTask(opening.schedule) : null
+  const [picked, setPicked] = useState<PickedProject | null>(wasPicked)
+  // The templates of a project in the window opened in it, before a template is chosen (ПР19).
+  const projectTemplates =
+    fixed && opening.kind === 'new' && opening.template === undefined
+      ? scheduleProjectTemplates.filter((each) => each.needs !== 'repository' || fixed.repository)
+      : []
   const [initial] = useState<ScheduleForm>(() => {
     const zone = list.data?.timezone ?? 'Europe/Moscow'
     if (opening.kind === 'edit') return formOfSchedule(opening.schedule, now)
@@ -221,6 +253,13 @@ function ScheduleFormBody({
     setRefusal(null)
   }
 
+  function chooseTemplate(chosen: ScheduleTemplate) {
+    setTemplate(chosen)
+    change(formOfTemplate(chosen, form.timezone, now))
+    // The words of the template are read first; a place to fill in is chosen to be written over.
+    setTimeout(() => selectPlaceholder(instructionsRef.current), 0)
+  }
+
   function setInChat() {
     keepChatDraft(userId, chatDraftOf(form))
     router.push(newChatHref())
@@ -246,8 +285,12 @@ function ScheduleFormBody({
           ? await update.mutateAsync({
               scheduleId: opening.schedule.id,
               ...changeOf(form, initial),
+              ...(fixed === undefined && (picked?.id ?? null) !== (wasPicked?.id ?? null)
+                ? { projectId: picked?.id ?? null }
+                : {}),
             })
           : await create.mutateAsync({
+              projectId: fixed?.id ?? picked?.id ?? null,
               name: form.name.trim(),
               instructions: form.instructions,
               effort: form.effort,
@@ -346,6 +389,33 @@ function ScheduleFormBody({
         >
           {topError ? <Alert severity="error">{topError}</Alert> : null}
 
+          {projectTemplates.length > 0 ? (
+            <Box>
+              <Typography variant="body2" sx={{ mb: 1, color: 'text.secondary' }}>
+                {scheduleDialogTexts.templates}
+              </Typography>
+              <Box
+                role="group"
+                aria-label={scheduleDialogTexts.templatesLabel}
+                sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}
+              >
+                {projectTemplates.map((each) => (
+                  <Button
+                    key={each.slug}
+                    size="small"
+                    variant={template?.slug === each.slug ? 'contained' : 'outlined'}
+                    aria-pressed={template?.slug === each.slug}
+                    onClick={() => chooseTemplate(each)}
+                    startIcon={<AppIcon name={each.icon} size={16} />}
+                    sx={{ borderRadius: 999, minHeight: 36, px: 1.5 }}
+                  >
+                    {each.name}
+                  </Button>
+                ))}
+              </Box>
+            </Box>
+          ) : null}
+
           <TextField
             inputRef={nameRef}
             // A new task by hand starts at its name; a template or a change is read first.
@@ -429,7 +499,10 @@ function ScheduleFormBody({
                 «Размышление» at the left of the frame (Зп55), its menu down; without the switch of
                 the thoughts of a chat, which is not the task's.
               */}
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
+                {fixed === undefined ? (
+                  <ProjectPicker value={picked} onChange={setPicked} disabled={pending} />
+                ) : null}
                 <EffortMenu
                   value={form.effort}
                   onChange={(effort) => change({ effort })}
@@ -450,6 +523,18 @@ function ScheduleFormBody({
             {template?.hint ? (
               <FormHelperText sx={{ mx: 1.5 }}>{template.hint}</FormHelperText>
             ) : null}
+            {fixed ? (
+              <Typography
+                variant="body2"
+                data-fixed-project=""
+                sx={{ mt: 1, mx: 1.5, color: 'text.secondary' }}
+              >
+                <Box component="span" sx={{ color: 'text.primary', fontWeight: 500 }}>
+                  {scheduleDialogTexts.fixedProject(fixed.name)}
+                </Box>
+                {scheduleDialogTexts.fixedProjectTail}
+              </Typography>
+            ) : null}
           </Box>
 
           {/*
@@ -469,7 +554,17 @@ function ScheduleFormBody({
               '& .MuiAlert-icon': { color: 'warning.main' },
             }}
           >
+            {fixed?.repository ? (
+              <Box component="span" sx={{ display: 'block', mb: 1 }} data-repository-warning="">
+                {nbsp(scheduleDialogTexts.repositoryWarning)}
+              </Box>
+            ) : null}
             {nbsp(scheduleDialogTexts.warning)}
+            {fixed || picked ? (
+              <Box component="span" sx={{ display: 'block', mt: 1 }}>
+                {nbsp(scheduleDialogTexts.projectRun)}
+              </Box>
+            ) : null}
           </Alert>
 
           <Box component="fieldset" sx={{ m: 0, p: 0, border: 0, minWidth: 0 }}>

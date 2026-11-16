@@ -18,10 +18,11 @@ import { useEffect, useId, useState } from 'react'
 import { AppIcon } from '@/components/application/app-icon'
 import { BrowserPushControl } from '@/components/notifications/browser-push-control'
 import { scheduleStateText } from '@/components/scheduled/schedule-model'
+import { scheduleConfirmTexts } from '@/components/scheduled/schedule-texts'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
-import { callErrorText } from './call-error'
+import { callErrorCode, callErrorText } from './call-error'
 import { chatHref, SCHEDULED_HREF, scheduledTaskHref } from './chat-address'
 import { effortText, scheduleChatText } from './chat-texts'
 import type { FeedRow, ScheduledTaskItem } from './chat-types'
@@ -126,6 +127,96 @@ function Instructions({ text }: { text: string }) {
         {open ? scheduleChatText.hideInstructions : scheduleChatText.showInstructions}
       </Button>
       {open ? words : null}
+    </Box>
+  )
+}
+
+/**
+ * «Включить задачу» (docs/plan/84-projects.md, ПР19): a task the agent set up or changed in a chat
+ * of a project with a repository waits, off, for its client. The card asks the server for the task
+ * as it is now and the token of exactly that, shows the name, the instructions and the schedule it
+ * answered, and turns it on with the token; a task changed since is shown again.
+ */
+function ConfirmTask({ scheduleId }: { scheduleId: string }) {
+  const trpc = useTRPC()
+  const queryClient = useQueryClient()
+  const card = useQuery({ ...trpc.schedule.confirmCard.queryOptions({ scheduleId }), retry: false })
+  const confirm = useMutation(trpc.schedule.confirm.mutationOptions())
+  const [said, setSaid] = useState<string | null>(null)
+  if (!card.data) return null
+  const { schedule, confirmToken } = card.data
+  return (
+    <Box
+      data-schedule-confirm=""
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1,
+        mt: 0.5,
+        p: 1.5,
+        borderRadius: '14px',
+        bgcolor: 'action.hover',
+      }}
+    >
+      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        {scheduleConfirmTexts.title}
+      </Typography>
+      <Typography variant="body2">{nbsp(scheduleConfirmTexts.lead)}</Typography>
+      <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+        {schedule.name}
+      </Typography>
+      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+        {scheduleConfirmTexts.instructions}
+      </Typography>
+      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+        {schedule.instructions}
+      </Typography>
+      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+        {scheduleConfirmTexts.schedule}
+      </Typography>
+      <Typography variant="body2">
+        {nbsp(scheduleText(schedule.triggers, schedule.timezone))}
+      </Typography>
+      <Box>
+        <Button
+          variant="contained"
+          size="small"
+          loading={confirm.isPending}
+          onClick={() => {
+            setSaid(null)
+            confirm.mutate(
+              { confirmToken },
+              {
+                onSuccess: (saved) => {
+                  queryClient.setQueryData(
+                    trpc.schedule.get.queryKey({ scheduleId: saved.id }),
+                    saved,
+                  )
+                  void queryClient.invalidateQueries({ queryKey: trpc.schedule.list.queryKey() })
+                  setSaid(scheduleConfirmTexts.confirmed)
+                },
+                onError: (error) => {
+                  if (callErrorCode(error) === 'SCHEDULE_CONFIRM_CHANGED') {
+                    setSaid(scheduleConfirmTexts.changed)
+                    void card.refetch()
+                    void queryClient.invalidateQueries({
+                      queryKey: trpc.schedule.list.queryKey(),
+                    })
+                  } else setSaid(callErrorText(error))
+                },
+              },
+            )
+          }}
+          sx={{ minHeight: 40 }}
+        >
+          {scheduleConfirmTexts.confirm}
+        </Button>
+      </Box>
+      {said !== null ? (
+        <Typography variant="body2" role="status">
+          {said}
+        </Typography>
+      ) : null}
     </Box>
   )
 }
@@ -242,6 +333,9 @@ export function FeedScheduleChange({
           {nbsp(details.join(' · '))}
         </Typography>
         <Instructions text={row.instructions} />
+        {task !== null && task.pausedReason === 'unconfirmed' ? (
+          <ConfirmTask scheduleId={row.scheduleId} />
+        ) : null}
         {task !== null ? (
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>
             <Button
