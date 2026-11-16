@@ -1,0 +1,319 @@
+import { Prisma, type PrismaClient } from '@repo/db'
+import {
+  gitConnectionProviders,
+  isDomainError,
+  mirrorLimits,
+  type GitAuth,
+  type GitConnectionKind,
+  type GitConnectionReason,
+  type GitGrant,
+  type GitProvider,
+  type RepoProviderKind,
+  type RepoRef,
+  type RepositoryInfo,
+} from '@repo/domain'
+
+import { GIT_CREDENTIAL_TTL_SECONDS } from '../git-workspace/git-auth.ts'
+import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
+import type { GitAuthSource } from './git-auth-source.ts'
+import type { ResolvePublicHost } from './public-host.ts'
+
+// The jobs of the queue `git` of slice 84.17 (docs/plan/84-projects.md, §4.3):
+// - `git.connection.sync` — the access of a connection is checked, its account named and the
+//   repositories it sees listed into `git_connection_repositories` (P-git-repo-pick);
+// - `git.repo.inspect` — the branches of one of them, for «Основная ветка»;
+// - `git.repo.attach` — the repository of a project: the provider's size, the first fetch by the
+//   git worker under the limits, gitleaks over the main branch (a warning, never a refusal) and
+//   the client's own paths of build settings (`ci_paths`). Done — `mirror_state = 'ready'`.
+// Every operation resolves the host once; the API and git connect to that very address (§4.6).
+
+/** Pages of 50 repositories one sync reads at most (P-git-repo-pick shows what it has). */
+export const GIT_SYNC_PAGES = 10
+/** Branches a repository keeps for the choice (CHECK of `git_connection_repositories`). */
+export const GIT_BRANCHES_KEPT = 100
+
+export interface GitProviderFactory {
+  (input: { kind: RepoProviderKind; host: string; address: string }): GitProvider
+}
+
+export interface GitJobsOptions {
+  prisma: PrismaClient
+  auth: Pick<GitAuthSource, 'grantFor'>
+  resolvePublic: ResolvePublicHost
+  /** An adapter whose every request of this operation goes to `address`. */
+  provider: GitProviderFactory
+  workspace: Pick<GitWorkspaceService, 'fetch' | 'findSecrets'>
+  logger: { log(line: string): void; warn(line: string): void }
+  now?: () => Date
+}
+
+interface ConnectionRow {
+  id: string
+  workspaceId: string
+  kind: GitConnectionKind
+  host: string
+  state: string
+}
+
+const connectionSelect = {
+  id: true,
+  workspaceId: true,
+  kind: true,
+  host: true,
+  state: true,
+} as const
+
+const tooLargeCodes = new Set(['REPOSITORY_TOO_LARGE', 'PUBLICATION_TOO_LARGE'])
+
+const reasonOf = (error: unknown): GitConnectionReason => {
+  if (!isDomainError(error)) return 'unreachable'
+  if (error.code === 'GIT_HOST_REFUSED') return 'host_refused'
+  if (error.code === 'GIT_ACCESS_DENIED') return 'access_denied'
+  if (error.code === 'GIT_CONNECTION_REAUTH') return 'reauth'
+  return 'unreachable'
+}
+
+/** A path of the client's own build settings, or null for one on another project or address. */
+export function ownCiPath(value: string | null | undefined): string | null {
+  if (!value) return null
+  if (value.includes('@') || value.includes('://') || value.startsWith('/')) return null
+  if (value.split('/').some((part) => part === '..' || part === '')) return null
+  return value.length <= 255 ? value : null
+}
+
+export class GitJobs {
+  readonly #o: GitJobsOptions
+  readonly #now: () => Date
+
+  constructor(options: GitJobsOptions) {
+    this.#o = options
+    this.#now = options.now ?? (() => new Date())
+  }
+
+  /** One operation on a host: its address, an adapter pinned to it and the access of a grant. */
+  async #operation(kind: RepoProviderKind, host: string, grant: GitGrant) {
+    const address = await this.#o.resolvePublic(host)
+    const provider = this.#o.provider({ kind, host, address })
+    const auth: GitAuth =
+      grant.kind === 'token' ? { kind: 'bearer', token: grant.token } : { kind: 'anonymous' }
+    return { address, provider, auth }
+  }
+
+  async #connection(id: string): Promise<ConnectionRow | null> {
+    const row = await this.#o.prisma.gitConnection.findUnique({
+      where: { id },
+      select: connectionSelect,
+    })
+    return row === null ? null : { ...row, kind: row.kind as GitConnectionKind }
+  }
+
+  /** `git.connection.sync`. */
+  async syncConnection(connectionId: string): Promise<void> {
+    const connection = await this.#connection(connectionId)
+    if (connection === null || connection.state === 'suspended') return
+    let account: { login: string; id: string }
+    let items: RepositoryInfo[]
+    try {
+      const grant = await this.#o.auth.grantFor(connection)
+      const { provider, auth } = await this.#operation(
+        gitConnectionProviders[connection.kind],
+        connection.host,
+        grant,
+      )
+      account = await provider.whoAmI(auth)
+      items = []
+      let page: string | undefined
+      for (let read = 0; read < GIT_SYNC_PAGES; read++) {
+        const listed = await provider.listRepositories(auth, page)
+        items.push(...listed.items)
+        if (listed.next === null) break
+        page = listed.next
+      }
+    } catch (error) {
+      const reason = reasonOf(error)
+      this.#o.logger.warn(`git.connection.sync ${connectionId}: ${reason}`)
+      // A connection that worked keeps its state on a passing failure of the network; a refused
+      // access or a new sign-in is said at once.
+      if (connection.state === 'ok' && reason === 'unreachable') return
+      if (reason === 'reauth') return // the auth source has set `reauth_needed`
+      await this.#o.prisma.gitConnection.updateMany({
+        where: { id: connectionId, state: { not: 'suspended' } },
+        data: { state: 'refused', stateReason: reason, checkedAt: this.#now() },
+      })
+      return
+    }
+    const now = this.#now()
+    try {
+      await this.#o.prisma.$transaction(async (tx) => {
+        await tx.gitConnection.update({
+          where: { id: connectionId },
+          data: {
+            accountLogin: account.login.slice(0, 100),
+            accountId: account.id,
+            state: 'ok',
+            stateReason: null,
+            checkedAt: now,
+          },
+        })
+        const seen = items.map((item) => item.ref.providerRepoId)
+        await tx.gitConnectionRepository.deleteMany({
+          where: { connectionId, providerRepoId: { notIn: seen } },
+        })
+        for (const item of items) {
+          const fields = {
+            path: item.ref.path,
+            name: item.ref.path.split('/').at(-1)!.slice(0, 200),
+            visibility: item.private ? 'private' : 'public',
+            defaultBranch: item.defaultBranch,
+            // GitLab lists the projects of a membership; the right to push is checked again
+            // before every push by the provider itself (84.19).
+            canPush: true,
+            canHook: false,
+            syncedAt: now,
+          }
+          await tx.gitConnectionRepository.upsert({
+            where: {
+              connectionId_providerRepoId: {
+                connectionId,
+                providerRepoId: item.ref.providerRepoId,
+              },
+            },
+            create: { connectionId, providerRepoId: item.ref.providerRepoId, ...fields },
+            update: fields,
+          })
+        }
+      })
+    } catch (error) {
+      // The same account of the same server is connected already by this user (the unique key).
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        await this.#o.prisma.gitConnection.updateMany({
+          where: { id: connectionId },
+          data: { state: 'refused', stateReason: 'already_connected', checkedAt: now },
+        })
+        return
+      }
+      throw error
+    }
+  }
+
+  /** `git.repo.inspect`. */
+  async inspectRepository(connectionId: string, providerRepoId: string): Promise<void> {
+    const connection = await this.#connection(connectionId)
+    if (connection === null || connection.state !== 'ok') return
+    const row = await this.#o.prisma.gitConnectionRepository.findUnique({
+      where: { connectionId_providerRepoId: { connectionId, providerRepoId } },
+      select: { path: true, defaultBranch: true },
+    })
+    if (row === null) return
+    const grant = await this.#o.auth.grantFor(connection)
+    const kind = gitConnectionProviders[connection.kind]
+    const { provider, auth } = await this.#operation(kind, connection.host, grant)
+    const names = await provider.listBranches(auth, {
+      provider: kind,
+      host: connection.host,
+      path: row.path,
+      providerRepoId,
+    })
+    const kept = [row.defaultBranch, ...names.filter((name) => name !== row.defaultBranch)].slice(
+      0,
+      GIT_BRANCHES_KEPT,
+    )
+    await this.#o.prisma.gitConnectionRepository.update({
+      where: { connectionId_providerRepoId: { connectionId, providerRepoId } },
+      data: { branches: kept, syncedAt: this.#now() },
+    })
+  }
+
+  /** `git.repo.attach`. */
+  async attachRepository(projectRepositoryId: string): Promise<void> {
+    const repo = await this.#o.prisma.projectRepository.findUnique({
+      where: { id: projectRepositoryId },
+      select: {
+        id: true,
+        provider: true,
+        host: true,
+        path: true,
+        providerRepoId: true,
+        defaultBranch: true,
+        connectionId: true,
+        connection: { select: connectionSelect },
+      },
+    })
+    if (repo === null) return
+    const mark = (data: Prisma.ProjectRepositoryUpdateInput) =>
+      this.#o.prisma.projectRepository.updateMany({
+        where: { id: projectRepositoryId },
+        data: data as Prisma.ProjectRepositoryUpdateManyMutationInput,
+      })
+    const ref: RepoRef = {
+      provider: repo.provider as RepoProviderKind,
+      host: repo.host,
+      path: repo.path,
+      ...(repo.providerRepoId === null ? {} : { providerRepoId: repo.providerRepoId }),
+    }
+    try {
+      let grant: GitGrant = { kind: 'anonymous' }
+      if (repo.connection !== null) {
+        if (repo.connection.state !== 'ok') {
+          await mark({ mirrorState: 'failed' })
+          return
+        }
+        grant = await this.#o.auth.grantFor({
+          ...repo.connection,
+          kind: repo.connection.kind as GitConnectionKind,
+        })
+      }
+      const { address, provider, auth } = await this.#operation(ref.provider, ref.host, grant)
+      const info = await provider.getRepository(auth, ref)
+      // By a link: private and missing are one answer (REPO_LINK_PRIVATE); by a connection the
+      // repository went away from what it sees.
+      if (info === null) {
+        await mark({ mirrorState: repo.connection === null ? 'unreachable' : 'failed' })
+        return
+      }
+      const branch = repo.connection === null ? info.defaultBranch : repo.defaultBranch
+      await mark({
+        providerRepoId: info.ref.providerRepoId,
+        defaultBranch: branch,
+        webUrl: info.webUrl,
+      })
+      if (info.sizeBytes !== null && info.sizeBytes > mirrorLimits.repositoryBytes) {
+        await mark({ mirrorState: 'too_large' })
+        return
+      }
+      const access = await provider.issueCredentials(grant, info.ref, 'read', {
+        ttlSeconds: GIT_CREDENTIAL_TTL_SECONDS,
+      })
+      try {
+        const heads = await this.#o.workspace.fetch({
+          projectRepositoryId,
+          remote: { cloneUrl: info.cloneUrl, pin: { host: ref.host, address }, access },
+          branches: [branch],
+          sizeBytes: info.sizeBytes,
+        })
+        const sha = heads.get(branch) ?? null
+        if (sha === null) {
+          await mark({ mirrorState: 'failed' })
+          return
+        }
+        const secrets = await this.#o.workspace.findSecrets(projectRepositoryId, sha)
+        const ciPath = ownCiPath(info.ciConfigPath)
+        await mark({
+          mirrorState: 'ready',
+          lastFetchedSha: sha,
+          fetchedAt: this.#now(),
+          secretsFound: secrets.map((path) => ({ path, rule: 'gitleaks' })),
+          ciPaths: ciPath === null ? Prisma.DbNull : [ciPath],
+        })
+      } finally {
+        await access.revoke?.().catch(() => undefined)
+      }
+    } catch (error) {
+      const code = isDomainError(error) ? error.code : 'unknown'
+      this.#o.logger.warn(`git.repo.attach ${projectRepositoryId}: ${code}`)
+      await mark({
+        mirrorState: tooLargeCodes.has(code) ? 'too_large' : 'failed',
+      })
+    }
+  }
+}

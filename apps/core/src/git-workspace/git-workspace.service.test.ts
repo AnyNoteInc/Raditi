@@ -503,5 +503,35 @@ describe('GitWorkspaceService', { timeout: 60_000 }, () => {
         }),
       ).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED' })
     })
+
+    describe('findSecrets', () => {
+      it('names the files that look like a secret, paths only, and leaves the mirror as it was', async () => {
+        const f = await fixture({
+          files: {
+            'index.js': 'hello\n',
+            'config/prod.env': 'TOKEN=synthetic-secret-marker\n',
+            'docs/readme.md': 'nothing here\n',
+            'src/keys.ts': 'export const k = "synthetic-secret-marker"\n',
+            'src/clean.ts': 'export const x = 1\n',
+          },
+        })
+        await f.fetchMain()
+        expect(await f.service.findSecrets(f.projectRepositoryId, f.baseSha)).toEqual([
+          'config/prod.env',
+          'src/keys.ts',
+        ])
+        expect(await readdir(join(f.mirrorDir, 'ops'))).toEqual([])
+        expect(await f.service.findSecrets(f.projectRepositoryId, f.baseSha, 1)).toHaveLength(1)
+      })
+
+      it('a clean tree has none; a commit of another repository is refused', async () => {
+        const f = await fixture()
+        await f.fetchMain()
+        expect(await f.service.findSecrets(f.projectRepositoryId, f.baseSha)).toEqual([])
+        await expect(f.service.findSecrets(randomUUID(), f.baseSha)).rejects.toMatchObject({
+          code: 'NOT_FOUND',
+        })
+      })
+    })
   })
 })

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { lstat, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises'
+import { link, lstat, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative } from 'node:path'
 
 import {
@@ -276,6 +276,86 @@ export class GitWorkspaceService {
     if (!(await this.isMirror(mirror))) return null
     return this.#mirrors.run(mirror, () =>
       this.operation(async (op) => (await this.refOf(op, mirror, repoChatRef(chatId))) || null),
+    )
+  }
+
+  /**
+   * The files of the tree of `sha` that look like a password or a key (ПР12, «Проверка при
+   * подключении»): gitleaks over host-numbered copies, then halves of the ones it flagged until each
+   * finding is one file. Paths only — never a value; at most `limit` of them. The tree is checked
+   * against the limits of a turn first (REPOSITORY_TOO_LARGE). Nothing is blocked by a finding:
+   * the client reads the list, and those files never reach a sandbox (ПР35, 84.18).
+   */
+  async findSecrets(projectRepositoryId: string, sha: string, limit = 20): Promise<string[]> {
+    if (!publicationShaSchema.safeParse(sha).success) throw badRequest('Invalid repository head')
+    const mirror = mirrorPath(this.#root, projectRepositoryId)
+    return this.#mirrors.run(mirror, () =>
+      this.operation(async (op) => {
+        await this.privateRepository(op, mirror, sha)
+        await this.checkTree(op, sha)
+        const listing = await this.git(op, ['ls-tree', '-rz', '--full-tree', sha], {
+          maxBytes: listBytes(publicationLimits.repositoryFiles),
+        })
+        const files: { path: string; oid: string }[] = []
+        for (const row of text(listing.stdout).replace(/\0$/, '').split('\0')) {
+          const match = TREE_ROW.exec(row)
+          if (match && (match[1] === '100644' || match[1] === '100755'))
+            files.push({ oid: match[3]!, path: match[4]! })
+        }
+        if (!files.length || this.options.gitleaks === false) return []
+        const sizes = await this.blobSizes(
+          op,
+          files.map((file) => file.oid),
+          repositoryTooLarge,
+        )
+        const all = join(op.root, 'scan')
+        await sharedDirectory(all)
+        // One copy per file: a blob shared by two paths is scanned under each of them.
+        const byOid = new Map<string, number[]>()
+        files.forEach((file, i) => byOid.set(file.oid, [...(byOid.get(file.oid) ?? []), i]))
+        await this.readBlobs(
+          op,
+          new Map(
+            [...byOid.keys()].map((oid) => [oid, sizes[files.findIndex((f) => f.oid === oid)]!]),
+          ),
+          async (oid, blob) => {
+            for (const i of byOid.get(oid) ?? [])
+              await sharedFile(join(all, String(i)), scanCopy(blob))
+          },
+        )
+        let subsets = 0
+        const flags = async (indices: readonly number[]): Promise<boolean> => {
+          const directory = join(op.root, `scan-${subsets++}`)
+          await sharedDirectory(directory)
+          try {
+            for (const i of indices) await link(join(all, String(i)), join(directory, String(i)))
+            const scan = await this.#runner.run({
+              tool: 'gitleaks',
+              args: [directory, join(op.root, 'gitleaks.toml'), join(op.root, 'empty')],
+              cwd: op.root,
+              protocol: 'none',
+            })
+            if (scan.code === GITLEAKS_FINDING_EXIT) return true
+            if (scan.code !== 0) throw failed()
+            return false
+          } finally {
+            await rm(directory, { recursive: true, force: true })
+          }
+        }
+        const found: string[] = []
+        const search = async (indices: readonly number[]): Promise<void> => {
+          if (found.length >= limit || !(await flags(indices))) return
+          if (indices.length === 1) {
+            found.push(files[indices[0]!]!.path)
+            return
+          }
+          const half = Math.ceil(indices.length / 2)
+          await search(indices.slice(0, half))
+          await search(indices.slice(half))
+        }
+        await search(files.map((_, i) => i))
+        return found.sort()
+      }),
     )
   }
 

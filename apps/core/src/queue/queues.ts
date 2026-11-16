@@ -52,6 +52,9 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   },
   // The poll of the bot's updates (docs/plan/80-telegram.md): one attempt, the next tick reads again.
   'telegram-updates': lifecycleJobs,
+  // The checks, lists and first fetch of git connections and repositories (docs/plan/84-projects.md,
+  // §4.3): a failed job is put again by the client's «Обновить» or its next look, never by BullMQ.
+  git: lifecycleJobs,
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

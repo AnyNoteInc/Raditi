@@ -35,7 +35,12 @@ import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
 import { yookassaConfigFromEnv, type YookassaConfig } from '@repo/yookassa'
 import { z } from 'zod'
-import { isLoopbackAddress, isPrivateAddress } from '@repo/ip-address'
+import {
+  isLoopbackAddress,
+  isPrivateAddress,
+  parseRefusedSubnets,
+  type RefusedSubnet,
+} from '@repo/ip-address'
 
 import { gitEnvConfig, type GitEnvConfig } from '../git-worker/config.ts'
 import { poolControlOrigin } from '../llm/pool-probe-client.ts'
@@ -128,6 +133,11 @@ export interface CoreConfig {
    * the cards core checks again (ПР15) and, outside production, the fakes of a stand.
    */
   gitApps: GitAppsConfig<GithubAppCoreCredentials>
+  /**
+   * SANDBOX_EGRESS_REFUSED_SUBNETS: the address of a git host in them is refused, as the git
+   * worker refuses it (docs/plan/84-projects.md, §4.6); blank — only the public check.
+   */
+  gitRefusedSubnets: RefusedSubnet[]
 }
 
 /** Where core reaches the browser worker's internal API. Holds its token: never log it. */
@@ -393,6 +403,9 @@ export function loadConfig(env: Env): CoreConfig {
 
   const git = gitEnvConfig(env)
   problems.push(...git.problems)
+  const gitRefusedSubnets = parseRefusedSubnets(env.SANDBOX_EGRESS_REFUSED_SUBNETS?.trim() ?? '')
+  if (gitRefusedSubnets === null)
+    problems.push('SANDBOX_EGRESS_REFUSED_SUBNETS: expected subnets such as 10.10.0.0/16')
   const gitApps = section(() => coreGitAppsFromEnv(env))
 
   if (problems.length > 0) throw new ConfigError(problems, 'core')
@@ -431,6 +444,7 @@ export function loadConfig(env: Env): CoreConfig {
     browser,
     git: git.config,
     gitApps: present(gitApps),
+    gitRefusedSubnets: gitRefusedSubnets ?? [],
   }
 }
 

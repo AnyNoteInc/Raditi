@@ -2,6 +2,7 @@ import { Logger, Module, type DynamicModule } from '@nestjs/common'
 import { DatabaseModule } from '@repo/service-runtime'
 
 import { BillingModule } from './billing/billing.module.ts'
+import { GitModule } from './git/git.module.ts'
 import { LeadsModule } from './leads/leads.module.ts'
 import { TelegramModule } from './telegram/telegram.module.ts'
 import { CoreConfigModule, type AppModuleOptions } from './config/config.module.ts'
@@ -55,6 +56,8 @@ export class AppModule {
         // the order it meets them, the order AppModule's test pins.
         turns,
         TasksModule.forRoot(turns),
+        // The git connections and repositories of projects (docs/plan/84-projects.md, 84.17).
+        GitModule,
       ],
     }
   }
