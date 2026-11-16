@@ -1,7 +1,7 @@
 import { parseRefusedSubnets } from '@repo/ip-address'
 import { describe, expect, it } from 'vitest'
 
-import { publicHostResolver } from './public-host.ts'
+import { fakedGitlabCom, publicHostResolver } from './public-host.ts'
 
 // The address of a git host (docs/plan/84-projects.md, §4.6): an own GitLab server or the host of
 // a link that resolves to a private address is refused before any request.
@@ -75,5 +75,21 @@ describe('publicHostResolver', () => {
     })
     expect(await refusedCode(resolve('8.8.8.8'))).toBe('GIT_HOST_REFUSED')
     expect(await resolve('localhost')).toBe('127.0.0.1')
+  })
+})
+
+describe('fakedGitlabCom', () => {
+  it('pins gitlab.com to the host of the fake of a stand, and nothing else', async () => {
+    const asked: string[] = []
+    const resolve = async (host: string) => {
+      asked.push(host)
+      return host === 'localhost' ? '127.0.0.1' : '203.0.113.7'
+    }
+    const faked = fakedGitlabCom(resolve, 'https://localhost:41234')
+    expect(await faked('gitlab.com')).toBe('127.0.0.1')
+    expect(await faked('git.example.ru')).toBe('203.0.113.7')
+    expect(asked).toEqual(['localhost', 'git.example.ru'])
+    // Without the fake — every name as it is.
+    expect(fakedGitlabCom(resolve, undefined)).toBe(resolve)
   })
 })
