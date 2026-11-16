@@ -578,6 +578,29 @@ module.exports = {
       },
     },
     {
+      name: 'git-worker-no-platform-access',
+      comment:
+        'The git worker runs git and gitleaks over the repositories of clients (docs/plan/84-projects.md, ПР33): it reaches no database, Redis, Vault, S3, provider adapter or Nest module of core, not even transitively — a hostile pack that breaks git finds no key of the platform there.',
+      severity: 'error',
+      from: { path: '^apps/core/src/git-worker/', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: [
+          '^packages/(db|vault|storage|service-runtime|git-providers|llm-backends|yookassa|billing|browser-link|turn-keys|snapshots|local-turns|observability)/',
+          '^apps/core/src/(?!git-worker/)',
+          ...npm('ioredis|bullmq|@prisma/[^/]+|@aws-sdk/[^/]+|@nestjs/core|@nestjs/bullmq'),
+        ],
+        reachable: true,
+      },
+    },
+    {
+      name: 'core-runs-no-git',
+      comment:
+        'Core runs no git or gitleaks itself (docs/plan/84-projects.md, 84.15а): of the git worker it takes only the protocol, the variables and the size of a directory; the process runner, the supervisor and the server are the worker’s alone.',
+      severity: 'error',
+      from: { path: '^apps/core/src/(?!git-worker/)', pathNot: '\\.test\\.ts$' },
+      to: { path: '^apps/core/src/git-worker/(?!(protocol|config|disk)\\.ts$)' },
+    },
+    {
       name: 'web-no-sandbox',
       comment:
         'Only the core and llm apps run agents, sandboxes, browsers and subscription backends.',

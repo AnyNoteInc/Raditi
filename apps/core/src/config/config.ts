@@ -32,6 +32,7 @@ import { yookassaConfigFromEnv, type YookassaConfig } from '@repo/yookassa'
 import { z } from 'zod'
 import { isLoopbackAddress, isPrivateAddress } from '@repo/ip-address'
 
+import { gitEnvConfig, type GitEnvConfig } from '../git-worker/config.ts'
 import { poolControlOrigin } from '../llm/pool-probe-client.ts'
 import {
   parseRunnerTokens,
@@ -111,6 +112,11 @@ export interface CoreConfig {
    * null — BROWSER_WORKER_URL is unset: such tasks are refused `unavailable`, the rest runs.
    */
   browser: BrowserWorkerConfig | null
+  /**
+   * Trusted git of the repositories of projects (docs/plan/84-projects.md, ПР12, ПР33): the volume
+   * core shares with its git worker; GIT_CA_FILE and GIT_ALLOW_LOOPBACK only outside production.
+   */
+  git: GitEnvConfig
 }
 
 /** Where core reaches the browser worker's internal API. Holds its token: never log it. */
@@ -374,6 +380,9 @@ export function loadConfig(env: Env): CoreConfig {
     else if (origin) browser = { url: origin, token: own.BROWSER_WORKER_TOKEN }
   }
 
+  const git = gitEnvConfig(env)
+  problems.push(...git.problems)
+
   if (problems.length > 0) throw new ConfigError(problems, 'core')
 
   return {
@@ -408,6 +417,7 @@ export function loadConfig(env: Env): CoreConfig {
       tickSeconds: own.BILLING_TICK_SECONDS,
     },
     browser,
+    git: git.config,
   }
 }
 

@@ -54,6 +54,7 @@ const prodEnv = (overrides: Env = {}): Env => ({
   SENDSAY_API_KEY: 'sendsay-key',
   METRICS_TOKEN: PROD_METRICS_TOKEN,
   RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@10.20.0.11`,
+  GIT_MIRROR_DIR: '/git',
   ...overrides,
 })
 
@@ -758,5 +759,31 @@ describe('loadConfig — the browser worker (docs/plan/57-browser-tasks.md, Б10
         prodEnv({ BROWSER_WORKER_URL: 'https://browser.internal', BROWSER_WORKER_TOKEN: TOKEN }),
       ).browser,
     ).toMatchObject({ url: 'https://browser.internal' })
+  })
+})
+
+describe('loadConfig — trusted git (docs/plan/84-projects.md, 84.15а)', () => {
+  it('takes the volume of the mirrors, required in production', () => {
+    expect(loadConfig(prodEnv()).git).toEqual({ mirrorDir: '/git', allowLoopback: false })
+    expect(problemsOf(prodEnv({ GIT_MIRROR_DIR: '' }))).toEqual([
+      'GIT_MIRROR_DIR: required in production (the volume of the mirrors)',
+    ])
+    expect(problemsOf(prodEnv({ GIT_MIRROR_DIR: 'git' }))).toEqual([
+      'GIT_MIRROR_DIR: must be an absolute path',
+    ])
+    expect(loadConfig(devEnv).git.mirrorDir).toMatch(/raditi-mirrors$/)
+  })
+
+  it('takes the CA and the loopback of a stand only outside production', () => {
+    expect(loadConfig({ ...devEnv, GIT_ALLOW_LOOPBACK: '1' }).git.allowLoopback).toBe(true)
+    expect(problemsOf(prodEnv({ GIT_ALLOW_LOOPBACK: '1' }))).toEqual([
+      'GIT_ALLOW_LOOPBACK: only outside production (the fakes of a stand)',
+    ])
+    expect(problemsOf(prodEnv({ GIT_CA_FILE: '/run/raditi/ca.pem' }))).toEqual([
+      'GIT_CA_FILE: only outside production (the CA of a stand)',
+    ])
+    expect(problemsOf({ ...devEnv, GIT_CA_FILE: '/no/such/ca.pem' })).toEqual([
+      'GIT_CA_FILE: must be an absolute path of a file',
+    ])
   })
 })
