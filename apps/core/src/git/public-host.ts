@@ -1,7 +1,7 @@
 import type { LookupAddress } from 'node:dns'
 import { lookup } from 'node:dns/promises'
 
-import { gitHostRefused, gitlabComHost } from '@repo/domain'
+import { githubHost, gitHostRefused, gitlabComHost } from '@repo/domain'
 import {
   ipLiteral,
   isLoopbackAddress,
@@ -56,4 +56,18 @@ export function fakedGitlabCom(
   if (!gitlabComUrl) return resolve
   const fake = new URL(gitlabComUrl).hostname
   return (host) => resolve(host === gitlabComHost ? fake : host)
+}
+
+/**
+ * The same for a stand's fake of GitHub (RADITI_FAKE_GITHUB_API_URL, never in production): git
+ * reaches `https://github.com/<path>.git` at the address of `localhost`, where the stand forwards 443
+ * to its fake.
+ */
+export function fakedGithubCom(
+  resolve: ResolvePublicHost,
+  githubApiUrl: string | undefined,
+): ResolvePublicHost {
+  if (!githubApiUrl) return resolve
+  const fake = new URL(githubApiUrl).hostname
+  return (host) => resolve(host === githubHost ? fake : host)
 }

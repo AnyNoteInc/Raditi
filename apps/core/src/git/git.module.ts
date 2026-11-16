@@ -21,7 +21,7 @@ import { GitPollScheduler } from './git-poll-scheduler.ts'
 import { GIT_JOBS, REPO_ACTIONS, REPO_CI } from './git.tokens.ts'
 import { RepoActions } from './repo-actions.ts'
 import { RepoCi } from './repo-ci.ts'
-import { fakedGitlabCom, publicHostResolver } from './public-host.ts'
+import { fakedGithubCom, fakedGitlabCom, publicHostResolver } from './public-host.ts'
 
 const GIT_SERVICES = Symbol('GIT_SERVICES')
 interface GitServices {
@@ -55,12 +55,15 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
         const logger = new Logger('Git')
         const ca = config.git.caFile ? readFileSync(config.git.caFile, 'utf8') : undefined
         const gitlabComUrl = config.gitApps.endpoints.gitlabComUrl
-        const resolvePublic = fakedGitlabCom(
-          publicHostResolver({
-            refusedSubnets: config.gitRefusedSubnets,
-            allowLoopback: config.git.allowLoopback,
-          }),
-          gitlabComUrl,
+        const resolvePublic = fakedGithubCom(
+          fakedGitlabCom(
+            publicHostResolver({
+              refusedSubnets: config.gitRefusedSubnets,
+              allowLoopback: config.git.allowLoopback,
+            }),
+            gitlabComUrl,
+          ),
+          config.gitApps.endpoints.githubApiUrl,
         )
         // The host of the operation goes to its checked address; a fake of a stand standing in
         // for it (`https://localhost:<port>`) is resolved and checked on its own.
@@ -71,6 +74,7 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
             ...(ca ? { ca } : {}),
           })
         const oauth = config.gitApps.gitlabOauth
+        const github = config.gitApps.githubApp
         const auth = new GitAuthSource({
           prisma,
           secrets,
@@ -85,6 +89,16 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
                 clientId: oauth.clientId,
                 clientSecret: oauth.clientSecret,
                 redirectUri: `${config.billing.appUrl}${gitlabCallbackPath}`,
+              }
+            : null,
+          // The key of the GitHub App lives only in core, as a file (§4.2): read per operation.
+          githubApp: github
+            ? {
+                appId: github.appId,
+                privateKey: () =>
+                  github.key.kind === 'file'
+                    ? readFileSync(github.key.path, 'utf8')
+                    : github.key.pem,
               }
             : null,
         })
@@ -108,6 +122,18 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
           warn: (line: string) => logger.warn(line),
         }
         const secret = config.gitApps.repoConfirmSecret
+        const actions = new RepoActions({
+          prisma,
+          auth,
+          resolvePublic,
+          provider,
+          workspace,
+          // The HMAC of the cards (ПР15): web signs, core checks again before the provider.
+          mac: secret
+            ? (material) => createHmac('sha256', secret).update(material).digest('base64url')
+            : null,
+          logger: lines,
+        })
         return {
           jobs: new GitJobs({
             prisma,
@@ -118,20 +144,18 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
             storage,
             logger: lines,
           }),
-          actions: new RepoActions({
+          actions,
+          // Builds and logs (ПР17; slice 84.21): polled, never written to — but for the merges the
+          // platform waits for itself, which RepoActions does (ПР15; slice 84.25).
+          ci: new RepoCi({
             prisma,
             auth,
             resolvePublic,
             provider,
-            workspace,
-            // The HMAC of the cards (ПР15): web signs, core checks again before the provider.
-            mac: secret
-              ? (material) => createHmac('sha256', secret).update(material).digest('base64url')
-              : null,
+            secrets,
             logger: lines,
+            waits: (projectRepositoryId) => actions.continueWaits(projectRepositoryId),
           }),
-          // Builds and logs (ПР17; slice 84.21): polled, never written to.
-          ci: new RepoCi({ prisma, auth, resolvePublic, provider, secrets, logger: lines }),
         }
       },
     },

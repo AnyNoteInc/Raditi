@@ -32,6 +32,15 @@ export interface GitConnectionOfGrant {
   workspaceId: string
   kind: GitConnectionKind
   host: string
+  /** The installation of a connection of the GitHub App (ПР10). */
+  installationId?: bigint | string | null
+}
+
+/** The GitHub App of Raditi as core holds it (§4.2): its id, and its private key read on demand. */
+export interface GithubAppGrantSource {
+  appId: string
+  /** The PEM of the key: read from its file each time, so a new key needs no restart. */
+  privateKey(): string
 }
 
 export interface GitAuthSourceOptions {
@@ -41,6 +50,8 @@ export interface GitAuthSourceOptions {
   connect: (host: string) => GitConnect
   /** Raditi's OAuth app on gitlab.com; null — the pair cannot be renewed (not configured). */
   gitlabOauth: OAuthApp | null
+  /** Raditi's GitHub App; null — its connections are not served here (not configured). */
+  githubApp?: GithubAppGrantSource | null
   now?: () => Date
 }
 
@@ -67,7 +78,21 @@ export class GitAuthSource {
         return { kind: 'token', token: secret.data.token }
       },
       gitlab_oauth: async () => ({ kind: 'token', token: await this.#oauthToken(connection) }),
-      github_app: () => Promise.reject(gitNotSupported('the GitHub App before Э10')),
+      // An installation's access is issued per operation by the adapter, from the app's JWT; core
+      // keeps no token of it (ПР10).
+      github_app: async () => {
+        const app = this.#options.githubApp ?? null
+        if (app === null) throw gitNotSupported('the GitHub App, which is not configured here')
+        const installationId = connection.installationId
+        if (installationId === null || installationId === undefined)
+          throw gitProviderFailed('a connection of the GitHub App without its installation')
+        return {
+          kind: 'github_installation',
+          appId: app.appId,
+          privateKey: app.privateKey(),
+          installationId: String(installationId),
+        }
+      },
     }
     return grants[connection.kind]()
   }
