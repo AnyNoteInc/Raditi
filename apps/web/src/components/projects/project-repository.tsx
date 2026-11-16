@@ -92,9 +92,12 @@ export function useProjectRepository(project: Pick<ProjectDetails, 'id' | 'repos
 export function ProjectRepositoryRow({
   project,
   compact = false,
+  onSignIn,
 }: {
   project: Pick<ProjectDetails, 'id' | 'repository'>
   compact?: boolean
+  /** «Войти заново» of a connection whose sign-in is to be renewed (ревью P3). */
+  onSignIn?: () => void
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
@@ -159,7 +162,11 @@ export function ProjectRepositoryRow({
         <Alert
           severity="warning"
           action={
-            repo.mirrorState === 'failed' || repo.mirrorState === 'unreachable' ? (
+            repo.refusal.code === 'GIT_CONNECTION_REAUTH' && onSignIn ? (
+              <Button color="inherit" size="small" onClick={onSignIn} sx={{ minHeight: 44 }}>
+                {repoText.signInAgain}
+              </Button>
+            ) : repo.mirrorState === 'failed' || repo.mirrorState === 'unreachable' ? (
               <Button
                 color="inherit"
                 size="small"

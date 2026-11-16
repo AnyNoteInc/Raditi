@@ -12,6 +12,7 @@ export const repoText = Object.freeze({
   gitlabCom: 'GitLab.com',
   gitlabComHint: 'Вход через GitLab',
   ownServer: 'Свой сервер GitLab — по токену',
+  signInAgain: 'Войти заново',
   ownServerHint: 'Адрес вашего сервера и токен доступа',
   soon: 'Скоро',
   serverAddress: 'Адрес сервера',

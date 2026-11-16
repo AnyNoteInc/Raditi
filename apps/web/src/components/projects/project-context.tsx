@@ -90,7 +90,7 @@ export function ProjectContext({ project }: { project: ProjectDetails }) {
           </Alert>
         ) : null}
         {/* The repository is part of «Контекст» (ПР6): under its title, with its last state. */}
-        <ProjectRepositoryRow project={project} compact />
+        <ProjectRepositoryRow project={project} compact onSignIn={repository.onGitlab} />
         {files.count === 0 && project.repository !== null ? (
           <Box>
             <Button
@@ -284,7 +284,7 @@ export function ContextDialog({
           />
         ) : null}
 
-        <ProjectRepositoryRow project={project} />
+        <ProjectRepositoryRow project={project} {...(onGitlab ? { onSignIn: onGitlab } : {})} />
 
         <Box component="section" aria-labelledby={listId}>
           <Typography id={listId} component="h3" sx={{ fontSize: 15, fontWeight: 600, mb: 1 }}>

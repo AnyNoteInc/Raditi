@@ -117,6 +117,11 @@ export interface ChatBranchView {
   /** The client may press: the repository takes writes by the author's connection. */
   canPush: boolean
   /**
+   * Why the client may not press, when the repository takes writes otherwise (ревью P3): the
+   * sign-in of the connection is to be renewed, or another member connected the repository.
+   */
+  pushBlocked: 'reauth' | 'other_member' | null
+  /**
    * What waits to be sent touches build settings (ПР16): `needed` — only by the card «Агент хочет
    * изменить настройки сборки»; `declined` — the client said «Не отправлять» to it; `foreign` — the
    * configuration lives in another project, nothing is sent.
@@ -198,6 +203,14 @@ export async function readChatBranch(
       repo.mode === 'write' &&
       repo.connection?.state === 'ok' &&
       repo.connection.createdById === input.userId,
+    pushBlocked:
+      repo.mode !== 'write' || repo.connection == null
+        ? null
+        : repo.connection.createdById !== input.userId
+          ? 'other_member'
+          : repo.connection.state === 'ok' || repo.connection.state === 'checking'
+            ? null
+            : 'reauth',
     ciChange,
     mergeRequest: mr
       ? {

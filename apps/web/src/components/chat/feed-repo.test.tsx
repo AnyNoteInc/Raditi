@@ -82,6 +82,7 @@ const view = (over: Record<string, unknown> = {}) => ({
   headSha: HEAD,
   sent: false,
   canPush: true,
+  pushBlocked: null,
   ciChange: 'none',
   mergeRequest: null,
   lastRun: null,
@@ -122,6 +123,21 @@ describe('the card «Изменения в ветке» (plan 84, 84.19)', () =>
         expect.anything(),
       ),
     )
+  })
+
+  it('says why a card has no buttons: the sign-in or another member (ревью P3)', async () => {
+    calls.branch.mockResolvedValue(view({ canPush: false, pushBlocked: 'reauth' }))
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    expect(await screen.findByText(/Отправить нельзя: нужно войти в GitLab заново/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Открыть проект' }).getAttribute('href')).toBe(
+      '/projects/0199a3f2-0000-7000-8000-00000000b001',
+    )
+  })
+
+  it('offers the merge request alone for a branch sent whose request did not open (ревью C5)', async () => {
+    calls.branch.mockResolvedValue(view({ sent: true, state: 'pushed' }))
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    expect(await screen.findByRole('button', { name: 'Открыть запрос на слияние' })).toBeTruthy()
   })
 
   it('has no button on an older card, on a sent branch, a read-only one or while a press goes', async () => {

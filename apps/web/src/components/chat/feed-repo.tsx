@@ -67,6 +67,12 @@ export const repoCardText = Object.freeze({
   waitingMerge: 'Примем в основную ветку, когда сборка пройдёт.',
   mergedTakenBack: repoPushRefusalTexts.REPO_ALREADY_MERGED,
   more: (n: number) => `и ещё ${n}`,
+  /** Why the card has no buttons (ревью P3). */
+  blocked: {
+    reauth: 'Отправить нельзя: нужно войти в GitLab заново',
+    other_member: 'Отправить нельзя: репозиторий подключил другой участник',
+  },
+  openProject: 'Открыть проект',
 })
 
 const pluralFiles = (n: number) => {
@@ -423,6 +429,17 @@ export function FeedRepoChanges({
       </Box>
       {current && view?.lastRun ? (
         <BuildLine projectId={view.projectId} run={view.lastRun} />
+      ) : null}
+      {current && view?.pushBlocked && !view.sent ? (
+        <Typography role="status" variant="body2" data-feed-repo-blocked="">
+          {repoCardText.blocked[view.pushBlocked]}.{' '}
+          <Link
+            href={`/projects/${view.projectId}`}
+            sx={{ display: 'inline-flex', minHeight: 44, alignItems: 'center' }}
+          >
+            {repoCardText.openProject}
+          </Link>
+        </Typography>
       ) : null}
       {/* «Принять в основную ветку» (ПР15): only a press of the client, never the agent. */}
       {taskId && current && view?.canPush && view.sent && !pressing && view.state === 'pushed' ? (
