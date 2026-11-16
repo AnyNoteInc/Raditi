@@ -156,6 +156,7 @@ export {
   lockProjectSchedules,
   lockWaitingRun,
   passUnattended,
+  pauseAgentSchedulesForRepository,
   pauseProjectSchedules,
   pauseSchedule,
   pauseSchedulesOfGoneProject,
