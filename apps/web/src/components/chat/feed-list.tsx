@@ -27,6 +27,8 @@ import {
   feedFileLeftText,
   feedDocLeftText,
   feedMemoryLeftText,
+  feedRepoChangesText,
+  feedRepoLeftText,
   feedPageChangeText,
   feedPageLeftText,
   feedFilesChangedText,
@@ -1057,6 +1059,12 @@ function RowView({
       return <FeedMemoryChange entryId={row.entryId} action={row.action} text={row.text} />
     case 'feed.memory_left':
       return <Note text={feedMemoryLeftText(row)} />
+    // What a turn left in the chat's branch, and changes it did not keep (docs/plan/84-projects.md,
+    // ПР12, ПР26): a line until the card «Изменения в ветке» of slice 84.19.
+    case 'feed.repo_changes':
+      return <Note text={feedRepoChangesText(row)} />
+    case 'feed.repo_left':
+      return <Note text={feedRepoLeftText(row)} />
     case 'feed.rewind':
       return <Note text={feedRewindText(row)} />
     case 'feed.redo':
