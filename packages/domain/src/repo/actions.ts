@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { DomainError } from '../errors.ts'
+import { repoCiRefusalTexts } from './ci.ts'
 import { mergeRequestDescriptionMaxLength } from './merge-request-text.ts'
 
 // What a button of the client does with the repository of a project, and what the agent may ask
@@ -74,7 +75,10 @@ export const repoNothingToPush = (): DomainError =>
 export const repoPushConflict = (): DomainError =>
   new DomainError('REPO_PUSH_CONFLICT', 'The changes do not go on top of the branch', 409)
 
-/** The changes touch build settings: they go only with the card of ПР16 (slice 84.20). */
+/**
+ * The changes touch build settings: they go only with the card «Агент хочет изменить настройки
+ * сборки» (ПР16), never by «Отправить в ветку».
+ */
 export const repoCiChangeNeedsCard = (): DomainError =>
   new DomainError('REPO_CI_CHANGE', 'The changes touch build settings', 409)
 
@@ -84,7 +88,8 @@ export const repoPushRefusalTexts = Object.freeze({
   REPO_PUSH_CONFLICT:
     'Изменения не отправлены: ветку изменили в репозитории, и они не легли поверх. Попросите агента повторить',
   REPO_CI_CHANGE:
-    'Изменения затрагивают настройки сборки — такую отправку пока нельзя подтвердить в Радити',
+    'Изменения затрагивают настройки сборки — отправьте их кнопкой «Разрешить и отправить» на карточке настроек сборки',
+  ...repoCiRefusalTexts,
   REPO_CONFIRM_INVALID: 'Карточка устарела — откройте её снова',
   REPO_PROPOSAL_LIMIT: 'Запрос на слияние в этом ходе уже предложен',
   REPO_MR_CHANGED:

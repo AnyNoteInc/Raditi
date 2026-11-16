@@ -93,6 +93,8 @@ export const gitJobNames = Object.freeze({
   repoAttach: 'git.repo.attach',
   /** A row of `repo_actions` a button of the client wrote (ПР13, ПР15; slice 84.19). */
   action: 'git.action',
+  /** The diff of the build settings of a chat's branch and its CI Lint (ПР16; slice 84.20). */
+  ciLint: 'git.ci_lint',
 })
 
 export const gitConnectionSyncPayloadSchema = z.strictObject({ connectionId: z.uuid() })
