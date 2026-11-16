@@ -20,6 +20,11 @@ import { TURN_EXECUTOR } from '../turns/turns.tokens.ts'
 import { ChatFiles } from './chat-files.ts'
 import { DocSections } from './doc-sections.ts'
 import { MemoryChanges } from './memory-changes.ts'
+import { RepoChanges, RepoTurnPreparer } from './repo-turns.ts'
+import type { GitJobs } from '../git/git-jobs.ts'
+import { GIT_JOBS } from '../git/git.tokens.ts'
+import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
+import { GIT_WORKSPACE } from '../git-workspace/git-workspace.tokens.ts'
 import { PageChanges } from './page-changes.ts'
 import { PageMetrics } from '../pages/page-metrics.ts'
 import { ProjectTrash } from '../projects/project-trash.ts'
@@ -73,6 +78,8 @@ export const taskProviders: Provider[] = [
       storage: ObjectStorage,
       registry: Registry,
       executor: TurnExecutor | null,
+      gitJobs: GitJobs | null,
+      workspace: GitWorkspaceService | null,
     ) => {
       // What the pool told a pass (plan 71, §4.4): the limits of the agent out.
       const limitsOut = new Counter({
@@ -107,6 +114,17 @@ export const taskProviders: Provider[] = [
         pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
         // What a turn asked of the memory of its chat (docs/plan/84-projects.md, ПР18).
         memoryChanges: new MemoryChanges({ db: prisma, logger: new Logger('MemoryChanges') }),
+        // The repository of the chat's project (docs/plan/84-projects.md, ПР12, ПР26).
+        ...(gitJobs && workspace
+          ? {
+              repositories: new RepoTurnPreparer({ git: gitJobs, workspace }),
+              repoChanges: new RepoChanges({
+                db: prisma,
+                storage,
+                logger: new Logger('RepoChanges'),
+              }),
+            }
+          : {}),
         // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
         workspaceTurnLimit: config.workspaceTurnLimit,
         capacity: new TurnCapacity(executor),
@@ -125,6 +143,8 @@ export const taskProviders: Provider[] = [
       OBJECT_STORAGE,
       METRICS_REGISTRY,
       { token: TURN_EXECUTOR, optional: true },
+      { token: GIT_JOBS, optional: true },
+      { token: GIT_WORKSPACE, optional: true },
     ],
   },
   {

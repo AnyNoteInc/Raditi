@@ -1,7 +1,10 @@
 import { Prisma, type PrismaClient } from '@repo/db'
 import {
   gitConnectionProviders,
+  gitConnectionReauth,
   isDomainError,
+  repositoryTooLarge,
+  repoUnreachable,
   mirrorLimits,
   type GitAuth,
   type GitConnectionKind,
@@ -105,6 +108,76 @@ export class GitJobs {
       select: connectionSelect,
     })
     return row === null ? null : { ...row, kind: row.kind as GitConnectionKind }
+  }
+
+  /**
+   * The head of the main branch of a project's repository, fetched into its mirror for a pass
+   * (docs/plan/84-projects.md, §4.3, step 3), and the brand of its provider. Throws what the pass
+   * tells the client: REPOSITORY_TOO_LARGE, GIT_CONNECTION_REAUTH, or REPO_UNREACHABLE for
+   * anything else — a provider that does not answer, a repository gone, a connection not `ok`.
+   */
+  async fetchForTurn(projectRepositoryId: string): Promise<{ sha: string; label: string }> {
+    const repo = await this.#o.prisma.projectRepository.findUnique({
+      where: { id: projectRepositoryId },
+      select: {
+        provider: true,
+        host: true,
+        path: true,
+        providerRepoId: true,
+        defaultBranch: true,
+        connection: { select: connectionSelect },
+      },
+    })
+    if (repo === null) throw repoUnreachable()
+    const ref: RepoRef = {
+      provider: repo.provider as RepoProviderKind,
+      host: repo.host,
+      path: repo.path,
+      ...(repo.providerRepoId === null ? {} : { providerRepoId: repo.providerRepoId }),
+    }
+    try {
+      let grant: GitGrant = { kind: 'anonymous' }
+      if (repo.connection !== null) {
+        if (repo.connection.state === 'reauth_needed') throw gitConnectionReauth()
+        if (repo.connection.state !== 'ok') throw repoUnreachable()
+        grant = await this.#o.auth.grantFor({
+          ...repo.connection,
+          kind: repo.connection.kind as GitConnectionKind,
+        })
+      }
+      const { address, provider, auth } = await this.#operation(ref.provider, ref.host, grant)
+      const info = await provider.getRepository(auth, ref)
+      if (info === null) throw repoUnreachable()
+      if (info.sizeBytes !== null && info.sizeBytes > mirrorLimits.repositoryBytes)
+        throw repositoryTooLarge('The provider names a repository above its limit')
+      const access = await provider.issueCredentials(grant, info.ref, 'read', {
+        ttlSeconds: GIT_CREDENTIAL_TTL_SECONDS,
+      })
+      try {
+        const heads = await this.#o.workspace.fetch({
+          projectRepositoryId,
+          remote: { cloneUrl: info.cloneUrl, pin: { host: ref.host, address }, access },
+          branches: [repo.defaultBranch],
+          sizeBytes: info.sizeBytes,
+        })
+        const sha = heads.get(repo.defaultBranch) ?? null
+        if (sha === null) throw repoUnreachable()
+        await this.#o.prisma.projectRepository.updateMany({
+          where: { id: projectRepositoryId },
+          data: { lastFetchedSha: sha, fetchedAt: this.#now() },
+        })
+        return { sha, label: provider.support.label }
+      } finally {
+        await access.revoke?.().catch(() => undefined)
+      }
+    } catch (error) {
+      const code = isDomainError(error) ? error.code : 'unknown'
+      if (tooLargeCodes.has(code)) throw repositoryTooLarge()
+      if (code === 'GIT_CONNECTION_REAUTH') throw gitConnectionReauth()
+      if (code !== 'REPO_UNREACHABLE')
+        this.#o.logger.warn(`git.turn.fetch ${projectRepositoryId}: ${code}`)
+      throw repoUnreachable()
+    }
   }
 
   /** `git.connection.sync`. */

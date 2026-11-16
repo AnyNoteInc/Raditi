@@ -90,5 +90,7 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
     },
     GitProcessor,
   ],
+  // The fetch of a pass of a chat with a repository (docs/plan/84-projects.md, §4.3, step 3).
+  exports: [GIT_JOBS],
 })
 export class GitModule {}

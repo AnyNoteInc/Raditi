@@ -467,6 +467,36 @@ describe('the variables of the workspace in a turn (plan 83, БП4)', () => {
     expect(await f.credentials.recover(f.ref)).toEqual(values)
   })
 
+  it('keeps a value of the form of a git token from a turn with a repository (docs/plan/84, ПР22)', async () => {
+    const variables = [row('GITLAB_TOKEN', 1), row('GITHUB', 1), row('PAYMENT_KEY', 1)]
+    const values = {
+      GITLAB_TOKEN: { data: { value: 'glpat-synthetic-0001' }, version: 1 },
+      GITHUB: { data: { value: 'github_pat_synthetic0001' }, version: 1 },
+      PAYMENT_KEY: { data: { value: 'pay-secret-0001' }, version: 1 },
+    }
+    const assignmentOf = (f: ReturnType<typeof fixture>, plan: unknown) => ({
+      sessionId: f.ref.sessionId,
+      firstEpoch: f.ref.epoch,
+      leaseEpoch: f.ref.epoch,
+      deadlineAt: f.grant.deadlineAt,
+      executor: 'local',
+      plan,
+    })
+    const repo = fixture({ variables, values })
+    repo.tx.turnAssignment.findFirst.mockResolvedValue(
+      assignmentOf(repo, { repository: { projectRepositoryId: 'x' } }) as never,
+    )
+    expect((await repo.credentials.issue(repo.ref, repo.grant)).envValues).toEqual({
+      PAYMENT_KEY: 'pay-secret-0001',
+    })
+    // A chat without a repository gets them all, as before (БП4).
+    const plain = fixture({ variables, values })
+    plain.tx.turnAssignment.findFirst.mockResolvedValue(assignmentOf(plain, {}) as never)
+    expect(Object.keys((await plain.credentials.issue(plain.ref, plain.grant)).envValues!)).toEqual(
+      ['GITLAB_TOKEN', 'GITHUB', 'PAYMENT_KEY'],
+    )
+  })
+
   it('gives every chat of the workspace its variables, the one with the browser too', async () => {
     const variables = [row('PAYMENT_KEY', 1)]
     const values = { PAYMENT_KEY: { data: { value: 'pay-secret-0001' }, version: 1 } }

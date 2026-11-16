@@ -5,10 +5,14 @@ import {
   memorySection,
   projectContextSection,
   projectSection,
+  repositorySection,
   turnProjectPath,
   type MemorySectionEntry,
   type ProjectContextFile,
   type ProjectSectionFacts,
+  type RepoMode,
+  type RepoProviderKind,
+  type TurnRepository,
 } from '@repo/domain'
 import {
   attemptBudgetRub,
@@ -121,6 +125,34 @@ export interface TaskAttachmentFacts {
   sizeBytes: number
 }
 
+/** The repository of the chat's project as the facts read it, before its pass prepares it (ПР12). */
+export interface PassRepositoryRow {
+  projectId: string
+  projectRepositoryId: string
+  provider: RepoProviderKind
+  path: string
+  defaultBranch: string
+  mode: RepoMode
+  /** The files gitleaks flagged when the repository was connected: never in a sandbox (ПР35). */
+  secretsFound: readonly string[]
+}
+
+/**
+ * The repository prepared for the pass (docs/plan/84-projects.md, §4.3, step 3): fetched, its base
+ * chosen, its bundle built and its hidden files named.
+ */
+export interface PassRepository extends PassRepositoryRow {
+  /** The brand of its provider (`support.label`). */
+  label: string
+  baseSha: string
+  sandboxBaseSha: string
+  branch: string
+  expectedRef: string | null
+  bundleSha256: string
+  bundleBytes: number
+  hiddenPaths: readonly string[]
+}
+
 export type PassBudget =
   | { kind: 'credits'; budget: AttemptCreditBudget }
   /** A task that holds no reserve by design (`billable = false`): the class ceiling. */
@@ -147,6 +179,13 @@ export interface PassFacts {
    * absent or null — a chat without a project, or one whose project is in the trash.
    */
   project?: ProjectSectionFacts | null
+  /** The repository of the chat's project whose mirror is ready; null or absent — none (ПР12). */
+  repositoryRow?: PassRepositoryRow | null
+  /**
+   * The repository prepared for this pass (§4.3, step 3); absent or null — the pass goes without
+   * one: the chat has none, its mirror is not ready, or the prepare was not asked for.
+   */
+  repository?: PassRepository | null
   /**
    * The ready files of the context of the chat's project (docs/plan/84-projects.md, ПР8), in the
    * order of their paths: every turn gets them all under /workspace/project, and the instructions
@@ -447,7 +486,10 @@ function startOf(facts: PassFacts, driver: AgentDriver): Start | null {
  * cover a first call is a question to the client, not a turn (Р8).
  */
 export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promise<PassPlan> {
-  const { task, requirements } = facts
+  const { task } = facts
+  // A repository exactly when the pass prepared one (docs/plan/84-projects.md, ПР12).
+  const repository = facts.repository ?? null
+  const requirements: TaskRequirements = { ...facts.requirements, repository: repository !== null }
   // A chat goes on without a word of `web_*` when the browser worker is not there (§5.4).
   const browser = requirements.browser && env.browser
   if (!facts.profile) return { kind: 'refused', code: 'unavailable' }
@@ -490,6 +532,44 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
   const start = startOf(facts, env.driver)
   if (!start) return { kind: 'refused', code: 'technical' }
   const action = actionOf(facts, start)
+  // Whether the repository of the chat came, went or changed since the turn whose session this
+  // pass restores (ПР32): only the session of that checkpoint is taken then.
+  const before = start.previous
+    ? (facts.turns.get(start.previous.turn)?.plan?.repository?.projectRepositoryId ?? null)
+    : null
+  const changed =
+    start.previous !== undefined && before !== (repository?.projectRepositoryId ?? null)
+  const repositoryBlock: TurnRepository | undefined = repository
+    ? {
+        projectId: repository.projectId,
+        projectRepositoryId: repository.projectRepositoryId,
+        provider: repository.provider,
+        baseSha: repository.baseSha,
+        sandboxBaseSha: repository.sandboxBaseSha,
+        branch: repository.branch,
+        mode: repository.mode,
+        expectedRef: repository.expectedRef,
+        bundleSha256: repository.bundleSha256,
+        bundleBytes: repository.bundleBytes,
+        hiddenPaths: [...repository.hiddenPaths],
+        ...(changed ? { repositoryChanged: true as const } : {}),
+      }
+    : undefined
+  const repoSection = repository
+    ? repositorySection({
+        provider: repository.provider,
+        path: repository.path,
+        label: repository.label,
+        branch: repository.branch,
+        defaultBranch: repository.defaultBranch,
+        baseSha: repository.baseSha,
+        mode: repository.mode,
+        hiddenPaths: repository.hiddenPaths,
+        ...(changed ? { changed: 'connected' as const } : {}),
+      })
+    : changed && before !== null
+      ? repositorySection({ changed: 'disconnected' })
+      : ''
   const turn = task.turnNo + 1
   const sessionId = task.id
   const reasoningEffort = reasoningEffortByClass[task.modelClass]
@@ -535,7 +615,8 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         browser,
         inbox: inboxFacts,
         variables: facts.variables ?? [],
-      })}${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${memorySection(facts.memory)}`,
+        repository: repository !== null,
+      })}${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${memorySection(facts.memory)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),
@@ -559,6 +640,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         },
     driverVersion: env.driver.cliVersion,
     requirements: { ...requirements },
+    ...(repositoryBlock ? { repository: repositoryBlock } : {}),
     committedAt: facts.committedAt.toISOString(),
     ...(start.previous ? { previous: start.previous } : {}),
     ...(start.rewound ? { rewound: true as const } : {}),

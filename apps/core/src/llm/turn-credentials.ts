@@ -8,6 +8,7 @@ import {
   DomainError,
   envVarLimits,
   envVarNameProblem,
+  looksLikeGitToken,
   envVarValueSchema,
   isDomainError,
   leaseLost,
@@ -161,7 +162,15 @@ interface Selection {
 type Preparation =
   | { kind: 'existing'; key: KeyRow; now: Date }
   /** `variables`: those the agent's commands get, at the versions their rows name. */
-  | ({ kind: 'selection'; variables: WorkspaceEnvVarVersion[] } & Selection)
+  /**
+   * `withRepository`: the turn works in a repository of a project (docs/plan/84-projects.md,
+   * ПР22) — a variable that looks like a git token never reaches its commands.
+   */
+  | ({
+      kind: 'selection'
+      variables: WorkspaceEnvVarVersion[]
+      withRepository: boolean
+    } & Selection)
 
 export interface GatewayTurnCredentialsOptions {
   prisma: Database
@@ -312,7 +321,11 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
           prepared.task.now.getTime() + 25 * 60_000,
         ),
       )
-      const env = await this.#agentValues(prepared.task, prepared.variables)
+      const env = await this.#agentValues(
+        prepared.task,
+        prepared.variables,
+        prepared.withRepository,
+      )
       const data = {
         v: '1',
         ...newTurnKeys(),
@@ -367,7 +380,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
   async #prepare(ref: TurnCredentialRef, grant: TurnCredentialGrant): Promise<Preparation> {
     return this.#transaction(async (tx) => {
       const task = await ownedTask(tx, ref)
-      await validateAssignment(tx, ref, grant, this.#requireAssignment)
+      const withRepository = await validateAssignment(tx, ref, grant, this.#requireAssignment)
       const key = await tx.llmKey.findUnique({ where: compound(ref) })
       if (key) {
         if (key.revokeRequestedAt || key.revokedAt || key.sessionId !== ref.sessionId)
@@ -378,6 +391,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       return {
         kind: 'selection',
         variables: await agentVariables(tx, task),
+        withRepository,
         ...(await this.#select(tx, ref, grant, task)),
       }
     })
@@ -391,9 +405,14 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
   async #agentValues(
     task: OwnedTask,
     variables: readonly WorkspaceEnvVarVersion[],
+    withRepository: boolean,
   ): Promise<string | null> {
     if (variables.length === 0) return null
-    const values = await readWorkspaceEnvValues(this.#secrets, task.workspaceId, variables)
+    const read = await readWorkspaceEnvValues(this.#secrets, task.workspaceId, variables)
+    // A token of git in a turn with a repository would push past the platform (ПР22).
+    const values = withRepository
+      ? Object.fromEntries(Object.entries(read).filter(([, value]) => !looksLikeGitToken(value)))
+      : read
     if (Object.keys(values).length === 0) return null
     const json = JSON.stringify(values)
     // More than a workspace may have: only rows two writers added at once give that.
@@ -987,7 +1006,7 @@ async function validateAssignment(
   ref: TurnCredentialRef,
   grant: TurnCredentialGrant,
   required: boolean,
-): Promise<void> {
+): Promise<boolean> {
   const assignment = await tx.turnAssignment.findFirst({
     where: { taskId: ref.taskId, turnNo: ref.turn, finishedAt: null },
     select: {
@@ -996,6 +1015,7 @@ async function validateAssignment(
       leaseEpoch: true,
       deadlineAt: true,
       executor: true,
+      plan: true,
     },
   })
   if (!assignment && required) throw conflict('Turn credentials require an open assignment')
@@ -1011,4 +1031,9 @@ async function validateAssignment(
     throw conflict('Turn credential policy does not match its assignment')
   if (assignment?.executor === 'runner' && grant.boundSource === null)
     throw badRequest('A runner turn requires its trusted source address')
+  // The plan names its repository (docs/plan/84-projects.md, §4.3): read as a fact, not trusted
+  // further — an unreadable plan counts as one with a repository, which gets the fewer values.
+  const plan = assignment?.plan
+  if (plan === undefined || plan === null) return false
+  return typeof plan !== 'object' || (plan as { repository?: unknown }).repository !== undefined
 }

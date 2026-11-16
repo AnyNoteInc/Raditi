@@ -16,8 +16,6 @@ export const queueNames = [
   'previews',
   // Starting the browser of a task the first time its agent needs it (docs/plan/61-chats-first.md, К11).
   'browser-sessions',
-  // The files of a project for its section «Терминал», read by core for web (06.11.2026).
-  'site-files',
   // Leads of the landing on their way to the Telegram group (docs/plan/65-landing-platforms-leads.md).
   'leads',
   // The bot of the chat in Telegram: its updates in, its messages out (docs/plan/80-telegram.md).

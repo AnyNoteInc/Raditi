@@ -29,8 +29,6 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   previews: lifecycleJobs,
   // The start of a task's browser: a failed job is put again by the call that waits for it.
   'browser-sessions': lifecycleJobs,
-  // The files of a project for web (06.11.2026): a failed job is put again by the next look.
-  'site-files': lifecycleJobs,
   // A lead on its way to Telegram (docs/plan/65-landing-platforms-leads.md): its sending is retried
   // for about two hours (15 s doubling, ten tries), then the poll posts it again; job data holds
   // only the id. The poll of the bot's buttons sets its own single attempt.

@@ -10,6 +10,8 @@ import {
 import {
   modelClassSchema,
   readFeedRow,
+  repoModes,
+  repoProviderKinds,
   turnSkillsOf,
   workspaceEnvVarsReachAgent,
   type LlmBackend,
@@ -26,6 +28,7 @@ import {
   type FinishedTurn,
   type PassBudget,
   type PassFacts,
+  type PassRepositoryRow,
   type TaskAttachmentFacts,
 } from './turn-planner.ts'
 
@@ -80,12 +83,32 @@ export async function readPassFacts(
       createdBy: { select: { agentInstructions: { select: { text: true } } } },
       // The project of the chat (docs/plan/84-projects.md, ПР7): its goal and instructions.
       project: {
-        select: { id: true, name: true, goal: true, instructions: true, deletedAt: true },
+        select: {
+          id: true,
+          name: true,
+          goal: true,
+          instructions: true,
+          deletedAt: true,
+          // The repository of the project (docs/plan/84-projects.md, ПР12): prepared for the
+          // pass by PassRunner once its mirror is ready.
+          repository: {
+            select: {
+              id: true,
+              provider: true,
+              path: true,
+              defaultBranch: true,
+              mode: true,
+              mirrorState: true,
+              secretsFound: true,
+            },
+          },
+        },
       },
     },
   })
   if (!task) return null
-  // No chat has a repository (docs/plan/83-remove-projects.md, БП2).
+  // The repository comes with the pass once it is prepared (PassRunner, docs/plan/84-projects.md,
+  // §4.3, step 3); the facts read here never name one.
   const requirements = { repository: false, browser: task.needsBrowser }
   const rows = await db.taskEvent.findMany({
     where: { taskId: task.id, type: 'feed.request' },
@@ -210,6 +233,7 @@ export async function readPassFacts(
     requirements,
     clientInstructions: task.createdBy?.agentInstructions?.text ?? null,
     project: projectFactsOf(task.project),
+    repositoryRow: repositoryRowOf(task.project),
     ...(projectFiles.length ? { projectFiles } : {}),
     memory: memoryEntries,
     ...(attachments.length ? { attachments } : {}),
@@ -240,6 +264,48 @@ const projectFactsOf = (
   project && project.deletedAt === null
     ? { name: project.name, goal: project.goal, instructions: project.instructions }
     : null
+
+/**
+ * The repository of the chat's project the pass may prepare (ПР12): one whose mirror is ready, of a
+ * project not in the trash. One still syncing, too large or unreachable — the chat goes without it.
+ */
+function repositoryRowOf(
+  project: {
+    id: string
+    deletedAt: Date | null
+    repository: {
+      id: string
+      provider: string
+      path: string
+      defaultBranch: string
+      mode: string
+      mirrorState: string
+      secretsFound: unknown
+    } | null
+  } | null,
+): PassRepositoryRow | null {
+  const repo = project?.repository
+  if (!project || project.deletedAt !== null || !repo || repo.mirrorState !== 'ready') return null
+  const provider = repoProviderKinds.find((kind) => kind === repo.provider)
+  const mode = repoModes.find((value) => value === repo.mode)
+  if (!provider || !mode) return null
+  const found = Array.isArray(repo.secretsFound)
+    ? repo.secretsFound.flatMap((row) =>
+        row && typeof row === 'object' && typeof (row as { path?: unknown }).path === 'string'
+          ? [(row as { path: string }).path]
+          : [],
+      )
+    : []
+  return {
+    projectId: project.id,
+    projectRepositoryId: repo.id,
+    provider,
+    path: repo.path,
+    defaultBranch: repo.defaultBranch,
+    mode,
+    secretsFound: found,
+  }
+}
 
 /** The files bound to a task as a pass tells the agent of them: never their key. */
 const attachmentFactsOf = (

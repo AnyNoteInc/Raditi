@@ -10,6 +10,7 @@ import {
   toTurnPlan,
   turnCredentialPolicySchema,
   turnPlanLimits,
+  turnPlanSchema,
   type AgentDriver,
   type LlmBackend,
   type TurnPlan,
@@ -25,7 +26,12 @@ import {
   sampleProviderModelId,
   sampleRoutePath,
 } from '../testing/ids.ts'
-import { CHAT_TITLE_SECTION, CONTINUE_PROMPT, INIT_PROMPT } from './turn-instructions.ts'
+import {
+  CHAT_TITLE_SECTION,
+  CONTINUE_PROMPT,
+  INIT_PROMPT,
+  REPO_RULES,
+} from './turn-instructions.ts'
 import {
   planTurn,
   promptOf,
@@ -612,5 +618,135 @@ describe('promptOf', () => {
     ]
     expect(promptOf(requests, null)).toBe('Телефон\n\nТеперь поменяйте адрес')
     expect(promptOf([request(10, 'first', 'Телефон', 0), init], at(20))).toBe(INIT_PROMPT)
+  })
+})
+
+// --- A chat of a project with a repository (docs/plan/84-projects.md, ПР7, ПР12, ПР32) -----------
+
+const REPO = {
+  projectId: '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a80',
+  projectRepositoryId: '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a81',
+  provider: 'gitlab' as const,
+  path: 'acme/shop',
+  defaultBranch: 'main',
+  mode: 'write' as const,
+  secretsFound: [],
+  label: 'GitLab',
+  baseSha: 'b'.repeat(40),
+  sandboxBaseSha: 'd'.repeat(40),
+  branch: 'raditi/chat-0199b2f46c1e',
+  expectedRef: null,
+  bundleSha256: 'e'.repeat(64),
+  bundleBytes: 4096,
+  hiddenPaths: ['.env'],
+}
+
+/** A finished turn whose saved plan had the repository, as a turn of 84.18 keeps it. */
+function finishedWithRepository(turnNo: number): FinishedTurn {
+  const turn = finished(turnNo, 'completed')
+  return {
+    ...turn,
+    plan: {
+      ...turn.plan!,
+      requirements: { repository: true, browser: false },
+      repository: {
+        projectId: REPO.projectId,
+        projectRepositoryId: REPO.projectRepositoryId,
+        provider: REPO.provider,
+        baseSha: REPO.baseSha,
+        sandboxBaseSha: REPO.sandboxBaseSha,
+        branch: REPO.branch,
+        mode: REPO.mode,
+        expectedRef: null,
+        bundleSha256: REPO.bundleSha256,
+        bundleBytes: REPO.bundleBytes,
+        hiddenPaths: REPO.hiddenPaths,
+      },
+    },
+  }
+}
+
+describe('planTurn of a chat with a repository (docs/plan/84-projects.md, §4.3, step 4)', () => {
+  const project = { name: 'Магазин', goal: 'Каталог', instructions: 'Коротко.' }
+
+  it('names the repository in the plan, the working copy in the rules and its section before the client’s (snapshot)', async () => {
+    const plan = await planned(
+      facts({ repository: REPO, project, clientInstructions: 'Пишите на «вы».' }),
+    )
+    expect(plan.requirements).toEqual({ repository: true, browser: false })
+    expect(plan.request.repository).toEqual({
+      projectId: REPO.projectId,
+      projectRepositoryId: REPO.projectRepositoryId,
+      provider: 'gitlab',
+      baseSha: REPO.baseSha,
+      sandboxBaseSha: REPO.sandboxBaseSha,
+      branch: REPO.branch,
+      mode: 'write',
+      expectedRef: null,
+      bundleSha256: REPO.bundleSha256,
+      bundleBytes: REPO.bundleBytes,
+      hiddenPaths: ['.env'],
+    })
+    // What the plan keeps passes its schema: the repository needs it and names it.
+    expect(turnPlanSchema.safeParse(toTurnPlan(plan.request, sampleDriverId)).success).toBe(true)
+    const { instructions } = plan.request.context
+    expect(instructions).toContain(REPO_RULES)
+    expect(instructions).not.toContain('The working directory is empty')
+    // ПР7: rules of the platform → the repository → the client's own → the project.
+    const order = [
+      '# Raditi platform rules',
+      '## The repository',
+      "## The client's own instructions",
+      '## The project',
+    ]
+    const places = order.map((heading) => instructions.indexOf(heading))
+    expect(places.every((place) => place > 0 || place === 0)).toBe(true)
+    expect([...places].sort((a, b) => a - b)).toEqual(places)
+    expect(instructions).toMatchSnapshot()
+  })
+
+  it('says the repository came to a chat that went on without it, and plans the change (ПР32)', async () => {
+    const plan = await planned(
+      facts({
+        repository: REPO,
+        turns: new Map([[1, finished(1, 'completed')]]),
+        task: { ...facts().task, turnNo: 1 },
+        requests: [request(1, 'text', 'раньше', 1), request(2, 'text', 'теперь с кодом', 15)],
+      }),
+    )
+    expect(plan.request.previous).toBeDefined()
+    expect(plan.request.repository?.repositoryChanged).toBe(true)
+    expect(plan.request.context.instructions).toContain(
+      'connected the repository to the project after this chat began',
+    )
+  })
+
+  it('says the repository went from a chat that had it, and plans no repository (ПР32)', async () => {
+    const plan = await planned(
+      facts({
+        repository: null,
+        turns: new Map([[1, finishedWithRepository(1)]]),
+        task: { ...facts().task, turnNo: 1 },
+        requests: [request(1, 'text', 'раньше', 1), request(2, 'text', 'дальше', 15)],
+      }),
+    )
+    expect(plan.requirements.repository).toBe(false)
+    expect(plan.request).not.toHaveProperty('repository')
+    expect(plan.request.context.instructions).toContain(
+      'disconnected the repository from the project',
+    )
+  })
+
+  it('goes on in the same repository without a word of a change', async () => {
+    const plan = await planned(
+      facts({
+        repository: REPO,
+        turns: new Map([[1, finishedWithRepository(1)]]),
+        task: { ...facts().task, turnNo: 1 },
+        requests: [request(1, 'text', 'раньше', 1), request(2, 'text', 'дальше', 15)],
+      }),
+    )
+    expect(plan.request.repository).not.toHaveProperty('repositoryChanged')
+    expect(plan.request.context.instructions).not.toMatch(/connected the repository/)
   })
 })
