@@ -12,12 +12,14 @@ import {
   MAX_PRESIGN_TTL_MS,
   snapshotSaveWroteNothing,
   TURN_PUBLICATION_GRACE_MS,
+  memoryPassEvidence,
   turnSnapshotPrefix,
   withTimeout,
   type AgentDriver,
   type AgentEvent,
   type DestroyReason,
   type ExecExit,
+  type MemoryPassEvidence,
   type PreparedRun,
   type SiteLeaseGrant,
   type SiteLeaseStore,
@@ -38,7 +40,7 @@ import {
   type TurnRestoreSource,
   type TurnResult,
 } from '@repo/domain'
-import { packOutbox, readOutboxArchive } from '@repo/snapshots'
+import { emptyUntrackedArchive, packOutbox, readOutboxArchive } from '@repo/snapshots'
 
 import type {
   LoadedSnapshot,
@@ -49,6 +51,14 @@ import { holdForRecovery, type LeaseGuard } from './lease-guard.ts'
 import { maskTurnEvents } from './turn-events-mask.ts'
 import { textRefusal } from './text-refusal.ts'
 import { readTurnResult } from './turn-result.ts'
+import {
+  gitNotConfigured,
+  publicationOf,
+  publicationRefusalOf,
+  type PublicationRefusal,
+  type TurnPublication,
+  type TurnRepositoryWorkspace,
+} from './turn-repository.ts'
 
 export interface TurnSnapshotStore {
   load(reference: SnapshotReference): Promise<LoadedSnapshot>
@@ -69,13 +79,34 @@ export interface TurnAttemptDependencies {
   snapshots: TurnSnapshotStore
   journal: TurnJournal
   credentials: TurnCredentialSource
+  /**
+   * The trusted git of the repositories of projects (docs/plan/84-projects.md, ПР12); absent or
+   * null while it is not configured — a turn without a repository runs all the same, one with a
+   * repository is refused (gitNotConfigured).
+   */
+  repository?: TurnRepositoryWorkspace | null
   logger?: { warn(message: string): void }
+}
+
+/** What a turn with a repository left (docs/plan/84-projects.md, ПР12, §4.3, step 8). */
+export interface TurnRepositoryOutcome {
+  baseSha: string
+  /** The commit published under the chat's ref; null — nothing was published. */
+  headSha: string | null
+  /** The patch of the published commit against `baseSha`; empty when nothing was published. */
+  patch: Uint8Array
+  /** Changed paths of the build (CI files, `.gitmodules`): marked for the card of ПР16. */
+  buildPaths: string[]
+  /** Why the changes were not kept, when they were not; absent — kept, or there were none. */
+  refusal?: PublicationRefusal
 }
 
 export interface CompletedTurn {
   result: TurnResult
-  /** Without `git`: a turn has no repository. */
+  /** With `git` exactly when the turn has a repository. */
   manifest: SnapshotManifest
+  /** The changes of a turn with a repository; absent for a turn without one. */
+  repository?: TurnRepositoryOutcome
   /**
    * The files the agent left for the client (docs/plan/66-chat-visuals.md, В8), checked here
    * against the turn's credentials and the values of its variables; absent when there were none
@@ -90,6 +121,11 @@ export interface CompletedTurn {
    * sections wait unchecked for the next end of a turn.
    */
   refusesText: ((text: string) => 'turn_key' | 'client_value' | null) | null
+  /**
+   * What the turn took in from outside, by its events (docs/plan/84-projects.md, ПР18): whether a
+   * note of memory it reserved may be active at once. Absent — not known: counted as outside.
+   */
+  evidence?: MemoryPassEvidence
 }
 
 export interface TurnAttemptInit {
@@ -109,11 +145,15 @@ export interface TurnAttemptInit {
 /** A presigned URL never outlives the lease that allowed it (spec §14). */
 const presignTtlMs = (guard: LeaseGuard) => Math.min(MAX_PRESIGN_TTL_MS, guard.leaseRemainingMs)
 
-/** What a turn's capture leaves for its checkpoint: its home. */
+/** What a turn's capture leaves for its checkpoint: its home, with a repository its candidate. */
 interface Captured {
   homeBytes: number
   /** The agent's files for the client as the executor took them: untrusted. */
   outbox?: Uint8Array
+  /** A candidate that passed every check, published after `checkpointed`. */
+  publication?: TurnPublication
+  git?: NonNullable<SnapshotMetadata['git']>
+  repository?: TurnRepositoryOutcome
 }
 
 /**
@@ -141,6 +181,8 @@ export class TurnAttempt {
   #abandoned = false
   #destroyed = false
   #checkpointStarted = false
+  #publishStarted = false
+  #publication: TurnPublication | undefined
   #completed = false
   #sequence: number
   #lastPhase: TurnPhase
@@ -355,8 +397,12 @@ export class TurnAttempt {
 
   /**
    * Quiesce, capture, checkpoint and removal of a turn whose agent finished. `run` is the
-   * driver's run of the turn; its session state names the home to save, as a checkpoint without
-   * `git` — the turn completes once its container is removed.
+   * driver's run of the turn; its session state names the home to save. A turn without a
+   * repository saves it as a checkpoint without `git` and completes once its container is removed.
+   * One with a repository (docs/plan/84-projects.md, ПР12) prepares its publication before the
+   * snapshot — the snapshot keeps the candidate's `headSha` and patch — and publishes it into the
+   * mirror after `checkpointed`; changes the checks refuse are not published, and the turn
+   * completes all the same with the reason.
    */
   async complete(events: readonly AgentEvent[], run: PreparedRun): Promise<CompletedTurn> {
     const { guard, plan, driver, lease } = this.init
@@ -374,7 +420,13 @@ export class TurnAttempt {
         run.context.nativeSessionId = event.nativeSessionId
     }
     const home = driver.sessionState(run)
-    const published = await this.#homeOnly(ready, home)
+    // Checked before the agent's work is captured: without git nothing of it could be published.
+    const git = this.deps.repository
+    if (plan.repository && !git) throw gitNotConfigured()
+    const published =
+      plan.repository && git
+        ? await this.#candidate(ready, home, plan.repository, git)
+        : await this.#homeOnly(ready, home)
     const outbox = published.outbox ? await this.#checkedOutbox(published.outbox) : undefined
     await guard.assertFence()
     await this.record('checkpointing')
@@ -406,10 +458,19 @@ export class TurnAttempt {
         ...(run.context.nativeSessionId ? { nativeSessionId: run.context.nativeSessionId } : {}),
       },
       home,
+      ...(published.git ? { git: published.git } : {}),
     }
+    // With a repository the snapshot keeps the patch of the candidate and no new files — they
+    // belong to its commit now —, or empty parts when nothing was published.
     const saving = snapshots.save(
       metadata,
-      { home: sealedHome },
+      plan.repository
+        ? {
+            home: sealedHome,
+            patch: published.publication?.patch ?? new Uint8Array(),
+            untracked: emptyUntrackedArchive(),
+          }
+        : { home: sealedHome },
       // Stops a save still pending on Vault from writing after the attempt gave up on it.
       guard.signal,
     )
@@ -435,6 +496,13 @@ export class TurnAttempt {
     await this.#destroy(true)
     await this.record('destroyed')
     await this.#revoke()
+    if (published.publication) {
+      await guard.assertFence()
+      await this.record('publishing')
+      this.#publishStarted = true
+      const publication = published.publication
+      await guard.interruptible(publication.publish(() => guard.assertFence()))
+    }
     await guard.assertFence()
     await this.record('completed', { result })
     if (!(await this.deps.leases.release(lease)))
@@ -444,7 +512,14 @@ export class TurnAttempt {
       (values) => textRefusal(this.credentials, values),
       () => null,
     )
-    return { result, manifest, refusesText, ...(outbox ? { outbox } : {}) }
+    return {
+      result,
+      manifest,
+      refusesText,
+      evidence: memoryPassEvidence(events),
+      ...(outbox ? { outbox } : {}),
+      ...(published.repository ? { repository: published.repository } : {}),
+    }
   }
 
   /**
@@ -465,6 +540,91 @@ export class TurnAttempt {
         `turn_outbox_dropped task=${labels.taskId} turn=${labels.turn} reason=${reason}`,
       )
       return packOutbox([], { refused: true }).catch(() => undefined)
+    }
+  }
+
+  /**
+   * The candidate of a turn with a repository (ПР12): the patch against the root commit the
+   * sandbox holds, checked and committed by the trusted git on the real base. Changes the checks
+   * refuse — a secret, a value of a variable, a turn key, a hidden file, `.git`, a link, too large
+   * — are not published: the snapshot names the base as its head, and the turn goes on to its
+   * answer with the reason. A failure of the platform fails the turn.
+   */
+  async #candidate(
+    ready: TurnExecution,
+    home: Parameters<TurnExecution['capture']>[0]['home'],
+    repository: NonNullable<TurnPlan['repository']>,
+    git: TurnRepositoryWorkspace,
+  ): Promise<Captured> {
+    const { guard, plan } = this.init
+    await guard.assertFence()
+    const captured = await ready.capture({ home, baseSha: repository.sandboxBaseSha })
+    if (!captured.patch || !captured.untracked)
+      throw conflict('The capture of a turn with a repository has no candidate parts')
+    const outbox = captured.outbox
+    const refusedValues = await this.#refusedValues()
+    await guard.assertFence()
+    const snapshotGit = (headSha: string, published: boolean) => ({
+      provider: repository.provider,
+      branch: repository.branch,
+      baseSha: repository.baseSha,
+      sandboxBaseSha: repository.sandboxBaseSha,
+      headSha,
+      // Recovery rebuilds and publishes a candidate only when the snapshot names its publication.
+      ...(published
+        ? { publication: { taskId: plan.context.taskId, committedAt: plan.committedAt } }
+        : {}),
+    })
+    const unpublished = (refusal?: PublicationRefusal): Captured => ({
+      homeBytes: captured.homeBytes,
+      ...(outbox ? { outbox } : {}),
+      git: snapshotGit(repository.baseSha, false),
+      repository: {
+        baseSha: repository.baseSha,
+        headSha: null,
+        patch: new Uint8Array(),
+        buildPaths: [],
+        ...(refusal ? { refusal } : {}),
+      },
+    })
+    let publication: TurnPublication
+    try {
+      publication = await guard.interruptibleResource(
+        git.preparePublication({
+          ...publicationOf(plan),
+          patch: captured.patch,
+          untracked: captured.untracked,
+          credentials: this.credentials,
+          ...(refusedValues.length ? { refusedValues } : {}),
+          hiddenPaths: repository.hiddenPaths,
+        }),
+        (late) => late.dispose(),
+      )
+    } catch (error) {
+      const refusal = publicationRefusalOf(error)
+      if (refusal === null || guard.signal.aborted) throw error
+      this.#logger.warn(
+        `turn_publication_refused task=${plan.context.taskId} turn=${plan.context.turn} reason=${refusal}`,
+      )
+      return unpublished(refusal)
+    }
+    // Nothing changed: no commit goes into the mirror, the chat stays where it was.
+    if (publication.patch.byteLength === 0) {
+      await publication.dispose().catch(() => {})
+      return unpublished()
+    }
+    this.#publication = publication
+    return {
+      homeBytes: captured.homeBytes,
+      ...(outbox ? { outbox } : {}),
+      publication,
+      git: snapshotGit(publication.headSha, true),
+      repository: {
+        baseSha: publication.baseSha,
+        headSha: publication.headSha,
+        patch: publication.patch,
+        buildPaths: publication.buildPaths,
+      },
     }
   }
 
@@ -513,13 +673,15 @@ export class TurnAttempt {
       ? guard.reason
       : this.#exit?.reason === 'timeout'
         ? 'timeout'
-        : this.#checkpointStarted
-          ? 'snapshot_ambiguous'
-          : isSnapshotCredential(error)
-            ? 'snapshot_credential'
-            : isDomainError(error) && error.code === 'LEASE_LOST'
-              ? 'lease_lost'
-              : 'run_failed'
+        : this.#publishStarted
+          ? 'publication_ambiguous'
+          : this.#checkpointStarted
+            ? 'snapshot_ambiguous'
+            : isSnapshotCredential(error)
+              ? 'snapshot_credential'
+              : isDomainError(error) && error.code === 'LEASE_LOST'
+                ? 'lease_lost'
+                : 'run_failed'
   }
 
   /**
@@ -571,6 +733,7 @@ export class TurnAttempt {
         // The runner keeps the turn: the journal stays on its last step and the lease on its
         // epoch, so the next core's recovery resumes the agent or removes the container.
         guard.close()
+        await this.#publication?.dispose().catch(() => {})
         return 'held'
       }
       recovery = true
@@ -601,6 +764,7 @@ export class TurnAttempt {
         })
         .catch(() => false)
     guard.close()
+    await this.#publication?.dispose().catch(() => {})
     return this.#completed ? 'completed' : recovery ? 'held' : 'released'
   }
 

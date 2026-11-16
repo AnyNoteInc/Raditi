@@ -33,6 +33,8 @@ model User {
   email         String   @unique @db.VarChar(255)
   emailVerified Boolean  @default(false) @map("email_verified")
   image         String?  @db.VarChar(1024)
+  /// «Агент запоминает важное» (docs/plan/84-projects.md, ПР18): off — no tools and no section.
+  agentMemory   Boolean  @default(true) @map("agent_memory")
   /// The zone of the client's browser, remembered by the cabinet (docs/plan/82-scheduled-tasks.md,
   /// Зп12): a new scheduled task takes it. A name of the IANA database as Intl resolves it.
   timezone      String?  @db.VarChar(64)
@@ -57,6 +59,11 @@ model User {
   chatNotifications       ChatNotification[]
   speechCalls             SpeechCall[]
   agentInstructions       AgentInstructions?
+  projectsCreated         Project[]             @relation("ProjectCreator")
+  projectFilesUploaded    ProjectFile[]         @relation("ProjectFileUploader")
+  gitConnections          GitConnection[]       @relation("GitConnectionCreator")
+  repoActions             RepoAction[]          @relation("RepoActionCreator")
+  memoryEntries           MemoryEntry[]
   scheduledTasks          ScheduledTask[]
 
   @@map("users")
@@ -173,25 +180,32 @@ model Workspace {
   createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  createdBy       User?                  @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  members         Member[]
-  credentialRefs  CredentialRef[]
-  chatSessions    ChatSession[]
-  tasks           Task[]
-  subscriptions   Subscription[]
-  billingAccounts BillingAccount[]
-  orders          Order[]
-  attachments     Attachment[]
-  browserSessions BrowserSession[]
-  webSearchCalls  WebSearchCall[]
-  pages           Page[]
-  pageTrees       PageTree[]
-  chatDocuments   ChatDocument[]
-  usageWindows    WorkspaceUsageWindow[]
-  envVars         WorkspaceEnvVar[]
-  agentSkills     WorkspaceAgentSkill[]
-  scheduledTasks  ScheduledTask[]
-  scheduleChanges ScheduleReservation[]
+  createdBy          User?                  @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  members            Member[]
+  credentialRefs     CredentialRef[]
+  chatSessions       ChatSession[]
+  tasks              Task[]
+  subscriptions      Subscription[]
+  billingAccounts    BillingAccount[]
+  orders             Order[]
+  attachments        Attachment[]
+  browserSessions    BrowserSession[]
+  webSearchCalls     WebSearchCall[]
+  pages              Page[]
+  pageTrees          PageTree[]
+  chatDocuments      ChatDocument[]
+  usageWindows       WorkspaceUsageWindow[]
+  envVars            WorkspaceEnvVar[]
+  agentSkills        WorkspaceAgentSkill[]
+  projects           Project[]
+  projectFiles       ProjectFile[]
+  memoryEntries      MemoryEntry[]
+  memoryReservations MemoryReservation[]
+  gitConnections     GitConnection[]
+  projectRepos       ProjectRepository[]
+  repoReservations   RepoReservation[]
+  scheduledTasks     ScheduledTask[]
+  scheduleChanges    ScheduleReservation[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -331,6 +345,7 @@ model CredentialRef {
   workspace           Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   llmProviders        LlmProvider[]
   subscriptionAccount SubscriptionAccount?
+  gitConnection       GitConnection?
 
   @@index([workspaceId])
   @@map("credential_refs")
@@ -340,6 +355,8 @@ enum CredentialKind {
   llm_provider
   subscription
   mcp_server
+  /// The tokens of a git connection, kv/workspaces/<ws>/git/<connectionId> (plan 84, §4.2).
+  git_connection
 }
 
 /// Must equal agentSkillAuthKinds in @repo/domain.
@@ -391,6 +408,430 @@ model ChatSession {
 
 /// One client request: one logical agent session and one task branch (spec §7). The status
 /// changes only by a conditional UPDATE in the same transaction as its credit_ledger entry.
+/// A project of a workspace (docs/plan/84-projects.md, ПР1): its chats, instructions and, in later
+/// slices, its context, memory and repository. Its id is a UUID of version 7 from the browser
+/// (CHECK projects_id_check); only its author sees and changes it. «Удалить» puts it into the trash
+/// for 30 days (ПР20): `deleted_at` and `purge_after` go together (CHECK projects_trash_check).
+model Project {
+  id               String    @id @db.Uuid
+  workspaceId      String    @map("workspace_id") @db.Uuid
+  createdById      String    @map("created_by_id") @db.Uuid
+  /// One line, 1–80 characters after trimming (CHECK projects_name_check).
+  name             String    @db.VarChar(80)
+  goal             String?   @db.VarChar(500)
+  /// Up to 8000 characters (CHECK projects_instructions_check), from slice 84.7.
+  instructions     String?
+  useAccountMemory Boolean   @default(true) @map("use_account_memory")
+  starredAt        DateTime? @map("starred_at") @db.Timestamptz(6)
+  archivedAt       DateTime? @map("archived_at") @db.Timestamptz(6)
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
+  purgeAfter       DateTime? @map("purge_after") @db.Timestamptz(6)
+  /// «Недавние»: a new chat, the end of a pass, a change of the project.
+  activityAt       DateTime  @default(now()) @map("activity_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace  Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  createdBy  User               @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  tasks      Task[]
+  files      ProjectFile[]
+  memory     MemoryEntry[]
+  repository ProjectRepository?
+
+  @@index([workspaceId, createdById, activityAt(sort: Desc)], map: "projects_owner_activity_idx", where: raw("deleted_at IS NULL"))
+  @@index([purgeAfter], map: "projects_purge_idx", where: raw("deleted_at IS NOT NULL"))
+  @@map("projects")
+}
+
+/// A file or a text of the context of a project (docs/plan/84-projects.md, ПР8), in raditi-inbox
+/// under projects/<workspaceId>/<id> (projectFileKey in @repo/domain; CHECK project_files_key_check).
+/// Announced without a project and with a day to be taken (`expires_at`), `ready` once web checked
+/// the stored object, then bound to a project (CHECK project_files_bound_ready_check), which keeps
+/// it while it lives; core collects a file nobody took.
+model ProjectFile {
+  id           String    @id @db.Uuid
+  workspaceId  String    @map("workspace_id") @db.Uuid
+  projectId    String?   @map("project_id") @db.Uuid
+  uploadedById String?   @map("uploaded_by_id") @db.Uuid
+  /// `file` — uploaded; `text` — «Добавить текстовое содержимое», kept as `.md` (CHECK).
+  kind         String    @db.VarChar(8)
+  /// The path in /workspace/project (projectFilePath; CHECK project_files_name_check).
+  name         String    @db.VarChar(255)
+  mediaType    String    @map("media_type") @db.VarChar(127)
+  /// 1 byte to 20 MiB (CHECK project_files_size_check).
+  sizeBytes    Int       @map("size_bytes")
+  /// Of the stored bytes, once web checked them.
+  sha256       String?   @db.Char(64)
+  /// `uploading` or `ready` (projectFileStatuses; CHECK project_files_status_check).
+  status       String    @default("uploading") @db.VarChar(10)
+  s3Key        String    @map("s3_key") @db.VarChar(200)
+  /// A file without a project: until when it may be taken (now() + 24 h).
+  expiresAt    DateTime? @map("expires_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project    Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedBy User?     @relation("ProjectFileUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, name])
+  @@index([workspaceId])
+  @@index([expiresAt], map: "project_files_unbound_idx", where: raw("project_id IS NULL"))
+  @@map("project_files")
+}
+
+/// A note of memory (docs/plan/84-projects.md, ПР18, §4.1): of a project, or — project_id NULL —
+/// of the account of its user in the workspace. Only `active` goes to the agent; `proposed` waits
+/// for «Сохранить». A proposal of the agent over an active entry is `pending_action` with, for an
+/// update, its `pending_text`: the entry keeps its text until the client saves the new one.
+model MemoryEntry {
+  id            String    @id @db.Uuid
+  workspaceId   String    @map("workspace_id") @db.Uuid
+  /// Whose note it is: the author of the chat it came from, or the client who wrote it.
+  userId        String    @map("user_id") @db.Uuid
+  projectId     String?   @map("project_id") @db.Uuid
+  /// preference, fact, decision, reference (memoryKinds; CHECK memory_entries_kind_check).
+  kind          String    @db.VarChar(12)
+  /// 1 to 400 characters after trimming (CHECK memory_entries_text_check).
+  text          String    @db.VarChar(400)
+  /// active or proposed (CHECK memory_entries_status_check).
+  status        String    @db.VarChar(10)
+  /// agent or client (CHECK memory_entries_author_check).
+  author        String    @db.VarChar(8)
+  sourceTaskId  String?   @map("source_task_id") @db.Uuid
+  sourceTurn    Int?      @map("source_turn")
+  /// Grows with every change: a change at another version is refused (MEMORY_VERSION_CHANGED).
+  version       Int       @default(1)
+  /// When the client saved it: the agent changes such an entry only by a proposal.
+  confirmedAt   DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  /// update or forget — a proposal of the agent over an active entry (CHECK).
+  pendingAction String?   @map("pending_action") @db.VarChar(8)
+  pendingText   String?   @map("pending_text") @db.VarChar(400)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project      Project?            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceTask   Task?               @relation(fields: [sourceTaskId], references: [id], onDelete: SetNull)
+  reservations MemoryReservation[]
+
+  @@index([userId, projectId, status])
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([sourceTaskId])
+  @@map("memory_entries")
+}
+
+/// A change of memory the agent reserved in a turn (as page_reservations): `core` applies it when
+/// the pass completed, or closes it refused or failed (docs/plan/84-projects.md, §4.3).
+model MemoryReservation {
+  id          String    @id @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  taskId      String    @map("task_id") @db.Uuid
+  turnNo      Int       @map("turn_no")
+  /// save, update or forget (CHECK memory_reservations_kind_check).
+  kind        String    @db.VarChar(8)
+  entryId     String?   @map("entry_id") @db.Uuid
+  /// memoryReservationPayloadSchema: the arguments and the memory they were asked in.
+  payload     Json
+  /// done, refused or failed (CHECK); NULL — open.
+  outcome     String?   @db.VarChar(8)
+  reason      String?   @db.VarChar(24)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  closedAt    DateTime? @map("closed_at") @db.Timestamptz(6)
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  entry     MemoryEntry? @relation(fields: [entryId], references: [id], onDelete: SetNull)
+
+  @@index([taskId, turnNo], map: "memory_reservations_open_idx", where: raw("outcome IS NULL"))
+  @@index([createdAt], map: "memory_reservations_stale_idx", where: raw("outcome IS NULL"))
+  @@index([workspaceId])
+  @@index([entryId])
+  @@map("memory_reservations")
+}
+
+/// A GitHub or GitLab connection of a user in a workspace (docs/plan/84-projects.md, ПР10): it acts
+/// in the name of the one who connected it, so only `created_by_id` sees, binds and uses it, while
+/// a member of the workspace. Kinds and states — gitConnectionKinds and gitConnectionStates of
+/// @repo/domain (CHECKs git_connections_kind_check, git_connections_state_check). A GitHub App
+/// connection holds no token (its installation token is issued per operation); the others name
+/// their `credential_refs` row of kind `git_connection` (CHECK git_connections_credential_check).
+/// At most 10 per workspace — kept by the service layer.
+model GitConnection {
+  id              String    @id @db.Uuid
+  workspaceId     String    @map("workspace_id") @db.Uuid
+  createdById     String    @map("created_by_id") @db.Uuid
+  kind            String    @db.VarChar(16)
+  /// `github.com`, `gitlab.com` or the name of the client's GitLab server; https on 443.
+  host            String    @db.VarChar(253)
+  accountLogin    String    @map("account_login") @db.VarChar(100)
+  /// The owner of the GitHub installation or the GitLab user.
+  accountId       String    @map("account_id") @db.VarChar(40)
+  installationId  BigInt?   @map("installation_id")
+  /// github_app: who connected it; their rights are checked before every action (ПР10).
+  githubUserId    String?   @map("github_user_id") @db.VarChar(40)
+  credentialRefId String?   @unique @map("credential_ref_id") @db.Uuid
+  state           String    @default("checking") @db.VarChar(16)
+  stateReason     String?   @map("state_reason") @db.VarChar(40)
+  checkedAt       DateTime? @map("checked_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace           Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy           User                      @relation("GitConnectionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  credentialRef       CredentialRef?            @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
+  repositories        GitConnectionRepository[]
+  projectRepositories ProjectRepository[]
+
+  @@unique([workspaceId, createdById, kind, host, accountId])
+  @@index([createdById])
+  @@map("git_connections")
+}
+
+/// The repositories of a connection core sees, for the choice (P-git-repo-pick); of a github_app
+/// connection only those where the user who connected it has `permissions.push` (ПР10).
+model GitConnectionRepository {
+  connectionId   String    @map("connection_id") @db.Uuid
+  providerRepoId String    @map("provider_repo_id") @db.VarChar(40)
+  path           String    @db.VarChar(300)
+  name           String    @db.VarChar(200)
+  /// public, internal or private (CHECK git_connection_repositories_visibility_check).
+  visibility     String    @db.VarChar(10)
+  defaultBranch  String    @map("default_branch") @db.VarChar(255)
+  /// Up to 100 names of branches, by git.repo.inspect (CHECK).
+  branches       Json?
+  canPush        Boolean   @map("can_push")
+  canHook        Boolean   @map("can_hook")
+  pushedAt       DateTime? @map("pushed_at") @db.Timestamptz(6)
+  syncedAt       DateTime  @map("synced_at") @db.Timestamptz(6)
+
+  connection GitConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@id([connectionId, providerRepoId])
+  @@map("git_connection_repositories")
+}
+
+/// The repository of a project (ПР9), one: by a public link (no connection, read only) or by a
+/// connection (read and write). Provider, mode and mirror state — repoProviderKinds, repoModes and
+/// repoMirrorStates of @repo/domain (CHECKs).
+model ProjectRepository {
+  id             String    @id @db.Uuid
+  projectId      String    @unique @map("project_id") @db.Uuid
+  workspaceId    String    @map("workspace_id") @db.Uuid
+  /// NULL — a public link (CHECK project_repositories_connection_mode_check: then `read`).
+  connectionId   String?   @map("connection_id") @db.Uuid
+  provider       String    @db.VarChar(8)
+  host           String    @db.VarChar(253)
+  providerRepoId String?   @map("provider_repo_id") @db.VarChar(40)
+  path           String    @db.VarChar(300)
+  /// Only `https://<host>/…` (CHECK project_repositories_web_url_check).
+  webUrl         String    @map("web_url") @db.VarChar(500)
+  defaultBranch  String    @map("default_branch") @db.VarChar(255)
+  mode           String    @db.VarChar(5)
+  mirrorState    String    @default("syncing") @map("mirror_state") @db.VarChar(12)
+  lastFetchedSha String?   @map("last_fetched_sha") @db.Char(40)
+  fetchedAt      DateTime? @map("fetched_at") @db.Timestamptz(6)
+  /// [{ path, rule }] without values (ПР12); these files never go into a bundle (ПР35).
+  secretsFound   Json?     @map("secrets_found")
+  /// ci_config_path and the files of `include: local` of the default branch (ПР16).
+  ciPaths        Json?     @map("ci_paths")
+  /// When `git.poll` last read its builds and merge requests (claimed by CAS, slice 84.21).
+  ciPolledAt     DateTime? @map("ci_polled_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project    Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspace  Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connection GitConnection? @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+
+  branches      ProjectRepoBranch[]
+  mergeRequests ProjectMergeRequest[]
+  actions       RepoAction[]
+  ciRuns        ProjectCiRun[]
+  ciLogs        ProjectCiLog[]
+  deployActions ProjectDeployAction[]
+
+  @@index([workspaceId])
+  @@index([connectionId])
+  @@map("project_repositories")
+}
+
+/// The branch of the agent of one chat in the repository of its project (docs/plan/84-projects.md,
+/// ПР13): written by the first card «Изменения в ветке», sent to the client only by a button. A
+/// chat's own branch is found by `task_id`, never by the name. State — repoBranchStates (CHECK).
+model ProjectRepoBranch {
+  taskId              String   @id @map("task_id") @db.Uuid
+  projectRepositoryId String   @map("project_repository_id") @db.Uuid
+  /// raditi/<word>-<last 8 of the chat id>[-n] (CHECK project_repo_branches_branch_check).
+  branch              String   @db.VarChar(255)
+  /// The head of the main branch the chat's first change was based on.
+  baseSha             String   @map("base_sha") @db.Char(40)
+  /// The head of the chat in the mirror whose changes the branch at the client holds; NULL — not sent.
+  mirrorSha           String?  @map("mirror_sha") @db.Char(40)
+  /// The head of the branch at the client after the last push; NULL — not sent.
+  remoteSha           String?  @map("remote_sha") @db.Char(40)
+  /// { files, additions, deletions, list ≤ 50 } of the last card.
+  diffstat            Json?
+  ciDiffSha256        String?  @map("ci_diff_sha256") @db.Char(64)
+  ciConfirmedSha256   String?  @map("ci_confirmed_sha256") @db.Char(64)
+  ciLint              Json?    @map("ci_lint")
+  state               String   @default("local") @db.VarChar(8)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  task       Task              @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([projectRepositoryId, branch])
+  @@map("project_repo_branches")
+}
+
+/// The merge requests of a repository the platform opened or reads (ПР14): a cache — core reads
+/// the truth at the provider. State and checks — pullRequestStates and checksStates (CHECKs).
+model ProjectMergeRequest {
+  id                  String   @id @db.Uuid
+  projectRepositoryId String   @map("project_repository_id") @db.Uuid
+  taskId              String?  @map("task_id") @db.Uuid
+  /// The number of a pull request or the iid of a merge request.
+  number              Int
+  sourceBranch        String   @map("source_branch") @db.VarChar(255)
+  targetBranch        String   @map("target_branch") @db.VarChar(255)
+  title               String   @db.VarChar(255)
+  state               String   @db.VarChar(8)
+  headSha             String   @map("head_sha") @db.Char(40)
+  mergeSha            String?  @map("merge_sha") @db.Char(40)
+  checks              String   @default("none") @db.VarChar(8)
+  autoMerge           Boolean  @default(false) @map("auto_merge")
+  webUrl              String   @map("web_url") @db.VarChar(500)
+  syncedAt            DateTime @map("synced_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+  task       Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@unique([projectRepositoryId, number])
+  @@index([taskId])
+  @@map("project_merge_requests")
+}
+
+/// What the agent proposes of the repository in a turn (ПР14): `repo_request_merge` reserves, core
+/// shows it at the end of the pass as `feed.repo_proposal`. Kind — request_merge (CHECK).
+model RepoReservation {
+  id          String    @id @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  taskId      String    @map("task_id") @db.Uuid
+  turnNo      Int       @map("turn_no")
+  kind        String    @db.VarChar(16)
+  /// repoProposalPayloadSchema: { title, description, draft }.
+  payload     Json
+  /// done, refused or failed (CHECK); NULL — open.
+  outcome     String?   @db.VarChar(8)
+  reason      String?   @db.VarChar(24)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  closedAt    DateTime? @map("closed_at") @db.Timestamptz(6)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, turnNo], map: "repo_reservations_open_idx", where: raw("outcome IS NULL"))
+  @@index([workspaceId])
+  @@map("repo_reservations")
+}
+
+/// What the client pressed, and only that (ПР13, ПР15): every row holds the token of its card, and
+/// core checks its HMAC again before it calls the provider — a row inserted without a press does not
+/// run. Kind — repoActionKinds, state — repoActionStates (CHECKs).
+model RepoAction {
+  id                  String    @id @db.Uuid
+  projectRepositoryId String    @map("project_repository_id") @db.Uuid
+  taskId              String?   @map("task_id") @db.Uuid
+  /// The one who pressed.
+  createdById         String    @map("created_by_id") @db.Uuid
+  kind                String    @db.VarChar(10)
+  /// repoActionArgsSchema: the token of the card and what the client wrote on it.
+  args                Json
+  /// One press, one row (ПР13, ПР15).
+  tokenSha256         String    @unique @map("token_sha256") @db.Char(64)
+  state               String    @default("queued") @db.VarChar(8)
+  error               String?   @db.VarChar(40)
+  result              Json?
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  finishedAt          DateTime? @map("finished_at") @db.Timestamptz(6)
+
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+  task       Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  createdBy  User              @relation("RepoActionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([projectRepositoryId, createdAt])
+  @@index([taskId])
+  @@map("repo_actions")
+}
+
+/// The builds of a project repository as `git.poll` of core read them (docs/plan/84-projects.md,
+/// ПР17, §4.1; slice 84.21): a cache of the newest REPO_CI_RUNS_KEPT, the truth is the provider's.
+model ProjectCiRun {
+  projectRepositoryId String    @map("project_repository_id") @db.Uuid
+  providerRunId       String    @map("provider_run_id") @db.VarChar(40)
+  ref                 String    @db.VarChar(255)
+  sha                 String    @db.Char(40)
+  name                String    @db.VarChar(200)
+  event               String?   @db.VarChar(40)
+  /// ciStatuses of @repo/domain (CHECK).
+  status              String    @db.VarChar(8)
+  /// ciRefusals: `account_unverified` — gitlab.com did not start it (ПР17).
+  refusal             String?   @db.VarChar(24)
+  webUrl              String    @map("web_url") @db.VarChar(500)
+  /// repoCiJobsSchema: up to 100 jobs; null — not read yet.
+  jobs                Json?
+  createdAt           DateTime  @map("created_at") @db.Timestamptz(6)
+  startedAt           DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt          DateTime? @map("finished_at") @db.Timestamptz(6)
+  syncedAt            DateTime  @map("synced_at") @db.Timestamptz(6)
+
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+
+  @@id([projectRepositoryId, providerRunId])
+  @@index([projectRepositoryId, createdAt(sort: Desc)], map: "project_ci_runs_newest_idx")
+  @@map("project_ci_runs")
+}
+
+/// The tail of the log of a job for 24 hours (ПР17): ANSI taken out, values and keys masked.
+model ProjectCiLog {
+  projectRepositoryId String    @map("project_repository_id") @db.Uuid
+  providerJobId       String    @map("provider_job_id") @db.VarChar(40)
+  /// repoCiLogStates (CHECK): `loading` until core has fetched it.
+  state               String    @db.VarChar(8)
+  text                String?
+  truncated           Boolean   @default(false)
+  requestedAt         DateTime  @map("requested_at") @db.Timestamptz(6)
+  fetchedAt           DateTime? @map("fetched_at") @db.Timestamptz(6)
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz(6)
+
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+
+  @@id([projectRepositoryId, providerJobId])
+  @@index([expiresAt])
+  @@map("project_ci_logs")
+}
+
+/// The manual jobs (and, with Э10, `workflow_dispatch`) of the head of the default branch (ПР15, ПР17).
+model ProjectDeployAction {
+  projectRepositoryId String   @map("project_repository_id") @db.Uuid
+  ref                 String   @db.VarChar(255)
+  sha                 String   @db.Char(40)
+  kind                String   @db.VarChar(16)
+  providerActionId    String   @map("provider_action_id") @db.VarChar(200)
+  name                String   @db.VarChar(200)
+  syncedAt            DateTime @map("synced_at") @db.Timestamptz(6)
+
+  repository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+
+  @@id([projectRepositoryId, kind, providerActionId])
+  @@map("project_deploy_actions")
+}
+
 model Task {
   id            String          @id @default(uuid(7)) @db.Uuid
   workspaceId   String          @map("workspace_id") @db.Uuid
@@ -440,6 +881,9 @@ model Task {
   pinnedAt      DateTime?       @map("pinned_at") @db.Timestamptz(6)
   /// «В архив»: the chat leaves the list for «Архив»; a new message brings it back.
   archivedAt    DateTime?       @map("archived_at") @db.Timestamptz(6)
+  /// The project the chat is in (docs/plan/84-projects.md, ПР2); NULL — a chat without one. A
+  /// project of the chat's own workspace, not deleted (trigger tasks_project_workspace).
+  projectId     String?         @map("project_id") @db.Uuid
 
   /// First bounded content access, including GET-only privacy maps.
   contentAccessedAt    DateTime? @map("content_accessed_at") @db.Timestamptz(6)
@@ -449,13 +893,14 @@ model Task {
   /// When the contact map the `web_*` tools wrote for this task was removed (К38).
   webMasksPurgedAt     DateTime? @map("web_masks_purged_at") @db.Timestamptz(6)
 
-  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  chatSession        ChatSession?        @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
-  createdBy          User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  revertsTask        Task?               @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
-  revertedBy         Task[]              @relation("TaskReverts")
-  telegramCurrentOf  ChannelIdentity[]   @relation("ChannelCurrentTask")
-  pricingRule        PricingRule?        @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
+  workspace          Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  chatSession        ChatSession?          @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
+  createdBy          User?                 @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  revertsTask        Task?                 @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
+  project            Project?              @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  revertedBy         Task[]                @relation("TaskReverts")
+  telegramCurrentOf  ChannelIdentity[]     @relation("ChannelCurrentTask")
+  pricingRule        PricingRule?          @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
   turns              TaskTurn[]
   events             TaskEvent[]
   queuedMessages     TaskQueuedMessage[]
@@ -475,10 +920,16 @@ model Task {
   pageTrees          PageTree[]
   pageFiles          PageFile[]
   chatDocuments      ChatDocument[]
+  memorySources      MemoryEntry[]
+  memoryReservations MemoryReservation[]
+  repoBranch         ProjectRepoBranch?
+  mergeRequests      ProjectMergeRequest[]
+  repoReservations   RepoReservation[]
+  repoActions        RepoAction[]
   /// The run of a scheduled task this chat was started by (docs/plan/82-scheduled-tasks.md, Зп17).
   scheduledRun       ScheduledRun?
   /// Scheduled tasks its agent set up (Зп33), and the changes of them its turns reserved.
-  setUpSchedules     ScheduledTask[]      @relation("ScheduledTaskSource")
+  setUpSchedules     ScheduledTask[]       @relation("ScheduledTaskSource")
   scheduleChanges    ScheduleReservation[]
 
   @@index([workspaceId, createdAt(sort: Desc)])
@@ -489,6 +940,7 @@ model Task {
   @@index([createdById])
   @@index([revertsTaskId])
   @@index([pricingRuleId])
+  @@index([projectId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_project_updated_idx", where: raw("project_id IS NOT NULL AND deleted_at IS NULL"))
   @@map("tasks")
 }
 

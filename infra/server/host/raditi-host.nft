@@ -3,7 +3,13 @@
 # from the public interface only SSH (2222) reaches the host itself, and Docker's published 80
 # and 443 (they go through FORWARD, not INPUT). The private address 10.10.0.0/24 is dropped from
 # outside before Docker's DNAT: a neighbour on the provider's network could otherwise send to it.
-# Containers reach the host through their bridges, which these chains do not touch.
+# Containers reach the host through their bridges, which these chains do not touch — except the
+# bridge of the git worker below.
+#
+# rd-git (BRIDGE_PREFIX=rd of env.example, network git-egress): the git worker parses the packs
+# of foreign servers (docs/plan/84-projects.md, ПР33), so it reaches public addresses only —
+# neither the host (its private 10.10.0.10 and public address answer INPUT) nor a published port
+# of the platform (Docker's DNAT sends that through FORWARD to a private container address).
 table inet raditi_host
 delete table inet raditi_host
 table inet raditi_host {
@@ -13,10 +19,16 @@ table inet raditi_host {
   }
   chain input {
     type filter hook input priority filter - 10; policy accept;
+    iifname "rd-git" drop
     iifname "eth0" ct state established,related accept
     iifname "eth0" ip protocol icmp accept
     iifname "eth0" ip6 nexthdr ipv6-icmp accept
     iifname "eth0" tcp dport 2222 accept
     iifname "eth0" drop
+  }
+  chain forward {
+    type filter hook forward priority filter - 10; policy accept;
+    iifname "rd-git" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } drop
+    iifname "rd-git" ip6 daddr { ::1, fc00::/7, fe80::/10 } drop
   }
 }

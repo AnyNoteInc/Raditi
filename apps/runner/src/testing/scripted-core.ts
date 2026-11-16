@@ -18,10 +18,13 @@ interface WaitingPoll {
  * the hub, a newer poll of the session answers the older ones empty, and like HTTP, a poll the
  * runner aborts after core wrote its answer loses that answer.
  */
-export function scriptedCore(options: { inbox?: readonly Uint8Array[] } = {}) {
+export function scriptedCore(
+  options: { inbox?: readonly Uint8Array[]; project?: readonly Uint8Array[] } = {},
+) {
   const polls: RunnerPollRequest[] = []
   /** The places of the files of the client the runner fetched, in order. */
   const inboxReads: number[] = []
+  const projectReads: number[] = []
   const reports: RunnerReport[] = []
   const waiting: WaitingPoll[] = []
   const transport = {
@@ -48,11 +51,21 @@ export function scriptedCore(options: { inbox?: readonly Uint8Array[] } = {}) {
       reports.push(structuredClone(report))
     }),
     reconcile: vi.fn(async () => ({ remove: [] })),
-    inbox: async function* (_assignmentId: string, index: number) {
-      inboxReads.push(index)
-      const file = options.inbox?.[index]
+    inbox: async function* (
+      _assignmentId: string,
+      index: number,
+      _fence: unknown,
+      _sizeBytes: number,
+      root: 'inbox' | 'project' = 'inbox',
+    ) {
+      if (root === 'project') projectReads.push(index)
+      else inboxReads.push(index)
+      const file = (root === 'project' ? options.project : options.inbox)?.[index]
       if (!file) throw new RunnerCallError('inbox', 409)
       yield Buffer.from(file)
+    },
+    bundle: async function* () {
+      yield Buffer.from('synthetic bundle')
     },
     key: vi.fn(async (): Promise<Uint8Array> => new Uint8Array(32).fill(7)),
     candidate: vi.fn(async () => {}),
@@ -62,6 +75,7 @@ export function scriptedCore(options: { inbox?: readonly Uint8Array[] } = {}) {
     polls,
     reports,
     inboxReads,
+    projectReads,
     types: () => reports.map((report) => report.type),
     /** Answers the runner's waiting poll. */
     async send(...commands: unknown[]) {

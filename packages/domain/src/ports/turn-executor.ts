@@ -3,13 +3,22 @@ import { z } from 'zod'
 import { turnSkillsSchema } from '../agent/skills.ts'
 import { attachmentLimits } from '../attachments/rules.ts'
 import { badRequest } from '../errors.ts'
+import type { TurnBundleSource } from '../git/publication.ts'
+import { projectFilePath } from '../projects/files.ts'
+import { projectLimits } from '../projects/limits.ts'
+import { turnRepositorySchema } from '../repo/turn.ts'
 import { snapshotIdSchema, snapshotReferenceSchema } from '../sessions/snapshot-manifest.ts'
 import type { SnapshotManifest, SnapshotReference } from '../sessions/snapshot-manifest.ts'
-import { taskRequirementsSchema, type TaskRequirements } from '../tasks/task-requirements.ts'
+import {
+  requirementsOf,
+  taskRequirementsSchema,
+  type TaskRequirements,
+} from '../tasks/task-requirements.ts'
 import {
   agentDriverIds,
   nativeSessionIdSchema,
   SANDBOX_INBOX,
+  SANDBOX_PROJECT,
   turnActions,
   type AgentDriverId,
   type AgentEvent,
@@ -44,8 +53,9 @@ export type TurnExecutorKind = (typeof turnExecutorKinds)[number]
  * driver; an executor owns the turn's container. `LocalTurnExecutor` drives a local
  * SandboxProvider (PoC, tests); the remote one sends the same steps to a runner VM over the
  * pull protocol (runner/protocol.ts). An executor never holds platform credentials: S3 objects
- * arrive as presigned requests, data keys through functions of core. A turn has no repository
- * (docs/plan/83-remove-projects.md): its working directory is empty.
+ * arrive as presigned requests, data keys and the base bundle through functions of core. A turn
+ * of a chat without a repository has an empty working directory; one of a chat of a project with
+ * a repository gets the bundle of its base (docs/plan/84-projects.md, ПР12).
  */
 export interface TurnExecutor {
   readonly kind: TurnExecutorKind
@@ -59,8 +69,8 @@ export interface TurnExecutor {
    */
   slots?(): number
   /**
-   * Create the container with an empty working directory, restore turn n−1, put the client's
-   * files, write the driver files.
+   * Create the container, import the base bundle into the working directory — without one it is
+   * empty —, restore turn n−1, put the client's files, write the driver files.
    */
   prepare(input: TurnPrepareInput, signal: AbortSignal): Promise<TurnExecution>
   /**
@@ -110,11 +120,22 @@ export interface TurnPrepareInput {
   remainingMs: number
   restore?: TurnRestoreSource
   /**
+   * The repository of the turn (docs/plan/84-projects.md, ПР12): imported into SANDBOX_WORKDIR
+   * before the restore, from the bundle's own commit. Absent — an empty working directory.
+   */
+  bundle?: TurnBundleSource
+  /**
    * The files the client sent with the task, as the plan names them (`input.attachments`): the
    * executor writes each at its path, read-only, after the restore (turnMayHoldInbox,
    * assertTurnInbox); absent — none.
    */
   inbox?: readonly TurnInboxFile[]
+  /**
+   * The files of the context of the chat's project (`input.projectFiles`, docs/plan/84-projects.md,
+   * ПР8): written like `inbox`, read-only, after it, under SANDBOX_PROJECT (assertTurnProjectFiles).
+   * They are put again by every turn and never captured. Absent — none.
+   */
+  projectFiles?: readonly TurnInboxFile[]
   /** Selects the stateless event parser on the executor side. */
   driverId: AgentDriverId
   /** Already checked by core (preparedRunSchema, preparedRunExposesSecret). */
@@ -129,7 +150,7 @@ export interface TurnPrepareInput {
    */
   envValues?: readonly string[]
   /**
-   * Called once the container exists, before the restore. From then on the caller owns
+   * Called once the container exists, before the bundle import and the restore. From then on the caller owns
    * its removal through this execution, even when prepare fails later; a rejection stops prepare.
    */
   created(execution: TurnExecution): Promise<void>
@@ -141,9 +162,10 @@ export interface TurnPrepareInput {
 
 /**
  * Turn n−1: the manifest is already checked by core; its part is verified before any write. Only
- * `home` is restored: a snapshot of a chat that had a project (before plan 83) also names a patch
- * and new files of its working copy, which a turn without a repository has no place for — they
- * stay in S3 and are not fetched; the home part opens under the manifest's AAD as before.
+ * `home` is restored: the working copy of a turn with a repository comes from its bundle — the
+ * commit the turn before published (docs/plan/84-projects.md, ПР12) —, and the patch and new files
+ * of a snapshot stay in S3 for the recovery of a publication; the home part opens under the
+ * manifest's AAD as before.
  */
 export interface TurnRestoreSource {
   manifest: SnapshotManifest
@@ -207,10 +229,12 @@ export interface TurnExecution {
   /** Stop the agent's processes; idempotent. */
   quiesce(): Promise<void>
   /**
-   * Idempotent; the home archive stays with the executor until seal(). Only `home` is taken: the
-   * working directory is not read (a turn has no repository).
+   * Idempotent; the home archive stays with the executor until seal(). With `baseSha` — the commit
+   * the bundle checked the sandbox out at — the patch of the working tree against it and its new
+   * files are taken too (docs/plan/84-projects.md, ПР12); without it only `home`: the working
+   * directory is not read. An executor refuses a capture whose `baseSha` disagrees with its prepare.
    */
-  capture(input: { home: SessionState }): Promise<CapturedTurn>
+  capture(input: { home: SessionState; baseSha?: string }): Promise<CapturedTurn>
   /** Encrypt the captured home archive and store it with a create-only presigned PUT. */
   seal(input: TurnSealInput): Promise<SealedTurnPart>
   destroy(reason: DestroyReason): Promise<void>
@@ -241,8 +265,13 @@ export interface TurnAgentExec {
   kill(): Promise<void>
 }
 
-/** What a capture took: the home part alone — the snapshot of a turn is that part. */
+/**
+ * What a capture took. `patch` and `untracked` are there exactly when the capture had a `baseSha`:
+ * untrusted until core builds the candidate from them.
+ */
 export interface CapturedTurn {
+  patch?: Uint8Array
+  untracked?: Uint8Array
   /** The sealed home part has exactly this size: AES-GCM adds no padding. */
   homeBytes: number
   /**
@@ -321,10 +350,12 @@ export interface TurnRequest {
   input: TurnInput
   driverVersion: string
   /**
-   * What the turn's environment needs (docs/plan/57-browser-tasks.md, Б3): never a repository.
-   * Absent — nothing (requirementsOf).
+   * What the turn's environment needs (docs/plan/57-browser-tasks.md, Б3). Absent — nothing
+   * (requirementsOf). A repository exactly when `repository` is there.
    */
   requirements?: TaskRequirements
+  /** The repository of a turn of a chat of a project (docs/plan/84-projects.md, §4.3). */
+  repository?: z.infer<typeof turnRepositorySchema>
   /** Trusted persisted time; retries use the identical value. */
   committedAt: string
   previous?: SnapshotReference
@@ -384,10 +415,44 @@ export const turnInboxPathSchema = z
     `expected a normalized path under ${SANDBOX_INBOX}`,
   )
 
+/**
+ * What one turn gets of the files of its project (docs/plan/84-projects.md, ПР8, §4.7): all the
+ * ready ones — a project holds at most this many and this many bytes.
+ */
+export const turnProjectFilesLimits = Object.freeze({
+  files: projectLimits.filesPerProject,
+  bytes: projectLimits.projectBytes,
+})
+
+/**
+ * A path of the plan's `input.projectFiles`: a clean path of a file of a project
+ * (projectFilePath) under SANDBOX_PROJECT.
+ */
+export const turnProjectPathSchema = z
+  .string()
+  .max(1024)
+  .refine(
+    (path) => turnProjectFileName(path) !== null,
+    `expected a clean path of a project file under ${SANDBOX_PROJECT}`,
+  )
+
+/** Where the host puts a file of the project: under its own path. null — not a clean path. */
+export function turnProjectPath(name: string): string | null {
+  return projectFilePath(name) === name ? `${SANDBOX_PROJECT}/${name}` : null
+}
+
+/** The path in the project a path of turnProjectPath() names; null for any other path. */
+export function turnProjectFileName(path: string): string | null {
+  if (!path.startsWith(`${SANDBOX_PROJECT}/`)) return null
+  const name = path.slice(SANDBOX_PROJECT.length + 1)
+  return projectFilePath(name) === name ? name : null
+}
+
 export const turnInputSchema = z
   .object({
     prompt: z.string().min(1).max(turnPlanLimits.prompt),
     attachments: z.array(turnInboxPathSchema).max(turnPlanLimits.attachments),
+    projectFiles: z.array(turnProjectPathSchema).max(turnProjectFilesLimits.files).optional(),
     action: z.enum(turnActions).optional(),
   })
   .strict() satisfies z.ZodType<TurnInput>
@@ -462,9 +527,67 @@ export function assertTurnInbox(
 }
 
 /**
+ * The files of the project of a prepare, as both executors and the runner protocol take them:
+ * only for the turn of a chat (turnMayHoldInbox — a project's files belong to its chats), each at a
+ * path of turnProjectPath() once, each of a file's size, all within turnProjectFilesLimits.
+ */
+export function assertTurnProjectFiles(
+  files: readonly Pick<TurnInboxFile, 'path' | 'sizeBytes'>[],
+  mayHold: boolean,
+): void {
+  if (files.length === 0) return
+  if (!mayHold) throw badRequest('Files of a project go only to the turn of its chat')
+  if (files.length > turnProjectFilesLimits.files)
+    throw badRequest('Too many files of the project for one turn')
+  let bytes = 0
+  const paths = new Set<string>()
+  for (const file of files) {
+    if (turnProjectFileName(file.path) === null || paths.has(file.path))
+      throw badRequest('Invalid path of a file of the project')
+    // A file and a folder of the same path cannot both be written.
+    for (const other of paths)
+      if (other.startsWith(`${file.path}/`) || file.path.startsWith(`${other}/`))
+        throw badRequest('Invalid path of a file of the project')
+    if (
+      !Number.isSafeInteger(file.sizeBytes) ||
+      file.sizeBytes < 1 ||
+      file.sizeBytes > projectLimits.fileBytes
+    )
+      throw badRequest('Invalid size of a file of the project')
+    paths.add(file.path)
+    bytes += file.sizeBytes
+  }
+  if (bytes > turnProjectFilesLimits.bytes)
+    throw badRequest('Files of the project too large for one turn')
+}
+
+const MIB = 1024 * 1024
+
+/**
+ * How the 512 MiB of `/workspace` are shared in a turn (docs/plan/84-projects.md, §4.7): without a
+ * repository — the files of the chat up to 200 MiB and of the project up to 100; with one (Э6) —
+ * the tree with `.git` up to 192 MiB, the files of the project up to 100, of the chat up to 100.
+ * What is left — at least 120 MiB — is the agent's: `/workspace/out`, new files, dependencies.
+ */
+export function turnWorkspaceBudget(requirements: Pick<TaskRequirements, 'repository'>): {
+  workspace: number
+  repository: number
+  inbox: number
+  project: number
+  agent: number
+} {
+  const workspace = 512 * MIB
+  const repository = requirements.repository ? 192 * MIB : 0
+  const inbox = requirements.repository ? 100 * MIB : turnInboxLimits.bytes
+  const project = turnProjectFilesLimits.bytes
+  return { workspace, repository, inbox, project, agent: workspace - repository - inbox - project }
+}
+
+/**
  * A TurnRequest without its credentials, as turn_assignments.plan keeps it for recovery.
  * Strict objects refuse an LLM key or an MCP token instead of silently storing them. A plan of a
- * turn with a repository (before plan 83: `workspace`, `replacesTurn`, `rebased`) is refused.
+ * turn with a repository before plan 83 (`workspace`, `replacesTurn`, `rebased`) is refused; one of
+ * plan 84 names its repository in `repository` (docs/plan/84-projects.md, §4.3).
  */
 export const turnPlanSchema = z
   .object({
@@ -503,14 +626,17 @@ export const turnPlanSchema = z
     /** Recovery picks the driver of the turn by it: extractResult, sessionState, the parser. */
     driverId: z.enum(agentDriverIds),
     driverVersion: snapshotReferenceSchema.shape.driver.shape.version,
-    requirements: taskRequirementsSchema
-      .refine((r) => !r.repository, 'a turn has no repository')
-      .optional(),
+    requirements: taskRequirementsSchema.optional(),
+    repository: turnRepositorySchema.optional(),
     committedAt: z.iso.datetime(),
     previous: snapshotReferenceSchema.optional(),
     rewound: z.literal(true).optional(),
   })
   .strict()
+  .refine(
+    (plan) => requirementsOf(plan).repository === (plan.repository !== undefined),
+    'a turn names its repository exactly when it needs one',
+  )
 export type TurnPlan = z.infer<typeof turnPlanSchema>
 
 /** The request without the LLM key and MCP token; refuses anything the plan cannot hold. */

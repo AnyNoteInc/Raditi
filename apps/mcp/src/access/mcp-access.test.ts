@@ -64,6 +64,8 @@ describe('MCP token access', () => {
     expect(await store.authenticate(token)).toEqual({
       ...base,
       requirements: { repository: false, browser: false },
+      memory: null,
+      repository: null,
       unattended: false,
     })
     expect(JSON.stringify($queryRaw.mock.calls)).not.toContain(token)
@@ -79,9 +81,65 @@ describe('MCP token access', () => {
     expect(await store.authenticate(token)).toEqual({
       ...base,
       requirements: { repository: false, browser: true },
+      memory: null,
+      repository: null,
       unattended: false,
     })
     $queryRaw.mockResolvedValueOnce([row(scope(), null)])
+    await expect(store.authenticate(token)).rejects.toMatchObject({
+      code: 'MCP_ACCESS_SCOPE_INVALID',
+    })
+  })
+
+  it('carries the memory of the chat while its author has it on and its project is not in the trash (plan 84, ПР18)', async () => {
+    const base = scope()
+    const userId = randomUUID()
+    const projectId = randomUUID()
+    const memoryRow = (extra: Record<string, unknown>) => ({
+      ...row(base),
+      authorId: userId,
+      agentMemory: true,
+      projectId,
+      projectGone: false,
+      ...extra,
+    })
+    const $queryRaw = vi.fn()
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
+    $queryRaw.mockResolvedValueOnce([memoryRow({})])
+    expect((await store.authenticate(token))?.memory).toEqual({ userId, projectId })
+    $queryRaw.mockResolvedValueOnce([memoryRow({ projectId: null, projectGone: null })])
+    expect((await store.authenticate(token))?.memory).toEqual({ userId, projectId: null })
+    for (const off of [{ agentMemory: false }, { projectGone: true }, { authorId: null }]) {
+      $queryRaw.mockResolvedValueOnce([memoryRow(off)])
+      expect((await store.authenticate(token))?.memory, JSON.stringify(off)).toBeNull()
+    }
+  })
+
+  it('carries the repository the plan of the turn names, and nothing of a broken one (plan 84, 84.19)', async () => {
+    const base = scope()
+    const repository = {
+      projectId: randomUUID(),
+      projectRepositoryId: randomUUID(),
+      provider: 'gitlab',
+      mode: 'write',
+      branch: 'raditi/novoe-menyu-0000000a',
+      baseSha: 'a'.repeat(40),
+      sandboxBaseSha: 'b'.repeat(40),
+      hiddenPaths: [],
+    }
+    const $queryRaw = vi.fn()
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
+    $queryRaw.mockResolvedValueOnce([{ ...row(base), repository }])
+    const access = await store.authenticate(token)
+    expect(access?.requirements.repository).toBe(true)
+    expect(access?.repository).toEqual({
+      projectId: repository.projectId,
+      projectRepositoryId: repository.projectRepositoryId,
+      mode: 'write',
+      branch: repository.branch,
+      baseSha: repository.baseSha,
+    })
+    $queryRaw.mockResolvedValueOnce([{ ...row(base), repository: { ...repository, mode: 'all' } }])
     await expect(store.authenticate(token)).rejects.toMatchObject({
       code: 'MCP_ACCESS_SCOPE_INVALID',
     })

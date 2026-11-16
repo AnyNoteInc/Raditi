@@ -40,6 +40,9 @@ import {
 import { AppIcon } from '@/components/application/app-icon'
 import { PanelToggle } from '@/components/application/cabinet-panel'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
+import { MoveToProjectDialog, useMoveToProject } from '@/components/projects/move-to-project'
+import { moveText, projectHref } from '@/components/projects/project-texts'
+import { useContextMentions } from '@/components/projects/use-context-mentions'
 import { ScheduleDialog, type ScheduleDialogOpening } from '@/components/scheduled/schedule-dialog'
 import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
@@ -192,6 +195,11 @@ function DialogHead({
 }) {
   const [renaming, setRenaming] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [moving, setMoving] = useState(false)
+  const [moveError, setMoveError] = useState<string | null>(null)
+  const move = useMoveToProject()
+  // «Проект «X» / название чата» (docs/plan/84-projects.md, ПР6).
+  const project = head?.task.project ?? null
   return (
     <Box
       component="header"
@@ -237,9 +245,43 @@ function DialogHead({
                 minWidth: 0,
                 display: 'flex',
                 alignItems: 'baseline',
-                gap: 1.5,
+                gap: 1,
               }}
             >
+              {project !== null ? (
+                <Box
+                  component="span"
+                  sx={{ flex: '0 1 auto', minWidth: 0, display: 'flex', gap: 1, fontSize: 15 }}
+                >
+                  <Box
+                    component={Link}
+                    href={projectHref(project.id)}
+                    title={project.name}
+                    data-chat-project=""
+                    sx={{
+                      minWidth: 0,
+                      maxWidth: { xs: 120, sm: 240 },
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      color: 'text.secondary',
+                      textDecoration: 'none',
+                      borderRadius: '6px',
+                      '&:hover': { color: 'text.primary', textDecoration: 'underline' },
+                      '&:focus-visible': {
+                        outline: '2px solid',
+                        outlineColor: 'primary.main',
+                        outlineOffset: 2,
+                      },
+                    }}
+                  >
+                    {moveText.crumb(project.name)}
+                  </Box>
+                  <Box component="span" aria-hidden="true" sx={{ color: 'text.secondary' }}>
+                    /
+                  </Box>
+                </Box>
+              ) : null}
               <Typography
                 component="h1"
                 title={title}
@@ -277,10 +319,44 @@ function DialogHead({
             title={title}
             onRename={() => setRenaming(true)}
             onRemove={() => setRemoving(true)}
+            project={{
+              inProject: project !== null,
+              onMove: () => {
+                setMoveError(null)
+                setMoving(true)
+              },
+              onTakeOut: () => {
+                setMoveError(null)
+                void move.to(taskId, null).then((refused) => {
+                  setMoveError(refused)
+                  if (refused === null) onRenamed()
+                })
+              },
+            }}
           />
         ) : null}
         {tools}
       </Box>
+      {moveError !== null ? (
+        <Typography
+          role="alert"
+          variant="body2"
+          color="error.main"
+          sx={{ gridColumn: '1 / -1', gridRow: 2 }}
+        >
+          {moveError}
+        </Typography>
+      ) : null}
+      {moving ? (
+        <MoveToProjectDialog
+          taskId={taskId}
+          title={title}
+          currentProjectId={project?.id ?? null}
+          open
+          onClose={() => setMoving(false)}
+          onMoved={onRenamed}
+        />
+      ) : null}
       {removing ? (
         <RemoveDialogConfirm taskId={taskId} open onClose={() => setRemoving(false)} />
       ) : null}
@@ -525,6 +601,8 @@ export function DialogView({
   // is on the screen its browser does not close for idle, the panel open or not.
   useBrowserWatching({ taskId, enabled: browserLive })
   const attachments = useAttachments()
+  // `@` in a chat of a project names the files of its context (docs/plan/84-projects.md, ПР24).
+  const mentions = useContextMentions(head?.task.project?.id ?? null)
   // The names of the files the messages sent: read once a message has one.
   const sentIds = rows.flatMap((row) =>
     row.type === 'feed.request' && 'attachments' in row && Array.isArray(row.attachments)
@@ -983,6 +1061,7 @@ export function DialogView({
   }
 
   const actions: FeedActions = {
+    taskId,
     onStop: () => runCommand('cancel'),
     onOpenDocument: (fileId) => {
       const document = documentOfFile(chatDocuments, fileId)
@@ -1081,7 +1160,7 @@ export function DialogView({
         </Box>
         <Button
           component={Link}
-          href={newChatHref()}
+          href={newChatHref(head.task.project?.id ?? null)}
           variant="outlined"
           startIcon={<AppIcon name="plus" size={18} />}
           sx={{ borderRadius: '999px' }}
@@ -1136,6 +1215,7 @@ export function DialogView({
         effort={settings}
         commands={composerCommands}
         attachments={attachments}
+        mentions={mentions}
         noSecrets={noSecrets}
         restored={undoneWords}
         restoredTaken={wordsTaken}

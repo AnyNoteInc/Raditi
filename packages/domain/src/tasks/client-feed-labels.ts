@@ -23,6 +23,12 @@ import type {
   TaskWaitingReason,
 } from './client-feed.ts'
 import type { TaskStatus } from './task-status.ts'
+import {
+  repoActionText,
+  repoLeftTexts,
+  type RepoActionKind,
+  type RepoActionState,
+} from '../repo/feed.ts'
 
 /**
  * What the platform itself says in a dialog — the catalogue the feed design calls
@@ -290,6 +296,89 @@ export function feedPageChangeText(row: {
     return `Агент перенёс в корзину «${row.title}»${more}. 30 дней её можно вернуть.`
   if (row.change === 'restored') return `Агент вернул из корзины «${row.title}»${more}.`
   return `Агент изменил страницу «${row.title}».`
+}
+
+/**
+ * What the end of a pass did with a note of memory (`feed.memory_change`, docs/plan/84-projects.md,
+ * ПР18, §4.4): «Запомнено: …», or a proposal the client saves or drops in the cabinet.
+ */
+export function feedMemoryChangeText(row: {
+  action: 'saved' | 'proposed' | 'updated' | 'update_proposed' | 'forgotten' | 'forget_proposed'
+  text: string
+}): string {
+  switch (row.action) {
+    case 'saved':
+      return `Запомнено: ${row.text}`
+    case 'proposed':
+      return `Агент предлагает запомнить: ${row.text}`
+    case 'updated':
+      return `Запись памяти изменена: ${row.text}`
+    case 'update_proposed':
+      return `Агент предлагает изменить запись: ${row.text}`
+    case 'forgotten':
+      return `Забыто: ${row.text}`
+    case 'forget_proposed':
+      return `Агент предлагает забыть: ${row.text}`
+  }
+}
+
+/**
+ * A note of memory the end of a pass did not keep (`feed.memory_left`, ПР18): never its text — it
+ * may be a secret.
+ */
+export function feedMemoryLeftText(row: {
+  action: 'save' | 'update' | 'forget'
+  reason: 'secret' | 'limit' | 'version' | 'not_found' | 'off' | 'failed'
+}): string {
+  const head =
+    row.action === 'save'
+      ? 'Не запомнено'
+      : row.action === 'update'
+        ? 'Запись памяти не изменена'
+        : 'Запись памяти не забыта'
+  const why = {
+    secret: 'похоже, в записи пароль, ключ или значение переменной',
+    limit: 'в памяти уже 40 записей — удалите ненужные',
+    version: 'запись уже изменили — попросите агента посмотреть память снова',
+    not_found: 'такой записи в памяти этого чата больше нет',
+    off: 'память агента выключена в настройках',
+    failed: 'попросите агента повторить',
+  }[row.reason]
+  return `${head}: ${why}.`
+}
+
+/**
+ * What a turn left in the chat's branch (`feed.repo_changes`, docs/plan/84-projects.md, ПР26): the
+ * line of the card «Изменения в ветке» — the branch and «N файлов · +A −D».
+ */
+export function feedRepoChangesText(row: {
+  branch: string
+  files: number
+  additions: number
+  deletions: number
+}): string {
+  const files = pluralRu(row.files, 'файл', 'файла', 'файлов')
+  return `Изменения в ветке ${row.branch}: ${row.files} ${files} · +${row.additions} −${row.deletions}`
+}
+
+/** Changes a turn did not keep (`feed.repo_left`, ПР12): the paths without values. */
+export function feedRepoLeftText(row: {
+  reason: keyof typeof repoLeftTexts
+  paths?: readonly string[]
+}): string {
+  const paths = row.paths?.length ? `: ${row.paths.join(', ')}` : ''
+  return `${repoLeftTexts[row.reason]}${paths}.`
+}
+
+/** The agent proposes a merge request (`feed.repo_proposal`, ПР14). */
+export function feedRepoProposalText(row: { title: string }): string {
+  return `Агент предлагает открыть запрос на слияние: «${row.title}»`
+}
+
+/** What a button of the client did (`feed.repo_action`, ПР13). */
+export function feedRepoActionText(row: { kind: RepoActionKind; state: RepoActionState }): string {
+  // The row has no adapter to write the number with (`!37`, `#37`, ПР3): the card links it.
+  return `${repoActionText(row, null)}.`
 }
 
 /**

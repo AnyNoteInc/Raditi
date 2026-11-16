@@ -37,6 +37,8 @@ import {
 import { collectExpiredAttachments, expiredAttachmentsIn } from './attachment-collector.ts'
 import type { LivePasses } from './live-passes.ts'
 import type { PageMetrics } from '../pages/page-metrics.ts'
+import type { MemoryChanges } from './memory-changes.ts'
+import type { ProjectTrash } from '../projects/project-trash.ts'
 import type { PagePublications } from './page-publications.ts'
 import type { ScheduleChanges } from './schedule-changes.ts'
 import {
@@ -92,6 +94,16 @@ export interface TaskSweepDependencies {
   /** The metrics of the sites of pages, counted again after each sweep of them (73.12). */
   pageMetrics?: Pick<PageMetrics, 'refresh'> | null
   /**
+   * The trash of projects (docs/plan/84-projects.md, ПР20): chats of projects in the trash are
+   * stopped, projects past their day purged. Absent — not swept.
+   */
+  projects?: Pick<ProjectTrash, 'sweep'> | null
+  /**
+   * The memory of chats (docs/plan/84-projects.md, ПР18): a change no end of a turn applied is
+   * closed failed a day on. Absent — not swept.
+   */
+  memory?: Pick<MemoryChanges, 'sweep'> | null
+  /**
    * The changes of the scheduled tasks no end of a turn reached (docs/plan/82-scheduled-tasks.md,
    * Зп33): closed and told once the turn is over. Absent — not swept.
    */
@@ -129,6 +141,8 @@ export class TaskSweep {
       ['browsers', () => this.sweepBrowsers()],
       ['attachments', () => this.collectAttachments()],
       ['pages', () => this.sweepPages()],
+      ['projects', () => this.deps.projects?.sweep()],
+      ['memory', () => this.sweepMemory()],
       ['schedules', () => this.sweepSchedules()],
       ['manual runs', () => this.closeStaleManualRuns()],
     ] as const) {
@@ -402,7 +416,7 @@ export class TaskSweep {
               v: 1,
               turn: task.turnNo > 0 ? task.turnNo : null,
               by: row.status === 'queued' ? 'queue_timeout' : 'no_answer',
-              site: feedEndedSiteOf({ siteId: null }, writes),
+              site: feedEndedSiteOf(writes),
               credits,
               ...(objects.length ? { objects } : {}),
             },
@@ -464,6 +478,15 @@ export class TaskSweep {
     // The numbers of the sites are a reading, never a reason to stop the sweep.
     await this.deps.pageMetrics?.refresh().catch(() => this.#logger.warn('page_metrics_failed'))
     return stale.length
+  }
+
+  /** Changes of memory of turns that never ended, a day on (PAGE_SWEEP_AFTER_MS). */
+  async sweepMemory(): Promise<number> {
+    const { memory } = this.deps
+    if (!memory) return 0
+    const closed = await memory.sweep(new Date(this.#now().getTime() - PAGE_SWEEP_AFTER_MS))
+    if (closed > 0) this.#logger.log(`task_sweep_memory failed=${closed}`)
+    return closed
   }
 
   /**

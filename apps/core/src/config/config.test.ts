@@ -54,6 +54,7 @@ const prodEnv = (overrides: Env = {}): Env => ({
   SENDSAY_API_KEY: 'sendsay-key',
   METRICS_TOKEN: PROD_METRICS_TOKEN,
   RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@10.20.0.11`,
+  GIT_MIRROR_DIR: '/git',
   ...overrides,
 })
 
@@ -758,6 +759,71 @@ describe('loadConfig — the browser worker (docs/plan/57-browser-tasks.md, Б10
         prodEnv({ BROWSER_WORKER_URL: 'https://browser.internal', BROWSER_WORKER_TOKEN: TOKEN }),
       ).browser,
     ).toMatchObject({ url: 'https://browser.internal' })
+  })
+})
+
+describe('loadConfig — trusted git (docs/plan/84-projects.md, 84.15а)', () => {
+  it('takes the volume of the mirrors, required in production', () => {
+    expect(loadConfig(prodEnv()).git).toEqual({ mirrorDir: '/git', allowLoopback: false })
+    expect(problemsOf(prodEnv({ GIT_MIRROR_DIR: '' }))).toEqual([
+      'GIT_MIRROR_DIR: required in production (the volume of the mirrors)',
+    ])
+    expect(problemsOf(prodEnv({ GIT_MIRROR_DIR: 'git' }))).toEqual([
+      'GIT_MIRROR_DIR: must be an absolute path',
+    ])
+    expect(loadConfig(devEnv).git.mirrorDir).toMatch(/raditi-mirrors$/)
+  })
+
+  it('takes the CA and the loopback of a stand only outside production', () => {
+    expect(loadConfig({ ...devEnv, GIT_ALLOW_LOOPBACK: '1' }).git.allowLoopback).toBe(true)
+    expect(problemsOf(prodEnv({ GIT_ALLOW_LOOPBACK: '1' }))).toEqual([
+      'GIT_ALLOW_LOOPBACK: only outside production (the fakes of a stand)',
+    ])
+    expect(problemsOf(prodEnv({ GIT_CA_FILE: '/run/raditi/ca.pem' }))).toEqual([
+      'GIT_CA_FILE: only outside production (the CA of a stand)',
+    ])
+    expect(problemsOf({ ...devEnv, GIT_CA_FILE: '/no/such/ca.pem' })).toEqual([
+      'GIT_CA_FILE: must be an absolute path of a file',
+    ])
+  })
+})
+
+describe('loadConfig — the apps of the repositories of projects (docs/plan/84-projects.md, 84.16)', () => {
+  it('reads the gitlab.com app, the GitHub App by its key file and the secret of the cards', () => {
+    const config = loadConfig(
+      prodEnv({
+        GITLAB_OAUTH_CLIENT_ID: 'gl-id',
+        GITLAB_OAUTH_CLIENT_SECRET: 'gl-secret',
+        REPO_CONFIRM_SECRET: 'c'.repeat(64),
+        GITHUB_APP_ID: '12345',
+        GITHUB_APP_PRIVATE_KEY_FILE: '/run/raditi/github-app.pem',
+      }),
+    )
+    expect(config.gitApps).toEqual({
+      gitlabOauth: { clientId: 'gl-id', clientSecret: 'gl-secret' },
+      githubApp: { appId: '12345', key: { kind: 'file', path: '/run/raditi/github-app.pem' } },
+      repoConfirmSecret: 'c'.repeat(64),
+      endpoints: {},
+    })
+    expect(loadConfig(prodEnv()).gitApps).toMatchObject({
+      gitlabOauth: null,
+      githubApp: null,
+      repoConfirmSecret: null,
+    })
+  })
+
+  it('refuses an app set in part, a short secret and the fakes of a stand in production', () => {
+    const problems = problemsOf(
+      prodEnv({
+        GITLAB_OAUTH_CLIENT_ID: 'gl-id',
+        REPO_CONFIRM_SECRET: 'short',
+        RADITI_FAKE_GITLAB_COM_URL: 'https://localhost:9443',
+      }),
+    ).join('; ')
+    expect(problems).toMatch(/GITLAB_OAUTH_CLIENT_SECRET: set GITLAB_OAUTH_CLIENT_ID/)
+    expect(problems).toMatch(/REPO_CONFIRM_SECRET: must be at least 32 characters/)
+    expect(problems).toMatch(/RADITI_FAKE_GITLAB_COM_URL: only outside production/)
+    expect(problems).not.toMatch(/gl-id|short/)
   })
 })
 

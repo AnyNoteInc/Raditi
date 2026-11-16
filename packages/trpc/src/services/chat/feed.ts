@@ -68,6 +68,7 @@ export async function readDialogFeed(
           waiting: true,
           needsBrowser: true,
           modelClass: true,
+          projectId: true,
         },
       })
       if (task === null) throw taskNotFound()
@@ -99,8 +100,17 @@ export async function feedHead(
     needsBrowser: boolean
     /** The database's class; one the domain does not know (`service`) reads as the default. */
     modelClass: string | null
+    /** The project of the chat (docs/plan/84-projects.md, ПР2). */
+    projectId: string | null
   },
 ): Promise<FeedTaskHead> {
+  const project =
+    task.projectId === null
+      ? null
+      : await tx.project.findFirst({
+          where: { id: task.projectId, deletedAt: null },
+          select: { id: true, name: true },
+        })
   // The chat's own lease: its turns hold it.
   const leases = await tx.siteLease.findMany({
     where: { siteId: task.id },
@@ -143,6 +153,7 @@ export async function feedHead(
     requirements: { repository: false, browser: task.needsBrowser },
     // A task older than the classes thinks at the level of `standard` (`createDialog`'s default).
     effort: effortOfModelClass(modelClassSchema.catch('standard').parse(task.modelClass)),
+    project,
   })
 }
 
@@ -234,6 +245,7 @@ export async function readDialogHead(
           waiting: true,
           needsBrowser: true,
           modelClass: true,
+          projectId: true,
           createdAt: true,
           updatedAt: true,
         },

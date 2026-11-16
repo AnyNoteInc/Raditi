@@ -6,6 +6,7 @@ import { telegramConfigFromEnv, type TelegramConfig } from '@repo/telegram'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
 import { yookassaConfigFromEnv, type YookassaConfig } from '@repo/yookassa'
 
+import { webGitEnvFromEnv, type WebGitEnv } from '@/server/git-env'
 import { webEnvFromEnv } from '@/server/web-env'
 
 // DATABASE_URL is read by @repo/db itself on first use (dbConfigFromEnv).
@@ -33,4 +34,6 @@ export const env = {
   yookassa: lazy((): YookassaConfig | null => yookassaConfigFromEnv(process.env)),
   /** null — the bot of the chat is off: TELEGRAM_BOT_TOKEN is empty (docs/plan/80-telegram.md). */
   telegram: lazy((): TelegramConfig | null => telegramConfigFromEnv(process.env)),
+  /** The apps of the repositories of projects (docs/plan/84-projects.md, §4.5); each part may be off. */
+  git: lazy((): WebGitEnv => webGitEnvFromEnv(process.env)),
 }

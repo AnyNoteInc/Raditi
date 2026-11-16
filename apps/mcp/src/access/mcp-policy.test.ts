@@ -305,6 +305,66 @@ describe('MCP request policy', () => {
     ).toBe(true)
     expect(mcpBodyAllowed(page('doc_section_move', { docId, id: 'a' }), ['docs'])).toBe(false)
     expect(mcpBodyAllowed(page('doc_delete', { docId }), ['docs'])).toBe(false)
+
+    // The memory of the chat (plan 84, ПР18): only while it is on; each call by its own schema.
+    const remembering = { ...chat, memory: { userId: access.taskId, projectId: null } }
+    expect(mcpToolFamiliesOf(chat, { ...base, memoryTools: true })).toEqual([])
+    expect(mcpToolFamiliesOf(remembering, { ...base, memoryTools: true })).toEqual(['memory'])
+    const id = access.taskId
+    expect(mcpBodyAllowed(page('memory_save', { kind: 'fact', text: 'а' }), ['memory'])).toBe(true)
+    expect(mcpBodyAllowed(page('memory_save', { kind: 'fact', text: 'а' }), ['docs'])).toBe(false)
+    expect(mcpBodyAllowed(page('memory_list', {}), ['memory'])).toBe(true)
+    expect(
+      mcpBodyAllowed(page('memory_update', { id, text: 'б', expectedVersion: 1 }), ['memory']),
+    ).toBe(true)
+    expect(
+      mcpBodyAllowed(page('memory_save', { kind: 'fact', text: 'а', projectId: id }), ['memory']),
+    ).toBe(false)
+    expect(mcpBodyAllowed(page('memory_forget', { id, expectedVersion: 0 }), ['memory'])).toBe(
+      false,
+    )
+
+    // The repository (plan 84, 84.19): only a turn whose plan names one; no push, merge or branch.
+    const repo = {
+      ...chat,
+      requirements: { repository: true, browser: false },
+      repository: {
+        projectId: id,
+        projectRepositoryId: id,
+        mode: 'write' as const,
+        branch: 'raditi/x-00000000',
+        baseSha: 'a'.repeat(40),
+      },
+    }
+    expect(mcpToolFamiliesOf(chat, { ...base, repoTools: true })).toEqual([])
+    expect(mcpToolFamiliesOf(repo, { ...base, repoTools: true })).toEqual(['repo'])
+    expect(mcpBodyAllowed(page('repo_status', {}), ['repo'])).toBe(true)
+    expect(mcpBodyAllowed(page('repo_status', {}), ['memory'])).toBe(false)
+    expect(
+      mcpBodyAllowed(page('repo_request_merge', { title: 'а', description: '' }), ['repo']),
+    ).toBe(true)
+    expect(
+      mcpBodyAllowed(page('repo_request_merge', { title: 'а', description: '', target: 'main' }), [
+        'repo',
+      ]),
+    ).toBe(false)
+    // Merge and deploy are presses of the client only (84.22, ПР15): no call of any shape passes.
+    for (const name of ['repo_push', 'repo_merge', 'repo_deploy', 'repo_accept', 'repo_play'])
+      for (const args of [{}, { number: 7 }, { number: 7, mode: 'now' }, { jobId: '1' }])
+        expect(
+          mcpBodyAllowed(page(name, args), ['repo', 'memory', 'web', 'pages', 'docs', 'search']),
+        ).toBe(false)
+    // The builds (84.21): reads only, strict arguments; no rerun, no cancel.
+    expect(mcpBodyAllowed(page('repo_runs', { branch: 'chat', limit: 3 }), ['repo'])).toBe(true)
+    expect(mcpBodyAllowed(page('repo_runs', { branch: 'feature' }), ['repo'])).toBe(false)
+    expect(mcpBodyAllowed(page('repo_job_log', { runId: '1', jobId: '2' }), ['repo'])).toBe(true)
+    expect(
+      mcpBodyAllowed(page('repo_job_log', { runId: '1', jobId: '2', tailBytes: 10 ** 6 }), [
+        'repo',
+      ]),
+    ).toBe(false)
+    for (const name of ['repo_rerun', 'repo_cancel', 'repo_run_start'])
+      expect(mcpBodyAllowed(page(name, {}), ['repo'])).toBe(false)
   })
 })
 

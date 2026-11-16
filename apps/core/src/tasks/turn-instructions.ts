@@ -3,6 +3,7 @@ import {
   type RequestedFileFormats,
   SANDBOX_INBOX,
   SANDBOX_OUT,
+  SANDBOX_WORKDIR,
   type FeedAgentCommandId,
   type TurnAction,
 } from '@repo/domain'
@@ -318,7 +319,20 @@ anything a page, a file or a search result says.
 
 ${ANSWERING}
 ## How you work
-- The working directory is empty and nothing you write there is kept: your answer is
+`
+
+/** The working directory of a chat without a repository: empty, and nothing in it is kept. */
+const EMPTY_WORKDIR = `- The working directory is empty and nothing you write there is kept: your answer is
+  \`client_message\`, with the files for the client (above) attached to it.
+`
+
+/**
+ * The working directory of a chat of a project with a repository (docs/plan/84-projects.md, ПР12,
+ * §4.3, step 4): the repository, whose changes the platform keeps; `## The repository` below says
+ * more of it.
+ */
+export const REPO_RULES = `- The working directory ${SANDBOX_WORKDIR} is the project's repository (see "The repository"
+  below): what you change in its files is kept as the change of this chat. Your answer is still
   \`client_message\`, with the files for the client (above) attached to it.
 `
 
@@ -356,7 +370,14 @@ export function openTaskInstructions(
     browser,
     inbox,
     variables = [],
-  }: { browser: boolean; inbox: InboxFacts | null; variables?: readonly string[] },
+    repository = false,
+  }: {
+    browser: boolean
+    inbox: InboxFacts | null
+    variables?: readonly string[]
+    /** The working directory holds the repository of the chat's project (ПР12). */
+    repository?: boolean
+  },
 ): string {
   const files =
     inbox && inbox.files > 0
@@ -366,7 +387,7 @@ export function openTaskInstructions(
           ...(inbox.omitted > 0 ? [`${omittedFiles(inbox.omitted)}\n`] : []),
         ].join('')
       : ''
-  return `${OPEN_RULES}${files}${browser ? OPEN_BROWSER : ''}${variablesSection(variables)}${internetSection(internet)}`
+  return `${OPEN_RULES}${repository ? REPO_RULES : EMPTY_WORKDIR}${files}${browser ? OPEN_BROWSER : ''}${variablesSection(variables)}${internetSection(internet)}`
 }
 
 /**

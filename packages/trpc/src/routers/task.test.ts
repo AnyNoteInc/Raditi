@@ -19,6 +19,7 @@ const user: User = {
   lastName: null,
   email: 'dialog-unit@example.ru',
   emailVerified: true,
+  agentMemory: true,
   image: null,
   timezone: null,
   createdAt: now,

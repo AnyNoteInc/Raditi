@@ -22,9 +22,18 @@ import { INIT_PROMPT } from './turn-instructions.ts'
 // workspace, never a value; its requests, turns and files. Reads only: any database.
 const databaseUrl = process.env.DATABASE_URL
 
+/** A UUID of version 7, as the browser makes the id of a project. */
+function uuidv7(): string {
+  const random = randomUUID().replaceAll('-', '')
+  const hex = `${Date.now().toString(16).padStart(12, '0')}7${random.slice(13, 16)}8${random.slice(17)}`
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
   let db: PrismaClient
   let fixtures: ReturnType<typeof billingFixtures>
+  const projects: string[] = []
+  const projectTasks: string[] = []
 
   beforeAll(() => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
@@ -32,6 +41,10 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
   })
   afterEach(async () => {
     await db.attachment.deleteMany({ where: { fileName: 'смета.pdf' } })
+    await db.task.updateMany({ where: { id: { in: projectTasks } }, data: { projectId: null } })
+    await db.project.deleteMany({ where: { id: { in: projects } } })
+    projects.length = 0
+    projectTasks.length = 0
     await fixtures.cleanup()
   })
   afterAll(async () => {
@@ -194,5 +207,82 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
     expect(read!.requirements).toEqual({ repository: false, browser: true })
     expect(read!.skills).toEqual(turnSkillsOf([], { platformBrowser: true }))
     expect(read!.skills?.map((skill) => skill.name)).not.toContain('playwright')
+  })
+
+  it('reads the active notes of the memory of the chat while its author has it on (ПР18)', async () => {
+    const { task, workspaceId, userId, facts } = await dialog()
+    // No author: no memory.
+    expect((await facts())?.memory).toBeNull()
+    await db.task.update({ where: { id: task.id }, data: { createdById: userId } })
+    expect((await facts())?.memory).toEqual([])
+    const note = (text: string, status: string) =>
+      db.memoryEntry.create({
+        data: { id: uuidv7(), workspaceId, userId, kind: 'fact', text, status, author: 'client' },
+      })
+    const active = await note('Цены — из прайса', 'active')
+    await note('Ждёт решения', 'proposed')
+    expect((await facts())?.memory).toEqual([
+      { id: active.id, kind: 'fact', text: 'Цены — из прайса', updatedAt: active.updatedAt },
+    ])
+    await db.user.update({ where: { id: userId }, data: { agentMemory: false } })
+    expect((await facts())?.memory).toBeNull()
+  })
+
+  it('reads the project of the chat: its name, goal and instructions, none from the trash (ПР7, ПР20)', async () => {
+    const { task, workspaceId, userId, facts } = await dialog()
+    expect((await facts())?.project).toBeNull()
+    const projectId = uuidv7()
+    projects.push(projectId)
+    await db.project.create({
+      data: {
+        id: projectId,
+        workspaceId,
+        createdById: userId,
+        name: 'Кофейня «Зерно»',
+        goal: 'Сезонное меню',
+        instructions: 'Пишите тепло.',
+      },
+    })
+    projectTasks.push(task.id)
+    await db.task.update({ where: { id: task.id }, data: { projectId } })
+    const project = {
+      name: 'Кофейня «Зерно»',
+      goal: 'Сезонное меню',
+      instructions: 'Пишите тепло.',
+    }
+    expect((await facts())?.project).toEqual(project)
+    expect((await facts())?.projectFiles).toBeUndefined()
+    // Its ready files of the context (ПР8), by path; one still uploading is not given.
+    const file = (name: string, status: string) => {
+      const id = uuidv7()
+      return db.$executeRaw`
+        INSERT INTO project_files (id, workspace_id, project_id, uploaded_by_id, kind, name,
+          media_type, size_bytes, status, s3_key, expires_at, updated_at)
+        VALUES (${id}::uuid, ${workspaceId}::uuid,
+          ${status === 'ready' ? projectId : null}::uuid, ${userId}::uuid, 'file', ${name},
+          'application/pdf', 10, ${status}, ${`projects/${workspaceId}/${id}`},
+          ${status === 'ready' ? null : new Date(Date.now() + 86_400_000)}, now())`
+    }
+    await file('Фото/b.pdf', 'ready')
+    await file('a.pdf', 'ready')
+    await file('c.pdf', 'uploading')
+    expect((await facts())?.projectFiles).toEqual(
+      [
+        { name: 'Фото/b.pdf', mediaType: 'application/pdf', sizeBytes: 10 },
+        { name: 'a.pdf', mediaType: 'application/pdf', sizeBytes: 10 },
+      ].sort((x, y) => (x.name < y.name ? -1 : 1)),
+    )
+    // A project in the archive keeps its chats, and so the section of their passes.
+    await db.project.update({ where: { id: projectId }, data: { archivedAt: new Date() } })
+    expect((await facts())?.project).toEqual(project)
+    // One in the trash has its passes stopped: one that still starts goes without it.
+    const now = new Date()
+    await db.project.update({
+      where: { id: projectId },
+      data: { deletedAt: now, purgeAfter: new Date(now.getTime() + 30 * 86_400_000) },
+    })
+    expect((await facts())?.project).toBeNull()
+    expect((await facts())?.projectFiles).toBeUndefined()
+    await db.projectFile.deleteMany({ where: { workspaceId } })
   })
 })

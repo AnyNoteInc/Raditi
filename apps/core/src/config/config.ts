@@ -3,6 +3,11 @@ import { ConfigError } from '@repo/app-bootstrap'
 import { browserWorkerOrigin } from '@repo/browser-link'
 import { dbConfigFromEnv, type DbConfig } from '@repo/db'
 import {
+  coreGitAppsFromEnv,
+  type GitAppsConfig,
+  type GithubAppCoreCredentials,
+} from '@repo/git-providers'
+import {
   appEnvSchema,
   browserWorkerTokenSchema,
   envProblems,
@@ -31,8 +36,14 @@ import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
 import { yookassaConfigFromEnv, type YookassaConfig } from '@repo/yookassa'
 import { z } from 'zod'
-import { isLoopbackAddress, isPrivateAddress } from '@repo/ip-address'
+import {
+  isLoopbackAddress,
+  isPrivateAddress,
+  parseRefusedSubnets,
+  type RefusedSubnet,
+} from '@repo/ip-address'
 
+import { gitEnvConfig, type GitEnvConfig } from '../git-worker/config.ts'
 import { poolControlOrigin } from '../llm/pool-probe-client.ts'
 import {
   parseRunnerTokens,
@@ -118,6 +129,22 @@ export interface CoreConfig {
    * null — BROWSER_WORKER_URL is unset: such tasks are refused `unavailable`, the rest runs.
    */
   browser: BrowserWorkerConfig | null
+  /**
+   * Trusted git of the repositories of projects (docs/plan/84-projects.md, ПР12, ПР33): the volume
+   * core shares with its git worker; GIT_CA_FILE and GIT_ALLOW_LOOPBACK only outside production.
+   */
+  git: GitEnvConfig
+  /**
+   * The apps of the repositories of projects (docs/plan/84-projects.md, §4.2, §4.5): the OAuth app
+   * on gitlab.com (renewal of tokens), the GitHub App's installation tokens (Э10), the secret of
+   * the cards core checks again (ПР15) and, outside production, the fakes of a stand.
+   */
+  gitApps: GitAppsConfig<GithubAppCoreCredentials>
+  /**
+   * SANDBOX_EGRESS_REFUSED_SUBNETS: the address of a git host in them is refused, as the git
+   * worker refuses it (docs/plan/84-projects.md, §4.6); blank — only the public check.
+   */
+  gitRefusedSubnets: RefusedSubnet[]
 }
 
 /** Where core reaches the browser worker's internal API. Holds its token: never log it. */
@@ -405,6 +432,13 @@ export function loadConfig(env: Env): CoreConfig {
     else if (origin) browser = { url: origin, token: own.BROWSER_WORKER_TOKEN }
   }
 
+  const git = gitEnvConfig(env)
+  problems.push(...git.problems)
+  const gitRefusedSubnets = parseRefusedSubnets(env.SANDBOX_EGRESS_REFUSED_SUBNETS?.trim() ?? '')
+  if (gitRefusedSubnets === null)
+    problems.push('SANDBOX_EGRESS_REFUSED_SUBNETS: expected subnets such as 10.10.0.0/16')
+  const gitApps = section(() => coreGitAppsFromEnv(env))
+
   if (problems.length > 0) throw new ConfigError(problems, 'core')
 
   return {
@@ -440,6 +474,9 @@ export function loadConfig(env: Env): CoreConfig {
       tickSeconds: own.BILLING_TICK_SECONDS,
     },
     browser,
+    git: git.config,
+    gitApps: present(gitApps),
+    gitRefusedSubnets: gitRefusedSubnets ?? [],
   }
 }
 

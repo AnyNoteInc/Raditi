@@ -5,11 +5,15 @@ import {
   DomainError,
   driverPrepareInvalid,
   isDomainError,
+  publicationTooLarge,
+  repositoryTooLarge,
+  repositoryUnsupported,
   sandboxCommandFailed,
   snapshotTooLarge,
   turnOutputRejected,
   turnOutputTooLarge,
 } from '../errors.ts'
+import { publicationLimits, publicationShaSchema, repoBranchSchema } from '../git/publication.ts'
 import { sessionStateSchema, snapshotLimits } from '../sessions/session-state.ts'
 import { outboxLimits } from '../tasks/chat-files.ts'
 import {
@@ -36,10 +40,14 @@ import {
 import { attachmentLimits } from '../attachments/rules.ts'
 import {
   assertTurnInbox,
+  assertTurnProjectFiles,
   turnInboxLimits,
   turnInboxPathSchema,
   turnMayHoldInbox,
+  turnProjectFilesLimits,
+  turnProjectPathSchema,
 } from '../ports/turn-executor.ts'
+import { projectLimits } from '../projects/limits.ts'
 import { execLost, siteLeaseFenceSchema, snapshotHasCredential } from '../ports/turn-runner.ts'
 import { envVarValueSchema } from '../release/env-vars.ts'
 
@@ -57,26 +65,40 @@ export const runnerApiPaths = Object.freeze({
 })
 const assignmentPath = (assignmentId: string) =>
   `${RUNNER_API_PREFIX}/assignments/${z.uuid().parse(assignmentId)}`
+/** GET: the base bundle of a prepare command that has one (docs/plan/84-projects.md, ПР12). */
+export const runnerBundlePath = (assignmentId: string) => `${assignmentPath(assignmentId)}/bundle`
 /**
  * GET: the file of an open prepare at this place of its `inbox` (a turn whose chat has files of
  * the client), never more than its `sizeBytes`.
  */
 export const runnerInboxPath = (assignmentId: string, index: number) =>
-  `${assignmentPath(assignmentId)}/inbox/${z
+  runnerFilePath(assignmentId, 'inbox', index)
+
+/**
+ * Where a runner fetches the files a prepare puts into the sandbox: `inbox` — of the chat,
+ * `project` — of the chat's project (docs/plan/84-projects.md, ПР8), by their place in the command.
+ */
+export const turnFileRoots = ['inbox', 'project'] as const
+export type TurnFileRoot = (typeof turnFileRoots)[number]
+
+/** GET: the file of an open prepare at this place of its `inbox` or `projectFiles`. */
+export const runnerFilePath = (assignmentId: string, root: TurnFileRoot, index: number) =>
+  `${assignmentPath(assignmentId)}/${root}/${z
     .number()
     .int()
     .nonnegative()
-    .lt(turnInboxLimits.files)
+    .lt(root === 'inbox' ? turnInboxLimits.files : turnProjectFilesLimits.files)
     .parse(index)}`
 /** GET: 32 bytes of the data key, `no-store`; only for an open restore or seal command. */
 export const runnerKeyPath = (assignmentId: string, purpose: 'restore' | 'seal') =>
   `${assignmentPath(assignmentId)}/keys/${purpose}`
-/** The part a capture may upload: the outbox. */
-export type RunnerCandidatePart = 'outbox'
+/** The parts a capture may upload: the candidate of a turn with a repository and the outbox. */
+export type RunnerCandidatePart = 'patch' | 'untracked' | 'outbox'
 
 /**
- * PUT: an untrusted captured part before the captured report — `outbox`, the files the agent left
- * for the client (docs/plan/66-chat-visuals.md, В8), of a capture that has one.
+ * PUT: an untrusted captured part before the captured report — `patch` and `untracked` of a
+ * capture with `baseSha` (docs/plan/84-projects.md, ПР12), and `outbox`, the files the agent left
+ * for the client (docs/plan/66-chat-visuals.md, В8), of any capture that has one.
  */
 export const runnerCandidatePath = (assignmentId: string, part: RunnerCandidatePart) =>
   `${assignmentPath(assignmentId)}/candidate/${part}`
@@ -188,8 +210,8 @@ const destroyReasonSchema = z.enum([
 ]) satisfies z.ZodType<DestroyReason>
 
 /**
- * What the home part's AAD binds: the manifest without its parts (snapshotAad). Never `git`: a
- * turn has no repository (docs/plan/83-remove-projects.md).
+ * What the home part's AAD binds: the manifest without its parts (snapshotAad), with `git` for a
+ * turn with a repository (docs/plan/84-projects.md, ПР12).
  */
 export const snapshotSealBaseSchema = snapshotMetadataSchema
   .extend({
@@ -197,7 +219,6 @@ export const snapshotSealBaseSchema = snapshotMetadataSchema
     createdAt: z.iso.datetime(),
   })
   .strict()
-  .refine((base) => base.git === undefined, 'a turn has no repository')
 
 // --- Commands: core → runner -------------------------------------------------------------------
 
@@ -227,8 +248,24 @@ const prepareCommand = command('prepare', {
     .object({
       /** Checked by core against the trusted snapshot reference. */
       manifest: snapshotManifestSchema,
-      /** `home` alone: the other parts of an older snapshot are not fetched (TurnRestoreSource). */
+      /** `home` alone: the working copy comes from the bundle (TurnRestoreSource). */
       parts: z.object({ home: presignedGetSchema }).strict(),
+    })
+    .strict()
+    .optional(),
+  /**
+   * Fetched from runnerBundlePath() and checked before the import (docs/plan/84-projects.md,
+   * ПР12). Absent for a turn without a repository: the runner makes the working directory empty.
+   */
+  bundle: z
+    .object({
+      /** The commit of the repository publication starts from. */
+      baseSha: publicationShaSchema,
+      /** The root commit the single ref of the bundle points at; the sandbox starts from it. */
+      sandboxBaseSha: publicationShaSchema,
+      branch: repoBranchSchema,
+      sha256: sha256Hex,
+      sizeBytes: z.number().int().positive().max(publicationLimits.bundleBytes),
     })
     .strict()
     .optional(),
@@ -248,6 +285,22 @@ const prepareCommand = command('prepare', {
     )
     .min(1)
     .max(turnInboxLimits.files)
+    .optional(),
+  /**
+   * The files of the chat's project the runner fetches from runnerFilePath(…, 'project', n) and
+   * writes at their paths after the inbox (TurnPrepareInput.projectFiles).
+   */
+  projectFiles: z
+    .array(
+      z
+        .object({
+          path: turnProjectPathSchema,
+          sizeBytes: z.number().int().positive().max(projectLimits.fileBytes),
+        })
+        .strict(),
+    )
+    .min(1)
+    .max(turnProjectFilesLimits.files)
     .optional(),
   driverId: z.enum(agentDriverIds),
   /** Checked by core (preparedRunSchema, preparedRunExposesSecret) and again by the runner. */
@@ -308,8 +361,14 @@ export const runnerCommandSchema = z
       eventCount: z.number().int().nonnegative().max(runnerLimits.events),
     }),
     command('quiesce', {}),
-    /** The runner captures `home` alone: the working directory is not read. */
-    command('capture', { home: sessionStateSchema }),
+    command('capture', {
+      home: sessionStateSchema,
+      /**
+       * The commit the bundle checked the sandbox out at (docs/plan/84-projects.md, ПР12): the
+       * runner takes the patch against it and the new files too. Absent — `home` alone.
+       */
+      baseSha: publicationShaSchema.optional(),
+    }),
     command('seal', {
       base: snapshotSealBaseSchema,
       /** The captured home size, signed into the PUT as its Content-Length. */
@@ -340,6 +399,17 @@ export const runnerCommandSchema = z
           assertTurnInbox(cmd.inbox, turnMayHoldInbox(cmd.sandbox.labels))
         } catch {
           ctx.addIssue({ code: 'custom', path: ['inbox'], message: 'invalid files of the client' })
+        }
+      }
+      if (cmd.projectFiles) {
+        try {
+          assertTurnProjectFiles(cmd.projectFiles, turnMayHoldInbox(cmd.sandbox.labels))
+        } catch {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['projectFiles'],
+            message: 'invalid files of the project',
+          })
         }
       }
     }
@@ -435,6 +505,9 @@ export const runnerFailureCodes = [
   'TURN_OUTPUT_TOO_LARGE',
   'EXEC_LOST',
   'CREDENTIALS_LOST',
+  'PUBLICATION_TOO_LARGE',
+  'REPOSITORY_TOO_LARGE',
+  'REPOSITORY_UNSUPPORTED',
 ] as const
 export type RunnerFailureCode = (typeof runnerFailureCodes)[number]
 
@@ -475,12 +548,15 @@ export const runnerReportSchema = z
     report('exited', { execId: sandboxRef, exit: execExitSchema }),
     report('quiesced', { commandId: uuid }),
     /**
-     * Sent after the outbox — the agent's files for the client (docs/plan/66, В8) — was uploaded
-     * to core, or without it when there is none.
+     * Sent after both candidate parts of a capture with `baseSha` (docs/plan/84-projects.md,
+     * ПР12) and the outbox — the agent's files for the client (docs/plan/66, В8) — were uploaded
+     * to core; a capture without `baseSha` uploads no candidate part and names none.
      */
     report('captured', {
       commandId: uuid,
       homeBytes: z.number().int().nonnegative().max(snapshotLimits.archiveBytes),
+      patch: candidatePart(snapshotLimits.patchBytes).optional(),
+      untracked: candidatePart(snapshotLimits.archiveBytes).optional(),
       outbox: candidatePart(outboxLimits.archiveBytes).optional(),
     }),
     report('sealed', {
@@ -503,6 +579,11 @@ export const runnerReportSchema = z
     }),
   ])
   .superRefine((value, ctx) => {
+    if (
+      value.type === 'captured' &&
+      (value.patch === undefined) !== (value.untracked === undefined)
+    )
+      ctx.addIssue({ code: 'custom', message: 'expected both candidate parts or neither' })
     if (value.type === 'failed' && value.absent && value.commandId === undefined)
       ctx.addIssue({ code: 'custom', message: 'only the answer to a prepare can be absent' })
     if (value.type !== 'output') return
@@ -605,5 +686,11 @@ export function runnerFailure(code: RunnerFailureCode): DomainError {
       return execLost()
     case 'CREDENTIALS_LOST':
       return execLost('The runner no longer holds the turn credentials')
+    case 'PUBLICATION_TOO_LARGE':
+      return publicationTooLarge()
+    case 'REPOSITORY_TOO_LARGE':
+      return repositoryTooLarge()
+    case 'REPOSITORY_UNSUPPORTED':
+      return repositoryUnsupported()
   }
 }

@@ -1,188 +1,263 @@
 /**
- * Git provider port — spec §10. Site code lives in our Gitea or in the client's GitHub/GitLab.
- * Git credentials never enter the sandbox: the platform publishes from a clean clone.
- * Paths an agent diff may not touch (DiffPolicy) live in policies/diff-paths.ts.
+ * Git provider port (docs/plan/84-projects.md, ПР11, §4.5; rule 8). The repository of a project
+ * lives on the client's GitHub or GitLab. The core knows only this port: what a provider can do is
+ * its `support` object, never a comparison of its kind. Tokens never enter the sandbox: the trusted
+ * side fetches and pushes with an access issued per operation.
+ */
+
+/**
+ * Kinds a stored snapshot may name. `gitea` stays only so the snapshots of plan 53 still read
+ * (docs/plan/84-projects.md, §4.5); no adapter serves it.
  */
 export const gitProviderKinds = ['gitea', 'github', 'gitlab'] as const
 export type GitProviderKind = (typeof gitProviderKinds)[number]
 
+/** The providers a project repository may live on. */
+export const repoProviderKinds = ['github', 'gitlab'] as const
+export type RepoProviderKind = (typeof repoProviderKinds)[number]
+
+/**
+ * A repository: the host it lives on and its path there (ПР11). On GitHub the path is exactly
+ * `owner/name`; on GitLab it is `group/sub/project`, up to 300 characters. `providerRepoId` is the
+ * provider's numeric id once known: the API and git addresses are built from the host and it,
+ * never from an answer of the API (§4.6).
+ */
 export interface RepoRef {
-  provider: GitProviderKind
-  owner: string
-  name: string
+  provider: RepoProviderKind
+  host: string
+  path: string
+  providerRepoId?: string
+}
+
+/** What a provider can do (ПР11): the core branches on these, never on the kind. */
+export interface GitProviderSupport {
+  /** The provider checks a CI configuration before a push (GitLab CI Lint). */
+  ciLint: boolean
+  /** The provider merges by itself once the pipeline passes (GitLab `auto_merge` with `sha`). */
+  autoMerge: boolean
+  /** Manual jobs a deploy can start (GitLab `when: manual`). */
+  manualJobs: boolean
+  /** Workflows a deploy can start (GitHub `workflow_dispatch`). */
+  workflowDispatch: boolean
+  /** Hooks on one repository (GitLab project hooks). */
+  projectHooks: boolean
+  /** The paths of build settings of this provider, on top of `forbiddenCiPaths` (ПР16). */
+  ciPaths: readonly string[]
+  /** The brand the client reads: «GitLab», «GitHub». */
+  label: string
+  /** How the provider writes the number of a merge request: `!37` or `#37`. */
+  requestRef(number: number): string
+}
+
+/** An OAuth application of Raditi on a provider (GitLab.com; GitHub App in Э10). */
+export interface OAuthApp {
+  host: string
+  clientId: string
+  clientSecret: string
+  /** The callback the authorization went to; GitLab wants it again on refresh. */
+  redirectUri: string
+}
+
+export interface GitTokens {
+  accessToken: string
+  refreshToken: string | null
+  expiresAt: Date | null
+}
+
+/**
+ * Sign-in with a provider (ПР11): `@repo/git-providers/connect`, the one part web may import. A
+ * refresh the provider refuses for good is the neutral `{ reauth: true }`, never its own code.
+ */
+export interface GitConnect {
+  exchangeCode(app: OAuthApp, code: string, verifier: string): Promise<GitTokens>
+  refreshAccess(app: OAuthApp, refreshToken: string): Promise<GitTokens | { reauth: true }>
+  /** Who signed in, by the access token just received: the account a connection acts as. */
+  signedInUser(app: OAuthApp, accessToken: string): Promise<{ login: string; id: string }>
+}
+
+/** The access of one operation. */
+export type GitAuth = { kind: 'anonymous' } | { kind: 'bearer'; token: string }
+
+/** What an access is issued from: an installation (Э10), a stored token, or nothing (a link). */
+export type GitGrant =
+  | { kind: 'github_installation'; appId: string; privateKey: string; installationId: string }
+  | { kind: 'token'; token: string }
+  | { kind: 'anonymous' }
+
+/**
+ * Access for one fetch or push. `basic` is what git sends (by `--config-env`, never in the URL);
+ * null for an anonymous read.
+ */
+export interface IssuedGitAccess {
+  auth: GitAuth
+  basic: { username: string; password: string } | null
+  expiresAt: Date
+  revoke?(): Promise<void>
 }
 
 export interface RepositoryInfo {
-  ref: RepoRef
+  ref: RepoRef & { providerRepoId: string }
   defaultBranch: string
-  cloneUrl: string
   private: boolean
+  /** `https://<host>/…` of the same host, otherwise built from the host and the path (§4.6). */
+  webUrl: string
+  /** Built by the adapter from the host and the path, never taken from the API (§4.6). */
+  cloneUrl: string
+  /** Bytes the provider reports, null when it does not say (ПР12). */
+  sizeBytes: number | null
+  /**
+   * The path of the build configuration of this repository when the provider names one of its
+   * own files (GitLab `ci_config_path`, ПР16); null or absent — the provider's default.
+   */
+  ciConfigPath?: string | null
 }
 
-/** Short-lived credentials for one clone or push by the platform's bot. */
-export interface GitCredentials {
-  username: string
-  token: string
-  expiresAt: Date
-}
+export type PullRequestState = 'open' | 'draft' | 'merged' | 'closed'
+export type ChecksState = 'none' | 'pending' | 'success' | 'failure'
 
 export interface PullRequest {
   number: number
   url: string
-  headBranch: string
+  title: string
+  sourceBranch: string
+  targetBranch: string
   headSha: string
-  baseBranch: string
-  state: 'open' | 'merged' | 'closed'
+  state: PullRequestState
+  checks: ChecksState
+  autoMerge: boolean
+  mergeSha: string | null
 }
 
-export type WorkflowStatus = 'queued' | 'in_progress' | 'completed'
-/** Anything that is not clearly a success is a failure: an unknown one never passes a deploy. */
-export type WorkflowConclusion = 'success' | 'failure' | 'cancelled' | 'skipped' | null
-
-export interface WorkflowRun {
-  id: string
-  /**
-   * A label for logs and screens, never an identifier: sources disagree. A Gitea webhook gives
-   * the workflow's `name:` (its file when it has none), the REST API only the file. Identify the
-   * workflow by `workflowFile` (and `workflowPath` where known) with `ref` and `event`, a run
-   * by `id`.
-   */
-  name: string
-  headSha: string
-  status: WorkflowStatus
-  conclusion: WorkflowConclusion
-  url: string
-  /** The workflow file as the run names it, without the ref: `deploy.yml`. */
-  workflowFile: string | null
-  /**
-   * The repository path of the workflow file, `.gitea/scoped_workflows/deploy.yml` for the
-   * obligatory workflow of platform/ci: the one field that tells it from a file of the site
-   * repository. A webhook carries it; the Gitea REST run does not (null).
-   */
-  workflowPath: string | null
-  /** The full ref the run is for: `refs/tags/v1.2.0`, `refs/heads/main`. */
-  ref: string | null
-  /** What started the run: `push`, `workflow_dispatch`, `pull_request`… */
-  event: string | null
-  /** The branch of the run; Gitea leaves it empty for a tag push (null): the tag is in `ref`. */
-  headBranch: string | null
-  /** 1 for the first attempt; a rerun of the same run counts up. */
-  runAttempt: number | null
-}
-
-export interface WorkflowJobStep {
-  name: string
-  status: WorkflowStatus
-  conclusion: WorkflowConclusion
-}
-
-/** One job of a run, from the `workflow_job` webhook: the only place that names the step. */
-export interface WorkflowJob {
-  id: string
-  runId: string
-  name: string
-  headSha: string
-  headBranch: string | null
-  runAttempt: number | null
-  status: WorkflowStatus
-  conclusion: WorkflowConclusion
-  url: string
-  steps: WorkflowJobStep[]
-}
-
-/** A tag of a repository as the provider's API shows it. */
-export interface GitTag {
-  name: string
-  /** The commit the tag names (peeled). */
-  commitSha: string
-  /** What the ref points to: the commit itself for a lightweight tag, a tag object otherwise. */
-  objectSha: string
-}
+/** A pipeline (GitLab) or a workflow run (GitHub), in the words of the platform. */
+export const ciStatuses = [
+  'pending',
+  'running',
+  'manual',
+  'success',
+  'failed',
+  'canceled',
+  'skipped',
+] as const
+export type CiStatus = (typeof ciStatuses)[number]
 
 /**
- * A run of a workflow the provider was asked to start (workflow_dispatch). `source` names the
- * repository a required (scoped) workflow comes from, `platform/ci` on our Gitea; without it the
- * workflow file is one of `ref`'s own repository.
+ * Why a job did not run though nothing in it failed (ПР17): `account_unverified` — gitlab.com did
+ * not start it on its own runners until the account is verified. Said in its own words, not «Упала».
  */
-export interface WorkflowDispatch {
-  workflow: string
+export const ciRefusals = ['account_unverified'] as const
+export type CiRefusal = (typeof ciRefusals)[number]
+
+export interface CiRun {
+  id: string
+  name: string
+  sha: string
   ref: string
-  inputs?: Record<string, string>
-  source?: RepoRef
+  status: CiStatus
+  url: string
+  createdAt: Date | null
+  startedAt?: Date | null
+  finishedAt: Date | null
+  /** What started it, as the provider names it (`push`, `merge_request_event`, `web`…). */
+  event?: string | null
+  refusal?: CiRefusal | null
 }
 
-/** Provider webhooks normalized to what the orchestrator needs. */
-export type GitWebhookEvent =
-  | { kind: 'pull_request'; repo: RepoRef; pullRequest: PullRequest }
-  | { kind: 'workflow_run'; repo: RepoRef; run: WorkflowRun }
-  | { kind: 'workflow_job'; repo: RepoRef; job: WorkflowJob }
-  | { kind: 'push'; repo: RepoRef; branch: string; headSha: string }
-  /** A tag created or moved; `sha` is what the ref points to now (see GitTag.objectSha). */
-  | { kind: 'tag'; repo: RepoRef; tag: string; sha: string }
+export interface CiJob {
+  id: string
+  runId: string
+  /** As the client's configuration names it (ПР3). */
+  name: string
+  stage: string | null
+  status: CiStatus
+  url: string
+  startedAt?: Date | null
+  finishedAt?: Date | null
+  refusal?: CiRefusal | null
+}
+
+/** A deploy the client can start on the head of the default branch (ПР15, ПР17). */
+export interface DeployAction {
+  id: string
+  kind: 'manual_job' | 'workflow_dispatch'
+  name: string
+  ref: string
+  sha: string
+}
+
+export interface OpenPullRequestInput {
+  head: string
+  base: string
+  title: string
+  body: string
+  draft: boolean
+}
 
 export interface GitProvider {
-  readonly kind: GitProviderKind
-  getRepository(ref: RepoRef): Promise<RepositoryInfo | null>
+  readonly kind: RepoProviderKind
+  readonly support: GitProviderSupport
   issueCredentials(
-    ref: RepoRef,
+    grant: GitGrant,
+    repo: RepoRef,
     access: 'read' | 'write',
-    ttlSeconds: number,
-  ): Promise<GitCredentials>
-  openPullRequest(
-    ref: RepoRef,
-    input: { head: string; base: string; title: string; body: string },
-  ): Promise<PullRequest>
-  getPullRequest(ref: RepoRef, number: number): Promise<PullRequest | null>
-  /** Merges only if the head is still `expectedHeadSha`. */
+    opts: { ttlSeconds: number; workflows?: boolean },
+  ): Promise<IssuedGitAccess>
+  whoAmI(auth: GitAuth): Promise<{ login: string; id: string }>
+  listRepositories(
+    auth: GitAuth,
+    page?: string,
+  ): Promise<{ items: RepositoryInfo[]; next: string | null }>
+  /** Null when the repository is not there or the access does not see it. */
+  getRepository(auth: GitAuth, repo: RepoRef): Promise<RepositoryInfo | null>
+  listBranches(auth: GitAuth, repo: RepoRef, query?: string): Promise<string[]>
+  /**
+   * The head of one branch at the provider; null when there is no such branch. A deploy reads the
+   * main branch again before it plays a job (ПР15). Only where `support.manualJobs`.
+   */
+  branchHead?(auth: GitAuth, repo: RepoRef, branch: string): Promise<string | null>
+  openPullRequest(auth: GitAuth, repo: RepoRef, input: OpenPullRequestInput): Promise<PullRequest>
+  getPullRequest(auth: GitAuth, repo: RepoRef, number: number): Promise<PullRequest | null>
+  /**
+   * Merges only while the source head is `expectedHeadSha` (otherwise REPO_CHANGED). `whenGreen`
+   * only where `support.autoMerge`: the provider merges once the pipeline passes.
+   */
   mergePullRequest(
-    ref: RepoRef,
+    auth: GitAuth,
+    repo: RepoRef,
     number: number,
-    expectedHeadSha: string,
-  ): Promise<{ mergeSha: string }>
-  closePullRequest(ref: RepoRef, number: number): Promise<void>
-  /**
-   * A secret of this repository's Actions, never of its organization: a run of another
-   * repository cannot read it. Creates or replaces. The provider may need a credential of the
-   * owner for this, not the bot's (spec §10; plan 53, Р29, Р35).
-   */
-  setActionsSecret(ref: RepoRef, name: string, value: string): Promise<void>
-  /** A secret that is already gone counts as deleted. */
-  deleteActionsSecret(ref: RepoRef, name: string): Promise<void>
-  setActionsVariable(ref: RepoRef, name: string, value: string): Promise<void>
-  /**
-   * Only the release account — the one `createTag` acts as — may create, move or delete a tag
-   * matching `pattern`; every other account is refused, the bot and its grants included.
-   * Idempotent. What it does not do: keep that one account from moving a tag (plan 53, Р26:
-   * immutability is code's, and `createTag` never moves one).
-   */
-  protectTags(ref: RepoRef, pattern: string): Promise<void>
-  /**
-   * A lightweight tag `name` on `commitSha`, made by the release account (plan 53, Р26, Р27).
-   * Never moves a tag: when the name is taken, the tag as the repository holds it is returned —
-   * the caller compares its `commitSha`. A tag protected for another account is refused.
-   */
-  createTag(ref: RepoRef, name: string, commitSha: string): Promise<GitTag>
-  /** Null when the repository has no such tag. */
-  getTag(ref: RepoRef, name: string): Promise<GitTag | null>
-  /** Polling fallback when a webhook is lost; newest first. */
-  listWorkflowRuns(
-    ref: RepoRef,
-    filter: { headSha?: string; event?: string; branch?: string },
-  ): Promise<WorkflowRun[]>
-  /** Null when the repository has no such run. */
-  getWorkflowRun(ref: RepoRef, id: string): Promise<WorkflowRun | null>
-  /**
-   * Starts a workflow that has a `workflow_dispatch` trigger. The run id when the provider names
-   * it. A provider that refuses to start this workflow (no such trigger, no such file at `ref`,
-   * a source it does not run for this repository) rejects with DomainError code NOT_SUPPORTED.
-   */
-  dispatchWorkflow(ref: RepoRef, dispatch: WorkflowDispatch): Promise<{ runId: string | null }>
-  /**
-   * The only way in for a webhook: first the timing-safe signature check on the raw body
-   * (X-Gitea-Signature, X-Hub-Signature-256, X-Gitlab-Token), then JSON.parse and a zod schema
-   * of the provider event. Any failure — bad or missing signature, malformed JSON, an unknown
-   * or unsupported event — yields null; it never throws. There is deliberately no way to parse
-   * an event without the signature check.
-   */
-  parseWebhook(headers: Headers, rawBody: string, secret: string): GitWebhookEvent | null
+    opts: { expectedHeadSha: string; deleteBranch: boolean; whenGreen: boolean },
+  ): Promise<{ state: 'merged' | 'scheduled'; mergeSha?: string }>
+  /** Takes an auto-merge off (ПР15); true when one was on. Only where `support.autoMerge`. */
+  cancelAutoMerge?(auth: GitAuth, repo: RepoRef, number: number): Promise<boolean>
+  closePullRequest(auth: GitAuth, repo: RepoRef, number: number): Promise<void>
+  listRuns(
+    auth: GitAuth,
+    repo: RepoRef,
+    filter: { branch?: string; sha?: string },
+  ): Promise<CiRun[]>
+  getRun(auth: GitAuth, repo: RepoRef, runId: string): Promise<CiRun | null>
+  listJobs(auth: GitAuth, repo: RepoRef, runId: string): Promise<CiJob[]>
+  /** The last `tailBytes` of the log as the build wrote it (owner's answer of 15.11.2026, §8). */
+  getJobLog(
+    auth: GitAuth,
+    repo: RepoRef,
+    jobId: string,
+    opts: { tailBytes: number },
+  ): Promise<{ text: string; truncated: boolean }>
+  rerunRun(auth: GitAuth, repo: RepoRef, runId: string): Promise<void>
+  cancelRun(auth: GitAuth, repo: RepoRef, runId: string): Promise<void>
+  /** Manual jobs or `workflow_dispatch` of `ref`'s newest run (ПР17). */
+  listDeployActions(auth: GitAuth, repo: RepoRef, ref: string): Promise<DeployAction[]>
+  startDeploy(auth: GitAuth, repo: RepoRef, action: DeployAction): Promise<{ runId: string | null }>
+  lintCi?(
+    auth: GitAuth,
+    repo: RepoRef,
+    content: string,
+    ref: string,
+  ): Promise<{ valid: boolean; errors: string[]; includes: string[] }>
+  createHook?(
+    auth: GitAuth,
+    repo: RepoRef,
+    hook: { url: string; token: string },
+  ): Promise<{ hookId: string }>
+  deleteHook?(auth: GitAuth, repo: RepoRef, hookId: string): Promise<void>
 }

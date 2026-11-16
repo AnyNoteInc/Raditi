@@ -23,6 +23,12 @@ import {
   feedDocLeftText,
   feedDocText,
   feedPageChangeText,
+  feedMemoryChangeText,
+  feedMemoryLeftText,
+  feedRepoChangesText,
+  feedRepoLeftText,
+  feedRepoActionText,
+  feedRepoProposalText,
   feedPageLeftText,
   feedPageText,
   feedFilesChangedText,
@@ -271,6 +277,18 @@ function rowBlock(row: FeedItem, withSite: boolean, h: Heading = heading): strin
       return block([h(feedExportText.agent, row.at), feedPageLeftText(row)])
     case 'feed.page_change':
       return block([h(feedExportText.agent, row.at), feedPageChangeText(row)])
+    case 'feed.memory_change':
+      return block([h(feedExportText.agent, row.at), feedMemoryChangeText(row)])
+    case 'feed.memory_left':
+      return block([h(feedExportText.agent, row.at), feedMemoryLeftText(row)])
+    case 'feed.repo_changes':
+      return block([h(feedExportText.agent, row.at), feedRepoChangesText(row)])
+    case 'feed.repo_left':
+      return block([h(feedExportText.agent, row.at), feedRepoLeftText(row)])
+    case 'feed.repo_proposal':
+      return block([h(feedExportText.agent, row.at), feedRepoProposalText(row)])
+    case 'feed.repo_action':
+      return block([h(feedExportText.agent, row.at), feedRepoActionText(row)])
     // A scheduled task the agent changed (docs/plan/82-scheduled-tasks.md, Зп35): its schedule
     // and next run as they were then, and its words as written.
     case 'feed.schedule_change': {

@@ -14,6 +14,7 @@ import {
   containsEnvValue,
   preparedRunExposesSecret,
   preparedRunSchema,
+  projectSection,
   turnResultSchema,
 } from '@repo/domain'
 import { createOpencodeDriver } from '../src/opencode.ts'
@@ -54,6 +55,13 @@ const TOOL_DUMP = '/tmp/raditi-g3-tool.json'
 /** What the model may be offered: the CLI's file and shell tools and the site's MCP tools. */
 const TOOLS = ['bash', 'edit', 'glob', 'grep', 'raditi_site_info', 'read', 'todowrite', 'write']
 const platformMarker = (turn) => `RADITI_G3_PLATFORM_TURN_${turn}`
+/** The client's instructions of the chat's project, changed every turn (docs/plan/84, ПР7). */
+const projectMarker = (turn) => `RADITI_G3_PROJECT_TURN_${turn}`
+const projectOf = (turn) => ({
+  name: 'Синтетика «G3»',
+  goal: 'Synthetic verification only',
+  instructions: `Project instructions ${projectMarker(turn)}`,
+})
 const LITERAL = 'Literal {env:HOME} and {file:/etc/hostname}.'
 const REASONING = 'Thinking about the next step.'
 /** What the scripted model answers a compaction with, and the one thing the next turn knows of it. */
@@ -930,7 +938,7 @@ async function turn({
     mcp: { url: 'http://sandbox-gw:8080/mcp', token: keys.mcpKey },
     // Different in every turn: the resumed session has to receive the current ones. The CLI
     // substitutes such references in its configuration; in the instructions they are plain text.
-    instructions: `Complete only the local synthetic verification. ${platformMarker(turnNo)} ${LITERAL}`,
+    instructions: `Complete only the local synthetic verification. ${platformMarker(turnNo)} ${LITERAL}${projectSection(projectOf(turnNo))}`,
     ...(nativeSessionId ? { nativeSessionId } : {}),
     ...(envValues ? { envValues } : {}),
     ...(egressProxy ? { egressProxy } : {}),
@@ -1013,6 +1021,9 @@ async function turn({
           platform: platformMarker(turnNo),
           literal: LITERAL,
           previousPlatform: platformMarker(turnNo - 1),
+          // The section of the project as the planner writes it, whole, and that of the turn before.
+          project: projectSection(projectOf(turnNo)).trim(),
+          previousProject: `${projectMarker(turnNo - 1)}\n`,
           contract: 'End the turn with one JSON object',
           summary: SUMMARY,
           platformAgent: 'You are the Raditi website agent.',
@@ -1083,6 +1094,8 @@ function expectRequests(run, count, tools = TOOLS) {
     assert.equal(record.system.platform, true, `Platform instructions of this turn: ${at}`)
     assert.equal(record.system.literal, true, `A reference in the instructions was replaced: ${at}`)
     assert.equal(record.system.previousPlatform, false, `Instructions of another turn: ${at}`)
+    assert.equal(record.system.project, true, `The project section of this turn: ${at}`)
+    assert.equal(record.system.previousProject, false, `The project of another turn: ${at}`)
     assert.equal(record.system.contract, true, `Result contract: ${at}`)
     assert.equal(record.system.platformAgent, true, `Platform agent prompt: ${at}`)
     assert.equal(record.system.workdir, true, `Working directory: ${at}`)
@@ -1311,7 +1324,7 @@ try {
     // Nothing of the CLI's own in the working copy: capture would publish it to the site.
     assert.deepEqual(output.after.workingTree, ['?? turn-1.txt'], describe())
     pass(
-      `exec — 4 provider requests in ${seconds(output.ms)}, the first after ${seconds(output.llm[0].at)}; kernel ${output.after.tool.kernel}; real driver, platform agent and instructions, tools ${TOOLS.length}, MCP bearer, the repository's own OpenCode files ignored, credentials in no file, environment, argv or output; session files ${output.snapshot.map((file) => `${file.path.split('/').at(-1)} ${file.bytes} B`).join(', ')}, archive ${output.archiveBytes} B`,
+      `exec — 4 provider requests in ${seconds(output.ms)}, the first after ${seconds(output.llm[0].at)}; kernel ${output.after.tool.kernel}; real driver, platform agent and instructions with the project section, tools ${TOOLS.length}, MCP bearer, the repository's own OpenCode files ignored, credentials in no file, environment, argv or output; session files ${output.snapshot.map((file) => `${file.path.split('/').at(-1)} ${file.bytes} B`).join(', ')}, archive ${output.archiveBytes} B`,
     )
   }
   const sessionFiles = first.output.snapshot.map(({ path, mode, base64 }) => ({

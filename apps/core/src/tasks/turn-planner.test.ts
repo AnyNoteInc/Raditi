@@ -1,12 +1,16 @@
 import type { AttemptCreditBudget } from '@repo/billing'
 import {
   BROWSER_ONLY,
+  memorySection,
   Money,
   PLAIN_CHAT,
+  projectContextSection,
+  projectSection,
   toCredits,
   toTurnPlan,
   turnCredentialPolicySchema,
   turnPlanLimits,
+  turnPlanSchema,
   type AgentDriver,
   type LlmBackend,
   type TurnPlan,
@@ -22,7 +26,12 @@ import {
   sampleProviderModelId,
   sampleRoutePath,
 } from '../testing/ids.ts'
-import { CHAT_TITLE_SECTION, CONTINUE_PROMPT, INIT_PROMPT } from './turn-instructions.ts'
+import {
+  CHAT_TITLE_SECTION,
+  CONTINUE_PROMPT,
+  INIT_PROMPT,
+  REPO_RULES,
+} from './turn-instructions.ts'
 import {
   planTurn,
   promptOf,
@@ -444,6 +453,134 @@ describe('planTurn of a chat (docs/plan/83-remove-projects.md)', () => {
   })
 })
 
+describe('the sections of the instructions of a pass (docs/plan/84-projects.md, ПР7)', () => {
+  const words = 'Мы — кофейня. Отвечайте коротко.'
+
+  it('keeps a chat without a project as it was, byte for byte', async () => {
+    const plan = await planned(facts({ clientInstructions: words }))
+    expect(plan.request.context.instructions).toMatchSnapshot()
+    expect(plan.request.context.instructions).not.toContain('## The project')
+    expect((await planned(facts({ clientInstructions: words, project: null }))).request).toEqual(
+      plan.request,
+    )
+  })
+
+  it('puts the project after the client’s own instructions, at the end of the rules (snapshot)', async () => {
+    const project = {
+      name: 'Кофейня «Зерно»',
+      goal: 'Сезонное меню',
+      instructions: 'Пишите тепло, без эмодзи.',
+    }
+    const bare = (await planned(facts({ clientInstructions: words }))).request.context.instructions
+    const instructions = (await planned(facts({ clientInstructions: words, project }))).request
+      .context.instructions
+    expect(instructions).toBe(`${bare}${projectSection(project)}`)
+    // Platform rules → the client's own instructions → the project (§4.4).
+    const order = ["## The client's own instructions", '## The project', '<project-instructions>']
+    const places = order.map((heading) => instructions.indexOf(heading))
+    expect(places.every((place) => place > 0)).toBe(true)
+    expect([...places].sort((a, b) => a - b)).toEqual(places)
+    expect(instructions.slice(instructions.indexOf('## The client'))).toMatchSnapshot()
+  })
+
+  it('gives the project to a chat whose client wrote no instructions of their own', async () => {
+    const plan = await planned(facts({ project: { name: 'Сайт', goal: null, instructions: null } }))
+    expect(plan.request.context.instructions).toMatch(
+      /\n## The project\nThis chat belongs to the client's project «Сайт»\.\n$/u,
+    )
+    expect(plan.request.context.instructions).not.toContain('client-instructions')
+  })
+})
+
+describe('the files of the project in a pass (docs/plan/84-projects.md, ПР8)', () => {
+  const project = { name: 'Пекарня', goal: null, instructions: null }
+  const files = [
+    { name: 'Прайс зима 2026.xlsx', mediaType: 'application/x', sizeBytes: 86_016 },
+    { name: 'Фото/витрина.jpg', mediaType: 'image/jpeg', sizeBytes: 2048 },
+  ]
+
+  it('lists them after the project and gives the turn their paths under /workspace/project', async () => {
+    const plan = await planned(facts({ project, projectFiles: files }))
+    const instructions = plan.request.context.instructions
+    expect(instructions.endsWith(`${projectSection(project)}${projectContextSection(files)}`)).toBe(
+      true,
+    )
+    expect(instructions.indexOf('## The project')).toBeLessThan(
+      instructions.indexOf('## Project files'),
+    )
+    expect(plan.request.input.projectFiles).toEqual([
+      '/workspace/project/Прайс зима 2026.xlsx',
+      '/workspace/project/Фото/витрина.jpg',
+    ])
+    expect(plan.request.input.attachments).toEqual([])
+  })
+
+  it('gives none without a project, and a chat without files keeps its plan byte for byte', async () => {
+    const without = await planned(facts({ project: null, projectFiles: files }))
+    expect(without.request.input.projectFiles).toBeUndefined()
+    expect(without.request.context.instructions).not.toContain('## Project files')
+    const bare = await planned(facts({ project }))
+    expect((await planned(facts({ project, projectFiles: [] }))).request).toEqual(bare.request)
+    expect(bare.request.input).not.toHaveProperty('projectFiles')
+  })
+})
+
+describe('the memory in a pass (docs/plan/84-projects.md, ПР18)', () => {
+  const project = { name: 'Пекарня', goal: null, instructions: null }
+  const files = [{ name: 'Прайс.xlsx', mediaType: 'application/x', sizeBytes: 2048 }]
+  const memory = [
+    {
+      id: '01960000-0000-7000-8000-0000000000e1',
+      kind: 'fact' as const,
+      text: 'Цены — только из прайса',
+      updatedAt: at(5),
+    },
+  ]
+
+  it('puts the notes last, after the files of the project', async () => {
+    const plan = await planned(facts({ project, projectFiles: files, memory }))
+    const instructions = plan.request.context.instructions
+    expect(
+      instructions.endsWith(
+        `${projectSection(project)}${projectContextSection(files)}${memorySection(memory)}`,
+      ),
+    ).toBe(true)
+    expect(instructions.indexOf('## Project files')).toBeLessThan(instructions.indexOf('## Memory'))
+    expect(instructions).toContain('- [01960000-0000-7000-8000-0000000000e1, fact, ')
+  })
+
+  it('has no section while the memory is off, and an empty one says so', async () => {
+    const off = await planned(facts({ project, memory: null }))
+    expect(off.request).toEqual((await planned(facts({ project }))).request)
+    expect(off.request.context.instructions).not.toContain('## Memory')
+    const empty = await planned(facts({ memory: [] }))
+    expect(empty.request.context.instructions).toContain('The memory is empty so far.')
+  })
+
+  it('reads «запомни» in the client’s words of this pass only', async () => {
+    expect(
+      (await planned(facts({ requests: [request(10, 'first', 'Запомни: цены из прайса', 0)] })))
+        .remember,
+    ).toBe(true)
+    expect((await planned(facts())).remember).toBe(false)
+    // Words before the last turn started were another pass's.
+    const later = facts({
+      task: { id: TASK, workspaceId: WORKSPACE, attempt: 1, turnNo: 1, modelClass: 'standard' },
+      requests: [
+        request(10, 'first', 'Запомни: цены из прайса', 0),
+        request(11, 'follow_up', 'Теперь поправьте шапку', 20),
+      ],
+      turns: new Map([[1, finished(1, 'completed')]]),
+    })
+    expect((await planned(later)).remember).toBe(false)
+    const asked = {
+      ...later,
+      requests: [...later.requests, request(12, 'follow_up', 'И запомните это', 30)],
+    }
+    expect((await planned(asked)).remember).toBe(true)
+  })
+})
+
 describe('turnInboxOf', () => {
   it('takes the latest files, as many as one turn holds, in the order they were sent', () => {
     const big = { contentType: 'application/pdf', sizeBytes: 20 * 1024 * 1024 }
@@ -484,6 +621,136 @@ describe('promptOf', () => {
   })
 })
 
+// --- A chat of a project with a repository (docs/plan/84-projects.md, ПР7, ПР12, ПР32) -----------
+
+const REPO = {
+  projectId: '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a80',
+  projectRepositoryId: '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a81',
+  provider: 'gitlab' as const,
+  path: 'acme/shop',
+  defaultBranch: 'main',
+  mode: 'write' as const,
+  secretsFound: [],
+  label: 'GitLab',
+  baseSha: 'b'.repeat(40),
+  sandboxBaseSha: 'd'.repeat(40),
+  branch: 'raditi/chat-0199b2f46c1e',
+  expectedRef: null,
+  bundleSha256: 'e'.repeat(64),
+  bundleBytes: 4096,
+  hiddenPaths: ['.env'],
+}
+
+/** A finished turn whose saved plan had the repository, as a turn of 84.18 keeps it. */
+function finishedWithRepository(turnNo: number): FinishedTurn {
+  const turn = finished(turnNo, 'completed')
+  return {
+    ...turn,
+    plan: {
+      ...turn.plan!,
+      requirements: { repository: true, browser: false },
+      repository: {
+        projectId: REPO.projectId,
+        projectRepositoryId: REPO.projectRepositoryId,
+        provider: REPO.provider,
+        baseSha: REPO.baseSha,
+        sandboxBaseSha: REPO.sandboxBaseSha,
+        branch: REPO.branch,
+        mode: REPO.mode,
+        expectedRef: null,
+        bundleSha256: REPO.bundleSha256,
+        bundleBytes: REPO.bundleBytes,
+        hiddenPaths: REPO.hiddenPaths,
+      },
+    },
+  }
+}
+
+describe('planTurn of a chat with a repository (docs/plan/84-projects.md, §4.3, step 4)', () => {
+  const project = { name: 'Магазин', goal: 'Каталог', instructions: 'Коротко.' }
+
+  it('names the repository in the plan, the working copy in the rules and its section before the client’s (snapshot)', async () => {
+    const plan = await planned(
+      facts({ repository: REPO, project, clientInstructions: 'Пишите на «вы».' }),
+    )
+    expect(plan.requirements).toEqual({ repository: true, browser: false })
+    expect(plan.request.repository).toEqual({
+      projectId: REPO.projectId,
+      projectRepositoryId: REPO.projectRepositoryId,
+      provider: 'gitlab',
+      baseSha: REPO.baseSha,
+      sandboxBaseSha: REPO.sandboxBaseSha,
+      branch: REPO.branch,
+      mode: 'write',
+      expectedRef: null,
+      bundleSha256: REPO.bundleSha256,
+      bundleBytes: REPO.bundleBytes,
+      hiddenPaths: ['.env'],
+    })
+    // What the plan keeps passes its schema: the repository needs it and names it.
+    expect(turnPlanSchema.safeParse(toTurnPlan(plan.request, sampleDriverId)).success).toBe(true)
+    const { instructions } = plan.request.context
+    expect(instructions).toContain(REPO_RULES)
+    expect(instructions).not.toContain('The working directory is empty')
+    // ПР7: rules of the platform → the repository → the client's own → the project.
+    const order = [
+      '# Raditi platform rules',
+      '## The repository',
+      "## The client's own instructions",
+      '## The project',
+    ]
+    const places = order.map((heading) => instructions.indexOf(heading))
+    expect(places.every((place) => place > 0 || place === 0)).toBe(true)
+    expect([...places].sort((a, b) => a - b)).toEqual(places)
+    expect(instructions).toMatchSnapshot()
+  })
+
+  it('says the repository came to a chat that went on without it, and plans the change (ПР32)', async () => {
+    const plan = await planned(
+      facts({
+        repository: REPO,
+        turns: new Map([[1, finished(1, 'completed')]]),
+        task: { ...facts().task, turnNo: 1 },
+        requests: [request(1, 'text', 'раньше', 1), request(2, 'text', 'теперь с кодом', 15)],
+      }),
+    )
+    expect(plan.request.previous).toBeDefined()
+    expect(plan.request.repository?.repositoryChanged).toBe(true)
+    expect(plan.request.context.instructions).toContain(
+      'connected the repository to the project after this chat began',
+    )
+  })
+
+  it('says the repository went from a chat that had it, and plans no repository (ПР32)', async () => {
+    const plan = await planned(
+      facts({
+        repository: null,
+        turns: new Map([[1, finishedWithRepository(1)]]),
+        task: { ...facts().task, turnNo: 1 },
+        requests: [request(1, 'text', 'раньше', 1), request(2, 'text', 'дальше', 15)],
+      }),
+    )
+    expect(plan.requirements.repository).toBe(false)
+    expect(plan.request).not.toHaveProperty('repository')
+    expect(plan.request.context.instructions).toContain(
+      'disconnected the repository from the project',
+    )
+  })
+
+  it('goes on in the same repository without a word of a change', async () => {
+    const plan = await planned(
+      facts({
+        repository: REPO,
+        turns: new Map([[1, finishedWithRepository(1)]]),
+        task: { ...facts().task, turnNo: 1 },
+        requests: [request(1, 'text', 'раньше', 1), request(2, 'text', 'дальше', 15)],
+      }),
+    )
+    expect(plan.request.repository).not.toHaveProperty('repositoryChanged')
+    expect(plan.request.context.instructions).not.toMatch(/connected the repository/)
+  })
+})
+
 describe('a pass of a run of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп17, Зп29)', () => {
   it('tells a pass without its client of its task, and asks no name of the chat', async () => {
     const words = [request(10, 'first', 'Пришли курс доллара по ЦБ на сегодня', 0)]
@@ -495,5 +762,8 @@ describe('a pass of a run of a scheduled task (docs/plan/82-scheduled-tasks.md, 
     expect(instructions).not.toContain(CHAT_TITLE_SECTION)
     const plain = await planned(facts({ requests: words }))
     expect(plain.request.context.instructions).not.toContain('## A run of a scheduled task')
+    // Its notes of memory are only proposed (docs/plan/84-projects.md, ПР19).
+    expect(plan.unattended).toBe(true)
+    expect(plain.unattended).toBe(false)
   })
 })

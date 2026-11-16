@@ -30,6 +30,7 @@ import {
   type RunContext,
   type TurnExecutor,
   type TurnPlan,
+  type TurnBundleSource,
   type TurnRequest,
   type UnkeyedTurnRequest,
   type TurnCredentialPolicy,
@@ -40,6 +41,8 @@ import { newTurnKeys } from '@repo/turn-keys'
 import { LeaseGuard, TURN_LEASE_MS, turnRenewal } from './lease-guard.ts'
 import type { LiveTurns } from './live-turns.ts'
 import type { TurnInbox } from './turn-inbox.ts'
+import type { TurnProjectFiles } from './turn-project-files.ts'
+import { bundleOfPlan, gitNotConfigured, plannedSnapshotGit } from './turn-repository.ts'
 import {
   TurnAttempt,
   type CompletedTurn,
@@ -57,6 +60,8 @@ export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
   live: LiveTurns
   /** Required for a plan that names files of the client (`input.attachments`). */
   inbox?: TurnInbox
+  /** Required for a plan that names files of the chat's project (`input.projectFiles`). */
+  projectFiles?: TurnProjectFiles
 }
 
 /** A presigned URL never outlives the lease that allowed it (spec §14). */
@@ -96,6 +101,10 @@ export class TurnSupervisor {
     // Persist the same profile the key allows, including an explicit provider default.
     // Older saved plans can still omit this field when recovery adopts their existing exec.
     plan.context.llm.reasoningEffort = parsed.data.reasoningEffort
+    // A turn with a repository needs the trusted git; one without needs none. Refused before the
+    // lease, so a core without git still runs turns without a repository.
+    const git = this.deps.repository
+    if (plan.repository && !git) throw gitNotConfigured()
     await this.assertLaunchable(plan)
     const labels = request.sandbox.labels
     // A pool that would send the pass back does so before anything of the turn is written: no
@@ -186,8 +195,15 @@ export class TurnSupervisor {
         const source = await guard.interruptible(
           this.deps.snapshots.restoreSource(request.previous, presignTtlMs(guard)),
         )
-        // Only the session comes back: a checkpoint of a chat that had a project (before plan 83)
-        // also names its working copy, which is not restored (TurnRestoreSource).
+        // Only the session comes back (TurnRestoreSource): the working copy of a turn with a
+        // repository comes from its bundle. A turn with one goes on from a checkpoint with the
+        // same branch, unless the repository of the chat changed since (ПР32) — then only the
+        // session of that checkpoint is taken. A turn without one never reads a working copy.
+        if (plan.repository && plan.repository.repositoryChanged !== true) {
+          const saved = source.manifest.git
+          if (saved === undefined || saved.branch !== plan.repository.branch)
+            throw conflict('Previous checkpoint differs from the repository of the turn')
+        }
         // The data key leaves core only while this owner still holds the site.
         restore = {
           ...source,
@@ -197,12 +213,25 @@ export class TurnSupervisor {
           },
         }
       }
+      // Built again by the trusted git from the plan (ПР12): the same bytes the plan names, from
+      // the cache of the bundles, or a conflict. The executor gets the objects only.
+      let bundle: TurnBundleSource | undefined
+      if (plan.repository && git) {
+        await guard.assertFence()
+        bundle = await guard.interruptible(bundleOfPlan(git, plan.repository))
+      }
       // The files the plan names, checked against the database again under the lease; each is
       // read only when the executor writes it into the sandbox.
       const inbox = request.input.attachments.length
         ? await guard.interruptible(
             this.deps.inbox!.files(labels.taskId, request.input.attachments),
           )
+        : []
+      // The files of the chat's project (docs/plan/84-projects.md, ПР8): checked the same way,
+      // against the project the chat is in now.
+      const projectPaths = request.input.projectFiles ?? []
+      const projectFiles = projectPaths.length
+        ? await guard.interruptible(this.deps.projectFiles!.files(labels.taskId, projectPaths))
         : []
       const context = {
         ...keyed.context,
@@ -232,7 +261,9 @@ export class TurnSupervisor {
             },
             remainingMs: guard.remainingMs,
             ...(restore ? { restore } : {}),
+            ...(bundle ? { bundle } : {}),
             ...(inbox.length ? { inbox } : {}),
+            ...(projectFiles.length ? { projectFiles } : {}),
             driverId: this.deps.driver.id,
             prepared: files,
             argv,
@@ -295,8 +326,9 @@ export class TurnSupervisor {
   private validate(request: UnkeyedTurnRequest): TurnPlan {
     assertSandboxSpec(request.sandbox)
     const labels = request.sandbox.labels
-    if (requirementsOf(request).repository)
-      throw badRequest('A turn has no repository (docs/plan/83-remove-projects.md)')
+    // A turn names its repository exactly when it needs one (docs/plan/84-projects.md, §4.3).
+    if (requirementsOf(request).repository !== (request.repository !== undefined))
+      throw badRequest('A turn has its repository exactly when it needs one')
     // `/undo` goes back to the checkpoint the undone turn started from (docs/plan/61, §5.14).
     if (request.rewound !== undefined && labels.turn < 2)
       throw badRequest('Only a later turn is rewound')
@@ -305,6 +337,11 @@ export class TurnSupervisor {
       throw badRequest('Files of the client go only to the turn of their chat')
     if (request.input.attachments.length && !this.deps.inbox)
       throw badRequest('Files of the client need the inbox of core')
+    // The files of a project go to the turn of its chat only (docs/plan/84-projects.md, ПР8).
+    if (request.input.projectFiles?.length && !turnMayHoldInbox(labels))
+      throw badRequest('Files of a project go only to the turn of its chat')
+    if (request.input.projectFiles?.length && !this.deps.projectFiles)
+      throw badRequest('Files of a project need the inbox of core')
     // A compaction shortens a session: only a checkpoint brings one (docs/plan/61, §5.14).
     if (request.input.action !== undefined && !request.previous)
       throw badRequest('An action of a turn needs the checkpoint of an earlier turn')
@@ -322,14 +359,16 @@ export class TurnSupervisor {
       request.context.turn !== labels.turn
     )
       throw badRequest('Turn context differs from sandbox identity')
-    // The manifest's own rules: a turn must not end with a checkpoint save() refuses. The
-    // checkpoint has no `git`: a turn has no repository.
+    // The manifest's own rules: a turn must not end with a checkpoint save() refuses. A turn
+    // with a repository saves its `git` too.
+    const git = plannedSnapshotGit(request)
     const plan = snapshotPlanSchema.safeParse({
       workspaceId: labels.workspaceId,
       sessionId: labels.sessionId,
       turn: labels.turn,
       image: request.sandbox.image,
       driver: { id: this.deps.driver.id, version: request.driverVersion },
+      ...(git ? { git } : {}),
     })
     if (!plan.success) throw badRequest('Invalid turn snapshot metadata')
     if (request.previous) {

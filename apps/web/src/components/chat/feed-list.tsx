@@ -26,6 +26,8 @@ import {
   feedFailureOpenText,
   feedFileLeftText,
   feedDocLeftText,
+  feedMemoryLeftText,
+  feedRepoLeftText,
   feedPageChangeText,
   feedPageLeftText,
   feedFilesChangedText,
@@ -90,6 +92,8 @@ import { FeedDocuments } from './feed-document'
 import { workingPhraseOf } from './working-phrases'
 import { DocRevisions, docRevisionsOf, FeedDoc } from './feed-doc'
 import { FeedFile } from './feed-file'
+import { FeedMemoryChange } from './feed-memory'
+import { FeedRepoAction, FeedRepoChanges, FeedRepoProposal } from './feed-repo'
 import { FeedPage, FeedPageChange, FeedPageWarnings } from './feed-page'
 import { FeedScheduleChange, FeedScheduleLeft } from './feed-schedule'
 import { FeedScreenshot } from './feed-screenshot'
@@ -101,6 +105,8 @@ import type { FeedHeadState } from './feed-state'
 
 /** What the rows can ask the dialog to do. */
 export interface FeedActions {
+  /** The chat: the cards of its repository read its branch (docs/plan/84-projects.md, ПР13). */
+  taskId?: string
   /** «Продолжить» after the platform's question about credits; absent — a closed project (К39). */
   onContinue?: () => void
   /** «Остановить задачу»: `/cancel` with its confirmation. */
@@ -1081,6 +1087,23 @@ function RowView({
       return null
     case 'feed.doc_left':
       return <Note text={feedDocLeftText(row)} />
+    // What the end of a pass did with the memory (docs/plan/84-projects.md, ПР18; P-chat).
+    case 'feed.memory_change':
+      return <FeedMemoryChange entryId={row.entryId} action={row.action} text={row.text} />
+    case 'feed.memory_left':
+      return <Note text={feedMemoryLeftText(row)} />
+    // What a turn left in the chat's branch, and changes it did not keep (docs/plan/84-projects.md,
+    // ПР12, ПР26): the card «Изменения в ветке» with its buttons (ПР13).
+    case 'feed.repo_changes':
+      return <FeedRepoChanges taskId={actions.taskId} row={row} />
+    case 'feed.repo_proposal':
+      return (
+        <FeedRepoProposal taskId={actions.taskId} title={row.title} description={row.description} />
+      )
+    case 'feed.repo_action':
+      return <FeedRepoAction kind={row.kind} state={row.state} url={row.url} error={row.error} />
+    case 'feed.repo_left':
+      return <Note text={feedRepoLeftText(row)} />
     case 'feed.rewind':
       return <Note text={feedRewindText(row)} />
     case 'feed.redo':

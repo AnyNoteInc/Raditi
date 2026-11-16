@@ -765,7 +765,8 @@ test('web’s AppRole holds the policies `sites-writer` and `workspace-provision
   assert.deepEqual(role.body.token_policies, [SITES_WRITER, 'workspace-provisioner'])
   assert.equal(role.body.token_no_default_policy, true)
   // The policy itself: write with CAS, read the metadata and keep one version of each key — of
-  // the variables of a workspace (БП4) and of the keys of its MCP servers (БП11) — nothing else;
+  // the variables of a workspace (БП4), of the keys of its MCP servers (БП11) and of the tokens of
+  // its git connections (plan 84) — nothing else;
   // no key of a site since plan 83, БП13.
   assert.deepEqual(
     [...read('infra/vault/policies/sites-writer.hcl').matchAll(/^path "([^"]+)"/gm)].map(
@@ -776,6 +777,9 @@ test('web’s AppRole holds the policies `sites-writer` and `workspace-provision
       'kv/metadata/workspaces/+/env/*',
       'kv/data/workspaces/+/mcp/*',
       'kv/metadata/workspaces/+/mcp/*',
+      // The tokens of git connections (docs/plan/84-projects.md, ПР10).
+      'kv/data/workspaces/+/git/*',
+      'kv/metadata/workspaces/+/git/*',
     ],
   )
   // And the Transit key of a workspace, made before its first task (docs/plan/57, Б32) — only.

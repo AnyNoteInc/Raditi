@@ -51,13 +51,15 @@ const uids = {
   traefik: '65532:65532',
   web: '10001:10001',
   core: '10002:10002',
+  // Its own uid in core's group: the volume of the mirrors is theirs (docs/plan/84-projects.md, ПР33)
+  'git-worker': '10010:10002',
   llm: '10008:10008',
   redis: '10003:10003',
   migrate: '10004:10004',
   seed: '10004:10004',
   postgres: '70:70',
 }
-const nodeServices = ['web', 'core', 'llm', 'migrate', 'seed']
+const nodeServices = ['web', 'core', 'git-worker', 'llm', 'migrate', 'seed']
 // seed runs as migrate: the schema owner
 const secretDirs = {
   web: 'web',
@@ -420,6 +422,10 @@ test('networks: only Traefik reaches web, web and core never meet, data stays in
     'web core': [],
     'web llm': [],
     'core llm': [],
+    'core git-worker': [],
+    'git-worker postgres': [],
+    'git-worker redis': [],
+    'git-worker web': [],
     'llm redis': [],
     'llm postgres': ['llm-data'],
     'web postgres': ['web-data'],
@@ -436,7 +442,7 @@ test('networks: only Traefik reaches web, web and core never meet, data stays in
   }
   for (const network of ['edge', 'web-data', 'core-data', 'llm-edge', 'llm-data', 'metrics-edge'])
     assert.equal(config.networks[network].internal, true, `${network} is not internal`)
-  for (const network of ['web-egress', 'core-egress', 'llm-out', 'public']) {
+  for (const network of ['web-egress', 'core-egress', 'git-egress', 'llm-out', 'public']) {
     assert.notEqual(config.networks[network].internal, true)
     const members = names.filter((name) => networksOf(name).includes(network))
     assert.equal(members.length, 1, `${network}: ${members}`)
@@ -502,6 +508,29 @@ test("verify-edge's fallback for a host without journald changes the logging dri
     const { logging: __, ...production } = services[name]
     assert.deepEqual(rest, production, name)
   }
+})
+
+test('git-worker holds nothing of core: no secrets, Vault, database or Redis, only the mirrors', () => {
+  const worker = services['git-worker']
+  assert.equal(worker.image, services.core.image)
+  assert.deepEqual(worker.command, ['dist/git-worker/main.js'])
+  assert.deepEqual(
+    (worker.volumes ?? []).map((volume) => [volume.source, volume.target]),
+    [['git-mirror', '/git']],
+  )
+  for (const key of Object.keys(worker.environment))
+    assert.doesNotMatch(key, /^(VAULT_|DATABASE_|REDIS_|S3_|NODE_EXTRA_CA_CERTS)/, key)
+  assert.equal(worker.environment.GIT_MIRROR_DIR, '/git')
+  assert.equal(services.core.environment.GIT_MIRROR_DIR, '/git')
+  assert.ok(
+    services.core.volumes.some(
+      (volume) => volume.source === 'git-mirror' && volume.target === '/git',
+    ),
+  )
+  assert.match(
+    services['volume-init'].command.join('\n'),
+    /chown 10002:10002 \/v\/git-mirror && chmod 0770/,
+  )
 })
 
 test('core that compose gives the intake of scheduled runs gets its secret too (docs/plan/82, §4.4)', () => {

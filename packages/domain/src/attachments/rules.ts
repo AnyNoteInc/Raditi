@@ -29,7 +29,8 @@ export const attachmentLimits = Object.freeze({
   sniffBytes: 4096,
 })
 
-type Signature = 'jpeg' | 'png' | 'webp' | 'gif' | 'pdf' | 'zip' | 'text'
+export type FileSignature = 'jpeg' | 'png' | 'webp' | 'gif' | 'pdf' | 'zip' | 'text'
+type Signature = FileSignature
 
 interface AttachmentTypeEntry {
   readonly mime: string
@@ -239,6 +240,13 @@ const signatures: Readonly<Record<Signature, (bytes: Uint8Array) => boolean>> = 
   zip: (bytes) => startsWith(bytes, ZIP),
   text: isUtf8Text,
 }
+
+/**
+ * Whether the first bytes are those of a file of this signature (the files of a project,
+ * docs/plan/84-projects.md, ПР8, read the same signatures).
+ */
+export const fileSignatureMatches = (signature: FileSignature, bytes: Uint8Array): boolean =>
+  signatures[signature](bytes.subarray(0, attachmentLimits.sniffBytes))
 
 /**
  * Whether the first bytes of a file are what its declared type says (at most

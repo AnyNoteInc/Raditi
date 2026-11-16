@@ -1,6 +1,7 @@
 import {
   appEnvSchema,
   chatCommandRefusals,
+  chatProjectSchema,
   FEED_REQUEST_TEXT_LIMIT,
   feedCursorSchema,
   feedTaskHeadSchema,
@@ -33,6 +34,7 @@ import {
 } from '../services/chat/queue.ts'
 import {
   archiveDialog,
+  moveDialogToProject,
   pinDialog,
   removeDialog,
   renameDialog,
@@ -123,6 +125,8 @@ const dialogListItemOutput = z.strictObject({
   updatedAt: z.date(),
   /** «Закрепить» (ВВ21). */
   pinned: z.boolean(),
+  /** The project the chat is in (docs/plan/84-projects.md, ПР2); null — none. */
+  project: chatProjectSchema.nullable(),
   /** «В архив» (ВВ21). */
   archived: z.boolean(),
   /** The chat goes on in Telegram too (docs/plan/80-telegram.md, 80.6). */
@@ -173,6 +177,11 @@ export const taskRouter = router({
         attachments: attachmentIdsSchema.optional(),
         /** How hard the model thinks: `low`, `high` (the default) or `max`. */
         effort: reasoningEffortSchema.optional(),
+        /**
+         * The project the chat starts in (docs/plan/84-projects.md, ПР30); null or absent — none.
+         * Fixed with the first message: later only `moveToProject` changes it.
+         */
+        projectId: browserId.nullable().optional(),
       }),
     )
     .output(z.strictObject({ taskId: z.uuid(), created: z.boolean() }))
@@ -183,8 +192,20 @@ export const taskRouter = router({
         text: input.text,
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
         ...(input.effort === undefined ? {} : { effort: input.effort }),
+        projectId: input.projectId ?? null,
         now: new Date(),
       }),
+    ),
+
+  /**
+   * «Перенести в проект…» and «Убрать из проекта» (docs/plan/84-projects.md, ПР2): refused with
+   * TASK_PROJECT_BUSY while a pass of the chat is queued or runs.
+   */
+  moveToProject: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), projectId: browserId.nullable() }))
+    .output(z.strictObject({ projectId: z.uuid().nullable() }))
+    .mutation(({ ctx, input }) =>
+      moveDialogToProject(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
     ),
 
   /** Words to a chat that waits: an answer to the agent, or a new pass. */
@@ -421,6 +442,11 @@ export const taskRouter = router({
         cursor: z.string().regex(DIALOG_CURSOR_PATTERN).optional(),
         /** «Архив» (docs/plan/75-chat-input-output.md, ВВ21); the list itself by default. */
         view: z.enum(['active', 'archive']).optional(),
+        /** The chats of one project of the user (docs/plan/84-projects.md, ПР2). */
+        projectId: z
+          .uuid()
+          .transform((id) => id.toLowerCase())
+          .optional(),
       }),
     )
     .output(
@@ -436,6 +462,7 @@ export const taskRouter = router({
         userId: ctx.user.id,
         cursor: input.cursor,
         view: input.view,
+        projectId: input.projectId,
       }),
     ),
 

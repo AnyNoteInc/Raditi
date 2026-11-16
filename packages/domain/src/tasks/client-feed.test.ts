@@ -29,7 +29,6 @@ import {
   feedRowSchema,
   feedRowSchemaWithin,
   feedEndedSiteOf,
-  feedSiteOf,
   feedSiteStates,
   feedStepPayloadSchema,
   feedSteps,
@@ -304,6 +303,68 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
   'feed.doc_left': [
     { v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', sections: 2, reason: 'refused' },
   ],
+  'feed.memory_change': [
+    {
+      v: 1,
+      action: 'saved',
+      entryId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd1',
+      kind: 'fact',
+      text: 'Цены — только из прайса',
+    },
+    {
+      v: 1,
+      action: 'forget_proposed',
+      entryId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd1',
+      kind: 'preference',
+      text: 'Отвечать коротко',
+    },
+  ],
+  'feed.memory_left': [{ v: 1, action: 'save', reason: 'secret' }],
+  'feed.repo_changes': [
+    {
+      v: 1,
+      branch: 'raditi/chat-0193a1b2c3d4',
+      baseSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      headSha: 'cccccccccccccccccccccccccccccccccccccccc',
+      diffSha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      files: 2,
+      additions: 5,
+      deletions: 1,
+      list: [{ path: 'src/a.ts', additions: 4, deletions: 1 }],
+      ciTouched: false,
+      pushed: false,
+      mergeRequest: null,
+    },
+  ],
+  'feed.repo_left': [
+    { v: 1, reason: 'secret_found', paths: ['config.js'] },
+    { v: 1, reason: 'failed' },
+  ],
+  'feed.repo_proposal': [
+    {
+      v: 1,
+      reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd1',
+      title: 'Зимнее меню',
+      description: 'Цены по прайсу.',
+      draft: false,
+    },
+  ],
+  'feed.repo_action': [
+    {
+      v: 1,
+      actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd2',
+      kind: 'push',
+      state: 'done',
+    },
+    {
+      v: 1,
+      actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd3',
+      kind: 'open_mr',
+      state: 'done',
+      number: 37,
+      url: 'https://gitlab.example.ru/kolos/site/-/merge_requests/37',
+    },
+  ],
   'feed.schedule_change': [
     scheduleChange,
     {
@@ -361,6 +422,12 @@ describe('feed vocabulary', () => {
       'feed.doc',
       'feed.doc_touch',
       'feed.doc_left',
+      'feed.memory_change',
+      'feed.memory_left',
+      'feed.repo_changes',
+      'feed.repo_left',
+      'feed.repo_proposal',
+      'feed.repo_action',
       'feed.schedule_change',
       'feed.schedule_left',
     ])
@@ -459,6 +526,8 @@ describe('free text is allowed in four fields, the agent words of a browser ques
       'feed.failure.objects[].title',
       // The name of a file the agent made, as it had it: shown, never read as markup.
       'feed.file.name',
+      // A note of memory (docs/plan/84-projects.md, ПР18): the client reads it, as text.
+      'feed.memory_change.text',
       // The title the agent gave its page: shown as text.
       'feed.page.title',
       // The title of a page the agent changed (docs/plan/73-pages-sites.md, Дер27): as text.
@@ -467,6 +536,13 @@ describe('free text is allowed in four fields, the agent words of a browser ques
       'feed.question.message',
       'feed.question.questions[].options[]',
       'feed.question.questions[].text',
+      // The paths and the branch of a repository: what git names, read back through feedText.
+      'feed.repo_changes.branch',
+      'feed.repo_changes.list[].path',
+      'feed.repo_left.paths[]',
+      // The agent's title and description of a merge request (ПР14): the client reads them as text.
+      'feed.repo_proposal.description',
+      'feed.repo_proposal.title',
       'feed.request.text',
       'feed.result.message',
       'feed.result.objects[].title',
@@ -1020,25 +1096,13 @@ describe('feed.result', () => {
   })
 })
 
-describe('what a row says of the site of its task (docs/plan/61-chats-first.md, К18)', () => {
-  const site = { siteId: '0199a000-0000-7000-8000-0000000000a1' }
-  const chat = { siteId: null }
-
-  it('keeps the state of a task with a site', () => {
-    expect(feedSiteOf(site, 'changed')).toBe('changed')
-    expect(feedSiteOf(site, 'unchanged')).toBe('unchanged')
-    expect(feedEndedSiteOf(site, true)).toBe('check')
-    expect(feedEndedSiteOf(site, false)).toBe('unchanged')
+describe('what an ending says of the site (docs/plan/83-remove-projects.md: a chat has none)', () => {
+  it('has nothing to say when nothing was done in the browser', () => {
+    expect(feedEndedSiteOf(false)).toBe('none')
   })
 
-  it('has nothing to say of a site without one', () => {
-    expect(feedSiteOf(chat, 'changed')).toBe('none')
-    expect(feedSiteOf(chat, 'unchanged')).toBe('none')
-    expect(feedEndedSiteOf(chat, false)).toBe('none')
-  })
-
-  it('names other sites when a chat without a site acted in its browser', () => {
-    expect(feedEndedSiteOf(chat, true)).toBe('elsewhere')
+  it('names other sites when the chat acted in its browser', () => {
+    expect(feedEndedSiteOf(true)).toBe('elsewhere')
   })
 })
 
@@ -1328,6 +1392,23 @@ describe('reading stored rows', () => {
       'feed.doc': [{ v: 1, docId: 'документ' }],
       'feed.doc_touch': [{ v: 1, docId: 'документ', revision: 1 }],
       'feed.doc_left': [{ v: 1, docId: 'документ', sections: 1, reason: 'refused' }],
+      'feed.memory_change': [
+        { v: 1, action: 'saved', entryId: 'запись', kind: 'fact', text: 'а' },
+        {
+          v: 1,
+          action: 'saved',
+          entryId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd1',
+          kind: 'fact',
+          text: '   ',
+        },
+      ],
+      'feed.memory_left': [{ v: 1, action: 'save' }],
+      'feed.repo_changes': [{ v: 1, branch: 'b', headSha: 'нет', files: 1 }],
+      'feed.repo_left': [{ v: 1 }],
+      'feed.repo_proposal': [{ v: 1, reservedId: 'нет', title: 'а' }],
+      'feed.repo_action': [
+        { v: 1, actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd2', kind: 'rerun' },
+      ],
       'feed.schedule_change': [
         { ...scheduleChange, scheduleId: 'задача' },
         { ...scheduleChange, name: '' },
@@ -1595,9 +1676,11 @@ describe('task head', () => {
   it('accepts the head of the design and every status of spec §7', () => {
     expect(feedTaskHeadSchema.parse(head)).toEqual({
       ...head,
-      requirements: { repository: true, browser: false },
+      requirements: { repository: false, browser: false },
       // A head written before the choice of reasoning reads as «Высокое».
       effort: 'high',
+      // A head written before projects is of a chat without one (docs/plan/84-projects.md).
+      project: null,
     })
     for (const status of taskStatuses)
       expect(feedTaskHeadSchema.safeParse({ ...head, status }).success).toBe(true)
@@ -1640,7 +1723,7 @@ describe('task head', () => {
 })
 
 describe('failure catalogue', () => {
-  it('lists the fourteen codes of the design', () => {
+  it('lists the fourteen codes of the design and three of a repository (docs/plan/84, ПР12)', () => {
     expect(feedFailureCodes).toEqual([
       'technical',
       'timeout',
@@ -1656,6 +1739,9 @@ describe('failure catalogue', () => {
       'content_refused',
       'unavailable',
       'not_accepted',
+      'repo_too_large',
+      'repo_unreachable',
+      'repo_reauth',
     ])
   })
 
@@ -1681,6 +1767,8 @@ describe('failure catalogue', () => {
       'site_held',
       'content_refused',
       'not_accepted',
+      'repo_too_large',
+      'repo_reauth',
     ])
   })
 
@@ -2006,9 +2094,9 @@ describe('the requirements of a task in its head', () => {
     runningSince: null,
   }
 
-  it('reads a head without them as a task with the repository alone', () => {
+  it('reads a head without them as a chat that needs nothing (plan 83: no repository)', () => {
     expect(feedTaskHeadSchema.parse(head).requirements).toEqual({
-      repository: true,
+      repository: false,
       browser: false,
     })
   })

@@ -12,6 +12,22 @@ import {
   pageKinds,
   pageLeftReasons,
 } from '../pages/feed.ts'
+import {
+  feedMemoryChangePayloadSchema,
+  feedMemoryLeftPayloadSchema,
+  memoryChangeActions,
+  memoryLeftReasons,
+} from '../memory/feed.ts'
+import { memoryChangeKinds, memoryKinds } from '../memory/schemas.ts'
+import {
+  feedRepoActionPayloadSchema,
+  feedRepoChangesPayloadSchema,
+  feedRepoLeftPayloadSchema,
+  feedRepoProposalPayloadSchema,
+  repoActionKinds,
+  repoActionStates,
+  repoLeftReasons,
+} from '../repo/feed.ts'
 import { pagePathSchema } from '../pages/path.ts'
 import { pageSlugSchema } from '../pages/slug.ts'
 import {
@@ -48,7 +64,8 @@ import {
   isFeedText,
   looksLikeSecret,
 } from './client-feed-text.ts'
-import { REPOSITORY_ONLY, taskRequirementsSchema } from './task-requirements.ts'
+import { chatProjectSchema } from '../projects/schemas.ts'
+import { PLAIN_CHAT, taskRequirementsSchema } from './task-requirements.ts'
 import { taskStatuses } from './task-status.ts'
 
 /**
@@ -104,6 +121,17 @@ export const feedEventTypes = [
   'feed.doc',
   'feed.doc_touch',
   'feed.doc_left',
+  // What the end of a pass did with the notes of memory the agent reserved, and a note it did not
+  // keep (docs/plan/84-projects.md, ПР18).
+  'feed.memory_change',
+  'feed.memory_left',
+  // What a turn of a chat with a repository left in its branch, and changes it did not keep
+  // (docs/plan/84-projects.md, ПР12, ПР26).
+  'feed.repo_changes',
+  'feed.repo_left',
+  // The agent proposes a merge request, and what a button of the client did (ПР13, ПР14).
+  'feed.repo_proposal',
+  'feed.repo_action',
   // A scheduled task the agent created, changed, paused, resumed or deleted at the end of its
   // turn, and one it could not (docs/plan/82-scheduled-tasks.md, Зп33, Зп35).
   'feed.schedule_change',
@@ -238,27 +266,14 @@ const resultSites = ['unchanged', 'changed', 'check', 'none'] as const
 const endedSites = ['unchanged', 'restored', 'check', 'none', 'elsewhere'] as const
 /** `/undo` gives back the session and the files, never what the task left on a site. */
 const rewindSites = ['unchanged', 'check', 'none', 'elsewhere'] as const
-type ResultSiteState = (typeof resultSites)[number]
-type EndedSiteState = (typeof endedSites)[number]
-
-/** What a row of a result says of the site: a task without one says nothing of it. */
-export const feedSiteOf = (
-  task: { siteId: string | null },
-  state: ResultSiteState,
-): ResultSiteState => (task.siteId === null ? 'none' : state)
 
 /**
- * What a failure or a cancellation says of the site, by whether the task left anything on it
- * that nothing gives back (`taskHasProductionWrites`); without a site that can only be what was
- * done in its browser, on sites of others.
+ * What a failure or a cancellation says of the site. A chat has no site since plan 83
+ * (docs/plan/83-remove-projects.md), so that is only what was done in its browser, on sites of
+ * others (`taskHasProductionWrites`): `elsewhere`, or `none`. A result always says `none`.
  */
-export const feedEndedSiteOf = (
-  task: { siteId: string | null },
-  writes: boolean,
-): Exclude<EndedSiteState, 'restored'> => {
-  if (task.siteId === null) return writes ? 'elsewhere' : 'none'
-  return writes ? 'check' : 'unchanged'
-}
+export const feedEndedSiteOf = (writes: boolean): 'none' | 'elsewhere' =>
+  writes ? 'elsewhere' : 'none'
 
 /** What became of the held credits; null — not known or not applicable. Trusted. */
 export const feedCreditsStates = ['returned', 'expired'] as const
@@ -903,6 +918,12 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.doc': feedDocPayloadSchema,
   'feed.doc_touch': feedDocTouchPayloadSchema,
   'feed.doc_left': feedDocLeftPayloadSchema,
+  'feed.memory_change': feedMemoryChangePayloadSchema,
+  'feed.memory_left': feedMemoryLeftPayloadSchema,
+  'feed.repo_changes': feedRepoChangesPayloadSchema,
+  'feed.repo_left': feedRepoLeftPayloadSchema,
+  'feed.repo_proposal': feedRepoProposalPayloadSchema,
+  'feed.repo_action': feedRepoActionPayloadSchema,
   'feed.schedule_change': feedScheduleChangePayloadSchema,
   'feed.schedule_left': feedScheduleLeftPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
@@ -945,6 +966,12 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.doc', feedDocPayloadSchema),
       row('feed.doc_touch', feedDocTouchPayloadSchema),
       row('feed.doc_left', feedDocLeftPayloadSchema),
+      row('feed.memory_change', feedMemoryChangePayloadSchema),
+      row('feed.memory_left', feedMemoryLeftPayloadSchema),
+      row('feed.repo_changes', feedRepoChangesPayloadSchema),
+      row('feed.repo_left', feedRepoLeftPayloadSchema),
+      row('feed.repo_proposal', feedRepoProposalPayloadSchema),
+      row('feed.repo_action', feedRepoActionPayloadSchema),
       row('feed.schedule_change', feedScheduleChangePayloadSchema),
       row('feed.schedule_left', feedScheduleLeftPayloadSchema),
     ])
@@ -1282,6 +1309,80 @@ const readDocLeft = z.object({
   reason: known(['refused'] as const, 'refused' as const),
 })
 
+// A note of memory (ПР18): an action this code does not know says the less — a proposal, which
+// does nothing until the client saves it; a reason it does not know, that the platform lost it.
+const readMemoryChange = z.object({
+  action: known(memoryChangeActions, 'proposed' as const),
+  entryId: z.uuid(),
+  kind: known(memoryKinds, 'fact' as const),
+  text: shownText(400),
+})
+const readMemoryLeft = z.object({
+  action: known(memoryChangeKinds, 'save' as const),
+  reason: known(memoryLeftReasons, 'failed' as const),
+})
+
+// The changes of a turn in the chat's branch (ПР26): the card shows the branch, the counts and up
+// to ten files; a file that cannot be read is left out, a broken count makes the row unreadable.
+const readRepoFile = z.object({
+  path: shownText(4096),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+})
+const readRepoChanges = z.object({
+  branch: shownText(255),
+  baseSha: z.string().regex(/^[0-9a-f]{40}$/),
+  headSha: z.string().regex(/^[0-9a-f]{40}$/),
+  diffSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  files: z.number().int().nonnegative(),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  list: z
+    .array(z.unknown())
+    .max(50)
+    .transform((rows) =>
+      rows.flatMap((row) => {
+        const file = readRepoFile.safeParse(row)
+        return file.success ? [file.data] : []
+      }),
+    ),
+  ciTouched: z.boolean(),
+  pushed: z.boolean(),
+  mergeRequest: z
+    .object({ number: z.number().int().positive(), url: z.url({ protocol: /^https$/ }).max(500) })
+    .nullable()
+    .catch(null),
+})
+// A reason this code does not know reads as the plain «не сохранены — попробуйте ещё раз».
+const readRepoLeft = z.object({
+  reason: known(repoLeftReasons, 'failed' as const),
+  paths: z.array(shownText(4096)).max(50).optional(),
+})
+// The agent's proposal of a merge request (ПР14): the card shows its title and description.
+const readRepoProposal = z.object({
+  reservedId: z.uuid(),
+  title: shownText(120),
+  description: z.string().max(4000).catch(''),
+  draft: z.boolean().catch(false),
+})
+// What a button did (ПР13): a kind or a state this code does not know is not shown as done.
+const readRepoAction = z.object({
+  actionId: z.uuid(),
+  kind: z.enum(repoActionKinds),
+  state: known(repoActionStates, 'failed' as const),
+  number: z.number().int().positive().optional().catch(undefined),
+  url: z
+    .url({ protocol: /^https$/ })
+    .max(500)
+    .optional()
+    .catch(undefined),
+  error: z
+    .string()
+    .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
+    .optional()
+    .catch(undefined),
+})
+
 /**
  * The schedules of a row as stored: a kind this code does not know makes them null — the card
  * says the schedule without its words — never the row unreadable.
@@ -1380,6 +1481,12 @@ export type FeedEvent =
   | ({ type: 'feed.doc' } & z.infer<typeof readDoc>)
   | ({ type: 'feed.doc_touch' } & z.infer<typeof readDocTouch>)
   | ({ type: 'feed.doc_left' } & z.infer<typeof readDocLeft>)
+  | ({ type: 'feed.memory_change' } & z.infer<typeof readMemoryChange>)
+  | ({ type: 'feed.memory_left' } & z.infer<typeof readMemoryLeft>)
+  | ({ type: 'feed.repo_changes' } & z.infer<typeof readRepoChanges>)
+  | ({ type: 'feed.repo_left' } & z.infer<typeof readRepoLeft>)
+  | ({ type: 'feed.repo_proposal' } & z.infer<typeof readRepoProposal>)
+  | ({ type: 'feed.repo_action' } & z.infer<typeof readRepoAction>)
   | ({ type: 'feed.schedule_change' } & z.infer<typeof readScheduleChange>)
   | ({ type: 'feed.schedule_left' } & z.infer<typeof readScheduleLeft>)
   | { type: 'newer' }
@@ -1541,6 +1648,30 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   'feed.doc_left': {
     1: (payload) => readWith(readDocLeft, payload, (data) => ({ type: 'feed.doc_left', ...data })),
   },
+  'feed.memory_change': {
+    1: (payload) =>
+      readWith(readMemoryChange, payload, (data) => ({ type: 'feed.memory_change', ...data })),
+  },
+  'feed.memory_left': {
+    1: (payload) =>
+      readWith(readMemoryLeft, payload, (data) => ({ type: 'feed.memory_left', ...data })),
+  },
+  'feed.repo_changes': {
+    1: (payload) =>
+      readWith(readRepoChanges, payload, (data) => ({ type: 'feed.repo_changes', ...data })),
+  },
+  'feed.repo_left': {
+    1: (payload) =>
+      readWith(readRepoLeft, payload, (data) => ({ type: 'feed.repo_left', ...data })),
+  },
+  'feed.repo_proposal': {
+    1: (payload) =>
+      readWith(readRepoProposal, payload, (data) => ({ type: 'feed.repo_proposal', ...data })),
+  },
+  'feed.repo_action': {
+    1: (payload) =>
+      readWith(readRepoAction, payload, (data) => ({ type: 'feed.repo_action', ...data })),
+  },
   'feed.schedule_change': {
     1: (payload) =>
       readWith(readScheduleChange, payload, (data) => ({ type: 'feed.schedule_change', ...data })),
@@ -1605,15 +1736,20 @@ export const feedTaskHeadSchema = z.strictObject({
   /** When the `work` stage of the current turn was written. */
   runningSince: z.iso.datetime().nullable(),
   /**
-   * What the task works with (docs/plan/57, Б2): its site's repository, the browser of the task
-   * or both. A head built without it is of a task that has the repository alone.
+   * What the task works with (docs/plan/57, Б2): the browser of the chat or nothing. A head built
+   * without it needs neither (a chat has no repository since plan 83).
    */
-  requirements: taskRequirementsSchema.default(() => ({ ...REPOSITORY_ONLY })),
+  requirements: taskRequirementsSchema.default(() => ({ ...PLAIN_CHAT })),
   /**
    * How hard the model thinks from the next turn on (owner's request of 26.10.2026): the class of
    * the task, which the client may change while the dialog goes on (`task.setEffort`). A head
    * built without it thinks at `high`, the default of a new dialog.
    */
   effort: reasoningEffortSchema.default('high'),
+  /**
+   * The project the chat is in (docs/plan/84-projects.md, ПР2); null — a chat without a project,
+   * or a head built before projects.
+   */
+  project: chatProjectSchema.nullable().default(null),
 })
 export type FeedTaskHead = z.infer<typeof feedTaskHeadSchema>

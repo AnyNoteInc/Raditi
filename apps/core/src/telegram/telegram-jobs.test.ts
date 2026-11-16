@@ -323,6 +323,36 @@ describe('TelegramJobs.deliver', () => {
     ])
   })
 
+  it('tells the rows of memory too (docs/plan/84-projects.md, ПР18)', async () => {
+    const h = harness({
+      events: [
+        result,
+        {
+          id: 3n,
+          type: 'feed.memory_change',
+          payload: {
+            v: 1,
+            action: 'proposed',
+            entryId: '0199a3f2-0000-7000-8000-0000000e0001',
+            kind: 'preference',
+            text: 'Блоки сезонных товаров — под шапкой',
+          },
+        },
+      ],
+    })
+    await h.jobs.deliver({ taskId: TASK, kind: 'answered', attempt: 1, turnNo: 2 })
+    expect(h.prisma.taskEvent.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          type: { in: expect.arrayContaining(['feed.memory_change', 'feed.memory_left']) },
+        }),
+      }),
+    )
+    expect(h.sent.at(-1)?.text).toContain(
+      'Агент предлагает запомнить: Блоки сезонных товаров — под шапкой',
+    )
+  })
+
   it('offers «Продолжить» for the question of the ceiling and skips a chat not bound to Telegram', async () => {
     const h = harness({
       events: [

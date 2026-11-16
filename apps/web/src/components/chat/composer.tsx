@@ -171,6 +171,13 @@ export interface ComposerMentions {
   state: 'ready' | 'preparing' | 'none'
   /** `@` was typed: the files are read now, not before. */
   onOpen: () => void
+  /**
+   * Where the paths lie for the agent: the choice puts `@<root><path>` into the words — the files
+   * of the context of a project are `/workspace/project/<path>` (docs/plan/84-projects.md, ПР24).
+   */
+  root?: string
+  /** The name of the list and its words when there is nothing in it, if not the working copy's. */
+  texts?: { label: string; none: string }
 }
 
 export interface ComposerCommands {
@@ -207,6 +214,7 @@ export function Composer({
   busy = false,
   onSend,
   commands,
+  project,
   effort,
   attachments,
   noSecrets = feedInputText.noSecrets,
@@ -236,6 +244,11 @@ export function Composer({
    */
   onSend: (text: string, attachmentIds: readonly string[]) => Promise<boolean>
   commands?: ComposerCommands
+  /**
+   * The pill of the project a new chat starts in, between the paperclip and «Размышление»
+   * (docs/plan/84-projects.md, ПР30); absent — the field has none.
+   */
+  project?: ReactNode
   /** «Размышление»: the menu of how hard the model thinks, after the paperclip. */
   effort?: ReactNode
   /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
@@ -352,8 +365,14 @@ export function Composer({
   const activeIndex = Math.min(active, Math.max(0, options.length - 1))
   const mention = mentions !== undefined && !open && !disabled ? mentionAt(text, caret) : null
   const mentionOpen = mention !== null && mention.start !== mentionClosedAt
+  const mentionRoot = mentions?.root ?? ''
+  // A folder chosen under the root goes on narrowing: its letters are read without the root.
+  const mentionQuery =
+    mention !== null && mentionRoot !== '' && mention.query.startsWith(mentionRoot)
+      ? mention.query.slice(mentionRoot.length)
+      : (mention?.query ?? '')
   const mentionOptions =
-    mentionOpen && mentions?.paths ? mentionMatches(mentions.paths, mention.query) : []
+    mentionOpen && mentions?.paths ? mentionMatches(mentions.paths, mentionQuery) : []
   const mentionIndex = Math.min(mentionActive, Math.max(0, mentionOptions.length - 1))
   const mentionStarted = mentionOpen ? mention.start : null
   const askFiles = mentions?.onOpen
@@ -378,7 +397,7 @@ export function Composer({
 
   function chooseMention(option: MentionOption) {
     if (mention === null) return
-    const next = withMention(text, mention, option.path)
+    const next = withMention(text, mention, `${mentionRoot}${option.path}`)
     setText(next.text)
     setCaret(next.caret)
     setMentionActive(0)
@@ -600,6 +619,7 @@ export function Composer({
             options={mentionOptions}
             active={mentionIndex}
             state={mentions?.paths ? 'ready' : (mentions?.state ?? 'preparing')}
+            {...(mentions?.texts ? { texts: mentions.texts } : {})}
             onChoose={chooseMention}
             onHover={setMentionActive}
           />
@@ -893,6 +913,7 @@ export function Composer({
                 />
               </>
             ) : null}
+            {project}
             {effort}
           </Box>
           {filesWait !== null ? (

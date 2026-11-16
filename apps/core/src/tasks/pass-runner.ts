@@ -13,15 +13,18 @@ import {
   type AgentTurnJob,
   type JobQueue,
   type LlmBackend,
+  type MemoryPassEvidence,
   type SandboxRuntime,
   type SiteLeaseStore,
 } from '@repo/domain'
 
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
-import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
+import type { CompletedTurn, TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { ChatFiles } from './chat-files.ts'
 import type { DocSections } from './doc-sections.ts'
+import type { MemoryChanges } from './memory-changes.ts'
 import type { PageChanges } from './page-changes.ts'
+import type { RepoChanges, RepoTurnPreparer } from './repo-turns.ts'
 import type { ScheduleChanges } from './schedule-changes.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
@@ -91,6 +94,15 @@ export interface PassRunnerDependencies {
   docs?: Pick<DocSections, 'settle'> & Partial<Pick<DocSections, 'checkLive'>>
   /** What the turn asked of the pages besides versions (docs/plan/73-pages-sites.md, Дер23). */
   pageChanges?: Pick<PageChanges, 'apply'>
+  /** What the turn asked of the memory of its chat (docs/plan/84-projects.md, ПР18). */
+  memoryChanges?: Pick<MemoryChanges, 'apply' | 'fail'>
+  /**
+   * The repository of the chat's project, prepared before the turn (docs/plan/84-projects.md,
+   * §4.3, step 3); absent — the chat goes without it.
+   */
+  repositories?: Pick<RepoTurnPreparer, 'prepare'>
+  /** What a turn with a repository left, told in the chat (§4.3, step 8). */
+  repoChanges?: Pick<RepoChanges, 'apply' | 'fail'>
   /**
    * What the turn asked of the scheduled tasks of its author (docs/plan/82-scheduled-tasks.md,
    * Зп33): applied after a completed turn, refused at once after one that failed or was cancelled.
@@ -334,12 +346,16 @@ export class PassRunner {
     let cause: string | null = null
     let outbox: Uint8Array | undefined
     let refusesText: ((text: string) => 'turn_key' | 'client_value' | null) | null = null
+    let evidence: MemoryPassEvidence | undefined
+    let repository: CompletedTurn['repository']
     try {
       const completed = await supervisor.run(plan.request, plan.policy, controller.signal, {
         onArmed: live.arm,
       })
       outbox = completed.outbox
       refusesText = completed.refusesText
+      evidence = completed.evidence
+      repository = completed.repository
       ending = { kind: 'completed', turn: plan.turn, result: completed.result }
     } catch (error) {
       cause = causeOf(error)
@@ -373,6 +389,10 @@ export class PassRunner {
       ending.turn !== null
     ) {
       await this.deps.chatFiles?.failPages(job.taskId, ending.turn)
+      // What it asked of the memory is never applied (§4.3, step 9), nor its proposal of a merge
+      // request shown.
+      await this.deps.memoryChanges?.fail(job.taskId, ending.turn)
+      await this.deps.repoChanges?.fail(job.taskId, ending.turn)
       // And the changes of the scheduled tasks it reserved (Зп33): «ответ агента оборвался».
       await this.deps.scheduleChanges?.failTurn(job.taskId, ending.turn)
     }
@@ -391,6 +411,23 @@ export class PassRunner {
       // The scheduled tasks the turn set up or changed, checked with what only the turn knew (Зп33).
       await this.deps.scheduleChanges?.apply(job.taskId, ending.turn, refusesText)
     }
+    // Last, the notes of memory (docs/plan/84-projects.md, §4.3, step 8): «Запомнено» stands after
+    // the answer. Without the values of the client they are closed failed, never applied unchecked.
+    if (ending.kind === 'completed' && answer === 'moved')
+      await this.deps.memoryChanges?.apply(job.taskId, ending.turn, refusesText, {
+        remember: plan.remember,
+        unattended: plan.unattended,
+        ...(evidence ? { evidence } : {}),
+        repository: plan.requirements.repository,
+      })
+    // Then the changes of the repository (§4.3, step 8): the card «Изменения в ветке», or why
+    // they were not kept. The commit itself was published by the turn (ПР12).
+    if (ending.kind === 'completed' && answer === 'moved' && repository && plan.request.repository)
+      await this.deps.repoChanges?.apply(job.taskId, ending.turn, repository, {
+        projectRepositoryId: plan.request.repository.projectRepositoryId,
+        branch: plan.request.repository.branch,
+        mode: plan.request.repository.mode,
+      })
     if (ending.kind === 'busy') {
       // Another end of the task came first (a cancel, which wakes nobody): this one ended it.
       if (answer !== 'moved') return 'ended'
@@ -425,12 +462,21 @@ export class PassRunner {
     if (!facts) return { kind: 'refused', code: 'technical' }
     const [driver] = this.deps.drivers.list()
     if (!driver) return { kind: 'refused', code: 'unavailable' }
-    return planTurn(facts, {
-      driver,
-      backends: this.deps.backends,
-      runtime: this.deps.runtime,
-      browser: Boolean(this.deps.browser),
-    })
+    // The repository of the chat's project: fetched, its base chosen and its bundle built before
+    // the plan (ПР12). A failure throws: the pass does not start, its reserve goes back.
+    const repository =
+      facts.repositoryRow && this.deps.repositories
+        ? await this.deps.repositories.prepare(job.taskId, facts.repositoryRow)
+        : null
+    return planTurn(
+      { ...facts, repository },
+      {
+        driver,
+        backends: this.deps.backends,
+        runtime: this.deps.runtime,
+        browser: Boolean(this.deps.browser),
+      },
+    )
   }
 
   /**

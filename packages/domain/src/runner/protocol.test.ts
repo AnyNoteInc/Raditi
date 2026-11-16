@@ -10,6 +10,7 @@ import {
   isCoreStopping,
   parseRunnerToken,
   runnerApiErrors,
+  runnerBundlePath,
   runnerCandidatePath,
   runnerCommandSchema,
   runnerConflictSchema,
@@ -17,6 +18,7 @@ import {
   runnerFailure,
   runnerFailureCodes,
   runnerIdSchema,
+  runnerFilePath,
   runnerInboxPath,
   runnerKeyPath,
   runnerLimits,
@@ -269,7 +271,7 @@ describe('runner commands', () => {
       },
     ],
     [
-      'a base bundle (a turn has no repository)',
+      'a base bundle without the root commit of its sandbox',
       {
         ...prepare(),
         bundle: { baseSha: 'b'.repeat(40), branch: 'agent/t', sha256: digest, sizeBytes: 1 },
@@ -302,25 +304,12 @@ describe('runner commands', () => {
       { ...sealCommand(), base: { ...sealCommand().base, parts: manifest.parts } },
     ],
     [
-      'a seal base with git',
-      {
-        ...sealCommand(),
-        base: {
-          ...sealCommand().base,
-          git: {
-            ...manifest.git,
-            publication: { taskId: ids.task, committedAt: manifest.createdAt },
-          },
-        },
-      },
-    ],
-    [
-      'a capture against a base',
+      'a capture against a base that is not a SHA',
       {
         ...envelope,
         type: 'capture',
-        home: { root: '/agent-home/opencode', include: [], exclude: [] },
-        baseSha: 'b'.repeat(40),
+        home: manifest.home,
+        baseSha: 'main',
       },
     ],
     [
@@ -340,6 +329,43 @@ describe('runner commands', () => {
     ],
   ])('refuses %s', (_label, cmd) => {
     expect(runnerCommandSchema.safeParse(cmd).success).toBe(false)
+  })
+
+  it('takes the bundle, the capture against a base and the git of a seal (docs/plan/84, ПР12)', () => {
+    const bundle = {
+      baseSha: 'b'.repeat(40),
+      sandboxBaseSha: 'd'.repeat(40),
+      branch: 'raditi/chat-0193a1b2c3d4',
+      sha256: digest,
+      sizeBytes: 1,
+    }
+    const withBundle = runnerCommandSchema.safeParse({ ...prepare(), bundle })
+    expect(withBundle.error?.issues ?? []).toEqual([])
+    expect(
+      runnerCommandSchema.safeParse({
+        ...envelope,
+        type: 'capture',
+        home: manifest.home,
+        baseSha: 'd'.repeat(40),
+      }).success,
+    ).toBe(true)
+    expect(
+      runnerCommandSchema.safeParse({
+        ...sealCommand(),
+        base: {
+          ...sealCommand().base,
+          git: {
+            provider: 'gitlab',
+            branch: 'raditi/chat-0193a1b2c3d4',
+            baseSha: 'b'.repeat(40),
+            sandboxBaseSha: 'd'.repeat(40),
+            headSha: 'c'.repeat(40),
+            publication: { taskId: ids.task, committedAt: manifest.createdAt },
+          },
+        },
+      }).success,
+    ).toBe(true)
+    expect(runnerBundlePath(ids.assignment)).toBe(`/runner/v1/assignments/${ids.assignment}/bundle`)
   })
 })
 
@@ -480,7 +506,7 @@ describe('runner reports', () => {
       expect(runnerReportSchema.safeParse(value).success, value.type).toBe(true)
   })
 
-  it('reports a capture of home alone, never with candidate parts (plan 83)', () => {
+  it('reports a capture with both candidate parts or neither (docs/plan/84, ПР12)', () => {
     const captured = {
       ...base,
       type: 'captured',
@@ -491,7 +517,7 @@ describe('runner reports', () => {
     const patch = { sha256: digest, sizeBytes: 0 }
     expect(runnerReportSchema.safeParse({ ...captured, patch }).success).toBe(false)
     expect(runnerReportSchema.safeParse({ ...captured, patch, untracked: patch }).success).toBe(
-      false,
+      true,
     )
   })
 
@@ -627,6 +653,10 @@ describe('runner poll and answers', () => {
     expect(() => runnerKeyPath('../poll', 'seal')).toThrow()
     expect(() => runnerInboxPath(ids.assignment, -1)).toThrow()
     expect(() => runnerInboxPath(ids.assignment, 50)).toThrow()
+    expect(runnerFilePath(ids.assignment, 'project', 99)).toBe(
+      `/runner/v1/assignments/${ids.assignment}/project/99`,
+    )
+    expect(() => runnerFilePath(ids.assignment, 'project', 100)).toThrow()
   })
 })
 
@@ -714,6 +744,55 @@ describe('runner commands with files of the client', () => {
       ),
     ],
     ['an unknown field', withInbox([{ path: path(1), sizeBytes: 1, key: 'inbox/ws/x' }])],
+  ])('refuses %s', (_label, value) => {
+    expect(runnerCommandSchema.safeParse(value).success).toBe(false)
+  })
+})
+
+describe('runner commands with files of the project (docs/plan/84-projects.md, ПР8)', () => {
+  const inChat = (command: Record<string, unknown>) => {
+    const sandbox = command.sandbox as { labels: Record<string, unknown> }
+    const fence = command.fence as { taskId: string }
+    return {
+      ...command,
+      fence: { ...fence, siteId: fence.taskId },
+      sandbox: { ...sandbox, labels: { ...sandbox.labels, siteId: fence.taskId } },
+    }
+  }
+  const withFiles = (projectFiles: unknown) => ({ ...prepare(), projectFiles })
+
+  it('carries the files of the project of the chat by path and size', () => {
+    const projectFiles = [
+      { path: '/workspace/project/Бриф.pdf', sizeBytes: 1024 },
+      { path: '/workspace/project/Фото/витрина.jpg', sizeBytes: 20 * 1024 * 1024 },
+    ]
+    expect(runnerCommandSchema.parse(inChat(withFiles(projectFiles)))).toMatchObject({
+      projectFiles,
+    })
+  })
+
+  it.each([
+    [
+      'of a turn under another lease',
+      withFiles([{ path: '/workspace/project/a.pdf', sizeBytes: 1 }]),
+    ],
+    ['an empty list', inChat(withFiles([]))],
+    [
+      'a path outside the project',
+      inChat(withFiles([{ path: '/workspace/inbox/a.pdf', sizeBytes: 1 }])),
+    ],
+    [
+      'a parent segment',
+      inChat(withFiles([{ path: '/workspace/project/../a.pdf', sizeBytes: 1 }])),
+    ],
+    [
+      'a file over its limit',
+      inChat(withFiles([{ path: '/workspace/project/a.pdf', sizeBytes: 20 * 1024 * 1024 + 1 }])),
+    ],
+    [
+      'an unknown field',
+      inChat(withFiles([{ path: '/workspace/project/a.pdf', sizeBytes: 1, key: 'projects/x' }])),
+    ],
   ])('refuses %s', (_label, value) => {
     expect(runnerCommandSchema.safeParse(value).success).toBe(false)
   })

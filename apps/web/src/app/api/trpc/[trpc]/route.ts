@@ -6,6 +6,7 @@ import { env } from '@/env'
 import { MAX_TRPC_BODY_BYTES, withBodyLimit } from '@/server/body-limit'
 import { chatServices } from '@/server/chat-services'
 import { mcpServerServices } from '@/server/mcp-servers'
+import { gitServices } from '@/server/git-services'
 import { paymentShop } from '@/server/payment-shop'
 import { refusedCrossOriginPost } from '@/server/trpc-origin'
 import { MAX_BATCH_SIZE } from '@/trpc/batch'
@@ -50,6 +51,7 @@ const handler = withBodyLimit(MAX_TRPC_BODY_BYTES, async (req) => {
         billing: paymentShop(),
         chat: chatServices(),
         mcpServers: mcpServerServices(),
+        git: gitServices(),
       }),
     onError: ({ path, error, type }) => {
       const failure = failureToLog(error)

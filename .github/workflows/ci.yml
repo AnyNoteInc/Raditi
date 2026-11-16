@@ -166,6 +166,21 @@ jobs:
       - name: Seed reference data
         run: pnpm db:seed
 
+      # The real gitleaks for the tests of trusted git (apps/core/src/git-workspace): the binary of
+      # the image apps/core/Dockerfile pins, so the tests and the git worker scan alike.
+      - name: Gitleaks of the core image
+        if: matrix.shard == 'core'
+        run: |
+          image=$(sed -n 's/^ARG GITLEAKS_IMAGE=//p' apps/core/Dockerfile)
+          test -n "$image"
+          docker pull --quiet "$image"
+          container=$(docker create "$image")
+          mkdir -p "$RUNNER_TEMP/gitleaks"
+          docker cp "$container:/usr/bin/gitleaks" "$RUNNER_TEMP/gitleaks/gitleaks"
+          docker rm "$container" >/dev/null
+          "$RUNNER_TEMP/gitleaks/gitleaks" version
+          echo "P2_GITLEAKS_BINARY=$RUNNER_TEMP/gitleaks/gitleaks" >> "$GITHUB_ENV"
+
       - name: Test
         # Shared runners are several times slower than a laptop: jsdom renders and real git
         # processes need more than Vitest's default 5 s per test. On its own turbo runs ten

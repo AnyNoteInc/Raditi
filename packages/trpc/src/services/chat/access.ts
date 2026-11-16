@@ -3,14 +3,16 @@ import { DomainError, type TaskRequirements, type TaskStatus } from '@repo/domai
 
 /**
  * A chat the user may open: a task of a workspace they are a member of, not deleted itself
- * («Удалить диалог»). A task of someone else and a task that does not exist answer the same
- * NOT_FOUND.
+ * («Удалить диалог») and not of a project in the trash, where its chats go with it
+ * (docs/plan/84-projects.md, ПР20). A task of someone else and a task that does not exist answer
+ * the same NOT_FOUND.
  */
 export const accessibleTask = (userId: string, id: string) =>
   ({
     id,
     deletedAt: null,
     workspace: { members: { some: { userId } } },
+    OR: [{ projectId: null }, { project: { deletedAt: null } }],
   }) satisfies Prisma.TaskWhereInput
 
 export const taskNotFound = () =>

@@ -7,6 +7,16 @@ import {
   feedInputText,
   feedTooLongText,
   isDomainError,
+  memoryRefusalTexts,
+  gitConnectionRefusalTexts,
+  repoCiRunTexts,
+  repoPushRefusalTexts,
+  repoRefusalTexts,
+  projectFileRefusals,
+  projectFileRefusalText,
+  projectRefusalTexts,
+  projectSpaceFullText,
+  type ProjectFileRefusal,
   scheduleForbidden,
   scheduledRunReasons,
   scheduledRunReasonText,
@@ -75,6 +85,15 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   CONFLICT: UNAVAILABLE_MESSAGE,
   NOT_IMPLEMENTED: 'Эта возможность ещё в разработке',
   [CONSENT_REQUIRED]: CONSENT_REQUIRED_MESSAGE,
+  // Projects and the project of a chat (docs/plan/84-projects.md, §4.4): the domain's texts.
+  ...projectRefusalTexts,
+  // The memory of a project and of the account (ПР18).
+  ...memoryRefusalTexts,
+  // The repository of a project and the git connections (84.17).
+  ...repoRefusalTexts,
+  ...repoPushRefusalTexts,
+  ...repoCiRunTexts,
+  ...gitConnectionRefusalTexts,
   // Tariffs and their payment: what the customer can do next. Why a bank declined a payment
   // is told by the order itself (paymentFailureText of @repo/billing), not by these.
   BILLING_PAYMENTS_NOT_CONFIGURED: 'Оплата сейчас недоступна. Попробуйте ещё раз немного позже',
@@ -511,6 +530,20 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
     return reason !== null && (attachmentRefusals as readonly string[]).includes(reason)
       ? attachmentRefusalText[reason as AttachmentRefusal].replace(/\.$/, '')
       : MESSAGE_BY_DOMAIN_CODE.ATTACHMENT_REFUSED!
+  },
+  // Why a file of a project is not taken (docs/plan/84-projects.md, ПР8): `details.reason`.
+  PROJECT_FILE_REFUSED: (details) => {
+    const reason = reasonOf(details)
+    return reason !== null && (projectFileRefusals as readonly string[]).includes(reason)
+      ? projectFileRefusalText[reason as ProjectFileRefusal]
+      : MESSAGE_BY_DOMAIN_CODE.PROJECT_FILE_REFUSED!
+  },
+  // Whose room is full: the project's or the workspace's (`details.scope`).
+  PROJECT_SPACE_FULL: (details) => {
+    const scope = detail(details, 'scope')
+    return scope === 'project' || scope === 'workspace'
+      ? projectSpaceFullText[scope]
+      : MESSAGE_BY_DOMAIN_CODE.PROJECT_SPACE_FULL!
   },
   // A command of the chat the server refused: the words `task.commands` shows for it.
   CHAT_COMMAND_UNAVAILABLE: (details) => {

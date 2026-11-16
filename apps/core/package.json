@@ -40,6 +40,7 @@
     "@repo/db": "workspace:*",
     "@repo/doc-render": "workspace:*",
     "@repo/domain": "workspace:*",
+    "@repo/git-providers": "workspace:*",
     "@repo/ip-address": "workspace:*",
     "@repo/llm-backends": "workspace:*",
     "@repo/local-turns": "workspace:*",

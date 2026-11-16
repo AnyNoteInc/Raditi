@@ -47,6 +47,7 @@ const CABINET_SECTIONS = Object.freeze([
   '/chats',
   '/pages',
   '/profile',
+  '/projects',
   '/scheduled',
   '/settings',
 ])

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { forgetTelegramChat, type PrismaClient } from '@repo/db'
+import { forgetTelegramChat, moveChatToProject, type PrismaClient } from '@repo/db'
 import {
   feedLimits,
   hasVisibleText,
@@ -14,7 +14,7 @@ import { modelClassPriced } from '@repo/billing'
 
 import { accessibleTask, lockTask, taskNotFound } from './access.ts'
 import { dialogFacts } from './dialog-facts.ts'
-import { WRITE } from './dialog-lock.ts'
+import { underDialogLock, WRITE } from './dialog-lock.ts'
 import {
   releaseInProgress,
   taskBusy,
@@ -116,6 +116,28 @@ export async function archiveDialog(
     await db.$executeRaw`
       UPDATE tasks SET archived_at = NULL WHERE id = ${task.id}::uuid AND deleted_at IS NULL`
   return { archived: input.archived }
+}
+
+/**
+ * «Перенести в проект…» and «Убрать из проекта» (docs/plan/84-projects.md, ПР2): under the lock of
+ * the chat, the one under which its next message queues it, so a pass never starts in one project
+ * and goes on in another. TASK_PROJECT_BUSY while a pass is queued or runs; the project must be a
+ * live one of the user out of «Архив», in the workspace of the chat. The chat keeps its place in
+ * the list.
+ */
+export function moveDialogToProject(
+  db: PrismaClient,
+  input: { userId: string; taskId: string; projectId: string | null; now: Date },
+): Promise<{ projectId: string | null }> {
+  return underDialogLock(db, input, async (tx, task) => {
+    const { projectId } = await moveChatToProject(tx, {
+      task,
+      projectId: input.projectId,
+      userId: input.userId,
+      now: input.now,
+    })
+    return { projectId }
+  })
 }
 
 /**

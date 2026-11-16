@@ -1,5 +1,10 @@
-import { Prisma, type PrismaClient } from '@repo/db'
-import type { ScheduledRunTrigger, TaskStatus } from '@repo/domain'
+import { Prisma, projectOwnedBy, type PrismaClient } from '@repo/db'
+import {
+  projectNotFound,
+  type ChatProject,
+  type ScheduledRunTrigger,
+  type TaskStatus,
+} from '@repo/domain'
 
 /** Dialogs of one page of the list. */
 export const DIALOG_PAGE = 50
@@ -35,6 +40,8 @@ export interface DialogListItem {
   archived: boolean
   /** The chat goes on in Telegram too (docs/plan/80-telegram.md, 80.6): the agent answers there. */
   telegram: boolean
+  /** The project the chat is in (docs/plan/84-projects.md, ПР2); null — none. */
+  project: ChatProject | null
   /**
    * The chat is a run of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп43): «По расписанию ·
    * <name>» or «Запуск вручную · <name>», a link to the task; `id` null — the task was deleted,
@@ -70,8 +77,16 @@ export const DIALOG_SEARCH_LIMIT = 50
 /** The longest words a search of the chats takes. */
 export const DIALOG_SEARCH_TEXT = 100
 
-/** A chat that is shown (К34): not deleted. */
-const SHOWN = Prisma.sql`t.deleted_at IS NULL`
+/**
+ * A chat that is shown (К34): not deleted, and not of a project in the trash — its chats go there
+ * with it (docs/plan/84-projects.md, ПР20).
+ */
+const SHOWN = Prisma.sql`t.deleted_at IS NULL AND (t.project_id IS NULL OR EXISTS (
+  SELECT 1 FROM projects p WHERE p.id = t.project_id AND p.deleted_at IS NULL))`
+
+/** The project of the chat `t` that is shown, as two columns. */
+const PROJECT = Prisma.sql`t.project_id,
+  (SELECT p.name FROM projects p WHERE p.id = t.project_id) AS project_name`
 
 /**
  * The newest row of `t` that says what its chat waits for. A `feed.rewind` before a `feed.redo` is
@@ -142,6 +157,8 @@ export function dialogPageQuery(input: {
   cursor?: string | undefined
   /** `active` (the default): the list without its pinned and archived chats; `archive` — «Архив». */
   view?: DialogView | undefined
+  /** The chats of one project alone (ПР2); its owner was checked by the caller. */
+  projectId?: string | undefined
 }): Prisma.Sql {
   const inView =
     input.view === 'archive'
@@ -153,6 +170,14 @@ export function dialogPageQuery(input: {
       ? Prisma.empty
       : Prisma.sql`AND (t.updated_at, t.id) <
           (timestamptz 'epoch' + ${BigInt(after[1]!)}::bigint * interval '1 microsecond', ${after[2]!}::uuid)`
+  // The chats of a project: `tasks_project_updated_idx` gives them in their order.
+  if (input.projectId !== undefined)
+    return Prisma.sql`
+      SELECT ${ITEM}
+      FROM tasks t
+      WHERE t.project_id = ${input.projectId}::uuid AND ${SHOWN} ${inView} ${afterCursor}
+      ORDER BY t.updated_at DESC, t.id DESC
+      LIMIT ${DIALOG_PAGE + 1}`
   return Prisma.sql`
     SELECT t.id, t.title, t.status::text AS status, t.created_at, t.updated_at,
       (extract(epoch FROM t.updated_at) * 1000000)::bigint AS updated_us,
@@ -161,11 +186,12 @@ export function dialogPageQuery(input: {
       ${FAILED} AS failed,
       t.pinned_at IS NOT NULL AS pinned, t.archived_at IS NOT NULL AS archived,
       EXISTS (SELECT 1 FROM chat_sessions c WHERE c.id = t.chat_session_id AND c.channel = 'telegram') AS telegram,
+      ${PROJECT},
       ${SCHEDULE} AS schedule
     FROM members m
     CROSS JOIN LATERAL (
       SELECT t.id, t.title, t.status, t.created_at, t.updated_at, t.pinned_at, t.archived_at,
-        t.chat_session_id
+        t.chat_session_id, t.project_id
       FROM tasks t
       WHERE t.workspace_id = m.workspace_id AND ${SHOWN} ${inView} ${afterCursor}
       ORDER BY t.updated_at DESC, t.id DESC
@@ -187,8 +213,15 @@ export async function listDialogs(
     userId: string
     cursor?: string | undefined
     view?: DialogView | undefined
+    /** The chats of one project of the user (ПР2); PROJECT_NOT_FOUND for any other. */
+    projectId?: string | undefined
   },
 ): Promise<DialogPage> {
+  if (
+    input.projectId !== undefined &&
+    (await projectOwnedBy(db, input.projectId, input.userId)) === null
+  )
+    throw projectNotFound()
   const rows = await db.$queryRaw<DialogRow[]>(dialogPageQuery(input))
   const page = rows.slice(0, DIALOG_PAGE)
   const last = page.at(-1)
@@ -211,6 +244,8 @@ interface DialogRow {
   pinned: boolean
   archived: boolean
   telegram: boolean
+  project_id: string | null
+  project_name: string | null
   schedule: DialogSchedule | null
   created_at: Date
   updated_at: Date
@@ -229,6 +264,10 @@ const itemOf = (row: DialogRow): DialogListItem => ({
   pinned: row.pinned,
   archived: row.archived,
   telegram: row.telegram,
+  project:
+    row.project_id === null || row.project_name === null
+      ? null
+      : { id: row.project_id, name: row.project_name },
   schedule: row.schedule,
 })
 
@@ -240,18 +279,20 @@ const ITEM = Prisma.sql`t.id, t.title, t.status::text AS status, t.created_at, t
   ${FAILED} AS failed,
   t.pinned_at IS NOT NULL AS pinned, t.archived_at IS NOT NULL AS archived,
   EXISTS (SELECT 1 FROM chat_sessions c WHERE c.id = t.chat_session_id AND c.channel = 'telegram') AS telegram,
+  ${PROJECT},
   ${SCHEDULE} AS schedule`
 
 /** The chats of the user's workspaces. */
 const OF_USER = (userId: string) =>
   Prisma.sql`t.workspace_id IN (SELECT m.workspace_id FROM members m WHERE m.user_id = ${userId}::uuid)`
 
-/** The pinned chats of the head of the list (ВВ21), the last pinned first. */
-export function pinnedQuery(input: { userId: string }) {
+/** The pinned chats of the head of the list (ВВ21), the last pinned first; of a project alone. */
+export function pinnedQuery(input: { userId: string; projectId?: string | undefined }) {
   return Prisma.sql`
     SELECT ${ITEM}
     FROM tasks t
     WHERE ${OF_USER(input.userId)} AND ${SHOWN}
+      ${input.projectId === undefined ? Prisma.empty : Prisma.sql`AND t.project_id = ${input.projectId}::uuid`}
       AND t.pinned_at IS NOT NULL AND t.archived_at IS NULL
     ORDER BY t.pinned_at DESC, t.id DESC
     LIMIT ${DIALOG_PINNED_LIMIT}`

@@ -1,5 +1,19 @@
 import type { AttemptCreditBudget } from '@repo/billing'
-import { clientInstructionsSection } from '@repo/domain'
+import {
+  askedToRemember,
+  clientInstructionsSection,
+  memorySection,
+  projectContextSection,
+  projectSection,
+  repositorySection,
+  turnProjectPath,
+  type MemorySectionEntry,
+  type ProjectContextFile,
+  type ProjectSectionFacts,
+  type RepoMode,
+  type RepoProviderKind,
+  type TurnRepository,
+} from '@repo/domain'
 import {
   attemptBudgetRub,
   TURN_LEASE_TTL_MS,
@@ -112,6 +126,34 @@ export interface TaskAttachmentFacts {
   sizeBytes: number
 }
 
+/** The repository of the chat's project as the facts read it, before its pass prepares it (ПР12). */
+export interface PassRepositoryRow {
+  projectId: string
+  projectRepositoryId: string
+  provider: RepoProviderKind
+  path: string
+  defaultBranch: string
+  mode: RepoMode
+  /** The files gitleaks flagged when the repository was connected: never in a sandbox (ПР35). */
+  secretsFound: readonly string[]
+}
+
+/**
+ * The repository prepared for the pass (docs/plan/84-projects.md, §4.3, step 3): fetched, its base
+ * chosen, its bundle built and its hidden files named.
+ */
+export interface PassRepository extends PassRepositoryRow {
+  /** The brand of its provider (`support.label`). */
+  label: string
+  baseSha: string
+  sandboxBaseSha: string
+  branch: string
+  expectedRef: string | null
+  bundleSha256: string
+  bundleBytes: number
+  hiddenPaths: readonly string[]
+}
+
 export type PassBudget =
   | { kind: 'credits'; budget: AttemptCreditBudget }
   /** A task that holds no reserve by design (`billable = false`): the class ceiling. */
@@ -133,6 +175,30 @@ export interface PassFacts {
   requirements: TaskRequirements
   /** The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2). */
   clientInstructions?: string | null
+  /**
+   * The project of the chat — its name, goal and instructions (docs/plan/84-projects.md, ПР7);
+   * absent or null — a chat without a project, or one whose project is in the trash.
+   */
+  project?: ProjectSectionFacts | null
+  /** The repository of the chat's project whose mirror is ready; null or absent — none (ПР12). */
+  repositoryRow?: PassRepositoryRow | null
+  /**
+   * The repository prepared for this pass (§4.3, step 3); absent or null — the pass goes without
+   * one: the chat has none, its mirror is not ready, or the prepare was not asked for.
+   */
+  repository?: PassRepository | null
+  /**
+   * The ready files of the context of the chat's project (docs/plan/84-projects.md, ПР8), in the
+   * order of their paths: every turn gets them all under /workspace/project, and the instructions
+   * list them. Absent or empty — none.
+   */
+  projectFiles?: readonly ProjectContextFile[]
+  /**
+   * The active notes of the chat's memory (docs/plan/84-projects.md, ПР18): of its project, with
+   * the account's when the project reads them, or the account's. Absent or null — the memory is
+   * off for the author of the chat: no section, and the agent has no tools of it.
+   */
+  memory?: readonly MemorySectionEntry[] | null
   /**
    * The pass of a run of a scheduled task before the first words of its client (`passUnattended`,
    * docs/plan/82-scheduled-tasks.md, Зп27, Зп29), with the name of its task; absent — an ordinary
@@ -178,6 +244,16 @@ export type PassPlan =
       turn: number
       /** The task's own: its browser comes back with the turn, or starts on `web_*` (К11). */
       requirements: TaskRequirements
+      /**
+       * The client's own words of the pass ask to remember (askedToRemember, ПР18): a note of the
+       * agent may be active at once only then.
+       */
+      remember: boolean
+      /**
+       * Nobody watches the pass: a run of a scheduled task before its client wrote (Зп27). Its notes
+       * of memory are only proposed (docs/plan/84-projects.md, ПР19).
+       */
+      unattended: boolean
     }
   /** The key cannot cover a first call: the platform asks «Продолжить?» (Р8). */
   | { kind: 'ceiling'; question: Extract<FeedQuestionPayload, { kind: 'ceiling' }> }
@@ -365,6 +441,20 @@ function clientWordsOf(facts: PassFacts, since: Date | null): string {
 }
 
 /**
+ * The client's own words this pass answers (docs/plan/84-projects.md, ПР18): those written after
+ * the last turn of the chat started — all of them before its first — and never the words of the
+ * platform of a command. Whether they ask to remember is read from them alone.
+ */
+function passWordsOf(facts: PassFacts): string {
+  const since = facts.turns.get(facts.task.turnNo)?.startedAt ?? null
+  return requestsNotUndone(facts)
+    .filter((request) => request.kind !== 'agent_command' && request.text !== null)
+    .filter((request) => since === null || request.createdAt.getTime() > since.getTime())
+    .map((request) => request.text!)
+    .join('\n\n')
+}
+
+/**
  * The action of the pass, among the requests the session it restores has not seen. A retry or
  * «Продолжить» after a compaction that did not end repeats it, for they say nothing of their own.
  * Words among them, before or after the command, come first: no compaction would tell them to
@@ -408,7 +498,10 @@ function startOf(facts: PassFacts, driver: AgentDriver): Start | null {
  * cover a first call is a question to the client, not a turn (Р8).
  */
 export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promise<PassPlan> {
-  const { task, requirements } = facts
+  const { task } = facts
+  // A repository exactly when the pass prepared one (docs/plan/84-projects.md, ПР12).
+  const repository = facts.repository ?? null
+  const requirements: TaskRequirements = { ...facts.requirements, repository: repository !== null }
   // A chat goes on without a word of `web_*` when the browser worker is not there (§5.4).
   const browser = requirements.browser && env.browser
   if (!facts.profile) return { kind: 'refused', code: 'unavailable' }
@@ -451,6 +544,44 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
   const start = startOf(facts, env.driver)
   if (!start) return { kind: 'refused', code: 'technical' }
   const action = actionOf(facts, start)
+  // Whether the repository of the chat came, went or changed since the turn whose session this
+  // pass restores (ПР32): only the session of that checkpoint is taken then.
+  const before = start.previous
+    ? (facts.turns.get(start.previous.turn)?.plan?.repository?.projectRepositoryId ?? null)
+    : null
+  const changed =
+    start.previous !== undefined && before !== (repository?.projectRepositoryId ?? null)
+  const repositoryBlock: TurnRepository | undefined = repository
+    ? {
+        projectId: repository.projectId,
+        projectRepositoryId: repository.projectRepositoryId,
+        provider: repository.provider,
+        baseSha: repository.baseSha,
+        sandboxBaseSha: repository.sandboxBaseSha,
+        branch: repository.branch,
+        mode: repository.mode,
+        expectedRef: repository.expectedRef,
+        bundleSha256: repository.bundleSha256,
+        bundleBytes: repository.bundleBytes,
+        hiddenPaths: [...repository.hiddenPaths],
+        ...(changed ? { repositoryChanged: true as const } : {}),
+      }
+    : undefined
+  const repoSection = repository
+    ? repositorySection({
+        provider: repository.provider,
+        path: repository.path,
+        label: repository.label,
+        branch: repository.branch,
+        defaultBranch: repository.defaultBranch,
+        baseSha: repository.baseSha,
+        mode: repository.mode,
+        hiddenPaths: repository.hiddenPaths,
+        ...(changed ? { changed: 'connected' as const } : {}),
+      })
+    : changed && before !== null
+      ? repositorySection({ changed: 'disconnected' })
+      : ''
   const turn = task.turnNo + 1
   const sessionId = task.id
   const reasoningEffort = reasoningEffortByClass[task.modelClass]
@@ -459,6 +590,8 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
   const inboxFacts = inbox?.paths.length
     ? { files: inbox.paths.length, omitted: inbox.omitted }
     : null
+  // The files of the project, with the project: an action (a compaction) reads no file.
+  const projectFiles = action || !facts.project ? [] : projectFilesOf(facts.projectFiles ?? [])
   const request: UnkeyedTurnRequest = {
     sandbox: {
       image: env.driver.image,
@@ -495,7 +628,8 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         browser,
         inbox: inboxFacts,
         variables: facts.variables ?? [],
-      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${facts.unattended ? unattendedSection(facts.unattended.name) : ''}${clientInstructionsSection(facts.clientInstructions)}`,
+        repository: repository !== null,
+      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${memorySection(facts.memory)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),
@@ -515,9 +649,11 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
           ),
           // Their paths only: core puts the files there when the sandbox is prepared.
           attachments: inbox?.paths ?? [],
+          ...(projectFiles.length ? { projectFiles: projectFiles.map((file) => file.path) } : {}),
         },
     driverVersion: env.driver.cliVersion,
     requirements: { ...requirements },
+    ...(repositoryBlock ? { repository: repositoryBlock } : {}),
     committedAt: facts.committedAt.toISOString(),
     ...(start.previous ? { previous: start.previous } : {}),
     ...(start.rewound ? { rewound: true as const } : {}),
@@ -532,11 +668,29 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     ttlMs: TURN_LEASE_TTL_MS,
     budgetRub,
   }
-  return { kind: 'turn', request, policy, turn, requirements: { ...requirements } }
+  return {
+    kind: 'turn',
+    request,
+    policy,
+    turn,
+    requirements: { ...requirements },
+    remember: !action && askedToRemember(passWordsOf(facts)),
+    unattended: Boolean(facts.unattended),
+  }
 }
 
 /** A plan saved by an assignment, or null when it no longer passes its schema (history). */
 export function savedPlanOf(value: unknown): TurnPlan | null {
   const parsed = turnPlanSchema.safeParse(value)
   return parsed.success ? parsed.data : null
+}
+
+/** The files of the project a turn holds: each at its path; a name that is not one is left out. */
+function projectFilesOf(
+  files: readonly ProjectContextFile[],
+): { path: string; facts: ProjectContextFile }[] {
+  return files.flatMap((facts) => {
+    const path = turnProjectPath(facts.name)
+    return path === null ? [] : [{ path, facts }]
+  })
 }

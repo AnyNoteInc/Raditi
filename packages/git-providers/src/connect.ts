@@ -1,0 +1,141 @@
+import { z } from 'zod'
+
+import {
+  gitlabComHost,
+  gitNotSupported,
+  gitProviderFailed,
+  type GitConnect,
+  type GitTokens,
+  type OAuthApp,
+} from '@repo/domain'
+
+import { parseEndpointOverride } from './api.ts'
+import { createGitTransport, type GitTransport, type GitTransportOptions } from './transport.ts'
+
+// Sign-in with a provider (docs/plan/84-projects.md, ПР11): `@repo/git-providers/connect`, the one
+// part of the package web may import. GitLab OAuth with PKCE (https://docs.gitlab.com/api/oauth2/);
+// the GitHub App's user sign-in and the check of an installation come with Э10.
+
+export { createGitTransport }
+export type { GitTransport, GitTransportOptions }
+// web's part of the variables of the git apps (§4.5)
+export {
+  DEV_REPO_CONFIRM_SECRET,
+  webGitAppsFromEnv,
+  type GitAppsConfig,
+  type GithubAppWebCredentials,
+  type GitlabOauthCredentials,
+} from './config.ts'
+
+export interface GitConnectConfig {
+  transport: GitTransport
+  /** Stands only: `https://localhost:<port>` instead of https://gitlab.com. */
+  gitlabComUrl?: string
+}
+
+const tokenSchema = z.looseObject({
+  access_token: z.string().min(1).max(4096),
+  token_type: z.string().optional(),
+  refresh_token: z.string().min(1).max(4096).nullish(),
+  expires_in: z.number().int().positive().nullish(),
+  created_at: z.number().int().positive().nullish(),
+})
+
+export function createGitConnect(kind: 'github' | 'gitlab', config: GitConnectConfig): GitConnect {
+  if (kind === 'github')
+    return {
+      exchangeCode: () => Promise.reject(gitNotSupported('the GitHub App sign-in before Э10')),
+      refreshAccess: () => Promise.reject(gitNotSupported('the GitHub App sign-in before Э10')),
+      signedInUser: () => Promise.reject(gitNotSupported('the GitHub App sign-in before Э10')),
+    }
+  const override = parseEndpointOverride(config.gitlabComUrl)
+
+  const urlOf = (app: OAuthApp, pathname: string): URL => {
+    const origin =
+      app.host === gitlabComHost && override !== null ? override : new URL(`https://${app.host}`)
+    const url = new URL(origin)
+    url.pathname = pathname
+    return url
+  }
+  const tokenUrl = (app: OAuthApp): URL => urlOf(app, '/oauth/token')
+
+  const post = async (app: OAuthApp, form: Record<string, string>) => {
+    const response = await config.transport.session().request({
+      method: 'POST',
+      url: tokenUrl(app),
+      headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: app.clientId,
+        client_secret: app.clientSecret,
+        redirect_uri: app.redirectUri,
+        ...form,
+      }).toString(),
+    })
+    let body: unknown = null
+    try {
+      body = JSON.parse(response.body.toString('utf8'))
+    } catch {
+      // judged by the status below
+    }
+    return { status: response.status, body }
+  }
+
+  const tokensOf = (body: unknown, status: number): GitTokens => {
+    const parsed = tokenSchema.safeParse(body)
+    if (status !== 200 || !parsed.success)
+      throw gitProviderFailed('the token endpoint refused', status)
+    const t = parsed.data
+    const issuedAt = t.created_at == null ? Date.now() : t.created_at * 1000
+    return {
+      accessToken: t.access_token,
+      refreshToken: t.refresh_token ?? null,
+      expiresAt: t.expires_in == null ? null : new Date(issuedAt + t.expires_in * 1000),
+    }
+  }
+
+  return {
+    async exchangeCode(app, code, verifier) {
+      const { status, body } = await post(app, {
+        grant_type: 'authorization_code',
+        code,
+        code_verifier: verifier,
+      })
+      return tokensOf(body, status)
+    },
+    async refreshAccess(app, refreshToken) {
+      const { status, body } = await post(app, {
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+      })
+      // A refresh revokes the old pair (§1): a refused grant means a new sign-in, nothing else.
+      const error = z.looseObject({ error: z.string() }).safeParse(body)
+      if (
+        (status === 400 || status === 401) &&
+        error.success &&
+        error.data.error === 'invalid_grant'
+      )
+        return { reauth: true }
+      return tokensOf(body, status)
+    },
+    async signedInUser(app, accessToken) {
+      // `GET /api/v4/user` — the one call of the sign-in besides the token (the whitelist of ПР10).
+      const response = await config.transport.session().request({
+        method: 'GET',
+        url: urlOf(app, '/api/v4/user'),
+        headers: { accept: 'application/json', authorization: `Bearer ${accessToken}` },
+      })
+      let body: unknown = null
+      try {
+        body = JSON.parse(response.body.toString('utf8'))
+      } catch {
+        // judged below
+      }
+      const user = z
+        .looseObject({ id: z.number().int().positive(), username: z.string().min(1).max(100) })
+        .safeParse(body)
+      if (response.status !== 200 || !user.success)
+        throw gitProviderFailed('the user of the sign-in', response.status)
+      return { login: user.data.username, id: String(user.data.id) }
+    },
+  }
+}

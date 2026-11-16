@@ -49,6 +49,28 @@ vi.mock('@/trpc/client', () => ({
         queryKey: () => ['user', 'agentInstructions'],
       },
       setAgentInstructions: { mutationOptions: () => ({ mutationFn: async () => ({ text: '' }) }) },
+      setAgentMemory: { mutationOptions: () => ({ mutationFn: async () => ({ on: true }) }) },
+    },
+    // «Память агента» (docs/plan/84-projects.md, ПР18): its own test covers it.
+    projectMemory: {
+      list: {
+        queryOptions: () => ({
+          queryKey: ['projectMemory', 'list'],
+          queryFn: async () => ({
+            entries: [],
+            useAccountMemory: null,
+            agentMemory: true,
+            limit: 40,
+          }),
+        }),
+      },
+      pathKey: () => ['projectMemory'],
+      add: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
+      clear: { mutationOptions: () => ({ mutationFn: async () => ({ removed: 0 }) }) },
+    },
+    project: {
+      pathKey: () => ['project'],
+      update: { mutationOptions: () => ({ mutationFn: async () => ({ updated: true }) }) },
     },
     // «Уведомления» of the settings (docs/plan/75, ВВ10): its own test covers it.
     notification: {

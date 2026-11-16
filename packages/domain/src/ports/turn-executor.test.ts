@@ -9,6 +9,11 @@ import {
 } from '../tasks/task-requirements.ts'
 import {
   assertTurnInbox,
+  assertTurnProjectFiles,
+  turnProjectFileName,
+  turnProjectFilesLimits,
+  turnProjectPath,
+  turnWorkspaceBudget,
   turnMayHoldInbox,
   toTurnPlan,
   turnInboxAttachmentId,
@@ -259,6 +264,32 @@ describe('turn plan', () => {
     expect(requirementsOf(turnPlanSchema.parse(stored))).toEqual(PLAIN_CHAT)
   })
 
+  it('keeps the repository of a turn of a project (docs/plan/84-projects.md, §4.3)', () => {
+    const repo: TurnRequest = {
+      ...request(),
+      requirements: REPOSITORY_ONLY,
+      repository: repositoryBlock(),
+    }
+    const plan = turnPlanSchema.parse(
+      JSON.parse(JSON.stringify(toTurnPlan(withoutTurnCredentials(repo), 'opencode'))),
+    )
+    expect(plan.repository).toEqual(repositoryBlock())
+    expect(withTurnCredentials(plan, { llmApiKey: 'k', mcpToken: 't' }).repository).toEqual(
+      repositoryBlock(),
+    )
+    // A token or an address of the repository is never kept in the plan.
+    for (const extra of [{ token: 'glpat-x' }, { cloneUrl: 'https://gitlab.com/a/b.git' }])
+      expect(
+        turnPlanSchema.safeParse({ ...plan, repository: { ...plan.repository, ...extra } }).success,
+      ).toBe(false)
+    expect(
+      turnPlanSchema.safeParse({
+        ...plan,
+        repository: { ...plan.repository, hiddenPaths: Array(201).fill('.env') },
+      }).success,
+    ).toBe(false)
+  })
+
   it('keeps a turn of a chat with the browser: its requirements carried both ways', () => {
     const browser: TurnRequest = { ...request(), requirements: BROWSER_ONLY }
     const unkeyed = withoutTurnCredentials(browser)
@@ -296,7 +327,8 @@ describe('turn plan', () => {
 
   it.each([
     ['«rewound» that is not true', { requirements: BROWSER_ONLY, rewound: false }, ['rewound']],
-    ['a repository', { requirements: REPOSITORY_ONLY }, ['requirements']],
+    ['a repository without its block', { requirements: REPOSITORY_ONLY }, []],
+    ['a block of a repository it does not need', { repository: repositoryBlock() }, []],
     ['an unknown need', { requirements: { ...PLAIN_CHAT, database: true } }, ['requirements']],
   ])('refuses %s', (_label, change, path) => {
     const plan = { ...toTurnPlan(request(), 'opencode'), ...change }
@@ -407,3 +439,97 @@ describe('files of the client in a turn', () => {
     expect(refusal(() => assertTurnInbox(files, mayHold))).toBe('BAD_REQUEST')
   })
 })
+
+describe('files of the project in a turn (docs/plan/84-projects.md, ПР8)', () => {
+  const MIB = 1024 * 1024
+  const file = (name: string, sizeBytes = 1024) => ({ path: turnProjectPath(name)!, sizeBytes })
+  const refusal = (run: () => void) => {
+    try {
+      run()
+    } catch (error) {
+      return isDomainError(error) ? error.code : 'other'
+    }
+    return null
+  }
+
+  it('puts each file at its path under /workspace/project, folders kept', () => {
+    expect(turnProjectPath('Фото/витрина.jpg')).toBe('/workspace/project/Фото/витрина.jpg')
+    expect(turnProjectFileName('/workspace/project/Фото/витрина.jpg')).toBe('Фото/витрина.jpg')
+    expect(turnInputSchema.shape.projectFiles.safeParse(['/workspace/project/a.pdf']).success).toBe(
+      true,
+    )
+    for (const path of [
+      '/workspace/project/../inbox/a.pdf',
+      '/workspace/project/.hidden',
+      '/workspace/project/',
+      '/workspace/projectx/a.pdf',
+      '/workspace/inbox/a.pdf',
+    ])
+      expect(turnProjectFileName(path), path).toBeNull()
+    expect(turnProjectPath('../a.pdf')).toBeNull()
+  })
+
+  it('keeps a plan of before the files valid: `projectFiles` is optional', () => {
+    expect(turnInputSchema.safeParse({ prompt: 'x', attachments: [] }).success).toBe(true)
+  })
+
+  it('takes a full project — 100 files of 1 MiB — for the turn of its chat', () => {
+    const full = Array.from({ length: turnProjectFilesLimits.files }, (_, i) =>
+      file(`f${i}.pdf`, MIB),
+    )
+    expect(refusal(() => assertTurnProjectFiles(full, true))).toBeNull()
+    expect(refusal(() => assertTurnProjectFiles([], false))).toBeNull()
+  })
+
+  it.each([
+    ['a turn of another lease', [file('a.pdf')], false],
+    ['a path twice', [file('a.pdf'), file('a.pdf')], true],
+    ['a file and a folder of one path', [file('Фото'), file('Фото/a.jpg')], true],
+    ['a path outside the project', [{ path: '/workspace/inbox/a.pdf', sizeBytes: 1 }], true],
+    ['an empty file', [file('a.pdf', 0)], true],
+    ['a file over 20 MiB', [file('a.pdf', 20 * MIB + 1)], true],
+    [
+      'more files than a project holds',
+      Array.from({ length: 101 }, (_, i) => file(`f${i}.pdf`, 1)),
+      true,
+    ],
+    ['more than 100 MiB', Array.from({ length: 6 }, (_, i) => file(`f${i}.pdf`, 20 * MIB)), true],
+  ])('refuses %s', (_label, files, mayHold) => {
+    expect(refusal(() => assertTurnProjectFiles(files, mayHold))).toBe('BAD_REQUEST')
+  })
+
+  it('shares /workspace so the agent keeps at least 120 MiB (§4.7)', () => {
+    const plain = turnWorkspaceBudget({ repository: false })
+    expect(plain).toEqual({
+      workspace: 512 * MIB,
+      repository: 0,
+      inbox: 200 * MIB,
+      project: 100 * MIB,
+      agent: 212 * MIB,
+    })
+    expect(plain.inbox).toBe(turnInboxLimits.bytes)
+    const repo = turnWorkspaceBudget({ repository: true })
+    expect(repo).toMatchObject({ repository: 192 * MIB, inbox: 100 * MIB, project: 100 * MIB })
+    expect(repo.agent).toBe(120 * MIB)
+    for (const budget of [plain, repo])
+      expect(budget.repository + budget.inbox + budget.project + budget.agent).toBe(
+        budget.workspace,
+      )
+  })
+})
+
+function repositoryBlock() {
+  return {
+    projectId: '0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b',
+    projectRepositoryId: '0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2c',
+    provider: 'gitlab' as const,
+    baseSha: 'b'.repeat(40),
+    sandboxBaseSha: 'd'.repeat(40),
+    branch: 'raditi/chat-0193a1b2c3d4',
+    mode: 'write' as const,
+    expectedRef: null,
+    bundleSha256: 'e'.repeat(64),
+    bundleBytes: 1024,
+    hiddenPaths: ['.env'],
+  }
+}

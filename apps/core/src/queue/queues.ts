@@ -29,8 +29,6 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   previews: lifecycleJobs,
   // The start of a task's browser: a failed job is put again by the call that waits for it.
   'browser-sessions': lifecycleJobs,
-  // The files of a project for web (06.11.2026): a failed job is put again by the next look.
-  'site-files': lifecycleJobs,
   // A lead on its way to Telegram (docs/plan/65-landing-platforms-leads.md): its sending is retried
   // for about two hours (15 s doubling, ten tries), then the poll posts it again; job data holds
   // only the id. The poll of the bot's buttons sets its own single attempt.
@@ -52,6 +50,9 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   },
   // The poll of the bot's updates (docs/plan/80-telegram.md): one attempt, the next tick reads again.
   'telegram-updates': lifecycleJobs,
+  // The checks, lists and first fetch of git connections and repositories (docs/plan/84-projects.md,
+  // §4.3): a failed job is put again by the client's «Обновить» or its next look, never by BullMQ.
+  git: lifecycleJobs,
   // The starts of the runs of scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп19, Зп21): web
   // away, a deploy or a fault of the platform is tried again — eight tries, from 30 s doubling,
   // about an hour —, then the run is «Не запустилась: сбой платформы». Job data holds the id of

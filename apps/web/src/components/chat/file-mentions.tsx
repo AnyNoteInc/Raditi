@@ -141,6 +141,7 @@ export function MentionList({
   options,
   active,
   state,
+  texts,
   onChoose,
   onHover,
 }: {
@@ -149,6 +150,8 @@ export function MentionList({
   active: number
   /** `ready` — the list is read; `preparing` — the files are being read; `none` — no files. */
   state: 'ready' | 'preparing' | 'none'
+  /** The name of the list and its words without files, when not those of the working copy. */
+  texts?: { label: string; none: string }
   onChoose: (option: MentionOption) => void
   onHover: (index: number) => void
 }) {
@@ -160,7 +163,7 @@ export function MentionList({
     state === 'preparing'
       ? mentionText.preparing
       : state === 'none'
-        ? mentionText.none
+        ? (texts?.none ?? mentionText.none)
         : options.length === 0
           ? mentionText.nothing
           : null
@@ -168,7 +171,7 @@ export function MentionList({
     <Box
       id={listId}
       role="listbox"
-      aria-label={mentionText.label}
+      aria-label={texts?.label ?? mentionText.label}
       tabIndex={-1}
       sx={{
         m: 0,

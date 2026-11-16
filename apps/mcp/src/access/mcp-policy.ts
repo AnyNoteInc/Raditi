@@ -34,6 +34,18 @@ import {
   pageUpdateArgumentsSchema,
 } from '../pages/pages-arguments.ts'
 import {
+  memoryForgetArgumentsSchema,
+  memoryListArgumentsSchema,
+  memorySaveArgumentsSchema,
+  memoryUpdateArgumentsSchema,
+} from '../memory/memory-arguments.ts'
+import {
+  repoJobLogArgumentsSchema,
+  repoRequestMergeArgumentsSchema,
+  repoRunsArgumentsSchema,
+  repoStatusArgumentsSchema,
+} from '../repo/repo-arguments.ts'
+import {
   scheduleArgumentsAdmitted,
   scheduleCreateArgumentsSchema,
   scheduleDeleteArgumentsSchema,
@@ -101,6 +113,20 @@ const pagesChangeCall = z.discriminatedUnion('name', [
   call('page_file_put', pageFilePutArgumentsSchema),
   call('page_file_delete', pageFileDeleteArgumentsSchema),
 ])
+// The memory of the chat (docs/plan/84-projects.md, §4.4): each tool its own branch.
+const memoryCall = z.discriminatedUnion('name', [
+  call('memory_list', memoryListArgumentsSchema.optional()),
+  call('memory_save', memorySaveArgumentsSchema),
+  call('memory_update', memoryUpdateArgumentsSchema),
+  call('memory_forget', memoryForgetArgumentsSchema),
+])
+// The repository of a chat's project (docs/plan/84-projects.md, §4.4): each tool its own branch.
+const repoCall = z.discriminatedUnion('name', [
+  call('repo_status', repoStatusArgumentsSchema.optional()),
+  call('repo_request_merge', repoRequestMergeArgumentsSchema),
+  call('repo_runs', repoRunsArgumentsSchema.optional()),
+  call('repo_job_log', repoJobLogArgumentsSchema),
+])
 // The scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп31, Зп32): the list for every turn, the
 // changes only for a turn its client watches. A schedule with runs closer than an hour is the
 // tool's own refusal (`SCHEDULE_TOO_OFTEN`), not a request refused as a whole.
@@ -163,6 +189,16 @@ export interface McpSecurity {
   /** The documents of a workspace (docs/plan/69-pages.md, Ст21): every turn, every composition. */
   docsTools?: boolean
   /**
+   * The memory of a chat (docs/plan/84-projects.md, ПР18): every composition, a turn whose chat has
+   * its memory on.
+   */
+  memoryTools?: boolean
+  /**
+   * The repository of a chat's project (docs/plan/84-projects.md, §4.4): every composition, a turn
+   * whose plan names a repository. `mcp` holds no token of git: the tools read the database only.
+   */
+  repoTools?: boolean
+  /**
    * The scheduled tasks of the chat's author (docs/plan/82-scheduled-tasks.md, Зп31): every turn,
    * every composition; their changes only where the client watches (Зп32).
    */
@@ -178,6 +214,8 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
     ...(worker ? { webTools: true } : {}),
     searchTools: true,
     docsTools: true,
+    memoryTools: true,
+    repoTools: true,
     ...(config.pages ? { pagesTools: true } : {}),
     scheduleTools: true,
   }
@@ -200,6 +238,8 @@ export const mcpToolFamilies = [
   'docs',
   'pages',
   'pages_changes',
+  'memory',
+  'repo',
   'schedule',
   'schedule_changes',
 ] as const
@@ -215,6 +255,10 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
     families.push('pages')
     if (!access.unattended) families.push('pages_changes')
   }
+  // The memory of the chat while it is on (docs/plan/84-projects.md, ПР18).
+  if (security.memoryTools && access.memory) families.push('memory')
+  // The repository of the chat's project, as the plan of the turn names it (§4.4).
+  if (security.repoTools && access.repository) families.push('repo')
   if (security.scheduleTools) {
     families.push('schedule')
     if (!access.unattended) families.push('schedule_changes')
@@ -283,6 +327,8 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       (families.includes('docs') && docsCall.safeParse(request.params).success) ||
       (families.includes('pages') && pagesCall.safeParse(request.params).success) ||
       (families.includes('pages_changes') && pagesChangeCall.safeParse(request.params).success) ||
+      (families.includes('memory') && memoryCall.safeParse(request.params).success) ||
+      (families.includes('repo') && repoCall.safeParse(request.params).success) ||
       (families.includes('schedule') && scheduleCall.safeParse(request.params).success) ||
       (families.includes('schedule_changes') &&
         scheduleChangeCall.safeParse(request.params).success)

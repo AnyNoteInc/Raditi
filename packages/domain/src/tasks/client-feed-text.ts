@@ -334,6 +334,38 @@ export function notesLookLikeSecret(text: string): boolean {
   )
 }
 
+// What a value of a password does not hold inside it in code: the brackets of a call, an object
+// or an element, a quote, a separator of arguments. A password with them is let through by
+// codeLooksLikeSecret(): a file of code is full of such words.
+const codeMark = /[(){}<>[\];,"'`\\]/u
+
+/**
+ * notesLookLikeSecret() for a file or a text of a project's context (docs/plan/84-projects.md,
+ * ПР8): code with JSX, `onSubmit={(event) => …}` beside a `password` field, holds words of the
+ * shape of a password in every line. Here a value near a word of a secret also holds none of the
+ * marks of code inside it, once the quotes and brackets around it are taken off — `password:
+ * "Xk9#mP2$vL"` is refused, `LoginForm({ … password` is not. Keys of known formats and a private
+ * key block are refused anywhere. Its caller cuts a long text into pieces.
+ */
+export function codeLooksLikeSecret(text: string): boolean {
+  const plain = text.replace(invisible, '').normalize('NFC')
+  const words = plain.split(/\s+/u).filter((word) => !address.test(word))
+  if (privateKeyBlock.test(words.join(' '))) return true
+  if (words.some((word) => keyPrefix.test(word) || hasSignedToken(word))) return true
+  const parts = words
+    .flatMap((word) => word.split(/[=:,]/u))
+    .filter((part) => /[\p{L}\p{N}]/u.test(part))
+  const value = (part: string) => {
+    const bare = part.replace(backticks, '').replace(around, '')
+    return !codeMark.test(bare) && readsAsValue(bare)
+  }
+  return parts.some(
+    (part, at) =>
+      namesSecret(part) &&
+      parts.slice(Math.max(0, at - SECRET_VALUE_REACH), at + SECRET_VALUE_REACH + 1).some(value),
+  )
+}
+
 /** The longest name the agent gives a chat; `tasks.title` holds up to `feedLimits.title`. */
 export const AGENT_CHAT_TITLE_LIMIT = 60
 

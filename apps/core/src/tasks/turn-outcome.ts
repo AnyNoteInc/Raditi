@@ -46,8 +46,12 @@ const errorCodes: Readonly<Record<string, FeedFailureCode>> = Object.freeze({
   TURN_OUTPUT_TOO_LARGE: 'too_large',
   PUBLICATION_FORBIDDEN: 'forbidden_change',
   PUBLICATION_SECRET: 'secret_found',
-  REPOSITORY_TOO_LARGE: 'site_files',
-  REPOSITORY_UNSUPPORTED: 'site_files',
+  // The repository of the chat's project could not be prepared (docs/plan/84-projects.md, ПР12).
+  REPOSITORY_TOO_LARGE: 'repo_too_large',
+  REPOSITORY_UNSUPPORTED: 'repo_too_large',
+  REPO_UNREACHABLE: 'repo_unreachable',
+  REPO_TOO_LARGE: 'repo_too_large',
+  GIT_CONNECTION_REAUTH: 'repo_reauth',
   SITE_HELD: 'site_held',
   LLM_GATEWAY_UNAVAILABLE: 'unavailable',
   // A turn with a repository while git is not configured (spec §20 «Транспорт git»).

@@ -1,8 +1,13 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import type { Page } from '@playwright/test'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
-import { createPrismaClient, insertFeedEvent, markAttachmentReady } from '@repo/db'
+import {
+  createPrismaClient,
+  insertFeedEvent,
+  markAttachmentReady,
+  markProjectFileReady,
+} from '@repo/db'
 
 import { authEnv, databaseUrl } from '../../fixtures/billing-stand.ts'
 
@@ -151,6 +156,43 @@ export async function addLongChat(
 }
 
 /** The lease of a chat without a project takes its id, of version 7 only (`tasks_chat_id_check`). */
+/**
+ * A project of the signed-in user (docs/plan/84-projects.md, ПР1), written as `project.create`
+ * writes it: in the personal workspace, by its author. It goes with the user.
+ */
+export async function addProject(
+  userId: string,
+  {
+    name,
+    goal = null,
+    starred = false,
+    archived = false,
+  }: { name: string; goal?: string | null; starred?: boolean; archived?: boolean },
+): Promise<{ projectId: string }> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const workspace = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+    )
+    const now = new Date()
+    const project = await prisma.project.create({
+      data: {
+        id: chatId(),
+        workspaceId: workspace.id,
+        createdById: userId,
+        name,
+        goal,
+        starredAt: starred ? now : null,
+        archivedAt: archived ? now : null,
+      },
+      select: { id: true },
+    })
+    return { projectId: project.id }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
 function chatId(): string {
   const time = Date.now().toString(16).padStart(12, '0')
   return `${time.slice(0, 8)}-${time.slice(8)}-7${randomUUID().slice(15)}`
@@ -164,7 +206,12 @@ function chatId(): string {
  */
 export async function addAnsweredChat(
   userId: string,
-  { words, answer, thought }: { words: string; answer: string; thought: string },
+  {
+    words,
+    answer,
+    thought,
+    projectId = null,
+  }: { words: string; answer: string; thought: string; projectId?: string | null },
 ): Promise<{ taskId: string }> {
   const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
   try {
@@ -180,6 +227,7 @@ export async function addAnsweredChat(
         title: words,
         turnNo: 1,
         needsBrowser: false,
+        projectId,
       },
       select: { id: true },
     })
@@ -317,6 +365,93 @@ export async function acceptUploads(page: Page): Promise<void> {
 }
 
 /**
+ * Takes the place of the store of files for the context of a project (docs/plan/84-projects.md,
+ * 84.10; this run has no S3): the bytes of a file chosen on `page` are answered as stored and its
+ * row is marked ready, as `PUT /api/project-files/<id>` does. The announcement
+ * (`projectFile.start`), the binding (`project.create({ fileIds })`, `projectFile.bind`) and the
+ * lists are the server's own.
+ */
+export async function acceptProjectUploads(page: Page): Promise<void> {
+  await page.route('**/api/project-files/*', async (route) => {
+    if (route.request().method() !== 'PUT') return route.fallback()
+    const id = new URL(route.request().url()).pathname.split('/').at(-1) ?? ''
+    const bytes = route.request().postDataBuffer() ?? Buffer.alloc(0)
+    const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+    try {
+      const { sizeBytes } = await prisma.projectFile.findUniqueOrThrow({
+        where: { id },
+        select: { sizeBytes: true },
+      })
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      await markProjectFileReady(prisma, { id, sizeBytes, sha256 })
+      await route.fulfill({ status: 200, json: { fileId: id, size: sizeBytes } })
+    } finally {
+      await prisma.$disconnect()
+    }
+  })
+}
+
+/** One answer of a tRPC batch of one call, as superjson sends it. */
+const trpcAnswer = (data: unknown) => [{ result: { data: { json: data } } }]
+
+/**
+ * The two procedures of the context that touch the store themselves — `projectFile.addText` puts
+ * the `.md` there, `projectFile.remove` deletes the object before its row — cannot run without S3.
+ * Here they do what they do to the database, by the same rules: a text is a ready `.md` of the
+ * workspace (taken by the project when it names one, else for a day), a removal deletes the row
+ * of a file of the user. Their checks live in packages/trpc (project-file-db.test.ts).
+ */
+export async function standInProjectFileStore(page: Page, userId: string): Promise<void> {
+  await page.route('**/api/trpc/projectFile.addText*', async (route) => {
+    const body = route.request().postDataJSON() as Record<
+      string,
+      { json: { title: string; text: string; projectId?: string } }
+    >
+    const input = body['0']!.json
+    const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+    try {
+      const workspace = await prisma.workspace.findFirstOrThrow({
+        where: { createdById: userId },
+        select: { id: true },
+      })
+      const id = randomUUID().toLowerCase()
+      const bytes = Buffer.from(input.text, 'utf8')
+      const name = `${input.title}.md`
+      await prisma.projectFile.create({
+        data: {
+          id,
+          workspaceId: workspace.id,
+          projectId: input.projectId ?? null,
+          uploadedById: userId,
+          kind: 'text',
+          name,
+          mediaType: 'text/markdown',
+          sizeBytes: bytes.byteLength,
+          sha256: createHash('sha256').update(bytes).digest('hex'),
+          status: 'ready',
+          s3Key: `projects/${workspace.id}/${id}`,
+          expiresAt: input.projectId ? null : new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+      })
+      await route.fulfill({ status: 200, json: trpcAnswer({ fileId: id, name }) })
+    } finally {
+      await prisma.$disconnect()
+    }
+  })
+  await page.route('**/api/trpc/projectFile.remove*', async (route) => {
+    const body = route.request().postDataJSON() as Record<string, { json: { fileId: string } }>
+    const fileId = body['0']!.json.fileId
+    const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+    try {
+      await prisma.projectFile.deleteMany({ where: { id: fileId, uploadedById: userId } })
+      await route.fulfill({ status: 200, json: trpcAnswer({ fileId }) })
+    } finally {
+      await prisma.$disconnect()
+    }
+  })
+}
+
+/**
  * Takes the indicator of `next dev` off every page the test opens. It stands in the bottom
  * right corner (next.config.ts), over «Ещё» of the bottom bar, and takes the click meant for
  * it; a production build has no indicator.
@@ -375,6 +510,100 @@ export async function priceDialogClass(): Promise<() => Promise<void>> {
         where: { id: model.provider.id },
         data: { enabled: false },
       })
+    await prisma.$disconnect()
+  }
+}
+
+/**
+ * Entries of the memory of a project of the user — or, `projectId: null`, of the account — as the
+ * end of a pass or the client leaves them (docs/plan/84-projects.md, ПР18); `feed` also writes the
+ * row «Запомнено» or «Агент предлагает запомнить» of its chat, as core does after the answer.
+ */
+export async function addMemoryEntries(
+  userId: string,
+  projectId: string | null,
+  entries: readonly {
+    text: string
+    status?: 'active' | 'proposed'
+    author?: 'agent' | 'client'
+    pendingAction?: 'update' | 'forget'
+    pendingText?: string
+    sourceTaskId?: string
+    feed?: 'saved' | 'proposed'
+  }[],
+): Promise<{ ids: string[] }> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const workspace = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+    )
+    const ids: string[] = []
+    for (const entry of entries) {
+      const author = entry.author ?? 'agent'
+      const row = await prisma.memoryEntry.create({
+        data: {
+          id: chatId(),
+          workspaceId: workspace.id,
+          userId,
+          projectId,
+          kind: 'preference',
+          text: entry.text,
+          status: entry.status ?? 'active',
+          author,
+          confirmedAt: author === 'client' ? new Date() : null,
+          sourceTaskId: entry.sourceTaskId ?? null,
+          sourceTurn: entry.sourceTaskId ? 1 : null,
+          ...(entry.pendingAction ? { pendingAction: entry.pendingAction } : {}),
+          ...(entry.pendingText ? { pendingText: entry.pendingText } : {}),
+        },
+        select: { id: true },
+      })
+      ids.push(row.id)
+      if (entry.feed && entry.sourceTaskId)
+        await insertFeedEvent(prisma, {
+          taskId: entry.sourceTaskId,
+          row: {
+            type: 'feed.memory_change',
+            payload: {
+              v: 1,
+              action: entry.feed,
+              entryId: row.id,
+              kind: 'preference',
+              text: entry.text,
+            },
+          },
+        })
+    }
+    return { ids }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** The memory of the user now, newest first: what the windows and the chat changed. */
+export async function memoryRows(userId: string) {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    return await prisma.memoryEntry.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, text: true, status: true, projectId: true, pendingAction: true },
+    })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** «Агент запоминает важное» of the user, as the agent's access and its section read it. */
+export async function agentMemoryOf(userId: string): Promise<boolean> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { agentMemory: true },
+    })
+    return user.agentMemory
+  } finally {
     await prisma.$disconnect()
   }
 }

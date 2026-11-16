@@ -16,13 +16,14 @@ export const queueNames = [
   'previews',
   // Starting the browser of a task the first time its agent needs it (docs/plan/61-chats-first.md, К11).
   'browser-sessions',
-  // The files of a project for its section «Терминал», read by core for web (06.11.2026).
-  'site-files',
   // Leads of the landing on their way to the Telegram group (docs/plan/65-landing-platforms-leads.md).
   'leads',
   // The bot of the chat in Telegram: its updates in, its messages out (docs/plan/80-telegram.md).
   'telegram',
   'telegram-updates',
+  // The git connections and repositories of projects: their checks, lists and first fetch
+  // (docs/plan/84-projects.md, §4.3; slice 84.17).
+  'git',
   // The tick of the scheduled tasks and the starts of their runs (docs/plan/82-scheduled-tasks.md, Зп19).
   'schedules',
 ] as const

@@ -95,10 +95,22 @@ export function loopbackTransport(hub: RunnerHub, runnerId = 'sandbox-1'): Loopb
           ),
         )
       }),
-    async *inbox(assignmentId, index, fence, sizeBytes) {
+    async *bundle(assignmentId, fence, sizeBytes) {
+      const source = await answer('bundle', async () => {
+        transport.intercept?.('bundle')
+        return transport.hub.bundle(runnerId, assignmentId, headers(fence))
+      })
+      let sent = 0
+      for await (const chunk of source.read()) {
+        sent += chunk.byteLength
+        if (sent > sizeBytes) throw new RunnerCallError('bundle', 200)
+        yield Buffer.from(chunk)
+      }
+    },
+    async *inbox(assignmentId, index, fence, sizeBytes, root) {
       const file = await answer('inbox', async () => {
         transport.intercept?.('inbox')
-        return transport.hub.inboxFile(runnerId, assignmentId, index, headers(fence))
+        return transport.hub.inboxFile(runnerId, assignmentId, index, headers(fence), root)
       })
       let sent = 0
       for await (const chunk of file.read()) {

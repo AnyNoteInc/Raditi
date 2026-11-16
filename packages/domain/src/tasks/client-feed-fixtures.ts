@@ -363,6 +363,71 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
       reason: 'refused',
     },
   },
+  // docs/plan/84-projects.md, ПР18: a note the agent saved, and one it did not keep.
+  {
+    name: 'memory_change v1 saved',
+    type: 'feed.memory_change',
+    payload: {
+      v: 1,
+      action: 'saved',
+      entryId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dd1',
+      kind: 'fact',
+      text: 'Цены на сайте — только из прайса',
+    },
+  },
+  {
+    name: 'memory_left v1 secret',
+    type: 'feed.memory_left',
+    payload: { v: 1, action: 'save', reason: 'secret' },
+  },
+  // docs/plan/84-projects.md, ПР12, ПР26: what a turn left in the chat's branch, and changes not kept.
+  {
+    name: 'repo_changes v1',
+    type: 'feed.repo_changes',
+    payload: {
+      v: 1,
+      branch: 'raditi/chat-0193a1b2c3d4',
+      baseSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      headSha: 'cccccccccccccccccccccccccccccccccccccccc',
+      diffSha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      files: 1,
+      additions: 3,
+      deletions: 0,
+      list: [{ path: 'README.md', additions: 3, deletions: 0 }],
+      ciTouched: false,
+      pushed: false,
+      mergeRequest: null,
+    },
+  },
+  {
+    name: 'repo_left v1 secret',
+    type: 'feed.repo_left',
+    payload: { v: 1, reason: 'secret_found', paths: ['config.js'] },
+  },
+  // ПР13, ПР14: the agent's proposal of a merge request, and what a button did.
+  {
+    name: 'repo_proposal v1',
+    type: 'feed.repo_proposal',
+    payload: {
+      v: 1,
+      reservedId: '0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b',
+      title: 'Зимнее меню',
+      description: 'Цены по прайсу и блок «Зимние пироги».',
+      draft: false,
+    },
+  },
+  {
+    name: 'repo_action v1 open_mr',
+    type: 'feed.repo_action',
+    payload: {
+      v: 1,
+      actionId: '0193a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2c',
+      kind: 'open_mr',
+      state: 'done',
+      number: 37,
+      url: 'https://gitlab.example.ru/kolos/site/-/merge_requests/37',
+    },
+  },
   {
     name: 'request v1 resume',
     type: 'feed.request',

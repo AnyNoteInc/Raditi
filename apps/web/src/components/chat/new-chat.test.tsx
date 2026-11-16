@@ -16,8 +16,9 @@ type CreateInput = {
   attachments?: string[]
 }
 
-const { create, push, search, start, setPreference } = vi.hoisted(() => ({
+const { create, push, search, start, setPreference, projects } = vi.hoisted(() => ({
   setPreference: vi.fn(),
+  projects: vi.fn(async () => ({ items: [] as unknown[] })),
   create: vi.fn<(input: CreateInput) => Promise<Created>>(),
   push: vi.fn<(path: string) => void>(),
   search: { params: new URLSearchParams() },
@@ -49,6 +50,21 @@ vi.mock('@/trpc/client', () => ({
         }),
       },
     },
+    project: {
+      pathKey: () => ['project'],
+      list: { queryOptions: () => ({ queryKey: ['project', 'list'], queryFn: projects }) },
+      create: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+    },
+    projectFile: {
+      pathKey: () => ['projectFile'],
+      list: {
+        queryOptions: (input: { projectId: string }) => ({
+          queryKey: ['projectFile.list', input],
+          queryFn: async () => ({ files: [], bytes: 0, limitBytes: 100 * 1024 * 1024, percent: 0 }),
+        }),
+      },
+      remove: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+    },
     billing: {
       usage: {
         queryKey: () => ['billing', 'usage'],
@@ -61,6 +77,12 @@ vi.mock('@/trpc/client', () => ({
     attachment: {
       start: { mutate: start },
       remove: { mutate: vi.fn() },
+    },
+    projectFile: {
+      start: { mutate: vi.fn() },
+      bind: { mutate: vi.fn() },
+      addText: { mutate: vi.fn() },
+      remove: { mutate: vi.fn(async () => ({})) },
     },
   }),
 }))
@@ -138,13 +160,13 @@ describe('new chat', () => {
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
   })
 
-  it('has no switch of modes and no choice of a project', () => {
+  it('has no switch of modes, and its pill says «Без проекта» (docs/plan/84, ПР30)', () => {
     showChat()
     expect(screen.queryByRole('radiogroup')).toBeNull()
-    expect(screen.queryByRole('button', { name: /Проект для этого чата/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Без проекта' })).toBeTruthy()
   })
 
-  it('starts a chat under an id of the browser, and names no project', async () => {
+  it('starts a chat under an id of the browser, without a project by default', async () => {
     const queryClient = showChat()
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
     write('Предложите пять названий для пекарни')
@@ -159,8 +181,133 @@ describe('new chat', () => {
       text: 'Предложите пять названий для пекарни',
       // «Высокое» unless the client picks another.
       effort: 'high',
+      projectId: null,
     })
     expect(push).toHaveBeenCalledWith(`/chats/${input.taskId}`)
+  })
+
+  describe('the project of the chat (docs/plan/84-projects.md, ПР30)', () => {
+    const KOLOS = '0199a3f2-0000-7000-8000-00000000c001'
+    const TEA = '0199a3f2-0000-7000-8000-00000000c002'
+    const listed = (id: string, name: string, patch: Record<string, unknown> = {}) => ({
+      id,
+      name,
+      goal: null,
+      starred: false,
+      archived: false,
+      chats: 0,
+      hasInstructions: false,
+      activityAt: new Date(),
+      createdAt: new Date(),
+      purgeAfter: null,
+      ...patch,
+    })
+    beforeEach(() => {
+      projects.mockResolvedValue({
+        items: [
+          listed(TEA, 'Интернет-магазин чая'),
+          listed(KOLOS, 'Сайт пекарни «Колос»', {
+            starred: true,
+            hasInstructions: true,
+            goal: 'Обновить сайт к зиме',
+          }),
+        ],
+      })
+    })
+
+    it('lists the starred first, finds one by its name, and starts the chat in it', async () => {
+      showChat()
+      fireEvent.click(screen.getByRole('button', { name: 'Без проекта' }))
+      const menu = await screen.findByRole('menu', { name: 'Проект для чата' })
+      await within(menu).findByRole('menuitemradio', { name: /Колос/ })
+      const names = within(menu)
+        .getAllByRole('menuitemradio')
+        .map((item) => item.textContent)
+      expect(names[0]).toContain('Без проекта')
+      expect(names[1]).toContain('Сайт пекарни «Колос»')
+      expect(names[2]).toContain('Интернет-магазин чая')
+      fireEvent.change(screen.getByRole('textbox', { name: 'Найти проект' }), {
+        target: { value: 'колос' },
+      })
+      expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(1)
+      fireEvent.click(within(menu).getByRole('menuitemradio', { name: /Колос/ }))
+
+      expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
+        'Новый чат в проекте «Сайт пекарни «Колос»»',
+      )
+      expect(screen.getByText('Обновить сайт к зиме')).toBeTruthy()
+      expect(screen.getByText('Агент учтёт инструкции и цель проекта')).toBeTruthy()
+      expect(screen.getByRole('link', { name: 'Открыть проект' }).getAttribute('href')).toBe(
+        `/projects/${KOLOS}`,
+      )
+      write('Сверь цены в прайсе с сайтом')
+      fireEvent.click(send())
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+      expect(create.mock.calls[0]![0]).toMatchObject({ projectId: KOLOS })
+    })
+
+    it('keeps the words and the files of the field when the project changes', async () => {
+      showChat()
+      write('Черновик до выбора')
+      await attach()
+      fireEvent.click(screen.getByRole('button', { name: 'Без проекта' }))
+      const menu = await screen.findByRole('menu', { name: 'Проект для чата' })
+      fireEvent.click(await within(menu).findByRole('menuitemradio', { name: /чая/ }))
+      expect(field().value).toBe('Черновик до выбора')
+      expect(screen.getByRole('list', { name: 'Файлы к сообщению' })).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Проект: Интернет-магазин чая' }))
+      fireEvent.click(
+        within(await screen.findByRole('menu', { name: 'Проект для чата' })).getByRole(
+          'menuitemradio',
+          { name: /Без проекта/ },
+        ),
+      )
+      expect(field().value).toBe('Черновик до выбора')
+      expect(screen.getByRole('button', { name: 'Без проекта' })).toBeTruthy()
+    })
+
+    it('chooses the project of `?project=` once the list names it as the user’s', async () => {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      render(
+        <QueryClientProvider client={queryClient}>
+          <NewChat userId={USER_ID} projectId={TEA} />
+        </QueryClientProvider>,
+      )
+      expect(
+        await screen.findByRole('button', { name: 'Проект: Интернет-магазин чая' }),
+      ).toBeTruthy()
+      expect(screen.getByText('Агент учтёт цель проекта')).toBeTruthy()
+    })
+
+    it('starts without a project when `?project=` names none of the user’s', async () => {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      render(
+        <QueryClientProvider client={queryClient}>
+          <NewChat userId={USER_ID} projectId="0199a3f2-0000-7000-8000-0000000000ff" />
+        </QueryClientProvider>,
+      )
+      await waitFor(() => expect(projects).toHaveBeenCalled())
+      expect(await screen.findByRole('button', { name: 'Без проекта' })).toBeTruthy()
+    })
+
+    it('starts the chat in the project of `?project=` before the list has come (84.7)', async () => {
+      // The list is on its way the whole time: the id of the address stands for the project.
+      projects.mockImplementation(() => new Promise<never>(() => {}))
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      render(
+        <QueryClientProvider client={queryClient}>
+          <NewChat userId={USER_ID} projectId={TEA.toUpperCase()} />
+        </QueryClientProvider>,
+      )
+      expect(screen.getByRole('button', { name: 'Загружаем проект…' })).toBeTruthy()
+      expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Новый чат в проекте')
+      expect(screen.queryByRole('button', { name: 'Без проекта' })).toBeNull()
+      expect(screen.queryByText(/Агент учтёт/)).toBeNull()
+      write('Сверь цены в прайсе с сайтом')
+      fireEvent.click(send())
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+      expect(create.mock.calls[0]![0]).toMatchObject({ projectId: TEA })
+    })
   })
 
   it('reminds that keys and passwords go to «Переменные», not to the chat', () => {

@@ -28,11 +28,11 @@ beforeEach(() => {
 })
 
 describe('the rail of the cabinet', () => {
-  it('stands «Чаты», the scheduled tasks and «Страницы», and the mark leads to the chats', () => {
+  it('stands «Чаты», the scheduled tasks, «Страницы» and «Проекты», and the mark leads to the chats', () => {
     const all = links()
-    // The three sections of the cabinet (plan 82, Зп60).
-    expect(all).toHaveLength(3)
-    const [chats, scheduled, pages] = all
+    // The four sections of the cabinet (plan 82, Зп60; plan 84).
+    expect(all).toHaveLength(4)
+    const [chats, scheduled, pages, projects] = all
     expect(chats).toHaveAccessibleName('Чаты')
     expect(chats).toHaveAttribute('href', '/chats')
     // After the chats and before the pages (owner's request of 15.11.2026, plan 82, Зп1): the
@@ -42,6 +42,9 @@ describe('the rail of the cabinet', () => {
     expect(scheduled).toHaveTextContent('Задачи')
     expect(pages).toHaveAccessibleName('Страницы')
     expect(pages).toHaveAttribute('href', '/pages')
+    // The last section (docs/plan/84-projects.md).
+    expect(projects).toHaveAccessibleName('Проекты')
+    expect(projects).toHaveAttribute('href', '/projects')
     expect(screen.getByRole('link', { name: 'Радити — главная страница' })).toHaveAttribute(
       'href',
       '/chats',
@@ -56,6 +59,8 @@ describe('the rail of the cabinet', () => {
     ['/scheduled/templates', 1],
     ['/scheduled/0199a3f2-0000-7000-8000-000000000002', 1],
     ['/pages', 2],
+    ['/projects', 3],
+    ['/projects/new', 3],
   ])('marks the section of %s, and only it', (pathname, current) => {
     mocks.pathname = pathname
     const all = links()

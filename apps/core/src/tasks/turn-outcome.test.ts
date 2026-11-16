@@ -38,7 +38,17 @@ describe('feedFailureOf', () => {
       'secret_found',
     )
     expect(feedFailureOf({ errorCode: 'REPOSITORY_UNSUPPORTED', policyFlagged: false })).toBe(
-      'site_files',
+      'repo_too_large',
+    )
+    // The repository of a pass (docs/plan/84-projects.md, ПР12, «Сбой подготовки»).
+    expect(feedFailureOf({ errorCode: 'REPOSITORY_TOO_LARGE', policyFlagged: false })).toBe(
+      'repo_too_large',
+    )
+    expect(feedFailureOf({ errorCode: 'REPO_UNREACHABLE', policyFlagged: false })).toBe(
+      'repo_unreachable',
+    )
+    expect(feedFailureOf({ errorCode: 'GIT_CONNECTION_REAUTH', policyFlagged: false })).toBe(
+      'repo_reauth',
     )
     expect(feedFailureOf({ errorCode: 'SITE_HELD', policyFlagged: false })).toBe('site_held')
     expect(feedFailureOf({ errorCode: 'CROSS_BORDER_NOT_CLEARED', policyFlagged: false })).toBe(

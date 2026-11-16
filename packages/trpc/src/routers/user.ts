@@ -58,4 +58,20 @@ export const userRouter = router({
       })
       return { text }
     }),
+
+  /**
+   * «Агент запоминает важное» (docs/plan/84-projects.md, ПР18): off — the agent of the user's chats
+   * has neither the tools of memory nor its section; the entries stay.
+   */
+  setAgentMemory: consentedProcedure
+    .input(z.strictObject({ on: z.boolean() }))
+    .output(z.strictObject({ on: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.prisma.user.update({
+        where: { id: ctx.user.id },
+        data: { agentMemory: input.on },
+        select: { id: true },
+      })
+      return { on: input.on }
+    }),
 })

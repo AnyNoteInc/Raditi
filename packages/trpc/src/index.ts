@@ -26,6 +26,8 @@ export type {
   McpServerServices,
 } from './services/mcp-server-auth.ts'
 export { checkSkillSignIn, connectSignedInServer } from './services/agent-skills.ts'
+// The git connections of the user (docs/plan/84-projects.md, 84.17): the return from gitlab.com.
+export { connectGitlabOAuth, type GitServices } from './services/git/connections.ts'
 // The updates of the bot of the chat in Telegram, handed by core to web (docs/plan/80-telegram.md).
 export {
   handleTelegramTopicGone,

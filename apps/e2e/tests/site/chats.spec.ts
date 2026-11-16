@@ -2,7 +2,14 @@ import type { Page } from '@playwright/test'
 
 import { expect, test } from '../../fixtures/signed-in.ts'
 
-import { addAnsweredChat, addLongDialog, hideDevIndicator, priceDialogClass } from './site.ts'
+import {
+  acceptUploads,
+  addAnsweredChat,
+  addLongDialog,
+  addProject,
+  hideDevIndicator,
+  priceDialogClass,
+} from './site.ts'
 
 // The ways through «Чаты» (docs/plan/61-chats-first.md, 61.12; no projects since plan 83): `/undo`,
 // `/thinking`, the commands of a chat and the addresses of no chat. No core works in this run: a
@@ -175,4 +182,116 @@ test('an address of no chat of the user is «not found»', async ({ page, signed
     expect(response?.status()).toBe(404)
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Такого чата нет')
   }
+})
+
+// The project a chat starts in (docs/plan/84-projects.md, ПР30): the pill in the field of
+// «Новый чат», its search, «Новый проект», the words and files kept, and `?project=<id>`.
+
+const pill = (page: Page, name: string) => page.getByRole('button', { name })
+
+test('the pill of the field picks the project of a new chat, keeping the words and the files', async ({
+  page,
+  signedInUser,
+}) => {
+  await addProject(signedInUser.id, { name: 'Интернет-магазин чая' })
+  const { projectId } = await addProject(signedInUser.id, {
+    name: 'Сайт пекарни «Колос»',
+    goal: 'Обновить сайт к зиме',
+    starred: true,
+  })
+  await hideDevIndicator(page)
+  await acceptUploads(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/chats/new')
+  await message(page).fill('Сверь цены в прайсе с сайтом')
+  await page.getByTestId('composer-files').setInputFiles({
+    name: 'Прайс.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.4 прайс'),
+  })
+  await expect(page.getByRole('list', { name: 'Файлы к сообщению' })).toContainText('Прайс.pdf')
+
+  await pill(page, 'Без проекта').click()
+  const menu = page.getByRole('menu', { name: 'Проект для чата' })
+  const items = menu.getByRole('menuitemradio')
+  // «Без проекта», then the starred project first.
+  await expect(items).toHaveCount(3)
+  await expect(items.nth(1)).toContainText('Колос')
+  await page.getByRole('textbox', { name: 'Найти проект' }).fill('чая')
+  await expect(items).toHaveCount(1)
+  await page.getByRole('textbox', { name: 'Найти проект' }).fill('')
+  await items.nth(1).click()
+
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+    'Новый чат в проекте «Сайт пекарни «Колос»»',
+  )
+  await expect(page.getByText('Агент учтёт цель проекта')).toBeVisible()
+  await expect(message(page)).toHaveValue('Сверь цены в прайсе с сайтом')
+  await expect(page.getByRole('list', { name: 'Файлы к сообщению' })).toContainText('Прайс.pdf')
+
+  await send(page).click()
+  await expect(page).toHaveURL(/\/chats\/[0-9a-f-]{36}$/)
+  await expect(page.getByRole('link', { name: 'Проект «Сайт пекарни «Колос»»' })).toHaveAttribute(
+    'href',
+    `/projects/${projectId}`,
+  )
+})
+
+test('«Новый проект» in the menu of the pill comes back with the new project chosen', async ({
+  page,
+  signedInUser,
+}) => {
+  void signedInUser
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/chats/new')
+  await message(page).fill('Черновик до проекта')
+  await pill(page, 'Без проекта').click()
+  await page
+    .getByRole('menu', { name: 'Проект для чата' })
+    .getByRole('menuitem', { name: 'Новый проект' })
+    .click()
+  const window_ = page.getByRole('dialog', { name: 'Создание проекта' })
+  await window_.getByRole('textbox', { name: /Над чем вы работаете/ }).fill('Отчёты')
+  await window_.getByRole('button', { name: 'Создать проект' }).click()
+  await expect(pill(page, 'Проект: Отчёты')).toBeVisible()
+  await expect(page).toHaveURL(/\/chats\/new$/)
+  await expect(message(page)).toHaveValue('Черновик до проекта')
+})
+
+test('`/chats/new?project=<id>` chooses the project, one of someone else does not', async ({
+  page,
+  signedInUser,
+}) => {
+  const { projectId } = await addProject(signedInUser.id, { name: 'Колос' })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/new?project=${projectId}`)
+  await expect(pill(page, 'Проект: Колос')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый чат в проекте «Колос»')
+
+  await page.goto('/chats/new?project=0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17')
+  await expect(pill(page, 'Без проекта')).toBeVisible()
+})
+
+test('on a phone the projects of the pill come in a sheet from the bottom', async ({
+  page,
+  signedInUser,
+}) => {
+  await addProject(signedInUser.id, { name: 'Колос' })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/chats/new')
+  await pill(page, 'Без проекта').click()
+  const sheet = page.getByRole('dialog', { name: 'Проект для чата' })
+  await expect(sheet).toBeVisible()
+  // Once it has slid in, it stands on the bottom edge of the screen.
+  await expect
+    .poll(async () => {
+      const box = await sheet.boundingBox()
+      return box === null ? null : Math.round(box.y + box.height)
+    })
+    .toBe(844)
+  await sheet.getByRole('menuitemradio', { name: /Колос/ }).click()
+  await expect(pill(page, 'Проект: Колос')).toBeVisible()
 })

@@ -24,3 +24,17 @@ path "kv/metadata/workspaces/+/mcp/*" {
     "max_versions" = ["1"]
   }
 }
+
+# The tokens of the git connections of a workspace (docs/plan/84-projects.md, ПР10, §4.2): written
+# by web after the sign-in or the form, never read back; a removed connection is overwritten by a
+# version without a value.
+path "kv/data/workspaces/+/git/*" {
+  capabilities = ["create", "update"]
+}
+
+path "kv/metadata/workspaces/+/git/*" {
+  capabilities = ["create", "update", "read"]
+  allowed_parameters = {
+    "max_versions" = ["1"]
+  }
+}

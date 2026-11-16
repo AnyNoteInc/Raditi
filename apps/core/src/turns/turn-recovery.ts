@@ -15,11 +15,13 @@ import {
   type SnapshotReference,
   type TurnEvidence,
   type TurnPhase,
+  type TurnPlan,
   withTimeout,
 } from '@repo/domain'
 
 import { holdForRecovery, LeaseGuard } from './lease-guard.ts'
 import type { TurnSupervisorDependencies } from './turn-supervisor.ts'
+import { gitNotConfigured, publicationOf, type TurnPublication } from './turn-repository.ts'
 
 /**
  * How the turn's container is known to be gone before its checkpoint is taken (spec §8):
@@ -94,7 +96,7 @@ export function isAmbiguousContainer(error: unknown): boolean {
 
 type RecoveryDependencies = Pick<
   TurnSupervisorDependencies,
-  'leases' | 'executor' | 'assignments' | 'snapshots' | 'journal'
+  'leases' | 'executor' | 'assignments' | 'snapshots' | 'journal' | 'repository'
 >
 
 type Record = (phase: TurnEvidence['phase'], extra?: Partial<TurnEvidence>) => Promise<void>
@@ -117,6 +119,156 @@ function ambiguousContainer(error: unknown): unknown {
       reason: AMBIGUOUS_CONTAINER,
     })
   return error
+}
+
+/** A committed checkpoint of a turn with a repository whose publication may be unfinished. */
+export interface PublicationRecoveryRequest extends TurnRecoveryRequest {
+  /** The plan of the turn: its repository, base and the chat's ref before it (ПР12). */
+  plan: TurnPlan
+}
+
+/**
+ * Finishes the publication of a turn with a repository from its committed, verified checkpoint
+ * (docs/plan/84-projects.md, ПР12, §4.3, step 7): a core that died between the snapshot and the
+ * publication left the candidate in the snapshot's patch. The trusted git builds the same commit
+ * again — the same SHA, or nothing is published — and moves it into the mirror under the chat's
+ * ref by CAS. It never reruns an agent.
+ */
+export class TurnPublicationRecovery {
+  constructor(private readonly deps: RecoveryDependencies) {}
+
+  async recover(
+    input: PublicationRecoveryRequest,
+    signal?: AbortSignal,
+  ): Promise<{ manifest: SnapshotManifest; headSha: string | null }> {
+    const reference = snapshotReferenceSchema.parse(input.snapshot)
+    const repository = input.plan.repository
+    if (!repository) throw badRequest('A turn without a repository has no publication to recover')
+    if (input.heldFence.operation !== 'turn')
+      throw badRequest('Only a held turn publication may be recovered')
+    const workspace = this.deps.repository
+    if (!workspace) throw gitNotConfigured()
+    if (signal?.aborted) throw conflict('Publication recovery was cancelled')
+    const loaded = await withTimeout(
+      this.deps.snapshots.load(reference),
+      RECOVERY_TIMEOUT_MS,
+      'Snapshot recovery read timed out',
+    ).catch((error: unknown) => {
+      throw checkpointLoadFailure(error)
+    })
+    const { manifest, archives } = loaded
+    const git = manifest.git
+    if (
+      !git ||
+      !archives.patch ||
+      !archives.untracked ||
+      git.baseSha !== repository.baseSha ||
+      git.branch !== repository.branch ||
+      git.provider !== repository.provider ||
+      (git.publication !== undefined && git.publication.taskId !== input.heldFence.taskId)
+    )
+      throw noCheckpoint(conflict('Checkpoint does not match the requested publication recovery'))
+    // The checks refused the changes before the snapshot: there is nothing to publish.
+    const metadata = git.publication
+
+    const started = performance.now()
+    // Its containers are adopted through the assignment, so it moves with the lease first.
+    const taken = await this.deps.assignments.takeOver({
+      id: input.assignmentId,
+      fence: input.heldFence,
+      ttlMs: Math.max(RECOVERY_TIMEOUT_MS, input.remainingMs) + TURN_PUBLICATION_GRACE_MS,
+      ...(input.runnerSession ? { runnerSession: input.runnerSession } : {}),
+      countAttempt: false,
+    })
+    if (!taken)
+      throw conflict('The turn assignment or its exact held lease moved on without this recovery')
+    const lease = taken.grant
+    const guard = new LeaseGuard(
+      lease,
+      this.deps.leases,
+      RECOVERY_TIMEOUT_MS,
+      signal,
+      performance.now() - started,
+    )
+    let publication: TurnPublication | undefined
+    let completed = false
+    // Counted once the containers are gone: a failed removal is tried again for free, a
+    // candidate that never matches the checkpoint reaches the attempt limit.
+    let counted = false
+    let sequence = 0
+    let lastPhase: TurnEvidence['phase'] = 'checkpointed'
+    const record: Record = async (phase, extra = {}) => {
+      lastPhase = phase
+      await this.deps.journal.record({
+        fence: lease,
+        sessionId: reference.sessionId,
+        turn: reference.turn,
+        sequence: ++sequence,
+        phase,
+        snapshotPrefix: turnSnapshotPrefix(reference.sessionId, reference.turn),
+        candidateHeadSha: git.headSha,
+        baseSha: git.baseSha,
+        ...(git.sandboxBaseSha ? { sandboxBaseSha: git.sandboxBaseSha } : {}),
+        committedAt: input.plan.committedAt,
+        recoveredFromEpoch: input.heldFence.epoch,
+        ...extra,
+      })
+    }
+    try {
+      await guard.assertFence()
+      // A pass that fails before `publishing` leaves the journal's confirmed removal as its last
+      // step, so the next one publishes without waiting for a runner that is away.
+      await record(input.removal === 'confirmed' ? 'destroyed' : 'checkpointed')
+      await removeTurnContainers(this.deps, input, reference, lease, guard, record).catch(
+        (error: unknown) => {
+          throw ambiguousContainer(error)
+        },
+      )
+      counted = await this.deps.assignments.countAttempt({
+        id: input.assignmentId,
+        epoch: lease.epoch,
+      })
+      if (!counted) throw conflict('The turn assignment moved on without this recovery')
+      if (metadata) {
+        await guard.assertFence()
+        publication = await guard.interruptibleResource(
+          workspace.preparePublication({
+            ...publicationOf(input.plan),
+            patch: archives.patch,
+            untracked: archives.untracked,
+            // A replay of a completed snapshot: the checks ran before its checkpoint.
+            credentials: [],
+            hiddenPaths: repository.hiddenPaths,
+          }),
+          (late) => late.dispose(),
+        )
+        if (publication.baseSha !== git.baseSha || publication.headSha !== git.headSha)
+          throw conflict('Reconstructed candidate differs from the immutable checkpoint')
+        await guard.assertFence()
+        await record('publishing')
+        await guard.interruptible(publication.publish(() => guard.assertFence()))
+      }
+      await guard.assertFence()
+      await record('publication_recovered')
+      if (!(await this.deps.leases.release(lease)))
+        throw leaseLost('Recovery lease was lost before completion')
+      completed = true
+      // A failed update is finished by the next recovery pass from the journal.
+      await this.deps.assignments
+        .finish({ id: input.assignmentId, epoch: lease.epoch, outcome: 'completed' })
+        .catch(() => false)
+      return { manifest, headSha: metadata ? git.headSha : null }
+    } finally {
+      if (!completed) {
+        await holdForRecovery(this.deps.leases, lease, lastPhase)
+        await record('recovery', {
+          reason: counted ? 'publication_ambiguous' : 'destroy_failed',
+        }).catch(() => {})
+      }
+      guard.close()
+      await publication?.dispose().catch(() => {})
+    }
+  }
 }
 
 /**

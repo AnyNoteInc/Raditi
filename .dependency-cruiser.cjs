@@ -7,7 +7,7 @@
 
 const TOOLING = '^packages/(eslint-config|typescript-config)/'
 const ADAPTERS =
-  'db|storage|vault|sandbox-providers|browser-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram'
+  'db|storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram'
 // A leaf: imports nothing of the repository. The apps import it; no tier rule of a package
 // allows it.
 const LEAVES = 'ip-address'
@@ -270,8 +270,38 @@ module.exports = {
         path: [
           '^packages/(turn-keys|snapshots|local-turns)/src/testing\\.ts$',
           '^packages/(app-bootstrap|service-runtime)/src/testing/',
+          '^packages/git-providers/src/testing/',
         ],
       },
+    },
+    {
+      name: 'git-providers-npm',
+      comment:
+        'The git adapters speak HTTP with Node built-ins and check answers with zod (docs/plan/84-projects.md, §4.5): no HTTP client, no SDK of a provider.',
+      severity: 'error',
+      from: { path: '^packages/git-providers/src/', pathNot: '\\.test\\.ts$' },
+      to: {
+        dependencyTypesNot: ['local', 'core'],
+        pathNot: ['^packages/(domain|git-providers)/', ...npm('zod')],
+      },
+    },
+    {
+      name: 'web-git-connect-only',
+      comment:
+        'web calls a provider only to sign in (docs/plan/84-projects.md, §4.3, ПР11): it imports the subpaths ./connect and ./webhooks of git-providers, never the adapters; the transport package trpc imports nothing of it.',
+      severity: 'error',
+      from: { path: '^apps/web/' },
+      to: {
+        path: '^packages/git-providers/',
+        pathNot: '^packages/git-providers/src/(connect|webhooks)\\.ts$',
+      },
+    },
+    {
+      name: 'trpc-no-git-providers',
+      comment: 'tRPC procedures reach a provider through core, never themselves (§4.3).',
+      severity: 'error',
+      from: { path: '^packages/trpc/' },
+      to: { path: '^packages/git-providers/' },
     },
     {
       name: 'web-no-role-runtime',
@@ -395,7 +425,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/mcp/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(sandbox-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|local-turns|doc-render|trpc|ui)/',
+        path: '^packages/(git-providers|sandbox-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|local-turns|doc-render|trpc|ui)/',
         reachable: true,
       },
     },
@@ -404,9 +434,12 @@ module.exports = {
       comment:
         'The web tools of a chat (docs/plan/57-browser-tasks.md, Б20), the web search (spec §20, «Веб-поиск агента»), the pages of the workspace (docs/plan/69-pages.md, Ст20) and the scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп31) are each its own module of the mcp app: no folder of them imports another (plan 56, §4.3).',
       severity: 'error',
-      from: { path: '^apps/mcp/src/(web|search|pages|schedule)/', pathNot: '\\.test\\.ts$' },
+      from: {
+        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule)/',
+        pathNot: '\\.test\\.ts$',
+      },
       to: {
-        path: '^apps/mcp/src/(web|search|pages|schedule)/',
+        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule)/',
         pathNot: '^apps/mcp/src/$1/',
       },
     },
@@ -420,9 +453,9 @@ module.exports = {
         pathNot: '\\.test\\.ts$',
       },
       to: {
-        path: '^apps/mcp/src/(web|search|pages|schedule)/',
+        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule)/',
         pathNot:
-          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|schedule/schedule-arguments)\\.ts$',
+          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|memory/memory-arguments|repo/repo-arguments|schedule/schedule-arguments)\\.ts$',
       },
     },
     {
@@ -433,7 +466,7 @@ module.exports = {
       from: {
         path: [
           '^apps/mcp/src/common/',
-          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|schedule/schedule-arguments)\\.ts$',
+          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|memory/memory-arguments|repo/repo-arguments|schedule/schedule-arguments)\\.ts$',
         ],
         pathNot: '\\.test\\.ts$',
       },
@@ -446,7 +479,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/llm/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|sandbox-providers|browser-providers|browser-link|agent-drivers|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|doc-render)/',
+        path: '^packages/(storage|git-providers|sandbox-providers|browser-providers|browser-link|agent-drivers|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|doc-render)/',
         reachable: true,
       },
     },
@@ -468,7 +501,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/preview/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|vault|sandbox-providers|browser-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|doc-render|trpc|ui)/',
+        path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|doc-render|trpc|ui)/',
         reachable: true,
       },
     },
@@ -495,7 +528,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/browser/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(vault|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render|trpc|ui)/',
+        path: '^packages/(vault|git-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render|trpc|ui)/',
         reachable: true,
       },
     },
@@ -546,6 +579,29 @@ module.exports = {
         ],
         reachable: true,
       },
+    },
+    {
+      name: 'git-worker-no-platform-access',
+      comment:
+        'The git worker runs git and gitleaks over the repositories of clients (docs/plan/84-projects.md, ПР33): it reaches no database, Redis, Vault, S3, provider adapter or Nest module of core, not even transitively — a hostile pack that breaks git finds no key of the platform there.',
+      severity: 'error',
+      from: { path: '^apps/core/src/git-worker/', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: [
+          '^packages/(db|vault|storage|service-runtime|git-providers|llm-backends|yookassa|billing|browser-link|turn-keys|snapshots|local-turns|observability)/',
+          '^apps/core/src/(?!git-worker/)',
+          ...npm('ioredis|bullmq|@prisma/[^/]+|@aws-sdk/[^/]+|@nestjs/core|@nestjs/bullmq'),
+        ],
+        reachable: true,
+      },
+    },
+    {
+      name: 'core-runs-no-git',
+      comment:
+        'Core runs no git or gitleaks itself (docs/plan/84-projects.md, 84.15а): of the git worker it takes only the protocol, the variables and the size of a directory; the process runner, the supervisor and the server are the worker’s alone.',
+      severity: 'error',
+      from: { path: '^apps/core/src/(?!git-worker/)', pathNot: '\\.test\\.ts$' },
+      to: { path: '^apps/core/src/git-worker/(?!(protocol|config|disk)\\.ts$)' },
     },
     {
       name: 'web-no-sandbox',

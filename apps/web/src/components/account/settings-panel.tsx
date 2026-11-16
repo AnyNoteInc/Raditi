@@ -19,6 +19,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTRPC } from '@/trpc/client'
 
 import { AgentInstructions } from './agent-instructions'
+import { AgentMemorySettings } from './agent-memory-settings'
 import { NotificationSettings } from './notification-settings'
 import { TelegramSettings } from './telegram-settings'
 
@@ -220,6 +221,8 @@ export function SettingsPanel({ email }: { email: string }) {
       </FormControl>
 
       <AgentInstructions />
+
+      <AgentMemorySettings />
 
       <NotificationSettings />
 
