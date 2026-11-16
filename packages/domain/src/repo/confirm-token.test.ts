@@ -1,5 +1,3 @@
-import { createHmac } from 'node:crypto'
-
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -9,8 +7,16 @@ import {
   type RepoConfirmClaims,
 } from './confirm-token.ts'
 
-const mac = (secret: string) => (material: string) =>
-  createHmac('sha256', secret).update(material).digest('base64url')
+// A stand-in of the HMAC the transport passes (the domain does no crypto): FNV-1a of the secret
+// and the material, enough to tell two secrets and two materials apart.
+const mac = (secret: string) => (material: string) => {
+  let hash = 0x811c9dc5
+  for (const char of `${secret}\n${material}`) {
+    hash ^= char.codePointAt(0)!
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(36)
+}
 
 const now = new Date('2026-11-16T10:00:00Z')
 const claims: RepoConfirmClaims = {
@@ -42,9 +48,10 @@ describe('the confirmation of a button of a repository (ПР13, ПР15)', () => 
   it('refuses a changed claim, a broken token and an expired one', () => {
     const token = signRepoConfirmToken(claims, mac('s'.repeat(40)))
     const [body, sig] = token.split('.')
-    const changed = Buffer.from(JSON.stringify({ ...claims, targetBranch: 'main' })).toString(
-      'base64url',
-    )
+    const changed = btoa(JSON.stringify({ ...claims, targetBranch: 'main' }))
+      .replaceAll('+', '-')
+      .replaceAll('/', '_')
+      .replace(/=+$/, '')
     for (const bad of [`${changed}.${sig}`, `${body}`, `${body}.${sig}.x`, '', 'x'.repeat(3000)])
       expect(() => readRepoConfirmToken(bad, mac('s'.repeat(40)), now)).toThrow(
         expect.objectContaining({ code: 'REPO_CONFIRM_INVALID' }),
