@@ -56,7 +56,10 @@ describe('webGitEnvFromEnv (docs/plan/84-projects.md, 84.16)', () => {
       /GIT_ALLOW_LOOPBACK: only outside production/,
     )
     expect(() =>
-      webGitEnvFromEnv({ APP_ENV: 'production', RADITI_FAKE_GITHUB_API_URL: 'https://localhost:9441' }),
+      webGitEnvFromEnv({
+        APP_ENV: 'production',
+        RADITI_FAKE_GITHUB_API_URL: 'https://localhost:9441',
+      }),
     ).toThrow(/RADITI_FAKE_GITHUB_API_URL: only outside production/)
     expect(() => webGitEnvFromEnv({ APP_ENV: 'production', GITHUB_APP_SLUG: 'raditi' })).toThrow(
       /GITHUB_APP_WEBHOOK_SECRET: set/,
