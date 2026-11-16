@@ -284,11 +284,15 @@ export class RepoChanges {
       if (outcome.headSha === null) return
       const files = diffStat(outcome.patch)
       const diffSha256 = createHash('sha256').update(outcome.patch).digest('hex')
+      // The diff is kept for the card's «Показать изменения»; a failed write loses only that, never
+      // the card or the head of the turn (ревью C2).
       if (outcome.patch.byteLength <= REPO_DIFF_KEPT_BYTES)
-        await storage.put('artifacts', repoDiffKey(taskId, turn), outcome.patch, {
-          contentType: 'text/x-diff',
-          sizeBytes: outcome.patch.byteLength,
-        })
+        await storage
+          .put('artifacts', repoDiffKey(taskId, turn), outcome.patch, {
+            contentType: 'text/x-diff',
+            sizeBytes: outcome.patch.byteLength,
+          })
+          .catch(() => logger?.warn(`repo_diff_not_kept task=${taskId} turn=${turn}`))
       const task = await db.task.findUnique({ where: { id: taskId }, select: { title: true } })
       // Build settings by the provider's paths and the repository's own too (ПР16): CODEOWNERS,
       // `ci_config_path`, the files of `include: local` — not only the domain's CI paths.

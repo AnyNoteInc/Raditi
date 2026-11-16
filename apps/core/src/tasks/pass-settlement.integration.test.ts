@@ -190,6 +190,28 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     expect(await settlement().settle(ref(task), completed())).toBe('skipped')
   })
 
+  it('writes the head of a turn with a repository with the move, before the queue goes on', async () => {
+    // Ревью C1: the next pass the drain starts reads the head from the turns that stand; a head
+    // written only with the card after the move let it move the chat's ref back.
+    const task = await dialog()
+    const baseSha = 'a'.repeat(40)
+    const headSha = 'b'.repeat(40)
+
+    expect(
+      await settlement().settle(ref(task), {
+        ...completed({ change_type: 'none' }),
+        repoHead: { baseSha, headSha },
+      } as PassEnding),
+    ).toBe('moved')
+
+    expect(
+      await db.taskTurn.findFirstOrThrow({
+        where: { taskId: task.taskId, turnNo: 1 },
+        select: { baseSha: true, headSha: true },
+      }),
+    ).toEqual({ baseSha, headSha })
+  })
+
   it('asks the agent question and charges the pass that asked', async () => {
     const task = await dialog()
 
