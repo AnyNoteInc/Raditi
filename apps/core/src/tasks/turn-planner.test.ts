@@ -762,5 +762,8 @@ describe('a pass of a run of a scheduled task (docs/plan/82-scheduled-tasks.md, 
     expect(instructions).not.toContain(CHAT_TITLE_SECTION)
     const plain = await planned(facts({ requests: words }))
     expect(plain.request.context.instructions).not.toContain('## A run of a scheduled task')
+    // Its notes of memory are only proposed (docs/plan/84-projects.md, ПР19).
+    expect(plan.unattended).toBe(true)
+    expect(plain.unattended).toBe(false)
   })
 })

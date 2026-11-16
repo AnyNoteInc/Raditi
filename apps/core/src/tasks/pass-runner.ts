@@ -416,6 +416,7 @@ export class PassRunner {
     if (ending.kind === 'completed' && answer === 'moved')
       await this.deps.memoryChanges?.apply(job.taskId, ending.turn, refusesText, {
         remember: plan.remember,
+        unattended: plan.unattended,
         ...(evidence ? { evidence } : {}),
         repository: plan.requirements.repository,
       })

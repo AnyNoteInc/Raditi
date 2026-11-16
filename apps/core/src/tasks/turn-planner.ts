@@ -249,6 +249,11 @@ export type PassPlan =
        * agent may be active at once only then.
        */
       remember: boolean
+      /**
+       * Nobody watches the pass: a run of a scheduled task before its client wrote (Зп27). Its notes
+       * of memory are only proposed (docs/plan/84-projects.md, ПР19).
+       */
+      unattended: boolean
     }
   /** The key cannot cover a first call: the platform asks «Продолжить?» (Р8). */
   | { kind: 'ceiling'; question: Extract<FeedQuestionPayload, { kind: 'ceiling' }> }
@@ -670,6 +675,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     turn,
     requirements: { ...requirements },
     remember: !action && askedToRemember(passWordsOf(facts)),
+    unattended: Boolean(facts.unattended),
   }
 }
 
