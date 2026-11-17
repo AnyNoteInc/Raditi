@@ -24,6 +24,7 @@ import {
 import { readWorkspaceEnvValuesToRefuse } from '../workspace-env/workspace-env-values.ts'
 import type { GitAuthSource } from './git-auth-source.ts'
 import type { GitProviderFactory } from './git-jobs.ts'
+import { accessSecrets, openGitOperation, type GitOperation } from './git-operation.ts'
 import type { ResolvePublicHost } from './public-host.ts'
 import { endWaitingMerges } from './repo-actions.ts'
 
@@ -62,6 +63,11 @@ export interface RepoCiOptions {
   provider: GitProviderFactory
   /** The values of the workspace's variables, to mask in logs. */
   secrets: Pick<SecretStore, 'kvRead'>
+  /**
+   * The presses «Принять, когда сборка пройдёт» the platform waits for itself (ПР15), read again
+   * after the merge requests of a repository (RepoActions.continueWaits).
+   */
+  waits?: (projectRepositoryId: string) => Promise<unknown>
   logger: { log(line: string): void; warn(line: string): void }
   now?: () => Date
 }
@@ -75,7 +81,16 @@ const repoSelect = {
   providerRepoId: true,
   defaultBranch: true,
   mirrorState: true,
-  connection: { select: { id: true, workspaceId: true, kind: true, host: true, state: true } },
+  connection: {
+    select: {
+      id: true,
+      workspaceId: true,
+      kind: true,
+      host: true,
+      state: true,
+      installationId: true,
+    },
+  },
 } as const
 
 interface RepoRow {
@@ -93,8 +108,11 @@ interface RepoRow {
     kind: string
     host: string
     state: string
+    installationId: bigint | null
   } | null
 }
+
+type Operation = GitOperation & { ref: RepoRef }
 
 const iso = (date: Date | null | undefined) => (date ? date.toISOString() : null)
 
@@ -153,6 +171,8 @@ export class RepoCi {
                   },
                 },
               },
+              // A press «Принять, когда сборка пройдёт» the platform waits for (ПР15).
+              { actions: { some: { kind: 'merge', state: 'waiting' } } },
             ],
           },
         ],
@@ -190,9 +210,15 @@ export class RepoCi {
     try {
       const op = await this.#operation(repo)
       if (op === null) return false
-      const defaultChanged = await this.#pollRuns(repo, op)
-      await this.#pollRequests(repo, op, now)
-      if (defaultChanged) await this.#deployActions(repo, op)
+      try {
+        const defaultChanged = await this.#pollRuns(repo, op)
+        await this.#pollRequests(repo, op, now)
+        if (defaultChanged) await this.#deployActions(repo, op)
+      } finally {
+        await op.close()
+      }
+      // A merge the platform waits for writes: it takes its own access (RepoActions).
+      if (repo.connection !== null) await this.#o.waits?.(repo.id)
       return true
     } catch (error) {
       const code = isDomainError(error) ? error.code : 'unknown'
@@ -201,9 +227,8 @@ export class RepoCi {
     }
   }
 
-  async #operation(
-    repo: RepoRow,
-  ): Promise<{ provider: GitProvider; auth: GitAuth; ref: RepoRef; grant: GitGrant } | null> {
+  /** An operation of reading on the repository, by its connection or anonymously by a link. */
+  async #operation(repo: RepoRow): Promise<Operation | null> {
     let grant: GitGrant = { kind: 'anonymous' }
     let kind = repo.provider as RepoProviderKind
     if (repo.connection !== null) {
@@ -212,17 +237,20 @@ export class RepoCi {
       kind = gitConnectionProviders[connectionKind]
       grant = await this.#o.auth.grantFor({ ...repo.connection, kind: connectionKind })
     }
-    const address = await this.#o.resolvePublic(repo.host)
-    const provider = this.#o.provider({ kind, host: repo.host, address })
-    const auth: GitAuth =
-      grant.kind === 'token' ? { kind: 'bearer', token: grant.token } : { kind: 'anonymous' }
     const ref: RepoRef = {
       provider: kind,
       host: repo.host,
       path: repo.path,
       ...(repo.providerRepoId === null ? {} : { providerRepoId: repo.providerRepoId }),
     }
-    return { provider, auth, ref, grant }
+    const op = await openGitOperation(this.#o, {
+      kind,
+      host: repo.host,
+      grant,
+      repo: ref,
+      access: 'read',
+    })
+    return { ...op, ref }
   }
 
   /** The newest runs; true when the newest run of the default branch is new or changed. */
@@ -378,12 +406,14 @@ export class RepoCi {
       })
       // «Принять, когда сборка пройдёт» (ПР15; slice 84.22): the press waits until the provider
       // merged the request — or ends when the wait was taken off or the request closed.
+      // The platform's own waits (GitHub, ПР15) read the checks themselves after this poll.
       if (pr.state === 'merged' || pr.state === 'closed' || !pr.autoMerge)
         await endWaitingMerges(prisma, {
           projectRepositoryId: repo.id,
           number: request.number,
           merged: pr.state === 'merged',
           now,
+          ...(pr.state === 'merged' || pr.state === 'closed' ? {} : { only: 'provider' as const }),
         })
     }
   }
@@ -397,7 +427,11 @@ export class RepoCi {
     if (repo === null || repo.mirrorState !== 'ready') return
     const op = await this.#operation(repo)
     if (op === null) return
-    await this.#deployActions(repo, op)
+    try {
+      await this.#deployActions(repo, op)
+    } finally {
+      await op.close()
+    }
   }
 
   async #deployActions(
@@ -455,8 +489,13 @@ export class RepoCi {
       if (repo === null) throw new Error('no repository')
       const op = await this.#operation(repo)
       if (op === null) throw new Error('the connection is not ok')
-      const raw = await op.provider.getJobLog(op.auth, op.ref, jobId, { tailBytes: LOG_READ_BYTES })
-      const values = await this.#maskValues(repo, op.grant)
+      let raw: { text: string; truncated: boolean }
+      try {
+        raw = await op.provider.getJobLog(op.auth, op.ref, jobId, { tailBytes: LOG_READ_BYTES })
+      } finally {
+        await op.close()
+      }
+      const values = await this.#maskValues(repo, op)
       const masked = maskCiLog(raw.text, values)
       await mark({
         state: 'ready',
@@ -471,7 +510,7 @@ export class RepoCi {
   }
 
   /** What a kept log never holds: the values of the workspace's variables and the access used. */
-  async #maskValues(repo: RepoRow, grant: GitGrant): Promise<string[]> {
+  async #maskValues(repo: RepoRow, op: Pick<GitOperation, 'access'>): Promise<string[]> {
     const names = await this.#o.prisma.workspaceEnvVar.findMany({
       where: { workspaceId: repo.workspaceId },
       select: { name: true },
@@ -481,7 +520,7 @@ export class RepoCi {
       repo.workspaceId,
       names.map((row) => row.name),
     )
-    if (grant.kind === 'token') values.push(grant.token)
+    values.push(...accessSecrets(op.access))
     return values
   }
 

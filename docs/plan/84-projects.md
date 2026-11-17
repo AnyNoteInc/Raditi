@@ -2014,3 +2014,83 @@ GitHub сливает синхронным `PUT …/merge` с `sha`; `merge-asyn
 - **Подсказка о репозитории в строке чата проекта** (§4.8, ревью P9). `task.list` и поиск отдают у каждого чата `repo` — состояние его ветки в репозитории, который сейчас у проекта: `state` (`project_repo_branches.state`), `sent` (голова чата — последний стоящий ход с ней — у клиента или ничего не стоит) и состояние новейшего запроса на слияние ветки; одним коррелированным подзапросом в запросе списка, без чтения на строку. Строки панели «Чаты» и «Чатов проекта» говорят: «изменения не отправлены», «запрос на слияние открыт», «черновик запроса на слияние», «принято в основную ветку», «запрос на слияние закрыт», «отправлено в ветку» (`listRepoHint`). Номер запроса (`!37` / `#37`) в строке не пишется: его форму знает только адаптер. Тесты — `repo-push-db.test.ts` (tRPC на PostgreSQL), `dialog-list.test.tsx` и `project-view.test.tsx`.
 
 **Проверки** (macOS, Docker Desktop): `pnpm gates` — код 0 (`@repo/domain` 5 016, `core` 1 355 и 287 пропущены, `mcp` 528 и 32 пропущены, `@repo/trpc` 499 и 173 пропущены, web 2 515 и 3 пропущены; архитектура — 2 469 модулей, нарушений нет; `test:infra` — 601, 593 прошли и 8 пропущены); `pnpm verify:db` — код 0: 742 проверки; наборы: база 783, `core` 1 665 и 1 пропущен, `llm` 598, `mcp` 560, `preview` 52, billing 1 399, tRPC 672, web 2 518. `verify:projects` не запускался.
+
+### Результат 84.25 (16.11.2026)
+
+Ветка `feat/github-app` от `origin/main` `96e00a5e` (v1.63.4 в production). GitHub App Радити ещё не зарегистрирован: всё сделано и проверено на подделках HTTP, а «Подключить GitHub» в production показывает «Скоро», пока рендер не отдаёт группу `kv/platform/github-app` (её отдают только все шесть полей вместе, `infra/server/README.md`, «Репозитории проектов»). Вне production приложение работает с подделками `RADITI_FAKE_GITHUB_API_URL` и `RADITI_FAKE_GITHUB_WEB_URL`.
+
+**Сделано.**
+- **Порт** (`packages/domain/src/ports/git-provider.ts`). `issueCredentials(grant, repo | null, …)`: `null` — операция на всю установку (синхронизация списка). `support.checksWait` — платформа сама ждёт проверок, где у провайдера нет своего ожидания (GitHub). Необязательные методы `personRights` (права человека, по его id у провайдера), `branchRules` (защита ветки и обязательные проверки) и `headChecks` («сборка прошла» по ПР15). `GitConnect.verifyInstallation` возвращает `VerifiedInstallation`: установка, её аккаунт, проверивший пользователь и репозитории, где он может отправлять. `repoProviderOffers` получил `checksWait` и `workflowDispatch`; рядом — `repoOffersWhenGreen` и `repoOffersDeploy`. Новые отказы — `REPO_NO_REQUIRED_CHECKS` и `REPO_CHECKS_FAILED` со своими текстами. `githubOffered(configured)`; `gitConnectionSignsIn.github_app = true`.
+- **Адаптер `github.ts`.**
+  - JWT приложения: RS256 через `node:crypto`, `iat` на минуту назад, срок 9 минут; ключ в ошибку не попадает.
+  - Токен установки — `POST /app/installations/{id}/access_tokens` с `repository_ids` одной операции. Права: чтение — metadata, contents, pull_requests, actions, checks и statuses; запись — contents, pull_requests и actions, checks и statuses на чтение. `workflows: write` — только при `workflows: true`. Git получает пользователя `x-access-token`; `revoke` — `DELETE /installation/token`, один раз.
+  - `personRights`: `GET /user/{id}` → логин → `collaborators/{login}/permission`. Ответ о другом id (логин заняли) прав не даёт.
+  - `branchRules`: классическая защита из `GET …/branches/{b}` и наборы правил `GET …/rules/branches/{b}`.
+  - Состояние проверок: наборы проверок (без тех, в которых не прошло ни одной проверки), проверки и статусы головы; `getPullRequest` теперь отдаёт `checks`.
+  - Запрос на слияние: открытие (`POST …/pulls`), закрытие (`PATCH`). Слияние — `PUT …/merge` с `sha`: 409 → `REPO_CHANGED`, 405 и 422 → `REPO_NOT_MERGEABLE`. Удаляется только ветка этого же репозитория, ветка форка — никогда.
+  - Журнал задания: одна переадресация, только `https` на хосты хранилища Actions, без доступа и с хвостом.
+  - Выкладка: `listDeployActions` берёт активные workflow головы основной ветки с `workflow_dispatch` вне комментариев, `startDeploy` — `…/dispatches` с `ref` (204 этой версии API, 200 с `workflow_run_id` — версии 2026-03-10).
+  - `listRepositories` установки — `GET /installation/repositories`.
+  - Повтор и отмена сборки — 84.26.
+- **Транспорт.** Метод `PATCH`; переадресацию по `limits.redirect: 'return'` получает вызывающий, сам транспорт за ней не идёт.
+- **`connect.ts`, GitHub.** `exchangeCode` — с `code_verifier` и `redirect_uri`; отказ GitHub приходит ответом 200 с `error`, и это ошибка. `refreshAccess`: `bad_refresh_token` → `{ reauth: true }`. `signedInUser` — `GET /user`. `verifyInstallation(userToken, id)`: установка ищется среди `GET /user/installations` этого пользователя (подделанный id — `null`), репозитории — `GET /user/installations/{id}/repositories`, остаются только те, где есть `permissions.push`, `maintain` или `admin`.
+- **web.**
+  - `GET /api/git/github/start?project=<id>` проверяет проект и запечатывает `state` и PKCE в cookie `raditi_github_sign_in` (путь `/api/git/github`, `HttpOnly`, `SameSite=Lax`, 10 минут), затем ведёт на `/apps/<slug>/installations/new?state=…`.
+  - `GET /api/git/github/callback` сначала принимает возврат установки (Setup URL): `installation_id` кладётся в cookie, браузер уходит на `/login/oauth/authorize` со своими `state` и PKCE.
+  - Потом тот же маршрут принимает возврат входа с `code`: `state` должен совпасть с cookie, пользователь — тот же. Дальше обмен кода, `verifyInstallation` и `connectGithubApp`; токен пользователя забыт.
+  - `setup_action=request` — «Запрос отправлен владельцу организации в GitHub»; без cookie — «Начните подключение из Радити» (`git=expired`).
+  - `connectGithubApp` (`@repo/trpc`) пишет `git_connections` (`github_app`, `installation_id`, `github_user_id`, аккаунт установки, `ok`, без ссылки на Vault) и сразу список выбора — только репозитории с `push`; повтор того же аккаунта обновляет список.
+  - Кабинет: «Подключить GitHub» в меню «Контекст» и в окне создания проекта — только когда `available.github`; окно подключения открывается на GitHub, кнопка «Установить в GitHub». Возврат `?git=connected&connection=<id>` сразу открывает выбор репозитория; у отказов GitHub свои тексты.
+  - «Выкатить» — и для `workflow_dispatch`, со словами «Запустится выбранный процесс GitHub Actions…».
+- **core.**
+  - `GitAuthSource` для `github_app` выдаёт `{ kind: 'github_installation' }`. Ключ читается из файла `GITHUB_APP_PRIVATE_KEY_FILE` на каждую операцию, поэтому новый ключ работает без перезапуска.
+  - `openGitOperation` (`apps/core/src/git/git-operation.ts`): адрес, адаптер и доступ операции из гранта, закрытие с отзывом. На нём теперь все задания очереди `git`, нажатия и опрос (вместо `grant.kind === 'token'` в трёх местах). Журналы маскируют секрет выданного доступа (`accessSecrets`).
+  - Синхронизация подключения, которое действует от имени установки (`github_user_id`): аккаунт остаётся тем, с которым установка проверена, `GET /user` не зовётся, в список выбора попадают только репозитории, где у этого человека есть `push`.
+  - `RepoActions` перед каждой отправкой, запросом, слиянием и выкладкой проверяет права человека: на отправку и запрос — `push`; на слияние и выкладку в защищённую основную ветку — `maintain` (`REPO_NOT_ALLOWED`). `workflows` попадает в доступ только у `ci_push`.
+  - «Принять, когда сборка пройдёт» у провайдера с `checksWait`:
+    - у основной ветки нет обязательных проверок — `REPO_NO_REQUIRED_CHECKS`;
+    - проверки ещё идут — нажатие `waiting` с `result.wait = 'platform'` и головой карточки;
+    - проверки упали — `REPO_CHECKS_FAILED`;
+    - проверки прошли — слияние сразу.
+  - Ожидающие нажатия читает `RepoActions.continueWaits` после каждого опроса репозитория. Токен проверяется на момент нажатия, права и запрос на слияние — заново. Голова сдвинулась — `REPO_CHANGED`; запрос слили вне Радити — `done`; ожидание больше 7 дней — `REPO_AUTO_MERGE_OFF`. Тик опроса берёт и репозитории с ожидающими нажатиями.
+  - `endWaitingMerges` с `only: 'provider'` не трогает ожидания платформы, когда у провайдера автослияние снято. «Отправить в ветку» снимает и ожидания платформы.
+  - «Выкатить» — `workflow_dispatch` головы основной ветки, голова сверяется перед запуском. `fakedGithubCom` направляет git к github.com на подделку стенда, только вне production.
+- **Документы.** README сервера: настройки регистрации — Callback URL и Setup URL на один маршрут, «Redirect on update», «Request user authorization (OAuth) during installation» — **выключено**, срок токенов пользователя. Также roadmap P22 и абзац «Проекты» в CLAUDE.md.
+
+**Отступления.**
+- **Вход в два шага.** План (§4.3) вёл возврат установки сразу к обмену `code`, README 84.16 — с «Request user authorization during installation». При этом флажке GitHub сам ведёт на вход без `state` и PKCE Радити (документация «Generating a user access token when a user installs your app»). Поэтому вход в два шага, а флажок выключен: `state` из адреса установки не нужен, его проверяет второй шаг.
+- **Порт.** Форма методов отличается от §4.5: `personRights` вместо сверки внутри `issueCredentials`, `branchRules` и `headChecks` — отдельные методы, `verifyInstallation` отдаёт `RepositoryInfo`.
+- **Список выбора** пишет web при подключении: токен пользователя после возврата забыт, а `core` пересобирает список правами человека при «Обновить».
+- **«Принять, когда сборка пройдёт»** карточка GitHub предлагает всегда: web провайдера не зовёт и обязательных проверок не знает. Отказ без них — в `core`, строкой ленты.
+- **Выкладка в защищённую основную ветку** требует `maintain`, как слияние.
+- **Автослияние GitHub** (GraphQL `enablePullRequestAutoMerge`) не используется: своё ожидание по ПР15. `merge-async` — тоже нет, слияние синхронным `PUT …/merge`.
+- **Production** закрыт только отсутствием секретов, по указанию к срезу. Документы 84.16а с GitHub Inc. не сделаны: вопрос 4 владельцу.
+- **Стенд `verify:projects` не расширен.** Подделке GitHub нужны git smart HTTP на `github.com:443`, страницы установки и входа, токены установок с правами и опрос проверок — по объёму это подделка GitLab, около 800 строк, и прогоны около 10 минут. Основной путь (установка → выбор → ход → отправка → запрос → слияние) держат тесты на подделках HTTP. Тест «подделка отклоняет `.github/workflows` и `.github/actions/*` без `workflows`» заменён проверкой прав выданного токена (`workflows` только у `ci_push`). Отказ при отправке делает сам GitHub, и `.github/actions/*` по его записи в changelog право `workflows` не закрывает: этот путь держит только карточка ПР16.
+
+**Проверки.**
+- `@repo/git-providers` — 100 тестов (+23 в `github-app.test.ts`): JWT проверяется открытым ключом; права токенов, `workflows`, отзыв один раз; права человека — чтение, запись, `maintain`, чужой id; защита ветки и наборы правил; «сборка прошла»; слияние 409, 405, без своего ожидания, ветка форка; журнал — переадресация только в хранилище Actions, без доступа; `workflow_dispatch`; подделанный `installation_id` → `null`; только репозитории с `push`; обмен с `code_verifier`, `bad_verification_code`.
+- `core` на одноразовой PostgreSQL — новый `github-app.integration.test.ts`, 8 тестов: слияние токеном одной установки, суженным до репозитория и отозванным после; участник с правом отправки не сливает в защищённую `main`; участник с правом чтения — синхронизация не предлагает ни одного репозитория, слияние и «Открыть запрос на слияние» отклонены до GitHub; синхронизация оставляет только репозитории с `push`; ожидание платформы — `waiting`, токен истёк, опрос сливает после проверок; проверки упали или голова сдвинулась — отказ без слияния; без обязательных проверок — `REPO_NO_REQUIRED_CHECKS`; «Выкатить» запускает workflow, сдвинутая `main` — `REPO_CHANGED`. Все наборы `apps/core/src/git` — 59 тестов (подделка провайдера в `git-jobs.integration.test.ts` получила выдачу доступа).
+- web — `github-sign-in.test.ts`, 9 тестов: cookie и `state`; возврат без cookie; переход ко входу с PKCE; подключение; подделанный `installation_id`; чужой `state`, код без установки, чужой пользователь; `setup_action=request`; поддельная cookie. Компоненты: «Подключить GitHub» открывает окно на GitHub и ведёт на `start`, без приложения — «Скоро»; «Выкатить» GitHub — своими словами.
+- `@repo/trpc` — `git-db.test.ts` +1: подключение установки, список без лишнего репозитория, `attach` чужого отклонён, без приложения — `GIT_CONNECT_UNAVAILABLE`.
+- `pnpm gates` — код 0: domain 5 016, `@repo/git-providers` 100, `@repo/trpc` 499 и 173 пропущены, web 2 524 и 3 пропущены, `core` 1 353 и 291 пропущены; `pnpm check-architecture` — 2 477 модулей, нарушений нет (первый прогон нашёл цикл `git-jobs.ts` ↔ `git-operation.ts`, тип фабрики перенесён).
+- `pnpm verify:db` — код 0: 742 проверки обновления и общего пользователя; наборы: база 783, `core` 1 667 и 1 пропущен, `llm` 598, `mcp` 560, `preview` 52, billing 1 399, tRPC 672, web 2 527. `pnpm verify:projects` не запускался: стенд не менялся.
+
+**Не проверено: факты GitHub, которых документация не подтверждает или которые не сверялись с настоящим GitHub.**
+- Передаёт ли GitHub `state` из `installations/new` в Setup URL. Вход на это не опирается.
+- Приходит ли возврат с `setup_action=update` для уже установленного приложения, когда включён «Redirect on update».
+- Хосты переадресации журнала: `*.actions.githubusercontent.com` и `productionresultssa<N>.blob.core.windows.net` — по памяти. Другой хост — отказ, журнал не читается.
+- Работает ли `GET /user/{account_id}` с токеном установки.
+- Видна ли `protection.required_status_checks` в «Get a branch» с правом contents на чтение, без administration. Если нет, обязательные проверки известны только из наборов правил, и «Принять, когда сборка пройдёт» откажет `REPO_NO_REQUIRED_CHECKS`.
+- Права, которые нужны `rules/branches`.
+- Набор проверок с `latest_check_runs_count = 0` не считается ожиданием.
+- Черновой запрос на слияние в закрытом репозитории бесплатного плана, вероятно, отклоняется (422).
+- Подтверждено документацией (context7, docs.github.com): `repository_ids` и `permissions` токена установки, срок 1 час; PKCE у входа GitHub App; предупреждение о подделке `installation_id` в Setup URL; ответ `collaborators/{u}/permission`; `rules/branches/{b}`; 200 вместо 204 у `workflow_dispatch` с версии API 2026-03-10.
+- Не проверялись: настоящий GitHub, Linux и `runsc`, стенд.
+
+**Открыто.**
+- Регистрация GitHub App и шесть полей `platform-secrets.mjs set github-app …` — действие владельца.
+- Документы 84.16а с GitHub Inc. — вопрос 4.
+- Стенд с подделкой GitHub.
+- 84.26: вебхуки, повтор и отмена сборок, отмена слиянием.
+- Окно между сверкой головы основной ветки и `workflow_dispatch`: запуск идёт по имени ветки, а не по SHA.
+- Ожидание платформы занимает опрос раз в 30 с на репозиторий с ожидающим нажатием.

@@ -5,6 +5,7 @@ import {
   gitConnectionReasonTexts,
   gitServerHostOf,
   repoProviderBrands,
+  type GitConnectionKind,
   type GitConnectionReason,
 } from '@repo/domain/repo'
 import Alert from '@mui/material/Alert'
@@ -294,6 +295,13 @@ function LinkForm({
 
 type Way = 'github' | 'gitlab' | 'gitlab-self'
 
+/** The way a connection that signs in on a provider's page is renewed (rule 8: a table). */
+const signInWays: Readonly<Record<GitConnectionKind, Way>> = Object.freeze({
+  github_app: 'github',
+  gitlab_oauth: 'gitlab',
+  gitlab_token: 'gitlab-self',
+})
+
 /**
  * «Подключить репозиторий» (P-git-connect): GitHub — «Скоро» until Э10; GitLab.com — a sign-in
  * (`/api/git/gitlab/start`), «Скоро» where it is not offered (ПР29); an own GitLab server — its
@@ -304,12 +312,15 @@ export function GitConnectDialog({
   onClose,
   project,
   onConnection,
+  way,
 }: {
   open: boolean
   onClose: () => void
   project: Pick<ProjectDetails, 'id' | 'name'>
   /** A connection to choose a repository of (P-git-repo-pick). */
   onConnection: (connectionId: string) => void
+  /** The way chosen when it opens: «Подключить GitHub» of the menu opens on GitHub. */
+  way?: 'github' | 'gitlab'
 }) {
   const titleId = useId()
   return (
@@ -319,6 +330,7 @@ export function GitConnectDialog({
         project={project}
         onClose={onClose}
         onConnection={onConnection}
+        initialWay={way ?? 'gitlab'}
       />
     </WindowFrame>
   )
@@ -329,18 +341,20 @@ function ConnectForm({
   project,
   onClose,
   onConnection,
+  initialWay,
 }: {
   titleId: string
   project: Pick<ProjectDetails, 'id' | 'name'>
   onClose: () => void
   onConnection: (connectionId: string) => void
+  initialWay: Way
 }) {
   const trpc = useTRPC()
   const list = useQuery(trpc.gitConnection.list.queryOptions())
   const addToken = useMutation(trpc.gitConnection.addToken.mutationOptions())
   const available = list.data?.available
   // GitLab.com by its sign-in when it is offered (ревью P2), else an own server by a token.
-  const [way, setWay] = useState<Way>('gitlab')
+  const [way, setWay] = useState<Way>(initialWay)
   const [host, setHost] = useState('')
   const [token, setToken] = useState('')
   const [shown, setShown] = useState(false)
@@ -354,6 +368,15 @@ function ConnectForm({
     event.preventDefault()
     event.stopPropagation()
     setError(null)
+    if (chosen === 'github') {
+      // The installation of the GitHub App on github.com; it comes back to this project (84.25).
+      setBusy(true)
+      // A route handler, not a page: a full navigation, the browser leaves for github.com from it.
+      const start = new URL('/api/git/github/start', window.location.href)
+      start.searchParams.set('project', project.id)
+      window.location.assign(start.href)
+      return
+    }
     if (chosen === 'gitlab') {
       setBusy(true)
       try {
@@ -459,7 +482,7 @@ function ConnectForm({
                 // opens its way again — the sign-in of gitlab.com, or the token of its server.
                 onClick={() => {
                   if (connection.state === 'ok') return onConnection(connection.id)
-                  if (connection.signsIn) return setWay('gitlab')
+                  if (connection.signsIn) return setWay(signInWays[connection.kind])
                   setWay('gitlab-self')
                   setHost(connection.host)
                 }}
@@ -654,7 +677,11 @@ function ConnectForm({
           {repoText.cancel}
         </Button>
         <Button type="submit" variant="contained" loading={busy} sx={{ minHeight: 44 }}>
-          {chosen === 'gitlab' ? repoText.signIn : repoText.check}
+          {chosen === 'github'
+            ? repoText.installGithub
+            : chosen === 'gitlab'
+              ? repoText.signIn
+              : repoText.check}
         </Button>
       </Box>
     </Box>
@@ -940,8 +967,10 @@ export function useRepositoryWindows(project: Pick<ProjectDetails, 'id' | 'name'
   const queryClient = useQueryClient()
   const attach = useMutation(trpc.projectRepo.attach.mutationOptions())
   const [linking, setLinking] = useState(false)
-  const [connecting, setConnecting] = useState(false)
+  const [connecting, setConnecting] = useState<'github' | 'gitlab' | null>(null)
   const [picking, setPicking] = useState<string | null>(null)
+  // Whether «Подключить GitHub» is offered here (84.25): the same list the window reads.
+  const offered = useQuery(trpc.gitConnection.list.queryOptions()).data?.available
   const [notice, setNotice] = useState<string | null>(null)
   // Back from gitlab.com: «Выберите репозиторий» of its newest sign-in, until it is closed.
   const [signedIn, setSignedIn] = useState(false)
@@ -954,12 +983,17 @@ export function useRepositoryWindows(project: Pick<ProjectDetails, 'id' | 'name'
       const git = params.get('git')
       const connect = params.get('connect')
       if (git === null && connect === null) return
-      if (connect === 'repository') setConnecting(true)
-      if (git === 'connected') setSignedIn(true)
+      if (connect === 'repository') setConnecting('gitlab')
+      // The return names its connection (GitHub, 84.25): its repositories are offered at once.
+      const connection = params.get('connection')
+      if (git === 'connected' && connection && /^[0-9a-f-]{36}$/.test(connection))
+        setPicking(connection)
+      else if (git === 'connected') setSignedIn(true)
       else if (git !== null && git in repoText.outcome)
         setNotice(repoText.outcome[git as keyof typeof repoText.outcome])
       params.delete('git')
       params.delete('connect')
+      params.delete('connection')
       const rest = params.toString()
       window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`)
     }, 0)
@@ -986,11 +1020,12 @@ export function useRepositoryWindows(project: Pick<ProjectDetails, 'id' | 'name'
         }}
       />
       <GitConnectDialog
-        open={connecting}
-        onClose={() => setConnecting(false)}
+        open={connecting !== null}
+        onClose={() => setConnecting(null)}
         project={project}
+        way={connecting ?? 'gitlab'}
         onConnection={(connectionId) => {
-          setConnecting(false)
+          setConnecting(null)
           setPicking(connectionId)
         }}
       />
@@ -1001,14 +1036,15 @@ export function useRepositoryWindows(project: Pick<ProjectDetails, 'id' | 'name'
         onClose={closePick}
         onBack={() => {
           closePick()
-          setConnecting(true)
+          setConnecting('gitlab')
         }}
       />
     </>
   )
   return {
     onLink: () => setLinking(true),
-    onGitlab: () => setConnecting(true),
+    onGitlab: () => setConnecting('gitlab'),
+    onGithub: offered?.github === true ? () => setConnecting('github') : undefined,
     notice,
     clearNotice: () => setNotice(null),
     windows,

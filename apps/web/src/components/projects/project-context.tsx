@@ -81,6 +81,7 @@ export function ProjectContext({ project }: { project: ProjectDetails }) {
             onText={() => setWriting(true)}
             onLink={repository.onLink}
             onGitlab={repository.onGitlab}
+            {...(repository.onGithub ? { onGithub: repository.onGithub } : {})}
             repositoryAttached={project.repository !== null}
           />
         </Box>
@@ -183,6 +184,7 @@ export function ProjectContext({ project }: { project: ProjectDetails }) {
         onWrite={() => setWriting(true)}
         onLink={repository.onLink}
         onGitlab={repository.onGitlab}
+        {...(repository.onGithub ? { onGithub: repository.onGithub } : {})}
         onRemoved={refresh}
       />
       <ContextTextDialog open={writing} onClose={() => setWriting(false)} onAdd={uploads.addText} />
@@ -203,6 +205,7 @@ export function ContextDialog({
   onWrite,
   onLink,
   onGitlab,
+  onGithub,
   onRemoved,
 }: {
   project: Pick<ProjectDetails, 'id' | 'repository'>
@@ -213,6 +216,7 @@ export function ContextDialog({
   /** The ways of a repository of «Добавить» (ревью P1); absent — «Скоро». */
   onLink?: () => void
   onGitlab?: () => void
+  onGithub?: () => void
   onRemoved: () => void
 }) {
   const fullScreen = useMediaQuery(useTheme().breakpoints.down('sm'))
@@ -385,6 +389,7 @@ export function ContextDialog({
             onText={onWrite}
             {...(onLink ? { onLink } : {})}
             {...(onGitlab ? { onGitlab } : {})}
+            {...(onGithub ? { onGithub } : {})}
             repositoryAttached={project.repository !== null}
           />
           <Box sx={{ flex: '1 1 auto' }} />

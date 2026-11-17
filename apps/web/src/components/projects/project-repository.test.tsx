@@ -228,7 +228,7 @@ describe('the repository of a project (84.17)', () => {
     expect(
       within(connect).getByText('Выберите, где лежит код проекта «Сайт пекарни «Колос»».'),
     ).toBeTruthy()
-    // GitHub is Э10, and GitLab.com is not offered here: both «Скоро».
+    // The GitHub App and GitLab.com are not offered here: both «Скоро».
     for (const name of [/^GitHub/, /^GitLab\.com/])
       expect(within(connect).getByRole('radio', { name }).getAttribute('aria-disabled')).toBe(
         'true',
@@ -284,6 +284,50 @@ describe('the repository of a project (84.17)', () => {
     expect(within(connect).getByRole('button', { name: 'Войти через GitLab' })).toBeTruthy()
     fireEvent.click(gitlab)
     expect(within(connect).getByRole('button', { name: 'Войти через GitLab' })).toBeTruthy()
+  })
+})
+
+describe('the GitHub App (84.25)', () => {
+  it('«Подключить GitHub» opens the window on GitHub and goes to install the app', async () => {
+    calls.list.mockResolvedValue({
+      connections: [],
+      available: { github: true, gitlabCom: false, ownServer: true },
+    })
+    const assign = vi.fn()
+    const location = window.location
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...location, href: 'https://raditi.example/projects/x', assign },
+    })
+    try {
+      wrap(<ProjectContext project={kolos()} />)
+      const menu = await openMenu()
+      const item = await within(menu).findByRole('menuitem', { name: /Подключить GitHub/ })
+      await waitFor(() => expect(item.getAttribute('aria-disabled')).toBeNull())
+      fireEvent.click(item)
+      const connect = await screen.findByRole('dialog', { name: 'Подключить репозиторий' })
+      expect(
+        within(connect)
+          .getByRole('radio', { name: /^GitHub/ })
+          .getAttribute('aria-checked'),
+      ).toBe('true')
+      fireEvent.click(within(connect).getByRole('button', { name: 'Установить в GitHub' }))
+      expect(assign).toHaveBeenCalledWith(
+        `https://raditi.example/api/git/github/start?project=${PROJECT_ID}`,
+      )
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: location })
+    }
+  })
+
+  it('«Подключить GitHub» is «Скоро» while the app is not offered', async () => {
+    wrap(<ProjectContext project={kolos()} />)
+    const menu = await openMenu()
+    expect(
+      within(menu)
+        .getByRole('menuitem', { name: /Подключить GitHub/ })
+        .getAttribute('aria-disabled'),
+    ).toBe('true')
   })
 })
 

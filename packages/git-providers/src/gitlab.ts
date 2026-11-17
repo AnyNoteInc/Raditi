@@ -148,6 +148,7 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
   const support: GitProviderSupport = {
     ciLint: true,
     autoMerge: true,
+    checksWait: false,
     manualJobs: true,
     workflowDispatch: false,
     projectHooks: true,
@@ -288,7 +289,7 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
     support,
 
     async issueCredentials(grant, repo, _access, opts) {
-      keyOf(repo)
+      if (repo !== null) keyOf(repo)
       const expiresAt = new Date(Date.now() + opts.ttlSeconds * 1000)
       if (grant.kind === 'anonymous') return { auth: { kind: 'anonymous' }, basic: null, expiresAt }
       if (grant.kind !== 'token') throw gitNotSupported('a GitHub installation on GitLab')

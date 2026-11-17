@@ -40,6 +40,7 @@ export const repoText = Object.freeze({
   cancel: 'Отмена',
   check: 'Проверить и подключить',
   signIn: 'Войти через GitLab',
+  installGithub: 'Установить в GitHub',
   addressRequired: 'Укажите адрес сервера',
   tokenRequired: 'Вставьте токен',
   signInFailed: 'Не удалось начать вход в GitLab. Попробуйте ещё раз.',
@@ -83,11 +84,18 @@ export const repoText = Object.freeze({
   secrets: (paths: readonly string[]) =>
     `В репозитории нашлись строки, похожие на пароли или ключи: ${paths.join(', ')}. Эти файлы агент не получит.`,
   connectedNotice: 'GitLab подключён — выберите репозиторий',
+  githubSignInFailed: 'Не удалось начать подключение GitHub. Попробуйте ещё раз.',
   outcome: {
     refused: 'Вход в GitLab не завершён. Попробуйте ещё раз.',
     expired: 'Начните подключение из Радити ещё раз.',
     failed: 'GitLab не подтвердил вход. Попробуйте ещё раз немного позже.',
     unavailable: 'Подключить GitLab.com сейчас нельзя.',
+    'github-refused':
+      'Подключение GitHub не завершено: приложение «Радити» не подтвердилось в ваших установках. Попробуйте ещё раз.',
+    'github-failed': 'GitHub не подтвердил вход. Попробуйте ещё раз немного позже.',
+    'github-unavailable': 'Подключить GitHub сейчас нельзя.',
+    'github-requested':
+      'Запрос отправлен владельцу организации в GitHub. Когда он одобрит установку, подключите репозиторий ещё раз.',
   },
   connectionState: {
     checking: 'Проверяем',

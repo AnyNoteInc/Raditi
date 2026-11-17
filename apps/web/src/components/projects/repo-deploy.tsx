@@ -28,8 +28,10 @@ export const deployText = Object.freeze({
   title: (branch: string) => `Выкатить основную ветку ${branch}?`,
   commit: (sha: string) => `Выкатится коммит ${sha.slice(0, 7)}.`,
   body: repoMergeTexts.deployBody,
+  /** A `workflow_dispatch` of GitHub (slice 84.25). */
+  workflowBody: repoMergeTexts.deployWorkflowBody,
   job: 'Задание выкладки',
-  none: 'У последней сборки основной ветки нет ручных заданий выкладки. Если ваша сборка выкатывает сама, она сделает это после принятия запроса на слияние.',
+  none: 'У основной ветки нет ручных заданий выкладки и процессов, которые запускаются вручную. Если ваша сборка выкатывает сама, она сделает это после принятия запроса на слияние.',
   loading: 'Читаем сборки основной ветки…',
   start: 'Запустить выкладку',
   cancel: 'Отмена',
@@ -187,7 +189,9 @@ export function DeployButton({ projectId }: { projectId: string }) {
                 ))}
               </RadioGroup>
               <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                {deployText.body}
+                {ready.actions.find((item) => item.id === chosen)?.kind === 'workflow_dispatch'
+                  ? deployText.workflowBody
+                  : deployText.body}
               </Typography>
             </>
           ) : null}

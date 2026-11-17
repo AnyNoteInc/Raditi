@@ -12,7 +12,7 @@ import { gitHostRefused, gitProviderFailed } from '@repo/domain'
 // time and size are bounded.
 
 export interface GitHttpRequest {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE'
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   url: URL
   headers?: Record<string, string>
   body?: string
@@ -31,6 +31,12 @@ export interface GitSendLimits {
   maxBytes: number
   /** Keep only the last bytes of a long body and read at most `maxBytes` of it. */
   tailBytes?: number
+  /**
+   * A redirect is answered to the caller instead of refused: only the log of a GitHub job, whose
+   * address is a redirect to a short-lived one the adapter checks and asks without the access
+   * (§4.5). Nothing follows a redirect by itself.
+   */
+  redirect?: 'return'
 }
 
 /** Connects to `address` for `request.url.hostname`; the default speaks TLS with node:https. */
@@ -98,7 +104,7 @@ export function createGitTransport(options: GitTransportOptions): GitTransport {
           assertGitUrl(request.url)
           const address = await addressOf(request.url.hostname)
           const response = await send(address, request, { ...base, ...limits })
-          if (response.status >= 300 && response.status < 400)
+          if (response.status >= 300 && response.status < 400 && limits?.redirect !== 'return')
             throw gitProviderFailed('a redirect is not followed', response.status)
           return response
         },

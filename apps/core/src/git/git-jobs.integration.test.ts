@@ -43,8 +43,19 @@ function info(overrides: Partial<RepositoryInfo> & { path?: string; id?: string 
   } satisfies RepositoryInfo
 }
 
-/** The adapter calls a job makes, answered by `answers`. */
+/**
+ * The adapter calls a job makes, answered by `answers`. The access of an operation is the stored
+ * token as it is (what the GitLab adapter issues), unless a test answers it itself.
+ */
 function fakeProvider(answers: Partial<GitProvider>) {
+  answers = {
+    issueCredentials: async () => ({
+      auth: { kind: 'bearer', token: 'synthetic-token' },
+      basic: { username: 'oauth2', password: 'synthetic-token' },
+      expiresAt: new Date(Date.now() + 60_000),
+    }),
+    ...answers,
+  }
   const calls: string[] = []
   const provider = new Proxy({} as GitProvider, {
     get: (_target, name: string) => {

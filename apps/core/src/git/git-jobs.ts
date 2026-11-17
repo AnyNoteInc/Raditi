@@ -6,6 +6,7 @@ import {
   ciIncludePaths,
   DEFAULT_CI_CONFIG_PATH,
   gitConnectionProviders,
+  gitAccessDenied,
   gitConnectionReauth,
   isDomainError,
   repositoryTooLarge,
@@ -30,11 +31,11 @@ import {
 } from '@repo/domain'
 import { errorMessage } from '@repo/observability'
 
-import { GIT_CREDENTIAL_TTL_SECONDS } from '../git-workspace/git-auth.ts'
 import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
 import { diffStat } from '../tasks/diff-stat.ts'
 import { buildPathsOf } from './build-paths.ts'
 import type { GitAuthSource } from './git-auth-source.ts'
+import { openGitOperation, type GitOperation, type GitProviderFactory } from './git-operation.ts'
 import type { ResolvePublicHost } from './public-host.ts'
 
 // The jobs of the queue `git` of slice 84.17 (docs/plan/84-projects.md, §4.3):
@@ -57,9 +58,7 @@ export const GIT_BRANCHES_KEPT = 100
 /** A first fetch still `syncing` after this stopped with its core (ревью C10). */
 export const REPO_SYNC_STUCK_MS = 30 * 60_000
 
-export interface GitProviderFactory {
-  (input: { kind: RepoProviderKind; host: string; address: string }): GitProvider
-}
+export type { GitProviderFactory } from './git-operation.ts'
 
 export interface GitJobsOptions {
   prisma: PrismaClient
@@ -83,6 +82,9 @@ interface ConnectionRow {
   kind: GitConnectionKind
   host: string
   state: string
+  installationId: bigint | null
+  /** The person a connection of an app acts for (ПР10); null — the connection is the person's own. */
+  githubUserId: string | null
 }
 
 const connectionSelect = {
@@ -91,6 +93,8 @@ const connectionSelect = {
   kind: true,
   host: true,
   state: true,
+  installationId: true,
+  githubUserId: true,
 } as const
 
 const tooLargeCodes = new Set(['REPOSITORY_TOO_LARGE', 'PUBLICATION_TOO_LARGE'])
@@ -128,12 +132,13 @@ export class GitJobs {
   }
 
   /** One operation on a host: its address, an adapter pinned to it and the access of a grant. */
-  async #operation(kind: RepoProviderKind, host: string, grant: GitGrant) {
-    const address = await this.#o.resolvePublic(host)
-    const provider = this.#o.provider({ kind, host, address })
-    const auth: GitAuth =
-      grant.kind === 'token' ? { kind: 'bearer', token: grant.token } : { kind: 'anonymous' }
-    return { address, provider, auth }
+  #operation(
+    kind: RepoProviderKind,
+    host: string,
+    grant: GitGrant,
+    repo: RepoRef | null,
+  ): Promise<GitOperation> {
+    return openGitOperation(this.#o, { kind, host, grant, repo, access: 'read' })
   }
 
   async #connection(id: string): Promise<ConnectionRow | null> {
@@ -221,15 +226,13 @@ export class GitJobs {
           kind: repo.connection.kind as GitConnectionKind,
         })
       }
-      const { address, provider, auth } = await this.#operation(ref.provider, ref.host, grant)
-      const info = await provider.getRepository(auth, ref)
-      if (info === null) throw repoUnreachable()
-      if (info.sizeBytes !== null && info.sizeBytes > mirrorLimits.repositoryBytes)
-        throw repositoryTooLarge('The provider names a repository above its limit')
-      const access = await provider.issueCredentials(grant, info.ref, 'read', {
-        ttlSeconds: GIT_CREDENTIAL_TTL_SECONDS,
-      })
+      const op = await this.#operation(ref.provider, ref.host, grant, ref)
+      const { address, provider, auth, access } = op
       try {
+        const info = await provider.getRepository(auth, ref)
+        if (info === null) throw repoUnreachable()
+        if (info.sizeBytes !== null && info.sizeBytes > mirrorLimits.repositoryBytes)
+          throw repositoryTooLarge('The provider names a repository above its limit')
         const heads = await this.#o.workspace.fetch({
           projectRepositoryId,
           remote: { cloneUrl: info.cloneUrl, pin: { host: ref.host, address }, access },
@@ -250,7 +253,7 @@ export class GitJobs {
           chatHead: chatBranch ? (heads.get(chatBranch) ?? null) : null,
         }
       } finally {
-        await access.revoke?.().catch(() => undefined)
+        await op.close()
       }
     } catch (error) {
       const code = isDomainError(error) ? error.code : 'unknown'
@@ -266,23 +269,36 @@ export class GitJobs {
   async syncConnection(connectionId: string): Promise<void> {
     const connection = await this.#connection(connectionId)
     if (connection === null || connection.state === 'suspended') return
-    let account: { login: string; id: string }
+    let account: { login: string; id: string } | null
     let items: RepositoryInfo[]
     try {
       const grant = await this.#o.auth.grantFor(connection)
-      const { provider, auth } = await this.#operation(
-        gitConnectionProviders[connection.kind],
-        connection.host,
-        grant,
-      )
-      account = await provider.whoAmI(auth)
-      items = []
-      let page: string | undefined
-      for (let read = 0; read < GIT_SYNC_PAGES; read++) {
-        const listed = await provider.listRepositories(auth, page)
-        items.push(...listed.items)
-        if (listed.next === null) break
-        page = listed.next
+      const kind = gitConnectionProviders[connection.kind]
+      const op = await this.#operation(kind, connection.host, grant, null)
+      try {
+        const { provider, auth } = op
+        const person = connection.githubUserId
+        // A connection of an app acts for the person who connected it (ПР10): its account is the
+        // one the installation was verified with, and it offers only the repositories where that
+        // person may push — the token of the installation reaches all of them.
+        account = person === null ? await provider.whoAmI(auth) : null
+        if (person !== null && !provider.personRights) throw gitAccessDenied()
+        items = []
+        let page: string | undefined
+        for (let read = 0; read < GIT_SYNC_PAGES; read++) {
+          const listed = await provider.listRepositories(auth, page)
+          items.push(...listed.items)
+          if (listed.next === null) break
+          page = listed.next
+        }
+        if (person !== null) {
+          const pushable: RepositoryInfo[] = []
+          for (const item of items)
+            if ((await provider.personRights!(auth, item.ref, person)).push) pushable.push(item)
+          items = pushable
+        }
+      } finally {
+        await op.close()
       }
     } catch (error) {
       const reason = reasonOf(error)
@@ -303,8 +319,9 @@ export class GitJobs {
         await tx.gitConnection.update({
           where: { id: connectionId },
           data: {
-            accountLogin: account.login.slice(0, 100),
-            accountId: account.id,
+            ...(account === null
+              ? {}
+              : { accountLogin: account.login.slice(0, 100), accountId: account.id }),
             state: 'ok',
             stateReason: null,
             checkedAt: now,
@@ -320,8 +337,8 @@ export class GitJobs {
             name: item.ref.path.split('/').at(-1)!.slice(0, 200),
             visibility: item.private ? 'private' : 'public',
             defaultBranch: item.defaultBranch,
-            // GitLab lists the projects of a membership; the right to push is checked again
-            // before every push by the provider itself (84.19).
+            // GitLab lists the projects of a membership; a connection of an app — only those its
+            // person may push to. The right is checked again before every push (84.19, ПР10).
             canPush: true,
             canHook: false,
             syncedAt: now,
@@ -362,13 +379,14 @@ export class GitJobs {
     if (row === null) return
     const grant = await this.#o.auth.grantFor(connection)
     const kind = gitConnectionProviders[connection.kind]
-    const { provider, auth } = await this.#operation(kind, connection.host, grant)
-    const names = await provider.listBranches(auth, {
-      provider: kind,
-      host: connection.host,
-      path: row.path,
-      providerRepoId,
-    })
+    const ref: RepoRef = { provider: kind, host: connection.host, path: row.path, providerRepoId }
+    const op = await this.#operation(kind, connection.host, grant, ref)
+    let names: string[]
+    try {
+      names = await op.provider.listBranches(op.auth, ref)
+    } finally {
+      await op.close()
+    }
     const kept = [row.defaultBranch, ...names.filter((name) => name !== row.defaultBranch)].slice(
       0,
       GIT_BRANCHES_KEPT,
@@ -433,28 +451,26 @@ export class GitJobs {
           kind: repo.connection.kind as GitConnectionKind,
         })
       }
-      const { address, provider, auth } = await this.#operation(ref.provider, ref.host, grant)
-      const info = await provider.getRepository(auth, ref)
-      // By a link: private and missing are one answer (REPO_LINK_PRIVATE); by a connection the
-      // repository went away from what it sees.
-      if (info === null) {
-        await mark({ mirrorState: repo.connection === null ? 'unreachable' : 'failed' })
-        return
-      }
-      const branch = repo.connection === null ? info.defaultBranch : repo.defaultBranch
-      await mark({
-        providerRepoId: info.ref.providerRepoId,
-        defaultBranch: branch,
-        webUrl: info.webUrl,
-      })
-      if (info.sizeBytes !== null && info.sizeBytes > mirrorLimits.repositoryBytes) {
-        await mark({ mirrorState: 'too_large' })
-        return
-      }
-      const access = await provider.issueCredentials(grant, info.ref, 'read', {
-        ttlSeconds: GIT_CREDENTIAL_TTL_SECONDS,
-      })
+      const op = await this.#operation(ref.provider, ref.host, grant, ref)
+      const { address, provider, auth, access } = op
       try {
+        const info = await provider.getRepository(auth, ref)
+        // By a link: private and missing are one answer (REPO_LINK_PRIVATE); by a connection the
+        // repository went away from what it sees.
+        if (info === null) {
+          await mark({ mirrorState: repo.connection === null ? 'unreachable' : 'failed' })
+          return
+        }
+        const branch = repo.connection === null ? info.defaultBranch : repo.defaultBranch
+        await mark({
+          providerRepoId: info.ref.providerRepoId,
+          defaultBranch: branch,
+          webUrl: info.webUrl,
+        })
+        if (info.sizeBytes !== null && info.sizeBytes > mirrorLimits.repositoryBytes) {
+          await mark({ mirrorState: 'too_large' })
+          return
+        }
         const heads = await this.#o.workspace.fetch({
           projectRepositoryId,
           remote: { cloneUrl: info.cloneUrl, pin: { host: ref.host, address }, access },
@@ -484,7 +500,7 @@ export class GitJobs {
           ciPaths: { ...own, includes },
         })
       } finally {
-        await access.revoke?.().catch(() => undefined)
+        await op.close()
       }
     } catch (error) {
       const code = isDomainError(error) ? error.code : 'unknown'
@@ -586,24 +602,29 @@ export class GitJobs {
           ...repo.connection,
           kind: repo.connection.kind as GitConnectionKind,
         })
-        const { provider, auth } = await this.#operation(kind, repo.host, grant)
-        if (provider.support.ciLint && provider.lintCi) {
-          const ref: RepoRef = {
-            provider: kind,
-            host: repo.host,
-            path: repo.path,
-            ...(repo.providerRepoId === null ? {} : { providerRepoId: repo.providerRepoId }),
+        const ref: RepoRef = {
+          provider: kind,
+          host: repo.host,
+          path: repo.path,
+          ...(repo.providerRepoId === null ? {} : { providerRepoId: repo.providerRepoId }),
+        }
+        const op = await this.#operation(kind, repo.host, grant, ref)
+        const { provider, auth } = op
+        try {
+          if (provider.support.ciLint && provider.lintCi) {
+            // A branch never sent is not at the client yet: the lint runs on the main branch.
+            const result = await provider.lintCi(
+              auth,
+              ref,
+              found.config.toString('utf8'),
+              branch.remoteSha !== null ? branch.branch : repo.defaultBranch,
+            )
+            lint = { valid: result.valid, errors: result.errors.map((e) => e.slice(0, 1000)) }
+            includes = ciIncludePaths(result.includes)
+            if (includes.some((path) => !ci.includes.includes(path))) found = await change(includes)
           }
-          // A branch never sent is not at the client yet: the lint runs on the main branch.
-          const result = await provider.lintCi(
-            auth,
-            ref,
-            found.config.toString('utf8'),
-            branch.remoteSha !== null ? branch.branch : repo.defaultBranch,
-          )
-          lint = { valid: result.valid, errors: result.errors.map((e) => e.slice(0, 1000)) }
-          includes = ciIncludePaths(result.includes)
-          if (includes.some((path) => !ci.includes.includes(path))) found = await change(includes)
+        } finally {
+          await op.close()
         }
       } catch (error) {
         const code = isDomainError(error) ? error.code : 'unknown'

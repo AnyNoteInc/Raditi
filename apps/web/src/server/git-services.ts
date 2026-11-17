@@ -89,6 +89,7 @@ export function gitServices(): GitServices | null {
           }
         })(),
         gitlabComConfigured: config.git.gitlabOauth !== null,
+        githubConfigured: config.git.githubApp !== null,
         // The cards of a repository (ПР13, ПР15): the same secret core checks every token by.
         confirmMac: (() => {
           const secret = config.git.repoConfirmSecret

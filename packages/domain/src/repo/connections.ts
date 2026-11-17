@@ -29,6 +29,16 @@ export function gitlabComOffered(appEnv: AppEnv, configured: boolean): boolean {
   return configured && (!isProduction(appEnv) || gitlabComPublishedInProduction)
 }
 
+/**
+ * Whether «Подключить GitHub» is offered (ПР10, ПР31; slice 84.25): whenever Raditi's GitHub App
+ * is configured — on the server its group of secrets is rendered only when all its fields are set
+ * (infra/server/README.md, «Репозитории проектов»). Until the app is registered the item says
+ * «Скоро» in production; outside production a stand's fake stands in for github.com.
+ */
+export function githubOffered(configured: boolean): boolean {
+  return configured
+}
+
 /** The provider a connection of each kind reaches: data, never a comparison (rule 8). */
 export const gitConnectionProviders: Readonly<Record<GitConnectionKind, RepoProviderKind>> =
   Object.freeze({ github_app: 'github', gitlab_oauth: 'gitlab', gitlab_token: 'gitlab' })
@@ -38,7 +48,7 @@ export const gitConnectionProviders: Readonly<Record<GitConnectionKind, RepoProv
  * back from it picks the newest of them (rule 8: a table, never a comparison of the kind).
  */
 export const gitConnectionSignsIn: Readonly<Record<GitConnectionKind, boolean>> = Object.freeze({
-  github_app: false,
+  github_app: true,
   gitlab_oauth: true,
   gitlab_token: false,
 })

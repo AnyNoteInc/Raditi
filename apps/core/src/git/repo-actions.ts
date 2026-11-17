@@ -35,14 +35,16 @@ import {
   repoConfirmInvalid,
   repoDeployGone,
   repoForeignCommits,
+  repoChecksFailed,
   repoMergeTargetChanged,
+  repoNoRequiredChecks,
+  repoNotAllowed,
   repoNothingToPush,
   repoNotMergeable,
   repoPushConflict,
   repoReadOnly,
   type GitAuth,
   type GitConnectionKind,
-  type GitGrant,
   type GitProvider,
   type PullRequest,
   type RepoActionArgs,
@@ -54,11 +56,11 @@ import {
   type RepoRef,
 } from '@repo/domain'
 
-import { GIT_CREDENTIAL_TTL_SECONDS } from '../git-workspace/git-auth.ts'
 import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
 import { buildPathsOf } from './build-paths.ts'
 import type { GitAuthSource } from './git-auth-source.ts'
 import type { GitProviderFactory } from './git-jobs.ts'
+import { openGitOperation, type GitOperation } from './git-operation.ts'
 import type { ResolvePublicHost } from './public-host.ts'
 
 // `git.action` (docs/plan/84-projects.md, ПР13–ПР15, §4.3, §4.4; slice 84.19): a row of
@@ -78,6 +80,13 @@ import type { ResolvePublicHost } from './public-host.ts'
 // reads the request merged, or the wait taken off. «Выкатить» (`deploy`) plays a manual job of the
 // newest build of the main branch only while the head of that branch is still the card's. Nothing
 // but a press of the client writes such a row: the agent and runs without a person never do (ПР19).
+// A connection of the GitHub App acts for an installation, not for a person (ПР10, slice 84.25):
+// before every push, request, merge and deploy core asks the provider what the person who connected
+// it may do in this repository — push for a push and a request, `maintain` for a merge or a deploy
+// into a protected branch. Where the provider has no wait of its own (GitHub), «Принять, когда
+// сборка пройдёт» is the platform's (ПР15): the press waits while `git.poll` reads the checks of the
+// head — the required checks of the main branch and every check suite — and merges with the head
+// expected once they passed; without required checks the wait is refused.
 
 /** A queued press older than this lost its job: it is put again while its token lives. */
 export const REPO_ACTION_REQUEUE_MS = 2 * 60_000
@@ -86,6 +95,12 @@ export const REPO_ACTION_REQUEUE_MS = 2 * 60_000
  * bounded (60 s a git command, the transport's time), so no live core holds one this long.
  */
 export const REPO_ACTION_LOST_MS = 15 * 60_000
+
+/** A press «Принять, когда сборка пройдёт» the platform waits for ends after this (ПР15). */
+export const REPO_MERGE_WAIT_MAX_MS = 7 * 24 * 60 * 60_000
+
+/** How a press of a merge waits for the build: the provider merges, or the platform does. */
+export type MergeWait = 'provider' | 'platform'
 
 /** Names of a branch tried at the client when the chat's own is taken there. */
 const NAME_TRIES = 5
@@ -114,7 +129,20 @@ interface ActionRow {
   args: unknown
   tokenSha256: string
   state: string
+  createdAt: Date
 }
+
+const actionSelect = {
+  id: true,
+  projectRepositoryId: true,
+  taskId: true,
+  createdById: true,
+  kind: true,
+  args: true,
+  tokenSha256: true,
+  state: true,
+  createdAt: true,
+} as const
 
 /** What a press left: kept in `repo_actions.result`, and the request the chat links to. */
 interface ActionResult {
@@ -146,16 +174,7 @@ export class RepoActions {
     const { prisma } = this.#o
     const row = (await prisma.repoAction.findUnique({
       where: { id: actionId },
-      select: {
-        id: true,
-        projectRepositoryId: true,
-        taskId: true,
-        createdById: true,
-        kind: true,
-        args: true,
-        tokenSha256: true,
-        state: true,
-      },
+      select: actionSelect,
     })) as ActionRow | null
     if (row === null) return
     // A row is taken once: another delivery of the job finds it running or ended.
@@ -213,16 +232,7 @@ export class RepoActions {
     const { prisma } = this.#o
     const now = this.#now()
     const ttl = new Date(now.getTime() - REPO_CONFIRM_TTL_SECONDS * 1000)
-    const select = {
-      id: true,
-      projectRepositoryId: true,
-      taskId: true,
-      createdById: true,
-      kind: true,
-      args: true,
-      tokenSha256: true,
-      state: true,
-    } as const
+    const select = actionSelect
     const waiting = await prisma.repoAction.findMany({
       where: {
         state: 'queued',
@@ -257,12 +267,19 @@ export class RepoActions {
     return { requeued: waiting.length, expired, lost }
   }
 
-  /** The token of the row, checked as web checked it, and its claims against the row (ПР15). */
-  #checkToken(row: ActionRow): { claims: RepoConfirmClaims; args: RepoActionArgs } {
+  /**
+   * The token of the row, checked as web checked it, and its claims against the row (ПР15). A
+   * press that waits for the build is checked again at the moment it was made (`at`): its token
+   * expired since, its HMAC and claims did not.
+   */
+  #checkToken(
+    row: ActionRow,
+    at: Date = this.#now(),
+  ): { claims: RepoConfirmClaims; args: RepoActionArgs } {
     if (this.#o.mac === null) throw repoConfirmInvalid()
     const args = repoActionArgsSchema.safeParse(row.args)
     if (!args.success) throw repoConfirmInvalid()
-    const claims = readRepoConfirmToken(args.data.token, this.#o.mac, this.#now())
+    const claims = readRepoConfirmToken(args.data.token, this.#o.mac, at)
     if (
       tokenSha256(args.data.token) !== row.tokenSha256 ||
       claims.userId !== row.createdById ||
@@ -334,6 +351,8 @@ export class RepoActions {
             host: true,
             state: true,
             createdById: true,
+            installationId: true,
+            githubUserId: true,
           },
         },
       },
@@ -346,46 +365,97 @@ export class RepoActions {
     return { project, repo, connection: repo.connection }
   }
 
-  /** The provider of the repository by the connection of the one who pressed, and its right. */
-  async #operation(repo: {
-    provider: string
-    host: string
-    path: string
-    providerRepoId: string | null
-    connection: { id: string; workspaceId: string; kind: string; host: string }
-  }) {
+  /**
+   * The provider of the repository by the connection of the one who pressed, the access of the
+   * operation to write, and their right (ПР10). The caller closes the operation.
+   */
+  async #operation(
+    repo: {
+      provider: string
+      host: string
+      path: string
+      providerRepoId: string | null
+      connection: {
+        id: string
+        workspaceId: string
+        kind: string
+        host: string
+        installationId: bigint | null
+        githubUserId: string | null
+      }
+    },
+    need: { right: 'push' | 'merge'; branch: string; workflows?: boolean },
+  ) {
     const ref: RepoRef = {
       provider: repo.provider as RepoProviderKind,
       host: repo.host,
       path: repo.path,
       ...(repo.providerRepoId === null ? {} : { providerRepoId: repo.providerRepoId }),
     }
-    const grant: GitGrant = await this.#o.auth.grantFor({
+    const grant = await this.#o.auth.grantFor({
       id: repo.connection.id,
       workspaceId: repo.connection.workspaceId,
       kind: repo.connection.kind as GitConnectionKind,
       host: repo.connection.host,
+      installationId: repo.connection.installationId,
     })
-    const address = await this.#o.resolvePublic(ref.host)
-    const provider = this.#o.provider({ kind: ref.provider, host: ref.host, address })
-    const auth: GitAuth =
-      grant.kind === 'token' ? { kind: 'bearer', token: grant.token } : { kind: 'anonymous' }
-    // The right of the one who connected it, at the provider, before anything is sent (ПР10).
-    const info = await provider.getRepository(auth, ref)
-    if (info === null) throw gitAccessDenied()
-    return { ref, grant, address, provider, auth, info }
+    const op = await openGitOperation(this.#o, {
+      kind: ref.provider,
+      host: ref.host,
+      grant,
+      repo: ref,
+      access: 'write',
+      ...(need.workflows ? { workflows: true } : {}),
+    })
+    try {
+      // The right of the one who connected it, at the provider, before anything is sent (ПР10).
+      const info = await op.provider.getRepository(op.auth, ref)
+      if (info === null) throw gitAccessDenied()
+      await this.#checkPerson(op, info.ref, repo.connection.githubUserId, need)
+      return { ref, address: op.address, provider: op.provider, auth: op.auth, info, op }
+    } catch (error) {
+      await op.close()
+      throw error
+    }
+  }
+
+  /**
+   * What the person a connection of an app acts for may do here (ПР10): push for a push and a
+   * merge request; for a merge or a deploy into a protected branch — `maintain`. A connection that
+   * is the person's own (a GitLab token, a GitLab sign-in) has nobody else to check: the provider
+   * refuses what its own access may not do.
+   */
+  async #checkPerson(
+    op: Pick<GitOperation, 'provider' | 'auth'>,
+    ref: RepoRef,
+    person: string | null,
+    need: { right: 'push' | 'merge'; branch: string },
+  ): Promise<void> {
+    if (person === null) return
+    if (!op.provider.personRights) throw gitAccessDenied()
+    const rights = await op.provider.personRights(op.auth, ref, person)
+    if (!rights.push) throw repoNotAllowed('push')
+    if (need.right !== 'merge' || rights.maintain) return
+    const rules = op.provider.branchRules
+      ? await op.provider.branchRules(op.auth, ref, need.branch)
+      : { protected: true }
+    if (rules.protected) throw repoNotAllowed('merge')
   }
 
   /**
    * «Принять в основную ветку» and «Принять, когда сборка пройдёт» (ПР15). The merge request is
    * read again: its target must still be what the card showed and the main branch (a target the
    * client changed after the card is refused), its source and its head the card's; the provider
-   * merges only with that head expected — a new head is its 409, REPO_CHANGED.
+   * merges only with that head expected — a new head is its 409, REPO_CHANGED. Where the provider
+   * has no wait of its own (`support.checksWait`), the platform waits: the required checks of the
+   * main branch and every check suite of the head; pending — the press waits, failed — refused,
+   * passed — merged now. `continuing` — a press that waits, read again by `git.poll`.
    */
   async #merge(
     row: ActionRow,
     claims: RepoConfirmClaims,
     merge: RepoMergeArgs,
+    continuing = false,
   ): Promise<ActionResult & { waiting: boolean }> {
     const { prisma } = this.#o
     const { repo, connection } = await this.#writableRepository(row, claims)
@@ -395,71 +465,153 @@ export class RepoActions {
       select: { sourceBranch: true, taskId: true },
     })
     if (cached === null || cached.taskId !== row.taskId) throw repoConfirmInvalid()
-    const { provider, auth, info } = await this.#operation({ ...repo, connection })
-    const whenGreen = merge.mode === 'when_green'
-    if (whenGreen && !provider.support.autoMerge) throw gitNotSupported('a merge when green')
-    const read = await provider.getPullRequest(auth, info.ref, number)
-    if (read === null || read.state === 'closed') throw repoNotMergeable()
-    if (read.state === 'merged') throw repoAlreadyMerged()
-    if (read.targetBranch !== claims.targetBranch || read.targetBranch !== repo.defaultBranch)
-      throw repoMergeTargetChanged()
-    if (read.sourceBranch !== cached.sourceBranch || read.headSha !== claims.headSha)
-      throw repoChanged()
-    // A chat's branch: the head is the commit Радити sent, nothing pushed past it (ревью,
-    // безопасность 4).
-    if (row.taskId !== null) {
-      const branch = await prisma.projectRepoBranch.findUnique({
-        where: { taskId: row.taskId },
-        select: { remoteSha: true, branch: true },
-      })
-      if (branch?.branch === read.sourceBranch && branch.remoteSha !== read.headSha)
-        throw repoForeignCommits()
-    }
-    if (read.state === 'draft') throw repoNotMergeable()
-    const merged = await provider.mergePullRequest(auth, info.ref, number, {
-      expectedHeadSha: claims.headSha,
-      deleteBranch: merge.deleteBranch,
-      whenGreen,
-    })
-    const now = this.#now()
-    const mergeSha = merged.mergeSha ?? null
-    await prisma.$transaction(async (tx) => {
-      await tx.projectMergeRequest.updateMany({
-        where: { projectRepositoryId: repo.id, number },
-        data:
-          merged.state === 'merged'
-            ? { state: 'merged', mergeSha, autoMerge: false, syncedAt: now }
-            : { autoMerge: true, syncedAt: now },
-      })
-      if (merged.state === 'merged')
-        await tx.projectRepoBranch.updateMany({
-          where: {
-            projectRepositoryId: repo.id,
-            branch: read.sourceBranch,
-            state: { in: ['pushed', 'closed'] },
-            ...(row.taskId === null ? {} : { taskId: row.taskId }),
-          },
-          data: { state: 'merged' },
+    const { provider, auth, info, op } = await this.#operation(
+      { ...repo, connection },
+      { right: 'merge', branch: repo.defaultBranch },
+    )
+    try {
+      const whenGreen = merge.mode === 'when_green'
+      const wait: MergeWait | null = !whenGreen
+        ? null
+        : provider.support.autoMerge
+          ? 'provider'
+          : provider.support.checksWait && provider.headChecks && provider.branchRules
+            ? 'platform'
+            : null
+      if (whenGreen && wait === null) throw gitNotSupported('a merge when green')
+      const read = await provider.getPullRequest(auth, info.ref, number)
+      if (read === null || read.state === 'closed') throw repoNotMergeable()
+      if (read.state === 'merged') throw repoAlreadyMerged()
+      if (read.targetBranch !== claims.targetBranch || read.targetBranch !== repo.defaultBranch)
+        throw repoMergeTargetChanged()
+      if (read.sourceBranch !== cached.sourceBranch || read.headSha !== claims.headSha)
+        throw repoChanged()
+      // A chat's branch: the head is the commit Радити sent, nothing pushed past it (ревью,
+      // безопасность 4).
+      if (row.taskId !== null) {
+        const branch = await prisma.projectRepoBranch.findUnique({
+          where: { taskId: row.taskId },
+          select: { remoteSha: true, branch: true },
         })
-    })
-    return {
-      waiting: merged.state === 'scheduled',
-      json: {
+        if (branch?.branch === read.sourceBranch && branch.remoteSha !== read.headSha)
+          throw repoForeignCommits()
+      }
+      if (read.state === 'draft') throw repoNotMergeable()
+      const json = {
         number,
         url: read.url,
         mode: merge.mode,
         deleteBranch: merge.deleteBranch,
-        mergeSha,
-      },
-      number,
-      url: read.url,
+      }
+      if (wait === 'platform') {
+        // «Сборка прошла» needs a check the main branch requires: a workflow of the agent's own
+        // branch could report success otherwise (ПР15, ревью).
+        const rules = await provider.branchRules!(auth, info.ref, read.targetBranch)
+        if (rules.requiredChecks.length === 0) throw repoNoRequiredChecks()
+        const checks = await provider.headChecks!(
+          auth,
+          info.ref,
+          claims.headSha,
+          rules.requiredChecks,
+        )
+        if (checks === 'failure') throw repoChecksFailed()
+        if (checks === 'pending')
+          return {
+            waiting: true,
+            json: { ...json, mergeSha: null, wait: 'platform', headSha: claims.headSha },
+            number,
+            url: read.url,
+          }
+      }
+      const merged = await provider.mergePullRequest(auth, info.ref, number, {
+        expectedHeadSha: claims.headSha,
+        deleteBranch: merge.deleteBranch,
+        whenGreen: wait === 'provider',
+      })
+      const now = this.#now()
+      const mergeSha = merged.mergeSha ?? null
+      await prisma.$transaction(async (tx) => {
+        await tx.projectMergeRequest.updateMany({
+          where: { projectRepositoryId: repo.id, number },
+          data:
+            merged.state === 'merged'
+              ? { state: 'merged', mergeSha, autoMerge: false, syncedAt: now }
+              : { autoMerge: true, syncedAt: now },
+        })
+        if (merged.state === 'merged')
+          await tx.projectRepoBranch.updateMany({
+            where: {
+              projectRepositoryId: repo.id,
+              branch: read.sourceBranch,
+              state: { in: ['pushed', 'closed'] },
+              ...(row.taskId === null ? {} : { taskId: row.taskId }),
+            },
+            data: { state: 'merged' },
+          })
+      })
+      if (continuing) this.#o.logger.log(`git.action ${row.id}: merged after its checks`)
+      return {
+        waiting: merged.state === 'scheduled',
+        json: { ...json, mergeSha, ...(wait === null ? {} : { wait }) },
+        number,
+        url: read.url,
+      }
+    } finally {
+      await op.close()
     }
   }
 
   /**
-   * «Выкатить» (ПР15): a manual job of the newest build of the main branch. The head of the main
-   * branch is read again first — moved since the card, REPO_CHANGED, so nothing unmerged and nothing
-   * the client did not see goes out — and the job must still be of a build of that head.
+   * The presses «Принять, когда сборка пройдёт» the platform waits for (ПР15), on a poll of their
+   * repository: each is checked again — its token as of the moment it was made, the person, the
+   * repository, the right — and the merge request read again; checks passed — merged, failed or the
+   * head moved — the press ends with that said in the chat; still running — it waits on, up to
+   * REPO_MERGE_WAIT_MAX_MS.
+   */
+  async continueWaits(projectRepositoryId: string): Promise<{ merged: number; ended: number }> {
+    const rows = (await this.#o.prisma.repoAction.findMany({
+      where: {
+        projectRepositoryId,
+        kind: 'merge',
+        state: 'waiting',
+        result: { path: ['wait'], equals: 'platform' },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 20,
+      select: actionSelect,
+    })) as ActionRow[]
+    let merged = 0
+    let ended = 0
+    for (const row of rows) {
+      try {
+        if (this.#now().getTime() - row.createdAt.getTime() > REPO_MERGE_WAIT_MAX_MS)
+          throw repoAutoMergeOff()
+        const { claims, args } = this.#checkToken(row, row.createdAt)
+        if (claims.kind !== 'merge' || args.merge?.mode !== 'when_green') throw repoConfirmInvalid()
+        const result = await this.#merge(row, claims, args.merge, true)
+        if (result.waiting) continue
+        if (await this.#finish(row, 'done', null, result, 'waiting')) merged++
+      } catch (error) {
+        const code = isDomainError(error) ? error.code : 'GIT_OPERATION_FAILED'
+        // Merged by the client in the meantime: what the press asked for is done.
+        if (code === repoAlreadyMerged().code) {
+          if (await this.#finish(row, 'done', null, null, 'waiting')) ended++
+          continue
+        }
+        // A provider that does not answer now is asked again on the next poll.
+        if (code === 'GIT_PROVIDER_FAILED') continue
+        this.#o.logger.warn(`git.action ${row.id}: ${code}`)
+        if (await this.#finish(row, 'failed', code.slice(0, 40), null, 'waiting')) ended++
+      }
+    }
+    return { merged, ended }
+  }
+
+  /**
+   * «Выкатить» (ПР15): a manual job of the newest build of the main branch, or a workflow that runs
+   * on `workflow_dispatch` at its head. The head of the main branch is read again first — moved
+   * since the card, REPO_CHANGED, so nothing unmerged and nothing the client did not see goes out —
+   * and the action must still be of that head.
    */
   async #deploy(row: ActionRow, claims: RepoConfirmClaims): Promise<ActionResult> {
     const { prisma } = this.#o
@@ -467,26 +619,36 @@ export class RepoActions {
     const asked = claims.deploy!
     if (claims.targetBranch !== repo.defaultBranch || asked.ref !== repo.defaultBranch)
       throw repoChanged()
-    const { provider, auth, info } = await this.#operation({ ...repo, connection })
-    if (asked.kind !== 'manual_job' || !provider.support.manualJobs || !provider.branchHead)
-      throw gitNotSupported('this deploy')
-    const head = await provider.branchHead(auth, info.ref, repo.defaultBranch)
-    if (head !== claims.headSha) throw repoChanged()
-    const action = (await provider.listDeployActions(auth, info.ref, repo.defaultBranch)).find(
-      (item) => item.kind === asked.kind && item.id === asked.id,
+    const { provider, auth, info, op } = await this.#operation(
+      { ...repo, connection },
+      { right: 'merge', branch: repo.defaultBranch },
     )
-    if (action === undefined) throw repoDeployGone()
-    if (action.sha !== claims.headSha || action.ref !== repo.defaultBranch) throw repoChanged()
-    const started = await provider.startDeploy(auth, info.ref, action)
-    // The build and its jobs are read again: the played job is not a manual one any more.
-    for (const type of [gitJobNames.poll, gitJobNames.deployActions])
-      await enqueueOutbox(prisma, {
-        topic: 'git',
-        type,
-        payload: { projectRepositoryId: repo.id },
-        dedupeKey: `${type}:deploy:${row.id}`,
-      })
-    return { json: { sha: head, job: action.id, name: action.name, runId: started.runId } }
+    try {
+      const supported =
+        asked.kind === 'manual_job'
+          ? provider.support.manualJobs
+          : provider.support.workflowDispatch
+      if (!supported || !provider.branchHead) throw gitNotSupported('this deploy')
+      const head = await provider.branchHead(auth, info.ref, repo.defaultBranch)
+      if (head !== claims.headSha) throw repoChanged()
+      const action = (await provider.listDeployActions(auth, info.ref, repo.defaultBranch)).find(
+        (item) => item.kind === asked.kind && item.id === asked.id,
+      )
+      if (action === undefined) throw repoDeployGone()
+      if (action.sha !== claims.headSha || action.ref !== repo.defaultBranch) throw repoChanged()
+      const started = await provider.startDeploy(auth, info.ref, action)
+      // The build and its jobs are read again: the played job is not a manual one any more.
+      for (const type of [gitJobNames.poll, gitJobNames.deployActions])
+        await enqueueOutbox(prisma, {
+          topic: 'git',
+          type,
+          payload: { projectRepositoryId: repo.id },
+          dedupeKey: `${type}:deploy:${row.id}`,
+        })
+      return { json: { sha: head, job: action.id, name: action.name, runId: started.runId } }
+    } finally {
+      await op.close()
+    }
   }
 
   async #push(
@@ -537,18 +699,17 @@ export class RepoActions {
     )
       throw repoChanged()
 
-    const { ref, grant, address, provider, auth, info } = await this.#operation({
-      ...repo,
-      connection,
-    })
-    await this.#cancelAutoMerge(provider, auth, info.ref, repo.id, branch.branch)
-    // GitHub (Э10): `workflows` only in the token of a press the card of build settings allowed.
-    const access = await provider.issueCredentials(grant, info.ref, 'write', {
-      ttlSeconds: GIT_CREDENTIAL_TTL_SECONDS,
-      workflows: claims.kind === 'ci_change',
-    })
+    // `workflows` only in the access of a press the card of build settings allowed (ПР16): GitHub
+    // refuses a push of a workflow without it — the second line.
+    const { ref, address, provider, auth, info, op } = await this.#operation(
+      { ...repo, connection },
+      { right: 'push', branch: branch.branch, workflows: claims.kind === 'ci_change' },
+    )
+    const access = op.access
     let pushed: { sha: string; rebased: boolean } | null = null
+    let mergeRequest: PullRequest | null = null
     try {
+      await this.#cancelAutoMerge(provider, auth, info.ref, repo.id, branch.branch)
       for (let attempt = 0; attempt < NAME_TRIES + 2 && pushed === null; attempt++) {
         const result = await workspace.pushChatBranch({
           projectRepositoryId: repo.id,
@@ -575,36 +736,37 @@ export class RepoActions {
         // `raced`: the branch moved between the check and the push — once again.
         else if (attempt > 0) throw repoChanged()
       }
-    } finally {
-      await access.revoke?.().catch(() => undefined)
-    }
-    if (pushed === null) throw repoChanged()
-    const sentBranch = branch.branch
-    await prisma.projectRepoBranch.updateMany({
-      where: { taskId, projectRepositoryId: repo.id },
-      data: {
-        mirrorSha: unsent.head.headSha,
-        remoteSha: pushed.sha,
-        state: 'pushed',
-        // What the client allowed of the build settings (ПР16).
-        ...(claims.kind === 'ci_change' ? { ciConfirmedSha256: claims.ciDiffSha256 } : {}),
-      },
-    })
-    // The ref of the mirror follows the head the client sent (ПР25: `/undo` moved only the turns).
-    const current = await workspace.readChatRef(repo.id, taskId).catch(() => null)
-    if (current !== unsent.head.headSha)
-      await workspace.moveChatRef(repo.id, taskId, current, unsent.head.headSha).catch(() => false)
-
-    let mergeRequest: PullRequest | null = null
-    if (claims.opensMergeRequest)
-      mergeRequest = await this.#openMergeRequest(provider, auth, info.ref, row, {
-        repositoryId: repo.id,
-        taskId,
-        branch: sentBranch,
-        target: repo.defaultBranch,
-        head: pushed.sha,
+      if (pushed === null) throw repoChanged()
+      const sentBranch = branch.branch
+      await prisma.projectRepoBranch.updateMany({
+        where: { taskId, projectRepositoryId: repo.id },
+        data: {
+          mirrorSha: unsent.head.headSha,
+          remoteSha: pushed.sha,
+          state: 'pushed',
+          // What the client allowed of the build settings (ПР16).
+          ...(claims.kind === 'ci_change' ? { ciConfirmedSha256: claims.ciDiffSha256 } : {}),
+        },
       })
-    return { ...pushed, mergeRequest }
+      // The ref of the mirror follows the head the client sent (ПР25: `/undo` moved only the turns).
+      const current = await workspace.readChatRef(repo.id, taskId).catch(() => null)
+      if (current !== unsent.head.headSha)
+        await workspace
+          .moveChatRef(repo.id, taskId, current, unsent.head.headSha)
+          .catch(() => false)
+
+      if (claims.opensMergeRequest)
+        mergeRequest = await this.#openMergeRequest(provider, auth, info.ref, row, {
+          repositoryId: repo.id,
+          taskId,
+          branch: sentBranch,
+          target: repo.defaultBranch,
+          head: pushed.sha,
+        })
+      return { ...pushed, mergeRequest }
+    } finally {
+      await op.close()
+    }
   }
 
   /**
@@ -639,15 +801,23 @@ export class RepoActions {
       select: { number: true },
     })
     if (open !== null) throw repoNothingToPush()
-    const { provider, auth, info } = await this.#operation({ ...repo, connection })
-    const mergeRequest = await this.#openMergeRequest(provider, auth, info.ref, row, {
-      repositoryId: repo.id,
-      taskId,
-      branch: branch.branch,
-      target: repo.defaultBranch,
-      head: branch.remoteSha,
-    })
-    return { sha: branch.remoteSha, rebased: false, mergeRequest }
+    const remoteSha = branch.remoteSha
+    const { provider, auth, info, op } = await this.#operation(
+      { ...repo, connection },
+      { right: 'push', branch: branch.branch },
+    )
+    try {
+      const mergeRequest = await this.#openMergeRequest(provider, auth, info.ref, row, {
+        repositoryId: repo.id,
+        taskId,
+        branch: branch.branch,
+        target: repo.defaultBranch,
+        head: remoteSha,
+      })
+      return { sha: remoteSha, rebased: false, mergeRequest }
+    } finally {
+      await op.close()
+    }
   }
 
   /**
@@ -683,7 +853,10 @@ export class RepoActions {
     if (sha256 !== claims.ciDiffSha256) throw repoChanged()
   }
 
-  /** «Отправить в ветку» first takes the provider's wait for the pipeline off (ПР15). */
+  /**
+   * «Отправить в ветку» first takes the wait for the build off (ПР15): the provider's auto-merge, and
+   * the presses the platform waits for — what they would merge is not the branch any more.
+   */
   async #cancelAutoMerge(
     provider: GitProvider,
     auth: GitAuth,
@@ -691,17 +864,18 @@ export class RepoActions {
     repositoryId: string,
     branch: string,
   ): Promise<void> {
-    if (!provider.support.autoMerge || !provider.cancelAutoMerge) return
-    const waiting = await this.#o.prisma.projectMergeRequest.findMany({
-      where: { projectRepositoryId: repositoryId, sourceBranch: branch, autoMerge: true },
-      select: { number: true },
+    const requests = await this.#o.prisma.projectMergeRequest.findMany({
+      where: { projectRepositoryId: repositoryId, sourceBranch: branch },
+      select: { number: true, autoMerge: true },
     })
-    for (const { number } of waiting) {
-      await provider.cancelAutoMerge(auth, ref, number)
-      await this.#o.prisma.projectMergeRequest.updateMany({
-        where: { projectRepositoryId: repositoryId, number },
-        data: { autoMerge: false, syncedAt: this.#now() },
-      })
+    for (const { number, autoMerge } of requests) {
+      if (autoMerge && provider.support.autoMerge && provider.cancelAutoMerge) {
+        await provider.cancelAutoMerge(auth, ref, number)
+        await this.#o.prisma.projectMergeRequest.updateMany({
+          where: { projectRepositoryId: repositoryId, number },
+          data: { autoMerge: false, syncedAt: this.#now() },
+        })
+      }
       // A press that waited for the build ends: what it would have merged is not the branch now.
       await endWaitingMerges(this.#o.prisma, {
         projectRepositoryId: repositoryId,
@@ -780,7 +954,7 @@ export class RepoActions {
     state: 'done' | 'failed' | 'waiting',
     error: string | null,
     result: ActionResult | null,
-    from: 'queued' | 'running' = 'running',
+    from: 'queued' | 'running' | 'waiting' = 'running',
   ): Promise<boolean> {
     const { prisma } = this.#o
     return prisma.$transaction(async (tx) => {
@@ -847,9 +1021,19 @@ const feedKindOf = (kind: string): RepoActionKind =>
  */
 export async function endWaitingMerges(
   prisma: PrismaClient,
-  input: { projectRepositoryId: string; number: number; merged: boolean; now: Date },
+  input: {
+    projectRepositoryId: string
+    number: number
+    merged: boolean
+    now: Date
+    /**
+     * Only the presses the provider waits for (its auto-merge was taken off); the platform's own
+     * waits (ПР15) end by their own reading of the checks. Absent — every wait of the request.
+     */
+    only?: MergeWait
+  },
 ): Promise<number> {
-  const waiting = await prisma.repoAction.findMany({
+  const found = await prisma.repoAction.findMany({
     where: {
       projectRepositoryId: input.projectRepositoryId,
       kind: 'merge',
@@ -859,6 +1043,10 @@ export async function endWaitingMerges(
     select: { id: true, taskId: true, result: true },
     take: 20,
   })
+  const waitOf = (result: unknown): MergeWait =>
+    (result as Record<string, unknown> | null)?.wait === 'platform' ? 'platform' : 'provider'
+  const waiting =
+    input.only === undefined ? found : found.filter((row) => waitOf(row.result) === input.only)
   let ended = 0
   for (const row of waiting) {
     const result = (row.result ?? {}) as Record<string, unknown>
