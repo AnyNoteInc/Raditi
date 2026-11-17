@@ -1,8 +1,11 @@
 import { z } from 'zod'
 
 import { DomainError } from '../errors.ts'
+import type { RepoProviderKind } from '../ports/git-provider.ts'
 import { repoCiRefusalTexts } from './ci.ts'
 import { repoCiRunTexts } from './ci-runs.ts'
+import { repoReauthText } from './connections.ts'
+import { repoRefusalTexts } from './errors.ts'
 import { repoMergeArgsSchema, repoMergeRefusalTexts } from './merge.ts'
 import { mergeRequestDescriptionMaxLength } from './merge-request-text.ts'
 import { repoRunRefusalTexts } from './webhooks.ts'
@@ -112,3 +115,18 @@ export const repoPushRefusalTexts = Object.freeze({
   REPO_MR_CHANGED:
     'Запрос на слияние открылся не таким, как просили, — мы его закрыли. Попробуйте ещё раз',
 } satisfies Record<string, string>)
+
+/**
+ * The client's words of the code of a refused press (`repo_actions.error`), without a final period;
+ * null — a code the client cannot read. `provider` — the provider of the repository the press was
+ * of, when the page knows it: a sign-in to renew names it (`repoReauthText`); null — neutral words.
+ */
+export function repoPressRefusalText(
+  code: string | null | undefined,
+  provider: RepoProviderKind | null,
+): string | null {
+  if (!code) return null
+  if (code === 'GIT_CONNECTION_REAUTH') return repoReauthText(provider)
+  const texts: Readonly<Record<string, string>> = { ...repoRefusalTexts, ...repoPushRefusalTexts }
+  return Object.hasOwn(texts, code) ? texts[code]! : null
+}

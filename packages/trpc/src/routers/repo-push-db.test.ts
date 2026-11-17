@@ -341,6 +341,51 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the push of a chat branch (plan 84, 8
     ).toBe('GIT_CONNECT_UNAVAILABLE')
   })
 
+  // docs/plan/84-projects.md, §10, «Остаток списка — закрыто»: the words of a sign-in to renew name
+  // the provider of the repository, GitHub as well as GitLab (rule 8: the brand is data).
+  it('names the provider of the repository when its sign-in is to be renewed', async () => {
+    const f = await fixture()
+    const { connectionId } = await db.projectRepository.findUniqueOrThrow({
+      where: { id: f.projectRepositoryId },
+      select: { connectionId: true },
+    })
+    await db.gitConnection.update({
+      where: { id: connectionId! },
+      data: { state: 'reauth_needed', stateReason: 'reauth' },
+    })
+    const said = async () => {
+      try {
+        await f.caller.projectRepo.preparePush({ taskId: f.task.id })
+      } catch (error) {
+        if (error instanceof TRPCError)
+          return { code: (error.cause as { code?: string }).code, text: error.message }
+        throw error
+      }
+      throw new Error('The procedure was not refused')
+    }
+    expect(await f.caller.projectRepo.branch({ taskId: f.task.id })).toMatchObject({
+      canPush: false,
+      pushBlocked: 'reauth',
+      provider: 'gitlab',
+    })
+    expect(await said()).toEqual({
+      code: 'GIT_CONNECTION_REAUTH',
+      text: 'Нужно войти в GitLab заново',
+    })
+    await db.projectRepository.update({
+      where: { id: f.projectRepositoryId },
+      data: { provider: 'github', host: 'github.com', webUrl: 'https://github.com/kolos/site' },
+    })
+    expect(await f.caller.projectRepo.branch({ taskId: f.task.id })).toMatchObject({
+      pushBlocked: 'reauth',
+      provider: 'github',
+    })
+    expect(await said()).toEqual({
+      code: 'GIT_CONNECTION_REAUTH',
+      text: 'Нужно войти в GitHub заново',
+    })
+  })
+
   it('has nothing to send once the branch at the client holds the head, or every turn was undone', async () => {
     const f = await fixture()
     await db.projectRepoBranch.update({

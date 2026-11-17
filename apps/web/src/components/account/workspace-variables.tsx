@@ -30,9 +30,6 @@ export const variablesText = Object.freeze({
   title: 'Переменные',
   lead: 'Ключи и пароли сервисов, которые нужны агенту.',
   note: 'Переменные доступны агенту в каждом чате этого пространства: в командах, которые он запускает. Значение хранится в защищённом хранилище и после сохранения не показывается — ни вам, ни нам.',
-  /** A workspace of real client data before the gate of 152-FZ (rule 1). */
-  agentClosed:
-    'Агент пока не получает переменные этого пространства: передавать их можно будет после проверки, которую мы проводим для рабочих данных. Сохранить их можно уже сейчас.',
   readOnly: 'Добавлять и менять переменные могут только владелец и администраторы пространства.',
   add: 'Добавить переменную',
   formTitle: 'Новая переменная',
@@ -246,11 +243,6 @@ export function WorkspaceVariables() {
         <Typography color="text.secondary" variant="body2" sx={{ mt: 1, maxWidth: 640 }}>
           {nbsp(variablesText.note)}
         </Typography>
-        {list.data && !list.data.agentGets ? (
-          <Alert severity="info" sx={{ mt: 2 }}>
-            {nbsp(variablesText.agentClosed)}
-          </Alert>
-        ) : null}
         {list.data && !list.data.canEdit ? (
           <Typography color="text.secondary" variant="body2" sx={{ mt: 1 }}>
             {variablesText.readOnly}

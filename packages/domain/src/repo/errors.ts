@@ -1,4 +1,5 @@
 import { DomainError } from '../errors.ts'
+import type { RepoProviderKind } from '../ports/git-provider.ts'
 
 // The refusals of repositories (docs/plan/84-projects.md, §4.4). The English message is for the
 // logs and the agent; the client reads the Russian text of the code (`repoRefusalTexts`).
@@ -9,14 +10,24 @@ export const gitHostRefused = (): DomainError =>
 
 /**
  * gitlab.com by a personal token while «Подключить GitLab.com» is not offered (docs/plan/84,
- * ПР29): the code of the client would go abroad before the documents of 84.16а.
+ * ПР29, slice 84.16а): in production the code of the client would go to the USA before the gate of
+ * code hosts abroad is open — the notice of art. 12 of 152-FZ (`codeHostsAbroadPublishedInProduction`).
  */
 export const gitlabComTokenRefused = (): DomainError =>
   new DomainError('GIT_GITLAB_COM_TOKEN', 'gitlab.com is not connected by a token now', 400)
 
-/** The provider refused the stored sign-in for good: the client signs in again. */
-export const gitConnectionReauth = (): DomainError =>
-  new DomainError('GIT_CONNECTION_REAUTH', 'The sign-in with the provider has to be renewed', 409)
+/**
+ * The provider refused the stored sign-in for good: the client signs in again. `provider` — the
+ * provider of the connection, when the thrower knows it: the client's words name it (`details`,
+ * rule 8: the brand is data, `repoReauthText`); without it they are neutral.
+ */
+export const gitConnectionReauth = (provider?: RepoProviderKind): DomainError =>
+  new DomainError(
+    'GIT_CONNECTION_REAUTH',
+    'The sign-in with the provider has to be renewed',
+    409,
+    provider === undefined ? undefined : { provider },
+  )
 
 export const gitConnectionInUse = (projects: readonly string[]): DomainError =>
   new DomainError('GIT_CONNECTION_IN_USE', 'Projects use this connection', 409, { projects })
@@ -83,7 +94,8 @@ export const repoRefusalTexts = Object.freeze({
   GIT_HOST_REFUSED: 'Этот адрес недоступен: сервер должен быть в интернете по https',
   GIT_GITLAB_COM_TOKEN:
     'GitLab.com скоро можно будет подключить. Сейчас по токену подключается только свой сервер GitLab',
-  GIT_CONNECTION_REAUTH: 'Нужно войти в GitLab заново',
+  // Neutral: a code alone does not say whose sign-in it is (`repoReauthText` names the provider).
+  GIT_CONNECTION_REAUTH: 'Нужно заново войти туда, где лежит репозиторий',
   GIT_CONNECTION_IN_USE: 'Подключение используют проекты',
   REPO_LINK_INVALID: 'Это не ссылка на репозиторий GitHub или GitLab',
   REPO_LINK_PRIVATE:

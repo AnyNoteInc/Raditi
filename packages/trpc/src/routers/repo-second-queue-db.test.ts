@@ -346,14 +346,27 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the cards of the second queue (plan 8
     expect(await jobs(f, 'git.repo.tree')).toEqual([
       { projectRepositoryId: f.projectRepositoryId, sha: mainSha },
     ])
-    kept.set(
-      repoTreeKey(f.projectRepositoryId, mainSha),
-      Buffer.from(JSON.stringify({ v: 1, sha: mainSha, paths: ['src/app.ts'], truncated: false })),
-    )
     await db.projectRepository.update({
       where: { id: f.projectRepositoryId },
       data: { treeSha: mainSha },
     })
+    // A list of an earlier version (v1 of 84.26 offered the files gitleaks flags, ПР35) is not
+    // read: the look asks core for one again, though `tree_sha` names this head.
+    kept.set(
+      `repo-trees/${f.projectRepositoryId}/${mainSha}.json`,
+      Buffer.from(JSON.stringify({ v: 1, sha: mainSha, paths: ['config.ts'], truncated: false })),
+    )
+    await dropGitJobsOf(db, [f.workspaceId])
+    expect(await f.caller.projectRepo.paths({ projectId: f.projectId })).toEqual({
+      state: 'loading',
+    })
+    expect(await jobs(f, 'git.repo.tree')).toEqual([
+      { projectRepositoryId: f.projectRepositoryId, sha: mainSha },
+    ])
+    kept.set(
+      repoTreeKey(f.projectRepositoryId, mainSha),
+      Buffer.from(JSON.stringify({ v: 2, sha: mainSha, paths: ['src/app.ts'], truncated: false })),
+    )
     expect(await f.caller.projectRepo.paths({ projectId: f.projectId })).toEqual({
       state: 'ready',
       sha: mainSha,

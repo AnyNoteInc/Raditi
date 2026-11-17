@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { isProduction, type AppEnv } from '../app-env.ts'
 import { DomainError } from '../errors.ts'
 import type { RepoProviderKind } from '../ports/git-provider.ts'
+import { repoRefusalTexts } from './errors.ts'
 import { gitHostSchema } from './ref.ts'
 import type { GitConnectionKind } from './statuses.ts'
 
@@ -19,24 +20,42 @@ export const gitConnectionLimits = Object.freeze({
 })
 
 /**
- * Whether «Подключить GitLab.com» is offered (ПР29). Outside production — whenever Raditi's OAuth
- * app is configured. In production — only once the texts for the client of slice 84.16а are
- * published: until then the item says «Скоро». An own GitLab server and an open link do not wait.
+ * Whether the code of a client may go, in production, to a code host abroad the client picks:
+ * gitlab.com (GitLab Inc., USA) and github.com (GitHub Inc., USA) — ПР29, slice 84.16а. The
+ * documents of the edition 2026-11-17 name both recipients; the transfer itself starts only after
+ * the owner, the operator, has filed the notice of art. 12 of 152-FZ for the USA and its ten working
+ * days have passed (the USA is not on the list of RKN order No. 253, so part 11 of art. 12 holds the
+ * transfer until then). One flag for both: one notice and one edition cover both recipients. The
+ * owner turns it on once they confirm the filing (docs/plan/84-projects.md, §10, «Действия
+ * владельца»; apps/web/content/legal/README.md, «Уведомление по ст. 12 о передаче кода в США»).
+ * An own GitLab server and an open link never wait on it.
  */
-export const gitlabComPublishedInProduction = false
+export const codeHostsAbroadPublishedInProduction = false
 
-export function gitlabComOffered(appEnv: AppEnv, configured: boolean): boolean {
-  return configured && (!isProduction(appEnv) || gitlabComPublishedInProduction)
+/**
+ * Whether a code host abroad is offered: Raditi's app for it is configured, and in production the
+ * flag above is on. Outside production a stand's fake stands in for gitlab.com and github.com.
+ */
+function codeHostAbroadOffered(appEnv: AppEnv, configured: boolean): boolean {
+  return configured && (!isProduction(appEnv) || codeHostsAbroadPublishedInProduction)
 }
 
 /**
- * Whether «Подключить GitHub» is offered (ПР10, ПР31; slice 84.25): whenever Raditi's GitHub App
- * is configured — on the server its group of secrets is rendered only when all its fields are set
- * (infra/server/README.md, «Репозитории проектов»). Until the app is registered the item says
- * «Скоро» in production; outside production a stand's fake stands in for github.com.
+ * Whether «Подключить GitLab.com» is offered (ПР29): Raditi's OAuth app is configured and the gate
+ * of code hosts abroad is open; until then the item says «Скоро».
  */
-export function githubOffered(configured: boolean): boolean {
-  return configured
+export function gitlabComOffered(appEnv: AppEnv, configured: boolean): boolean {
+  return codeHostAbroadOffered(appEnv, configured)
+}
+
+/**
+ * Whether «Подключить GitHub» is offered (ПР10, ПР29, ПР31; slices 84.25 and 84.16а): Raditi's GitHub
+ * App is configured — on the server its group of secrets is rendered only when all its fields are
+ * set (infra/server/README.md, «Репозитории проектов») — and the gate of code hosts abroad is open;
+ * until then the item says «Скоро».
+ */
+export function githubOffered(appEnv: AppEnv, configured: boolean): boolean {
+  return codeHostAbroadOffered(appEnv, configured)
 }
 
 /** The provider a connection of each kind reaches: data, never a comparison (rule 8). */
@@ -60,6 +79,18 @@ export const repoProviderBrands: Readonly<
   github: Object.freeze({ label: 'GitHub', icon: 'github' }),
   gitlab: Object.freeze({ label: 'GitLab', icon: 'gitlab' }),
 })
+
+/**
+ * «Нужно войти в GitLab заново», «Нужно войти в GitHub заново»: the sign-in of a connection is to be
+ * renewed. The brand comes from `repoProviderBrands` (rule 8: data, never a comparison); null —
+ * the provider is not known where the words are said (a code of a press, a line of the feed, a run
+ * of a scheduled task): neutral words.
+ */
+export function repoReauthText(provider: RepoProviderKind | null): string {
+  return provider === null
+    ? repoRefusalTexts.GIT_CONNECTION_REAUTH
+    : `Нужно войти в ${repoProviderBrands[provider].label} заново`
+}
 
 /** Where the tokens of a connection live: one version, CAS (§4.2). */
 export const gitConnectionSecretPath = (workspaceId: string, connectionId: string): string =>
@@ -164,16 +195,40 @@ export const gitConnectionReasons = [
 ] as const
 export type GitConnectionReason = (typeof gitConnectionReasons)[number]
 
-/** The words of a connection that is not `ok` (P-git-connect, P-git-repo-pick). */
-export const gitConnectionReasonTexts = Object.freeze({
-  access_denied: 'GitLab не принял токен — проверьте его права и срок',
-  host_refused: 'Этот адрес недоступен: сервер должен быть в интернете по https',
-  unreachable: 'Сервер не ответил — попробуйте ещё раз немного позже',
-  already_connected: 'Эта учётная запись уже подключена',
-  reauth: 'Нужно войти в GitLab заново',
-  installation_gone:
-    'Приложение Радити на GitHub удалено или приостановлено — подключите GitHub заново',
-} satisfies Record<GitConnectionReason, string>)
+/**
+ * The words of a connection that is not `ok` (P-git-connect, P-git-repo-pick), by the kind of the
+ * connection: its provider names the brand, and a connection by a token is told to check the
+ * token, one by a sign-in to connect again (rule 8: tables, never a comparison of the kind). null
+ * — the kind is not known: neutral words.
+ */
+export function gitConnectionReasonText(
+  reason: GitConnectionReason,
+  kind: GitConnectionKind | null,
+): string {
+  switch (reason) {
+    case 'access_denied': {
+      if (kind === null) return repoRefusalTexts.GIT_ACCESS_DENIED
+      const brand = repoProviderBrands[gitConnectionProviders[kind]].label
+      return gitConnectionSignsIn[kind]
+        ? `${brand} не дал доступ — подключите ${brand} заново`
+        : `${brand} не принял токен — проверьте его права и срок`
+    }
+    case 'reauth':
+      return repoReauthText(kind === null ? null : gitConnectionProviders[kind])
+    case 'host_refused':
+      return 'Этот адрес недоступен: сервер должен быть в интернете по https'
+    case 'unreachable':
+      return 'Сервер не ответил — попробуйте ещё раз немного позже'
+    case 'already_connected':
+      return 'Эта учётная запись уже подключена'
+    // Only an installation of the GitHub App comes to it (the `installation` webhook, 84.27).
+    case 'installation_gone':
+      return 'Приложение Радити на GitHub удалено или приостановлено — подключите GitHub заново'
+  }
+}
+
+export const isGitConnectionReason = (reason: string): reason is GitConnectionReason =>
+  (gitConnectionReasons as readonly string[]).includes(reason)
 
 // --- refusals ---------------------------------------------------------------------------------
 

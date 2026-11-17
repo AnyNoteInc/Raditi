@@ -340,6 +340,7 @@ describe.skipIf(!enabled)('the GitHub App in core with PostgreSQL (plan 84, 84.2
         dropMirror: () => Promise.reject(new Error('no fetch here')),
         removeOrphans: () => Promise.reject(new Error('no fetch here')),
         listPaths: () => Promise.reject(new Error('no fetch here')),
+        hiddenFiles: () => Promise.reject(new Error('no fetch here')),
       },
     })
 

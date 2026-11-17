@@ -2,11 +2,11 @@
 
 import {
   gitConnectionProviders,
-  gitConnectionReasonTexts,
+  gitConnectionReasonText,
   gitServerHostOf,
+  isGitConnectionReason,
   repoProviderBrands,
   type GitConnectionKind,
-  type GitConnectionReason,
 } from '@repo/domain/repo'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
@@ -854,7 +854,7 @@ function PickForm({
             </Button>
           }
         >
-          {reasonText(repos.data?.reason ?? null)}
+          {reasonText(repos.data?.reason ?? null, connection?.kind ?? null)}
         </Alert>
       ) : (
         <>
@@ -969,10 +969,12 @@ function PickForm({
   )
 }
 
-function reasonText(reason: string | null): string {
-  return reason !== null && reason in gitConnectionReasonTexts
-    ? gitConnectionReasonTexts[reason as GitConnectionReason]
-    : gitConnectionReasonTexts.unreachable
+/** Why a connection is not ready, in the words of its own kind (its provider names the brand). */
+function reasonText(reason: string | null, kind: GitConnectionKind | null): string {
+  return gitConnectionReasonText(
+    reason !== null && isGitConnectionReason(reason) ? reason : 'unreachable',
+    kind,
+  )
 }
 
 /**

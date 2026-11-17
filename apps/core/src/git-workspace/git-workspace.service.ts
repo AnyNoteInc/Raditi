@@ -758,13 +758,15 @@ export class GitWorkspaceService {
 
   /**
    * The paths of the tree of `sha` for `@` (ПР24; slice 84.26): files only, in the order of the
-   * tree, at most `limit`; `truncated` — the tree has more. Files that look like a secret are left
-   * out: the sandbox holds them as a stub (ПР35). Read from the mirror, nothing checked out.
+   * tree, at most `limit`; `truncated` — the tree has more. Files that look like a secret by name,
+   * and the `hidden` ones (`hiddenFiles` — those gitleaks flags), are left out: the sandbox holds
+   * them as a stub (ПР35). Read from the mirror, nothing checked out.
    */
   async listPaths(
     projectRepositoryId: string,
     sha: string,
     limit: number,
+    hidden: ReadonlySet<string> = new Set(),
   ): Promise<{ paths: string[]; truncated: boolean }> {
     if (!publicationShaSchema.safeParse(sha).success) throw badRequest('Invalid repository head')
     const mirror = mirrorPath(this.#root, projectRepositoryId)
@@ -787,7 +789,7 @@ export class GitWorkspaceService {
           const match = TREE_ROW.exec(row)
           if (!match || match[2] !== 'blob') continue
           const path = match[4]!
-          if (isSecretFileName(path)) continue
+          if (isSecretFileName(path) || hidden.has(path)) continue
           if (paths.length >= limit) {
             truncated = true
             break

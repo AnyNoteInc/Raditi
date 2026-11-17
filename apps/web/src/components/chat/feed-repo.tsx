@@ -2,13 +2,15 @@
 
 import {
   repoActionText,
+  repoPressRefusalText,
   repoPushRefusalTexts,
-  repoRefusalTexts,
+  repoReauthText,
   type CiRefusal,
   type CiStatus,
   type RepoActionKind,
   type RepoActionState,
 } from '@repo/domain/repo'
+import type { RepoProviderKind } from '@repo/domain'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Dialog from '@mui/material/Dialog'
@@ -36,6 +38,17 @@ import { MergeCard } from './feed-repo-merge'
 // proposal of a merge request; what a press did. Nothing reaches the client's repository but by a
 // press: the card asks for a token bound to what it shows, and core checks it again. A change of
 // build settings has its own card under it (feed-repo-ci.tsx, ПР16).
+
+/** «Нужно …» in the middle of a sentence: «Отправить нельзя: нужно …». */
+const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1)
+
+/** Why the card has no buttons (ревью P3); a sign-in names the provider of the repository. */
+const blockedText: Readonly<
+  Record<'reauth' | 'other_member', (provider: RepoProviderKind) => string>
+> = Object.freeze({
+  reauth: (provider) => `Отправить нельзя: ${lowerFirst(repoReauthText(provider))}`,
+  other_member: () => 'Отправить нельзя: репозиторий подключил другой участник',
+})
 
 export const repoCardText = Object.freeze({
   title: 'Изменения в ветке',
@@ -66,11 +79,7 @@ export const repoCardText = Object.freeze({
   waitingMerge: 'Примем в основную ветку, когда сборка пройдёт.',
   mergedTakenBack: repoPushRefusalTexts.REPO_ALREADY_MERGED,
   more: (n: number) => `и ещё ${n}`,
-  /** Why the card has no buttons (ревью P3). */
-  blocked: {
-    reauth: 'Отправить нельзя: нужно войти в GitLab заново',
-    other_member: 'Отправить нельзя: репозиторий подключил другой участник',
-  },
+  blocked: blockedText,
   openProject: 'Открыть проект',
 })
 
@@ -86,11 +95,16 @@ const pluralFiles = (n: number) => {
 export const statLine = (stat: { files: number; additions: number; deletions: number }) =>
   `${stat.files} ${pluralFiles(stat.files)} · +${stat.additions} −${stat.deletions}`
 
-/** The words of a refusal code of a press, without a code the client cannot read. */
-export function repoErrorText(code: string | null | undefined): string {
-  if (!code) return repoCardText.failed
-  const texts: Record<string, string> = { ...repoRefusalTexts, ...repoPushRefusalTexts }
-  const text = texts[code]
+/**
+ * The words of a refusal code of a press, without a code the client cannot read. A line of the feed
+ * keeps no provider — the repository of the project may have been changed since — so a sign-in to
+ * renew is said in neutral words; a page that knows the repository passes its provider.
+ */
+export function repoErrorText(
+  code: string | null | undefined,
+  provider: RepoProviderKind | null = null,
+): string {
+  const text = repoPressRefusalText(code, provider)
   return text ? `${text}.` : repoCardText.failed
 }
 
@@ -431,7 +445,7 @@ export function FeedRepoChanges({
       ) : null}
       {current && view?.pushBlocked && !view.sent ? (
         <Typography role="status" variant="body2" data-feed-repo-blocked="">
-          {repoCardText.blocked[view.pushBlocked]}.{' '}
+          {repoCardText.blocked[view.pushBlocked](view.provider)}.{' '}
           <Link
             href={`/projects/${view.projectId}`}
             sx={{ display: 'inline-flex', minHeight: 44, alignItems: 'center' }}
