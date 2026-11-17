@@ -88,6 +88,7 @@ describe.skipIf(!databaseUrl)('the webhooks of repositories in PostgreSQL', () =
   let db: PrismaClient
   const users: string[] = []
   const repositories: string[] = []
+  const connections: string[] = []
 
   beforeAll(() => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
@@ -100,6 +101,12 @@ describe.skipIf(!databaseUrl)('the webhooks of repositories in PostgreSQL', () =
     })
     repositories.splice(0)
     await db.gitWebhookDelivery.deleteMany({ where: { deliveryId: { startsWith: 'test-8426-' } } })
+    await db.outboxEvent.deleteMany({
+      where: {
+        OR: connections.map((id) => ({ dedupeKey: { startsWith: `git.connection.sync:${id}:` } })),
+      },
+    })
+    await db.gitConnection.deleteMany({ where: { id: { in: connections.splice(0) } } })
     for (const userId of users.splice(0)) {
       const workspaces = { workspace: { createdById: userId } }
       await db.projectRepository.deleteMany({ where: workspaces })
@@ -271,5 +278,91 @@ describe.skipIf(!databaseUrl)('the webhooks of repositories in PostgreSQL', () =
         })
       ).status,
     ).toBe(404)
+  })
+
+  it('an installation deleted or suspended stops its connections at once; back, core checks them', async () => {
+    const user = await db.user.create({
+      data: { name: 'Synthetic', email: `${randomUUID()}@example.test` },
+    })
+    users.push(user.id)
+    const ws = await db.workspace.create({
+      data: { name: 'Synthetic', dataClass: 'synthetic', createdById: user.id },
+    })
+    const installationId = BigInt(Date.now())
+    const connection = async (over: { state?: string; installationId?: bigint } = {}) => {
+      const id = randomUUID()
+      connections.push(id)
+      await db.gitConnection.create({
+        data: {
+          id,
+          workspaceId: ws.id,
+          createdById: user.id,
+          kind: 'github_app',
+          host: 'github.com',
+          accountLogin: 'acme',
+          accountId: String(Number(installationId % 1_000_000n) + connections.length),
+          installationId: over.installationId ?? installationId,
+          githubUserId: '9',
+          state: over.state ?? 'ok',
+        },
+      })
+      return id
+    }
+    const ours = await connection()
+    const left = await connection({ state: 'suspended' })
+    const another = await connection({ installationId: installationId + 1n })
+    const stateOf = async (id: string) =>
+      db.gitConnection.findUniqueOrThrow({
+        where: { id },
+        select: { state: true, stateReason: true },
+      })
+    const deliver = (action: string, delivery: string) =>
+      handleGithubWebhook(
+        githubRequest(
+          JSON.stringify({
+            action,
+            installation: { id: Number(installationId), account: { login: 'acme' } },
+          }),
+          { 'x-github-event': 'installation', 'x-github-delivery': delivery },
+        ),
+        { prisma: db, now: () => now, webhookSecret: APP_SECRET },
+      )
+
+    expect((await deliver('deleted', 'test-8426-inst-1')).status).toBe(202)
+    expect(await stateOf(ours)).toEqual({
+      state: 'reauth_needed',
+      stateReason: 'installation_gone',
+    })
+    // The member's leaving and another installation are not this event's.
+    expect(await stateOf(left)).toEqual({ state: 'suspended', stateReason: null })
+    expect(await stateOf(another)).toEqual({ state: 'ok', stateReason: null })
+
+    // Unsuspended: back to a check by core, once per delivery.
+    expect((await deliver('unsuspend', 'test-8426-inst-2')).status).toBe(202)
+    expect((await deliver('unsuspend', 'test-8426-inst-2')).status).toBe(202)
+    expect(await stateOf(ours)).toEqual({ state: 'checking', stateReason: null })
+    expect(await stateOf(left)).toEqual({ state: 'suspended', stateReason: null })
+    const syncs = await db.outboxEvent.findMany({
+      where: {
+        dedupeKey: { startsWith: 'git.connection.sync:' },
+        payload: { path: ['connectionId'], equals: ours },
+      },
+      select: { type: true, payload: true },
+    })
+    expect(syncs).toEqual([{ type: 'git.connection.sync', payload: { connectionId: ours } }])
+
+    // Suspended again, then an action core does not read: it stays stopped.
+    await deliver('suspend', 'test-8426-inst-3')
+    expect(await stateOf(ours)).toEqual({
+      state: 'reauth_needed',
+      stateReason: 'installation_gone',
+    })
+    await deliver('new_permissions_accepted', 'test-8426-inst-4')
+    expect(await stateOf(ours)).toEqual({
+      state: 'reauth_needed',
+      stateReason: 'installation_gone',
+    })
+    expect((await deliver('created', 'test-8426-inst-5')).status).toBe(202)
+    expect(await stateOf(ours)).toEqual({ state: 'checking', stateReason: null })
   })
 })

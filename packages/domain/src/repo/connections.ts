@@ -159,6 +159,8 @@ export const gitConnectionReasons = [
   'unreachable',
   'already_connected',
   'reauth',
+  /** The GitHub App was removed from the account or suspended there (the `installation` webhook). */
+  'installation_gone',
 ] as const
 export type GitConnectionReason = (typeof gitConnectionReasons)[number]
 
@@ -169,6 +171,8 @@ export const gitConnectionReasonTexts = Object.freeze({
   unreachable: 'Сервер не ответил — попробуйте ещё раз немного позже',
   already_connected: 'Эта учётная запись уже подключена',
   reauth: 'Нужно войти в GitLab заново',
+  installation_gone:
+    'Приложение Радити на GitHub удалено или приостановлено — подключите GitHub заново',
 } satisfies Record<GitConnectionReason, string>)
 
 // --- refusals ---------------------------------------------------------------------------------

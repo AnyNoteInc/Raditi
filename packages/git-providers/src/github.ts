@@ -912,6 +912,41 @@ export function createGithubProvider(config: GithubProviderConfig): GitProvider 
         runId: body.success && body.data.workflow_run_id ? String(body.data.workflow_run_id) : null,
       }
     },
+
+    async findDispatchedRun(auth, repo, action, since) {
+      if (action.kind !== 'workflow_dispatch') return null
+      // https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow
+      // `created` is of whole seconds: the moment is taken down to its second.
+      const from = new Date(Math.floor(since.getTime() / 1000) * 1000)
+      const body = jsonOf(
+        await get(
+          auth,
+          `${repoPath(repo)}/actions/workflows/${numericId(action.id, 'workflow')}/runs`,
+          {
+            event: 'workflow_dispatch',
+            branch: action.ref,
+            created: `>=${from.toISOString().replace('.000Z', 'Z')}`,
+            per_page: '20',
+          },
+        ),
+      )
+      const parsed = z.looseObject({ workflow_runs: z.array(z.unknown()) }).safeParse(body)
+      if (!parsed.success) throw gitProviderFailed('runs of an unexpected form')
+      // GitHub lists the newest first: the oldest one since the dispatch is the one it started.
+      const runs = parsed.data.workflow_runs
+        .map((run) => runOf(repo, run))
+        .filter(
+          (run) =>
+            run.event === 'workflow_dispatch' &&
+            run.ref === action.ref &&
+            run.createdAt !== null &&
+            run.createdAt.getTime() >= from.getTime(),
+        )
+        .sort(
+          (a, b) => a.createdAt!.getTime() - b.createdAt!.getTime() || Number(a.id) - Number(b.id),
+        )
+      return runs[0] ?? null
+    },
   }
   return provider
 }

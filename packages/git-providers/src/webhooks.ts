@@ -76,6 +76,41 @@ export function gitlabHookKeyId(rootSecret: string): string {
 export type GitlabDeliveryCheck =
   { ok: true; signed: boolean } | { ok: false; reason: 'token' | 'signature' | 'unsigned' | 'time' }
 
+/** What an `installation` event of the GitHub App says of the installation (84.27, §10). */
+export type GithubInstallationChange = 'gone' | 'back'
+
+export interface GithubInstallationHint {
+  deliveryId: string
+  installationId: string
+  /** `gone` — deleted or suspended: its connections stop; `back` — unsuspended or created. */
+  change: GithubInstallationChange
+}
+
+/**
+ * An `installation` event of the GitHub App
+ * (https://docs.github.com/en/webhooks/webhook-events-and-payloads#installation): `deleted` and
+ * `suspend` stop the connections of the installation at once, `unsuspend` and `created` give them
+ * back to a check. null — another event or action (`new_permissions_accepted`, a ping).
+ */
+export function parseGithubInstallationWebhook(
+  headers: Headers,
+  rawBody: string,
+): GithubInstallationHint | null {
+  if (headers.get('x-github-event') !== 'installation') return null
+  const deliveryId = deliveryIdOf(headers.get('x-github-delivery'))
+  const body = jsonBody(rawBody)
+  if (deliveryId === null || body === null) return null
+  const installationId = idOf(objectOf(body.installation)?.id)
+  if (installationId === null) return null
+  const change: GithubInstallationChange | null =
+    body.action === 'deleted' || body.action === 'suspend'
+      ? 'gone'
+      : body.action === 'unsuspend' || body.action === 'created'
+        ? 'back'
+        : null
+  return change === null ? null : { deliveryId, installationId, change }
+}
+
 /**
  * A delivery of a GitLab project hook. With `webhook-signature` (Standard Webhooks: `v1,<base64>`
  * of HMAC-SHA256 over `<webhook-id>.<webhook-timestamp>.<body>` by the decoded signing token) the

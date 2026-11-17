@@ -49,6 +49,8 @@ import {
   repoRunGone,
   repoRunTexts,
   rerunIsDeploy,
+  type CiRun,
+  type DeployAction,
   type GitAuth,
   type GitConnectionKind,
   type GitProvider,
@@ -125,7 +127,18 @@ export interface RepoActionsOptions {
   mac: RepoConfirmMac | null
   logger: { log(line: string): void; warn(line: string): void }
   now?: () => Date
+  /** The pause between the reads of a dispatched run; a test passes its own. */
+  sleep?: (ms: number) => Promise<void>
 }
+
+/**
+ * The run a `workflow_dispatch` started is looked for this many times, this far apart: GitHub makes
+ * it a moment after it answered the dispatch (docs/plan/84-projects.md, §4.6).
+ */
+export const DISPATCHED_RUN_READS = 5
+export const DISPATCHED_RUN_PAUSE_MS = 2_000
+/** How far before the dispatch a run counts as its own: the clocks of GitHub and ours differ. */
+export const DISPATCHED_RUN_SKEW_MS = 2_000
 
 interface ActionRow {
   id: string
@@ -170,10 +183,13 @@ const tokenSha256 = (token: string) => createHash('sha256').update(token).digest
 export class RepoActions {
   readonly #o: RepoActionsOptions
   readonly #now: () => Date
+  readonly #sleep: (ms: number) => Promise<void>
 
   constructor(options: RepoActionsOptions) {
     this.#o = options
     this.#now = options.now ?? (() => new Date())
+    this.#sleep =
+      options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms).unref()))
   }
 
   /** `git.action`: one attempt; the row ends `done` or `failed` and the chat is told. */
@@ -670,7 +686,27 @@ export class RepoActions {
       )
       if (action === undefined) throw repoDeployGone()
       if (action.sha !== claims.headSha || action.ref !== repo.defaultBranch) throw repoChanged()
+      const since = new Date(this.#now().getTime() - DISPATCHED_RUN_SKEW_MS)
       const started = await provider.startDeploy(auth, info.ref, action)
+      // GitHub runs a dispatch by the name of the branch: a commit that reached it between the
+      // read of the head above and the dispatch would go out unseen. The run is found and, on
+      // another commit, stopped at once (§4.6); the card says the changes moved.
+      const run = await this.#dispatchedRun(provider, auth, info.ref, action, started.runId, since)
+      if (run !== null && run.sha !== claims.headSha) {
+        await provider.cancelRun(auth, info.ref, run.id).catch((error: unknown) => {
+          this.#o.logger.warn(
+            `git.action ${row.id}: the run ${run.id} of another commit was not stopped: ${isDomainError(error) ? error.code : 'unknown'}`,
+          )
+        })
+        this.#o.logger.warn(`git.action ${row.id}: the dispatch ran ${run.sha}, cancelled`)
+        await enqueueOutbox(prisma, {
+          topic: 'git',
+          type: gitJobNames.poll,
+          payload: { projectRepositoryId: repo.id },
+          dedupeKey: `${gitJobNames.poll}:deploy:${row.id}`,
+        })
+        throw repoChanged()
+      }
       // The build and its jobs are read again: the played job is not a manual one any more.
       for (const type of [gitJobNames.poll, gitJobNames.deployActions])
         await enqueueOutbox(prisma, {
@@ -679,10 +715,51 @@ export class RepoActions {
           payload: { projectRepositoryId: repo.id },
           dedupeKey: `${type}:deploy:${row.id}`,
         })
-      return { json: { sha: head, job: action.id, name: action.name, runId: started.runId } }
+      return {
+        json: {
+          sha: head,
+          job: action.id,
+          name: action.name,
+          runId: started.runId ?? run?.id ?? null,
+        },
+      }
     } finally {
       await op.close()
     }
+  }
+
+  /**
+   * The run a `workflow_dispatch` started, read a few times while GitHub makes it; null — none
+   * found in time or the provider cannot tell (a manual job of GitLab plays a job of a known
+   * commit). A failed read is not the press's failure: the dispatch has gone, the next poll shows
+   * the run.
+   */
+  async #dispatchedRun(
+    provider: GitProvider,
+    auth: GitAuth,
+    ref: RepoRef,
+    action: DeployAction,
+    runId: string | null,
+    since: Date,
+  ): Promise<CiRun | null> {
+    if (action.kind !== 'workflow_dispatch') return null
+    if (runId === null && provider.findDispatchedRun === undefined) return null
+    for (let read = 0; read < DISPATCHED_RUN_READS; read++) {
+      if (read > 0) await this.#sleep(DISPATCHED_RUN_PAUSE_MS)
+      try {
+        const run =
+          runId !== null
+            ? await provider.getRun(auth, ref, runId)
+            : await provider.findDispatchedRun!(auth, ref, action, since)
+        if (run !== null) return run
+      } catch (error) {
+        this.#o.logger.warn(
+          `git.action dispatched run of ${ref.path}: ${isDomainError(error) ? error.code : 'unknown'}`,
+        )
+        return null
+      }
+    }
+    return null
   }
 
   /**

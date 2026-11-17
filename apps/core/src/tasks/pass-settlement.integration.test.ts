@@ -1541,6 +1541,97 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         })
       })
 
+      it('tells a run that prepared changes in the branch to look and send them (plan 84)', async () => {
+        const task = await dialog()
+        const run = await runOf(task)
+        await settlement().settle(ref(task), completed({ change_type: 'code' }))
+        const turn = await db.taskTurn.findFirstOrThrow({
+          where: { taskId: task.taskId, turnNo: 1 },
+          select: { id: true },
+        })
+        // The card «Изменения в ветке» RepoChanges writes right after the pass settles.
+        await insertFeedEvent(db, {
+          taskId: task.taskId,
+          turnId: turn.id,
+          row: {
+            type: 'feed.repo_changes',
+            payload: {
+              v: 1,
+              branch: 'raditi/svodka-12345678',
+              baseSha: 'a'.repeat(40),
+              headSha: 'b'.repeat(40),
+              diffSha256: 'c'.repeat(64),
+              files: 1,
+              additions: 2,
+              deletions: 0,
+              list: [{ path: 'README.md', additions: 2, deletions: 0 }],
+              ciTouched: false,
+              pushed: false,
+              mergeRequest: null,
+            },
+          },
+        })
+        const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
+        expect(await notify(sender()).run(job)).toBe('sent')
+        // Ids and the kind only (rule 1, Зп40).
+        expect(pushOf(task)).toEqual([
+          {
+            id: expect.any(String),
+            path: `/chats/${task.taskId}`,
+            kind: 'ready',
+            scheduled: true,
+            tag: `schedule:${run.scheduleId}`,
+            at: expect.any(Number),
+          },
+        ])
+        expect(await told(task)).toEqual([
+          {
+            payload: expect.objectContaining({
+              text: 'Задача «Проверка сайта» подготовила изменения — посмотрите и отправьте в ветку.',
+            }),
+          },
+        ])
+        expect(await letters(task.taskId)).toHaveLength(0)
+        expect(
+          await db.chatNotification.findFirstOrThrow({ where: { taskId: task.taskId } }),
+        ).toMatchObject({ kind: 'ready', scheduledRunId: run.runId })
+      })
+
+      it('says nothing of prepared changes to a client who looks, nor with the switch off', async () => {
+        const task = await dialog()
+        await runOf(task, false)
+        await settlement().settle(ref(task), completed({ change_type: 'code' }))
+        const turn = await db.taskTurn.findFirstOrThrow({
+          where: { taskId: task.taskId, turnNo: 1 },
+          select: { id: true },
+        })
+        await insertFeedEvent(db, {
+          taskId: task.taskId,
+          turnId: turn.id,
+          row: {
+            type: 'feed.repo_proposal',
+            payload: {
+              v: 1,
+              reservedId: randomUUID(),
+              title: 'Сводка',
+              description: '',
+              draft: false,
+            },
+          },
+        })
+        const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
+        expect(await notify(sender()).run(job)).toBe('skipped')
+        await db.scheduledTask.updateMany({
+          where: { runs: { some: { taskId: task.taskId } } },
+          data: { notify: true },
+        })
+        await db.taskPresence.create({
+          data: { userId: task.userId, taskId: task.taskId, seenAt: NOW },
+        })
+        expect(await notify(sender()).run(job)).toBe('seen')
+        expect(await db.chatNotification.count({ where: { taskId: task.taskId } })).toBe(0)
+      })
+
       it('keeps «выполнена» quiet with the switch of the task off, never a question', async () => {
         const task = await dialog()
         await runOf(task, false)
