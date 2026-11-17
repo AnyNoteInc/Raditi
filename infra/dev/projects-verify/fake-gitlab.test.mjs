@@ -147,23 +147,86 @@ describe(
       assert.equal(pushed.json.length, 1)
       // A branch of the agent and its merge request.
       const branchSha = (await fake.heads(project))['raditi/menu']
-      const mr = await call('POST', `/api/v4/projects/${project.id}/merge_requests`, {
-        body: {
-          source_branch: 'raditi/menu',
-          target_branch: 'main',
-          title: 'Меню',
-          description: '/merge',
-        },
-      })
+      const open = () =>
+        call('POST', `/api/v4/projects/${project.id}/merge_requests`, {
+          body: {
+            source_branch: 'raditi/menu',
+            target_branch: 'main',
+            title: 'Меню',
+            description: 'Новое меню.\n/draft\n/merge\n/label ~menu',
+          },
+        })
+      // Right after the push GitLab does not know the branch yet; the next request opens.
+      const early = await open()
+      assert.equal(early.status, 400)
+      assert.deepEqual(early.json, { message: { source_branch: ['does not exist'] } })
+      const mr = await open()
       assert.equal(mr.status, 201)
       assert.equal(mr.json.sha, branchSha)
-      const stale = await call('PUT', `/api/v4/projects/${project.id}/merge_requests/1/merge`, {
-        body: { sha: 'f'.repeat(40) },
+      // The quick actions it ran are taken out of the text; `/merge` does not run on opening.
+      assert.equal(mr.json.title, 'Draft: Меню')
+      assert.equal(mr.json.description, 'Новое меню.')
+      assert.deepEqual(project.mergeRequests.at(-1).quickActions, ['/draft', '/label ~menu'])
+      assert.equal((await open()).status, 409, 'one open merge request per branch')
+      await call('PUT', `/api/v4/projects/${project.id}/merge_requests/1`, {
+        body: { state_event: 'close' },
       })
+      const ready = await call('POST', `/api/v4/projects/${project.id}/merge_requests`, {
+        body: { source_branch: 'raditi/menu', target_branch: 'main', title: 'Меню' },
+      })
+      assert.equal(ready.status, 201)
+      const iid = ready.json.iid
+      // Being checked: a merge is 405, a merge when green 422; a read starts the check.
+      assert.equal(ready.json.detailed_merge_status, 'checking')
+      const early405 = await call(
+        'PUT',
+        `/api/v4/projects/${project.id}/merge_requests/${iid}/merge`,
+        {
+          body: { sha: branchSha },
+        },
+      )
+      assert.equal(early405.status, 405)
+      const early422 = await call(
+        'PUT',
+        `/api/v4/projects/${project.id}/merge_requests/${iid}/merge`,
+        {
+          body: { sha: branchSha, auto_merge: true },
+        },
+      )
+      assert.equal(early422.status, 422)
+      await new Promise((done) => setTimeout(done, 200))
+      assert.equal(
+        (await call('GET', `/api/v4/projects/${project.id}/merge_requests/${iid}`)).json
+          .detailed_merge_status,
+        'mergeable',
+      )
+      // No auto-merge on: cancel_auto_merge is 409, the deprecated endpoint 201 with an error.
+      const cancel = await call(
+        'POST',
+        `/api/v4/projects/${project.id}/merge_requests/${iid}/cancel_auto_merge`,
+      )
+      assert.equal(cancel.status, 409)
+      const legacy = await call(
+        'POST',
+        `/api/v4/projects/${project.id}/merge_requests/${iid}/cancel_merge_when_pipeline_succeeds`,
+      )
+      assert.equal(legacy.status, 201)
+      assert.equal(legacy.json.status, 'error')
+      const stale = await call(
+        'PUT',
+        `/api/v4/projects/${project.id}/merge_requests/${iid}/merge`,
+        {
+          body: { sha: 'f'.repeat(40) },
+        },
+      )
       assert.equal(stale.status, 409)
-      const merged = await call('PUT', `/api/v4/projects/${project.id}/merge_requests/1/merge`, {
-        body: { sha: branchSha, should_remove_source_branch: true },
-      })
+      const merged = await call(
+        'PUT',
+        `/api/v4/projects/${project.id}/merge_requests/${iid}/merge`,
+        {
+          body: { sha: branchSha, should_remove_source_branch: true },
+        },
+      )
       assert.equal(merged.json.state, 'merged')
       assert.ok(fake.isSha(merged.json.merge_commit_sha))
       const after = await fake.heads(project)
@@ -265,7 +328,18 @@ describe(
       const refused = await call('GET', `/api/v4/projects/${closed.id}/pipelines?ref=feature`, {
         auth: `${token}-2`,
       })
-      assert.equal(refused.json[0].failure_reason, 'user_not_verified')
+      // A pipeline has no `failure_reason`, and the list no times: the jobs say why.
+      assert.equal(refused.json[0].failure_reason, undefined)
+      assert.equal(refused.json[0].finished_at, undefined)
+      const jobs = await call(
+        'GET',
+        `/api/v4/projects/${closed.id}/pipelines/${refused.json[0].id}/jobs`,
+        { auth: `${token}-2` },
+      )
+      assert.equal(jobs.json[0].failure_reason, 'user_not_verified')
+      // Anonymous: no statistics, no permissions.
+      assert.equal(anonymous.json.statistics, undefined)
+      assert.equal(anonymous.json.permissions, undefined)
     })
 
     it('makes a signed hook, names the files of include: local, retries and cancels a pipeline', async () => {
@@ -273,7 +347,11 @@ describe(
       const auth = `${token}-hooks`
       const project = await fake.addProject(OWN_HOST, {
         path: 'stand/hooks',
-        files: { 'README.md': 'Хуки\n' },
+        files: {
+          'README.md': 'Хуки\n',
+          'ci/build.yml': 'build: {}\n',
+          'ci/test.yml': 'test: {}\n',
+        },
         members: [user],
       })
       const at = `/api/v4/projects/${project.id}`
@@ -292,12 +370,31 @@ describe(
       assert.equal(made.json.signing_token_present, true)
       const lint = await call('POST', `${at}/ci/lint`, {
         auth,
-        body: { content: 'include:\n  - local: ci/build.yml\nstages:\n  - test\n' },
+        body: {
+          content: "include:\n  - local: /ci/build.yml\n  - local: 'ci/*.yml'\nstages:\n  - test\n",
+          ref: 'main',
+        },
       })
+      // A wildcard comes back expanded to the files at the ref.
       assert.deepEqual(
         lint.json.includes.map((item) => [item.type, item.location]),
-        [['local', 'ci/build.yml']],
+        [
+          ['local', 'ci/build.yml'],
+          ['local', 'ci/build.yml'],
+          ['local', 'ci/test.yml'],
+        ],
       )
+      const missing = await call('POST', `${at}/ci/lint`, {
+        auth,
+        body: { content: 'include:\n  - local: ci/new.yml\nstages:\n  - test\n', ref: 'main' },
+      })
+      assert.equal(missing.json.valid, false)
+      assert.equal(missing.json.includes, null)
+      const malformed = await call('POST', `${at}/hooks`, {
+        auth,
+        body: { url: 'https://raditi.example/x', token: 't', signing_token: 'whsec_short' },
+      })
+      assert.equal(malformed.status, 422)
       const sha = await fake.rerunPipeline(project, 'main')
       const pipeline = project.pipelines.findLast((item) => item.sha === sha)
       await call('POST', `${at}/pipelines/${pipeline.id}/cancel`, { auth })
@@ -314,6 +411,24 @@ describe(
         fake.pipelineActions.map((item) => item.action),
         ['cancel', 'retry'],
       )
+      // A pipeline that passed: its retry runs nothing.
+      pipeline.runMs = 50
+      await new Promise((done) => setTimeout(done, 100))
+      const passed = await call('GET', `${at}/pipelines/${pipeline.id}`, { auth })
+      assert.equal(passed.json.status, 'success')
+      await call('POST', `${at}/pipelines/${pipeline.id}/retry`, { auth })
+      assert.equal(
+        (await call('GET', `${at}/pipelines/${pipeline.id}`, { auth })).json.finished_at,
+        passed.json.finished_at,
+      )
+      assert.equal(
+        (await call('GET', `${at}/pipelines/${pipeline.id}`, { auth })).json.status,
+        'success',
+      )
+      const job = pipeline.jobs.find((item) => !item.manual)
+      // The log of a job as Runner 19 writes it: every line with its prefix.
+      const trace = await call('GET', `${at}/jobs/${job.id}/trace`, { auth })
+      assert.match(trace.text, /^\d{4}-\d\d-\d\dT[\d:.]+Z 0[01]O[ +]/)
       assert.equal((await call('DELETE', `${at}/hooks/${made.json.id}`, { auth })).status, 204)
       assert.equal(fake.removedHooks.length, 1)
     })
