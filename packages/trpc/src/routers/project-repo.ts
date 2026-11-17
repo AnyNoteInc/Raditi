@@ -196,6 +196,7 @@ export const projectRepoRouter = router({
           sent: z.boolean(),
           canPush: z.boolean(),
           pushBlocked: z.enum(['reauth', 'other_member']).nullable(),
+          provider: z.enum(repoProviderKinds),
           ciChange: z.enum(['none', 'needed', 'declined', 'foreign']),
           mergeRequest: z
             .strictObject({
@@ -557,6 +558,7 @@ export const projectRepoRouter = router({
         kind: z.enum(repoActionKinds),
         state: z.enum(repoActionStates),
         error: z.string().nullable(),
+        provider: z.enum(repoProviderKinds),
       }),
     )
     .query(({ ctx, input }) =>

@@ -103,7 +103,12 @@ describe('the runs', () => {
     expect(scheduledRunReasonText.platform).toBe('сбой платформы')
     expect(schedulePausedReasonText.refused).toBe('Остановлена после трёх отказов подряд')
     // A project put away, a task the agent set up that waits for the client (docs/plan/84, ПР19).
-    expect(scheduledRunReasonText.project_unavailable).toBe('нужно войти в GitLab заново')
+    // The run keeps no provider: the words fit GitLab and GitHub alike (§10, «Остаток списка»).
+    expect(scheduledRunReasonText.project_unavailable).toBe(
+      'нужно заново войти туда, где лежит репозиторий проекта',
+    )
+    for (const text of Object.values(scheduledRunReasonText))
+      expect(text).not.toMatch(/Git(Lab|Hub)/)
     expect(schedulePausedReasonText.project_gone).toBe('Остановлена: проект в архиве или удалён')
     expect(schedulePausedReasonText.unconfirmed).toBe('Ждёт, пока вы её включите')
     for (const text of Object.values(scheduledRunReasonText)) expect(text).toMatch(/^[а-яё]/u)

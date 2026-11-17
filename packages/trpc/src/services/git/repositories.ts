@@ -14,7 +14,8 @@ import {
   gitConnectionNotReady,
   gitConnectionProviders,
   gitJobNames,
-  gitConnectionReasonTexts,
+  gitConnectionReasonText,
+  isGitConnectionReason,
   parseRepositoryLink,
   projectArchived,
   projectHasRepository,
@@ -22,10 +23,10 @@ import {
   repoBranchSchema,
   repoNotInConnection,
   repoRefusalTexts,
+  repoSecretsFoundPaths,
   repoWebUrl,
   taskProjectBusy,
   type GitConnectionKind,
-  type GitConnectionReason,
   type RepoMirrorState,
   type RepoMode,
   type RepoProviderKind,
@@ -87,10 +88,15 @@ function refusalOf(row: ViewRow): ProjectRepoView['refusal'] {
     row.connection.state !== 'ok' &&
     row.connection.state !== 'checking'
   ) {
-    const reason = (row.connection.stateReason ?? 'reauth') as GitConnectionReason
+    const reason = row.connection.stateReason ?? 'reauth'
+    // The words name the provider of the connection's own kind (rule 8: a table, never a
+    // comparison); a reason of another version of the code reads as a sign-in to renew.
     return {
       code: 'GIT_CONNECTION_REAUTH',
-      message: gitConnectionReasonTexts[reason] ?? repoRefusalTexts.GIT_CONNECTION_REAUTH,
+      message: gitConnectionReasonText(
+        isGitConnectionReason(reason) ? reason : 'reauth',
+        row.connection.kind as GitConnectionKind,
+      ),
     }
   }
   if (row.mirrorState === 'unreachable')
@@ -124,13 +130,7 @@ const viewOf = (row: ViewRow): ProjectRepoView => ({
           state: row.connection.state,
         },
   refusal: refusalOf(row),
-  secretsFound: Array.isArray(row.secretsFound)
-    ? row.secretsFound.flatMap((item) =>
-        item !== null && typeof item === 'object' && 'path' in item && typeof item.path === 'string'
-          ? [item.path]
-          : [],
-      )
-    : [],
+  secretsFound: repoSecretsFoundPaths(row.secretsFound),
   fetchedAt: row.fetchedAt,
 })
 

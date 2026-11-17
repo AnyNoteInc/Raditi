@@ -233,8 +233,10 @@ const TREE_ASK_MS = 60_000
 
 /**
  * `projectRepo.paths` (ПР24): the paths of the main branch core keeps for `@`, by the head it last
- * fetched. A newer head than the kept list — the kept one is answered and core is asked for the new
- * one (`git.repo.tree`); none kept — `loading`. `none` — no repository, or not ready.
+ * fetched — without the files a sandbox holds as a stub (ПР35). A newer head than the kept list —
+ * the kept one is answered and core is asked for the new one (`git.repo.tree`); none kept, or one
+ * of an earlier version of the list (`repoTreeKey`) — `loading`, and core is asked. `none` — no
+ * repository, or not ready.
  */
 export async function readRepoPaths(
   db: PrismaClient,
@@ -248,15 +250,17 @@ export async function readRepoPaths(
   })
   if (repo === null || repo.mirrorState !== 'ready' || repo.lastFetchedSha === null)
     return { state: 'none' }
-  if (repo.treeSha !== repo.lastFetchedSha)
+  const stream =
+    repo.treeSha === null || storage === null
+      ? null
+      : await storage.get('artifacts', repoTreeKey(repo.id, repo.treeSha))
+  if (repo.treeSha !== repo.lastFetchedSha || stream === null)
     await enqueueOutbox(db, {
       topic: 'git',
       type: gitJobNames.repoTree,
       payload: { projectRepositoryId: repo.id, sha: repo.lastFetchedSha },
       dedupeKey: `git.repo.tree:${repo.id}:${repo.lastFetchedSha}:${Math.floor(input.now.getTime() / TREE_ASK_MS)}`,
     })
-  if (repo.treeSha === null || storage === null) return { state: 'loading' }
-  const stream = await storage.get('artifacts', repoTreeKey(repo.id, repo.treeSha))
   if (stream === null) return { state: 'loading' }
   const chunks: Uint8Array[] = []
   let bytes = 0

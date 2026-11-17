@@ -5,12 +5,15 @@ import {
   gitAccessDenied,
   gitHostRefused,
   repositoryTooLarge,
+  repositoryUnsupported,
+  repoTreeFileSchema,
+  repoTreeKey,
   type GitProvider,
   type RepositoryInfo,
 } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { GitJobs, ownCiPath } from './git-jobs.ts'
+import { GitJobs, ownCiPath, type GitJobsOptions } from './git-jobs.ts'
 
 // The jobs of the queue `git` (docs/plan/84-projects.md, §4.3; slice 84.17) on PostgreSQL, with a
 // fake adapter and a fake trusted git: the check and the list of a connection, the branches, the
@@ -61,6 +64,8 @@ function fakeProvider(answers: Partial<GitProvider>) {
     get: (_target, name: string) => {
       const answer = (answers as Record<string, unknown>)[name]
       if (name === 'then') return undefined
+      // `support` is data of the adapter, not a call: none named — an adapter that offers nothing.
+      if (name === 'support') return answer ?? {}
       return async (...args: unknown[]) => {
         calls.push(name)
         if (typeof answer !== 'function') throw new Error(`unexpected call ${name}`)
@@ -146,7 +151,14 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
     return id
   }
 
-  function jobs(answers: Partial<GitProvider>) {
+  function jobs(
+    answers: Partial<GitProvider>,
+    extra: {
+      listPaths?: GitJobsOptions['workspace']['listPaths']
+      hiddenFiles?: GitJobsOptions['workspace']['hiddenFiles']
+      storage?: GitJobsOptions['storage']
+    } = {},
+  ) {
     const fake = fakeProvider(answers)
     const fetch = vi.fn(async (_input: unknown) => new Map([['main', SHA]]))
     const findSecrets = vi.fn(async () => ['config/prod.env'])
@@ -169,8 +181,10 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
         buildSettingsChange,
         dropMirror,
         removeOrphans: vi.fn(async () => 0),
-        listPaths: vi.fn(async () => ({ paths: [], truncated: false })),
+        listPaths: extra.listPaths ?? vi.fn(async () => ({ paths: [], truncated: false })),
+        hiddenFiles: extra.hiddenFiles ?? vi.fn(async () => []),
       },
+      ...(extra.storage ? { storage: extra.storage } : {}),
       logger: quiet,
     })
     return {
@@ -270,6 +284,57 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
     expect(row.branches).toEqual(['main', 'develop', 'winter-2026'])
   })
 
+  // docs/plan/84-projects.md, §10, «Остаток списка — закрыто»: `can_hook` is what the adapter says.
+  it('keeps the right to a hook as the adapter says it, and a list that does not say keeps it', async () => {
+    const own = await owner()
+    const id = await tokenConnection(own)
+    const hooks = { projectHooks: true } as GitProvider['support']
+    // A list of GitLab carries no permissions: the right is not known yet.
+    await jobs({
+      support: hooks,
+      whoAmI: async () => ({ login: 'elena.k', id: '42' }),
+      listRepositories: async () => ({
+        items: [info(), info({ path: 'kolos/bot', id: '8', canManageHooks: true })],
+        next: null,
+      }),
+    }).jobs.syncConnection(id)
+    const canHook = async (providerRepoId: string) =>
+      (
+        await db.gitConnectionRepository.findUniqueOrThrow({
+          where: { connectionId_providerRepoId: { connectionId: id, providerRepoId } },
+        })
+      ).canHook
+    expect([await canHook('7'), await canHook('8')]).toEqual([false, true])
+    // The look at the repository in the choice reads it from the repository itself.
+    const looked = jobs({
+      support: hooks,
+      listBranches: async () => ['main'],
+      getRepository: async () => info({ canManageHooks: true }),
+    })
+    await looked.jobs.inspectRepository(id, '7')
+    expect(looked.calls).toEqual(expect.arrayContaining(['listBranches', 'getRepository']))
+    expect(await canHook('7')).toBe(true)
+    // A later list that does not say keeps it; one that says changes it.
+    const again = jobs({
+      support: hooks,
+      whoAmI: async () => ({ login: 'elena.k', id: '42' }),
+      listRepositories: async () => ({
+        items: [info(), info({ path: 'kolos/bot', id: '8', canManageHooks: false })],
+        next: null,
+      }),
+    })
+    await again.jobs.syncConnection(id)
+    expect([await canHook('7'), await canHook('8')]).toEqual([true, false])
+    // A provider without hooks of one repository is not asked.
+    const none = jobs({
+      support: { projectHooks: false } as GitProvider['support'],
+      listBranches: async () => ['main'],
+    })
+    await none.jobs.inspectRepository(id, '8')
+    expect(none.calls).not.toContain('getRepository')
+    expect(await canHook('8')).toBe(false)
+  })
+
   async function linkRepository(own: Awaited<ReturnType<typeof owner>>, connectionId?: string) {
     const id = randomUUID()
     await db.projectRepository.create({
@@ -289,6 +354,73 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
     })
     return id
   }
+
+  // docs/plan/84-projects.md, ПР24, ПР35; §10, «Остаток списка — закрыто»: `@` offers only what
+  // the agent can read — never a file the sandbox holds as a stub.
+  it('`git.repo.tree` leaves out the files a sandbox gets as a stub, and makes an old list again', async () => {
+    const own = await owner()
+    const id = await linkRepository(own)
+    await db.projectRepository.update({
+      where: { id },
+      data: {
+        mirrorState: 'ready',
+        lastFetchedSha: SHA,
+        secretsFound: [{ path: 'deploy/settings.php', rule: 'gitleaks' }],
+      },
+    })
+    const kept = new Map<string, Buffer>()
+    const storage = {
+      put: vi.fn(async (_bucket: string, key: string, body: Uint8Array) => {
+        kept.set(key, Buffer.from(body))
+      }),
+      exists: vi.fn(async (_bucket: string, key: string) => kept.has(key)),
+    }
+    const listPaths = vi.fn(
+      async (_id: string, _sha: string, _limit: number, hidden?: ReadonlySet<string>) => ({
+        paths: ['README.md', 'src/app.ts', 'src/keys.ts', 'deploy/settings.php'].filter(
+          (path) => !hidden?.has(path),
+        ),
+        truncated: false,
+      }),
+    )
+    const hiddenFiles = vi.fn(async () => ['.env', 'src/keys.ts'])
+    const run = jobs({}, { listPaths, hiddenFiles, storage: storage as never })
+    await run.jobs.repoTree(id, SHA)
+    expect(hiddenFiles).toHaveBeenCalledWith(id, SHA)
+    expect([...listPaths.mock.calls[0]![3]!].sort()).toEqual([
+      '.env',
+      'deploy/settings.php',
+      'src/keys.ts',
+    ])
+    const file = repoTreeFileSchema.parse(JSON.parse(kept.get(repoTreeKey(id, SHA))!.toString()))
+    expect(file).toEqual({ v: 2, sha: SHA, paths: ['README.md', 'src/app.ts'], truncated: false })
+    expect(await db.projectRepository.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      treeSha: SHA,
+    })
+    // The list is kept: a repeat reads nothing.
+    await run.jobs.repoTree(id, SHA)
+    expect(listPaths).toHaveBeenCalledTimes(1)
+    // A list of an earlier version is under another key: the job makes it again.
+    kept.clear()
+    await run.jobs.repoTree(id, SHA)
+    expect(listPaths).toHaveBeenCalledTimes(2)
+    // A tree no turn takes offers nothing.
+    kept.clear()
+    await jobs(
+      {},
+      {
+        listPaths,
+        hiddenFiles: vi.fn(async () => {
+          throw repositoryUnsupported('Too many files of the repository look like secrets')
+        }),
+        storage: storage as never,
+      },
+    ).jobs.repoTree(id, SHA)
+    expect(listPaths).toHaveBeenCalledTimes(2)
+    expect(
+      repoTreeFileSchema.parse(JSON.parse(kept.get(repoTreeKey(id, SHA))!.toString())).paths,
+    ).toEqual([])
+  })
 
   it('`git.repo.forget` removes the mirror of a repository whose row is gone, and only then', async () => {
     const own = await owner()

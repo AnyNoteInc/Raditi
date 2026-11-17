@@ -262,6 +262,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: merge and deploy cards (plan 84, 84.2
       kind: 'merge',
       state: 'queued',
       error: null,
+      // A refusal of the sign-in names the provider of the repository pressed on (§10).
+      provider: 'gitlab',
     })
   })
 

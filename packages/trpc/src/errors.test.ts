@@ -24,6 +24,7 @@ import {
   conflict,
   DomainError,
   forbidden,
+  gitConnectionReauth,
   notFound,
   notImplemented,
   taskRefusal,
@@ -584,6 +585,20 @@ describe('the text of a refused task, built from the details of its refusal', ()
         expect(JSON.stringify(formatted)).not.toContain('spendable')
       }
     }
+  })
+})
+
+// docs/plan/84-projects.md, §10, «Остаток списка — закрыто»: a sign-in to renew names the provider
+// its thrower knew, never GitLab for a repository on GitHub; without it — neutral words.
+describe('a sign-in with the provider of a repository to renew', () => {
+  it('names the provider of the details, or none', () => {
+    expect(toTRPCError(gitConnectionReauth('gitlab')).message).toBe('Нужно войти в GitLab заново')
+    expect(toTRPCError(gitConnectionReauth('github')).message).toBe('Нужно войти в GitHub заново')
+    expect(toTRPCError(gitConnectionReauth()).message).toBe(
+      'Нужно заново войти туда, где лежит репозиторий',
+    )
+    const forged = new DomainError('GIT_CONNECTION_REAUTH', 'x', 409, { provider: 'gitea' })
+    expect(toTRPCError(forged).message).toBe('Нужно заново войти туда, где лежит репозиторий')
   })
 })
 

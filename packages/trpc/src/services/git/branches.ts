@@ -41,6 +41,7 @@ import {
   type RepoBranchState,
   type RepoConfirmKind,
   type RepoConfirmMac,
+  type RepoProviderKind,
 } from '@repo/domain'
 
 import { accessibleTask, taskNotFound } from '../chat/access.ts'
@@ -76,6 +77,7 @@ async function ownChat(
     where: { projectId: project.id },
     select: {
       id: true,
+      provider: true,
       defaultBranch: true,
       mode: true,
       webUrl: true,
@@ -121,6 +123,8 @@ export interface ChatBranchView {
    * sign-in of the connection is to be renewed, or another member connected the repository.
    */
   pushBlocked: 'reauth' | 'other_member' | null
+  /** The provider of the repository: the card names it when its sign-in is to be renewed. */
+  provider: RepoProviderKind
   /**
    * What waits to be sent touches build settings (ПР16): `needed` — only by the card «Агент хочет
    * изменить настройки сборки»; `declined` — the client said «Не отправлять» to it; `foreign` — the
@@ -211,6 +215,7 @@ export async function readChatBranch(
           : repo.connection.state === 'ok' || repo.connection.state === 'checking'
             ? null
             : 'reauth',
+    provider: repo.provider as RepoProviderKind,
     ciChange,
     mergeRequest: mr
       ? {
@@ -298,7 +303,8 @@ function assertWritable(
 ): asserts repo is NonNullable<Awaited<ReturnType<typeof ownChat>>['repo']> {
   if (repo === null) throw repoNothingToPush()
   if (repo.mode !== 'write' || repo.connection === null) throw repoReadOnly()
-  if (repo.connection.state === 'reauth_needed') throw gitConnectionReauth()
+  if (repo.connection.state === 'reauth_needed')
+    throw gitConnectionReauth(repo.provider as RepoProviderKind)
   if (repo.connection.state !== 'ok' || repo.connection.createdById !== userId) throw repoReadOnly()
 }
 

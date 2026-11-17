@@ -468,7 +468,9 @@ export async function connectGithubApp(
         visibility: item.private ? 'private' : 'public',
         defaultBranch: item.defaultBranch,
         canPush: true,
-        canHook: false,
+        // As the adapter says (84.26): the GitHub App has one webhook for all its repositories,
+        // no hook of one repository — false.
+        canHook: item.canManageHooks === true,
         syncedAt: now,
       }
       await tx.gitConnectionRepository.upsert({

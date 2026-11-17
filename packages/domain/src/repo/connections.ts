@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { isProduction, type AppEnv } from '../app-env.ts'
 import { DomainError } from '../errors.ts'
 import type { RepoProviderKind } from '../ports/git-provider.ts'
+import { repoRefusalTexts } from './errors.ts'
 import { gitHostSchema } from './ref.ts'
 import type { GitConnectionKind } from './statuses.ts'
 
@@ -60,6 +61,18 @@ export const repoProviderBrands: Readonly<
   github: Object.freeze({ label: 'GitHub', icon: 'github' }),
   gitlab: Object.freeze({ label: 'GitLab', icon: 'gitlab' }),
 })
+
+/**
+ * «Нужно войти в GitLab заново», «Нужно войти в GitHub заново»: the sign-in of a connection is to be
+ * renewed. The brand comes from `repoProviderBrands` (rule 8: data, never a comparison); null —
+ * the provider is not known where the words are said (a code of a press, a line of the feed, a run
+ * of a scheduled task): neutral words.
+ */
+export function repoReauthText(provider: RepoProviderKind | null): string {
+  return provider === null
+    ? repoRefusalTexts.GIT_CONNECTION_REAUTH
+    : `Нужно войти в ${repoProviderBrands[provider].label} заново`
+}
 
 /** Where the tokens of a connection live: one version, CAS (§4.2). */
 export const gitConnectionSecretPath = (workspaceId: string, connectionId: string): string =>
@@ -164,16 +177,40 @@ export const gitConnectionReasons = [
 ] as const
 export type GitConnectionReason = (typeof gitConnectionReasons)[number]
 
-/** The words of a connection that is not `ok` (P-git-connect, P-git-repo-pick). */
-export const gitConnectionReasonTexts = Object.freeze({
-  access_denied: 'GitLab не принял токен — проверьте его права и срок',
-  host_refused: 'Этот адрес недоступен: сервер должен быть в интернете по https',
-  unreachable: 'Сервер не ответил — попробуйте ещё раз немного позже',
-  already_connected: 'Эта учётная запись уже подключена',
-  reauth: 'Нужно войти в GitLab заново',
-  installation_gone:
-    'Приложение Радити на GitHub удалено или приостановлено — подключите GitHub заново',
-} satisfies Record<GitConnectionReason, string>)
+/**
+ * The words of a connection that is not `ok` (P-git-connect, P-git-repo-pick), by the kind of the
+ * connection: its provider names the brand, and a connection by a token is told to check the
+ * token, one by a sign-in to connect again (rule 8: tables, never a comparison of the kind). null
+ * — the kind is not known: neutral words.
+ */
+export function gitConnectionReasonText(
+  reason: GitConnectionReason,
+  kind: GitConnectionKind | null,
+): string {
+  switch (reason) {
+    case 'access_denied': {
+      if (kind === null) return repoRefusalTexts.GIT_ACCESS_DENIED
+      const brand = repoProviderBrands[gitConnectionProviders[kind]].label
+      return gitConnectionSignsIn[kind]
+        ? `${brand} не дал доступ — подключите ${brand} заново`
+        : `${brand} не принял токен — проверьте его права и срок`
+    }
+    case 'reauth':
+      return repoReauthText(kind === null ? null : gitConnectionProviders[kind])
+    case 'host_refused':
+      return 'Этот адрес недоступен: сервер должен быть в интернете по https'
+    case 'unreachable':
+      return 'Сервер не ответил — попробуйте ещё раз немного позже'
+    case 'already_connected':
+      return 'Эта учётная запись уже подключена'
+    // Only an installation of the GitHub App comes to it (the `installation` webhook, 84.27).
+    case 'installation_gone':
+      return 'Приложение Радити на GitHub удалено или приостановлено — подключите GitHub заново'
+  }
+}
+
+export const isGitConnectionReason = (reason: string): reason is GitConnectionReason =>
+  (gitConnectionReasons as readonly string[]).includes(reason)
 
 // --- refusals ---------------------------------------------------------------------------------
 

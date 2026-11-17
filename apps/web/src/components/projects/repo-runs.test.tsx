@@ -343,6 +343,33 @@ describe('the cards of a build and of «Отменить» (plan 84, 84.26)', ()
     expect(await screen.findByText('Сборка запущена снова — она появится в списке.')).toBeTruthy()
   })
 
+  it('a press refused for a sign-in names the provider of its repository (§10, «Остаток списка»)', async () => {
+    calls.run.mockResolvedValue({ run: runRow('482', 'failed'), jobs: [] })
+    calls.prepareRunAction.mockResolvedValue({
+      kind: 'rerun',
+      runId: '482',
+      name: 'pipeline',
+      ref: 'raditi/novoe-menyu-0000c002',
+      sha: 'e'.repeat(40),
+      status: 'failed',
+      deploy: false,
+      confirmToken: 'token-rerun',
+      expiresAt: new Date(Date.now() + 600_000),
+    })
+    calls.action.mockResolvedValue({
+      id: 'x',
+      kind: 'rerun',
+      state: 'failed',
+      error: 'GIT_CONNECTION_REAUTH',
+      provider: 'github',
+    })
+    wrap(<RunView project={project} runId="482" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Запустить снова' }))
+    await screen.findByText('Ветка raditi/novoe-menyu-0000c002, версия eeeeeee.')
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }))
+    expect(await screen.findByText('Нужно войти в GitHub заново.')).toBeTruthy()
+  })
+
   it('a build that goes offers «Остановить»; a repository read by a link offers nothing', async () => {
     calls.run.mockResolvedValue({ run: runRow('484', 'running'), jobs: [] })
     wrap(<RunView project={project} runId="484" />)
