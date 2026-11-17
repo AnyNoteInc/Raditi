@@ -30,6 +30,7 @@ import { useTRPC } from '@/trpc/client'
 
 import type { ProjectDetails } from './project-types'
 import { DeployButton } from './repo-deploy'
+import { RevertButton, RunActionButton } from './repo-press'
 import { repoText } from './repo-texts'
 
 // The repository of a project and its builds (docs/plan/84-projects.md, ПР17, §4.8; slice 84.21;
@@ -88,6 +89,10 @@ export const runHref = (projectId: string, runId: string) =>
   `/projects/${projectId}/repository/runs/${runId}`
 
 const active = (status: CiStatus) => status === 'pending' || status === 'running'
+
+/** The author's own connection may write: the buttons of a trusted card are offered (ПР15). */
+const writable = (repo: ProjectDetails['repository']) =>
+  repo !== null && repo !== undefined && repo.mode === 'write' && repo.connection?.state === 'ok'
 
 /** «Идёт», «Упала», «Ждёт ручного запуска»…; a run gitlab.com did not start — in its own words. */
 export function ciWord(status: CiStatus, refusal: CiRefusal | null | undefined): string {
@@ -371,6 +376,10 @@ export function RepositoryView({
                       {pullRequestStateWords[mr.state]} · {checksStateWords[mr.checks]}
                       {mr.chat ? ` · ${runText.fromChat(mr.chat.title)}` : ''}
                     </Typography>
+                    {/* «Отменить» of a merged request: a new merge request (ПР15; 84.26). */}
+                    {mr.state === 'merged' && writable(project.repository) ? (
+                      <RevertButton projectId={project.id} number={mr.number} />
+                    ) : null}
                   </Box>
                 ))}
               </Box>
@@ -599,6 +608,15 @@ export function RunView({
               </Typography>
               <CiStatusChip status={data.run.status} refusal={data.run.refusal} />
               <Box sx={{ flex: '1 1 auto' }} />
+              {/* «Запустить снова» or «Остановить» (ПР17; 84.26): a trusted card each. */}
+              {writable(project.repository) ? (
+                <RunActionButton
+                  key={active(data.run.status) ? 'cancel' : 'rerun'}
+                  projectId={project.id}
+                  runId={data.run.id}
+                  kind={active(data.run.status) ? 'cancel' : 'rerun'}
+                />
+              ) : null}
               <Button
                 size="small"
                 component="a"

@@ -1,7 +1,8 @@
-import type { PrismaClient } from '@repo/db'
+import { enqueueOutbox, type PrismaClient } from '@repo/db'
 import {
   ciStatusIsActive,
   gitConnectionProviders,
+  gitJobNames,
   isDomainError,
   maskCiLog,
   REPO_CI_JOBS_KEPT,
@@ -15,6 +16,7 @@ import {
   type GitConnectionKind,
   type GitGrant,
   type GitProvider,
+  type GitRefreshPayload,
   type RepoCiJob,
   type RepoProviderKind,
   type RepoRef,
@@ -26,6 +28,7 @@ import type { GitAuthSource } from './git-auth-source.ts'
 import type { GitProviderFactory } from './git-jobs.ts'
 import { accessSecrets, openGitOperation, type GitOperation } from './git-operation.ts'
 import type { ResolvePublicHost } from './public-host.ts'
+import { cacheMergeRequest, chatOfMergeRequest } from './merge-request-cache.ts'
 import { endWaitingMerges } from './repo-actions.ts'
 
 // The builds of the repositories of projects (docs/plan/84-projects.md, ПР15, ПР17, §4.3; slice
@@ -53,6 +56,9 @@ const REQUESTS_PER_POLL = 20
 const RECENT_PUSH_MS = 15 * 60_000
 /** Two polls of one repository are at least this far apart, whoever asks. */
 const POLL_GAP_MS = REPO_POLL_EVERY_MS - 5_000
+/** Sent branches without a known merge request one poll asks the provider about at most. */
+const ADOPT_PER_POLL = 5
+
 /** What core reads of a log: its kept tail and room for the escapes it takes out. */
 const LOG_READ_BYTES = REPO_CI_LOG_BYTES + 16 * 1024
 
@@ -191,6 +197,49 @@ export class RepoCi {
    * False — another process polled it within the gap, or it cannot be read now.
    */
   async poll(projectRepositoryId: string): Promise<boolean> {
+    return (await this.#pollOnce(projectRepositoryId, null)) === 'polled'
+  }
+
+  /**
+   * `git.refresh` (slice 84.26): a hint of a webhook, never trusted — the repository is polled as
+   * the tick polls it, its hinted merge request read now, and one opened at the provider for a
+   * chat's branch adopted. Read within the poll gap already — once more when the gap ends, by one
+   * outbox row per key and poll: a storm of deliveries is at most one read a gap.
+   */
+  async refresh(payload: GitRefreshPayload): Promise<'polled' | 'later' | 'skipped'> {
+    const { prisma } = this.#o
+    const id = payload.projectRepositoryId
+    if (payload.number !== undefined)
+      await prisma.projectMergeRequest.updateMany({
+        where: {
+          projectRepositoryId: id,
+          number: payload.number,
+          state: { in: ['open', 'draft'] },
+        },
+        data: { syncedAt: new Date(0) },
+      })
+    const outcome = await this.#pollOnce(id, payload)
+    if (outcome !== 'busy') return outcome
+    const row = await prisma.projectRepository.findUnique({
+      where: { id },
+      select: { ciPolledAt: true },
+    })
+    if (row?.ciPolledAt == null) return 'skipped'
+    const object = payload.number ?? payload.runId ?? '-'
+    await enqueueOutbox(prisma, {
+      topic: 'git',
+      type: gitJobNames.refresh,
+      payload,
+      dedupeKey: `git.refresh.later:${id}:${payload.kind}:${object}:${row.ciPolledAt.getTime()}`,
+      availableAt: new Date(row.ciPolledAt.getTime() + POLL_GAP_MS + 1_000),
+    })
+    return 'later'
+  }
+
+  async #pollOnce(
+    projectRepositoryId: string,
+    hint: GitRefreshPayload | null,
+  ): Promise<'polled' | 'busy' | 'skipped'> {
     const { prisma } = this.#o
     const now = this.#now()
     const claimed = await prisma.projectRepository.updateMany({
@@ -201,17 +250,23 @@ export class RepoCi {
       },
       data: { ciPolledAt: now },
     })
-    if (claimed.count === 0) return false
+    if (claimed.count === 0) {
+      const ready = await prisma.projectRepository.count({
+        where: { id: projectRepositoryId, mirrorState: 'ready' },
+      })
+      return ready === 0 ? 'skipped' : 'busy'
+    }
     const repo = (await prisma.projectRepository.findUnique({
       where: { id: projectRepositoryId },
       select: repoSelect,
     })) as RepoRow | null
-    if (repo === null) return false
+    if (repo === null) return 'skipped'
     try {
       const op = await this.#operation(repo)
-      if (op === null) return false
+      if (op === null) return 'skipped'
       try {
         const defaultChanged = await this.#pollRuns(repo, op)
+        await this.#adoptRequests(repo, op, now, hint)
         await this.#pollRequests(repo, op, now)
         if (defaultChanged) await this.#deployActions(repo, op)
       } finally {
@@ -219,11 +274,77 @@ export class RepoCi {
       }
       // A merge the platform waits for writes: it takes its own access (RepoActions).
       if (repo.connection !== null) await this.#o.waits?.(repo.id)
-      return true
+      return 'polled'
     } catch (error) {
       const code = isDomainError(error) ? error.code : 'unknown'
       this.#o.logger.warn(`git.poll ${projectRepositoryId}: ${code}`)
-      return false
+      return 'skipped'
+    }
+  }
+
+  /**
+   * Merge requests opened at the provider for a chat's own branch that Радити does not know
+   * (slice 84.26): the one a webhook named, and those of branches sent within RECENT_PUSH_MS — or of
+   * any sent branch when the hint is of a merge request — without a known request, read by their
+   * branch. A request of a branch that is not a chat's is never adopted.
+   */
+  async #adoptRequests(
+    repo: RepoRow,
+    op: { provider: GitProvider; auth: GitAuth; ref: RepoRef },
+    now: Date,
+    hint: GitRefreshPayload | null,
+  ): Promise<void> {
+    const { prisma } = this.#o
+    const adopt = async (pr: Awaited<ReturnType<GitProvider['getPullRequest']>>) => {
+      if (pr === null) return
+      const taskId = await chatOfMergeRequest(prisma, {
+        projectRepositoryId: repo.id,
+        defaultBranch: repo.defaultBranch,
+        pr,
+      })
+      if (taskId === null) return
+      await prisma.$transaction((tx) =>
+        cacheMergeRequest(tx, { projectRepositoryId: repo.id, taskId, pr, now }),
+      )
+      this.#o.logger.log(`git.poll ${repo.id}: a merge request of a chat adopted`)
+    }
+    if (hint?.number !== undefined) {
+      const known = await prisma.projectMergeRequest.count({
+        where: { projectRepositoryId: repo.id, number: hint.number },
+      })
+      if (known === 0) await adopt(await op.provider.getPullRequest(op.auth, op.ref, hint.number))
+    }
+    const branches = await prisma.projectRepoBranch.findMany({
+      where: {
+        projectRepositoryId: repo.id,
+        state: 'pushed',
+        remoteSha: { not: null },
+        ...(hint?.kind === 'merge_request'
+          ? {}
+          : { updatedAt: { gte: new Date(now.getTime() - RECENT_PUSH_MS) } }),
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 50,
+      select: { branch: true },
+    })
+    if (branches.length === 0) return
+    const known = new Set(
+      (
+        await prisma.projectMergeRequest.findMany({
+          where: {
+            projectRepositoryId: repo.id,
+            sourceBranch: { in: branches.map((b) => b.branch) },
+            state: { in: ['open', 'draft', 'merged'] },
+          },
+          select: { sourceBranch: true },
+        })
+      ).map((row) => row.sourceBranch),
+    )
+    for (const { branch } of branches
+      .filter((b) => !known.has(b.branch))
+      .slice(0, ADOPT_PER_POLL)) {
+      const found = await op.provider.findPullRequests(op.auth, op.ref, branch)
+      await adopt(found.find((pr) => pr.targetBranch === repo.defaultBranch) ?? null)
     }
   }
 

@@ -10,6 +10,7 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import {
+  ciStatusIsActive,
   gitAccessDenied,
   gitConnectionReauth,
   gitNotSupported,
@@ -43,6 +44,11 @@ import {
   repoNotMergeable,
   repoPushConflict,
   repoReadOnly,
+  repoNotMerged,
+  repoRevertConflict,
+  repoRunGone,
+  repoRunTexts,
+  rerunIsDeploy,
   type GitAuth,
   type GitConnectionKind,
   type GitProvider,
@@ -61,6 +67,7 @@ import { buildPathsOf } from './build-paths.ts'
 import type { GitAuthSource } from './git-auth-source.ts'
 import type { GitProviderFactory } from './git-jobs.ts'
 import { openGitOperation, type GitOperation } from './git-operation.ts'
+import { cacheMergeRequest, isMergeRequestThere } from './merge-request-cache.ts'
 import type { ResolvePublicHost } from './public-host.ts'
 
 // `git.action` (docs/plan/84-projects.md, ПР13–ПР15, §4.3, §4.4; slice 84.19): a row of
@@ -112,7 +119,7 @@ export interface RepoActionsOptions {
   provider: GitProviderFactory
   workspace: Pick<
     GitWorkspaceService,
-    'pushChatBranch' | 'moveChatRef' | 'readChatRef' | 'buildSettingsChange'
+    'pushChatBranch' | 'moveChatRef' | 'readChatRef' | 'buildSettingsChange' | 'revertMerge'
   >
   /** HMAC by REPO_CONFIRM_SECRET; null — no secret: no action runs. */
   mac: RepoConfirmMac | null
@@ -190,6 +197,10 @@ export class RepoActions {
         await this.#finish(row, merged.waiting ? 'waiting' : 'done', null, merged)
       } else if (row.kind === 'deploy')
         await this.#finish(row, 'done', null, await this.#deploy(row, claims))
+      else if (row.kind === 'rerun' || row.kind === 'cancel')
+        await this.#finish(row, 'done', null, await this.#runAction(row, claims))
+      else if (row.kind === 'revert')
+        await this.#finish(row, 'done', null, await this.#revert(row, claims))
       else {
         const pushed = await this.#push(row, claims)
         await this.#finish(row, 'done', null, {
@@ -313,6 +324,29 @@ export class RepoActions {
         if (
           claims.deploy === null ||
           claims.targetBranch === null ||
+          merge !== null ||
+          args.data.mergeRequest !== null
+        )
+          throw repoConfirmInvalid()
+        break
+      // A build of the repository page (84.26): no chat, no merge request.
+      case 'rerun':
+      case 'cancel':
+        if (
+          claims.run == null ||
+          claims.number !== null ||
+          claims.deploy !== null ||
+          claims.targetBranch !== claims.run.ref ||
+          merge !== null ||
+          args.data.mergeRequest !== null
+        )
+          throw repoConfirmInvalid()
+        break
+      case 'revert':
+        if (
+          claims.number === null ||
+          claims.targetBranch === null ||
+          claims.deploy !== null ||
           merge !== null ||
           args.data.mergeRequest !== null
         )
@@ -651,6 +685,149 @@ export class RepoActions {
     }
   }
 
+  /**
+   * «Запустить снова» and «Остановить» of a build (ПР17; slice 84.26). The run is read again: its
+   * commit and its ref must be the card's. A rerun of a build of the main branch or one with deploy
+   * jobs is a card of a deploy (ПР15): the card said so, it needs the right to merge into the main
+   * branch, and it reruns only while its commit is the head of its branch — an older build would put
+   * an older version out. A rerun of a build that still goes, or a cancel of one that ended, is
+   * REPO_RUN_GONE.
+   */
+  async #runAction(row: ActionRow, claims: RepoConfirmClaims): Promise<ActionResult> {
+    const { prisma } = this.#o
+    const asked = claims.run!
+    const { repo, connection } = await this.#writableRepository(row, claims)
+    const cached = await prisma.projectCiRun.findUnique({
+      where: {
+        projectRepositoryId_providerRunId: {
+          projectRepositoryId: repo.id,
+          providerRunId: asked.id,
+        },
+      },
+      select: { ref: true, sha: true, event: true, jobs: true },
+    })
+    if (cached === null || cached.ref !== asked.ref) throw repoRunGone()
+    const deploy = rerunIsDeploy({
+      ref: cached.ref,
+      defaultBranch: repo.defaultBranch,
+      event: cached.event,
+      manualJobs: hasManualJobs(cached.jobs),
+    })
+    // The card of a plain rerun for a build that may put code out: never.
+    if (claims.kind === 'rerun' && deploy && !asked.deploy) throw repoChanged()
+    const onDefault = cached.ref === repo.defaultBranch
+    const { provider, auth, info, op } = await this.#operation(
+      { ...repo, connection },
+      { right: deploy || onDefault ? 'merge' : 'push', branch: cached.ref },
+    )
+    try {
+      const now = await provider.getRun(auth, info.ref, asked.id)
+      if (now === null || now.sha !== claims.headSha || now.ref !== asked.ref) throw repoRunGone()
+      if (claims.kind === 'cancel') {
+        if (!ciStatusIsActive(now.status)) throw repoRunGone()
+        await provider.cancelRun(auth, info.ref, asked.id)
+      } else {
+        if (ciStatusIsActive(now.status)) throw repoRunGone()
+        if (deploy) {
+          if (!provider.branchHead) throw gitNotSupported('a rerun of a deploy')
+          const head = await provider.branchHead(auth, info.ref, now.ref)
+          // A ref that is not a branch (the ref of a merge request) has no head to compare.
+          if ((head === null && onDefault) || (head !== null && head !== now.sha))
+            throw repoChanged()
+        }
+        await provider.rerunRun(auth, info.ref, asked.id)
+      }
+      await enqueueOutbox(prisma, {
+        topic: 'git',
+        type: gitJobNames.poll,
+        payload: { projectRepositoryId: repo.id },
+        dedupeKey: `${gitJobNames.poll}:run:${row.id}`,
+      })
+      return { json: { runId: asked.id, sha: now.sha, deploy } }
+    } finally {
+      await op.close()
+    }
+  }
+
+  /**
+   * «Отменить» of a merged request (ПР15; slice 84.26): a new merge request whose one commit takes
+   * the changes of the merge out of the main branch as it stands now — made in the mirror without a
+   * working tree, sent to a new branch `raditi/revert-<n>-…`, opened with a title and a description
+   * made harmless. The request is read again: merged, into the main branch, by the merge commit the
+   * card showed. Nothing reaches the main branch until the client accepts the new request.
+   */
+  async #revert(row: ActionRow, claims: RepoConfirmClaims): Promise<ActionResult> {
+    const { prisma, workspace } = this.#o
+    const number = claims.number!
+    const { repo, connection } = await this.#writableRepository(row, claims)
+    if (claims.targetBranch !== repo.defaultBranch) throw repoChanged()
+    const cached = await prisma.projectMergeRequest.findUnique({
+      where: { projectRepositoryId_number: { projectRepositoryId: repo.id, number } },
+      select: { taskId: true },
+    })
+    if (cached === null || cached.taskId !== row.taskId) throw repoConfirmInvalid()
+    const { ref, address, provider, auth, info, op } = await this.#operation(
+      { ...repo, connection },
+      { right: 'push', branch: repo.defaultBranch },
+    )
+    try {
+      const read = await provider.getPullRequest(auth, info.ref, number)
+      if (read === null || read.state !== 'merged' || read.mergeSha === null) throw repoNotMerged()
+      if (read.mergeSha !== claims.headSha || read.targetBranch !== repo.defaultBranch)
+        throw repoChanged()
+      const label = provider.support.requestRef(number)
+      const committedAt = this.#now().toISOString()
+      let pushed: { sha: string; branch: string } | null = null
+      for (let attempt = 0; attempt < NAME_TRIES && pushed === null; attempt++) {
+        const branch = `raditi/revert-${number}-${row.id.slice(-8).toLowerCase()}${attempt ? `-${attempt + 1}` : ''}`
+        const result = await workspace.revertMerge({
+          projectRepositoryId: repo.id,
+          remote: { cloneUrl: info.cloneUrl, pin: { host: ref.host, address }, access: op.access },
+          defaultBranch: repo.defaultBranch,
+          mergeSha: read.mergeSha,
+          branch,
+          message: `Revert ${label}\n\nThis reverts the merge ${read.mergeSha}.\n`,
+          committedAt,
+        })
+        if (result.kind === 'conflict') throw new Refused(repoRevertConflict().code)
+        if (result.kind === 'nothing') throw new Refused('REPO_REVERT_NOTHING')
+        if (result.kind === 'pushed') pushed = { sha: result.sha, branch }
+      }
+      if (pushed === null) throw repoChanged()
+      const title = neutraliseMergeRequestTitle(
+        repoRunTexts.revertTitleOf(read.title).slice(0, 120),
+      )
+      const opened = await provider.openPullRequest(auth, info.ref, {
+        head: pushed.branch,
+        base: repo.defaultBranch,
+        title,
+        body: neutraliseMergeRequestDescription(
+          `Отменяет изменения запроса ${label}. Открыт кнопкой «Отменить» в Радити.`,
+        ),
+        draft: false,
+      })
+      const again = (await provider.getPullRequest(auth, info.ref, opened.number)) ?? opened
+      if (again.sourceBranch !== pushed.branch || again.targetBranch !== repo.defaultBranch) {
+        await provider.closePullRequest(auth, info.ref, opened.number).catch(() => undefined)
+        throw new Refused('REPO_MR_CHANGED')
+      }
+      // The new request is no chat's: its branch is the platform's, not a chat's own.
+      await cacheMergeRequest(prisma, {
+        projectRepositoryId: repo.id,
+        taskId: null,
+        pr: again,
+        now: this.#now(),
+      })
+      return {
+        json: { number: again.number, url: again.url, sha: pushed.sha, reverts: number },
+        number: again.number,
+        url: again.url,
+      }
+    } finally {
+      await op.close()
+    }
+  }
+
   async #push(
     row: ActionRow,
     claims: RepoConfirmClaims,
@@ -900,13 +1077,31 @@ export class RepoActions {
   ): Promise<PullRequest> {
     const args = repoActionArgsSchema.parse(row.args)
     const asked = args.mergeRequest!
-    const opened = await provider.openPullRequest(auth, ref, {
-      head: at.branch,
-      base: at.target,
-      title: neutraliseMergeRequestTitle(asked.title),
-      body: neutraliseMergeRequestDescription(asked.description),
-      draft: asked.draft,
-    })
+    let opened: PullRequest
+    try {
+      opened = await provider.openPullRequest(auth, ref, {
+        head: at.branch,
+        base: at.target,
+        title: neutraliseMergeRequestTitle(asked.title),
+        body: neutraliseMergeRequestDescription(asked.description),
+        draft: asked.draft,
+      })
+    } catch (error) {
+      // A merge request of this branch is there already — opened at the provider, unknown to
+      // Радити (slice 84.26): it is read and kept for the chat, and nothing new is opened.
+      if (!isMergeRequestThere(error)) throw error
+      const there = (await provider.findPullRequests(auth, ref, at.branch)).find(
+        (pr) => pr.targetBranch === at.target && (pr.state === 'open' || pr.state === 'draft'),
+      )
+      if (there === undefined) throw error
+      await cacheMergeRequest(this.#o.prisma, {
+        projectRepositoryId: at.repositoryId,
+        taskId: at.taskId,
+        pr: there,
+        now: this.#now(),
+      })
+      return there
+    }
     const read = await provider.getPullRequest(auth, ref, opened.number)
     const wanted = asked.draft ? 'draft' : 'open'
     if (
@@ -1006,8 +1201,22 @@ function kindOfClaims(claims: RepoConfirmClaims): RepoActionKind {
       return claims.opensMergeRequest ? 'open_mr' : 'push'
     case 'merge':
     case 'deploy':
+    case 'rerun':
+    case 'cancel':
+    case 'revert':
       return claims.kind
   }
+}
+
+/** Whether the kept jobs of a build have one to start by hand (a deploy job, ПР15). */
+function hasManualJobs(jobs: unknown): boolean {
+  return (
+    Array.isArray(jobs) &&
+    jobs.some(
+      (job) =>
+        typeof job === 'object' && job !== null && (job as { manual?: unknown }).manual === true,
+    )
+  )
 }
 
 const feedKindOf = (kind: string): RepoActionKind =>

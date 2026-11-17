@@ -369,7 +369,7 @@ test('«Контекст» of a project: a file and a text, the window, «Убр
   await test.step('«@» in the field names the files where the agent finds them', async () => {
     const field = page.getByRole('textbox', { name: 'Сообщение' })
     await field.fill('Сверь цены с @Пра')
-    const list = page.getByRole('listbox', { name: 'Файлы контекста проекта' })
+    const list = page.getByRole('listbox', { name: 'Файлы контекста и репозитория проекта' })
     await expect(list.getByRole('option', { name: 'Прайс.pdf' })).toBeVisible()
     await field.press('Enter')
     await expect(field).toHaveValue('Сверь цены с @/workspace/project/Прайс.pdf ')

@@ -10,6 +10,7 @@ import {
   repoChanged,
   repoCloneUrl,
   repoNotMergeable,
+  repoRunGone,
   repoWebUrl,
   sameHostUrl,
   type BranchRules,
@@ -296,9 +297,6 @@ export function createGithubProvider(config: GithubProviderConfig): GitProvider 
   }
   const get = (auth: GitAuth, path: string, query: Record<string, string> = {}) =>
     send(transport.session(), 'GET', auth, path, { query })
-
-  const notYet = (what: string) => () =>
-    Promise.reject(gitNotSupported(`${what} on GitHub before 84.26`))
 
   const repositoryOf = (raw: unknown): RepositoryInfo | null => {
     const parsed = repositorySchema.safeParse(raw)
@@ -671,6 +669,33 @@ export function createGithubProvider(config: GithubProviderConfig): GitProvider 
       return pull
     },
 
+    async findPullRequests(auth, repo, sourceBranch) {
+      // `head` is `owner:branch` of this repository: a branch of a fork never matches
+      // (https://docs.github.com/en/rest/pulls/pulls#list-pull-requests).
+      const owner = repo.path.split('/')[0]!
+      const parsed = z.array(z.unknown()).safeParse(
+        jsonOf(
+          await get(auth, `${repoPath(repo)}/pulls`, {
+            head: `${owner}:${sourceBranch}`,
+            state: 'all',
+            sort: 'created',
+            direction: 'desc',
+            per_page: '20',
+          }),
+        ),
+      )
+      if (!parsed.success) throw gitProviderFailed('pull requests of an unexpected form')
+      return parsed.data
+        .map((raw) => pullOf(repo, raw))
+        .filter(
+          ({ pull, headRepo }) =>
+            pull.sourceBranch === sourceBranch &&
+            pull.state !== 'closed' &&
+            headRepo?.toLowerCase() === repo.path.toLowerCase(),
+        )
+        .map(({ pull }) => pull)
+    },
+
     async mergePullRequest(auth, repo, number, opts) {
       // GitHub has no wait of its own here: the platform waits for the checks (`checksWait`).
       if (opts.whenGreen) throw gitNotSupported('a merge when green by the provider')
@@ -798,8 +823,29 @@ export function createGithubProvider(config: GithubProviderConfig): GitProvider 
       return { text: new TextDecoder('utf-8').decode(log.body), truncated: log.truncated }
     },
 
-    rerunRun: notYet('a rerun'),
-    cancelRun: notYet('cancelling a run'),
+    // https://docs.github.com/en/rest/actions/workflow-runs#re-run-a-workflow (201) and
+    // #cancel-a-workflow-run (202); 403 — the run cannot be rerun now, 409 — not cancelled now.
+    async rerunRun(auth, repo, runId) {
+      const response = await send(
+        transport.session(),
+        'POST',
+        auth,
+        `${repoPath(repo)}/actions/runs/${numericId(runId, 'run')}/rerun`,
+      )
+      if (response.status === 403 || response.status === 409) throw repoRunGone()
+      jsonOf(response)
+    },
+
+    async cancelRun(auth, repo, runId) {
+      const response = await send(
+        transport.session(),
+        'POST',
+        auth,
+        `${repoPath(repo)}/actions/runs/${numericId(runId, 'run')}/cancel`,
+      )
+      if (response.status === 409) throw repoRunGone()
+      jsonOf(response)
+    },
 
     async listDeployActions(auth, repo, ref) {
       // A deploy starts a workflow of the head of the main branch (ПР15): one that runs on

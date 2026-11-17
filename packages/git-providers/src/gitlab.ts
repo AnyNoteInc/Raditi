@@ -59,7 +59,17 @@ const projectSchema = z.looseObject({
   web_url: z.unknown().optional(),
   statistics: z.looseObject({ repository_size: z.number().nonnegative().nullish() }).nullish(),
   ci_config_path: z.string().max(255).nullish(),
+  // https://docs.gitlab.com/api/projects/#get-a-single-project: the access of the token's user.
+  permissions: z
+    .looseObject({
+      project_access: z.looseObject({ access_level: z.number().int() }).nullish(),
+      group_access: z.looseObject({ access_level: z.number().int() }).nullish(),
+    })
+    .nullish(),
 })
+
+/** Maintainer (https://docs.gitlab.com/api/members/#roles): what a project hook needs (ПР17). */
+const MAINTAINER = 40
 
 const pipelineRefSchema = z.looseObject({ id: z.number().int(), status: z.string() }).nullish()
 
@@ -215,6 +225,15 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
       cloneUrl: repoCloneUrl(ref),
       sizeBytes: typeof size === 'number' ? size : null,
       ciConfigPath: project.ci_config_path ? project.ci_config_path : null,
+      ...(project.permissions == null
+        ? {}
+        : {
+            canManageHooks:
+              Math.max(
+                project.permissions.project_access?.access_level ?? 0,
+                project.permissions.group_access?.access_level ?? 0,
+              ) >= MAINTAINER,
+          }),
     }
   }
 
@@ -385,6 +404,22 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
       )
       if (response.status === 404) return null
       return pullRequestOf(repo, jsonOf(response))
+    },
+
+    async findPullRequests(auth, repo, sourceBranch) {
+      const response = await request(fresh(), 'GET', auth, repo, '/merge_requests', {
+        query: {
+          source_branch: sourceBranch,
+          order_by: 'created_at',
+          sort: 'desc',
+          per_page: '20',
+        },
+      })
+      const body = jsonOf(response)
+      if (!Array.isArray(body)) throw gitProviderFailed('merge requests of an unexpected form')
+      return body
+        .map((raw) => pullRequestOf(repo, raw))
+        .filter((mr) => mr.sourceBranch === sourceBranch && mr.state !== 'closed')
     },
 
     async mergePullRequest(auth, repo, number, opts) {
@@ -595,16 +630,29 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
           body: {
             url: hook.url,
             token: hook.token,
+            // https://docs.gitlab.com/api/project_webhooks/#add-a-webhook-to-a-project: since
+            // 19.0; an older server ignores it and answers without `signing_token_present`.
+            ...(hook.signingToken === null ? {} : { signing_token: hook.signingToken }),
+            name: 'Радити',
             push_events: true,
             merge_requests_events: true,
             pipeline_events: true,
+            job_events: false,
             enable_ssl_verification: true,
           },
         }),
       )
-      const parsed = z.looseObject({ id: z.number().int().positive() }).safeParse(body)
+      const parsed = z
+        .looseObject({
+          id: z.number().int().positive(),
+          signing_token_present: z.boolean().nullish(),
+        })
+        .safeParse(body)
       if (!parsed.success) throw gitProviderFailed('a hook of an unexpected form')
-      return { hookId: String(parsed.data.id) }
+      return {
+        hookId: String(parsed.data.id),
+        signed: hook.signingToken !== null && parsed.data.signing_token_present === true,
+      }
     },
 
     async deleteHook(auth, repo, hookId) {

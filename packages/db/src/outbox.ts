@@ -53,3 +53,46 @@ export function enqueueRepoForget(db: OutboxWriter, projectRepositoryId: string)
     dedupeKey: `git.repo.forget:${projectRepositoryId}`,
   })
 }
+
+/** What the row of a repository held of its hook (slice 84.26): enough to remove it after the row. */
+export interface RepoHookRow {
+  id: string
+  connectionId: string | null
+  host: string
+  path: string
+  providerRepoId: string | null
+  hookId: string | null
+}
+
+/** The columns `enqueueRepoGone` reads: select them on the rows about to be deleted. */
+export const repoHookSelect = {
+  id: true,
+  connectionId: true,
+  host: true,
+  path: true,
+  providerRepoId: true,
+  hookId: true,
+} as const
+
+/**
+ * The row of a repository is deleted in this transaction («Отключить репозиторий», the purge of a
+ * project): core removes its mirror (`git.repo.forget`, ПР20) and, when it made one, the hook at
+ * the provider by the same connection (`git.hook.remove`, slice 84.26) — the row is gone by then,
+ * so the job names the hook by what the row held.
+ */
+export async function enqueueRepoGone(db: OutboxWriter, row: RepoHookRow): Promise<void> {
+  await enqueueRepoForget(db, row.id)
+  if (row.hookId === null || row.connectionId === null || row.providerRepoId === null) return
+  await enqueueOutbox(db, {
+    topic: 'git',
+    type: gitJobNames.hookRemove,
+    payload: {
+      connectionId: row.connectionId,
+      host: row.host,
+      path: row.path,
+      providerRepoId: row.providerRepoId,
+      hookId: row.hookId,
+    },
+    dedupeKey: `git.hook.remove:${row.id}:${row.hookId}`,
+  })
+}

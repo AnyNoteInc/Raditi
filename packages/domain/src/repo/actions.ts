@@ -5,6 +5,7 @@ import { repoCiRefusalTexts } from './ci.ts'
 import { repoCiRunTexts } from './ci-runs.ts'
 import { repoMergeArgsSchema, repoMergeRefusalTexts } from './merge.ts'
 import { mergeRequestDescriptionMaxLength } from './merge-request-text.ts'
+import { repoRunRefusalTexts } from './webhooks.ts'
 
 // What a button of the client does with the repository of a project, and what the agent may ask
 // of it (docs/plan/84-projects.md, ПР13, ПР14, §4.1, §4.4): the arguments of a row of
@@ -104,6 +105,7 @@ export const repoPushRefusalTexts = Object.freeze({
     'Изменения затрагивают настройки сборки — отправьте их кнопкой «Разрешить и отправить» на карточке настроек сборки',
   ...repoCiRefusalTexts,
   ...repoMergeRefusalTexts,
+  ...repoRunRefusalTexts,
   REPO_ACTION_LOST: repoCiRunTexts.REPO_ACTION_LOST,
   REPO_CONFIRM_INVALID: 'Карточка устарела — откройте её снова',
   REPO_PROPOSAL_LIMIT: 'Запрос на слияние в этом ходе уже предложен',

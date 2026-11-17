@@ -40,6 +40,13 @@ import {
   repositoryBranches,
   retryAttach,
 } from '../services/git/repositories.ts'
+import {
+  confirmRevert,
+  confirmRunAction,
+  prepareRevert,
+  prepareRunAction,
+  readRepoPaths,
+} from '../services/git/run-actions.ts'
 import { readJobLog, readRepoWork, readRun, readRuns } from '../services/git/runs.ts'
 import { consentedProcedure, router } from '../trpc.ts'
 
@@ -434,6 +441,109 @@ export const projectRepoRouter = router({
       confirmDeploy(ctx.prisma, ctx.git?.confirmMac, {
         userId: ctx.user.id,
         confirmToken: input.confirmToken,
+        now: new Date(),
+      }),
+    ),
+
+  /**
+   * «Запустить снова» or «Остановить» of a build (ПР17; slice 84.26): the build as core last read
+   * it and a token bound to it; a rerun of a build of the main branch or one with deploy jobs is a
+   * card of a deploy (`deploy`, ПР15).
+   */
+  prepareRunAction: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef, runId, kind: z.enum(['rerun', 'cancel']) }))
+    .output(
+      z.strictObject({
+        kind: z.enum(['rerun', 'cancel']),
+        runId,
+        name: z.string(),
+        ref: z.string(),
+        sha,
+        status: z.enum(ciStatuses),
+        deploy: z.boolean(),
+        confirmToken: z.string(),
+        expiresAt: z.date(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      prepareRunAction(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        projectId: input.projectId,
+        runId: input.runId,
+        kind: input.kind,
+        now: new Date(),
+      }),
+    ),
+
+  /** The press of the card of a build: written once, core reads the build again. */
+  confirmRunAction: consentedProcedure
+    .input(z.strictObject({ confirmToken: z.string().min(1).max(2048) }))
+    .output(z.strictObject({ actionId: z.uuid() }))
+    .mutation(({ ctx, input }) =>
+      confirmRunAction(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        confirmToken: input.confirmToken,
+        now: new Date(),
+      }),
+    ),
+
+  /** «Отменить принятые изменения?» of a merged request (ПР15; slice 84.26). */
+  prepareRevert: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef, number: z.number().int().positive() }))
+    .output(
+      z.strictObject({
+        number: z.number().int(),
+        title: z.string(),
+        target: z.string(),
+        mergeSha: sha,
+        url: z.string(),
+        confirmToken: z.string(),
+        expiresAt: z.date(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      prepareRevert(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        projectId: input.projectId,
+        number: input.number,
+        now: new Date(),
+      }),
+    ),
+
+  /** The press of «Отменить»: core opens a new merge request that takes the changes out. */
+  confirmRevert: consentedProcedure
+    .input(z.strictObject({ confirmToken: z.string().min(1).max(2048) }))
+    .output(z.strictObject({ actionId: z.uuid() }))
+    .mutation(({ ctx, input }) =>
+      confirmRevert(ctx.prisma, ctx.git?.confirmMac, {
+        userId: ctx.user.id,
+        confirmToken: input.confirmToken,
+        now: new Date(),
+      }),
+    ),
+
+  /**
+   * The paths of the main branch for `@` in a chat of the project (ПР24; slice 84.26): what core
+   * keeps from its mirror; `loading` while core reads them, `none` without a ready repository.
+   */
+  paths: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef }))
+    .output(
+      z.discriminatedUnion('state', [
+        z.strictObject({ state: z.literal('none') }),
+        z.strictObject({ state: z.literal('loading') }),
+        z.strictObject({
+          state: z.literal('ready'),
+          sha,
+          paths: z.array(z.string()),
+          truncated: z.boolean(),
+        }),
+      ]),
+    )
+    .query(({ ctx, input }) =>
+      readRepoPaths(ctx.prisma, ctx.chat ? chatContextOf(ctx).storage() : null, {
+        userId: ctx.user.id,
+        projectId: input.projectId,
         now: new Date(),
       }),
     ),

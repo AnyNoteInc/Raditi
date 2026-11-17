@@ -42,6 +42,8 @@ export function repoTrpc(answers: RepoAnswers = {}) {
         'projectRepo.runs',
         answers.runs ?? (() => ({ items: [], next: null, polledAt: null, refreshing: false })),
       ),
+      // `@` over the paths of the repository (ПР24; slice 84.26).
+      paths: query('projectRepo.paths', () => ({ state: 'none' })),
     },
     gitConnection: {
       pathKey: () => ['gitConnection'],

@@ -12,6 +12,9 @@ export {
 export {
   enqueueOutbox,
   enqueueRepoForget,
+  enqueueRepoGone,
+  repoHookSelect,
+  type RepoHookRow,
   type OutboxMessage,
   type OutboxWriter,
 } from './outbox.ts'

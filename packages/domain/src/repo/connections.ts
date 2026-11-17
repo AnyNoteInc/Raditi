@@ -134,6 +134,14 @@ export const gitJobNames = Object.freeze({
    * written in the transaction that deleted the row (docs/plan/84-projects.md, ПР20, §4.2).
    */
   repoForget: 'git.repo.forget',
+  /** A hint of a webhook: core reads the repository again (ПР17; slice 84.26). */
+  refresh: 'git.refresh',
+  /** The hook of a GitLab project, created by its connection when it may (ПР17; slice 84.26). */
+  hookCreate: 'git.hook.create',
+  /** The hook of a repository whose row is gone, removed at the provider (slice 84.26). */
+  hookRemove: 'git.hook.remove',
+  /** The paths of the main branch for `@` (ПР24; slice 84.26). */
+  repoTree: 'git.repo.tree',
 })
 
 export const gitConnectionSyncPayloadSchema = z.strictObject({ connectionId: z.uuid() })

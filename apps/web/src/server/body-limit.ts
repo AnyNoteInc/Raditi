@@ -2,6 +2,9 @@
 // a full tRPC batch a few kilobytes; the edge has its own, larger limit (infra/app/traefik).
 export const MAX_AUTH_BODY_BYTES = 64 * 1024
 export const MAX_TRPC_BODY_BYTES = 256 * 1024
+// A delivery of a webhook of a repository (docs/plan/84-projects.md, ПР17): an event of a push or a
+// merge request is a few kilobytes; a larger one is refused, and the poll reads the state anyway.
+export const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 
 /**
  * The request body, or null once it passes `limit` bytes. A declared oversize body is refused
