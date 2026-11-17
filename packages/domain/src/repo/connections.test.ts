@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import { repoPressRefusalText } from './actions.ts'
 import {
+  codeHostsAbroadPublishedInProduction,
   gitConnectionLimits,
   gitConnectionReasons,
   gitConnectionReasonText,
   gitConnectionSecretPath,
   gitConnectionSecretSchema,
+  githubOffered,
   gitlabComOffered,
   gitServerHostOf,
   gitTokenInputSchema,
@@ -34,10 +36,21 @@ describe('git connections', () => {
       expect(gitServerHostOf(refused)).toBeNull()
   })
 
-  it('offers GitLab.com in production only once the texts of 84.16а are published', () => {
-    expect(gitlabComOffered('development', true)).toBe(true)
-    expect(gitlabComOffered('development', false)).toBe(false)
-    expect(gitlabComOffered('production', true)).toBe(false)
+  it('offers GitLab.com and GitHub in production only through one gate of code hosts abroad', () => {
+    for (const offered of [gitlabComOffered, githubOffered]) {
+      expect(offered('development', true)).toBe(true)
+      expect(offered('test', true)).toBe(true)
+      for (const appEnv of ['development', 'test', 'production'] as const)
+        expect(offered(appEnv, false)).toBe(false)
+      // Both open together, with the flag the owner turns on after the notice of art. 12 (84.16а).
+      expect(offered('production', true)).toBe(codeHostsAbroadPublishedInProduction)
+    }
+  })
+
+  it('keeps the gate closed until the owner confirms the notice of art. 12 for the USA', () => {
+    // The owner's answer of 17.11.2026 (docs/plan/84-projects.md, §8, question 4): the buttons open
+    // after the filing is confirmed. Turning the flag on is that step, with the checklist of §10.
+    expect(codeHostsAbroadPublishedInProduction).toBe(false)
   })
 
   it('keeps the tokens as strings at the path of the workspace', () => {
