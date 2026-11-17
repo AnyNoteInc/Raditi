@@ -290,6 +290,47 @@ describe('the picture of the page', () => {
     expect(context.drawImage).toHaveBeenLastCalledWith(bitmap, 0, 200, 320, 200)
   })
 
+  it('moves the picture by a scroll no frame shows yet, never past its place (plan 85, ТР7)', async () => {
+    const bitmap = { close: vi.fn() } as unknown as ImageBitmap
+    const { context, painter } = stand(async () => bitmap)
+    painter.resize(640, 400, 1)
+    await painter.paint(frame)
+    // 1280 × 800 at half size: 100 window pixels down move the picture 50 px up.
+    painter.shift({ dx: 0, dy: 100 }, { width: 1280, height: 800 })
+    expect(context.drawImage).toHaveBeenLastCalledWith(bitmap, 0, 100, 1280, 700, 0, 0, 640, 350)
+    painter.shift({ dx: -64, dy: -100 }, { width: 1280, height: 800 })
+    expect(context.drawImage).toHaveBeenLastCalledWith(bitmap, 0, 0, 1216, 700, 32, 50, 608, 350)
+    // A shift past the picture leaves the panel empty until the frame comes.
+    const calls = context.drawImage.mock.calls.length
+    painter.shift({ dx: 0, dy: 900 }, { width: 1280, height: 800 })
+    expect(context.drawImage.mock.calls.length).toBe(calls)
+    expect(context.clearRect).toHaveBeenLastCalledWith(0, 0, 640, 400)
+    painter.shift({ dx: 0, dy: 0 }, { width: 1280, height: 800 })
+    expect(context.drawImage).toHaveBeenLastCalledWith(bitmap, 0, 0, 640, 400)
+  })
+
+  it('puts a shift meant for the next frame on the screen with that frame, never before it', async () => {
+    const first = { close: vi.fn() } as unknown as ImageBitmap
+    const second = { close: vi.fn() } as unknown as ImageBitmap
+    const decode = vi.fn(async () => first)
+    const { context, painter } = stand(decode)
+    painter.resize(640, 400, 1)
+    await painter.paint(frame)
+    painter.shift({ dx: 0, dy: 100 }, { width: 1280, height: 800 })
+    const calls = context.drawImage.mock.calls.length
+    // The frame that shows the scroll is on its way: the old picture stays moved meanwhile.
+    painter.shift({ dx: 0, dy: 0 }, { width: 1280, height: 800 }, { redraw: false })
+    expect(context.drawImage.mock.calls.length).toBe(calls)
+    decode.mockResolvedValueOnce(second)
+    await painter.paint(frame)
+    expect(context.drawImage).toHaveBeenLastCalledWith(second, 0, 0, 640, 400)
+    // A frame that cannot be decoded still puts the shift meant for it on the old picture.
+    painter.shift({ dx: 0, dy: 100 }, { width: 1280, height: 800 }, { redraw: false })
+    decode.mockRejectedValueOnce(new Error('broken JPEG'))
+    expect(await painter.paint(frame)).toBe(false)
+    expect(context.drawImage).toHaveBeenLastCalledWith(second, 0, 100, 1280, 700, 0, 0, 640, 350)
+  })
+
   it('keeps the last picture when a frame cannot be decoded', async () => {
     const first = { close: vi.fn() } as unknown as ImageBitmap
     const decode = vi.fn(async () => first)

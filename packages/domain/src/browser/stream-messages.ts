@@ -169,6 +169,32 @@ export function isBrowserInputInViewport(
 // Client → server
 // ---------------------------------------------------------------------------------------------
 
+/** A duration the cabinet measured, in milliseconds: a minute at most, anything longer is noise. */
+const statMs = z.number().finite().min(0).max(60_000)
+/** A median and a 95th percentile of the last period; null when nothing was measured. */
+const statQuantiles = z.strictObject({ p50: statMs, p95: statMs }).nullable()
+
+/**
+ * What the cabinet saw of the stream in the last period (docs/plan/85-browser-stream-mobile.md,
+ * ТР3): numbers only, nothing of the page. The worker keeps them for the line of the viewer and
+ * the metrics; it never answers them.
+ */
+export const browserStreamStatsSchema = z.strictObject({
+  t: z.literal('stats'),
+  /** Frames drawn and the bytes they took, header included. */
+  frames: z.number().int().min(0).max(100_000),
+  bytes: z.number().int().min(0).max(1_000_000_000),
+  /** Decoding and drawing one frame. */
+  draw: statQuantiles,
+  /** From sending an input to drawing the first frame that shows it (ТР7). */
+  input: statQuantiles,
+  /** How many inputs `input` measured. */
+  inputs: z.number().int().min(0).max(100_000),
+  /** The viewer's main pointer is a finger (`pointer: coarse`). */
+  touch: z.boolean(),
+})
+export type BrowserStreamStats = z.infer<typeof browserStreamStatsSchema>
+
 const attachmentIds = z
   .array(z.uuid())
   .max(BROWSER_CHOOSER_MAX_FILES)
@@ -190,6 +216,12 @@ export const browserClientMessageSchema = z.discriminatedUnion('t', [
     controlEpoch: browserU32Schema,
     viewportVersion: browserU32Schema.min(1),
     event: browserInputEventSchema,
+    /**
+     * The viewer's own number of this input, growing by one (docs/plan/85-browser-stream-mobile.md,
+     * ТР7): `applied` names the newest one a frame already shows. A cabinet that does not number
+     * its input leaves it out.
+     */
+    seq: browserU32Schema.optional(),
   }),
   z.strictObject({
     t: z.literal('navigate'),
@@ -208,6 +240,7 @@ export const browserClientMessageSchema = z.discriminatedUnion('t', [
   z
     .strictObject({ t: z.literal('viewport'), ...browserViewportSchema.shape })
     .refine(isBrowserViewport, 'expected one of the offered window sizes'),
+  browserStreamStatsSchema,
 ])
 export type BrowserClientMessage = z.infer<typeof browserClientMessageSchema>
 
@@ -301,6 +334,16 @@ export const browserServerMessageSchema = z.discriminatedUnion('t', [
   z.strictObject({ t: z.literal('ping'), ts: z.number().finite() }),
   z.strictObject({ t: z.literal('refused'), reason: z.enum(browserStreamRefusals) }),
   z.strictObject({ t: z.literal('closed'), reason: z.enum(browserStreamEndReasons) }),
+  /**
+   * The frame `frameSeq` and every later one already show the viewer's input up to `inputSeq`
+   * (docs/plan/85-browser-stream-mobile.md, ТР7): sent before that frame, which may still be
+   * dropped on the way — a later frame shows the input too.
+   */
+  z.strictObject({
+    t: z.literal('applied'),
+    frameSeq: browserU32Schema,
+    inputSeq: browserU32Schema,
+  }),
 ])
 export type BrowserServerMessage = z.infer<typeof browserServerMessageSchema>
 

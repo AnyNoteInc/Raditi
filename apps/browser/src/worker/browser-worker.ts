@@ -80,6 +80,7 @@ export class BrowserWorker implements OnApplicationBootstrap, BeforeApplicationS
       ...(parts.timings?.pingMs === undefined ? {} : { pingMs: parts.timings.pingMs }),
       now,
       warn,
+      log: (line) => logger.log(line),
     })
     this.#sweepMs = parts.timings?.sweepMs ?? SWEEP_MS
     if (!this.sessions.configured)

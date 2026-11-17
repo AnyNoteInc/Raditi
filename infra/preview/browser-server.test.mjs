@@ -36,6 +36,8 @@ test('Chromium: every request through the relay, loopback names too, no WebRTC a
   })
   const args = chromiumArgs()
   assert.ok(args.includes('--force-webrtc-ip-handling-policy=disable_non_proxied_udp'))
+  // A scroll lands in one frame (plan 85, ТР8).
+  assert.ok(args.includes('--disable-smooth-scrolling'))
   // The proxy only through the option: a second flag would leave the request API around it.
   assert.ok(!args.some((arg) => arg.startsWith('--proxy-')))
   assert.ok(!args.some((arg) => arg.startsWith('--remote-debugging-port')))

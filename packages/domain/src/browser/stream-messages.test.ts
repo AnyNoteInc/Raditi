@@ -144,8 +144,50 @@ describe('messages of the stream', () => {
       { t: 'files', chooserId: 'c1', attachmentIds: [uuid] },
       { t: 'files', chooserId: 'c1', attachmentIds: [] },
       { t: 'viewport', width: 1440, height: 900 },
+      {
+        t: 'input',
+        pageId: 1,
+        controlEpoch: 2,
+        viewportVersion: 1,
+        event: { kind: 'wheel', x: 10, y: 20, dx: 0, dy: 120 },
+        seq: 7,
+      },
+      {
+        t: 'stats',
+        frames: 48,
+        bytes: 3_100_000,
+        draw: { p50: 9, p95: 21.5 },
+        input: { p50: 180, p95: 410 },
+        inputs: 31,
+        touch: true,
+      },
+      { t: 'stats', frames: 0, bytes: 0, draw: null, input: null, inputs: 0, touch: false },
     ]
     for (const message of messages) expect(send(message)).toEqual(message)
+  })
+
+  it('carries only numbers in the stats of a viewer, within bounds', () => {
+    const stats = {
+      t: 'stats',
+      frames: 1,
+      bytes: 1,
+      draw: { p50: 1, p95: 2 },
+      input: null,
+      inputs: 0,
+      touch: true,
+    }
+    expect(send(stats)).toEqual(stats)
+    for (const broken of [
+      { ...stats, frames: -1 },
+      { ...stats, frames: 1.5 },
+      { ...stats, draw: { p50: 1 } },
+      { ...stats, draw: { p50: 1, p95: 60_001 } },
+      { ...stats, input: { p50: Number.NaN, p95: 1 } },
+      { ...stats, touch: 'yes' },
+      { ...stats, url: 'https://news.example.ru/' },
+      { t: 'stats' },
+    ])
+      expect(send(broken), JSON.stringify(broken)).toBeNull()
   })
 
   it('drops what is not a message of a viewer, and never throws', () => {
@@ -170,6 +212,14 @@ describe('messages of the stream', () => {
       JSON.stringify({ t: 'files', chooserId: 'c1', attachmentIds: [uuid, uuid] }),
       JSON.stringify({ t: 'files', chooserId: 'c1', attachmentIds: Array(11).fill(uuid) }),
       JSON.stringify({ t: 'viewport', width: 1920, height: 1080 }),
+      JSON.stringify({
+        t: 'input',
+        pageId: 1,
+        controlEpoch: 0,
+        viewportVersion: 1,
+        event: { kind: 'text', text: 'x' },
+        seq: -1,
+      }),
       JSON.stringify({ t: 'evaluate', script: 'document.cookie' }),
       JSON.stringify({
         t: 'input',
@@ -220,6 +270,7 @@ describe('messages of the stream', () => {
       { t: 'refused', reason: 'not_holder' },
       { t: 'closed', reason: 'task_done' },
       { t: 'closed', reason: 'forbidden' },
+      { t: 'applied', frameSeq: 41, inputSeq: 7 },
     ]
     for (const message of messages)
       expect(parseBrowserServerMessage(JSON.stringify(message))).toEqual(message)
@@ -230,6 +281,8 @@ describe('messages of the stream', () => {
       JSON.stringify({ t: 'state', session: uuid }),
       JSON.stringify({ t: 'hello', ticket }),
       JSON.stringify({ t: 'viewer', viewer: 'tab-1' }),
+      JSON.stringify({ t: 'applied', frameSeq: 41 }),
+      JSON.stringify({ t: 'applied', frameSeq: 41, inputSeq: -1 }),
     ])
       expect(parseBrowserServerMessage(data), data).toBeNull()
   })
