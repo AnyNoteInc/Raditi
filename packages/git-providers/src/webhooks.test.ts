@@ -329,7 +329,8 @@ describe('the GitHub adapter of 84.26', () => {
       'POST /repos/acme/site/actions/runs/99/cancel': { status: 202, body: {} },
       'POST /repos/acme/site/actions/runs/98/cancel': { status: 409, body: {} },
     })
-    await provider.rerunRun(bearer, ghRepo, '99')
+    // GitHub reruns the run itself: the same id goes again, its commit is the run's.
+    expect(await provider.rerunRun(bearer, ghRepo, '99')).toEqual({ runId: '99' })
     await provider.cancelRun(bearer, ghRepo, '99')
     expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual([
       'POST /repos/acme/site/actions/runs/99/rerun',

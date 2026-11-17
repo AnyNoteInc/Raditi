@@ -323,7 +323,14 @@ export interface GitProvider {
     jobId: string,
     opts: { tailBytes: number },
   ): Promise<{ text: string; truncated: boolean }>
-  rerunRun(auth: GitAuth, repo: RepoRef, runId: string): Promise<void>
+  /**
+   * «Запустить снова» (ПР17, ПР36): the run that goes now — the same one, or a new one of its
+   * branch where the provider runs a passed run again only as a new run (GitLab), and only while
+   * the head of the branch is the run's commit (otherwise REPO_CHANGED). `sha` — the commit a new
+   * run builds: it is started by the name of the branch, so a commit that reached the branch
+   * between the read of its head and the start is built unseen; the caller stops such a run (§4.6).
+   */
+  rerunRun(auth: GitAuth, repo: RepoRef, runId: string): Promise<{ runId: string; sha?: string }>
   cancelRun(auth: GitAuth, repo: RepoRef, runId: string): Promise<void>
   /** Manual jobs or `workflow_dispatch` of `ref`'s newest run (ПР17). */
   listDeployActions(auth: GitAuth, repo: RepoRef, ref: string): Promise<DeployAction[]>

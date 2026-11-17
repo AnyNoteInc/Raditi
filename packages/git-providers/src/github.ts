@@ -834,6 +834,8 @@ export function createGithubProvider(config: GithubProviderConfig): GitProvider 
       )
       if (response.status === 403 || response.status === 409) throw repoRunGone()
       jsonOf(response)
+      // GitHub reruns the run itself, whatever its result: the same id goes again.
+      return { runId: numericId(runId, 'run') }
     },
 
     async cancelRun(auth, repo, runId) {

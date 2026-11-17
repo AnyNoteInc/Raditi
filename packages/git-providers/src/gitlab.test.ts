@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ciIncludePaths, DomainError, maskCiLog, type GitAuth, type RepoRef } from '@repo/domain'
 
 import { createGitlabProvider, gitlabLocalIncludes, gitlabTraceText } from './gitlab.ts'
-import { gitlabPathAllowed } from './gitlab-paths.ts'
+import { gitlabBodyAllowed, gitlabPathAllowed } from './gitlab-paths.ts'
 import { fakeSend, type Route } from './testing/fake-send.ts'
 import { createGitTransport } from './transport.ts'
 
@@ -422,21 +422,139 @@ describe('gitlab pipelines', () => {
     ])
   })
 
-  it('a rerun is the retry of the pipeline, and nothing else, whatever it answers', async () => {
-    for (const status of ['running', 'success']) {
-      const { provider, calls } = setup({
+  // A failed pipeline, and a passed one with a failed job of `allow_failure: true`: GitLab's retry
+  // runs the failed jobs again and answers `running` (GitLab CE 19.5.6, 17.11.2026).
+  it('a rerun of a pipeline with failed jobs is its retry, in place', async () => {
+    const { provider, calls } = setup({
+      [`POST ${P}/pipelines/9/retry`]: {
+        status: 201,
+        body: { id: 9, sha: head, ref: 'raditi/x', tag: false, status: 'running' },
+      },
+    })
+    expect(await provider.rerunRun(auth, repo, '9')).toEqual({ runId: '9' })
+    expect(calls).toHaveLength(1)
+  })
+
+  it('a retry answered in a form not known is a failure, not a press that did nothing', async () => {
+    const { provider } = setup({
+      [`POST ${P}/pipelines/9/retry`]: { status: 201, body: { id: 'nine' } },
+    })
+    expect(await code(provider.rerunRun(auth, repo, '9'))).toBe('GIT_PROVIDER_FAILED')
+  })
+
+  // GitLab CE 19.5.6 (the live check of 17.11.2026): the retry of a pipeline that passed answers
+  // 201 as it was and runs nothing; a new pipeline of the branch runs its head again (ПР36).
+  const passedRun = { id: 9, sha: head, ref: 'raditi/x', status: 'success' }
+  const rerunRoutes = (over: Record<string, Route | ReturnType<Route>> = {}) => ({
+    [`POST ${P}/pipelines/9/retry`]: { status: 201, body: passedRun },
+    [`GET ${P}/repository/branches`]: {
+      status: 200,
+      body: [{ name: 'raditi/x', commit: { id: head } }],
+    },
+    [`POST ${P}/pipeline`]: {
+      status: 201,
+      body: { id: 14, sha: head, ref: 'raditi/x', status: 'created', source: 'api' },
+    },
+    ...over,
+  })
+
+  it('a rerun of a passed pipeline is a new pipeline of its branch, with its ref alone', async () => {
+    const { provider, calls } = setup(rerunRoutes())
+    expect(await provider.rerunRun(auth, repo, '9')).toEqual({ runId: '14', sha: head })
+    expect(calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual([
+      `POST ${P}/pipelines/9/retry`,
+      `GET ${P}/repository/branches`,
+      `POST ${P}/pipeline`,
+    ])
+    expect(calls[1]!.url.searchParams.get('search')).toBe('^raditi/x$')
+    const created = calls[2]!
+    expect(created.body).toEqual({ ref: 'raditi/x' })
+    expect([...created.url.searchParams.keys()]).toEqual([])
+  })
+
+  it('a branch that moved on is REPO_CHANGED, and nothing is started', async () => {
+    const { provider, calls } = setup(
+      rerunRoutes({
+        [`GET ${P}/repository/branches`]: {
+          status: 200,
+          body: [{ name: 'raditi/x', commit: { id: 'b'.repeat(40) } }],
+        },
+      }),
+    )
+    expect(await code(provider.rerunRun(auth, repo, '9'))).toBe('REPO_CHANGED')
+    expect(calls.some((c) => c.url.pathname === `${P}/pipeline`)).toBe(false)
+  })
+
+  it('a pipeline of a tag or of a merge request ref is REPO_RUN_NOT_A_BRANCH', async () => {
+    const { provider, calls } = setup(
+      rerunRoutes({ [`GET ${P}/repository/branches`]: { status: 200, body: [] } }),
+    )
+    expect(await code(provider.rerunRun(auth, repo, '9'))).toBe('REPO_RUN_NOT_A_BRANCH')
+    expect(calls.some((c) => c.url.pathname === `${P}/pipeline`)).toBe(false)
+  })
+
+  it('a pipeline of a tag is REPO_RUN_NOT_A_BRANCH, though a branch may share its name', async () => {
+    const { provider, calls } = setup(
+      rerunRoutes({
         [`POST ${P}/pipelines/9/retry`]: {
           status: 201,
-          body: { id: 9, sha: head, ref: 'raditi/x', status },
+          body: { ...passedRun, ref: 'raditi/x', tag: true },
         },
-      })
-      await provider.rerunRun(auth, repo, '9')
-      // A pipeline that passed stays as it was: no job of it is retried on its own, a deploy job
-      // a person played among them (the live check of 17.11.2026).
-      expect(calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual([
-        `POST ${P}/pipelines/9/retry`,
-      ])
-    }
+      }),
+    )
+    expect(await code(provider.rerunRun(auth, repo, '9'))).toBe('REPO_RUN_NOT_A_BRANCH')
+    expect(calls).toHaveLength(1)
+  })
+
+  it.each([
+    [
+      'a protected branch of a Developer',
+      "You do not have sufficient permission to run a pipeline on 'main'. Please select a different branch or contact your administrator for assistance.",
+      'REPO_RUN_NOT_ALLOWED',
+    ],
+    [
+      'rules that leave no job',
+      'The resulting pipeline would have been empty. Review the rules configuration.',
+      'REPO_RUN_NOT_STARTED',
+    ],
+    [
+      'workflow rules that do not run',
+      'The pipeline did not run. Review the workflow:rules configuration for the pipeline.',
+      'REPO_RUN_NOT_STARTED',
+    ],
+    ['a branch gone', 'Reference not found', 'REPO_CHANGED'],
+    ['words GitLab has not said yet', 'Something new', 'REPO_RUN_REFUSED'],
+  ])('a new pipeline GitLab will not start (%s) is said in words', async (_name, base, error) => {
+    const { provider } = setup(
+      rerunRoutes({ [`POST ${P}/pipeline`]: { status: 400, body: { message: { base: [base] } } } }),
+    )
+    expect(await code(provider.rerunRun(auth, repo, '9'))).toBe(error)
+  })
+
+  it('a pipeline the one connected may not run is REPO_RUN_NOT_ALLOWED, not a lost access', async () => {
+    const retry = setup({
+      [`POST ${P}/pipelines/9/retry`]: { status: 403, body: { message: '403 Forbidden' } },
+    })
+    expect(await code(retry.provider.rerunRun(auth, repo, '9'))).toBe('REPO_RUN_NOT_ALLOWED')
+    const create = setup(
+      rerunRoutes({ [`POST ${P}/pipeline`]: { status: 403, body: { message: '403 Forbidden' } } }),
+    )
+    expect(await code(create.provider.rerunRun(auth, repo, '9'))).toBe('REPO_RUN_NOT_ALLOWED')
+  })
+
+  // The branch moved between the read of its head and the start (seen on GitLab CE 19.5.6): the new
+  // pipeline builds the new commit. The adapter says which; the caller stops it.
+  it('a new pipeline of another commit comes back with its commit, for the caller to stop', async () => {
+    const { provider, calls } = setup(
+      rerunRoutes({
+        [`POST ${P}/pipeline`]: {
+          status: 201,
+          body: { id: 15, sha: 'c'.repeat(40), ref: 'raditi/x', status: 'created' },
+        },
+      }),
+    )
+    expect(await provider.rerunRun(auth, repo, '9')).toEqual({ runId: '15', sha: 'c'.repeat(40) })
+    expect(calls.at(-1)!.url.pathname).toBe(`${P}/pipeline`)
   })
 
   it('another 400 of a manual job is a failure, not a job gone', async () => {
@@ -799,6 +917,11 @@ describe('the path whitelist (ПР10)', () => {
     expect(gitlabPathAllowed('PUT', '/projects/42/merge_requests/37/merge', q, '42')).toBe(true)
     expect(gitlabPathAllowed('GET', '/projects/42/jobs/5/trace', q, '42')).toBe(true)
     expect(gitlabPathAllowed('POST', '/projects/42/jobs/5/retry', q, '42')).toBe(false)
+    expect(gitlabPathAllowed('POST', '/projects/42/pipeline', q, '42')).toBe(true)
+    // A new pipeline takes no query: `?variables[…]` never goes.
+    expect(
+      gitlabPathAllowed('POST', '/projects/42/pipeline', new URLSearchParams('ref=main'), '42'),
+    ).toBe(false)
     expect(gitlabPathAllowed('POST', '/projects/42/jobs/5/cancel', q, '42')).toBe(false)
   })
 
@@ -811,6 +934,18 @@ describe('the path whitelist (ПР10)', () => {
       await code(provider.getRun(auth, { ...repo, providerRepoId: '42/variables' }, '1')),
     ).toBe('GIT_PROVIDER_FAILED')
     expect(calls).toHaveLength(0)
+  })
+
+  it('a new pipeline carries its ref and nothing else: no variables, no inputs (ПР36)', () => {
+    expect(gitlabBodyAllowed('POST', '/projects/42/pipeline', { ref: 'main' })).toBe(true)
+    for (const body of [
+      { ref: 'main', variables: [{ key: 'DEPLOY', value: 'yes' }] },
+      { ref: 'main', inputs: { env: 'prod' } },
+      { variables: [] },
+      { ref: 7 },
+      null,
+    ])
+      expect(gitlabBodyAllowed('POST', '/projects/42/pipeline', body)).toBe(false)
   })
 
   it('a PUT of a merge request only closes it', async () => {

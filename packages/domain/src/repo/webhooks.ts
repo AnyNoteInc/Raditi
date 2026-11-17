@@ -126,6 +126,28 @@ export function rerunIsDeploy(run: {
 export const repoRunGone = (): DomainError =>
   new DomainError('REPO_RUN_GONE', 'The build is not there or not in that state', 409)
 
+/**
+ * «Запустить снова» of a build that passed is a new build of its branch (ПР36), and the provider
+ * would not start it: by its settings such a start has no jobs, or its workflow does not run.
+ */
+export const repoRunNotStarted = (): DomainError =>
+  new DomainError('REPO_RUN_NOT_STARTED', 'The provider did not start the new build', 409)
+
+/**
+ * The provider refused the new build in words the platform does not know (a configuration error,
+ * a limit of builds…): not a technical failure, and not said to be the settings.
+ */
+export const repoRunRefused = (): DomainError =>
+  new DomainError('REPO_RUN_REFUSED', 'The provider refused the new build', 409)
+
+/** A build of a tag or of a merge request ref passed: a new one is started only at the provider. */
+export const repoRunNotABranch = (): DomainError =>
+  new DomainError('REPO_RUN_NOT_A_BRANCH', 'The build is not of a branch', 409)
+
+/** The one who connected the repository may not start a build on this branch (a protected one). */
+export const repoRunNotAllowed = (): DomainError =>
+  new DomainError('REPO_RUN_NOT_ALLOWED', 'The user may not start a build on this branch', 403)
+
 /** The merge request was not merged, or its merge commit is not known. */
 export const repoNotMerged = (): DomainError =>
   new DomainError('REPO_NOT_MERGED', 'The merge request is not merged', 409)
@@ -137,6 +159,12 @@ export const repoRevertConflict = (): DomainError =>
 /** The words of the refusals of a build button and of a revert, without a final period. */
 export const repoRunRefusalTexts = Object.freeze({
   REPO_RUN_GONE: 'Сборка уже не в том состоянии — обновите страницу',
+  REPO_RUN_NOT_STARTED:
+    'Новая сборка не запустилась: её настройки не дают ей идти при запуске из Радити — запустите её в самом репозитории',
+  REPO_RUN_REFUSED: 'Новая сборка не запустилась — запустите её в самом репозитории',
+  REPO_RUN_NOT_A_BRANCH:
+    'Эту сборку запускали не для ветки — запустить её снова можно в самом репозитории',
+  REPO_RUN_NOT_ALLOWED: 'У вас нет права запускать сборки в этой ветке',
   REPO_NOT_MERGED: 'Запрос ещё не принят — отменять нечего',
   REPO_REVERT_NOTHING: 'Этих изменений уже нет в основной ветке — отменять нечего',
   REPO_REVERT_CONFLICT:

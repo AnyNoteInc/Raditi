@@ -179,6 +179,11 @@ describe.skipIf(!enabled)('the second queue with PostgreSQL (plan 84, 84.26)', (
         },
       ] as Record<string, unknown>[],
       mainHead: mainSha,
+      branchHead: head,
+      // The answer to a new pipeline (ПР36): a refusal, or the commit it builds when the branch
+      // moved between the read of its head and the start.
+      newPipeline: null as { status: number; body: unknown } | null,
+      newPipelineSha: null as string | null,
       requests: { 7: mrOf() } as Record<number, Record<string, unknown>>,
       openStatus: 201,
       hooks: [] as Record<string, unknown>[],
@@ -203,12 +208,33 @@ describe.skipIf(!enabled)('the second queue with PostgreSQL (plan 84, 84.26)', (
       [`GET ${P}/pipelines/481`]: () => ({ status: 200, body: gitlab.pipelines[1] }),
       [`GET ${P}/pipelines/482/jobs`]: () => ({ status: 200, body: jobs[482] }),
       [`GET ${P}/pipelines/481/jobs`]: () => ({ status: 200, body: jobs[481] }),
-      [`POST ${P}/pipelines/482/retry`]: () => ({ status: 201, body: { id: 482 } }),
-      [`POST ${P}/pipelines/481/retry`]: () => ({ status: 201, body: { id: 481 } }),
+      // As GitLab CE 19.5.6 answers: a failed pipeline goes again, a passed one stays as it was.
+      [`POST ${P}/pipelines/482/retry`]: () => ({
+        status: 201,
+        body:
+          gitlab.pipelines[0]!.status === 'failed'
+            ? { ...gitlab.pipelines[0], status: 'running' }
+            : gitlab.pipelines[0],
+      }),
+      [`POST ${P}/pipelines/481/retry`]: () => ({ status: 201, body: gitlab.pipelines[1] }),
+      // A new pipeline of a branch builds its head (ПР36).
+      [`POST ${P}/pipeline`]: (request) => {
+        if (gitlab.newPipeline !== null) return gitlab.newPipeline
+        const { ref } = JSON.parse(String(request.body)) as { ref: string }
+        const sha = gitlab.newPipelineSha ?? (ref === 'main' ? gitlab.mainHead : gitlab.branchHead)
+        return {
+          status: 201,
+          body: { id: 483, sha, ref, status: 'created', source: 'api' },
+        }
+      },
       [`POST ${P}/pipelines/481/cancel`]: () => ({ status: 201, body: { id: 481 } }),
+      [`POST ${P}/pipelines/483/cancel`]: () => ({ status: 200, body: { id: 483 } }),
       [`GET ${P}/repository/branches`]: () => ({
         status: 200,
-        body: [{ name: 'main', commit: { id: gitlab.mainHead } }],
+        body: [
+          { name: 'main', commit: { id: gitlab.mainHead } },
+          { name: BRANCH, commit: { id: gitlab.branchHead } },
+        ],
       }),
       [`GET ${P}/merge_requests/7`]: () => ({ status: 200, body: gitlab.requests[7] }),
       [`GET ${P}/merge_requests/8`]: () =>
@@ -602,6 +628,49 @@ describe.skipIf(!enabled)('the second queue with PostgreSQL (plan 84, 84.26)', (
     )
     expect([deployed.state, deployed.error]).toEqual(['done', null])
     expect(sent(f)).toContain(`POST ${P}/pipelines/481/retry`)
+    // It had passed: GitLab's retry ran nothing, a new pipeline of main runs its head, with the
+    // ref alone in its body, and the row keeps the new run (ПР36).
+    const created = f.calls.filter((call) => call.url.pathname === `${P}/pipeline`)
+    expect(created.map((call) => call.body)).toEqual([{ ref: 'main' }])
+    expect(deployed.result).toMatchObject({ runId: '483', rerunOf: '481', deploy: true })
+  })
+
+  it('a rerun of a passed build of a branch is a new build of its head, or words, never another commit', async () => {
+    const f = await fixture()
+    await f.ci.poll(f.projectRepositoryId)
+    f.gitlab.pipelines[0]!.status = 'success'
+    const card = {
+      kind: 'rerun' as const,
+      taskId: null,
+      number: null,
+      targetBranch: BRANCH,
+      headSha: head,
+      run: { id: '482', ref: BRANCH, deploy: false },
+    }
+    // A plain card: GitLab's retry ran nothing, a new pipeline of the branch builds its head.
+    const fresh = await f.press(card, 'rerun')
+    expect([fresh.state, fresh.error]).toEqual(['done', null])
+    const created = f.calls.filter((call) => call.url.pathname === `${P}/pipeline`)
+    expect(created.map((call) => call.body)).toEqual([{ ref: BRANCH }])
+    expect(fresh.result).toMatchObject({ runId: '483', rerunOf: '482', sha: head, deploy: false })
+    // Settings that give such a start no job: words, not a technical failure.
+    f.gitlab.newPipeline = {
+      status: 400,
+      body: {
+        message: {
+          base: ['The resulting pipeline would have been empty. Review the rules configuration.'],
+        },
+      },
+    }
+    const empty = await f.press(card, 'rerun')
+    expect([empty.state, empty.error]).toEqual(['failed', 'REPO_RUN_NOT_STARTED'])
+    // The branch moved between the read of its head and the start: the new pipeline builds a
+    // commit the card did not show — stopped at once, the changes moved.
+    f.gitlab.newPipeline = null
+    f.gitlab.newPipelineSha = 'e'.repeat(40)
+    const raced = await f.press(card, 'rerun')
+    expect([raced.state, raced.error]).toEqual(['failed', 'REPO_CHANGED'])
+    expect(sent(f).at(-1)).toBe(`POST ${P}/pipelines/483/cancel`)
   })
 
   it('«Отменить» of a merge opens a new merge request of the revert, never touching main', async () => {

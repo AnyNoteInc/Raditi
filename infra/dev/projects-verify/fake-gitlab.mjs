@@ -124,6 +124,8 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
   const pipelineActions = []
   /** cancel_auto_merge and its deprecated endpoint: { iid, on }. */
   const autoMergeCancels = []
+  /** New pipelines asked for (POST /pipeline): { path, body, query } — the body as it came. */
+  const createdPipelines = []
 
   const hostOf = (req) => {
     const name = String(req.headers.host ?? '')
@@ -736,6 +738,9 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
     if (retryAt && req.method === 'POST') {
       const p = project.pipelines.find((item) => item.id === Number(retryAt[1]))
       if (!p) return answer(404, { message: '404 Not found' })
+      // A pipeline of the protected main is not a Developer's to retry (GitLab CE 19.5.6: 403).
+      if (p.ref === project.defaultBranch && (project.accessLevel ?? 40) < 40)
+        return answer(403, { message: '403 Forbidden' })
       pipelineActions.push({
         path: project.path,
         pipeline: p.id,
@@ -750,6 +755,36 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
         p.failureReason = null
       } else if (retryAt[2] === 'cancel') p.canceled = true
       return answer(retryAt[2] === 'retry' ? 201 : 200, pipelineJson(host, project, p))
+    }
+    // A new pipeline of a ref, as GitLab CE 19.5.6 answers it (ПР36): of the head of a branch,
+    // `source: api`; 400 for a ref that is not there, a protected main of a Developer and settings
+    // that leave it no job (`project.pushOnly` — rules on `$CI_PIPELINE_SOURCE == "push"`).
+    if (req.method === 'POST' && rest === '/pipeline') {
+      createdPipelines.push({ path: project.path, body, query: url.search })
+      const ref = typeof body?.ref === 'string' ? body.ref : null
+      if (ref === null) return answer(400, { message: 'ref is missing' })
+      if (!heads[ref]) return answer(400, { message: { base: ['Reference not found'] } })
+      if (ref === project.defaultBranch && (project.accessLevel ?? 40) < 40)
+        return answer(400, {
+          message: {
+            base: [
+              `You do not have sufficient permission to run a pipeline on '${ref}'. Please select a different branch or contact your administrator for assistance.`,
+            ],
+          },
+        })
+      if (project.pushOnly)
+        return answer(400, {
+          message: {
+            base: ['The resulting pipeline would have been empty. Review the rules configuration.'],
+          },
+        })
+      const made = makePipeline(project, {
+        ref,
+        sha: heads[ref],
+        source: 'api',
+        deploy: ref === project.defaultBranch,
+      })
+      return answer(201, pipelineJson(host, project, made))
     }
     if (req.method === 'POST' && rest === '/hooks') {
       // `whsec_` and base64 of 24–64 bytes (Standard Webhooks); on GitLab CE 19.5.6 32 bytes were
@@ -928,6 +963,7 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
     removedHooks,
     pipelineActions,
     autoMergeCancels,
+    createdPipelines,
     /**
      * A delivery of the hook of `project` as GitLab ≥ 19.0 sends it (Standard Webhooks:
      * `webhook-id`, `webhook-timestamp`, `webhook-signature`), to `origin` — the address of web the

@@ -429,6 +429,26 @@ describe(
       // The log of a job as Runner 19 writes it: every line with its prefix.
       const trace = await call('GET', `${at}/jobs/${job.id}/trace`, { auth })
       assert.match(trace.text, /^\d{4}-\d\d-\d\dT[\d:.]+Z 0[01]O[ +]/)
+      // «Запустить снова» of a passed pipeline is a new one of its branch (ПР36), as GitLab answers.
+      const created = await call('POST', `${at}/pipeline`, { auth, body: { ref: 'main' } })
+      assert.equal(created.status, 201)
+      assert.equal(created.json.source, 'api')
+      assert.equal(created.json.sha, (await fake.heads(project)).main)
+      assert.notEqual(created.json.id, pipeline.id)
+      assert.deepEqual(fake.createdPipelines.at(-1).body, { ref: 'main' })
+      const noRef = await call('POST', `${at}/pipeline`, { auth, body: { ref: 'nope' } })
+      assert.deepEqual(noRef.json, { message: { base: ['Reference not found'] } })
+      project.pushOnly = true
+      const empty = await call('POST', `${at}/pipeline`, { auth, body: { ref: 'main' } })
+      assert.equal(empty.status, 400)
+      assert.match(empty.json.message.base[0], /would have been empty/)
+      project.pushOnly = false
+      project.accessLevel = 30
+      const developer = await call('POST', `${at}/pipeline`, { auth, body: { ref: 'main' } })
+      assert.match(developer.json.message.base[0], /sufficient permission/)
+      const retried = await call('POST', `${at}/pipelines/${created.json.id}/retry`, { auth })
+      assert.equal(retried.status, 403)
+      project.accessLevel = 40
       assert.equal((await call('DELETE', `${at}/hooks/${made.json.id}`, { auth })).status, 204)
       assert.equal(fake.removedHooks.length, 1)
     })
