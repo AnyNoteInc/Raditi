@@ -69,7 +69,11 @@ export function ciConfigPathOf(value: string | null | undefined): {
   return value.length <= 255 ? { path: normalized, foreign: false } : { path: null, foreign: true }
 }
 
-/** The `include: local` files of a CI Lint answer, as paths of the repository; at most 100. */
+/**
+ * The `include: local` files of a CI Lint answer, as paths of the repository; at most 100. More
+ * than can be kept are every path (`*`): a list cut short would leave a file of the build out of
+ * the card (ПР16).
+ */
 export function ciIncludePaths(locations: readonly string[]): string[] {
   const paths = new Set<string>()
   for (const location of locations) {
@@ -81,7 +85,7 @@ export function ciIncludePaths(locations: readonly string[]): string[] {
       const directory = normalized.slice(0, normalized.lastIndexOf('/', star) + 1)
       paths.add(directory === '' ? '*' : directory)
     } else paths.add(normalized)
-    if (paths.size >= REPO_CI_INCLUDES_KEPT) break
+    if (paths.size > REPO_CI_INCLUDES_KEPT) return ['*']
   }
   return [...paths].sort()
 }

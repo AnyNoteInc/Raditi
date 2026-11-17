@@ -347,6 +347,23 @@ describe.skipIf(!enabled)('git.poll and git.log with PostgreSQL (plan 84, 84.21)
     expect(run.status).toBe('failed')
     expect(run.refusal).toBe('account_unverified')
     expect((run.jobs as { refusal: string | null }[])[0]!.refusal).toBe('account_unverified')
+    // A later poll reads the run unchanged and not its jobs: GitLab's pipeline has no
+    // `failure_reason`, and the refusal stays (the live check of 17.11.2026).
+    const reads = f.calls.length
+    f.advance(30_000)
+    expect(await f.ci.tick()).toEqual({ polled: 1 })
+    expect(
+      f.calls.slice(reads).some((call) => call.url.pathname.endsWith('/pipelines/483/jobs')),
+    ).toBe(false)
+    const again = await db.projectCiRun.findUniqueOrThrow({
+      where: {
+        projectRepositoryId_providerRunId: {
+          projectRepositoryId: f.projectRepositoryId,
+          providerRunId: '483',
+        },
+      },
+    })
+    expect(again.refusal).toBe('account_unverified')
   })
 
   it('marks the chat’s branch merged when its merge request is accepted (ПР25)', async () => {

@@ -575,6 +575,7 @@ export class RepoActions {
       }
       const merged = await provider.mergePullRequest(auth, info.ref, number, {
         expectedHeadSha: claims.headSha,
+        expectedTargetBranch: read.targetBranch,
         deleteBranch: merge.deleteBranch,
         whenGreen: wait === 'provider',
       })

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { DomainError, type GitAuth, type RepoRef } from '@repo/domain'
+import { ciIncludePaths, DomainError, maskCiLog, type GitAuth, type RepoRef } from '@repo/domain'
 
-import { createGitlabProvider } from './gitlab.ts'
+import { createGitlabProvider, gitlabLocalIncludes, gitlabTraceText } from './gitlab.ts'
 import { gitlabPathAllowed } from './gitlab-paths.ts'
 import { fakeSend, type Route } from './testing/fake-send.ts'
 import { createGitTransport } from './transport.ts'
@@ -135,6 +135,36 @@ describe('gitlab merge requests', () => {
       description: '​/merge',
       remove_source_branch: false,
     })
+  })
+
+  it('opens again while GitLab does not know the branch pushed a moment ago yet', async () => {
+    const answers = [
+      { status: 400, body: { message: { source_branch: ['does not exist'] } } },
+      { status: 201, body: mr() },
+    ]
+    const { send, calls } = fakeSend({ [`POST ${P}/merge_requests`]: () => answers.shift()! })
+    const provider = createGitlabProvider({
+      host,
+      transport: createGitTransport({ resolvePublic: async () => '203.0.113.7', send }),
+      settle: { tries: 3, everyMs: 1 },
+    })
+    const input = { head: 'raditi/x', base: 'main', title: 'Меню', body: '', draft: false }
+    expect((await provider.openPullRequest(auth, repo, input)).number).toBe(37)
+    expect(calls).toHaveLength(2)
+    // Another refusal is the answer at once.
+    const other = fakeSend({
+      [`POST ${P}/merge_requests`]: {
+        status: 400,
+        body: { message: { title: ["can't be blank"] } },
+      },
+    })
+    const once = createGitlabProvider({
+      host,
+      transport: createGitTransport({ resolvePublic: async () => '203.0.113.7', send: other.send }),
+      settle: { tries: 3, everyMs: 1 },
+    })
+    expect(await code(once.openPullRequest(auth, repo, input))).toBe('GIT_PROVIDER_FAILED')
+    expect(other.calls).toHaveLength(1)
   })
 
   it('a merge with another head is REPO_CHANGED (409)', async () => {
@@ -317,9 +347,13 @@ describe('gitlab pipelines', () => {
     })
   })
 
-  it('reads the tail of a job log', async () => {
+  it('reads the tail of a job log, without the line it starts inside', async () => {
     const { provider, calls } = setup({
-      [`GET ${P}/jobs/5/trace`]: { status: 200, text: '…конец журнала', truncated: true },
+      [`GET ${P}/jobs/5/trace`]: {
+        status: 200,
+        text: 'ца строки\n…конец журнала',
+        truncated: true,
+      },
     })
     expect(await provider.getJobLog(auth, repo, '5', { tailBytes: 32768 })).toEqual({
       text: '…конец журнала',
@@ -328,6 +362,333 @@ describe('gitlab pipelines', () => {
     expect(calls[0]!.limits.tailBytes).toBe(32768)
   })
 
+  // The start of a log of GitLab Runner 19.5.3 as GitLab CE 19.5.6 gives it (the live check of
+  // 17.11.2026, docs/plan/84-projects.md, §10): every line prefixed, `+` continues a line.
+  const runnerLog = [
+    '2026-11-17T13:59:50.622449Z 00O \u001b[0KRunning with gitlab-runner 19.5.3 (33227fd4)\u001b[0;m',
+    '2026-11-17T13:59:50.622482Z 00O section_start:1794923990:prepare_executor\r\u001b[0K',
+    '2026-11-17T13:59:50.622485Z 00O+\u001b[0K\u001b[36;1mPreparing the "shell" executor\u001b[0;m\u001b[0;m',
+    '2026-11-17T13:59:50.622551Z 00O section_end:1794923990:prepare_executor\r\u001b[0K',
+    '2026-11-17T13:59:50.622666Z 00O+section_start:1794923990:step_script\r\u001b[0K',
+    '2026-11-17T13:59:50.622669Z 00O+\u001b[0K\u001b[36;1mExecuting "step_script" stage of the job script\u001b[0;m\u001b[0;m',
+    "2026-11-17T13:59:50.818803Z 01O \u001b[32;1m$ printf '\\033[32mgreen\\033[0m line\\n'\u001b[0;m",
+    '2026-11-17T13:59:50.818806Z 01E \u001b[32mgreen\u001b[0m line',
+    '2026-11-17T14:00:35.872236Z 00O \u001b[32;1mJob succeeded\u001b[0;m',
+    '',
+  ].join('\n')
+
+  it('takes the prefixes of the runner off a log and joins the parts of a line', async () => {
+    const { provider } = setup({ [`GET ${P}/jobs/5/trace`]: { status: 200, text: runnerLog } })
+    const log = await provider.getJobLog(auth, repo, '5', { tailBytes: 32768 })
+    expect(log.truncated).toBe(false)
+    expect(maskCiLog(log.text, []).text).toBe(
+      [
+        'Running with gitlab-runner 19.5.3 (33227fd4)',
+        'Preparing the "shell" executor',
+        'Executing "step_script" stage of the job script',
+        "$ printf '\\033[32mgreen\\033[0m line\\n'",
+        'green line',
+        'Job succeeded',
+        '',
+      ].join('\n'),
+    )
+  })
+
+  it('a tail of one line is kept: there is no other to start with', () => {
+    expect(gitlabTraceText('…12 %\r…87 %\r…100 %', true)).toBe('…12 %\r…87 %\r…100 %')
+  })
+
+  it('leaves a log of an older runner, without prefixes, as it is', () => {
+    const old = '\u001b[0KRunning with gitlab-runner 16.11.0\u001b[0;m\n$ npm test\nok\n'
+    expect(gitlabTraceText(old, false)).toBe(old)
+    expect(gitlabTraceText('2026-11-17T13:59:50Z 01O+ continued\n', false)).toBe(' continued\n')
+  })
+
+  it('a listed pipeline that is over ended when it last changed; one that goes has no end', async () => {
+    const { provider } = setup({
+      // The list as GitLab CE 19.5.6 gives it: no `started_at`, no `finished_at`.
+      [`GET ${P}/pipelines`]: {
+        status: 200,
+        body: [
+          { id: 10, sha: head, ref: 'main', status: 'running', updated_at: '2026-11-17T14:01:00Z' },
+          { id: 9, sha: head, ref: 'main', status: 'success', updated_at: '2026-11-17T14:00:00Z' },
+        ],
+      },
+    })
+    const runs = await provider.listRuns(auth, repo, { branch: 'main' })
+    expect(runs.map((r) => [r.id, r.startedAt, r.finishedAt])).toEqual([
+      ['10', null, null],
+      ['9', null, new Date('2026-11-17T14:00:00Z')],
+    ])
+  })
+
+  it('a rerun is the retry of the pipeline, and nothing else, whatever it answers', async () => {
+    for (const status of ['running', 'success']) {
+      const { provider, calls } = setup({
+        [`POST ${P}/pipelines/9/retry`]: {
+          status: 201,
+          body: { id: 9, sha: head, ref: 'raditi/x', status },
+        },
+      })
+      await provider.rerunRun(auth, repo, '9')
+      // A pipeline that passed stays as it was: no job of it is retried on its own, a deploy job
+      // a person played among them (the live check of 17.11.2026).
+      expect(calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual([
+        `POST ${P}/pipelines/9/retry`,
+      ])
+    }
+  })
+
+  it('another 400 of a manual job is a failure, not a job gone', async () => {
+    const { provider } = setup({
+      [`POST ${P}/jobs/11/play`]: { status: 400, body: { message: 'job_variables_attributes' } },
+    })
+    expect(
+      await code(
+        provider.startDeploy(auth, repo, {
+          id: '11',
+          kind: 'manual_job',
+          name: 'deploy',
+          ref: 'main',
+          sha: head,
+        }),
+      ),
+    ).toBe('GIT_PROVIDER_FAILED')
+  })
+
+  it('a manual job that is not waiting any more is REPO_RUN_GONE (400 «Unplayable Job»)', async () => {
+    const { provider } = setup({
+      [`POST ${P}/jobs/11/play`]: {
+        status: 400,
+        body: { message: '400 Bad request - Unplayable Job' },
+      },
+    })
+    expect(
+      await code(
+        provider.startDeploy(auth, repo, {
+          id: '11',
+          kind: 'manual_job',
+          name: 'deploy',
+          ref: 'main',
+          sha: head,
+        }),
+      ),
+    ).toBe('REPO_RUN_GONE')
+  })
+
+  it('adds the local includes the configuration names to those the lint found', async () => {
+    const { provider } = setup({
+      [`POST ${P}/ci/lint`]: {
+        status: 200,
+        // GitLab expands a wildcard to the files at the ref and leaves a missing file out.
+        body: { valid: true, errors: [], includes: [{ type: 'local', location: 'ci/build.yml' }] },
+      },
+    })
+    const config = [
+      'include:',
+      '  - local: /ci/build.yml',
+      "  - local: 'ci/*.yml'",
+      '  - ci/new.yml',
+      'test:',
+      '  script: [echo ok]',
+    ].join('\n')
+    expect((await provider.lintCi!(auth, repo, config, 'main')).includes).toEqual([
+      'ci/build.yml',
+      '/ci/build.yml',
+      'ci/*.yml',
+      'ci/new.yml',
+    ])
+  })
+})
+
+describe('the local includes of a configuration', () => {
+  it.each([
+    ['the plain form', "include: '/templates/main.yml'\n", ['/templates/main.yml']],
+    ['a list of paths', 'include:\n  - a.yml\n  - "b/*.yml"\n', ['a.yml', 'b/*.yml']],
+    [
+      'a list at the depth of the key',
+      'include:\n- local: a.yml\n- b.yml\nstages: [x]\n',
+      ['a.yml', 'b.yml'],
+    ],
+    ['one mapping', 'include:\n  local: ci/a.yml # comment\n', ['ci/a.yml']],
+    [
+      'flow style',
+      "include: ['a.yml', { local: 'b.yml' }, {remote: 'https://x.example/c.yml'}]\n",
+      ['a.yml', 'b.yml'],
+    ],
+    ['a variable in a path', 'include:\n  - local: ci/$ENV/deploy.yml\n', ['ci/*/deploy.yml']],
+    [
+      'other places stay out',
+      [
+        'include:',
+        '  - project: group/other',
+        '    file: /templates/ci.yml',
+        '  - remote: https://example.com/ci.yml',
+        '  - template: Auto-DevOps.gitlab-ci.yml',
+        '  - component: $CI_SERVER_FQDN/group/c@1.0',
+        '  - local: own.yml',
+        '    rules:',
+        '      - exists:',
+        '          - Dockerfile',
+      ].join('\n'),
+      ['own.yml'],
+    ],
+    ['a child pipeline', 'child:\n  trigger:\n    include: ci/child.yml\n', ['ci/child.yml']],
+    ['nothing', 'stages: [test]\ntest:\n  script: [echo include: x]\n', []],
+    ['a quoted key', 'include:\n  - "local": evil.yml\n', ['evil.yml']],
+    [
+      'a flow entry of a list',
+      "include:\n  - { local: 'a.yml', rules: [{ if: $X }] }\n",
+      ['a.yml'],
+    ],
+    // What it cannot read is every path: closed, not open (ПР16).
+    ['an alias of YAML', 'include: *common\n', ['*']],
+    ['a flow over several lines', "include: ['a.yml',\n  'b.yml']\n", ['*']],
+    ['a block scalar', 'include:\n  - local: |\n      a.yml\n', ['*']],
+    ['a quote left open', "include: 'a.yml\n", ['*']],
+  ] as const)('%s', (_name, config, expected) => {
+    expect(gitlabLocalIncludes(config)).toEqual([...expected].sort())
+  })
+
+  it('more entries than it reads are every path', () => {
+    const many = Array.from({ length: 250 }, (_, i) => `  - local: ci/a${i}.yml`).join('\n')
+    expect(gitlabLocalIncludes(`include:\n${many}\n`)).toEqual(['*'])
+  })
+
+  // The configuration is the agent's, and core reads it in its one process (§4.6, ПР33): 256 KiB
+  // of the worst of it is read in well under a second (the review of 17.11.2026 measured 38 s and
+  // 3.5 min of the reading before).
+  it.each([
+    ['nested include keys', `include:\n${'- include:\n'.repeat(23_800)}`],
+    ['a long run of spaces', `include: a${' '.repeat(256 * 1024)}b\n`],
+    ['a long run of spaces before a comment', `include:\n  - local: a${' '.repeat(256 * 1024)}#\n`],
+  ])('reads %s of 256 KiB at once', (_name, config) => {
+    const started = performance.now()
+    gitlabLocalIncludes(config)
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
+
+  it('whatever the form, the domain bounds a wildcard by its directory', () => {
+    expect(ciIncludePaths(gitlabLocalIncludes("include:\n  - local: 'ci/*.yml'\n"))).toEqual([
+      'ci/',
+    ])
+  })
+})
+
+describe('gitlab merges while GitLab still checks the request', () => {
+  const quick = { tries: 5, everyMs: 1 }
+  function checking(statuses: string[], merge: { status: number; body: unknown }[]) {
+    const { send, calls } = fakeSend({
+      [`GET ${P}/merge_requests/37`]: () => ({
+        status: 200,
+        body: { ...mr(), detailed_merge_status: statuses.shift() ?? 'mergeable' },
+      }),
+      [`PUT ${P}/merge_requests/37/merge`]: () => merge.shift() ?? null,
+    })
+    const provider = createGitlabProvider({
+      host,
+      transport: createGitTransport({ resolvePublic: async () => '203.0.113.7', send }),
+      settle: quick,
+    })
+    return { provider, calls }
+  }
+  const opts = { expectedHeadSha: head, deleteBranch: false, whenGreen: false }
+
+  it('a 405 while the request is checked waits for the check and merges', async () => {
+    const merged = 'b'.repeat(40)
+    const { provider, calls } = checking(
+      ['unchecked', 'checking'],
+      [
+        { status: 405, body: { message: '405 Method Not Allowed' } },
+        { status: 200, body: mr({ state: 'merged', merge_commit_sha: merged }) },
+      ],
+    )
+    expect(await provider.mergePullRequest(auth, repo, 37, opts)).toEqual({
+      state: 'merged',
+      mergeSha: merged,
+    })
+    expect(calls.map((c) => c.method)).toEqual(['PUT', 'GET', 'GET', 'GET', 'PUT'])
+  })
+
+  it('a 422 of a merge when green while the request is prepared is scheduled after it', async () => {
+    const { provider } = checking(
+      ['preparing'],
+      [
+        { status: 422, body: { message: 'Branch cannot be merged' } },
+        { status: 200, body: mr({ merge_when_pipeline_succeeds: true }) },
+      ],
+    )
+    expect(await provider.mergePullRequest(auth, repo, 37, { ...opts, whenGreen: true })).toEqual({
+      state: 'scheduled',
+    })
+  })
+
+  it('a refusal of a checked request is the answer: one read, no second merge', async () => {
+    const { provider, calls } = checking(['conflict'], [{ status: 405, body: {} }])
+    expect(await code(provider.mergePullRequest(auth, repo, 37, opts))).toBe('REPO_NOT_MERGEABLE')
+    expect(calls.map((c) => c.method)).toEqual(['PUT', 'GET'])
+  })
+
+  it('a target changed while the request is checked is REPO_CHANGED, and nothing is merged', async () => {
+    const { send, calls } = fakeSend({
+      [`GET ${P}/merge_requests/37`]: {
+        status: 200,
+        body: { ...mr({ target_branch: 'release' }), detailed_merge_status: 'checking' },
+      },
+      [`PUT ${P}/merge_requests/37/merge`]: { status: 405, body: {} },
+    })
+    const provider = createGitlabProvider({
+      host,
+      transport: createGitTransport({ resolvePublic: async () => '203.0.113.7', send }),
+      settle: quick,
+    })
+    expect(
+      await code(
+        provider.mergePullRequest(auth, repo, 37, { ...opts, expectedTargetBranch: 'main' }),
+      ),
+    ).toBe('REPO_CHANGED')
+    expect(calls.map((c) => c.method)).toEqual(['PUT', 'GET'])
+  })
+
+  it('a check that never ends gives up after its reads', async () => {
+    const { provider, calls } = checking(
+      Array.from({ length: 10 }, () => 'checking'),
+      [{ status: 405, body: {} }],
+    )
+    expect(await code(provider.mergePullRequest(auth, repo, 37, opts))).toBe('REPO_NOT_MERGEABLE')
+    expect(calls.filter((c) => c.method === 'GET')).toHaveLength(quick.tries)
+  })
+})
+
+describe('gitlab takes an auto-merge off that was not on', () => {
+  it('409 «Can’t cancel the automatic merge» of a request without one is false', async () => {
+    const { provider, calls } = setup({
+      [`POST ${P}/merge_requests/37/cancel_auto_merge`]: {
+        status: 409,
+        body: { message: "Can't cancel the automatic merge" },
+      },
+      [`GET ${P}/merge_requests/37`]: { status: 200, body: mr({ state: 'closed' }) },
+    })
+    expect(await provider.cancelAutoMerge!(auth, repo, 37)).toBe(false)
+    expect(calls.map((c) => c.url.pathname)).toEqual([
+      `${P}/merge_requests/37/cancel_auto_merge`,
+      `${P}/merge_requests/37`,
+    ])
+  })
+
+  it('409 while the request still waits for its build is a failure', async () => {
+    const { provider } = setup({
+      [`POST ${P}/merge_requests/37/cancel_auto_merge`]: { status: 409, body: {} },
+      [`GET ${P}/merge_requests/37`]: {
+        status: 200,
+        body: mr({ merge_when_pipeline_succeeds: true }),
+      },
+    })
+    expect(await code(provider.cancelAutoMerge!(auth, repo, 37))).toBe('GIT_PROVIDER_FAILED')
+  })
+})
+
+describe('gitlab runs and jobs', () => {
   it('says a job gitlab.com did not start for an unverified account, with its times', async () => {
     const { provider } = setup({
       [`GET ${P}/pipelines/9`]: {
@@ -437,6 +798,8 @@ describe('the path whitelist (ПР10)', () => {
     ).toBe(true)
     expect(gitlabPathAllowed('PUT', '/projects/42/merge_requests/37/merge', q, '42')).toBe(true)
     expect(gitlabPathAllowed('GET', '/projects/42/jobs/5/trace', q, '42')).toBe(true)
+    expect(gitlabPathAllowed('POST', '/projects/42/jobs/5/retry', q, '42')).toBe(false)
+    expect(gitlabPathAllowed('POST', '/projects/42/jobs/5/cancel', q, '42')).toBe(false)
   })
 
   it('refuses an id that would leave the project before the network', async () => {

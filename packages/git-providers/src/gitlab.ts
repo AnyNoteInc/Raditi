@@ -9,6 +9,7 @@ import {
   repoChanged,
   repoCloneUrl,
   repoNotMergeable,
+  repoRunGone,
   repoWebUrl,
   sameHostUrl,
   type CiJob,
@@ -26,7 +27,7 @@ import {
 
 import { call, dateOf, jsonOf, numericId, shaPattern } from './api.ts'
 import { assertGitlabPath } from './gitlab-paths.ts'
-import type { GitSession, GitTransport } from './transport.ts'
+import type { GitHttpResponse, GitSession, GitTransport } from './transport.ts'
 
 // GitLab REST v4 (https://docs.gitlab.com/api/rest/): gitlab.com and the client's own server
 // (docs/plan/84-projects.md, ПР10, ПР11, §4.5). One adapter per host. Every path goes through the
@@ -38,7 +39,19 @@ export interface GitlabProviderConfig {
   transport: GitTransport
   /** Stands only: `https://localhost:<port>` instead of `https://<host>` (parsed by the caller). */
   baseUrl?: URL | null
+  /**
+   * How long the adapter waits for GitLab to catch up with what just happened: a merge for the
+   * check of whether a request can merge, a new merge request for the push of its branch (see
+   * `mergePullRequest`, `openPullRequest`) — `tries` attempts, `everyMs` apart. Tests shorten it.
+   */
+  settle?: { tries: number; everyMs: number }
 }
+
+/**
+ * 20 attempts half a second apart. GitLab CE 19.5.6 took about 0.6 s to check a fresh request, and
+ * knew a pushed branch about 0.3 s after the push.
+ */
+export const gitlabSettleDefaults = Object.freeze({ tries: 20, everyMs: 500 })
 
 /** Paths of build settings on GitLab (ПР16), besides `forbiddenCiPaths` of the domain. */
 export const gitlabCiPaths = [
@@ -98,6 +111,7 @@ const pipelineSchema = z.looseObject({
   source: z.string().nullish(),
   web_url: z.unknown().optional(),
   created_at: z.string().nullish(),
+  updated_at: z.string().nullish(),
   started_at: z.string().nullish(),
   finished_at: z.string().nullish(),
   failure_reason: z.string().nullish(),
@@ -120,6 +134,175 @@ const lintSchema = z.looseObject({
   errors: z.array(z.string()).default([]),
   includes: z.array(z.looseObject({ type: z.string(), location: z.string() })).nullish(),
 })
+
+/**
+ * `detailed_merge_status` while GitLab still computes whether a request can merge: a request just
+ * opened (`preparing`, then `checking`) or one whose target moved since it was last read
+ * (`unchecked` until a read starts the check). A merge then is 405, a merge when green 422 —
+ * checked on GitLab CE 19.5.6 (docs/plan/84-projects.md, §10, «Живая проверка GitLab CE»).
+ */
+const STILL_CHECKING = new Set(['unchecked', 'checking', 'preparing', 'approvals_syncing'])
+
+/** A pipeline that is over. */
+const PIPELINE_OVER = new Set(['success', 'failed', 'canceled', 'skipped'])
+
+// GitLab Runner writes every line of a job's log with a prefix (on by default in Runner 19, checked
+// on 19.5.3): `<RFC 3339 time> <stream, 2 hex><O|E><' ' or '+'>`, where `+` continues the line
+// before. The API gives the log so; GitLab's own page shows it without. A log without the prefix
+// (an older runner) is left as it is.
+const TRACE_PREFIX = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z [0-9a-f]{2}[OE]([ +])/
+
+/**
+ * The text of a job's log as the build wrote it (ПР17): the runner's prefixes taken off, the parts
+ * of one line joined. The first line of a tail starts inside a line and is left out.
+ */
+export function gitlabTraceText(raw: string, truncated: boolean): string {
+  const lines = raw.split('\n')
+  if (truncated && lines.length > 1) lines.shift()
+  const out: string[] = []
+  for (const line of lines) {
+    const prefix = TRACE_PREFIX.exec(line)
+    if (prefix === null) out.push(line)
+    else if (prefix[1] === '+' && out.length > 0)
+      out[out.length - 1] += line.slice(prefix[0].length)
+    else out.push(line.slice(prefix[0].length))
+  }
+  return out.join('\n')
+}
+
+/** A path `include:` names: a file of this repository, another place, or a form not read. */
+type Named = { path: string } | 'elsewhere' | 'unknown'
+
+/** The keys of an include that are another place than this repository. */
+const ELSEWHERE = new Set(['project', 'remote', 'template', 'component'])
+/** More include entries than this are not read one by one: every path is a build path. */
+const INCLUDES_READ = 200
+
+/** A line without its YAML comment — one pass, so no text of the agent makes it slow. */
+function withoutComment(text: string): string {
+  const at = text.search(/(?:^|\s)#/)
+  return (at < 0 ? text : text.slice(0, at)).trim()
+}
+
+/** A scalar of `include` or `local:`: a variable in a path is any name (`*`). */
+function namedOf(raw: string): Named {
+  const text = withoutComment(raw)
+  // An alias, an anchor, a tag, a block scalar or a flow of YAML is not read as a path; a wildcard
+  // is quoted.
+  if (text === '' || /^[*&!|>[{]/.test(text)) return 'unknown'
+  const quoted = /^(['"])(.*)\1$/.exec(text)
+  if (quoted === null && /^['"]/.test(text)) return 'unknown'
+  const path = quoted === null ? text : quoted[2]!
+  if (path === '') return 'unknown'
+  if (path.includes('://')) return 'elsewhere'
+  if (/[[\]{},]/.test(path)) return 'unknown'
+  return { path: path.replace(/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/g, '*') }
+}
+
+/** The parts of a flow `[…]` or `{…}` of one line, split at its own commas. */
+function flowParts(inner: string): string[] | null {
+  const parts: string[] = []
+  let depth = 0
+  let quote: string | null = null
+  let from = 0
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i]!
+    if (quote !== null) {
+      if (c === quote) quote = null
+    } else if (c === '"' || c === "'") quote = c
+    else if (c === '[' || c === '{') depth++
+    else if (c === ']' || c === '}') {
+      if (--depth < 0) return null
+    } else if (c === ',' && depth === 0) {
+      parts.push(inner.slice(from, i).trim())
+      from = i + 1
+    }
+  }
+  if (quote !== null || depth !== 0) return null
+  parts.push(inner.slice(from).trim())
+  return parts.filter((part) => part !== '')
+}
+
+const KEY = /^(?:"([A-Za-z_]+)"|'([A-Za-z_]+)'|([A-Za-z_]+))\s*:(?:\s+(.*))?$/
+
+/** One entry of a flow: `{ local: a.yml }` or a path. */
+function flowEntry(part: string): Named[] {
+  if (!part.startsWith('{')) return [namedOf(part)]
+  const parts = part.endsWith('}') ? flowParts(part.slice(1, -1)) : null
+  if (parts === null) return ['unknown']
+  let local: Named | null = null
+  for (const pair of parts) {
+    const key = KEY.exec(pair)
+    const name = key?.[1] ?? key?.[2] ?? key?.[3]
+    if (name === 'local') local = namedOf(key?.[4] ?? '')
+    else if (name !== undefined && ELSEWHERE.has(name)) return ['elsewhere']
+  }
+  return [local ?? 'unknown']
+}
+
+/** `include: […]` or `include: {…}` on one line. */
+function flowOf(text: string): Named[] {
+  if (text.startsWith('{')) return flowEntry(text)
+  const parts = text.endsWith(']') ? flowParts(text.slice(1, -1)) : null
+  return parts === null ? ['unknown'] : parts.flatMap(flowEntry)
+}
+
+/** A scalar or a one-line flow. */
+const entryOf = (text: string): Named[] =>
+  text.startsWith('[') || text.startsWith('{') ? flowOf(text) : [namedOf(text)]
+
+/**
+ * The files of `include: local` (and of `trigger: include`) a configuration names in its own text
+ * (ПР16): the plain form, a list of paths, `local:` keys and one-line flows; `project:`, `remote:`,
+ * `template:` and `component:` are other places and stay out. GitLab's CI Lint names only the
+ * files that exist at the ref it is asked for, with a wildcard already expanded, and none at all
+ * when one is missing (GitLab CE 19.5.6) — so a file the chat's branch adds, or that only a
+ * wildcard covers, comes from here. A reading of the text, not a YAML parser, and closed where it
+ * cannot read: a form it does not know, or more than INCLUDES_READ entries, is `*` — every path.
+ * Linear in the text: the configuration is the agent's.
+ */
+export function gitlabLocalIncludes(content: string): string[] {
+  const named: Named[] = []
+  const lines = content.replace(/\r\n?/g, '\n').split('\n')
+  for (let i = 0; i < lines.length && named.length <= INCLUDES_READ; i++) {
+    const at = /^(\s*)(?:-\s+)?include:(?:\s+(.*))?$/.exec(lines[i]!)
+    if (at === null) continue
+    const indent = at[1]!.length
+    // `include: &anchor` names the block below.
+    const inline = withoutComment(at[2] ?? '').replace(/^&\S+$/, '')
+    if (inline !== '') named.push(...entryOf(inline))
+    // The block below: deeper lines, or list items at the same depth. A path alone is an entry
+    // of the include list itself, not of a list deeper in it (`rules: - exists: - Dockerfile`).
+    let other = false
+    let itemDepth = -1
+    let j = i + 1
+    for (; j < lines.length && named.length <= INCLUDES_READ; j++) {
+      const line = lines[j]!
+      const body = withoutComment(line.replace(/^\s*-(?=\s|$)/, ''))
+      const item = /^\s*-(?:\s|$)/.test(line)
+      if (body === '' && !item) continue
+      const depth = line.length - line.trimStart().length
+      if (depth < indent || (depth === indent && !item)) break
+      if (item && itemDepth < 0) itemDepth = depth
+      const entry = item && depth === itemDepth
+      if (entry) other = false
+      const key = KEY.exec(body)
+      const name = key?.[1] ?? key?.[2] ?? key?.[3]
+      if (name === 'local') named.push(namedOf(key?.[4] ?? ''))
+      else if (name !== undefined) {
+        if (ELSEWHERE.has(name)) other = true
+      } else if (entry && !other) named.push(...entryOf(body))
+    }
+    // The block is read: the next `include:` is after it.
+    i = j - 1
+  }
+  if (named.length > INCLUDES_READ) return ['*']
+  const paths = new Set<string>()
+  for (const entry of named)
+    if (entry === 'unknown') paths.add('*')
+    else if (entry !== 'elsewhere') paths.add(entry.path)
+  return [...paths].sort()
+}
 
 /** GitLab's pipeline and job statuses in the words of the platform (https://docs.gitlab.com/api/jobs/). */
 export function gitlabCiStatus(status: string): CiStatus {
@@ -279,7 +462,10 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
       url: sameHostUrl(host, p.web_url, `${repoWebUrl(repo)}/-/pipelines/${p.id}`),
       createdAt: dateOf(p.created_at),
       startedAt: dateOf(p.started_at),
-      finishedAt: dateOf(p.finished_at),
+      // The list of pipelines has no `started_at` and `finished_at`, only the pipeline itself
+      // (GitLab CE 19.5.6): a pipeline that is over ended when it last changed.
+      finishedAt:
+        dateOf(p.finished_at) ?? (PIPELINE_OVER.has(p.status) ? dateOf(p.updated_at) : null),
       event: p.source ?? null,
       refusal: gitlabCiRefusal(p.failure_reason),
     }
@@ -302,6 +488,60 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
   }
 
   const fresh = () => transport.session()
+
+  const settle = config.settle ?? gitlabSettleDefaults
+  const pause = () => new Promise((done) => setTimeout(done, settle.everyMs))
+  /**
+   * After GitLab refused a merge: reads the request while it is STILL_CHECKING, at most
+   * `settle.tries` times. True — it was being checked, or can merge now: the refusal was not
+   * GitLab's answer, and the merge may be asked again.
+   */
+  const checkedSince = async (
+    session: GitSession,
+    auth: GitAuth,
+    repo: RepoRef,
+    iid: string,
+    target: string | undefined,
+  ): Promise<boolean> => {
+    let waited = false
+    for (let i = 0; i < settle.tries; i++) {
+      const response = await request(session, 'GET', auth, repo, `/merge_requests/${iid}`)
+      if (response.status !== 200) return false
+      const read = z
+        .looseObject({
+          detailed_merge_status: z.string().nullish(),
+          target_branch: z.string().nullish(),
+        })
+        .safeParse(jsonOf(response))
+      // A target changed while the request was checked is not the one the client was shown (ПР15).
+      if (target !== undefined && read.success && read.data.target_branch !== target)
+        throw repoChanged()
+      const status = read.success ? (read.data.detailed_merge_status ?? null) : null
+      if (status === null || !STILL_CHECKING.has(status)) return waited || status === 'mergeable'
+      waited = true
+      await pause()
+    }
+    return false
+  }
+
+  /**
+   * 400 `{"message":{"source_branch":["does not exist"]}}`: GitLab does not know a branch pushed a
+   * moment ago yet — 3 of 8 requests opened right after the push on GitLab CE 19.5.6, known on the
+   * next attempt. Nothing was opened.
+   */
+  const branchNotKnownYet = (response: GitHttpResponse): boolean => {
+    if (response.status !== 400) return false
+    let raw: unknown
+    try {
+      raw = JSON.parse(response.body.toString('utf8'))
+    } catch {
+      return false
+    }
+    const body = z
+      .looseObject({ message: z.looseObject({ source_branch: z.array(z.string()).optional() }) })
+      .safeParse(raw)
+    return body.success && (body.data.message.source_branch ?? []).includes('does not exist')
+  }
 
   const provider: GitProvider = {
     kind: 'gitlab',
@@ -382,15 +622,22 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
 
     async openPullRequest(auth, repo, input) {
       // A draft is a title prefix on GitLab (https://docs.gitlab.com/user/project/merge_requests/drafts/).
-      const response = await request(fresh(), 'POST', auth, repo, '/merge_requests', {
-        body: {
-          source_branch: input.head,
-          target_branch: input.base,
-          title: input.draft ? `Draft: ${input.title}` : input.title,
-          description: input.body,
-          remove_source_branch: false,
-        },
-      })
+      const session = fresh()
+      const open = () =>
+        request(session, 'POST', auth, repo, '/merge_requests', {
+          body: {
+            source_branch: input.head,
+            target_branch: input.base,
+            title: input.draft ? `Draft: ${input.title}` : input.title,
+            description: input.body,
+            remove_source_branch: false,
+          },
+        })
+      let response = await open()
+      for (let i = 1; i < settle.tries && branchNotKnownYet(response); i++) {
+        await pause()
+        response = await open()
+      }
       return pullRequestOf(repo, jsonOf(response))
     },
 
@@ -424,13 +671,10 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
 
     async mergePullRequest(auth, repo, number, opts) {
       if (!shaPattern.test(opts.expectedHeadSha)) throw repoChanged()
-      const response = await request(
-        fresh(),
-        'PUT',
-        auth,
-        repo,
-        `/merge_requests/${numericId(number, 'merge request')}/merge`,
-        {
+      const iid = numericId(number, 'merge request')
+      const session = fresh()
+      const put = () =>
+        request(session, 'PUT', auth, repo, `/merge_requests/${iid}/merge`, {
           body: {
             sha: opts.expectedHeadSha,
             should_remove_source_branch: opts.deleteBranch,
@@ -438,8 +682,15 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
             // ignores the other — both go, so an old server never merges at once instead.
             ...(opts.whenGreen ? { auto_merge: true, merge_when_pipeline_succeeds: true } : {}),
           },
-        },
+        })
+      let response = await put()
+      // A refusal while GitLab still checks the request (STILL_CHECKING) is not its answer: the
+      // check ends in about a second, then the merge is asked once again.
+      if (
+        (response.status === 405 || response.status === 422) &&
+        (await checkedSince(session, auth, repo, iid, opts.expectedTargetBranch))
       )
+        response = await put()
       // https://docs.gitlab.com/api/merge_requests/#merge-a-merge-request
       if (response.status === 409) throw repoChanged()
       if (response.status === 405 || response.status === 422) throw repoNotMergeable()
@@ -456,8 +707,8 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
     async cancelAutoMerge(auth, repo, number) {
       const iid = numericId(number, 'merge request')
       const session = fresh()
-      // `cancel_auto_merge` since GitLab 19.5 answers with the merge request; older servers have
-      // only the deprecated endpoint, which answers 201 with `status` (success or error).
+      // `cancel_auto_merge` answers 201 with the merge request; older servers have only the
+      // deprecated endpoint, which answers 201 with `status` (success or error).
       const current = await request(
         session,
         'POST',
@@ -465,6 +716,16 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
         repo,
         `/merge_requests/${iid}/cancel_auto_merge`,
       )
+      // 409 «Can't cancel the automatic merge» — none was on, or the request is closed (GitLab CE
+      // 19.5.6). The request is read: still waiting is a failure, otherwise nothing was on.
+      if (current.status === 409) {
+        const now = await request(session, 'GET', auth, repo, `/merge_requests/${iid}`)
+        if (now.status === 404) return false
+        const mr = pullRequestOf(repo, jsonOf(now))
+        if (mr.autoMerge && (mr.state === 'open' || mr.state === 'draft'))
+          throw gitProviderFailed('the auto-merge was not taken off', 409)
+        return false
+      }
       if (current.status !== 404) {
         const mr = pullRequestOf(repo, jsonOf(current))
         return !mr.autoMerge
@@ -544,10 +805,16 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
       if (response.status === 401 || response.status === 403) jsonOf(response)
       if (response.status !== 200) throw gitProviderFailed('unexpected answer', response.status)
       // A tail may start inside a character: the decoder writes a replacement, never throws.
-      return { text: new TextDecoder('utf-8').decode(response.body), truncated: response.truncated }
+      const raw = new TextDecoder('utf-8').decode(response.body)
+      return { text: gitlabTraceText(raw, response.truncated), truncated: response.truncated }
     },
 
     async rerunRun(auth, repo, runId) {
+      // GitLab's retry of a pipeline runs again only its failed and canceled jobs: of one that
+      // passed it runs nothing and answers 201 with it as it was (GitLab CE 19.5.6). What
+      // «Запустить снова» means for such a pipeline is the owner's (docs/plan/84-projects.md, §10,
+      // «Живая проверка GitLab CE»): retrying its jobs one by one would run a deploy job a person
+      // had played, without the card of a deploy.
       jsonOf(
         await request(
           fresh(),
@@ -599,9 +866,17 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
 
     async startDeploy(auth, repo, action) {
       if (action.kind !== 'manual_job') throw gitNotSupported('workflow_dispatch')
-      const body = jsonOf(
-        await request(fresh(), 'POST', auth, repo, `/jobs/${numericId(action.id, 'job')}/play`),
+      const played = await request(
+        fresh(),
+        'POST',
+        auth,
+        repo,
+        `/jobs/${numericId(action.id, 'job')}/play`,
       )
+      // 400 «Unplayable Job»: the job is not waiting any more — played already (GitLab CE 19.5.6).
+      if (played.status === 400 && /unplayable job/i.test(played.body.toString('utf8')))
+        throw repoRunGone()
+      const body = jsonOf(played)
       const job = jobSchema.safeParse(body)
       return { runId: job.success && job.data.pipeline ? String(job.data.pipeline.id) : null }
     },
@@ -615,12 +890,15 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
         ),
       )
       if (!parsed.success) throw gitProviderFailed('a lint answer of an unexpected form')
+      // GitLab names the local files that exist at `ref`, a wildcard expanded; what the
+      // configuration itself names joins them (gitlabLocalIncludes).
+      const named = (parsed.data.includes ?? [])
+        .filter((include) => include.type === 'local')
+        .map((include) => include.location)
       return {
         valid: parsed.data.valid,
         errors: parsed.data.errors.slice(0, 50),
-        includes: (parsed.data.includes ?? [])
-          .filter((include) => include.type === 'local')
-          .map((include) => include.location),
+        includes: [...new Set([...named, ...gitlabLocalIncludes(content)])],
       }
     },
 

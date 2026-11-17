@@ -291,13 +291,20 @@ export interface GitProvider {
   findPullRequests(auth: GitAuth, repo: RepoRef, sourceBranch: string): Promise<PullRequest[]>
   /**
    * Merges only while the source head is `expectedHeadSha` (otherwise REPO_CHANGED). `whenGreen`
-   * only where `support.autoMerge`: the provider merges once the pipeline passes.
+   * only where `support.autoMerge`: the provider merges once the pipeline passes. An adapter that
+   * waits for the provider and asks again (GitLab checks a request first) asks again only while
+   * the target is `expectedTargetBranch`.
    */
   mergePullRequest(
     auth: GitAuth,
     repo: RepoRef,
     number: number,
-    opts: { expectedHeadSha: string; deleteBranch: boolean; whenGreen: boolean },
+    opts: {
+      expectedHeadSha: string
+      expectedTargetBranch?: string
+      deleteBranch: boolean
+      whenGreen: boolean
+    },
   ): Promise<{ state: 'merged' | 'scheduled'; mergeSha?: string }>
   /** Takes an auto-merge off (ПР15); true when one was on. Only where `support.autoMerge`. */
   cancelAutoMerge?(auth: GitAuth, repo: RepoRef, number: number): Promise<boolean>
