@@ -497,6 +497,33 @@ describe.skipIf(!enabled)('the GitHub App in core with PostgreSQL (plan 84, 84.2
     )
   })
 
+  it('a sync does not give back a connection whose installation GitHub said is gone', async () => {
+    // The `installation` webhook (plan 84, §10): deleted or suspended — only its return or a new
+    // installation gives the connection back; a sync that read it in time does not, nor its
+    // failure overwrite the reason.
+    const f = await fixture()
+    await db.gitConnection.update({
+      where: { id: f.connectionId },
+      data: { state: 'reauth_needed', stateReason: 'installation_gone' },
+    })
+    await f.jobs.syncConnection(f.connectionId)
+    expect(
+      await db.gitConnection.findUniqueOrThrow({
+        where: { id: f.connectionId },
+        select: { state: true, stateReason: true },
+      }),
+    ).toEqual({ state: 'reauth_needed', stateReason: 'installation_gone' })
+    expect(
+      await db.gitConnectionRepository.count({ where: { connectionId: f.connectionId } }),
+    ).toBe(0)
+    // A press refuses as for a sign-in to renew.
+    const id = await f.press('merge', f.claimsOf({}), {
+      merge: { mode: 'now', deleteBranch: false },
+    })
+    await f.actions.run(id)
+    expect(await f.rowOf(id)).toMatchObject({ state: 'failed', error: 'GIT_CONNECTION_REAUTH' })
+  })
+
   it('«Принять, когда сборка пройдёт» waits for the required checks and merges after them', async () => {
     const f = await fixture()
     const id = await f.press('merge', f.claimsOf({}), {

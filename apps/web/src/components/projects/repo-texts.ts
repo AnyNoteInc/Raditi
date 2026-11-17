@@ -13,6 +13,8 @@ export const repoText = Object.freeze({
   gitlabComHint: 'Вход через GitLab',
   ownServer: 'Свой сервер GitLab — по токену',
   signInAgain: 'Войти заново',
+  /** The GitHub App removed or suspended at the account (84.27): install it again. */
+  reconnect: 'Подключить заново',
   ownServerHint: 'Адрес вашего сервера и токен доступа',
   soon: 'Скоро',
   serverAddress: 'Адрес сервера',

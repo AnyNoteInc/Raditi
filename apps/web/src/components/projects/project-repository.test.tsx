@@ -320,6 +320,35 @@ describe('the GitHub App (84.25)', () => {
     }
   })
 
+  it('offers «Подключить заново» on GitHub when the app was removed or suspended (84.27)', async () => {
+    calls.list.mockResolvedValue({
+      connections: [],
+      available: { github: true, gitlabCom: false, ownServer: true },
+    })
+    const gone = repository({
+      mode: 'write',
+      connection: { id: CONNECTION_ID, kind: 'github_app', login: 'kolos', state: 'reauth_needed' },
+      refusal: {
+        code: 'GIT_CONNECTION_REAUTH',
+        message:
+          'Приложение Радити на GitHub удалено или приостановлено — подключите GitHub заново',
+      },
+    })
+    calls.get.mockResolvedValue(gone)
+    wrap(<ProjectContext project={kolos(gone)} />)
+    expect(await screen.findByText(/удалено или приостановлено/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Войти заново' })).toBeNull()
+    fireEvent.click(await screen.findByRole('button', { name: 'Подключить заново' }))
+    const connect = await screen.findByRole('dialog', { name: 'Подключить репозиторий' })
+    await waitFor(() =>
+      expect(
+        within(connect)
+          .getByRole('radio', { name: /^GitHub/ })
+          .getAttribute('aria-checked'),
+      ).toBe('true'),
+    )
+  })
+
   it('«Подключить GitHub» is «Скоро» while the app is not offered', async () => {
     wrap(<ProjectContext project={kolos()} />)
     const menu = await openMenu()

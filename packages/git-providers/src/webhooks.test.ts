@@ -12,6 +12,7 @@ import { createGitTransport } from './transport.ts'
 import {
   gitlabHookKeyId,
   gitlabHookSecrets,
+  parseGithubInstallationWebhook,
   parseGithubWebhook,
   parseGitlabWebhook,
   verifyGithubSignature,
@@ -371,5 +372,46 @@ describe('the GitHub adapter of 84.26', () => {
     ])
     expect(calls[0]!.url.searchParams.get('head')).toBe('acme:raditi/novoe-menyu-1a2b3c4d')
     expect(calls[0]!.url.searchParams.get('state')).toBe('all')
+  })
+})
+
+describe('the installation event of the GitHub App (84.27)', () => {
+  const headers = (event: string, delivery = 'd-77') =>
+    new Headers({ 'x-github-event': event, 'x-github-delivery': delivery })
+  const body = (action: string, id: unknown = 77) =>
+    JSON.stringify({ action, installation: { id }, sender: { login: 'acme' } })
+
+  it('says gone of deleted and suspend, back of unsuspend and created', () => {
+    for (const [action, change] of [
+      ['deleted', 'gone'],
+      ['suspend', 'gone'],
+      ['unsuspend', 'back'],
+      ['created', 'back'],
+    ] as const)
+      expect(parseGithubInstallationWebhook(headers('installation'), body(action))).toEqual({
+        deliveryId: 'd-77',
+        installationId: '77',
+        change,
+      })
+  })
+
+  it('takes nothing else: another action or event, no id, no delivery', () => {
+    expect(
+      parseGithubInstallationWebhook(headers('installation'), body('new_permissions_accepted')),
+    ).toBeNull()
+    expect(parseGithubInstallationWebhook(headers('push'), body('deleted'))).toBeNull()
+    expect(
+      parseGithubInstallationWebhook(headers('installation_repositories'), body('removed')),
+    ).toBeNull()
+    expect(
+      parseGithubInstallationWebhook(headers('installation'), body('deleted', '77')),
+    ).toBeNull()
+    expect(
+      parseGithubInstallationWebhook(
+        new Headers({ 'x-github-event': 'installation' }),
+        body('deleted'),
+      ),
+    ).toBeNull()
+    expect(parseGithubInstallationWebhook(headers('installation'), 'not json')).toBeNull()
   })
 })
