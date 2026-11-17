@@ -37,9 +37,9 @@ export function scheduledNoticeTitle(kind: NotificationKind, cause?: NoticeLimit
     case 'question':
       return 'Запланированной задаче нужен ваш ответ'
     case 'ready':
-      // The kind of the chats, kept as they keep it (Зп62): of a pass without the client, should
-      // it come, it says the task was done.
-      return 'Запланированная задача выполнена'
+      // A run in a project with a repository that left changes in the chat's branch (plan 84,
+      // §10, «Открытое — закрыто (17.11.2026)»); nothing went out — the client sends them.
+      return 'Запланированная задача подготовила изменения'
     case 'failed':
       return 'Запланированная задача не выполнена'
     case 'limit':
@@ -56,6 +56,13 @@ export function scheduledNoticeTitle(kind: NotificationKind, cause?: NoticeLimit
       return 'Запланированная задача пропустила запуск'
   }
 }
+
+/** What the client does with the changes a run prepared: the second half of its notice. */
+export const scheduledReadyHint = 'посмотрите и отправьте в ветку'
+
+/** The words of the bot of a run that prepared changes (`ready`): no word of the client but the name. */
+export const scheduledReadyText = (name: string): string =>
+  `Задача «${name}» подготовила изменения — ${scheduledReadyHint}.`
 
 /**
  * The title of any notice: a pass without the client of a scheduled run, a notice of a task — in

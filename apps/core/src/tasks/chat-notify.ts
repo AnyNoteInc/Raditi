@@ -3,6 +3,7 @@ import { passUnattended, pauseSchedule, type PrismaClient } from '@repo/db'
 import {
   notificationTitle,
   readFeedRow,
+  scheduledReadyText,
   scheduleNotifySwitchKinds,
   type ChatNotifyJob,
   type ChatNotifyKind,
@@ -24,6 +25,11 @@ import type { DeliveryAnswer, NotificationDelivery } from './notification-delive
 // failure, at most one in 30 minutes per task. Its pass refused by the gate of the chat
 // (`not_accepted`) pauses the task, and that is the one notice (Зп22). From the client's first
 // words on the chat is an ordinary one.
+//
+// A pass of such a run in a project with a repository that prepared changes — the card «Изменения
+// в ветке» or a proposal of a merge request of its turn — is told as `ready` (docs/plan/84-
+// projects.md, §10, «Открытое — закрыто»): «Задача «…» подготовила изменения — посмотрите и
+// отправьте в ветку». Nothing is sent from the run itself (ПР19); the client sends it.
 
 /** The client looked at the chat this recently: no notification. */
 export const PRESENCE_FRESH_MS = 60_000
@@ -110,21 +116,28 @@ export class ChatNotify {
     })
     if (presence && now.getTime() - presence.seenAt.getTime() < PRESENCE_FRESH_MS)
       return this.#log(job, 'seen')
-    if (scheduled && !scheduled.notify && SWITCHED.has(job.kind)) return this.#log(job, 'skipped')
+    // An answer of a run that left changes in the chat's branch is what the client acts on.
+    const kind: ChatNotifyKind =
+      scheduled && job.kind === 'answered' && (await this.#preparedChanges(job))
+        ? 'ready'
+        : job.kind
+    if (scheduled && !scheduled.notify && SWITCHED.has(kind)) return this.#log(job, 'skipped')
 
     const text = scheduled
-      ? `${notificationTitle(job.kind, {
-          scheduled: true,
-          ...(job.kind === 'limit' ? { cause: await this.#limitCause(job.taskId) } : {}),
-        })} — «${scheduled.name}».`
-      : `${CHAT_NOTIFY_TELEGRAM_TEXT[job.kind]} — чат «${task.title?.trim() || 'Чат'}».`
+      ? kind === 'ready'
+        ? scheduledReadyText(scheduled.name)
+        : `${notificationTitle(kind, {
+            scheduled: true,
+            ...(kind === 'limit' ? { cause: await this.#limitCause(job.taskId) } : {}),
+          })} — «${scheduled.name}».`
+      : `${CHAT_NOTIFY_TELEGRAM_TEXT[kind]} — чат «${task.title?.trim() || 'Чат'}».`
     const answer = await this.deps.delivery.deliver({
       userId,
-      kind: job.kind,
+      kind,
       chat: { taskId: job.taskId, attempt: job.attempt, turnNo: job.turnNo },
       schedule: scheduled ? { id: scheduled.scheduleId, runId: scheduled.runId } : null,
       path: `/chats/${job.taskId}`,
-      letter: scheduled ? SCHEDULED_LETTERS.has(job.kind) : true,
+      letter: scheduled ? SCHEDULED_LETTERS.has(kind) : true,
       telegram: { text, button: 'Открыть чат' },
     })
     return this.#log(job, answerOf(answer))
@@ -196,6 +209,22 @@ export class ChatNotify {
         reason: 'not_accepted',
       })) ?? 'none'
     )
+  }
+
+  /**
+   * Whether the turn of the pass left the card «Изменения в ветке» or a proposal of a merge
+   * request (`RepoChanges`, written right after the pass settles, well before the job is due).
+   */
+  async #preparedChanges(job: ChatNotifyJob): Promise<boolean> {
+    const row = await this.deps.db.taskEvent.findFirst({
+      where: {
+        taskId: job.taskId,
+        type: { in: ['feed.repo_changes', 'feed.repo_proposal'] },
+        turn: { turnNo: job.turnNo },
+      },
+      select: { id: true },
+    })
+    return row !== null
   }
 
   /** What stopped a pass at its limit, by the row that ended it: credits or the weekly limit. */
