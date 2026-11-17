@@ -136,23 +136,58 @@ export async function scenarioW(stand) {
     gitlab.pipelineActions.some((item) => item.pipeline === pipeline.id && item.action === 'retry'),
     'the fake retried the pipeline of the card',
   )
+  // It had passed: GitLab's retry ran nothing, and «Запустить снова» is a new pipeline of the
+  // branch, its ref alone in the body (ПР36; GitLab CE 19.5.6, the live check of 17.11.2026).
+  const asked = gitlab.createdPipelines.filter((item) => item.path === project.path)
+  const rerunRow = await db.repoAction.findUniqueOrThrow({ where: { id: rerunPress.actionId } })
+  const fresh = project.pipelines.findLast((item) => item.ref === 'client/hook')
+  rt.check(
+    asked.length === 1 &&
+      JSON.stringify(asked[0].body) === JSON.stringify({ ref: 'client/hook' }) &&
+      asked[0].query === '' &&
+      fresh !== undefined &&
+      fresh.id !== pipeline.id &&
+      fresh.source === 'api' &&
+      fresh.sha === pipeline.sha &&
+      rerunRow.result?.runId === String(fresh.id) &&
+      rerunRow.result?.rerunOf === finished.id,
+    `a rerun of a passed build is a new pipeline #${fresh?.id} of its branch, asked with its ref alone`,
+    { asked, result: rerunRow.result },
+  )
   const replay = await owner.call('mutation', 'projectRepo.confirmRunAction', {
     confirmToken: rerun.confirmToken,
   })
   rt.check(!replay.ok, 'the token of the rerun works once', replay)
-  // The rerun passes again, and core reads it so.
-  await rt
-    .until(
-      'the rerun to pass and core to read it',
-      async () => {
-        if (Date.now() - pipeline.started < pipeline.runMs + 500) return null
-        const runs = await owner.query('projectRepo.runs', { projectId })
-        const found = runs.items.find((item) => item.id === finished.id)
-        return found?.status === 'success' && found.finishedAt > finished.finishedAt ? found : null
-      },
-      { timeoutMs: 120_000, intervalMs: 3000, service: stand.processes.core },
-    )
-    .catch(() => null)
+  // The new pipeline passes, and core reads it.
+  const rerunRead = await rt.until(
+    'the new pipeline to pass and core to read it',
+    async () => {
+      const runs = await owner.query('projectRepo.runs', { projectId })
+      const found = runs.items.find((item) => item.id === String(fresh?.id))
+      return found?.status === 'success' ? found : null
+    },
+    { timeoutMs: 120_000, intervalMs: 3000, service: stand.processes.core },
+  )
+  // Settings that leave a new pipeline no job: the press says so in words.
+  project.pushOnly = true
+  let emptyRow
+  try {
+    const empty = await owner.mutate('projectRepo.prepareRunAction', {
+      projectId,
+      runId: rerunRead.id,
+      kind: 'rerun',
+    })
+    const emptyPress = await owner.mutate('projectRepo.confirmRunAction', {
+      confirmToken: empty.confirmToken,
+    })
+    emptyRow = await actionEnded(stand, projectId, emptyPress.actionId, 'the empty rerun')
+  } finally {
+    project.pushOnly = false
+  }
+  rt.check(
+    emptyRow.state === 'failed' && emptyRow.error === 'REPO_RUN_NOT_STARTED',
+    `a new pipeline GitLab would not start is refused in words (${emptyRow.state} ${emptyRow.error})`,
+  )
 
   project.slowRefs.set('client/slow', 120_000)
   await gitlab.commitAsClient(project, 'main', 'docs/slow.md', 'Долгая сборка\n', {
