@@ -1306,8 +1306,10 @@ async function scenarioF(stand) {
   rt.check(
     mr.description.split('\n').every((line) => !/^\s*\//.test(line)) &&
       !/@\w/.test(mr.description) &&
-      !/\bcloses\b/i.test(mr.description),
-    'its text is neutralised: no quick action, no mention, no closing word',
+      !/\bcloses\b/i.test(mr.description) &&
+      // GitLab runs the quick actions of the text it is given (the live check of 17.11.2026).
+      mr.quickActions.length === 0,
+    'its text is neutralised: no quick action ran, no mention, no closing word',
     mr.description,
   )
   const second = await say(stand, taskId, 'Спасибо!', 'plainAnswer')
@@ -1731,7 +1733,8 @@ async function scenarioI(stand) {
     deleteBranch: true,
   })
   rt.check(
-    !replay.ok && gitlab.mergeCalls.length === 1,
+    // A merge GitLab refused while it still checked the request is asked again by the adapter.
+    !replay.ok && gitlab.mergeCalls.filter((item) => !item.unchecked).length === 1,
     'the token of the merge works once',
     replay,
   )

@@ -46,6 +46,12 @@ describe('ciIncludePaths', () => {
       ciIncludePaths(['/ci/deploy.yml', 'ci/deploy.yml', 'configs/**/*.yml', '*.yml']),
     ).toEqual(['*', 'ci/deploy.yml', 'configs/'])
   })
+
+  it('more files than it keeps are every path, not the first hundred', () => {
+    const many = Array.from({ length: 100 }, (_, i) => `ci/a${String(i).padStart(3, '0')}.yml`)
+    expect(ciIncludePaths(many)).toHaveLength(100)
+    expect(ciIncludePaths([...many, 'ci/zz-new.yml'])).toEqual(['*'])
+  })
 })
 
 describe('repoBuildPathMatcher', () => {

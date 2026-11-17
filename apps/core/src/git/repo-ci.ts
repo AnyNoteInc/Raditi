@@ -386,7 +386,7 @@ export class RepoCi {
       (
         await prisma.projectCiRun.findMany({
           where: { projectRepositoryId: repo.id, providerRunId: { in: runs.map((r) => r.id) } },
-          select: { providerRunId: true, status: true, jobs: true },
+          select: { providerRunId: true, status: true, jobs: true, refusal: true },
         })
       ).map((row) => [row.providerRunId, row]),
     )
@@ -412,7 +412,13 @@ export class RepoCi {
         name: run.name.slice(0, 200),
         event: run.event ? run.event.slice(0, 40) : null,
         status: run.status,
-        refusal: refusalOf(run, jobs),
+        // GitLab names why a run did not start on its jobs only — a pipeline has no
+        // `failure_reason` (GitLab CE 19.5.6): a poll that does not read the jobs of a run that
+        // did not change keeps it.
+        refusal:
+          jobs === null && before?.status === run.status
+            ? (run.refusal ?? before.refusal)
+            : refusalOf(run, jobs),
         webUrl: run.url.slice(0, 500),
         startedAt: run.startedAt ?? null,
         finishedAt: run.finishedAt,

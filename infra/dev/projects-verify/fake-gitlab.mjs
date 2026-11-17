@@ -7,7 +7,10 @@
 // name on 443 for git. A merge request merges in the bare repository; a push makes a pipeline with
 // its jobs, a merge into the main branch — one with a manual deploy job. Everything it saw is kept
 // for the scenarios: requests (method, path, how they were signed — never a token), pushes, merge
-// requests with their texts, lints, played jobs.
+// requests with their texts, lints, played jobs. Where a real GitLab CE 19.5.6 answered otherwise
+// than this fake did (the live check of 17.11.2026, docs/plan/84-projects.md, §10), it answers so
+// now: the races of a push and of the check of a request, quick actions, the list of pipelines,
+// the log of Runner 19, the lint of `include: local` (the README of the stand).
 import { spawn } from 'node:child_process'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -58,6 +61,20 @@ export function runGit(args, { cwd, home, input, env = {}, allowFailure = false 
 }
 
 const sha40 = /^[0-9a-f]{40}$/
+
+/** A path of `include: local` as a test of file names: `*` within a directory, `**` across. */
+function globOf(pattern) {
+  let source = ''
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i]
+    if (char === '*' && pattern[i + 1] === '*') {
+      source += '.*'
+      i++
+    } else if (char === '*') source += '[^/]*'
+    else source += char.replace(/[.+?^${}()|[\]\\/]/g, '\\$&')
+  }
+  return new RegExp(`^${source}$`)
+}
 const json = (res, status, body, headers = {}) => {
   res.writeHead(status, { 'content-type': 'application/json', ...headers })
   res.end(JSON.stringify(body))
@@ -105,6 +122,8 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
   const hooks = new Map()
   const removedHooks = []
   const pipelineActions = []
+  /** cancel_auto_merge and its deprecated endpoint: { iid, on }. */
+  const autoMergeCancels = []
 
   const hostOf = (req) => {
     const name = String(req.headers.host ?? '')
@@ -114,7 +133,9 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
   }
   const userOf = (host, token) => (token ? (hosts[host].users.get(token) ?? null) : null)
 
-  const projectJson = (host, project, size) => ({
+  // Without a token GitLab answers a public project without `statistics`, `permissions` and
+  // `ci_config_path`: `statistics=true` is ignored, not refused (GitLab CE 19.5.6, gitlab.com).
+  const projectJson = (host, project, size, { anonymous = false } = {}) => ({
     id: project.id,
     path_with_namespace: project.path,
     name: project.path.split('/').at(-1),
@@ -123,29 +144,45 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
     web_url: `https://${host}/${project.path}`,
     // An own server may answer any address for git: the platform builds its own (§4.6).
     http_url_to_repo: `https://10.0.0.1/${project.path}.git`,
-    statistics: { repository_size: size },
-    ci_config_path: null,
     archived: false,
-    // Maintainer (40) by default: the role GitLab requires to make a project hook (84.26).
-    permissions: {
-      project_access: { access_level: project.accessLevel ?? 40 },
-      group_access: null,
-    },
+    ...(anonymous
+      ? {}
+      : {
+          statistics: { repository_size: size },
+          ci_config_path: null,
+          // Maintainer (40) by default: the role GitLab requires to make a project hook (84.26).
+          permissions: {
+            project_access: { access_level: project.accessLevel ?? 40 },
+            group_access: null,
+          },
+        }),
   })
 
-  const pipelineJson = (host, project, p) => ({
-    id: p.id,
-    sha: p.sha,
-    ref: p.ref,
-    status: statusOf(p),
-    source: p.source,
-    name: p.name,
-    web_url: `https://${host}/${project.path}/-/pipelines/${p.id}`,
-    created_at: p.createdAt,
-    started_at: p.createdAt,
-    finished_at: statusOf(p) === 'running' ? null : p.createdAt,
-    failure_reason: p.failureReason ?? null,
-  })
+  /** When a pipeline that is over ended: its run time after its last start. */
+  const endedAt = (p) => new Date(p.started + p.runMs).toISOString()
+  // The list of pipelines has no `started_at` and `finished_at` — only the pipeline itself does
+  // (GitLab CE 19.5.6); `updated_at` is in both. Neither has `failure_reason`: the jobs do.
+  const pipelineJson = (host, project, p, { listed = false } = {}) => {
+    const status = statusOf(p)
+    const over = ['success', 'failed', 'canceled'].includes(status)
+    return {
+      id: p.id,
+      sha: p.sha,
+      ref: p.ref,
+      status,
+      source: p.source,
+      name: p.name,
+      web_url: `https://${host}/${project.path}/-/pipelines/${p.id}`,
+      created_at: p.createdAt,
+      updated_at: over && !p.canceled && !p.failureReason ? endedAt(p) : new Date().toISOString(),
+      ...(listed
+        ? {}
+        : {
+            started_at: new Date(p.started).toISOString(),
+            finished_at: over ? (p.canceled || p.failureReason ? p.createdAt : endedAt(p)) : null,
+          }),
+    }
+  }
   /** A pipeline runs for `runMs`, then its jobs are done (the manual ones wait). */
   const jobStatusOf = (p, job) =>
     p.canceled && !job.manual
@@ -181,6 +218,19 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
     pipeline: { id: p.id, sha: p.sha },
   })
 
+  const seconds = () => Math.floor(Date.now() / 1000)
+  /**
+   * A log as GitLab Runner 19.5 writes it (GitLab CE 19.5.6 gives it so): every line
+   * `<time> <stream><O|E><' '|'+'>`, `+` continuing the line before. `parts` — [stream, text, more].
+   */
+  const runnerLog = (parts) =>
+    parts
+      .map(
+        ([stream, text, more = false]) =>
+          `${new Date().toISOString().replace('Z', '123Z')} ${stream}O${more ? '+' : ' '}${text}`,
+      )
+      .join('\n') + '\n'
+
   const makePipeline = (project, { ref, sha, source, deploy }) => {
     const p = {
       id: nextId(),
@@ -199,10 +249,27 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
           stage: 'test',
           manual: false,
           // The log of a build: ANSI, the access of the run and a variable — core masks them.
-          trace: `\u001b[0K\u001b[32;1m$ npm test\u001b[0;m\nCI_JOB_TOKEN=${project.logSecret ?? 'none'}\n\u001b[32mok\u001b[0m 3 tests\n`,
+          trace: runnerLog([
+            ['00', '\u001b[0KRunning with gitlab-runner 19.5.3 (stand)\u001b[0;m'],
+            ['00', `section_start:${seconds()}:step_script\r\u001b[0K`],
+            ['00', '\u001b[0K\u001b[36;1mExecuting "step_script" stage\u001b[0;m', true],
+            ['01', '\u001b[0K\u001b[32;1m$ npm test\u001b[0;m'],
+            ['01', `CI_JOB_TOKEN=${project.logSecret ?? 'none'}`],
+            ['01', '\u001b[32mok\u001b[0m 3 tests'],
+            ['00', `section_end:${seconds()}:step_script\r\u001b[0K`],
+            ['00', '\u001b[32;1mJob succeeded\u001b[0;m'],
+          ]),
         },
         ...(deploy
-          ? [{ id: nextId(), name: 'deploy', stage: 'deploy', manual: true, trace: 'deploy\n' }]
+          ? [
+              {
+                id: nextId(),
+                name: 'deploy',
+                stage: 'deploy',
+                manual: true,
+                trace: runnerLog([['01', 'deploy']]),
+              },
+            ]
           : []),
       ],
     }
@@ -210,15 +277,32 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
     return p
   }
 
-  const mrJson = async (host, project, mr) => {
+  /**
+   * `detailed_merge_status` of `mr` (GitLab CE 19.5.6): a request is checked about a second after
+   * it is opened, and again once a read of it alone follows a move of its target — until then
+   * `unchecked`/`checking`, and a merge of it is refused (405, 422 when green).
+   */
+  const mergeStatusOf = (mr, heads, { read = false } = {}) => {
+    if (mr.state !== 'opened') return 'not_open'
+    const target = heads[mr.target] ?? null
+    if (!mr.check || mr.check.target !== target) {
+      if (read) mr.check = { target, readyAt: Date.now() + 150 }
+      return 'unchecked'
+    }
+    return Date.now() < mr.check.readyAt ? 'checking' : 'mergeable'
+  }
+
+  const mrJson = async (host, project, mr, { read = false } = {}) => {
     const heads = await headsOf(project.bare, home)
     const head = mr.state === 'opened' ? (heads[mr.source] ?? mr.sha) : mr.sha
     const pipeline = project.pipelines.findLast((p) => p.sha === head) ?? null
     return {
       iid: mr.iid,
       title: mr.title,
-      description: mr.description,
+      // What GitLab keeps: the text without the quick actions it ran.
+      description: mr.kept ?? mr.description,
       state: mr.state,
+      detailed_merge_status: mergeStatusOf(mr, heads, { read }),
       draft: mr.title.startsWith('Draft: '),
       source_branch: mr.source,
       target_branch: mr.target,
@@ -438,6 +522,7 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
       const updates = Object.entries(after).filter(([branch, sha]) => before[branch] !== sha)
       const deleted = Object.keys(before).filter((branch) => !(branch in after))
       pushes.push({ host, path: project.path, user: user?.username ?? null, updates, deleted })
+      for (const [branch] of updates) project.pushedAt.set(branch, Date.now())
       for (const [branch, sha] of updates)
         makePipeline(project, {
           ref: branch,
@@ -477,7 +562,8 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
       const open = [...hosts[host].projects.values()].find(
         (p) => (String(p.id) === key || p.path === key) && p.visibility === 'public',
       )
-      if (req.method === 'GET' && open) return answer(200, projectJson(host, open, open.size))
+      if (req.method === 'GET' && open)
+        return answer(200, projectJson(host, open, open.size, { anonymous: true }))
       if (key !== null) return answer(404, { message: '404 Project Not Found' })
       return answer(401, { message: '401 Unauthorized' })
     }
@@ -523,18 +609,73 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
       )
     }
     if (req.method === 'POST' && rest === '/merge_requests') {
-      if (!heads[body.source_branch]) return answer(422, { message: ['Source branch not found'] })
+      // A branch pushed a moment ago is not known yet: the first request opened within 300 ms of
+      // the push is refused so (3 of 8 on GitLab CE 19.5.6), the next one opens.
+      const pushedAt = project.pushedAt.get(body.source_branch)
+      project.pushedAt.delete(body.source_branch)
+      if (!heads[body.source_branch] || (pushedAt !== undefined && Date.now() - pushedAt < 300))
+        return answer(400, { message: { source_branch: ['does not exist'] } })
+      const other = project.mergeRequests.find(
+        (item) => item.state === 'opened' && item.source === body.source_branch,
+      )
+      if (other)
+        return answer(409, {
+          message: [
+            `Another open merge request already exists for this source branch: !${other.iid}`,
+          ],
+        })
+      const description = String(body.description ?? '')
+      // GitLab runs the quick actions of the description of a request it opens: `/draft`,
+      // `/label`, `/assign` ran, `/title` and `/merge` did not; their lines are taken out.
+      const quickActions = []
+      const kept = []
+      for (const line of description.split('\n')) {
+        const action =
+          /^\/(draft|label|assign|unassign|title|merge|approve|target_branch|close)\b/.exec(line)
+        if (action === null) kept.push(line)
+        else if (['draft', 'label', 'assign', 'unassign', 'close'].includes(action[1]))
+          quickActions.push(line)
+      }
       const mr = {
         iid: project.mergeRequests.length + 1,
-        title: String(body.title),
-        description: String(body.description ?? ''),
+        title: quickActions.some((line) => line.startsWith('/draft'))
+          ? `Draft: ${String(body.title)}`
+          : String(body.title),
+        // As sent: the scenarios read what core gave GitLab.
+        description,
+        kept: kept.join('\n'),
+        quickActions,
         source: body.source_branch,
         target: body.target_branch,
         state: 'opened',
         sha: heads[body.source_branch],
+        check: { target: heads[body.target_branch] ?? null, readyAt: Date.now() + 150 },
       }
       project.mergeRequests.push(mr)
       return answer(201, await mrJson(host, project, mr))
+    }
+    // `cancel_auto_merge` (201 with the request; 409 when none was on or it is closed) and the
+    // deprecated endpoint (201 with `status`), as GitLab CE 19.5.6 answers.
+    const cancelAt =
+      /^\/merge_requests\/(\d+)\/(cancel_auto_merge|cancel_merge_when_pipeline_succeeds)$/.exec(
+        rest,
+      )
+    if (cancelAt && req.method === 'POST') {
+      const mr = project.mergeRequests.find((item) => item.iid === Number(cancelAt[1]))
+      if (!mr) return answer(404, { message: '404 Not found' })
+      const on = mr.autoMerge === true && mr.state !== 'closed'
+      if (on) mr.autoMerge = false
+      autoMergeCancels.push({ iid: mr.iid, on })
+      if (cancelAt[2] === 'cancel_auto_merge')
+        return on
+          ? answer(201, await mrJson(host, project, mr))
+          : answer(409, { message: "Can't cancel the automatic merge" })
+      return answer(
+        201,
+        on
+          ? { status: 'success' }
+          : { message: "Can't cancel the automatic merge", status: 'error', http_status: 406 },
+      )
     }
     if (req.method === 'GET' && rest === '/merge_requests') {
       const source = url.searchParams.get('source_branch')
@@ -548,16 +689,24 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
     if (mrAt) {
       const mr = project.mergeRequests.find((item) => item.iid === Number(mrAt[1]))
       if (!mr) return answer(404, { message: '404 Not found' })
-      if (req.method === 'GET' && !mrAt[2]) return answer(200, await mrJson(host, project, mr))
+      if (req.method === 'GET' && !mrAt[2])
+        return answer(200, await mrJson(host, project, mr, { read: true }))
       if (req.method === 'PUT' && !mrAt[2]) {
         if (body.state_event === 'close') mr.state = 'closed'
         return answer(200, await mrJson(host, project, mr))
       }
       if (req.method === 'PUT' && mrAt[2]) {
         mergeCalls.push({ iid: mr.iid, sha: body.sha, body })
+        const green = body.auto_merge === true || body.merge_when_pipeline_succeeds === true
         if (mr.state !== 'opened') return answer(405, { message: '405 Method Not Allowed' })
+        if (['unchecked', 'checking'].includes(mergeStatusOf(mr, heads))) {
+          mergeCalls.at(-1).unchecked = true
+          return green
+            ? answer(422, { message: 'Branch cannot be merged' })
+            : answer(405, { message: '405 Method Not Allowed' })
+        }
         if (body.sha !== heads[mr.source]) return answer(409, { message: 'SHA does not match' })
-        if (body.auto_merge || body.merge_when_pipeline_succeeds) {
+        if (green) {
           const p = project.pipelines.findLast((item) => item.sha === heads[mr.source])
           if (p && statusOf(p) !== 'success') {
             mr.autoMerge = true
@@ -566,7 +715,8 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
           }
         }
         const merged = await merge(project, mr, body.should_remove_source_branch === true)
-        if (merged === null) return answer(422, { message: 'Branch cannot be merged' })
+        // A conflict is known by the check: a merge of it is 405, as on GitLab CE 19.5.6.
+        if (merged === null) return answer(405, { message: '405 Method Not Allowed' })
         return answer(200, await mrJson(host, project, mr))
       }
     }
@@ -579,7 +729,7 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
         .slice(0, Number(url.searchParams.get('per_page') ?? 20))
       return answer(
         200,
-        list.map((p) => pipelineJson(host, project, p)),
+        list.map((p) => pipelineJson(host, project, p, { listed: true })),
       )
     }
     const retryAt = /^\/pipelines\/(\d+)\/(retry|cancel)$/.exec(rest)
@@ -592,14 +742,23 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
         action: retryAt[2],
         status: statusOf(p),
       })
-      if (retryAt[2] === 'retry') {
+      // A retry runs again the failed and canceled jobs only: a pipeline that passed stays as it
+      // was (GitLab CE 19.5.6).
+      if (retryAt[2] === 'retry' && (p.canceled || p.failureReason)) {
         p.started = Date.now()
         p.canceled = false
         p.failureReason = null
-      } else p.canceled = true
-      return answer(201, pipelineJson(host, project, p))
+      } else if (retryAt[2] === 'cancel') p.canceled = true
+      return answer(retryAt[2] === 'retry' ? 201 : 200, pipelineJson(host, project, p))
     }
     if (req.method === 'POST' && rest === '/hooks') {
+      // `whsec_` and base64 of 24–64 bytes (Standard Webhooks); on GitLab CE 19.5.6 32 bytes were
+      // taken and `whsec_short` refused so.
+      if (typeof body.signing_token === 'string') {
+        const key = /^whsec_([A-Za-z0-9+/]+={0,2})$/.exec(body.signing_token)?.[1]
+        const bytes = key ? Buffer.from(key, 'base64').length : 0
+        if (bytes < 24 || bytes > 64) return answer(422, { error: 'Signing token is invalid' })
+      }
       const hook = {
         id: nextId(),
         path: project.path,
@@ -655,7 +814,8 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
         return res.end(job.trace)
       }
       if (jAt[2] === 'play' && req.method === 'POST') {
-        if (jobStatusOf(p, job) !== 'manual') return answer(400, { message: 'Unplayable Job' })
+        if (jobStatusOf(p, job) !== 'manual')
+          return answer(400, { message: '400 Bad request - Unplayable Job' })
         job.played = Date.now()
         played.push({ path: project.path, job: job.name, sha: p.sha, ref: p.ref })
         return answer(200, jobJson(host, project, p, job))
@@ -664,19 +824,49 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
     if (req.method === 'POST' && rest === '/ci/lint') {
       lints.push({ path: project.path, content: body.content, ref: body.ref })
       const content = String(body.content ?? '')
+      const ref = String(body.ref ?? project.defaultBranch)
+      // GitLab reads the files of `include: local` at `ref`: a wildcard is expanded to the files
+      // there, and a file that is not there makes the configuration invalid and names no includes
+      // at all (GitLab CE 19.5.6).
+      const tree = await runGit(['ls-tree', '-r', '--name-only', ref, '--'], {
+        cwd: project.bare,
+        home,
+        allowFailure: true,
+      })
+      if (tree.code !== 0)
+        return answer(200, {
+          valid: false,
+          errors: ['Reference not found'],
+          warnings: [],
+          includes: null,
+        })
+      const files = tree.stdout.split('\n').filter(Boolean)
+      const patterns = [
+        ...content.matchAll(/^\s*(?:-\s*)?local:\s*['"]?([^'"\s]+)['"]?\s*$/gm),
+      ].map((match) => match[1].replace(/^\//, ''))
+      const includes = []
+      for (const pattern of patterns) {
+        const glob = globOf(pattern)
+        const found = files.filter((file) => glob.test(file))
+        if (!pattern.includes('*') && found.length === 0)
+          return answer(200, {
+            valid: false,
+            errors: [`Local file \`${pattern}\` does not exist!`],
+            warnings: [],
+            includes: null,
+          })
+        for (const file of found)
+          includes.push({
+            type: 'local',
+            location: file,
+            blob: `https://${host}/${project.path}/-/blob/${ref}/${file}`,
+            raw: `https://${host}/${project.path}/-/raw/${ref}/${file}`,
+            extra: {},
+            context_project: project.path,
+            context_sha: null,
+          })
+      }
       const valid = /stages:/.test(content)
-      // `include: - local: <path>`: GitLab names each included file of the project in `includes`.
-      const includes = [...content.matchAll(/^\s*-\s*local:\s*['"]?([^'"\s]+)['"]?\s*$/gm)].map(
-        (match) => ({
-          type: 'local',
-          location: match[1],
-          blob: `https://${host}/${project.path}/-/blob/${body.ref ?? 'main'}/${match[1]}`,
-          raw: `https://${host}/${project.path}/-/raw/${body.ref ?? 'main'}/${match[1]}`,
-          extra: {},
-          context_project: project.path,
-          context_sha: null,
-        }),
-      )
       return answer(200, {
         valid,
         errors: valid ? [] : ['jobs config should contain at least one visible job'],
@@ -737,6 +927,7 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
     hooks,
     removedHooks,
     pipelineActions,
+    autoMergeCancels,
     /**
      * A delivery of the hook of `project` as GitLab ≥ 19.0 sends it (Standard Webhooks:
      * `webhook-id`, `webhook-timestamp`, `webhook-signature`), to `origin` — the address of web the
@@ -820,6 +1011,8 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, 
         members: new Set(members.map((user) => user.id)),
         mergeRequests: [],
         pipelines: [],
+        /** branch → when it was last pushed by git (the race of opening a request, above). */
+        pushedAt: new Map(),
         logSecret,
       }
       hosts[host].projects.set(project.id, project)
