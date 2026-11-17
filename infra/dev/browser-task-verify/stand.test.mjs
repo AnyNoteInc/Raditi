@@ -8,6 +8,10 @@ import { Page, attachmentsOf, treeLines } from './programs.mjs'
 import {
   CORE_WITHOUT,
   appEnvironment,
+  bridgeGatewayOf,
+  hostGatewayOf,
+  hostOf,
+  hostRelays,
   leakedIn,
   scenariosToRun,
   solidPng,
@@ -95,6 +99,116 @@ describe('options and names', () => {
     // No site of a project since plan 83: nothing of WordPress or MariaDB.
     assert.deepEqual(Object.keys(names.containers), ['postgres', 'redis', 's3', 'openbao'])
     assert.throws(() => standNames('nope'), /Invalid run/)
+  })
+})
+
+describe('the host of a run', () => {
+  const desktop = { operatingSystem: 'Docker Desktop', bridgeGateway: '172.17.0.1' }
+  it('tells Docker Desktop, plain Linux and a VM apart by the addresses, not by the platform', () => {
+    assert.deepEqual(hostOf({ ...desktop, hostGateway: '192.168.65.254' }), {
+      kind: 'desktop',
+      relay: null,
+      upstream: 'host.docker.internal',
+      hostGateway: '192.168.65.254',
+      bridgeGateway: '172.17.0.1',
+    })
+    // Plain Linux: host-gateway is the bridge gateway, where the relays listen.
+    const linux = hostOf({
+      operatingSystem: 'Ubuntu 24.04.3 LTS',
+      bridgeGateway: '172.17.0.1',
+      hostGateway: '172.17.0.1',
+    })
+    assert.equal(linux.kind, 'linux')
+    assert.equal(linux.relay, '172.17.0.1')
+    assert.equal(linux.upstream, 'host.docker.internal')
+    // A VM of Colima: host-gateway leads to the Mac; `docker info` alone would say Ubuntu.
+    const vm = hostOf({
+      operatingSystem: 'Ubuntu 24.04.4 LTS',
+      bridgeGateway: '172.17.0.1',
+      hostGateway: '192.168.5.2',
+    })
+    assert.equal(vm.kind, 'vm')
+    assert.equal(vm.relay, '172.17.0.1')
+    assert.equal(vm.upstream, '172.17.0.1')
+    assert.throws(
+      () => hostOf({ operatingSystem: 'Ubuntu', bridgeGateway: '', hostGateway: '' }),
+      /No IPv4 address of the gateway of the default bridge/,
+    )
+  })
+
+  it('reads the addresses Docker prints, in words when there is none', () => {
+    assert.equal(bridgeGatewayOf('172.17.0.1\n'), '172.17.0.1')
+    assert.throws(() => bridgeGatewayOf('<no value>'), /No IPv4 address/)
+    const hosts =
+      '127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost\n172.17.0.1\thost.docker.internal\n172.17.0.2\tabc123\n'
+    assert.equal(hostGatewayOf(hosts), '172.17.0.1')
+    assert.throws(() => hostGatewayOf('127.0.0.1 localhost\n'), /resolved to no IPv4/)
+  })
+
+  it('relays the ports the containers reach to loopback, never on Docker Desktop', () => {
+    const linux = hostOf({
+      operatingSystem: 'Ubuntu',
+      bridgeGateway: '172.17.0.1',
+      hostGateway: '172.17.0.1',
+    })
+    assert.deepEqual(hostRelays(linux, { llm: 41007, mcp: 41006 }), [
+      { role: 'llm', listen: '172.17.0.1', port: 41007, to: '127.0.0.1' },
+      { role: 'mcp', listen: '172.17.0.1', port: 41006, to: '127.0.0.1' },
+    ])
+    assert.deepEqual(
+      hostRelays(hostOf({ ...desktop, hostGateway: '192.168.65.254' }), { llm: 41007 }),
+      [],
+    )
+    assert.throws(() => hostRelays(linux, { llm: 80 }), /Invalid port/)
+  })
+
+  it('keeps the environments of Docker Desktop and runc when the context names no host', () => {
+    const linux = hostOf({
+      operatingSystem: 'Ubuntu',
+      bridgeGateway: '172.17.0.1',
+      hostGateway: '172.17.0.1',
+    })
+    for (const app of ['llm', 'mcp', 'core'])
+      assert.deepEqual(
+        appEnvironment(app, { ...context, host: linux }),
+        appEnvironment(app, context),
+        app,
+      )
+    const core = appEnvironment('core', context)
+    assert.equal(core.SANDBOX_RUNTIME, 'runc')
+    assert.equal(core.SANDBOX_LLM_UPSTREAM, 'http://host.docker.internal:41007')
+    assert.equal(core.SANDBOX_MCP_UPSTREAM, 'http://host.docker.internal:41006')
+    assert.equal(
+      appEnvironment('llm', context).LLM_GATEWAY_HOSTS,
+      'host.docker.internal:41007,127.0.0.1:41007',
+    )
+    assert.equal(appEnvironment('mcp', context).MCP_ALLOWED_HOSTS, 'host.docker.internal')
+  })
+
+  it('sends the gateway of a turn in a VM to the bridge gateway, which llm and mcp accept', () => {
+    const vm = hostOf({
+      operatingSystem: 'Ubuntu',
+      bridgeGateway: '172.17.0.1',
+      hostGateway: '192.168.5.2',
+    })
+    const at = { ...context, host: vm, runtime: 'runsc' }
+    const core = appEnvironment('core', at)
+    assert.equal(core.SANDBOX_LLM_UPSTREAM, 'http://172.17.0.1:41007')
+    assert.equal(core.SANDBOX_MCP_UPSTREAM, 'http://172.17.0.1:41006')
+    assert.equal(core.SANDBOX_RUNTIME, 'runsc')
+    assert.equal(
+      appEnvironment('llm', at).LLM_GATEWAY_HOSTS,
+      'host.docker.internal:41007,127.0.0.1:41007,172.17.0.1:41007',
+    )
+    // The apps keep listening on loopback and take relayed connections from it only.
+    assert.equal(appEnvironment('llm', at).LLM_GATEWAY_LISTEN_HOST, '127.0.0.1')
+    assert.equal(appEnvironment('llm', at).LLM_GATEWAY_CLIENTS, '127.0.0.1/32')
+    assert.equal(appEnvironment('mcp', at).MCP_ALLOWED_HOSTS, 'host.docker.internal,172.17.0.1')
+    assert.throws(() => appEnvironment('core', { ...context, runtime: 'kata' }), /Unknown runtime/)
+    assert.throws(
+      () => appEnvironment('core', { ...context, host: { kind: 'other' } }),
+      /No kind of host/,
+    )
   })
 })
 

@@ -3,13 +3,18 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { textPdf } from './scenarios.mjs'
+import { hostOf } from '../browser-task-verify/stand.mjs'
 import {
   BUILT_IMAGES,
   PROJECTS_BUILD,
   forwarderArgs,
   gitWorkerEnvironment,
+  hostProbes,
   leakedIn,
+  probeAnswers,
+  procRemotePorts,
   projectAppEnvironment,
+  projectRelays,
   projectWebEnvironment,
   scenariosToRun,
   standNames,
@@ -76,7 +81,10 @@ describe('projects stand', () => {
       keep: false,
       webDev: false,
       only: ['E'],
+      runtime: 'runc',
     })
+    assert.equal(standOptions(['--runtime=runsc']).runtime, 'runsc')
+    assert.throws(() => standOptions(['--runtime=kata']), /runc or runsc/)
     assert.throws(() => standOptions(['--database', 'x']))
     assert.throws(() => standOptions(['--only', 'Z']))
   })
@@ -150,7 +158,96 @@ describe('projects stand', () => {
     assert.ok(!args.some((arg) => /^0\.0\.0\.0|^443:/.test(arg)))
     assert.ok(args.includes('--read-only') && args.includes('ALL'))
     assert.ok(args.at(-1).includes('41012'))
+    assert.ok(args.at(-1).includes("'host.docker.internal'") && !args.includes('--add-host'))
     assert.throws(() => forwarderArgs({ names, image: 'x', fakePort: 80 }))
+  })
+
+  const linux = hostOf({
+    operatingSystem: 'Ubuntu 24.04.3 LTS',
+    bridgeGateway: '172.17.0.1',
+    hostGateway: '172.17.0.1',
+  })
+  const vm = hostOf({
+    operatingSystem: 'Ubuntu 24.04.4 LTS',
+    bridgeGateway: '172.17.0.1',
+    hostGateway: '192.168.5.2',
+  })
+
+  it('forwards on Linux and in a VM with no more privilege, to the relay of the fake', () => {
+    for (const host of [linux, vm]) {
+      const args = forwarderArgs({ names, image: 'b@sha256:2', fakePort: 41012, host })
+      // The same container as on Docker Desktop: default bridge, loopback, read-only, no capability.
+      assert.ok(args.includes('127.0.0.1:443:8443') && args.includes('[::1]:443:8443'))
+      assert.ok(args.includes('--read-only') && args.includes('ALL'))
+      assert.ok(!args.some((arg) => /^--network|^--cap-add|^--privileged|^--user/.test(arg)))
+    }
+    const onLinux = forwarderArgs({ names, image: 'b@sha256:2', fakePort: 41012, host: linux })
+    assert.equal(onLinux[onLinux.indexOf('--add-host') + 1], 'host.docker.internal:host-gateway')
+    assert.ok(onLinux.at(-1).includes("net.connect(41012, 'host.docker.internal')"))
+    const inVm = forwarderArgs({ names, image: 'b@sha256:2', fakePort: 41012, host: vm })
+    assert.ok(!inVm.includes('--add-host'))
+    assert.ok(inVm.at(-1).includes("net.connect(41012, '172.17.0.1')"))
+  })
+
+  it('relays llm, mcp and the fake GitLab off Docker Desktop, and probes them from the sandbox', () => {
+    assert.deepEqual(
+      projectRelays(linux, context.ports).map((relay) => [relay.role, relay.listen, relay.port]),
+      [
+        ['llm', '172.17.0.1', 41007],
+        ['mcp', '172.17.0.1', 41006],
+        ['gitlab', '172.17.0.1', 41012],
+      ],
+    )
+    const desktop = hostOf({
+      operatingSystem: 'Docker Desktop',
+      bridgeGateway: '172.17.0.1',
+      hostGateway: '192.168.65.254',
+    })
+    assert.deepEqual(projectRelays(desktop, context.ports), [])
+    // Every address the host has for containers, at every port the stand opens.
+    assert.deepEqual(hostProbes(vm, context.ports), [
+      '192.168.5.2:41007',
+      '192.168.5.2:41006',
+      '192.168.5.2:41012',
+      '172.17.0.1:41007',
+      '172.17.0.1:41006',
+      '172.17.0.1:41012',
+    ])
+    assert.equal(hostProbes(linux, context.ports).length, 3)
+    assert.equal(hostProbes(desktop, context.ports).length, 6)
+    assert.deepEqual(
+      probeAnswers('push=128\nprobe 172.17.0.1:41007=124\nprobe 172.17.0.1:41006=1\n'),
+      {
+        '172.17.0.1:41007': '124',
+        '172.17.0.1:41006': '1',
+      },
+    )
+  })
+
+  it('runs the sandbox of a turn under the runtime of the run, at the host of the run', () => {
+    const core = projectAppEnvironment('core', { ...context, host: vm, runtime: 'runsc' })
+    assert.equal(core.SANDBOX_RUNTIME, 'runsc')
+    assert.equal(core.SANDBOX_LLM_UPSTREAM, 'http://172.17.0.1:41007')
+    assert.equal(projectAppEnvironment('core', context).SANDBOX_RUNTIME, 'runc')
+    assert.equal(
+      projectAppEnvironment('mcp', { ...context, host: vm }).MCP_ALLOWED_HOSTS,
+      'host.docker.internal,172.17.0.1',
+    )
+  })
+
+  it('reads the remote ports of a process from the TCP tables of Linux', () => {
+    const table = [
+      '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
+      '   0: 0100007F:A1B2 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 111 1 0000000000000000 100 0 0 10 0',
+      '   1: 0100007F:C3D4 0100007F:1538 01 00000000:00000000 00:00000000 00000000  1000        0 222 1 0000000000000000 20 4 30 10 -1',
+      '   2: 0100007F:C3D5 0100007F:18EB 01 00000000:00000000 00:00000000 00000000  1000        0 333 1 0000000000000000 20 4 30 10 -1',
+    ].join('\n')
+    const v6 = [
+      '  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
+      '   0: 00000000000000000000000001000000:E000 00000000000000000000000001000000:0050 01 00000000:00000000 00:00000000 00000000  1000        0 444 1 0000000000000000 20 4 30 10 -1',
+    ].join('\n')
+    // The listening socket (111) has no remote port; 333 is another process's.
+    assert.deepEqual(procRemotePorts([table, v6], new Set(['111', '222', '444'])), ['5432', '80'])
   })
 
   it('finds a leaked secret by its name, never a short one', () => {

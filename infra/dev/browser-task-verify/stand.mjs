@@ -319,6 +319,97 @@ export function certificateConfigs(names = []) {
   }
 }
 
+// ─── The host ─────────────────────────────────────────────────────────────────
+
+/** The kinds of host a stand runs on (`hostOf`). */
+export const HOST_KINDS = Object.freeze(['desktop', 'linux', 'vm'])
+
+/** The name a container of the platform calls the host by (the gateway of a turn, `host-gateway`). */
+export const HOST_NAME = 'host.docker.internal'
+
+/**
+ * What the host is for containers, read from `docker info` and a probe container (services.mjs,
+ * `probeHost`), never from process.platform. `operatingSystem` — `docker info`; `bridgeGateway` —
+ * the gateway of the default bridge; `hostGateway` — what `host-gateway` resolves to inside a
+ * container on it.
+ *
+ * - `desktop`: Docker Desktop carries `host.docker.internal` of a container to the loopback of
+ *   this machine, where the processes of the stand listen. Nothing is relayed.
+ * - `linux`: `host-gateway` is the bridge gateway, an address of this machine where nothing of the
+ *   stand listens (the apps listen on loopback, `listenHost` of app-bootstrap). A relay of the
+ *   stand on the bridge gateway carries a container to them (`hostRelays`); the container calls
+ *   it `host.docker.internal`, as on Docker Desktop.
+ * - `vm`: `host-gateway` is another address — a VM whose daemon leads it to another machine
+ *   (Colima: to the Mac), or `host-gateway-ip` of the daemon. The relay is the same, and the
+ *   containers go to the bridge gateway by its address.
+ *
+ * Not by the interfaces of this machine: an idle `docker0` is DOWN and absent from them; and
+ * `docker info` in a VM does not say Docker Desktop, so without the probe it would pass for Linux.
+ */
+export function hostOf({ operatingSystem, bridgeGateway, hostGateway }) {
+  if (/Docker Desktop/.test(String(operatingSystem)))
+    return { kind: 'desktop', relay: null, upstream: HOST_NAME, hostGateway, bridgeGateway }
+  ipv4Of(bridgeGateway, 'the gateway of the default bridge')
+  return hostGateway === bridgeGateway
+    ? { kind: 'linux', relay: bridgeGateway, upstream: HOST_NAME, hostGateway, bridgeGateway }
+    : { kind: 'vm', relay: bridgeGateway, upstream: bridgeGateway, hostGateway, bridgeGateway }
+}
+
+/** The host of a context without one: Docker Desktop, as every stand ran before Linux. */
+export const DESKTOP_HOST = Object.freeze({ kind: 'desktop', relay: null, upstream: HOST_NAME })
+
+const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/
+function ipv4Of(value, what) {
+  const address = String(value ?? '').trim()
+  if (!IPV4.test(address)) throw new Error(`No IPv4 address of ${what}: ${address.slice(0, 100)}`)
+  return address
+}
+
+/** `docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}'`, checked. */
+export const bridgeGatewayOf = (output) => ipv4Of(output, 'the gateway of the default bridge')
+
+/**
+ * The address `host.docker.internal` has in the /etc/hosts of a probe container started with
+ * `--add-host host.docker.internal:host-gateway`: Docker writes what `host-gateway` resolved to.
+ */
+export function hostGatewayOf(hostsFile) {
+  for (const line of String(hostsFile).split('\n')) {
+    const [address, ...names] = line.replace(/#.*/, '').trim().split(/\s+/)
+    if (names.includes(HOST_NAME) && IPV4.test(address ?? '')) return address
+  }
+  throw new Error(
+    `host-gateway of this daemon resolved to no IPv4: ${String(hostsFile).slice(0, 200)}`,
+  )
+}
+
+/** The host of a run, refused in words when the context names none of the kinds. */
+export function hostIn(context) {
+  const host = context.host ?? DESKTOP_HOST
+  if (!HOST_KINDS.includes(host.kind)) throw new Error(`No kind of host ${host.kind}`)
+  return host
+}
+
+/**
+ * The relays of a run on Linux and in a VM: `<bridge gateway>:<port>` → `127.0.0.1:<port>`, one
+ * per port the containers reach on the host (the apps llm and mcp for the gateway of a turn; a
+ * stand adds its own); none on Docker Desktop. The processes keep listening on loopback and see a
+ * relayed connection from 127.0.0.1 (LLM_GATEWAY_CLIENTS stays `127.0.0.1/32`). Only containers on
+ * the default bridge meet the relay: the trusted gateway proxy of a turn, never its sandbox, whose
+ * attempt network is internal and has no address of the host (spec §8).
+ */
+export function hostRelays(host, ports) {
+  if (host.relay === null) return []
+  return Object.entries(ports).map(([role, port]) => ({
+    role,
+    listen: host.relay,
+    port: loopbackPort(port),
+    to: '127.0.0.1',
+  }))
+}
+
+/** The runtimes of a turn's sandbox a stand runs under (`--runtime`); Docker Desktop has runc only. */
+export const RUNTIMES = Object.freeze(['runc', 'runsc'])
+
 // ─── Processes ────────────────────────────────────────────────────────────────
 
 const sandboxed = ({ path, directory }) => ({
@@ -372,9 +463,18 @@ export const PLATFORM_HOST = 'raditi.ru'
 /**
  * The environment of one app of the platform (`node dist/main.js` of the build copy).
  * NODE_ENV=production keeps it from looking for a `.env`; APP_ENV is `test`.
+ *
+ * `context.host` (`hostOf`; Docker Desktop when absent) — how the gateway of a turn reaches llm
+ * and mcp: by `host.docker.internal`, or in a VM by the address of the bridge gateway, which then
+ * the two apps accept as well. `context.runtime` (`RUNTIMES`; runc when absent) — the runtime of
+ * the sandbox of a turn. Without either the environment is the one of Docker Desktop and runc.
  */
 export function appEnvironment(app, context) {
   const { path, directory, ports, databaseUrl, vault, roles, s3, secrets } = context
+  const host = hostIn(context)
+  const byAddress = host.upstream !== HOST_NAME
+  const runtime = context.runtime ?? 'runc'
+  if (!RUNTIMES.includes(runtime)) throw new Error(`Unknown runtime ${runtime}`)
   const base = {
     ...sandboxed({ path, directory }),
     NODE_ENV: 'production',
@@ -391,7 +491,11 @@ export function appEnvironment(app, context) {
         LLM_GATEWAY_PORT: String(loopbackPort(ports.llm)),
         LLM_GATEWAY_LISTEN_HOST: '127.0.0.1',
         LLM_GATEWAY_CLIENTS: '127.0.0.1/32',
-        LLM_GATEWAY_HOSTS: `host.docker.internal:${ports.llm},127.0.0.1:${ports.llm}`,
+        LLM_GATEWAY_HOSTS: [
+          `${HOST_NAME}:${ports.llm}`,
+          `127.0.0.1:${ports.llm}`,
+          ...(byAddress ? [`${host.upstream}:${ports.llm}`] : []),
+        ].join(','),
         LLM_BACKEND_URL_ZAI_CODING: `https://localhost:${loopbackPort(ports.zai)}`,
         LLM_UPSTREAM_CA_FILE: context.caFile,
         // A turn of the scripted model calls a tool every second or so (observe, act, observe):
@@ -406,7 +510,7 @@ export function appEnvironment(app, context) {
         ...pagesOf(ports),
         MCP_PORT: String(loopbackPort(ports.mcp)),
         // What sandbox-gw rewrites Host to: the role accepts nothing else.
-        MCP_ALLOWED_HOSTS: 'host.docker.internal',
+        MCP_ALLOWED_HOSTS: [HOST_NAME, ...(byAddress ? [host.upstream] : [])].join(','),
       }
     case 'preview':
       return {
@@ -452,13 +556,13 @@ export function appEnvironment(app, context) {
         // The label of this run's turn containers: a core of another tree on this daemon lists
         // and collects only its own, and this one only these.
         SANDBOX_DEPLOYMENT: sandboxDeployment('browser-task-verify', context.run),
-        SANDBOX_RUNTIME: 'runc',
+        SANDBOX_RUNTIME: runtime,
         SANDBOX_DOCKER_SOCKET: context.socket,
         SANDBOX_IMAGE: context.images.sandbox,
         SANDBOX_GATEWAY_IMAGE: context.images.gateway,
         SANDBOX_NETWORK_GUARD_IMAGE: context.images.guard,
-        SANDBOX_LLM_UPSTREAM: `http://host.docker.internal:${ports.llm}`,
-        SANDBOX_MCP_UPSTREAM: `http://host.docker.internal:${ports.mcp}`,
+        SANDBOX_LLM_UPSTREAM: `http://${host.upstream}:${ports.llm}`,
+        SANDBOX_MCP_UPSTREAM: `http://${host.upstream}:${ports.mcp}`,
         BROWSER_SESSION_MAX_HOURS: '4',
       }
     default:

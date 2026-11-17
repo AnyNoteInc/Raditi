@@ -5,7 +5,7 @@
 // with a session cookie, as the cabinet calls it. The "agent" is the real OpenCode CLI on the
 // scripted model (programs.mjs).
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { readdir, readFile, readlink, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import process from 'node:process'
 
@@ -14,11 +14,43 @@ import { grantTariff, signUp, switchOnModel } from '../browser-task-verify/setup
 import { dockerClient, reapExpired } from '../../sandbox/watchdog.mjs'
 import { COM_HOST, OWN_HOST } from './fake-gitlab.mjs'
 import { scenarioP, scenarioW } from './scenarios-second.mjs'
-import { leakedIn, projectAppEnvironment } from './stand.mjs'
+import {
+  hostProbes,
+  leakedIn,
+  probeAnswers,
+  procRemotePorts,
+  projectAppEnvironment,
+} from './stand.mjs'
 
 const ENDED = new Set(['done', 'failed', 'cancelled', 'rolled_back'])
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * The environment of a running process and the remote ports of its TCP connections, as the system
+ * gives them: on Linux /proc (`environ`, the descriptors and the TCP tables of its namespace), on
+ * macOS `ps -E` and `lsof -i`.
+ */
+async function processSeen(rt, pid) {
+  if (process.platform === 'linux') {
+    const environment = (await readFile(`/proc/${pid}/environ`)).toString('utf8').split('\0')
+    const inodes = new Set()
+    for (const fd of await readdir(`/proc/${pid}/fd`)) {
+      const target = await readlink(`/proc/${pid}/fd/${fd}`).catch(() => '')
+      const inode = /^socket:\[(\d+)\]$/.exec(target)?.[1]
+      if (inode) inodes.add(inode)
+    }
+    const tables = await Promise.all(
+      ['tcp', 'tcp6'].map((table) => readFile(`/proc/${pid}/net/${table}`, 'utf8').catch(() => '')),
+    )
+    return { environment: environment.join('\n'), reached: procRemotePorts(tables, inodes) }
+  }
+  const environment = (await rt.run('ps', ['-wwE', '-p', String(pid), '-o', 'command='])).output
+  const sockets = (
+    await rt.run('lsof', ['-nP', '-a', '-p', String(pid), '-i'], { allowFailure: true })
+  ).output
+  return { environment, reached: [...sockets.matchAll(/->[^\s]*:(\d+)/g)].map((match) => match[1]) }
+}
 
 /** A one-page PDF whose page holds `text` (ASCII), with a correct cross-reference table. */
 export function textPdf(text) {
@@ -945,7 +977,11 @@ async function scenarioE(stand) {
     text: 'Добавьте в описание условия доставки и меню на неделю.',
     projectId,
     program: 'changeRepository',
-    ctx: { host: OWN_HOST, path: 'kofeinya/sait' },
+    ctx: {
+      host: OWN_HOST,
+      path: 'kofeinya/sait',
+      probes: hostProbes(stand.context.host, stand.ports),
+    },
   })
   state.chatE = chat.taskId
   const facts = chat.facts
@@ -967,6 +1003,16 @@ async function scenarioE(stand) {
   rt.check(
     pushed !== '0' && curled !== '0',
     `the agent cannot push nor reach GitLab itself (push=${pushed}, curl=${curled})`,
+    facts.attempts,
+  )
+  // The host rules of the turn on this host: the sandbox reaches neither the host nor the ports
+  // the stand opens there — llm, mcp and the fake behind their relays on Linux (`hostProbes`).
+  const probes = hostProbes(stand.context.host, stand.ports)
+  const answers = probeAnswers(facts.attempts ?? '')
+  rt.check(
+    probes.length > 0 &&
+      probes.every((target) => answers[target] !== undefined && answers[target] !== '0'),
+    `the sandbox connects to no address of the host at the ports of the stand (${stand.context.host.kind}: ${probes.map((target) => `${target}=${answers[target] ?? '?'}`).join(', ')})`,
     facts.attempts,
   )
   const instructions = lastInstructions(stand)
@@ -2026,8 +2072,8 @@ async function scenarioN(stand) {
   // The git worker holds nothing of core (ПР33): its environment, as the system gives it, names no
   // database, Redis, Vault or S3 and no /run/raditi, and it holds no connection to any of them.
   const worker = stand.processes.gitWorker
-  const environment = (await rt.run('ps', ['-wwE', '-p', String(worker.pid), '-o', 'command=']))
-    .output
+  const seen = await processSeen(rt, worker.pid)
+  const environment = seen.environment
   const names = [...environment.matchAll(/(?:^|\s)([A-Z][A-Z0-9_]*)=/g)].map((match) => match[1])
   rt.check(
     names.includes('GIT_MIRROR_DIR') &&
@@ -2046,14 +2092,16 @@ async function scenarioN(stand) {
       stand.s3.endpoint,
     ].map((url) => new URL(url).port),
   )
-  const sockets = (
-    await rt.run('lsof', ['-nP', '-a', '-p', String(worker.pid), '-i'], { allowFailure: true })
-  ).output
-  const reached = [...sockets.matchAll(/->[^\s]*:(\d+)/g)].map((match) => match[1])
+  const reached = seen.reached
+  // The control: read the same way, the stand's own process holds its connection to the database
+  // (a query just now keeps it in the pool).
+  await stand.db.$queryRawUnsafe('SELECT 1')
+  const control = (await processSeen(rt, process.pid)).reached
+  const databasePort = new URL(stand.context.databaseUrl).port
   rt.check(
-    !reached.some((port) => ports.has(port)),
-    `the git worker holds no connection to the database, Redis, Vault or S3 (${reached.length} open)`,
-    reached,
+    !reached.some((port) => ports.has(port)) && control.includes(databasePort),
+    `the git worker holds no connection to the database, Redis, Vault or S3 (${reached.length} open; the stand itself, read alike, holds ${control.length}, the database among them)`,
+    { reached, control },
   )
   rt.end()
 }
