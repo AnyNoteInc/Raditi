@@ -50,14 +50,11 @@ function memoryVault() {
 }
 
 /** One workspace the user is a member of with `role`, and its rows of `workspace_env_vars`. */
-function fakeDb(role: 'owner' | 'admin' | 'member' | null, dataClass: 'synthetic' | 'client') {
+function fakeDb(role: 'owner' | 'admin' | 'member' | null) {
   const rows = new Map<string, Row>()
   const db = {
     member: {
       findUnique: vi.fn(async () => (role === null ? null : { role })),
-    },
-    workspace: {
-      findUniqueOrThrow: vi.fn(async () => ({ dataClass })),
     },
     workspaceEnvVar: {
       findMany: vi.fn(async () => [...rows.values()].sort((a, b) => a.name.localeCompare(b.name))),
@@ -115,7 +112,7 @@ const place = { appEnv: 'test' as const, userId, workspaceId }
 
 describe('the variables of a workspace', () => {
   it('puts the value into Vault only, under the path of the workspace, and never gives it back', async () => {
-    const { prisma, rows } = fakeDb('owner', 'synthetic')
+    const { prisma, rows } = fakeDb('owner')
     const vault = memoryVault()
 
     const saved = await setWorkspaceEnv(prisma, () => vault.writer, {
@@ -140,14 +137,13 @@ describe('the variables of a workspace', () => {
     expect(listed).toEqual({
       workspaceId,
       canEdit: true,
-      agentGets: true,
       variables: [{ name: 'TELEGRAM_TOKEN', keyVersion: 1, updatedAt: now }],
     })
     expect(JSON.stringify(listed)).not.toContain('secret-value-123')
   })
 
   it('replaces a value by the next version, and the row names it', async () => {
-    const { prisma, rows } = fakeDb('admin', 'synthetic')
+    const { prisma, rows } = fakeDb('admin')
     const vault = memoryVault()
     const input = { ...place, name: 'API_KEY', value: 'first-value' }
     await setWorkspaceEnv(prisma, () => vault.writer, input)
@@ -160,7 +156,7 @@ describe('the variables of a workspace', () => {
   })
 
   it('removes a variable with a version without its value, and the row with it', async () => {
-    const { prisma, rows } = fakeDb('owner', 'synthetic')
+    const { prisma, rows } = fakeDb('owner')
     const vault = memoryVault()
     await setWorkspaceEnv(prisma, () => vault.writer, { ...place, name: 'API_KEY', value: 'x' })
 
@@ -177,7 +173,7 @@ describe('the variables of a workspace', () => {
   })
 
   it('lets a member read the names and not change them', async () => {
-    const { prisma } = fakeDb('member', 'synthetic')
+    const { prisma } = fakeDb('member')
     const vault = memoryVault()
 
     await expect(listWorkspaceEnv(prisma, place)).resolves.toMatchObject({ canEdit: false })
@@ -191,13 +187,8 @@ describe('the variables of a workspace', () => {
   })
 
   it('answers a workspace of someone else as one that does not exist', async () => {
-    const { prisma } = fakeDb(null, 'synthetic')
+    const { prisma } = fakeDb(null)
     await expect(listWorkspaceEnv(prisma, place)).rejects.toMatchObject({ code: 'NOT_FOUND' })
-  })
-
-  it('keeps the variables of client data, and says the agent does not get them yet (rule 1)', async () => {
-    const { prisma } = fakeDb('owner', 'client')
-    await expect(listWorkspaceEnv(prisma, place)).resolves.toMatchObject({ agentGets: false })
   })
 
   it.each([
@@ -205,7 +196,7 @@ describe('the variables of a workspace', () => {
     ['reserved', 'PATH', 'WORKSPACE_ENV_NAME_RESERVED'],
     ['of the platform', 'RADITI_TOKEN', 'WORKSPACE_ENV_NAME_RESERVED'],
   ])('refuses a name %s before Vault is asked', async (_case, name, code) => {
-    const { prisma } = fakeDb('owner', 'synthetic')
+    const { prisma } = fakeDb('owner')
     const vault = memoryVault()
     await expect(
       setWorkspaceEnv(prisma, () => vault.writer, { ...place, name, value: 'x' }),
@@ -214,7 +205,7 @@ describe('the variables of a workspace', () => {
   })
 
   it('refuses an empty value and one with NUL', async () => {
-    const { prisma } = fakeDb('owner', 'synthetic')
+    const { prisma } = fakeDb('owner')
     const vault = memoryVault()
     for (const value of ['', 'a\0b'])
       await expect(
@@ -223,7 +214,7 @@ describe('the variables of a workspace', () => {
   })
 
   it('takes no more than 64 variables', async () => {
-    const { prisma, rows } = fakeDb('owner', 'synthetic')
+    const { prisma, rows } = fakeDb('owner')
     for (let index = 0; index < 64; index += 1)
       rows.set(`KEY_${index}`, { name: `KEY_${index}`, keyVersion: 1, updatedAt: now })
     const vault = memoryVault()
@@ -237,7 +228,7 @@ describe('the variables of a workspace', () => {
   })
 
   it('tells a writer that lost the race of Vault that the variable changed', async () => {
-    const { prisma } = fakeDb('owner', 'synthetic')
+    const { prisma } = fakeDb('owner')
     const vault = memoryVault()
     // Another writer gets in between the read of the version and the write.
     vault.raw.kvMetadata.mockResolvedValueOnce(null)

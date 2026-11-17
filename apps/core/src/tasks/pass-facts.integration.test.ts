@@ -89,7 +89,7 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
     return { task, workspaceId: workspace.id, userId, facts }
   }
 
-  it('reads the names of the variables of the workspace, none for client data (БП4)', async () => {
+  it('reads the names of the variables of the workspace, for client data too (БП4, БП14)', async () => {
     const { workspaceId, facts } = await dialog()
     await db.workspaceEnvVar.createMany({
       data: [
@@ -98,9 +98,9 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
       ],
     })
     expect((await facts())?.variables).toEqual(['PAYMENT_KEY', 'SMTP_PASSWORD'])
-    // Real client data: nothing reaches the agent until the gate of 152-FZ (rule 1).
+    // Real client data: the agent gets them all the same (the owner's decision of 17.11.2026).
     await db.workspace.update({ where: { id: workspaceId }, data: { dataClass: 'client' } })
-    expect((await facts())?.variables).toEqual([])
+    expect((await facts())?.variables).toEqual(['PAYMENT_KEY', 'SMTP_PASSWORD'])
   })
 
   it('reads `/init` as the words of the platform, `/compact` as an action, a press as no words (§5.2)', async () => {

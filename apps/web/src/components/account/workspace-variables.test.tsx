@@ -41,7 +41,6 @@ function page() {
 const listed = (patch: Record<string, unknown> = {}) => ({
   workspaceId: WORKSPACE,
   canEdit: true,
-  agentGets: true,
   variables: [{ name: 'DELIVERY_KEY', keyVersion: 2, updatedAt: new Date('2026-11-14T09:00:00Z') }],
   ...patch,
 })
@@ -58,7 +57,7 @@ describe('«Настройки → Переменные» (docs/plan/83-remove-p
     page()
     expect(await screen.findByText('DELIVERY_KEY')).toBeTruthy()
     expect(screen.getByText(variablesText.note)).toBeTruthy()
-    expect(screen.queryByText(variablesText.agentClosed)).toBeNull()
+    expect(screen.queryByText(/Агент пока не получает/)).toBeNull()
   })
 
   it('adds a variable of the workspace and says it was saved', async () => {
@@ -109,11 +108,10 @@ describe('«Настройки → Переменные» (docs/plan/83-remove-p
     ])
   })
 
-  it('offers no change to a member, and tells a workspace of client data what waits', async () => {
-    calls.list.mockResolvedValue(listed({ canEdit: false, agentGets: false }))
+  it('offers no change to a member', async () => {
+    calls.list.mockResolvedValue(listed({ canEdit: false }))
     page()
     expect(await screen.findByText(variablesText.readOnly)).toBeTruthy()
-    expect(screen.getByText(variablesText.agentClosed)).toBeTruthy()
     expect(screen.queryByRole('button', { name: variablesText.add })).toBeNull()
     expect(screen.queryByRole('button', { name: variablesText.remove })).toBeNull()
   })
