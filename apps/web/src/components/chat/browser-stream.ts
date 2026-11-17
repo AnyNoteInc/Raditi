@@ -1,4 +1,8 @@
-import { decodeBrowserFrame, type BrowserFrame } from '@repo/domain/browser/stream-codec'
+import {
+  BROWSER_FRAME_HEADER_BYTES,
+  decodeBrowserFrame,
+  type BrowserFrame,
+} from '@repo/domain/browser/stream-codec'
 import {
   browserStreamCloseCode,
   browserStreamCloseCodes,
@@ -8,6 +12,8 @@ import {
   type BrowserStreamEndReason,
   type BrowserStreamRefusal,
 } from '@repo/domain/browser/stream-messages'
+
+import { StreamStats, STREAM_STATS_PERIOD_MS } from './stream-stats'
 
 // The cabinet's end of the stream of a task's browser (docs/plan/57-browser-tasks.md, §3.6,
 // Б12–Б14): a one-time ticket, `hello` as the first message, frames drawn and acknowledged, pings
@@ -60,6 +66,22 @@ export interface StreamEvents {
   refused(reason: BrowserStreamRefusal): void
 }
 
+/** An input message as the panel makes it; the client numbers it (ТР7). */
+export type BrowserInputMessage = Omit<Extract<BrowserClientMessage, { t: 'input' }>, 'seq'>
+
+/** Window pixels the picture is moved by: the scroll sent and not yet in a drawn frame. */
+export interface PictureShift {
+  dx: number
+  dy: number
+}
+
+/** A scroll the picture shows ahead of the frames for at most this long (ТР7). */
+export const PREDICTION_MAX_MS = 1_000
+/** From an input to its frame, longer than this is no sample: the page did not move for it. */
+const INPUT_SAMPLE_MAX_MS = 3_000
+/** Inputs remembered until a frame shows them. */
+const PENDING_INPUTS = 512
+
 export interface BrowserStreamOptions {
   /** A fresh one-time ticket (`browser.streamTicket`): one per connection. */
   ticket: () => Promise<StreamTicket>
@@ -77,6 +99,20 @@ export interface BrowserStreamOptions {
    * first state if it still holds it — hiding the panel and showing it again keeps the control.
    */
   heldBy?: string | null
+  /**
+   * The picture is to be moved by `shift` window pixels of `viewport` (ТР7): the scroll this tab
+   * sent that the drawn frame does not show yet. Called before a frame is drawn and whenever it
+   * changes; `redraw` false — for the frame about to be drawn, which shows it.
+   */
+  shift?: (
+    shift: PictureShift,
+    viewport: { width: number; height: number },
+    redraw: boolean,
+  ) => void
+  /** This tab's clock in milliseconds; `performance.now()`. */
+  now?: () => number
+  /** The main pointer of this device is a finger: told to the worker with the numbers (ТР3). */
+  touch?: boolean
 }
 
 /** Silence this long from the gateway and the stream is opened anew (Б14). */
@@ -134,11 +170,22 @@ export class BrowserStreamClient {
   #drawing = false
   #waiting: BrowserFrame | null = null
   #pending: 'take' | 'release' | null = null
+  /** What this tab measured of the stream (docs/plan/85-browser-stream-mobile.md, ТР3). */
+  readonly stats = new StreamStats()
+  readonly #now: () => number
+  #statsTimer: unknown = null
+  /** This connection's numbers of input, the ones no frame shows yet, and the frames that do. */
+  #inputSeq = 0
+  #inputs: { seq: number; at: number; dx: number; dy: number }[] = []
+  #marks: { frameSeq: number; inputSeq: number }[] = []
+  #shift: PictureShift = { dx: 0, dy: 0 }
+  #predictionTimer: unknown = null
 
   constructor(options: BrowserStreamOptions) {
     this.#options = options
     this.#timers = options.timers ?? realTimers
     this.#heldBy = options.heldBy ?? null
+    this.#now = options.now ?? (() => performance.now())
   }
 
   get connection(): StreamConnection {
@@ -205,6 +252,23 @@ export class BrowserStreamClient {
     else this.#pending = null
   }
 
+  /**
+   * An input to the page, numbered for this connection (ТР7): a scroll moves the picture at once,
+   * until a frame shows it. False — the stream is not open, nothing was sent.
+   */
+  input(message: BrowserInputMessage): boolean {
+    if (this.#socket === null || this.#connection !== 'open') return false
+    const seq = (this.#inputSeq = (this.#inputSeq + 1) % 0x1_0000_0000)
+    const event = message.event
+    const wheel = event.kind === 'wheel'
+    this.#inputs.push({ seq, at: this.#now(), dx: wheel ? event.dx : 0, dy: wheel ? event.dy : 0 })
+    if (this.#inputs.length > PENDING_INPUTS)
+      this.#inputs.splice(0, this.#inputs.length - PENDING_INPUTS)
+    this.#socket.send(JSON.stringify({ ...message, seq }))
+    if (wheel) this.#reshift()
+    return true
+  }
+
   /** A message to the browser; false — the stream is not open, nothing was sent. */
   send(message: BrowserClientMessage): boolean {
     if (this.#socket === null || this.#connection !== 'open') return false
@@ -223,6 +287,94 @@ export class BrowserStreamClient {
     if (this.#retry !== null) this.#timers.clear(this.#retry)
     this.#silence = null
     this.#retry = null
+    this.#stopStats()
+  }
+
+  /** Every period the numbers of this tab go to the worker, while the stream is open (ТР3). */
+  #armStats(): void {
+    this.#stopStats()
+    const generation = this.#generation
+    this.#statsTimer = this.#timers.set(() => {
+      this.#statsTimer = null
+      if (generation !== this.#generation) return
+      const period = this.stats.period(this.#options.touch ?? false)
+      if (period !== null) this.send({ t: 'stats', ...period })
+      this.#armStats()
+    }, STREAM_STATS_PERIOD_MS)
+  }
+
+  #stopStats(): void {
+    if (this.#statsTimer !== null) this.#timers.clear(this.#statsTimer)
+    this.#statsTimer = null
+  }
+
+  /**
+   * The frame `frameSeq` is about to be drawn: the inputs it shows leave the shift (ТР7). Answers
+   * when the scrolls among them were sent, to be timed once the frame is on the screen.
+   */
+  #shown(frameSeq: number): number[] {
+    let upTo: number | null = null
+    this.#marks = this.#marks.filter((mark) => {
+      if (mark.frameSeq > frameSeq) return true
+      upTo = upTo === null ? mark.inputSeq : Math.max(upTo, mark.inputSeq)
+      return false
+    })
+    if (upTo === null) return []
+    const shown = upTo
+    const sent: number[] = []
+    this.#inputs = this.#inputs.filter((input) => {
+      if (input.seq > shown) return true
+      if (input.dx !== 0 || input.dy !== 0) sent.push(input.at)
+      return false
+    })
+    return sent
+  }
+
+  /**
+   * The shift is the scroll sent and not shown, of the last second; told when it changes. Before
+   * a frame it is told without a redraw: the frame itself puts it on the screen.
+   */
+  #reshift(redraw = true): void {
+    const now = this.#now()
+    let dx = 0
+    let dy = 0
+    let oldest: number | null = null
+    for (const input of this.#inputs) {
+      if ((input.dx === 0 && input.dy === 0) || now - input.at > PREDICTION_MAX_MS) continue
+      dx += input.dx
+      dy += input.dy
+      oldest = oldest === null ? input.at : Math.min(oldest, input.at)
+    }
+    if (this.#predictionTimer !== null) this.#timers.clear(this.#predictionTimer)
+    this.#predictionTimer = null
+    // A scroll no frame showed in time stops moving the picture: the page did not go there.
+    if (oldest !== null) {
+      const generation = this.#generation
+      this.#predictionTimer = this.#timers.set(
+        () => {
+          this.#predictionTimer = null
+          if (generation === this.#generation) this.#reshift()
+        },
+        Math.max(1, oldest + PREDICTION_MAX_MS - now + 1),
+      )
+    }
+    if (dx === this.#shift.dx && dy === this.#shift.dy) return
+    this.#shift = { dx, dy }
+    const viewport = this.#state?.viewport
+    if (viewport) this.#options.shift?.(this.#shift, viewport, redraw)
+  }
+
+  /** A new connection numbers its input from the start; nothing it sent before is ahead. */
+  #forgetInputs(): void {
+    this.#inputSeq = 0
+    this.#inputs = []
+    this.#marks = []
+    if (this.#predictionTimer !== null) this.#timers.clear(this.#predictionTimer)
+    this.#predictionTimer = null
+    if (this.#shift.dx === 0 && this.#shift.dy === 0) return
+    this.#shift = { dx: 0, dy: 0 }
+    const viewport = this.#state?.viewport
+    if (viewport) this.#options.shift?.(this.#shift, viewport, true)
   }
 
   /** Forgets the socket of this connection without waiting for its close. */
@@ -235,6 +387,8 @@ export class BrowserStreamClient {
       this.#options.events.viewer(null)
     }
     this.#waiting = null
+    this.#stopStats()
+    this.#forgetInputs()
     if (socket === null) return
     socket.onopen = null
     socket.onmessage = null
@@ -336,6 +490,8 @@ export class BrowserStreamClient {
     }
     if (this.#silence !== null) this.#timers.clear(this.#silence)
     this.#silence = null
+    this.#stopStats()
+    this.#forgetInputs()
     switch (said) {
       case browserStreamCloseCodes.ended:
       case browserStreamCloseCodes.forbidden:
@@ -374,12 +530,20 @@ export class BrowserStreamClient {
         return
       case 'state': {
         const { t: _type, ...state } = message
+        // A scroll sent on another tab or window size is no scroll of what is shown now.
+        const before = this.#state
+        if (
+          before !== null &&
+          (before.pageId !== state.pageId || before.viewportVersion !== state.viewportVersion)
+        )
+          this.#forgetInputs()
         this.#state = state
         const first = this.#connection !== 'open'
         if (first) {
           this.#attempt = 0
           this.#opened = true
           this.#set('open')
+          this.#armStats()
         }
         this.#options.events.state(state)
         if (first) this.#afterOpen(state)
@@ -394,6 +558,11 @@ export class BrowserStreamClient {
         return
       case 'closed':
         this.#endReason = message.reason
+        return
+      case 'applied':
+        this.#marks.push({ frameSeq: message.frameSeq, inputSeq: message.inputSeq })
+        if (this.#marks.length > PENDING_INPUTS)
+          this.#marks.splice(0, this.#marks.length - PENDING_INPUTS)
         return
     }
   }
@@ -437,8 +606,20 @@ export class BrowserStreamClient {
     let next: BrowserFrame | null = first
     try {
       while (next !== null) {
-        await this.#options.draw(next).catch(() => false)
+        const started = this.#now()
+        // What this frame shows leaves the shift before it is drawn: the picture never jumps
+        // ahead twice (ТР7).
+        const scrolled = this.#shown(next.header.frameSeq)
+        this.#reshift(false)
+        const drawn = await this.#options.draw(next).catch(() => false)
         if (generation !== this.#generation) return
+        if (drawn) {
+          const done = this.#now()
+          this.stats.drew(BROWSER_FRAME_HEADER_BYTES + next.jpeg.byteLength, done - started, done)
+          // From a scroll sent to the frame that shows it on the screen: this tab's own clock.
+          for (const at of scrolled)
+            if (done - at <= INPUT_SAMPLE_MAX_MS) this.stats.input(done - at, done)
+        }
         this.send({ t: 'ack', frameSeq: next.header.frameSeq })
         next = this.#waiting
         this.#waiting = null

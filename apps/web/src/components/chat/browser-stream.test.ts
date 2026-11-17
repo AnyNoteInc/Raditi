@@ -93,13 +93,17 @@ const frame = (
     jpeg,
   )
 
-function setup(options: { url?: string; gone?: boolean; heldBy?: string | null } = {}) {
+function setup(
+  options: { url?: string; gone?: boolean; heldBy?: string | null; touch?: boolean } = {},
+) {
   const sockets: FakeSocket[] = []
   const connections: StreamConnection[] = []
   const states: BrowserState[] = []
   let tickets = 0
   const drawn: BrowserFrame[] = []
   const draws: Array<() => void> = []
+  const shifts: { dx: number; dy: number }[] = []
+  const redraws: boolean[] = []
   const ticket = vi.fn(async () => {
     tickets += 1
     if (options.gone) throw Object.assign(new Error('gone'), { data: { code: 'NOT_FOUND' } })
@@ -108,6 +112,8 @@ function setup(options: { url?: string; gone?: boolean; heldBy?: string | null }
   const client = new BrowserStreamClient({
     streamUrl: STREAM_URL,
     heldBy: options.heldBy,
+    ...(options.touch === undefined ? {} : { touch: options.touch }),
+    now: () => Date.now(),
     ticket,
     isGone: (error) => (error as { data?: { code?: string } }).data?.code === 'NOT_FOUND',
     // A draw resolves when the test lets it: the acknowledgement must wait for it.
@@ -116,6 +122,10 @@ function setup(options: { url?: string; gone?: boolean; heldBy?: string | null }
         drawn.push(next)
         draws.push(() => resolve(true))
       }),
+    shift: (shift, _viewport, redraw) => {
+      shifts.push(shift)
+      redraws.push(redraw)
+    },
     createSocket: (url) => {
       const socket = new FakeSocket(url)
       sockets.push(socket)
@@ -135,6 +145,8 @@ function setup(options: { url?: string; gone?: boolean; heldBy?: string | null }
     states,
     drawn,
     draws,
+    shifts,
+    redraws,
     ticket,
     tickets: () => tickets,
     socket: () => sockets.at(-1)!,
@@ -219,6 +231,128 @@ describe('the stream of a task browser', () => {
       { t: 'ack', frameSeq: 2 },
       { t: 'ack', frameSeq: 3 },
     ])
+  })
+
+  it('tells the worker its numbers every period while it draws, and nothing while it does not', async () => {
+    const stand = setup({ touch: true })
+    const socket = await opened(stand)
+    const stats = () => socket.sent.filter((message) => (message as { t: string }).t === 'stats')
+    socket.binary(frame(1))
+    await vi.advanceTimersByTimeAsync(12)
+    stand.draws.shift()!()
+    await settle()
+    expect(stats()).toEqual([])
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(stats()).toEqual([
+      {
+        t: 'stats',
+        frames: 1,
+        bytes: 48 + jpeg.byteLength,
+        draw: { p50: 12, p95: 12 },
+        input: null,
+        inputs: 0,
+        touch: true,
+      },
+    ])
+    expect(stand.client.stats.live(Date.now())).toMatchObject({ fps: 0 })
+    // A quiet period says nothing; a closed stream stops telling.
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(stats()).toHaveLength(1)
+    stand.client.stop()
+    socket.binary(frame(2))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(stats()).toHaveLength(1)
+  })
+
+  describe('a scroll ahead of its frame (plan 85, ТР7)', () => {
+    const wheel = (dy: number) => ({
+      t: 'input' as const,
+      pageId: 1,
+      controlEpoch: 1,
+      viewportVersion: 1,
+      event: { kind: 'wheel' as const, x: 10, y: 10, dx: 0, dy },
+    })
+    const inputs = (socket: FakeSocket) =>
+      socket.sent.filter((message) => (message as { t: string }).t === 'input') as {
+        seq: number
+      }[]
+
+    it('numbers the input of a connection and moves the picture by the scroll at once', async () => {
+      const stand = setup()
+      expect(stand.client.input(wheel(100))).toBe(false)
+      const socket = await opened(stand)
+      expect(stand.client.input(wheel(100))).toBe(true)
+      stand.client.input({ ...wheel(0), event: { kind: 'text', text: 'а' } })
+      stand.client.input(wheel(-30))
+      expect(inputs(socket).map((input) => input.seq)).toEqual([1, 2, 3])
+      expect(stand.shifts).toEqual([
+        { dx: 0, dy: 100 },
+        { dx: 0, dy: 70 },
+      ])
+    })
+
+    it('takes back what a frame shows before drawing it, and times it once it is on the screen', async () => {
+      const stand = setup()
+      const socket = await opened(stand)
+      stand.client.input(wheel(100))
+      await vi.advanceTimersByTimeAsync(40)
+      stand.client.input(wheel(50))
+      // Frame 7 shows the first scroll only; the second stays ahead of it.
+      socket.text({ t: 'applied', frameSeq: 7, inputSeq: 1 })
+      await vi.advanceTimersByTimeAsync(100)
+      socket.binary(frame(7))
+      expect(stand.shifts.at(-1)).toEqual({ dx: 0, dy: 50 })
+      // Told without a redraw: frame 7 itself puts it on the screen.
+      expect(stand.redraws.at(-1)).toBe(false)
+      expect(stand.redraws.slice(0, 2)).toEqual([true, true])
+      await vi.advanceTimersByTimeAsync(10)
+      stand.draws.shift()!()
+      await settle()
+      // 40 + 100 + 10 ms from the first scroll to its frame on the screen.
+      expect(stand.client.stats.live(Date.now()).inputMs).toBe(150)
+      // A later frame covers a mark whose own frame was dropped on the way.
+      socket.text({ t: 'applied', frameSeq: 8, inputSeq: 2 })
+      socket.binary(frame(9))
+      expect(stand.shifts.at(-1)).toEqual({ dx: 0, dy: 0 })
+    })
+
+    it('stops moving the picture for a scroll no frame showed within a second', async () => {
+      const stand = setup()
+      await opened(stand)
+      stand.client.input(wheel(80))
+      expect(stand.shifts.at(-1)).toEqual({ dx: 0, dy: 80 })
+      await vi.advanceTimersByTimeAsync(999)
+      expect(stand.shifts.at(-1)).toEqual({ dx: 0, dy: 80 })
+      await vi.advanceTimersByTimeAsync(10)
+      expect(stand.shifts.at(-1)).toEqual({ dx: 0, dy: 0 })
+    })
+
+    it('forgets the scroll ahead when another tab or window size is shown', async () => {
+      const stand = setup()
+      const socket = await opened(stand)
+      stand.client.input(wheel(60))
+      expect(stand.shifts.at(-1)).toEqual({ dx: 0, dy: 60 })
+      socket.text({
+        t: 'state',
+        ...state({ viewportVersion: 2, viewport: { width: 390, height: 844 } }),
+      })
+      expect(stand.shifts.at(-1)).toEqual({ dx: 0, dy: 0 })
+    })
+
+    it('forgets the scroll ahead and numbers anew on a new connection', async () => {
+      const stand = setup()
+      const socket = await opened(stand)
+      stand.client.input(wheel(40))
+      socket.end(4503)
+      expect(stand.shifts.at(-1)).toEqual({ dx: 0, dy: 0 })
+      await vi.advanceTimersByTimeAsync(1_000)
+      const next = stand.socket()
+      next.open()
+      next.text({ t: 'viewer', viewer: NEXT_VIEWER })
+      next.text({ t: 'state', ...state() })
+      stand.client.input(wheel(40))
+      expect(inputs(next).map((input) => input.seq)).toEqual([1])
+    })
   })
 
   it('answers a ping with a pong', async () => {

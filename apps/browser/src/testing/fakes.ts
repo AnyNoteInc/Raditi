@@ -554,7 +554,12 @@ export class FakeInbox implements InboxStorage {
 }
 
 export const countingMetrics = () => {
-  const counts = { sent: 0, dropped: { replaced: 0, stale: 0 }, actions: [] as string[] }
+  const counts = {
+    sent: 0,
+    dropped: { replaced: 0, stale: 0 },
+    actions: [] as string[],
+    times: [] as string[],
+  }
   const metrics: BrowserWorkerMetrics = {
     frameSent: () => {
       counts.sent += 1
@@ -564,6 +569,9 @@ export const countingMetrics = () => {
     },
     action: (tool, result) => {
       counts.actions.push(`${tool}:${result}`)
+    },
+    streamTime: (kind, ms) => {
+      counts.times.push(`${kind}:${ms}`)
     },
   }
   return { metrics, counts }

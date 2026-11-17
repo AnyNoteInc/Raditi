@@ -651,6 +651,10 @@ export const browserText = Object.freeze({
   more: 'Ещё',
   windowSize: 'Размер окна браузера',
   windowSizeLocked: 'Размер окна можно изменить, когда управляете вы.',
+  /** Under the panel of a phone with a window of a computer (docs/plan/85, ТР11). */
+  mobileHint: 'На телефоне легче смотреть мобильную версию сайта.',
+  mobileHintAction: 'Мобильная версия',
+  mobileHintClose: 'Скрыть подсказку',
   size: (width: number, height: number) => `${width} × ${height}`,
   tabs: 'Вкладки',
   tabOf: (index: number, count: number) => `Вкладка ${index} из ${count}`,

@@ -20,11 +20,16 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import { frameDropReasons, type BrowserWorkerMetrics } from '../metrics/worker-metrics.ts'
 import type { EncodedFrame, SessionViewer, WorkerSession } from '../sessions/worker-session.ts'
 import type { BrowserWorkerStore } from '../store/worker-store.ts'
+import { AppliedInputs } from './applied-inputs.ts'
+import { ViewerMeasure } from './viewer-measure.ts'
 
 const STREAM_PATH =
   /^\/v1\/sessions\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\/stream$/
 /** A message of the gateway is JSON text of at most 64 Ki characters: up to three bytes each. */
 const MAX_PAYLOAD_BYTES = 192 * 1024
+/** Pings whose pongs may still come; an older one is no round trip any more. */
+const PINGS_KEPT = 4
+
 /** Never a frame to a page or a size: a pageId the worker never gives (they start at 1). */
 const NOWHERE = Object.freeze({ pageId: 0, viewportVersion: 0 })
 
@@ -42,6 +47,11 @@ export interface BrowserStreamServerOptions {
   messagesPerSecond?: number
   now?: () => number
   warn(event: string, error?: unknown): void
+  /**
+   * One line of the log when a viewer leaves: the numbers its stream measured (ТР2), JSON. The
+   * tests leave it out.
+   */
+  log?(line: string): void
 }
 
 /**
@@ -159,6 +169,11 @@ class StreamViewer implements SessionViewer {
   #attached = false
   #counted: FrameFlowDrops = { replaced: 0, stale: 0 }
   #window = { start: 0, count: 0, refused: false }
+  readonly #measure: ViewerMeasure
+  /** The inputs the page took, told with the first frame painted after them (ТР7). */
+  readonly #applied = new AppliedInputs()
+  /** The `ts` of the worker's own last pings: only their pongs time the round trip. */
+  readonly #pings: number[] = []
 
   constructor(
     ws: WebSocket,
@@ -175,6 +190,7 @@ class StreamViewer implements SessionViewer {
     this.#options = options
     this.#now = options.now ?? Date.now
     this.#flow = new FrameFlow<EncodedFrame>(options.flow)
+    this.#measure = new ViewerMeasure(this.#now())
     this.#onEnd = onEnd
     ws.on('error', () => undefined)
     ws.on('message', (data, isBinary) => this.#message(data, isBinary))
@@ -214,6 +230,18 @@ class StreamViewer implements SessionViewer {
     this.#send({ t: 'refused', reason })
   }
 
+  inputDone(seq: number, at: number): void {
+    this.#applied.taken(seq, at)
+  }
+
+  acks(since: number) {
+    return this.#measure.acksSince(since)
+  }
+
+  quality(quality: number): void {
+    this.#measure.quality(quality)
+  }
+
   closed(reason: BrowserCloseReason): void {
     this.end(reason)
   }
@@ -236,12 +264,32 @@ class StreamViewer implements SessionViewer {
     // Only an acknowledgement frees a place in the window (Б13): one that does is never dropped
     // for the rate, or a fast pointer would stop the frames for good. The gateway lets through no
     // more of them than frames it was sent.
-    if (message?.t === 'ack' && this.#flow.ack(message.frameSeq)) return this.#pump()
+    if (message?.t === 'ack' && this.#flow.ack(message.frameSeq)) {
+      const ms = this.#measure.acked(message.frameSeq, this.#now())
+      if (ms !== null) this.#options.metrics.streamTime('ack', ms)
+      return this.#pump()
+    }
     if (!this.#admitted()) return
     // `hello` is the gateway's own; a frame comes from the worker only.
     if (message === null || message.t === 'hello') return this.refused('bad_message')
-    // An acknowledgement of nothing on the way, or a pong: nothing to do.
-    if (message.t === 'ack' || message.t === 'pong') return
+    // An acknowledgement of nothing on the way: nothing to do.
+    if (message.t === 'ack') return
+    if (message.t === 'pong') {
+      // Only a pong of the worker's own ping: the gateway's and any other `ts` are not its clock.
+      const index = message.ts === undefined ? -1 : this.#pings.indexOf(message.ts)
+      if (index < 0) return
+      this.#pings.splice(index, 1)
+      const ms = this.#measure.pong(message.ts, this.#now())
+      if (ms !== null) this.#options.metrics.streamTime('rtt', ms)
+      return
+    }
+    // The cabinet's numbers are the stream's, never the session's (ТР3).
+    if (message.t === 'stats') {
+      this.#measure.stats(message)
+      if (message.draw) this.#options.metrics.streamTime('draw', message.draw.p50)
+      if (message.input) this.#options.metrics.streamTime('input', message.input.p50)
+      return
+    }
     this.#session.message(this, message)
   }
 
@@ -272,7 +320,9 @@ class StreamViewer implements SessionViewer {
         this.#current ?? NOWHERE,
       )
       if (decision.kind === 'send') {
+        this.#tellApplied(decision.frame)
         this.#ws.send(decision.frame.data, { binary: true })
+        this.#measure.sent(decision.frame.seq, decision.frame.bytes, this.#now())
         this.#options.metrics.frameSent()
         continue
       }
@@ -283,6 +333,12 @@ class StreamViewer implements SessionViewer {
       break
     }
     this.#countDrops()
+  }
+
+  /** Before a frame, the viewer hears the newest of its inputs the frame already shows (ТР7). */
+  #tellApplied(frame: EncodedFrame): void {
+    const inputSeq = this.#applied.shownBy(frame.timestamp)
+    if (inputSeq !== null) this.#send({ t: 'applied', frameSeq: frame.seq, inputSeq })
   }
 
   #countDrops(): void {
@@ -305,7 +361,10 @@ class StreamViewer implements SessionViewer {
     this.#alive = false
     if (this.#ws.readyState !== WebSocket.OPEN) return
     this.#ws.ping()
-    this.#send({ t: 'ping', ts: this.#now() })
+    const ts = this.#now()
+    this.#pings.push(ts)
+    if (this.#pings.length > PINGS_KEPT) this.#pings.splice(0, this.#pings.length - PINGS_KEPT)
+    this.#send({ t: 'ping', ts })
   }
 
   #send(message: BrowserServerMessage): void {
@@ -325,6 +384,8 @@ class StreamViewer implements SessionViewer {
     this.#countDrops()
     // The pause holds; the keys and buttons this viewer held are let go (Б17).
     if (this.#attached) this.#session.detach(this.id)
+    if (this.#attached)
+      this.#options.log?.(JSON.stringify(this.#measure.summary(this.#now(), this.#counted)))
     this.#onEnd()
   }
 }

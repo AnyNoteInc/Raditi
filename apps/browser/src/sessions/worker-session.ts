@@ -16,6 +16,7 @@ import {
   browserObservationLimits,
   browserPageShown,
   browserScreenshotLimits,
+  browserStreamQualityRule,
   browserTaskError,
   browserToolResultSchema,
   browserToolLimits,
@@ -34,6 +35,7 @@ import {
   takeBrowserControl,
   withTimeout,
   BROWSER_DEFAULT_VIEWPORT,
+  BrowserStreamQuality,
   type BrowserAction,
   type BrowserChooser,
   type BrowserClientMessage,
@@ -66,6 +68,7 @@ import {
   type CloudBrowserFrame,
   type CloudBrowserSession,
   type FlowFrame,
+  type StreamAck,
 } from '@repo/domain'
 import type { BrowserCheckpointRecord } from '@repo/db'
 
@@ -76,6 +79,8 @@ import type { BrowserWorkerStore } from '../store/worker-store.ts'
 /** A frame as every viewer gets it: the 48-byte header and the JPEG, encoded once. */
 export interface EncodedFrame extends FlowFrame {
   data: Uint8Array
+  /** When Chromium painted it, on this machine's clock (the header's `timestamp`). */
+  timestamp: number
 }
 
 /**
@@ -90,6 +95,15 @@ export interface SessionViewer {
   refused(reason: BrowserStreamRefusal): void
   /** The session ended: the viewer says why and closes its connection. */
   closed(reason: BrowserCloseReason): void
+  /**
+   * The page took the viewer's input `seq` by `at` (docs/plan/85-browser-stream-mobile.md, ТР7):
+   * a frame painted later shows it.
+   */
+  inputDone?(seq: number, at: number): void
+  /** Its acknowledgements since `since`, oldest first: what the quality is judged by (ТР9). */
+  acks?(since: number): readonly StreamAck[]
+  /** The JPEG quality of the screencast it is sent, now and at each change (ТР9). */
+  quality?(quality: number): void
 }
 
 /** What a session needs of the worker; one object for all its sessions. */
@@ -186,6 +200,8 @@ const writes = (event: BrowserInputEvent): boolean =>
 
 /** Messages of the client waiting for the page; past this they are refused (`busy`). */
 const INPUT_BACKLOG = 256
+/** The quality of the screencast is judged at most this often (ТР9). */
+const QUALITY_CHECK_MS = 500
 
 /**
  * Questions of a page whose «OK» confirms what it asks — «Удалить навсегда?» — or sends what is
@@ -255,6 +271,9 @@ export class WorkerSession {
   #lastActivity: number
   #lastTouch = Number.NEGATIVE_INFINITY
   readonly #viewers = new Map<string, SessionViewer>()
+  /** The quality of the screencast, by the worst viewer's link (docs/plan/85…, ТР9). */
+  #quality: BrowserStreamQuality | null = null
+  #qualityCheckedAt = 0
   readonly #frames = {
     stop: null as (() => Promise<void>) | null,
     /** Start and stop of the screencast, one at a time. */
@@ -670,8 +689,11 @@ export class WorkerSession {
   /** A tab of the cabinet starts watching; false — the session ended or the id is taken. */
   attach(viewer: SessionViewer): boolean {
     if (!this.live || this.#viewers.has(viewer.id)) return false
+    // The first viewer brings a new link: the quality starts again from the configured one.
+    if (this.#viewers.size === 0) this.#quality = null
     this.#viewers.set(viewer.id, viewer)
     this.#touch()
+    viewer.quality?.(this.#streamQuality().quality)
     // The state and the last picture at once: a new viewer does not wait for the page to change.
     viewer.state(this.state())
     const last = this.#frames.last
@@ -710,13 +732,36 @@ export class WorkerSession {
       try {
         this.#frames.stop = await browser.startFrames((frame) => this.#frame(frame), {
           size: { ...this.#viewport },
-          quality: this.#context.settings.stream.quality,
+          quality: this.#streamQuality().quality,
         })
       } catch (error) {
         this.#context.warn('browser_frames_start_failed', error)
       }
     }
     this.#frames.chain = this.#frames.chain.then(run, run)
+  }
+
+  #streamQuality(): BrowserStreamQuality {
+    this.#quality ??= new BrowserStreamQuality(
+      this.#context.settings.stream.quality,
+      this.#context.now(),
+    )
+    return this.#quality
+  }
+
+  /**
+   * At most twice a second, with a frame: the worst viewer's link may change the quality, and the
+   * screencast starts again with the new one (ТР9).
+   */
+  #judgeQuality(now: number): void {
+    if (now - this.#qualityCheckedAt < QUALITY_CHECK_MS) return
+    this.#qualityCheckedAt = now
+    const since = now - browserStreamQualityRule.baseMs
+    const viewers = [...this.#viewers.values()].map((viewer) => viewer.acks?.(since) ?? [])
+    const next = this.#streamQuality().observe(viewers, now)
+    if (next === null) return
+    for (const viewer of this.#viewers.values()) viewer.quality?.(next)
+    this.#syncFrames(true)
   }
 
   /**
@@ -753,10 +798,12 @@ export class WorkerSession {
       viewportVersion: control.viewportVersion,
       bytes: data.byteLength,
       data,
+      timestamp: frame.timestamp,
     }
     this.#frames.last = encoded
     for (const viewer of this.#viewers.values()) viewer.frame(encoded)
     const now = this.#context.now()
+    this.#judgeQuality(now)
     const interval = 1000 / this.#context.settings.stream.maxFps
     const slot = Math.max(now, this.#frames.nextSlot)
     this.#frames.nextSlot = slot + interval
@@ -782,9 +829,11 @@ export class WorkerSession {
         this.#touch()
         this.#apply(releaseBrowserControl(this.#control))
         return
+      // Not the session's: the gateway's own, the stream's, and the cabinet's numbers (plan 85, ТР3).
       case 'hello':
       case 'ack':
       case 'pong':
+      case 'stats':
         return
       default:
         // A page that stopped answering does not pile the client's input up behind it.
@@ -825,7 +874,10 @@ export class WorkerSession {
 
   async #command(
     viewer: SessionViewer,
-    message: Exclude<BrowserClientMessage, { t: 'hello' | 'ack' | 'pong' | 'take' | 'release' }>,
+    message: Exclude<
+      BrowserClientMessage,
+      { t: 'hello' | 'ack' | 'pong' | 'stats' | 'take' | 'release' }
+    >,
   ): Promise<void> {
     const browser = this.#browser
     if (!this.live || !browser || !this.#viewers.has(viewer.id)) return
@@ -844,7 +896,11 @@ export class WorkerSession {
         this.#manualWrite()
       } else this.#touch()
       // A key or a click the page did not take in time is lost, as on a slow link.
-      await browser.input(message.event).catch(() => undefined)
+      const done = await browser.input(message.event).then(
+        () => true,
+        () => false,
+      )
+      if (done && message.seq !== undefined) viewer.inputDone?.(message.seq, this.#context.now())
       return
     }
     const command = admitBrowserUserCommand(this.#control, viewer.id)

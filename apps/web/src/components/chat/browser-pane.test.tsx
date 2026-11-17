@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
@@ -80,6 +80,7 @@ function fakeStream(patch: Partial<BrowserStream> = {}): BrowserStream {
     release: vi.fn(),
     retry: vi.fn(),
     setPainter: vi.fn(),
+    liveStats: () => null,
     ...patch,
   }
 }
@@ -401,6 +402,153 @@ describe('the browser of a task', () => {
       { kind: 'mouse', type: 'up', x: 640, y: 400, button: 'left', clickCount: 1 },
     ])
     vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockRestore()
+  })
+
+  describe('scrolling with a finger and the wheel (plan 85, ТР5, ТР6)', () => {
+    // The panel is 1000 × 800: the window shows at 0.78125 between margins of 87.5 px.
+    const panel = () =>
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        left: 100,
+        top: 50,
+        width: 1000,
+        height: 800,
+        right: 1100,
+        bottom: 850,
+        x: 100,
+        y: 50,
+        toJSON: () => ({}),
+      })
+    let frames: FrameRequestCallback[] = []
+    const runFrames = (at: number) => {
+      for (const run of frames.splice(0)) run(at)
+    }
+    beforeEach(() => {
+      frames = []
+      vi.stubGlobal('requestAnimationFrame', (run: FrameRequestCallback) => frames.push(run))
+      vi.stubGlobal('cancelAnimationFrame', () => undefined)
+    })
+    afterEach(() => {
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+    })
+    const events = (stream: BrowserStream) =>
+      sent(stream).map((message) => (message as { event: unknown }).event)
+    const touch = (
+      type: 'pointerDown' | 'pointerMove' | 'pointerUp',
+      x: number,
+      y: number,
+      at: number,
+    ) =>
+      fireEvent[type](canvas(), {
+        pointerType: 'touch',
+        pointerId: 7,
+        clientX: x,
+        clientY: y,
+        timeStamp: at,
+      })
+
+    it('scrolls the page with one finger past the slop, one wheel a frame, and never clicks', () => {
+      const stream = holding()
+      panel()
+      show({ stream })
+      touch('pointerDown', 600, 450, 0)
+      // Within the slop the finger may still tap.
+      touch('pointerMove', 600, 442, 10)
+      runFrames(16)
+      expect(events(stream)).toEqual([])
+      touch('pointerMove', 600, 422, 20)
+      touch('pointerMove', 600, 402, 30)
+      expect(events(stream)).toEqual([])
+      runFrames(32)
+      // 40 px of the panel are 51.2 px of the window, sent as one event under the finger.
+      expect(events(stream)).toEqual([{ kind: 'wheel', x: 640, y: 339, dx: 0, dy: 51 }])
+      touch('pointerUp', 600, 402, 1_000)
+      runFrames(1_016)
+      // A finger that stopped before it was lifted does not coast; nor is it a click.
+      expect(events(stream)).toHaveLength(1)
+    })
+
+    it('lets a swipe coast on after the finger, and stops it at the next touch', () => {
+      const stream = holding()
+      panel()
+      show({ stream })
+      touch('pointerDown', 600, 600, 0)
+      for (let index = 1; index <= 6; index++)
+        touch('pointerMove', 600, 600 - index * 30, index * 16)
+      runFrames(100)
+      touch('pointerUp', 600, 420, 100)
+      const before = events(stream).length
+      for (let frame = 1; frame <= 5; frame++) runFrames(100 + frame * 16)
+      const coasted = events(stream).slice(before) as { dy: number }[]
+      expect(coasted.length).toBeGreaterThan(1)
+      for (const event of coasted) expect(event.dy).toBeGreaterThan(0)
+      touch('pointerDown', 600, 500, 200)
+      runFrames(216)
+      runFrames(232)
+      expect(events(stream).length).toBe(before + coasted.length)
+    })
+
+    it('still clicks on a tap of one finger', () => {
+      const stream = holding()
+      panel()
+      show({ stream })
+      touch('pointerDown', 600, 449.5, 0)
+      touch('pointerUp', 600, 449.5, 80)
+      expect(events(stream)).toEqual([
+        { kind: 'mouse', type: 'move', x: 640, y: 400, button: 'none', clickCount: 0 },
+        { kind: 'mouse', type: 'down', x: 640, y: 400, button: 'left', clickCount: 1 },
+        { kind: 'mouse', type: 'up', x: 640, y: 400, button: 'left', clickCount: 1 },
+      ])
+    })
+
+    it('gathers the turns of the wheel between two frames into one event', () => {
+      const stream = holding()
+      panel()
+      show({ stream })
+      fireEvent.wheel(canvas(), { clientX: 600, clientY: 449.5, deltaY: 50, deltaMode: 0 })
+      fireEvent.wheel(canvas(), { clientX: 600, clientY: 449.5, deltaY: 50, deltaMode: 0 })
+      expect(events(stream)).toEqual([])
+      runFrames(16)
+      expect(events(stream)).toEqual([{ kind: 'wheel', x: 640, y: 400, dx: 0, dy: 128 }])
+    })
+  })
+
+  describe('the mobile version on a phone (plan 85, ТР11)', () => {
+    const asPhone = (phone: boolean) =>
+      vi.stubGlobal('matchMedia', (query: string) => ({
+        matches: phone && query.includes('pointer: coarse'),
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }))
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+    const hint = () => screen.queryByTestId('browser-mobile-hint')
+
+    it('offers a phone that drives a window of a computer the mobile window, and hides when closed', () => {
+      asPhone(true)
+      const stream = holding()
+      show({ stream })
+      expect(hint()?.textContent).toContain('На телефоне легче смотреть мобильную версию сайта.')
+      fireEvent.click(within(hint()!).getByRole('button', { name: 'Мобильная версия' }))
+      expect(sent(stream)).toEqual([{ t: 'viewport', width: 390, height: 844 }])
+      fireEvent.click(screen.getByRole('button', { name: 'Скрыть подсказку' }))
+      expect(hint()).toBeNull()
+    })
+
+    it('offers nothing to a computer, under the agent, or in the mobile window already', () => {
+      asPhone(false)
+      show({ stream: holding() })
+      expect(hint()).toBeNull()
+      cleanup()
+      asPhone(true)
+      show({ stream: fakeStream() })
+      expect(hint()).toBeNull()
+      cleanup()
+      show({ stream: holding({ viewport: { width: 390, height: 844 } }) })
+      expect(hint()).toBeNull()
+    })
   })
 
   it('sends no input while the agent drives the browser', () => {

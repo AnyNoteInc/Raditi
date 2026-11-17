@@ -988,6 +988,46 @@ describe('frames', () => {
     expect(browser.streaming).toBe(false)
   })
 
+  it('steps the quality down for a thin link, starts the screencast again and tells the viewers (plan 85, ТР9)', async () => {
+    const { ensured, clock } = setup()
+    const { session, browser } = await ensured()
+    const now = () => Date.now() + clock.skew
+    const qualities: number[] = []
+    const viewer = Object.assign(new ViewerProbe(), {
+      // The link's own time is 60 ms; its last two seconds take 400 ms a frame.
+      acks: () => {
+        const at = now()
+        return [
+          { at: at - 10_000, ms: 60 },
+          ...Array.from({ length: 10 }, (_, index) => ({ at: at - 2_000 + index * 200, ms: 400 })),
+        ]
+      },
+      quality: (quality: number) => qualities.push(quality),
+    })
+    session.attach(viewer)
+    await settle()
+    expect(qualities).toEqual([70])
+    // Within 4 s of the start the quality holds whatever the link.
+    await browser.frame()
+    await settle()
+    expect(browser.frameStarts.map((start) => start.quality)).toEqual([70])
+    clock.skew += 5_000
+    await browser.frame()
+    await settle()
+    expect(qualities).toEqual([70, 55])
+    expect(browser.frameStarts.at(-1)).toEqual({ size: { width: 1280, height: 800 }, quality: 55 })
+    // A viewer that comes back after everyone left starts from the configured quality again.
+    session.detach(viewer.id)
+    await settle()
+    const next = Object.assign(new ViewerProbe(), {
+      quality: (quality: number) => qualities.push(quality),
+    })
+    session.attach(next)
+    await settle()
+    expect(qualities.at(-1)).toBe(70)
+    expect(browser.frameStarts.at(-1)?.quality).toBe(70)
+  })
+
   it('starts the screencast again at the new size when the holder changes the window', async () => {
     const { ensured } = setup()
     const { session, browser } = await ensured()

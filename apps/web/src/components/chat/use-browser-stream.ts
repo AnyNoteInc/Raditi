@@ -18,6 +18,7 @@ import {
   type StreamSocket,
 } from './browser-stream'
 import { isNotFound } from './call-error'
+import type { LiveStreamStats } from './stream-stats'
 
 // The stream of a task's browser for the window of the task (docs/plan/57-browser-tasks.md, Б12,
 // Б14): open only while the page and the panel are shown — or while a press of «Взять
@@ -55,6 +56,8 @@ export interface BrowserStream {
   retry: () => void
   /** The canvas that draws the frames; null while there is none. */
   setPainter: (painter: FramePainter | null) => void
+  /** What this tab measured in the last seconds; null while no stream is open (ТР4). */
+  liveStats: () => LiveStreamStats | null
 }
 
 export function useBrowserStream({
@@ -139,8 +142,11 @@ export function useBrowserStream({
         }),
       isGone: isNotFound,
       draw: (frame) => painter.current?.paint(frame) ?? Promise.resolve(false),
+      shift: (shift, viewport, redraw) => painter.current?.shift(shift, viewport, { redraw }),
       createSocket,
       heldBy: heldBy.current,
+      touch:
+        typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches,
       events: {
         connection: (next, reason) => {
           setConnection(next)
@@ -178,10 +184,14 @@ export function useBrowserStream({
     }
   }, [enabled, streamUrl, taskId, client, queryClient, createSocket])
 
-  const send = useCallback(
-    (message: BrowserClientMessage) => stream.current?.send(message) ?? false,
-    [],
-  )
+  // Input goes numbered, so a scroll moves the picture before its frame comes (plan 85, ТР7).
+  const send = useCallback((message: BrowserClientMessage) => {
+    const current = stream.current
+    if (current === null) return false
+    if (message.t !== 'input') return current.send(message)
+    const { seq: _seq, ...input } = message
+    return current.input(input)
+  }, [])
   const press = useCallback(
     (kind: 'take' | 'release') => {
       setPending({ kind, refusals: told?.seq ?? 0 })
@@ -197,6 +207,7 @@ export function useBrowserStream({
   const setPainter = useCallback((next: FramePainter | null) => {
     painter.current = next
   }, [])
+  const liveStats = useCallback(() => stream.current?.stats.live(performance.now()) ?? null, [])
 
   const holding =
     connection === 'open' &&
@@ -223,5 +234,6 @@ export function useBrowserStream({
     release,
     retry,
     setPainter,
+    liveStats,
   }
 }
