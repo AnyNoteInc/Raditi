@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { plain } from '@/components/billing/testing'
 
 import type { DialogListItem, DialogListPage } from './chat-types'
-import { ArchiveButton, DialogList } from './dialog-list'
+import { listRepoHint } from './chat-texts'
+import { ArchiveButton, DialogList, ProjectChats } from './dialog-list'
 import { SearchDialog } from './search-dialog'
 import { declared } from './testing'
 
@@ -80,6 +81,7 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
     telegram: false,
     project: null,
     schedule: null,
+    repo: null,
     ...patch,
   }
 }
@@ -416,6 +418,87 @@ describe('pinned, archived and found chats (docs/plan/75, ВВ21)', () => {
       expect((await screen.findByRole('alert')).textContent).toBe(
         'Агент сейчас работает в этом чате.',
       )
+    })
+
+    // The branch of a chat of a project in its row (docs/plan/84-projects.md, §4.8, ревью P9).
+    describe('the hint of the branch of a chat', () => {
+      const branch = (patch: Partial<NonNullable<DialogListItem['repo']>> = {}) => ({
+        state: 'pushed' as const,
+        sent: true,
+        request: null,
+        ...patch,
+      })
+
+      it('says first what waits for the client, then the merge request, then the branch', () => {
+        expect(listRepoHint(null)).toBeNull()
+        expect(listRepoHint(branch({ sent: false, request: { state: 'open' } }))).toBe(
+          'изменения не отправлены',
+        )
+        expect(listRepoHint(branch({ request: { state: 'open' } }))).toBe(
+          'запрос на слияние открыт',
+        )
+        expect(listRepoHint(branch({ request: { state: 'draft' } }))).toBe(
+          'черновик запроса на слияние',
+        )
+        expect(listRepoHint(branch({ request: { state: 'merged' } }))).toBe(
+          'принято в основную ветку',
+        )
+        expect(listRepoHint(branch({ state: 'merged' }))).toBe('принято в основную ветку')
+        expect(listRepoHint(branch({ request: { state: 'closed' } }))).toBe(
+          'запрос на слияние закрыт',
+        )
+        expect(listRepoHint(branch())).toBe('отправлено в ветку')
+        // Every change was taken back before anything was sent: nothing to say.
+        expect(listRepoHint(branch({ state: 'local' }))).toBeNull()
+      })
+
+      it('shows it in the rows of the chats panel, and only for a chat with a branch', async () => {
+        listPage.mockResolvedValue({
+          pinned: [],
+          items: [
+            dialog('1', {
+              project: KOLOS,
+              repo: branch({ state: 'local', sent: false }),
+            }),
+            dialog('2', {
+              title: 'Новое меню',
+              project: KOLOS,
+              repo: branch({ request: { state: 'open' } }),
+            }),
+            dialog('3', { title: 'Вопрос', project: KOLOS }),
+          ],
+          nextCursor: null,
+        })
+        showList()
+        const unsent = await screen.findByText('изменения не отправлены')
+        expect(unsent.closest('a')?.textContent).toContain('Поменять цену капучино')
+        expect(screen.getByText('запрос на слияние открыт').closest('a')?.textContent).toContain(
+          'Новое меню',
+        )
+        expect(screen.getByText('Вопрос').closest('a')?.querySelector('[data-dialog-repo]')).toBe(
+          null,
+        )
+      })
+
+      it('shows it in «Чаты проекта», read for that project alone', async () => {
+        listPage.mockResolvedValue({
+          pinned: [],
+          items: [dialog('1', { project: KOLOS, repo: branch({ state: 'merged' }) })],
+          nextCursor: null,
+        })
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        render(
+          <QueryClientProvider client={queryClient}>
+            <h2 id="project-chats">Чаты проекта</h2>
+            <ProjectChats projectId={KOLOS.id} labelledBy="project-chats" empty={null} />
+          </QueryClientProvider>,
+        )
+        const merged = await screen.findByText('принято в основную ветку')
+        expect(merged.closest('a')?.textContent).toContain('Поменять цену капучино')
+        // The name of the project they all share is not repeated.
+        expect(screen.queryByText('Колос')).toBeNull()
+        expect(listPage).toHaveBeenCalledWith({ projectId: KOLOS.id })
+      })
     })
 
     it('offers no «Убрать из проекта» to a chat outside projects', async () => {

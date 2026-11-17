@@ -223,6 +223,9 @@ describe('the page of a project (docs/plan/84-projects.md, ПР6)', () => {
           project: { id: PROJECT_ID, name: kolos.name },
           archived: false,
           telegram: false,
+          schedule: null,
+          // Its branch was sent and its merge request opened (§4.8, ревью P9).
+          repo: { state: 'pushed', sent: true, request: { state: 'open' } },
         },
       ],
       nextCursor: null,
@@ -231,6 +234,7 @@ describe('the page of a project (docs/plan/84-projects.md, ПР6)', () => {
     const list = await screen.findByRole('list', { name: /Чаты проекта/ })
     expect(within(list).getByRole('link').textContent).toContain('Новое меню на зиму')
     expect(within(list).queryByText(kolos.name)).toBeNull()
+    expect(within(list).getByText('запрос на слияние открыт')).toBeTruthy()
   })
 
   it('adds the instructions in a window that counts the characters', async () => {

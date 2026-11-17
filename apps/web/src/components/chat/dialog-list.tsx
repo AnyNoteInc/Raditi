@@ -18,7 +18,7 @@ import { useTRPCClient } from '@/trpc/client'
 
 import { chatHref } from './chat-address'
 import { dialogGroups, listTime } from './chat-format'
-import { listText } from './chat-texts'
+import { listRepoHint, listText } from './chat-texts'
 import type { DialogListItem } from './chat-types'
 import { ArchiveDialog, archiveText } from './archive-dialog'
 import {
@@ -136,6 +136,8 @@ function DialogLink({
   showProject: boolean
 }) {
   const hint = item.answered || item.failed ? null : taskStatusListHint[item.status]
+  // The branch of a chat of a project (docs/plan/84-projects.md, §4.8).
+  const repoHint = listRepoHint(item.repo)
   // On the fill of the open dialog the cabinet's quiet colour falls under 4.5:1 in the dark scheme
   // (4.4:1): its time and second line take the colour of the text.
   const quiet = current ? 'text.primary' : 'text.secondary'
@@ -243,6 +245,12 @@ function DialogLink({
           <Typography component="span" variant="caption" color={quiet}>
             <span aria-hidden="true">· </span>
             {listText.inTelegram}
+          </Typography>
+        ) : null}
+        {repoHint ? (
+          <Typography component="span" variant="caption" color={quiet} data-dialog-repo="">
+            <span aria-hidden="true">· </span>
+            {repoHint}
           </Typography>
         ) : null}
       </Box>

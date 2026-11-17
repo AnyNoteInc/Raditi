@@ -2,6 +2,8 @@ import { Prisma, projectOwnedBy, type PrismaClient } from '@repo/db'
 import {
   projectNotFound,
   type ChatProject,
+  type PullRequestState,
+  type RepoBranchState,
   type ScheduledRunTrigger,
   type TaskStatus,
 } from '@repo/domain'
@@ -48,6 +50,21 @@ export interface DialogListItem {
    * the label stays without a link (Зп23).
    */
   schedule: DialogSchedule | null
+  /**
+   * The chat's branch in the repository of its project (docs/plan/84-projects.md, §4.8, ревью P9):
+   * the hint of its row; null — the chat changed nothing in the repository its project has now.
+   */
+  repo: DialogRepo | null
+}
+
+/** What the row of a chat of a project says of its branch (§4.8). */
+export interface DialogRepo {
+  /** `project_repo_branches.state` (ПР13). */
+  state: RepoBranchState
+  /** The branch at the client has the chat's head (or nothing of it stands): nothing waits. */
+  sent: boolean
+  /** The newest merge request of the branch, as core last read it (ПР14); null — none. */
+  request: { state: PullRequestState } | null
 }
 
 /** The scheduled task a chat is a run of (Зп43). */
@@ -146,6 +163,26 @@ const SCHEDULE = Prisma.sql`(SELECT json_build_object(
   WHERE r.task_id = t.id)`
 
 /**
+ * The branch of the chat `t` in the repository its project has now (§4.8): its state, whether its
+ * head — the newest standing turn with one, as `chatBranchHead` reads it — was sent, and the newest
+ * merge request of it. Lookups by key of the row alone: the primary key of the branch, the
+ * repository of the project, `task_turns (task_id, turn_no)` and the merge requests of one
+ * repository.
+ */
+const REPO = Prisma.sql`(SELECT json_build_object(
+    'state', b.state,
+    'sent', b.mirror_sha IS NOT DISTINCT FROM COALESCE((SELECT h.head_sha FROM task_turns h
+      WHERE h.task_id = t.id AND h.status = 'completed' AND h.rejected_at IS NULL
+        AND h.undone_at IS NULL AND h.head_sha IS NOT NULL
+      ORDER BY h.turn_no DESC LIMIT 1), b.mirror_sha),
+    'request', (SELECT json_build_object('state', r.state) FROM project_merge_requests r
+      WHERE r.project_repository_id = b.project_repository_id AND r.source_branch = b.branch
+      ORDER BY r.number DESC LIMIT 1))
+  FROM project_repo_branches b
+  JOIN project_repositories pr ON pr.id = b.project_repository_id AND pr.project_id = t.project_id
+  WHERE b.task_id = t.id)`
+
+/**
  * One page of the chats of the workspaces of `userId`, the latest changed first. A page per
  * workspace, then the page of them all: `tasks_workspace_updated_idx` gives each in its order, and
  * the rest of a workspace is not read — `workspace_id IN (…)` would read every chat it has and sort
@@ -187,7 +224,8 @@ export function dialogPageQuery(input: {
       t.pinned_at IS NOT NULL AS pinned, t.archived_at IS NOT NULL AS archived,
       EXISTS (SELECT 1 FROM chat_sessions c WHERE c.id = t.chat_session_id AND c.channel = 'telegram') AS telegram,
       ${PROJECT},
-      ${SCHEDULE} AS schedule
+      ${SCHEDULE} AS schedule,
+      ${REPO} AS repo
     FROM members m
     CROSS JOIN LATERAL (
       SELECT t.id, t.title, t.status, t.created_at, t.updated_at, t.pinned_at, t.archived_at,
@@ -247,6 +285,7 @@ interface DialogRow {
   project_id: string | null
   project_name: string | null
   schedule: DialogSchedule | null
+  repo: DialogRepo | null
   created_at: Date
   updated_at: Date
   updated_us: bigint
@@ -269,6 +308,7 @@ const itemOf = (row: DialogRow): DialogListItem => ({
       ? null
       : { id: row.project_id, name: row.project_name },
   schedule: row.schedule,
+  repo: row.repo,
 })
 
 /** What every query of the list says of the chat `t`. */
@@ -280,7 +320,8 @@ const ITEM = Prisma.sql`t.id, t.title, t.status::text AS status, t.created_at, t
   t.pinned_at IS NOT NULL AS pinned, t.archived_at IS NOT NULL AS archived,
   EXISTS (SELECT 1 FROM chat_sessions c WHERE c.id = t.chat_session_id AND c.channel = 'telegram') AS telegram,
   ${PROJECT},
-  ${SCHEDULE} AS schedule`
+  ${SCHEDULE} AS schedule,
+  ${REPO} AS repo`
 
 /** The chats of the user's workspaces. */
 const OF_USER = (userId: string) =>
