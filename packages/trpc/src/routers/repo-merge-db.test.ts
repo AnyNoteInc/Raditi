@@ -425,4 +425,23 @@ describe.skipIf(!databaseUrl)('PostgreSQL: merge and deploy cards (plan 84, 84.2
       ),
     ).toBe('REPO_CONFIRM_INVALID')
   })
+
+  it('keeps a workflow of GitHub that runs on workflow_dispatch: its kind fits the column', async () => {
+    const f = await fixture()
+    await db.projectDeployAction.create({
+      data: {
+        projectRepositoryId: f.projectRepositoryId,
+        ref: 'main',
+        sha: mainSha,
+        kind: 'workflow_dispatch',
+        providerActionId: '91',
+        name: 'Выкладка',
+        syncedAt: new Date(),
+      },
+    })
+    const kept = await db.projectDeployAction.findMany({
+      where: { projectRepositoryId: f.projectRepositoryId },
+    })
+    expect(kept.map((row) => row.kind)).toEqual(['workflow_dispatch'])
+  })
 })

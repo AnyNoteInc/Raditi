@@ -268,6 +268,56 @@ describe(
       assert.equal(refused.json[0].failure_reason, 'user_not_verified')
     })
 
+    it('makes a signed hook, names the files of include: local, retries and cancels a pipeline', async () => {
+      const user = fake.addUser(OWN_HOST, { username: 'hooks', token: `${token}-hooks` })
+      const auth = `${token}-hooks`
+      const project = await fake.addProject(OWN_HOST, {
+        path: 'stand/hooks',
+        files: { 'README.md': 'Хуки\n' },
+        members: [user],
+      })
+      const at = `/api/v4/projects/${project.id}`
+      const info = await call('GET', at, { auth })
+      assert.equal(info.json.permissions.project_access.access_level, 40)
+      const signing = `whsec_${randomBytes(32).toString('base64')}`
+      const made = await call('POST', `${at}/hooks`, {
+        auth,
+        body: {
+          url: 'https://raditi.example/api/webhooks/gitlab?r=x',
+          token: 't',
+          signing_token: signing,
+        },
+      })
+      assert.equal(made.status, 201)
+      assert.equal(made.json.signing_token_present, true)
+      const lint = await call('POST', `${at}/ci/lint`, {
+        auth,
+        body: { content: 'include:\n  - local: ci/build.yml\nstages:\n  - test\n' },
+      })
+      assert.deepEqual(
+        lint.json.includes.map((item) => [item.type, item.location]),
+        [['local', 'ci/build.yml']],
+      )
+      const sha = await fake.rerunPipeline(project, 'main')
+      const pipeline = project.pipelines.findLast((item) => item.sha === sha)
+      await call('POST', `${at}/pipelines/${pipeline.id}/cancel`, { auth })
+      assert.equal(
+        (await call('GET', `${at}/pipelines/${pipeline.id}`, { auth })).json.status,
+        'canceled',
+      )
+      await call('POST', `${at}/pipelines/${pipeline.id}/retry`, { auth })
+      assert.notEqual(
+        (await call('GET', `${at}/pipelines/${pipeline.id}`, { auth })).json.status,
+        'canceled',
+      )
+      assert.deepEqual(
+        fake.pipelineActions.map((item) => item.action),
+        ['cancel', 'retry'],
+      )
+      assert.equal((await call('DELETE', `${at}/hooks/${made.json.id}`, { auth })).status, 204)
+      assert.equal(fake.removedHooks.length, 1)
+    })
+
     it('signs in with PKCE and refuses another verifier', async () => {
       fake.addUser(COM_HOST, { username: 'oauth-klient', signsIn: true })
       const verifier = randomBytes(32).toString('base64url')

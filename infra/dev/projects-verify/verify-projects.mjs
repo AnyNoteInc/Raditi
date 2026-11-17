@@ -11,7 +11,7 @@
 //
 //   pnpm verify:projects [-- --no-build] [--keep] [--only E,F]
 import assert from 'node:assert/strict'
-import { randomBytes } from 'node:crypto'
+import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -43,6 +43,7 @@ import {
   S3_IMAGE,
   summaryTable,
 } from '../browser-task-verify/stand.mjs'
+import { startFakeGithub } from './fake-github.mjs'
 import { startFakeGitlab } from './fake-gitlab.mjs'
 import { PROGRAMS } from './programs.mjs'
 import { runScenarios } from './scenarios.mjs'
@@ -142,7 +143,18 @@ async function main(options, owned) {
   const redis = await startRedis(rt, names, directory)
   rt.setStage('ports')
   const ports = {}
-  for (const name of ['vault', 's3', 'web', 'core', 'mcp', 'llm', 'pages', 'zai', 'gitlab'])
+  for (const name of [
+    'vault',
+    's3',
+    'web',
+    'core',
+    'mcp',
+    'llm',
+    'pages',
+    'zai',
+    'gitlab',
+    'github',
+  ])
     ports[name] = await freeLoopbackPort()
   rt.setStage('PostgreSQL, Redis, S3 and OpenBao')
   const s3 = await startS3(rt, names, directory, ports.s3)
@@ -187,12 +199,38 @@ async function main(options, owned) {
     clientId: rt.secret(`stand-app-${randomBytes(8).toString('hex')}`),
     secret: rt.secret(randomBytes(24).toString('base64url')),
   }
+  // Raditi's GitHub App of the stand: its key (RS256) in a file of the run, as core reads it
+  // (GITHUB_APP_PRIVATE_KEY_FILE); the fake knows only the public half.
+  const appKeys = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const pem = appKeys.privateKey.export({ type: 'pkcs8', format: 'pem' })
+  rt.secret(pem.split('\n').slice(1, -2).join(''))
+  const keyFile = join(directory, 'github-app.pem')
+  await writeFile(keyFile, pem, { mode: 0o600 })
+  const githubApp = {
+    id: String(400_000 + Math.floor(Math.random() * 100_000)),
+    slug: 'raditi-stand',
+    clientId: rt.secret(`Iv23stand${randomBytes(6).toString('hex')}`),
+    clientSecret: rt.secret(randomBytes(20).toString('hex')),
+    webhookSecret: rt.secret(randomBytes(24).toString('base64url')),
+    publicKey: appKeys.publicKey,
+  }
+  const github = await startFakeGithub({
+    key: certificates.key,
+    cert: certificates.cert,
+    port: ports.github,
+    app: githubApp,
+    callbackUrl: `http://127.0.0.1:${ports.web}/api/git/github/callback`,
+    logFile: join(directory, 'logs', 'github.log'),
+  })
+  owned.github = github
   const gitlab = await startFakeGitlab({
     key: certificates.key,
     cert: certificates.cert,
     port: ports.gitlab,
     oauth,
     logFile: join(directory, 'logs', 'gitlab.log'),
+    // git of github.com comes on 443 through the same forwarder.
+    delegate: { host: 'github.com', handle: github.handle },
   })
   owned.gitlab = gitlab
   await rt.docker(forwarderArgs({ names, image: images.gateway, fakePort: ports.gitlab }))
@@ -206,6 +244,9 @@ async function main(options, owned) {
   })
   console.log(
     'PASS the fake GitLab on the stand port (127.0.0.1 and ::1) and on 443 of loopback through the forwarder, TLS of the stand CA',
+  )
+  console.log(
+    'PASS the fake GitHub on its own port (API, installation and sign-in pages), its git on 443 of loopback for github.com; the key of the App only in a file of the run',
   )
 
   const secrets = {
@@ -235,6 +276,15 @@ async function main(options, owned) {
       fakePort: ports.gitlab,
       oauth,
       confirmSecret: secrets.confirm,
+      github: {
+        origin: github.origin,
+        appId: githubApp.id,
+        keyFile,
+        slug: githubApp.slug,
+        clientId: githubApp.clientId,
+        clientSecret: githubApp.clientSecret,
+        webhookSecret: githubApp.webhookSecret,
+      },
     },
   }
 
@@ -331,6 +381,8 @@ async function main(options, owned) {
     ports,
     model,
     gitlab,
+    github,
+    githubApp,
     vault,
     processes,
     certificates,
@@ -396,6 +448,8 @@ async function diagnose(owned) {
     console.error(`--- move ${JSON.stringify(move)}`)
   for (const entry of (owned.gitlab?.requests ?? []).slice(-15))
     console.error(`--- gitlab ${JSON.stringify({ ...entry, body: undefined })}`)
+  for (const entry of (owned.github?.requests ?? []).slice(-15))
+    console.error(`--- github ${JSON.stringify(entry)}`)
 }
 
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
@@ -446,6 +500,7 @@ async function cleanup(owned) {
   for (const service of [...(owned.processes ?? [])].reverse()) await service.stop().catch(() => {})
   await owned.model?.close().catch(() => {})
   await owned.gitlab?.close().catch(() => {})
+  await owned.github?.close().catch(() => {})
   await owned.db?.$disconnect().catch(() => {})
   if (!owned.containers) return { left: [], platformLeft }
   const volumes = new Set()

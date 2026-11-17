@@ -850,7 +850,7 @@ model ProjectDeployAction {
   projectRepositoryId String   @map("project_repository_id") @db.Uuid
   ref                 String   @db.VarChar(255)
   sha                 String   @db.Char(40)
-  kind                String   @db.VarChar(16)
+  kind                String   @db.VarChar(24)
   providerActionId    String   @map("provider_action_id") @db.VarChar(200)
   name                String   @db.VarChar(200)
   syncedAt            DateTime @map("synced_at") @db.Timestamptz(6)

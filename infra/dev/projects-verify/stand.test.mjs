@@ -57,6 +57,15 @@ const context = {
     fakePort: 41012,
     oauth: { clientId: 'client', secret: 'client-secret' },
     confirmSecret: 'confirm-secret-of-the-stand',
+    github: {
+      origin: 'https://localhost:41013',
+      appId: '4242',
+      keyFile: '/tmp/run/github-app.pem',
+      slug: 'raditi-stand',
+      clientId: 'gh-client',
+      clientSecret: 'gh-client-secret',
+      webhookSecret: 'gh-webhook-secret',
+    },
   },
 }
 
@@ -76,6 +85,8 @@ describe('projects stand', () => {
     assert.deepEqual(scenariosToRun(['I']), ['S', 'A', 'K', 'E', 'F', 'H', 'I'])
     assert.deepEqual(scenariosToRun(['M']), ['S', 'A', 'M'])
     assert.deepEqual(scenariosToRun(['L']), ['S', 'A', 'K', 'E', 'L'])
+    assert.deepEqual(scenariosToRun(['P']), ['S', 'A', 'P'])
+    assert.deepEqual(scenariosToRun(['W']), ['S', 'A', 'K', 'E', 'F', 'H', 'I', 'W'])
   })
 
   it('builds under names of its own', () => {
@@ -96,6 +107,12 @@ describe('projects stand', () => {
     assert.equal(core.REPO_CONFIRM_SECRET, 'confirm-secret-of-the-stand')
     assert.equal(core.SANDBOX_DEPLOYMENT, 'projects-verify-0123abcd')
     assert.equal(core.NODE_ENV, 'production')
+    // Hooks of GitLab projects are made for an https APP_URL only; web keeps its own address.
+    assert.match(core.APP_URL, /^https:\/\/[^/]+$/)
+    assert.equal(core.GITHUB_APP_ID, '4242')
+    assert.equal(core.GITHUB_APP_PRIVATE_KEY_FILE, '/tmp/run/github-app.pem')
+    assert.equal(core.RADITI_FAKE_GITHUB_API_URL, 'https://localhost:41013')
+    assert.equal(core.GITHUB_APP_CLIENT_SECRET, undefined)
     const mcp = projectAppEnvironment('mcp', context)
     assert.equal(mcp.BROWSER_WORKER_URL, undefined)
     assert.equal(mcp.GIT_CA_FILE, undefined)
@@ -119,6 +136,12 @@ describe('projects stand', () => {
     assert.equal(web.GIT_CA_FILE, undefined)
     assert.equal(web.NODE_EXTRA_CA_CERTS, '/tmp/run/ca.pem')
     assert.equal(web.GITLAB_OAUTH_CLIENT_SECRET, 'client-secret')
+    assert.equal(web.APP_URL, 'http://127.0.0.1:41004')
+    assert.equal(web.GITHUB_APP_SLUG, 'raditi-stand')
+    assert.equal(web.GITHUB_APP_WEBHOOK_SECRET, 'gh-webhook-secret')
+    assert.equal(web.RADITI_FAKE_GITHUB_WEB_URL, 'https://localhost:41013')
+    assert.equal(web.RADITI_FAKE_GITHUB_API_URL, 'https://localhost:41013')
+    assert.equal(web.GITHUB_APP_PRIVATE_KEY_FILE, undefined)
   })
 
   it('forwards 443 of loopback only, read-only, without capabilities', () => {
