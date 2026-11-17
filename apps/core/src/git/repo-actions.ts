@@ -769,7 +769,8 @@ export class RepoActions {
    * jobs is a card of a deploy (ПР15): the card said so, it needs the right to merge into the main
    * branch, and it reruns only while its commit is the head of its branch — an older build would put
    * an older version out. A rerun of a build that still goes, or a cancel of one that ended, is
-   * REPO_RUN_GONE.
+   * REPO_RUN_GONE. Where the provider reruns a passed build only as a new one (GitLab, ПР36), the
+   * row keeps the new run's id (`runId`, `rerunOf`).
    */
   async #runAction(row: ActionRow, claims: RepoConfirmClaims): Promise<ActionResult> {
     const { prisma } = this.#o
@@ -801,6 +802,8 @@ export class RepoActions {
     try {
       const now = await provider.getRun(auth, info.ref, asked.id)
       if (now === null || now.sha !== claims.headSha || now.ref !== asked.ref) throw repoRunGone()
+      // The run that goes after the press: the same one, or a new one of the branch (ПР36).
+      let runId = asked.id
       if (claims.kind === 'cancel') {
         if (!ciStatusIsActive(now.status)) throw repoRunGone()
         await provider.cancelRun(auth, info.ref, asked.id)
@@ -813,7 +816,26 @@ export class RepoActions {
           if ((head === null && onDefault) || (head !== null && head !== now.sha))
             throw repoChanged()
         }
-        await provider.rerunRun(auth, info.ref, asked.id)
+        const rerun = await provider.rerunRun(auth, info.ref, asked.id)
+        // A new run is started by the name of the branch (ПР36): a commit that reached it after
+        // the read of its head is built unseen. Such a run is stopped at once (§4.6) and the card
+        // says the changes moved — on the main branch it may hold automatic deploy jobs.
+        if (rerun.sha !== undefined && rerun.sha !== now.sha) {
+          await provider.cancelRun(auth, info.ref, rerun.runId).catch((error: unknown) => {
+            this.#o.logger.warn(
+              `git.action ${row.id}: the run ${rerun.runId} of another commit was not stopped: ${isDomainError(error) ? error.code : 'unknown'}`,
+            )
+          })
+          this.#o.logger.warn(`git.action ${row.id}: the new run built ${rerun.sha}, cancelled`)
+          await enqueueOutbox(prisma, {
+            topic: 'git',
+            type: gitJobNames.poll,
+            payload: { projectRepositoryId: repo.id },
+            dedupeKey: `${gitJobNames.poll}:run:${row.id}`,
+          })
+          throw repoChanged()
+        }
+        runId = rerun.runId
       }
       await enqueueOutbox(prisma, {
         topic: 'git',
@@ -821,7 +843,14 @@ export class RepoActions {
         payload: { projectRepositoryId: repo.id },
         dedupeKey: `${gitJobNames.poll}:run:${row.id}`,
       })
-      return { json: { runId: asked.id, sha: now.sha, deploy } }
+      return {
+        json: {
+          runId,
+          ...(runId === asked.id ? {} : { rerunOf: asked.id }),
+          sha: now.sha,
+          deploy,
+        },
+      }
     } finally {
       await op.close()
     }

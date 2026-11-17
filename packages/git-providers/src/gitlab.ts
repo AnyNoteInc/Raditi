@@ -10,6 +10,10 @@ import {
   repoCloneUrl,
   repoNotMergeable,
   repoRunGone,
+  repoRunNotABranch,
+  repoRunNotAllowed,
+  repoRunNotStarted,
+  repoRunRefused,
   repoWebUrl,
   sameHostUrl,
   type CiJob,
@@ -17,6 +21,7 @@ import {
   type CiRun,
   type CiStatus,
   type DeployAction,
+  type DomainError,
   type GitAuth,
   type GitProvider,
   type GitProviderSupport,
@@ -106,6 +111,7 @@ const pipelineSchema = z.looseObject({
   id: z.number().int().positive(),
   sha: z.string(),
   ref: z.string().nullish(),
+  tag: z.boolean().nullish(),
   status: z.string(),
   name: z.string().nullish(),
   source: z.string().nullish(),
@@ -142,6 +148,30 @@ const lintSchema = z.looseObject({
  * checked on GitLab CE 19.5.6 (docs/plan/84-projects.md, §10, «Живая проверка GitLab CE»).
  */
 const STILL_CHECKING = new Set(['unchecked', 'checking', 'preparing', 'approvals_syncing'])
+
+/** A pipeline GitLab's retry leaves as it was: nothing of it failed or was canceled. */
+const PIPELINE_PASSED = new Set(['success', 'skipped', 'manual'])
+
+/**
+ * A new pipeline GitLab would not start answers 400 `{"message":{"base":[…]}}` (GitLab CE 19.5.6):
+ * «You do not have sufficient permission to run a pipeline on 'main'» for a protected branch of a
+ * Developer, «Reference not found» for a branch gone, and for settings that leave it without jobs
+ * «The resulting pipeline would have been empty» (`rules`) or «The pipeline did not run» (`workflow:
+ * rules`). Any other refusal is words for the client too, not a technical failure, but they do not
+ * say why: it may be an error in the settings or a limit of builds.
+ */
+function pipelineRefusal(response: GitHttpResponse): DomainError {
+  let text = ''
+  try {
+    text = JSON.stringify(JSON.parse(response.body.toString('utf8')))
+  } catch {
+    // Not JSON: a refusal without words of its own.
+  }
+  if (/sufficient permission/i.test(text)) return repoRunNotAllowed()
+  if (/reference not found/i.test(text)) return repoChanged()
+  if (/would have been empty|did not run/i.test(text)) return repoRunNotStarted()
+  return repoRunRefused()
+}
 
 /** A pipeline that is over. */
 const PIPELINE_OVER = new Set(['success', 'failed', 'canceled', 'skipped'])
@@ -543,6 +573,28 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
     return body.success && (body.data.message.source_branch ?? []).includes('does not exist')
   }
 
+  /** The head of `branch`; null — no such branch (a tag, the ref of a merge request). */
+  const headOf = async (
+    session: GitSession,
+    auth: GitAuth,
+    repo: RepoRef,
+    branch: string,
+  ): Promise<string | null> => {
+    // `search` matches parts of names; `^name$` anchors it, and the exact name is still compared
+    // (https://docs.gitlab.com/api/branches/#list-repository-branches). A tag is not found so.
+    const response = await request(session, 'GET', auth, repo, '/repository/branches', {
+      query: { per_page: '100', search: `^${branch}$` },
+    })
+    const parsed = z
+      .array(z.looseObject({ name: z.string(), commit: z.looseObject({ id: z.string() }) }))
+      .safeParse(jsonOf(response))
+    if (!parsed.success) throw gitProviderFailed('branches of an unexpected form')
+    const found = parsed.data.find((b) => b.name === branch)
+    if (found === undefined) return null
+    if (!shaPattern.test(found.commit.id)) throw gitProviderFailed('a branch without a head')
+    return found.commit.id
+  }
+
   const provider: GitProvider = {
     kind: 'gitlab',
     support,
@@ -605,19 +657,7 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
     },
 
     async branchHead(auth, repo, branch) {
-      // `search` matches parts of names; `^name$` anchors it, and the exact name is still compared
-      // (https://docs.gitlab.com/api/branches/#list-repository-branches).
-      const response = await request(fresh(), 'GET', auth, repo, '/repository/branches', {
-        query: { per_page: '100', search: `^${branch}$` },
-      })
-      const parsed = z
-        .array(z.looseObject({ name: z.string(), commit: z.looseObject({ id: z.string() }) }))
-        .safeParse(jsonOf(response))
-      if (!parsed.success) throw gitProviderFailed('branches of an unexpected form')
-      const found = parsed.data.find((b) => b.name === branch)
-      if (found === undefined) return null
-      if (!shaPattern.test(found.commit.id)) throw gitProviderFailed('a branch without a head')
-      return found.commit.id
+      return headOf(fresh(), auth, repo, branch)
     },
 
     async openPullRequest(auth, repo, input) {
@@ -810,20 +850,33 @@ export function createGitlabProvider(config: GitlabProviderConfig): GitProvider 
     },
 
     async rerunRun(auth, repo, runId) {
-      // GitLab's retry of a pipeline runs again only its failed and canceled jobs: of one that
-      // passed it runs nothing and answers 201 with it as it was (GitLab CE 19.5.6). What
-      // «Запустить снова» means for such a pipeline is the owner's (docs/plan/84-projects.md, §10,
-      // «Живая проверка GitLab CE»): retrying its jobs one by one would run a deploy job a person
-      // had played, without the card of a deploy.
-      jsonOf(
-        await request(
-          fresh(),
-          'POST',
-          auth,
-          repo,
-          `/pipelines/${numericId(runId, 'pipeline')}/retry`,
-        ),
-      )
+      const id = numericId(runId, 'pipeline')
+      const session = fresh()
+      const retry = await request(session, 'POST', auth, repo, `/pipelines/${id}/retry`)
+      // 403 — the one connected may not run this pipeline: a protected branch of a Developer
+      // (GitLab CE 19.5.6). Not a lost access: the connection stays as it is.
+      if (retry.status === 403) throw repoRunNotAllowed()
+      const retried = pipelineSchema.safeParse(jsonOf(retry))
+      if (!retried.success) throw gitProviderFailed('a pipeline of an unexpected form')
+      // GitLab's retry runs again only the failed and canceled jobs: a pipeline that passed it
+      // answers 201 as it was and runs nothing (GitLab CE 19.5.6). «Запустить снова» of such a
+      // pipeline is a new pipeline of its branch (the owner's answer of 17.11.2026, ПР36) — only
+      // while the head of the branch is its commit, with the ref alone in the body.
+      if (!PIPELINE_PASSED.has(retried.data.status)) return { runId: id }
+      const { ref, sha } = retried.data
+      // A tag may share its name with a branch: GitLab says which it is.
+      if (!ref || retried.data.tag === true) throw repoRunNotABranch()
+      const head = await headOf(session, auth, repo, ref)
+      if (head === null) throw repoRunNotABranch()
+      if (head !== sha) throw repoChanged()
+      const created = await request(session, 'POST', auth, repo, '/pipeline', { body: { ref } })
+      if (created.status === 400) throw pipelineRefusal(created)
+      if (created.status === 403) throw repoRunNotAllowed()
+      const pipeline = pipelineSchema.safeParse(jsonOf(created))
+      if (!pipeline.success) throw gitProviderFailed('a pipeline of an unexpected form')
+      // GitLab starts it by the name of the branch: a commit that came between the read of the
+      // head and the start is built. The caller compares the commit and stops such a pipeline.
+      return { runId: String(pipeline.data.id), sha: pipeline.data.sha }
     },
 
     async cancelRun(auth, repo, runId) {

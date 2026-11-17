@@ -28,6 +28,9 @@ const projectRules: readonly [Method, RegExp][] = [
   ['GET', new RegExp(`^/pipelines/${N}$`)],
   ['GET', new RegExp(`^/pipelines/${N}/jobs$`)],
   ['POST', new RegExp(`^/pipelines/${N}/(retry|cancel)$`)],
+  // «Запустить снова» of a pipeline that passed — a new pipeline of its branch (ПР36): its body is
+  // `{ ref }` and nothing else, no query (gitlabBodyAllowed) — no variables, no inputs.
+  ['POST', /^\/pipeline$/],
   ['GET', new RegExp(`^/jobs/${N}/trace$`)],
   ['POST', new RegExp(`^/jobs/${N}/play$`)],
   ['POST', /^\/ci\/lint$/],
@@ -52,11 +55,22 @@ export function gitlabPathAllowed(
   const prefix = `/projects/${projectKey}`
   if (!apiPath.startsWith(prefix)) return false
   const rest = apiPath.slice(prefix.length)
+  if (method === 'POST' && rest === '/pipeline' && [...query.keys()].length > 0) return false
   return projectRules.some(([m, pattern]) => m === method && pattern.test(rest))
 }
 
-/** The one body a PUT of a merge request may carry: closing it. */
+/**
+ * The one body a PUT of a merge request may carry: closing it. The one body a new pipeline may
+ * carry: its ref — the client's words never reach the variables or inputs of a build (ПР36).
+ */
 export function gitlabBodyAllowed(method: Method, apiPath: string, body: unknown): boolean {
+  if (method === 'POST' && apiPath.endsWith('/pipeline'))
+    return (
+      typeof body === 'object' &&
+      body !== null &&
+      Object.keys(body).length === 1 &&
+      typeof (body as Record<string, unknown>).ref === 'string'
+    )
   if (method !== 'PUT' || apiPath.endsWith('/merge')) return true
   return (
     typeof body === 'object' &&
