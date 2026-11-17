@@ -2,6 +2,8 @@ import { taskRewoundLabel } from '@repo/domain/tasks/client-feed-labels'
 
 import { plural } from '@/lib/plural'
 
+import type { DialogListItem } from './chat-types'
+
 import { MISSING_DOCUMENT } from '@repo/doc-render/markdown'
 
 // What the screens of a dialog say beyond the catalogue of the feed
@@ -384,7 +386,32 @@ export const listText = Object.freeze({
   more: 'Показать ещё',
   untitled: 'Чат без названия',
   loading: 'Загружаем чаты',
+  /**
+   * The branch of a chat of a project in its row (docs/plan/84-projects.md, §4.8, ревью P9): what
+   * waits for the client first, then its merge request, then where the branch stands.
+   */
+  repo: Object.freeze({
+    unsent: 'изменения не отправлены',
+    requestOpen: 'запрос на слияние открыт',
+    requestDraft: 'черновик запроса на слияние',
+    merged: 'принято в основную ветку',
+    requestClosed: 'запрос на слияние закрыт',
+    pushed: 'отправлено в ветку',
+  }),
 })
+
+/** The hint of a row of a chat of a project about its branch (§4.8); null — nothing to say. */
+export function listRepoHint(repo: DialogListItem['repo']): string | null {
+  if (repo === null) return null
+  const words = listText.repo
+  if (!repo.sent) return words.unsent
+  const request = repo.request?.state
+  if (request === 'open') return words.requestOpen
+  if (request === 'draft') return words.requestDraft
+  if (request === 'merged' || repo.state === 'merged') return words.merged
+  if (request === 'closed' || repo.state === 'closed') return words.requestClosed
+  return repo.state === 'pushed' ? words.pushed : null
+}
 
 /**
  * Scheduled tasks in the chats (docs/plan/82-scheduled-tasks.md, Зп35, Зп43): the label of a chat

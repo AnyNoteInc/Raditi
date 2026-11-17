@@ -4,12 +4,17 @@ import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { billingFixtures } from '@repo/billing/testing'
 import {
+  applyPageVersion,
   bindAttachments,
   createAttachment,
   createPrismaClient,
   insertFeedEvent,
   markAttachmentReady,
   openBrowserSession,
+  reserveMemoryChange,
+  reservePageChange,
+  reservePagePublication,
+  reserveScheduleChange,
   upsertBrowserCheckpoint,
   type PrismaClient,
 } from '@repo/db'
@@ -26,7 +31,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { sampleDriverId } from '../testing/ids.ts'
 import { TaskEventTurnJournal } from '../turns/turn-journal.ts'
 import { LivePasses } from './live-passes.ts'
+import { MEMORY_OUTSIDE_EVENT, MemoryChanges } from './memory-changes.ts'
+import { PageChanges } from './page-changes.ts'
 import { CHARGE_LATER_EVENT, PassSettlement } from './pass-settlement.ts'
+import { ScheduleChanges } from './schedule-changes.ts'
 import { ORPHAN_PREPARING_MS, TaskSweep } from './task-sweep.ts'
 
 // The sweep reads every task of the database: only on a disposable one (RADITI_GATEWAY_DB_TESTS).
@@ -709,6 +717,280 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       expect(row!.payload).toMatchObject({
         message: 'Готово: переписка сжата. Агент продолжит с её кратким пересказом.',
         next: 'awaiting_user',
+      })
+    })
+
+    // docs/plan/84-projects.md, §10 «Открытое после ревью»: a turn whose end recovery reached
+    // applies what a live end applies — pages, scheduled tasks, memory — with the same checks.
+    describe('the changes of a turn whose end recovery reached', () => {
+      const VALUE = 'синтетическое-значение-переменной'
+      const turnKey = `sk-rdt-${'Q'.repeat(43)}`
+      const repository = {
+        projectId: randomUUID(),
+        projectRepositoryId: randomUUID(),
+        provider: 'gitlab',
+        baseSha: 'a'.repeat(40),
+        sandboxBaseSha: 'b'.repeat(40),
+        branch: 'raditi/chat-1',
+        mode: 'write',
+        expectedRef: null,
+        bundleSha256: 'c'.repeat(64),
+        bundleBytes: 100,
+        hiddenPaths: [],
+      }
+      const recovered = { baseSha: 'a'.repeat(40), candidateHeadSha: 'd'.repeat(40) }
+      const kinds = {
+        checkpoint_recovered: {
+          phases: [['checkpointing'], ['checkpoint_recovered']],
+          repository: undefined,
+        },
+        publication_recovered: {
+          phases: [
+            ['checkpointing'],
+            ['checkpointed', recovered],
+            ['destroyed', recovered],
+            ['publishing', recovered],
+            ['publication_recovered', recovered],
+          ],
+          repository,
+        },
+      } as const
+
+      async function recoveredTurn(
+        kind: keyof typeof kinds,
+        tools: string[] = ['raditi_memory_save'],
+      ) {
+        const events: AgentEvent[] = [
+          { type: 'started', nativeSessionId: 'native1' },
+          ...tools.map((tool) => ({ type: 'tool_call' as const, tool, ok: true })),
+          { type: 'message', text: JSON.stringify(turnResult) },
+          { type: 'completed' },
+        ]
+        const { phases, repository: withRepository } = kinds[kind]
+        const created = await closedTurn(
+          [
+            ['running'],
+            ['output', { cursor: { stdout: 10, stderr: 0 }, events }],
+            ...(phases as unknown as Array<[TurnEvidence['phase'], object?]>),
+          ],
+          undefined,
+          withRepository,
+        )
+        // The chat of its author: only he manages the pages and the memory of it.
+        await db.task.update({
+          where: { id: created.taskId },
+          data: { createdById: created.userId },
+        })
+        return created
+      }
+
+      async function reserveAll(taskId: string, workspaceId: string, userId: string) {
+        const scope = { workspaceId, userId, projectId: null }
+        for (const text of ['Цены — только из прайса', `Склад: ${VALUE}`])
+          await reserveMemoryChange(db, {
+            taskId,
+            turnNo: 1,
+            scope,
+            change: { kind: 'save', entryKind: 'fact', text },
+          })
+        // A key of a turn the reservation let through (the role checks its form too): the end of
+        // a recovered turn, which no longer holds the key, refuses it by the form.
+        await db.memoryReservation.create({
+          data: {
+            id: randomUUID(),
+            workspaceId,
+            taskId,
+            turnNo: 1,
+            kind: 'save',
+            payload: { projectId: null, kind: 'fact', text: `Адрес: ${turnKey}` },
+          },
+        })
+        for (const instructions of ['Откройте главную.', `Войдите с паролем ${VALUE}.`])
+          await reserveScheduleChange(db, {
+            workspaceId,
+            taskId,
+            turnNo: 1,
+            now: new Date(),
+            change: {
+              kind: 'create',
+              name: instructions === 'Откройте главную.' ? 'Проверка сайта' : 'Вход',
+              instructions,
+              triggers: [{ kind: 'daily', time: '09:00' }],
+            },
+          })
+        // A page the turn published, renamed and then given a title with a value.
+        const home = await reservePagePublication(db, {
+          workspaceId,
+          taskId,
+          turnNo: 1,
+          title: 'Главная',
+          target: { fileName: `${randomUUID()}.html` },
+        })
+        const publication = await db.pageReservation.findFirstOrThrow({
+          where: { pageId: home.pageId, outcome: null },
+        })
+        await applyPageVersion(db, {
+          pageId: home.pageId,
+          bytes: new TextEncoder().encode('<p>Главная</p>'),
+          source: 'outbox',
+          reservationId: publication.id,
+        })
+        await reservePageChange(db, {
+          workspaceId,
+          taskId,
+          turnNo: 1,
+          change: { kind: 'update', pageId: home.pageId, expectedVersion: 1, title: 'О нас' },
+        })
+        await reservePageChange(db, {
+          workspaceId,
+          taskId,
+          turnNo: 1,
+          change: { kind: 'update', pageId: home.pageId, expectedVersion: 1, title: VALUE },
+        })
+        return home
+      }
+
+      const changesSweep = (siteValues: () => Promise<string[]>) =>
+        new TaskSweep({
+          db,
+          settlement: new PassSettlement({ db, logger: quiet }),
+          live: new LivePasses(),
+          journal: new TaskEventTurnJournal(db),
+          drivers: { has: () => true, get: () => driver } as unknown as AgentDriverRegistry,
+          queue,
+          browser: { verify: vi.fn(async () => false), sweep: vi.fn() } as never,
+          memory: new MemoryChanges({ db, logger: quiet }),
+          schedules: new ScheduleChanges({ db, logger: quiet }),
+          pageChanges: new PageChanges({ db, logger: quiet }),
+          values: { siteValues: vi.fn(siteValues) },
+          logger: quiet,
+        })
+
+      const feed = async (taskId: string) =>
+        (
+          await db.taskEvent.findMany({
+            where: { taskId, type: { startsWith: 'feed.' } },
+            orderBy: { id: 'asc' },
+            select: { type: true, payload: true },
+          })
+        ).map((row) => [row.type, row.payload] as const)
+
+      async function removeChanges(workspaceId: string) {
+        await db.memoryEntry.deleteMany({ where: { workspaceId } })
+        await db.scheduledTask.deleteMany({ where: { workspaceId } })
+        await db.pageTree.deleteMany({ where: { workspaceId } })
+      }
+
+      for (const kind of ['checkpoint_recovered', 'publication_recovered'] as const)
+        it(`applies them after the answer of a turn ending ${kind}, refusing a value and a key`, async () => {
+          const { taskId, task, userId } = await recoveredTurn(kind)
+          try {
+            const home = await reserveAll(taskId, task.workspaceId, userId)
+
+            expect(await changesSweep(async () => [VALUE]).settleOrphans()).toBe(1)
+
+            const rows = await feed(taskId)
+            const types = rows.map(([type]) => type)
+            // After the answer, in the order of the live end: pages, scheduled tasks, memory.
+            expect(types.indexOf('feed.result')).toBeLessThan(types.indexOf('feed.page_change'))
+            expect(types.indexOf('feed.page_change')).toBeLessThan(
+              types.indexOf('feed.schedule_change'),
+            )
+            expect(types.indexOf('feed.schedule_change')).toBeLessThan(
+              types.indexOf('feed.memory_change'),
+            )
+            expect(rows.filter(([type]) => type === 'feed.page_change')).toEqual([
+              [
+                'feed.page_change',
+                expect.objectContaining({ pageId: home.pageId, title: 'О нас', change: 'updated' }),
+              ],
+            ])
+            expect(rows.filter(([type]) => type === 'feed.page_left')).toEqual([
+              ['feed.page_left', { v: 1, pageId: home.pageId, reason: 'refused', of: 'change' }],
+            ])
+            expect(
+              await db.page.findUniqueOrThrow({
+                where: { id: home.pageId },
+                select: { title: true },
+              }),
+            ).toEqual({ title: 'О нас' })
+            // The scheduled task is made; the one with the value is refused and told.
+            expect(
+              (
+                await db.scheduledTask.findMany({
+                  where: { sourceTaskId: taskId },
+                  select: { name: true },
+                })
+              ).map(({ name }) => name),
+            ).toEqual(['Проверка сайта'])
+            expect(rows.filter(([type]) => type === 'feed.schedule_left')).toHaveLength(1)
+            // The note is kept, only «Предложено»: the client's words were not read again.
+            expect(
+              await db.memoryEntry.findMany({
+                where: { sourceTaskId: taskId },
+                select: { text: true, status: true },
+              }),
+            ).toEqual([{ text: 'Цены — только из прайса', status: 'proposed' }])
+            expect(rows.filter(([type]) => type.startsWith('feed.memory_'))).toEqual([
+              [
+                'feed.memory_change',
+                expect.objectContaining({ action: 'proposed', text: 'Цены — только из прайса' }),
+              ],
+              ['feed.memory_left', { v: 1, action: 'save', reason: 'secret' }],
+              ['feed.memory_left', { v: 1, action: 'save', reason: 'secret' }],
+            ])
+            // Nothing of the turn is left open for the sweeps to close as failed.
+            expect(await db.memoryReservation.count({ where: { taskId, outcome: null } })).toBe(0)
+            expect(await db.scheduleReservation.count({ where: { taskId, outcome: null } })).toBe(0)
+            expect(await db.pageReservation.count({ where: { taskId, outcome: null } })).toBe(0)
+            // Nothing outside came into this turn: no mark that keeps later notes proposed.
+            expect(
+              await db.taskEvent.count({ where: { taskId, type: MEMORY_OUTSIDE_EVENT } }),
+            ).toBe(0)
+          } finally {
+            await removeChanges(task.workspaceId)
+          }
+        })
+
+      it('marks the chat when its recovered turn took in something from outside', async () => {
+        const { taskId, task, userId } = await recoveredTurn('checkpoint_recovered', ['webfetch'])
+        try {
+          await reserveAll(taskId, task.workspaceId, userId)
+          expect(await changesSweep(async () => []).settleOrphans()).toBe(1)
+          expect(await db.taskEvent.count({ where: { taskId, type: MEMORY_OUTSIDE_EVENT } })).toBe(
+            1,
+          )
+        } finally {
+          await removeChanges(task.workspaceId)
+        }
+      })
+
+      it('without the values, closes the memory failed and told, and leaves pages and tasks to their sweeps', async () => {
+        const { taskId, task, userId } = await recoveredTurn('publication_recovered')
+        try {
+          await reserveAll(taskId, task.workspaceId, userId)
+
+          expect(
+            await changesSweep(async () => {
+              throw new Error('Vault is away')
+            }).settleOrphans(),
+          ).toBe(1)
+
+          expect(await db.taskEvent.count({ where: { taskId, type: 'feed.result' } })).toBe(1)
+          expect(await db.memoryEntry.count({ where: { sourceTaskId: taskId } })).toBe(0)
+          expect((await feed(taskId)).filter(([type]) => type === 'feed.memory_left')).toEqual(
+            Array.from({ length: 3 }, () => [
+              'feed.memory_left',
+              { v: 1, action: 'save', reason: 'failed' },
+            ]),
+          )
+          // Unchecked, never applied: their own sweeps close and tell them.
+          expect(await db.scheduledTask.count({ where: { sourceTaskId: taskId } })).toBe(0)
+          expect(await db.scheduleReservation.count({ where: { taskId, outcome: null } })).toBe(2)
+          expect(await db.pageReservation.count({ where: { taskId, outcome: null } })).toBe(2)
+        } finally {
+          await removeChanges(task.workspaceId)
+        }
       })
     })
 

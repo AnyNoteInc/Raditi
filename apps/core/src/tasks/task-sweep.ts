@@ -20,17 +20,21 @@ import {
   agentTurnRetryJobId,
   feedEndedSiteOf,
   isDomainError,
+  memoryPassEvidence,
   publicationLimits,
   scheduleLimits,
   type FeedCreditsState,
   type JobQueue,
+  type MemoryPassEvidence,
   type ObjectStorage,
+  type TurnCredentialSource,
   type TurnPlan,
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
 
 import { readBrowserTaskFacts } from '../browser/browser-facts.ts'
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
+import { recoveredTextRefusal } from '../turns/text-refusal.ts'
 import { readTurnResult } from '../turns/turn-result.ts'
 import {
   replayedTurn,
@@ -42,6 +46,7 @@ import type { LivePasses } from './live-passes.ts'
 import type { PageMetrics } from '../pages/page-metrics.ts'
 import type { MemoryChanges } from './memory-changes.ts'
 import type { ProjectTrash } from '../projects/project-trash.ts'
+import type { PageChanges } from './page-changes.ts'
 import type { PagePublications } from './page-publications.ts'
 import type { RepoChanges } from './repo-turns.ts'
 import type { ScheduleChanges } from './schedule-changes.ts'
@@ -80,6 +85,14 @@ interface RecoveredPublication {
   headSha: string
 }
 
+/** What the end of a completed turn the sweep reached needs of its changes, from its journal. */
+interface SweptTurn {
+  /** What the turn took in from outside, by the events its journal kept (ПР18). */
+  evidence: MemoryPassEvidence
+  /** The plan of the turn had a repository. */
+  repository: boolean
+}
+
 export interface TaskSweepDependencies {
   db: PrismaClient
   settlement: PassSettlement
@@ -114,12 +127,24 @@ export interface TaskSweepDependencies {
    * The memory of chats (docs/plan/84-projects.md, ПР18): a change no end of a turn applied is
    * closed failed a day on. Absent — not swept.
    */
-  memory?: Pick<MemoryChanges, 'sweep'> | null
+  memory?: Pick<MemoryChanges, 'sweep' | 'apply'> | null
   /**
    * The changes of the scheduled tasks no end of a turn reached (docs/plan/82-scheduled-tasks.md,
    * Зп33): closed and told once the turn is over. Absent — not swept.
    */
-  schedules?: Pick<ScheduleChanges, 'sweep'> | null
+  schedules?: Pick<ScheduleChanges, 'sweep' | 'apply'> | null
+  /**
+   * The changes of pages a completed turn reserved (docs/plan/73-pages-sites.md, Дер23), applied
+   * when the sweep ends its pass. Absent — they are left for the sweep of pages.
+   */
+  pageChanges?: Pick<PageChanges, 'apply'> | null
+  /**
+   * The current values of the variables of a chat's workspace (БП4): what the changes of a turn
+   * the sweep ends are refused for. Absent or unanswered — the memory of that turn is closed
+   * failed, and its pages and scheduled tasks wait for their sweeps, as after a live end without
+   * Vault.
+   */
+  values?: Pick<TurnCredentialSource, 'siteValues'> | null
   /**
    * The repository of a chat whose turn recovery published (docs/plan/84-projects.md, ПР12): the
    * card «Изменения в ветке» of the commit recovery put under the chat's ref, its diff read from
@@ -255,13 +280,56 @@ export class TaskSweep {
       return answer
     }
     if (!assignment?.finishedAt) return null
-    const { ending, published } = await this.#endingOf(assignment)
+    const { ending, published, swept } = await this.#endingOf(assignment)
     // As the live handler: what a task in the browser saved is read first (Б23).
     if (task.needs_browser) await this.deps.browser?.verify(task.id)
     const answer = await this.deps.settlement.settle(ref, ending)
+    if (answer === 'moved' && ending.kind === 'completed' && swept)
+      await this.#applyChanges(assignment, ending.turn, swept)
     if (answer === 'moved' && ending.kind === 'completed' && published)
       await this.#tellPublished(task.id, ending.turn, published)
     return answer
+  }
+
+  /**
+   * What the live end of a completed pass applies after its answer, for a turn whose end only the
+   * sweep reached — recovery finished it, or its handler died after the journal recorded it
+   * (docs/plan/84-projects.md, §10): the changes of pages, of scheduled tasks and of the memory, in
+   * the order of PassRunner and with its checks. The keys of the turn are gone with its attempt, so
+   * any text in their form is refused; the values are read again. The client's words of the pass
+   * are not read again either: every note of the agent is only «Предложено», which the client
+   * saves himself. Never throws.
+   */
+  async #applyChanges(
+    assignment: { taskId: string; sessionId: string; turnNo: number; firstEpoch: number },
+    turn: number,
+    swept: SweptTurn,
+  ): Promise<void> {
+    const { taskId } = assignment
+    let refusesText: ReturnType<typeof recoveredTextRefusal> | null = null
+    try {
+      const values = this.deps.values?.siteValues
+        ? await this.deps.values.siteValues({
+            taskId,
+            sessionId: assignment.sessionId,
+            turn: assignment.turnNo,
+            epoch: assignment.firstEpoch,
+          })
+        : null
+      if (values) refusesText = recoveredTextRefusal(values)
+    } catch (error) {
+      this.#warn(`task sweep values task=${taskId}`, logged(error))
+    }
+    if (refusesText) {
+      await this.deps.pageChanges?.apply(taskId, turn, refusesText)
+      await this.deps.schedules?.apply(taskId, turn, refusesText)
+    }
+    await this.deps.memory?.apply(taskId, turn, refusesText, {
+      // Not read again: a note of the turn is never active at once (passMayRemember).
+      remember: false,
+      evidence: swept.evidence,
+      repository: swept.repository,
+    })
   }
 
   /**
@@ -305,7 +373,7 @@ export class TaskSweep {
     firstEpoch: number
     leaseEpoch: number
     plan: unknown
-  }): Promise<{ ending: PassEnding; published?: RecoveredPublication }> {
+  }): Promise<{ ending: PassEnding; published?: RecoveredPublication; swept?: SweptTurn }> {
     const turn = assignment.turnNo
     const technical = { ending: { kind: 'failed', turn } as PassEnding }
     let entries: JournaledEvidence[]
@@ -335,10 +403,14 @@ export class TaskSweep {
     const raw = assignment.plan
     if (plan === null && typeof raw === 'object' && raw !== null && 'workspace' in raw)
       return technical
+    const swept: SweptTurn = {
+      evidence: memoryPassEvidence(replayed.events),
+      repository: Boolean(plan?.repository),
+    }
     if (replayed.lastPhase === 'completed') {
       const result = entries.findLast((entry) => entry.phase === 'completed')?.result
       if (!result) return technical
-      return { ending: { kind: 'completed', turn, result } }
+      return { ending: { kind: 'completed', turn, result }, swept }
     }
     // Recovery finished the checkpoint of the turn (Б6), or the publication of its commit into the
     // mirror (ПР12), but does not keep its result: it is read from the output.
@@ -373,8 +445,9 @@ export class TaskSweep {
         return {
           ending: { ...ending, repoHead: { baseSha, headSha } },
           published: { repository: plan.repository, baseSha, headSha },
+          swept,
         }
-      return { ending }
+      return { ending, swept }
     }
     if (replayed.lastPhase === 'failed' && replayed.reason)
       return { ending: { kind: 'failed', turn, journalReason: replayed.reason } }

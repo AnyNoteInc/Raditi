@@ -21,6 +21,7 @@ function dialog(id: string, status: DialogListItem['status'], createdAt: string)
     telegram: false,
     project: null,
     schedule: null,
+    repo: null,
   }
 }
 

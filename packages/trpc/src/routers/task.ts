@@ -5,7 +5,9 @@ import {
   FEED_REQUEST_TEXT_LIMIT,
   feedCursorSchema,
   feedTaskHeadSchema,
+  pullRequestStates,
   reasoningEffortSchema,
+  repoBranchStates,
   scheduledRunTriggers,
   serverCommandIds,
   taskStatuses,
@@ -133,6 +135,14 @@ const dialogListItemOutput = z.strictObject({
   telegram: z.boolean(),
   /** The chat is a run of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп43). */
   schedule: scheduleLabelOutput.nullable(),
+  /** The chat's branch in the repository of its project (docs/plan/84-projects.md, §4.8). */
+  repo: z
+    .strictObject({
+      state: z.enum(repoBranchStates),
+      sent: z.boolean(),
+      request: z.strictObject({ state: z.enum(pullRequestStates) }).nullable(),
+    })
+    .nullable(),
 })
 
 const credits = z.number().int().nonnegative()
