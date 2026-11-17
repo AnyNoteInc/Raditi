@@ -641,6 +641,19 @@ model ProjectRepository {
   ciPaths        Json?     @map("ci_paths")
   /// When `git.poll` last read its builds and merge requests (claimed by CAS, slice 84.21).
   ciPolledAt     DateTime? @map("ci_polled_at") @db.Timestamptz(6)
+  /// The hook core made on a GitLab project (slice 84.26, ПР17): its id at the provider.
+  hookId         String?   @map("hook_id") @db.VarChar(40)
+  /// active, failed, not_allowed (repoHookStates, CHECK); NULL — none tried yet.
+  hookState      String?   @map("hook_state") @db.VarChar(12)
+  /// GitLab said it signs the deliveries (`webhook-signature`): web refuses one without it.
+  hookSigned     Boolean   @default(false) @map("hook_signed")
+  /// The nonce the hook's secrets are derived from with REPO_CONFIRM_SECRET; never a secret itself.
+  hookNonce      String?   @map("hook_nonce") @db.Char(32)
+  /// The id of the root secret of the hook: another one after a rotation, and core makes it again.
+  hookKeyId      String?   @map("hook_key_id") @db.Char(16)
+  hookCheckedAt  DateTime? @map("hook_checked_at") @db.Timestamptz(6)
+  /// The SHA of the main branch whose paths core keeps for `@` (ПР24, raditi-artifacts).
+  treeSha        String?   @map("tree_sha") @db.Char(40)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -657,6 +670,7 @@ model ProjectRepository {
 
   @@index([workspaceId])
   @@index([connectionId])
+  @@index([provider, host, providerRepoId], map: "project_repositories_provider_repo_idx")
   @@map("project_repositories")
 }
 
@@ -816,6 +830,19 @@ model ProjectCiLog {
   @@id([projectRepositoryId, providerJobId])
   @@index([expiresAt])
   @@map("project_ci_logs")
+}
+
+/// A delivery of a webhook of a repository web took (docs/plan/84-projects.md, ПР17; slice 84.26):
+/// a repeat of the same id enqueues nothing. Removed after 7 days by the tick of `git.poll`. The
+/// body is never kept.
+model GitWebhookDelivery {
+  provider   String   @db.VarChar(8)
+  deliveryId String   @map("delivery_id") @db.VarChar(100)
+  receivedAt DateTime @default(now()) @map("received_at") @db.Timestamptz(6)
+
+  @@id([provider, deliveryId])
+  @@index([receivedAt])
+  @@map("git_webhook_deliveries")
 }
 
 /// The manual jobs (and, with Э10, `workflow_dispatch`) of the head of the default branch (ПР15, ПР17).

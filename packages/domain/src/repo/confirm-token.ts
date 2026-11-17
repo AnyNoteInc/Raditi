@@ -15,37 +15,64 @@ export const REPO_CONFIRM_TTL_SECONDS = 10 * 60
 const sha = z.string().regex(/^[0-9a-f]{40}$/)
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/)
 
-export const repoConfirmKinds = ['push', 'merge', 'deploy', 'ci_change'] as const
+/**
+ * `rerun` and `cancel` — a build (Э10, 84.26; ПР17): the run, its ref and its commit; a rerun of a
+ * build of the main branch or of one with deploy jobs is a card of a deploy (`run.deploy`, ПР15).
+ * `revert` — «Отменить» of a merged request (ПР15): its number, the main branch and the merge commit.
+ */
+export const repoConfirmKinds = [
+  'push',
+  'merge',
+  'deploy',
+  'ci_change',
+  'rerun',
+  'cancel',
+  'revert',
+] as const
 export type RepoConfirmKind = (typeof repoConfirmKinds)[number]
 
-export const repoConfirmClaimsSchema = z.strictObject({
-  /** `push` with `opensMergeRequest` — the first push and the merge request (ПР14). */
-  kind: z.enum(repoConfirmKinds),
-  userId: z.uuid(),
-  projectId: z.uuid(),
-  projectRepositoryId: z.uuid(),
-  taskId: z.uuid().nullable(),
-  /** The merge request (merge). */
-  number: z.number().int().positive().nullable(),
-  /** The branch the push goes to (push) or the target of the merge request (merge). */
-  targetBranch: z.string().min(1).max(255).nullable(),
-  /** push: the head of the chat in the mirror; deploy: the head of the main branch. */
-  headSha: sha,
-  /** push: the diff of the card the client was shown. */
-  diffSha256: sha256.nullable(),
-  ciDiffSha256: sha256.nullable(),
-  opensMergeRequest: z.boolean(),
-  deploy: z
-    .strictObject({
-      kind: z.enum(['manual_job', 'workflow_dispatch']),
-      id: z.string().min(1).max(200),
-      ref: z.string().min(1).max(255),
-    })
-    .nullable(),
-  nonce: z.string().regex(/^[0-9a-f]{32}$/),
-  /** Unix seconds. */
-  expiresAt: z.number().int().positive(),
+const runClaim = z.strictObject({
+  id: z.string().regex(/^[1-9][0-9]{0,19}$/),
+  ref: z.string().min(1).max(255),
+  /** The card of a deploy: the main branch, deploy jobs or a workflow started by hand (ПР15). */
+  deploy: z.boolean(),
 })
+
+export const repoConfirmClaimsSchema = z
+  .strictObject({
+    /** `push` with `opensMergeRequest` — the first push and the merge request (ПР14). */
+    kind: z.enum(repoConfirmKinds),
+    userId: z.uuid(),
+    projectId: z.uuid(),
+    projectRepositoryId: z.uuid(),
+    taskId: z.uuid().nullable(),
+    /** The merge request (merge). */
+    number: z.number().int().positive().nullable(),
+    /** The branch the push goes to (push) or the target of the merge request (merge). */
+    targetBranch: z.string().min(1).max(255).nullable(),
+    /** push: the head of the chat in the mirror; deploy: the head of the main branch. */
+    headSha: sha,
+    /** push: the diff of the card the client was shown. */
+    diffSha256: sha256.nullable(),
+    ciDiffSha256: sha256.nullable(),
+    opensMergeRequest: z.boolean(),
+    deploy: z
+      .strictObject({
+        kind: z.enum(['manual_job', 'workflow_dispatch']),
+        id: z.string().min(1).max(200),
+        ref: z.string().min(1).max(255),
+      })
+      .nullable(),
+    /** rerun and cancel: the build (84.26); absent or null for every other kind. */
+    run: runClaim.nullable().optional(),
+    nonce: z.string().regex(/^[0-9a-f]{32}$/),
+    /** Unix seconds. */
+    expiresAt: z.number().int().positive(),
+  })
+  // A build is named by exactly the cards of a build: the material has its line only then.
+  .refine(
+    (claims) => (claims.run != null) === (claims.kind === 'rerun' || claims.kind === 'cancel'),
+  )
 export type RepoConfirmClaims = z.infer<typeof repoConfirmClaimsSchema>
 
 /** The text the HMAC is computed over: every claim, in this order (§4.4). */
@@ -65,6 +92,10 @@ export function repoConfirmMaterial(claims: RepoConfirmClaims): string {
     value.ciDiffSha256 ?? '-',
     value.opensMergeRequest ? '1' : '0',
     value.deploy ? `${value.deploy.kind}:${value.deploy.ref}:${value.deploy.id}` : '-',
+    // Only the cards of a build carry this line: the material of every other kind is as before.
+    ...(value.run
+      ? [`run:${value.run.id}:${value.run.deploy ? 'deploy' : 'plain'}:${value.run.ref}`]
+      : []),
     value.nonce,
     value.expiresAt,
   ].join('\n')

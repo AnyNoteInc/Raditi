@@ -44,7 +44,7 @@ import { WRITE } from '../chat/dialog-lock.ts'
 type Tx = Prisma.TransactionClient
 
 /** The HMAC of the cards (REPO_CONFIRM_SECRET); none — no card is offered (ПР15). */
-const macOf = (mac: RepoConfirmMac | null | undefined): RepoConfirmMac => {
+export const macOf = (mac: RepoConfirmMac | null | undefined): RepoConfirmMac => {
   if (!mac) throw gitConnectUnavailable()
   return mac
 }
@@ -63,7 +63,7 @@ const repoSelect = {
  * The repository of a project its author owns and may write to by the author's own connection:
  * what a merge and a deploy need. PROJECT_NOT_FOUND for another's project.
  */
-async function writableRepository(
+export async function writableRepository(
   db: Pick<Tx, 'project' | 'projectRepository'>,
   userId: string,
   projectId: string,
@@ -77,8 +77,8 @@ async function writableRepository(
   return { project, repo, provider: repo.provider as RepoProviderKind }
 }
 
-const nonce = () => randomBytes(16).toString('hex')
-const expiry = (now: Date) => Math.floor(now.getTime() / 1000) + REPO_CONFIRM_TTL_SECONDS
+export const nonce = () => randomBytes(16).toString('hex')
+export const expiry = (now: Date) => Math.floor(now.getTime() / 1000) + REPO_CONFIRM_TTL_SECONDS
 
 export interface PreparedMerge {
   number: number
@@ -174,13 +174,13 @@ export async function prepareMerge(
 }
 
 /** A press of a trusted card, written once with its token, and the job of core — one transaction. */
-async function writePress(
+export async function writePress(
   db: PrismaClient,
   input: {
     userId: string
     confirmToken: string
     claims: RepoConfirmClaims
-    kind: Extract<RepoActionKind, 'merge' | 'deploy'>
+    kind: Extract<RepoActionKind, 'merge' | 'deploy' | 'rerun' | 'cancel' | 'revert'>
     merge: { mode: RepoMergeMode; deleteBranch: boolean } | null
   },
 ): Promise<{ actionId: string }> {

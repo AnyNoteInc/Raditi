@@ -44,8 +44,20 @@ export const feedRepoProposalPayloadSchema = z.strictObject({
 })
 export type FeedRepoProposalPayload = z.infer<typeof feedRepoProposalPayloadSchema>
 
-/** What a confirmed button does (§4.1, `repo_actions.kind`). */
-export const repoActionKinds = ['push', 'open_mr', 'merge', 'deploy', 'ci_push'] as const
+/**
+ * What a confirmed button does (§4.1, `repo_actions.kind`). `rerun` and `cancel` — a build of the
+ * repository page; `revert` — «Отменить» of a merged request, a new merge request (Э10, 84.26).
+ */
+export const repoActionKinds = [
+  'push',
+  'open_mr',
+  'merge',
+  'deploy',
+  'ci_push',
+  'rerun',
+  'cancel',
+  'revert',
+] as const
 export type RepoActionKind = (typeof repoActionKinds)[number]
 
 /** `waiting` — the provider merges once the pipeline passes (`auto_merge`, ПР15). */
@@ -119,6 +131,14 @@ export function repoActionText(
       return 'Принято в основную ветку'
     case 'deploy':
       return 'Выкладка запущена'
+    case 'rerun':
+      return 'Сборка запущена снова'
+    case 'cancel':
+      return 'Сборка остановлена'
+    case 'revert':
+      return label === null
+        ? 'Открыт запрос на слияние, который отменяет принятые изменения'
+        : `Открыт запрос на слияние ${label}, который отменяет принятые изменения`
   }
 }
 

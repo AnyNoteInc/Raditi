@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./connect": "./src/connect.ts",
+    "./webhooks": "./src/webhooks.ts",
     "./testing": "./src/testing/fake-send.ts"
   },
   "scripts": {

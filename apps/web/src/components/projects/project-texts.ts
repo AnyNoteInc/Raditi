@@ -215,7 +215,7 @@ export const contextText = Object.freeze({
   textBodyRequired: 'Напишите текст',
   textCancel: 'Отмена',
   textAdd: 'Добавить',
-  mentionLabel: 'Файлы контекста проекта',
+  mentionLabel: 'Файлы контекста и репозитория проекта',
   mentionNone: 'В контексте проекта нет файлов.',
 })
 

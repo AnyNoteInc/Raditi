@@ -217,6 +217,10 @@ const botIdentity = (at: string) => {
   }
 }
 
+/** The path of a repository's own git address: up to 21 segments, the last one ending in `.git`. */
+const REPO_CLONE_PATH =
+  /^(?:\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}){1,20}\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}\.git$/
+
 const TREE_ROW = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40})\t([^\0]+)$/
 const INDEX_ROW = /^(100644|100755|120000|160000) ([a-f0-9]{40}) 0\t([^\0]+)$/
 const RAW_CHANGE = /^:([0-7]{6}) ([0-7]{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) ([AMDT])$/
@@ -753,6 +757,152 @@ export class GitWorkspaceService {
   }
 
   /**
+   * The paths of the tree of `sha` for `@` (ПР24; slice 84.26): files only, in the order of the
+   * tree, at most `limit`; `truncated` — the tree has more. Files that look like a secret are left
+   * out: the sandbox holds them as a stub (ПР35). Read from the mirror, nothing checked out.
+   */
+  async listPaths(
+    projectRepositoryId: string,
+    sha: string,
+    limit: number,
+  ): Promise<{ paths: string[]; truncated: boolean }> {
+    if (!publicationShaSchema.safeParse(sha).success) throw badRequest('Invalid repository head')
+    const mirror = mirrorPath(this.#root, projectRepositoryId)
+    return this.#mirrors.run(mirror, () =>
+      this.operation(async (op) => {
+        await this.privateRepository(op, mirror, sha)
+        let listing: GitCommandResult
+        try {
+          listing = await this.git(op, ['ls-tree', '-rz', '--full-tree', sha], {
+            maxBytes: listBytes(publicationLimits.repositoryFiles),
+          })
+        } catch (error) {
+          if (isDomainError(error) && error.code === 'PROCESS_OUTPUT_LIMIT')
+            return { paths: [], truncated: true }
+          throw error
+        }
+        const paths: string[] = []
+        let truncated = false
+        for (const row of text(listing.stdout).split('\0')) {
+          const match = TREE_ROW.exec(row)
+          if (!match || match[2] !== 'blob') continue
+          const path = match[4]!
+          if (isSecretFileName(path)) continue
+          if (paths.length >= limit) {
+            truncated = true
+            break
+          }
+          paths.push(path)
+        }
+        return { paths, truncated }
+      }),
+    )
+  }
+
+  /**
+   * «Отменить» of a merged request (ПР15; slice 84.26): a commit of the platform on top of the head
+   * of the main branch at the client that takes the changes of `mergeSha` out — the tree of its
+   * first parent merged onto the head with `mergeSha` as the base (`git merge-tree`, no working
+   * tree) — pushed as the new branch `branch`, which must not exist there. `conflict` — the main
+   * branch changed those places since; `nothing` — the changes are not in it any more.
+   */
+  async revertMerge(input: {
+    projectRepositoryId: string
+    remote: RepoRemote
+    defaultBranch: string
+    mergeSha: string
+    branch: string
+    message: string
+    committedAt: string
+  }): Promise<
+    | { kind: 'pushed'; sha: string; base: string }
+    | { kind: 'conflict' }
+    | { kind: 'nothing' }
+    | { kind: 'name_taken' }
+  > {
+    if (
+      !isAgentBranch(input.branch, input.defaultBranch) ||
+      !publicationShaSchema.safeParse(input.mergeSha).success ||
+      !Number.isFinite(Date.parse(input.committedAt)) ||
+      !repoBranchSchema.safeParse(input.defaultBranch).success
+    )
+      throw repoProtectedBranch()
+    const mirror = mirrorPath(this.#root, input.projectRepositoryId)
+    const remote = await this.remote(input.remote)
+    return this.#mirrors.run(mirror, () =>
+      this.operation(async (op) => {
+        await this.ensureMirror(op, mirror)
+        const heads = await this.remoteHeads(op, remote, [input.defaultBranch, input.branch])
+        if (heads.has(input.branch)) return { kind: 'name_taken' as const }
+        const head = heads.get(input.defaultBranch)
+        if (head === undefined) throw failed()
+        if (!(await this.commitsIn(op, mirror, [head]))[0])
+          await this.fetchInto(op, mirror, remote, [input.defaultBranch], heads, undefined)
+        // The merge commit and its first parent, two commits deep by its SHA, in a repository of
+        // its own that reads the mirror for the head.
+        const apart = await this.fetchCommitApart(op, mirror, remote, input.mergeSha, 2)
+        const env = { GIT_DIR: apart }
+        const parent = await this.command(
+          op,
+          ['rev-parse', '--verify', '--quiet', `${input.mergeSha}^1^{commit}`],
+          { env },
+        )
+        if (parent.code !== 0) throw failed()
+        const before = this.sha(parent.stdout)
+        const merged = await this.command(
+          op,
+          [
+            'merge-tree',
+            '--write-tree',
+            '--no-messages',
+            '--name-only',
+            `--merge-base=${input.mergeSha}`,
+            head,
+            before,
+          ],
+          { env, maxBytes: listBytes(publicationLimits.files) },
+        )
+        if (merged.code === 1) return { kind: 'conflict' as const }
+        if (merged.code !== 0) throw failed()
+        const tree = this.sha(Buffer.from(text(merged.stdout).split('\n')[0] ?? ''))
+        const headTree = this.sha(
+          (await this.git(op, ['rev-parse', '--verify', `${head}^{tree}`], { env })).stdout,
+        )
+        if (tree === headTree) return { kind: 'nothing' as const }
+        const sha = this.sha(
+          (
+            await this.git(op, ['commit-tree', tree, '-p', head], {
+              input: Buffer.from(input.message),
+              env: { ...env, ...botIdentity(input.committedAt) },
+            })
+          ).stdout,
+        )
+        const pushed = await this.command(
+          op,
+          [
+            'push',
+            '--porcelain',
+            '--quiet',
+            '--no-verify',
+            '--no-recurse-submodules',
+            `--force-with-lease=refs/heads/${input.branch}:`,
+            '--',
+            remote.url,
+            `${sha}:refs/heads/${input.branch}`,
+          ],
+          { env: { ...remote.auth, ...env }, remote, maxBytes: 64 * 1024 },
+        )
+        if (pushed.code !== 0) {
+          const now = await this.remoteHeads(op, remote, [input.branch])
+          if (now.has(input.branch)) return { kind: 'name_taken' as const }
+          throw repoNotAllowed('push')
+        }
+        return { kind: 'pushed' as const, sha, base: head }
+      }),
+    )
+  }
+
+  /**
    * The changes from `base` to `ours`, on top of `theirs`: `git merge-tree --write-tree` in the
    * repository of the operation, one commit of the platform with the parent `theirs`. null — they
    * conflict; `theirs` itself — nothing is left to put on top.
@@ -1053,6 +1203,74 @@ export class GitWorkspaceService {
     await this.checkObjects(op, incoming)
     await this.movePacks(join(incoming, 'objects', 'pack'), join(mirror, 'objects', 'pack'))
     await this.mergeShallow(join(incoming, 'shallow'), join(mirror, 'shallow'))
+  }
+
+  /**
+   * One commit by its SHA and `depth` commits behind it, into a repository of the operation of its
+   * own under the quota and the object checks of a branch (the revert of a merge, 84.26): never into
+   * the mirror, whose shallow commits stay as they are. The providers fetch a commit their branches
+   * reach (protocol v2). Returns that repository: the mirror's objects as an alternate, the shallow
+   * commits of both but the fetched one, whose parents it now has.
+   */
+  private async fetchCommitApart(
+    op: Operation,
+    mirror: string,
+    remote: Remote,
+    sha: string,
+    depth: number,
+  ): Promise<string> {
+    if (!publicationShaSchema.safeParse(sha).success || !Number.isInteger(depth) || depth < 2)
+      throw failed()
+    const used =
+      (await directoryBytes(join(this.#root, 'repos'))) +
+      (await directoryBytes(join(this.#root, 'bundles')))
+    const quota = Math.min(
+      this.options.fetchBytes ?? mirrorLimits.fetchBytes,
+      (this.options.volumeBytes ?? mirrorLimits.volumeBytes) - used,
+    )
+    if (quota <= 0) throw repositoryTooLarge('The volume of the mirrors is full')
+    const apart = join(op.root, 'commit.git')
+    await this.initBare(op, apart)
+    await this.git(
+      op,
+      [
+        'fetch',
+        `--depth=${depth}`,
+        '--no-tags',
+        '--quiet',
+        '--no-write-fetch-head',
+        '--no-recurse-submodules',
+        '--no-auto-maintenance',
+        '--',
+        remote.url,
+        `${sha}:refs/raditi/fetched`,
+      ],
+      {
+        env: { ...remote.auth, GIT_DIR: apart },
+        remote,
+        quota: { path: apart, bytes: quota },
+      },
+    )
+    if ((await this.refOf(op, apart, 'refs/raditi/fetched')) !== sha) throw failed()
+    await this.checkObjects(op, apart)
+    await sharedFile(join(apart, 'objects', 'info', 'alternates'), `${join(mirror, 'objects')}\n`)
+    const read = async (path: string) =>
+      (await readFile(path, 'latin1').catch(() => ''))
+        .split('\n')
+        .filter((line) => /^[a-f0-9]{40}$/.test(line))
+    const rows = [
+      ...new Set([
+        ...(await read(join(mirror, 'shallow'))),
+        ...(await read(join(apart, 'shallow'))),
+      ]),
+    ]
+      .filter((row) => row !== sha)
+      .sort()
+    const shallow = join(apart, 'shallow')
+    const temporary = `${shallow}.${randomBytes(6).toString('hex')}.tmp`
+    await sharedFile(temporary, rows.map((row) => `${row}\n`).join(''))
+    await rename(temporary, shallow)
+    return apart
   }
 
   /** No object of a fetch above its limit (ПР12: `cat-file --batch-check`). */
@@ -1590,7 +1808,13 @@ export class GitWorkspaceService {
       url.search ||
       url.hash ||
       !remote.pin ||
-      remote.pin.host !== url.hostname
+      remote.pin.host !== url.hostname ||
+      // The access of an operation goes only to a repository's own address (§4.6; slice 84.26):
+      // `/<group>/…/<name>.git`, never an API path or a page of the provider.
+      !REPO_CLONE_PATH.test(url.pathname) ||
+      url.pathname.split('/').some((part) => part === '.' || part === '..' || part === '-') ||
+      // `api` is a reserved name on GitLab and GitHub: no repository lives below it.
+      url.pathname.split('/')[1]?.toLowerCase() === 'api'
     )
       throw forbidden('A repository address must be https on 443 with its pinned address')
     return { url: url.href, protocol: 'https', pin: remote.pin, auth }

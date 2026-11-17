@@ -45,6 +45,7 @@ const noWorkspace = {
   moveChatRef: () => Promise.reject(new Error('no push in a merge')),
   readChatRef: () => Promise.reject(new Error('no push in a merge')),
   buildSettingsChange: () => Promise.reject(new Error('no push in a merge')),
+  revertMerge: () => Promise.reject(new Error('no push in a merge')),
 }
 
 describe.skipIf(!enabled)('merge and deploy with PostgreSQL (plan 84, 84.22)', () => {

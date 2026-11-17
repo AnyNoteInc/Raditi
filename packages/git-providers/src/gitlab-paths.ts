@@ -14,6 +14,8 @@ const projectRules: readonly [Method, RegExp][] = [
   ['GET', /^$/],
   ['GET', /^\/repository\/branches$/],
   ['POST', /^\/merge_requests$/],
+  // The merge requests of one source branch: one opened at the provider is adopted (84.26).
+  ['GET', /^\/merge_requests$/],
   ['GET', new RegExp(`^/merge_requests/${N}$`)],
   // Closing only: the adapter sends `state_event: close` and nothing else (gitlabBodyAllowed).
   ['PUT', new RegExp(`^/merge_requests/${N}$`)],

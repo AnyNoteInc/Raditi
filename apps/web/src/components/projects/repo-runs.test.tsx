@@ -24,6 +24,14 @@ const calls = vi.hoisted(() => ({
     actionId: '0199a3f2-0000-7000-8000-00000000c0aa',
   })),
   action: vi.fn<() => Promise<unknown>>(),
+  prepareRunAction: vi.fn<(input: unknown) => Promise<unknown>>(),
+  confirmRunAction: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({
+    actionId: '0199a3f2-0000-7000-8000-00000000c0ab',
+  })),
+  prepareRevert: vi.fn<(input: unknown) => Promise<unknown>>(),
+  confirmRevert: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({
+    actionId: '0199a3f2-0000-7000-8000-00000000c0ac',
+  })),
 }))
 
 vi.mock('next/link', () => ({
@@ -64,6 +72,10 @@ vi.mock('@/trpc/client', () => ({
       action: {
         queryOptions: (input: unknown) => ({ queryKey: ['action', input], queryFn: calls.action }),
       },
+      prepareRunAction: { mutationOptions: () => ({ mutationFn: calls.prepareRunAction }) },
+      confirmRunAction: { mutationOptions: () => ({ mutationFn: calls.confirmRunAction }) },
+      prepareRevert: { mutationOptions: () => ({ mutationFn: calls.prepareRevert }) },
+      confirmRevert: { mutationOptions: () => ({ mutationFn: calls.confirmRevert }) },
     },
   }),
 }))
@@ -297,6 +309,103 @@ describe('«Выкатить» on P-repo (plan 84, 84.22)', () => {
     wrap(<RepositoryView project={{ ...project, repository: repo }} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Выкатить' }))
     expect(await screen.findByText(/процесс GitHub Actions на основной ветке/)).toBeTruthy()
+  })
+})
+
+describe('the cards of a build and of «Отменить» (plan 84, 84.26)', () => {
+  it('a build that ended reruns by its card; one of main says it is a deploy', async () => {
+    calls.run.mockResolvedValue({ run: runRow('481', 'failed', { ref: 'main' }), jobs: [] })
+    calls.prepareRunAction.mockResolvedValue({
+      kind: 'rerun',
+      runId: '481',
+      name: 'pipeline',
+      ref: 'main',
+      sha: 'e'.repeat(40),
+      status: 'failed',
+      deploy: true,
+      confirmToken: 'token-rerun',
+      expiresAt: new Date(Date.now() + 600_000),
+    })
+    calls.action.mockResolvedValue({ id: 'x', kind: 'rerun', state: 'done', error: null })
+    wrap(<RunView project={project} runId="481" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Запустить снова' }))
+    expect(await screen.findByText(/повтор может выкатить её версию/)).toBeTruthy()
+    expect(screen.getByText('Ветка main, версия eeeeeee.')).toBeTruthy()
+    expect(calls.prepareRunAction.mock.calls[0]![0]).toEqual({
+      projectId: PROJECT,
+      runId: '481',
+      kind: 'rerun',
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }))
+    await waitFor(() =>
+      expect(calls.confirmRunAction.mock.calls[0]![0]).toEqual({ confirmToken: 'token-rerun' }),
+    )
+    expect(await screen.findByText('Сборка запущена снова — она появится в списке.')).toBeTruthy()
+  })
+
+  it('a build that goes offers «Остановить»; a repository read by a link offers nothing', async () => {
+    calls.run.mockResolvedValue({ run: runRow('484', 'running'), jobs: [] })
+    wrap(<RunView project={project} runId="484" />)
+    expect(await screen.findByRole('button', { name: 'Остановить' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Запустить снова' })).toBeNull()
+    cleanup()
+    wrap(
+      <RunView
+        project={{ ...project, repository: { ...repository, mode: 'read', connection: null } }}
+        runId="484"
+      />,
+    )
+    expect(await screen.findByText('Сборка #484')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Остановить' })).toBeNull()
+  })
+
+  it('a merged request offers «Отменить» — a new merge request, by its card', async () => {
+    calls.get.mockResolvedValue(repository)
+    calls.runs.mockResolvedValue({ items: [], next: null, polledAt: new Date(), refreshing: false })
+    calls.work.mockResolvedValue({
+      mergeRequests: [
+        {
+          number: 7,
+          title: 'Новое меню',
+          state: 'merged',
+          checks: 'success',
+          sourceBranch: 'raditi/novoe-menyu-0000c002',
+          url: 'https://gitlab.com/kolos-bakery/site/-/merge_requests/7',
+          chat: null,
+        },
+        {
+          number: 8,
+          title: 'Ещё',
+          state: 'open',
+          checks: 'pending',
+          sourceBranch: 'raditi/eshche-0000c003',
+          url: 'https://gitlab.com/kolos-bakery/site/-/merge_requests/8',
+          chat: null,
+        },
+      ],
+      branches: [],
+    })
+    calls.prepareRevert.mockResolvedValue({
+      number: 7,
+      title: 'Новое меню',
+      target: 'main',
+      mergeSha: 'd'.repeat(40),
+      url: 'https://gitlab.com/kolos-bakery/site/-/merge_requests/7',
+      confirmToken: 'token-revert',
+      expiresAt: new Date(Date.now() + 600_000),
+    })
+    calls.action.mockResolvedValue({ id: 'x', kind: 'revert', state: 'queued', error: null })
+    wrap(<RepositoryView project={project} />)
+    fireEvent.click(await screen.findByRole('tab', { name: /Запросы на слияние/ }))
+    // Only the merged one.
+    expect((await screen.findAllByRole('button', { name: 'Отменить' })).length).toBe(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Отменить' }))
+    expect(await screen.findByText(/Откроем новый запрос на слияние/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть запрос на отмену' }))
+    await waitFor(() =>
+      expect(calls.confirmRevert.mock.calls[0]![0]).toEqual({ confirmToken: 'token-revert' }),
+    )
+    expect(await screen.findByText('Выполняем…')).toBeTruthy()
   })
 })
 

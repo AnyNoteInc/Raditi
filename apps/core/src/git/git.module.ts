@@ -18,9 +18,10 @@ import { GitAuthSource } from './git-auth-source.ts'
 import { GitJobs } from './git-jobs.ts'
 import { GitProcessor } from './git.processor.ts'
 import { GitPollScheduler } from './git-poll-scheduler.ts'
-import { GIT_JOBS, REPO_ACTIONS, REPO_CI } from './git.tokens.ts'
+import { GIT_JOBS, REPO_ACTIONS, REPO_CI, REPO_HOOKS } from './git.tokens.ts'
 import { RepoActions } from './repo-actions.ts'
 import { RepoCi } from './repo-ci.ts'
+import { RepoHooks } from './repo-hooks.ts'
 import { fakedGithubCom, fakedGitlabCom, publicHostResolver } from './public-host.ts'
 
 const GIT_SERVICES = Symbol('GIT_SERVICES')
@@ -28,6 +29,7 @@ interface GitServices {
   jobs: GitJobs
   actions: RepoActions
   ci: RepoCi
+  hooks: RepoHooks
 }
 
 /** Where web sends the client back from gitlab.com; GitLab wants it again on a refresh. */
@@ -156,6 +158,17 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
             logger: lines,
             waits: (projectRepositoryId) => actions.continueWaits(projectRepositoryId),
           }),
+          // The hooks of GitLab projects (ПР17; slice 84.26): their secrets derive from the secret
+          // of the cards, and they send to the public address of web.
+          hooks: new RepoHooks({
+            prisma,
+            auth,
+            resolvePublic,
+            provider,
+            rootSecret: secret,
+            appUrl: config.billing.appUrl,
+            logger: lines,
+          }),
         }
       },
     },
@@ -166,6 +179,7 @@ export const gitlabCallbackPath = '/api/git/gitlab/callback'
       useFactory: (git: GitServices) => git.actions,
     },
     { provide: REPO_CI, inject: [GIT_SERVICES], useFactory: (git: GitServices) => git.ci },
+    { provide: REPO_HOOKS, inject: [GIT_SERVICES], useFactory: (git: GitServices) => git.hooks },
     GitProcessor,
     GitPollScheduler,
   ],

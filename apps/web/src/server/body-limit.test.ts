@@ -170,6 +170,10 @@ describe('API routes', () => {
     // A run of a scheduled task, posted by core: schedule-intake.ts reads at most 1 KiB after the
     // secret (docs/plan/82-scheduled-tasks.md, §4.3).
     'webhooks/scheduled-runs': /handleScheduleIntake\(request,/,
+    // The webhooks of the repositories of projects: git-webhooks.ts reads at most
+    // MAX_WEBHOOK_BODY_BYTES (256 KiB) before the signature (docs/plan/84-projects.md, ПР17).
+    'webhooks/github': /handleGithubWebhook\(request,/,
+    'webhooks/gitlab': /handleGitlabWebhook\(request,/,
     // A new Web Push subscription of this browser from its service worker: 4 KiB after the origin
     // (docs/plan/82-scheduled-tasks.md, Зп41).
     'notifications/resubscribe': /handleResubscribe\(request,/,

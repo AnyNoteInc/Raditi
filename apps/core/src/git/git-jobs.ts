@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-import { chatBranchHead, Prisma, type PrismaClient } from '@repo/db'
+import { chatBranchHead, enqueueOutbox, Prisma, type PrismaClient } from '@repo/db'
 import {
   ciConfigPathOf,
   ciIncludePaths,
@@ -12,8 +12,12 @@ import {
   repositoryTooLarge,
   repoUnreachable,
   mirrorLimits,
+  gitJobNames,
   readRepoCiPaths,
   REPO_CI_CONFIG_LINT_BYTES,
+  REPO_TREE_MAX_PATHS,
+  repoTreeKey,
+  type RepoTreeFile,
   REPO_DIFF_KEPT_BYTES,
   repoCiDiffKey,
   repoCiLintSchema,
@@ -68,7 +72,7 @@ export interface GitJobsOptions {
   provider: GitProviderFactory
   workspace: Pick<
     GitWorkspaceService,
-    'fetch' | 'findSecrets' | 'buildSettingsChange' | 'dropMirror' | 'removeOrphans'
+    'fetch' | 'findSecrets' | 'buildSettingsChange' | 'dropMirror' | 'removeOrphans' | 'listPaths'
   >
   /** Where the diff of the build settings of a branch is kept for the card (`git.ci_lint`). */
   storage?: Pick<ObjectStorage, 'put'>
@@ -499,6 +503,14 @@ export class GitJobs {
           secretsFound: secrets.map((path) => ({ path, rule: 'gitleaks' })),
           ciPaths: { ...own, includes },
         })
+        // The hook of a GitLab project, when the connection may make one (ПР17; slice 84.26).
+        if (repo.connection !== null && provider.support.projectHooks)
+          await enqueueOutbox(this.#o.prisma, {
+            topic: 'git',
+            type: gitJobNames.hookCreate,
+            payload: { projectRepositoryId },
+            dedupeKey: `git.hook.create:${projectRepositoryId}:${sha}`,
+          })
       } finally {
         await op.close()
       }
@@ -509,6 +521,33 @@ export class GitJobs {
         mirrorState: tooLargeCodes.has(code) ? 'too_large' : 'failed',
       })
     }
+  }
+
+  /**
+   * `git.repo.tree` (ПР24; slice 84.26): the paths of the main branch at `sha` for `@`, from the
+   * mirror, kept in `raditi-artifacts` by the SHA; `tree_sha` names the newest kept. A SHA the
+   * mirror has not, or not the head core last fetched, writes nothing.
+   */
+  async repoTree(projectRepositoryId: string, sha: string): Promise<void> {
+    const { prisma, workspace, storage } = this.#o
+    const repo = await prisma.projectRepository.findUnique({
+      where: { id: projectRepositoryId },
+      select: { lastFetchedSha: true, treeSha: true, mirrorState: true },
+    })
+    if (repo === null || repo.mirrorState !== 'ready' || repo.lastFetchedSha !== sha) return
+    if (repo.treeSha === sha) return
+    if (!storage) throw new Error('git.repo.tree needs the storage of artifacts')
+    const listed = await workspace.listPaths(projectRepositoryId, sha, REPO_TREE_MAX_PATHS)
+    const file: RepoTreeFile = { v: 1, sha, paths: listed.paths, truncated: listed.truncated }
+    const body = Buffer.from(JSON.stringify(file))
+    await storage.put('artifacts', repoTreeKey(projectRepositoryId, sha), body, {
+      contentType: 'application/json',
+      sizeBytes: body.byteLength,
+    })
+    await prisma.projectRepository.updateMany({
+      where: { id: projectRepositoryId, lastFetchedSha: sha },
+      data: { treeSha: sha },
+    })
   }
 
   /**

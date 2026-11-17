@@ -199,6 +199,14 @@ vi.mock('@/trpc/client', () => ({
       moveToProject: mutation(calls.moveToProject),
       export: query('task.export', calls.exported),
     },
+    projectRepo: {
+      paths: {
+        queryOptions: (input: { projectId: string }) => ({
+          queryKey: ['projectRepo.paths', input],
+          queryFn: async () => ({ state: 'none' as const }),
+        }),
+      },
+    },
     projectFile: {
       pathKey: () => ['projectFile'],
       list: {

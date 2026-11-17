@@ -169,6 +169,7 @@ describe.skipIf(!enabled)('GitJobs with PostgreSQL (plan 84, 84.17)', () => {
         buildSettingsChange,
         dropMirror,
         removeOrphans: vi.fn(async () => 0),
+        listPaths: vi.fn(async () => ({ paths: [], truncated: false })),
       },
       logger: quiet,
     })

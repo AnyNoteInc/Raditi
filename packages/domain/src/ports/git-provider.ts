@@ -154,6 +154,11 @@ export interface RepositoryInfo {
    * own files (GitLab `ci_config_path`, ПР16); null or absent — the provider's default.
    */
   ciConfigPath?: string | null
+  /**
+   * The access may create hooks on this repository (GitLab: Maintainer or above, ПР17); absent —
+   * the provider does not say, or has no hooks of one repository.
+   */
+  canManageHooks?: boolean
 }
 
 export type PullRequestState = 'open' | 'draft' | 'merged' | 'closed'
@@ -280,6 +285,11 @@ export interface GitProvider {
   openPullRequest(auth: GitAuth, repo: RepoRef, input: OpenPullRequestInput): Promise<PullRequest>
   getPullRequest(auth: GitAuth, repo: RepoRef, number: number): Promise<PullRequest | null>
   /**
+   * The merge requests from `sourceBranch` of this very repository, newest first — open, draft or
+   * merged (84.26): one opened at the provider for a chat's branch is adopted by the platform.
+   */
+  findPullRequests(auth: GitAuth, repo: RepoRef, sourceBranch: string): Promise<PullRequest[]>
+  /**
    * Merges only while the source head is `expectedHeadSha` (otherwise REPO_CHANGED). `whenGreen`
    * only where `support.autoMerge`: the provider merges once the pipeline passes.
    */
@@ -317,10 +327,15 @@ export interface GitProvider {
     content: string,
     ref: string,
   ): Promise<{ valid: boolean; errors: string[]; includes: string[] }>
+  /**
+   * A hook of the repository (ПР17; slice 84.26): `token` comes back in `X-Gitlab-Token`,
+   * `signingToken` (`whsec_…`) signs every delivery where the server can (GitLab ≥ 19.0); `signed`
+   * — the server says it took the signing token.
+   */
   createHook?(
     auth: GitAuth,
     repo: RepoRef,
-    hook: { url: string; token: string },
-  ): Promise<{ hookId: string }>
+    hook: { url: string; token: string; signingToken: string | null },
+  ): Promise<{ hookId: string; signed: boolean }>
   deleteHook?(auth: GitAuth, repo: RepoRef, hookId: string): Promise<void>
 }

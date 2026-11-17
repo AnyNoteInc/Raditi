@@ -48,6 +48,7 @@ const noWorkspace = {
   moveChatRef: () => Promise.reject(new Error('no push here')),
   readChatRef: () => Promise.reject(new Error('no push here')),
   buildSettingsChange: () => Promise.reject(new Error('no push here')),
+  revertMerge: () => Promise.reject(new Error('no push here')),
 }
 
 const repository = (id: number, fullName: string) => ({
@@ -326,6 +327,7 @@ describe.skipIf(!enabled)('the GitHub App in core with PostgreSQL (plan 84, 84.2
         buildSettingsChange: () => Promise.reject(new Error('no fetch here')),
         dropMirror: () => Promise.reject(new Error('no fetch here')),
         removeOrphans: () => Promise.reject(new Error('no fetch here')),
+        listPaths: () => Promise.reject(new Error('no fetch here')),
       },
     })
 

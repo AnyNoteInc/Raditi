@@ -4,7 +4,7 @@ import { terminalTaskStatuses } from '@repo/domain'
 
 import { insertFeedEvent } from './feed-events.ts'
 import type { Prisma, PrismaClient, TaskStatus } from './generated/prisma/client.ts'
-import { enqueueRepoForget } from './outbox.ts'
+import { enqueueRepoGone, repoHookSelect } from './outbox.ts'
 import { enqueueTurnCancel } from './task-commands-outbox.ts'
 import { deleteProjectSchedules, lockProjectSchedules } from './scheduled-tasks.ts'
 import { forgetTelegramChat } from './telegram-outbox.ts'
@@ -149,11 +149,12 @@ export async function purgeProject(
     await deleteProjectSchedules(tx, project.id, input.now)
     // Its repository goes by cascade; core removes its mirror and bundles from the volume after
     // this commits (`git.repo.forget`), or they would stay there and count against its quota.
+    // A hook core made on it goes too (`git.hook.remove`, slice 84.26).
     const repos = await tx.projectRepository.findMany({
       where: { projectId: project.id },
-      select: { id: true },
+      select: repoHookSelect,
     })
-    for (const repo of repos) await enqueueRepoForget(tx, repo.id)
+    for (const repo of repos) await enqueueRepoGone(tx, repo)
     // `tasks.project_id` is ON DELETE SET NULL: every chat of the project, deleted before or now,
     // stays without it.
     await tx.$executeRaw`DELETE FROM projects WHERE id = ${project.id}::uuid`
