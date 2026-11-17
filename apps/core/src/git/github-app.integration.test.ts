@@ -189,6 +189,8 @@ describe.skipIf(!enabled)('the GitHub App in core with PostgreSQL (plan 84, 84.2
       installationRepos: [repository(42, 'acme/site'), repository(43, 'acme/billing')],
       /** The repositories where the person may push; the others answer read. */
       pushable: new Set(['acme/site']),
+      /** The runs of the deploy workflow that `workflow_dispatch` started, newest first. */
+      dispatched: [] as Record<string, unknown>[],
     }
     const checks = (sha: string) => ({
       [`GET ${R}/commits/${sha}/check-suites`]: () => ({
@@ -278,6 +280,11 @@ describe.skipIf(!enabled)('the GitHub App in core with PostgreSQL (plan 84, 84.2
         },
       },
       [`POST ${R}/actions/workflows/3/dispatches`]: { status: 204 },
+      [`GET ${R}/actions/workflows/3/runs`]: () => ({
+        status: 200,
+        body: { workflow_runs: github.dispatched },
+      }),
+      [`POST ${R}/actions/runs/91/cancel`]: { status: 202, body: {} },
       'GET /installation/repositories': () => ({
         status: 200,
         body: {
@@ -313,7 +320,12 @@ describe.skipIf(!enabled)('the GitHub App in core with PostgreSQL (plan 84, 84.2
       logger: quiet,
       now: () => now,
     }
-    const actions = new RepoActions({ ...options, workspace: noWorkspace, mac })
+    const actions = new RepoActions({
+      ...options,
+      workspace: noWorkspace,
+      mac,
+      sleep: () => Promise.resolve(),
+    })
     const ci = new RepoCi({
       ...options,
       secrets: { kvRead: async () => null },
@@ -387,6 +399,7 @@ describe.skipIf(!enabled)('the GitHub App in core with PostgreSQL (plan 84, 84.2
       sent,
       fake,
       later: (ms: number) => (now = new Date(now.getTime() + ms)),
+      now: () => now,
     }
   }
 
@@ -561,5 +574,64 @@ describe.skipIf(!enabled)('the GitHub App in core with PostgreSQL (plan 84, 84.2
     await f.actions.run(stale)
     expect(await f.rowOf(stale)).toMatchObject({ state: 'failed', error: 'REPO_CHANGED' })
     expect(f.sent('POST', `${R}/actions/workflows/3/dispatches`)).toHaveLength(1)
+  })
+
+  it('stops a dispatched run that got a commit newer than the card, and says the changes moved', async () => {
+    // §4.6: GitHub runs `workflow_dispatch` by the name of the branch. A commit that reached the
+    // main branch between the read of its head and the dispatch is the run's — it is cancelled.
+    const f = await fixture()
+    const deploy = () =>
+      f.claimsOf({
+        kind: 'deploy',
+        taskId: null,
+        number: null,
+        headSha: mainSha,
+        deploy: { kind: 'workflow_dispatch', id: '3', ref: 'main' },
+      })
+    const runOf = (id: number, sha: string, at: Date, event = 'workflow_dispatch') => ({
+      id,
+      name: 'Deploy',
+      head_sha: sha,
+      head_branch: 'main',
+      status: 'queued',
+      conclusion: null,
+      event,
+      html_url: `https://github.com/acme/site/actions/runs/${id}`,
+      created_at: at.toISOString(),
+    })
+    const newer = 'f'.repeat(40)
+    // An older run and a push run are not the dispatch's; the oldest dispatch since it is.
+    f.github.dispatched = [
+      runOf(92, mainSha, new Date(f.now().getTime() + 5_000)),
+      runOf(91, newer, new Date(f.now().getTime() + 1_000)),
+      runOf(90, mainSha, new Date(f.now().getTime() - 60_000)),
+      runOf(89, mainSha, new Date(f.now().getTime() + 1_000), 'push'),
+    ]
+    const id = await f.press('deploy', deploy())
+    await f.actions.run(id)
+    expect(await f.rowOf(id)).toMatchObject({ state: 'failed', error: 'REPO_CHANGED' })
+    expect(f.sent('POST', `${R}/actions/runs/91/cancel`)).toHaveLength(1)
+    const [read] = f.sent('GET', `${R}/actions/workflows/3/runs`)
+    expect(Object.fromEntries(read!.url.searchParams)).toMatchObject({
+      event: 'workflow_dispatch',
+      branch: 'main',
+    })
+    expect(read!.url.searchParams.get('created')).toMatch(/^>=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/)
+
+    // The run of the card's commit stands: done, with its id; nothing is cancelled.
+    f.github.dispatched = [runOf(93, mainSha, new Date(f.now().getTime() + 1_000))]
+    const ok = await f.press('deploy', deploy())
+    await f.actions.run(ok)
+    expect(await f.rowOf(ok)).toMatchObject({ state: 'done' })
+    expect((await f.rowOf(ok)).result).toMatchObject({ runId: '93' })
+    expect(f.sent('POST', `${R}/actions/runs/91/cancel`)).toHaveLength(1)
+
+    // GitHub made no run in time: the press stands, the next poll shows the run.
+    f.github.dispatched = []
+    const reads = f.sent('GET', `${R}/actions/workflows/3/runs`).length
+    const late = await f.press('deploy', deploy())
+    await f.actions.run(late)
+    expect(await f.rowOf(late)).toMatchObject({ state: 'done' })
+    expect(f.sent('GET', `${R}/actions/workflows/3/runs`)).toHaveLength(reads + 5)
   })
 })

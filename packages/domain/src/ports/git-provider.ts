@@ -321,6 +321,19 @@ export interface GitProvider {
   /** Manual jobs or `workflow_dispatch` of `ref`'s newest run (ПР17). */
   listDeployActions(auth: GitAuth, repo: RepoRef, ref: string): Promise<DeployAction[]>
   startDeploy(auth: GitAuth, repo: RepoRef, action: DeployAction): Promise<{ runId: string | null }>
+  /**
+   * The run a `workflow_dispatch` of `action` started: one of its workflow, event
+   * `workflow_dispatch`, on `action.ref`, created at `since` or later — the oldest such, null while
+   * the provider has made none. Only where a dispatch runs by the name of a branch, not by a
+   * commit (GitHub): the platform then checks the commit the run got (docs/plan/84-projects.md,
+   * §4.6).
+   */
+  findDispatchedRun?(
+    auth: GitAuth,
+    repo: RepoRef,
+    action: DeployAction,
+    since: Date,
+  ): Promise<CiRun | null>
   lintCi?(
     auth: GitAuth,
     repo: RepoRef,
