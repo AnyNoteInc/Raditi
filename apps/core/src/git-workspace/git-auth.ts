@@ -25,11 +25,11 @@ export function gitAuthEnvironment(
     return {}
   }
   const { username, password } = access.basic
-  const ttl = access.expiresAt instanceof Date ? access.expiresAt.getTime() - Date.now() : 0
+  const now = Date.now()
+  const ttl = access.expiresAt instanceof Date ? access.expiresAt.getTime() - now : 0
   if (
     !Number.isFinite(ttl) ||
     ttl < 5000 ||
-    ttl > (ttlSeconds + 5) * 1000 ||
     typeof username !== 'string' ||
     typeof password !== 'string' ||
     !username ||
@@ -43,6 +43,9 @@ export function gitAuthEnvironment(
     throw forbidden('Repository credentials are not a valid short-lived grant')
   return {
     RADITI_GIT_AUTH: `Authorization: Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`,
-    RADITI_GIT_AUTH_EXPIRES: String(access.expiresAt.getTime()),
+    // A token the provider makes longer-lived than one operation (GitHub's installation token
+    // lives an hour, and the operation revokes it at its end) is used by the worker only within
+    // the grant's own lifetime.
+    RADITI_GIT_AUTH_EXPIRES: String(Math.min(access.expiresAt.getTime(), now + ttlSeconds * 1000)),
   }
 }
