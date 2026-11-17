@@ -9,7 +9,7 @@
 // for the scenarios: requests (method, path, how they were signed — never a token), pushes, merge
 // requests with their texts, lints, played jobs.
 import { spawn } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:https'
 import { tmpdir } from 'node:os'
@@ -77,7 +77,11 @@ async function headsOf(bare, home) {
   )
 }
 
-export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }) {
+/**
+ * `delegate` — another fake that answers every request for its host on this server (the fake
+ * GitHub, whose git reaches `github.com` on 443 through the same forwarder).
+ */
+export async function startFakeGitlab({ key, cert, port, oauth, logFile = null, delegate = null }) {
   const root = await mkdtemp(join(tmpdir(), 'raditi-projects-verify-gitlab-'))
   const home = join(root, 'home')
   await mkdir(home, { mode: 0o700 })
@@ -97,6 +101,10 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
   const lints = []
   const played = []
   const mergeCalls = []
+  /** Project hooks core made: id → { project, url, token, signingToken, ... }. */
+  const hooks = new Map()
+  const removedHooks = []
+  const pipelineActions = []
 
   const hostOf = (req) => {
     const name = String(req.headers.host ?? '')
@@ -118,6 +126,11 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
     statistics: { repository_size: size },
     ci_config_path: null,
     archived: false,
+    // Maintainer (40) by default: the role GitLab requires to make a project hook (84.26).
+    permissions: {
+      project_access: { access_level: project.accessLevel ?? 40 },
+      group_access: null,
+    },
   })
 
   const pipelineJson = (host, project, p) => ({
@@ -135,18 +148,21 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
   })
   /** A pipeline runs for `runMs`, then its jobs are done (the manual ones wait). */
   const jobStatusOf = (p, job) =>
-    job.played
-      ? Date.now() - job.played > 1500
-        ? 'success'
-        : 'running'
-      : job.manual
-        ? 'manual'
-        : p.failureReason
-          ? 'failed'
-          : Date.now() - p.started > p.runMs
-            ? 'success'
-            : 'running'
+    p.canceled && !job.manual
+      ? 'canceled'
+      : job.played
+        ? Date.now() - job.played > 1500
+          ? 'success'
+          : 'running'
+        : job.manual
+          ? 'manual'
+          : p.failureReason
+            ? 'failed'
+            : Date.now() - p.started > p.runMs
+              ? 'success'
+              : 'running'
   const statusOf = (p) => {
+    if (p.canceled) return 'canceled'
     if (p.failureReason) return 'failed'
     const statuses = p.jobs.map((job) => jobStatusOf(p, job))
     if (statuses.includes('running')) return 'running'
@@ -520,6 +536,14 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
       project.mergeRequests.push(mr)
       return answer(201, await mrJson(host, project, mr))
     }
+    if (req.method === 'GET' && rest === '/merge_requests') {
+      const source = url.searchParams.get('source_branch')
+      const list = project.mergeRequests.filter((mr) => source === null || mr.source === source)
+      return answer(
+        200,
+        await Promise.all(list.toReversed().map((mr) => mrJson(host, project, mr))),
+      )
+    }
     const mrAt = /^\/merge_requests\/(\d+)(\/merge)?$/.exec(rest)
     if (mrAt) {
       const mr = project.mergeRequests.find((item) => item.iid === Number(mrAt[1]))
@@ -558,6 +582,55 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
         list.map((p) => pipelineJson(host, project, p)),
       )
     }
+    const retryAt = /^\/pipelines\/(\d+)\/(retry|cancel)$/.exec(rest)
+    if (retryAt && req.method === 'POST') {
+      const p = project.pipelines.find((item) => item.id === Number(retryAt[1]))
+      if (!p) return answer(404, { message: '404 Not found' })
+      pipelineActions.push({
+        path: project.path,
+        pipeline: p.id,
+        action: retryAt[2],
+        status: statusOf(p),
+      })
+      if (retryAt[2] === 'retry') {
+        p.started = Date.now()
+        p.canceled = false
+        p.failureReason = null
+      } else p.canceled = true
+      return answer(201, pipelineJson(host, project, p))
+    }
+    if (req.method === 'POST' && rest === '/hooks') {
+      const hook = {
+        id: nextId(),
+        path: project.path,
+        projectId: project.id,
+        url: String(body.url ?? ''),
+        token: String(body.token ?? ''),
+        signingToken: typeof body.signing_token === 'string' ? body.signing_token : null,
+        events: {
+          push: body.push_events === true,
+          mergeRequests: body.merge_requests_events === true,
+          pipelines: body.pipeline_events === true,
+        },
+        sslVerification: body.enable_ssl_verification === true,
+      }
+      hooks.set(hook.id, hook)
+      return answer(201, {
+        id: hook.id,
+        url: hook.url,
+        signing_token_present: hook.signingToken !== null,
+      })
+    }
+    const hookAt = /^\/hooks\/(\d+)$/.exec(rest)
+    if (hookAt && req.method === 'DELETE') {
+      const hook = hooks.get(Number(hookAt[1]))
+      if (!hook || hook.projectId !== project.id) return answer(404, { message: '404 Not found' })
+      hooks.delete(hook.id)
+      removedHooks.push(hook)
+      entry.status = 204
+      res.writeHead(204)
+      return res.end()
+    }
     const pAt = /^\/pipelines\/(\d+)(\/jobs)?$/.exec(rest)
     if (pAt && req.method === 'GET') {
       const p = project.pipelines.find((item) => item.id === Number(pAt[1]))
@@ -590,12 +663,25 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
     }
     if (req.method === 'POST' && rest === '/ci/lint') {
       lints.push({ path: project.path, content: body.content, ref: body.ref })
-      const valid = /stages:/.test(String(body.content ?? ''))
+      const content = String(body.content ?? '')
+      const valid = /stages:/.test(content)
+      // `include: - local: <path>`: GitLab names each included file of the project in `includes`.
+      const includes = [...content.matchAll(/^\s*-\s*local:\s*['"]?([^'"\s]+)['"]?\s*$/gm)].map(
+        (match) => ({
+          type: 'local',
+          location: match[1],
+          blob: `https://${host}/${project.path}/-/blob/${body.ref ?? 'main'}/${match[1]}`,
+          raw: `https://${host}/${project.path}/-/raw/${body.ref ?? 'main'}/${match[1]}`,
+          extra: {},
+          context_project: project.path,
+          context_sha: null,
+        }),
+      )
       return answer(200, {
         valid,
         errors: valid ? [] : ['jobs config should contain at least one visible job'],
         warnings: [],
-        includes: [],
+        includes,
       })
     }
     return answer(404, { message: '404 Not Found' })
@@ -603,6 +689,13 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
 
   const handler = async (req, res) => {
     try {
+      if (
+        delegate !== null &&
+        String(req.headers.host ?? '')
+          .replace(/:\d+$/, '')
+          .toLowerCase() === delegate.host
+      )
+        return await delegate.handle(req, res)
       const url = new URL(req.url, 'https://fake.invalid')
       const host = hostOf(req)
       if (url.pathname === '/oauth/authorize' && req.method === 'GET' && host === COM_HOST)
@@ -641,6 +734,43 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
     mergeCalls,
     oauthRefusals,
     codes,
+    hooks,
+    removedHooks,
+    pipelineActions,
+    /**
+     * A delivery of the hook of `project` as GitLab ≥ 19.0 sends it (Standard Webhooks:
+     * `webhook-id`, `webhook-timestamp`, `webhook-signature`), to `origin` — the address of web the
+     * stand reaches, in place of the public one of the hook. `forge` signs with another key;
+     * `deliveryId` repeats a delivery. The status web answered.
+     */
+    async deliver(
+      project,
+      { origin, kind, body, forge = false, deliveryId = `stand-${randomBytes(6).toString('hex')}` },
+    ) {
+      const hook = [...hooks.values()].find((item) => item.projectId === project.id)
+      if (!hook) throw new Error(`no hook on ${project.path}`)
+      const raw = JSON.stringify({ object_kind: kind, project: { id: project.id }, ...body })
+      const timestamp = String(Math.floor(Date.now() / 1000))
+      const secret = forge
+        ? randomBytes(32)
+        : Buffer.from(String(hook.signingToken).replace(/^whsec_/, ''), 'base64')
+      const signature = `v1,${createHmac('sha256', secret).update(`${deliveryId}.${timestamp}.${raw}`, 'utf8').digest('base64')}`
+      const url = new URL(hook.url)
+      const target = new URL(`${url.pathname}${url.search}`, origin)
+      const response = await fetch(target, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-gitlab-event': `${kind} Hook`,
+          'webhook-id': deliveryId,
+          'webhook-timestamp': timestamp,
+          'webhook-signature': signature,
+        },
+        body: raw,
+        redirect: 'manual',
+      })
+      return { status: response.status, deliveryId }
+    },
     /** A user of `host` reached by `token` (an own server) or signing in by OAuth (gitlab.com). */
     addUser(host, { username, token = null, signsIn = false, redirect = false }) {
       const user = { id: nextId(), username, signsIn }
@@ -674,6 +804,8 @@ export async function startFakeGitlab({ key, cert, port, oauth, logFile = null }
       await mkdir(dirname(bare), { recursive: true })
       await runGit(['clone', '-q', '--bare', work, bare], { cwd: root, home })
       await runGit(['config', 'http.receivepack', 'true'], { cwd: bare, home })
+      // A commit fetched by its SHA (the revert of a merge reads the merge commit so, 84.26).
+      await runGit(['config', 'uploadpack.allowAnySHA1InWant', 'true'], { cwd: bare, home })
       await rm(work, { recursive: true, force: true })
       const project = {
         id: nextId(),

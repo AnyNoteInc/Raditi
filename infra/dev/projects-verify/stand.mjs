@@ -11,6 +11,7 @@ import {
   appEnvironment,
   webEnvironment,
 } from '../browser-task-verify/stand.mjs'
+import { GITHUB_HOST } from './fake-github.mjs'
 import { COM_HOST, OWN_HOST } from './fake-gitlab.mjs'
 
 export const STAND = 'projects-verify'
@@ -58,7 +59,8 @@ export const PROJECTS_BUILD = Object.freeze({
  * The scenarios in their order (README, «Сценарии») and what each needs first. S signs the owner
  * up and switches the model on; A makes the project the others use; D and K connect GitLab; E
  * attaches the repository the rest works on; F opens the second chat whose request I merges when
- * its build passes; M puts projects into the trash and purges them.
+ * its build passes; W takes the hook of that repository, reruns its builds and reverts the merge of
+ * I; P is the GitHub App on its own project; M puts projects into the trash and purges them.
  */
 export const SCENARIO_IDS = Object.freeze([
   'S',
@@ -73,6 +75,8 @@ export const SCENARIO_IDS = Object.freeze([
   'H',
   'I',
   'J',
+  'W',
+  'P',
   'L',
   'N',
   'M',
@@ -90,6 +94,8 @@ const NEEDS = Object.freeze({
   H: ['S', 'A', 'K', 'E', 'F'],
   I: ['S', 'A', 'K', 'E', 'F', 'H'],
   J: ['S', 'A', 'K', 'E', 'F', 'H', 'I'],
+  W: ['S', 'A', 'K', 'E', 'F', 'H', 'I'],
+  P: ['S', 'A'],
   L: ['S', 'A', 'K', 'E'],
   N: ['S'],
   M: ['S', 'A'],
@@ -134,8 +140,14 @@ export function standOptions(argv) {
 
 // ─── Processes ────────────────────────────────────────────────────────────────
 
-/** The host names of the fake's certificate: the own server and gitlab.com. */
-export const FAKE_HOSTS = Object.freeze([OWN_HOST, COM_HOST])
+/** The host names of the fakes' certificate: the own server, gitlab.com and github.com. */
+export const FAKE_HOSTS = Object.freeze([OWN_HOST, COM_HOST, GITHUB_HOST])
+
+/**
+ * core's APP_URL: a hook of a GitLab project is made only for an `https` address (84.26). Core puts
+ * it into letters and hooks only; the fake GitLab delivers to web's own address in its place.
+ */
+export const CORE_APP_URL = 'https://raditi.localhost'
 
 /** What the stand never gives core or mcp: there is no browser of a chat here. */
 const NO_BROWSER = ['BROWSER_WORKER_URL', 'BROWSER_WORKER_TOKEN', 'BROWSER_SESSION_MAX_HOURS']
@@ -154,6 +166,7 @@ const without = (env, names) =>
 function gitOf(context) {
   const { git } = context
   return {
+    RADITI_FAKE_GITHUB_API_URL: git.github.origin,
     GIT_CA_FILE: context.caFile,
     GIT_ALLOW_LOOPBACK: '1',
     RADITI_FAKE_GITLAB_COM_URL: `https://localhost:${git.fakePort}`,
@@ -168,9 +181,14 @@ export function projectAppEnvironment(app, context) {
   const env = without(appEnvironment(app, noBrowserPorts(context)), NO_BROWSER)
   if (app === 'core') {
     const { GIT_CA_FILE, GIT_ALLOW_LOOPBACK, ...apps } = gitOf(context)
-    if (!isAbsolute(context.git.mirrorDir)) throw new Error('GIT_MIRROR_DIR is an absolute path')
+    const { git } = context
+    if (!isAbsolute(git.mirrorDir)) throw new Error('GIT_MIRROR_DIR is an absolute path')
+    if (!isAbsolute(git.github.keyFile)) throw new Error('The key of the GitHub App is a file')
     return {
       ...env,
+      APP_URL: CORE_APP_URL,
+      GITHUB_APP_ID: git.github.appId,
+      GITHUB_APP_PRIVATE_KEY_FILE: git.github.keyFile,
       SANDBOX_DEPLOYMENT: `${STAND}-${context.run}`,
       GIT_MIRROR_DIR: context.git.mirrorDir,
       GIT_CA_FILE,
@@ -202,7 +220,17 @@ export function projectWebEnvironment(context, options) {
     'BROWSER_STREAM_PUBLIC_URL',
   ])
   const { GIT_CA_FILE: _ca, ...git } = gitOf(context)
-  return { ...env, ...git, NODE_EXTRA_CA_CERTS: context.caFile }
+  const { github } = context.git
+  return {
+    ...env,
+    ...git,
+    RADITI_FAKE_GITHUB_WEB_URL: github.origin,
+    GITHUB_APP_SLUG: github.slug,
+    GITHUB_APP_CLIENT_ID: github.clientId,
+    GITHUB_APP_CLIENT_SECRET: github.clientSecret,
+    GITHUB_APP_WEBHOOK_SECRET: github.webhookSecret,
+    NODE_EXTRA_CA_CERTS: context.caFile,
+  }
 }
 
 /**
