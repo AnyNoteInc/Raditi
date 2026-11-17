@@ -15,6 +15,8 @@ import { dockerClient, reapExpired } from '../../sandbox/watchdog.mjs'
 import { COM_HOST, OWN_HOST } from './fake-gitlab.mjs'
 import { scenarioP, scenarioW } from './scenarios-second.mjs'
 import {
+  PROBE_CONTROL,
+  gvisorKernel,
   hostProbes,
   leakedIn,
   probeAnswers,
@@ -980,7 +982,7 @@ async function scenarioE(stand) {
     ctx: {
       host: OWN_HOST,
       path: 'kofeinya/sait',
-      probes: hostProbes(stand.context.host, stand.ports),
+      probes: [PROBE_CONTROL, ...hostProbes(stand.context.host, stand.ports)],
     },
   })
   state.chatE = chat.taskId
@@ -998,6 +1000,15 @@ async function scenarioE(stand) {
     /---env\n0/.test(facts.seen ?? ''),
     'no token of git is in the environment of the sandbox',
   )
+  // The runtime the run names is the one the sandbox of the turn runs under: under runsc its
+  // kernel is gVisor's, under runc the kernel of the daemon's machine.
+  const kernel = /---kernel\n(\S+)/.exec(facts.seen ?? '')?.[1]
+  const runtime = stand.context.runtime
+  rt.check(
+    kernel !== undefined && (runtime === 'runsc') === gvisorKernel(kernel),
+    `the sandbox of the turn runs under ${runtime} (its kernel ${kernel ?? '?'})`,
+    facts.seen?.split('---kernel')[1]?.slice(0, 100),
+  )
   const pushed = /push=(\d+)/.exec(facts.attempts ?? '')?.[1]
   const curled = /curl=(\d+)/.exec(facts.attempts ?? '')?.[1]
   rt.check(
@@ -1006,13 +1017,15 @@ async function scenarioE(stand) {
     facts.attempts,
   )
   // The host rules of the turn on this host: the sandbox reaches neither the host nor the ports
-  // the stand opens there — llm, mcp and the fake behind their relays on Linux (`hostProbes`).
+  // the stand opens there — llm, mcp and the fake behind their relays on Linux (`hostProbes`) —,
+  // while the same probe reaches its gateway.
   const probes = hostProbes(stand.context.host, stand.ports)
   const answers = probeAnswers(facts.attempts ?? '')
   rt.check(
-    probes.length > 0 &&
+    answers[PROBE_CONTROL] === '0' &&
+      probes.length > 0 &&
       probes.every((target) => answers[target] !== undefined && answers[target] !== '0'),
-    `the sandbox connects to no address of the host at the ports of the stand (${stand.context.host.kind}: ${probes.map((target) => `${target}=${answers[target] ?? '?'}`).join(', ')})`,
+    `the sandbox connects to no address of the host at the ports of the stand, and to its gateway (${stand.context.host.kind}: ${[PROBE_CONTROL, ...probes].map((target) => `${target}=${answers[target] ?? '?'}`).join(', ')})`,
     facts.attempts,
   )
   const instructions = lastInstructions(stand)

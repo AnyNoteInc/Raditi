@@ -77,6 +77,9 @@ export function* changeRepository(ctx, facts) {
       'git remote -v 2>&1',
       'echo ---env',
       'env | grep -ciE "glpat|stand-oauth|stand-token" || true',
+      // The kernel the sandbox sees: gVisor answers with its own release (`sandboxKernel`).
+      'echo ---kernel',
+      'uname -r',
     ].join('; '),
     'Look at the repository',
   )

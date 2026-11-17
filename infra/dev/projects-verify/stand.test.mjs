@@ -9,6 +9,7 @@ import {
   PROJECTS_BUILD,
   forwarderArgs,
   gitWorkerEnvironment,
+  gvisorKernel,
   hostProbes,
   leakedIn,
   probeAnswers,
@@ -216,11 +217,10 @@ describe('projects stand', () => {
     assert.equal(hostProbes(linux, context.ports).length, 3)
     assert.equal(hostProbes(desktop, context.ports).length, 6)
     assert.deepEqual(
-      probeAnswers('push=128\nprobe 172.17.0.1:41007=124\nprobe 172.17.0.1:41006=1\n'),
-      {
-        '172.17.0.1:41007': '124',
-        '172.17.0.1:41006': '1',
-      },
+      probeAnswers(
+        'push=128\nprobe sandbox-gw:8080=0\nprobe 172.17.0.1:41007=124\nprobe 172.17.0.1:41006=1\n',
+      ),
+      { 'sandbox-gw:8080': '0', '172.17.0.1:41007': '124', '172.17.0.1:41006': '1' },
     )
   })
 
@@ -233,6 +233,13 @@ describe('projects stand', () => {
       projectAppEnvironment('mcp', { ...context, host: vm }).MCP_ALLOWED_HOSTS,
       'host.docker.internal,172.17.0.1',
     )
+  })
+
+  it('tells the kernel of gVisor from the kernel of a machine', () => {
+    assert.equal(gvisorKernel('4.19.0-gvisor'), true)
+    assert.equal(gvisorKernel('4.4.0'), true)
+    for (const release of ['6.8.0-117-generic', '7.0.14-linuxkit', undefined])
+      assert.equal(gvisorKernel(release), false, release)
   })
 
   it('reads the remote ports of a process from the TCP tables of Linux', () => {

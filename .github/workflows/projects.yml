@@ -70,8 +70,9 @@ permissions:
 jobs:
   stand:
     runs-on: ubuntu-latest
-    # A first value, not a measurement: after the first runs it becomes the measured time plus half.
-    timeout-minutes: 75
+    # The first run on a PR (17.11.2026): 20 min 22 s, the stand 1 047 s of it, its images built
+    # from nothing; the bound is that plus a half and some, the runners vary.
+    timeout-minutes: 40
     env:
       # The engine of the sandbox VM (spec §8): fixed addresses on a subnet Docker picks need
       # Docker Engine 29.1, and the runner image ships 28.0.4 (browser.yml).

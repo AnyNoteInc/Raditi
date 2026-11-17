@@ -268,12 +268,25 @@ export function hostProbes(host, ports) {
   )
 }
 
-/** `probe <address>:<port>=<code>` lines of the sandbox (programs.mjs, changeRepository). */
+/**
+ * The control of the probes: the gateway of the turn, the one address the host rules leave the
+ * sandbox. It must connect, or a refusal of the probes would prove nothing.
+ */
+export const PROBE_CONTROL = 'sandbox-gw:8080'
+
+/**
+ * Whether a kernel release is the one gVisor reports to what runs under it (`uname -r` in the
+ * sandbox, E): `4.19.0-gvisor` of the runsc in the Colima VM, `4.4.0` of older releases.
+ */
+export const gvisorKernel = (release) => /-gvisor$/.test(release ?? '') || release === '4.4.0'
+
+/** `probe <host>:<port>=<code>` lines of the sandbox (programs.mjs, changeRepository). */
 export function probeAnswers(text) {
   return Object.fromEntries(
-    [...String(text).matchAll(/^probe (\d+\.\d+\.\d+\.\d+:\d+)=(\d+)$/gm)].map(
-      ([, target, code]) => [target, code],
-    ),
+    [...String(text).matchAll(/^probe ([\w.-]+:\d+)=(\d+)$/gm)].map(([, target, code]) => [
+      target,
+      code,
+    ]),
   )
 }
 
