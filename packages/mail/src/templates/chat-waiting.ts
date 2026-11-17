@@ -33,8 +33,8 @@ const lines: Record<ChatKind, string> = {
 const scheduledSubjects: Record<ChatWaitingKind, string> = {
   answered: 'Запланированная задача выполнена',
   question: 'Запланированной задаче нужен ваш ответ',
-  // The kind of the chats, kept as they keep it (Зп62): a task done.
-  ready: 'Запланированная задача выполнена',
+  // Never a letter by Зп39 (only a question or a failure); kept in the words of the push.
+  ready: 'Запланированная задача подготовила изменения',
   failed: 'Запланированная задача не выполнена',
   limit: 'Запланированная задача остановилась',
   not_started: 'Запланированная задача не запустилась',
@@ -45,7 +45,8 @@ const scheduledSubjects: Record<ChatWaitingKind, string> = {
 const scheduledLines: Record<ChatWaitingKind, string> = {
   answered: 'Агент выполнил запланированную задачу и ответил в чате запуска.',
   question: 'Агенту нужен ваш ответ, чтобы продолжить запланированную задачу.',
-  ready: 'Агент выполнил запланированную задачу и ответил в чате запуска.',
+  ready:
+    'Запланированная задача подготовила изменения. Посмотрите их в чате запуска и отправьте в ветку.',
   failed:
     'Запланированная задача остановилась из-за сбоя. Напишите в чате запуска «продолжи» — агент попробует снова.',
   limit: 'Кредиты или недельный лимит закончились. Подробности — в чате запуска.',

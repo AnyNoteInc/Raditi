@@ -56,6 +56,16 @@ import type { ResolvePublicHost } from './public-host.ts'
 // Every operation resolves the host once; the API and git connect to that very address (§4.6).
 
 /** Pages of 50 repositories one sync reads at most (P-git-repo-pick shows what it has). */
+
+/**
+ * A connection whose GitHub App installation was deleted or suspended (the `installation` webhook,
+ * docs/plan/84-projects.md, §10): only the webhook of its return, or a new installation, gives it
+ * back — a sync that read it before or fails after does not.
+ */
+const notInstallationGone = {
+  OR: [{ stateReason: null }, { stateReason: { not: 'installation_gone' } }],
+} satisfies Prisma.GitConnectionWhereInput
+
 export const GIT_SYNC_PAGES = 10
 /** Branches a repository keeps for the choice (CHECK of `git_connection_repositories`). */
 export const GIT_BRANCHES_KEPT = 100
@@ -312,7 +322,7 @@ export class GitJobs {
       if (connection.state === 'ok' && reason === 'unreachable') return
       if (reason === 'reauth') return // the auth source has set `reauth_needed`
       await this.#o.prisma.gitConnection.updateMany({
-        where: { id: connectionId, state: { not: 'suspended' } },
+        where: { id: connectionId, state: { not: 'suspended' }, ...notInstallationGone },
         data: { state: 'refused', stateReason: reason, checkedAt: this.#now() },
       })
       return
@@ -320,8 +330,9 @@ export class GitJobs {
     const now = this.#now()
     try {
       await this.#o.prisma.$transaction(async (tx) => {
-        await tx.gitConnection.update({
-          where: { id: connectionId },
+        // An installation GitHub said is gone while this sync read it stays stopped (84.27).
+        const kept = await tx.gitConnection.updateMany({
+          where: { id: connectionId, ...notInstallationGone },
           data: {
             ...(account === null
               ? {}
@@ -331,6 +342,7 @@ export class GitJobs {
             checkedAt: now,
           },
         })
+        if (kept.count === 0) return
         const seen = items.map((item) => item.ref.providerRepoId)
         await tx.gitConnectionRepository.deleteMany({
           where: { connectionId, providerRepoId: { notIn: seen } },

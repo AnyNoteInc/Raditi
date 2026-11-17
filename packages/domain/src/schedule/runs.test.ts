@@ -21,6 +21,7 @@ import {
   notificationPushPayloadSchema,
   notificationTitle,
   scheduledNoticeTitle,
+  scheduledReadyText,
   scheduleNotifySwitchKinds,
   taskPageNotificationKinds,
   urgentNotificationKinds,
@@ -246,8 +247,8 @@ describe('the notices', () => {
     expect(notificationKinds.map((kind) => scheduledNoticeTitle(kind))).toEqual([
       'Запланированная задача выполнена',
       'Запланированной задаче нужен ваш ответ',
-      // A `ready`, should it come, is a task done (Зп62).
-      'Запланированная задача выполнена',
+      // A run in a project with a repository that prepared changes (plan 84).
+      'Запланированная задача подготовила изменения',
       'Запланированная задача не выполнена',
       'Запланированная задача остановилась',
       'Запланированная задача не запустилась',
@@ -259,6 +260,12 @@ describe('the notices', () => {
     )
     expect(scheduledNoticeTitle('limit', 'weekly_limit')).toBe(
       'Запланированная задача остановилась: исчерпан недельный лимит',
+    )
+  })
+
+  it('tell a run that prepared changes to look at them and send them to the branch', () => {
+    expect(scheduledReadyText('Сводка запросов')).toBe(
+      'Задача «Сводка запросов» подготовила изменения — посмотрите и отправьте в ветку.',
     )
   })
 

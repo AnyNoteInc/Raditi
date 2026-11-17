@@ -100,8 +100,11 @@ export function ProjectRepositoryRow({
 }: {
   project: Pick<ProjectDetails, 'id' | 'repository'>
   compact?: boolean
-  /** «Войти заново» of a connection whose sign-in is to be renewed (ревью P3). */
-  onSignIn?: () => void
+  /**
+   * «Войти заново» of a connection whose sign-in is to be renewed (ревью P3), «Подключить заново»
+   * of an installation of the GitHub App that was removed or suspended: the way it is renewed.
+   */
+  onSignIn?: (way: SignInWay) => void
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
@@ -165,9 +168,14 @@ export function ProjectRepositoryRow({
         <Alert
           severity="warning"
           action={
-            repo.refusal.code === 'GIT_CONNECTION_REAUTH' && onSignIn ? (
-              <Button color="inherit" size="small" onClick={onSignIn} sx={{ minHeight: 44 }}>
-                {repoText.signInAgain}
+            repo.refusal.code === 'GIT_CONNECTION_REAUTH' && onSignIn && repo.connection ? (
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => onSignIn(renewals[repo.connection!.kind].way)}
+                sx={{ minHeight: 44 }}
+              >
+                {renewals[repo.connection.kind].label}
               </Button>
             ) : repo.mirrorState === 'failed' || repo.mirrorState === 'unreachable' ? (
               <Button
@@ -294,6 +302,17 @@ function LinkForm({
 }
 
 type Way = 'github' | 'gitlab' | 'gitlab-self'
+
+/** The way the window «Подключить репозиторий» opens on. */
+export type SignInWay = 'github' | 'gitlab'
+
+/** How the row renews a connection that stopped (rule 8: a table). */
+const renewals: Readonly<Record<GitConnectionKind, { way: SignInWay; label: string }>> =
+  Object.freeze({
+    github_app: { way: 'github', label: repoText.reconnect },
+    gitlab_oauth: { way: 'gitlab', label: repoText.signInAgain },
+    gitlab_token: { way: 'gitlab', label: repoText.signInAgain },
+  })
 
 /** The way a connection that signs in on a provider's page is renewed (rule 8: a table). */
 const signInWays: Readonly<Record<GitConnectionKind, Way>> = Object.freeze({
@@ -1045,6 +1064,8 @@ export function useRepositoryWindows(project: Pick<ProjectDetails, 'id' | 'name'
     onLink: () => setLinking(true),
     onGitlab: () => setConnecting('gitlab'),
     onGithub: offered?.github === true ? () => setConnecting('github') : undefined,
+    /** «Войти заново» and «Подключить заново» of the repository row. */
+    onSignIn: (way: SignInWay) => setConnecting(way),
     notice,
     clearNotice: () => setNotice(null),
     windows,

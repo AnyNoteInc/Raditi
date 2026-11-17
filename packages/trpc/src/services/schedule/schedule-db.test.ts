@@ -824,6 +824,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
         url: `/chats/${taskId}`,
       })
 
+      // A run in a project with a repository that prepared changes (plan 84): look and send.
+      const ready = await notice({
+        userId: owner.id,
+        taskId,
+        scheduledTaskId: task.id,
+        scheduledRunId: run.id,
+        kind: 'ready',
+        attempt: 1,
+        turnNo: 3,
+      })
+      expect(await readChatNotification(db, owner.id, ready.id)).toEqual({
+        title: 'Запланированная задача подготовила изменения',
+        body: 'Проверка сайта — посмотрите и отправьте в ветку',
+        url: `/chats/${taskId}`,
+      })
+
       // A pass the client watched is told as any chat.
       const attended = await notice({
         userId: owner.id,

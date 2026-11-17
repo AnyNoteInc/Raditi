@@ -29,7 +29,7 @@ import {
 } from './context-parts'
 import { ContextTextDialog } from './context-text-dialog'
 import { contextText } from './project-texts'
-import { ProjectRepositoryRow, useRepositoryWindows } from './project-repository'
+import { ProjectRepositoryRow, useRepositoryWindows, type SignInWay } from './project-repository'
 import type { ProjectDetails } from './project-types'
 import { useContextUploads, type ContextUploads } from './use-context-uploads'
 
@@ -91,7 +91,7 @@ export function ProjectContext({ project }: { project: ProjectDetails }) {
           </Alert>
         ) : null}
         {/* The repository is part of «Контекст» (ПР6): under its title, with its last state. */}
-        <ProjectRepositoryRow project={project} compact onSignIn={repository.onGitlab} />
+        <ProjectRepositoryRow project={project} compact onSignIn={repository.onSignIn} />
         {files.count === 0 && project.repository !== null ? (
           <Box>
             <Button
@@ -288,7 +288,12 @@ export function ContextDialog({
           />
         ) : null}
 
-        <ProjectRepositoryRow project={project} {...(onGitlab ? { onSignIn: onGitlab } : {})} />
+        <ProjectRepositoryRow
+          project={project}
+          {...(onGitlab || onGithub
+            ? { onSignIn: (way: SignInWay) => (way === 'github' ? onGithub : onGitlab)?.() }
+            : {})}
+        />
 
         <Box component="section" aria-labelledby={listId}>
           <Typography id={listId} component="h3" sx={{ fontSize: 15, fontWeight: 600, mb: 1 }}>

@@ -2,6 +2,7 @@ import { enqueueOutbox, type PrismaClient } from '@repo/db'
 import {
   githubHost,
   gitJobNames,
+  type GitConnectionReason,
   gitRefreshAvailableAt,
   gitRefreshDedupeKey,
   gitRefreshPayloadSchema,
@@ -11,10 +12,12 @@ import {
 import {
   gitlabHookKeyId,
   gitlabHookSecrets,
+  parseGithubInstallationWebhook,
   parseGithubWebhook,
   parseGitlabWebhook,
   verifyGithubSignature,
   verifyGitlabDelivery,
+  type GithubInstallationHint,
   type GitWebhookHint,
 } from '@repo/git-providers/webhooks'
 
@@ -27,6 +30,12 @@ import { MAX_WEBHOOK_BODY_BYTES, readBodyWithin } from './body-limit'
 // `git.refresh` written for core in the same transaction — core reads the state again from the
 // provider. The body is never kept; web calls no provider. Answers are bare: a sender learns only
 // whether it was taken.
+//
+// An `installation` event of the GitHub App is not a hint (§10, «Открытое — закрыто (17.11.2026)»):
+// deleted or suspended, the connections of that installation stop at once — `reauth_needed` by
+// `installation_gone`, so cards and runs refuse as for a sign-in to renew and the repository row
+// offers «Подключить заново»; unsuspended or created again, they go back to `checking` and core
+// checks them (`git.connection.sync`).
 
 export interface GitWebhookDeps {
   prisma: Pick<PrismaClient, '$transaction' | 'projectRepository'>
@@ -83,6 +92,49 @@ async function takeDelivery(
   })
 }
 
+const INSTALLATION_GONE: GitConnectionReason = 'installation_gone'
+
+/**
+ * The connections of one installation of the GitHub App, stopped or given back to a check, in the
+ * transaction that keeps the delivery. A connection the member's leaving suspended stays so.
+ */
+async function takeInstallation(deps: GitWebhookDeps, hint: GithubInstallationHint): Promise<void> {
+  const now = deps.now()
+  const installationId = BigInt(hint.installationId)
+  await deps.prisma.$transaction(async (tx) => {
+    const kept = await tx.gitWebhookDelivery.createMany({
+      data: [{ provider: 'github', deliveryId: hint.deliveryId, receivedAt: now }],
+      skipDuplicates: true,
+    })
+    if (kept.count === 0) return
+    const of = { kind: 'github_app', host: githubHost, installationId }
+    if (hint.change === 'gone') {
+      await tx.gitConnection.updateMany({
+        where: { ...of, state: { not: 'suspended' } },
+        data: { state: 'reauth_needed', stateReason: INSTALLATION_GONE, checkedAt: now },
+      })
+      return
+    }
+    const back = await tx.gitConnection.findMany({
+      where: { ...of, state: 'reauth_needed', stateReason: INSTALLATION_GONE },
+      select: { id: true },
+      take: 50,
+    })
+    for (const { id } of back) {
+      await tx.gitConnection.updateMany({
+        where: { id, state: 'reauth_needed', stateReason: INSTALLATION_GONE },
+        data: { state: 'checking', stateReason: null, checkedAt: now },
+      })
+      await enqueueOutbox(tx, {
+        topic: 'git',
+        type: gitJobNames.connectionSync,
+        payload: { connectionId: id },
+        dedupeKey: `git.connection.sync:${id}:${Math.floor(now.getTime() / 10_000)}`,
+      })
+    }
+  })
+}
+
 /**
  * `POST /api/webhooks/github`. `webhookSecret` null — no GitHub App here: 404. The repositories of
  * an event are found by their id on github.com: every project whose repository it is gets a hint.
@@ -95,8 +147,13 @@ export async function handleGithubWebhook(
   const raw = await bodyOf(request)
   if (typeof raw !== 'string') return raw
   if (!verifyGithubSignature(request.headers, raw, deps.webhookSecret)) return bare(401)
+  const installation = parseGithubInstallationWebhook(request.headers, raw)
+  if (installation !== null) {
+    await takeInstallation(deps, installation)
+    return bare(202)
+  }
   const hint = parseGithubWebhook(request.headers, raw)
-  // An event of no repository (ping, installation) or not one core reads: taken, nothing to do.
+  // An event of no repository (ping) or not one core reads: taken, nothing to do.
   if (hint === null) return bare(202)
   const rows = await deps.prisma.projectRepository.findMany({
     where: { provider: 'github', host: githubHost, providerRepoId: hint.providerRepoId },

@@ -3,6 +3,7 @@ import {
   DomainError,
   isNotificationKind,
   notificationTitle,
+  scheduledReadyHint,
   scheduledRunReasonText,
   scheduledRunReasons,
   taskPageNotificationKinds,
@@ -296,6 +297,7 @@ export async function readChatNotification(
     const reason = reasonOf(row.scheduledRun?.reason ?? null)
     why = reason === null ? null : scheduledRunReasonText[reason]
   } else if (kind === 'paused') why = pausedWords(schedule)
+  else if (kind === 'ready') why = scheduledReadyHint
   const ofTask = (taskPageNotificationKinds as readonly string[]).includes(kind)
   const url =
     !ofTask && row.task !== null
