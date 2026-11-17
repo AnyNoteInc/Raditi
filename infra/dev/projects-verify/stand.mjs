@@ -8,7 +8,11 @@ import { isAbsolute } from 'node:path'
 
 import {
   BUILT_IMAGES as BROWSER_TASK_IMAGES,
+  HOST_NAME,
+  RUNTIMES,
   appEnvironment,
+  hostIn,
+  hostRelays,
   webEnvironment,
 } from '../browser-task-verify/stand.mjs'
 import { GITHUB_HOST } from './fake-github.mjs'
@@ -112,15 +116,22 @@ export function scenariosToRun(only) {
   return SCENARIO_IDS.filter((id) => wanted.has(id))
 }
 
-/** `--no-build`, `--keep`, `--only a,b`; nothing names a database, a host or a key. */
+/**
+ * `--no-build`, `--keep`, `--only a,b`, `--runtime=runc|runsc` (the sandbox of a turn; runsc on
+ * Linux only); nothing names a database, a host or a key.
+ */
 export function standOptions(argv) {
-  const options = { build: true, keep: false, webDev: false, only: null }
+  const options = { build: true, keep: false, webDev: false, only: null, runtime: 'runc' }
   const args = argv.filter((value) => value !== '--')
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]
     if (arg === '--no-build') options.build = false
     else if (arg === '--keep') options.keep = true
-    else if (arg === '--only' || arg.startsWith('--only=')) {
+    else if (arg.startsWith('--runtime=')) {
+      const runtime = arg.slice('--runtime='.length)
+      if (!RUNTIMES.includes(runtime)) throw new Error('--runtime is runc or runsc')
+      options.runtime = runtime
+    } else if (arg === '--only' || arg.startsWith('--only=')) {
       const value = arg === '--only' ? args[++index] : arg.slice('--only='.length)
       const ids = String(value ?? '')
         .split(',')
@@ -132,7 +143,7 @@ export function standOptions(argv) {
       options.only = ids
     } else
       throw new Error(
-        'This stand accepts --no-build, --keep and --only only; it takes no database, host or key',
+        'This stand accepts --no-build, --keep, --only and --runtime only; it takes no database, host or key',
       )
   }
   return options
@@ -234,17 +245,86 @@ export function projectWebEnvironment(context, options) {
 }
 
 /**
- * The forwarder of 443: macOS lets no user bind 443 on loopback, Docker Desktop does. Git reaches
- * a repository at `https://<host>/<path>.git` on 443 only (and the API of an own server too), so
- * 127.0.0.1:443 and [::1]:443 go to the fake on the stand's own port. A node of the gateway image
- * of this tree — nothing is pulled.
+ * The ports of this machine the containers of a run reach (`hostRelays` on Linux and in a VM): llm
+ * and mcp for the gateway of a turn, the fake GitLab for the forwarder of 443.
  */
-export function forwarderArgs({ names, image, fakePort }) {
+export function relayedPorts(ports) {
+  return { llm: ports.llm, mcp: ports.mcp, gitlab: ports.gitlab }
+}
+
+/** The relays of a run: none on Docker Desktop (stand.mjs of the browser-task stand, `hostOf`). */
+export const projectRelays = (host, ports) => hostRelays(host, relayedPorts(ports))
+
+/**
+ * What the sandbox of a turn tries to reach on the host (scenario E): every address the host has
+ * for containers — `host-gateway` and the gateway of the default bridge, where the relays listen
+ * on Linux — at every port the stand opens there. The host rules of a turn leave the sandbox only
+ * its gateway (spec §8): none of them may connect.
+ */
+export function hostProbes(host, ports) {
+  const addresses = [...new Set([host.hostGateway, host.bridgeGateway].filter(Boolean))]
+  return addresses.flatMap((address) =>
+    Object.values(relayedPorts(ports)).map((port) => `${address}:${port}`),
+  )
+}
+
+/**
+ * The control of the probes: the gateway of the turn, the one address the host rules leave the
+ * sandbox. It must connect, or a refusal of the probes would prove nothing.
+ */
+export const PROBE_CONTROL = 'sandbox-gw:8080'
+
+/**
+ * Whether a kernel release is the one gVisor reports to what runs under it (`uname -r` in the
+ * sandbox, E): `4.19.0-gvisor` of the runsc in the Colima VM, `4.4.0` of older releases.
+ */
+export const gvisorKernel = (release) => /-gvisor$/.test(release ?? '') || release === '4.4.0'
+
+/** `probe <host>:<port>=<code>` lines of the sandbox (programs.mjs, changeRepository). */
+export function probeAnswers(text) {
+  return Object.fromEntries(
+    [...String(text).matchAll(/^probe ([\w.-]+:\d+)=(\d+)$/gm)].map(([, target, code]) => [
+      target,
+      code,
+    ]),
+  )
+}
+
+/**
+ * The remote ports of the TCP sockets of a process on Linux (scenario N), from the tables of its
+ * network namespace (`/proc/<pid>/net/tcp` and `tcp6`) and the inodes of its descriptors: what
+ * `lsof -i` of macOS names. A listening socket has no remote port.
+ */
+export function procRemotePorts(tables, inodes) {
+  const ports = []
+  for (const table of tables)
+    for (const line of String(table).split('\n').slice(1)) {
+      const fields = line.trim().split(/\s+/)
+      if (fields.length < 10 || !inodes.has(fields[9])) continue
+      const port = Number.parseInt(fields[2].split(':').at(-1) ?? '', 16)
+      if (Number.isInteger(port) && port > 0) ports.push(String(port))
+    }
+  return ports
+}
+
+/**
+ * The forwarder of 443: no user of this machine may bind 443 on loopback (macOS; Linux below
+ * `ip_unprivileged_port_start`), the daemon may. Git reaches a repository at
+ * `https://<host>/<path>.git` on 443 only (and the API of an own server too), so 127.0.0.1:443
+ * and [::1]:443 go to the fake on the stand's own port. A node of the gateway image of this tree —
+ * nothing is pulled — on the default bridge, read-only, without capabilities, published on
+ * loopback only, on every kind of host. It reaches the fake where the host is for containers
+ * (`hostOf`): Docker Desktop carries `host.docker.internal` to the loopback of the Mac; on Linux
+ * that name is `host-gateway` — the bridge gateway, where the relay of the stand carries it on to
+ * the fake on loopback; in a VM the bridge gateway by its address.
+ */
+export function forwarderArgs({ names, image, fakePort, host: given }) {
   if (!Number.isInteger(fakePort) || fakePort < 1024 || fakePort > 65_535)
     throw new Error('Invalid port')
+  const host = hostIn({ host: given })
   const program = [
     "const net = require('node:net');",
-    `net.createServer((c) => { const u = net.connect(${fakePort}, 'host.docker.internal');`,
+    `net.createServer((c) => { const u = net.connect(${fakePort}, '${host.upstream}');`,
     "c.pipe(u); u.pipe(c); c.on('error', () => u.destroy()); u.on('error', () => c.destroy()); })",
     ".listen(8443, '0.0.0.0');",
   ].join(' ')
@@ -260,6 +340,8 @@ export function forwarderArgs({ names, image, fakePort }) {
       names.label,
     ],
     ...['-p', '127.0.0.1:443:8443', '-p', '[::1]:443:8443', '--read-only', '--cap-drop', 'ALL'],
+    // Docker Desktop resolves the name itself; on Linux only `host-gateway` gives it.
+    ...(host.kind === 'linux' ? ['--add-host', `${HOST_NAME}:host-gateway`] : []),
     ...['--entrypoint', 'node', image, '-e', program],
   ]
 }

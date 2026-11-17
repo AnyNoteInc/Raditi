@@ -77,6 +77,9 @@ export function* changeRepository(ctx, facts) {
       'git remote -v 2>&1',
       'echo ---env',
       'env | grep -ciE "glpat|stand-oauth|stand-token" || true',
+      // The kernel the sandbox sees: gVisor answers with its own release (`sandboxKernel`).
+      'echo ---kernel',
+      'uname -r',
     ].join('; '),
     'Look at the repository',
   )
@@ -96,6 +99,13 @@ export function* changeRepository(ctx, facts) {
       'cd /workspace/repo',
       `git push https://oauth2:x@${ctx.host}/${ctx.path}.git HEAD:refs/heads/agent-own > /tmp/push.txt 2>&1; echo "push=$?"; tail -2 /tmp/push.txt`,
       `curl -sS -m 5 -o /dev/null -w "%{http_code}" https://${ctx.host}/api/v4/user 2>&1; echo " curl=$?"`,
+      // The host where the stand's processes and relays listen, by address and port
+      // (`hostProbes`): a TCP connection, all at once; 0 is a connection.
+      ...(ctx.probes?.length
+        ? [
+            `for t in ${ctx.probes.join(' ')}; do (timeout 3 bash -c "exec 3<>/dev/tcp/\${t%:*}/\${t##*:}" 2>/dev/null; echo "probe $t=$?") & done; wait`,
+          ]
+        : []),
     ].join('; '),
     'Try to push and to call GitLab',
   )

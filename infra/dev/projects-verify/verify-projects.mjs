@@ -30,9 +30,11 @@ import {
 } from '../browser-task-verify/runtime.mjs'
 import {
   createCertificates,
+  probeHost,
   startOpenbao,
   startPostgres,
   startRedis,
+  startRelays,
   startS3,
 } from '../browser-task-verify/services.mjs'
 import {
@@ -53,6 +55,7 @@ import {
   forwarderArgs,
   gitWorkerEnvironment,
   projectAppEnvironment,
+  projectRelays,
   projectWebEnvironment,
   scenariosToRun,
   standNames,
@@ -66,7 +69,7 @@ const names = standNames(randomBytes(4).toString('hex'))
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP']
 const interrupt = () => rt.controller.abort(new Error('The stand was interrupted'))
 
-async function preflight() {
+async function preflight(options) {
   rt.setStage('preflight')
   const context = await rt.docker([
     'context',
@@ -77,15 +80,30 @@ async function preflight() {
   const endpoint = callerEnv.DOCKER_HOST ?? JSON.parse(context.output)
   if (typeof endpoint !== 'string' || !endpoint.startsWith('unix://'))
     throw new Error('This stand needs a local Docker socket; remote Docker endpoints are refused')
-  const info = await rt.docker(['info', '--format', '{{.OperatingSystem}}'])
-  if (!/Docker Desktop/.test(info.output))
-    throw new Error('This stand runs on Docker Desktop (macOS): see README, «Что не проверено»')
   for (const image of [POSTGRES_IMAGE, REDIS_IMAGE, S3_IMAGE, OPENBAO_IMAGE])
     if ((await rt.docker(['image', 'inspect', image], { allowFailure: true })).code !== 0)
       throw new Error(
         `The pinned image ${image} is missing locally; pull it first (docker pull ${PULLED_TAGS[image] ?? image})`,
       )
-  for (const tool of ['git', 'rsync', 'openssl', 'pnpm']) await rt.run(tool, ['--version'])
+  // Docker Desktop, or a daemon of this Linux machine: the processes of the stand listen on its
+  // loopback, and the containers reach them there (README, «Linux и CI»). A Mac on the daemon of
+  // a VM (Colima) is refused: the VM does not see the loopback of the Mac.
+  const host = await probeHost(rt, names, POSTGRES_IMAGE)
+  if (host.kind !== 'desktop' && process.platform !== 'linux')
+    throw new Error(
+      `The daemon is not Docker Desktop (${host.kind}): run the stand on the machine of the daemon — in a VM, inside it (README, «Linux и CI»)`,
+    )
+  if (options.runtime === 'runsc') {
+    const runtimes = await rt.docker(['info', '--format', '{{json .Runtimes}}'])
+    if (host.kind === 'desktop' || !Object.hasOwn(JSON.parse(runtimes.output), 'runsc'))
+      throw new Error('--runtime=runsc needs a Linux daemon with the runsc runtime')
+  }
+  console.log(
+    `PASS host of the daemon: ${host.kind}; ${host.relay === null ? 'containers reach the loopback of this machine by host.docker.internal' : `relays of llm, mcp and the fake GitLab on ${host.relay}, containers go to ${host.upstream}`}; the sandbox of a turn under ${options.runtime}`,
+  )
+  for (const tool of ['git', 'rsync', 'pnpm']) await rt.run(tool, ['--version'])
+  // OpenSSL 3 of Linux knows `version` only; LibreSSL of macOS takes both.
+  await rt.run('openssl', ['version'])
   await rt.run('gitleaks', ['version'])
   // 443 of loopback is the forwarder's: another stand or server there would take its requests.
   const busy = await exchange('https://127.0.0.1:443/', { timeoutMs: 2000 }).then(
@@ -94,7 +112,7 @@ async function preflight() {
   )
   if (busy)
     throw new Error('Something answers on 127.0.0.1:443: the forwarder of the fake needs it')
-  return endpoint.slice('unix://'.length)
+  return { socket: endpoint.slice('unix://'.length), host }
 }
 
 async function copyModules(copy) {
@@ -109,7 +127,7 @@ async function copyModules(copy) {
 }
 
 async function main(options, owned) {
-  const socket = await preflight()
+  const { socket, host } = await preflight(options)
   const copy = copyDirectory(root, PROJECTS_BUILD)
   owned.lock = await lockCopy(copy)
   const built = await buildCopy(rt, copy, options, PROJECTS_BUILD)
@@ -156,6 +174,15 @@ async function main(options, owned) {
     'github',
   ])
     ports[name] = await freeLoopbackPort()
+  // On Linux and in a VM: what the containers meet on the bridge gateway, carried to loopback.
+  const relays = projectRelays(host, ports)
+  if (relays.length > 0) {
+    rt.setStage('relays to the host')
+    owned.relays = await startRelays(relays)
+    console.log(
+      `PASS relays ${relays.map((relay) => `${relay.role} ${relay.listen}:${relay.port}`).join(', ')} → 127.0.0.1 of this machine`,
+    )
+  }
   rt.setStage('PostgreSQL, Redis, S3 and OpenBao')
   const s3 = await startS3(rt, names, directory, ports.s3)
   const vault = await startOpenbao(rt, names, ports.vault)
@@ -233,7 +260,7 @@ async function main(options, owned) {
     delegate: { host: 'github.com', handle: github.handle },
   })
   owned.gitlab = gitlab
-  await rt.docker(forwarderArgs({ names, image: images.gateway, fakePort: ports.gitlab }))
+  await rt.docker(forwarderArgs({ names, image: images.gateway, fakePort: ports.gitlab, host }))
   await rt.until('the forwarder of 443 reaches the fake GitLab', async () => {
     const answer = await exchange('https://127.0.0.1:443/api/v4/user', {
       headers: { host: 'gitlab.localhost' },
@@ -271,6 +298,8 @@ async function main(options, owned) {
     caFile: certificates.caFile,
     socket,
     images,
+    host,
+    runtime: options.runtime,
     git: {
       mirrorDir: owned.mirrors,
       fakePort: ports.gitlab,
@@ -501,6 +530,7 @@ async function cleanup(owned) {
   await owned.model?.close().catch(() => {})
   await owned.gitlab?.close().catch(() => {})
   await owned.github?.close().catch(() => {})
+  await owned.relays?.close().catch(() => {})
   await owned.db?.$disconnect().catch(() => {})
   if (!owned.containers) return { left: [], platformLeft }
   const volumes = new Set()

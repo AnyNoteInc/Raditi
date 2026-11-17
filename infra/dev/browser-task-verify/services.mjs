@@ -1,17 +1,23 @@
 // The services of the browser-task stand, each started and made ready here: the certificates,
 // PostgreSQL, Redis, S3 and OpenBao (from the release stand, removed with the projects —
 // docs/plan/83-remove-projects.md). Every container is labelled with the run; the caller removes
-// them (verify-browser-task.mjs, cleanup).
+// them (verify-browser-task.mjs, cleanup). The probe of the host and the relays to the host serve
+// a stand that runs on Linux as well (the projects stand, infra/dev/projects-verify).
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { connect, createServer } from 'node:net'
 import { join } from 'node:path'
 import process from 'node:process'
 
 import { bootstrapLocalVault, localVaultRequest } from '../../vault/bootstrap.mjs'
 import {
   BUCKETS,
+  HOST_NAME,
+  bridgeGatewayOf,
   certificateConfigs,
+  hostGatewayOf,
+  hostOf,
   openbaoArgs,
   postgresArgs,
   postgresEnvFile,
@@ -272,4 +278,74 @@ export async function startOpenbao(rt, names, port) {
       ).auth.client_token,
     )
   return { address, root, request, roles, tokens }
+}
+
+/**
+ * What the host is for containers (stand.mjs, `hostOf`): `docker info`, the gateway of the default
+ * bridge and what `host-gateway` resolves to in a probe container on it — `image`, a pinned image
+ * the stand has already (it is never pulled), which only prints its /etc/hosts. The probe carries
+ * the label of the run.
+ */
+export async function probeHost(rt, names, image) {
+  const info = await rt.docker(['info', '--format', '{{.OperatingSystem}}'])
+  const bridge = await rt.docker([
+    ...['network', 'inspect', 'bridge', '--format', '{{(index .IPAM.Config 0).Gateway}}'],
+  ])
+  const probe = await rt.docker([
+    ...['run', '--rm', '--pull', 'never', '--label', names.label, '--network', 'bridge'],
+    ...['--add-host', `${HOST_NAME}:host-gateway`, '--read-only', '--cap-drop', 'ALL'],
+    ...['--entrypoint', 'cat', image, '/etc/hosts'],
+  ])
+  return hostOf({
+    operatingSystem: info.output.trim(),
+    bridgeGateway: bridgeGatewayOf(bridge.output),
+    hostGateway: hostGatewayOf(probe.output),
+  })
+}
+
+/**
+ * The relays of a run on Linux and in a VM (stand.mjs, `hostRelays`): a plain TCP forwarder in
+ * this process per entry, `<listen>:<port>` → `<to>:<port>`. Resolves once every relay listens;
+ * `close()` stops them and every open connection. A relay that cannot listen is refused in words
+ * and leaves none behind.
+ */
+export async function startRelays(relays) {
+  const servers = []
+  const sockets = new Set()
+  // Open connections first: a server closes only when the last of its connections did.
+  const close = async () => {
+    for (const socket of sockets) socket.destroy()
+    await Promise.all(servers.map((server) => new Promise((done) => server.close(() => done()))))
+  }
+  try {
+    for (const relay of relays) {
+      const server = createServer((inbound) => {
+        const outbound = connect({ host: relay.to, port: relay.port })
+        for (const end of [inbound, outbound]) {
+          sockets.add(end)
+          end.once('close', () => sockets.delete(end))
+          end.on('error', () => {
+            inbound.destroy()
+            outbound.destroy()
+          })
+        }
+        inbound.pipe(outbound).pipe(inbound)
+      })
+      servers.push(server)
+      await new Promise((resolve, reject) => {
+        server.once('error', (error) =>
+          reject(
+            new Error(
+              `The relay of ${relay.role} cannot listen on ${relay.listen}:${relay.port}: ${error.message}`,
+            ),
+          ),
+        )
+        server.listen(relay.port, relay.listen, () => resolve())
+      })
+    }
+  } catch (error) {
+    await close()
+    throw error
+  }
+  return { relays, close }
 }
