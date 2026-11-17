@@ -10,7 +10,8 @@ export const gitHostRefused = (): DomainError =>
 
 /**
  * gitlab.com by a personal token while «Подключить GitLab.com» is not offered (docs/plan/84,
- * ПР29): the code of the client would go abroad before the documents of 84.16а.
+ * ПР29, slice 84.16а): in production the code of the client would go to the USA before the gate of
+ * code hosts abroad is open — the notice of art. 12 of 152-FZ (`codeHostsAbroadPublishedInProduction`).
  */
 export const gitlabComTokenRefused = (): DomainError =>
   new DomainError('GIT_GITLAB_COM_TOKEN', 'gitlab.com is not connected by a token now', 400)
