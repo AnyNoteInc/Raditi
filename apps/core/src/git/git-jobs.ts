@@ -16,6 +16,7 @@ import {
   readRepoCiPaths,
   REPO_CI_CONFIG_LINT_BYTES,
   REPO_TREE_MAX_PATHS,
+  repoSecretsFoundPaths,
   repoTreeKey,
   type RepoTreeFile,
   REPO_DIFF_KEPT_BYTES,
@@ -82,10 +83,19 @@ export interface GitJobsOptions {
   provider: GitProviderFactory
   workspace: Pick<
     GitWorkspaceService,
-    'fetch' | 'findSecrets' | 'buildSettingsChange' | 'dropMirror' | 'removeOrphans' | 'listPaths'
+    | 'fetch'
+    | 'findSecrets'
+    | 'buildSettingsChange'
+    | 'dropMirror'
+    | 'removeOrphans'
+    | 'listPaths'
+    | 'hiddenFiles'
   >
-  /** Where the diff of the build settings of a branch is kept for the card (`git.ci_lint`). */
-  storage?: Pick<ObjectStorage, 'put'>
+  /**
+   * Where the diff of the build settings of a branch is kept for the card (`git.ci_lint`), and the
+   * paths of `@` (`git.repo.tree`).
+   */
+  storage?: Pick<ObjectStorage, 'put' | 'exists'>
   logger: { log(line: string): void; warn(line: string): void }
   now?: () => Date
 }
@@ -112,6 +122,8 @@ const connectionSelect = {
 } as const
 
 const tooLargeCodes = new Set(['REPOSITORY_TOO_LARGE', 'PUBLICATION_TOO_LARGE'])
+/** A tree no turn takes (ПР12, ПР35): `@` offers none of its paths. */
+const treeRefusedCodes = new Set(['REPOSITORY_TOO_LARGE', 'REPOSITORY_UNSUPPORTED'])
 
 const reasonOf = (error: unknown): GitConnectionReason => {
   if (!isDomainError(error)) return 'unreachable'
@@ -356,9 +368,14 @@ export class GitJobs {
             // GitLab lists the projects of a membership; a connection of an app — only those its
             // person may push to. The right is checked again before every push (84.19, ПР10).
             canPush: true,
-            canHook: false,
             syncedAt: now,
           }
+          // Whether the access may make a hook of this repository, as the adapter says (ПР17;
+          // 84.26). A list of GitLab carries no permissions — the look at the repository in the
+          // choice (`git.repo.inspect`) reads them, and a list that does not say keeps that; a
+          // provider without hooks of one repository (GitHub: the app's own webhook) says false.
+          // The hook itself is made by the right read again (`RepoHooks`).
+          const canHook = item.canManageHooks
           await tx.gitConnectionRepository.upsert({
             where: {
               connectionId_providerRepoId: {
@@ -366,8 +383,13 @@ export class GitJobs {
                 providerRepoId: item.ref.providerRepoId,
               },
             },
-            create: { connectionId, providerRepoId: item.ref.providerRepoId, ...fields },
-            update: fields,
+            create: {
+              connectionId,
+              providerRepoId: item.ref.providerRepoId,
+              ...fields,
+              canHook: canHook === true,
+            },
+            update: { ...fields, ...(canHook === undefined ? {} : { canHook }) },
           })
         }
       })
@@ -398,8 +420,15 @@ export class GitJobs {
     const ref: RepoRef = { provider: kind, host: connection.host, path: row.path, providerRepoId }
     const op = await this.#operation(kind, connection.host, grant, ref)
     let names: string[]
+    let canHook: boolean | null = null
     try {
       names = await op.provider.listBranches(op.auth, ref)
+      // The right to a hook of this repository (ПР17; 84.26): a list of the provider may not carry
+      // it, the repository itself does. Only a provider with hooks of one repository is asked.
+      if (op.provider.support.projectHooks) {
+        const info = await op.provider.getRepository(op.auth, ref)
+        canHook = info?.canManageHooks === true
+      }
     } finally {
       await op.close()
     }
@@ -409,7 +438,7 @@ export class GitJobs {
     )
     await this.#o.prisma.gitConnectionRepository.update({
       where: { connectionId_providerRepoId: { connectionId, providerRepoId } },
-      data: { branches: kept, syncedAt: this.#now() },
+      data: { branches: kept, ...(canHook === null ? {} : { canHook }), syncedAt: this.#now() },
     })
   }
 
@@ -538,21 +567,36 @@ export class GitJobs {
   /**
    * `git.repo.tree` (ПР24; slice 84.26): the paths of the main branch at `sha` for `@`, from the
    * mirror, kept in `raditi-artifacts` by the SHA; `tree_sha` names the newest kept. A SHA the
-   * mirror has not, or not the head core last fetched, writes nothing.
+   * mirror has not, or not the head core last fetched, writes nothing. The files a sandbox holds as
+   * a stub (ПР35) — named like a secret, flagged by gitleaks at this head or at the connection —
+   * are not offered: the agent cannot read them. A tree a turn refuses (too large, too many such
+   * files) offers nothing.
    */
   async repoTree(projectRepositoryId: string, sha: string): Promise<void> {
     const { prisma, workspace, storage } = this.#o
     const repo = await prisma.projectRepository.findUnique({
       where: { id: projectRepositoryId },
-      select: { lastFetchedSha: true, treeSha: true, mirrorState: true },
+      select: { lastFetchedSha: true, treeSha: true, mirrorState: true, secretsFound: true },
     })
     if (repo === null || repo.mirrorState !== 'ready' || repo.lastFetchedSha !== sha) return
-    if (repo.treeSha === sha) return
     if (!storage) throw new Error('git.repo.tree needs the storage of artifacts')
-    const listed = await workspace.listPaths(projectRepositoryId, sha, REPO_TREE_MAX_PATHS)
-    const file: RepoTreeFile = { v: 1, sha, paths: listed.paths, truncated: listed.truncated }
+    const key = repoTreeKey(projectRepositoryId, sha)
+    // A list kept by an earlier version of this job lives under another key: it is made again.
+    if (repo.treeSha === sha && (await storage.exists('artifacts', key))) return
+    let listed: { paths: string[]; truncated: boolean }
+    try {
+      const hidden = new Set([
+        ...repoSecretsFoundPaths(repo.secretsFound),
+        ...(await workspace.hiddenFiles(projectRepositoryId, sha)),
+      ])
+      listed = await workspace.listPaths(projectRepositoryId, sha, REPO_TREE_MAX_PATHS, hidden)
+    } catch (error) {
+      if (!isDomainError(error) || !treeRefusedCodes.has(error.code)) throw error
+      listed = { paths: [], truncated: false }
+    }
+    const file: RepoTreeFile = { v: 2, sha, paths: listed.paths, truncated: listed.truncated }
     const body = Buffer.from(JSON.stringify(file))
-    await storage.put('artifacts', repoTreeKey(projectRepositoryId, sha), body, {
+    await storage.put('artifacts', key, body, {
       contentType: 'application/json',
       sizeBytes: body.byteLength,
     })

@@ -42,6 +42,20 @@ export function isSecretFileName(path: string): boolean {
 }
 
 /**
+ * The paths of `project_repositories.secrets_found` (`[{ path, rule }]`, ПР12): the files gitleaks
+ * flagged at the connection, hidden from the sandbox too (ПР35). Anything else in the column is
+ * not a path.
+ */
+export function repoSecretsFoundPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((row: unknown) =>
+    row !== null && typeof row === 'object' && typeof (row as { path?: unknown }).path === 'string'
+      ? [(row as { path: string }).path]
+      : [],
+  )
+}
+
+/**
  * The prefixes of git tokens of GitHub and GitLab (ПР22): a variable of such a form never reaches
  * the commands of a turn of a chat with a repository, which would push with it past the platform.
  */

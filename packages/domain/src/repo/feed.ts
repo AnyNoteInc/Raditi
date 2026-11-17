@@ -150,7 +150,8 @@ export const repoLeftTexts = Object.freeze({
   conflict:
     'Изменения не отправлены: ветку изменили в репозитории, и они не легли поверх. Попросите агента повторить',
   unreachable: 'Не удалось получить репозиторий — попробуем в следующем сообщении',
-  reauth: 'Нужно войти в GitLab заново',
+  // A row of the feed does not say whose sign-in it is: neutral words (`repoReauthText`).
+  reauth: 'Нужно заново войти туда, где лежит репозиторий',
   failed: 'Изменения не сохранены — попробуйте ещё раз',
 } satisfies Record<RepoLeftReason, string>)
 

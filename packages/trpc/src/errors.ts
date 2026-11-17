@@ -10,7 +10,9 @@ import {
   memoryRefusalTexts,
   gitConnectionRefusalTexts,
   repoCiRunTexts,
+  repoProviderKinds,
   repoPushRefusalTexts,
+  repoReauthText,
   repoRefusalTexts,
   projectFileRefusals,
   projectFileRefusalText,
@@ -34,6 +36,7 @@ import {
   type AttachmentRefusal,
   type ChatCommandRefusal,
   type DomainError,
+  type RepoProviderKind,
   type TaskRefusalDetails,
 } from '@repo/domain'
 import { TRPCError, type TRPC_ERROR_CODE_KEY } from '@trpc/server'
@@ -417,6 +420,16 @@ const SKILL_CHECK_TEXT: Readonly<Record<string, string>> = {
 }
 
 const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string>> = {
+  // A sign-in to renew names the provider of its connection when the thrower knew it (rule 8:
+  // the brand is data); without it — neutral words (docs/plan/84-projects.md, §10).
+  GIT_CONNECTION_REAUTH: (details) => {
+    const provider = detail(details, 'provider')
+    return repoReauthText(
+      provider !== null && (repoProviderKinds as readonly string[]).includes(provider)
+        ? (provider as RepoProviderKind)
+        : null,
+    )
+  },
   AGENT_SKILL_CHECK_FAILED: (details) =>
     SKILL_CHECK_TEXT[detail(details, 'reason') ?? ''] ??
     MESSAGE_BY_DOMAIN_CODE.AGENT_SKILL_CHECK_FAILED!,

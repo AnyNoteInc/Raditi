@@ -155,7 +155,7 @@ describe('GitWorkspaceService.revertMerge', { timeout: 60_000 }, () => {
 })
 
 describe('GitWorkspaceService.listPaths', { timeout: 60_000 }, () => {
-  it('lists the files of a commit of the mirror, without the ones that look like a secret', async () => {
+  it('lists the files of a commit of the mirror, without the ones a sandbox gets as a stub', async () => {
     const f = await fixture()
     const listed = await f.service.listPaths(f.projectRepositoryId, f.headSha, 100)
     expect(listed).toEqual({ paths: ['about.txt', 'menu.txt', 'src/app.ts'], truncated: false })
@@ -163,6 +163,13 @@ describe('GitWorkspaceService.listPaths', { timeout: 60_000 }, () => {
       paths: ['about.txt', 'menu.txt'],
       truncated: true,
     })
+    // The files gitleaks flags are left out too (ПР35), and the limit counts the paths offered.
+    expect(
+      await f.service.listPaths(f.projectRepositoryId, f.headSha, 100, new Set(['src/app.ts'])),
+    ).toEqual({ paths: ['about.txt', 'menu.txt'], truncated: false })
+    expect(
+      await f.service.listPaths(f.projectRepositoryId, f.headSha, 1, new Set(['about.txt'])),
+    ).toEqual({ paths: ['menu.txt'], truncated: true })
     await expect(
       f.service.listPaths(f.projectRepositoryId, 'f'.repeat(40), 10),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' })

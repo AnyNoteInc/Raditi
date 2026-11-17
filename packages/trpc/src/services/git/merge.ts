@@ -72,7 +72,8 @@ export async function writableRepository(
   if (project === null) throw projectNotFound()
   const repo = await db.projectRepository.findUnique({ where: { projectId }, select: repoSelect })
   if (repo === null || repo.mode !== 'write' || repo.connection === null) throw repoReadOnly()
-  if (repo.connection.state === 'reauth_needed') throw gitConnectionReauth()
+  if (repo.connection.state === 'reauth_needed')
+    throw gitConnectionReauth(repo.provider as RepoProviderKind)
   if (repo.connection.state !== 'ok' || repo.connection.createdById !== userId) throw repoReadOnly()
   return { project, repo, provider: repo.provider as RepoProviderKind }
 }
@@ -375,6 +376,8 @@ export interface RepoActionView {
   kind: RepoActionKind
   state: RepoActionState
   error: string | null
+  /** The provider of the repository pressed on: a refusal of the sign-in names it. */
+  provider: RepoProviderKind
 }
 
 /** `projectRepo.action`: how far core got with a press of the author, for «Выкатить» on P-repo. */
@@ -389,7 +392,13 @@ export async function readRepoAction(
       createdById: input.userId,
       repository: { projectId: input.projectId },
     },
-    select: { id: true, kind: true, state: true, error: true },
+    select: {
+      id: true,
+      kind: true,
+      state: true,
+      error: true,
+      repository: { select: { provider: true } },
+    },
   })
   if (row === null) throw projectNotFound()
   return {
@@ -397,5 +406,6 @@ export async function readRepoAction(
     kind: row.kind as RepoActionKind,
     state: row.state as RepoActionState,
     error: row.error,
+    provider: row.repository.provider as RepoProviderKind,
   }
 }

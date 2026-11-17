@@ -1,6 +1,7 @@
 'use client'
 
-import { repoMergeTexts, repoPushRefusalTexts, repoRefusalTexts } from '@repo/domain/repo'
+import { repoMergeTexts, repoPressRefusalText } from '@repo/domain/repo'
+import type { RepoProviderKind } from '@repo/domain'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Dialog from '@mui/material/Dialog'
@@ -40,10 +41,12 @@ export const deployText = Object.freeze({
   started: 'Выкладка запущена — следите за сборкой в списке ниже.',
 })
 
-/** The words of the refusal of a press, or a plain «не получилось». */
-function refusalText(code: string | null | undefined): string {
-  const texts: Record<string, string> = { ...repoRefusalTexts, ...repoPushRefusalTexts }
-  const text = code ? texts[code] : undefined
+/**
+ * The words of the refusal of a press, or a plain «не получилось»; a sign-in to renew names the
+ * provider of the repository pressed on.
+ */
+function refusalText(code: string | null | undefined, provider: RepoProviderKind | null): string {
+  const text = repoPressRefusalText(code, provider)
   return text ? `${text}.` : 'Не получилось — попробуйте ещё раз.'
 }
 
@@ -81,7 +84,7 @@ function PressState({ projectId, actionId }: { projectId: string; actionId: stri
       {state === 'done'
         ? deployText.started
         : state === 'failed'
-          ? refusalText(action.data?.error)
+          ? refusalText(action.data?.error, action.data?.provider ?? null)
           : deployText.running}
     </Typography>
   )

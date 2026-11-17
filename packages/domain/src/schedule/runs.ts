@@ -18,8 +18,8 @@ export type ScheduledRunStatus = (typeof scheduledRunStatuses)[number]
 
 /**
  * Why a run did not start a chat (Зп14, Зп21, Зп48, §4.3). `project_gone` — the project of the task
- * is in «Архив» or in the trash; `project_unavailable` — the sign-in with GitLab of its repository
- * has to be renewed (docs/plan/84-projects.md, ПР19).
+ * is in «Архив» or in the trash; `project_unavailable` — the sign-in with the provider of its
+ * repository has to be renewed (docs/plan/84-projects.md, ПР19).
  */
 export const scheduledRunReasons = [
   'no_credits',
@@ -52,12 +52,13 @@ export const scheduledRunReasonText: Readonly<Record<ScheduledRunReason, string>
   paused: 'задача была на паузе',
   platform: 'сбой платформы',
   project_gone: 'проект в архиве или удалён',
-  project_unavailable: 'нужно войти в GitLab заново',
+  // A run keeps the reason, not the provider: neutral for GitLab and GitHub alike.
+  project_unavailable: 'нужно заново войти туда, где лежит репозиторий проекта',
 })
 
 /**
- * Refusals for a reason of the client: three in a row pause the task (Зп22); a sign-in with GitLab
- * to renew among them (docs/plan/84-projects.md, ПР19).
+ * Refusals for a reason of the client: three in a row pause the task (Зп22); a sign-in with the
+ * provider to renew among them (docs/plan/84-projects.md, ПР19).
  */
 export const clientRefusalReasons = [
   'no_credits',

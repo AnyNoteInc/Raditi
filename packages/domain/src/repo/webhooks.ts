@@ -84,13 +84,21 @@ export const REPO_TREE_MAX_PATHS = 20_000
 /** `git.repo.tree`: the paths of the main branch at `sha`, from the mirror. */
 export const gitRepoTreePayloadSchema = z.strictObject({ projectRepositoryId: z.uuid(), sha })
 
-/** Where core keeps the paths in `raditi-artifacts`; web reads them for `projectRepo.paths`. */
+/**
+ * Where core keeps the paths in `raditi-artifacts`; web reads them for `projectRepo.paths`. The
+ * version is in the key: a list of v1 (84.26) still offered the files gitleaks flags, which a
+ * sandbox holds as a stub (ПР35) — it is never read, and a look at `@` asks core for a new one.
+ */
 export const repoTreeKey = (projectRepositoryId: string, treeSha: string): string =>
-  `repo-trees/${projectRepositoryId.toLowerCase()}/${treeSha}.json`
+  `repo-trees/${projectRepositoryId.toLowerCase()}/v2/${treeSha}.json`
 
-/** The file at `repoTreeKey`. */
+/**
+ * The file at `repoTreeKey`: the files of the tree a sandbox gets as they are — none of those it
+ * holds as a stub (ПР35: named like a secret, flagged by gitleaks), so `@` offers only what the
+ * agent can read. Paths only, never contents.
+ */
 export const repoTreeFileSchema = z.strictObject({
-  v: z.literal(1),
+  v: z.literal(2),
   sha,
   paths: z.array(z.string().min(1).max(4096)).max(REPO_TREE_MAX_PATHS),
   /** The tree has more files than REPO_TREE_MAX_PATHS: only the first are listed. */

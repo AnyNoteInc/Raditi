@@ -83,6 +83,7 @@ const view = (over: Record<string, unknown> = {}) => ({
   sent: false,
   canPush: true,
   pushBlocked: null,
+  provider: 'gitlab',
   ciChange: 'none',
   mergeRequest: null,
   lastRun: null,
@@ -134,6 +135,15 @@ describe('the card «Изменения в ветке» (plan 84, 84.19)', () =>
     )
   })
 
+  it('names GitHub on a card of a repository on GitHub (§10, «Остаток списка»)', async () => {
+    calls.branch.mockResolvedValue(
+      view({ canPush: false, pushBlocked: 'reauth', provider: 'github' }),
+    )
+    wrap(<FeedRepoChanges taskId={TASK} row={row} />)
+    expect(await screen.findByText(/Отправить нельзя: нужно войти в GitHub заново/)).toBeTruthy()
+    expect(screen.queryByText(/GitLab/)).toBeNull()
+  })
+
   it('offers the merge request alone for a branch sent whose request did not open (ревью C5)', async () => {
     calls.branch.mockResolvedValue(view({ sent: true, state: 'pushed' }))
     wrap(<FeedRepoChanges taskId={TASK} row={row} />)
@@ -183,6 +193,11 @@ describe('the card «Изменения в ветке» (plan 84, 84.19)', () =>
     wrap(<FeedRepoAction kind="push" state="failed" error="REPO_PUSH_CONFLICT" />)
     expect(screen.getByText(/ветку изменили в репозитории/)).toBeTruthy()
     expect(repoErrorText('SOMETHING_ELSE')).toBe('Не получилось — попробуйте ещё раз.')
+    // A line of the feed keeps no provider: a sign-in to renew is said in neutral words.
+    expect(repoErrorText('GIT_CONNECTION_REAUTH')).toBe(
+      'Нужно заново войти туда, где лежит репозиторий.',
+    )
+    expect(repoErrorText('GIT_CONNECTION_REAUTH', 'github')).toBe('Нужно войти в GitHub заново.')
     expect(statLine({ files: 1, additions: 2, deletions: 0 })).toBe('1 файл · +2 −0')
   })
 })
