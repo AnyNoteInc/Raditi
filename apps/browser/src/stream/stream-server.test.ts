@@ -41,6 +41,7 @@ async function stand(
 ) {
   const harness = sessionHarness()
   const { metrics, counts } = countingMetrics()
+  const logged: string[] = []
   const stream = new BrowserStreamServer({
     token: TEST_WORKER_TOKEN,
     sessions: harness.manager,
@@ -50,6 +51,7 @@ async function stand(
     ...(options.pingMs ? { pingMs: options.pingMs } : {}),
     ...(options.messagesPerSecond ? { messagesPerSecond: options.messagesPerSecond } : {}),
     warn: () => undefined,
+    log: (line) => logged.push(line),
   })
   const server: Server = createServer((_request, response) => response.writeHead(404).end())
   stream.attach(server)
@@ -111,7 +113,7 @@ async function stand(
     return result
   }
   const send = (ws: WebSocket, message: BrowserClientMessage) => ws.send(JSON.stringify(message))
-  return { ...harness, ...opened, user, stream, counts, connect, open, send }
+  return { ...harness, ...opened, user, stream, counts, logged, connect, open, send }
 }
 
 describe('the stream of a session', () => {
@@ -198,6 +200,54 @@ describe('the stream of a session', () => {
     ])
   })
 
+  it('measures the stream of a viewer and logs only its numbers when it leaves', async () => {
+    const { open, browser, send, counts, logged, session } = await stand({ window: 2, pingMs: 30 })
+    const { ws, got } = await open()
+    await until(() => browser.streaming)
+    await browser.frame()
+    await until(() => got.frames.length === 1)
+    send(ws, { t: 'ack', frameSeq: 1 })
+    // A pong of a ping the worker did not send — the gateway's or made up — times nothing.
+    send(ws, { t: 'pong', ts: Date.now() - 40 })
+    await until(() => got.messages.some((message) => message.t === 'ping'))
+    const ping = got.messages.find((message) => message.t === 'ping')
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    send(ws, { t: 'pong', ts: ping?.t === 'ping' ? ping.ts : 0 })
+    send(ws, {
+      t: 'stats',
+      frames: 1,
+      bytes: 51_200,
+      draw: { p50: 9, p95: 14 },
+      input: { p50: 180, p95: 260 },
+      inputs: 2,
+      touch: true,
+    })
+    await until(() => counts.times.some((time) => time.startsWith('input:')))
+    expect(counts.times).toEqual(
+      expect.arrayContaining(['draw:9', 'input:180', expect.stringMatching(/^ack:\d+$/)]),
+    )
+    expect(counts.times.filter((time) => time.startsWith('rtt:'))).toHaveLength(1)
+    expect(counts.times.find((time) => time.startsWith('rtt:'))).toMatch(/^rtt:(4\d|5\d|6\d|7\d)$/)
+    // The numbers are the stream's: the session hears nothing and refuses nothing.
+    expect(got.messages.filter((message) => message.t === 'refused')).toEqual([])
+    expect(logged).toEqual([])
+    ws.close()
+    await until(() => logged.length === 1 && session.viewerCount === 0)
+    const line = JSON.parse(logged[0] ?? '{}') as Record<string, unknown>
+    expect(line).toMatchObject({
+      event: 'browser_stream_viewer',
+      framesSent: 1,
+      framesDrawn: 1,
+      drawMsP50: 9,
+      inputMsP50: 180,
+      inputs: 2,
+      touch: true,
+    })
+    expect(line.ackMsP50).toEqual(expect.any(Number))
+    // Never an id of the session, the viewer or the user.
+    expect(logged[0]).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/)
+  })
+
   it('pings the gateway and cuts a connection that stops answering', async () => {
     const { open, session } = await stand({ pingMs: 40 })
     const live = await open()
@@ -248,6 +298,53 @@ describe('the stream of a session', () => {
     ])
     await until(() => refusals(other.got).length === 1)
     expect(refusals(other.got)).toEqual(['not_holder'])
+  })
+
+  it('tells the holder the first frame painted after the page took its numbered input (plan 85, ТР7)', async () => {
+    const { open, send, browser } = await stand({ window: 4 })
+    const holder = await open()
+    send(holder.ws, { t: 'take' })
+    await until(() =>
+      holder.got.messages.some((message) => message.t === 'state' && message.controller === 'user'),
+    )
+    await until(() => browser.streaming)
+    const state = holder.got.messages.findLast((message) => message.t === 'state')
+    const controlEpoch = state?.t === 'state' ? state.controlEpoch : 0
+    const wheel = (seq?: number): BrowserClientMessage => ({
+      t: 'input',
+      pageId: 1,
+      controlEpoch,
+      viewportVersion: 1,
+      event: { kind: 'wheel', x: 640, y: 400, dx: 0, dy: 120 },
+      ...(seq === undefined ? {} : { seq }),
+    })
+    send(holder.ws, wheel(5))
+    await until(() => browser.inputs.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    // Painted before the page took it: the frame does not show it.
+    await browser.frame({ timestamp: Date.now() - 1_000 })
+    await browser.frame({ timestamp: Date.now() + 5 })
+    await browser.frame({ timestamp: Date.now() + 10 })
+    await until(() => holder.got.frames.length >= 3)
+    const applied = holder.got.messages.filter((message) => message.t === 'applied')
+    const [first, second, third] = holder.got.frames.slice(-3).map((frame) => frame.frameSeq)
+    expect(applied).toEqual([{ t: 'applied', frameSeq: second, inputSeq: 5 }])
+    // Said right before the frame it speaks of, once.
+    const order = holder.got.order.filter((item) => item !== 'state')
+    expect(order.slice(-4)).toEqual([
+      `frame:${first}`,
+      'applied',
+      `frame:${second}`,
+      `frame:${third}`,
+    ])
+    // An input without a number is never told.
+    send(holder.ws, wheel())
+    await until(() => browser.inputs.length === 2)
+    for (const frame of holder.got.frames.slice(-3))
+      send(holder.ws, { t: 'ack', frameSeq: frame.frameSeq })
+    await browser.frame({ timestamp: Date.now() + 50 })
+    await until(() => holder.got.frames.length >= 4)
+    expect(holder.got.messages.filter((message) => message.t === 'applied')).toHaveLength(1)
   })
 
   it('refuses a second connection of a viewer already watching', async () => {

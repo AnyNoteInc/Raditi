@@ -22,6 +22,17 @@ export interface FramePainter {
    * Before the first frame, where a window of `fallback`'s proportions would lie.
    */
   rect(fallback?: BrowserSize): FittedRect
+  /**
+   * The picture moved by `shift` window pixels of `viewport` (docs/plan/85-browser-stream-mobile.md,
+   * ТР7): a scroll sent that no frame shows yet. What it uncovers stays the colour of the panel.
+   * `redraw: false` — for the frame about to be painted: the old picture stays where it is until
+   * the new one replaces it, never moved back while the new one is decoded.
+   */
+  shift(
+    shift: { dx: number; dy: number },
+    viewport: BrowserSize,
+    options?: { redraw?: boolean },
+  ): void
   /** A frame has been drawn: there is something on the screen. */
   painted(): boolean
   /** The panel goes: the last image is released. */
@@ -33,6 +44,17 @@ export interface PaintContext {
   setTransform(a: number, b: number, c: number, d: number, e: number, f: number): void
   clearRect(x: number, y: number, width: number, height: number): void
   drawImage(image: CanvasImageSource, x: number, y: number, width: number, height: number): void
+  drawImage(
+    image: CanvasImageSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    dx: number,
+    dy: number,
+    dw: number,
+    dh: number,
+  ): void
   imageSmoothingQuality?: ImageSmoothingQuality
 }
 
@@ -48,6 +70,10 @@ export function createFramePainter(
   let image: ImageBitmap | null = null
   let imageSize: BrowserSize | null = null
   let disposed = false
+  let moved = { dx: 0, dy: 0 }
+  let movedIn: BrowserSize | null = null
+  /** A shift given for the next frame and not on the screen yet. */
+  let pending = false
 
   const rect = (fallback?: BrowserSize): FittedRect => fitRect(size, imageSize ?? fallback ?? size)
 
@@ -55,10 +81,33 @@ export function createFramePainter(
     if (context === null) return
     context.setTransform(ratio, 0, 0, ratio, 0, 0)
     context.clearRect(0, 0, size.width, size.height)
-    if (image === null) return
+    if (image === null || imageSize === null) return
     const where = rect()
     if (context.imageSmoothingQuality !== undefined) context.imageSmoothingQuality = 'high'
-    context.drawImage(image, where.x, where.y, where.width, where.height)
+    // Window pixels of the shift as pixels of the panel: the picture goes the other way.
+    const ox = movedIn && movedIn.width > 0 ? (-moved.dx * where.width) / movedIn.width : 0
+    const oy = movedIn && movedIn.height > 0 ? (-moved.dy * where.height) / movedIn.height : 0
+    if (ox === 0 && oy === 0) {
+      context.drawImage(image, where.x, where.y, where.width, where.height)
+      return
+    }
+    // Only the part still inside the picture's place is drawn: nothing spills on the margins.
+    const width = where.width - Math.abs(ox)
+    const height = where.height - Math.abs(oy)
+    if (width <= 0 || height <= 0) return
+    const kx = imageSize.width / where.width
+    const ky = imageSize.height / where.height
+    context.drawImage(
+      image,
+      Math.max(0, -ox) * kx,
+      Math.max(0, -oy) * ky,
+      width * kx,
+      height * ky,
+      where.x + Math.max(0, ox),
+      where.y + Math.max(0, oy),
+      width,
+      height,
+    )
   }
 
   return {
@@ -67,6 +116,11 @@ export function createFramePainter(
       try {
         next = await decode(frame.jpeg)
       } catch {
+        // No new picture: the shift meant for it goes on the old one.
+        if (pending) {
+          pending = false
+          draw()
+        }
         return false
       }
       if (disposed) {
@@ -76,6 +130,7 @@ export function createFramePainter(
       image?.close?.()
       image = next
       imageSize = { width: frame.header.width, height: frame.header.height }
+      pending = false
       draw()
       return true
     },
@@ -88,6 +143,17 @@ export function createFramePainter(
       draw()
     },
     rect,
+    shift(next, viewport, options) {
+      if (!Number.isFinite(next.dx) || !Number.isFinite(next.dy)) return
+      moved = { dx: next.dx, dy: next.dy }
+      movedIn = { width: viewport.width, height: viewport.height }
+      if (options?.redraw === false) {
+        pending = true
+        return
+      }
+      pending = false
+      draw()
+    },
     painted: () => image !== null,
     dispose() {
       disposed = true

@@ -48,7 +48,11 @@ export function proxyOption(proxy) {
   return { server: proxy, bypass: '<-loopback>' }
 }
 
-/** Chromium's other flags: no WebRTC around the proxy, nothing in the background. */
+/**
+ * Chromium's other flags: no WebRTC around the proxy, nothing in the background, and a scroll in
+ * one frame — a smooth one would spread it over several, late on a phone and after the frame the
+ * cabinet waits for (docs/plan/85-browser-stream-mobile.md, ТР8).
+ */
 export function chromiumArgs() {
   return [
     '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
@@ -58,6 +62,7 @@ export function chromiumArgs() {
     '--disable-sync',
     '--no-pings',
     '--disable-dev-shm-usage',
+    '--disable-smooth-scrolling',
   ]
 }
 

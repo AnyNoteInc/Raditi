@@ -50,6 +50,8 @@ import {
 import { browserText } from './chat-texts'
 import { offScreen } from './composer'
 import type { FeedHeadState } from './feed-state'
+import { StreamStatsLine } from './stream-stats-line'
+import { Fling, TOUCH_SCROLL_SLOP_PX, WheelGatherer } from './touch-scroll'
 import type { BrowserStream } from './use-browser-stream'
 
 // The browser of a task beside its dialog (docs/plan/57-browser-tasks.md, Б12–Б17, Б27, Б29):
@@ -401,6 +403,24 @@ function Address({
   )
 }
 
+/** Narrower than this, with a finger for a pointer, is a phone (ТР11). */
+const PHONE_MAX_WIDTH = 600
+const PHONE_QUERY = `(pointer: coarse) and (max-width: ${PHONE_MAX_WIDTH - 0.05}px)`
+
+/** This device is a phone now: a finger and a narrow screen; follows a turn of the screen. */
+function usePhone(): boolean {
+  const [phone, setPhone] = useState(false)
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia(PHONE_QUERY)
+    const changed = () => setPhone(query.matches)
+    changed()
+    query.addEventListener('change', changed)
+    return () => query.removeEventListener('change', changed)
+  }, [])
+  return phone
+}
+
 export interface BrowserPaneProps {
   taskId: string
   head: FeedHeadState | null
@@ -458,6 +478,18 @@ export function BrowserPane({
   const live = sessionLive(session)
   const holding = stream.holding
   const manual = holding && state !== null && state.manualReady && state.pageId !== null
+
+  // A phone that drives a window of a computer is offered the site's mobile version; the window
+  // itself does not change by itself — the agent works in the same one (docs/plan/85, ТР11).
+  const phone = usePhone()
+  const [hintClosedFor, setHintClosedFor] = useState<string | null>(null)
+  const phoneWindow = browserViewports.find((size) => size.width < PHONE_MAX_WIDTH) ?? null
+  const mobileHint =
+    manual &&
+    phone &&
+    state !== null &&
+    state.viewport.width >= PHONE_MAX_WIDTH &&
+    hintClosedFor !== state.session
   const controller = state?.controller ?? session?.controller ?? 'agent'
   const otherTab = live && controller === 'user' && stream.connection === 'open' && !holding
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -542,9 +574,66 @@ export function BrowserPane({
   const move = useRef<{ x: number; y: number } | null>(null)
   const frame = useRef<number | null>(null)
   const touches = useRef(
-    new Map<number, { x: number; y: number; startX: number; startY: number; at: number }>(),
+    new Map<
+      number,
+      { x: number; y: number; startX: number; startY: number; at: number; scrolling: boolean }
+    >(),
   )
   const pinch = useRef(false)
+
+  // The wheel, one finger and two fingers scroll through one gatherer, one event an animation
+  // frame (docs/plan/85-browser-stream-mobile.md, ТР5, ТР6); a finger let go coasts on.
+  const wheelGather = useRef(new WheelGatherer())
+  const wheelFrame = useRef<number | null>(null)
+  const fling = useRef(new Fling())
+  const flingFrame = useRef<number | null>(null)
+
+  /** Pixels of the panel as pixels of the browser's window. */
+  const windowScale = () => painterRef.current?.rect(latest.current?.viewport).scale ?? 0
+
+  const flushWheel = () => {
+    wheelFrame.current = null
+    const step = wheelGather.current.take()
+    if (step !== null) sendRef.current({ kind: 'wheel', ...step })
+  }
+
+  /** A scroll of `dx`, `dy` window pixels aimed at `point`, sent with the next animation frame. */
+  const queueWheel = (point: { x: number; y: number }, dx: number, dy: number) => {
+    wheelGather.current.add(point, dx, dy)
+    if (wheelFrame.current === null) wheelFrame.current = requestAnimationFrame(flushWheel)
+  }
+
+  const stopFling = () => {
+    const coasting = fling.current.active || flingFrame.current !== null
+    fling.current.stop()
+    if (flingFrame.current !== null) cancelAnimationFrame(flingFrame.current)
+    flingFrame.current = null
+    // The step of the coast not sent yet stays unsent: the page stops where the finger found it.
+    if (!coasting) return
+    wheelGather.current.clear()
+    if (wheelFrame.current !== null) cancelAnimationFrame(wheelFrame.current)
+    wheelFrame.current = null
+  }
+
+  /** The page goes on by itself after the finger, aimed where the finger left it. */
+  const coast = (point: { x: number; y: number }) => {
+    const tick = (at: number) => {
+      flingFrame.current = null
+      const step = fling.current.step(at)
+      if (step === null || !manualRef.current) return
+      queueWheel(point, step.dx, step.dy)
+      flingFrame.current = requestAnimationFrame(tick)
+    }
+    flingFrame.current = requestAnimationFrame(tick)
+  }
+
+  useEffect(
+    () => () => {
+      if (wheelFrame.current !== null) cancelAnimationFrame(wheelFrame.current)
+      if (flingFrame.current !== null) cancelAnimationFrame(flingFrame.current)
+    },
+    [],
+  )
 
   const pointOf = (event: { clientX: number; clientY: number }) => {
     const canvas = canvasRef.current
@@ -586,12 +675,15 @@ export function BrowserPane({
   function pointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (!manual) return
     if (event.pointerType === 'touch') {
+      // A touch stops a page that coasts, where it is.
+      stopFling()
       touches.current.set(event.pointerId, {
         x: event.clientX,
         y: event.clientY,
         startX: event.clientX,
         startY: event.clientY,
         at: event.timeStamp,
+        scrolling: false,
       })
       if (touches.current.size > 1) pinch.current = true
       return
@@ -620,23 +712,34 @@ export function BrowserPane({
         touch.y = event.clientY
         const after = centre(touches.current)
         const point = pointOf(after)
-        const scale = painterRef.current?.rect(latest.current?.viewport).scale ?? 0
-        if (point !== null && scale > 0) {
-          const { dx, dy } = wheelDelta(
-            {
-              deltaX: before.clientX - after.clientX,
-              deltaY: before.clientY - after.clientY,
-              deltaMode: 0,
-            },
-            latest.current?.viewport ?? { width: 0, height: 0 },
-            scale,
+        const scale = windowScale()
+        if (point !== null && scale > 0)
+          queueWheel(
+            point,
+            (before.clientX - after.clientX) / scale,
+            (before.clientY - after.clientY) / scale,
           )
-          if (dx !== 0 || dy !== 0) send({ kind: 'wheel', ...point, dx, dy })
-        }
         return
       }
+      // One finger moved past the slop scrolls the page, as on a phone, and no longer clicks.
+      if (
+        !pinch.current &&
+        !touch.scrolling &&
+        Math.hypot(event.clientX - touch.startX, event.clientY - touch.startY) >
+          TOUCH_SCROLL_SLOP_PX
+      )
+        touch.scrolling = true
+      const before = { clientX: touch.x, clientY: touch.y }
       touch.x = event.clientX
       touch.y = event.clientY
+      if (!touch.scrolling) return
+      const point = pointOf(event)
+      const scale = windowScale()
+      if (point === null || scale <= 0) return
+      const dx = (before.clientX - event.clientX) / scale
+      const dy = (before.clientY - event.clientY) / scale
+      fling.current.moved(dx, dy, event.timeStamp)
+      queueWheel(point, dx, dy)
       return
     }
     const point = pointOf(event)
@@ -653,9 +756,15 @@ export function BrowserPane({
       if (!manual || !touch) return
       const wasPinch = pinch.current
       if (touches.current.size === 0) pinch.current = false
+      // A swipe let go goes on by itself, aimed where the finger left the page.
+      if (touch.scrolling && !wasPinch) {
+        const point = pointOf(event)
+        if (point !== null && fling.current.release(event.timeStamp)) coast(point)
+        return
+      }
       // A tap is a click: one finger, short, hardly moved.
       const moved = Math.hypot(touch.x - touch.startX, touch.y - touch.startY)
-      if (wasPinch || moved > 10 || event.timeStamp - touch.at > 600) return
+      if (wasPinch || moved > TOUCH_SCROLL_SLOP_PX || event.timeStamp - touch.at > 600) return
       const point = pointOf({ clientX: touch.startX, clientY: touch.startY })
       if (point === null) return
       send({ kind: 'mouse', type: 'move', ...point, button: 'none', clickCount: 0 })
@@ -699,6 +808,10 @@ export function BrowserPane({
   useEffect(() => {
     manualRef.current = manual
   }, [manual])
+  const queueWheelRef = useRef(queueWheel)
+  useEffect(() => {
+    queueWheelRef.current = queueWheel
+  })
   useEffect(() => {
     const canvas = canvasRef.current
     if (canvas === null) return
@@ -711,7 +824,7 @@ export function BrowserPane({
       if (point === null) return
       event.preventDefault()
       const { dx, dy } = wheelDelta(event, now.viewport, rect.scale)
-      if (dx !== 0 || dy !== 0) sendRef.current({ kind: 'wheel', ...point, dx, dy })
+      if (dx !== 0 || dy !== 0) queueWheelRef.current(point, dx, dy)
     }
     canvas.addEventListener('wheel', wheel, { passive: false })
     return () => canvas.removeEventListener('wheel', wheel)
@@ -1019,6 +1132,7 @@ export function BrowserPane({
             touchAction: manual ? 'none' : 'auto',
           }}
         />
+        <StreamStatsLine read={stream.liveStats} />
         {/* The keys and the text of the client: a field the page cannot see, focused on a click. */}
         <Box
           component="textarea"
@@ -1093,6 +1207,42 @@ export function BrowserPane({
           canTake={showTake && stream.connection === 'open' && !busy && !stopping}
         />
       </Box>
+
+      {mobileHint && phoneWindow ? (
+        <Box
+          data-testid="browser-mobile-hint"
+          sx={{
+            flex: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            pl: 2,
+            pr: 0.5,
+            py: 0.5,
+            borderTop: 1,
+            borderColor: 'divider',
+            fontSize: 13.5,
+          }}
+        >
+          <Box sx={{ flex: '1 1 auto' }}>{browserText.mobileHint}</Box>
+          <Button
+            size="small"
+            onClick={() =>
+              stream.send({ t: 'viewport', width: phoneWindow.width, height: phoneWindow.height })
+            }
+            sx={{ flex: 'none', minHeight: 44 }}
+          >
+            {browserText.mobileHintAction}
+          </Button>
+          <IconButton
+            aria-label={browserText.mobileHintClose}
+            onClick={() => setHintClosedFor(state?.session ?? null)}
+            sx={{ flex: 'none', width: 44, height: 44 }}
+          >
+            <AppIcon name="close" size={18} />
+          </IconButton>
+        </Box>
+      ) : null}
 
       {manual ? (
         <Box
