@@ -14,7 +14,6 @@ import {
   repoModes,
   repoProviderKinds,
   turnSkillsOf,
-  workspaceEnvVarsReachAgent,
   type LlmBackend,
   type LlmBackendId,
   type ModelClass,
@@ -73,7 +72,6 @@ export async function readPassFacts(
       needsBrowser: true,
       workspace: {
         select: {
-          dataClass: true,
           // The skills of the workspace's agent (plan 83, БП11): every chat of it gets them.
           agentSkills: {
             select: { name: true, url: true, enabled: true, authKind: true, authState: true },
@@ -165,14 +163,12 @@ export async function readPassFacts(
       select: { turnNo: true, plan: true },
     }),
     // The variables of the workspace (docs/plan/83-remove-projects.md, БП4): every chat gets them,
-    // none in a workspace of client data before the gate of 152-FZ (rule 1).
-    workspaceEnvVarsReachAgent(task.workspace.dataClass)
-      ? db.workspaceEnvVar.findMany({
-          where: { workspaceId: task.workspaceId },
-          orderBy: { name: 'asc' },
-          select: { name: true },
-        })
-      : [],
+    // whatever the data class of the workspace (the owner's decision of 17.11.2026, БП14).
+    db.workspaceEnvVar.findMany({
+      where: { workspaceId: task.workspaceId },
+      orderBy: { name: 'asc' },
+      select: { name: true },
+    }),
   ])
   const plans = new Map(assignments.map((row) => [row.turnNo, savedPlanOf(row.plan)]))
   const turns = new Map<number, FinishedTurn>(

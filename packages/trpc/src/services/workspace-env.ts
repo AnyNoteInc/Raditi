@@ -5,7 +5,6 @@ import {
   workspaceEnvVarLimits,
   workspaceEnvVarPath,
   workspaceEnvVarSecret,
-  workspaceEnvVarsReachAgent,
   workspaceEnvVarTombstone,
   type AppEnv,
 } from '@repo/domain'
@@ -40,11 +39,6 @@ export interface WorkspaceEnvList {
   workspaceId: string | null
   /** The user may add, replace and remove variables here. */
   canEdit: boolean
-  /**
-   * false in a workspace of real client data before the gate of 152-FZ
-   * (`workspaceEnvVarsReachAgent`): the variables are kept, the agent does not get them yet.
-   */
-  agentGets: boolean
   variables: WorkspaceEnvVarView[]
 }
 
@@ -57,11 +51,11 @@ interface Place {
   workspaceId?: string | undefined
 }
 
-/** The workspace, the reader's role in it and its data class; NOT_FOUND for any other. */
+/** The workspace and the reader's role in it; NOT_FOUND for any other. */
 async function workspaceOf(
   db: PrismaClient,
   place: Place & { create: boolean },
-): Promise<{ id: string; canEdit: boolean; dataClass: 'synthetic' | 'client' } | null> {
+): Promise<{ id: string; canEdit: boolean } | null> {
   let id = place.workspaceId
   if (id === undefined) {
     const personal = place.create
@@ -72,17 +66,12 @@ async function workspaceOf(
   }
   const role = await memberRole(db, id, place.userId)
   if (role === null) throw workspaceNotFound()
-  const workspace = await db.workspace.findUniqueOrThrow({
-    where: { id },
-    select: { dataClass: true },
-  })
-  return { id, canEdit: isManagerRole(role), dataClass: workspace.dataClass }
+  return { id, canEdit: isManagerRole(role) }
 }
 
 export async function listWorkspaceEnv(db: PrismaClient, place: Place): Promise<WorkspaceEnvList> {
   const workspace = await workspaceOf(db, { ...place, create: false })
-  if (workspace === null)
-    return { workspaceId: null, canEdit: true, agentGets: true, variables: [] }
+  if (workspace === null) return { workspaceId: null, canEdit: true, variables: [] }
   const variables = await db.workspaceEnvVar.findMany({
     where: { workspaceId: workspace.id },
     orderBy: { name: 'asc' },
@@ -91,7 +80,6 @@ export async function listWorkspaceEnv(db: PrismaClient, place: Place): Promise<
   return {
     workspaceId: workspace.id,
     canEdit: workspace.canEdit,
-    agentGets: workspaceEnvVarsReachAgent(workspace.dataClass),
     variables,
   }
 }

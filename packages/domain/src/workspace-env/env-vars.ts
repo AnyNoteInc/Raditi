@@ -7,8 +7,9 @@ import { envVarNameProblem, envVarNameSchema, envVarValueSchema } from '../relea
  * Variables of a workspace (docs/plan/83-remove-projects.md, БП4): «Настройки → Переменные».
  * The value of each lies in Vault `kv/workspaces/<workspaceId>/env/<NAME>` (written by web,
  * never read back there), the name in `workspace_env_vars`. Every turn of every chat of the
- * workspace gets them all in the agent's `bash` commands — no consent per variable — unless the
- * workspace holds real client data and the gate of 152-FZ is not passed (rule 1).
+ * workspace gets them all in the agent's `bash` commands as soon as they are saved — no consent
+ * per variable and, since the owner's decision of 17.11.2026, no gate by the data class of the
+ * workspace either.
  */
 export const workspaceEnvVarLimits = Object.freeze({ perWorkspace: 64 })
 
@@ -44,7 +45,3 @@ export const workspaceEnvVarTombstone = (at: Date): Record<string, string> => ({
 /** The value a reader takes from the data of the key; null — the variable was removed. */
 export const workspaceEnvVarValueOf = (data: Readonly<Record<string, string>>): string | null =>
   Object.hasOwn(data, 'value') && typeof data.value === 'string' ? data.value : null
-
-/** Whether the agent of a workspace of this data class gets its variables (rule 1). */
-export const workspaceEnvVarsReachAgent = (dataClass: 'synthetic' | 'client'): boolean =>
-  dataClass !== 'client'

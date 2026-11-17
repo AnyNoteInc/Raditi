@@ -36,7 +36,6 @@ import {
   type TurnCredentialSource,
   type TurnCredentialValues,
   workspaceEnvVarLimits,
-  workspaceEnvVarsReachAgent,
 } from '@repo/domain'
 import {
   decodeLimitWindows,
@@ -897,11 +896,11 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
 }
 /**
  * The variables of the task's workspace whose values the agent's commands get (БП4): every chat
- * of the workspace gets them all, unless it holds real client data (until the gate of 152-FZ,
- * rule 1).
+ * of the workspace gets them all, whatever its data class (the owner's decision of 17.11.2026,
+ * БП14). A workspace of client data gets a key only past the gate of 152-FZ for the provider, so
+ * without that clearance nothing of a value is read either.
  */
 async function agentVariables(tx: Transaction, task: OwnedTask): Promise<WorkspaceEnvVarVersion[]> {
-  if (!workspaceEnvVarsReachAgent(task.dataClass)) return []
   const rows = await tx.workspaceEnvVar.findMany({
     where: { workspaceId: task.workspaceId },
     orderBy: { name: 'asc' },

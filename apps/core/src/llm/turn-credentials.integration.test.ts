@@ -470,8 +470,8 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     const rows = JSON.stringify(await db.llmKey.findMany({ where: { taskId: f.task.id } }))
     expect(rows).not.toContain('payment_key-value')
 
-    // A workspace of client data gives the agent nothing, whatever the rows say: here the gate
-    // of 152-FZ refuses the key, and no value was even read before it.
+    // A workspace of client data gets its variables like any other (БП14), but only with a key:
+    // without a clearance the gate of 152-FZ refuses it, and no value was even read before it.
     const client = await fixture({ client: true })
     await db.workspaceEnvVar.create({
       data: { workspaceId: client.workspace.id, name: 'PAYMENT_KEY' },

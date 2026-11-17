@@ -506,7 +506,7 @@ describe('the variables of the workspace in a turn (plan 83, БП4)', () => {
     })
   })
 
-  it('gives nothing for a removed variable, or in a workspace of client data', async () => {
+  it('gives nothing for a removed variable, and the same to a workspace of client data', async () => {
     const values = {
       PAYMENT_KEY: { data: { value: 'pay-secret-0001' }, version: 1 },
       REMOVED_KEY: { data: { removed: '2026-09-29T11:00:00.000Z' }, version: 2 },
@@ -517,15 +517,11 @@ describe('the variables of the workspace in a turn (plan 83, БП4)', () => {
       PAYMENT_KEY: 'pay-secret-0001',
     })
     // Past the gate of 152-FZ for its provider (this fake clears every one), a workspace of
-    // client data still gives the agent no variable: none is even read (rule 1).
+    // client data gets its variables like any other (the owner's decision of 17.11.2026, БП14).
     const client = fixture({ variables, values, dataClass: 'client' })
-    expect(await client.credentials.issue(client.ref, client.grant)).not.toHaveProperty('envValues')
-    expect(client.tx.workspaceEnvVar.findMany).not.toHaveBeenCalled()
-    expect(
-      client.secrets.kvRead.mock.calls.filter(([path]) =>
-        String(path).startsWith('kv/workspaces/'),
-      ),
-    ).toEqual([])
+    expect((await client.credentials.issue(client.ref, client.grant)).envValues).toEqual({
+      PAYMENT_KEY: 'pay-secret-0001',
+    })
     const none = fixture()
     const bare = await none.credentials.issue(none.ref, none.grant)
     expect(bare).not.toHaveProperty('envValues')

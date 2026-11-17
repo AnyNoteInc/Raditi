@@ -23,7 +23,6 @@ export const workspaceEnvRouter = router({
       z.strictObject({
         workspaceId: z.uuid().nullable(),
         canEdit: z.boolean(),
-        agentGets: z.boolean(),
         variables: z.array(variableOutput),
       }),
     )
