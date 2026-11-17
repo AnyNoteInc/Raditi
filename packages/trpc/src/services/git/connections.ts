@@ -142,8 +142,9 @@ export async function listConnections(
   return {
     connections: rows.map(viewOf),
     available: {
-      // The GitHub App (slice 84.25): offered once it is configured, «Скоро» until then.
-      github: services ? githubOffered(services.githubConfigured === true) : false,
+      // The GitHub App (slice 84.25): offered once it is configured and, in production, once the
+      // gate of code hosts abroad is open (ПР29, 84.16а); «Скоро» until then.
+      github: services ? githubOffered(input.appEnv, services.githubConfigured === true) : false,
       gitlabCom: services ? gitlabComOffered(input.appEnv, services.gitlabComConfigured) : false,
       ownServer: Boolean(services),
     },
@@ -294,7 +295,8 @@ export async function addTokenConnection(
   const host = gitServerHostOf(input.host)
   // GitHub takes no token here: its way is the GitHub App (Э10).
   if (host === null || host === githubHost) throw gitHostRefused()
-  // gitlab.com takes a token only once it is offered at all (ПР29): before 84.16а its way is closed.
+  // gitlab.com takes a token only once it is offered at all (ПР29): until the gate of code hosts
+  // abroad is open in production (the notice of art. 12, 84.16а) its way is closed.
   if (
     (host === gitlabComHost || host.endsWith(`.${gitlabComHost}`)) &&
     !gitlabComOffered(services.appEnv, services.gitlabComConfigured)
@@ -415,7 +417,8 @@ export async function connectGithubApp(
     now?: Date
   },
 ): Promise<{ connectionId: string }> {
-  if (!githubOffered(services.githubConfigured === true)) throw gitConnectUnavailable()
+  if (!githubOffered(services.appEnv, services.githubConfigured === true))
+    throw gitConnectUnavailable()
   const now = input.now ?? new Date()
   const { installation } = input
   const { id: workspaceId } = await personalWorkspaceOf(db, {

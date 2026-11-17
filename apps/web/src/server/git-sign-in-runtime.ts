@@ -62,7 +62,7 @@ export const githubSignInDependencies: GithubSignInDependencies = {
   github() {
     const git = env.git()
     const app = git.githubApp
-    if (app === null || !githubOffered(true)) return null
+    if (app === null || !githubOffered(env.web().appEnv, true)) return null
     return {
       slug: app.slug,
       app: { host: githubHost, clientId: app.clientId, clientSecret: app.clientSecret },

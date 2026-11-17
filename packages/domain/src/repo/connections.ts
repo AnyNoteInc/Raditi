@@ -20,24 +20,42 @@ export const gitConnectionLimits = Object.freeze({
 })
 
 /**
- * Whether «Подключить GitLab.com» is offered (ПР29). Outside production — whenever Raditi's OAuth
- * app is configured. In production — only once the texts for the client of slice 84.16а are
- * published: until then the item says «Скоро». An own GitLab server and an open link do not wait.
+ * Whether the code of a client may go, in production, to a code host abroad the client picks:
+ * gitlab.com (GitLab Inc., USA) and github.com (GitHub Inc., USA) — ПР29, slice 84.16а. The
+ * documents of the edition 2026-11-17 name both recipients; the transfer itself starts only after
+ * the owner, the operator, has filed the notice of art. 12 of 152-FZ for the USA and its ten working
+ * days have passed (the USA is not on the list of RKN order No. 253, so part 11 of art. 12 holds the
+ * transfer until then). One flag for both: one notice and one edition cover both recipients. The
+ * owner turns it on once they confirm the filing (docs/plan/84-projects.md, §10, «Действия
+ * владельца»; apps/web/content/legal/README.md, «Уведомление по ст. 12 о передаче кода в США»).
+ * An own GitLab server and an open link never wait on it.
  */
-export const gitlabComPublishedInProduction = false
+export const codeHostsAbroadPublishedInProduction = false
 
-export function gitlabComOffered(appEnv: AppEnv, configured: boolean): boolean {
-  return configured && (!isProduction(appEnv) || gitlabComPublishedInProduction)
+/**
+ * Whether a code host abroad is offered: Raditi's app for it is configured, and in production the
+ * flag above is on. Outside production a stand's fake stands in for gitlab.com and github.com.
+ */
+function codeHostAbroadOffered(appEnv: AppEnv, configured: boolean): boolean {
+  return configured && (!isProduction(appEnv) || codeHostsAbroadPublishedInProduction)
 }
 
 /**
- * Whether «Подключить GitHub» is offered (ПР10, ПР31; slice 84.25): whenever Raditi's GitHub App
- * is configured — on the server its group of secrets is rendered only when all its fields are set
- * (infra/server/README.md, «Репозитории проектов»). Until the app is registered the item says
- * «Скоро» in production; outside production a stand's fake stands in for github.com.
+ * Whether «Подключить GitLab.com» is offered (ПР29): Raditi's OAuth app is configured and the gate
+ * of code hosts abroad is open; until then the item says «Скоро».
  */
-export function githubOffered(configured: boolean): boolean {
-  return configured
+export function gitlabComOffered(appEnv: AppEnv, configured: boolean): boolean {
+  return codeHostAbroadOffered(appEnv, configured)
+}
+
+/**
+ * Whether «Подключить GitHub» is offered (ПР10, ПР29, ПР31; slices 84.25 and 84.16а): Raditi's GitHub
+ * App is configured — on the server its group of secrets is rendered only when all its fields are
+ * set (infra/server/README.md, «Репозитории проектов») — and the gate of code hosts abroad is open;
+ * until then the item says «Скоро».
+ */
+export function githubOffered(appEnv: AppEnv, configured: boolean): boolean {
+  return codeHostAbroadOffered(appEnv, configured)
 }
 
 /** The provider a connection of each kind reaches: data, never a comparison (rule 8). */
