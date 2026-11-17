@@ -98,3 +98,5 @@ bash infra/dev/projects-verify/colima.sh [--no-sync] [--runtime=runc|runsc] [--n
 16.11.2026 с дополнением (ветка `feat/projects-finish`, Docker Desktop, `runc`, со свежей сборкой): 15 сценариев, 133 проверки в сценариях (S — 1, A — 11, B — 1, C — 10, K — 10, D — 11, E — 24, F — 12, G — 6, H — 5, I — 10, J — 4, L — 8, N — 6, M — 14) и 1 строка `NOTE` (шлюз хода убитого `core` убирает сторож), 619 с, код 0.
 
 17.11.2026 с подделкой GitHub, вебхуками и остатком §6 (ветка `test/projects-stand-github`, Docker Desktop, `runc`, со свежей сборкой): 17 сценариев, 183 проверки в сценариях (S — 1, A — 11, B — 1, C — 11, K — 10, D — 11, E — 24, F — 12, G — 10, H — 5, I — 11, J — 4, W — 18, P — 23, L — 10, N — 6, M — 15), 946 с, код 0.
+
+17.11.2026 на Linux и в CI (ветка `ci/projects-stand-linux`, со свежей сборкой): 17 сценариев, 186 проверок в сценариях (E — 26 с пробой хоста и средой песочницы, M — 16 и 1 строка `NOTE`), код 0 — в ВМ Colima под `runc` (955 с) и `runsc` (1 074 с), на раннере GitHub в `projects.yml` (`ubuntu-latest`, x64, `runc`, 999 с, job — 19 мин 52 с) и на Docker Desktop (1 028 с).
