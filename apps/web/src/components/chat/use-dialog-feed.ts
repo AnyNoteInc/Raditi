@@ -5,6 +5,7 @@ import { useCallback, useEffect, useReducer, useRef, useState, type Dispatch } f
 import { useTRPCClient } from '@/trpc/client'
 
 import { isNotFound } from './call-error'
+import { taskSignalBus } from './task-signal-bus'
 import type { DialogFeed } from './chat-types'
 import {
   feedReducer,
@@ -80,17 +81,47 @@ export function useDialogFeed(taskId: string): { state: FeedState; refresh: () =
     return () => reader.stop()
   }, [reader])
 
+  // The signals of the chat (`task.signals`, SSE): a change is read as soon as it commits, and
+  // the polls below become the fallback for a signal lost on the way. A stream that ends — no
+  // Redis, a refused reader, a closed connection — leaves the polls as they were.
+  const [signalled, setSignalled] = useState(false)
+  useEffect(() => {
+    const up = (value: boolean) => {
+      taskSignalBus.setConnected(taskId, value)
+      setSignalled(value)
+    }
+    const subscription = client.task.signals.subscribe(
+      { taskId },
+      {
+        onData: ({ signal }) => {
+          up(true)
+          if (signal !== 'activity') void reader.read()
+          if (signal !== 'feed') taskSignalBus.activity(taskId)
+        },
+        onConnectionStateChange: ({ state: connection }) => {
+          if (connection !== 'pending') up(false)
+        },
+        onError: () => up(false),
+        onComplete: () => up(false),
+      },
+    )
+    return () => {
+      subscription.unsubscribe()
+      taskSignalBus.setConnected(taskId, false)
+    }
+  }, [client, taskId, reader])
+
   // Every answer or failure changes the state, and the next read is planned from it.
   useEffect(() => {
     latest.current = state
     reader.follow(state)
-    const delay = pollDelay(state)
+    const delay = pollDelay(state, signalled)
     if (delay === null) return
     // A hidden page is not read: it is read again as soon as it is shown.
     if (delay > 0 && document.visibilityState === 'hidden') return
     const timer = window.setTimeout(() => void reader.read(), delay)
     return () => window.clearTimeout(timer)
-  }, [state, reader])
+  }, [state, reader, signalled])
 
   useEffect(() => {
     const shown = () => {

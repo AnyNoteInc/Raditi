@@ -109,6 +109,14 @@ export const feedPolling = Object.freeze({
   max: 30_000,
   /** «Ход работы» of a live turn: what the agent is writing now comes about this often. */
   activity: 1_000,
+  /**
+   * While the stream of the chat's signals is up (`task.signals`), a change is read as it commits:
+   * the polls are only the fallback for a signal lost on the way. Waiting, a page still marks the
+   * client present well inside `PRESENCE_FRESH_MS` of core (60 s; a mark every 30 s at most).
+   */
+  signalled: Object.freeze({ working: 15_000, waiting: 20_000, activity: 5_000 }),
+  /** The shortest time between two reads of «Ход работы» its signals ask for. */
+  signalGap: 500,
 })
 
 const WORKING = new Set(['queued', 'preparing', 'running', 'deploying', 'verifying'])
@@ -118,8 +126,9 @@ const LIVE_BROWSER = new Set(['starting', 'ready'])
  * Milliseconds until the next read; null — no more reads: the chat has ended, or there is no such
  * chat. 2 s while the agent is at work or the chat's browser is open, 15 s while the chat waits
  * for the client; after a failed read the pause doubles, up to 30 s. A hidden page is not read at all — the hook waits for it to be shown again.
+ * `signalled` — the stream of the chat's signals is up: the rates of `feedPolling.signalled`.
  */
-export function pollDelay(state: FeedState): number | null {
+export function pollDelay(state: FeedState, signalled = false): number | null {
   if (state.missing) return null
   if (state.now && state.failures === 0) return 0
   const head = state.head
@@ -130,8 +139,9 @@ export function pollDelay(state: FeedState): number | null {
     // An open browser (docs/plan/57-browser-tasks.md): who drives it and what the agent asks
     // there change while the dialog waits.
     (head.browser !== null && LIVE_BROWSER.has(head.browser.status))
-  const base = busy ? feedPolling.working : feedPolling.waiting
-  return Math.min(base * 2 ** state.failures, feedPolling.max)
+  const rates = signalled ? feedPolling.signalled : feedPolling
+  const base = busy ? rates.working : rates.waiting
+  return Math.min(base * 2 ** state.failures, Math.max(feedPolling.max, base))
 }
 
 /** Three failed reads in a row: the screen offers to read again by hand. */

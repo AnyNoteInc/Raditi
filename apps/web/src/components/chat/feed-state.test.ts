@@ -176,6 +176,13 @@ describe('pollDelay', () => {
     ).toBe(feedPolling.waiting)
   })
 
+  it('polls only as the fallback while the stream of signals is up', () => {
+    expect(pollDelay(at({ status: 'running' }), true)).toBe(feedPolling.signalled.working)
+    expect(pollDelay(at({ status: 'awaiting_user' }), true)).toBe(feedPolling.signalled.waiting)
+    // A page of rows left is read at once all the same.
+    expect(pollDelay(answered(initialFeedState, feedAnswer({ more: true }), '0'), true)).toBe(0)
+  })
+
   it('stops at the end of a dialog', () => {
     for (const status of ['done', 'failed', 'cancelled', 'rolled_back'] as const)
       expect(pollDelay(at({ status }))).toBeNull()

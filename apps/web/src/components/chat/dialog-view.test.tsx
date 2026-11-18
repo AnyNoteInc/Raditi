@@ -38,8 +38,19 @@ import {
 type Press = { taskId: string; requestId: string }
 type Posted = { requestEventId: string; repeated: boolean }
 
+/** What a stream of `task.signals` is told: the test plays the server. */
+type SignalHandlers = {
+  onData: (data: { signal: 'feed' | 'activity' | 'resync' }) => void
+  onConnectionStateChange: (state: { state: 'idle' | 'connecting' | 'pending' }) => void
+  onError: (error: unknown) => void
+  onComplete: () => void
+}
+
 const calls = vi.hoisted(() => ({
   feed: vi.fn<(input: { taskId: string; after: string }) => Promise<DialogFeed>>(),
+  signals: vi.fn<
+    (input: { taskId: string }, handlers: SignalHandlers) => { unsubscribe: () => void }
+  >(() => ({ unsubscribe: () => undefined })),
   activity: vi.fn<(input: { after: string }) => Promise<TurnActivityPage>>(),
   message: vi.fn<(input: Press & { text: string }) => Promise<Posted>>(),
   // The queue of the chat (docs/plan/75, ВВ1): empty unless a test fills it.
@@ -122,6 +133,7 @@ vi.mock('./attachment-upload', async (original) => ({
 const client = vi.hoisted(() => ({
   task: {
     feed: { query: calls.feed },
+    signals: { subscribe: calls.signals },
     activity: { query: calls.activity },
   },
   preview: { ticket: { mutate: calls.ticket } },
@@ -412,6 +424,7 @@ const streamState = (controller: 'agent' | 'user') => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  calls.signals.mockImplementation(() => ({ unsubscribe: () => undefined }))
   calls.activity.mockResolvedValue({ events: [], cursor: '0', more: false })
   calls.message.mockResolvedValue(posted)
   calls.proceed.mockResolvedValue(posted)
@@ -442,6 +455,20 @@ const NETWORK_TEXT = 'Не удалось связаться с сервером
 
 describe('a dialog', () => {
   // The page passes null from 61.12 on: nothing fails by itself then (docs/plan/61, К18).
+
+  it('reads the chat as soon as a change is signalled, and not for the work of a turn', async () => {
+    showDialog(feedAnswer({ status: 'awaiting_user', events: [requestRow('1')], cursor: '1.5' }))
+    await waitFor(() => expect(calls.feed).toHaveBeenCalledTimes(1))
+    expect(calls.signals).toHaveBeenCalledWith({ taskId: TASK_ID }, expect.anything())
+    const handlers = calls.signals.mock.calls[0]![1]
+    handlers.onData({ signal: 'feed' })
+    await waitFor(() => expect(calls.feed).toHaveBeenCalledTimes(2))
+    expect(calls.feed.mock.calls[1]![0]).toEqual({ taskId: TASK_ID, after: '1.5' })
+    // The output of a turn is for «Ход работы»: the feed is not read for it.
+    handlers.onData({ signal: 'activity' })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(calls.feed).toHaveBeenCalledTimes(2)
+  })
 
   describe('the commands of the page (docs/plan/61-chats-first.md, §5.14)', () => {
     afterEach(() => {

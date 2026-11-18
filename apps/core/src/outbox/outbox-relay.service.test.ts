@@ -357,6 +357,58 @@ describe('OutboxRelayService.tick', () => {
   })
 })
 
+describe('OutboxRelayService.wake', () => {
+  /** A relay of the process that runs the workers, polling not started. */
+  function background(claimed: Row[], enqueue?: JobQueue['enqueue']) {
+    const queryRaw = vi.fn().mockResolvedValue(claimed)
+    const prisma = {
+      $queryRaw: queryRaw,
+      outboxEvent: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    }
+    const queue = { enqueue: vi.fn(enqueue ?? (async () => undefined)) }
+    const relay = new OutboxRelayService(
+      prisma as unknown as PrismaClient,
+      queue as unknown as JobQueue,
+      true,
+    )
+    return { relay, queryRaw, queue }
+  }
+
+  it('runs a pass at once when new rows commit, not at the next poll', async () => {
+    const { relay, queryRaw, queue } = background([row()])
+    relay.wake()
+    await vi.waitFor(() => expect(queue.enqueue).toHaveBeenCalledOnce())
+    expect(queryRaw).toHaveBeenCalledOnce()
+  })
+
+  it('runs one more pass right after the one a wake came during: its rows are not left', async () => {
+    let release: () => void = () => {}
+    const blocked = new Promise<void>((resolve) => (release = resolve))
+    const { relay, queryRaw } = background([row()], () => blocked)
+    relay.wake()
+    await vi.waitFor(() => expect(queryRaw).toHaveBeenCalledOnce())
+    // Two wakes during the pass make one more pass, not two.
+    relay.wake()
+    relay.wake()
+    release()
+    await vi.waitFor(() => expect(queryRaw).toHaveBeenCalledTimes(2))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(queryRaw).toHaveBeenCalledTimes(2)
+  })
+
+  it('does nothing in a process that runs no workers, or once it stops', async () => {
+    const { relay, queryRaw } = setup([row()])
+    relay.wake()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(queryRaw).not.toHaveBeenCalled()
+    const running = background([row()])
+    await running.relay.onModuleDestroy()
+    running.relay.wake()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(running.queryRaw).not.toHaveBeenCalled()
+  })
+})
+
 describe('OutboxRelayService.onModuleDestroy', () => {
   it('lets the running pass finish its row, releases the rest and starts no new pass', async () => {
     let finish: () => void = () => {}

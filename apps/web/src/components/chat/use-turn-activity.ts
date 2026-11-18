@@ -6,6 +6,7 @@ import { useTRPCClient } from '@/trpc/client'
 
 import type { ActivityEvent, TurnActivityPage } from './chat-types'
 import { feedPolling } from './feed-state'
+import { taskSignalBus } from './task-signal-bus'
 
 /** «Ход работы» of one turn as the screen holds it. */
 export interface ActivityState {
@@ -59,25 +60,53 @@ export function startActivityReader(options: {
   cursor: { current: string }
   live: boolean
   hidden?: () => boolean
+  /**
+   * Called with the read of now when the output of the turn is signalled (`task.signals`); returns
+   * the unsubscribe. While `signalled()` says the stream is up, a live turn is polled every
+   * `feedPolling.signalled.activity` ms only, as the fallback.
+   */
+  wake?: (read: () => void) => () => void
+  signalled?: () => boolean
 }): () => void {
   let alive = true
   let failures = 0
+  let reading = false
+  let again = false
+  let startedAt = Number.NEGATIVE_INFINITY
   let timer: ReturnType<typeof setTimeout> | undefined
+  const every = () =>
+    options.signalled?.() ? feedPolling.signalled.activity : feedPolling.activity
   const plan = (delay: number) => {
+    clearTimeout(timer)
     timer = setTimeout(() => void read(), delay)
   }
+  // The output of a turn comes a few times a second: a signal reads at once, but not sooner than
+  // `feedPolling.signalGap` after the read before it.
+  const unwake = options.wake?.(() => {
+    if (!alive) return
+    if (reading) again = true
+    else plan(Math.max(0, startedAt + feedPolling.signalGap - Date.now()))
+  })
   async function read(): Promise<void> {
     if (!alive) return
-    if (options.live && options.hidden?.()) return plan(feedPolling.activity)
+    if (options.live && options.hidden?.()) return plan(every())
+    reading = true
+    startedAt = Date.now()
     try {
       const page = await options.query(options.cursor.current)
       if (!alive) return
       failures = 0
       options.cursor.current = page.cursor
       options.update((state) => withActivity(state, page))
+      reading = false
       if (page.more) return plan(0)
-      if (options.live) plan(feedPolling.activity)
+      if (again) {
+        again = false
+        return plan(Math.max(0, startedAt + feedPolling.signalGap - Date.now()))
+      }
+      if (options.live) plan(every())
     } catch {
+      reading = false
       if (!alive) return
       failures += 1
       options.update((state) => (state.failed ? state : { ...state, failed: true }))
@@ -89,6 +118,7 @@ export function startActivityReader(options: {
   return () => {
     alive = false
     clearTimeout(timer)
+    unwake?.()
   }
 }
 
@@ -111,8 +141,10 @@ export function useTurnActivity(taskId: string, turn: number, live: boolean): Ac
         cursor,
         live,
         hidden: () => document.visibilityState === 'hidden',
+        wake: (read) => taskSignalBus.onActivity(taskId, read),
+        signalled: () => taskSignalBus.connected(taskId),
       }),
-    [query, live],
+    [query, live, taskId],
   )
   return state
 }

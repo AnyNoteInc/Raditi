@@ -27,6 +27,7 @@ import {
   searchDialogs,
 } from '../services/chat/dialog-list.ts'
 import { readDialogExport, readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
+import { readTaskSignals } from '../services/chat/signals.ts'
 import { markPresence } from '../services/notifications.ts'
 import {
   editQueuedWords,
@@ -415,6 +416,23 @@ export const taskRouter = router({
       // The client looks at the chat: it is not notified of it (docs/plan/75, ВВ7).
       await markPresence(ctx.prisma, ctx.user.id, feed.task.id)
       return feed
+    }),
+
+  /**
+   * The signals of the chat (spec §7): `feed` — read `task.feed` now, `activity` — the agent's
+   * output of the turn, `resync` — signals may have been missed, read both. Over SSE
+   * (`httpSubscriptionLink`); the polls of the page go on, slower, as the fallback.
+   */
+  signals: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .subscription(async function* ({ ctx, input, signal }) {
+      const signals = ctx.chat?.signals ?? null
+      if (signals === null) return
+      yield* readTaskSignals(ctx.prisma, signals, {
+        userId: ctx.user.id,
+        taskId: input.taskId,
+        ...(signal ? { signal } : {}),
+      })
     }),
 
   /**

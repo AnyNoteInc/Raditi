@@ -7,6 +7,7 @@ import {
 } from '@repo/domain'
 
 import type { PageKeys } from './page-tokens.ts'
+import type { TaskSignals } from './signals.ts'
 
 /**
  * What the procedures of a dialog reach outside the database (docs/plan/53-chat-preview-release.md).
@@ -55,6 +56,11 @@ export interface ChatContext {
    * can call `kvRead`.
    */
   secrets: () => ChatSecretWriter
+  /**
+   * The signals of changed chats (`task.signals`, spec §7). Absent or null — Redis is not set up
+   * here: the stream ends at once, and the page reads by its polls alone.
+   */
+  signals?: TaskSignals | null
 }
 
 /**

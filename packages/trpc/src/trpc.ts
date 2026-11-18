@@ -108,6 +108,12 @@ const t = initTRPC.context<Context>().create({
   transformer: superjson,
   isDev,
   errorFormatter: ({ shape, error }) => formatError(shape, error, isDev),
+  // The streams of `task.signals` (SSE): a comment every 15 s keeps a quiet one open through
+  // proxies, and a client that hears nothing for 40 s connects again.
+  sse: {
+    ping: { enabled: true, intervalMs: 15_000 },
+    client: { reconnectAfterInactivityMs: 40_000 },
+  },
 })
 
 /** A DomainError thrown anywhere in a procedure becomes the matching tRPC error. */

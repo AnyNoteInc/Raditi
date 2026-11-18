@@ -92,6 +92,8 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
   #stopping = false
   #failedPasses = 0
   #pausedUntil = 0
+  /** A wake came while a pass ran: one more pass follows it at once. */
+  #again = false
   readonly #warn = throttledLogger((line) => this.#logger.warn(line))
   readonly #logPassFailure = (err: unknown) => this.#warn('Outbox relay pass failed', err)
 
@@ -124,6 +126,17 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
   }
 
   /**
+   * New rows were committed (NOTIFY raditi_outbox, task-signals): a pass now, not at the next
+   * poll — or right after the pass that runs, which may have claimed before they were there.
+   * Nothing outside the process that runs the workers.
+   */
+  wake(): void {
+    if (!this.#background || this.#stopping) return
+    if (this.#tick) this.#again = true
+    else void this.tick()
+  }
+
+  /**
    * One relay pass; resolves to the number of rows it claimed. A call while the previous
    * pass is still running, during the pause after a failed pass or after shutdown began
    * returns 0 at once: passes never overlap. Never rejects.
@@ -148,6 +161,10 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
       })
       .finally(() => {
         this.#tick = undefined
+        if (this.#again && !this.#stopping) {
+          this.#again = false
+          void this.tick()
+        }
       })
     return this.#tick
   }
