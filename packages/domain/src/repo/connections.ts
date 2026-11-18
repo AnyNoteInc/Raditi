@@ -26,11 +26,12 @@ export const gitConnectionLimits = Object.freeze({
  * the owner, the operator, has filed the notice of art. 12 of 152-FZ for the USA and its ten working
  * days have passed (the USA is not on the list of RKN order No. 253, so part 11 of art. 12 holds the
  * transfer until then). One flag for both: one notice and one edition cover both recipients. The
- * owner turns it on once they confirm the filing (docs/plan/84-projects.md, §10, «Действия
- * владельца»; apps/web/content/legal/README.md, «Уведомление по ст. 12 о передаче кода в США»).
- * An own GitLab server and an open link never wait on it.
+ * owner turned it on on 18.11.2026, confirming the filing and the ten days with no ban
+ * (docs/plan/84-projects.md, §10, «Действия владельца»; apps/web/content/legal/README.md,
+ * «Уведомление по ст. 12 о передаче кода в США»). An own GitLab server and an open link never
+ * waited on it.
  */
-export const codeHostsAbroadPublishedInProduction = false
+export const codeHostsAbroadPublishedInProduction = true
 
 /**
  * Whether a code host abroad is offered: Raditi's app for it is configured, and in production the

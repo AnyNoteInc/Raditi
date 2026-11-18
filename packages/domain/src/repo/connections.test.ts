@@ -47,10 +47,10 @@ describe('git connections', () => {
     }
   })
 
-  it('keeps the gate closed until the owner confirms the notice of art. 12 for the USA', () => {
+  it('opens the gate once the owner confirmed the notice of art. 12 for the USA', () => {
     // The owner's answer of 17.11.2026 (docs/plan/84-projects.md, §8, question 4): the buttons open
-    // after the filing is confirmed. Turning the flag on is that step, with the checklist of §10.
-    expect(codeHostsAbroadPublishedInProduction).toBe(false)
+    // after the filing is confirmed. The owner confirmed it on 18.11.2026 («Открыть для всех»).
+    expect(codeHostsAbroadPublishedInProduction).toBe(true)
   })
 
   it('keeps the tokens as strings at the path of the workspace', () => {
