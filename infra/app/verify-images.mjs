@@ -6,6 +6,10 @@
 // they run from the repository), and the runner image carries no package of the platform's data
 // (spec §8, §19: a sandbox VM holds no platform credentials) and the operator's runner-token
 // command. core and web are built by verify:edge, the llm image is run for real by verify:llm-app.
+// The core image is checked only when named (`--only core`, docs/plan/84-projects.md, §6): it is
+// the one image that carries git and gitleaks, for its git worker (ПР33), and the second entry of
+// that worker refuses an empty configuration in its own words as well. images.yml leaves it out:
+// edge.yml and publish-images.yml build it in CI.
 //
 //   pnpm verify:images [-- --no-build] [--keep] [--only <app>[,<app>…]]
 import { spawn } from 'node:child_process'
@@ -14,6 +18,14 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 export const APPS = ['llm', 'mcp', 'preview', 'runner', 'browser']
+/** The images checked only when `--only` names them. */
+export const NAMED_APPS = ['core']
+
+/**
+ * The tools of the git worker of core and the least versions its Dockerfile pins
+ * (apps/core/Dockerfile: git of the Debian security release, gitleaks of its image).
+ */
+export const GIT_WORKER_TOOLS = { git: [2, 47, 3], gitleaks: [8, 30, 1] }
 
 /**
  * The workspace packages an image may not carry: what dependency-cruiser forbids the app to reach
@@ -23,6 +35,8 @@ export const APPS = ['llm', 'mcp', 'preview', 'runner', 'browser']
  * against it) — turbo prune takes it, and no code of the app imports it.
  */
 export const FORBIDDEN_PACKAGES = {
+  // core-no-trpc-ui: core reaches business logic via domain.
+  core: ['trpc', 'ui'],
   llm: [
     'storage',
     'git-providers',
@@ -140,6 +154,20 @@ export const STAND_FILE =
 
 /** The operator's commands an image keeps next to where the stands were (its scripts/). */
 export const OPERATOR_SCRIPTS = {
+  // Run in its image on the app VM (`docker compose run --entrypoint node core scripts/… …`).
+  core: [
+    'billing-rates.mjs',
+    'billing-refund.mjs',
+    'billing-refunds-needed.mjs',
+    'billing-settle-payment.mjs',
+    'billing-stop-renewal.mjs',
+    // The pool and the windows of the workspaces (docs/plan/71-usage-limits.md, §4.4).
+    'llm-plan-rates.mjs',
+    'llm-usage.mjs',
+    // The support's take-down and return of a site of pages (docs/plan/73-pages-sites.md, Дер18).
+    'pages-return.mjs',
+    'pages-take-down.mjs',
+  ],
   llm: [
     'subscription-login.mjs',
     'subscription-retire.mjs',
@@ -160,6 +188,18 @@ export function standFilesOf(paths) {
 /** The operator's commands of the app that its image does not carry. */
 export function missingOperatorScriptsOf(app, scripts) {
   return OPERATOR_SCRIPTS[app].filter((name) => !scripts.includes(name))
+}
+
+/**
+ * Whether the first version a tool printed (`git version 2.47.3`, `8.30.1`) is at least the least
+ * one, compared part by part; nothing printed is not.
+ */
+export function versionAtLeast(said, least) {
+  const found = /(\d+)\.(\d+)\.(\d+)/.exec(said)
+  if (!found) return false
+  const parts = found.slice(1).map(Number)
+  for (const [index, part] of parts.entries()) if (part !== least[index]) return part > least[index]
+  return true
 }
 
 /** The names of the forbidden workspace packages an image carries. */
@@ -230,12 +270,13 @@ async function main() {
   })
   if (options.help) {
     process.stdout.write(
-      'Usage: pnpm verify:images [-- --no-build] [--keep] [--only llm,runner,browser]\n',
+      'Usage: pnpm verify:images [-- --no-build] [--keep] [--only llm,runner,browser|core]\n',
     )
     return
   }
   const apps = options.only === undefined ? APPS : options.only.split(',')
-  for (const app of apps) if (!APPS.includes(app)) throw new Error(`Unknown app ${app}`)
+  for (const app of apps)
+    if (!APPS.includes(app) && !NAMED_APPS.includes(app)) throw new Error(`Unknown app ${app}`)
   const root = fileURLToPath(new URL('../../', import.meta.url))
   const started = Date.now()
   let passed = 0
@@ -303,13 +344,26 @@ async function main() {
         !/ERR_MODULE_NOT_FOUND|Cannot find (module|package)/.test(said),
       said.slice(0, 600),
     )
-    const tools = await inside(tag, 'command -v git || command -v gitleaks || true')
-    check(
-      app,
-      'carries no git and no gitleaks',
-      tools.code === 0 && tools.stdout.trim() === '',
-      tools.stdout.trim(),
-    )
+    if (app === 'core') {
+      // The git worker of the repositories of projects runs both (ПР33), at the pinned versions.
+      for (const [tool, least] of Object.entries(GIT_WORKER_TOOLS)) {
+        const said = await inside(tag, `${tool} version`)
+        check(
+          app,
+          `carries ${tool} ${least.join('.')} or later for its git worker`,
+          said.code === 0 && versionAtLeast(said.stdout, least),
+          (said.stdout + said.stderr).trim().slice(0, 200),
+        )
+      }
+    } else {
+      const tools = await inside(tag, 'command -v git || command -v gitleaks || true')
+      check(
+        app,
+        'carries no git and no gitleaks',
+        tools.code === 0 && tools.stdout.trim() === '',
+        tools.stdout.trim(),
+      )
+    }
     const env = await inside(tag, 'find /app -maxdepth 3 -name .env -print')
     check(app, 'carries no .env', env.code === 0 && env.stdout.trim() === '', env.stdout.trim())
     const listed = await inside(tag, 'ls /app/packages')
@@ -335,6 +389,24 @@ async function main() {
       files.code === 0 && own.code === 0 && stands.length === 0 && missing.length === 0,
       `stands: ${stands.join(' ')}; missing: ${missing.join(' ')}`,
     )
+    if (app === 'core') {
+      // The second entry of the image: the git worker, its own process in its own container.
+      const worker = await container(tag, [
+        '-e',
+        'APP_ENV=production',
+        tag,
+        'dist/git-worker/main.js',
+      ])
+      const said = worker.stdout + worker.stderr
+      check(
+        app,
+        'its git worker starts and refuses an empty configuration: «[git-worker] invalid configuration»',
+        worker.code === 1 &&
+          said.includes('[git-worker] invalid configuration') &&
+          !/ERR_MODULE_NOT_FOUND|Cannot find (module|package)/.test(said),
+        said.slice(0, 600),
+      )
+    }
     if (app !== 'runner') return
     const store = await inside(tag, 'ls /app/node_modules/.pnpm')
     const modules = forbiddenModulesOf(store.stdout.split('\n').filter(Boolean))

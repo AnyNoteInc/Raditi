@@ -53,12 +53,13 @@ test('the stopwatch of the rail stands after «Чаты» and before «Стра�
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/chats')
   const links = rail(page).getByRole('link')
-  // The three sections of the rail (Зп60).
-  await expect(links).toHaveCount(3)
+  // The sections of the rail (Зп60), «Проекты» last (docs/plan/84-projects.md, 84.6).
+  await expect(links).toHaveCount(4)
   await expect(links.nth(0)).toHaveAccessibleName('Чаты')
   await expect(links.nth(1)).toHaveAccessibleName('Запланированные задачи')
   await expect(links.nth(1)).toHaveAttribute('href', '/scheduled')
   await expect(links.nth(2)).toHaveAccessibleName('Страницы')
+  await expect(links.nth(3)).toHaveAccessibleName('Проекты')
 
   await links.nth(1).click()
   await expect(page).toHaveURL(/\/scheduled$/)

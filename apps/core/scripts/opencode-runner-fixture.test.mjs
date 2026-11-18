@@ -136,6 +136,7 @@ function runShell(message, files, number, overrides = {}) {
           assert.match(path, /^\/proc\/(1|17)\/environ$/)
           return overrides.environ ?? 'PATH=/usr/bin\0HOME=/agent-home/opencode\0'
         },
+        existsSync: (path) => files.has(path),
         appendFileSync: (path, content) => files.set(path, (files.get(path) ?? '') + content),
         writeFileSync: (path, content) => files.set(path, content),
       }
@@ -179,18 +180,26 @@ async function play(fixture, number, files, history = []) {
   return [{ role: 'user', content: `Client request:\n${turn(number).prompt}` }, ...steps, final]
 }
 
-test('plays two turns: shell under gVisor, MCP tool, result; the second sees the first', async (t) => {
+test('plays two turns: shell under gVisor, MCP tool, result; the second goes on from the session of the first, in an empty working copy', async (t) => {
   const fixture = await open(t)
-  const files = new Map([['index.php', "<?php echo 'hello';\n"]])
+  // A chat without a repository: each turn starts in an empty working copy (rule 5).
+  const files = new Map()
   assert.deepEqual(fixture.addTurn(turn(1)), fixture.resultFor(1))
   const first = await play(fixture, 1, files)
   assert.deepEqual(JSON.parse(first.at(-1).content), fixture.resultFor(1))
-  assert.equal(files.get('index.php'), "<?php echo 'hello';\nturn 1\n")
+  assert.equal(files.get('index.php'), 'turn 1\n')
   assert.equal(files.get('turn-1.txt'), 'turn 1\n')
   fixture.addTurn(turn(2))
-  const second = await play(fixture, 2, files, first)
+  const again = new Map()
+  const second = await play(fixture, 2, again, first)
   assert.deepEqual(JSON.parse(second.at(-1).content), fixture.resultFor(2))
-  assert.ok(files.get('index.php').endsWith('turn 1\nturn 2\n'))
+  assert.deepEqual(
+    [...again],
+    [
+      ['index.php', 'turn 2\n'],
+      ['turn-2.txt', 'turn 2\n'],
+    ],
+  )
   fixture.assertComplete()
   const observed = fixture.observations()
   assert.deepEqual(observed.problems, [])
@@ -204,6 +213,19 @@ test('plays two turns: shell under gVisor, MCP tool, result; the second sees the
   assert.equal(observed.turns[1].continuationSeen, true)
   // Nothing of a credential is kept in what the stand prints.
   assert.ok(!JSON.stringify(observed).includes('synthetic-llm'))
+})
+
+test('the second turn refuses a working copy that kept the files of the first', async (t) => {
+  const fixture = await open(t)
+  const files = new Map()
+  fixture.addTurn(turn(1))
+  const first = await play(fixture, 1, files)
+  fixture.addTurn(turn(2))
+  const shell = await llm(fixture, 2, bodyFor(2, first))
+  // What the turns of a site's repository had: the working copy of the first turn.
+  assert.throws(() => runShell(shell, new Map(files), 2))
+  assert.throws(() => runShell(shell, new Map([['turn-1.txt', 'turn 1\n']]), 2))
+  assert.doesNotThrow(() => runShell(shell, new Map(), 2))
 })
 
 test('the shell command refuses a sandbox that is not the one of the product', async (t) => {

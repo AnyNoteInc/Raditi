@@ -22,7 +22,7 @@ pnpm verify:pages [-- --no-build] [--keep]
 - `--no-build` — не собирать `apps/preview`, взять текущий `dist`.
 - `--keep` — оставить контейнер PostgreSQL и каталог с логом `preview.log`.
 
-Нужен загруженный образ PostgreSQL стенда выпуска (`docker pull` — в `infra/dev/release-verify/README.md`).
+Нужен загруженный образ PostgreSQL стенда биллинга (`POSTGRES_IMAGE` в `infra/dev/billing-verify/stand.mjs`, `docker pull` — в `infra/dev/billing-verify/README.md`); общие модули стенд берёт у стенда браузера (`infra/dev/browser-task-verify/runtime.mjs` и `stand.mjs`).
 `.env`, dev-инфраструктура, модель и ключи не используются.
 
 ## Сценарии

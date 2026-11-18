@@ -553,7 +553,9 @@ export async function verifyAgentSupervisor({
     })
     // A passed run prints only what it verified: no values, and not the output of a failure.
     for (const line of run.stdout.split('\n')) if (line.startsWith('- ')) log(line)
-    log(`PASS real ${driverName} supervisor exec/resume on gVisor, snapshots and publication`)
+    log(
+      `PASS real ${driverName} supervisor exec/resume on gVisor and snapshots of chats without a repository`,
+    )
   } catch (error) {
     failure = new Error(`${milestone} supervisor verification failed at ${currentStage}`)
     // A failed run keeps one explicitly private diagnostic. Service secrets/configs below

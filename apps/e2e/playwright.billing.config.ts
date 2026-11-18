@@ -100,8 +100,10 @@ export default defineConfig({
         VAULT_ROLE_ID: vault.roleId,
         VAULT_SECRET_ID: vault.secretId,
         VAULT_DEV_ROOT_TOKEN: '',
-        // Blank counts as unset and leaves Redis and S3 switched off: only /api/health and the
-        // avatar routes read them.
+        // Blank counts as unset and leaves Redis and S3 switched off: /api/health and the avatar
+        // routes read them, and `projectRepo.paths` makes its S3 client before it knows whether
+        // the project has a repository — here it logs the refusal of the storage; no project of
+        // these runs has a repository (docs/plan/84-projects.md, §10, «Регрессия и e2e»).
         REDIS_URL: '',
         S3_ENDPOINT: '',
         S3_ACCESS_KEY_ID: '',
