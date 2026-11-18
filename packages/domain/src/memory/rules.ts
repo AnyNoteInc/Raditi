@@ -9,7 +9,7 @@ import type { MemoryAuthor, MemoryStatus } from './schemas.ts'
 // into the model is not told apart from the words of the client, and a note lives in every chat
 // and run of its project. So a note of the agent is active at once only when everything at once
 // says the client wanted it: their own words of this pass ask to remember, nothing of outside came
-// into the pass, the chat has no repository, the text has no link, address or command, and someone
+// into the pass, the chat has no repository, the text has no command, and someone
 // watches the pass. Otherwise it is «Предложено» and waits for «Сохранить».
 
 const letter = String.raw`\p{L}`
@@ -34,10 +34,6 @@ export function askedToRemember(words: string): boolean {
   return asks.some((pattern) => pattern.test(text))
 }
 
-const link = /(?:[a-z][a-z0-9+.-]*:\/\/|(?<![\p{L}\d])www\.)/iu
-const domain =
-  /(?<![\p{L}\d.@-])[\p{L}\d-]+(?:\.[\p{L}\d-]+)*\.(?:ru|рф|su|com|net|org|io|dev|app|info|biz|me|co|xyz|online|site|store|shop|tech|pro|ai|cc|tv|kz|by|ua)(?![\p{L}\d-])/iu
-const email = /[\p{L}\d._%+-]+@[\p{L}\d-]+(?:\.[\p{L}\d-]+)+/u
 const command = [
   /`/u,
   /\$\(/u,
@@ -47,14 +43,13 @@ const command = [
   /(?:^|\n)\s*[$#>]\s+\S/u,
 ]
 
-/** A link, an address of e-mail or a command in the text of an entry: the client reads it first. */
+/**
+ * A command in the text of an entry: the client reads it first. A link and an address of e-mail
+ * are saved like any other text (answer of the owner, 18.11.2026, ПР37): only a secret is never
+ * saved (memoryTextOf).
+ */
 export function memoryTextNeedsReview(text: string): boolean {
-  return (
-    link.test(text) ||
-    email.test(text) ||
-    domain.test(text) ||
-    command.some((pattern) => pattern.test(text))
-  )
+  return command.some((pattern) => pattern.test(text))
 }
 
 /**
