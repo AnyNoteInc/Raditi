@@ -44,7 +44,7 @@ const writes = {
 const scopeOf = (context: McpContext) => context.getRawRequest<McpRequest>()?.[MCP_REQUEST_ACCESS]
 
 const rules =
-  'Only when the client asks you to remember something, or states a lasting preference, fact or decision. Never a secret, a password, a value of a variable, a link, a command or personal data of other people. The change is applied when this turn ends: it is active at once only when the client asked to remember in this turn and nothing of outside (a page, a file read by a command, a search) came into the turn; otherwise the client confirms it. At most 10 changes a turn.'
+  'Only when the client asks you to remember something, or states a lasting preference, fact or decision. Never a secret, a password, a value of a variable, a link, a command or personal data of other people. The change is applied when this turn ends: it is active at once only when the client asked to remember in this turn, the turn ran no command and nothing of outside (a page, a file, a search) came into it; otherwise it waits for the client in «Предложено». You learn which only when the turn ends: never tell the client a note is already active. At most 10 changes a turn.'
 
 /**
  * The memory of a chat (docs/plan/84-projects.md, ПР18, §4.4): the family `memory`, declared while

@@ -56,7 +56,7 @@ const reserved = (reservationId: string) => ({
     reservedId: reservationId,
     live: 'when this turn ends',
     status:
-      'active only when the client asked to remember it in this turn and nothing of outside came into it; otherwise the client confirms it',
+      'known when this turn ends: active only when the client asked to remember it in this turn, the turn ran no command and nothing of outside came into it; otherwise it waits for the client in «Предложено». Do not tell the client it is already active',
   },
 })
 
