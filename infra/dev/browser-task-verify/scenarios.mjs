@@ -1490,8 +1490,7 @@ async function scenarioQ(stand) {
   )
   const version = await db.chatDocument.findUniqueOrThrow({
     where: { id: docId },
-    // The host of a page is its site's since plan 73 (Дер11): `pages.slug` is left for the release
-    // before, a new page has none.
+    // The host of a page is its site's since plan 73 (Дер11): the client no longer has `pages.slug`.
     include: { content: true, page: { include: { tree: true } } },
   })
   rt.check(

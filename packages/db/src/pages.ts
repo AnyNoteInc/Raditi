@@ -37,7 +37,8 @@ import { insertFeedEvent } from './feed-events.ts'
 import { Prisma, type PrismaClient } from './generated/prisma/client.ts'
 
 // The pages and documents of a workspace (docs/plan/69-pages.md, Ст6, Ст7, Ст13–Ст16, Ст19–Ст21).
-// A page has one slug for ever and the bytes of its current version alone; a document has its
+// A page is a node of a site (docs/plan/73-pages-sites.md, Дер11, Дер12): the site holds the slug
+// for ever, the page its path and the bytes of its current version alone; a document has its
 // sections, the Markdown of its current version, and the history of both as numbers and sums.
 // Every change takes the row lock of its page or document first, so that concurrent turns and the
 // cabinet count versions and positions one at a time; the counts of a workspace take its row with

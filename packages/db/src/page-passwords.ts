@@ -9,8 +9,9 @@ import { pageLimits } from '@repo/domain'
 
 import type { PrismaClient } from './generated/prisma/client.ts'
 
-// The password of a page (docs/plan/69-pages.md, Ст13): the cabinet sets it, the page server checks
-// it; both keep only this hash in `pages.password_hash`. scrypt of Node: N = 2^15, r = 8, p = 1,
+// The password of a site of pages (docs/plan/69-pages.md, Ст13; docs/plan/73-pages-sites.md,
+// Дер17): the cabinet sets it, the page server checks it; both keep only this hash in
+// `page_trees.password_hash`. scrypt of Node: N = 2^15, r = 8, p = 1,
 // a salt of 16 bytes, a key of 32 — `scrypt$15$8$1$<salt>$<key>` in base64url.
 
 const COST_LOG2 = 15
