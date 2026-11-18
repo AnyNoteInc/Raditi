@@ -143,7 +143,9 @@ describe.skipIf(!databaseUrl)('the migration of pages into sites', () => {
       })),
     )
     const pages = await schema.db.query(
-      'SELECT id, tree_id, parent_id, segment, path, state, taken_down_by, deleted_at IS NOT NULL AS deleted FROM pages ORDER BY slug',
+      // By the slug of the site: the drop of pages.slug (slice 73.12) runs with the rest of the migrations.
+      `SELECT id, tree_id, parent_id, segment, path, state, taken_down_by, deleted_at IS NOT NULL AS deleted
+         FROM pages ORDER BY (SELECT t.slug FROM page_trees t WHERE t.id = pages.tree_id)`,
     )
     for (const row of pages.rows)
       expect(row).toMatchObject({ tree_id: row.id, parent_id: null, segment: null, path: '/' })
@@ -185,11 +187,12 @@ describe.skipIf(!databaseUrl)('the migration of pages into sites', () => {
   })
 
   it('holds a node to its place in the site, and a site to one home page', async () => {
-    const child = (values: Values) =>
-      insert(schema, 'pages', {
-        ...page(randomUUID(), slugOf('z'), { slug: null, tree_id: ids.live }),
-        ...values,
-      })
+    // A node as the migrations leave it: no pages.slug or pages.password_epoch, which the drop of
+    // slice 73.12 removes.
+    const child = (values: Values) => {
+      const { slug: _slug, password_epoch: _epoch, ...node } = page(randomUUID(), slugOf('z'))
+      return insert(schema, 'pages', { ...node, tree_id: ids.live, ...values })
+    }
     // A page under the home page needs its parent, a segment and its path.
     await expect(child({ path: '/uslugi' })).rejects.toThrow(/pages_tree_check/)
     await expect(
