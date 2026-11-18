@@ -226,8 +226,14 @@ describe('the stream of a session', () => {
     expect(counts.times).toEqual(
       expect.arrayContaining(['draw:9', 'input:180', expect.stringMatching(/^ack:\d+$/)]),
     )
-    expect(counts.times.filter((time) => time.startsWith('rtt:'))).toHaveLength(1)
-    expect(counts.times.find((time) => time.startsWith('rtt:'))).toMatch(/^rtt:(4\d|5\d|6\d|7\d)$/)
+    // Only the pong of the worker's own ping is timed, and it waited 40 ms before the answer; how
+    // much later it came is the scheduler's (the full gates gave 111 ms), so the top is loose.
+    const rtts = counts.times.filter((time) => time.startsWith('rtt:'))
+    expect(rtts).toHaveLength(1)
+    expect(rtts[0]).toMatch(/^rtt:\d+$/)
+    const rtt = Number(rtts[0]?.slice('rtt:'.length))
+    expect(rtt).toBeGreaterThanOrEqual(39)
+    expect(rtt).toBeLessThan(2000)
     // The numbers are the stream's: the session hears nothing and refuses nothing.
     expect(got.messages.filter((message) => message.t === 'refused')).toEqual([])
     expect(logged).toEqual([])
