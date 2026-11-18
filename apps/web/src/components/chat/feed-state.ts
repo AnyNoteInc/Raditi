@@ -14,13 +14,17 @@ export interface FeedState {
   head: FeedHeadState | null
   /** Rows by id, in the order of their ids. A row once read is never dropped. */
   rows: FeedRow[]
-  /** What the next read asks for: rows after this id. */
+  /**
+   * What the next read asks for: rows after this id, and the rows of transactions the last read
+   * could not see (`feedReadCursorSchema`): a row that commits late is never skipped, so a new
+   * status needs no read from the start.
+   */
   cursor: string
   /** Reads that failed in a row; what is on the screen stays. */
   failures: number
   /** The server answered that there is no such dialog: reading stops. */
   missing: boolean
-  /** The next read is due at once: a page of rows is left, or the status changed. */
+  /** The next read is due at once: a page of rows is left. */
   now: boolean
 }
 
@@ -42,12 +46,32 @@ export function compareRowIds(first: string, second: string): number {
   return first < second ? -1 : first > second ? 1 : 0
 }
 
-/** Rows of both by id; a row read again replaces the copy read before. */
+/**
+ * Rows of both by id, in one pass over each; a row read again replaces the copy read before.
+ * `known` is in the order of its ids, as every state keeps it; `read` is put in that order first.
+ */
 export function mergeRows(known: readonly FeedRow[], read: readonly FeedRow[]): FeedRow[] {
   if (read.length === 0) return known as FeedRow[]
-  const byId = new Map(known.map((row) => [row.id, row]))
-  for (const row of read) byId.set(row.id, row)
-  return [...byId.values()].sort((first, second) => compareRowIds(first.id, second.id))
+  const incoming = [...read].sort((first, second) => compareRowIds(first.id, second.id))
+  const last = known.at(-1)
+  // The usual answer: rows after the last one known.
+  if (last === undefined || compareRowIds(incoming[0]!.id, last.id) > 0) {
+    const merged = [...known]
+    for (const row of incoming)
+      if (merged.length === 0 || compareRowIds(row.id, merged.at(-1)!.id) > 0) merged.push(row)
+      else merged[merged.length - 1] = row
+    return merged
+  }
+  const merged: FeedRow[] = []
+  let at = 0
+  for (const row of incoming) {
+    while (at < known.length && compareRowIds(known[at]!.id, row.id) < 0) merged.push(known[at++]!)
+    if (at < known.length && known[at]!.id === row.id) at += 1
+    if (merged.at(-1)?.id === row.id) merged[merged.length - 1] = row
+    else merged.push(row)
+  }
+  while (at < known.length) merged.push(known[at++]!)
+  return merged
 }
 
 export function feedReducer(state: FeedState, action: FeedAction): FeedState {
@@ -61,21 +85,20 @@ export function feedReducer(state: FeedState, action: FeedAction): FeedState {
   }
   const { answer, after } = action
   const { events, cursor, more, ...head } = answer
-  // A status changed between two reads: the rows of the dialog are read again from the start,
-  // so the screen is drawn from one consistent history of the new status.
-  const reread =
-    after !== '0' && state.head !== null && state.head.task.status !== answer.task.status
-  // A read that started from a cursor the state has left since — a read from the start was
-  // asked for meanwhile — gives its rows and its head, never its cursor: the read from the
-  // start is not lost to it.
+  // Rows that commit late come with the next read whatever their ids (the cursor names what the
+  // read could not see), so a new status reads nothing again. A cursor of '0' is the server
+  // starting the reader over (more late rows than a page): every row comes from the first one on,
+  // page by page, and replaces its copy. A read that started from a cursor the state has left
+  // since gives its rows and its head, never its cursor: the reads after the newer cursor are not
+  // lost to it.
   const current = after === state.cursor
   return {
     head,
     rows: mergeRows(state.rows, events),
-    cursor: reread ? '0' : current ? cursor : state.cursor,
+    cursor: current ? cursor : state.cursor,
     failures: 0,
     missing: false,
-    now: reread || (current ? more : state.now),
+    now: current ? more : state.now,
   }
 }
 
@@ -86,6 +109,14 @@ export const feedPolling = Object.freeze({
   max: 30_000,
   /** «Ход работы» of a live turn: what the agent is writing now comes about this often. */
   activity: 1_000,
+  /**
+   * While the stream of the chat's signals is up (`task.signals`), a change is read as it commits:
+   * the polls are only the fallback for a signal lost on the way. Waiting, a page still marks the
+   * client present well inside `PRESENCE_FRESH_MS` of core (60 s; a mark every 30 s at most).
+   */
+  signalled: Object.freeze({ working: 15_000, waiting: 20_000, activity: 5_000 }),
+  /** The shortest time between two reads of «Ход работы» its signals ask for. */
+  signalGap: 500,
 })
 
 const WORKING = new Set(['queued', 'preparing', 'running', 'deploying', 'verifying'])
@@ -95,8 +126,9 @@ const LIVE_BROWSER = new Set(['starting', 'ready'])
  * Milliseconds until the next read; null — no more reads: the chat has ended, or there is no such
  * chat. 2 s while the agent is at work or the chat's browser is open, 15 s while the chat waits
  * for the client; after a failed read the pause doubles, up to 30 s. A hidden page is not read at all — the hook waits for it to be shown again.
+ * `signalled` — the stream of the chat's signals is up: the rates of `feedPolling.signalled`.
  */
-export function pollDelay(state: FeedState): number | null {
+export function pollDelay(state: FeedState, signalled = false): number | null {
   if (state.missing) return null
   if (state.now && state.failures === 0) return 0
   const head = state.head
@@ -107,8 +139,9 @@ export function pollDelay(state: FeedState): number | null {
     // An open browser (docs/plan/57-browser-tasks.md): who drives it and what the agent asks
     // there change while the dialog waits.
     (head.browser !== null && LIVE_BROWSER.has(head.browser.status))
-  const base = busy ? feedPolling.working : feedPolling.waiting
-  return Math.min(base * 2 ** state.failures, feedPolling.max)
+  const rates = signalled ? feedPolling.signalled : feedPolling
+  const base = busy ? rates.working : rates.waiting
+  return Math.min(base * 2 ** state.failures, Math.max(feedPolling.max, base))
 }
 
 /** Three failed reads in a row: the screen offers to read again by hand. */

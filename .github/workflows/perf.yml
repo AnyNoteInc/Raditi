@@ -1,0 +1,57 @@
+name: Perf
+
+# The chat from the database to the screen, measured (infra/dev/perf-verify/README.md): the real
+# task.feed and task.activity on synthetic short, long and running chats, on a disposable
+# PostgreSQL with pg_stat_statements. It fails only when the measurements cannot run; the numbers
+# go to the report, an artifact of the run, to compare a change with the one before.
+# Synthetic data only: no repository secrets, no customer data.
+#
+# It runs on changes to the stand and to the reads of the feed it measures, not on every change
+# of tRPC or of the database (docs/plan/86-speedups.md): its numbers are compared by hand, and a
+# wider filter would only spend minutes of runners. workflow_dispatch measures any branch.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/perf.yml
+      - infra/dev/perf-verify/**
+      - packages/trpc/src/routers/chat-feed.perf.test.ts
+      # What a read of the feed asks of the database.
+      - packages/trpc/src/services/chat/feed.ts
+      - packages/trpc/src/services/chat/dialog-facts.ts
+      - packages/trpc/src/services/chat/dialog-state.ts
+      - packages/trpc/src/services/chat/activity.ts
+  workflow_dispatch:
+
+concurrency:
+  group: perf-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  chat-feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      # The stand never pulls: its image is pinned by digest in infra/dev/perf-verify/perf.mjs.
+      - name: Pull the pinned image
+        run: docker pull --quiet postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+      - name: Measure the chat feed
+        env:
+          RADITI_PERF_BENCH: '1'
+        run: pnpm perf:chat --label "${{ github.sha }}" --out "${{ runner.temp }}/perf.json"
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-chat-feed
+          path: ${{ runner.temp }}/perf.json
+          if-no-files-found: ignore
+          retention-days: 30

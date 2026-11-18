@@ -108,6 +108,40 @@ describe('the reader of «Ход работы»', () => {
     expect(state()).toMatchObject({ failed: true, events: [message('2:0')] })
   })
 
+  it('reads a live turn at once when its output is signalled, and polls it rarely meanwhile', async () => {
+    const query = vi.fn(async (after: string) =>
+      page({ events: [message(`${Number(after) + 1}:0`)], cursor: String(Number(after) + 1) }),
+    )
+    let wake: () => void = () => {}
+    const stop = startActivityReader({
+      query,
+      update: () => undefined,
+      cursor: { current: '0' },
+      live: true,
+      wake: (read) => {
+        wake = read
+        return () => (wake = () => {})
+      },
+      signalled: () => true,
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(query).toHaveBeenCalledTimes(1)
+    // The stream is up: no read every second.
+    await vi.advanceTimersByTimeAsync(feedPolling.activity * 2)
+    expect(query).toHaveBeenCalledTimes(1)
+    wake()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(query).toHaveBeenLastCalledWith('1')
+    // The fallback poll of a lost signal.
+    await vi.advanceTimersByTimeAsync(feedPolling.signalled.activity)
+    expect(query).toHaveBeenCalledTimes(3)
+    stop()
+    wake()
+    await vi.advanceTimersByTimeAsync(feedPolling.signalled.activity * 2)
+    expect(query).toHaveBeenCalledTimes(3)
+  })
+
   it('updates nothing after it is stopped', async () => {
     let resolve: (answer: TurnActivityPage) => void = () => {}
     const update = vi.fn()

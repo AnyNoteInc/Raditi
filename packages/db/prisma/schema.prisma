@@ -1112,17 +1112,20 @@ enum TurnAssignmentOutcome {
 /// Task history for the chat and SSE (spec §7). The bigint id orders events and is the
 /// Last-Event-ID a browser resumes from. Large bodies live in S3 under s3_key.
 model TaskEvent {
-  id            BigInt   @id @default(autoincrement())
-  taskId        String   @map("task_id") @db.Uuid
-  turnId        String?  @map("turn_id") @db.Uuid
+  id            BigInt               @id @default(autoincrement())
+  taskId        String               @map("task_id") @db.Uuid
+  turnId        String?              @map("turn_id") @db.Uuid
   /// A common agent event (started, message, command, …, failed) or a platform event.
-  type          String   @db.VarChar(64)
+  type          String               @db.VarChar(64)
   payload       Json
   /// Shown to the client in the chat; the rest is for operators.
-  clientVisible Boolean  @default(false) @map("client_visible")
+  clientVisible Boolean              @default(false) @map("client_visible")
   /// Key in raditi-logs or raditi-artifacts when the body is too large for payload.
-  s3Key         String?  @map("s3_key") @db.VarChar(1024)
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  s3Key         String?              @map("s3_key") @db.VarChar(1024)
+  createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// The transaction that wrote the row (`pg_current_xact_id()`); NULL for rows before 18.11.2026.
+  /// A read of the feed takes again the rows of transactions its last read could not see.
+  xact          Unsupported("xid8")? @default(dbgenerated("pg_current_xact_id()"))
 
   task Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
   turn TaskTurn? @relation(fields: [turnId], references: [id], onDelete: Cascade)
@@ -1135,6 +1138,7 @@ model TaskEvent {
   @@index([taskId], map: "task_events_llm_policy_flagged_idx", where: raw("type::text = 'llm.policy_flagged'::text"))
   // What a reader of the feed reads (CHECK task_events_feed_visible_check: visible = `feed.*`).
   @@index([taskId, id], map: "task_events_feed_idx", where: raw("client_visible"))
+  @@index([taskId, xact], map: "task_events_feed_xact_idx", where: raw("client_visible"))
   @@map("task_events")
 }
 

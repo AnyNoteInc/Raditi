@@ -326,6 +326,56 @@ export const feedCursorSchema = z
   .regex(/^(?:0|[1-9]\d{0,18})$/)
   .refine(fitsBigint, 'out of bigint range')
 
+// A transaction id of PostgreSQL (xid8): an unsigned 64-bit number.
+const MAX_XID8 = '18446744073709551615'
+const fitsXid8 = (digits: string) =>
+  digits.length < MAX_XID8.length || (digits.length === MAX_XID8.length && digits <= MAX_XID8)
+
+/** Transactions open at a read that a cursor names one by one; more — it names their oldest. */
+export const FEED_CURSOR_OPEN_TRANSACTIONS = 64
+
+const XID = '(?:0|[1-9]\\d{0,19})'
+const FEED_READ_CURSOR = new RegExp(
+  `^(?:0|[1-9]\\d{0,18})(?:\\.${XID}(?:\\.${XID}(?:_${XID}){0,${FEED_CURSOR_OPEN_TRANSACTIONS - 1}})?)?$`,
+)
+
+/**
+ * The cursor of a reader of the feed (`task.feed`): `<id>.<bound>[.<open>_<open>…]` — the id of
+ * the last row seen, the first transaction id not yet given out when it was read
+ * (`pg_snapshot_xmax`) and the transactions still open then (`pg_snapshot_xip`). A row with a
+ * smaller id may commit after a larger one: the rows the read could not see are exactly those of
+ * the open transactions and of the ones that began after it, and the next read takes them again,
+ * whatever their ids — never a row it saw. More open transactions than
+ * `FEED_CURSOR_OPEN_TRANSACTIONS`: the bound is the oldest of them and none is named. `0` before
+ * the first; a cursor without the dot is an id alone, as before 18.11.2026 (docs/plan/86-speedups.md).
+ */
+export const feedReadCursorSchema = z
+  .string()
+  .regex(FEED_READ_CURSOR)
+  .refine((cursor) => {
+    const [id = '', bound, open] = cursor.split('.')
+    return (
+      fitsBigint(id) &&
+      (bound === undefined || fitsXid8(bound)) &&
+      (open === undefined || open.split('_').every(fitsXid8))
+    )
+  }, 'out of range')
+
+/**
+ * The parts of a cursor of `feedReadCursorSchema`: the id, and the transactions whose rows the
+ * read did not see — every one from `bound` on and the ones `open` names. null — an id alone.
+ */
+export function feedCursorParts(cursor: string): {
+  id: string
+  unseen: { bound: string; open: string[] } | null
+} {
+  const [id = '0', bound, open] = cursor.split('.')
+  return {
+    id,
+    unseen: bound === undefined ? null : { bound, open: open ? open.split('_') : [] },
+  }
+}
+
 const version = z.literal(FEED_VERSION)
 const turnNo = z.number().int().min(1).max(limits.turn)
 const count = z.number().int().nonnegative()

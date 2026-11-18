@@ -8,6 +8,8 @@ import { createVaultSecretStore } from '@repo/vault'
 
 import { env } from '@/env'
 
+import { taskSignals } from './task-signals'
+
 /**
  * Three methods of the store, not the store (spec §15): web shares its
  * AppRole with `core` at MVP (П9), and in dev it holds the root token, so nothing a procedure
@@ -68,6 +70,8 @@ export function chatServices(): ChatContext | null {
             },
       storage: () => (storage ??= createS3ObjectStorage(env.storage())),
       secrets: () => (secrets ??= writerOf(createVaultSecretStore(env.vault()))),
+      // The signals of changed chats (spec §7): one subscriber of Redis for the process.
+      signals: taskSignals(),
     }
     return built
   } catch (error) {

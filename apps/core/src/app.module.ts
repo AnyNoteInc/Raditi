@@ -14,6 +14,7 @@ import { MetricsModule } from './metrics/metrics.module.ts'
 import { NotificationsModule } from './notifications/notifications.module.ts'
 import { OutboxModule } from './outbox/outbox.module.ts'
 import { QueueModule } from './queue/queue.module.ts'
+import { TaskSignalsModule } from './task-signals/task-signals.module.ts'
 import { TasksModule } from './tasks/tasks.module.ts'
 import { TurnsModule } from './turns/turns.module.ts'
 
@@ -63,6 +64,9 @@ export class AppModule {
         TasksModule.forRoot(turns),
         // The git connections and repositories of projects (docs/plan/84-projects.md, 84.17).
         GitModule,
+        // The signals of chats to the pages and the wake of the outbox, from the process that
+        // runs the workers (spec §7; docs/plan/86-speedups.md).
+        ...(background ? [TaskSignalsModule] : []),
       ],
     }
   }

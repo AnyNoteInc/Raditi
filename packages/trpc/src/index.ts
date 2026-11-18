@@ -4,6 +4,8 @@ export { appRouter, createCaller, type AppRouter } from './router.ts'
 export { createContext, type BillingContext } from './trpc.ts'
 // What the procedures of a dialog reach outside the database; the app builds it (plan 53).
 export { type ChatContext, type ChatSecretWriter } from './services/chat/context.ts'
+// Where the signals of changed chats come from; web builds it from Redis (spec §7).
+export type { TaskSignals } from './services/chat/signals.ts'
 // A snapshot the agent took of a task's browser for the client (`web_screenshot`).
 export { readTaskFile, type ChatFile } from './services/chat/files.ts'
 // The documents of a chat and the tokens of the domain of pages (docs/plan/67-agent-documents.md).

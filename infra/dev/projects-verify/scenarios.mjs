@@ -1840,6 +1840,19 @@ async function scenarioJ(stand) {
     action?.kind === 'manual_job',
     `the card offers the manual job «deploy» of ${deploy.sha.slice(0, 8)}`,
   )
+  // A second card of the same head, shown before the press: after the deploy core reads the jobs
+  // again at once (its outbox wakes the relay, docs/plan/86-speedups.md), the played job is no
+  // manual one any more, and a card asked for after it would offer nothing.
+  const fresh = await rt.until(
+    'a second card of the deploy',
+    async () => {
+      const answer = await owner.mutate('projectRepo.prepareDeploy', { projectId: state.projectId })
+      return answer.state === 'ready' && answer.sha === state.mainAfter && answer.actions.length > 0
+        ? answer
+        : null
+    },
+    { timeoutMs: 60_000, intervalMs: 2000 },
+  )
   const pressed = await owner.mutate('projectRepo.confirmDeploy', {
     confirmToken: action.confirmToken,
   })
@@ -1856,17 +1869,8 @@ async function scenarioJ(stand) {
   })
   rt.check(!again.ok && gitlab.played.length === 1, 'the token of the deploy works once', again)
 
-  // The head of main moves after the card was shown: nothing is played, «Изменения обновились».
-  const fresh = await rt.until(
-    'a new card of the deploy',
-    async () => {
-      const answer = await owner.mutate('projectRepo.prepareDeploy', { projectId: state.projectId })
-      return answer.state === 'ready' && answer.sha === state.mainAfter && answer.actions.length > 0
-        ? answer
-        : null
-    },
-    { timeoutMs: 60_000, intervalMs: 2000 },
-  )
+  // The head of main moves after the second card was shown: nothing is played, «Изменения
+  // обновились».
   const moved = await gitlab.commitAsClient(state.ownProject, 'main', 'news.md', 'Новости\n')
   const late = await owner.call('mutation', 'projectRepo.confirmDeploy', {
     confirmToken: fresh.actions.find((item) => item.name === 'deploy').confirmToken,
