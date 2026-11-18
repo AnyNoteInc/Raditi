@@ -14,13 +14,17 @@ export interface FeedState {
   head: FeedHeadState | null
   /** Rows by id, in the order of their ids. A row once read is never dropped. */
   rows: FeedRow[]
-  /** What the next read asks for: rows after this id. */
+  /**
+   * What the next read asks for: rows after this id, and the rows of transactions the last read
+   * could not see (`feedReadCursorSchema`): a row that commits late is never skipped, so a new
+   * status needs no read from the start.
+   */
   cursor: string
   /** Reads that failed in a row; what is on the screen stays. */
   failures: number
   /** The server answered that there is no such dialog: reading stops. */
   missing: boolean
-  /** The next read is due at once: a page of rows is left, or the status changed. */
+  /** The next read is due at once: a page of rows is left. */
   now: boolean
 }
 
@@ -42,12 +46,32 @@ export function compareRowIds(first: string, second: string): number {
   return first < second ? -1 : first > second ? 1 : 0
 }
 
-/** Rows of both by id; a row read again replaces the copy read before. */
+/**
+ * Rows of both by id, in one pass over each; a row read again replaces the copy read before.
+ * `known` is in the order of its ids, as every state keeps it; `read` is put in that order first.
+ */
 export function mergeRows(known: readonly FeedRow[], read: readonly FeedRow[]): FeedRow[] {
   if (read.length === 0) return known as FeedRow[]
-  const byId = new Map(known.map((row) => [row.id, row]))
-  for (const row of read) byId.set(row.id, row)
-  return [...byId.values()].sort((first, second) => compareRowIds(first.id, second.id))
+  const incoming = [...read].sort((first, second) => compareRowIds(first.id, second.id))
+  const last = known.at(-1)
+  // The usual answer: rows after the last one known.
+  if (last === undefined || compareRowIds(incoming[0]!.id, last.id) > 0) {
+    const merged = [...known]
+    for (const row of incoming)
+      if (merged.length === 0 || compareRowIds(row.id, merged.at(-1)!.id) > 0) merged.push(row)
+      else merged[merged.length - 1] = row
+    return merged
+  }
+  const merged: FeedRow[] = []
+  let at = 0
+  for (const row of incoming) {
+    while (at < known.length && compareRowIds(known[at]!.id, row.id) < 0) merged.push(known[at++]!)
+    if (at < known.length && known[at]!.id === row.id) at += 1
+    if (merged.at(-1)?.id === row.id) merged[merged.length - 1] = row
+    else merged.push(row)
+  }
+  while (at < known.length) merged.push(known[at++]!)
+  return merged
 }
 
 export function feedReducer(state: FeedState, action: FeedAction): FeedState {
@@ -61,21 +85,20 @@ export function feedReducer(state: FeedState, action: FeedAction): FeedState {
   }
   const { answer, after } = action
   const { events, cursor, more, ...head } = answer
-  // A status changed between two reads: the rows of the dialog are read again from the start,
-  // so the screen is drawn from one consistent history of the new status.
-  const reread =
-    after !== '0' && state.head !== null && state.head.task.status !== answer.task.status
-  // A read that started from a cursor the state has left since — a read from the start was
-  // asked for meanwhile — gives its rows and its head, never its cursor: the read from the
-  // start is not lost to it.
+  // Rows that commit late come with the next read whatever their ids (the cursor names what the
+  // read could not see), so a new status reads nothing again. A cursor of '0' is the server
+  // starting the reader over (more late rows than a page): every row comes from the first one on,
+  // page by page, and replaces its copy. A read that started from a cursor the state has left
+  // since gives its rows and its head, never its cursor: the reads after the newer cursor are not
+  // lost to it.
   const current = after === state.cursor
   return {
     head,
     rows: mergeRows(state.rows, events),
-    cursor: reread ? '0' : current ? cursor : state.cursor,
+    cursor: current ? cursor : state.cursor,
     failures: 0,
     missing: false,
-    now: reread || (current ? more : state.now),
+    now: current ? more : state.now,
   }
 }
 

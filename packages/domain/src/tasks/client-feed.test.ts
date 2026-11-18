@@ -5,7 +5,9 @@ import {
   feedCancelledBys,
   feedCeilingReasons,
   feedCreditsStates,
+  feedCursorParts,
   feedCursorSchema,
+  feedReadCursorSchema,
   feedDecisionKinds,
   feedEventIdSchema,
   feedBrowserReasons,
@@ -1655,7 +1657,44 @@ describe('ids and the cursor', () => {
     for (const value of ['last', '1n', '0x10', ' ', '1'.repeat(400)]) {
       expect(() => feedCursorSchema.safeParse(value)).not.toThrow()
       expect(() => feedEventIdSchema.safeParse(value)).not.toThrow()
+      expect(() => feedReadCursorSchema.safeParse(value)).not.toThrow()
     }
+  })
+
+  it('takes a cursor of the feed with what its read could not see, or an id alone', () => {
+    for (const cursor of [
+      '0',
+      '4812',
+      '4812.0',
+      '4812.771',
+      '0.771',
+      '4812.771.765_769',
+      '4812.771.770',
+      '9223372036854775807.18446744073709551615',
+      `1.900.${Array.from({ length: 64 }, (_, index) => 800 + index).join('_')}`,
+    ])
+      expect(feedReadCursorSchema.safeParse(cursor).success).toBe(true)
+    for (const cursor of [
+      '4812.',
+      '.771',
+      '4812.0771',
+      '4812.771.',
+      '4812.771._1',
+      '4812.771.1_',
+      '4812.771.1.2',
+      '9223372036854775808.1',
+      '1.18446744073709551616',
+      '1.2.18446744073709551616',
+      '1.-1',
+      `1.900.${Array.from({ length: 65 }, (_, index) => 800 + index).join('_')}`,
+    ])
+      expect(feedReadCursorSchema.safeParse(cursor).success).toBe(false)
+    expect(feedCursorParts('4812.771.765_769')).toEqual({
+      id: '4812',
+      unseen: { bound: '771', open: ['765', '769'] },
+    })
+    expect(feedCursorParts('4812.771')).toEqual({ id: '4812', unseen: { bound: '771', open: [] } })
+    expect(feedCursorParts('4812')).toEqual({ id: '4812', unseen: null })
   })
 })
 

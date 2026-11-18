@@ -1,6 +1,8 @@
-import type { Prisma, PrismaClient } from '@repo/db'
+import { Prisma, type PrismaClient } from '@repo/db'
 import {
   effortOfModelClass,
+  FEED_CURSOR_OPEN_TRANSACTIONS,
+  feedCursorParts,
   feedFileName,
   feedLimits,
   feedMarkdown,
@@ -31,7 +33,10 @@ export interface DialogFeed {
   browser: FeedBrowser | null
   commands: ChatCommandAvailability[]
   events: FeedItem[]
-  /** The id of the last row read, or the `after` of the request. */
+  /**
+   * The id of the last row read, or that of the `after` of the request, and what the snapshot of
+   * the read could not see (`feedReadCursorSchema`); `0` — read again from the first row.
+   */
   cursor: string
   more: boolean
 }
@@ -49,7 +54,7 @@ export async function readDialogFeed(
   input: {
     userId: string
     taskId: string
-    /** `task_events.id` of the last row the screen has; '0' before the first. */
+    /** The cursor of the last answer the screen has (`feedReadCursorSchema`); '0' before the first. */
     after: string
   },
 ): Promise<DialogFeed> {
@@ -167,23 +172,85 @@ export async function feedHead(
   })
 }
 
-/** Rows after the cursor, at most a page of them, in the order of their ids. */
+/**
+ * What a snapshot could not see, for the next read (`feedReadCursorSchema`): the first transaction
+ * id not given out yet and the open ones; past `FEED_CURSOR_OPEN_TRANSACTIONS` open ones, their
+ * oldest as the bound and none named. One expression of the statement that reads the rows.
+ */
+const unseenOfSnapshot = Prisma.sql`
+  SELECT CASE WHEN coalesce(cardinality(x.open), 0) > ${FEED_CURSOR_OPEN_TRANSACTIONS}
+    THEN pg_snapshot_xmin(c)::text
+    ELSE pg_snapshot_xmax(c)::text
+      || CASE WHEN coalesce(cardinality(x.open), 0) > 0
+        THEN '.' || array_to_string(x.open, '_') ELSE '' END
+    END AS unseen
+  FROM pg_current_snapshot() c,
+    LATERAL (SELECT array_agg(i::text ORDER BY i) AS open FROM pg_snapshot_xip(c) i) x`
+
+interface ReadRow {
+  unseen: string
+  id: bigint | null
+  type: string | null
+  payload: Prisma.JsonValue
+  created_at: Date | null
+  late: boolean | null
+}
+
+/**
+ * Rows after the cursor, at most a page of them, in the order of their ids, and before them the
+ * rows of the transactions the last read could not see, below its cursor: exactly those, never a
+ * row it gave. The next cursor names what this snapshot could not see, whether or not the page
+ * reaches the end. More of the late rows than a page — one transaction wrote that many, or too many
+ * were open to name — and the reader starts over from the first row (cursor `0`).
+ */
 async function feedPage(
   tx: Tx,
   taskId: string,
   after: string,
 ): Promise<{ events: FeedItem[]; cursor: string; more: boolean }> {
-  const rows = await tx.taskEvent.findMany({
-    where: { taskId, clientVisible: true, id: { gt: BigInt(after) } },
-    orderBy: { id: 'asc' },
-    take: feedLimits.page + 1,
-    select: { id: true, type: true, payload: true, createdAt: true },
-  })
-  const more = rows.length > feedLimits.page
-  const page = more ? rows.slice(0, feedLimits.page) : rows
+  const { id, unseen } = feedCursorParts(after)
+  const late =
+    unseen === null
+      ? Prisma.empty
+      : Prisma.sql`
+      UNION ALL
+      (SELECT e.id, e.type, e.payload, e.created_at, true AS late FROM task_events e
+       WHERE e.task_id = ${taskId}::uuid AND e.client_visible AND e.id <= ${BigInt(id)}
+         AND (e.xact >= ${unseen.bound}::xid8 OR e.xact = ANY(${unseen.open}::text[]::xid8[]))
+       ORDER BY e.id LIMIT ${feedLimits.page + 1})`
+  // One statement: what this snapshot cannot see, the rows after the cursor and the late ones.
+  const read = await tx.$queryRaw<ReadRow[]>`
+    SELECT s.unseen, p.id, p.type, p.payload, p.created_at, p.late
+    FROM (${unseenOfSnapshot}) s
+    LEFT JOIN LATERAL (
+      (SELECT e.id, e.type, e.payload, e.created_at, false AS late FROM task_events e
+       WHERE e.task_id = ${taskId}::uuid AND e.client_visible AND e.id > ${BigInt(id)}
+       ORDER BY e.id LIMIT ${feedLimits.page + 1})
+      ${late}
+    ) p ON true
+    ORDER BY p.id`
+  const now = read[0]?.unseen ?? '0'
+  const rows = read.filter((row) => row.id !== null)
+  const lateRows = rows.filter((row) => row.late === true)
+  const fresh = rows.filter((row) => row.late !== true)
+  if (lateRows.length > feedLimits.page)
+    return { events: feedRows(fresh.slice(0, feedLimits.page)), cursor: '0', more: true }
+  const more = fresh.length > feedLimits.page
+  const page = more ? fresh.slice(0, feedLimits.page) : fresh
+  const last = page.at(-1)?.id
+  return {
+    events: feedRows([...lateRows, ...page]),
+    cursor: `${last == null ? id : String(last)}.${now}`,
+    more,
+  }
+}
+
+/** Rows as the feed gives them: read with `readFeedRow`, one row per stage of a turn. */
+function feedRows(rows: readonly ReadRow[]): FeedItem[] {
   const steps = new Set<string>()
   const events: FeedItem[] = []
-  for (const row of page) {
+  for (const row of rows) {
+    if (row.id === null || row.type === null || row.created_at === null) continue
     const event = readFeedRow(row.type, row.payload)
     if (event.type === 'skipped') continue
     if (event.type === 'feed.step') {
@@ -191,9 +258,9 @@ async function feedPage(
       if (steps.has(key)) continue
       steps.add(key)
     }
-    events.push({ ...event, id: String(row.id), at: row.createdAt.toISOString() })
+    events.push({ ...event, id: String(row.id), at: row.created_at.toISOString() })
   }
-  return { events, cursor: page.length > 0 ? String(page.at(-1)!.id) : after, more }
+  return events
 }
 
 /**
@@ -212,13 +279,14 @@ export async function readDialogExport(
         select: { id: true, title: true },
       })
       if (task === null) throw taskNotFound()
+      // One snapshot: what it cannot see it never sees, so the pages go by id alone.
       const rows: FeedItem[] = []
       let cursor = '0'
       for (;;) {
         const page = await feedPage(tx, task.id, cursor)
         rows.push(...page.events)
         if (!page.more) break
-        cursor = page.cursor
+        cursor = feedCursorParts(page.cursor).id
       }
       return {
         fileName: feedFileName(task.title),

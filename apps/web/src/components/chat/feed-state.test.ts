@@ -50,57 +50,82 @@ describe('feedReducer', () => {
     expect(pollDelay(state)).toBe(0)
   })
 
-  it('reads again from the start when the status changed, keeping what it has', () => {
+  it('keeps its cursor when the status changes: a late row comes with the next read', () => {
     const first = answered(
       initialFeedState,
-      feedAnswer({ events: [requestRow('5')], cursor: '5' }),
+      feedAnswer({ events: [requestRow('5')], cursor: '5.100' }),
       '0',
     )
     const next = answered(
       first,
-      feedAnswer({ status: 'running', events: [stepRow('6', 1)], cursor: '6' }),
-      '5',
+      feedAnswer({ status: 'running', events: [stepRow('7', 1)], cursor: '7.101' }),
+      '5.100',
     )
-    expect(next.cursor).toBe('0')
-    expect(next.now).toBe(true)
-    expect(next.rows.map((row) => row.id)).toEqual(['5', '6'])
-    // The read from the start does not start another one.
-    const reread = answered(next, feedAnswer({ status: 'running', cursor: '6' }), '0')
-    expect(reread.cursor).toBe('6')
-    expect(reread.now).toBe(false)
+    expect(next.cursor).toBe('7.101')
+    expect(next.now).toBe(false)
+    expect(pollDelay(next)).toBe(feedPolling.working)
+    // The row of a transaction open at the last read, with its lower id, and a row given again.
+    const late = answered(
+      next,
+      feedAnswer({
+        status: 'running',
+        events: [stepRow('6', 1), stepRow('7', 1)],
+        cursor: '7.102',
+      }),
+      '7.101',
+    )
+    expect(late.rows.map((row) => row.id)).toEqual(['5', '6', '7'])
+    expect(late.cursor).toBe('7.102')
   })
 
-  it('keeps the read from the start when a read from the old cursor answers after it was asked', () => {
+  it('takes the cursor of a read only when it started from the cursor of the state', () => {
     const first = answered(
       initialFeedState,
-      feedAnswer({ events: [requestRow('5')], cursor: '5' }),
+      feedAnswer({ events: [requestRow('5')], cursor: '5.1' }),
       '0',
     )
-    const changed = answered(
-      first,
-      feedAnswer({ status: 'running', events: [stepRow('7', 1)], cursor: '7' }),
-      '5',
-    )
-    expect(changed.cursor).toBe('0')
-    // A read that had started from 5 before the state asked for the start answers now.
-    const late = answered(
-      changed,
-      feedAnswer({ status: 'running', events: [stepRow('8', 1)], cursor: '8' }),
-      '5',
-    )
+    const newer = answered(first, feedAnswer({ events: [stepRow('8', 1)], cursor: '8.2' }), '5.1')
+    // A read that had started from 5 answers after the one from 8.
+    const late = answered(newer, feedAnswer({ events: [stepRow('7', 1)], cursor: '7.1' }), '5.1')
     expect(late.rows.map((row) => row.id)).toEqual(['5', '7', '8'])
-    expect(late.cursor).toBe('0')
-    expect(late.now).toBe(true)
-    expect(pollDelay(late)).toBe(0)
-    // The read from the start then lands the row committed late, with its lower id.
-    const reread = answered(
-      late,
-      feedAnswer({ status: 'running', events: [requestRow('5'), stepRow('6', 1)], cursor: '8' }),
+    expect(late.cursor).toBe('8.2')
+  })
+
+  it('reads every row from the first one when the server starts the reader over', () => {
+    const opened = answered(
+      initialFeedState,
+      feedAnswer({ events: [requestRow('50')], cursor: '50.9' }),
       '0',
     )
-    expect(reread.rows.map((row) => row.id)).toEqual(['5', '6', '7', '8'])
-    expect(reread.cursor).toBe('8')
-    expect(reread.now).toBe(false)
+    const over = answered(
+      opened,
+      feedAnswer({ events: [requestRow('1')], cursor: '0', more: true }),
+      '50.9',
+    )
+    expect(over.cursor).toBe('0')
+    expect(over.now).toBe(true)
+    expect(pollDelay(over)).toBe(0)
+    expect(over.rows.map((row) => row.id)).toEqual(['1', '50'])
+    // A start over that answers a read the state has left since changes no cursor.
+    const newer = answered(opened, feedAnswer({ cursor: '51.9' }), '50.9')
+    const stale = answered(newer, feedAnswer({ cursor: '0', more: true }), '50.9')
+    expect(stale.cursor).toBe('51.9')
+  })
+
+  it('merges rows in the order of their ids, a row read again in place of its copy', () => {
+    const known = [requestRow('5'), stepRow('7', 1), resultRow('9', 1)]
+    expect(mergeRows(known, []).map((row) => row.id)).toEqual(['5', '7', '9'])
+    expect(mergeRows(known, [stepRow('11', 2), requestRow('10')]).map((row) => row.id)).toEqual([
+      '5',
+      '7',
+      '9',
+      '10',
+      '11',
+    ])
+    const again = { ...stepRow('7', 1), at: '2026-11-18T10:00:00.000Z' }
+    const merged = mergeRows(known, [resultRow('12', 1), again, requestRow('6')])
+    expect(merged.map((row) => row.id)).toEqual(['5', '6', '7', '9', '12'])
+    expect(merged[2]).toBe(again)
   })
 
   it('counts failed reads and keeps the screen; a dialog not found stops the reads', () => {

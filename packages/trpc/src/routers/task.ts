@@ -4,6 +4,7 @@ import {
   chatProjectSchema,
   FEED_REQUEST_TEXT_LIMIT,
   feedCursorSchema,
+  feedReadCursorSchema,
   feedTaskHeadSchema,
   pullRequestStates,
   reasoningEffortSchema,
@@ -98,7 +99,8 @@ const feedOutput = z.strictObject({
   browser: feedBrowserOutput,
   commands: commandsOutput,
   events: z.array(feedItem),
-  cursor: feedCursorSchema,
+  /** The last row read and what the read could not see: rows that commit late come next. */
+  cursor: feedReadCursorSchema,
   more: z.boolean(),
 })
 
@@ -402,7 +404,7 @@ export const taskRouter = router({
 
   /** The head of the dialog and its rows after the cursor, from one snapshot. */
   feed: consentedProcedure
-    .input(z.strictObject({ taskId: z.uuid(), after: feedCursorSchema.optional() }))
+    .input(z.strictObject({ taskId: z.uuid(), after: feedReadCursorSchema.optional() }))
     .output(feedOutput)
     .query(async ({ ctx, input }) => {
       const feed = await readDialogFeed(ctx.prisma, {
