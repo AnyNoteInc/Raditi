@@ -204,6 +204,67 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     ])
   })
 
+  it('puts back in the queue a pass whose core died between the slot of a runner and the prepare', async () => {
+    const { taskId, userId } = await dialog('preparing', 1)
+    const words = await firstWords(taskId, userId)
+    const opened = new Date(Date.now() - 2 * 60_000)
+    // What recovery leaves of it: the assignment no runner claimed, given up `lost` (spec §8).
+    const assignment = {
+      taskId,
+      siteId: taskId,
+      sessionId: taskId,
+      turnNo: 1,
+      executor: 'runner' as const,
+      plan: {},
+      firstEpoch: 1,
+      leaseEpoch: 1,
+      deadlineAt: new Date(Date.now() + 60_000),
+      createdAt: opened,
+      finishedAt: new Date(opened.getTime() + 60_000),
+      outcome: 'lost' as const,
+    }
+    await db.turnAssignment.create({ data: assignment })
+    await db.$executeRaw`UPDATE tasks SET updated_at = ${new Date(opened.getTime() + 500)}
+      WHERE id = ${taskId}::uuid`
+
+    expect(await sweep().settleOrphans()).toBe(1)
+    expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+      status: 'queued',
+      waiting: null,
+    })
+    expect(queue.enqueue).toHaveBeenCalledWith(
+      'agent-turns',
+      'turn.run',
+      { taskId, attempt: 1, requestEventId: words.toString() },
+      { jobId: expect.stringContaining(':retry:orphan-') },
+    )
+    expect(await db.taskEvent.count({ where: { taskId, type: 'feed.failure' } })).toBe(0)
+    // Its reserve waits with it.
+    expect(
+      (await db.creditHold.findMany({ where: { taskId } })).map((hold) => hold.status),
+    ).toEqual(['active'])
+
+    // One a runner claimed may have run: it is ended from its journal, as before.
+    const claimed = await dialog('preparing', 1)
+    await db.turnAssignment.create({
+      data: {
+        ...assignment,
+        taskId: claimed.taskId,
+        siteId: claimed.taskId,
+        sessionId: claimed.taskId,
+        runnerId: 'runner-1',
+        runnerSession: randomUUID(),
+        claimedAt: opened,
+      },
+    })
+    await db.$executeRaw`UPDATE tasks SET updated_at = ${new Date(opened.getTime() + 500)}
+      WHERE id = ${claimed.taskId}::uuid`
+    expect(await sweep().settleOrphans()).toBe(1)
+    expect(
+      await db.taskEvent.count({ where: { taskId: claimed.taskId, type: 'feed.failure' } }),
+    ).toBe(1)
+  })
+
   it('goes on past a row that fails, and leaves a pass that must wait alone for a while', async () => {
     const first = await dialog('running', 1)
     const second = await dialog('running', 1)

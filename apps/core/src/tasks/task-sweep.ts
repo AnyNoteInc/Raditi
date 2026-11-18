@@ -280,6 +280,22 @@ export class TaskSweep {
       return answer
     }
     if (!assignment?.finishedAt) return null
+    // Lost by recovery before any runner claimed it — its core died between the reservation of a
+    // slot and the prepare: nothing of the turn ran anywhere (spec §8, proof 1), so the pass goes
+    // back to the queue as one lost before its turn, not to the client as a failure
+    // (docs/plan/86-speedups.md).
+    if (
+      task.status === 'preparing' &&
+      assignment.executor === 'runner' &&
+      assignment.runnerId === null &&
+      assignment.outcome === 'lost'
+    ) {
+      const answer = await this.deps.settlement.settle(ref, { kind: 'orphaned' })
+      const back = await db.task.findUnique({ where: { id: task.id }, select: { status: true } })
+      if (answer === 'moved' && back?.status === 'queued')
+        await this.#put(task.id, task.attempt, `orphan-${now.getTime()}`)
+      return answer
+    }
     const { ending, published, swept } = await this.#endingOf(assignment)
     // As the live handler: what a task in the browser saved is read first (Б23).
     if (task.needs_browser) await this.deps.browser?.verify(task.id)
