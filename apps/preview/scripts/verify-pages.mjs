@@ -26,8 +26,8 @@ import {
   createRuntime,
   freeLoopbackPort,
   startProcess,
-} from '../../../infra/dev/release-verify/runtime.mjs'
-import { POSTGRES_IMAGE, PULLED_TAGS } from '../../../infra/dev/release-verify/stand.mjs'
+} from '../../../infra/dev/browser-task-verify/runtime.mjs'
+import { POSTGRES_IMAGE, PULLED_TAGS } from '../../../infra/dev/browser-task-verify/stand.mjs'
 import {
   FIRST,
   PROBE_MARK,

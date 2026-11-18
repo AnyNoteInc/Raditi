@@ -460,6 +460,48 @@ test('every build module a stand loads has its source in that app', () => {
   assert.ok(loaded.size >= 30, `only ${loaded.size} build modules of the stands were checked`)
 })
 
+test('every source module a stand imports is in the repository', () => {
+  // A stand that runs by hand only (verify:pages, verify:runner) breaks silently when a module it
+  // imports goes with another stand: verify:pages imported the runtime of the release stand, which
+  // plan 83 removed, until the regression run of plan 84 ran it (§10, «Регрессия и e2e»). The
+  // build modules (`dist/`) are the test above; here every other relative import of a tracked
+  // script of the stands, static or `import()` with one literal, must name a tracked file: a
+  // local file nobody committed decides nothing. Paths a stand builds with `join` or `new URL`
+  // are not imports and are not read here.
+  const tracked = new Set(
+    execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
+      .split('\0')
+      .filter(Boolean),
+  )
+  const stands = execFileSync(
+    'git',
+    [
+      'ls-files',
+      '-z',
+      '--',
+      ':(glob)apps/*/scripts/*.mjs',
+      ':(glob)packages/*/scripts/*.mjs',
+      ':(glob)infra/**/*.mjs',
+    ],
+    { cwd: root, encoding: 'utf8' },
+  )
+    .split('\0')
+    .filter(Boolean)
+  let checked = 0
+  for (const file of stands)
+    for (const [, specifier] of read(file).matchAll(
+      /(?:\bfrom\s*|\bimport\s*\(\s*|^import\s*)['"](\.{1,2}\/[^'"]+)['"]/gm,
+    )) {
+      if (specifier.includes('/dist/')) continue
+      checked += 1
+      assert.ok(
+        tracked.has(relative(root, join(root, dirname(file), specifier))),
+        `${file} imports ${specifier}, which the repository does not have`,
+      )
+    }
+  assert.ok(checked >= 100, `only ${checked} imports of the stands were checked`)
+})
+
 test('the live mode of the stands never runs in CI: no workflow names it or the provider key', () => {
   // A live run sends requests to the real provider, on a plan with windows or on the paid API
   // (infra/dev/llm-verify/live.mjs), with the one key ZAI_API_KEY. It is started by a person who

@@ -9,11 +9,15 @@ import { fileURLToPath } from 'node:url'
 
 import {
   APPS,
+  FORBIDDEN_PACKAGES,
   forbiddenModulesOf,
   forbiddenPackagesOf,
+  GIT_WORKER_TOOLS,
   missingOperatorScriptsOf,
+  NAMED_APPS,
   OPERATOR_SCRIPTS,
   standFilesOf,
+  versionAtLeast,
 } from './verify-images.mjs'
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
@@ -55,11 +59,39 @@ function scriptsOf(directory) {
 }
 
 test('every app the stand builds has its own Dockerfile and a list of what it may not carry', () => {
-  for (const app of APPS)
+  for (const app of [...APPS, ...NAMED_APPS]) {
     assert.match(
       readFileSync(new URL(`../../apps/${app}/Dockerfile`, import.meta.url), 'utf8'),
       /AS runtime/,
     )
+    assert.ok(Array.isArray(FORBIDDEN_PACKAGES[app]), app)
+    assert.ok(Array.isArray(OPERATOR_SCRIPTS[app]), app)
+  }
+  // The image named only by --only is none of those images.yml checks one per job.
+  assert.deepEqual(
+    NAMED_APPS.filter((app) => APPS.includes(app)),
+    [],
+  )
+})
+
+test('the core image carries git and gitleaks no older than its Dockerfile pins', () => {
+  const dockerfile = readFileSync(new URL('../../apps/core/Dockerfile', import.meta.url), 'utf8')
+  const git = /^ARG GIT_VERSION=1:(\d+)\.(\d+)\.(\d+)-/m.exec(dockerfile)
+  const gitleaks = /^ARG GITLEAKS_IMAGE=\S+:v(\d+)\.(\d+)\.(\d+)@/m.exec(dockerfile)
+  assert.deepEqual(git.slice(1).map(Number), GIT_WORKER_TOOLS.git)
+  assert.deepEqual(gitleaks.slice(1).map(Number), GIT_WORKER_TOOLS.gitleaks)
+  assert.equal(versionAtLeast('git version 2.47.3\n', [2, 47, 3]), true)
+  assert.equal(versionAtLeast('git version 2.51.0\n', [2, 47, 3]), true)
+  assert.equal(versionAtLeast('git version 2.47.2\n', [2, 47, 3]), false)
+  assert.equal(versionAtLeast('git version 2.9.10\n', [2, 47, 3]), false)
+  assert.equal(versionAtLeast('8.30.1\n', [8, 30, 1]), true)
+  assert.equal(versionAtLeast('v8.29.9\n', [8, 30, 1]), false)
+  assert.equal(versionAtLeast('sh: gitleaks: not found\n', [8, 30, 1]), false)
+  // core reaches business logic via domain (core-no-trpc-ui).
+  assert.deepEqual(forbiddenPackagesOf('core', ['db', 'git-providers', 'trpc', 'ui']), [
+    'trpc',
+    'ui',
+  ])
 })
 
 test('the runner image may carry the frame of a process, never the data of the platform', () => {
@@ -167,25 +199,7 @@ test('the .dockerignore matcher of these tests reads the file as Docker does', (
 })
 
 test('.dockerignore leaves out exactly the stands, never an operator command of an app', () => {
-  // core is built by verify:edge, not by verify:images; its operator commands
-  // run in its image on the app VM
-  // (`docker compose run --entrypoint node core scripts/billing-refund.mjs …`).
-  const kept = {
-    ...OPERATOR_SCRIPTS,
-    core: [
-      'billing-rates.mjs',
-      'billing-refund.mjs',
-      'billing-refunds-needed.mjs',
-      'billing-settle-payment.mjs',
-      'billing-stop-renewal.mjs',
-      // The pool and the windows of the workspaces (docs/plan/71-usage-limits.md, §4.4).
-      'llm-plan-rates.mjs',
-      'llm-usage.mjs',
-      // The support's take-down and return of a site of pages (docs/plan/73-pages-sites.md, Дер18).
-      'pages-return.mjs',
-      'pages-take-down.mjs',
-    ],
-  }
+  const kept = OPERATOR_SCRIPTS
   // The stands of the packages the images carry go too (the runner image holds agent-drivers and
   // sandbox-providers); the image check of verify:images knows a stand by STAND_FILE alone.
   const packages = readdirSync(new URL('../../packages/', import.meta.url)).map(

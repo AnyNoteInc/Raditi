@@ -18,6 +18,15 @@ export function webServer(mode: 'dev' | 'start' = 'dev') {
     url: baseURL,
     timeout: 180_000,
     reuseExistingServer: !process.env.CI,
-    env: { APP_URL: baseURL, BETTER_AUTH_URL: baseURL },
+    // A tree without the repository .env (a worktree, a clean checkout) has neither APP_ENV nor
+    // the secret of sign-in, and web refuses to start without them: `development`, as
+    // .env.example has it, and a synthetic secret — the landing signs nobody in — unless exported.
+    env: {
+      APP_ENV: process.env.APP_ENV ?? 'development',
+      BETTER_AUTH_SECRET:
+        process.env.BETTER_AUTH_SECRET ?? 'synthetic-secret-of-the-e2e-landing-run',
+      APP_URL: baseURL,
+      BETTER_AUTH_URL: baseURL,
+    },
   }
 }

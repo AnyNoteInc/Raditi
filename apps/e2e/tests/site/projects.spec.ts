@@ -278,7 +278,14 @@ test('«Контекст» of a new project: files uploaded before it are taken 
   await test.step('«Добавить контекст» → «Загрузить с устройства» → «Файлы…»', async () => {
     await context.getByRole('button', { name: 'Добавить контекст' }).click()
     const menu = page.getByRole('menu', { name: 'Добавить в контекст' })
-    await expect(menu.getByRole('menuitem', { name: /Подключить GitLab/ })).toHaveAttribute(
+    // The ways of a repository (84.17, 84.25): «Подключить GitLab» is chosen in the window and
+    // opens after «Создать проект» (ПР5); «Подключить GitHub» — «Скоро» while no GitHub App is set up, as
+    // in this run.
+    await expect(menu.getByRole('menuitem', { name: /Подключить GitLab/ })).not.toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+    await expect(menu.getByRole('menuitem', { name: /Подключить GitHub/ })).toHaveAttribute(
       'aria-disabled',
       'true',
     )
