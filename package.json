@@ -26,6 +26,7 @@
     "test:infra": "node --test infra/*/*.test.mjs infra/dev/*/*.test.mjs",
     "vault:bootstrap": "docker compose --env-file .env -f infra/dev/docker-compose.yml exec -T vault printenv BAO_DEV_ROOT_TOKEN_ID | node infra/vault/bootstrap.mjs --address http://127.0.0.1:8200 --wait",
     "verify:vault": "node infra/vault/verify-local.mjs",
+    "perf:chat": "exec node infra/dev/perf-verify/perf.mjs",
     "verify:billing": "exec node infra/dev/billing-verify/verify-billing.mjs",
     "verify:db": "node infra/dev/db-verify/verify-db.mjs",
     "verify:browser-task": "exec node infra/dev/browser-task-verify/verify-browser-task.mjs",
