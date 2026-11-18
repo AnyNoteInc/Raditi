@@ -21,15 +21,24 @@
 // RUNNER_TOKENS names for the runner. Synthetic data only; every row, object, key, container,
 // network and firewall rule it creates is removed.
 //
-//   pnpm --filter core verify:runner
-// G3: the driver supervisor launcher creates disposable platform services and enters --opencode.
-// That mode runs the two-turn scenario with the real CLI and local LLM/MCP fixtures, including
-// encrypted snapshot restore, then a chat whose last request is undone
-// (docs/plan/61-chats-first.md, §5.14): it leases by its own id, two turns, and a third that goes
-// back to the snapshot of the first through the runner's links. Crash scenarios still use the P2
-// agent. Every turn is a chat's: no repository (docs/plan/83-remove-projects.md).
+//   pnpm --filter core verify:runner          (the seven scenarios above, synthetic agent)
+//   pnpm verify:opencode-supervisor           (--opencode, the real CLI)
+// Both launchers create disposable PostgreSQL, SeaweedFS and OpenBao of their own
+// (verify-agent-supervisor.mjs) and never read .env (П47). --opencode runs the two-turn scenario
+// with the real CLI and local LLM/MCP fixtures, including encrypted snapshot restore, then a chat
+// whose last request is undone (docs/plan/61-chats-first.md, §5.14): it leases by its own id, two
+// turns, and a third that goes back to the snapshot of the first through the runner's links; a
+// file of the client in /workspace/inbox; and a chat of a project with a repository
+// (docs/plan/84-projects.md, ПР8, ПР12, ПР33, ПР35) — the path of production: the bundle without
+// history the runner fetches from core into /workspace/repo, the files that look like secrets
+// stubbed, the files of the project in /workspace/project, no git credential in the sandbox, the
+// candidate committed by the trusted git of core through its git worker into refs/raditi/<chat> of
+// the mirror, its snapshot with the parts `patch` and `untracked`; a kill -9 of core between that
+// snapshot and the publication, finished by the next core from those parts. Crash scenarios of
+// chats without a repository still use the P2 agent.
 //
-// Needs: the local infrastructure from .env;
+// Needs: disposable PostgreSQL, S3 and OpenBao (the launchers make them); with --opencode git and
+// gitleaks on PATH for the git worker;
 // P2_RUNNER_DOCKER_SOCKET, the VM's Docker socket on this host; images built in that daemon and
 // pinned by digest: P2_SANDBOX_IMAGE (runtime), P2_RUNNER_NODE_IMAGE (base: Node and tini, which runs
 // this repository's build instead of the orchestrator image), SANDBOX_GATEWAY_IMAGE, SANDBOX_NETWORK_GUARD_IMAGE. The VM reaches
@@ -38,7 +47,7 @@ import assert from 'node:assert/strict'
 import { fork, spawn } from 'node:child_process'
 import { createHash, randomBytes, randomUUID, randomUUIDv7 } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -47,7 +56,16 @@ import { parseArgs } from 'node:util'
 import { zstdDecompressSync } from 'node:zlib'
 
 import { createPrismaClient } from '@repo/db'
-import { attachmentKey, snapshotPartFiles, turnInboxPath, turnSnapshotPrefix } from '@repo/domain'
+import {
+  attachmentKey,
+  HIDDEN_FILE_STUB,
+  projectFileKey,
+  repositorySection,
+  snapshotPartFiles,
+  turnInboxPath,
+  turnProjectPath,
+  turnSnapshotPrefix,
+} from '@repo/domain'
 import { createDockerSandboxProvider } from '@repo/sandbox-providers'
 import { createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
 import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
@@ -204,6 +222,14 @@ let work
 let port
 let site
 const turnCredentials = new Map()
+/**
+ * The trusted git of the stand's core (--opencode): the volume of the mirrors, where the git worker
+ * listens, and the root of the clients' bare repositories its `local-test` transport reads.
+ */
+let gitSettings = null
+let gitWorker
+/** The rows and objects of the project of the repository scenario, removed at the end. */
+const projectRows = { users: [], objects: [] }
 const cores = []
 const runners = []
 
@@ -234,6 +260,7 @@ async function startCore() {
       recoverEveryMs: 5_000,
       driverId: realCli ? driverId : null,
       sandboxImage: images.sandbox,
+      git: gitSettings,
     },
   })
   const pending = new Map()
@@ -379,7 +406,149 @@ async function startRunner() {
   return name
 }
 
-/** kill -9 of the runner process: SIGKILL to the container's init ends everything in it. */
+/**
+ * The git worker (docs/plan/84-projects.md, ПР33) as its own process, like its container next to
+ * core: it outlives a kill -9 of core. git and gitleaks of this machine; its socket on the volume.
+ */
+async function startGitWorker() {
+  const log = await open(join(work, 'git-worker.log'), 'a')
+  const child = spawn(process.execPath, [join(scripts, 'verify-runner-git-worker.mjs')], {
+    cwd: join(repository, 'apps/core'),
+    env: {
+      PATH: env.PATH,
+      HOME: join(work, 'home'),
+      TMPDIR: join(work, 'tmp'),
+      NODE_ENV: 'test',
+      APP_ENV: 'test',
+      NO_COLOR: '1',
+      GIT_MIRROR_DIR: gitSettings.mirrorDir,
+    },
+    stdio: ['ignore', log.fd, log.fd],
+  })
+  const exited = new Promise((done) => child.once('close', done))
+  void exited.then(() => log.close())
+  await waitFor(
+    async () => existsSync(join(gitSettings.mirrorDir, 'worker.sock')) || child.exitCode !== null,
+    'the git worker to listen on its socket',
+    30_000,
+  )
+  assert.equal(child.exitCode, null, 'The git worker did not start')
+  return {
+    async stop() {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+      await exited
+    },
+  }
+}
+
+/** git of this machine, outside the platform: the client's repository and reads of the mirror. */
+const hostGit = async (cwd, ...args) =>
+  (
+    await command('git', ['-C', cwd, ...args], {
+      extraEnv: {
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_TERMINAL_PROMPT: '0',
+      },
+    })
+  ).stdout
+
+/**
+ * The client's repository on its hosting: a bare repository with history and a tag, made from
+ * `commits` ([message, { path: content }] in order).
+ */
+async function clientRepository(root, commits) {
+  const tree = await mkdtemp(join(root, 'client-'))
+  await hostGit(tree, 'init', '-q', '-b', 'main')
+  for (const [message, files] of commits) {
+    for (const [name, content] of Object.entries(files)) {
+      await mkdir(dirname(join(tree, name)), { recursive: true })
+      await writeFile(join(tree, name), content)
+    }
+    await hostGit(tree, 'add', '-A')
+    await hostGit(
+      tree,
+      '-c',
+      'user.name=Клиент',
+      '-c',
+      'user.email=client@kolosok.example',
+      'commit',
+      '-q',
+      '-m',
+      message,
+    )
+  }
+  await hostGit(tree, 'tag', 'v1', 'HEAD~1')
+  const bare = join(root, 'kolosok', 'sait.git')
+  await mkdir(dirname(bare), { recursive: true })
+  await hostGit(root, 'clone', '-q', '--bare', tree, bare)
+  await rm(tree, { recursive: true, force: true })
+  return bare
+}
+
+const sha256 = (value) => createHash('sha256').update(value).digest('hex')
+/** A word of a shell command in single quotes. */
+const shellWord = (value) => `'${String(value).replaceAll("'", "'\\''")}'`
+
+/**
+ * The shell command of a turn of a chat with a repository: each check runs in order and the first
+ * that fails prints its name and stops the command (the fixture names it); then the change.
+ */
+function repositoryCommand(checks, change = []) {
+  return [
+    'fail() { echo "raditi-check-failed:$1"; exit 1; }',
+    'cd /workspace/repo || fail workdir',
+    ...checks.map(([name, test]) => `{ ${test} ; } || fail ${name}`),
+    ...change,
+  ].join('\n')
+}
+
+/**
+ * What a sandbox of a chat with a repository must be, whatever its turn (ПР12, ПР35, rule 5): gVisor
+ * and the product's uid; one commit without history — the root the bundle carries, `sandboxBaseSha`
+ * —, on the chat's branch, no remote, no tag, a clean tree; the files that look like secrets as the
+ * stub; and no git credential anywhere — none in git's settings, no credential file, no variable of
+ * git, no token of the form of GitLab in the environment of any process, in any file the agent can
+ * read or in any object of the repository. The prefix of the token is put together in the shell, so
+ * that the command itself, which the session keeps, does not hold it.
+ */
+function sandboxChecks({ sandboxBaseSha, branch, hidden }) {
+  const stub = sha256(HIDDEN_FILE_STUB)
+  return [
+    ['kernel', 'uname -r | grep -qi gvisor'],
+    ['uid', '[ "$(id -u)" = 10001 ]'],
+    ['head', `[ "$(git rev-parse HEAD)" = ${sandboxBaseSha} ]`],
+    ['history', '[ "$(git rev-list --all --count)" = 1 ] && [ -z "$(git log -1 --format=%P)" ]'],
+    ['tags', '[ -z "$(git tag)" ]'],
+    ['branch', `[ "$(git branch --show-current)" = ${shellWord(branch)} ]`],
+    ['remote', '[ -z "$(git remote)" ]'],
+    ['clean', '[ -z "$(git status --porcelain)" ]'],
+    ...hidden.map((path) => [
+      'stub',
+      `[ "$(sha256sum < ${shellWord(path)} | cut -c1-64)" = ${stub} ]`,
+    ]),
+    [
+      'git-config',
+      "! git config --list --show-origin 2>/dev/null | grep -Eiq 'credential|extraheader|insteadof|://[^/[:space:]]*@'",
+    ],
+    [
+      'git-credentials',
+      '[ ! -e "$HOME/.git-credentials" ] && [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/git/credentials" ]',
+    ],
+    [
+      'git-env',
+      '[ -z "${GIT_ASKPASS:-}${SSH_ASKPASS:-}${GIT_CONFIG_PARAMETERS:-}${GIT_CONFIG_COUNT:-}${GITLAB_TOKEN:-}${GITHUB_TOKEN:-}${CI_JOB_TOKEN:-}" ]',
+    ],
+    ['token-form', 'p="glp""at-"; [ -n "$p" ]'],
+    [
+      'token-environ',
+      '( for e in /proc/[0-9]*/environ; do if tr "\\0" "\\n" < "$e" 2>/dev/null | grep -q "$p"; then exit 9; fi; done )',
+    ],
+    ['token-files', '! grep -rIlq --devices=skip "$p" /workspace /agent-home /tmp 2>/dev/null'],
+    ['token-objects', '! git cat-file --batch-all-objects --batch | grep -aq "$p"'],
+  ]
+}
+
 const killRunner = (name) => docker('kill', '--signal', 'KILL', name)
 
 async function runnerSession(core) {
@@ -519,12 +688,15 @@ const homeFiles = async (reference) => [...(await homeEntries(reference)).keys()
  * A chat (docs/plan/61-chats-first.md, §5.3): its id of version 7, and it leases by that id,
  * which is what its turns carry as their site (`leaseScopeOf`).
  */
-async function createChat() {
+async function createChat({ projectId, createdById } = {}) {
   const task = await db.task.create({
     data: {
       id: randomUUIDv7(),
       workspaceId: site.workspaceId,
       needsBrowser: false,
+      // A chat of a project (docs/plan/84-projects.md, ПР2): its turns get the project's files and
+      // repository; its lease is still its own id.
+      ...(projectId ? { projectId, createdById } : {}),
     },
   })
   chats.push(task.id)
@@ -533,7 +705,7 @@ async function createChat() {
 
 function turnRequest(
   { taskId, sessionId },
-  { turn, previous, gated, withoutRepository, compaction, chat },
+  { turn, previous, gated, withoutRepository, compaction, repo },
 ) {
   const action = compaction ? 'compact' : withoutRepository?.action
   const context = {
@@ -550,12 +722,13 @@ function turnRequest(
       url: 'http://sandbox-gw.invalid/mcp',
       token: `verify-mcp-${randomBytes(16).toString('hex')}`,
     },
-    instructions: `Synthetic runner verification\nRADITI_PLATFORM_TURN_${turn}`,
+    // A turn with a repository has its section, as the planner writes it (ПР7, §4.4).
+    instructions: `Synthetic runner verification\nRADITI_PLATFORM_TURN_${turn}${repo?.section ?? ''}`,
   }
   // A lone dash, then nearly the longest prompt the turn plan accepts, starting with a slash.
   const prompt =
     compaction?.prompt ??
-    chat?.prompt ??
+    repo?.prompt ??
     withoutRepository?.prompt ??
     (realCli ? (turn === 1 ? '-' : `/init ${'я'.repeat(99_900)}`) : JSON.stringify({ gated }))
   if (realCli) {
@@ -573,7 +746,7 @@ function turnRequest(
         ...identity,
         ...(compaction?.fixture ?? withoutRepository.fixture),
       })
-    else if (chat) fixture.addChatTurn({ ...identity, id: taskId, ...chat.fixture })
+    else if (repo) fixture.addRepositoryTurn({ ...identity, id: taskId, ...repo.fixture })
     else if (withoutRepository?.attachments)
       fixture.addInboxTurn({ ...identity, ...withoutRepository.fixture })
     else if (withoutRepository) fixture.addRewindTurn({ ...identity, ...withoutRepository.fixture })
@@ -605,10 +778,13 @@ function turnRequest(
     input: {
       prompt,
       attachments: withoutRepository?.attachments ?? [],
+      ...(repo?.projectFiles ? { projectFiles: repo.projectFiles } : {}),
       ...(action ? { action } : {}),
     },
     driverVersion,
-    requirements: { repository: false, browser: false },
+    // A turn names its repository exactly when it needs one (docs/plan/84-projects.md, §4.3).
+    requirements: { repository: Boolean(repo), browser: false },
+    ...(repo ? { repository: repo.block } : {}),
     committedAt: new Date().toISOString(),
     ...(previous ? { previous } : {}),
     ...(withoutRepository?.rewound ? { rewound: true } : {}),
@@ -721,6 +897,20 @@ try {
   work = await mkdtemp(join(tmpdir(), 'raditi-runner-verify-'))
   await mkdir(join(work, 'tmp'))
   port = await freePort()
+  if (realCli) {
+    // The trusted git of core (docs/plan/84-projects.md, ПР12, ПР33) for the chat with a
+    // repository: git and gitleaks of this machine run by the git worker, its socket on the volume
+    // of the mirrors — a path under the TMPDIR of macOS is longer than the 104 bytes of a socket's
+    // address. The clients' repositories lie below `root`.
+    await command('git', ['--version'])
+    await command('gitleaks', ['version'])
+    await mkdir(join(work, 'home'), { mode: 0o700 })
+    await mkdir(join(work, 'repos'))
+    const mirrorDir = await mkdtemp('/tmp/raditi-rv-')
+    await chmod(mirrorDir, 0o700)
+    gitSettings = { mirrorDir, root: join(work, 'repos') }
+    gitWorker = await startGitWorker()
+  }
   // A TaskTurn names its driver. A seeded database has the row; a migrated one gets it here.
   if (!(await db.agentDriver.findUnique({ where: { id: driverId } }))) {
     await db.agentDriver.create({
@@ -1060,6 +1250,385 @@ try {
     await storage.delete('inbox', s3Key)
     verified.push(
       `real ${driverName} file of a chat without a project: from raditi-inbox through the API of runners to /workspace/inbox, read by the CLI and answered with its content (${Math.round((Date.now() - started) / 1000)} s)`,
+    )
+  }
+
+  // A chat of a project with a repository on the runner (docs/plan/84-projects.md, ПР8, ПР12,
+  // ПР33, ПР35; §4.3, steps 3–8): the path of production. Each pass is prepared as the product
+  // prepares it (RepoTurnPreparer in the stand's core): the main branch fetched into the mirror, the
+  // base chosen — the chat's own ref once it published —, the files that look like secrets named
+  // and the bundle built. The runner fetches the bundle and the files of the project from core's API
+  // of runners; it uploads the candidate's parts back there; the trusted git of core commits them
+  // through the git worker and publishes the commit into refs/raditi/<chat> of the mirror. Turn 2 is
+  // killed with core between its checkpoint and its publication: the next core publishes it from
+  // the snapshot's `patch` and `untracked`. Turn 3 starts from that commit.
+  if (realCli) {
+    const started = Date.now()
+    const token = `glpat-${randomBytes(10).toString('hex')}`
+    const readme = '# Пекарня «Колосок»\n\nСайт пекарни.\n'
+    const files = {
+      'README.md': readme,
+      'index.html': '<h1>Колосок</h1>\n',
+      // gitleaks flags it; `certs/site.key` is hidden by its name (ПР35).
+      'config/old-settings.env': `GITLAB_TOKEN=${token}\n`,
+      'certs/site.key': 'заглушка ключа сайта\n',
+    }
+    const bare = await clientRepository(gitSettings.root, [
+      ['Первая версия', { 'README.md': '# Колосок\n', 'index.html': '<h1>Колосок</h1>\n' }],
+      ['Описание и настройки', files],
+    ])
+    const mainSha = (await hostGit(bare, 'rev-parse', 'refs/heads/main')).trim()
+    const user = await db.user.create({
+      data: { name: 'Runner verification', email: `${randomUUID()}@runner-verify.example.ru` },
+    })
+    projectRows.users.push(user.id)
+    const project = await db.project.create({
+      data: {
+        id: randomUUIDv7(),
+        workspaceId: site.workspaceId,
+        createdById: user.id,
+        name: 'Пекарня «Колосок»',
+      },
+    })
+    const projectRepositoryId = randomUUID()
+    // An open link (`read`): the turn does not depend on the mode, the instructions do.
+    await db.projectRepository.create({
+      data: {
+        id: projectRepositoryId,
+        projectId: project.id,
+        workspaceId: site.workspaceId,
+        provider: 'gitlab',
+        host: 'gitlab.localhost',
+        path: 'kolosok/sait',
+        webUrl: 'https://gitlab.localhost/kolosok/sait',
+        defaultBranch: 'main',
+        mode: 'read',
+        mirrorState: 'ready',
+        lastFetchedSha: mainSha,
+      },
+    })
+    // The context of the project (ПР8): a text the client wrote and a table, in raditi-inbox.
+    const context = {
+      'menyu.md': `# Меню недели\nХлеб «Колосок» — raditi-project-${randomBytes(6).toString('hex')}\n`,
+      'zametki/ceny.csv': 'позиция;цена\nбатон;90\n',
+    }
+    for (const [name, content] of Object.entries(context)) {
+      const id = randomUUID()
+      const key = projectFileKey(site.workspaceId, id)
+      await storage.put('inbox', key, Buffer.from(content))
+      projectRows.objects.push(key)
+      await db.projectFile.create({
+        data: {
+          id,
+          workspaceId: site.workspaceId,
+          projectId: project.id,
+          kind: name.endsWith('.md') ? 'text' : 'file',
+          name,
+          mediaType: name.endsWith('.md') ? 'text/markdown' : 'text/csv',
+          sizeBytes: Buffer.byteLength(content),
+          sha256: sha256(content),
+          status: 'ready',
+          s3Key: key,
+        },
+      })
+    }
+    const projectFiles = Object.keys(context).map((name) => turnProjectPath(name))
+    const task = await createChat({ projectId: project.id, createdById: user.id })
+    sessions.push(task.sessionId)
+    const row = {
+      projectId: project.id,
+      projectRepositoryId,
+      provider: 'gitlab',
+      path: 'kolosok/sait',
+      defaultBranch: 'main',
+      mode: 'read',
+      secretsFound: [],
+    }
+    const prepare = () => core.request('repoPrepare', { chatId: task.taskId, row, cloneUrl: bare })
+    const chatRef = () => core.request('repoRef', { projectRepositoryId, chatId: task.taskId })
+    const mirror = join(gitSettings.mirrorDir, 'repos', `${projectRepositoryId}.git`)
+    const inMirror = (...args) => hostGit(work, '--git-dir', mirror, ...args)
+    const show = async (sha, path) => inMirror('show', `${sha}:${path}`)
+    /** The plan's repository and its section, as turn-planner.ts makes them of a prepared pass. */
+    const planned = (prepared) => ({
+      block: {
+        projectId: project.id,
+        projectRepositoryId,
+        provider: 'gitlab',
+        baseSha: prepared.baseSha,
+        sandboxBaseSha: prepared.sandboxBaseSha,
+        branch: prepared.branch,
+        mode: 'read',
+        expectedRef: prepared.expectedRef,
+        bundleSha256: prepared.bundleSha256,
+        bundleBytes: prepared.bundleBytes,
+        hiddenPaths: [...prepared.hiddenPaths],
+      },
+      section: repositorySection({
+        provider: 'gitlab',
+        path: row.path,
+        label: prepared.label,
+        branch: prepared.branch,
+        defaultBranch: 'main',
+        baseSha: prepared.baseSha,
+        mode: 'read',
+        hiddenPaths: prepared.hiddenPaths,
+      }),
+      projectFiles,
+    })
+    const hidden = ['certs/site.key', 'config/old-settings.env']
+    const projectChecks = (name) =>
+      Object.entries(context).flatMap(([path, content]) => [
+        [name, `[ "$(sha256sum < /workspace/project/${path} | cut -c1-64)" = ${sha256(content)} ]`],
+        [`${name}-mode`, `[ "$(stat -c %a /workspace/project/${path})" = 444 ]`],
+      ])
+    const words = ['raditi-repo-first-words', 'raditi-repo-second-words', 'raditi-repo-third-words']
+    const answers = [
+      'Ответ raditi-repo-first',
+      'Ответ raditi-repo-second',
+      'Ответ raditi-repo-third',
+    ]
+    const lines = {
+      readme: 'Доставка по городу — бесплатно от 1 000 ₽.',
+      menu: 'Меню на неделю: батон, бородинский, булочки с маком.',
+      hours: 'Работаем с 8 до 20 без выходных.',
+      second: 'По пятницам — пироги с капустой.',
+    }
+    const repoTurn = (
+      turn,
+      prepared,
+      { checks, change = [], changed, previous, remembered = [] },
+    ) =>
+      turnRequest(task, {
+        turn,
+        ...(previous ? { previous } : {}),
+        repo: {
+          ...planned(prepared),
+          prompt: words[turn - 1],
+          fixture: {
+            answer: answers[turn - 1],
+            command: repositoryCommand(
+              [...sandboxChecks({ ...prepared, hidden }), ...checks],
+              change,
+            ),
+            files: changed,
+            remembered,
+          },
+        },
+      })
+
+    // Turn 1: a bundle of the head of main, without its history; the files of the project in
+    // /workspace/project, read-only; the agent tries to change them, which must not last; it
+    // changes the description and adds two files.
+    const first = await prepare()
+    assert.deepEqual(
+      [first.baseSha, first.expectedRef, first.branch],
+      [mainSha, null, `raditi/chat-${task.taskId.replaceAll('-', '').slice(-8)}`],
+    )
+    assert.deepEqual(first.hiddenPaths, hidden, 'gitleaks and the names hide the two files')
+    assert.notEqual(first.sandboxBaseSha, mainSha, 'The sandbox gets a root commit of its own')
+    const one = await core.request('run', {
+      request: repoTurn(1, first, {
+        checks: [
+          ['readme', `[ "$(sha256sum < README.md | cut -c1-64)" = ${sha256(readme)} ]`],
+          ...projectChecks('project'),
+          ['project-readonly', `! ( printf x >> /workspace/project/menyu.md ) 2>/dev/null`],
+        ],
+        change: [
+          // What the agent does to the files of the project does not last (ПР8): the next turn sees
+          // them as the client left them.
+          'chmod u+w /workspace/project/menyu.md 2>/dev/null; printf "агент был здесь\\n" >> /workspace/project/menyu.md 2>/dev/null; printf "agent\\n" > /workspace/project/agent-note.txt 2>/dev/null; true',
+          `printf '%s\\n' ${shellWord(lines.readme)} >> README.md || fail change`,
+          `printf '%s\\n' ${shellWord(lines.menu)} > menu.md || fail change`,
+          `mkdir -p docs && printf '%s\\n' ${shellWord(lines.hours)} > docs/hours.md || fail change`,
+        ],
+        changed: ['README.md', 'menu.md', 'docs/hours.md'],
+      }),
+    })
+    assert.equal(one.result.client_message, answers[0])
+    await expectCompleted(task.taskId, 1)
+    const head1 = one.repository?.headSha
+    assert.match(head1 ?? '', /^[a-f0-9]{40}$/, 'Turn 1 published a commit')
+    assert.deepEqual(
+      [one.repository.baseSha, one.repository.refusal, one.repository.buildPaths],
+      [mainSha, undefined, []],
+    )
+    // The snapshot names the candidate: its head, the base and the root the sandbox held.
+    assert.deepEqual(
+      [one.manifest.git.provider, one.manifest.git.branch, one.manifest.git.baseSha],
+      ['gitlab', first.branch, mainSha],
+    )
+    assert.deepEqual(
+      [one.manifest.git.sandboxBaseSha, one.manifest.git.headSha],
+      [first.sandboxBaseSha, head1],
+    )
+    assert.equal(one.manifest.git.publication.taskId, task.taskId)
+    // In the mirror under the chat's ref, through the git worker: one commit of the platform's bot
+    // on main, with the three files and the hidden ones as the client has them.
+    assert.equal(await chatRef(), head1)
+    assert.equal(
+      (await inMirror('rev-parse', `refs/raditi/${task.taskId}`)).trim(),
+      head1,
+      'The ref of the chat in the mirror',
+    )
+    assert.equal((await inMirror('log', '-1', '--format=%P', head1)).trim(), mainSha)
+    assert.equal(
+      (await inMirror('log', '-1', '--format=%an <%ae>', head1)).trim(),
+      'Радити <noreply@raditi.ru>',
+    )
+    assert.deepEqual(
+      (await inMirror('diff', '--name-only', mainSha, head1)).trim().split('\n').sort(),
+      ['README.md', 'docs/hours.md', 'menu.md'],
+    )
+    assert.equal(await show(head1, 'README.md'), `${readme}${lines.readme}\n`)
+    assert.equal(await show(head1, 'menu.md'), `${lines.menu}\n`)
+    for (const path of hidden)
+      assert.equal(await show(head1, path), files[path], `${path} is the client's, not the stub`)
+    // The snapshot keeps the candidate: its patch, and an empty `untracked` — the new files belong
+    // to the commit; the home is the session alone.
+    const loaded1 = await snapshots.load(reference(task, 1, one.manifest))
+    const patch1 = Buffer.from(one.repository.patch, 'base64')
+    assert.deepEqual(Buffer.from(loaded1.archives.patch), patch1, 'The snapshot keeps the patch')
+    for (const part of ['+++ b/menu.md', '+++ b/docs/hours.md', lines.readme])
+      assert(patch1.toString().includes(part), part)
+    assert.deepEqual(
+      zstdDecompressSync(loaded1.archives.untracked),
+      Buffer.alloc(1024),
+      'An empty archive of untracked files',
+    )
+    for (const secret of [token, 'raditi-project-'])
+      assert(
+        !patch1.toString().includes(secret),
+        'The patch holds no file of the project or secret',
+      )
+    const journal1 = (await journal(task.taskId)).filter((entry) => entry.turn === 1)
+    const phases1 = journal1.map((entry) => entry.phase)
+    assert(
+      phases1.indexOf('publishing') > phases1.indexOf('destroyed') &&
+        phases1.indexOf('destroyed') > phases1.indexOf('checkpointed'),
+      'Turn 1 published after its checkpoint and the removal of its container',
+    )
+
+    // Turn 2: a bundle of the commit of turn 1, the session of turn 1 restored; core is killed
+    // with SIGKILL right after the checkpoint is journaled, before the publication.
+    const second = await prepare()
+    assert.deepEqual([second.baseSha, second.expectedRef], [head1, head1])
+    assert.notEqual(second.sandboxBaseSha, first.sandboxBaseSha)
+    await core.request('crashAfter', { taskId: task.taskId, phase: 'checkpointed' })
+    const killed = core.request('run', {
+      request: repoTurn(2, second, {
+        previous: reference(task, 1, one.manifest),
+        remembered: [words[0], answers[0]],
+        checks: [
+          ['kept', `grep -qxF ${shellWord(lines.readme)} README.md`],
+          ['kept', `[ "$(cat menu.md)" = ${shellWord(lines.menu)} ]`],
+          ['kept', `[ "$(cat docs/hours.md)" = ${shellWord(lines.hours)} ]`],
+          ...projectChecks('project-again'),
+          ['project-agent-file', '[ ! -e /workspace/project/agent-note.txt ]'],
+        ],
+        change: [`printf '%s\\n' ${shellWord(lines.second)} >> menu.md || fail change`],
+        changed: ['menu.md'],
+      }),
+    })
+    killed.catch(() => {})
+    await core.exited
+    const left = await journal(task.taskId)
+    assert.deepEqual(
+      [left.at(-1).phase, left.at(-1).turn],
+      ['checkpointed', 2],
+      'core died right after the checkpoint of turn 2',
+    )
+    const { epoch } = left.at(-1).fence
+    assert.equal(
+      await inMirror('rev-parse', `refs/raditi/${task.taskId}`).then((ref) => ref.trim()),
+      head1,
+      'Not published yet',
+    )
+    core = await startCore()
+    await waitFor(
+      async () => (await assignmentOf(task.taskId, 2))?.outcome,
+      'the next core to finish the publication of turn 2',
+    )
+    await expectCompleted(task.taskId, 2)
+    const loaded2 = await snapshots.load(reference(task, 2))
+    const head2 = loaded2.manifest.git.headSha
+    assert.equal(await chatRef(), head2, 'The next core published the checkpoint of turn 2')
+    assert.notEqual(head2, head1)
+    assert.equal((await inMirror('log', '-1', '--format=%P', head2)).trim(), head1)
+    assert.deepEqual((await inMirror('diff', '--name-only', head1, head2)).trim(), 'menu.md')
+    assert.equal(await show(head2, 'menu.md'), `${lines.menu}\n${lines.second}\n`)
+    assert(Buffer.from(loaded2.archives.patch).toString().includes(lines.second))
+    assert.deepEqual(zstdDecompressSync(loaded2.archives.untracked), Buffer.alloc(1024))
+    const recovered = (await journal(task.taskId)).filter(
+      (entry) => entry.turn === 2 && entry.fence.epoch > epoch,
+    )
+    for (const phase of ['publishing', 'publication_recovered'])
+      assert(
+        recovered.some((entry) => entry.phase === phase),
+        `Recovery journaled ${phase}`,
+      )
+    assert(
+      recovered.every(
+        (entry) => entry.recoveredFromEpoch === epoch && entry.candidateHeadSha === head2,
+      ),
+      'The publication was recovered from the checkpoint of the killed core',
+    )
+
+    // Turn 3: from the commit the next core published; it changes nothing, and nothing is published.
+    const third = await prepare()
+    assert.deepEqual([third.baseSha, third.expectedRef], [head2, head2])
+    const three = await core.request('run', {
+      request: repoTurn(3, third, {
+        previous: reference(task, 2),
+        remembered: [words[1], answers[1]],
+        checks: [
+          ['recovered', `grep -qxF ${shellWord(lines.second)} menu.md`],
+          ['kept', `grep -qxF ${shellWord(lines.readme)} README.md`],
+        ],
+        changed: [],
+      }),
+    })
+    assert.equal(three.result.client_message, answers[2])
+    await expectCompleted(task.taskId, 3)
+    assert.deepEqual(
+      [
+        three.repository.headSha,
+        three.repository.refusal,
+        Buffer.from(three.repository.patch, 'base64').length,
+      ],
+      [null, undefined, 0],
+      'A turn without changes publishes nothing',
+    )
+    assert.deepEqual(
+      [three.manifest.git.headSha, three.manifest.git.publication],
+      [head2, undefined],
+    )
+    assert.equal(await chatRef(), head2)
+    assert(
+      !(await journal(task.taskId)).some(
+        (entry) => entry.turn === 3 && entry.phase === 'publishing',
+      ),
+    )
+    fixture.assertRepositoryComplete(task.taskId, 3)
+
+    // Every turn ran on the runner, under the chat's own lease; no turn credential and no token of
+    // the client's repository stayed in the journal or the assignments.
+    const entries = await journal(task.taskId)
+    for (const entry of entries) assert.equal(entry.fence.siteId, task.taskId)
+    const assignments = []
+    for (const turn of [1, 2, 3]) {
+      const assignment = await assignmentOf(task.taskId, turn)
+      assert.deepEqual([assignment.executor, assignment.runnerId], ['runner', runnerId])
+      assert.equal(assignment.plan.repository.projectRepositoryId, projectRepositoryId)
+      assignments.push(assignment)
+    }
+    const persisted = JSON.stringify([entries, assignments])
+    assert(!persisted.includes(token), 'The token of the repository reached the journal')
+    for (const values of turnCredentials.values())
+      for (const secret of Object.values(values))
+        assert(!persisted.includes(secret), 'Journal or assignment contains a turn credential')
+    verified.push(
+      `real ${driverName} chat of a project with a repository on the runner: a bundle without history in /workspace/repo with two files stubbed, the files of the project read-only in /workspace/project and as the client left them in the next turn, no git credential and no token of GitLab in the sandbox; turn 1 committed by core through the git worker into refs/raditi/<chat> of the mirror, its snapshot with the patch and an empty untracked part; turn 2 on a bundle of that commit with the session restored, core killed after its checkpoint, the next core published it from the snapshot's patch and untracked parts; turn 3 from that commit, nothing to publish (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 
@@ -1465,6 +2034,7 @@ try {
     if (core.child.exitCode === null && core.child.signalCode === null)
       await settle('core', () => core.kill())
   if (fixture) await settle('model and MCP fixture', () => fixture.close())
+  if (gitWorker) await settle('git worker', () => gitWorker.stop())
   for (const name of runners)
     await settle('runner', async () => {
       const owned = await dockerCommand(
@@ -1523,7 +2093,11 @@ try {
       }
       await db.siteLease.deleteMany({ where: { siteId: { in: chats } } })
       await db.task.deleteMany({ where: { workspaceId: site.workspaceId } })
+      // The project of the chat with a repository: its files and repository go with it.
+      await db.project.deleteMany({ where: { workspaceId: site.workspaceId } })
       await db.workspace.delete({ where: { id: site.workspaceId } })
+      if (projectRows.users.length)
+        await db.user.deleteMany({ where: { id: { in: projectRows.users } } })
       if (driverCreated) await db.agentDriver.delete({ where: { id: driverId } })
     })
     await settle('snapshot objects', async () => {
@@ -1536,6 +2110,9 @@ try {
           ])
             await storage.delete('sessions', `${turnSnapshotPrefix(sessionId, turn)}${name}`)
     })
+    await settle('files of the project', async () => {
+      for (const key of projectRows.objects) await storage.delete('inbox', key)
+    })
     if (keyCreated)
       await settle('Vault key', async () => {
         await vault(`transit/keys/ws-${site.workspaceId}/config`, { deletion_allowed: true })
@@ -1543,6 +2120,9 @@ try {
       })
   }
   await settle('token volume', () => docker('volume', 'rm', '--force', tokenVolume))
+  // The mirrors, the bundles and the socket of the git worker: nothing of them outlives the run.
+  if (gitSettings)
+    await settle('mirrors', () => rm(gitSettings.mirrorDir, { recursive: true, force: true }))
   await settle('firewall rules', async () => assert.deepEqual(await firewall(), rulesBefore))
   await db.$disconnect()
   if (work && succeeded && cleanup.length === 0) await rm(work, { recursive: true, force: true })
@@ -1555,5 +2135,5 @@ try {
 }
 if (failures.length) throw new AggregateError(failures, 'Runner verification failed')
 console.log(
-  `PASS (runner ${runnerId}, gVisor):\n${verified.map((line) => `- ${line}`).join('\n')}\n- containers, gateway networks, host firewall rules, rows, objects, Vault key and token volume removed`,
+  `PASS (runner ${runnerId}, gVisor):\n${verified.map((line) => `- ${line}`).join('\n')}\n- containers, gateway networks, host firewall rules, rows, objects, Vault key, token volume${gitSettings ? ', mirrors and the git worker' : ''} removed`,
 )

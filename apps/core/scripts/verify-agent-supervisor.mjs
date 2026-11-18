@@ -1,6 +1,9 @@
 /* global AbortController, AbortSignal, clearTimeout, console, fetch, setTimeout, URL */
-// The supervisor stand of a driver: own disposable data services on Docker Desktop, the real
-// runner on local Colima.
+// The supervisor stands: own disposable data services on Docker Desktop (PostgreSQL with the
+// tree's migrations, SeaweedFS, OpenBao), and over them the scenarios of verify-runner.mjs with the
+// real runner on local Colima — the real CLI of a driver (`--opencode`, verify:opencode-supervisor)
+// or the synthetic agent of P2 (verify:runner) — or the snapshots of verify-snapshots.mjs, which
+// need no database and no runner (verify:snapshots; П47, docs/plan/84-projects.md, §10).
 // Does not read .env, accept existing data-service credentials, pull images or use accounts.
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
@@ -299,6 +302,13 @@ export async function provisionServices({
   command,
   buckets = ['sessions', 'inbox'],
 }) {
+  // A stand without a database (the snapshots) starts no PostgreSQL: nothing to migrate.
+  if (names.postgres)
+    await migrateDatabase({ docker, names, directory, env, signal, stage, command })
+  await provisionStorage({ env, signal, stage, buckets })
+}
+
+async function migrateDatabase({ docker, names, directory, env, signal, stage, command }) {
   stage('PostgreSQL readiness')
   await eventually(
     async () =>
@@ -331,7 +341,10 @@ export async function provisionServices({
       timeoutMs: 180_000,
     },
   )
-  stage('disposable S3 sessions and inbox buckets')
+}
+
+async function provisionStorage({ env, signal, stage, buckets }) {
+  stage(`disposable S3 ${buckets.join(' and ')} bucket${buckets.length > 1 ? 's' : ''}`)
   const { S3Client, CreateBucketCommand, HeadBucketCommand } = createRequire(
     join(repository, 'packages/storage/package.json'),
   )('@aws-sdk/client-s3')
@@ -391,7 +404,7 @@ export function scenarioEnvironment(environment, settings, fixture) {
     APP_ENV: 'test',
     NO_COLOR: '1',
     P4_DISPOSABLE_ID: fixture.marker,
-    DATABASE_URL: fixture.databaseUrl,
+    ...(fixture.databaseUrl ? { DATABASE_URL: fixture.databaseUrl } : {}),
     S3_ENDPOINT: fixture.s3Endpoint,
     S3_REGION: 'us-east-1',
     S3_FORCE_PATH_STYLE: 'true',
@@ -404,47 +417,152 @@ export function scenarioEnvironment(environment, settings, fixture) {
   }
 }
 
-/** Dependencies are injectable only for tests; the CLI exposes no alternate service endpoints. */
+/**
+ * What a launcher runs over its services: the scenarios of verify-runner.mjs with the real CLI of
+ * a driver (`cli`) or with the synthetic agent of P2 (`synthetic`), each with the real runner.
+ */
+const runnerScenarios = {
+  cli: (driverId) => ({ milestone: 'G3', args: ['scripts/verify-runner.mjs', `--${driverId}`] }),
+  synthetic: () => ({ milestone: 'P2', args: ['scripts/verify-runner.mjs'] }),
+}
+
+/**
+ * The scenarios of verify-runner.mjs with the real runner on local Colima, over disposable
+ * services of their own: `agent: 'cli'` — the real CLI of `driverId` (verify:opencode-supervisor),
+ * `'synthetic'` — the P2 agent and its crash scenarios (verify:runner). Dependencies are
+ * injectable only for tests; the CLI exposes no alternate service endpoints.
+ */
 export async function verifyAgentSupervisor({
   driverId = 'opencode',
+  agent = 'cli',
   environment = process.env,
   command = runCommand,
   provision = provisionServices,
   signals = process,
   log = console.log,
 } = {}) {
-  const drivers = { opencode: ['OpenCode', 'G3'] }
+  const drivers = { opencode: 'OpenCode' }
   assert(Object.hasOwn(drivers, driverId), 'Unsupported verification driver')
-  const [driverName, milestone] = drivers[driverId]
+  assert(Object.hasOwn(runnerScenarios, agent), 'Unsupported verification agent')
+  const driverName = drivers[driverId]
+  const { milestone, args } = runnerScenarios[agent](driverId)
   const settings = runnerSettings(environment)
+  await withDisposableServices({
+    environment,
+    settings,
+    command,
+    provision,
+    signals,
+    log,
+    milestone,
+    // The runner and the data services never share a daemon.
+    apart: settings.P2_RUNNER_DOCKER_SOCKET,
+    async run(env, { stage, signal }) {
+      stage(
+        agent === 'cli'
+          ? `${driverName} supervisor exec and native resume`
+          : 'runner scenarios with the synthetic agent',
+      )
+      const done = await command(process.execPath, args, {
+        cwd: orchestrator,
+        env,
+        signal,
+        timeoutMs: 25 * 60_000,
+        abortGraceMs: 75_000,
+      })
+      // A passed run prints only what it verified: no values, and not the output of a failure.
+      for (const line of done.stdout.split('\n')) if (line.startsWith('- ')) log(line)
+      log(
+        agent === 'cli'
+          ? `PASS real ${driverName} supervisor exec/resume on gVisor, snapshots of chats without a repository and a chat of a project with a repository`
+          : 'PASS P2 runner scenarios on gVisor with the synthetic agent: crashes of core and the runner, cancellation, recovery',
+      )
+    },
+  })
+}
+
+/**
+ * The snapshots of verify-snapshots.mjs (P1) over disposable SeaweedFS and OpenBao of their own:
+ * no database and no runner (verify:snapshots; П47).
+ */
+export async function verifyDisposableSnapshots({
+  environment = process.env,
+  command = runCommand,
+  provision = provisionServices,
+  signals = process,
+  log = console.log,
+} = {}) {
+  await withDisposableServices({
+    environment,
+    command,
+    provision,
+    signals,
+    log,
+    milestone: 'P1',
+    database: false,
+    buckets: ['sessions'],
+    async run(env, { stage, signal }) {
+      stage('encrypted snapshots on disposable S3 and Transit')
+      const done = await command(process.execPath, ['scripts/verify-snapshots.mjs'], {
+        cwd: orchestrator,
+        env,
+        signal,
+        timeoutMs: 5 * 60_000,
+      })
+      for (const line of done.stdout.split('\n'))
+        if (line.startsWith('Snapshot integration passed')) log(`PASS ${line}`)
+    },
+  })
+}
+
+/**
+ * Disposable data services on Docker Desktop for one run, removed after it whatever happens:
+ * PostgreSQL with the tree's migrations (`database`), SeaweedFS with `buckets` and OpenBao with
+ * Transit. `run(env, { stage, signal })` gets their environment and nothing else of the caller's
+ * (scenarioEnvironment); `apart` — the socket of a daemon the data services must not share (the
+ * runner's). A failure keeps one private diagnostic file; nothing of it reaches the log.
+ */
+export async function withDisposableServices({
+  environment,
+  settings = {},
+  command,
+  provision,
+  signals,
+  log,
+  milestone,
+  database = true,
+  buckets = ['sessions', 'inbox'],
+  apart,
+  run,
+}) {
   const controller = new AbortController()
   const connection = await localDesktop(environment, (binary, args, options) =>
     command(binary, args, { ...options, signal: controller.signal }),
   )
-  assert.notEqual(
-    connection.endpoint,
-    `unix://${settings.P2_RUNNER_DOCKER_SOCKET}`,
-    'Data services and runner must use different Docker daemons',
-  )
-  assert(
-    (await stat(settings.P2_RUNNER_DOCKER_SOCKET)).isSocket(),
-    'Runner Docker socket is unavailable',
-  )
+  if (apart) {
+    assert.notEqual(
+      connection.endpoint,
+      `unix://${apart}`,
+      'Data services and runner must use different Docker daemons',
+    )
+    assert((await stat(apart)).isSocket(), 'Runner Docker socket is unavailable')
+  }
   const docker = (args, options = {}) =>
     command('docker', [...connection.args, ...args], {
       env: connection.env,
       signal: controller.signal,
       ...options,
     })
-  for (const image of Object.values(serviceImages))
-    await docker(['image', 'inspect', image, '--format', '{{.Id}}'])
+  for (const [name, image] of Object.entries(serviceImages))
+    if (database || name !== 'postgres')
+      await docker(['image', 'inspect', image, '--format', '{{.Id}}'])
   const marker = randomBytes(16).toString('hex')
   const resources = ownedContainers(docker, marker)
   let directory
   const interrupt = () => controller.abort()
   signals.on('SIGINT', interrupt)
   signals.on('SIGTERM', interrupt)
-  const deadline = setTimeout(interrupt, 25 * 60_000)
+  const deadline = setTimeout(interrupt, 30 * 60_000)
   let currentStage = 'starting disposable data services'
   const stage = (value) => {
     currentStage = value
@@ -459,22 +577,24 @@ export async function verifyAgentSupervisor({
     const secretKey = randomBytes(24).toString('hex')
     const postgresEnv = join(directory, 'postgres.env'),
       vaultEnv = join(directory, 'vault.env')
-    await writeFile(
-      postgresEnv,
-      `POSTGRES_USER=raditi\nPOSTGRES_DB=raditi\nPOSTGRES_PASSWORD=${postgresPassword}\n`,
-      { mode: 0o600 },
-    )
     await writeFile(vaultEnv, `BAO_DEV_ROOT_TOKEN_ID=${vaultToken}\n`, { mode: 0o600 })
     const names = {}
-    names.postgres = await resources.start('postgres', [
-      '--tmpfs',
-      '/var/lib/postgresql/data:rw,size=768m',
-      '-p',
-      '127.0.0.1::5432',
-      '--env-file',
-      postgresEnv,
-      serviceImages.postgres,
-    ])
+    if (database) {
+      await writeFile(
+        postgresEnv,
+        `POSTGRES_USER=raditi\nPOSTGRES_DB=raditi\nPOSTGRES_PASSWORD=${postgresPassword}\n`,
+        { mode: 0o600 },
+      )
+      names.postgres = await resources.start('postgres', [
+        '--tmpfs',
+        '/var/lib/postgresql/data:rw,size=768m',
+        '-p',
+        '127.0.0.1::5432',
+        '--env-file',
+        postgresEnv,
+        serviceImages.postgres,
+      ])
+    }
     names.s3 = await resources.start('s3', [
       '--tmpfs',
       '/data:rw,size=768m',
@@ -538,24 +658,25 @@ export async function verifyAgentSupervisor({
       accessKey,
       secretKey,
       vaultToken,
-      databaseUrl: `postgresql://raditi:${postgresPassword}@${await port(names.postgres, 5432)}/raditi`,
+      ...(names.postgres
+        ? {
+            databaseUrl: `postgresql://raditi:${postgresPassword}@${await port(names.postgres, 5432)}/raditi`,
+          }
+        : {}),
       s3Endpoint: `http://${await port(names.s3, 8333)}`,
       vaultAddress: `http://${await port(names.vault, 8200)}`,
     })
-    await provision({ docker, names, directory, env, signal: controller.signal, stage, command })
-    stage(`${driverName} supervisor exec and native resume`)
-    const run = await command(process.execPath, ['scripts/verify-runner.mjs', `--${driverId}`], {
-      cwd: orchestrator,
+    await provision({
+      docker,
+      names,
+      directory,
       env,
       signal: controller.signal,
-      timeoutMs: 20 * 60_000,
-      abortGraceMs: 75_000,
+      stage,
+      command,
+      buckets,
     })
-    // A passed run prints only what it verified: no values, and not the output of a failure.
-    for (const line of run.stdout.split('\n')) if (line.startsWith('- ')) log(line)
-    log(
-      `PASS real ${driverName} supervisor exec/resume on gVisor and snapshots of chats without a repository`,
-    )
+    await run(env, { stage, signal: controller.signal })
   } catch (error) {
     failure = new Error(`${milestone} supervisor verification failed at ${currentStage}`)
     // A failed run keeps one explicitly private diagnostic. Service secrets/configs below
@@ -598,5 +719,5 @@ export async function verifyAgentSupervisor({
     signals.removeListener('SIGTERM', interrupt)
   }
   if (failure) throw failure
-  log('PASS disposable PostgreSQL, S3, OpenBao and private files removed')
+  log(`PASS disposable ${database ? 'PostgreSQL, ' : ''}S3, OpenBao and private files removed`)
 }

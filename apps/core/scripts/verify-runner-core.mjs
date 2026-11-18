@@ -1,7 +1,12 @@
-/* global AbortController, process, setImmediate */
+/* global AbortController, Buffer, process, setImmediate */
 // The core process of verify-runner.mjs: the turn supervisor, the runner API and exec recovery
-// over the local PostgreSQL, S3 and Vault, as P12 will wire them. The harness sends it turns over
-// IPC and kills it with SIGKILL: only the database, S3 and the runner VM outlive it. Started by verify-runner.mjs only, which sends its configuration as the first message.
+// over the local PostgreSQL, S3 and Vault, as TurnsModule wires them (turns.providers.ts). The
+// harness sends it turns over IPC and kills it with SIGKILL: only the database, S3, the runner VM
+// and the git worker outlive it. With `config.git` it has the trusted git of the repositories of
+// projects (docs/plan/84-projects.md, ПР12, ПР33): GitWorkspaceService over the socket of the git
+// worker the harness started, the mirrors on its volume, and the files of projects from
+// raditi-inbox. Started by verify-runner.mjs only, which sends its configuration as the first
+// message.
 import { randomBytes } from 'node:crypto'
 
 import { createOpencodeDriver } from '@repo/agent-drivers'
@@ -15,15 +20,20 @@ import { createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
 import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 
 import { parseRunnerTokens, runnerCredentialAddress } from '../dist/config/runner-tokens.js'
+import { gitWorkerSocketPath } from '../dist/git-worker/protocol.js'
+import { GitWorkspaceService } from '../dist/git-workspace/git-workspace.service.js'
+import { GitWorkerClient } from '../dist/git-workspace/worker-client.js'
 import { RemoteTurnExecutor } from '../dist/runner-api/remote-turn-executor.js'
 import { RunnerApiServer } from '../dist/runner-api/runner-api.server.js'
 import { RunnerAuthenticator } from '../dist/runner-api/runner-auth.js'
 import { RunnerHub } from '../dist/runner-api/runner-hub.js'
 import { SnapshotService } from '../dist/sessions/snapshot.service.js'
+import { RepoTurnPreparer } from '../dist/tasks/repo-turns.js'
 import { LiveTurns } from '../dist/turns/live-turns.js'
 import { TurnExecRecovery } from '../dist/turns/turn-exec-recovery.js'
 import { TaskInboxFiles } from '../dist/turns/turn-inbox.js'
 import { TaskEventTurnJournal } from '../dist/turns/turn-journal.js'
+import { TaskProjectFiles } from '../dist/turns/turn-project-files.js'
 import { TurnSupervisor } from '../dist/turns/turn-supervisor.js'
 
 if (!process.send) throw new Error('Started by verify-runner.mjs only')
@@ -170,6 +180,24 @@ executor.prepare = (input, signal) =>
     signal,
   )
 const live = new LiveTurns()
+// The trusted git of core (GitWorkspaceModule): every command goes to the git worker over its
+// socket. The repositories of the projects are bare repositories of the stand below `root`,
+// reached by the transport GitWorkspaceService keeps for tests (`local-test`, NODE_ENV=test only):
+// the provider's side of a fetch — its API, OAuth, the pinned address and the token of git — is
+// verify:projects', and none of it is in the way of a turn.
+const git = config.git
+  ? new GitWorkspaceService({
+      runner: new GitWorkerClient(gitWorkerSocketPath(config.git.mirrorDir)),
+      mirrorDir: config.git.mirrorDir,
+      transport: { kind: 'local-test', root: config.git.root },
+    })
+  : null
+/** A fetch of a public repository: no grant, as `git.repo.attach` of an open link takes it. */
+const anonymous = () => ({
+  auth: { kind: 'anonymous' },
+  basic: null,
+  expiresAt: new Date(Date.now() + 60_000),
+})
 
 // A stand-in for P3's store: the values each turn started with, kept by the harness.
 const credentialKey = (ref) => `${ref.taskId}:${ref.sessionId}:${ref.turn}`
@@ -203,6 +231,10 @@ const supervisor = new TurnSupervisor({
   credentials,
   // As TurnsModule: the files of a chat, read from raditi-inbox when the runner asks for them.
   inbox: new TaskInboxFiles(db, storage),
+  // The files of the chat's project, the same way (docs/plan/84-projects.md, ПР8).
+  projectFiles: new TaskProjectFiles(db, storage),
+  // The trusted git of the repositories of projects (ПР12); null — a turn with one is refused.
+  repository: git,
 })
 const credentialPolicy = {
   driverId: driver.id,
@@ -231,6 +263,8 @@ const recovery = new TurnExecRecovery({
     },
   }),
   executor,
+  // A checkpointed turn with a repository has its publication finished here (ПР12, §4.3, step 7).
+  repository: git,
   journal,
   driver: (id) => {
     if (id !== driver.id) throw new Error('Unknown driver')
@@ -256,7 +290,7 @@ const handlers = {
     const cancel = new AbortController()
     cancels.set(request.context.taskId, cancel)
     try {
-      return await supervisor.run(
+      const done = await supervisor.run(
         withoutTurnCredentials(request),
         config.driverId
           ? {
@@ -267,9 +301,52 @@ const handlers = {
           : credentialPolicy,
         cancel.signal,
       )
+      // What IPC carries: no closure (`refusesText`), the patch as base64.
+      return {
+        result: done.result,
+        manifest: done.manifest,
+        ...(done.repository
+          ? {
+              repository: {
+                ...done.repository,
+                patch: Buffer.from(done.repository.patch).toString('base64'),
+              },
+            }
+          : {}),
+      }
     } finally {
       cancels.delete(request.context.taskId)
     }
+  },
+  /**
+   * The repository of a pass of a chat of a project (§4.3, step 3) as the product prepares it
+   * (RepoTurnPreparer): the main branch fetched into the mirror, the base — the chat's own ref
+   * once it published, else the head of the main branch —, the files that look like secrets
+   * named and the bundle built. Only the fetch is the stand's: from `cloneUrl`, without a grant.
+   */
+  async repoPrepare({ chatId, row, cloneUrl }) {
+    if (!git) throw new Error('This core has no trusted git')
+    const preparer = new RepoTurnPreparer({
+      db,
+      git: {
+        async fetchForTurn(projectRepositoryId) {
+          const heads = await git.fetch({
+            projectRepositoryId,
+            remote: { cloneUrl, access: anonymous() },
+            branches: [row.defaultBranch],
+            sizeBytes: null,
+          })
+          return { sha: heads.get(row.defaultBranch), label: 'GitLab', chatHead: null }
+        },
+      },
+      workspace: git,
+    })
+    return preparer.prepare(chatId, row)
+  },
+  /** The chat's ref of the mirror (`refs/raditi/<chatId>`): what core published, or null. */
+  async repoRef({ projectRepositoryId, chatId }) {
+    if (!git) throw new Error('This core has no trusted git')
+    return git.readChatRef(projectRepositoryId, chatId)
   },
   async cancel({ taskId }) {
     cancels.get(taskId)?.abort()

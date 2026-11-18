@@ -542,7 +542,8 @@ export const projectRepoRouter = router({
       ]),
     )
     .query(({ ctx, input }) =>
-      readRepoPaths(ctx.prisma, ctx.chat ? chatContextOf(ctx).storage() : null, {
+      // The S3 client only when a kept list is read: never for a project without a repository.
+      readRepoPaths(ctx.prisma, ctx.chat ? () => chatContextOf(ctx).storage() : null, {
         userId: ctx.user.id,
         projectId: input.projectId,
         now: new Date(),

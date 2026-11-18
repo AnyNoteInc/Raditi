@@ -563,21 +563,21 @@ test('a chat without a repository is no turn of the two the stand requires', asy
   assert.throws(() => fixture.assertRewindComplete(), /three turns/)
 })
 
-/** The turn that replaces the undone one in a chat with the repository (`verify-runner.mjs`). */
-const chatTurn = {
-  ...turn(3),
+/** The second turn of a chat of a project with a repository (`verify-runner.mjs`). */
+const COMMAND = 'fail() { echo raditi-check-failed:$1; exit 1; }\ncd /workspace/repo || fail cd'
+const repositoryTurn = {
+  ...turn(2),
   id: 'chat',
-  llmKey: 'synthetic-llm-chat',
-  mcpKey: 'synthetic-mcp-chat',
+  llmKey: 'synthetic-llm-repository',
+  mcpKey: 'synthetic-mcp-repository',
   prompt: WORDS.next,
   answer: ANSWERS.next,
+  command: COMMAND,
+  files: ['menu.md'],
   remembered: [WORDS.first],
-  forgotten: [WORDS.undone],
-  holds: [1],
-  lacks: [2],
 }
-const chatBody = (history) => {
-  const value = bodyFor(3)
+const repositoryBody = (history) => {
+  const value = bodyFor(2)
   value.messages = [
     value.messages[0],
     ...first,
@@ -597,79 +597,91 @@ const callIn = (text) => {
 }
 const toolAnswer = (id, content) => [{ role: 'tool', tool_call_id: id, content }]
 
-test('a turn of a chat with the repository checks its working copy, changes it and answers', async (t) => {
+test('a turn of a chat with a repository runs the command of the stand and answers with its files', async (t) => {
   const fixture = await open(t)
-  fixture.addChatTurn(chatTurn)
-  const asked = await send(fixture, PATH, chatTurn.llmKey, chatBody([]))
+  const planned = fixture.addRepositoryTurn(repositoryTurn)
+  assert.deepEqual([planned.change_type, planned.files_changed], ['code', ['menu.md']])
+  const asked = await send(fixture, PATH, repositoryTurn.llmKey, repositoryBody([]))
   assert.equal(asked.status, 200, asked.text)
   const { id, command } = callIn(asked.text)
-  for (const part of [
-    "grep -qx 'turn 1' index.php && test -e turn-1.txt",
-    "! grep -qx 'turn 2' index.php && test ! -e turn-2.txt",
-    "printf 'turn 3\\n' >> index.php",
-    "printf 'turn 3\\n' > turn-3.txt",
-  ])
-    assert(command.includes(part), part)
+  // The command of the stand, then the marker of the turn: printed only when no check stopped it.
+  assert.equal(command, `${COMMAND}\necho raditi-g3-shell-ok-turn-2`)
   const answered = await send(
     fixture,
     PATH,
-    chatTurn.llmKey,
-    chatBody(toolAnswer(id, 'raditi-g3-shell-ok-turn-3')),
+    repositoryTurn.llmKey,
+    repositoryBody(toolAnswer(id, 'raditi-g3-shell-ok-turn-2')),
   )
   assert.equal(answered.status, 200, answered.text)
   assert.match(answered.text, new RegExp(ANSWERS.next))
-  fixture.assertChatComplete('chat', 1)
+  assert.match(answered.text, /menu\.md/)
+  fixture.assertRepositoryComplete('chat', 1)
+})
+
+test('a repository turn without files answers that it changed nothing', async (t) => {
+  const fixture = await open(t)
+  const planned = fixture.addRepositoryTurn({ ...repositoryTurn, files: [] })
+  assert.deepEqual([planned.change_type, planned.files_changed], ['none', []])
 })
 
 test('counts the turns of a chat: a stand that names another chat proves nothing', async (t) => {
   const fixture = await open(t)
-  fixture.addChatTurn(chatTurn)
-  assert.throws(() => fixture.assertChatComplete('another', 1), /turns of this chat/)
-  assert.throws(() => fixture.assertChatComplete('chat', 2), /turns of this chat/)
+  fixture.addRepositoryTurn(repositoryTurn)
+  assert.throws(() => fixture.assertRepositoryComplete('another', 1), /turns of this chat/)
+  assert.throws(() => fixture.assertRepositoryComplete('chat', 2), /turns of this chat/)
+  assert.throws(() => fixture.addRepositoryTurn({ ...repositoryTurn, id: 'empty', command: '' }), {
+    message: 'Invalid repository turn',
+  })
+  assert.throws(() => fixture.addRepositoryTurn(repositoryTurn), {
+    message: 'Unexpected repository turn',
+  })
+  assert.throws(
+    () => fixture.addRepositoryTurn({ ...repositoryTurn, id: 'other', files: 'menu.md' }),
+    { message: 'Invalid repository turn' },
+  )
 })
 
-test('refuses a session of a chat that lost the words of a turn before', async (t) => {
+test('refuses a session of a repository chat that lost the words of a turn before', async (t) => {
   const fixture = await open(t)
-  fixture.addChatTurn(chatTurn)
-  const body = bodyFor(3)
+  fixture.addRepositoryTurn(repositoryTurn)
+  const body = bodyFor(2)
   body.messages = [body.messages[0], { role: 'user', content: `Client request:\n${WORDS.next}` }]
-  const lost = await send(fixture, PATH, chatTurn.llmKey, body)
+  const lost = await send(fixture, PATH, repositoryTurn.llmKey, body)
   assert.equal(lost.status, 400)
   assert.deepEqual(fixture.observations().problems, [
     'The restored session lost words of an earlier turn',
   ])
 })
 
-test('refuses a chat turn whose working copy is not the one it starts from', async (t) => {
+test('names the check that stopped the command of a repository turn, and nothing of its output', async (t) => {
   const fixture = await open(t)
-  fixture.addChatTurn(chatTurn)
-  const { id } = callIn((await send(fixture, PATH, chatTurn.llmKey, chatBody([]))).text)
+  fixture.addRepositoryTurn(repositoryTurn)
+  const { id } = callIn((await send(fixture, PATH, repositoryTurn.llmKey, repositoryBody([]))).text)
   const refused = await send(
     fixture,
     PATH,
-    chatTurn.llmKey,
-    chatBody(toolAnswer(id, 'exit code 1')),
+    repositoryTurn.llmKey,
+    repositoryBody(toolAnswer(id, 'secret-looking output\nraditi-check-failed:history\nexit 1')),
   )
   assert.equal(refused.status, 400)
   assert.deepEqual(fixture.observations().problems, [
-    'The working copy is not the one the turn starts from',
+    'The working copy is not the one the turn starts from (history)',
   ])
-  assert.throws(() => fixture.assertChatComplete('chat', 1), /failed requests/)
-})
-
-test('refuses a chat turn whose session kept the undone turn, and one that made no change', async (t) => {
-  const fixture = await open(t)
-  fixture.addChatTurn(chatTurn)
-  const kept = chatBody([])
-  kept.messages.splice(1, 0, { role: 'user', content: WORDS.undone })
-  assert.equal((await send(fixture, PATH, chatTurn.llmKey, kept)).status, 400)
-  assert.deepEqual(fixture.observations().problems, [
-    'The words of an undone turn reached the provider',
-  ])
+  assert.throws(() => fixture.assertRepositoryComplete('chat', 1), /failed requests/)
 
   const quiet = await open(t)
-  quiet.addChatTurn(chatTurn)
-  assert.throws(() => quiet.assertChatComplete('chat', 1), /one change and answer/)
-  // The chat turns are no turns of the two scenarios the stand requires of the fixture.
+  quiet.addRepositoryTurn(repositoryTurn)
+  const call = callIn((await send(quiet, PATH, repositoryTurn.llmKey, repositoryBody([]))).text)
+  await send(quiet, PATH, repositoryTurn.llmKey, repositoryBody(toolAnswer(call.id, 'exit 1')))
+  assert.deepEqual(quiet.observations().problems, [
+    'The working copy is not the one the turn starts from',
+  ])
+})
+
+test('a repository turn that never ran its command is not complete, nor one of the two turns', async (t) => {
+  const quiet = await open(t)
+  quiet.addRepositoryTurn(repositoryTurn)
+  assert.throws(() => quiet.assertRepositoryComplete('chat', 1), /one command and answer/)
+  // The repository turns are no turns of the two scenarios the stand requires of the fixture.
   assert.throws(() => quiet.assertComplete(), /two registered turns/)
 })

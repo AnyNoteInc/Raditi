@@ -8,8 +8,9 @@
 // command. core and web are built by verify:edge, the llm image is run for real by verify:llm-app.
 // The core image is checked only when named (`--only core`, docs/plan/84-projects.md, §6): it is
 // the one image that carries git and gitleaks, for its git worker (ПР33), and the second entry of
-// that worker refuses an empty configuration in its own words as well. images.yml leaves it out:
-// edge.yml and publish-images.yml build it in CI.
+// that worker refuses an empty configuration in its own words as well. Locally it stays out of the
+// default set — it is the slowest to build —; images.yml checks it in a job of its own, like the
+// others (docs/plan/84-projects.md, §10, «Раннер песочной ВМ и CI»).
 //
 //   pnpm verify:images [-- --no-build] [--keep] [--only <app>[,<app>…]]
 import { spawn } from 'node:child_process'
@@ -18,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 export const APPS = ['llm', 'mcp', 'preview', 'runner', 'browser']
-/** The images checked only when `--only` names them. */
+/** The images checked only when `--only` names them; images.yml checks them as well. */
 export const NAMED_APPS = ['core']
 
 /**

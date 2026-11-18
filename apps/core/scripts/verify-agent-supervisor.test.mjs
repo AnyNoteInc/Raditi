@@ -15,6 +15,7 @@ import {
   runnerSettings,
   scenarioEnvironment,
   verifyAgentSupervisor,
+  verifyDisposableSnapshots,
 } from './verify-agent-supervisor.mjs'
 
 const endpoint = 'unix:///local/desktop.sock'
@@ -224,25 +225,59 @@ async function fakeRuntime() {
   }
 }
 
-// Every shell the launcher runs, with the name its PASS line carries.
-const launchers = { opencode: 'OpenCode' }
-for (const [driverId, driverName] of Object.entries(launchers))
+// Every run a launcher makes over its services: the arguments of its child, the line of the child
+// it repeats, the PASS line it ends with, and whether it starts a database. verify:runner and
+// verify:snapshots read no .env any more: their services are these (П47).
+const launchers = [
+  {
+    name: 'OpenCode supervisor',
+    start: (options) => verifyAgentSupervisor({ driverId: 'opencode', ...options }),
+    args: ['scripts/verify-runner.mjs', '--opencode'],
+    runner: true,
+    database: true,
+    verified: '- what the run verified',
+    pass: 'PASS real OpenCode supervisor',
+  },
+  {
+    name: 'P2 runner scenarios',
+    start: (options) => verifyAgentSupervisor({ agent: 'synthetic', ...options }),
+    args: ['scripts/verify-runner.mjs'],
+    runner: true,
+    database: true,
+    verified: '- what the run verified',
+    pass: 'PASS P2 runner scenarios on gVisor',
+  },
+  {
+    name: 'snapshots',
+    start: (options) => verifyDisposableSnapshots(options),
+    args: ['scripts/verify-snapshots.mjs'],
+    runner: false,
+    database: false,
+    verified: 'Snapshot integration passed: synthetic',
+    pass: 'PASS Snapshot integration passed: synthetic',
+  },
+]
+for (const launcher of launchers)
   for (const interrupt of [false, true])
-    test(`launcher ${driverId} ${interrupt ? 'SIGTERM failure' : 'success'} cleans resources and keeps environment pinned`, async () => {
+    test(`launcher of ${launcher.name} ${interrupt ? 'SIGTERM failure' : 'success'} cleans resources and keeps environment pinned`, async () => {
       const runtime = await fakeRuntime()
       const signals = new EventEmitter()
       const containers = new Map()
       const envFiles = []
       const log = []
+      const published = []
       let childEnv, fixtureDirectory, stdinConfig, failure
       const command = async (binary, args, options) => {
         if (binary !== 'docker') {
           assert.equal(binary, process.execPath)
-          assert.deepEqual(args, ['scripts/verify-runner.mjs', `--${driverId}`])
-          assert(options.abortGraceMs >= 60_000)
+          assert.deepEqual(args, launcher.args)
+          if (launcher.runner) assert(options.abortGraceMs >= 60_000)
           childEnv = options.env
           assert.match(childEnv.P4_DISPOSABLE_ID, /^[a-f0-9]{32}$/u)
           assert.doesNotMatch(JSON.stringify(childEnv), /old-root|production|do-not-load/u)
+          // The snapshots get no database and nothing of the runner.
+          assert.equal(childEnv.DATABASE_URL === undefined, !launcher.database)
+          assert.equal(childEnv.P2_RUNNER_DOCKER_SOCKET === undefined, !launcher.runner)
           if (interrupt) {
             signals.emit('SIGTERM')
             assert.equal(options.signal.aborted, true)
@@ -251,7 +286,7 @@ for (const [driverId, driverName] of Object.entries(launchers))
             })
           }
           return ok(
-            `Do not print this credential: ${childEnv.VAULT_DEV_ROOT_TOKEN}\n- what the run verified`,
+            `Do not print this credential: ${childEnv.VAULT_DEV_ROOT_TOKEN}\n${launcher.verified}`,
           )
         }
         if (args[0] === 'context') return ok(endpoint)
@@ -265,6 +300,7 @@ for (const [driverId, driverName] of Object.entries(launchers))
           assert(cmd.includes('--tmpfs'))
           assert(!cmd.includes('--volume') && !cmd.includes('-v'))
           assert.match(cmd[cmd.indexOf('-p') + 1], /^127\.0\.0\.1::/u)
+          published.push(cmd[cmd.indexOf('-p') + 1])
           const name = cmd[cmd.indexOf('--name') + 1]
           containers.set(name, cmd[cmd.indexOf('--label') + 1].split('=')[1])
           if (cmd.includes('--env-file')) {
@@ -299,23 +335,26 @@ for (const [driverId, driverName] of Object.entries(launchers))
       }
       try {
         try {
-          await verifyAgentSupervisor({
-            driverId,
+          await launcher.start({
             environment: runtime.environment,
             command,
             signals,
             log: (value) => log.push(value),
-            provision: async ({ directory, env }) => {
+            provision: async ({ directory, env, names, buckets }) => {
               fixtureDirectory = directory
               assert.equal(stdinConfig.identities[0].credentials[0].accessKey, env.S3_ACCESS_KEY_ID)
               assert.equal(
                 stdinConfig.identities[0].credentials[0].secretKey,
                 env.S3_SECRET_ACCESS_KEY,
               )
-              assert.match(
-                env.DATABASE_URL,
-                /^postgresql:\/\/raditi:[a-f0-9]+@127\.0\.0\.1:15432\/raditi$/u,
-              )
+              assert.equal(Boolean(names.postgres), launcher.database)
+              assert.deepEqual(buckets, launcher.database ? ['sessions', 'inbox'] : ['sessions'])
+              if (launcher.database)
+                assert.match(
+                  env.DATABASE_URL,
+                  /^postgresql:\/\/raditi:[a-f0-9]+@127\.0\.0\.1:15432\/raditi$/u,
+                )
+              else assert.equal(env.DATABASE_URL, undefined)
             },
           })
         } catch (error) {
@@ -323,6 +362,7 @@ for (const [driverId, driverName] of Object.entries(launchers))
         }
         assert.equal(Boolean(failure), interrupt)
         assert(childEnv)
+        assert.equal(published.includes('127.0.0.1::5432'), launcher.database)
         assert.equal(containers.size, 0)
         assert.equal(signals.listenerCount('SIGINT'), 0)
         assert.equal(signals.listenerCount('SIGTERM'), 0)
@@ -337,8 +377,12 @@ for (const [driverId, driverName] of Object.entries(launchers))
             childEnv.VAULT_DEV_ROOT_TOKEN,
           )
         } else {
-          assert(log.some((line) => line.startsWith(`PASS real ${driverName} supervisor`)))
-          assert(log.includes('- what the run verified'))
+          assert(log.some((line) => line.startsWith(launcher.pass)))
+          if (launcher.runner) assert(log.includes(launcher.verified))
+          assert.equal(
+            log.at(-1),
+            `PASS disposable ${launcher.database ? 'PostgreSQL, ' : ''}S3, OpenBao and private files removed`,
+          )
         }
       } finally {
         if (failure?.diagnosticPath)
@@ -346,3 +390,17 @@ for (const [driverId, driverName] of Object.entries(launchers))
         await runtime.close()
       }
     })
+
+test('the package scripts of verify:runner and verify:snapshots go through their launchers', async () => {
+  const { scripts } = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+  )
+  for (const [name, launcher] of [
+    ['verify:runner', 'scripts/verify-runner-stand.mjs'],
+    ['verify:snapshots', 'scripts/verify-snapshots-stand.mjs'],
+    ['verify:opencode-supervisor', 'scripts/verify-opencode-supervisor.mjs'],
+  ]) {
+    assert.match(scripts[name], new RegExp(`exec node ${launcher.replaceAll('.', '\\.')}$`), name)
+    assert.doesNotMatch(scripts[name], /env-file|\.env/u, name)
+  }
+})

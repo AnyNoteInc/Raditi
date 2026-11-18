@@ -89,9 +89,10 @@ try {
     turn: 1,
     image: `registry/raditi@sha256:${'a'.repeat(64)}`,
     driver: { ...driver, nativeSessionId: id },
+    // A turn of a chat with a repository of a project (docs/plan/84-projects.md, ПР12).
     git: {
-      provider: 'gitea',
-      branch: 'task/p1-verification',
+      provider: 'gitlab',
+      branch: 'raditi/p1-verification',
       baseSha: 'b'.repeat(40),
       headSha: 'c'.repeat(40),
     },
@@ -138,18 +139,24 @@ try {
   }
   await service.save({ ...metadata, turn: 2 }, { ...parts, home: sealedHome })
   assert.equal(replayed, 412, 'A presigned PUT must be create-only')
+  // A turn's executor restores the session alone, through a presigned GET: the working copy of a
+  // turn with a repository comes from its bundle (TurnRestoreSource, docs/plan/84-projects.md,
+  // ПР12). `untracked` and `patch` are read back by core itself — recovery publishes from them.
   const source = await service.restoreSource({ ...reference, turn: 2 }, 60_000)
+  assert.deepEqual(Object.keys(source.parts), ['home'], 'The executor gets the session alone')
   const stored = []
-  for (const part of source.manifest.parts) {
+  for (const part of source.manifest.parts.filter(({ name }) => name === 'home')) {
     const response = await presigned(source.parts[part.name])
     assert.equal(response.status, 200)
     stored.push({ part, body: Buffer.from(await response.arrayBuffer()) })
   }
   const restored = await openSnapshotParts(source.manifest, stored, home, source.dataKey)
+  assert.deepEqual(Buffer.from(restored.home), parts.home)
+  const kept = await service.load({ ...reference, turn: 2 })
   for (const name of ['home', 'untracked', 'patch'])
-    assert.deepEqual(Buffer.from(restored[name]), parts[name])
+    assert.deepEqual(Buffer.from(kept.archives[name]), parts[name])
   console.log(
-    'Snapshot integration passed: S3 conditional PUT (12 contenders), Vault Transit, encrypted round trip, immutable turn, workspace isolation, home sealed through a create-only presigned PUT and restored through presigned GETs.',
+    'Snapshot integration passed: S3 conditional PUT (12 contenders), Vault Transit, encrypted round trip, immutable turn, workspace isolation, home sealed through a create-only presigned PUT and restored through a presigned GET, the parts of the candidate read back by core.',
   )
 } finally {
   const cleanup = await Promise.allSettled(objectKeys.map((key) => storage.delete('sessions', key)))

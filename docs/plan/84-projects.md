@@ -1744,9 +1744,9 @@ GitHub сливает синхронным `PUT …/merge` с `sha`; `merge-asyn
 - `@repo/domain` — 87 файлов, 4 723 (новый `repo/turn.test.ts` — 29); `@repo/snapshots` — 114; `@repo/local-turns` — 43; `runner` — 51; web `components/chat` — 48 файлов, 536.
 - `typecheck` и `lint` `@repo/domain`, `@repo/snapshots`, `@repo/local-turns`, `runner`, `core`, web, `typecheck` `@repo/trpc`; `pnpm check-architecture` — 2 274 модуля, нарушений нет; `pnpm test:infra` — 587, 579 прошли, 8 пропущены; prettier.
 - `pnpm verify:opencode -- --image raditi-g3verify-sandbox:noprojects` (Docker Desktop, `runc`) — код 0, 20 строк `PASS`. **Ответ на вопрос §9:** при `OPENCODE_DISABLE_PROJECT_CONFIG` и обёртке драйвера OpenCode 1.18.34 не загружает `AGENTS.md` и `CLAUDE.md` рабочей папки как правила: стенд кладёт их в `/workspace/repo` с метками, и `expectRequests` в каждом запросе к провайдеру проверяет, что ни одной метки нет ни в системном тексте, ни в теле. Такие файлы репозитория агент видит только как материал, если сам прочтёт их инструментом.
-- Не запускались: `verify-runner.mjs` под `runsc` с бандлом (ВМ Colima `gvisor` остановлена, сценария с бандлом в стенде нет), `pnpm gates` целиком, `pnpm verify:db`, стенды с настоящим GitLab.
+- Не запускались: ~~`verify-runner.mjs` под `runsc` с бандлом (ВМ Colima `gvisor` остановлена, сценария с бандлом в стенде нет)~~ (сделано 18.11.2026 — «Раннер песочной ВМ и CI (18.11.2026)» ниже), `pnpm gates` целиком, `pnpm verify:db`, стенды с настоящим GitLab.
 
-**Открыто.** Карточка «Изменения в ветке», `projectRepo.diff`, отправка ветки, `repo_*` в `mcp`, `/undo`/`/redo` ссылки зеркала, ветка чата у провайдера как база — 84.19; сценарий `verify-runner.mjs` с бандлом под `runsc`; карточка хода, довершённого восстановлением.
+**Открыто.** Карточка «Изменения в ветке», `projectRepo.diff`, отправка ветки, `repo_*` в `mcp`, `/undo`/`/redo` ссылки зеркала, ветка чата у провайдера как база — 84.19; ~~сценарий `verify-runner.mjs` с бандлом под `runsc`~~ (сделано 18.11.2026 — «Раннер песочной ВМ и CI (18.11.2026)» ниже); карточка хода, довершённого восстановлением.
 
 ### Результат 84.19 (16.11.2026)
 
@@ -2627,7 +2627,7 @@ GitHub сливает синхронным `PUT …/merge` с `sha`; `merge-asyn
 | `pnpm verify:opencode-supervisor` (после исправления, ниже) | данные — Docker Desktop, раннер — ВМ под `runsc` | 3 сценария: два хода с восстановлением (32 с), чат с `/undo` и сжатием (81 с), файл клиента в `/workspace/inbox` (12 с) | 155 с |
 | семь сценариев P2 `verify-runner.mjs` (синтетический агент) | то же | 7 из 7: два хода, `kill -9` `core`, раннера и обоих, отмена до и после выдачи `prepare`, `core` убит после контрольной точки без раннера и до выдачи `prepare` | 104 с |
 
-Сценарии P2 шли без корневого `.env`: пакетная команда `verify:runner` его читает (П47 по-прежнему открыт), поэтому их вёл запускатель стенда супервизора с его одноразовыми PostgreSQL, SeaweedFS и OpenBao. Обёртка вне репозитория убирает из его запуска `verify-runner.mjs` только флаг `--opencode`; повторить её — из `apps/core` после `pnpm --filter core --filter runner build`, с теми же `P2_*` и `SANDBOX_*_IMAGE`, что у `verify:opencode-supervisor`:
+Сценарии P2 шли без корневого `.env`: пакетная команда `verify:runner` его читала (П47 был открыт; закрыт 18.11.2026 — «Раннер песочной ВМ и CI (18.11.2026)» ниже: теперь `pnpm --filter core verify:runner` сама идёт через этот запускатель), поэтому их вёл запускатель стенда супервизора с его одноразовыми PostgreSQL, SeaweedFS и OpenBao. Обёртка вне репозитория убирает из его запуска `verify-runner.mjs` только флаг `--opencode`; повторить её — из `apps/core` после `pnpm --filter core --filter runner build`, с теми же `P2_*` и `SANDBOX_*_IMAGE`, что у `verify:opencode-supervisor`:
 
 ```js
 import { runCommand, verifyAgentSupervisor } from './scripts/verify-agent-supervisor.mjs'
@@ -2665,8 +2665,69 @@ await verifyAgentSupervisor({
 
 **Не проверено и почему.**
 - Остальные живые проверки §6 (OAuth gitlab.com, быстрые действия gitlab.com, настоящие GitLab CI и GitHub Actions, GitHub App, путь целиком) и `--live` стендов — их делает владелец на сервере; приложения Радити на gitlab.com и GitHub не зарегистрированы. Память на GLM и живой проход чата проекта — #137.
-- Ход чата с репозиторием на раннере песочной ВМ (`TURN_EXECUTOR=runner`, как в production): `verify-runner.mjs` с плана 83 ведёт только чаты без репозитория, а `verify:projects` идёт с `TURN_EXECUTOR=local`. Бандл и файлы проекта через API раннеров держат модульные тесты раннера (`sandbox-runner.test.ts`, «files of the project») и `local-turns`; стенда раннера под gVisor для хода с репозиторием нет.
+- ~~Ход чата с репозиторием на раннере песочной ВМ (`TURN_EXECUTOR=runner`, как в production): `verify-runner.mjs` с плана 83 ведёт только чаты без репозитория, а `verify:projects` идёт с `TURN_EXECUTOR=local`. Бандл и файлы проекта через API раннеров держат модульные тесты раннера (`sandbox-runner.test.ts`, «files of the project») и `local-turns`; стенда раннера под gVisor для хода с репозиторием нет.~~ Закрыто 18.11.2026 — «Раннер песочной ВМ и CI (18.11.2026)» ниже.
 - `verify:browser-task` на Linux и под `runsc` (его предварительная проверка требует Docker Desktop); `verify:pages` и `test:site` — только на macOS.
 - `verify:billing` локально (его вёл CI), `verify:llm-gateway` и `verify:llm-app` локально (CI).
 
-**Мелочь, которую видно в журнале `test:site`.** `projectRepo.paths` создаёт клиент S3 до того, как узнаёт, есть ли у проекта репозиторий (`chatContextOf(ctx).storage()` в аргументах `readRepoPaths`): в прогоне `test:site`, где S3 выключен намеренно, web пишет в журнал `[storage] invalid configuration` на каждый такой запрос, проверки проходят. В production S3 задан всегда. Комментарий `playwright.billing.config.ts` об этом поправлен; сам запрос не менялся: это правка продукта без пользы для клиента.
+**Мелочь, которую видно в журнале `test:site`** (исправлено 18.11.2026 — «Раннер песочной ВМ и CI (18.11.2026)» ниже). `projectRepo.paths` создаёт клиент S3 до того, как узнаёт, есть ли у проекта репозиторий (`chatContextOf(ctx).storage()` в аргументах `readRepoPaths`): в прогоне `test:site`, где S3 выключен намеренно, web пишет в журнал `[storage] invalid configuration` на каждый такой запрос, проверки проходят. В production S3 задан всегда. Комментарий `playwright.billing.config.ts` об этом поправлен; сам запрос не менялся: это правка продукта без пользы для клиента.
+
+### Раннер песочной ВМ и CI (18.11.2026)
+
+Ветка `fix/projects-runner-ci` от `origin/main` `0146c674` (v1.67.4), PR #140. Закрывает остаточные риски регрессии (выше, «Не проверено и почему» и «Мелочь…»): у хода чата с репозиторием на раннере песочной ВМ не было стенда; `verify:runner` и `verify:snapshots` читали корневой `.env` (П47); образ `core` не проверялся в CI; `projectRepo.paths` создавал клиент S3 у проекта без репозитория.
+
+**Как раннер получает репозиторий** (разведка до кода; так было с 84.18, код раннера не менялся).
+- **Бандл.** Его строит `core`: проход готовит `RepoTurnPreparer` (`fetch` основной ветки в зеркало, база — ссылка чата `refs/raditi/<chatId>`, если чат уже публиковал, иначе голова основной ветки; скрытые файлы `hiddenFiles`; `buildBaseBundle`), а супервизор под арендой собирает его ещё раз по плану (`bundleOfPlan`: те же байты из кэша бандлов или конфликт). Все команды git — в `git-worker`. В команде `prepare` раннер получает только поля бандла: `baseSha`, `sandboxBaseSha`, ветку, SHA-256 и размер. Байты он берёт у API раннеров `core` — `GET /runner/v1/assignments/<id>/bundle`, пока `prepare` открыт, после строгой проверки аренды (`RunnerHub.bundle`). В песочницу их кладёт `importBaseBundle` из `@repo/local-turns` через stdin exec: сверка размера и SHA-256, `git clone` без хуков, подмодулей и `origin` в `/workspace/repo`, ветка чата, бандл удаляется.
+- **Файлы проекта** — тем же API: `GET …/assignments/<id>/project/<n>`, по месту файла в `projectFiles` команды. `core` читает их из `raditi-inbox` после сверки с проектом чата (`TaskProjectFiles`); раннер кладёт их `placeProjectFiles` с режимом 0444.
+- **Обратно** раннер шлёт части кандидата: `PUT …/candidate/patch` и `…/untracked` (и `outbox`) в `core`. `core` готовит публикацию до снимка (`preparePublication` через `git-worker`), снимок — с частью `patch` кандидата и пустой `untracked`, публикация в `refs/raditi/<chatId>` — после `checkpointed`.
+- **Ссылки S3** раннер получает только для снимков: запечатывает `home` presigned PUT и восстанавливает presigned GET. Бандл, файлы проекта и части кандидата идут только через `core`. Ни ссылок на `raditi-inbox`, ни учётных данных git у раннера нет.
+
+**Что сделано.**
+- **Стенд хода с репозиторием на раннере.** `verify-runner.mjs --opencode` (его ведёт `pnpm verify:opencode-supervisor`) получил сценарий «чат проекта с репозиторием» на настоящем OpenCode и pull-раннере под `runsc` в ВМ Colima `gvisor`. Три хода:
+  - **ход 1.** Бандл головы `main` без истории. Песочница проверяет себя командой стенда, каждая проверка со своим именем (`sandboxChecks`):
+    - ядро gVisor и uid 10001;
+    - один корневой коммит `sandboxBaseSha` на ветке чата: без родителя, тегов и `origin`, чистое дерево;
+    - `config/old-settings.env` (токен формы GitLab, его находит gitleaks) и `certs/site.key` (по имени) — заглушкой `HIDDEN_FILE_STUB`;
+    - файлы проекта в `/workspace/project` — байты клиента, режим 444, без `chmod` не пишутся;
+    - нет учётных данных git: ни в `git config`, ни в файлах `.git-credentials`, ни в переменных `GIT_ASKPASS`, `GIT_CONFIG_*`, `GITLAB_TOKEN` и подобных;
+    - строки `glpat-` нет ни в окружении какого-либо процесса, ни в файлах `/workspace`, `/agent-home`, `/tmp`, ни в объектах репозитория.
+
+    Агент меняет `README.md`, добавляет `menu.md` и `docs/hours.md`, правит файл проекта и кладёт рядом свой. `core` коммитит кандидата через `git-worker` в `refs/raditi/<chatId>` зеркала: один коммит бота «Радити» на `main`, три файла, скрытые файлы — как у клиента, не заглушкой. Снимок хранит патч, равный патчу кандидата, и пустую часть `untracked`; публикация — после `checkpointed` и `destroyed`;
+  - **ход 2.** Бандл коммита хода 1, сессия хода 1 восстановлена (слова хода 1 — в запросе провайдеру). В песочнице — изменения хода 1, а файлы проекта такие, какими их оставил клиент: без строки агента и без его файла. `core` убит `kill -9` сразу после `checkpointed`, ссылка чата ещё на ходе 1. Следующий `core` доводит публикацию из частей `patch` и `untracked` снимка (`TurnPublicationRecovery`): `publishing` и `publication_recovered` под новой эпохой, `recoveredFromEpoch` и `candidateHeadSha` — убитого `core`. Ход завершён, аренда свободна, контейнера нет;
+  - **ход 3.** База — коммит, опубликованный восстановлением. Ход ничего не меняет и ничего не публикует: голова снимка — база, `publication` нет, ссылка не сдвинулась.
+
+  Под конец стенд проверяет: все ходы — на раннере (`executor: runner`), под арендой самого чата; ни ключа хода, ни токена репозитория нет в журнале и назначениях.
+- **Что переиспользовано.**
+  - Запускатель стенда супервизора и синтетический Z.ai стенда раннера (`opencode-runner-fixture.mjs`). Его мёртвый с плана 83 ход «чата с репозиторием» плана 61 стал ходом чата проекта: одна команда стенда и имя первой не прошедшей проверки в отказе — фиксированное слово, без вывода.
+  - Из сборки `core`: `RepoTurnPreparer`, `GitWorkspaceService` с `GitWorkerClient`, `TaskProjectFiles`, сервер и конфигурация `git-worker`. Своего стенда для них не написано.
+  - Подделка GitLab стенда `verify:projects` не понадобилась. Адрес git `GitWorkspaceService` принимает только `https` на 443 — подделке нужен пересыльщик 443 на loopback, то есть постоянный порт. А стенд раннера проверяет ход, не подключение. Репозиторий клиента — голый репозиторий стенда с историей и тегом; его читает транспорт `local-test`, который `GitWorkspaceService` и `git-worker` держат для тестов (только `NODE_ENV=test`, вне production). Провайдер, OAuth и закреплённый адрес остаются за `verify:projects`.
+- **`git-worker`** — свой процесс стенда (`verify-runner-git-worker.mjs`), его сокет — на томе зеркал. Он переживает `kill -9` `core`, как его контейнер. Это сервер и конфигурация второго входа образа (`dist/git-worker/server.js`, `config.js`) без `load-env`: вне production `main.js` загружает ближайший `.env` выше дерева — у рабочего дерева внутри другой копии репозитория это `.env` той копии, — а транспорт `file` требует `NODE_ENV=test`.
+- **П47 закрыт.** Тело `verifyAgentSupervisor` стало общей `withDisposableServices` (`verify-agent-supervisor.mjs`): одноразовые PostgreSQL (по желанию), SeaweedFS и OpenBao на Docker Desktop. Пакетные команды:
+  - `verify:runner` → `verify-runner-stand.mjs`: семь сценариев P2 с синтетическим агентом;
+  - `verify:snapshots` → `verify-snapshots-stand.mjs`: без базы и раннера;
+  - `verify:opencode-supervisor` — как прежде.
+
+  Ни одна из них не читает `.env`; от прежнего поведения ничего не зависело. Прямой запуск скриптов с явным окружением остался.
+
+  Первый прогон `verify:snapshots` через запускатель нашёл, что `verify-snapshots.mjs` падал с 84.18 (`TypeError` до проверки восстановления): `restoreSource` отдаёт исполнителю хода ссылку только на `home`, а стенд ждал ссылок на все три части. Теперь он проверяет, что ссылка одна, и читает `untracked` и `patch` через `load` — как их читает восстановление публикации. В метаданных его снимка — `gitlab` и ветка `raditi/…` вместо `gitea` плана 83.
+- **Образ `core` в CI.** `images.yml` проверяет и его, своим job матрицы; `apps/core/**` запускает workflow. В выпуске его сборка на раннере как есть — около 3 минут (`publish-images.yml`, 17.11.2026), предел job — 30 минут; диск раннера держит один образ с кэшем, как у остальных. Контракт `infra/app/ci.test.mjs`: матрица — `APPS` и `NAMED_APPS` `verify-images.mjs`, фильтр путей называет каждое приложение. Локально `core` по-прежнему проверяется только с `--only core`.
+- **`projectRepo.paths`** получает фабрику клиента S3 и вызывает её, только когда есть сохранённый список путей. У проекта без репозитория, без готового зеркала или без списка клиента S3 нет; `[storage] invalid configuration` в журнале `test:site` больше не пишется. Тест (`repo-second-queue-db.test.ts`): проект без репозитория и путь до сохранённого списка — ни одного клиента, дальше — по одному на чтение списка.
+
+**Прогоны** (macOS, arm64; Docker Desktop 29.8.2; ВМ Colima `gvisor` — Ubuntu 24.04.4, Docker 29.5.2; одноразовые базы и сервисы на динамических портах loopback; `.env` нет).
+
+| Проверка | Где, среда | Итог | Время |
+| --- | --- | --- | --- |
+| `node apps/core/scripts/verify-opencode-supervisor.mjs`, первый прогон (сборка — заранее) | данные — Docker Desktop, раннер — ВМ под `runsc` | 4 сценария: два хода (33 с), чат без проекта с `/undo` и сжатием (80 с), файл клиента (12 с), чат проекта с репозиторием (70 с); уборка | 218 с |
+| то же, контроль: проверка `head` сверяет HEAD песочницы с головой `main` клиента | то же | код 1: фикстура назвала проверку — «The working copy is not the one the turn starts from (head)»; уборка прошла | — |
+| `pnpm verify:opencode-supervisor`, второй прогон | то же | 4 сценария: 33, 79, 12 и 70 с; уборка | 224 с со сборкой |
+| `pnpm --filter core verify:runner` (новый запускатель) | то же | 7 из 7 сценариев P2 с синтетическим агентом | 117 с со сборкой |
+| `pnpm --filter core verify:snapshots` (новый запускатель) | Docker Desktop, SeaweedFS и OpenBao | первый прогон — код 1 (`TypeError`, «Что сделано» выше); после правки — код 0 | 13 с со сборкой |
+| `pnpm verify:images -- --only core` | Docker Desktop | 8 проверок | 350 с со сборкой |
+| `pnpm verify:db` | Docker Desktop, PostgreSQL 17.11 | 750 проверок обновления и общего пользователя; наборы: база 783, `core` 1 691 и 1 пропущен, `llm` 598, `mcp` 560, `preview` 52, billing 1 399, tRPC 682 (+1: `@` проекта без репозитория), web 2 571 | 525 с |
+| `pnpm gates` | macOS | код 0: domain 5 027, tRPC 502 и 180 пропущены, web 2 565 и 6, `core` — 1 360 и 308 пропущены и тесты скриптов 60 (+6: запускатели P2 и снимков, контракт пакетных команд, ход с репозиторием в фикстуре); архитектура — 2 520 модулей, нарушений нет; `test:infra` — 619, 611 прошли и 8 пропущены | 201 с |
+
+**Не проверено.**
+- `runsc` на x64: стенд раннера — только в ВМ Colima на arm64. В CI его нет: нужны второй демон с gVisor и раннер в нём, а раннер GitHub — `runc` (`agent-driver.yml` ведёт под `runc` только `verify:opencode`).
+- Провайдер в этом стенде: `fetch` идёт из голого репозитория стенда, без API, OAuth, закреплённого адреса и токена операции. Это держит `verify:projects`.
+- ПР22 (переменные формы токена git): фильтр — в источнике ключей хода, а стенд раннера его подменяет. Стенд проверяет, что строки `glpat-` в песочнице нет; что такую переменную не выдают, держат `verify:projects` (E) и тесты `turn-credentials`.
+- Что следует за ходом — `RepoChanges` (`feed.repo_changes`, `feed.repo_left`, дифф в `raditi-artifacts`), отказы публикации и карточки — стенд раннера не ведёт: это проход, а не ход. Держит `verify:projects`.
+- `images.yml` с `core` на GitHub — прогоном этого PR.

@@ -23,7 +23,8 @@ const ALLOWED_TOOLS = new Set([
 ])
 /**
  * Texts of the OpenCode files a site repository of verify-runner.mjs held until plan 83 took the
- * repositories of its turns away: none may reach a request still.
+ * repositories of its turns away: none may reach a request still (the repository of a project of
+ * plan 84 holds none of them).
  */
 const PROJECT_TEXTS = ['HOSTILE_PROJECT_AGENT', 'HOSTILE_PROJECT_AGENTS_MD', 'HOSTILE_PROJECT_RULE']
 class FixtureError extends Error {}
@@ -51,15 +52,17 @@ const inboxResult = (answer) => ({
   needs_approval: false,
   risk: 'low',
 })
-const chatResult = (turn, answer) => ({
-  summary: 'Синтетический ход чата с репозиторием',
-  change_type: 'code',
+const repositoryResult = (answer, files) => ({
+  summary: 'Синтетический ход чата проекта с репозиторием',
+  change_type: files.length ? 'code' : 'none',
   client_message: answer,
-  files_changed: ['index.php', `turn-${turn}.txt`],
+  files_changed: files,
   questions: [],
   needs_approval: false,
   risk: 'low',
 })
+/** What the shell command of a repository turn prints for the first check it failed. */
+const FAILED_CHECK = /raditi-check-failed:([a-z0-9-]{1,40})/
 const resultFor = (turn) => ({
   summary: turn === 1 ? PRIOR : 'Синтетический второй ход после восстановления сессии',
   change_type: 'code',
@@ -113,29 +116,20 @@ function shellCall(body, state) {
 }
 
 /**
- * The turn of a chat with the repository whose files the stand follows: it fails unless the working
- * copy holds exactly the turns it should, then adds its own, as the turns of the two-turn scenario do.
+ * The turn of a chat of a project with a repository (docs/plan/84-projects.md, ПР12): its one
+ * shell command is the stand's — it checks /workspace/repo and /workspace/project, makes the
+ * turn's change and prints the marker of the turn last; a check that fails prints its name
+ * (FAILED_CHECK) and stops.
  */
-function chatShellCall(body, state) {
+function repositoryShellCall(body, state) {
   const tool = body.tools?.find(
     (item) => item.type === 'function' && item.function?.name === 'bash',
   )
   check(Boolean(tool), 'Shell tool was not advertised')
-  const { turn } = state
-  const { holds, lacks } = state.chat
-  const tests = [
-    ...holds.map((held) => `grep -qx 'turn ${held}' index.php && test -e turn-${held}.txt`),
-    ...lacks.map((lost) => `! grep -qx 'turn ${lost}' index.php && test ! -e turn-${lost}.txt`),
-  ]
-  const command = [
-    ...tests,
-    `printf 'turn ${turn}\\n' >> index.php`,
-    `printf 'turn ${turn}\\n' > turn-${turn}.txt`,
-    `echo ${marker(turn)}`,
-  ].join(' && ')
+  const command = `${state.repository.command}\necho ${marker(state.turn)}`
   return {
     name: 'bash',
-    arguments: JSON.stringify({ command, description: 'Synthetic chat file change' }),
+    arguments: JSON.stringify({ command, description: 'Synthetic repository change' }),
   }
 }
 
@@ -364,7 +358,7 @@ export async function startOpencodeRunnerFixture() {
         ),
         'Turn prompt missing',
       )
-      if (state.turn === 2 && !state.rewind && !state.chat && !state.inbox) {
+      if (state.turn === 2 && !state.rewind && !state.repository && !state.inbox) {
         check(
           body.messages.some(
             (message) =>
@@ -415,29 +409,38 @@ export async function startOpencodeRunnerFixture() {
         )
         state.phase = 'completed'
         item = { content: JSON.stringify(rewindResult(state.rewind.answer)) }
-      } else if (state.chat) {
-        // The session behind this request, as for a turn without a repository, and its one change.
+      } else if (state.repository) {
+        // The session behind this request, as for a turn without a repository, and its one command.
         check(
-          state.chat.remembered.every((text) => serialized.includes(text)),
+          state.repository.remembered.every((text) => serialized.includes(text)),
           'The restored session lost words of an earlier turn',
-        )
-        check(
-          !state.chat.forgotten.some((text) => serialized.includes(text)),
-          'The words of an undone turn reached the provider',
         )
         if (state.phase === 'initial') {
           state.phase = 'shell'
-          state.shellCallId = `call_chat_${state.chat.id}`
-          item = { function: chatShellCall(body, state), id: state.shellCallId }
+          state.shellCallId = `call_repo_${state.repository.id}_${state.turn}`
+          item = { function: repositoryShellCall(body, state), id: state.shellCallId }
         } else {
           check(state.phase === 'shell', 'Unexpected request after turn completion')
-          check(
-            toolOutput(body, state.shellCallId, marker(state.turn)),
-            'The working copy is not the one the turn starts from',
-          )
+          if (!toolOutput(body, state.shellCallId, marker(state.turn))) {
+            // The name of the check the command printed, a fixed word of the stand: never output.
+            const failed = body.messages
+              .filter(
+                (message) => message.role === 'tool' && message.tool_call_id === state.shellCallId,
+              )
+              .flatMap((message) => texts(message.content))
+              .map((text) => FAILED_CHECK.exec(text)?.[1])
+              .find(Boolean)
+            throw new FixtureError(
+              `The working copy is not the one the turn starts from${failed ? ` (${failed})` : ''}`,
+            )
+          }
           state.toolOutputSeen = true
           state.phase = 'completed'
-          item = { content: JSON.stringify(chatResult(state.turn, state.chat.answer)) }
+          item = {
+            content: JSON.stringify(
+              repositoryResult(state.repository.answer, state.repository.files),
+            ),
+          }
         }
       } else if (state.phase === 'initial') {
         item = { function: shellCall(body, state), id: `call_shell_${state.turn}` }
@@ -543,30 +546,42 @@ export async function startOpencodeRunnerFixture() {
       return rewindResult(answer)
     },
     /**
-     * One turn of a chat with the repository whose last request is undone or brought back
-     * (docs/plan/61-chats-first.md, §5.14): what its session held, as for `addRewindTurn`, and what
-     * its working copy held — the turns of `holds` and none of `lacks` — before its own change.
+     * One turn of a chat of a project with a repository (docs/plan/84-projects.md, ПР12): what its
+     * session held — `remembered` must stand in each request —, its one shell command `command`
+     * (the stand's checks of the working copy and the files of the project, and its change), then
+     * an answer that names `files`.
      */
-    addChatTurn({ id, turn, llmKey, mcpKey, prompt, effort, answer, ...held }) {
-      const key = `chat-${id}-${turn}`
-      const { remembered = [], forgotten = [], holds = [], lacks = [] } = held
-      check(!closed && Number.isInteger(turn) && !turns.has(key), 'Unexpected chat turn')
+    addRepositoryTurn({
+      id,
+      turn,
+      llmKey,
+      mcpKey,
+      prompt,
+      effort,
+      answer,
+      command,
+      files,
+      remembered = [],
+    }) {
+      const key = `repository-${id}-${turn}`
+      check(!closed && Number.isInteger(turn) && !turns.has(key), 'Unexpected repository turn')
       check(
-        [id, prompt, answer, ...remembered, ...forgotten].every(
+        [id, prompt, answer, command, ...remembered].every(
           (text) => typeof text === 'string' && text.length > 0,
         ),
-        'Invalid chat turn',
+        'Invalid repository turn',
       )
       check(
-        [...holds, ...lacks].every((other) => Number.isInteger(other)),
-        'Invalid chat turn',
+        Array.isArray(files) && files.every((file) => typeof file === 'string' && file.length > 0),
+        'Invalid repository turn',
       )
       check(effort === (turn === 1 ? 'low' : 'high'), 'Invalid fixture effort')
       assertRotated(llmKey, mcpKey)
       turns.set(key, {
         ...freshTurn({ turn, llmKey, mcpKey, prompt, effort, model: MODEL }),
-        chat: { id, answer, remembered, forgotten, holds, lacks },
+        repository: { id, answer, command, files, remembered },
       })
+      return repositoryResult(answer, files)
     },
     /**
      * The turn of a chat without a project that holds a file of the client (docs/plan/61-chats-first.md,
@@ -652,7 +667,7 @@ export async function startOpencodeRunnerFixture() {
     assertComplete() {
       check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
       const planned = [...turns.values()].filter(
-        (state) => !state.rewind && !state.compaction && !state.chat && !state.inbox,
+        (state) => !state.rewind && !state.compaction && !state.repository && !state.inbox,
       )
       check(planned.length === 2, 'Fixture requires two registered turns')
       for (const state of planned) {
@@ -684,15 +699,15 @@ export async function startOpencodeRunnerFixture() {
         'The turn with a file did not read it and answer',
       )
     },
-    /** The turns of a chat with the repository: their change and their answer, nothing else. */
-    assertChatComplete(id, count) {
+    /** The turns of a chat with a repository: their one command and their answer, nothing else. */
+    assertRepositoryComplete(id, count) {
       check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
-      const chat = [...turns.values()].filter((item) => item.chat?.id === id)
+      const chat = [...turns.values()].filter((item) => item.repository?.id === id)
       check(chat.length === count, 'Fixture has not the turns of this chat')
       for (const state of chat)
         check(
           state.phase === 'completed' && state.toolOutputSeen && state.llmRequests === 2,
-          'A turn of the chat did not make its one change and answer',
+          'A turn of the chat did not run its one command and answer',
         )
     },
     /** The turns of the chat without a repository, each answered once by a checked request. */

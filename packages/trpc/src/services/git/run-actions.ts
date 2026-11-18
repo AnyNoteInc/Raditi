@@ -237,10 +237,15 @@ const TREE_ASK_MS = 60_000
  * the kept one is answered and core is asked for the new one (`git.repo.tree`); none kept, or one
  * of an earlier version of the list (`repoTreeKey`) — `loading`, and core is asked. `none` — no
  * repository, or not ready.
+ *
+ * `storage` makes the client of `raditi-artifacts`, and is called only when there is a kept list to
+ * read: a project without a repository, or one whose list core has not written yet, makes no S3
+ * client at all (the regression of plan 84, §10: a process without S3 logged `[storage] invalid
+ * configuration` on every look at `@`).
  */
 export async function readRepoPaths(
   db: PrismaClient,
-  storage: Pick<ObjectStorage, 'get'> | null,
+  storage: (() => Pick<ObjectStorage, 'get'>) | null,
   input: { userId: string; projectId: string; now: Date },
 ): Promise<RepoPaths> {
   if ((await projectOwnedBy(db, input.projectId, input.userId)) === null) throw projectNotFound()
@@ -253,7 +258,7 @@ export async function readRepoPaths(
   const stream =
     repo.treeSha === null || storage === null
       ? null
-      : await storage.get('artifacts', repoTreeKey(repo.id, repo.treeSha))
+      : await storage().get('artifacts', repoTreeKey(repo.id, repo.treeSha))
   if (repo.treeSha !== repo.lastFetchedSha || stream === null)
     await enqueueOutbox(db, {
       topic: 'git',

@@ -67,7 +67,9 @@ export const localTurnExecutor: Provider = {
 /**
  * The turn supervisor and its recovery as the stands compose them (scripts/verify-runner-core.mjs)
  * over TURN_EXECUTOR, with the background side of turns (TurnRuntime). The supervisor is null
- * without a driver. Both run turns without a repository only (docs/plan/83-remove-projects.md).
+ * without a driver. A turn with a repository needs the trusted git (GIT_WORKSPACE,
+ * docs/plan/84-projects.md, ПР12): without it the supervisor refuses one and recovery leaves its
+ * publication to a core that has it.
  */
 export const turnEngineProviders: Provider[] = [
   // One per process, shared by the supervisor and recovery: a turn driven here is never taken over.
