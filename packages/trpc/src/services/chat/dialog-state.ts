@@ -1,6 +1,14 @@
 import type { Prisma } from '@repo/db'
 import { readFeedRow, type FeedCeilingReason, type FeedCreditsState } from '@repo/domain'
 
+/**
+ * Rows of the feed (`feed.*`) are exactly the rows `client_visible` marks
+ * (`task_events_feed_visible_check`): a lookup of one says so, and PostgreSQL reads the partial index
+ * of the feed (`task_events_feed_idx`) — a few rows a turn — instead of every row of the task, its
+ * journal included.
+ */
+export const visible = { clientVisible: true } as const satisfies Prisma.TaskEventWhereInput
+
 /** A `feed.request` already written for this press of the browser: its id, or null. */
 export async function requestOf(
   db: Pick<Prisma.TransactionClient, 'taskEvent'>,
@@ -10,6 +18,7 @@ export async function requestOf(
   const row = await db.taskEvent.findFirst({
     where: {
       taskId,
+      ...visible,
       type: 'feed.request',
       payload: { path: ['requestId'], equals: requestId.toLowerCase() },
     },
@@ -32,7 +41,7 @@ export async function cancelPending(
   taskId: string,
 ): Promise<boolean> {
   const rows = await db.taskEvent.findMany({
-    where: { taskId, type: 'feed.request' },
+    where: { taskId, ...visible, type: 'feed.request' },
     orderBy: { id: 'desc' },
     take: PRESSES_READ,
     select: { payload: true },
@@ -52,6 +61,7 @@ export async function cancelPending(
  * `/update` — is a press: it answers no question and starts no work of the agent.
  */
 export const movingRequest = {
+  ...visible,
   type: 'feed.request',
   NOT: { payload: { path: ['kind'], equals: 'command' } },
 } as const satisfies Prisma.TaskEventWhereInput
@@ -66,11 +76,11 @@ async function standingRewinds(
   taskId: string,
 ): Promise<Prisma.TaskEventWhereInput> {
   const redo = await db.taskEvent.findFirst({
-    where: { taskId, type: 'feed.redo' },
+    where: { taskId, ...visible, type: 'feed.redo' },
     orderBy: { id: 'desc' },
     select: { id: true },
   })
-  return { type: 'feed.rewind', ...(redo === null ? {} : { id: { gt: redo.id } }) }
+  return { ...visible, type: 'feed.rewind', ...(redo === null ? {} : { id: { gt: redo.id } }) }
 }
 
 /**
@@ -91,7 +101,7 @@ export async function lastQuestion(
   taskId: string,
 ): Promise<DialogQuestion | null> {
   const row = await db.taskEvent.findFirst({
-    where: { taskId, type: 'feed.question' },
+    where: { taskId, ...visible, type: 'feed.question' },
     orderBy: { id: 'desc' },
     select: { id: true, payload: true },
   })
@@ -101,7 +111,7 @@ export async function lastQuestion(
   // What closes a question: a row that moves the dialog on, or `/undo` of the turn that asked.
   const closes = { OR: [movingRequest, await standingRewinds(db, taskId)] }
   const answered = await db.taskEvent.count({
-    where: { taskId, AND: [closes, { id: { gt: row.id } }] },
+    where: { taskId, ...visible, AND: [closes, { id: { gt: row.id } }] },
   })
   return {
     id: row.id,
@@ -127,6 +137,7 @@ export async function openResult(
   const row = await db.taskEvent.findFirst({
     where: {
       taskId,
+      ...visible,
       OR: [
         { type: { in: ['feed.result', 'feed.failure'] } },
         await standingRewinds(db, taskId),
@@ -170,6 +181,7 @@ export async function wordsOfTurn(
   const rows = await db.taskEvent.findMany({
     where: {
       taskId,
+      ...visible,
       type: 'feed.request',
       createdAt: { lte: until, ...(since === null ? {} : { gt: since }) },
     },
@@ -198,7 +210,7 @@ export async function wordsOfUndonePress(
 ): Promise<string | null> {
   const taskId = task.id
   const row = await db.taskEvent.findFirst({
-    where: { taskId, type: 'feed.rewind', id: { gt: pressId } },
+    where: { taskId, ...visible, type: 'feed.rewind', id: { gt: pressId } },
     orderBy: { id: 'asc' },
     select: { id: true, payload: true },
   })

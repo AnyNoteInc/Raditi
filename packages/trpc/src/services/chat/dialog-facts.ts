@@ -2,6 +2,7 @@ import { openBrowserSessionOfTask, type MemberRole, type Prisma } from '@repo/db
 import {
   chatCommandAvailability,
   readFeedRow,
+  terminalTaskStatuses,
   type AgentBrowserRefusal,
   type ChatCommandAvailability,
   type ChatCommandFacts,
@@ -15,7 +16,7 @@ import {
 import { z } from 'zod'
 
 import { memberRole } from './access.ts'
-import { cancelPending, movingRequest, openCeilingQuestion } from './dialog-state.ts'
+import { cancelPending, movingRequest, openCeilingQuestion, visible } from './dialog-state.ts'
 import { commandUnavailable } from './refusals.ts'
 
 type Reader = Pick<
@@ -37,6 +38,63 @@ export interface DialogFacts {
 }
 
 /**
+ * The task of the facts. What a caller already read of its row is taken as read — the columns of
+ * the task and the reader's role (null — not a member) — and the rest is read here.
+ */
+export interface FactsTask {
+  id: string
+  workspaceId: string
+  status: TaskStatus
+  needsBrowser?: boolean
+  turnNo?: number
+  role?: MemberRole | null
+}
+
+/**
+ * Rows several verdicts ask about, read once and only when one asks: the last turn, the question
+ * about credits and the live browser session. Awaited one at a time, as every read of the facts:
+ * the client may be an interactive transaction.
+ */
+function sharedReads(db: Reader, taskId: string, turnNo: number) {
+  let turn: Promise<LastTurn | null> | undefined
+  let ceiling: ReturnType<typeof openCeilingQuestion> | undefined
+  let session: ReturnType<typeof openBrowserSessionOfTask> | undefined
+  return {
+    turn: () =>
+      (turn ??= db.taskTurn.findUnique({
+        where: { taskId_turnNo: { taskId, turnNo } },
+        select: {
+          status: true,
+          rejectedAt: true,
+          undoneAt: true,
+          nativeSessionId: true,
+          startedAt: true,
+        },
+      })),
+    ceiling: () => (ceiling ??= openCeilingQuestion(db, taskId)),
+    session: () => (session ??= openBrowserSessionOfTask(db, taskId)),
+  }
+}
+type SharedReads = ReturnType<typeof sharedReads>
+
+interface LastTurn {
+  status: string
+  rejectedAt: Date | null
+  undoneAt: Date | null
+  nativeSessionId: string | null
+  startedAt: Date | null
+}
+
+const BUSY: readonly TaskStatus[] = ['queued', 'preparing', 'running']
+
+/**
+ * Whether `chatCommandAvailability` looks at the facts of `/compact`: not while the agent works or
+ * once the chat has ended — it answers `busy` or `finished` before them then.
+ */
+const compactAsked = (status: TaskStatus) =>
+  !BUSY.includes(status) && !terminalTaskStatuses.includes(status)
+
+/**
  * What the server decides the commands of a chat by (Р34): the reader's role, the browser and the
  * turns of the chat, read with the caller's client — the snapshot of `task.feed` or the transaction
  * of a command. A chat has no repository, candidate, preview or release
@@ -44,18 +102,24 @@ export interface DialogFacts {
  */
 export async function dialogFacts(
   db: Reader,
-  task: { id: string; workspaceId: string; status: TaskStatus },
+  task: FactsTask,
   userId: string,
 ): Promise<DialogFacts> {
   // One query at a time: the client may be an interactive transaction.
-  const role = await memberRole(db, task.workspaceId, userId)
-  const needs = await db.task.findUnique({
-    where: { id: task.id },
-    select: { needsBrowser: true, turnNo: true },
-  })
+  const role = task.role !== undefined ? task.role : await memberRole(db, task.workspaceId, userId)
+  const needs =
+    task.needsBrowser !== undefined && task.turnNo !== undefined
+      ? { needsBrowser: task.needsBrowser, turnNo: task.turnNo }
+      : await db.task.findUnique({
+          where: { id: task.id },
+          select: { needsBrowser: true, turnNo: true },
+        })
   const withBrowser = needs?.needsBrowser ?? false
-  const agentBrowser = await agentBrowserRefusal(db, task.id)
   const turnNo = needs?.turnNo ?? 0
+  const shared = sharedReads(db, task.id, turnNo)
+  // Only `/compact` looks at the browser, and only while the chat waits.
+  const asked = compactAsked(task.status)
+  const agentBrowser = asked ? await agentBrowserRefusal(shared) : null
 
   return {
     role,
@@ -63,11 +127,13 @@ export async function dialogFacts(
       taskStatus: task.status,
       role: role ?? 'member',
       cancelPending: withBrowser && (await cancelPending(db, task.id)),
-      turnUndo: await turnUndoRefusal(db, { taskId: task.id, status: task.status, turnNo }),
-      turnRedo: await turnRedoRefusal(db, { taskId: task.id, status: task.status, turnNo }),
+      turnUndo: await turnUndoRefusal(db, shared, { taskId: task.id, status: task.status }),
+      turnRedo: await turnRedoRefusal(db, shared, { taskId: task.id, status: task.status }),
       compaction: await driverCompacts(db),
       agentBrowser,
-      compactRefusal: await compactRefusal(db, { taskId: task.id, turnNo }, agentBrowser),
+      compactRefusal: asked
+        ? await compactRefusal(db, shared, { taskId: task.id, turnNo }, agentBrowser)
+        : 'nothing_to_compact',
     },
   }
 }
@@ -88,11 +154,8 @@ async function driverCompacts(db: Reader): Promise<boolean> {
  * Why a command of the agent runs no turn for the browser of the chat (`agentBrowser`): the agent
  * asked the client to act in it, or the client took it over.
  */
-async function agentBrowserRefusal(
-  db: Reader,
-  taskId: string,
-): Promise<AgentBrowserRefusal | null> {
-  const session = await openBrowserSessionOfTask(db, taskId)
+async function agentBrowserRefusal(shared: SharedReads): Promise<AgentBrowserRefusal | null> {
+  const session = await shared.session()
   if (session?.helpReason) return 'awaiting_answer'
   return session?.controller === 'user' ? 'browser_with_client' : null
 }
@@ -117,19 +180,11 @@ function saysNothing(payload: Prisma.JsonValue): boolean {
  */
 async function compactRefusal(
   db: Reader,
+  shared: SharedReads,
   chat: { taskId: string; turnNo: number },
   browser: AgentBrowserRefusal | null,
 ): Promise<CompactRefusal | null> {
-  const turn = await db.taskTurn.findUnique({
-    where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
-    select: {
-      status: true,
-      rejectedAt: true,
-      undoneAt: true,
-      nativeSessionId: true,
-      startedAt: true,
-    },
-  })
+  const turn = await shared.turn()
   if (
     turn?.status !== 'completed' ||
     turn.rejectedAt !== null ||
@@ -138,7 +193,7 @@ async function compactRefusal(
     turn.startedAt === null
   )
     return 'nothing_to_compact'
-  if ((await openCeilingQuestion(db, chat.taskId)) !== null) return 'awaiting_answer'
+  if ((await shared.ceiling()) !== null) return 'awaiting_answer'
   if (browser !== null) return browser
   const compacted = await db.turnAssignment.count({
     where: {
@@ -168,18 +223,16 @@ async function compactRefusal(
  */
 async function turnUndoRefusal(
   db: Reader,
-  chat: { taskId: string; status: TaskStatus; turnNo: number },
+  shared: SharedReads,
+  chat: { taskId: string; status: TaskStatus },
 ): Promise<TurnUndoRefusal | null> {
   if (chat.status !== 'awaiting_user' && chat.status !== 'awaiting_approval')
     return 'nothing_to_undo'
-  const turn = await db.taskTurn.findUnique({
-    where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
-    select: { status: true, rejectedAt: true, undoneAt: true, startedAt: true },
-  })
+  const turn = await shared.turn()
   if (turn?.status !== 'completed' || turn.rejectedAt !== null || turn.undoneAt !== null)
     return 'nothing_to_undo'
-  if ((await openCeilingQuestion(db, chat.taskId)) !== null) return 'awaiting_answer'
-  const session = await openBrowserSessionOfTask(db, chat.taskId)
+  if ((await shared.ceiling()) !== null) return 'awaiting_answer'
+  const session = await shared.session()
   if (session?.helpReason) return 'awaiting_answer'
   if (turn.startedAt !== null) {
     const later = await db.taskEvent.count({
@@ -197,17 +250,15 @@ async function turnUndoRefusal(
  */
 async function turnRedoRefusal(
   db: Reader,
-  chat: { taskId: string; status: TaskStatus; turnNo: number },
+  shared: SharedReads,
+  chat: { taskId: string; status: TaskStatus },
 ): Promise<TurnRedoRefusal | null> {
   if (chat.status !== 'awaiting_user' && chat.status !== 'awaiting_approval')
     return 'nothing_to_redo'
-  const turn = await db.taskTurn.findUnique({
-    where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
-    select: { undoneAt: true },
-  })
+  const turn = await shared.turn()
   if (!turn?.undoneAt) return 'nothing_to_redo'
   const rewind = await db.taskEvent.findFirst({
-    where: { taskId: chat.taskId, type: 'feed.rewind' },
+    where: { taskId: chat.taskId, ...visible, type: 'feed.rewind' },
     orderBy: { id: 'desc' },
     select: { id: true },
   })

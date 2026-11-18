@@ -18,7 +18,7 @@ import { accessibleTask, taskNotFound } from './access.ts'
 import { feedBrowser, type FeedBrowser } from './browser.ts'
 import { dialogCommands, dialogFacts } from './dialog-facts.ts'
 import type { DialogSchedule } from './dialog-list.ts'
-import { movingRequest } from './dialog-state.ts'
+import { movingRequest, visible } from './dialog-state.ts'
 
 type Tx = Prisma.TransactionClient
 
@@ -56,7 +56,8 @@ export async function readDialogFeed(
   return db.$transaction(
     async (tx) => {
       await tx.$executeRaw`SET TRANSACTION READ ONLY`
-      const task = await tx.task.findFirst({
+      // With what the facts would read again: the reader's role.
+      const row = await tx.task.findFirst({
         where: accessibleTask(input.userId, input.taskId),
         select: {
           id: true,
@@ -69,10 +70,18 @@ export async function readDialogFeed(
           needsBrowser: true,
           modelClass: true,
           projectId: true,
+          workspace: {
+            select: { members: { where: { userId: input.userId }, select: { role: true } } },
+          },
         },
       })
-      if (task === null) throw taskNotFound()
-      const facts = await dialogFacts(tx, task, input.userId)
+      if (row === null) throw taskNotFound()
+      const { workspace, ...task } = row
+      const facts = await dialogFacts(
+        tx,
+        { ...task, role: workspace.members[0]?.role ?? null },
+        input.userId,
+      )
       const head = await feedHead(tx, task)
       const browser = await feedBrowser(tx, task)
       const page = await feedPage(tx, task.id, input.after)
@@ -129,6 +138,7 @@ export async function feedHead(
       : await tx.taskEvent.findFirst({
           where: {
             taskId: task.id,
+            ...visible,
             type: 'feed.step',
             AND: [
               { payload: { path: ['turn'], equals: task.turnNo } },
