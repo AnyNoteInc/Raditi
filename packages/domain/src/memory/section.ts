@@ -28,8 +28,9 @@ const intro = [
   'or decision; update or forget a note that turned out wrong. A note becomes active at once only when the client',
   'asked to remember it in this turn, the turn ran no command and nothing of outside (a page, a search, a file)',
   'came into it; otherwise it waits for the client in «Предложено». You learn which only when the turn ends: never',
-  'tell the client a note is already active. Never save a secret, a password, a value of a variable, a link, a',
-  'command or personal data of other people. The client reads the notes: write them in Russian, short and neutral.',
+  'tell the client a note is already active. A link or an e-mail address the client gives is saved like any',
+  'note; a note with a command waits for the client. Never save a secret: a password, a key, a token or a value',
+  'of a variable. The client reads the notes: write them in Russian, short and neutral.',
 ].join('\n')
 
 /**
