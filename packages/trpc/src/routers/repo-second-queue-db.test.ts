@@ -94,10 +94,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the cards of the second queue (plan 8
     },
   }
 
+  /** How many S3 clients the procedures made: `@` makes one only to read a kept list. */
+  let storageClients = 0
   const chatContext: ChatContext = {
     appEnv: 'test',
     browser: null,
-    storage: () => trees as unknown as ObjectStorage,
+    storage: () => {
+      storageClients += 1
+      return trees as unknown as ObjectStorage
+    },
     secrets: () => ({}) as SecretStore,
   }
 
@@ -332,8 +337,19 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the cards of the second queue (plan 8
     ).toBe('REPO_READ_ONLY')
   })
 
+  it('`@` of a project without a repository is none, and makes no S3 client', async () => {
+    const user = await person()
+    const caller = callerOf(user)
+    const projectId = v7()
+    await caller.project.create({ projectId, name: 'Без репозитория' })
+    storageClients = 0
+    expect(await caller.projectRepo.paths({ projectId })).toEqual({ state: 'none' })
+    expect(storageClients).toBe(0)
+  })
+
   it('`@` gets the paths core keeps; a newer head asks core for its own, once a minute', async () => {
     const f = await fixture()
+    storageClients = 0
     expect(await f.caller.projectRepo.paths({ projectId: f.projectId })).toEqual({ state: 'none' })
     await db.projectRepository.update({
       where: { id: f.projectRepositoryId },
@@ -346,6 +362,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the cards of the second queue (plan 8
     expect(await jobs(f, 'git.repo.tree')).toEqual([
       { projectRepositoryId: f.projectRepositoryId, sha: mainSha },
     ])
+    // No list kept yet, and before that no ready repository: no S3 client was made (a process
+    // without S3 logged an invalid configuration on every look, plan 84, §10).
+    expect(storageClients).toBe(0)
     await db.projectRepository.update({
       where: { id: f.projectRepositoryId },
       data: { treeSha: mainSha },
@@ -373,6 +392,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the cards of the second queue (plan 8
       paths: ['src/app.ts'],
       truncated: false,
     })
+    // One client for each look that read a kept list, and only those.
+    expect(storageClients).toBe(2)
     // Another person reads nothing of it.
     const other = callerOf(await person())
     expect(await refusal(() => other.projectRepo.paths({ projectId: f.projectId }))).toBe(

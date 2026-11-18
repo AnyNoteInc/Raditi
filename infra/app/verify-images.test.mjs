@@ -67,7 +67,7 @@ test('every app the stand builds has its own Dockerfile and a list of what it ma
     assert.ok(Array.isArray(FORBIDDEN_PACKAGES[app]), app)
     assert.ok(Array.isArray(OPERATOR_SCRIPTS[app]), app)
   }
-  // The image named only by --only is none of those images.yml checks one per job.
+  // The image named only by --only is none of the default set (images.yml checks both).
   assert.deepEqual(
     NAMED_APPS.filter((app) => APPS.includes(app)),
     [],

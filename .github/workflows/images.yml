@@ -1,11 +1,14 @@
 name: Images
 
-# The production images of the apps no other workflow builds (docs/plan/55-split-orchestrator.md):
-# llm, mcp, preview, the runner of the sandbox VMs and the browser worker
-# (docs/plan/57-browser-tasks.md), each built from its own Dockerfile and checked from the outside
-# (pnpm verify:images): its own app starts and refuses an empty configuration, no git, gitleaks,
-# .env or stand, and nothing of the platform's data in the runner.
-# core and web are built by edge.yml, the llm image also runs for real in llm-app.yml.
+# The production images of the apps (docs/plan/55-split-orchestrator.md): llm, mcp, preview, the
+# runner of the sandbox VMs, the browser worker (docs/plan/57-browser-tasks.md) and core, each
+# built from its own Dockerfile and checked from the outside (pnpm verify:images): its own app
+# starts and refuses an empty configuration, no git, gitleaks, .env or stand — core alone carries
+# git and gitleaks, no older than its Dockerfile pins, for its git worker, whose second entry
+# refuses an empty configuration too (docs/plan/84-projects.md, ПР33) — and nothing of the
+# platform's data in the runner. core is checked only when named locally (`--only core`); here it
+# has a job of its own like the others. web is built by edge.yml, the llm image also runs for real
+# in llm-app.yml.
 on:
   pull_request:
     branches: [main]
@@ -22,6 +25,7 @@ on:
       - apps/preview/**
       - apps/runner/**
       - apps/browser/**
+      - apps/core/**
       - packages/**
       - infra/app/verify-images.mjs
   workflow_dispatch:
@@ -34,7 +38,9 @@ permissions:
   contents: read
 
 jobs:
-  # One image per runner, all five at once: the build of each is its own, the checks the same.
+  # One image per runner, all six at once: the build of each is its own, the checks the same. The
+  # core image is the largest (git, gitleaks and its operator commands): about three minutes to
+  # build on a runner as it comes (publish-images.yml), well inside the limit below.
   images:
     name: image (${{ matrix.app }})
     runs-on: ubuntu-latest
@@ -42,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [llm, mcp, preview, runner, browser]
+        app: [llm, mcp, preview, runner, browser, core]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

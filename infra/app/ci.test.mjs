@@ -1068,8 +1068,13 @@ test('the llm profile of the app VM is verified on the engine of the VM, without
 
 test('images.yml checks every image of verify:images, one per job', async () => {
   const source = workflow('images')
-  const { APPS } = await import(join(root, 'infra/app/verify-images.mjs'))
-  assert.deepEqual(matrixOf(source).app, APPS)
+  // The images of the default set and those checked only when named (core): every one in CI.
+  const { APPS, NAMED_APPS } = await import(join(root, 'infra/app/verify-images.mjs'))
+  assert.deepEqual(matrixOf(source).app, [...APPS, ...NAMED_APPS])
+  // A change of an app starts the workflow: its sources are in the filter.
+  const filter = pathFilter(source)
+  for (const app of [...APPS, ...NAMED_APPS])
+    assert.ok(starts(filter, `apps/${app}/Dockerfile`), `apps/${app} does not start images.yml`)
   assert.match(
     source,
     /^ {8}run: node infra\/app\/verify-images\.mjs --only \$\{\{ matrix\.app \}\}$/m,
