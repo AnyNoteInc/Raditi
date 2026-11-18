@@ -2410,20 +2410,14 @@ model Page {
   turnNo         Int?      @map("turn_no")
   /// pageKinds of @repo/domain: html, markdown, doc.
   kind           String    @db.VarChar(16)
-  /// The host of a page before sites (plan 69): the site has it since 73.6 (`PageTree.slug`).
-  /// `@ignore` (73.12, docs/plan/73-pages-sites.md, §4.3): the client neither reads nor writes the
-  /// column, so the release after this one drops it with `password_*` while this one still runs;
-  /// the column stays here until then, or schema.prisma would no longer match the migrations.
-  slug           String?   @unique @ignore @db.Char(26)
+  /// The host and the password of a page live in its site since 73.6 (`PageTree.slug`,
+  /// `passwordHash`, `passwordEpoch`); the columns of the page were dropped in 73.12
+  /// (`20261118120000_pages_drop_legacy`).
   title          String    @db.VarChar(200)
   /// pageStates: pending, live, taken_down.
   state          String    @default("pending") @db.VarChar(16)
   /// v1, v2, …: 0 while pending; only grows.
   currentVersion Int       @default(0) @map("current_version")
-  /// The password of a page before sites (plan 69): the site has it since 73.6
-  /// (`PageTree.passwordHash`, `passwordEpoch`); ignored and dropped like `slug`.
-  passwordHash   String?   @map("password_hash") @ignore @db.VarChar(255)
-  passwordEpoch  Int       @default(0) @map("password_epoch") @ignore
   takenDownAt    DateTime? @map("taken_down_at") @db.Timestamptz(6)
   /// client or operator.
   takenDownBy    String?   @map("taken_down_by") @db.VarChar(16)
