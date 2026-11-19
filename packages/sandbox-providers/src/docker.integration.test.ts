@@ -230,6 +230,28 @@ describe.skipIf(!image)('real Docker sandbox provider', () => {
     expect(await timeout.wait()).toMatchObject({ reason: 'timeout' })
   }, 20_000)
 
+  it('runs a program from /workspace, never from /tmp, /agent-home or the secrets', async () => {
+    // What a repository installs for its checks runs in /workspace — node_modules/.bin, native
+    // modules, pnpm (spec §20, «Инструменты песочницы — решения 19.11.2026», ИП1); the other
+    // tmpfs mounts the agent writes stay noexec, and the shell refuses to run from them (126).
+    const sandbox = await spawn()
+    const run = async (dir: string) => {
+      const exec = await sandbox.exec({
+        argv: ['/bin/sh', '-c', `cp /bin/true ${dir}/t && ${dir}/t`],
+        timeoutMs: 10_000,
+      })
+      const output = await collect(exec.output())
+      return { exit: await exec.wait(), stderr: output.stderr.toString() }
+    }
+    const workspace = await run('/workspace')
+    expect(workspace.exit, workspace.stderr).toEqual({ code: 0, reason: 'exited' })
+    for (const dir of ['/tmp', '/agent-home', '/run/raditi/secrets']) {
+      const refused = await run(dir)
+      expect(refused.exit, `${dir}: ${refused.stderr}`).toEqual({ code: 126, reason: 'exited' })
+      expect(refused.stderr).toContain('Permission denied')
+    }
+  }, 30_000)
+
   it('cancels process groups and escaped descendants, then permits a clean quiescent snapshot phase', async () => {
     const sandbox = await spawn()
     const controller = new AbortController()

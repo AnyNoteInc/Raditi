@@ -13,6 +13,8 @@ import {
   runnerIdSchema,
   SANDBOX_SECRETS_DIR,
   SANDBOX_SECRETS_TMPFS_BYTES,
+  SANDBOX_TMP_TMPFS_BYTES,
+  SANDBOX_WORKSPACE_TMPFS_BYTES,
   sandboxCommandFailed,
   sandboxLabelsSchema,
   type NetworkPolicy,
@@ -53,14 +55,38 @@ const PROTOCOL = '1'
 // Every exec resets these for the trusted helper, so container-wide values never reach the agent.
 const helperEnvNames = new Set(HELPER_ENV.map((entry) => entry.slice(0, entry.indexOf('='))))
 const labelNames = ['workspaceId', 'siteId', 'taskId', 'sessionId', 'turn', 'leaseEpoch'] as const
+/**
+ * The tmpfs mounts of a turn container. Docker mounts a tmpfs noexec, nosuid and nodev unless its
+ * options say otherwise (moby merges these defaults with them, the later option wins), and runsc
+ * keeps the flag. /workspace is exec, so that what a repository installs for its checks runs —
+ * node_modules/.bin, native modules, pnpm; every other mount says noexec itself. noexec never
+ * kept native code out (python3 ctypes makes raw syscalls): gVisor is the boundary (spec §20,
+ * «Инструменты песочницы — решения 19.11.2026», ИП1, ИП2).
+ */
 const tmpfs = {
-  '/workspace': 'rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700',
-  '/agent-home': 'rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
-  '/tmp': 'rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700',
+  '/workspace': `rw,exec,nosuid,nodev,size=${SANDBOX_WORKSPACE_TMPFS_BYTES / 1024}k,uid=10001,gid=10001,mode=0700`,
+  '/agent-home': 'rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
+  '/tmp': `rw,noexec,nosuid,nodev,size=${SANDBOX_TMP_TMPFS_BYTES / 1024}k,uid=10001,gid=10001,mode=0700`,
   [SANDBOX_SECRETS_DIR]: `rw,noexec,nosuid,nodev,size=${SANDBOX_SECRETS_TMPFS_BYTES / 1024}k,uid=10001,gid=10001,mode=0700`,
   '/run/raditi/exec': 'rw,noexec,nosuid,nodev,size=192m,uid=10001,gid=10001,mode=0700',
   '/run/raditi/control': 'rw,noexec,nosuid,nodev,size=1m,uid=0,gid=0,mode=0755',
 }
+/**
+ * The mounts the release before this one gave a turn container: /workspace of 512 MiB, and it,
+ * /agent-home and /tmp noexec by Docker's defaults alone. A turn that runs through the deploy is
+ * still adopted with them and finishes in its container (ИП8), which is never reset for another
+ * turn (PreviousMountsSandbox). Goes in the next release.
+ */
+const previousTmpfs = {
+  ...tmpfs,
+  '/workspace': 'rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700',
+  '/agent-home': 'rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
+  '/tmp': 'rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700',
+}
+/** Exactly these mounts with exactly these options: no more, no fewer. */
+const mountedAs = (mounts: Record<string, string> | undefined, map: Record<string, string>) =>
+  Object.keys(mounts ?? {}).length === Object.keys(map).length &&
+  Object.entries(map).every(([path, value]) => mounts?.[path] === value)
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right)
 /** An HTTP answer of the daemon; a timeout or an abort of `bounded` has none. */
 const daemonRefused = (error: unknown): boolean =>
@@ -188,6 +214,21 @@ function identity(info: Docker.ContainerInspectInfo): {
   return { labels: parsed.data, deadline, policy, gatewayId }
 }
 
+/**
+ * A turn container with the mounts of the release before (previousTmpfs): it finishes the turn
+ * it was adopted for and is never reset for another, whose instructions speak of this release's
+ * /workspace — exec, of SANDBOX_WORKSPACE_TMPFS_BYTES. Its reset removes it, as a reset that
+ * fails does, and the next turn gets a new container. The warm containers of @repo/local-turns
+ * are only those its own process created, so none of these reaches a reset today; the rule is
+ * kept here all the same. Goes with previousTmpfs.
+ */
+class PreviousMountsSandbox extends DockerSandbox {
+  override async reset(): Promise<void> {
+    await this.destroy('failed')
+    throw commandError()
+  }
+}
+
 export function createDockerSandboxProvider(
   config: SandboxConfig,
   /** Injection is trusted infrastructure, used by tests. */
@@ -202,7 +243,10 @@ export function createDockerSandboxProvider(
     options.gateway ??
     (config.gateway && createDockerGatewayManager(config.gateway, docker, config.runtime))
 
-  /** This provider's own turn container, unchanged since creation; its gateway is not checked. */
+  /**
+   * This provider's own turn container, unchanged since creation; its gateway is not checked.
+   * Its mounts are this release's or, whole, the release before's (`previousMounts`).
+   */
   const inspectOwned = (info: Docker.ContainerInspectInfo) => {
     const meta = identity(info)
     if (!meta) return null
@@ -260,11 +304,9 @@ export function createDockerSandboxProvider(
       )
     )
       return null
-    if (
-      Object.keys(host.Tmpfs ?? {}).length !== Object.keys(tmpfs).length ||
-      Object.entries(tmpfs).some(([path, value]) => host.Tmpfs?.[path] !== value)
-    )
-      return null
+    // One map whole, never a mix of the two.
+    const previousMounts = !mountedAs(host.Tmpfs, tmpfs)
+    if (previousMounts && !mountedAs(host.Tmpfs, previousTmpfs)) return null
     if (
       host.RestartPolicy?.Name !== 'no' ||
       host.AutoRemove ||
@@ -280,7 +322,7 @@ export function createDockerSandboxProvider(
       (host.NetworkMode !== 'none' || (host.ExtraHosts?.length ?? 0) !== 0)
     )
       return null
-    return { ...meta, createdAt }
+    return { ...meta, createdAt, previousMounts }
   }
 
   /** Owned and with its gateway intact: a container to work in. */
@@ -332,7 +374,9 @@ export function createDockerSandboxProvider(
         )
       }
     }
-    return new DockerSandbox(container, docker, meta.labels, meta.deadline, {
+    // A container of the release before keeps its turn and never gets another (ИП8).
+    const Kind = meta.previousMounts ? PreviousMountsSandbox : DockerSandbox
+    return new Kind(container, docker, meta.labels, meta.deadline, {
       lease: async (deadline) => {
         await createOwned(
           docker.createContainer({

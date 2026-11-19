@@ -3,7 +3,11 @@ import {
   type RequestedFileFormats,
   SANDBOX_INBOX,
   SANDBOX_OUT,
+  SANDBOX_SHELL_TIMEOUT_MAX_MS,
+  SANDBOX_TMP_TMPFS_BYTES,
+  SANDBOX_TOOLS_HOME,
   SANDBOX_WORKDIR,
+  SANDBOX_WORKSPACE_TMPFS_BYTES,
   type FeedAgentCommandId,
   type TurnAction,
 } from '@repo/domain'
@@ -21,6 +25,15 @@ import {
  * letter is two of them: a hundred leaves room for any text, and an agent counts characters.
  */
 const OUTBOX_NAME_ADVICE = 100
+
+const MIB = 1024 * 1024
+
+/**
+ * What the sandbox of a turn gets (CLAUDE.md rule 5): at most 2 vCPU, 4 GiB and 512 processes, and
+ * no limit of time — the supervisor renews the turn (docs/plan/70-turn-without-time-limit.md,
+ * ВР1). The planner asks for it; the rules of a chat with a repository tell the agent of it.
+ */
+export const TURN_RESOURCES = Object.freeze({ cpu: 2, memoryMiB: 4096, pids: 512 })
 
 /**
  * Long documents and public pages (docs/plan/69-pages.md, Ст18, Ст20, Ст21): the eight steps of a
@@ -122,6 +135,8 @@ const ANSWERING = `## Answering the client
   No jargon, no English terms, no file paths, code or commands in them.
 - Ask a question only when the request cannot be done without the answer.
 - Never put passwords, keys, tokens or other secrets into files, messages or the result.
+- Tell the client only what you did and saw: say in plain words what you checked and how it
+  ended, and what you could not check.
 
 ## Files for the client
 - Files for the client go to ${SANDBOX_OUT} (make the folder with \`mkdir -p ${SANDBOX_OUT}\`): files
@@ -130,7 +145,7 @@ const ANSWERING = `## Answering the client
   name the file for what it holds, in a few words. After your turn the platform attaches them to
   the chat; nothing else you write reaches the client as a file.
 - Scratch files of your scripts and commands go to /tmp/opencode (it is there at the start of
-  every turn, and /tmp is gone after it): never into ${SANDBOX_OUT}.
+  every turn, holds ${SANDBOX_TMP_TMPFS_BYTES / MIB} MiB at most, and /tmp is gone after it): never into ${SANDBOX_OUT}.
 - A document the client asked you to prepare as a file — a report, a price list, an article, a
   post, a description — is one of two kinds, and the client sees it at once in the panel beside
   the chat (a long text to read and check — an audit, a plan of work, a summary — is a long
@@ -317,7 +332,7 @@ function internetSection(internet: InternetFacts): string {
   return (
     '\n## The internet\n' +
     '- You may look things up on the public internet: the fetch tool, and the commands you run ' +
-    "(curl, npm, pip), go through the platform's proxy to any public site over HTTP or " +
+    "(curl, npm, pnpm), go through the platform's proxy to any public site over HTTP or " +
     'HTTPS. Addresses of private networks and of the platform are closed.\n' +
     WEB_SEARCH +
     skills +
@@ -345,11 +360,49 @@ const EMPTY_WORKDIR = `- The working directory is empty and nothing you write th
 /**
  * The working directory of a chat of a project with a repository (docs/plan/84-projects.md, ПР12,
  * §4.3, step 4): the repository, whose changes the platform keeps; `## The repository` below says
- * more of it.
+ * more of it. Then what the sandbox has to check a change with, and how to tell the client what
+ * was checked (spec §20, «Инструменты песочницы — решения 19.11.2026», ИП7): a turn of 19.11.2026
+ * spent 30 of its 46 minutes learning what the sandbox has, and a type error reached a merge
+ * request behind «типы … всё чисто». Every number and place comes from what the sandbox mounts
+ * and gets: SANDBOX_*_TMPFS_BYTES, SANDBOX_TOOLS_HOME, TURN_RESOURCES.
  */
 export const REPO_RULES = `- The working directory ${SANDBOX_WORKDIR} is the project's repository (see "The repository"
   below): what you change in its files is kept as the change of this chat. Your answer is still
   \`client_message\`, with the files for the client (above) attached to it.
+- Nothing of the project is installed: no dependencies, no build output, no generated code. The
+  sandbox has node with npm and pnpm, python3 without pip, php with composer, git, curl, jq, rg
+  and fd; no yarn or bun: a repository on yarn runs the release it pins with node
+  (\`.yarn/releases\`), or else \`npx yarn@<version> --cwd ${SANDBOX_WORKDIR}\` from outside it.
+- To check a change, install only what the check needs, with the package manager the repository
+  names (\`packageManager\` or \`devEngines\` in its package.json; pnpm switches by itself to the
+  version pinned there) and with its lockfile as it is:
+  \`pnpm install --frozen-lockfile --filter <package>...\` installs one package of a workspace with
+  what it uses, \`npm ci\` a project of npm. When \`devEngines\` names another package manager, npm
+  and npx refuse (EBADDEVENGINES): use \`pnpm exec\` and \`pnpm dlx\`. Code the build generates (a
+  database client, types of routes) comes from the repository's own script for it.
+- Check what you changed with the repository's own scripts: the tests of the changed files first,
+  then the type check and the lint of their packages, one package at a time. Give the shell tool a
+  \`timeout\` of up to ${SANDBOX_SHELL_TIMEOUT_MAX_MS} ms for an install or a test run, end such a command
+  with \`; echo "exit: $?"\`, and never cut its output with tail or grep, which hide failed files
+  and the exit code: send a long output to a file (\`> "$TMPDIR/check.log" 2>&1\`) and read all
+  of it.
+- The sandbox has ${TURN_RESOURCES.cpu} CPUs and ${TURN_RESOURCES.memoryMiB / 1024} GiB of memory, and /workspace (${SANDBOX_WORKSPACE_TMPFS_BYTES / MIB} MiB: the repository, the
+  client's files and all you install) lives in that memory; /tmp holds ${SANDBOX_TMP_TMPFS_BYTES / MIB} MiB. When the sandbox
+  runs out of memory, it stops at once and the work of the turn is lost: run one heavy command at
+  a time. When an install stops with ENOSPC, delete what it left (node_modules and
+  ${SANDBOX_TOOLS_HOME}) and leave that check to the project's build. npm, pnpm and your commands
+  keep their caches and temporary files in ${SANDBOX_TOOLS_HOME}; installs and caches do not survive
+  the turn.
+- When a check still does not run after about ten commands or ten minutes of setting it up, stop:
+  finish the change and say that the check did not run.
+- Never change a file of the repository only to make a tool run — a lockfile, a configuration, a
+  hidden file — not even for a moment, and never stage files (\`git add\`). Before you answer, run
+  \`git status --porcelain\`: every path it lists, except untracked node_modules, goes into the
+  chat's branch, so remove what you made only for a check.
+- Tell the client exactly which checks ran and how they ended, in plain words
+  («тесты изменённых файлов прошли» is a check of those files, not of the whole package), and
+  which did not run and why. A check that ran another tool in place of the project's own, or with
+  errors filtered out, did not run.
 `
 
 const OPEN_BROWSER = `- The platform's browser tools (\`web_*\`) open any public \`https://\` site: \`web_open\` takes

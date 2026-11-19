@@ -47,7 +47,7 @@ import {
   type TurnExecutor,
   type TurnRestoreSource,
   type TurnResult,
-  HIDDEN_FILE_STUB,
+  hiddenFileStub,
   withoutTurnCredentials,
 } from '@repo/domain'
 import { pack } from 'tar-stream'
@@ -2419,7 +2419,8 @@ describe.each(executorKinds)(
       for await (const chunk of bundle.read()) chunks.push(Buffer.from(chunk))
       await writeFile(path, Buffer.concat(chunks))
       await fixtureGit(g.root, 'clone', '--quiet', '--branch', 'raditi-base', path, clone)
-      expect(await readFile(join(clone, '.env'), 'utf8')).toBe(HIDDEN_FILE_STUB)
+      // The stub of a file of variables is a comment of its own (19.11.2026).
+      expect(await readFile(join(clone, '.env'), 'utf8')).toBe(hiddenFileStub('.env'))
       expect(await readFile(join(clone, 'index.js'), 'utf8')).toBe('hello\n')
     })
 

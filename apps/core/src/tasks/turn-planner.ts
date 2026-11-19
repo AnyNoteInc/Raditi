@@ -50,6 +50,7 @@ import {
   openTaskInstructions,
   CHAT_TITLE_SECTION,
   requestedFormatsSection,
+  TURN_RESOURCES,
   unattendedSection,
 } from './turn-instructions.ts'
 
@@ -67,8 +68,6 @@ export const SANDBOX_GATEWAY_URL = 'http://sandbox-gw:8080' // NOSONAR: plain HT
  */
 export const SANDBOX_EGRESS_PROXY_URL = `http://sandbox-gw:${SANDBOX_EGRESS_PORT}` // NOSONAR: as above, CONNECT carries the client's own TLS
 
-/** CLAUDE.md rule 5: at most 2 vCPU, 4 GiB and 512 processes, 20 minutes per turn. */
-const TURN_RESOURCES = Object.freeze({ cpu: 2, memoryMiB: 4096, pids: 512 })
 const SANDBOX_USER = Object.freeze({ uid: 10001, gid: 10001 })
 
 /**

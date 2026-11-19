@@ -10,7 +10,9 @@ import {
   SANDBOX_GID,
   SANDBOX_SECRETS_DIR,
   SANDBOX_SECRETS_TMPFS_BYTES,
+  SANDBOX_TMP_TMPFS_BYTES,
   SANDBOX_UID,
+  SANDBOX_WORKSPACE_TMPFS_BYTES,
   type ExecChunk,
   type SandboxSpec,
 } from '@repo/domain'
@@ -164,6 +166,15 @@ function daemon() {
   }
 }
 const config = { runtime: 'runc' as const }
+/** The mounts the release before gave a turn container (ИП8), as Docker reports them back. */
+const previousMounts = {
+  '/workspace': 'rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700',
+  '/agent-home': 'rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
+  '/tmp': 'rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700',
+  '/run/raditi/secrets': 'rw,noexec,nosuid,nodev,size=2048k,uid=10001,gid=10001,mode=0700',
+  '/run/raditi/exec': 'rw,noexec,nosuid,nodev,size=192m,uid=10001,gid=10001,mode=0700',
+  '/run/raditi/control': 'rw,noexec,nosuid,nodev,size=1m,uid=0,gid=0,mode=0755',
+}
 const collect = async (source: AsyncIterable<ExecChunk>) => {
   const chunks = []
   for await (const chunk of source) chunks.push(chunk)
@@ -206,6 +217,93 @@ describe('Docker sandbox provider', () => {
     expect(() =>
       createDockerSandboxProvider({ ...config, socketPath: 'tcp://localhost:2375' }),
     ).toThrow(/socket/)
+  })
+
+  it('mounts /workspace exec and every other tmpfs noexec, each in its own options', async () => {
+    // Docker mounts a tmpfs noexec unless its options say exec, and runsc keeps the flag: what a
+    // repository installs for its checks runs from /workspace alone (spec §20, ИП1, ИП2).
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const mounts = fake.raw.createContainer.mock.calls[0]![0].HostConfig!.Tmpfs!
+    const options = (path: string) => mounts[path]!.split(',')
+    expect(options('/workspace')).toEqual(
+      expect.arrayContaining([
+        'rw',
+        'exec',
+        'nosuid',
+        'nodev',
+        `size=${SANDBOX_WORKSPACE_TMPFS_BYTES / 1024}k`,
+      ]),
+    )
+    expect(options('/workspace')).not.toContain('noexec')
+    expect(options('/tmp')).toContain(`size=${SANDBOX_TMP_TMPFS_BYTES / 1024}k`)
+    const others = Object.keys(mounts).filter((path) => path !== '/workspace')
+    expect(new Set(others)).toEqual(
+      new Set([
+        '/agent-home',
+        '/tmp',
+        SANDBOX_SECRETS_DIR,
+        '/run/raditi/exec',
+        '/run/raditi/control',
+      ]),
+    )
+    for (const path of others) {
+      expect(options(path), path).toEqual(
+        expect.arrayContaining(['rw', 'noexec', 'nosuid', 'nodev']),
+      )
+      expect(options(path), path).not.toContain('exec')
+    }
+    await sandbox.destroy('completed')
+  })
+
+  it('adopts a turn container of the release before by its mounts whole, never by a mix', async () => {
+    // A turn that runs through the deploy finishes in its container (ИП8).
+    const fake = daemon()
+    const provider = createDockerSandboxProvider(config, { client: fake.client })
+    const sandbox = await provider.create(spec())
+    const current = { ...fake.info().HostConfig.Tmpfs }
+    fake.info().HostConfig.Tmpfs = { ...previousMounts }
+    const adopted = (await provider.get(sandbox.id))!
+    expect(adopted.labels).toEqual(spec().labels)
+    expect(await provider.list()).toMatchObject([{ id: sandbox.id, labels: spec().labels }])
+    expect(await provider.getForRemoval(sandbox.id)).toMatchObject({ id: sandbox.id })
+    const run = await adopted.exec({ argv: ['agent'], timeoutMs: 5000 })
+    expect(await run.wait()).toEqual({ code: 0, reason: 'exited' })
+    // A mount of the other map, one more or one fewer: no container of this provider.
+    for (const mounts of [
+      { ...current, '/tmp': previousMounts['/tmp'] },
+      { ...previousMounts, '/workspace': current['/workspace']! },
+      { ...previousMounts, '/srv': previousMounts['/tmp'] },
+      { ...current, '/srv': current['/tmp']! },
+      Object.fromEntries(Object.entries(previousMounts).filter(([path]) => path !== '/tmp')),
+    ]) {
+      fake.info().HostConfig.Tmpfs = mounts
+      expect(await provider.get(sandbox.id)).toBeNull()
+      expect(await provider.list()).toEqual([])
+      await expect(provider.getForRemoval(sandbox.id)).rejects.toMatchObject({ code: 'CONFLICT' })
+    }
+    expect(fake.container.remove).not.toHaveBeenCalled()
+    fake.info().HostConfig.Tmpfs = current
+    expect(await provider.get(sandbox.id)).not.toBeNull()
+    await sandbox.destroy('completed')
+  })
+
+  it('never resets a container of the release before for another turn: it is removed', async () => {
+    // The next turn is told of this release's /workspace (exec, SANDBOX_WORKSPACE_TMPFS_BYTES):
+    // it gets a new container, not the warm one of the release before (ИП8).
+    const fake = daemon()
+    const provider = createDockerSandboxProvider(config, { client: fake.client })
+    const sandbox = await provider.create(spec())
+    fake.info().HostConfig.Tmpfs = { ...previousMounts }
+    const adopted = (await provider.get(sandbox.id))!
+    const before = fake.commands.length
+    await expect(adopted.reset!()).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+    // Nothing of a reset ran in it: it was removed as it was.
+    expect(fake.commands.slice(before)).toEqual([])
+    expect(fake.container.remove).toHaveBeenCalledTimes(1)
+    await expect(adopted.fs.write('/workspace/inbox/file', Buffer.from('x'))).rejects.toThrow()
   })
 
   it('extends a turn with leases the watchdog honours, and drops them with the sandbox', async () => {

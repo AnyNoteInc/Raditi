@@ -42,6 +42,20 @@ export const SANDBOX_INBOX = '/workspace/inbox'
 export const SANDBOX_PROJECT = '/workspace/project'
 export const SANDBOX_OUT = '/workspace/out'
 export const SANDBOX_AGENT_HOME = '/agent-home'
+/**
+ * Where every driver points the caches, temporary files and global packages of the agent's
+ * commands (spec §20, «Инструменты песочницы — решения 19.11.2026», ИП4): on /workspace, which runs
+ * what is installed, and outside the working directory, so that neither the snapshot nor the
+ * publication takes it. The instructions of a turn name it to the agent.
+ */
+export const SANDBOX_TOOLS_HOME = '/workspace/.cache'
+/**
+ * The longest `timeout` in ms the shell tool of every driver takes for one command (ИП7): an
+ * install or a run of tests takes minutes, longer than a shell tool waits by default. The
+ * instructions of a turn name it. OpenCode 1.18.34: 600 000, its default 120 000
+ * (packages/agent-drivers/cli/README.md).
+ */
+export const SANDBOX_SHELL_TIMEOUT_MAX_MS = 600_000
 
 /** Everything the orchestrator hands a driver for one turn. */
 export interface RunContext {

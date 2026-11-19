@@ -127,7 +127,8 @@ function runShell(message, files, number, overrides = {}) {
       assert.equal(name, 'node:fs')
       return {
         readdirSync(path) {
-          if (path === '/run/raditi/secrets') return overrides.secretFiles ?? []
+          // What the wrapper leaves there on every turn: the script bash sources (ИП4).
+          if (path === '/run/raditi/secrets') return overrides.secretFiles ?? ['shell-env.sh']
           assert.equal(path, '/proc')
           return ['1', '17', 'self', 'uptime']
         },
@@ -241,7 +242,11 @@ test('the shell command refuses a sandbox that is not the one of the product', a
     { kernel: '6.12.76-linuxkit\n' },
     { uid: 0 },
     { version: '1.18.35\n' },
+    // A credential file the wrapper did not remove, beside the script or in its place; and no
+    // script, which every turn writes (ИП4).
     { secretFiles: ['llm'] },
+    { secretFiles: ['llm', 'shell-env.sh'] },
+    { secretFiles: [] },
     // The turn key or the MCP token in the command's own environment, or in any process.
     { env: { PATH: '/usr/bin', BUN_ENABLE_CRASH_REPORTING: '0', ANY_NAME: 'synthetic-llm-1' } },
     { env: { PATH: '/usr/bin', BUN_ENABLE_CRASH_REPORTING: '0', AUTH: 'Bearer synthetic-mcp-1' } },

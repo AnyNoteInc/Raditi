@@ -190,7 +190,13 @@ describe('browser session containers', () => {
       PidsLimit: 512,
     })
     expect(browser.HostConfig?.PortBindings).toBeUndefined()
-    expect(browser.HostConfig?.Tmpfs?.['/run/raditi/browser']).toContain('noexec')
+    // Its home and its state: noexec in their own options, as Docker would mount them anyway.
+    const mounts = browser.HostConfig?.Tmpfs ?? {}
+    expect(new Set(Object.keys(mounts))).toEqual(new Set(['/tmp', '/run/raditi/browser']))
+    for (const options of Object.values(mounts)) {
+      expect(options.split(',')).toContain('noexec')
+      expect(options.split(',')).not.toContain('exec')
+    }
     expect(browser.NetworkingConfig?.EndpointsConfig).toEqual({
       [place.network.id]: { IPAMConfig: { IPv4Address: '172.30.0.3' } },
     })
