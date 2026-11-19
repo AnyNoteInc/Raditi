@@ -42,6 +42,7 @@ export function useProjectActions() {
   const archive = useMutation(trpc.project.archive.mutationOptions())
   const remove = useMutation(trpc.project.remove.mutationOptions())
   const restore = useMutation(trpc.project.restore.mutationOptions())
+  const purge = useMutation(trpc.project.purge.mutationOptions())
   const settle = () => {
     void queryClient.invalidateQueries({ queryKey: trpc.project.pathKey() })
     // The chats of a project in the trash leave the list, and come back with it (ПР20).
@@ -64,8 +65,66 @@ export function useProjectActions() {
       run(() => archive.mutateAsync({ projectId, archived })),
     remove: (projectId: string) => run(() => remove.mutateAsync({ projectId })),
     restore: (projectId: string) => run(() => restore.mutateAsync({ projectId })),
+    purge: (projectId: string) => run(() => purge.mutateAsync({ projectId })),
     removing: remove.isPending,
+    purging: purge.isPending,
   }
+}
+
+/**
+ * «Удалить навсегда…» of a project in «Корзина» (ПР38): before its 30 days, after a question — it
+ * cannot be returned then.
+ */
+export function ProjectPurgeButton({
+  project,
+  onNotice,
+}: {
+  project: { id: string; name: string }
+  onNotice: (text: string) => void
+}) {
+  const [asking, setAsking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const actions = useProjectActions()
+  return (
+    <>
+      <Button
+        size="small"
+        color="error"
+        startIcon={<AppIcon name="trash" size={14} />}
+        aria-haspopup="dialog"
+        aria-label={`${projectsText.purgeConfirm}: ${project.name}`}
+        onClick={() => {
+          setError(null)
+          setAsking(true)
+        }}
+        sx={{ minHeight: 36, borderRadius: 999 }}
+      >
+        {projectsText.purge}
+      </Button>
+      <ConfirmDialog
+        open={asking}
+        onClose={() => setAsking(false)}
+        title={projectsText.purgeTitle(project.name)}
+        busy={actions.purging}
+        error={error}
+        keepLabel={projectsText.removeKeep}
+        confirmLabel={projectsText.purgeConfirm}
+        danger
+        onConfirm={() =>
+          void actions.purge(project.id).then((refused) => {
+            if (refused !== null) {
+              setError(refused)
+              return
+            }
+            setAsking(false)
+            onNotice(projectsText.purged(project.name))
+          })
+        }
+      >
+        <Typography sx={{ mt: 1.5 }}>{projectsText.purgeBody}</Typography>
+      </ConfirmDialog>
+    </>
+  )
 }
 
 /** The star of a project: «В избранное» / «Убрать из избранного». */

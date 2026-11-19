@@ -52,6 +52,13 @@ export const projectsText = Object.freeze({
   cancel: 'Отмена',
   removed: (name: string) => `Проект «${name}» в корзине.`,
   restored: (name: string) => `Проект «${name}» возвращён.`,
+  // «Удалить навсегда» from the trash before its 30 days (ПР38).
+  purge: 'Удалить навсегда…',
+  purgeTitle: (name: string) => `Удалить проект «${name}» навсегда?`,
+  purgeBody:
+    'Вернуть его будет нельзя: чаты, файлы, инструкции, память и запланированные задачи проекта удалятся. Код, ветки и запросы на слияние в репозитории на GitHub или GitLab останутся.',
+  purgeConfirm: 'Удалить навсегда',
+  purged: (name: string) => `Проект «${name}» удалён навсегда.`,
   archived: (name: string) => `Проект «${name}» в архиве.`,
   unarchived: (name: string) => `Проект «${name}» снова в списке.`,
 })

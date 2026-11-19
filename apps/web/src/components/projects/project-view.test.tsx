@@ -56,6 +56,7 @@ vi.mock('@/trpc/client', async () => {
         star: noop,
         remove: noop,
         restore: noop,
+        purge: noop,
         update: noop,
       },
       schedule: {

@@ -3,6 +3,7 @@ import {
   memoryCounts,
   createProject,
   listProjects,
+  purgeProjectNow,
   readProject,
   restoreProject,
   setProjectInstructions,
@@ -112,7 +113,7 @@ export const projectRouter = router({
     )
     .output(z.strictObject({ items: z.array(projectListItem) }))
     .query(async ({ ctx, input }) => ({
-      items: await listProjects(ctx.prisma, { userId: ctx.user.id, ...input }),
+      items: await listProjects(ctx.prisma, { userId: ctx.user.id, ...input, now: new Date() }),
     })),
 
   /** One project for its page. */
@@ -273,5 +274,17 @@ export const projectRouter = router({
     .mutation(async ({ ctx, input }) => {
       await restoreProject(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() })
       return { restored: true as const }
+    }),
+
+  /**
+   * «Удалить навсегда» from the trash, before its 30 days (ПР38): the project leaves «Корзина» at
+   * once and can no longer be returned; core purges it within a minute, as on its day.
+   */
+  purge: consentedProcedure
+    .input(z.strictObject({ projectId: projectRef }))
+    .output(z.strictObject({ purged: z.literal(true) }))
+    .mutation(async ({ ctx, input }) => {
+      await purgeProjectNow(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() })
+      return { purged: true as const }
     }),
 })

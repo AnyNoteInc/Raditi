@@ -244,6 +244,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: projects and the chats in them', () =
       notFound,
     )
     expect(await refusal(() => stranger.caller.project.remove({ projectId }))).toEqual(notFound)
+    expect(await refusal(() => stranger.caller.project.purge({ projectId }))).toEqual(notFound)
     expect(await refusal(() => stranger.caller.task.list({ projectId }))).toEqual(notFound)
     expect(
       await refusal(() => stranger.caller.task.create({ taskId: v7(), text: 'Привет', projectId })),
@@ -285,6 +286,19 @@ describe.skipIf(!databaseUrl)('PostgreSQL: projects and the chats in them', () =
     )
     await caller.project.restore({ projectId: a })
     expect(await ids()).toEqual([a])
+
+    // «Удалить навсегда» (ПР38): only from the trash, and then it is gone from it for good.
+    expect(await refusal(() => caller.project.purge({ projectId: a }))).toEqual({
+      code: 'PROJECT_NOT_IN_TRASH',
+      text: 'Проект уже вернули из корзины — чтобы удалить его навсегда, сначала удалите его снова',
+    })
+    await caller.project.remove({ projectId: a })
+    expect(await caller.project.purge({ projectId: a })).toEqual({ purged: true })
+    expect(await ids('trash')).toEqual([])
+    expect((await refusal(() => caller.project.restore({ projectId: a }))).code).toBe(
+      'PROJECT_NOT_FOUND',
+    )
+    expect(await caller.project.purge({ projectId: a })).toEqual({ purged: true })
   })
 
   it('starts a chat in a project: its workspace, its label, its list, and «Недавние»', async () => {

@@ -10,6 +10,7 @@ import {
   createProject,
   insertFeedEvent,
   purgeProject,
+  purgeProjectNow,
   restoreProject,
   trashProject,
   type PrismaClient,
@@ -160,7 +161,7 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
       deletedAt: null,
       purgeAfter: null,
     })
-    expect(await trash.purge()).toEqual({ purged: 0, more: false })
+    expect(await trash.purge()).toBe(0)
     expect(await db.project.count({ where: { id: projectId } })).toBe(1)
 
     // Into the trash again, with a chat that waits for its client; 30 days on, the purge.
@@ -183,10 +184,10 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
       logger: quiet,
       now: () => new Date(second.purgeAfter.getTime() - 1),
     })
-    expect(await early.purge()).toEqual({ purged: 0, more: false })
+    expect(await early.purge()).toBe(0)
 
     // A chat that has not ended is pressed first — a waiting one too — and the project waits.
-    expect(await purging.purge()).toEqual({ purged: 0, more: true })
+    expect(await purging.purge()).toBe(0)
     expect(await stopsOf(queued)).toEqual({ presses: 2, jobs: 2 })
     expect(await db.project.count({ where: { id: projectId } })).toBe(1)
     // «Вернуть» past the day is refused: the project is no longer the client's to restore.
@@ -210,9 +211,9 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
       expect(chat.projectId).toBeNull()
       expect(chat.deletedAt).toEqual(past)
     }
-    // A repeat finds nothing to purge; within the hour the sweep does not purge again.
-    expect(await purging.purge()).toEqual({ purged: 0, more: false })
-    expect(await purging.sweep()).toEqual({ stopped: 0, purged: null, collected: 0, paused: 0 })
+    // A repeat finds nothing to purge, and the next sweep looks again (ПР38).
+    expect(await purging.purge()).toBe(0)
+    expect(await purging.sweep()).toEqual({ stopped: 0, purged: 0, collected: 0, paused: 0 })
   })
 
   it('the purge asks core to remove the mirror of the repository of the project (ПР20)', async () => {
@@ -247,6 +248,52 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
       payload: { projectRepositoryId: repositoryId },
     })
     await db.outboxEvent.delete({ where: { id: forget.id } })
+  })
+
+  it('«Удалить навсегда» on its second day: the next sweep purges it, its files first (ПР38)', async () => {
+    const now = new Date()
+    const { userId, projectId, chats } = await projectWith(['awaiting_user'], now)
+    const [waiting] = chats as [string]
+    const project = await db.project.findUniqueOrThrow({ where: { id: projectId } })
+    const file = await createProjectFile(db, {
+      workspaceId: project.workspaceId,
+      uploadedById: userId,
+      kind: 'file',
+      name: 'Бриф.pdf',
+      mediaType: 'application/pdf',
+      sizeBytes: 10,
+    })
+    await markProjectFileReady(db, { id: file!.id, sizeBytes: 10, sha256: 'd'.repeat(64) })
+    await db.$transaction((tx) =>
+      bindProjectFiles(tx, {
+        projectId,
+        workspaceId: project.workspaceId,
+        userId,
+        ids: [file!.id],
+      }),
+    )
+    await trashProject(db, { projectId, userId, now })
+    const pressed = new Date(now.getTime() + DAY)
+    await purgeProjectNow(db, { projectId, userId, now: pressed })
+
+    const deleted: string[] = []
+    const storage = {
+      delete: vi.fn(async (_bucket: string, key: string) => void deleted.push(key)),
+    }
+    const trash = new ProjectTrash({ db, storage, logger: quiet, now: () => pressed })
+    // The chat that waits for its client is closed first, as on the 30th day; the project waits.
+    expect((await trash.sweep()).purged).toBe(0)
+    expect(await stopsOf(waiting)).toEqual({ presses: 1, jobs: 1 })
+    expect(deleted).toEqual([file!.key])
+    await db.$executeRaw`UPDATE tasks SET status = 'cancelled' WHERE id = ${waiting}::uuid`
+    // The very next sweep, a minute on — not the next hour.
+    expect((await trash.sweep()).purged).toBe(1)
+    expect(await db.project.count({ where: { id: projectId } })).toBe(0)
+    expect(await db.projectFile.count({ where: { id: file!.id } })).toBe(0)
+    expect(await db.task.findUniqueOrThrow({ where: { id: waiting } })).toMatchObject({
+      projectId: null,
+      deletedAt: pressed,
+    })
   })
 
   it('a project restored before the purge took it is kept', async () => {
@@ -306,10 +353,10 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
 
     // The project past its day: a failed delete of an object of its files keeps it waiting.
     await trashProject(db, { projectId, userId, now })
-    expect(await trash.purge()).toEqual({ purged: 0, more: true })
+    expect(await trash.purge()).toBe(0)
     expect(await db.project.count({ where: { id: projectId } })).toBe(1)
     failing = false
-    expect(await trash.purge()).toEqual({ purged: 1, more: false })
+    expect(await trash.purge()).toBe(1)
     expect(deleted).toContain(kept.key)
     expect(await db.projectFile.count({ where: { id: kept.id } })).toBe(0)
     await db.projectFile.deleteMany({ where: { id: fresh.id } })
