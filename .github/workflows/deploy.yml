@@ -27,7 +27,9 @@ permissions: {}
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A normal deploy takes 3–4 min. On 19.11.2026 ghcr gave the server ~0.4 MB/s and two deploys
+    # in a row ran out of 30 min in the image pull; 60 lets a throttled pull finish.
+    timeout-minutes: 60
     environment: production
     permissions:
       contents: read
