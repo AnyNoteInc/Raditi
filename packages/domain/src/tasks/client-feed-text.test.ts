@@ -758,6 +758,32 @@ describe('agentChatTitle', () => {
     expect(agentChatTitle('  «Список цен\n на ремонт».  ')).toBe('Список цен на ремонт')
   })
 
+  it('keeps both quotes of a quote inside the name (19.11.2026)', () => {
+    expect(agentChatTitle('Предупреждение в карточке «Запустить снова»')).toBe(
+      'Предупреждение в карточке «Запустить снова»',
+    )
+    expect(agentChatTitle('«Запустить снова» в карточке сборки.')).toBe(
+      '«Запустить снова» в карточке сборки',
+    )
+    expect(agentChatTitle('«Кнопка «Запустить снова»»')).toBe('Кнопка «Запустить снова»')
+    expect(agentChatTitle('«Запустить снова»')).toBe('Запустить снова')
+    expect(agentChatTitle('"Кнопка "Запустить""')).toBe('Кнопка "Запустить"')
+    expect(agentChatTitle('“Run again” в карточке')).toBe('“Run again” в карточке')
+    // A name the agent left open is closed.
+    expect(agentChatTitle('Карточка «Запустить снова')).toBe('Карточка «Запустить снова»')
+  })
+
+  it('closes a quote the cut falls inside, within the limit', () => {
+    const title = agentChatTitle(
+      'Предупреждение о повторе сборки в карточке «Запустить снова на той же версии ветки»',
+    )
+    expect(title).not.toBeNull()
+    expect(title!.length).toBeLessThanOrEqual(AGENT_CHAT_TITLE_LIMIT)
+    expect(title!.startsWith('Предупреждение о повторе сборки в карточке «Запустить')).toBe(true)
+    expect(title!.endsWith('»')).toBe(true)
+    expect(title!.split('«').length).toBe(title!.split('»').length)
+  })
+
   it('cuts a long name at a word', () => {
     const title = agentChatTitle(`${'Очень длинное название чата '.repeat(5)}конец`)
     expect(title).not.toBeNull()
