@@ -369,27 +369,81 @@ export function codeLooksLikeSecret(text: string): boolean {
 /** The longest name the agent gives a chat; `tasks.title` holds up to `feedLimits.title`. */
 export const AGENT_CHAT_TITLE_LIMIT = 60
 
+/** The quotes a name may hold, as an opener and its closer; `"` is both. */
+const nameQuotes = [
+  ['«', '»'],
+  ['“', '”'],
+  ['"', '"'],
+] as const
+
+const countOf = (text: string, char: string): number => text.split(char).length - 1
+
+/** Closers `text` lacks for one pair of quotes (negative — openers it lacks). */
+function quoteDebt(text: string, open: string, close: string): number {
+  return open === close ? countOf(text, open) % 2 : countOf(text, open) - countOf(text, close)
+}
+
+/**
+ * The quotes taken off the edges of a name that belong to a quote inside it, given back: the
+ * closer of «Запустить снова» in «Предупреждение в карточке «Запустить снова»», the opener of
+ * «Запустить снова» in «Запустить снова» в карточке». Quotes that wrap the whole name stay off.
+ */
+function quotesGivenBack(core: string, lead: string, trail: string): string {
+  let out = core
+  for (const [open, close] of nameQuotes) {
+    const debt = quoteDebt(out, open, close)
+    if (open === close) {
+      if (debt === 0) continue
+      if (trail.includes(close)) out = `${out}${close}`
+      else if (lead.includes(open)) out = `${open}${out}`
+    } else if (debt > 0) out += close.repeat(Math.min(debt, countOf(trail, close)))
+    else if (debt < 0) out = open.repeat(Math.min(-debt, countOf(lead, open))) + out
+  }
+  return out
+}
+
+/** `text` with the closers of the quotes it leaves open. */
+function quotesClosed(text: string): string {
+  let out = text
+  for (const [open, close] of nameQuotes) {
+    const debt = quoteDebt(out, open, close)
+    if (debt > 0) out += close.repeat(open === close ? 1 : debt)
+  }
+  return out
+}
+
+/** `line` cut at a word to at most `room` characters. */
+function cutAtWord(line: string, room: number): string {
+  if (line.length <= room) return line
+  const cut = line.slice(0, room + 1)
+  const space = cut.lastIndexOf(' ')
+  return (space > room / 2 ? cut.slice(0, space) : cut.slice(0, room)).trim()
+}
+
 /**
  * The name the agent gave a chat on its first pass (`chat_title`, owner's request of
- * 15.11.2026), made fit for the list and the head: one line, quotes and a final period taken
- * off, cut at a word to AGENT_CHAT_TITLE_LIMIT. null — nothing to read or something like a
- * secret: the chat keeps the first words of the request.
+ * 15.11.2026), made fit for the list and the head: one line, the quotes that wrap it and a final
+ * period taken off, cut at a word to AGENT_CHAT_TITLE_LIMIT. A quote inside the name keeps both
+ * its quotes, also when the cut falls inside it (19.11.2026: «…в карточке «Запустить снова»» lost
+ * its closer, and the request on GitHub took the chat's name). null — nothing to read or
+ * something like a secret: the chat keeps the first words of the request.
  */
 export function agentChatTitle(raw: string | undefined): string | null {
   if (raw === undefined) return null
-  let line = raw
-    .replace(invisible, '')
-    .replace(/\s+/gu, ' ')
-    .trim()
-    .replace(/^["'«»“”„\s]+|["'«»“”„.。\s]+$/gu, '')
-  if (line.length > AGENT_CHAT_TITLE_LIMIT) {
-    const cut = line.slice(0, AGENT_CHAT_TITLE_LIMIT + 1)
-    const space = cut.lastIndexOf(' ')
-    line = (
-      space > AGENT_CHAT_TITLE_LIMIT / 2
-        ? cut.slice(0, space)
-        : cut.slice(0, AGENT_CHAT_TITLE_LIMIT)
-    ).trim()
+  const whole = raw.replace(invisible, '').replace(/\s+/gu, ' ').trim()
+  const lead = /^["'«»“”„\s]+/u.exec(whole)?.[0] ?? ''
+  const rest = whole.slice(lead.length)
+  const trail = /["'«»“”„.。\s]+$/u.exec(rest)?.[0] ?? ''
+  let line = quotesGivenBack(rest.slice(0, rest.length - trail.length), lead, trail)
+  // Room for the closers a cut inside a quote needs, so the name stays within the limit.
+  let room = AGENT_CHAT_TITLE_LIMIT
+  for (;;) {
+    const named = quotesClosed(cutAtWord(line, room))
+    if (named.length <= AGENT_CHAT_TITLE_LIMIT || room <= AGENT_CHAT_TITLE_LIMIT / 2) {
+      line = named
+      break
+    }
+    room -= named.length - AGENT_CHAT_TITLE_LIMIT
   }
   if (!hasVisibleText(line) || looksLikeSecret(line)) return null
   return line
