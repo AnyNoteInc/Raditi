@@ -7,7 +7,9 @@ import {
   insertFeedEvent,
   markAttachmentReady,
   markProjectFileReady,
+  type Prisma,
 } from '@repo/db'
+import type { AgentTodoItem } from '@repo/domain/tasks/agent-todo'
 
 import { authEnv, databaseUrl } from '../../fixtures/billing-stand.ts'
 
@@ -198,11 +200,161 @@ function chatId(): string {
   return `${time.slice(0, 8)}-${time.slice(8)}-7${randomUUID().slice(15)}`
 }
 
+type Db = ReturnType<typeof createPrismaClient>
+
+/**
+ * The agent's plan of its work (docs/plan/89-agent-todos.md, ТД2): the items of a `todo_list`
+ * event, as the driver reads them from `todowrite`. The page shows the last list of the last turn.
+ */
+export type PlanItems = readonly AgentTodoItem[]
+
+const planEvent = (plan: PlanItems) => ({
+  type: 'todo_list',
+  items: plan.map(({ text, status }) => ({ text, status })),
+})
+
+/**
+ * A chat without a project and the client's first words in it, in the status a test wants it
+ * in; `after` — when the feed wrote the words, which the first turn answers.
+ */
+async function addChatWith(
+  prisma: Db,
+  userId: string,
+  {
+    words,
+    status,
+    projectId = null,
+    title = words,
+  }: {
+    words: string
+    status: 'awaiting_user' | 'running' | 'cancelled'
+    projectId?: string | null
+    title?: string
+  },
+): Promise<{ taskId: string; after: Date }> {
+  const workspace = await prisma.$transaction((tx) =>
+    ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+  )
+  const task = await prisma.task.create({
+    data: {
+      id: chatId(),
+      workspaceId: workspace.id,
+      createdById: userId,
+      status,
+      title,
+      turnNo: 1,
+      needsBrowser: false,
+      projectId,
+    },
+    select: { id: true },
+  })
+  const after = await addRequest(prisma, {
+    taskId: task.id,
+    authorId: userId,
+    words,
+    answers: null,
+  })
+  return { taskId: task.id, after }
+}
+
+/**
+ * The client's words in the feed and when it wrote them; `answers` — the row that left the chat
+ * open for them, null for the first words.
+ */
+async function addRequest(
+  prisma: Db,
+  {
+    taskId,
+    authorId,
+    words,
+    answers,
+  }: { taskId: string; authorId: string; words: string; answers: bigint | null },
+): Promise<Date> {
+  const base = { v: 1, authorId, requestId: randomUUID(), text: words } as const
+  const request = await insertFeedEvent(prisma, {
+    taskId,
+    row: {
+      type: 'feed.request',
+      payload:
+        answers === null
+          ? { ...base, kind: 'first' }
+          : { ...base, kind: 'answer', answersEventId: String(answers) },
+    },
+  })
+  const { createdAt } = await prisma.taskEvent.findUniqueOrThrow({
+    where: { id: request },
+    select: { createdAt: true },
+  })
+  return createdAt
+}
+
+/**
+ * One turn of a chat as core leaves it: its row in `status`, one batch of the agent's output in
+ * its journal (`events`, as they stand after the mask) and the stage «work» in the feed. A turn at
+ * work has not finished.
+ */
+async function addTurn(
+  prisma: Db,
+  {
+    taskId,
+    turnNo,
+    status,
+    after,
+    events,
+  }: {
+    taskId: string
+    turnNo: number
+    status: 'running' | 'completed' | 'cancelled'
+    /** The turn answers words written then: it started after them, by the clock that wrote them. */
+    after: Date
+    events: Prisma.InputJsonValue[]
+  },
+): Promise<void> {
+  const startedAt = new Date(after.getTime() + 1)
+  const turn = await prisma.taskTurn.create({
+    data: {
+      taskId,
+      turnNo,
+      status,
+      driverId: 'opencode',
+      image: `raditi/sbx@sha256:${'a'.repeat(64)}`,
+      startedAt,
+      finishedAt: status === 'running' ? null : startedAt,
+    },
+    select: { id: true },
+  })
+  await prisma.taskEvent.create({
+    data: { taskId, turnId: turn.id, type: 'turn.output', payload: { turn: turnNo, events } },
+  })
+  await insertFeedEvent(prisma, {
+    taskId,
+    row: { type: 'feed.step', payload: { v: 1, turn: turnNo, attempt: 1, step: 'work' } },
+  })
+}
+
+/** The answer of the turn `turn` that leaves the chat open for the client's next words. */
+const answerRow = (turn: number, answer: string) =>
+  ({
+    type: 'feed.result',
+    payload: {
+      v: 1,
+      turn,
+      message: answer,
+      site: 'none',
+      next: 'awaiting_user',
+      filesChanged: 0,
+      changeType: 'none',
+      needsApproval: false,
+      risk: 'low',
+    },
+  }) as const
+
 /**
  * A chat without a project as a finished turn leaves it, for what the page does with that turn
  * (docs/plan/61-chats-first.md, §5.14): the client's words, the stages of the turn and what the
  * model thought in its journal, the answer, and the chat open. No core runs here: `/undo` of this
- * chat is `task.undoTurn` in web, and `/thinking` reads the journal. Everything goes with the user.
+ * chat is `task.undoTurn` in web, and `/thinking` reads the journal. `plan` — the last list of the
+ * agent's plan in that turn (docs/plan/89-agent-todos.md). Everything goes with the user.
  */
 export async function addAnsweredChat(
   userId: string,
@@ -212,6 +364,7 @@ export async function addAnsweredChat(
     thought,
     projectId = null,
     title = words,
+    plan,
   }: {
     words: string
     answer: string
@@ -219,81 +372,178 @@ export async function addAnsweredChat(
     projectId?: string | null
     /** The name of the chat, when its words are longer than a name may be. */
     title?: string
+    plan?: PlanItems
   },
 ): Promise<{ taskId: string }> {
   const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
   try {
-    const workspace = await prisma.$transaction((tx) =>
-      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
-    )
-    const task = await prisma.task.create({
-      data: {
-        id: chatId(),
-        workspaceId: workspace.id,
-        createdById: userId,
-        status: 'awaiting_user',
-        title,
-        turnNo: 1,
-        needsBrowser: false,
-        projectId,
-      },
+    const { taskId, after } = await addChatWith(prisma, userId, {
+      words,
+      status: 'awaiting_user',
+      projectId,
+      title,
+    })
+    await addTurn(prisma, {
+      taskId,
+      turnNo: 1,
+      status: 'completed',
+      after,
+      events: [{ type: 'reasoning', text: thought }, ...(plan ? [planEvent(plan)] : [])],
+    })
+    await insertFeedEvent(prisma, { taskId, row: answerRow(1, answer) })
+    return { taskId }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
+ * The client writes again in an answered chat, and the agent answers with no plan this time
+ * (docs/plan/89-agent-todos.md, ТД5): the next turn, completed, with no list in its journal, and
+ * the chat open again.
+ */
+export async function answerAgain(
+  taskId: string,
+  { words, answer }: { words: string; answer: string },
+): Promise<void> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const task = await prisma.task.findUniqueOrThrow({
+      where: { id: taskId },
+      select: { createdById: true, turnNo: true },
+    })
+    if (task.createdById === null) throw new Error('A chat of these tests has its author')
+    const open = await prisma.taskEvent.findFirstOrThrow({
+      where: { taskId, type: 'feed.result' },
+      orderBy: { id: 'desc' },
       select: { id: true },
     })
-    const request = await insertFeedEvent(prisma, {
-      taskId: task.id,
-      row: {
-        type: 'feed.request',
-        payload: { v: 1, kind: 'first', authorId: userId, requestId: randomUUID(), text: words },
-      },
+    const turnNo = task.turnNo + 1
+    const after = await addRequest(prisma, {
+      taskId,
+      authorId: task.createdById,
+      words,
+      answers: open.id,
     })
-    // The turn answers these words: it started after them, by the clock that wrote them.
-    const { createdAt } = await prisma.taskEvent.findUniqueOrThrow({
-      where: { id: request },
-      select: { createdAt: true },
+    await addTurn(prisma, {
+      taskId,
+      turnNo,
+      status: 'completed',
+      after,
+      events: [{ type: 'message', text: answer }],
     })
-    const startedAt = new Date(createdAt.getTime() + 1)
-    const turn = await prisma.taskTurn.create({
-      data: {
-        taskId: task.id,
-        turnNo: 1,
-        status: 'completed',
-        driverId: 'opencode',
-        image: `raditi/sbx@sha256:${'a'.repeat(64)}`,
-        startedAt,
-        finishedAt: startedAt,
-      },
+    await insertFeedEvent(prisma, { taskId, row: answerRow(turnNo, answer) })
+    await prisma.task.update({ where: { id: taskId }, data: { turnNo } })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
+ * A chat without a project whose first turn is at work on a plan (docs/plan/89-agent-todos.md,
+ * §6): the client's words, the stage «work», the agent's list in the journal of the turn and the
+ * chat `running`. No core runs here: the turn ends only by `endWorkingTurn`, and the page reads
+ * the plan every 5 s while it works — this run has no stream of signals (no Redis).
+ */
+export async function addWorkingChat(
+  userId: string,
+  { words, plan }: { words: string; plan: PlanItems },
+): Promise<{ taskId: string }> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const { taskId, after } = await addChatWith(prisma, userId, { words, status: 'running' })
+    await addTurn(prisma, {
+      taskId,
+      turnNo: 1,
+      status: 'running',
+      after,
+      events: [planEvent(plan)],
+    })
+    return { taskId }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** The turn at work rewrites its plan: one more batch of its output, as `todowrite` leaves it. */
+export async function writePlan(taskId: string, plan: PlanItems): Promise<void> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const task = await prisma.task.findUniqueOrThrow({
+      where: { id: taskId },
+      select: { turnNo: true },
+    })
+    const turn = await prisma.taskTurn.findUniqueOrThrow({
+      where: { taskId_turnNo: { taskId, turnNo: task.turnNo } },
       select: { id: true },
     })
     await prisma.taskEvent.create({
       data: {
-        taskId: task.id,
+        taskId,
         turnId: turn.id,
         type: 'turn.output',
-        payload: { turn: 1, events: [{ type: 'reasoning', text: thought }] },
+        payload: { turn: task.turnNo, events: [planEvent(plan)] },
       },
     })
-    await insertFeedEvent(prisma, {
-      taskId: task.id,
-      row: { type: 'feed.step', payload: { v: 1, turn: 1, attempt: 1, step: 'work' } },
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** The turn at work ends with an answer and leaves the chat open, in one transaction as core does. */
+export async function endWorkingTurn(taskId: string, answer: string): Promise<void> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    await prisma.$transaction(async (tx) => {
+      const { turnNo } = await tx.task.findUniqueOrThrow({
+        where: { id: taskId },
+        select: { turnNo: true },
+      })
+      await tx.taskTurn.update({
+        where: { taskId_turnNo: { taskId, turnNo } },
+        data: { status: 'completed', finishedAt: new Date() },
+      })
+      await insertFeedEvent(tx, { taskId, row: answerRow(turnNo, answer) })
+      await tx.task.update({ where: { id: taskId }, data: { status: 'awaiting_user' } })
+    })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
+ * A chat the client stopped while its first turn worked on a plan: «Остановить» runs `/cancel`
+ * (spec §7), so the turn and the chat are `cancelled`, and the feed says who stopped it.
+ */
+export async function addStoppedChat(
+  userId: string,
+  { words, plan }: { words: string; plan: PlanItems },
+): Promise<{ taskId: string }> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const { taskId, after } = await addChatWith(prisma, userId, { words, status: 'cancelled' })
+    await addTurn(prisma, {
+      taskId,
+      turnNo: 1,
+      status: 'cancelled',
+      after,
+      events: [planEvent(plan)],
     })
     await insertFeedEvent(prisma, {
-      taskId: task.id,
+      taskId,
       row: {
-        type: 'feed.result',
+        type: 'feed.cancelled',
         payload: {
           v: 1,
           turn: 1,
-          message: answer,
+          by: 'customer',
+          authorId: userId,
           site: 'none',
-          next: 'awaiting_user',
-          filesChanged: 0,
-          changeType: 'none',
-          needsApproval: false,
-          risk: 'low',
+          credits: 'returned',
         },
       },
     })
-    return { taskId: task.id }
+    return { taskId }
   } finally {
     await prisma.$disconnect()
   }

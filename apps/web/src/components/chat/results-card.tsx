@@ -11,12 +11,14 @@ import { useCallback, useEffect, useState, type RefObject } from 'react'
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
 import { useAgentDocument } from './agent-document'
-import { resultsText } from './chat-texts'
+import { resultsText, todoText } from './chat-texts'
 
 // «Результаты» beside the chat (owner's request of 14.11.2026, as ChatGPT shows them): a card
 // pinned to the top right of the chat that names what the agent made in it — a document it writes
-// with how far it is, the pages and texts it left — and opens each in the tab «Документы». The
-// icon in the head of the chat hides and shows it; a chat too narrow for it does not show it.
+// with how far it is, the pages and texts it left — and opens each in the tab «Документы». It
+// shares the column beside the chat with «План работы» (docs/plan/89-agent-todos.md, ТД6), which
+// stands over it. The icon in the head of the chat hides and shows the column; a chat too narrow
+// for it does not show it.
 
 /** The card's width and the room it keeps from the feed. */
 export const RESULTS_WIDTH = 280
@@ -27,7 +29,11 @@ const RESULTS_MIN_AREA = 640 + RESULTS_WIDTH + RESULTS_GAP + 64
 /** The room the feed keeps on the right while the card is shown, in px. */
 export const RESULTS_ROOM = RESULTS_WIDTH + RESULTS_GAP
 
-const HIDDEN_KEY = 'raditi.chat.results.hidden'
+/**
+ * The client hid the column (ТД6). A key of its own since the plan came into the column: one who
+ * once hid «Результаты» under `raditi.chat.results.hidden` would never see the plan otherwise.
+ */
+const HIDDEN_KEY = 'raditi.chat.side.hidden'
 
 function readHidden(): boolean {
   try {
@@ -38,23 +44,33 @@ function readHidden(): boolean {
 }
 
 /**
- * Whether the card is hidden by the client (kept in this browser) and whether the area of the
- * feed is wide enough for it: the card is shown when both allow it.
+ * Whether the column beside the chat is hidden by the client (kept in this browser) and whether
+ * the area of the feed is wide enough for it: the column is shown when both allow it. `measured`
+ * — the area was measured: before it, the column neither fits nor fails to.
  */
 export function useResultsCard(area: RefObject<HTMLElement | null>, enabled: boolean) {
   // The card is drawn only once the area is measured, never on the server: reading the choice at
   // once does not change the first paint.
   const [hidden, setHidden] = useState(() => typeof window !== 'undefined' && readHidden())
-  const [measured, setFits] = useState(false)
+  const [width, setFits] = useState<'unknown' | 'fits' | 'narrow'>('unknown')
   useEffect(() => {
     const element = area.current
     if (!enabled || element === null || typeof ResizeObserver === 'undefined') return
     // The observer reports the size at once, then every change of it.
-    const observer = new ResizeObserver(() => setFits(element.clientWidth >= RESULTS_MIN_AREA))
+    const observer = new ResizeObserver(() =>
+      setFits(element.clientWidth >= RESULTS_MIN_AREA ? 'fits' : 'narrow'),
+    )
     observer.observe(element)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      // A width read while the column was wanted says nothing of the next time it is: enabled
+      // again, the column waits for a new reading, and neither it nor the line over the field
+      // flashes in for a frame on the old one.
+      setFits('unknown')
+    }
   }, [area, enabled])
-  const fits = enabled && measured
+  const fits = enabled && width === 'fits'
+  const measured = enabled && width !== 'unknown'
   const toggle = useCallback(() => {
     setHidden((was) => {
       const next = !was
@@ -66,12 +82,29 @@ export function useResultsCard(area: RefObject<HTMLElement | null>, enabled: boo
       return next
     })
   }, [])
-  return { fits, hidden, shown: fits && !hidden, toggle }
+  return { fits, measured, hidden, shown: fits && !hidden, toggle }
 }
 
-/** The icon in the head of the chat that hides and shows «Результаты». */
-export function ResultsToggle({ shown, onToggle }: { shown: boolean; onToggle: () => void }) {
-  const label = shown ? resultsText.hide : resultsText.show
+/** What the column beside the chat holds: «Результаты», «План работы», or both. */
+export type SideHolds = 'results' | 'plan' | 'both'
+
+const toggleWords: Record<SideHolds, { show: string; hide: string }> = {
+  results: resultsText,
+  plan: todoText.side.plan,
+  both: todoText.side.both,
+}
+
+/** The icon in the head of the chat that hides and shows the column beside it. */
+export function ResultsToggle({
+  shown,
+  onToggle,
+  holds = 'results',
+}: {
+  shown: boolean
+  onToggle: () => void
+  holds?: SideHolds
+}) {
+  const label = shown ? toggleWords[holds].hide : toggleWords[holds].show
   return (
     <Tooltip title={label}>
       <IconButton
@@ -186,12 +219,15 @@ export function ResultsCard({
   shownAgentDoc,
   onOpenAgentDoc,
   onOpenFile,
+  underPlan = false,
 }: {
   agentDocs: readonly string[]
   documents: readonly ChatDocument[]
   shownAgentDoc: string | null
   onOpenAgentDoc: (docId: string) => void
   onOpenFile: (fileId: string) => void
+  /** «План работы» stands over it: the card leaves the column room for both (ТД6). */
+  underPlan?: boolean
 }) {
   return (
     <Box
@@ -199,7 +235,7 @@ export function ResultsCard({
       aria-label={resultsText.title}
       sx={{
         width: RESULTS_WIDTH,
-        maxHeight: 'min(60vh, 480px)',
+        maxHeight: underPlan ? 'min(40vh, 320px)' : 'min(60vh, 480px)',
         overflowY: 'auto',
         p: 1,
         border: 1,

@@ -7,11 +7,18 @@ import { baseURL } from '../../fixtures/billing-stand.ts'
 import { expect, test } from '../../fixtures/signed-in.ts'
 
 import {
+  addAnsweredChat,
   addBrowserTask,
   addLongChat,
   addLongDialog,
+  addStoppedChat,
+  addWorkingChat,
+  answerAgain,
+  endWorkingTurn,
   hideDevIndicator,
   priceDialogClass,
+  writePlan,
+  type PlanItems,
 } from './site.ts'
 
 // A dialog in a real browser (docs/plan/53-chat-preview-release.md, R9): the first words start
@@ -704,6 +711,237 @@ test('a task in the browser in a window lower than 420px: «К чату» keeps 
     .toBeLessThanOrEqual(1)
   await expect(open).toBeInViewport()
   await expect(plus(page)).not.toBeInViewport()
+})
+
+// «План работы» (docs/plan/89-agent-todos.md, §6): the agent's to-do list of the last turn of the
+// chat, read from the journal of that turn. No core works in this run: the rows a turn leaves are
+// written by the tests (site.ts), and with no stream of signals (no Redis) the page reads the
+// plan again every 5 s while a turn works (ТД12). From `lg` the plan is a card in the column beside
+// the chat — in a chat with no documents too (ТД6) —; where the column does not fit, one line over
+// the field while the agent works (ТД7); a turn that ended without a list takes it away (ТД5).
+
+const PLAN_WORDS = 'Сделайте на сайте страницу с ценами из прайса.'
+const PLAN_ANSWER = 'Страница с ценами готова: цены взял из прайса.'
+const PLAN: PlanItems = [
+  { text: 'Посмотрели текущую страницу', status: 'completed' },
+  { text: 'Готовим текст страницы', status: 'in_progress' },
+  { text: 'Публикуем страницу', status: 'pending' },
+]
+
+/** The card in the column beside the chat: a region of its own heading (§6.4). */
+const planCard = (page: Page) =>
+  page
+    .getByRole('region', { name: /^План работы/ })
+    .filter({ has: page.getByRole('heading', { level: 2 }) })
+/** The line over the field (§6.2): the same name, no heading. */
+const planStrip = (page: Page) =>
+  page
+    .getByRole('region', { name: 'План работы', exact: true })
+    .filter({ hasNot: page.getByRole('heading') })
+const resultsCard = (page: Page) => page.getByRole('complementary', { name: 'Результаты' })
+/** The icon in the head of the chat that hides and shows the column beside it, whatever it says. */
+const sideToggle = (page: Page) =>
+  page.getByRole('button', { name: /^(Скрыть|Показать) (план|результаты)/ })
+
+test('«План работы» from `lg`: a card beside a chat with no documents, read again as the agent works', async ({
+  page,
+  signedInUser,
+}) => {
+  const { taskId } = await addWorkingChat(signedInUser.id, { words: PLAN_WORDS, plan: PLAN })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  const card = planCard(page)
+  const activity = page.getByRole('region', { name: 'Ход работы' })
+
+  await test.step('the card: the count and the item at work; no «Результаты», nothing over the field', async () => {
+    await expect(card).toBeVisible()
+    await expect(card.getByRole('heading', { level: 2 })).toHaveText('План работы')
+    await expect(card).toContainText('Сделано 1 из 3')
+    await expect(card.getByRole('listitem')).toHaveCount(3)
+    const now = card.getByRole('listitem', { name: 'Готовим текст страницы, сейчас' })
+    await expect(now).toHaveAttribute('aria-current', 'step')
+    await expect(now).toContainText('Сейчас')
+    await expect(
+      card.getByRole('listitem', { name: 'Посмотрели текущую страницу, сделано' }),
+    ).toBeVisible()
+    await expect(card.getByRole('listitem', { name: 'Публикуем страницу, впереди' })).toBeVisible()
+    await expect(resultsCard(page)).toHaveCount(0)
+    await expect(planStrip(page)).toHaveCount(0)
+    // Beside the feed, which keeps clear of it, not over it.
+    const lines = await box(feed(page))
+    expect((await box(card)).x).toBeGreaterThanOrEqual(lines.x + lines.width - 1)
+    await expectNoSidewaysScroll(page)
+    // «Ход работы» names the plan in words, never the tool `todowrite` (ТД8).
+    await expect(
+      activity.getByRole('button', {
+        name: 'План работы · сделано 1 из 3 · Готовим текст страницы',
+      }),
+    ).toBeVisible()
+    await expect(activity).not.toContainText('todowrite')
+    expect(await violations(page)).toEqual([])
+  })
+
+  await test.step('the agent moves on: the card follows without a reload', async () => {
+    await writePlan(taskId, [
+      { text: 'Посмотрели текущую страницу', status: 'completed' },
+      { text: 'Готовим текст страницы', status: 'completed' },
+      { text: 'Публикуем страницу', status: 'in_progress' },
+    ])
+    // A poll of the plan, 5 s while the turn works.
+    await expect(card).toContainText('Сделано 2 из 3', { timeout: 15_000 })
+    await expect(
+      card.getByRole('listitem', { name: 'Публикуем страницу, сейчас' }),
+    ).toHaveAttribute('aria-current', 'step')
+    await expect(card.locator('[aria-current]')).toHaveCount(1)
+    await expect(card.getByRole('status')).toHaveText('Сделано 2 из 3')
+    // A line of «Ход работы» for each step the plan moved to.
+    await expect(activity.getByRole('button', { name: /^План работы · сделано/ })).toHaveText([
+      'План работы · сделано 1 из 3 · Готовим текст страницы',
+      'План работы · сделано 2 из 3 · Публикуем страницу',
+    ])
+  })
+
+  await test.step('the icon in the head hides the column, and this browser keeps the choice', async () => {
+    const hide = page.getByRole('button', { name: 'Скрыть план работы' })
+    await expect(hide).toHaveAttribute('aria-pressed', 'true')
+    await expect(sideToggle(page)).toHaveCount(1)
+    await hide.click()
+    await expect(card).toHaveCount(0)
+    const show = page.getByRole('button', { name: 'Показать план работы' })
+    await expect(show).toHaveAttribute('aria-pressed', 'false')
+    expect(await page.evaluate(() => window.localStorage.getItem('raditi.chat.side.hidden'))).toBe(
+      '1',
+    )
+    // The column fits: hidden by the client, the plan does not come over the field instead.
+    await expect(planStrip(page)).toHaveCount(0)
+    await page.reload()
+    await expect(show).toBeVisible()
+    await expect(card).toHaveCount(0)
+    await show.click()
+    await expect(card).toBeVisible()
+    await expect(card).toContainText('Сделано 2 из 3')
+  })
+})
+
+test('«План работы» below `lg`: one line over the field while the agent works, gone once it answers', async ({
+  page,
+  signedInUser,
+}) => {
+  const { taskId } = await addWorkingChat(signedInUser.id, { words: PLAN_WORDS, plan: PLAN })
+  await hideDevIndicator(page)
+  const strip = planStrip(page)
+  const line = strip.getByRole('button')
+
+  for (const [width, height] of [
+    [1024, 768],
+    [390, 844],
+  ] as const) {
+    await test.step(`${width}×${height}: folded over the field, opened by a press, folded by Esc`, async () => {
+      await page.setViewportSize({ width, height })
+      await page.goto(`/chats/${taskId}`)
+      await expect(line).toHaveText('Сделано 1 из 3 · Сейчас: Готовим текст страницы')
+      await expect(line).toHaveAttribute('aria-expanded', 'false')
+      await expect(strip.getByRole('listitem')).toHaveCount(0)
+      await expect(planCard(page)).toHaveCount(0)
+      await expect(sideToggle(page)).toHaveCount(0)
+      // Over the field and in sight, the height of a finger.
+      const over = await box(line)
+      expect(over.y + over.height).toBeLessThanOrEqual((await box(message(page))).y)
+      expect(over.height).toBeGreaterThanOrEqual(44)
+      await expect(line).toBeInViewport()
+      await expectNoSidewaysScroll(page)
+      expect(await violations(page)).toEqual([])
+
+      await line.click()
+      await expect(line).toHaveAttribute('aria-expanded', 'true')
+      await expect(strip.getByRole('listitem')).toHaveCount(3)
+      await expect(
+        strip.getByRole('listitem', { name: 'Готовим текст страницы, сейчас' }),
+      ).toBeInViewport()
+      // The field stays where it was, under the open list.
+      await expect(message(page)).toBeInViewport()
+      await expectNoSidewaysScroll(page)
+      await page.keyboard.press('Escape')
+      await expect(line).toHaveAttribute('aria-expanded', 'false')
+      await expect(strip.getByRole('listitem')).toHaveCount(0)
+    })
+  }
+
+  await test.step('the turn answers: the line leaves the field', async () => {
+    await endWorkingTurn(taskId, PLAN_ANSWER)
+    // A poll of the chat, 2 s while the agent works: the new status reads the plan again.
+    await expect(feed(page)).toContainText(PLAN_ANSWER, { timeout: 15_000 })
+    await expect(strip).toHaveCount(0)
+    await expect(planCard(page)).toHaveCount(0)
+  })
+})
+
+test('«План работы» of a stopped turn: «Остановлено», the item at work not finished', async ({
+  page,
+  signedInUser,
+}) => {
+  const { taskId } = await addStoppedChat(signedInUser.id, { words: PLAN_WORDS, plan: PLAN })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  const card = planCard(page)
+
+  await expect(card).toHaveAccessibleName('План работы: Остановлено')
+  await expect(card).toContainText('Сделано 1 из 3')
+  // Unfinished is never drawn as done, and nothing is at work any more.
+  const left = card.getByRole('listitem', { name: 'Готовим текст страницы, не закончено' })
+  await expect(left).toContainText('не закончено')
+  await expect(card.locator('[aria-current]')).toHaveCount(0)
+  await expect(card.getByRole('listitem', { name: /, сделано$/ })).toHaveCount(1)
+  await expect(sideToggle(page)).toHaveAccessibleName('Скрыть план работы')
+  expect(await violations(page)).toEqual([])
+
+  // Below `lg` a turn that is over leaves nothing over the field.
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(card).toHaveCount(0)
+  await expect(planStrip(page)).toHaveCount(0)
+})
+
+test('«План работы» goes with a later turn that ended without a list', async ({
+  page,
+  signedInUser,
+}) => {
+  const { taskId } = await addAnsweredChat(signedInUser.id, {
+    words: PLAN_WORDS,
+    answer: PLAN_ANSWER,
+    thought: 'Read the price list first.',
+    plan: PLAN.map((item) => ({ ...item, status: 'completed' })),
+  })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  const card = planCard(page)
+
+  await test.step('a plan done to its end folds into its head until the client opens it', async () => {
+    await expect(card).toHaveAccessibleName('План работы: План выполнен')
+    await expect(card).toContainText('3 из 3')
+    const open = card.getByRole('button', { name: 'Развернуть план работы' })
+    await expect(open).toHaveAttribute('aria-expanded', 'false')
+    await expect(card.getByRole('listitem')).toHaveCount(0)
+    await open.click()
+    await expect(card.getByRole('button', { name: 'Свернуть план работы' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+    await expect(card.getByRole('listitem', { name: /, сделано$/ })).toHaveCount(3)
+  })
+
+  await test.step('the next turn answers with no plan: the card goes, and the column with it', async () => {
+    const later = 'Добавил телефон в подвал страницы.'
+    await answerAgain(taskId, { words: 'А теперь добавьте телефон в подвал.', answer: later })
+    await page.reload()
+    await expect(feed(page)).toContainText(later)
+    await expect(card).toHaveCount(0)
+    await expect(resultsCard(page)).toHaveCount(0)
+    // No column, and no icon for it in the head.
+    await expect(sideToggle(page)).toHaveCount(0)
+  })
 })
 
 // docs/plan/61-chats-first.md, К31: the answer to `/init` becomes the notes of the project only as

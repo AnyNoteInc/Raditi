@@ -84,6 +84,8 @@ const LITERAL = 'Literal {env:HOME} and {file:/etc/hostname}.'
 const REASONING = 'Thinking about the next step.'
 /** What the scripted model answers a compaction with, and the one thing the next turn knows of it. */
 const SUMMARY = 'RADITI_G3_COMPACTED_SUMMARY'
+/** A word of the agent's to-do list: the next turn finds it only in the history of the session. */
+const TODO = 'RADITI_G3_TODO_MARKER'
 /** Texts of the site repository's own OpenCode files: none may reach the provider. */
 const hostile = {
   agentsMd: 'RADITI_G3_HOSTILE_AGENTS_MD',
@@ -780,6 +782,14 @@ async function inside() {
         triggers: db.prepare("select name from sqlite_master where type = 'trigger'").all().length,
         sessions: db.prepare('select id, agent, model, permission, directory from session').all(),
         messages: db.prepare('select count(*) as n from message').get().n,
+        // The agent's to-do list (docs/plan/89-agent-todos.md, §2): the CLI's own table of it,
+        // and the calls of its tool the history of the session keeps.
+        todo: {
+          rows: db.prepare('select count(*) as n from todo').get().n,
+          calls: db
+            .prepare("select count(*) as n from part where json_extract(data, '$.tool') = ?")
+            .get('todowrite').n,
+        },
       }
       db.close()
     } catch (error) {
@@ -1037,6 +1047,7 @@ async function turn({
           previousProject: `${projectMarker(turnNo - 1)}\n`,
           contract: 'End the turn with one JSON object',
           summary: SUMMARY,
+          todo: TODO,
           platformAgent: 'You are the Raditi website agent.',
           workdir: 'Working directory: /workspace/repo',
           prior: PRIOR,
@@ -1438,6 +1449,78 @@ try {
     assert.ok(lost > 0, `The CLI left no output behind in ${times} turns of ${huge.length} B`)
     pass(
       `control of the long reasoning — ${huge.length} characters right before the answer: exit 0 and the result lost in ${lost} of ${times} turns`,
+    )
+  }
+
+  // 2c. The agent's to-do list (docs/plan/89-agent-todos.md, §2 and 89.2). The driver reads the
+  // whole list of a `todowrite` call in place of the call. The CLI's own table holds it in the
+  // turn that wrote it; the next turn, carried over by export and import, starts without it, and
+  // the model has only its call in the history of the session. So the platform keeps the last
+  // list, from its own journal.
+  {
+    const todos = [
+      { content: `Прочитать страницу ${TODO}`, status: 'completed', priority: 'high' },
+      { content: 'Подготовить текст', status: 'in_progress', priority: 'medium' },
+      { content: 'Опубликовать страницу', status: 'pending', priority: 'low' },
+    ]
+    const planned = await turn({
+      label: 'to-do list',
+      returnSnapshot: true,
+      steps: [
+        { calls: [{ name: 'todowrite', arguments: { todos } }] },
+        { text: JSON.stringify(result('Синтетический ход с планом')) },
+      ],
+    })
+    expectRequests(planned, 2)
+    const plannedSession = expectSuccess(planned, result('Синтетический ход с планом'))
+    {
+      const { output, events, describe } = planned
+      assert.deepEqual(
+        events.filter((event) => event.type === 'todo_list' || event.type === 'tool_call'),
+        [
+          {
+            type: 'todo_list',
+            items: todos.map(({ content, status }) => ({ text: content, status })),
+          },
+        ],
+        describe(),
+      )
+      // The row as the pinned CLI prints it: the list in the input and in the metadata.
+      const rows = output.stdout
+        .split('\n')
+        .filter((line) => line.includes('"tool":"todowrite"'))
+        .map((line) => JSON.parse(line))
+      assert.equal(rows.length, 1, describe())
+      const { state } = rows[0].part
+      assert.equal(state.status, 'completed', describe())
+      assert.deepEqual(state.input, { todos }, describe())
+      assert.deepEqual(state.metadata?.todos, todos, describe())
+      // The CLI's title counts the items not completed.
+      assert.equal(state.title, '2 todos', describe())
+      assert.deepEqual(output.database.todo, { rows: 3, calls: 1 }, describe())
+    }
+    const next = await turn({
+      label: 'to-do list, the next turn',
+      turnNo: 2,
+      nativeSessionId: plannedSession,
+      restored: planned.output.snapshot.map(({ path, mode, base64 }) => ({ path, mode, base64 })),
+      steps: [{ text: JSON.stringify(result('Синтетический ход после плана')) }],
+    })
+    expectRequests(next, 1)
+    assert.equal(expectSuccess(next, result('Синтетический ход после плана')), plannedSession)
+    {
+      const { output, events, describe } = next
+      assert.equal(
+        output.llm[0].body.todo,
+        true,
+        `No call of the list in the history: ${describe()}`,
+      )
+      assert.ok(!events.some((event) => event.type === 'todo_list'), describe())
+      // Nothing in this turn wrote a list: what its database holds at the end, it held at the start.
+      assert.deepEqual(output.database.todo, { rows: 0, calls: 1 }, describe())
+    }
+    pass(
+      `to-do list — the driver reads the three items of a todowrite call as one todo_list and no tool_call; the CLI's table holds 3 rows in that turn, the next turn from its session files starts with none, and the call is in the history the model gets`,
     )
   }
 

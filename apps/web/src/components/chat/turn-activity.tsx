@@ -1,16 +1,19 @@
 'use client'
 
+import { todoListReadsRussian, todoProgressOf, todoStepKey } from '@repo/domain/tasks/agent-todo'
 import { fontFamilies } from '@repo/ui/theme/tokens'
 import Box from '@mui/material/Box'
+import ButtonBase from '@mui/material/ButtonBase'
 import Typography from '@mui/material/Typography'
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
 import { useChatThinking, useTurnAtWorkShown } from './chat-details'
 import { CommandBlock } from './command-block'
-import { activityText } from './chat-texts'
+import { activityText, todoText } from './chat-texts'
 import type { ActivityEvent } from './chat-types'
+import { TodoList, todoStepOf } from './todo-card'
 import { useTurnActivity, type ActivityState } from './use-turn-activity'
 
 // «Ход работы» (owner's decision of 26.10.2026): everything the agent wrote, ran and changed in a
@@ -19,7 +22,8 @@ import { useTurnActivity, type ActivityState } from './use-turn-activity'
 // is set apart from what the agent said: it is raw and often English, and no answer of the agent.
 // A live turn shows it as it comes, with what the agent is writing now (owner's request of
 // 09.11.2026) unless the viewer hid them; a finished one only for a viewer who asked (`/thinking`,
-// docs/plan/61, К32).
+// docs/plan/61, К32). The agent's plan of its work is no thought: a line for each step it moved
+// to, whatever `/thinking` says (docs/plan/89-agent-todos.md, ТД8).
 
 const thought = {
   m: 0,
@@ -169,6 +173,102 @@ function Label({
 const lineKey = (event: ActivityEvent) =>
   event.type === 'draft' ? `draft:${event.kind}` : event.id
 
+type TodoListEvent = Extract<ActivityEvent, { type: 'todo_list' }>
+
+/** An item in the line of a plan: 80 characters at most, cut between whole characters. */
+function clipItem(text: string): string {
+  const chars = Array.from(text)
+  return chars.length <= 80 ? text : `${chars.slice(0, 79).join('').trimEnd()}…`
+}
+
+/**
+ * The agent's plan as it stood at that moment (docs/plan/89-agent-todos.md, ТД8): one line with
+ * the count, opened by a press into the list. A list not in Russian is told by its count alone.
+ */
+function TodoSnapshot({ event }: { event: TodoListEvent }) {
+  const [open, setOpen] = useState(false)
+  const listId = useId()
+  const progress = todoProgressOf(event)
+  const russian = todoListReadsRussian(event.items)
+  if (event.items.length === 0) return <Label icon="runs" text={todoText.activityCleared} />
+  const label = progress.abandoned
+    ? todoText.activityAbandoned
+    : russian
+      ? todoText.activity(
+          progress.done,
+          progress.total,
+          progress.current === null ? null : clipItem(event.items[progress.current]!.text),
+        )
+      : todoText.activityStep(todoStepOf(progress), progress.total)
+  if (!russian) return <Label icon="runs" text={label} />
+  return (
+    <Box sx={{ display: 'grid', gap: 0.5, minWidth: 0 }}>
+      <ButtonBase
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((was) => !was)}
+        sx={{
+          justifySelf: 'start',
+          justifyContent: 'flex-start',
+          gap: 1,
+          minHeight: 24,
+          borderRadius: '6px',
+          color: 'text.secondary',
+          fontSize: 13,
+          textAlign: 'left',
+          '& > svg': { flex: 'none' },
+          '&:hover': { color: 'text.primary' },
+          '&:focus-visible': {
+            outline: '2px solid',
+            outlineColor: 'primary.main',
+            outlineOffset: 2,
+          },
+        }}
+      >
+        <AppIcon name="runs" size={14} />
+        <span>{label}</span>
+        <Box
+          component="span"
+          aria-hidden
+          sx={{ display: 'flex', transform: open ? 'rotate(180deg)' : 'none' }}
+        >
+          <AppIcon name="down" size={14} />
+        </Box>
+      </ButtonBase>
+      <Box id={listId} sx={{ display: open ? 'block' : 'none', pl: 0.25 }}>
+        <TodoList list={event} mode="snapshot" />
+      </Box>
+    </Box>
+  )
+}
+
+/**
+ * The plans of a turn worth a line each: a list that kept the count and the item at work of the
+ * one before it is the same step for the client (ТД8); an emptied list gets its own line (§7).
+ */
+function withoutRepeatedPlans(events: readonly ActivityEvent[]): ActivityEvent[] {
+  let step: string | null = null
+  return events.filter((event) => {
+    if (event.type !== 'todo_list') return true
+    const key = planLineKey(event)
+    if (key === step) return false
+    step = key
+    return true
+  })
+}
+
+/**
+ * What the line of a plan tells the client (its words name the item at work of a list in Russian):
+ * the count and the item at work of a list in Russian,
+ * the count alone of a list told by its count (ТД11), nothing more of an emptied one.
+ */
+function planLineKey(event: TodoListEvent): string {
+  if (event.items.length === 0) return 'cleared'
+  if (todoListReadsRussian(event.items)) return todoStepKey(event)
+  const progress = todoProgressOf(event)
+  return `${progress.abandoned ? 'abandoned' : 'count'}:${progress.done}/${progress.total}`
+}
+
 function ActivityLine({ event }: { event: ActivityEvent }) {
   switch (event.type) {
     case 'message':
@@ -209,6 +309,8 @@ function ActivityLine({ event }: { event: ActivityEvent }) {
       )
     case 'file_change':
       return <Label icon="file" text={activityText.file[event.change]} subject={event.path} />
+    case 'todo_list':
+      return <TodoSnapshot event={event} />
     case 'question':
       return (
         <Box sx={{ display: 'grid', gap: 0.5 }}>
@@ -254,7 +356,7 @@ export function TurnActivityView({
 }) {
   // A draft of a turn that has ended is what it was writing when it stopped: its finished
   // events say the rest. A thought, finished or being written, only for `thinking`.
-  const shown = state.events.filter(
+  const shown = withoutRepeatedPlans(state.events).filter(
     (event) =>
       (thinking ||
         (event.type !== 'reasoning' && !(event.type === 'draft' && event.kind === 'reasoning'))) &&

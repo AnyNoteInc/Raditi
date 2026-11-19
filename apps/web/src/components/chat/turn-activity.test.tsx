@@ -172,6 +172,185 @@ describe('«Ход работы»', () => {
     expect(screen.getByText('raditi_wp_rest')).toBeTruthy()
   })
 
+  // «План работы» in «Ход работы» (docs/plan/89-agent-todos.md, ТД8, §6.3): `ActivityLine` would
+  // draw nothing of it without its case, and nothing but this test would say so.
+  describe('the plan of the agent', () => {
+    type Plan = Extract<ActivityEvent, { type: 'todo_list' }>
+    const plan = (id: string, items: Plan['items'], omitted?: Plan['omitted']): Plan => ({
+      id,
+      type: 'todo_list',
+      items,
+      ...(omitted ? { omitted } : {}),
+    })
+    const first = plan('4:0', [
+      { text: 'Посмотрели текущую страницу', status: 'completed' },
+      { text: 'Готовим текст страницы', status: 'in_progress' },
+      { text: 'Публикуем страницу', status: 'pending' },
+    ])
+    const lines = () => screen.queryAllByRole('button', { name: /^План работы/ })
+
+    it('is one line with the count, which opens into the list as it stood then', () => {
+      render(<TurnActivityView state={read({ events: [first] })} live={false} />)
+      const [line] = lines()
+      expect(line).toHaveTextContent('План работы · сделано 1 из 3 · Готовим текст страницы')
+      expect(line).toHaveAttribute('aria-expanded', 'false')
+      const list = document.getElementById(line!.getAttribute('aria-controls')!)!
+      expect(list).not.toBeVisible()
+      fireEvent.click(line!)
+      expect(line).toHaveAttribute('aria-expanded', 'true')
+      expect(list).toBeVisible()
+      expect(
+        within(list)
+          .getAllByRole('listitem')
+          .map((item) => item.getAttribute('aria-label')),
+      ).toEqual([
+        'Посмотрели текущую страницу, сделано',
+        'Готовим текст страницы, сейчас',
+        'Публикуем страницу, впереди',
+      ])
+      // History: nothing of it says it is at work now.
+      expect(within(list).queryByText('Сейчас')).toBeNull()
+      expect(list.querySelector('[aria-current]')).toBeNull()
+    })
+
+    it('stands in the live turn too, and is no tool any more', () => {
+      render(<TurnActivityView state={read({ events: [first] })} live />)
+      expect(lines()).toHaveLength(1)
+      expect(screen.queryByText('Инструмент')).toBeNull()
+    })
+
+    it('keeps a line only where the count or the item at work changed', () => {
+      // Rewritten words of an item ahead are the same step for the client.
+      const rewritten = plan('4:1', [
+        first.items[0]!,
+        first.items[1]!,
+        { text: 'Публикуем страницу на сайте', status: 'pending' },
+      ])
+      const next = plan('5:0', [
+        first.items[0]!,
+        { text: 'Готовим текст страницы', status: 'completed' },
+        { text: 'Публикуем страницу', status: 'in_progress' },
+      ])
+      const again = plan('6:0', next.items)
+      render(
+        <TurnActivityView
+          state={read({ events: [first, rewritten, events[0]!, next, again] })}
+          live={false}
+        />,
+      )
+      expect(lines().map((line) => line.textContent)).toEqual([
+        'План работы · сделано 1 из 3 · Готовим текст страницы',
+        'План работы · сделано 2 из 3 · Публикуем страницу',
+      ])
+    })
+
+    it('says when the agent cleared its list, and a list written back after it gets its line', () => {
+      render(
+        <TurnActivityView
+          state={read({ events: [first, plan('5:0', []), plan('6:0', first.items)] })}
+          live={false}
+        />,
+      )
+      expect(screen.getByText('План работы · агент убрал план')).toBeVisible()
+      expect(lines().map((line) => line.textContent)).toEqual([
+        'План работы · сделано 1 из 3 · Готовим текст страницы',
+        'План работы · сделано 1 из 3 · Готовим текст страницы',
+      ])
+    })
+
+    it('tells a list that starts its first step from the list with everything ahead', () => {
+      const ahead = plan('4:0', [
+        { text: 'Посмотрим страницу', status: 'pending' },
+        { text: 'Подготовим текст', status: 'pending' },
+      ])
+      const started = plan('4:1', [
+        { text: 'Посмотрим страницу', status: 'in_progress' },
+        { text: 'Подготовим текст', status: 'pending' },
+      ])
+      render(<TurnActivityView state={read({ events: [ahead, started] })} live={false} />)
+      expect(lines().map((line) => line.textContent)).toEqual([
+        'План работы · сделано 0 из 2',
+        'План работы · сделано 0 из 2 · Посмотрим страницу',
+      ])
+    })
+
+    it('cuts a long item in its line between whole characters', () => {
+      const long = `${'Готовим очень длинный текст '.repeat(3)}😀${'я'.repeat(60)}`
+      render(
+        <TurnActivityView
+          state={read({
+            events: [
+              plan('4:0', [
+                { text: long, status: 'in_progress' },
+                { text: 'Публикуем', status: 'pending' },
+              ]),
+            ],
+          })}
+          live={false}
+        />,
+      )
+      const [line] = lines()
+      const words = line!.textContent!.split(' · ').at(-1)!
+      expect(Array.from(words)).toHaveLength(80)
+      expect(words.endsWith('…')).toBe(true)
+      expect(words.isWellFormed()).toBe(true)
+    })
+
+    it('keeps one line while a list told by its count keeps its count', () => {
+      const english = (id: string, statuses: Plan['items'][number]['status'][]) =>
+        plan(
+          id,
+          ['Read the page', 'Write the text', 'Publish it'].map((text, n) => ({
+            text,
+            status: statuses[n]!,
+          })),
+        )
+      render(
+        <TurnActivityView
+          state={read({
+            events: [
+              english('4:0', ['pending', 'pending', 'pending']),
+              english('4:1', ['in_progress', 'pending', 'pending']),
+              english('5:0', ['completed', 'pending', 'pending']),
+              english('5:1', ['completed', 'in_progress', 'pending']),
+            ],
+          })}
+          live={false}
+        />,
+      )
+      expect(screen.getAllByText(/^План работы · шаг/).map((line) => line.textContent)).toEqual([
+        'План работы · шаг 1 из 3',
+        'План работы · шаг 2 из 3',
+      ])
+    })
+
+    it('counts what a long list left out', () => {
+      render(
+        <TurnActivityView
+          state={read({ events: [plan(first.id, first.items, { completed: 12, other: 3 })] })}
+          live={false}
+        />,
+      )
+      const [line] = lines()
+      expect(line).toHaveTextContent('План работы · сделано 13 из 18')
+      fireEvent.click(line!)
+      expect(screen.getByText('12 выполненных шагов не показаны')).toBeVisible()
+      expect(screen.getByText('и ещё 3 шага')).toBeVisible()
+    })
+
+    it('tells a list with no Russian word by its step alone, with nothing to open', () => {
+      const english = plan('4:0', [
+        { text: 'Read the page', status: 'completed' },
+        { text: 'Write the text', status: 'in_progress' },
+        { text: 'Publish', status: 'pending' },
+      ])
+      render(<TurnActivityView state={read({ events: [english] })} live={false} />)
+      expect(screen.getByText('План работы · шаг 2 из 3')).toBeTruthy()
+      expect(lines()).toEqual([])
+      expect(screen.queryByText('Write the text')).toBeNull()
+    })
+  })
+
   describe("a command, IN and OUT (owner's request of 09.11.2026)", () => {
     const command = (patch: Partial<Extract<ActivityEvent, { type: 'command' }>> = {}) =>
       read({

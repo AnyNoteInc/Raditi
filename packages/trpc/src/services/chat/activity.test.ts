@@ -152,6 +152,60 @@ describe('readTurnActivity', () => {
   })
 })
 
+describe('the plan of the agent in its work (docs/plan/89-agent-todos.md, ТД8)', () => {
+  const list = [
+    { text: 'Найти шапку сайта', status: 'completed' },
+    { text: 'Поменять телефон', status: 'in_progress' },
+    { text: 'Проверить страницу', status: 'pending' },
+  ] as const
+
+  it('gives each list whole, with what the driver left out', async () => {
+    const { read } = setup([
+      output(3n, [
+        { type: 'todo_list', items: list.slice(0, 2) },
+        { type: 'message', text: 'Меняю телефон.' },
+      ]),
+      output(4n, [{ type: 'todo_list', items: list, omitted: { completed: 4, other: 1 } }]),
+      output(5n, [{ type: 'todo_list', items: [] }]),
+    ])
+    expect(await read()).toEqual({
+      events: [
+        { id: '3:0', type: 'todo_list', items: list.slice(0, 2) },
+        { id: '3:1', type: 'message', text: 'Меняю телефон.' },
+        { id: '4:0', type: 'todo_list', items: list, omitted: { completed: 4, other: 1 } },
+        { id: '5:0', type: 'todo_list', items: [] },
+      ],
+      cursor: '5',
+      more: false,
+    })
+  })
+
+  it('passes over a list the event schema does not take', async () => {
+    const { read } = setup([
+      output(1n, [
+        { type: 'todo_list', items: [{ text: 'Шаг', status: 'waiting' }] },
+        { type: 'todo_list', items: [{ text: '', status: 'pending' }] },
+        { type: 'todo_list', items: [{ text: 'я'.repeat(301), status: 'pending' }] },
+        { type: 'todo_list', items: list, omitted: { completed: -1, other: 0 } },
+      ]),
+    ])
+    expect(await read()).toEqual({ events: [], cursor: '1', more: false })
+  })
+
+  it('counts the words of the items toward the text of a page', async () => {
+    const item = (index: number) => ({ text: `${index}`.padEnd(300, 'я'), status: 'pending' })
+    const long = Array.from({ length: 50 }, (_, index) => item(index))
+    // 50 × 300 units a row: a page of 256 KiB holds 17 such rows and ends after the 18th.
+    const rows = Array.from({ length: 30 }, (_, index) =>
+      output(BigInt(index + 1), [{ type: 'todo_list', items: long }]),
+    )
+    const page = await setup(rows).read()
+    expect(page.more).toBe(true)
+    expect(page.events).toHaveLength(18)
+    expect(page.cursor).toBe('18')
+  })
+})
+
 describe('shownActivity', () => {
   it('does not repeat the turn’s result object as words of the agent', () => {
     expect(

@@ -79,6 +79,7 @@ export {
 } from './attachments.ts'
 export { classProfile, type ClassProfile } from './class-profile.ts'
 export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-events.ts'
+export { readChatTodo, type ChatTodoTurns } from './agent-todo.ts'
 export {
   applyPageVersion,
   chatAuthorManages,

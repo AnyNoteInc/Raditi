@@ -423,6 +423,48 @@ describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11; docs/p
   })
 })
 
+describe('the plan of the work beside the chat (docs/plan/89-agent-todos.md, ТД10, ТД13)', () => {
+  const kinds = () =>
+    [false, true].flatMap((browser) =>
+      [false, true].map((repository) =>
+        openTaskInstructions(
+          { skills: [] },
+          { browser, inbox: { files: 1, omitted: 0 }, repository },
+        ),
+      ),
+    )
+  /** The section «How you work»: up to the next section after it. */
+  const howYouWork = (text: string) => text.split('## How you work\n')[1]!.split('\n## ')[0]!
+
+  it('tells every kind of turn, in «How you work», how to write the items the client sees', () => {
+    for (const text of kinds()) {
+      const section = howYouWork(text)
+      expect(section).toContain(
+        '- When you keep a to-do list with your to-do tool, the client sees it beside the chat as the\n  plan of your work.',
+      )
+      expect(section).toContain('7 items at most')
+      expect(section).toContain('a few plain Russian words about your own\n  work')
+      expect(section).toContain('«Готовим текст страницы»')
+      expect(section).toContain(
+        'no file paths,\n  commands, code, names of tools, secrets or values of variables.',
+      )
+      expect(section).toContain('only when a step\n  starts or ends')
+      expect(section).toContain('mark each finished item completed and each dropped item cancelled')
+      expect(section).toContain('leave the items still ahead as they are')
+      // Once, after what the working directory holds.
+      expect(text.split('your to-do tool')).toHaveLength(2)
+      expect(text.indexOf('your to-do tool')).toBeGreaterThan(text.indexOf('The working directory'))
+    }
+  })
+
+  it('never asks for a list, and names no tool of the driver (rule 7, rule 8)', () => {
+    for (const text of kinds()) {
+      expect(text).not.toMatch(/todo(write|read)|TodoWrite|update_plan|write_todos/i)
+      expect(text).not.toMatch(/(^|\. |- )(Always )?(Keep|Use|Make|Write|Start) (a|your) to-do/m)
+    }
+  })
+})
+
 describe('requestedFormatsSection (docs/plan/67, Д1)', () => {
   it('names the formats the client asked for, and nothing without them', () => {
     expect(requestedFormatsSection({ word: false, excel: false, markdown: false })).toBe('')
