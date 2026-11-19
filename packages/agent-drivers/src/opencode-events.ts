@@ -18,10 +18,12 @@ import {
   type JsonObject,
 } from './jsonl.ts'
 import { platformToolName } from './opencode-mcp.ts'
+import { todoListEvents } from './opencode-todo.ts'
 
 // `opencode run --format json` of the pinned 1.18.34: one row per finished part.
 //   step_start, reasoning (with `--thinking`), text, tool_use (a tool part that is completed or
-//   failed), step_finish, error — and the wrapper's `raditi_draft` of a part not finished yet
+//   failed; a completed `todowrite` is read as the agent's to-do list), step_finish, error — and
+//   the wrapper's `raditi_draft` of a part not finished yet
 // The CLI prints no end-of-turn row. A step that ends with `stop` is followed by more steps when
 // the CLI compacts the context, and between them the CLI prints a line of its own as `text`
 // outside any step; a run cut on a rejected permission request exits 0 after a `tool-calls`
@@ -97,6 +99,12 @@ function toolEvents(part: JsonObject): AgentEvent[] {
       ok: false,
     })
   const ok = state.status === 'completed'
+  // The agent's plan of its work (docs/plan/87-agent-todos.md, ТД3): the list in place of the
+  // call, which says nothing a client could read. A failed call, or one with no list, stays a call.
+  if (ok && tool === 'todowrite') {
+    const list = todoListEvents(state)
+    if (list.length > 0) return list
+  }
   // Only the reported name: what a tool of the CLI itself did is read by the name of the row.
   const result = events({ type: 'tool_call', tool: platformToolName(tool), ok })
   if (tool === 'bash') {

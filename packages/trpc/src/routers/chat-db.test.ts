@@ -958,6 +958,64 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     })
   })
 
+  describe('task.todo (docs/plan/87-agent-todos.md, §5.3)', () => {
+    const plan = [
+      { text: 'Найти шапку сайта', status: 'completed' },
+      { text: 'Поменять телефон', status: 'in_progress' },
+      { text: 'Проверить страницу', status: 'pending' },
+    ] as const
+
+    /** A turn of the chat and a batch of its output with the list, as core's journal writes them. */
+    async function turnWithPlan(taskId: string, turnNo: number, status: 'running' | 'completed') {
+      const turn = await db.taskTurn.create({
+        data: { taskId, turnNo, status, driverId: 'opencode', image: 'synthetic/agent:test' },
+        select: { id: true },
+      })
+      await db.taskEvent.create({
+        data: {
+          taskId,
+          turnId: turn.id,
+          type: 'turn.output',
+          clientVisible: false,
+          payload: {
+            turn: turnNo,
+            phase: 'output',
+            events: [
+              { type: 'todo_list', items: [plan[0], { ...plan[1], status: 'pending' }, plan[2]] },
+              { type: 'message', text: 'Меняю телефон.' },
+              { type: 'todo_list', items: plan },
+            ],
+          },
+        },
+      })
+      return turn.id
+    }
+
+    it('gives the list of the turn at work, and nothing once that turn is undone', async () => {
+      const { owner } = await chatOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller)
+      expect(await caller.task.todo({ taskId })).toBeNull()
+
+      const turnId = await turnWithPlan(taskId, 1, 'running')
+      expect(await caller.task.todo({ taskId })).toEqual({ turn: 1, state: 'working', items: plan })
+
+      await db.taskTurn.update({ where: { id: turnId }, data: { undoneAt: new Date() } })
+      expect(await caller.task.todo({ taskId })).toBeNull()
+    })
+
+    it('answers a chat of someone else as one that does not exist', async () => {
+      const { owner } = await chatOwner()
+      const { taskId } = await newDialog(callerOf(owner))
+      await turnWithPlan(taskId, 1, 'completed')
+      const other = await person()
+
+      await expect(callerOf(other).task.todo({ taskId })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+  })
+
   describe('chats without a project (docs/plan/61-chats-first.md, §5.9)', () => {
     const newChat = (caller: ReturnType<typeof callerOf>, attachments?: string[]) =>
       caller.task

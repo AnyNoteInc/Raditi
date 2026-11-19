@@ -405,6 +405,22 @@ export const REPO_RULES = `- The working directory ${SANDBOX_WORKDIR} is the pro
   errors filtered out, did not run.
 `
 
+/**
+ * The agent's plan of its work (docs/plan/87-agent-todos.md, ТД10, ТД13): the client sees the
+ * agent's to-do list beside the chat, so these words say how to write its items and never ask for
+ * a list — the tool's own description does that, and each call is one more request of the model,
+ * paid with the client's credits (rule 7). The tool is not named: its name is the driver's
+ * (rule 8).
+ */
+const TODO_LIST = `- When you keep a to-do list with your to-do tool, the client sees it beside the chat as the
+  plan of your work. Keep it to 7 items at most, each a few plain Russian words about your own
+  work for a client who is not technical, such as «Готовим текст страницы»: no file paths,
+  commands, code, names of tools, secrets or values of variables. Update it only when a step
+  starts or ends (one update may close a step and start the next one), not more often. Before
+  your final answer mark each finished item completed and each dropped item cancelled; when you
+  end the turn with a question to the client, leave the items still ahead as they are.
+`
+
 const OPEN_BROWSER = `- The platform's browser tools (\`web_*\`) open any public \`https://\` site: \`web_open\` takes
   a full address. Use them only when the request needs a page. The browser starts with your
   first \`web_*\` call; when it answers \`BROWSER_STARTING\`, call it again.
@@ -456,7 +472,7 @@ export function openTaskInstructions(
           ...(inbox.omitted > 0 ? [`${omittedFiles(inbox.omitted)}\n`] : []),
         ].join('')
       : ''
-  return `${OPEN_RULES}${repository ? REPO_RULES : EMPTY_WORKDIR}${files}${browser ? OPEN_BROWSER : ''}${variablesSection(variables)}${internetSection(internet)}`
+  return `${OPEN_RULES}${repository ? REPO_RULES : EMPTY_WORKDIR}${files}${TODO_LIST}${browser ? OPEN_BROWSER : ''}${variablesSection(variables)}${internetSection(internet)}`
 }
 
 /**

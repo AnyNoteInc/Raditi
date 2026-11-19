@@ -2,6 +2,7 @@ import {
   appEnvSchema,
   chatCommandRefusals,
   chatProjectSchema,
+  chatTodoSchema,
   FEED_REQUEST_TEXT_LIMIT,
   feedCursorSchema,
   feedReadCursorSchema,
@@ -30,6 +31,7 @@ import {
 } from '../services/chat/dialog-list.ts'
 import { readDialogExport, readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
 import { readTaskSignals } from '../services/chat/signals.ts'
+import { chatTodo } from '../services/chat/todo.ts'
 import { markPresence } from '../services/notifications.ts'
 import {
   editQueuedWords,
@@ -464,6 +466,15 @@ export const taskRouter = router({
         after: input.after ?? '0',
       }),
     ),
+
+  /**
+   * «План работы»: the agent's to-do list of the last counted turn and its state, a snapshot
+   * (docs/plan/87-agent-todos.md, §5.3; services/chat/todo.ts). null — no plan to show.
+   */
+  todo: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(chatTodoSchema.nullable())
+    .query(({ ctx, input }) => chatTodo(ctx.prisma, { userId: ctx.user.id, taskId: input.taskId })),
 
   /**
    * The chats of the user, the latest changed first; `cursor` is `nextCursor` of the page before.

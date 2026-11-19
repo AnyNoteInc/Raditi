@@ -1,10 +1,27 @@
 import {
   agentEventSchema,
+  agentTodoLimits,
   clipCommandOutput,
   maskEnvValuesDeep,
   turnOutputRejected,
   type AgentEvent,
 } from '@repo/domain'
+
+/**
+ * An item of the agent's plan cut back to its limit the way the driver cuts it
+ * (docs/plan/87-agent-todos.md, §5.2): whole characters and «…» — an astral one takes two units
+ * of `length`, and the schema counts those.
+ */
+function clipTodoText(text: string): string {
+  if (text.length <= agentTodoLimits.text) return text
+  const room = agentTodoLimits.text - 1
+  let kept = ''
+  for (const char of text) {
+    if (kept.length + char.length > room) break
+    kept += char
+  }
+  return `${kept}…`
+}
 
 /**
  * The agent's events with every value of the client's variables of the turn replaced by
@@ -20,7 +37,7 @@ export function maskTurnEvents(
 ): AgentEvent[] {
   if (values.length === 0) return [...events]
   return events.map((event) => {
-    const masked = maskEnvValuesDeep(event, values)
+    let masked = maskEnvValuesDeep(event, values)
     // A mask may be longer than the value it hides: what a command printed is clipped again,
     // rather than a turn failing on the output the chat only shows.
     if (masked.type === 'command' && masked.output !== undefined) {
@@ -28,6 +45,13 @@ export function maskTurnEvents(
       masked.output = clipped.output
       if (clipped.outputCut) masked.outputCut = true
     }
+    // The same for the items of the agent's plan (ТД14): the client sees them beside the chat.
+    // A new object: with nothing to mask, maskEnvValuesDeep hands back the event it was given.
+    if (masked.type === 'todo_list')
+      masked = {
+        ...masked,
+        items: masked.items.map((item) => ({ ...item, text: clipTodoText(item.text) })),
+      }
     const checked = agentEventSchema.safeParse(masked)
     if (!checked.success) throw turnOutputRejected('Agent event failed its schema')
     return checked.data

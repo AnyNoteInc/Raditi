@@ -55,7 +55,7 @@ describe('turnResultSchema', () => {
 })
 
 describe('agentEventSchema', () => {
-  it('covers exactly the eleven common event types of CLAUDE.md rule 8, reasoning and draft among them', () => {
+  it('covers exactly the twelve common event types of CLAUDE.md rule 8, reasoning, draft and todo_list among them', () => {
     const types = agentEventSchema.options.map((o) => o.shape.type.value)
     expect(types.sort()).toEqual(
       [
@@ -68,6 +68,7 @@ describe('agentEventSchema', () => {
         'question',
         'reasoning',
         'started',
+        'todo_list',
         'tool_call',
         'usage',
       ].sort(),

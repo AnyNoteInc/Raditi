@@ -367,6 +367,75 @@ export const resultsText = Object.freeze({
   open: (title: string) => `Открыть «${title}»`,
 })
 
+const steps = (count: number) => `${count} ${plural(count, 'шаг', 'шага', 'шагов')}`
+
+/**
+ * «План работы» (docs/plan/87-agent-todos.md, §6, ТД1): the agent's plan of its work beside the
+ * chat, over the field on a narrow screen, and in «Ход работы». The items are the agent's own
+ * words; a list it wrote without a Russian word is told by its count alone (ТД11).
+ */
+export const todoText = Object.freeze({
+  title: 'План работы',
+  /** The head of the card by its state (§6.1); in `working` it is the title itself. */
+  head: Object.freeze({
+    carried: 'С прошлого раза',
+    allDone: 'План выполнен',
+    waiting: 'Ждём вашего ответа',
+    stopped: 'Остановлено',
+    failed: 'Работа прервалась',
+    abandoned: 'Агент отменил этот план',
+  }),
+  done: (done: number, total: number) => `Сделано ${done} из ${total}`,
+  /** «План выполнен · 5 из 5». */
+  of: (done: number, total: number) => `${done} из ${total}`,
+  /** A list not in Russian: where the agent is, without its words. */
+  step: (step: number, total: number) => `Шаг ${step} из ${total}`,
+  current: 'Сейчас',
+  unfinished: 'не закончено',
+  /** Items the agent's list had over what the chat shows: the rest of its tail… */
+  more: (count: number) => `и ещё ${steps(count)}`,
+  /** …and the completed ones of its head. */
+  hiddenDone: (count: number) =>
+    `${count} ${plural(count, 'выполненный шаг', 'выполненных шага', 'выполненных шагов')} ${plural(count, 'не показан', 'не показаны', 'не показаны')}`,
+  collapse: 'Свернуть план работы',
+  expand: 'Развернуть план работы',
+  /** The name of the list of the plan, which scrolls in itself (§6.4). */
+  steps: 'Шаги плана работы',
+  /** What a screen reader hears after the words of an item. */
+  status: Object.freeze({
+    pending: 'впереди',
+    in_progress: 'сейчас',
+    completed: 'сделано',
+    cancelled: 'пропущено',
+    unfinished: 'не закончено',
+  }),
+  item: (text: string, status: string) => `${text}, ${status}`,
+  /** The line over the field: «Сделано 2 из 5 · Сейчас: готовим текст страницы». */
+  strip: (count: string, current: string | null) =>
+    current === null ? count : `${count} · Сейчас: ${current}`,
+  /** A count after the words of a state: «С прошлого раза · сделано 3 из 5». */
+  after: (label: string, count: string) =>
+    `${label} · ${count.charAt(0).toLowerCase()}${count.slice(1)}`,
+  /**
+   * The line of «Ход работы»: «План работы · сделано 2 из 5 · Готовим текст страницы» — the item
+   * at work then, without «сейчас»: the line is history.
+   */
+  activity: (done: number, total: number, current: string | null) =>
+    `План работы · сделано ${done} из ${total}${current === null ? '' : ` · ${current}`}`,
+  activityStep: (step: number, total: number) => `План работы · шаг ${step} из ${total}`,
+  activityAbandoned: 'План работы · агент отменил этот план',
+  /** The agent cleared its list (§7, `[]`): the card goes away, «Ход работы» says why. */
+  activityCleared: 'План работы · агент убрал план',
+  /** The icon in the head of the chat, by what the column beside it holds. */
+  side: Object.freeze({
+    both: Object.freeze({
+      show: 'Показать план и результаты',
+      hide: 'Скрыть план и результаты',
+    }),
+    plan: Object.freeze({ show: 'Показать план работы', hide: 'Скрыть план работы' }),
+  }),
+})
+
 /** The section «Чаты» and its screens (docs/plan/61-chats-first.md, §5.13). */
 export const chatsText = Object.freeze({
   title: 'Чаты',

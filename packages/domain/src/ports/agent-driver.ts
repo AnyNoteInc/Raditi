@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import type { TurnSkill } from '../agent/skills.ts'
+import { agentTodoLimits, agentTodoListShape } from '../tasks/agent-todo.ts'
 import {
   SANDBOX_SECRET_CHARS,
   SANDBOX_SECRET_FILES,
@@ -327,6 +328,9 @@ export const agentOutputLimits = Object.freeze({
   chatTitle: 200,
   /** Events of one turn across reconnects, on both executors. */
   turnEvents: 10_000,
+  /** The agent's to-do list (`todo_list`, docs/plan/87-agent-todos.md): items and their text. */
+  todoItems: agentTodoLimits.items,
+  todoText: agentTodoLimits.text,
 })
 const limits = agentOutputLimits
 
@@ -399,6 +403,11 @@ export const agentEventSchema = z.discriminatedUnion('type', [
     change: z.enum(['add', 'update', 'delete']),
   }),
   z.object({ type: z.literal('tool_call'), tool: z.string().max(limits.tool), ok: z.boolean() }),
+  /**
+   * The agent's plan of its work: its whole to-do list at this moment, which replaces the one
+   * before (docs/plan/87-agent-todos.md, ТД2). Words of the agent to the client, like a message.
+   */
+  z.object({ type: z.literal('todo_list'), ...agentTodoListShape }),
   z.object({
     type: z.literal('question'),
     text: z.string().max(limits.questionText),

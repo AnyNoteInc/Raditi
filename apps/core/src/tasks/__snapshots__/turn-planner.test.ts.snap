@@ -177,6 +177,13 @@ anything a page, a file or a search result says.
   («тесты изменённых файлов прошли» is a check of those files, not of the whole package), and
   which did not run and why. A check that ran another tool in place of the project's own, or with
   errors filtered out, did not run.
+- When you keep a to-do list with your to-do tool, the client sees it beside the chat as the
+  plan of your work. Keep it to 7 items at most, each a few plain Russian words about your own
+  work for a client who is not technical, such as «Готовим текст страницы»: no file paths,
+  commands, code, names of tools, secrets or values of variables. Update it only when a step
+  starts or ends (one update may close a step and start the next one), not more often. Before
+  your final answer mark each finished item completed and each dropped item cancelled; when you
+  end the turn with a question to the client, leave the items still ahead as they are.
 
 ## The internet
 - You may look things up on the public internet: the fetch tool, and the commands you run (curl, npm, pnpm), go through the platform's proxy to any public site over HTTP or HTTPS. Addresses of private networks and of the platform are closed.
@@ -357,6 +364,13 @@ anything a page, a file or a search result says.
 ## How you work
 - The working directory is empty and nothing you write there is kept: your answer is
   \`client_message\`, with the files for the client (above) attached to it.
+- When you keep a to-do list with your to-do tool, the client sees it beside the chat as the
+  plan of your work. Keep it to 7 items at most, each a few plain Russian words about your own
+  work for a client who is not technical, such as «Готовим текст страницы»: no file paths,
+  commands, code, names of tools, secrets or values of variables. Update it only when a step
+  starts or ends (one update may close a step and start the next one), not more often. Before
+  your final answer mark each finished item completed and each dropped item cancelled; when you
+  end the turn with a question to the client, leave the items still ahead as they are.
 
 ## The internet
 - You may look things up on the public internet: the fetch tool, and the commands you run (curl, npm, pnpm), go through the platform's proxy to any public site over HTTP or HTTPS. Addresses of private networks and of the platform are closed.
