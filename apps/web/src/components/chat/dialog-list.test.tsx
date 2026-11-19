@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { plain } from '@/components/billing/testing'
@@ -14,6 +14,7 @@ import { declared } from './testing'
 const {
   listPage,
   segment,
+  address,
   rename,
   remove,
   pin,
@@ -26,6 +27,8 @@ const {
 } = vi.hoisted(() => ({
   listPage: vi.fn<(input: { cursor?: string }) => Promise<DialogListPage>>(),
   segment: { current: null as string | null },
+  /** The query of the address: `?project=` of a new chat. */
+  address: { search: '' },
   rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
   remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
   pin: vi.fn<(input: { taskId: string; pinned: boolean }) => Promise<{ pinned: boolean }>>(),
@@ -55,6 +58,7 @@ const mutation = <I, O>(fn: (input: I) => Promise<O>) => ({
 
 vi.mock('next/navigation', () => ({
   useSelectedLayoutSegment: () => segment.current,
+  useSearchParams: () => new URLSearchParams(address.search),
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
   usePathname: () => '/projects',
 }))
@@ -126,6 +130,7 @@ function showList({ grouped = false }: { grouped?: boolean } = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   segment.current = null
+  address.search = ''
 })
 
 describe('the list of dialogs', () => {
@@ -656,6 +661,57 @@ describe('«По проектам» (owner’s request of 19.11.2026)', () => {
     expect(screen.getByRole('button', { name: /Колос/ }).getAttribute('aria-expanded')).toBe(
       'false',
     )
+  })
+
+  it('opens the folder of the project the address names, without an open chat', async () => {
+    segment.current = 'new'
+    address.search = `project=${TEA.id.toUpperCase()}`
+    showList({ grouped: true })
+    const tea = await screen.findByRole('list', { name: 'Магазин чая' })
+    expect(within(tea).getByText('Чай')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Колос/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    )
+    expect(head).not.toHaveBeenCalled()
+  })
+
+  it('opens «Без проекта» for a new chat without a project, as for an open one', async () => {
+    segment.current = 'new'
+    showList({ grouped: true })
+    const none = await screen.findByRole('list', { name: 'Без проекта' })
+    expect(within(none).getByText('Письмо поставщику')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Колос/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    )
+  })
+
+  it('at the root opens «Без проекта» only where the new chat stands beside the list', async () => {
+    showList({ grouped: true })
+    await screen.findByRole('button', { name: /Без проекта/ })
+    expect(screen.getByRole('button', { name: /Без проекта/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    )
+    cleanup()
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string): MediaQueryList =>
+        ({
+          matches: true,
+          media: query,
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }) as MediaQueryList,
+    )
+    try {
+      showList({ grouped: true })
+      expect(await screen.findByRole('list', { name: 'Без проекта' })).toBeTruthy()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('opens the only folder there is', async () => {

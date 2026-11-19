@@ -7,7 +7,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
-import { useChatThinking } from './chat-details'
+import { useChatThinking, useTurnAtWorkShown } from './chat-details'
 import { CommandBlock } from './command-block'
 import { activityText } from './chat-texts'
 import type { ActivityEvent } from './chat-types'
@@ -328,6 +328,7 @@ export function TurnActivity({
 }) {
   const state = useTurnActivity(taskId, turn, live)
   const thoughts = useChatThinking()
+  useTurnAtWorkShown(live)
   return (
     <TurnActivityView
       state={state}
