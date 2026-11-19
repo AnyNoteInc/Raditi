@@ -16,7 +16,7 @@ import { accessibleTask, taskNotFound } from './access.ts'
 // the client's variables never is in them. The rows stay out of the feed (`client_visible` is
 // false). They have two readers for the page: this one, and `task.todo` (services/chat/todo.ts),
 // which takes of them only the last `todo_list` of a turn — the plan of the agent beside the chat
-// (docs/plan/87-agent-todos.md). A `failed` event's reason is raw CLI or provider text and never
+// (docs/plan/89-agent-todos.md). A `failed` event's reason is raw CLI or provider text and never
 // shown (spec §8), and `started`, `usage` and `completed` say nothing to the client. The turn's
 // final message is its result object: the dialog shows it as its answer. A `reasoning` event is
 // the model's raw thought: it is given like the rest, and the page draws it only for a viewer who
@@ -71,7 +71,7 @@ const shownEvent = z.discriminatedUnion('type', [
     options: z.array(z.string().max(agentOutputLimits.questionOption)),
   }),
   /**
-   * The agent's whole to-do list at that moment (docs/plan/87-agent-todos.md, ТД8): the line
+   * The agent's whole to-do list at that moment (docs/plan/89-agent-todos.md, ТД8): the line
    * «План работы» of «Ход работы» opens on it.
    */
   z.strictObject({

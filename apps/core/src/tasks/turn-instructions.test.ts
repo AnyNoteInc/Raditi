@@ -423,7 +423,7 @@ describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11; docs/p
   })
 })
 
-describe('the plan of the work beside the chat (docs/plan/87-agent-todos.md, ТД10, ТД13)', () => {
+describe('the plan of the work beside the chat (docs/plan/89-agent-todos.md, ТД10, ТД13)', () => {
   const kinds = () =>
     [false, true].flatMap((browser) =>
       [false, true].map((repository) =>

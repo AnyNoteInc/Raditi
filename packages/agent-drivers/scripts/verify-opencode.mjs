@@ -782,7 +782,7 @@ async function inside() {
         triggers: db.prepare("select name from sqlite_master where type = 'trigger'").all().length,
         sessions: db.prepare('select id, agent, model, permission, directory from session').all(),
         messages: db.prepare('select count(*) as n from message').get().n,
-        // The agent's to-do list (docs/plan/87-agent-todos.md, §2): the CLI's own table of it,
+        // The agent's to-do list (docs/plan/89-agent-todos.md, §2): the CLI's own table of it,
         // and the calls of its tool the history of the session keeps.
         todo: {
           rows: db.prepare('select count(*) as n from todo').get().n,
@@ -1452,7 +1452,7 @@ try {
     )
   }
 
-  // 2c. The agent's to-do list (docs/plan/87-agent-todos.md, §2 and 87.2). The driver reads the
+  // 2c. The agent's to-do list (docs/plan/89-agent-todos.md, §2 and 89.2). The driver reads the
   // whole list of a `todowrite` call in place of the call. The CLI's own table holds it in the
   // turn that wrote it; the next turn, carried over by export and import, starts without it, and
   // the model has only its call in the history of the session. So the platform keeps the last

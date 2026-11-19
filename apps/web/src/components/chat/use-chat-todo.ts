@@ -9,7 +9,7 @@ import { useTRPC } from '@/trpc/client'
 
 import { taskSignalBus } from './task-signal-bus'
 
-// «План работы» of the open chat (docs/plan/87-agent-todos.md, ТД12): a snapshot of `task.todo`,
+// «План работы» of the open chat (docs/plan/89-agent-todos.md, ТД12): a snapshot of `task.todo`,
 // read again with no signal of its own. The agent's list comes in its output, and every output
 // of a turn signals `activity` (task.signals): while the agent works, such a signal reads the plan
 // again. A new turn or a new status of the chat reads it too — the plan of the turn that ended

@@ -568,7 +568,7 @@ test('a chat without a repository is no turn of the two the stand requires', asy
   assert.throws(() => fixture.assertRewindComplete(), /three turns/)
 })
 
-/** The to-do list the first turn of the stand's chat writes (docs/plan/87-agent-todos.md, 87.6). */
+/** The to-do list the first turn of the stand's chat writes (docs/plan/89-agent-todos.md, 89.6). */
 const TODOS = [
   { content: 'Прочитать запрос raditi-todo', status: 'completed', priority: 'high' },
   { content: 'Подготовить ответ', status: 'in_progress', priority: 'medium' },

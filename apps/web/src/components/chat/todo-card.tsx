@@ -29,7 +29,7 @@ import { todoText } from './chat-texts'
 import { offScreen } from './composer'
 import { RESULTS_WIDTH } from './results-card'
 
-// «План работы» (docs/plan/87-agent-todos.md, §6): the agent's plan of its work, as its to-do tool
+// «План работы» (docs/plan/89-agent-todos.md, §6): the agent's plan of its work, as its to-do tool
 // left it. From `lg` a card over «Результаты» in the column beside the chat, in every state of the
 // plan; where the column does not fit, one line over the field while the agent works on it. The
 // same ordered list stands in both and in «Ход работы». Nothing here takes the focus (§6.4): the

@@ -1,7 +1,7 @@
 import { keyframes } from '@mui/material/styles'
 
 // The motion of a dialog: a row that arrives fades in; the agent at work is the moving mark of
-// Raditi (`BrandProgress`), and the item of its plan it works on now breathes (docs/plan/87, §6.1).
+// Raditi (`BrandProgress`), and the item of its plan it works on now breathes (docs/plan/89, §6.1).
 // Nothing else moves, and nothing moves for a viewer who asked for less.
 
 /** A row that has just arrived: up a few pixels from nothing. */

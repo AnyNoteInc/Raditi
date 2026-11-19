@@ -203,7 +203,7 @@ function chatId(): string {
 type Db = ReturnType<typeof createPrismaClient>
 
 /**
- * The agent's plan of its work (docs/plan/87-agent-todos.md, ТД2): the items of a `todo_list`
+ * The agent's plan of its work (docs/plan/89-agent-todos.md, ТД2): the items of a `todo_list`
  * event, as the driver reads them from `todowrite`. The page shows the last list of the last turn.
  */
 export type PlanItems = readonly AgentTodoItem[]
@@ -354,7 +354,7 @@ const answerRow = (turn: number, answer: string) =>
  * (docs/plan/61-chats-first.md, §5.14): the client's words, the stages of the turn and what the
  * model thought in its journal, the answer, and the chat open. No core runs here: `/undo` of this
  * chat is `task.undoTurn` in web, and `/thinking` reads the journal. `plan` — the last list of the
- * agent's plan in that turn (docs/plan/87-agent-todos.md). Everything goes with the user.
+ * agent's plan in that turn (docs/plan/89-agent-todos.md). Everything goes with the user.
  */
 export async function addAnsweredChat(
   userId: string,
@@ -399,7 +399,7 @@ export async function addAnsweredChat(
 
 /**
  * The client writes again in an answered chat, and the agent answers with no plan this time
- * (docs/plan/87-agent-todos.md, ТД5): the next turn, completed, with no list in its journal, and
+ * (docs/plan/89-agent-todos.md, ТД5): the next turn, completed, with no list in its journal, and
  * the chat open again.
  */
 export async function answerAgain(
@@ -440,7 +440,7 @@ export async function answerAgain(
 }
 
 /**
- * A chat without a project whose first turn is at work on a plan (docs/plan/87-agent-todos.md,
+ * A chat without a project whose first turn is at work on a plan (docs/plan/89-agent-todos.md,
  * §6): the client's words, the stage «work», the agent's list in the journal of the turn and the
  * chat `running`. No core runs here: the turn ends only by `endWorkingTurn`, and the page reads
  * the plan every 5 s while it works — this run has no stream of signals (no Redis).

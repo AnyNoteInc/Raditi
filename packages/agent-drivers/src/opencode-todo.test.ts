@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 import { parseOpencodeEvent } from './opencode-events.ts'
 
-// A `tool_use` row of `todowrite` as OpenCode 1.18.34 prints it (docs/plan/87-agent-todos.md, §2).
+// A `tool_use` row of `todowrite` as OpenCode 1.18.34 prints it (docs/plan/89-agent-todos.md, §2).
 const todowrite = (state: Record<string, unknown>) =>
   parseOpencodeEvent(
     JSON.stringify({
@@ -35,7 +35,7 @@ function listOf(events: AgentEvent[]): AgentTodoList {
 }
 const texts = (events: AgentEvent[]) => listOf(events).items.map((item) => item.text)
 
-describe("the agent's to-do list (docs/plan/87-agent-todos.md, §5.2)", () => {
+describe("the agent's to-do list (docs/plan/89-agent-todos.md, §5.2)", () => {
   it('reads the list of the input in its order, in place of the call', () => {
     const events = todowrite({
       status: 'completed',

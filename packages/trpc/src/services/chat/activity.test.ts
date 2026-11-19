@@ -152,7 +152,7 @@ describe('readTurnActivity', () => {
   })
 })
 
-describe('the plan of the agent in its work (docs/plan/87-agent-todos.md, ТД8)', () => {
+describe('the plan of the agent in its work (docs/plan/89-agent-todos.md, ТД8)', () => {
   const list = [
     { text: 'Найти шапку сайта', status: 'completed' },
     { text: 'Поменять телефон', status: 'in_progress' },

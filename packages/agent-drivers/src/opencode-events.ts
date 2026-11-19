@@ -99,7 +99,7 @@ function toolEvents(part: JsonObject): AgentEvent[] {
       ok: false,
     })
   const ok = state.status === 'completed'
-  // The agent's plan of its work (docs/plan/87-agent-todos.md, ТД3): the list in place of the
+  // The agent's plan of its work (docs/plan/89-agent-todos.md, ТД3): the list in place of the
   // call, which says nothing a client could read. A failed call, or one with no list, stays a call.
   if (ok && tool === 'todowrite') {
     const list = todoListEvents(state)

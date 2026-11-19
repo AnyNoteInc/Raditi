@@ -469,7 +469,7 @@ export const taskRouter = router({
 
   /**
    * «План работы»: the agent's to-do list of the last counted turn and its state, a snapshot
-   * (docs/plan/87-agent-todos.md, §5.3; services/chat/todo.ts). null — no plan to show.
+   * (docs/plan/89-agent-todos.md, §5.3; services/chat/todo.ts). null — no plan to show.
    */
   todo: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid() }))

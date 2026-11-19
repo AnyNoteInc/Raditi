@@ -10,7 +10,7 @@ import { taskSignalBus } from './task-signal-bus'
 import { TASK_ID } from './testing'
 import { todoPolling, useChatTodo } from './use-chat-todo'
 
-// When «План работы» of the open chat is read again (docs/plan/87-agent-todos.md, ТД12).
+// When «План работы» of the open chat is read again (docs/plan/89-agent-todos.md, ТД12).
 
 const todo = vi.hoisted(() => vi.fn<(input: { taskId: string }) => Promise<ChatTodo | null>>())
 

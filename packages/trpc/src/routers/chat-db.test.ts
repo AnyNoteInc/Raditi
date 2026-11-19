@@ -958,7 +958,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     })
   })
 
-  describe('task.todo (docs/plan/87-agent-todos.md, §5.3)', () => {
+  describe('task.todo (docs/plan/89-agent-todos.md, §5.3)', () => {
     const plan = [
       { text: 'Найти шапку сайта', status: 'completed' },
       { text: 'Поменять телефон', status: 'in_progress' },

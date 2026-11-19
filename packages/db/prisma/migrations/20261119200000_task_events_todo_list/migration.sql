@@ -1,4 +1,4 @@
--- The agent's plan of its work beside the chat (docs/plan/87-agent-todos.md, ТД4, §5.3). The list
+-- The agent's plan of its work beside the chat (docs/plan/89-agent-todos.md, ТД4, §5.3). The list
 -- has no state of its own: `task.todo` reads the last `todo_list` event the agent wrote in the
 -- journal of its last counted turns — the newest row `turn.output` of a turn that holds one. Only
 -- (turn_id) and (task_id, id) indexes existed, so each read would go through every journal row of

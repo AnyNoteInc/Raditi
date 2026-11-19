@@ -23,7 +23,7 @@ import { useTurnActivity, type ActivityState } from './use-turn-activity'
 // A live turn shows it as it comes, with what the agent is writing now (owner's request of
 // 09.11.2026) unless the viewer hid them; a finished one only for a viewer who asked (`/thinking`,
 // docs/plan/61, К32). The agent's plan of its work is no thought: a line for each step it moved
-// to, whatever `/thinking` says (docs/plan/87-agent-todos.md, ТД8).
+// to, whatever `/thinking` says (docs/plan/89-agent-todos.md, ТД8).
 
 const thought = {
   m: 0,
@@ -182,7 +182,7 @@ function clipItem(text: string): string {
 }
 
 /**
- * The agent's plan as it stood at that moment (docs/plan/87-agent-todos.md, ТД8): one line with
+ * The agent's plan as it stood at that moment (docs/plan/89-agent-todos.md, ТД8): one line with
  * the count, opened by a press into the list. A list not in Russian is told by its count alone.
  */
 function TodoSnapshot({ event }: { event: TodoListEvent }) {

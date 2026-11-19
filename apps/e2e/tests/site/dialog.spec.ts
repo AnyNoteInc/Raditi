@@ -713,7 +713,7 @@ test('a task in the browser in a window lower than 420px: «К чату» keeps 
   await expect(plus(page)).not.toBeInViewport()
 })
 
-// «План работы» (docs/plan/87-agent-todos.md, §6): the agent's to-do list of the last turn of the
+// «План работы» (docs/plan/89-agent-todos.md, §6): the agent's to-do list of the last turn of the
 // chat, read from the journal of that turn. No core works in this run: the rows a turn leaves are
 // written by the tests (site.ts), and with no stream of signals (no Redis) the page reads the
 // plan again every 5 s while a turn works (ТД12). From `lg` the plan is a card in the column beside

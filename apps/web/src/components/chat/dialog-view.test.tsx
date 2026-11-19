@@ -56,7 +56,7 @@ const calls = vi.hoisted(() => ({
     (input: { taskId: string }, handlers: SignalHandlers) => { unsubscribe: () => void }
   >(() => ({ unsubscribe: () => undefined })),
   activity: vi.fn<(input: { after: string }) => Promise<TurnActivityPage>>(),
-  // «План работы» (docs/plan/87-agent-todos.md): none unless a test gives one.
+  // «План работы» (docs/plan/89-agent-todos.md): none unless a test gives one.
   todo: vi.fn<(input: { taskId: string }) => Promise<ChatTodo | null>>(),
   message: vi.fn<(input: Press & { text: string }) => Promise<Posted>>(),
   // The queue of the chat (docs/plan/75, ВВ1): empty unless a test fills it.
@@ -2083,7 +2083,7 @@ describe('the queue of the chat while the agent works (docs/plan/75, ВВ1, ВВ
   })
 })
 
-describe('«План работы» of the agent (docs/plan/87-agent-todos.md, §6)', () => {
+describe('«План работы» of the agent (docs/plan/89-agent-todos.md, §6)', () => {
   const plan = (patch: Partial<ChatTodo> = {}): ChatTodo => ({
     turn: 1,
     state: 'working',

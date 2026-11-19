@@ -90,7 +90,7 @@ describe('«Результаты» beside the chat (14.11.2026)', () => {
     ).toBe(of(40, 320))
   })
 
-  // The column holds «План работы» too (docs/plan/87-agent-todos.md, ТД6, §6.1).
+  // The column holds «План работы» too (docs/plan/89-agent-todos.md, ТД6, §6.1).
   it.each([
     ['plan', 'Скрыть план работы', 'Показать план работы'],
     ['both', 'Скрыть план и результаты', 'Показать план и результаты'],

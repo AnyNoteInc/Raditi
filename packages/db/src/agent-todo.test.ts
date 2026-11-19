@@ -21,9 +21,9 @@ describe('readChatTodo without a database', () => {
   })
 })
 
-// The plan of the agent beside the chat (docs/plan/87-agent-todos.md, ТД4, §5.3): the last list
+// The plan of the agent beside the chat (docs/plan/89-agent-todos.md, ТД4, §5.3): the last list
 // of the last two counted turns, read from the journal through task_events_todo_list_idx.
-describe.skipIf(!databaseUrl)('PostgreSQL: the plan of the agent in the journal (plan 87)', () => {
+describe.skipIf(!databaseUrl)('PostgreSQL: the plan of the agent in the journal (plan 89)', () => {
   let schema: MigratedSchema
   let db: PrismaClient
   const workspaces: string[] = []

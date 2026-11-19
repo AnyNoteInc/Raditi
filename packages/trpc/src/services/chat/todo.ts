@@ -3,7 +3,7 @@ import { chatTodoOf, chatTodoSchema, type ChatTodo } from '@repo/domain'
 
 import { accessibleTask, taskNotFound } from './access.ts'
 
-// «План работы» beside the chat (docs/plan/87-agent-todos.md, ТД4, ТД5, §5.3): the agent's to-do
+// «План работы» beside the chat (docs/plan/89-agent-todos.md, ТД4, ТД5, §5.3): the agent's to-do
 // list as the card shows it — a snapshot, no cursor. The list is read from the journal of the last
 // two counted turns; which of them the card shows, and in what state, is the domain's.
 

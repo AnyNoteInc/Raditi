@@ -414,7 +414,7 @@ export async function startOpencodeRunnerFixture() {
           'The words of an undone turn reached the provider',
         )
         if (todos && state.phase === 'initial') {
-          // The agent's to-do list first (docs/plan/87-agent-todos.md, 87.6): the CLI's own tool.
+          // The agent's to-do list first (docs/plan/89-agent-todos.md, 89.6): the CLI's own tool.
           check(
             body.tools.some((tool) => tool.function?.name === 'todowrite'),
             'The to-do tool was not advertised',
@@ -555,7 +555,7 @@ export async function startOpencodeRunnerFixture() {
      * held — `remembered` must stand in the request and `forgotten` must not, or the request is
      * refused and the turn fails. No turn of the chat with the repository is one of these. With
      * `todos` the model first writes that to-do list with the CLI's `todowrite`
-     * (docs/plan/87-agent-todos.md, 87.6) and answers once the list came back to it.
+     * (docs/plan/89-agent-todos.md, 89.6) and answers once the list came back to it.
      */
     addRewindTurn({ turn, llmKey, mcpKey, prompt, effort, answer, remembered, forgotten, todos }) {
       const key = `rewind-${turn}`

@@ -35,7 +35,7 @@ describe('the message of the work of the agent', () => {
   })
 })
 
-describe('the plan of the work in the message (docs/plan/87-agent-todos.md, ТД9, ТД11)', () => {
+describe('the plan of the work in the message (docs/plan/89-agent-todos.md, ТД9, ТД11)', () => {
   type Item = { text: string; status: 'pending' | 'in_progress' | 'completed' | 'cancelled' }
   const plan = (items: Item[], omitted?: { completed: number; other: number }) =>
     activityLine({ type: 'todo_list', items, ...(omitted ? { omitted } : {}) })

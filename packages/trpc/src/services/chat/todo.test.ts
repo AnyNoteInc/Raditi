@@ -30,7 +30,7 @@ const todo = (items: readonly unknown[], extra: Record<string, unknown> = {}) =>
   ...extra,
 })
 
-// «План работы» beside the chat (docs/plan/87-agent-todos.md, §5.3): who may read it, and what
+// «План работы» beside the chat (docs/plan/89-agent-todos.md, §5.3): who may read it, and what
 // of the journal facts reaches the page.
 describe('chatTodo', () => {
   it('reads the plan of a chat of the user, and only then the journal', async () => {

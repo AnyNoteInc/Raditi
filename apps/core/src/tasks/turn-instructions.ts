@@ -406,7 +406,7 @@ export const REPO_RULES = `- The working directory ${SANDBOX_WORKDIR} is the pro
 `
 
 /**
- * The agent's plan of its work (docs/plan/87-agent-todos.md, ТД10, ТД13): the client sees the
+ * The agent's plan of its work (docs/plan/89-agent-todos.md, ТД10, ТД13): the client sees the
  * agent's to-do list beside the chat, so these words say how to write its items and never ask for
  * a list — the tool's own description does that, and each call is one more request of the model,
  * paid with the client's credits (rule 7). The tool is not named: its name is the driver's

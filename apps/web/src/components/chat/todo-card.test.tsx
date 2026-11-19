@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { TodoCard, TodoList, todoHeadOf, TodoStrip, todoStripShows } from './todo-card'
 
-// «План работы» (docs/plan/87-agent-todos.md, §6): the card beside the chat, the line over the
+// «План работы» (docs/plan/89-agent-todos.md, §6): the card beside the chat, the line over the
 // field and the list they share.
 
 const item = (text: string, status: AgentTodoItem['status']): AgentTodoItem => ({ text, status })

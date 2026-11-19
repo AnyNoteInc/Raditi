@@ -28,7 +28,7 @@
 // with the real CLI and local LLM/MCP fixtures, including encrypted snapshot restore, then a chat
 // whose last request is undone (docs/plan/61-chats-first.md, §5.14): it leases by its own id, two
 // turns, and a third that goes back to the snapshot of the first through the runner's links, the
-// first writing the agent's to-do list (docs/plan/87-agent-todos.md, 87.6) that the runner reports
+// first writing the agent's to-do list (docs/plan/89-agent-todos.md, 89.6) that the runner reports
 // to core as one todo_list; a file of the client in /workspace/inbox; and a chat of a project
 // with a repository (docs/plan/84-projects.md, ПР8, ПР12, ПР33, ПР35) — the path of production:
 // the bundle without history the runner fetches from core into /workspace/repo, the files that
@@ -687,7 +687,7 @@ async function homeEntries(reference) {
 const homeFiles = async (reference) => [...(await homeEntries(reference)).keys()]
 
 /**
- * The agent's to-do list in the session of a checkpoint (docs/plan/87-agent-todos.md, §2): the
+ * The agent's to-do list in the session of a checkpoint (docs/plan/89-agent-todos.md, §2): the
  * rows of the CLI's own table and the calls of its tool the history keeps, read from a private
  * copy of the session database and its WAL.
  */
@@ -1121,7 +1121,7 @@ try {
       })
     const kept = [words[0], answers[0]]
     const undone = [words[1], answers[1]]
-    // The agent's to-do list (docs/plan/87-agent-todos.md, 87.6): the first turn writes one with
+    // The agent's to-do list (docs/plan/89-agent-todos.md, 89.6): the first turn writes one with
     // the CLI's `todowrite` before it answers. What the runner parsed of that row reaches the
     // journal of core as one `todo_list` and no `tool_call`; the turns after it start with the
     // CLI's table empty and find the call only in the history of the session.

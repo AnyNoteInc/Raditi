@@ -9,7 +9,7 @@ import {
 
 /**
  * An item of the agent's plan cut back to its limit the way the driver cuts it
- * (docs/plan/87-agent-todos.md, §5.2): whole characters and «…» — an astral one takes two units
+ * (docs/plan/89-agent-todos.md, §5.2): whole characters and «…» — an astral one takes two units
  * of `length`, and the schema counts those.
  */
 function clipTodoText(text: string): string {

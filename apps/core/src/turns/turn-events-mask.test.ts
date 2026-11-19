@@ -50,7 +50,7 @@ describe('the client variables of a turn in its events (plan 53, Р13)', () => {
     expect(shown).not.toContain(short)
   })
 
-  it('masks a value inside an item of the plan, the client sees it beside the chat (plan 87, ТД14)', () => {
+  it('masks a value inside an item of the plan, the client sees it beside the chat (plan 89, ТД14)', () => {
     const plan: AgentEvent = {
       type: 'todo_list',
       items: [

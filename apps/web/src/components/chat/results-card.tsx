@@ -16,7 +16,7 @@ import { resultsText, todoText } from './chat-texts'
 // «Результаты» beside the chat (owner's request of 14.11.2026, as ChatGPT shows them): a card
 // pinned to the top right of the chat that names what the agent made in it — a document it writes
 // with how far it is, the pages and texts it left — and opens each in the tab «Документы». It
-// shares the column beside the chat with «План работы» (docs/plan/87-agent-todos.md, ТД6), which
+// shares the column beside the chat with «План работы» (docs/plan/89-agent-todos.md, ТД6), which
 // stands over it. The icon in the head of the chat hides and shows the column; a chat too narrow
 // for it does not show it.
 

@@ -9,7 +9,7 @@ import {
 
 import { events, object, text, type JsonObject } from './jsonl.ts'
 
-// What OpenCode's `todowrite` wrote, as the common event `todo_list` (docs/plan/87-agent-todos.md,
+// What OpenCode's `todowrite` wrote, as the common event `todo_list` (docs/plan/89-agent-todos.md,
 // §5.2, ТД3). Every call sends the agent's whole list, `{ todos: [{ content, status, priority }] }`;
 // `status` is free text on the wire (the model is told four words, its schema has no enum), and
 // an item has no id: its place in the list is what it is. This file knows the shape of the tool;

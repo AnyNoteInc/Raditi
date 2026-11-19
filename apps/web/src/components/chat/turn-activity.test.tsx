@@ -172,7 +172,7 @@ describe('«Ход работы»', () => {
     expect(screen.getByText('raditi_wp_rest')).toBeTruthy()
   })
 
-  // «План работы» in «Ход работы» (docs/plan/87-agent-todos.md, ТД8, §6.3): `ActivityLine` would
+  // «План работы» in «Ход работы» (docs/plan/89-agent-todos.md, ТД8, §6.3): `ActivityLine` would
   // draw nothing of it without its case, and nothing but this test would say so.
   describe('the plan of the agent', () => {
     type Plan = Extract<ActivityEvent, { type: 'todo_list' }>

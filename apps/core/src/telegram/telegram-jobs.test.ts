@@ -467,7 +467,7 @@ describe('TelegramJobs.progress', () => {
     expect(h.edits).toEqual([{ messageId: 1, text: expect.stringMatching(/Ищет в интернете/u) }])
   })
 
-  it('says the plan of the work when the agent last wrote its list, escaped (docs/plan/87, ТД9)', async () => {
+  it('says the plan of the work when the agent last wrote its list, escaped (docs/plan/89, ТД9)', async () => {
     const h = harness({
       output: [
         ...search,

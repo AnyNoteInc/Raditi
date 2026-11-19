@@ -2,7 +2,7 @@ import { agentEventSchema, type AgentTodoList, type TurnTodoFacts } from '@repo/
 
 import type { PrismaClient, TurnStatus } from './generated/prisma/client.ts'
 
-// The agent's plan of its work beside the chat (docs/plan/87-agent-todos.md, ТД4, §5.3). The list
+// The agent's plan of its work beside the chat (docs/plan/89-agent-todos.md, ТД4, §5.3). The list
 // has no state of its own: it is the last `todo_list` event the agent wrote in the journal of a
 // turn. A turn undone by `/undo` is not counted, so `/undo` and `/redo` move the plan with no code
 // of their own. What the card shows of these facts is the domain's (`chatTodoOf`).

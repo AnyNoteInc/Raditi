@@ -64,7 +64,7 @@ const cut = (text: string, max: number) => {
 }
 
 /**
- * The plan of the agent's work (docs/plan/87-agent-todos.md, ТД9, ТД11): what is done of it and
+ * The plan of the agent's work (docs/plan/89-agent-todos.md, ТД9, ТД11): what is done of it and
  * the item at work. A list the agent did not write in Russian is told by its count alone (rule
  * 10): the step at work, or all done.
  */

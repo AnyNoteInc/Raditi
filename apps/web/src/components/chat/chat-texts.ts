@@ -370,7 +370,7 @@ export const resultsText = Object.freeze({
 const steps = (count: number) => `${count} ${plural(count, 'шаг', 'шага', 'шагов')}`
 
 /**
- * «План работы» (docs/plan/87-agent-todos.md, §6, ТД1): the agent's plan of its work beside the
+ * «План работы» (docs/plan/89-agent-todos.md, §6, ТД1): the agent's plan of its work beside the
  * chat, over the field on a narrow screen, and in «Ход работы». The items are the agent's own
  * words; a list it wrote without a Russian word is told by its count alone (ТД11).
  */

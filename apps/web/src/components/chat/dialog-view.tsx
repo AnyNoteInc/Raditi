@@ -598,7 +598,7 @@ export function DialogView({
     dispatchTools({ type: 'documentArrived', opens: wide })
   })
   const documentCount = chatDocuments.length + agentDocs.length
-  // «План работы» (docs/plan/87-agent-todos.md): the agent's to-do list of the last turn. `/undo`
+  // «План работы» (docs/plan/89-agent-todos.md): the agent's to-do list of the last turn. `/undo`
   // and `/redo` change which turn is last with no new status: their newest row reads it again.
   const lastRewind = useMemo(
     () => rows.findLast((row) => row.type === 'feed.rewind' || row.type === 'feed.redo')?.id,
@@ -609,7 +609,7 @@ export function DialogView({
   const rereadTodo = () =>
     void queryClient.invalidateQueries({ queryKey: trpc.task.todo.queryKey({ taskId }) })
   // The column beside the chat — «План работы» over «Результаты» (owner's request of 14.11.2026;
-  // docs/plan/87, ТД6): from `lg`, while the area of the feed is wide enough and the client has
+  // docs/plan/89, ТД6): from `lg`, while the area of the feed is wide enough and the client has
   // not hidden it. A plan brings it in a chat with no documents too.
   const results = useResultsCard(feedArea, wide && (documentCount > 0 || todo !== null))
   const sideHolds: SideHolds = todo === null ? 'results' : documentCount > 0 ? 'both' : 'plan'
@@ -1589,7 +1589,7 @@ export function DialogView({
             }}
           >
             {/* Where the column beside the chat does not fit, the plan of the work stands over
-                the field while the agent works (docs/plan/87, ТД7); from `lg` only once the area
+                the field while the agent works (docs/plan/89, ТД7); from `lg` only once the area
                 is measured, so the column does not follow the line in. */}
             {todo !== null &&
             todoStripShows(todo) &&

@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { hiddenContactText } from './client-feed-text.ts'
 
-// The agent's plan of its work (docs/plan/87-agent-todos.md, ТД2, ТД5, ТД11): the list a driver
+// The agent's plan of its work (docs/plan/89-agent-todos.md, ТД2, ТД5, ТД11): the list a driver
 // reads from the agent's own to-do tool, carried as the common event `todo_list`, and what the
 // chat shows of it. Every call of such a tool sends the whole list, and the last one wins — so
 // do OpenCode `todowrite`, Claude Code `TodoWrite`, Codex `update_plan` and ACP `plan`. Pure: no
