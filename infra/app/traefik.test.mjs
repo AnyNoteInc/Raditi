@@ -55,6 +55,10 @@ test('metrics are refused at the edge, on either host', () => {
   assert.match(code, /edge-deny:\n\s+ipAllowList: \{ sourceRange: \['127\.0\.0\.1\/32'\] \}/)
 })
 
+// A method a route file of web exports: `export async function PUT(…)` or, wrapped by
+// server/cabinet-only.ts, `export const PUT = cabinetOnly(…)`.
+const ROUTE_METHOD = /^export (?:(?:async )?function|const) ([A-Z]+)\b/gm
+
 test('a body sent to the API is limited at the edge; pages and GET are never buffered', () => {
   const api = router('web-api-body')
   assert.ok(api.includes(apex) && !api.includes(www))
@@ -101,7 +105,7 @@ test('a body sent to the API is limited at the edge; pages and GET are never buf
     'utf8',
   )
   assert.deepEqual(
-    [...projectFiles.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]),
+    [...projectFiles.matchAll(ROUTE_METHOD)].map((m) => m[1]),
     ['PUT', 'GET'],
   )
   // So does dictation (960 000 bytes at most, docs/plan/75, ВВ17): web reads it after its checks
@@ -111,7 +115,7 @@ test('a body sent to the API is limited at the edge; pages and GET are never buf
     'utf8',
   )
   assert.deepEqual(
-    [...route.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]),
+    [...route.matchAll(ROUTE_METHOD)].map((m) => m[1]),
     ['PUT'],
   )
 })
