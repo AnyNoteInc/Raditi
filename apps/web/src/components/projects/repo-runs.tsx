@@ -22,7 +22,7 @@ import ButtonBase from '@mui/material/ButtonBase'
 import Typography from '@mui/material/Typography'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { callErrorText } from '@/components/chat/call-error'
@@ -80,6 +80,7 @@ export const runText = Object.freeze({
   retry: 'Ещё раз',
   workLoading: 'Загружаем…',
   noJobs: 'Заданий сборки ещё нет.',
+  jobs: 'Задания',
   lastRun: 'Последняя сборка',
   allRunsLink: 'Сборки',
 })
@@ -630,9 +631,14 @@ export function RunView({
             </Box>
             <Typography sx={{ fontSize: 13, color: 'text.secondary', overflowWrap: 'anywhere' }}>
               <Box component="span" sx={{ fontFamily: 'var(--font-mono, monospace)' }}>
-                {data.run.ref} · {data.run.sha.slice(0, 7)}
-              </Box>{' '}
-              · {data.run.name}
+                {data.run.ref}
+              </Box>
+              {' · '}
+              <Box component="span" sx={{ fontFamily: 'var(--font-mono, monospace)' }}>
+                {data.run.sha.slice(0, 7)}
+              </Box>
+              {' · '}
+              {data.run.name}
               {data.run.chat ? (
                 <>
                   {' · '}
@@ -684,27 +690,25 @@ function Stages({
         <Typography sx={{ color: 'text.secondary' }}>{runText.noJobs}</Typography>
       </Box>
     )
+  // As many columns as there are stages, up to four: a build of GitHub has no stages, its jobs
+  // are one list across the whole width, not a quarter of it.
   return (
     <Box
       data-repo-stages=""
       sx={{
         display: 'grid',
         gap: 1.5,
-        gridTemplateColumns: {
-          xs: '1fr',
-          sm: 'repeat(2, minmax(0, 1fr))',
-          lg: 'repeat(4, minmax(0, 1fr))',
-        },
+        gridTemplateColumns: { xs: '1fr', sm: 'repeat(auto-fit, minmax(260px, 1fr))' },
       }}
     >
       {stages.map((stage) => (
         <Box
-          key={stage.name ?? '—'}
-          sx={{ ...card, display: 'flex', flexDirection: 'column', gap: 1 }}
+          key={stage.name ?? ''}
+          sx={{ ...card, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}
         >
           <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
             <Typography sx={{ fontWeight: 600, fontSize: 14, overflowWrap: 'anywhere' }}>
-              {stage.name ?? '—'}
+              {stage.name ?? runText.jobs}
             </Typography>
             <CiStatusChip status={stage.status} />
           </Box>
@@ -717,6 +721,7 @@ function Stages({
               sx={{
                 minHeight: 44,
                 px: 1,
+                py: 0.75,
                 borderRadius: '8px',
                 justifyContent: 'space-between',
                 gap: 1,
@@ -726,11 +731,15 @@ function Stages({
                 '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main' },
               }}
             >
+              {/* A long name of a matrix job wraps at its spaces, a word is cut only when it alone
+                  is wider than the row. */}
               <Typography
                 sx={{
+                  flex: '1 1 auto',
+                  minWidth: 0,
                   fontSize: 13.5,
                   fontFamily: 'var(--font-mono, monospace)',
-                  overflowWrap: 'anywhere',
+                  overflowWrap: 'break-word',
                 }}
               >
                 {job.name}
@@ -747,6 +756,26 @@ function Stages({
       ))}
     </Box>
   )
+}
+
+/**
+ * The log of a job lies under the list of jobs, which in a build of GitHub is long: a log opened,
+ * shown or read that is not wholly on the screen is brought to its top, gently unless the client
+ * asked for less motion. A log already in sight stays where it is.
+ */
+function useInSight(shown: boolean, read: boolean) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const box = ref.current
+    if (!box || typeof box.scrollIntoView !== 'function') return
+    const { top, bottom } = box.getBoundingClientRect()
+    if (top >= 0 && bottom <= window.innerHeight) return
+    const calm =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    box.scrollIntoView({ block: 'start', behavior: calm ? 'auto' : 'smooth' })
+  }, [shown, read])
+  return ref
 }
 
 /** The log of a job: core fetches it on the first look (`loading`), then the masked tail. */
@@ -776,8 +805,13 @@ export function JobLog({
           : false,
   })
   const data = log.data
+  const inSight = useInSight(shown, data?.state === 'ready')
   return (
-    <Box data-repo-log={job.id} sx={{ ...card, display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Box
+      ref={inSight}
+      data-repo-log={job.id}
+      sx={{ ...card, scrollMarginTop: 16, display: 'flex', flexDirection: 'column', gap: 1 }}
+    >
       <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
         <Typography component="h2" sx={{ fontWeight: 600, fontSize: 15 }}>
           {runText.log(job.name)}

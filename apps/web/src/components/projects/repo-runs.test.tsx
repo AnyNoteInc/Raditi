@@ -209,6 +209,65 @@ describe('P-pipeline (plan 84, 84.21)', () => {
     expect(calls.jobLog).toHaveBeenCalledWith({ projectId: PROJECT, runId: '481', jobId: '4813' })
   })
 
+  it('a build without stages lists its jobs under «Задания», without a dash', async () => {
+    calls.run.mockResolvedValue({
+      run: runRow('484', 'running', { stages: [] }),
+      jobs: [
+        job('4842', 'images / build (migrate, apps/core/Dockerfile)', '', 'success', {
+          stage: null,
+        }),
+        job('4841', 'release', '', 'success', { stage: null }),
+      ],
+    })
+    wrap(<RunView project={project} runId="484" />)
+    expect(await screen.findByText('Задания')).toBeTruthy()
+    expect(screen.queryByText('—')).toBeNull()
+    expect(screen.getByText('images / build (migrate, apps/core/Dockerfile)')).toBeTruthy()
+  })
+
+  it('brings an opened log out of sight to its top, a log in sight stays put', async () => {
+    calls.run.mockResolvedValue({
+      run: runRow('485', 'success', { stages: [] }),
+      jobs: [
+        job('4852', 'release', '', 'success', { stage: null }),
+        job('4851', 'verified', '', 'success', { stage: null }),
+      ],
+    })
+    calls.jobLog.mockResolvedValue({
+      state: 'ready',
+      text: 'done',
+      truncated: false,
+      fetchedAt: new Date(),
+    })
+    const scroll = vi.fn()
+    const place = { top: 0, bottom: 0 }
+    const measure = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(
+        () => ({ ...place, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0 }) as DOMRect,
+      )
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scroll,
+    })
+    try {
+      wrap(<RunView project={project} runId="485" />)
+      // Below the screen: opened — to its top.
+      Object.assign(place, { top: 900, bottom: 1000 })
+      fireEvent.click(await screen.findByText('release'))
+      expect(scroll).toHaveBeenCalledTimes(1)
+      expect(scroll).toHaveBeenLastCalledWith({ block: 'start', behavior: 'smooth' })
+      // In sight: shown and read — no jump.
+      Object.assign(place, { top: 100, bottom: 600 })
+      fireEvent.click(screen.getByRole('button', { name: 'Показать журнал' }))
+      expect(await screen.findByText('done')).toBeTruthy()
+      expect(scroll).toHaveBeenCalledTimes(1)
+    } finally {
+      measure.mockRestore()
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
   it('a build gitlab.com did not start says why', async () => {
     calls.run.mockResolvedValue({
       run: runRow('483', 'failed', { refusal: 'account_unverified' }),
