@@ -11,7 +11,7 @@ import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
 import { backendCapacities, backendFallbacks } from './backends.ts'
 import { CoreCredentialRuntime } from './credential-runtime.ts'
 import { CredentialSweeper, type CredentialSweepKind } from './credential-sweeper.ts'
-import { TURN_CREDENTIALS } from './llm.tokens.ts'
+import { POOL_PROBE, TURN_CREDENTIALS } from './llm.tokens.ts'
 import { createPoolProbeClient, type PoolProbeClient } from './pool-probe-client.ts'
 import { TurnCostRuntime } from './turn-costs.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
@@ -50,7 +50,12 @@ export function loggedProbe(
   providers: [
     {
       provide: TURN_CREDENTIALS,
-      useFactory: (prisma: PrismaClient, secrets: SecretStore, config: CoreConfig) =>
+      useFactory: (
+        prisma: PrismaClient,
+        secrets: SecretStore,
+        config: CoreConfig,
+        probe: PoolProbeClient | null,
+      ) =>
         new GatewayTurnCredentials({
           prisma,
           secrets,
@@ -60,16 +65,21 @@ export function loggedProbe(
           capacityOf: backendCapacities(llmBackends),
           // The API after the plan (docs/plan/70-turn-without-time-limit.md, ВР25).
           fallbackOf: backendFallbacks(llmBackends),
-          ...(config.llmControlUrl === undefined
-            ? {}
-            : {
-                probeAccounts: loggedProbe(
-                  createPoolProbeClient(config.llmControlUrl, config.metricsToken),
-                  new Logger('CoreCredentials'),
-                ),
-              }),
+          ...(probe === null ? {} : { probeAccounts: probe }),
         }),
-      inject: [PRISMA, SECRET_STORE, CORE_CONFIG],
+      inject: [PRISMA, SECRET_STORE, CORE_CONFIG, POOL_PROBE],
+    },
+    {
+      // One client of the gateway's probe for the issue of keys and the choice of a pass's backend.
+      provide: POOL_PROBE,
+      useFactory: (config: CoreConfig): PoolProbeClient | null =>
+        config.llmControlUrl === undefined
+          ? null
+          : loggedProbe(
+              createPoolProbeClient(config.llmControlUrl, config.metricsToken),
+              new Logger('CoreCredentials'),
+            ),
+      inject: [CORE_CONFIG],
     },
     { provide: GatewayTurnCredentials, useExisting: TURN_CREDENTIALS },
     {
@@ -110,6 +120,6 @@ export function loggedProbe(
       inject: [CredentialSweeper, BACKGROUND_JOBS],
     },
   ],
-  exports: [TURN_CREDENTIALS],
+  exports: [TURN_CREDENTIALS, POOL_PROBE],
 })
 export class LlmModule {}

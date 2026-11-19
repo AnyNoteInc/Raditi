@@ -18,7 +18,8 @@ import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { AGENT_DRIVERS } from '../drivers/drivers.tokens.ts'
 import { OBJECT_STORAGE } from '../infra/infra.tokens.ts'
 import { SITE_LEASES } from '../leases/leases.tokens.ts'
-import { TURN_CREDENTIALS } from '../llm/llm.tokens.ts'
+import { POOL_PROBE, TURN_CREDENTIALS } from '../llm/llm.tokens.ts'
+import type { PoolProbeClient } from '../llm/pool-probe-client.ts'
 import { JOB_QUEUE } from '../queue/queue.tokens.ts'
 import { TaskEventTurnJournal } from '../turns/turn-journal.ts'
 import { turnRuntimeOf } from '../turns/turn-runtime.ts'
@@ -90,6 +91,7 @@ export const taskProviders: Provider[] = [
       executor: TurnExecutor | null,
       gitJobs: GitJobs | null,
       workspace: GitWorkspaceService | null,
+      poolProbe: PoolProbeClient | null,
     ) => {
       // What the pool told a pass (plan 71, §4.4): the limits of the agent out.
       const limitsOut = new Counter({
@@ -104,6 +106,7 @@ export const taskProviders: Provider[] = [
         browser,
         drivers,
         backends: llmBackends,
+        ...(poolProbe ? { poolProbe } : {}),
         leases,
         runtime: turnRuntimeOf(config),
         settlement,
@@ -157,6 +160,7 @@ export const taskProviders: Provider[] = [
       { token: TURN_EXECUTOR, optional: true },
       { token: GIT_JOBS, optional: true },
       { token: GIT_WORKSPACE, optional: true },
+      { token: POOL_PROBE, optional: true },
     ],
   },
   {

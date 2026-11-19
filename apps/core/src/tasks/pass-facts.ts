@@ -23,6 +23,7 @@ import {
   type UnavailableRepositoryFacts,
 } from '@repo/domain'
 
+import type { PoolProbeClient } from '../llm/pool-probe-client.ts'
 import { poolHasRoom } from '../llm/pool-room.ts'
 import { AGENT_COMMANDS } from './turn-instructions.ts'
 import {
@@ -48,6 +49,11 @@ export interface PassFactsInput {
 export interface PassFactsDependencies {
   db: PrismaClient
   backends: readonly LlmBackend[]
+  /**
+   * The probe of the pool through the gateway: a pool closed only by the forecast between probes
+   * is probed before a pass leaves it for the next backend (`poolHasRoom`); absent — not probed.
+   */
+  poolProbe?: PoolProbeClient
 }
 
 const turnStatus = (status: string): FinishedTurn['status'] =>
@@ -195,7 +201,7 @@ export async function readPassFacts(
   // backend in the order of the registry: the plan first, the API when the plan has its limits
   // out (owner's answer of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР24). With every
   // pool out the first stays, and the issue of its key tells the client so (plan 68).
-  const chosen = await profileWithRoom(db, deps.backends, modelClass.data)
+  const chosen = await profileWithRoom(deps, modelClass.data)
   const profile = chosen
     ? {
         backend: chosen.backend,
@@ -343,8 +349,7 @@ const attachmentFactsOf = (
 
 /** The profile of the class on the first backend whose pool has room, or on the first at all. */
 async function profileWithRoom(
-  db: PrismaClient,
-  backends: readonly LlmBackend[],
+  { db, backends, poolProbe }: PassFactsDependencies,
   modelClass: ModelClass,
 ): Promise<Awaited<ReturnType<typeof classProfile<LlmBackendId>>>> {
   let first: Awaited<ReturnType<typeof classProfile<LlmBackendId>>> = null
@@ -353,7 +358,21 @@ async function profileWithRoom(
     if (!profile) continue
     first ??= profile
     // One backend: no other to go to, and the issue decides under its lock as before.
-    if (backends.length === 1 || (await poolHasRoom(db, backend, new Date()))) return profile
+    if (backends.length === 1) return profile
+    // What a turn of the profile takes, as the issue counts it (Л12).
+    const cost = await db.llmTurnCost.findUnique({
+      where: { modelId: profile.modelId },
+      select: { p95PlanCredits: true },
+    })
+    const turnCostCredits =
+      cost === null || cost.p95PlanCredits.lte(0) ? null : cost.p95PlanCredits.toNumber()
+    if (
+      await poolHasRoom(db, backend, new Date(), {
+        turnCostCredits,
+        ...(poolProbe ? { probe: poolProbe } : {}),
+      })
+    )
+      return profile
   }
   return first
 }

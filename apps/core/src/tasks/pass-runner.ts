@@ -19,6 +19,7 @@ import {
 } from '@repo/domain'
 
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
+import type { PoolProbeClient } from '../llm/pool-probe-client.ts'
 import type { CompletedTurn, TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { ChatFiles } from './chat-files.ts'
 import type { DocSections } from './doc-sections.ts'
@@ -78,6 +79,8 @@ export interface PassRunnerDependencies {
   browser?: Pick<BrowserSessions, 'reclaim' | 'verify'> | null
   drivers: AgentDriverRegistry
   backends: readonly LlmBackend[]
+  /** The probe of the pool before a pass leaves a plan the forecast alone closed (`poolHasRoom`). */
+  poolProbe?: PoolProbeClient
   leases: Pick<SiteLeaseStore, 'inspect'>
   /** The runtime of turn sandboxes (SANDBOX_RUNTIME). */
   runtime: SandboxRuntime
@@ -459,7 +462,11 @@ export class PassRunner {
 
   async #plan(job: AgentTurnJob, ref: PassRef): Promise<PassPlan> {
     const facts = await readPassFacts(
-      { db: this.deps.db, backends: this.deps.backends },
+      {
+        db: this.deps.db,
+        backends: this.deps.backends,
+        ...(this.deps.poolProbe ? { poolProbe: this.deps.poolProbe } : {}),
+      },
       {
         taskId: job.taskId,
         attempt: job.attempt,
