@@ -361,6 +361,51 @@ describe('durable turn credentials', () => {
     expect(probeAccounts).toHaveBeenLastCalledWith([old.accountId], { stale: true })
   })
 
+  it('probes before it refuses on the forecast alone, and keeps to what Z.ai reports (19.11.2026)', async () => {
+    const now = new Date('2026-09-30T12:00:00Z')
+    const fiveHours = {
+      name: '5h',
+      usedPct: 1.25,
+      usedCredits: 25,
+      limitCredits: 2_000,
+      resetsAt: new Date(now.getTime() + 2 * 3_600_000).toISOString(),
+    }
+    // The probe said 25 of 2 000; the calls since forecast 3 101 more: the window is out.
+    const account: Record<string, unknown> = {
+      limitWindows: [fiveHours],
+      limitsSeenAt: new Date(now.getTime() - 45 * 60_000),
+      closedPlanCredits: '3101',
+      openPlanCredits: '0',
+    }
+    const reported = (usedCredits: number) => () => {
+      account.limitWindows = [{ ...fiveHours, usedCredits, usedPct: usedCredits / 20 }]
+      account.limitsSeenAt = now
+      account.closedPlanCredits = '0'
+    }
+    const roomy = vi.fn(async () => reported(300)())
+    const ok = fixture({ capacityOf: () => 'windows', probeAccounts: roomy, account })
+    await ok.credentials.issue(ok.ref, ok.grant)
+    expect(roomy).toHaveBeenCalledOnce()
+    expect(roomy).toHaveBeenCalledWith([ok.accountId], { stale: true })
+    expect(ok.key()).not.toBeNull()
+
+    account.limitWindows = [fiveHours]
+    account.limitsSeenAt = new Date(now.getTime() - 45 * 60_000)
+    account.closedPlanCredits = '3101'
+    const full = vi.fn(async () => reported(1_990)())
+    const out = fixture({ capacityOf: () => 'windows', probeAccounts: full, account })
+    await expect(out.credentials.issue(out.ref, out.grant)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_WAIT',
+    })
+    expect(full).toHaveBeenCalledOnce()
+    // A window Z.ai itself reports closed waits without another probe.
+    full.mockClear()
+    await expect(out.credentials.issue(out.ref, out.grant)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_WAIT',
+    })
+    expect(full).not.toHaveBeenCalled()
+  })
+
   it('is not composed without the capacity of each backend', () => {
     // A stand composes it in plain JS, unchecked: it stops at once, not at its first issue.
     const options = { prisma: {}, secrets: {} } as unknown as GatewayTurnCredentialsOptions

@@ -52,4 +52,60 @@ describe('whether a pool may take a turn (plan 70, ВР24)', () => {
     expect(await poolHasRoom(db([row({ enabled: false })]), backend, now)).toBe(false)
     expect(await poolHasRoom(db([row({ status: 'retired' })]), backend, now)).toBe(false)
   })
+
+  describe('as the issue reads it: with the forecast between probes (19.11.2026)', () => {
+    const resetsAt = new Date(now.getTime() + poolPolicy.limitsOutWaitMs + 3_600_000).toISOString()
+    const window = (usedCredits: number) => ({
+      name: '5h',
+      usedPct: usedCredits / 20,
+      usedCredits,
+      limitCredits: 2_000,
+      resetsAt,
+    })
+    // The probe said 25 of 2 000; the calls of the account since forecast 3 101 more.
+    const forecastOut = row({ limitWindows: [window(25)], closedPlanCredits: '3101' })
+
+    it('has no room the probe alone would give it, once a probe did not open it', async () => {
+      expect(await poolHasRoom(db([forecastOut]), backend, now, { probed: true })).toBe(false)
+      const open = row({ limitWindows: [window(25)], openPlanCredits: '1990' })
+      expect(await poolHasRoom(db([open]), backend, now, { probed: true })).toBe(false)
+    })
+
+    it('counts a turn at its measured cost', async () => {
+      const left = row({ limitWindows: [window(1_600)] })
+      expect(await poolHasRoom(db([left]), backend, now)).toBe(true)
+      expect(await poolHasRoom(db([left]), backend, now, { turnCostCredits: 519 })).toBe(false)
+    })
+
+    it('probes a pool only the forecast closed, and reads it again', async () => {
+      const rows = [forecastOut]
+      const store = db(rows)
+      const probe = vi.fn(async () => {
+        rows[0] = row({ limitWindows: [window(300)] })
+      })
+      expect(await poolHasRoom(store, backend, now, { probe })).toBe(true)
+      expect(probe).toHaveBeenCalledWith(['account-1'], { stale: true })
+      // Z.ai confirms the forecast: the next backend is the way out.
+      rows[0] = forecastOut
+      probe.mockImplementation(async () => {
+        rows[0] = row({ limitWindows: [window(1_990)] })
+      })
+      expect(await poolHasRoom(store, backend, now, { probe })).toBe(false)
+      // A failed probe opens nothing either.
+      rows[0] = forecastOut
+      probe.mockRejectedValue(new Error('refused'))
+      expect(await poolHasRoom(store, backend, now, { probe })).toBe(false)
+    })
+
+    it('leaves a pool only the forecast closed to the issue without a probe of its own', async () => {
+      expect(await poolHasRoom(db([forecastOut]), backend, now)).toBe(true)
+    })
+
+    it('never probes a window the provider itself reports closed', async () => {
+      const probe = vi.fn(async () => {})
+      const full = row({ limitWindows: [window(1_990)] })
+      expect(await poolHasRoom(db([full]), backend, now, { probe })).toBe(false)
+      expect(probe).not.toHaveBeenCalled()
+    })
+  })
 })

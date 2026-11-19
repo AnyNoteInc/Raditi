@@ -1,7 +1,5 @@
 import type { Prisma, PrismaClient } from '@repo/db'
 import {
-  absoluteWindow,
-  accountWindowForecast,
   badRequest,
   conflict,
   crossBorderNotCleared,
@@ -24,7 +22,6 @@ import {
   turnKeyBudgetVerdict,
   TURN_PUBLICATION_GRACE_MS,
   type AttemptBudgetInput,
-  type LimitWindow,
   type LlmBackendId,
   type LlmCapacity,
   type PoolAccountSnapshot,
@@ -56,6 +53,7 @@ import {
   readWorkspaceEnvValuesToRefuse,
   type WorkspaceEnvVarVersion,
 } from '../workspace-env/workspace-env-values.ts'
+import { forecastOnlyWait, forecastWindows } from './pool-forecast.ts'
 
 type Transaction = Prisma.TransactionClient
 type Database = Pick<PrismaClient, '$transaction'>
@@ -157,6 +155,11 @@ interface Selection {
    * for a backend without windows: there is nothing to refresh.
    */
   staleAccountId: string | null
+  /**
+   * An account the wait stands on only by the forecast between probes (`forecastOnlyWait`):
+   * probed once before the issue refuses, then selected again from what Z.ai reported.
+   */
+  forecastAccountId: string | null
 }
 type Preparation =
   | { kind: 'existing'; key: KeyRow; now: Date }
@@ -242,10 +245,12 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         return task === null ? null : this.#select(tx, null, grant, task)
       })
       if (selected === null) return
+      if (selected.forecastAccountId !== null) return
       decision = selected.decision
     } catch {
       return
     }
+    // A probe decides it in the issue: the windows are unknown, or only the forecast closed them.
     if (decision.kind === 'wait' && decision.probeAccountIds.length > 0) return
     requireSelection(decision)
   }
@@ -267,6 +272,19 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
           await this.#probeAccounts(ids).catch(() => undefined)
           prepared = await this.#prepare(ref, grant)
         }
+      }
+      if (
+        prepared.kind === 'selection' &&
+        prepared.decision.kind === 'wait' &&
+        prepared.forecastAccountId !== null &&
+        this.#probeAccounts
+      ) {
+        // Only the forecast closes the pool: what Z.ai reports decides, not the guess. The role
+        // keeps to one probe per account in five minutes, and a failed probe closes nothing new.
+        await this.#probeAccounts([prepared.forecastAccountId], { stale: true }).catch(
+          () => undefined,
+        )
+        prepared = await this.#prepare(ref, grant)
       }
       if (prepared.kind === 'selection' && prepared.staleAccountId && this.#probeAccounts) {
         // A provider that reports its windows only when asked: the account would be selected
@@ -680,19 +698,23 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
             AND k.revoked_at IS NULL AND k.expires_at > clock_timestamp()) AS "activeTurns"
       FROM subscription_accounts a WHERE a.provider_id = ${profile.providerId}::uuid
         AND a.driver_id = ${grant.driverId}`
-    const snapshots = accounts.map(
-      ({ limitsSeenAt: _seen, closedPlanCredits, openPlanCredits, ...a }) => ({
+    const reported = accounts.map(
+      ({ limitsSeenAt: _seen, closedPlanCredits: _closed, openPlanCredits: _open, ...a }) => ({
         ...a,
         backend: grant.backend,
         activeTurns: Number(a.activeTurns),
-        // Between probes the pool reads the forecast (plan 71, §2.1): the probe's use plus what
-        // the calls of the account took since and what its open calls hold.
-        limitWindows: forecastWindows(decodeLimitWindows(a.limitWindows), {
-          closedSinceProbe: closedPlanCredits,
-          openReserved: openPlanCredits,
-        }),
+        limitWindows: decodeLimitWindows(a.limitWindows),
       }),
     )
+    // Between probes the pool reads the forecast (plan 71, §2.1): the probe's use plus what the
+    // calls of the account took since and what its open calls hold.
+    const snapshots = reported.map((a, index) => ({
+      ...a,
+      limitWindows: forecastWindows(a.limitWindows, {
+        closedSinceProbe: accounts[index]!.closedPlanCredits,
+        openReserved: accounts[index]!.openPlanCredits,
+      }),
+    }))
     // Not llm_keys.last_refusal: any later refusal of the same key overwrites that one.
     const policyFlagged = await tx.taskEvent.findFirst({
       where: { taskId: task.id, type: policyFlaggedEvent },
@@ -728,13 +750,14 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
             : turnCost.p95PlanCredits.toNumber(),
         accounts,
       })
-    const decision = pick(
+    const pinned = <T extends { id: string }>(rows: T[]) =>
       requiredAccount
-        ? snapshots.filter(
-            (a) => a.id === requiredAccount || a.id === binding?.subscriptionAccountId,
-          )
-        : snapshots,
-    )
+        ? rows.filter((a) => a.id === requiredAccount || a.id === binding?.subscriptionAccountId)
+        : rows
+    const decision = pick(pinned(snapshots))
+    // A wait the forecast alone makes is probed before it refuses (`forecastOnlyWait`).
+    const forecastAccountId =
+      capacity === 'windows' ? forecastOnlyWait(decision, pick(pinned(reported))) : null
     if (ref !== null) await assertCurrentFence(tx, ref)
     // Windows nobody has dated are unknown ones, which the selection sends to a probe itself.
     const seenAt =
@@ -745,6 +768,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       task,
       profile,
       decision,
+      forecastAccountId,
       staleAccountId:
         decision.kind === 'selected' &&
         capacity === 'windows' &&
@@ -840,25 +864,6 @@ function requireSelection(
       reason: decision.reason,
     })
 }
-/** The windows of an account with their use forecast between probes, in plan credits. */
-function forecastWindows(
-  windows: LimitWindow[] | null,
-  since: { closedSinceProbe: string; openReserved: string },
-): LimitWindow[] | null {
-  if (windows === null) return null
-  return windows.map((window) => {
-    const absolute = absoluteWindow(window)
-    if (absolute === null) return window
-    const used = accountWindowForecast({ probedUsedCredits: absolute.usedCredits, ...since })
-    return {
-      ...window,
-      limitCredits: absolute.limitCredits,
-      usedCredits: Math.min(used, 1e9),
-      usedPct: Math.min(100, (used * 100) / absolute.limitCredits),
-    }
-  })
-}
-
 async function clock(tx: Transaction): Promise<Date> {
   const rows = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`
   return rows[0]!.now
