@@ -23,7 +23,9 @@ import { chatContextOf } from '../services/chat/context.ts'
 import {
   DIALOG_CURSOR_PATTERN,
   DIALOG_SEARCH_TEXT,
+  listDialogFolders,
   listDialogs,
+  NO_PROJECT,
   searchDialogs,
 } from '../services/chat/dialog-list.ts'
 import { readDialogExport, readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
@@ -472,10 +474,12 @@ export const taskRouter = router({
         cursor: z.string().regex(DIALOG_CURSOR_PATTERN).optional(),
         /** «Архив» (docs/plan/75-chat-input-output.md, ВВ21); the list itself by default. */
         view: z.enum(['active', 'archive']).optional(),
-        /** The chats of one project of the user (docs/plan/84-projects.md, ПР2). */
+        /**
+         * The chats of one project of the user (docs/plan/84-projects.md, ПР2); `none` — those
+         * without a project, a folder of «По проектам» (owner's request of 19.11.2026).
+         */
         projectId: z
-          .uuid()
-          .transform((id) => id.toLowerCase())
+          .union([z.uuid().transform((id) => id.toLowerCase()), z.literal(NO_PROJECT)])
           .optional(),
       }),
     )
@@ -495,6 +499,27 @@ export const taskRouter = router({
         projectId: input.projectId,
       }),
     ),
+
+  /**
+   * «По проектам» (owner's request of 19.11.2026): the folders of the user's chats, counted on the
+   * server over all of them.
+   */
+  folders: consentedProcedure
+    .input(z.strictObject({}))
+    .output(
+      z.strictObject({
+        folders: z.array(
+          z.strictObject({
+            project: chatProjectSchema.nullable(),
+            count: z.number().int().nonnegative(),
+            attention: z.boolean(),
+          }),
+        ),
+      }),
+    )
+    .query(async ({ ctx }) => ({
+      folders: await listDialogFolders(ctx.prisma, { userId: ctx.user.id }),
+    })),
 
   /** «Поиск по чатам» (ВВ21): by the name and by the client's words, in «Архив» too. */
   search: consentedProcedure

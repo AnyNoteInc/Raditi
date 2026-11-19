@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
@@ -114,6 +114,63 @@ describe('the window of commands', () => {
     ).toEqual(['turn_redo', 'sessions'])
     type('/redo please')
     expect(screen.queryByRole('listbox')).toBeNull()
+  })
+
+  it('shows what a command of the page answered under the field, for a moment (19.11.2026)', () => {
+    vi.useFakeTimers()
+    try {
+      const onRun = vi.fn(() => 'Размышления агента скрыты')
+      render(
+        <Composer
+          placeholder="Что поправить?"
+          onSend={vi.fn(async () => true)}
+          commands={{ verdicts: verdicts(), onRun }}
+        />,
+      )
+      type('/thinking')
+      press('Enter')
+      expect(onRun).toHaveBeenCalledWith('thinking')
+      // The live region that reads it aloud stands visible, once in the page.
+      const status = screen.getByRole('status')
+      expect(status.textContent).toBe('Размышления агента скрыты')
+      expect(status.hasAttribute('data-command-said')).toBe(true)
+      expect(getComputedStyle(status).position).not.toBe('absolute')
+      act(() => void vi.advanceTimersByTime(4000))
+      expect(status.hasAttribute('data-command-said')).toBe(false)
+      expect(status.textContent).toBe('')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows the next answer of a command its own while, not the rest of the last one', () => {
+    vi.useFakeTimers()
+    try {
+      const onRun = vi
+        .fn<() => string>()
+        .mockReturnValueOnce('Размышления агента показаны')
+        .mockReturnValueOnce('Размышления агента скрыты')
+      render(
+        <Composer
+          placeholder="Что поправить?"
+          onSend={vi.fn(async () => true)}
+          commands={{ verdicts: verdicts(), onRun }}
+        />,
+      )
+      type('/thinking')
+      press('Enter')
+      act(() => void vi.advanceTimersByTime(3000))
+      type('/thinking')
+      press('Enter')
+      const status = screen.getByRole('status')
+      expect(status.textContent).toBe('Размышления агента скрыты')
+      act(() => void vi.advanceTimersByTime(3000))
+      expect(status.hasAttribute('data-command-said')).toBe(true)
+      act(() => void vi.advanceTimersByTime(1000))
+      expect(status.hasAttribute('data-command-said')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('moves with the arrows and runs the chosen command with Enter, never sending its words', () => {
@@ -467,7 +524,7 @@ describe('the field', () => {
     )
   })
 
-  it('keeps its controls in one order: «/», the paperclip, «Размышление», then «Отправить»', () => {
+  it('keeps its controls in one order: «+», «/», «Размышление», then «Отправить»', () => {
     render(
       <Composer
         placeholder="Что поправить?"
@@ -480,11 +537,11 @@ describe('the field', () => {
       screen
         .getAllByRole('button')
         .map((button) => button.textContent || button.getAttribute('aria-label')),
-    ).toEqual(['Команды', 'Прикрепить файлы', 'Размышление: Высокое', 'Отправить'])
+    ).toEqual(['Прикрепить файлы', 'Команды', 'Размышление: Высокое', 'Отправить'])
     const attach = screen.getByRole<HTMLButtonElement>('button', { name: 'Прикрепить файлы' })
-    // A paperclip, not «+»: «+» of a dialog is its tools (docs/plan/59, И15).
-    expect(outline(attach)).toBe(outlineOf('attach'))
-    expect(outline(attach)).not.toBe(outlineOf('plus'))
+    // A plus in place of the paperclip, first in the row (owner's request of 19.11.2026).
+    expect(outline(attach)).toBe(outlineOf('plus'))
+    expect(outline(attach)).not.toBe(outlineOf('attach'))
     expect(attach.getAttribute('aria-haspopup')).toBe('menu')
     // A field that takes no files has it all the same, closed, and says why.
     expect(attach.disabled).toBe(true)

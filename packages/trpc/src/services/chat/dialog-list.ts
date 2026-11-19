@@ -1,5 +1,6 @@
 import { Prisma, projectOwnedBy, type PrismaClient } from '@repo/db'
 import {
+  NO_PROJECT_FOLDER,
   projectNotFound,
   type ChatProject,
   type PullRequestState,
@@ -88,6 +89,22 @@ export interface DialogPage {
 /** Which chats the list shows: the list itself, or «Архив» (ВВ21). */
 export type DialogView = 'active' | 'archive'
 
+/**
+ * The chats of one folder of «По проектам» (owner's request of 19.11.2026, after docs/plan/61,
+ * К23): a project of the user by its id, or `none` — the chats without a project.
+ */
+export const NO_PROJECT = NO_PROJECT_FOLDER
+export type DialogFolderKey = string
+
+/** One folder of «По проектам»: a project with chats, or (`project` null) the chats without one. */
+export interface DialogFolder {
+  project: ChatProject | null
+  /** Its chats in the list, the pinned among them; not those in «Архив». */
+  count: number
+  /** A chat of it waits for the client: the folder says so while it is closed. */
+  attention: boolean
+}
+
 /** The most pinned chats the head of the list shows, and the most a search finds. */
 export const DIALOG_PINNED_LIMIT = 50
 export const DIALOG_SEARCH_LIMIT = 50
@@ -136,6 +153,10 @@ const PASS_ENDING = (column: Prisma.Sql) => Prisma.sql`(SELECT ${column} FROM ta
  */
 export const FAILED = Prisma.sql`(t.status IN ('awaiting_user', 'awaiting_approval')
   AND COALESCE(${PASS_ENDING(Prisma.sql`e.type`)} = 'feed.failure', false))`
+
+/** The chat `t` waits for the client: a question or a confirmation, not an answer or a failure. */
+const WAITS_FOR_CLIENT = Prisma.sql`(NOT ${FAILED} AND (t.status = 'awaiting_approval'
+  OR (t.status = 'awaiting_user' AND NOT ${ANSWERED})))`
 
 /**
  * The open chat `t` stopped at a limit (docs/plan/82-scheduled-tasks.md, Зп5): the newest row that
@@ -194,8 +215,8 @@ export function dialogPageQuery(input: {
   cursor?: string | undefined
   /** `active` (the default): the list without its pinned and archived chats; `archive` — «Архив». */
   view?: DialogView | undefined
-  /** The chats of one project alone (ПР2); its owner was checked by the caller. */
-  projectId?: string | undefined
+  /** The chats of one project alone (ПР2), its owner checked by the caller; `none` — of none. */
+  projectId?: DialogFolderKey | undefined
 }): Prisma.Sql {
   const inView =
     input.view === 'archive'
@@ -208,7 +229,7 @@ export function dialogPageQuery(input: {
       : Prisma.sql`AND (t.updated_at, t.id) <
           (timestamptz 'epoch' + ${BigInt(after[1]!)}::bigint * interval '1 microsecond', ${after[2]!}::uuid)`
   // The chats of a project: `tasks_project_updated_idx` gives them in their order.
-  if (input.projectId !== undefined)
+  if (input.projectId !== undefined && input.projectId !== NO_PROJECT)
     return Prisma.sql`
       SELECT ${ITEM}
       FROM tasks t
@@ -232,6 +253,7 @@ export function dialogPageQuery(input: {
         t.chat_session_id, t.project_id
       FROM tasks t
       WHERE t.workspace_id = m.workspace_id AND ${SHOWN} ${inView} ${afterCursor}
+        ${input.projectId === NO_PROJECT ? Prisma.sql`AND t.project_id IS NULL` : Prisma.empty}
       ORDER BY t.updated_at DESC, t.id DESC
       LIMIT ${DIALOG_PAGE + 1}
     ) t
@@ -251,12 +273,16 @@ export async function listDialogs(
     userId: string
     cursor?: string | undefined
     view?: DialogView | undefined
-    /** The chats of one project of the user (ПР2); PROJECT_NOT_FOUND for any other. */
-    projectId?: string | undefined
+    /**
+     * The chats of one project of the user (ПР2), PROJECT_NOT_FOUND for any other; `none` — those
+     * without a project.
+     */
+    projectId?: DialogFolderKey | undefined
   },
 ): Promise<DialogPage> {
   if (
     input.projectId !== undefined &&
+    input.projectId !== NO_PROJECT &&
     (await projectOwnedBy(db, input.projectId, input.userId)) === null
   )
     throw projectNotFound()
@@ -327,13 +353,19 @@ const ITEM = Prisma.sql`t.id, t.title, t.status::text AS status, t.created_at, t
 const OF_USER = (userId: string) =>
   Prisma.sql`t.workspace_id IN (SELECT m.workspace_id FROM members m WHERE m.user_id = ${userId}::uuid)`
 
-/** The pinned chats of the head of the list (ВВ21), the last pinned first; of a project alone. */
-export function pinnedQuery(input: { userId: string; projectId?: string | undefined }) {
+/** The pinned chats of the head of the list (ВВ21), the last pinned first; of a folder alone. */
+export function pinnedQuery(input: { userId: string; projectId?: DialogFolderKey | undefined }) {
+  const inFolder =
+    input.projectId === undefined
+      ? Prisma.empty
+      : input.projectId === NO_PROJECT
+        ? Prisma.sql`AND t.project_id IS NULL`
+        : Prisma.sql`AND t.project_id = ${input.projectId}::uuid`
   return Prisma.sql`
     SELECT ${ITEM}
     FROM tasks t
     WHERE ${OF_USER(input.userId)} AND ${SHOWN}
-      ${input.projectId === undefined ? Prisma.empty : Prisma.sql`AND t.project_id = ${input.projectId}::uuid`}
+      ${inFolder}
       AND t.pinned_at IS NOT NULL AND t.archived_at IS NULL
     ORDER BY t.pinned_at DESC, t.id DESC
     LIMIT ${DIALOG_PINNED_LIMIT}`
@@ -368,4 +400,42 @@ export async function searchDialogs(
     ORDER BY t.updated_at DESC, t.id DESC
     LIMIT ${DIALOG_SEARCH_LIMIT}`
   return rows.map(itemOf)
+}
+
+/**
+ * «По проектам» (owner's request of 19.11.2026, after docs/plan/61, К23): every project with chats
+ * in the list, the latest changed first, then the chats without a project. Counted here over all
+ * the chats: a page of the list would give wrong numbers. A project in the trash takes its chats
+ * with it (ПР20), one in «Архив» keeps its folder while it has chats. The events of a chat are read
+ * only for the chats that can wait for the client: the folders are read again with the list.
+ * A project is named by its row alone, as in the list (`PROJECT`): the workspaces are personal,
+ * so the project of a chat of the user is the user's — with members, check its author here too.
+ */
+export async function listDialogFolders(
+  db: Pick<PrismaClient, '$queryRaw'>,
+  input: { userId: string },
+): Promise<DialogFolder[]> {
+  const rows = await db.$queryRaw<
+    Array<{
+      project_id: string | null
+      project_name: string | null
+      count: number
+      attention: boolean
+    }>
+  >`
+    SELECT p.id AS project_id, p.name AS project_name, count(*)::int AS count,
+      bool_or(CASE WHEN t.status IN ('awaiting_user', 'awaiting_approval')
+        THEN ${WAITS_FOR_CLIENT} ELSE false END) AS attention
+    FROM tasks t LEFT JOIN projects p ON p.id = t.project_id
+    WHERE ${OF_USER(input.userId)} AND ${SHOWN} AND t.archived_at IS NULL
+    GROUP BY p.id, p.name
+    ORDER BY p.id IS NULL, max(t.updated_at) DESC, p.id`
+  return rows.map((row) => ({
+    project:
+      row.project_id === null || row.project_name === null
+        ? null
+        : { id: row.project_id, name: row.project_name },
+    count: row.count,
+    attention: row.attention,
+  }))
 }

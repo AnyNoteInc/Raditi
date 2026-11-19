@@ -6,6 +6,7 @@ import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import NextLink from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 
 import { UsageWindowHint } from '@/components/billing/usage-window-hint'
@@ -18,6 +19,7 @@ import {
   type ProjectListItem,
 } from '@/components/projects/project-types'
 
+import { projectOfSearch, rememberProjectInAddress } from './chat-address'
 import { takeChatDraft } from './chat-draft'
 import { useRememberedEffort } from './chat-effort'
 import { useGreeting } from './chat-greeting'
@@ -35,7 +37,8 @@ import { useStartChat } from './use-start-chat'
  * first.md, К6). The first words start a chat: the browser invents its id, so a repeat of the
  * same request after a lost answer finds the same chat, and the screen moves to it. The pill of the
  * field chooses the project the chat starts in, «Без проекта» by default; `?project=<id>` and the
- * page of a project choose it at once (docs/plan/84-projects.md, ПР30). Changing it keeps the words
+ * page of a project choose it at once (docs/plan/84-projects.md, ПР30), and the pill writes its
+ * choice into `?project=<id>`, so a reload keeps it (owner's request of 19.11.2026). Changing it keeps the words
  * and the files of the field. «Размышление» picks how hard the model thinks — the same menu changes it
  * later in the chat. Beside the list at the root of the section (`beside`) the heading of the page
  * is the list's, so the screen takes the level below; below `md` that screen stands hidden on the
@@ -66,6 +69,16 @@ export function NewChat({
   const [chosen, setChosen] = useState<PickedProject | null | undefined>(
     projectId === null ? null : undefined,
   )
+  // The pill writes the address itself (ПИ6). An address it did not write — «Создать», a link with
+  // `?project=` — starts the choice over from the address: Next keeps this screen mounted when only
+  // the query of the address changes, so the choice would outlive it.
+  const addressed = projectOfSearch(useSearchParams().get('project') ?? undefined)?.toLowerCase()
+  const [seen, setSeen] = useState(addressed)
+  if (addressed !== seen) {
+    setSeen(addressed)
+    if (chosen !== undefined && (chosen?.id ?? undefined) !== addressed)
+      setChosen(addressed === undefined ? null : undefined)
+  }
   const { choices, loaded } = useProjectChoices(chosen === undefined)
   const project =
     chosen !== undefined ? chosen : projectOfAddress(projectId, loaded ? choices : null)
@@ -163,7 +176,16 @@ export function NewChat({
         restored={draft}
         history={history}
         speech={speech}
-        project={<ProjectPicker value={project} onChange={setChosen} disabled={busy} />}
+        project={
+          <ProjectPicker
+            value={project}
+            onChange={(next) => {
+              setChosen(next)
+              rememberProjectInAddress(next?.id ?? null)
+            }}
+            disabled={busy}
+          />
+        }
         effort={<EffortMenu value={effort} onChange={setEffort} handle={effortMenu} />}
       />
       {project !== null ? (

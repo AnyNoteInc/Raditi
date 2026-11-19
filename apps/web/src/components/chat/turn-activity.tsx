@@ -18,7 +18,8 @@ import { useTurnActivity, type ActivityState } from './use-turn-activity'
 // names of tools and paths in the monospace face, as the agent gave them. What the model thought
 // is set apart from what the agent said: it is raw and often English, and no answer of the agent.
 // A live turn shows it as it comes, with what the agent is writing now (owner's request of
-// 09.11.2026); a finished one only for a viewer who asked (`/thinking`, docs/plan/61, К32).
+// 09.11.2026) unless the viewer hid them; a finished one only for a viewer who asked (`/thinking`,
+// docs/plan/61, К32).
 
 const thought = {
   m: 0,
@@ -252,9 +253,12 @@ export function TurnActivityView({
   thinking?: boolean
 }) {
   // A draft of a turn that has ended is what it was writing when it stopped: its finished
-  // events say the rest.
+  // events say the rest. A thought, finished or being written, only for `thinking`.
   const shown = state.events.filter(
-    (event) => (thinking || event.type !== 'reasoning') && (live || event.type !== 'draft'),
+    (event) =>
+      (thinking ||
+        (event.type !== 'reasoning' && !(event.type === 'draft' && event.kind === 'reasoning'))) &&
+      (live || event.type !== 'draft'),
   )
   const count = shown.length
   let status: string | null = null
@@ -323,6 +327,12 @@ export function TurnActivity({
   live: boolean
 }) {
   const state = useTurnActivity(taskId, turn, live)
-  const { thinking } = useChatThinking()
-  return <TurnActivityView state={state} live={live} thinking={live || thinking} />
+  const thoughts = useChatThinking()
+  return (
+    <TurnActivityView
+      state={state}
+      live={live}
+      thinking={live ? thoughts.live : thoughts.thinking}
+    />
+  )
 }

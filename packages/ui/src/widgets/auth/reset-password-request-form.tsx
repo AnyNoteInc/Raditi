@@ -47,7 +47,7 @@ export function ResetPasswordRequestForm({
     <Stack component="form" noValidate onSubmit={submit} spacing={3}>
       <AuthHeader
         title="Восстановление пароля"
-        subtitle="Укажите адрес, с которым вы регистрировались, — пришлём ссылку для смены пароля."
+        subtitle="Укажите адрес, с которым вы регистрировались — пришлём ссылку для смены пароля."
         homeHref={homeHref}
       />
       {isSubmitSuccessful ? (

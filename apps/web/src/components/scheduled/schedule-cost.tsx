@@ -12,7 +12,7 @@ import type { ScheduleCost } from './schedule-model'
 import { scheduleCostTexts } from './schedule-texts'
 
 /**
- * «Каждый запуск тратит кредиты, как обычный чат, — в среднем около 11. Так выйдет примерно N в
+ * «Каждый запуск тратит кредиты, как обычный чат — в среднем около 11. Так выйдет примерно N в
  * неделю; ваш недельный лимит — M.» (Зп30); more than half the limit — in the colour of a
  * warning, with «Остальным чатам останется меньше»; only by hand — the first sentence alone.
  */

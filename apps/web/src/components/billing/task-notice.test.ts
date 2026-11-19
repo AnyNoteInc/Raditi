@@ -382,7 +382,7 @@ describe('on a paid tariff that does not renew (A9)', () => {
   it('offers the pack and auto-renewal', () => {
     expect(told({ ...ending, offer: PACK })).toEqual({
       reason: 'empty',
-      text: `${state} Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 200 кредитов.`,
+      text: `${state} Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают — или включите автопродление: тогда 18 октября начислим 200 кредитов.`,
       actions: ['buy_pack', 'resume_renewal'],
     })
     // A few credits left start a task: no notice then.

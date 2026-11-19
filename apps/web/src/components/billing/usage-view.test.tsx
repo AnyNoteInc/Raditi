@@ -825,7 +825,7 @@ describe('a customer whose credits are used up', () => {
 
     const credits = await section('Кредиты')
     expect(plain(within(credits).getByRole('status').textContent)).toBe(
-      'Лимиты закончились, а тариф «Бизнес» действует до 18 октября и не продлится. Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 1 000 кредитов.',
+      'Лимиты закончились, а тариф «Бизнес» действует до 18 октября и не продлится. Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают — или включите автопродление: тогда 18 октября начислим 1 000 кредитов.',
     )
     expect(within(credits).getByRole('button', { name: 'Купить пакет' })).toBeVisible()
     expect(within(credits).getByRole('link', { name: 'Включить автопродление' })).toHaveAttribute(

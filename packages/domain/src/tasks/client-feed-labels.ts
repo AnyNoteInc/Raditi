@@ -132,7 +132,7 @@ const FEED_QUEUED_TEXT =
 /** Why the task waits in the queue, by `tasks.waiting`. */
 export const feedWaitingText: Readonly<Record<TaskWaitingReason, string>> = Object.freeze({
   agents:
-    'Ваша задача в очереди: сейчас все мощности ИИ-агента заняты. Начнём, как только возьмёмся, — результат появится в этом чате.',
+    'Ваша задача в очереди: сейчас все мощности ИИ-агента заняты. Начнём, как только возьмёмся — результат появится в этом чате.',
   site: 'На сайте сейчас идёт другая работа. Начнём, когда она закончится.',
 })
 

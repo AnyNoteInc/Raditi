@@ -6,8 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatsFrame } from './chats-frame'
 import type { DialogListPage } from './chat-types'
 
-const { listPage, replace, mocks } = vi.hoisted(() => ({
+const { listPage, folders, replace, mocks } = vi.hoisted(() => ({
   listPage: vi.fn<(input: { cursor?: string }) => Promise<DialogListPage>>(),
+  folders: vi.fn(),
   replace: vi.fn(),
   mocks: { segment: null as string | null, search: new URLSearchParams() },
 }))
@@ -23,6 +24,7 @@ vi.mock('@/trpc/client', () => ({
     task: {
       list: { query: listPage },
       get: { query: vi.fn() },
+      folders: { query: folders },
     },
   }),
   useTRPC: () => ({
@@ -56,12 +58,12 @@ const chat: DialogListPage['items'][number] = {
   repo: null,
 }
 
-function showFrame(segment: string | null) {
+function showFrame(segment: string | null, group?: 'list' | 'projects') {
   mocks.segment = segment
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={queryClient}>
-      <ChatsFrame>
+      <ChatsFrame {...(group ? { group } : {})}>
         <p>Содержимое</p>
       </ChatsFrame>
     </QueryClientProvider>,
@@ -77,10 +79,11 @@ beforeEach(() => {
 })
 
 describe('the frame of «Чаты»', () => {
-  it('heads the page with the list at the root, with «Новый чат» and no way back', async () => {
+  it('heads the page with the list at the root, with «Создать» and no way back', async () => {
     showFrame(null)
     expect(within(list()).getByRole('heading', { level: 1, name: 'Чаты' })).toBeTruthy()
-    const action = within(list()).getByRole('link', { name: 'Новый чат' })
+    const action = within(list()).getByRole('link', { name: 'Создать чат' })
+    expect(action.textContent).toBe('Создать')
     expect(action.getAttribute('href')).toBe('/chats/new')
     expect(action.getAttribute('aria-current')).toBeNull()
     expect(screen.queryByRole('link', { name: 'К чатам' })).toBeNull()
@@ -88,13 +91,38 @@ describe('the frame of «Чаты»', () => {
     expect(screen.getByText('Содержимое')).toBeTruthy()
   })
 
-  it('marks «Новый чат» on its address and leaves the page heading to the content', () => {
+  it('marks «Создать» on its address and leaves the page heading to the content', () => {
     showFrame('new')
     expect(
-      within(list()).getByRole('link', { name: 'Новый чат' }).getAttribute('aria-current'),
+      within(list()).getByRole('link', { name: 'Создать чат' }).getAttribute('aria-current'),
     ).toBe('page')
     expect(within(list()).getByRole('heading', { level: 2, name: 'Чаты' })).toBeTruthy()
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
+  })
+
+  it('shows the chats by projects from «Показывать чаты», and remembers it (19.11.2026)', async () => {
+    folders.mockResolvedValue({
+      folders: [{ project: { id: chat.id, name: 'Колос' }, count: 1, attention: false }],
+    })
+    document.cookie = 'raditi-chats-group=; max-age=0; path=/'
+    showFrame(null)
+    expect(await screen.findByText('Идеи для названия пекарни')).toBeTruthy()
+    fireEvent.click(within(list()).getByRole('button', { name: 'Группировка чатов' }))
+    const menu = await screen.findByRole('menu', { name: 'Показывать чаты' })
+    expect(
+      within(menu)
+        .getByRole('menuitemradio', { name: 'Одним списком' })
+        .getAttribute('aria-checked'),
+    ).toBe('true')
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'По проектам' }))
+    expect(await within(list()).findByRole('button', { name: /Колос/ })).toBeTruthy()
+    expect(document.cookie).toContain('raditi-chats-group=projects')
+  })
+
+  it('draws the folders at once when the cookie chose them', async () => {
+    folders.mockResolvedValue({ folders: [{ project: null, count: 1, attention: false }] })
+    showFrame(null, 'projects')
+    expect(await within(list()).findByRole('button', { name: /Без проекта/ })).toBeTruthy()
   })
 
   it('leads back to the list from an item, outside the list itself', () => {

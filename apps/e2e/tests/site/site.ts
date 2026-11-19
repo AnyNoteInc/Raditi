@@ -211,7 +211,15 @@ export async function addAnsweredChat(
     answer,
     thought,
     projectId = null,
-  }: { words: string; answer: string; thought: string; projectId?: string | null },
+    title = words,
+  }: {
+    words: string
+    answer: string
+    thought: string
+    projectId?: string | null
+    /** The name of the chat, when its words are longer than a name may be. */
+    title?: string
+  },
 ): Promise<{ taskId: string }> {
   const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
   try {
@@ -224,7 +232,7 @@ export async function addAnsweredChat(
         workspaceId: workspace.id,
         createdById: userId,
         status: 'awaiting_user',
-        title: words,
+        title,
         turnNo: 1,
         needsBrowser: false,
         projectId,

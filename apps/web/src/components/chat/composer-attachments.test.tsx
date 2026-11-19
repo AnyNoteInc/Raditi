@@ -102,7 +102,7 @@ describe('files of a message', () => {
     expect(attach.disabled).toBe(false)
     fireEvent.click(attach)
     expect(attach.getAttribute('aria-expanded')).toBe('true')
-    // The menu is named by its button (docs/plan/59, И15: the paperclip, not «+»).
+    // The menu is named by its button, «+» of the field (owner's request of 19.11.2026).
     const menu = within(await screen.findByRole('menu', { name: 'Прикрепить файлы' }))
     // One item for now (owner's request of 29.10.2026), with the hint that a paste works too.
     expect(menu.getAllByRole('menuitem')).toHaveLength(1)

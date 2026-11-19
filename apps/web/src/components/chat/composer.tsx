@@ -56,6 +56,9 @@ import type { AttachmentsControl } from './use-attachments'
 const PALETTE_EDGE = 12
 const PALETTE_LEAST = 120
 
+/** How long the answer of a command of the page stands under the field. */
+const SAID_MS = 4000
+
 /** A native control that stays in the accessibility tree and off the screen. */
 export const offScreen = {
   position: 'absolute',
@@ -197,9 +200,9 @@ export interface ComposerCommands {
 
 /**
  * The field a client writes in, the same on «Новый чат» and in a dialog that goes on (owner's
- * request of 29.10.2026). Its row holds, in this order, the window of commands — `/` at the start
- * of the empty field or its button opens it —, the paperclip «Прикрепить файлы» with «Загрузить
- * файл» (not «+»: «+» of a dialog is its tools, docs/plan/59-dialog-tools-panel.md, И15),
+ * request of 29.10.2026). Its row holds, in this order, «+» «Прикрепить файлы» with «Загрузить
+ * файл» (owner's request of 19.11.2026: a plus in place of the paperclip, first in the row), the
+ * window of commands — `/` at the start of the empty field or its button opens it —,
  * «Размышление», and the send button. A file pasted into the field is attached as if it were
  * chosen. Enter in the field sends; Shift+Enter is a new line. A text that is a command
  * alone runs the command and is never sent. The text stays in the field until the server has
@@ -245,11 +248,11 @@ export function Composer({
   onSend: (text: string, attachmentIds: readonly string[]) => Promise<boolean>
   commands?: ComposerCommands
   /**
-   * The pill of the project a new chat starts in, between the paperclip and «Размышление»
+   * The pill of the project a new chat starts in, between the commands and «Размышление»
    * (docs/plan/84-projects.md, ПР30); absent — the field has none.
    */
   project?: ReactNode
-  /** «Размышление»: the menu of how hard the model thinks, after the paperclip. */
+  /** «Размышление»: the menu of how hard the model thinks, after the pill of the project. */
   effort?: ReactNode
   /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
   attachments?: AttachmentsControl
@@ -304,6 +307,19 @@ export function Composer({
   // the server does not allow now. Gone with the next change of the text.
   const [notice, setNotice] = useState<string | null>(null)
   const shownError = notice ?? error
+  // What a command of the page answered — «Размышления агента скрыты» — is shown under the field
+  // for a moment as well as read aloud: the change may be nowhere on the screen (owner's request
+  // of 19.11.2026). The live region itself stands visible then. `said` counts the answers, so the
+  // next one is shown its own while, not the rest of the last one's; 0 — none is shown.
+  const [said, setSaid] = useState(0)
+  useEffect(() => {
+    if (said === 0) return
+    const gone = window.setTimeout(() => {
+      setSaid(0)
+      setAnnouncement('')
+    }, SAID_MS)
+    return () => window.clearTimeout(gone)
+  }, [said])
   const listRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -454,8 +470,11 @@ export function Composer({
     setDismissed(false)
     setForced(false)
     setActive(0)
-    const said = commands?.onRun(option.id)
-    if (said) setAnnouncement(said)
+    const answer = commands?.onRun(option.id)
+    if (answer) {
+      setAnnouncement(answer)
+      setSaid((count) => count + 1)
+    }
   }
 
   function changeText(next: string, at: number = next.length) {
@@ -465,6 +484,7 @@ export function Composer({
       setMentionClosedAt(null)
     const wasClosed = !open
     setNotice(null)
+    setSaid(0)
     setText(next)
     setHistoryIndex(-1)
     if (!next.startsWith('/')) setDismissed(false)
@@ -837,19 +857,6 @@ export function Composer({
           sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}
         >
           <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', minWidth: 0 }}>
-            {commands ? (
-              <IconButton
-                ref={buttonRef}
-                aria-label={paletteText.open}
-                aria-haspopup="listbox"
-                aria-expanded={forced}
-                aria-controls={forced ? listId : undefined}
-                onClick={openByButton}
-                sx={toolButton}
-              >
-                <AppIcon name="slash" size={18} />
-              </IconButton>
-            ) : null}
             <IconButton
               aria-label={composerText.attach}
               aria-haspopup="menu"
@@ -860,7 +867,7 @@ export function Composer({
               onClick={(event) => setAddAnchor(event.currentTarget)}
               sx={toolButton}
             >
-              <AppIcon name="attach" size={18} />
+              <AppIcon name="plus" size={18} />
             </IconButton>
             {attachments ? (
               <>
@@ -912,6 +919,19 @@ export function Composer({
                   }}
                 />
               </>
+            ) : null}
+            {commands ? (
+              <IconButton
+                ref={buttonRef}
+                aria-label={paletteText.open}
+                aria-haspopup="listbox"
+                aria-expanded={forced}
+                aria-controls={forced ? listId : undefined}
+                onClick={openByButton}
+                sx={toolButton}
+              >
+                <AppIcon name="slash" size={18} />
+              </IconButton>
             ) : null}
             {project}
             {effort}
@@ -997,12 +1017,17 @@ export function Composer({
           {attachmentHintText}
         </Box>
       ) : (
-        // The paperclip is there and closed where the message takes no files: read aloud why.
+        // «+» is there and closed where the message takes no files: read aloud why.
         <Box id={noFilesId} sx={offScreen}>
           {attachmentText.none}
         </Box>
       )}
-      <Box role="status" aria-live="polite" sx={offScreen}>
+      <Box
+        role="status"
+        aria-live="polite"
+        data-command-said={said > 0 ? '' : undefined}
+        sx={said > 0 ? { color: 'text.secondary', fontSize: 14, lineHeight: 1.43 } : offScreen}
+      >
         {announcement}
       </Box>
       <Box id={secretsId} sx={offScreen}>
