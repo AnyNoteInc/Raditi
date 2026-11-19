@@ -10,6 +10,7 @@ import {
   SANDBOX_OUT,
   SANDBOX_PROJECT,
   SANDBOX_SECRETS_DIR,
+  SANDBOX_TOOLS_HOME,
   SANDBOX_WORKDIR,
   skillRelayPath,
 } from '@repo/domain'
@@ -75,15 +76,77 @@ const contextSchema = runContextSchema(effort)
 
 /**
  * An allowlist of the session database only, with its WAL: after a normal exit most of the
- * session is still in the WAL. Configuration, logs, caches and the export file never reach
- * home.tar.zst. The CLI must be stopped before the two files are taken.
+ * session is still in the WAL. Configuration, logs, caches, the saved outputs of tools
+ * (toolOutput) and the export file never reach home.tar.zst. The CLI must be stopped before the
+ * two files are taken.
  */
 const sessionFiles = [`${dataDirectory}/opencode.db`, `${dataDirectory}/opencode.db-wal`]
 /**
+ * Where the CLI saves the output of a tool too long for the model — more than 2000 lines or 51 200
+ * bytes (`Truncate` of OpenCode 1.18.34, in its data directory: `opencode debug paths`) — as
+ * `tool_<id>`, and tells the model to Read or Grep it there. Of a command that prints fast the
+ * file may lack the start (verify-opencode.mjs, 13b). In the home: gone with the container, never
+ * in the snapshot.
+ */
+const toolOutput = `${home}/${dataDirectory}/tool-output`
+/**
  * The script the shell tool's bash sources (BASH_ENV): the client's variables and the egress
- * proxy of the turn (plan 53, Р13), in the tmpfs of the secrets — never in the snapshot.
+ * proxy of the turn (plan 53, Р13) and the places of the tools of its commands, in the tmpfs of
+ * the secrets — never in the snapshot.
  */
 const shellEnv = `${SANDBOX_SECRETS_DIR}/shell-env.sh`
+/**
+ * What the commands of the shell tool get on top of the CLI's environment, through BASH_ENV only
+ * (spec §20, «Инструменты песочницы — решения 19.11.2026», ИП4): their temporary files and caches,
+ * the pnpm store and what npm, pnpm, yarn and composer install globally, all in the tools' home
+ * SANDBOX_TOOLS_HOME. That is on /workspace, the one tmpfs that executes: what they install runs
+ * from there, and pnpm hard-links its store into node_modules only on the filesystem node_modules
+ * is on. It goes with the container, and the reset of a warm sandbox empties it with the rest of
+ * /workspace. Never HOME: the session database of the CLI lives there, and a full home stops the
+ * CLI. In the CLI's own environment TMPDIR and XDG_CACHE_HOME would move its /tmp/opencode and its
+ * caches. pnpm 12 reads PNPM_HOME and pnpm_config_*, not npm_config_*: its store is
+ * `$PNPM_HOME/store`.
+ */
+const toolEnvironment = Object.freeze({
+  TMPDIR: `${SANDBOX_TOOLS_HOME}/tmp`,
+  XDG_CACHE_HOME: SANDBOX_TOOLS_HOME,
+  npm_config_cache: `${SANDBOX_TOOLS_HOME}/npm`,
+  npm_config_prefix: `${SANDBOX_TOOLS_HOME}/npm-global`,
+  npm_config_update_notifier: 'false',
+  PNPM_HOME: `${SANDBOX_TOOLS_HOME}/pnpm`,
+  pnpm_config_update_notifier: 'false',
+  /**
+   * The repository's lockfile taken as it is (`trustLockfile`, pnpm 11.3 and later). On a cold
+   * cache pnpm 12 first checks every entry of a lockfile against the repository's supply-chain
+   * policy (minimumReleaseAge, trustPolicy): for a monorepo like the platform's own, about 500 MiB
+   * of registry metadata in `$XDG_CACHE_HOME/pnpm` and some 40 s, on a /workspace that lives in
+   * the sandbox's memory. Here a lockfile is installed only to run checks in the sandbox; the build
+   * of the client's branch verifies it under the repository's own policy, and what is resolved
+   * anew — `pnpm add`, a package the lockfile does not hold yet — still goes through those checks.
+   */
+  pnpm_config_trust_lockfile: 'true',
+  /**
+   * Yarn 2 and later keep their global cache in their global folder, `~/.yarn/berry` without
+   * XDG_DATA_HOME: in the CLI's home. Not YARN_CACHE_FOLDER: that would move the `.yarn/cache` a
+   * zero-install repository keeps in its tree.
+   */
+  YARN_GLOBAL_FOLDER: `${SANDBOX_TOOLS_HOME}/yarn`,
+  /**
+   * composer's global packages and settings, otherwise in `~/.config/composer` of the CLI's home;
+   * with it set, its cache is `$COMPOSER_HOME/cache` (`Factory::getCacheDir` of composer 2.5).
+   */
+  COMPOSER_HOME: `${SANDBOX_TOOLS_HOME}/composer`,
+})
+/**
+ * In front of the PATH of those commands: where `npm install -g` and `pnpm add -g` put the bins —
+ * pnpm 12 in `$PNPM_HOME/bin`, pnpm 10 and earlier, which pnpm fetches for a repository that pins
+ * one, in PNPM_HOME itself. Neither pnpm installs globally without its directory on the PATH.
+ */
+const toolPath = Object.freeze([
+  `${toolEnvironment.npm_config_prefix}/bin`,
+  `${toolEnvironment.PNPM_HOME}/bin`,
+  toolEnvironment.PNPM_HOME,
+])
 
 /**
  * What the CLI loads from the directory it runs in and from every directory up to the root of
@@ -175,6 +238,14 @@ function permissionOf(context: Pick<RunContext, 'internet' | 'skills'>) {
       // Scratch files of the agent's scripts: the tmpfs of the turn, gone with its container.
       '/tmp': 'allow',
       '/tmp/*': 'allow',
+      // The caches, temporary files and global packages of its commands (SANDBOX_TOOLS_HOME).
+      [SANDBOX_TOOLS_HOME]: 'allow',
+      [`${SANDBOX_TOOLS_HOME}/*`]: 'allow',
+      // The output of a tool too long for the model, which the CLI tells it to read there
+      // (toolOutput). OpenCode 1.18.34 appends the same rule after the configuration's own unless
+      // one of those denies exactly it; named here, it does not depend on the CLI's version.
+      [toolOutput]: 'allow',
+      [`${toolOutput}/*`]: 'allow',
       // The page snapshots the browser skill writes, which its answers name by path.
       ...(context.skills?.some((skill) => skill.kind === 'local')
         ? { [`${playwrightOutput}/*`]: 'allow' }
@@ -500,6 +571,9 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
               mcpServer,
               variables: variables.length ? { paths: variableFiles, names: variables } : null,
               shellEnv,
+              toolEnv: toolEnvironment,
+              toolPath,
+              toolDirs: [toolEnvironment.TMPDIR],
               egressProxy: egressProxy ?? null,
               internet: internet === true,
               // The gateway of the sandbox stays direct for whatever the agent's commands call.

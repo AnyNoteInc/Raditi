@@ -7,7 +7,9 @@ import { promisify } from 'node:util'
 import { zstdCompressSync } from 'node:zlib'
 
 import {
+  HIDDEN_FILE_MARK,
   HIDDEN_FILE_STUB,
+  hiddenFileStub,
   isSnapshotCredential,
   type IssuedGitAccess,
   type TurnBundleSource,
@@ -673,7 +675,9 @@ process.exit(99)
           hiddenPaths: ['.env', 'missing.key'],
         })
         const work = await checkout(f.root, bundle)
-        expect(await readFile(join(work, '.env'), 'utf8')).toBe(HIDDEN_FILE_STUB)
+        // A file of variables: its stub is a comment of its own (19.11.2026).
+        expect(await readFile(join(work, '.env'), 'utf8')).toBe(hiddenFileStub('.env'))
+        expect(hiddenFileStub('.env')).toMatch(/^# .*\n# hidden: looks like a secret\n$/)
         // The same tree and time give the same commit: the bundle comes from the cache.
         const again = await f.service.buildBaseBundle({
           projectRepositoryId: f.projectRepositoryId,
@@ -709,6 +713,99 @@ process.exit(99)
         const kept = await changed(async (w) => writeFile(join(w, 'index.js'), 'changed\n'))
         candidates.push(kept)
         expect(Buffer.from(kept.patch).toString()).not.toContain('.env')
+      })
+
+      it('gives each hidden file the stub of its own language, one blob a kind (ИП6)', async () => {
+        const f = await fixture({
+          files: {
+            'index.js': 'hello\n',
+            '.env': 'A=1\n',
+            'certs/site.key': 'key\n',
+            'cmd/keys.go': 'package main\n',
+            'config.json': '{"token":"x"}\n',
+            'src/a.test.ts': 'export const a = 1\n',
+            'src/b.ts': 'export const b = 2\n',
+            'src/.env.local.ts': 'export const c = 3\n',
+          },
+        })
+        await f.fetchMain()
+        const hiddenPaths = [
+          '.env',
+          'certs/site.key',
+          'cmd/keys.go',
+          'config.json',
+          'src/a.test.ts',
+          'src/b.ts',
+          'src/.env.local.ts',
+        ]
+        const bundle = await f.service.buildBaseBundle({
+          projectRepositoryId: f.projectRepositoryId,
+          baseSha: f.baseSha,
+          branch: 'raditi/chat-1',
+          committedAt: '2000-01-01T00:00:00.000Z',
+          hiddenPaths,
+        })
+        const work = await checkout(f.root, bundle)
+        for (const path of hiddenPaths)
+          expect(await readFile(join(work, path), 'utf8')).toBe(hiddenFileStub(path))
+        // A compiler reads the TypeScript stub as a module with nothing in it — the stub of a
+        // TypeScript file named like a file of variables too: its extension decides.
+        expect(await readFile(join(work, 'src/b.ts'), 'utf8')).toMatch(/^\/\/ .*\n\/\/ .*\n$/)
+        // JSON parses, the mark its only key.
+        expect(JSON.parse(await readFile(join(work, 'config.json'), 'utf8'))).toEqual({
+          [HIDDEN_FILE_MARK]: 'файл скрыт: похоже на секрет',
+        })
+        // A key and Go keep the text: a parse error is the honest signal there.
+        expect(await readFile(join(work, 'certs/site.key'), 'utf8')).toBe(HIDDEN_FILE_STUB)
+        expect(await readFile(join(work, 'cmd/keys.go'), 'utf8')).toBe(HIDDEN_FILE_STUB)
+        expect(await readFile(join(work, 'index.js'), 'utf8')).toBe('hello\n')
+        // Four kinds of stub, four blobs: files of one kind share theirs.
+        const blob = (path: string) => gitText(work, 'rev-parse', `HEAD:${path}`)
+        expect(await blob('src/a.test.ts')).toBe(await blob('src/b.ts'))
+        expect(await blob('src/.env.local.ts')).toBe(await blob('src/b.ts'))
+        expect(await blob('certs/site.key')).toBe(await blob('cmd/keys.go'))
+        expect(new Set(await Promise.all(hiddenPaths.map(blob))).size).toBe(4)
+        expect(await gitText(work, 'status', '--porcelain')).toBe('')
+      })
+
+      it('commits a patch of a sandbox with the stub of before as one of today: on the real base', async () => {
+        // A turn whose sandbox got the text stub before the release, published or recovered after
+        // it: the patch never holds a hidden file, so the candidate is the same commit.
+        const f = await fixture({ files: { 'index.js': 'hello\n', 'src/keys.ts': 'export {}\n' } })
+        await f.fetchMain()
+        const bundle = await f.service.buildBaseBundle({
+          projectRepositoryId: f.projectRepositoryId,
+          baseSha: f.baseSha,
+          branch: 'raditi/chat-1',
+          committedAt: '2000-01-01T00:00:00.000Z',
+          hiddenPaths: ['src/keys.ts'],
+        })
+        const today = await checkout(f.root, bundle)
+        const before = await checkout(f.root, bundle)
+        await writeFile(join(before, 'src/keys.ts'), HIDDEN_FILE_STUB)
+        await git(before, 'commit', '--quiet', '--amend', '--all', '--no-edit')
+        expect(await gitText(before, 'rev-list', '--count', 'HEAD')).toBe('1')
+        expect(await gitText(before, 'rev-parse', 'HEAD')).not.toBe(bundle.sandboxBaseSha)
+        const chatId = randomUUID()
+        const candidate = async (work: string) => {
+          const root = await gitText(work, 'rev-parse', 'HEAD')
+          await writeFile(join(work, 'index.js'), 'changed\n')
+          const made = await f.service.preparePublication({
+            projectRepositoryId: f.projectRepositoryId,
+            baseSha: f.baseSha,
+            ...turn(chatId),
+            expectedRef: null,
+            patch: await git(work, 'diff', '--binary', '--no-renames', root),
+            untracked: emptyUntrackedArchive(),
+            credentials: [],
+            hiddenPaths: ['src/keys.ts'],
+          })
+          candidates.push(made)
+          return made
+        }
+        const [ofToday, ofBefore] = [await candidate(today), await candidate(before)]
+        expect(ofBefore.headSha).toBe(ofToday.headSha)
+        expect(Buffer.from(ofBefore.patch).toString()).not.toContain('src/keys.ts')
       })
     })
   })

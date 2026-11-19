@@ -59,6 +59,7 @@ import { createPrismaClient } from '@repo/db'
 import {
   attachmentKey,
   HIDDEN_FILE_STUB,
+  hiddenFileStub,
   projectFileKey,
   repositorySection,
   snapshotPartFiles,
@@ -507,13 +508,13 @@ function repositoryCommand(checks, change = []) {
  * What a sandbox of a chat with a repository must be, whatever its turn (ПР12, ПР35, rule 5): gVisor
  * and the product's uid; one commit without history — the root the bundle carries, `sandboxBaseSha`
  * —, on the chat's branch, no remote, no tag, a clean tree; the files that look like secrets as the
- * stub; and no git credential anywhere — none in git's settings, no credential file, no variable of
- * git, no token of the form of GitLab in the environment of any process, in any file the agent can
- * read or in any object of the repository. The prefix of the token is put together in the shell, so
- * that the command itself, which the session keeps, does not hold it.
+ * stub of each (`hiddenFileStub`: a comment of its language, or the text); and no git credential
+ * anywhere — none in git's settings, no credential file, no variable of git, no token of the form
+ * of GitLab in the environment of any process, in any file the agent can read or in any object of
+ * the repository. The prefix of the token is put together in the shell, so that the command
+ * itself, which the session keeps, does not hold it.
  */
 function sandboxChecks({ sandboxBaseSha, branch, hidden }) {
-  const stub = sha256(HIDDEN_FILE_STUB)
   return [
     ['kernel', 'uname -r | grep -qi gvisor'],
     ['uid', '[ "$(id -u)" = 10001 ]'],
@@ -525,7 +526,7 @@ function sandboxChecks({ sandboxBaseSha, branch, hidden }) {
     ['clean', '[ -z "$(git status --porcelain)" ]'],
     ...hidden.map((path) => [
       'stub',
-      `[ "$(sha256sum < ${shellWord(path)} | cut -c1-64)" = ${stub} ]`,
+      `[ "$(sha256sum < ${shellWord(path)} | cut -c1-64)" = ${sha256(hiddenFileStub(path))} ]`,
     ]),
     [
       'git-config',
@@ -1377,6 +1378,9 @@ try {
       projectFiles,
     })
     const hidden = ['certs/site.key', 'config/old-settings.env']
+    // Two kinds of stub (19.11.2026): the key keeps the text, the file of variables gets `#`.
+    assert.equal(hiddenFileStub('certs/site.key'), HIDDEN_FILE_STUB)
+    assert.match(hiddenFileStub('config/old-settings.env'), /^# .*\n# hidden: looks like a secret/)
     const projectChecks = (name) =>
       Object.entries(context).flatMap(([path, content]) => [
         [name, `[ "$(sha256sum < /workspace/project/${path} | cut -c1-64)" = ${sha256(content)} ]`],

@@ -524,6 +524,7 @@ export async function scenarioP(stand) {
     projectId,
     program: 'appendLine',
     ctx: { file: 'README.md', line: 'Часы: 8:00–22:00', message: 'Добавил часы работы.' },
+    changes: true,
   })
   state.githubChat = chat.taskId
   const card = await owner.mutate('projectRepo.preparePush', { taskId: chat.taskId })

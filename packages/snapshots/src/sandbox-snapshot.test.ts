@@ -1,4 +1,8 @@
 import { Buffer } from 'node:buffer'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 
 import {
@@ -95,8 +99,21 @@ function sandboxFixture(parts: Parts, override?: (spec: ExecSpec) => Reply | und
 }
 
 const isHomeTar = (spec: ExecSpec) => spec.argv.includes('--create')
+const isUntrackedTar = (spec: ExecSpec) =>
+  spec.argv.includes('--create') && spec.argv.includes('--directory=/workspace/repo')
 const touchesWorkdir = (spec: ExecSpec) =>
   spec.cwd === '/workspace/repo' || spec.argv.some((arg) => arg.includes('/workspace'))
+/** Real git of this machine with no configuration but the repository's own. */
+const gitEnv = (home: string) => ({
+  PATH: process.env.PATH,
+  HOME: home,
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_AUTHOR_NAME: 'Agent',
+  GIT_AUTHOR_EMAIL: 'agent@example.test',
+  GIT_COMMITTER_NAME: 'Agent',
+  GIT_COMMITTER_EMAIL: 'agent@example.test',
+})
 
 async function packed(header: Record<string, unknown>): Promise<Uint8Array> {
   const writer = pack()
@@ -137,6 +154,127 @@ describe('SandboxSnapshotTransport', () => {
     expect(fake.calls.every(({ spec }) => spec.argv[0] !== 'sh' && spec.argv[0] !== 'bash')).toBe(
       true,
     )
+  })
+
+  it('captures the changes of a turn with a repository without anything named node_modules', async () => {
+    const parts = await fixture()
+    const baseSha = 'a'.repeat(40)
+    const untracked = await archive('src/z.ts', 'export const z = 1\n')
+    const patch = Buffer.from(
+      'diff --git a/node_modules/kept/index.js b/node_modules/kept/index.js\n',
+    )
+    const fake = sandboxFixture(parts, (spec) => {
+      if (spec.argv.includes('ls-files')) return { stdout: Buffer.from('src/z.ts\0') }
+      if (isUntrackedTar(spec)) return { stdout: untracked }
+      if (spec.argv.includes('diff')) return { stdout: patch }
+      return undefined
+    })
+    const result = await new SandboxSnapshotTransport().captureRepository(
+      fake.sandbox,
+      state,
+      baseSha,
+    )
+    expect(result).toEqual({ home: parts.home, untracked, patch })
+    const git = fake.calls.filter(({ spec }) => spec.argv[0] === 'git')
+    expect(git.map(({ spec }) => [spec.cwd, spec.argv])).toEqual([
+      [
+        '/workspace/repo',
+        [
+          'git',
+          '-c',
+          'core.fsmonitor=false',
+          'ls-files',
+          '--others',
+          '--exclude-standard',
+          // Whatever the repository ignores, installed packages are never new files of the turn:
+          // no slash, so a file or a link of that name is left out as a folder is.
+          '--exclude=node_modules',
+          '-z',
+        ],
+      ],
+      [
+        '/workspace/repo',
+        // No pathspec: a tracked file under node_modules still reaches the patch.
+        [
+          'git',
+          '--no-replace-objects',
+          '-c',
+          'core.fsmonitor=false',
+          'diff',
+          '--binary',
+          '--no-ext-diff',
+          '--no-textconv',
+          '--no-renames',
+          baseSha,
+          '--',
+        ],
+      ],
+    ])
+    // The untracked part holds exactly what git listed: tar itself excludes nothing.
+    const tars = fake.calls.filter(({ spec }) => isUntrackedTar(spec))
+    expect(tars).toHaveLength(1)
+    expect(tars[0]!.stdin.toString()).toBe('src/z.ts\0')
+    expect(tars[0]!.spec.argv).toContain('--no-recursion')
+    expect(tars[0]!.spec.argv.some((arg) => arg.startsWith('--exclude'))).toBe(false)
+    expect(fake.calls.every(({ spec }) => spec.argv[0] !== 'sh' && spec.argv[0] !== 'bash')).toBe(
+      true,
+    )
+  })
+
+  it('leaves a folder, a file and a link named node_modules out of the new files, by real git (ИП5)', async () => {
+    // The git commands of the capture, as it sends them, run by the git of this machine in a
+    // repository whose ignore files hide nothing; tar is the fake's. A link listed by the capture
+    // would be archived as a link, and the whole capture refused.
+    const root = await mkdtemp(join(tmpdir(), 'raditi-capture-'))
+    try {
+      const git = (...args: string[]) =>
+        execFileSync('git', args, {
+          cwd: root,
+          env: gitEnv(root),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+      const write = async (path: string, body: string) => {
+        await mkdir(dirname(join(root, path)), { recursive: true })
+        await writeFile(join(root, path), body)
+      }
+      git('init', '--quiet', '--initial-branch=main')
+      await write('src/a.ts', 'export const a = 1\n')
+      await write('node_modules/kept/index.js', 'module.exports = 1\n')
+      git('add', '--all')
+      git('commit', '--quiet', '--message=base')
+      const baseSha = git('rev-parse', 'HEAD').toString().trim()
+      // What the turn leaves.
+      await write('src/z.ts', 'export const z = 1\n')
+      await write('node_modules.txt', 'not a package\n')
+      await write('folder/node_modules/pkg/index.js', 'module.exports = 2\n')
+      await write('file/node_modules', 'a file of that name\n')
+      await mkdir(join(root, 'linked'))
+      await symlink('/elsewhere', join(root, 'linked/node_modules'))
+      await write('node_modules/new.js', 'module.exports = 3\n')
+      await write('node_modules/kept/index.js', 'module.exports = 4\n')
+      const untracked = await archive('src/z.ts', 'export const z = 1\n')
+      const fake = sandboxFixture(await fixture(), (spec) => {
+        if (spec.argv[0] === 'git' && spec.cwd === '/workspace/repo')
+          return { stdout: git(...spec.argv.slice(1)) }
+        if (isUntrackedTar(spec)) return { stdout: untracked }
+        return undefined
+      })
+      const result = await new SandboxSnapshotTransport().captureRepository(
+        fake.sandbox,
+        state,
+        baseSha,
+      )
+      // Of the new files, these two alone reach the archive.
+      const tars = fake.calls.filter(({ spec }) => isUntrackedTar(spec))
+      expect(tars.map(({ stdin }) => stdin.toString())).toEqual(['node_modules.txt\0src/z.ts\0'])
+      // The tracked file under node_modules, changed, is in the patch, and nothing else is.
+      const patch = Buffer.from(result.patch).toString()
+      expect(patch.match(/^diff --git .*$/gm)).toEqual([
+        'diff --git a/node_modules/kept/index.js b/node_modules/kept/index.js',
+      ])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it("refuses a home with a turn credential or a value of the client's variables (Р13)", async () => {

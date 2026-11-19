@@ -9,7 +9,7 @@ import {
   envValueBytes,
   envValueInChange,
   forbidden,
-  HIDDEN_FILE_STUB,
+  hiddenFileStub,
   HIDDEN_PATHS_LIMIT,
   isSecretFileName,
   isAgentBranch,
@@ -1124,7 +1124,11 @@ export class GitWorkspaceService {
 
   /**
    * The tree a sandbox gets of `baseSha` (ПР35): the same, but each hidden file a regular file of
-   * HIDDEN_FILE_STUB. Built in the index of the operation, never on a disk.
+   * its stub — a comment of the file's language where it has one and an object with the mark in a
+   * JSON file, so that a compiler still checks the rest (hiddenFileStub, ИП6) —, one blob a kind of
+   * stub. Built in the index of the operation, never on a disk. A changed stub changes
+   * `sandboxBaseSha`, so `bundleOfPlan` refuses a turn planned before the change; a publication
+   * lands on `baseSha` and is not touched.
    */
   private async sandboxTree(
     op: Operation,
@@ -1142,9 +1146,17 @@ export class GitWorkspaceService {
       return entry !== undefined && (entry.mode === '100644' || entry.mode === '100755')
     })
     if (hidden.length) {
-      const [stub] = await this.hashBlobs(op, [Buffer.from(HIDDEN_FILE_STUB)])
+      const stubs = hidden.map((path) => hiddenFileStub(path))
+      const kinds = [...new Set(stubs)]
+      const oids = await this.hashBlobs(
+        op,
+        kinds.map((stub) => Buffer.from(stub)),
+      )
+      const oidOf = new Map(kinds.map((stub, i) => [stub, oids[i]!]))
       await this.git(op, ['update-index', '-z', '--index-info'], {
-        input: Buffer.from(hidden.map((path) => `100644 ${stub}\t${path}\0`).join('')),
+        input: Buffer.from(
+          hidden.map((path, i) => `100644 ${oidOf.get(stubs[i]!)}\t${path}\0`).join(''),
+        ),
       })
     }
     return this.sha((await this.git(op, ['write-tree'])).stdout)

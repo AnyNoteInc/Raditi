@@ -16,6 +16,20 @@ export type SandboxRuntime = (typeof sandboxRuntimes)[number]
 export const SANDBOX_SECRETS_DIR = '/run/raditi/secrets'
 /** Size of the secrets tmpfs every provider mounts; prepared secrets must fit into it. */
 export const SANDBOX_SECRETS_TMPFS_BYTES = 2 * 1024 * 1024
+/**
+ * Size of the /workspace tmpfs of a sandbox (spec §20, «Инструменты песочницы — решения
+ * 19.11.2026», ИП2): the repository with its `.git`, the files of the chat and of the project,
+ * `/workspace/out` and what the agent installs for its checks — `node_modules`, the pnpm store and
+ * the caches of its commands (SANDBOX_TOOLS_HOME) — share it. It lives in the sandbox's memory and
+ * counts against the memory of the container, and under runsc a sandbox out of memory is killed
+ * whole — the turn is lost. 1 GiB holds a package-level check of a monorepo like the platform's own
+ * (its domain package with what it uses: about 360 MiB with a trusted lockfile); a whole web app
+ * (about 1.25 GiB, and then a type check of about 2.8 GiB) is left to the project's build: ENOSPC
+ * stops such an install, where a bigger tmpfs would let its type check kill the sandbox.
+ */
+export const SANDBOX_WORKSPACE_TMPFS_BYTES = 1024 * 1024 * 1024
+/** Size of the /tmp tmpfs of a sandbox: the scratch files of the agent's CLI (/tmp/opencode). */
+export const SANDBOX_TMP_TMPFS_BYTES = 64 * 1024 * 1024
 /** Secret files of one sandbox and the characters of each: 32 × 64 KiB fill the secrets tmpfs. */
 export const SANDBOX_SECRET_FILES = 32
 export const SANDBOX_SECRET_CHARS = 65_536

@@ -20,6 +20,7 @@ import {
   SANDBOX_OUT,
   SANDBOX_PROJECT,
   SANDBOX_SECRETS_DIR,
+  SANDBOX_TOOLS_HOME,
   turnCredentials,
   turnInputSchema,
   type PreparedRun,
@@ -49,6 +50,8 @@ const context: RunContext = {
 const input = { prompt: 'Поменяйте заголовок', attachments: [] }
 const nativeSessionId = 'ses_00000000000000000000000001'
 const home = '/agent-home/opencode'
+/** Where the CLI saves the output of a tool too long for the model (`opencode debug paths`). */
+const toolOutput = `${home}/.local/share/opencode/tool-output`
 const file = (run: PreparedRun, name: string) =>
   run.files.find((entry) => entry.path === `${home}/${name}`)!.content
 const args = (run: PreparedRun): string[] => JSON.parse(file(run, 'cli-args.json'))
@@ -195,10 +198,17 @@ describe('OpenCode driver: prepared files and argv', () => {
         [`${SANDBOX_OUT}/*`]: 'allow',
         '/tmp': 'allow',
         '/tmp/*': 'allow',
+        // The caches, temporary files and global packages of the agent's commands.
+        [SANDBOX_TOOLS_HOME]: 'allow',
+        [`${SANDBOX_TOOLS_HOME}/*`]: 'allow',
+        // The output of a tool too long for the model, which the CLI saves there.
+        [toolOutput]: 'allow',
+        [`${toolOutput}/*`]: 'allow',
       },
       'raditi_*': 'allow',
     })
-    // The last matching rule wins: the inbox, outbox and /tmp exceptions come after the denial.
+    // The last matching rule wins: the inbox, outbox, /tmp, cache and tool output exceptions come
+    // after the denial.
     expect(Object.keys(value.permission.external_directory)).toEqual([
       '*',
       `${SANDBOX_INBOX}/*`,
@@ -207,7 +217,20 @@ describe('OpenCode driver: prepared files and argv', () => {
       `${SANDBOX_OUT}/*`,
       '/tmp',
       '/tmp/*',
+      SANDBOX_TOOLS_HOME,
+      `${SANDBOX_TOOLS_HOME}/*`,
+      toolOutput,
+      `${toolOutput}/*`,
     ])
+    // The tools' home of the commands is the one the domain names: on /workspace, outside the
+    // working copy. The CLI saves the outputs of tools in its own home, of which the snapshot
+    // takes only the session database.
+    expect(SANDBOX_TOOLS_HOME).toBe('/workspace/.cache')
+    expect(
+      driver
+        .sessionState(await driver.prepare(context))
+        .include.filter((path) => `${home}/${path}`.startsWith(toolOutput)),
+    ).toEqual([])
     // An `ask` rule is rejected automatically in `run` mode and may end the turn with exit 0.
     const leaves = (node: unknown): unknown[] =>
       node !== null && typeof node === 'object' ? Object.values(node).flatMap(leaves) : [node]
@@ -259,8 +282,8 @@ describe('OpenCode driver: prepared files and argv', () => {
     for (const flag of ['--headless', '--isolated', '--no-sandbox']) expect(command).toContain(flag)
     // The model reads no pixels (N22): a screenshot answers without its image.
     expect(command[command.indexOf('--image-responses') + 1]).toBe('omit')
-    // Besides the inbox, the project, outbox and /tmp, the agent reads only the snapshots the
-    // skill writes.
+    // Besides the inbox, the project, outbox, /tmp, the caches of the commands and the saved
+    // outputs of tools, the agent reads only the snapshots the skill writes.
     expect(value.permission.external_directory).toEqual({
       '*': 'deny',
       [`${SANDBOX_INBOX}/*`]: 'allow',
@@ -269,6 +292,10 @@ describe('OpenCode driver: prepared files and argv', () => {
       [`${SANDBOX_OUT}/*`]: 'allow',
       '/tmp': 'allow',
       '/tmp/*': 'allow',
+      [SANDBOX_TOOLS_HOME]: 'allow',
+      [`${SANDBOX_TOOLS_HOME}/*`]: 'allow',
+      [toolOutput]: 'allow',
+      [`${toolOutput}/*`]: 'allow',
       [`${home}/playwright/output/*`]: 'allow',
     })
     expect(command[command.indexOf('--proxy-server') + 1]).toBe(egressProxy)
@@ -587,6 +614,8 @@ interface CliRecord {
   oldData: boolean
   /** The OpenCode files of the site the CLI process could see in the working copy. */
   project: string[]
+  /** The mode of TMPDIR of the agent's commands when the process started; null — none there. */
+  toolsTmp: number | null
   stdin?: string
   delivered?: Record<string, string>
   again?: Record<string, string>
@@ -861,6 +890,7 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
       home: join(directory, 'home'),
       secrets: join(directory, 'secrets'),
       repo: join(directory, 'repo'),
+      cache: join(directory, '.cache'),
       cli: join(directory, 'opencode'),
     }
     try {
@@ -870,6 +900,8 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
           .replaceAll(SANDBOX_SECRETS_DIR, paths.secrets)
           .replaceAll('/usr/local/bin/opencode', paths.cli)
           .replaceAll('/workspace/repo', paths.repo)
+          // The tools' home of the agent's commands, next to the working copy as in the sandbox.
+          .replaceAll(SANDBOX_TOOLS_HOME, paths.cache)
           // The directory above the working copy, where the wrapper names it by itself.
           .replaceAll('"/workspace"', JSON.stringify(directory))
           // The relay of the stream on a port of this launch, the gateway in this test.
@@ -905,12 +937,14 @@ const path = require('node:path');
 const behaviour = JSON.parse(fs.readFileSync(${JSON.stringify(join(directory, 'behaviour.json'))}, 'utf8'));
 const [command, ...rest] = process.argv.slice(2);
 const configHome = process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME, '.config');
+const toolsTmp = fs.statSync(${JSON.stringify(join(paths.cache, 'tmp'))}, { throwIfNoEntry: false });
 const record = {
   command, argv: process.argv.slice(2), cwd: process.cwd(), env: { ...process.env }, at: Date.now(),
   secrets: fs.readdirSync(${JSON.stringify(paths.secrets)}).map((name) => ({ name, fifo: fs.statSync(path.join(${JSON.stringify(paths.secrets)}, name)).isFIFO() })),
   configMode: fs.statSync(path.join(configHome, 'opencode')).mode & 0o777,
   oldData: fs.existsSync(path.join(process.env.HOME, '.local/share/opencode/old-session')) || fs.existsSync(path.join(process.env.HOME, '.cache/old-cache')),
   project: ${JSON.stringify(PROJECT_FILES)}.filter((name) => fs.existsSync(path.join(process.cwd(), name))),
+  toolsTmp: toolsTmp?.isDirectory() ? toolsTmp.mode & 0o777 : null,
 };
 const save = () => fs.appendFileSync(${JSON.stringify(join(directory, 'records.jsonl'))}, JSON.stringify(record) + '\\n');
 const step = behaviour[command] ?? {};
@@ -1205,7 +1239,7 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
     )
     expect(result.code).toBe(0)
     const [cli] = result.records as [CliRecord]
-    // shell-env.sh of the proxy stands there too; the pipes are what matter here.
+    // shell-env.sh stands there too; the pipes are what matter here.
     const pipes = cli.secrets.filter((entry) => entry.fifo)
     expect(pipes.toSorted((a, b) => a.name.localeCompare(b.name))).toEqual([
       { name: 'llm', fifo: true },
@@ -1247,10 +1281,12 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
     ])
     expect(cli.argv).not.toContain('--session')
     expect(cli.stdin).toBe('Client request:\n-')
-    // Both files were removed before anything started; the CLI found two pipes in their place.
+    // Both files were removed before anything started; the CLI found two pipes in their place,
+    // and the script of its shell tool, with the places of the tools of the commands.
     expect(cli.secrets).toEqual([
       { name: 'llm', fifo: true },
       { name: 'mcp', fifo: true },
+      { name: 'shell-env.sh', fifo: false },
     ])
     expect(cli.delivered).toEqual({ llm: context.llm.apiKey, mcp: context.mcp.token })
     // A second read finds nothing: the pipe is gone once its value was taken.
@@ -1262,6 +1298,7 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
         .filter((name) => name !== '__CF_USER_TEXT_ENCODING')
         .sort(),
     ).toEqual([
+      'BASH_ENV',
       'BUN_ENABLE_CRASH_REPORTING',
       'HOME',
       'LANG',
@@ -1276,6 +1313,8 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       'OPENCODE_DISABLE_SHARE',
       'OPENCODE_PURE',
       'PATH',
+      'SHELL',
+      'SHLVL',
     ])
     // Bun uploads a crash report only when asked to; an inherited request must not survive.
     expect(cli.env.BUN_ENABLE_CRASH_REPORTING).toBe('0')
@@ -1781,8 +1820,10 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       'opencode.json',
       'opencode.jsonc',
     ])
-    // Nothing of the holding place is left next to the working copy.
+    // Nothing of the holding place is left next to the working copy; the tools' home of the
+    // agent's commands stands there, as in the sandbox.
     expect(result.left.aboveRepo).toEqual([
+      '.cache',
       'behaviour.json',
       'home',
       'opencode',
@@ -2021,6 +2062,78 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       .toBe('gone')
   })
 
+  it('gives the commands of the shell tool the places of their tools, and the CLI none of them', async () => {
+    mcpAnswer = accept
+    const result = await launch(
+      // A variable of the client of that name does not move it (the domain refuses the others).
+      { envValues: { PNPM_HOME: '/elsewhere/of/the/client' } },
+      {
+        run: {
+          shell:
+            'printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" "$TMPDIR" "$XDG_CACHE_HOME" "$npm_config_cache" "$npm_config_prefix" "$npm_config_update_notifier" "$PNPM_HOME" "$pnpm_config_update_notifier" "$pnpm_config_trust_lockfile" "$YARN_GLOBAL_FOLDER" "$COMPOSER_HOME" "$PATH"',
+        },
+      },
+    )
+    expect(result.stderr).toBe('')
+    expect(result.code).toBe(0)
+    const [cli] = result.records as [CliRecord]
+    // The tools' home of the sandbox, /workspace/.cache, next to the working copy.
+    const cache = join(dirname(result.repo), '.cache')
+    expect(cli.shell!.split('|')).toEqual([
+      `${cache}/tmp`,
+      cache,
+      `${cache}/npm`,
+      `${cache}/npm-global`,
+      'false',
+      `${cache}/pnpm`,
+      'false',
+      // The repository's lockfile is installed as it is, without the registry's metadata.
+      'true',
+      // The global folder of Yarn 2 and later, and composer's home, out of the CLI's home.
+      `${cache}/yarn`,
+      `${cache}/composer`,
+      // Where npm, pnpm 12 and an earlier pnpm put the bins of global packages, in front.
+      `${cache}/npm-global/bin:${cache}/pnpm/bin:${cache}/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+    ])
+    // TMPDIR is there, the agent's own, when the CLI starts: the first command needs it.
+    expect(cli.toolsTmp).toBe(0o700)
+    // The CLI keeps its own TMPDIR, caches and PATH.
+    for (const name of [
+      'TMPDIR',
+      'XDG_CACHE_HOME',
+      'npm_config_cache',
+      'npm_config_prefix',
+      'npm_config_update_notifier',
+      'PNPM_HOME',
+      'pnpm_config_update_notifier',
+      'pnpm_config_trust_lockfile',
+      'YARN_GLOBAL_FOLDER',
+      'YARN_CACHE_FOLDER',
+      'COMPOSER_HOME',
+    ])
+      expect(cli.env, name).not.toHaveProperty(name)
+    expect(cli.env.PATH).toBe('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')
+    expect(JSON.stringify(cli.env)).not.toContain(cache)
+  })
+
+  it("makes TMPDIR again for every command after one that removed the tools' home", async () => {
+    mcpAnswer = accept
+    // One command frees space with the whole tools' home; the next — a shell of its own, as
+    // each command of the shell tool is — writes into its TMPDIR. Its stderr counts too.
+    const result = await launch(
+      {},
+      {
+        run: {
+          shell:
+            'rm -rf "$XDG_CACHE_HOME" && bash -c \'test -d "$TMPDIR" && printf "%s|%s" "$(ls -ld "$TMPDIR" | cut -c1-10)" "$(printf written > "$TMPDIR/scratch" && cat "$TMPDIR/scratch")"\' 2>&1',
+        },
+      },
+    )
+    expect(result.stderr).toBe('')
+    expect(result.code).toBe(0)
+    expect(result.records[0]!.shell).toBe('drwx------|written')
+  })
+
   describe('the client variables of the turn (plan 53, Р13)', () => {
     const values = {
       HOOK_TOKEN: 'hook-token-0002\nsecond line',
@@ -2090,7 +2203,7 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       )
     })
 
-    it('gives the shell the proxy alone when no value reached the turn, and nothing without either', async () => {
+    it('gives the shell the proxy alone when no value reached the turn, and neither without the proxy', async () => {
       mcpAnswer = accept
       const proxied = await launch(
         { egressProxy },
@@ -2098,10 +2211,15 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       )
       expect(proxied.code).toBe(0)
       expect(proxied.records[0]!.shell).toBe(`${egressProxy}|`)
-      const bare = await launch({}, { run: { shell: 'printf "%s|%s" "$BASH_ENV" "$HTTPS_PROXY"' } })
+      // The script is there for the places of the tools alone: no proxy, no value.
+      const bare = await launch(
+        {},
+        { run: { shell: 'printf "%s|%s|%s" "$BASH_ENV" "$HTTPS_PROXY" "$PAYMENT_KEY"' } },
+      )
       expect(bare.code).toBe(0)
-      expect(bare.records[0]!.shell).toBe('|')
-      expect(bare.records[0]!.env).not.toHaveProperty('BASH_ENV')
+      expect(bare.records[0]!.shell).toMatch(/\/secrets\/shell-env\.sh\|\|$/)
+      expect(bare.records[0]!.env.BASH_ENV).toMatch(/\/secrets\/shell-env\.sh$/)
+      expect(Object.keys(bare.records[0]!.env).filter((name) => /proxy/i.test(name))).toEqual([])
     })
 
     it('masks every value in the session database the snapshot takes, and merges its WAL', async () => {
