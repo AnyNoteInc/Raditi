@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -103,6 +103,54 @@ describe('git worker', () => {
       pin: { host: 'localhost', address: '127.0.0.1' },
     })
     expect(result.code).toBe(0)
+  })
+
+  it('runs gitleaks with its fixed options and writes the report only where a scan names it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'raditi-git-worker-scanner-'))
+    roots.push(root)
+    // Prints the arguments it got: the worker adds every option itself (19.11.2026).
+    const scanner = join(root, 'scanner.mjs')
+    await writeFile(
+      scanner,
+      `#!${process.execPath}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)))\n`,
+      { mode: 0o700 },
+    )
+    const { root: volume, client } = await worker({ gitleaksBinary: scanner })
+    const ops = join(volume, 'ops')
+    for (const name of ['scan', 'empty', 'report']) await mkdir(join(ops, name))
+    await writeFile(join(ops, 'gitleaks.toml'), '')
+    const args = (scan: string[]) =>
+      client
+        .run({ tool: 'gitleaks', args: scan, cwd: ops, protocol: 'none' })
+        .then((result) => JSON.parse(result.stdout.toString()) as string[])
+    const plain = await args([join(ops, 'scan'), join(ops, 'gitleaks.toml'), join(ops, 'empty')])
+    expect(plain).toContain('--redact=100')
+    expect(plain).not.toContain('--report-path')
+    const reported = await args([
+      join(ops, 'scan'),
+      join(ops, 'gitleaks.toml'),
+      join(ops, 'empty'),
+      join(ops, 'report'),
+    ])
+    const at = reported.indexOf('--report-path')
+    expect(reported[at + 1]).toMatch(/\/ops\/report\/report\.json$/)
+    expect(reported.slice(reported.indexOf('--report-format'), at)).toEqual([
+      '--report-format',
+      'json',
+    ])
+    // A report outside the volume, or a fifth argument, is not a scan the worker runs.
+    await expect(
+      args([join(ops, 'scan'), join(ops, 'gitleaks.toml'), join(ops, 'empty'), tmpdir()]),
+    ).rejects.toMatchObject({ code: 'GIT_WORKER_REFUSED' })
+    await expect(
+      args([
+        join(ops, 'scan'),
+        join(ops, 'gitleaks.toml'),
+        join(ops, 'empty'),
+        join(ops, 'report'),
+        join(ops, 'scan'),
+      ]),
+    ).rejects.toMatchObject({ code: 'GIT_WORKER_REFUSED' })
   })
 
   it('refuses an environment variable it does not know and runs no other tool', async () => {

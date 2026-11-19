@@ -1,9 +1,9 @@
 import { Buffer } from 'node:buffer'
 import { chmod, lstat, realpath, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { dirname as dirnameOf, isAbsolute, relative } from 'node:path'
+import { dirname as dirnameOf, isAbsolute, join, relative } from 'node:path'
 
-import { DomainError, isDomainError } from '@repo/domain'
+import { DomainError, isDomainError, publicationLimits } from '@repo/domain'
 import {
   ipLiteral,
   isLoopbackAddress,
@@ -14,6 +14,7 @@ import {
 import { runProcess } from './process.ts'
 import {
   GIT_WORKER_PATH,
+  GITLEAKS_REPORT,
   gitWorkerRequestSchema,
   gitWorkerSocketPath,
   type GitWorkerResponse,
@@ -121,7 +122,8 @@ export async function startGitWorker(options: GitWorkerOptions): Promise<GitWork
               // gitleaks needs no grant, repository or identity: the fixed environment only.
               env: trustedGitEnvironment({ home: cwd, protocol: 'none' }),
               maxBytes: 64 * 1024,
-              timeoutMs: request.timeoutMs,
+              // A scan of a whole tree is one run (19.11.2026): its own deadline, not a git one.
+              timeoutMs: request.timeoutMs ?? publicationLimits.scanMs,
             },
           )
     return { code: result.code, stdout: result.stdout.toString('base64') }
@@ -188,9 +190,14 @@ export async function startGitWorker(options: GitWorkerOptions): Promise<GitWork
   }
 }
 
-/** `gitleaks dir <dir>` with the host's config and every allowance of the scanned files off. */
+/**
+ * `gitleaks dir <dir>` with the host's config and every allowance of the scanned files off. A
+ * fourth directory, when named, gets the JSON report `report.json` there: the caller reads which
+ * of its numbered copies were flagged in one scan instead of halving the tree (19.11.2026). Every
+ * secret in the report is redacted; the caller reads only the file names.
+ */
 function gitleaksArgs(args: readonly string[]): string[] {
-  const [directory, config, ignore, ...rest] = args
+  const [directory, config, ignore, report, ...rest] = args
   if (rest.length || !directory || !config || !ignore) throw refused('Invalid scan')
   return [
     'dir',
@@ -205,6 +212,9 @@ function gitleaksArgs(args: readonly string[]): string[] {
     '--no-color',
     '--log-level=error',
     `--exit-code=${GITLEAKS_FINDING_EXIT}`,
+    ...(report === undefined
+      ? []
+      : ['--report-format', 'json', '--report-path', join(report, GITLEAKS_REPORT)]),
   ]
 }
 

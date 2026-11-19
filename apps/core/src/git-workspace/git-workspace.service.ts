@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { link, lstat, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises'
+import { lstat, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative } from 'node:path'
 
 import {
@@ -40,7 +40,7 @@ import {
 import { BASE_BUNDLE_REF, bundleHead } from '@repo/local-turns'
 
 import { directoryBytes } from '../git-worker/disk.ts'
-import type { GitWorkerRequest } from '../git-worker/protocol.ts'
+import { GITLEAKS_REPORT, type GitWorkerRequest } from '../git-worker/protocol.ts'
 import { untrackedFiles } from './archive.ts'
 import { assertBinaryPatchLimits } from './binary-limits.ts'
 import { gitAuthEnvironment } from './git-auth.ts'
@@ -188,6 +188,38 @@ const ZERO_SHA = '0'.repeat(40)
  */
 const SCAN_PREFIX = Buffer.from('GIF89a\n')
 export const scanCopy = (blob: Buffer): Buffer => Buffer.concat([SCAN_PREFIX, blob])
+
+/** A report of a scan above this is a tree full of findings, not one a sandbox may get. */
+const REPORT_BYTES = 16 * 1024 * 1024
+
+/**
+ * The numbers of the copies a gitleaks report flags (findSecrets): its `File` names only, each the
+ * name of a copy of this scan; anything else in the report — the redacted findings — is not read.
+ * A report that names something else, or none after a finding, is a failure.
+ */
+async function flaggedCopies(path: string, copies: number): Promise<number[]> {
+  const size = (await stat(path).catch(() => null))?.size
+  if (size === undefined) throw failed()
+  if (size > REPORT_BYTES)
+    throw repositoryUnsupported('Too many files of the repository look like secrets')
+  let rows: unknown
+  try {
+    rows = JSON.parse(await readFile(path, 'utf8'))
+  } catch {
+    throw failed()
+  }
+  if (!Array.isArray(rows) || !rows.length) throw failed()
+  const flagged = new Set<number>()
+  for (const row of rows) {
+    const file = typeof row === 'object' && row !== null ? (row as { File?: unknown }).File : null
+    if (typeof file !== 'string') throw failed()
+    const name = file.slice(file.lastIndexOf('/') + 1)
+    const index = /^(?:0|[1-9]\d{0,8})$/.test(name) ? Number(name) : -1
+    if (index < 0 || index >= copies) throw failed()
+    flagged.add(index)
+  }
+  return [...flagged]
+}
 
 const failed = () =>
   new DomainError('GIT_OPERATION_FAILED', 'Trusted repository operation failed', 502)
@@ -389,12 +421,19 @@ export class GitWorkspaceService {
 
   /**
    * The files of the tree of `sha` that look like a password or a key (ПР12, «Проверка при
-   * подключении»): gitleaks over host-numbered copies, then halves of the ones it flagged until each
-   * finding is one file. Paths only — never a value; at most `limit` of them. The tree is checked
-   * against the limits of a turn first (REPOSITORY_TOO_LARGE). Nothing is blocked by a finding:
-   * the client reads the list, and those files never reach a sandbox (ПР35, 84.18).
+   * подключении»): one gitleaks scan over host-numbered copies, whose report names the copies it
+   * flagged (19.11.2026: halving the tree took a scan per half, and the first scan of a 60 MB tree
+   * already outran the 60 s of a command). Paths only — never a value; at most `limit` of them.
+   * The tree is checked against the limits of a turn first (REPOSITORY_TOO_LARGE). Nothing is
+   * blocked by a finding: the client reads the list, and those files never reach a sandbox (ПР35,
+   * 84.18).
    */
   async findSecrets(projectRepositoryId: string, sha: string, limit = 20): Promise<string[]> {
+    return (await this.flaggedPaths(projectRepositoryId, sha)).slice(0, limit)
+  }
+
+  /** Every file of the tree of `sha` gitleaks flags, sorted (findSecrets, hiddenFiles). */
+  private async flaggedPaths(projectRepositoryId: string, sha: string): Promise<string[]> {
     if (!publicationShaSchema.safeParse(sha).success) throw badRequest('Invalid repository head')
     const mirror = mirrorPath(this.#root, projectRepositoryId)
     return this.#mirrors.run(mirror, () =>
@@ -431,38 +470,18 @@ export class GitWorkspaceService {
               await sharedFile(join(all, String(i)), scanCopy(blob))
           },
         )
-        let subsets = 0
-        const flags = async (indices: readonly number[]): Promise<boolean> => {
-          const directory = join(op.root, `scan-${subsets++}`)
-          await sharedDirectory(directory)
-          try {
-            for (const i of indices) await link(join(all, String(i)), join(directory, String(i)))
-            const scan = await this.#runner.run({
-              tool: 'gitleaks',
-              args: [directory, join(op.root, 'gitleaks.toml'), join(op.root, 'empty')],
-              cwd: op.root,
-              protocol: 'none',
-            })
-            if (scan.code === GITLEAKS_FINDING_EXIT) return true
-            if (scan.code !== 0) throw failed()
-            return false
-          } finally {
-            await rm(directory, { recursive: true, force: true })
-          }
-        }
-        const found: string[] = []
-        const search = async (indices: readonly number[]): Promise<void> => {
-          if (found.length >= limit || !(await flags(indices))) return
-          if (indices.length === 1) {
-            found.push(files[indices[0]!]!.path)
-            return
-          }
-          const half = Math.ceil(indices.length / 2)
-          await search(indices.slice(0, half))
-          await search(indices.slice(half))
-        }
-        await search(files.map((_, i) => i))
-        return found.sort()
+        const report = join(op.root, 'report')
+        await sharedDirectory(report)
+        const scan = await this.#runner.run({
+          tool: 'gitleaks',
+          args: [all, join(op.root, 'gitleaks.toml'), join(op.root, 'empty'), report],
+          cwd: op.root,
+          protocol: 'none',
+        })
+        if (scan.code === 0) return []
+        if (scan.code !== GITLEAKS_FINDING_EXIT) throw failed()
+        const flagged = await flaggedCopies(join(report, GITLEAKS_REPORT), files.length)
+        return [...new Set(flagged.map((i) => files[i]!.path))].sort()
       }),
     )
   }
@@ -487,7 +506,8 @@ export class GitWorkspaceService {
           .filter((path) => path !== '' && isSecretFileName(path))
       }),
     )
-    const found = await this.findSecrets(projectRepositoryId, sha, HIDDEN_PATHS_LIMIT)
+    // All of them: a tree with more than one sandbox may hide is refused below, not cut short.
+    const found = await this.flaggedPaths(projectRepositoryId, sha)
     const hidden = [...new Set([...named, ...found])].sort()
     if (hidden.length > HIDDEN_PATHS_LIMIT)
       throw repositoryUnsupported('Too many files of the repository look like secrets')
