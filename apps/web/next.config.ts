@@ -85,10 +85,12 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ['pg', '@prisma/client', '@prisma/adapter-pg'],
   ...(workspaceRoot ? { outputFileTracingRoot: workspaceRoot } : {}),
   experimental: {
-    // Next copies the body of every request that passes proxy.ts (every page) into memory and
-    // holds it until the request ends, for any sender; the default is 10 MB. A page takes a
-    // body only as a server action, which Next limits to 1 MB by itself. The API routes do not
-    // pass the proxy: their limits are in server/body-limit.ts.
+    // Next copies the body of every request that passes proxy.ts into memory and holds it until
+    // the request ends, for any sender; the default is 10 MB. Past the limit the route gets the
+    // body cut off, and only the server log says so. A page takes a body only as a server
+    // action, which Next limits to 1 MB by itself, and the other API routes read far less
+    // (server/body-limit.ts). The routes that take a file do not pass the proxy at all
+    // (proxy.ts, `config.matcher`).
     proxyClientMaxBodySize: '1mb',
   },
   async headers() {
