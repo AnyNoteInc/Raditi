@@ -8,16 +8,18 @@ import Button from '@mui/material/Button'
 import ButtonBase from '@mui/material/ButtonBase'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
+import { useTheme } from '@mui/material/styles'
+import useMediaQuery from '@mui/material/useMediaQuery'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
-import { useSelectedLayoutSegment } from 'next/navigation'
+import { useSearchParams, useSelectedLayoutSegment } from 'next/navigation'
 import { useId, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { MoveToProjectDialog, useMoveToProject } from '@/components/projects/move-to-project'
 import { useTRPCClient } from '@/trpc/client'
 
-import { chatHref, NEW_CHAT_SEGMENT } from './chat-address'
+import { chatHref, NEW_CHAT_SEGMENT, projectOfSearch } from './chat-address'
 import { dialogGroups, listTime } from './chat-format'
 import { chatsText, listRepoHint, listText } from './chat-texts'
 import type { DialogListItem } from './chat-types'
@@ -586,8 +588,11 @@ function Folder({
 /**
  * «По проектам» (owner's request of 19.11.2026, after docs/plan/61-chats-first.md, К23): the
  * folders the server counted, «Без проекта» the last; a folder reads its chats only once it is
- * open. The folder of the open chat is open, and so is the only one there is; the client's own
- * press wins.
+ * open. The folder of the open chat is open, and so is the only one there is. A new chat in view —
+ * «Новый чат», or the root of the section, where it stands beside the list from `md` — opens the
+ * folder of its pill as an open chat does: of the project `?project=` names, which the pill writes
+ * there, or «Без проекта» (owner's answers of 19.11.2026). Without a chat in view the folder of
+ * `?project=` opens all the same. The client's own press wins.
  */
 function Folders({ currentId }: { currentId: string | null }) {
   const client = useTRPCClient()
@@ -605,10 +610,19 @@ function Folders({ currentId }: { currentId: string | null }) {
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
   })
+  const addressed =
+    projectOfSearch(useSearchParams().get('project') ?? undefined)?.toLowerCase() ?? null
+  const wide = useMediaQuery(useTheme().breakpoints.up('md'))
+  const newChat = currentId === NEW_CHAT_SEGMENT || (currentId === null && wide)
   const current =
-    openChat === null ? null : shown.data ? (shown.data.project?.id ?? NO_PROJECT) : null
+    openChat !== null
+      ? shown.data
+        ? (shown.data.project?.id ?? NO_PROJECT)
+        : null
+      : (addressed ?? (newChat ? NO_PROJECT : null))
   const [pressed, setPressed] = useState<Readonly<Record<string, boolean>>>({})
-  // Moving to a chat of a folder the client closed opens it again: the open chat stays in sight.
+  // Moving to a chat — or a choice of the pill — of a folder the client closed opens it again: the
+  // chat in view stays in sight.
   const [followed, setFollowed] = useState(current)
   if (followed !== current) {
     setFollowed(current)

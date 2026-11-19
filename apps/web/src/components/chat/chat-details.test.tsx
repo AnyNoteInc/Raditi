@@ -2,7 +2,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { useChatDetails, useChatThinking } from './chat-details'
+import { useChatDetails, useChatThinking, useTurnAtWorkShown } from './chat-details'
 
 function Shown() {
   const { details, toggle } = useChatDetails()
@@ -59,6 +59,7 @@ function Thoughts() {
 }
 
 function LiveThoughts() {
+  useTurnAtWorkShown(true)
   const { live, toggle } = useChatThinking()
   return (
     <button type="button" onClick={toggle}>
@@ -67,16 +68,43 @@ function LiveThoughts() {
   )
 }
 
+/** The switch as `/thinking` and the menu show it, beside a turn at work while `atWork`. */
+function Switch({ atWork }: { atWork: boolean }) {
+  useTurnAtWorkShown(atWork)
+  const { shown, toggle } = useChatThinking()
+  return (
+    <button type="button" onClick={toggle}>
+      {shown ? 'переключатель: видны' : 'переключатель: скрыты'}
+    </button>
+  )
+}
+
 describe('«Размышления агента»', () => {
-  it('shows the thoughts of a turn at work until the viewer hides them (19.11.2026)', () => {
+  it('hides the thoughts of a turn at work at the first press (19.11.2026)', () => {
     render(<LiveThoughts />)
     // Nothing chosen: a turn at work shows what the model thinks (РА7).
     expect(screen.getByText('идущий ход: мысли видны')).toBeTruthy()
     press()
-    expect(screen.getByText('идущий ход: мысли видны')).toBeTruthy()
-    press()
     expect(screen.getByText('идущий ход: мысли скрыты')).toBeTruthy()
     expect(window.localStorage.getItem('raditi-chat-thinking')).toBe('0')
+    press()
+    expect(screen.getByText('идущий ход: мысли видны')).toBeTruthy()
+    expect(window.localStorage.getItem('raditi-chat-thinking')).toBe('1')
+  })
+
+  it('speaks of the turn at work while one stands on the page, else of finished turns', () => {
+    const page = render(<Switch atWork />)
+    expect(screen.getByText('переключатель: видны')).toBeTruthy()
+    // The turn ends: nothing chosen, finished turns keep their thoughts closed.
+    page.rerender(<Switch atWork={false} />)
+    expect(screen.getByText('переключатель: скрыты')).toBeTruthy()
+    press()
+    expect(window.localStorage.getItem('raditi-chat-thinking')).toBe('1')
+    page.rerender(<Switch atWork />)
+    expect(screen.getByText('переключатель: видны')).toBeTruthy()
+    press()
+    expect(window.localStorage.getItem('raditi-chat-thinking')).toBe('0')
+    expect(screen.getByText('переключатель: скрыты')).toBeTruthy()
   })
 
   it('starts hidden, and keeps the choice for the next visit', () => {

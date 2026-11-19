@@ -613,6 +613,33 @@ describe('a dialog', () => {
       window.localStorage.clear()
     })
 
+    it('`/thinking` hides the thoughts of a turn at work at the first press (19.11.2026)', async () => {
+      calls.activity.mockResolvedValue({
+        events: [{ id: '1:0', type: 'reasoning', text: 'Look at the prices first.' }],
+        cursor: '1',
+        more: false,
+      })
+      window.localStorage.clear()
+      showDialog(
+        feedAnswer({
+          status: 'running',
+          task: { turnNo: 1, runningSince: '2026-10-17T09:01:00.000Z' },
+          events: [requestRow('1', 'Поменяйте цену')],
+          cursor: '1',
+        }),
+      )
+      // Nothing chosen: the turn at work shows what the model thinks (РА7).
+      await screen.findByText('Look at the prices first.')
+      await run(/Размышления агента/)
+      await screen.findByText('Размышления агента скрыты')
+      await waitFor(() => expect(screen.queryByText('Look at the prices first.')).toBeNull())
+      expect(window.localStorage.getItem('raditi-chat-thinking')).toBe('0')
+      await run(/Размышления агента/)
+      await screen.findByText('Размышления агента показаны')
+      await screen.findByText('Look at the prices first.')
+      window.localStorage.clear()
+    })
+
     it('`/details` and `/thinking` together: each says what the page shows', async () => {
       calls.activity.mockResolvedValue({
         events: [

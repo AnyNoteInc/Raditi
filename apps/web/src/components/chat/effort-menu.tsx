@@ -64,7 +64,7 @@ export function EffortMenu({
   const menuId = useId()
   const open = anchor !== null
   const button = useRef<HTMLButtonElement>(null)
-  const { thinking, toggle: toggleThinking } = useChatThinking()
+  const { shown: thinking, toggle: toggleThinking } = useChatThinking()
   useImperativeHandle(handle, () => ({ open: () => setAnchor(button.current) }), [])
   return (
     <>
