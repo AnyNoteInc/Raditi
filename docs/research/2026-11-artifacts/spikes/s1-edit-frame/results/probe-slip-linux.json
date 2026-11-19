@@ -1,0 +1,62 @@
+{
+ "firefox 155.0": {
+  "route, attribute without allow-scripts": {
+   "scriptsRan": 0,
+   "externalLoads": 0,
+   "metaRefreshNavigated": false,
+   "listeners": true
+  },
+  "route, allow-scripts slipped into the attribute": {
+   "scriptsRan": 0,
+   "externalLoads": 0,
+   "metaRefreshNavigated": false,
+   "listeners": true
+  },
+  "srcdoc + meta CSP, allow-scripts slipped into the attribute": {
+   "scriptsRan": 0,
+   "externalLoads": 0,
+   "metaRefreshNavigated": true,
+   "listeners": true
+  }
+ },
+ "webkit 26.6": {
+  "route, attribute without allow-scripts": {
+   "scriptsRan": 0,
+   "externalLoads": 0,
+   "metaRefreshNavigated": false,
+   "listeners": false
+  },
+  "route, allow-scripts slipped into the attribute": {
+   "scriptsRan": 0,
+   "externalLoads": 0,
+   "metaRefreshNavigated": false,
+   "listeners": false
+  },
+  "srcdoc + meta CSP, allow-scripts slipped into the attribute": {
+   "scriptsRan": 0,
+   "externalLoads": 0,
+   "metaRefreshNavigated": true,
+   "listeners": true
+  }
+ },
+ "chromium 153.0.8010.12": {
+  "route, attribute without allow-scripts": {
+   "scriptsRan": 0,
+   "externalLoads": 0,
+   "metaRefreshNavigated": false,
+   "listeners": true
+  },
+  "route, allow-scripts slipped into the attribute": {
+   "scriptsRan": 0,
+   "externalLoads": 0,
+   "metaRefreshNavigated": false,
+   "listeners": true
+  },
+  "srcdoc + meta CSP, allow-scripts slipped into the attribute": {
+   "scriptsRan": 0,
+   "externalLoads": 0,
+   "metaRefreshNavigated": true,
+   "listeners": true
+  }
+ }
+}

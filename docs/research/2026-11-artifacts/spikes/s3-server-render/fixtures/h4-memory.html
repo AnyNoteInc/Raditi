@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Враждебный кадр: память</title>
+<style>body { font-family: "Golos Text", sans-serif; padding: 24px; }</style></head>
+<body>
+<h1>Кадр занимает всю память</h1>
+<p id="n">0 МБ</p>
+<script>
+  // {{MEMORY_KIND}}: heap — arrays on the V8 heap; buffers — ArrayBuffers outside it.
+  const kind = '{{MEMORY_KIND}}'
+  const keep = []
+  let mb = 0
+  function grow() {
+    for (let k = 0; k < 8; k++) {
+      if (kind === 'buffers') { const b = new Uint8Array(64 * 1024 * 1024); b.fill(1); keep.push(b); mb += 64 }
+      else { const a = new Array(2 * 1024 * 1024); for (let i = 0; i < a.length; i++) a[i] = i * 1.5; keep.push(a); mb += 16 }
+    }
+    document.getElementById('n').textContent = mb + ' МБ'
+    setTimeout(grow, 0)
+  }
+  grow()
+</script>
+</body>
+</html>

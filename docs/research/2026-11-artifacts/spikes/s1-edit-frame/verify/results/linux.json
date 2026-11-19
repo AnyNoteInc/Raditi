@@ -1,0 +1,2034 @@
+{
+ "runs": [
+  {
+   "file": "linux-wc.json",
+   "os": "Linux 7.0.14-linuxkit arm64",
+   "node": "v24.20.0",
+   "startedAt": "2026-11-19T20:28:50.204Z",
+   "uptimeAtStart": "20:28:50 up 1 day,  4:46,  0 user,  load average: 0.11, 0.05, 0.09",
+   "uptimeAtEnd": "20:32:51 up 1 day,  4:50,  0 user,  load average: 0.20, 0.18, 0.13",
+   "groups": [
+    "safety",
+    "net",
+    "listeners",
+    "cancel",
+    "overlay",
+    "delivery",
+    "toggle",
+    "anchor",
+    "editcopy",
+    "feval",
+    "typing",
+    "clobber",
+    "coep",
+    "slip",
+    "feval2",
+    "feval3",
+    "anchor2"
+   ]
+  },
+  {
+   "file": "linux-ffsafety.json",
+   "os": "Linux 7.0.14-linuxkit arm64",
+   "node": "v24.20.0",
+   "startedAt": "2026-11-19T19:53:06.674Z",
+   "uptimeAtStart": "19:53:06 up 1 day,  4:10,  0 user,  load average: 0.00, 0.29, 0.61",
+   "uptimeAtEnd": "19:53:51 up 1 day,  4:11,  0 user,  load average: 0.21, 0.31, 0.60",
+   "groups": [
+    "safety"
+   ]
+  },
+  {
+   "file": "linux-ffdbg.json",
+   "os": "Linux 7.0.14-linuxkit arm64",
+   "node": "v24.20.0",
+   "startedAt": "2026-11-19T19:47:43.087Z",
+   "uptimeAtStart": "19:47:43 up 1 day,  4:05,  0 user,  load average: 0.12, 0.78, 0.84",
+   "uptimeAtEnd": "19:47:47 up 1 day,  4:05,  0 user,  load average: 0.51, 0.85, 0.86",
+   "groups": [
+    "listeners",
+    "overlay"
+   ]
+  },
+  {
+   "file": "linux-ffrest.json",
+   "os": "Linux 7.0.14-linuxkit arm64",
+   "node": "v24.20.0",
+   "startedAt": "2026-11-19T19:54:55.226Z",
+   "uptimeAtStart": "19:54:55 up 1 day,  4:12,  0 user,  load average: 0.11, 0.26, 0.56",
+   "uptimeAtEnd": "20:00:45 up 1 day,  4:18,  0 user,  load average: 0.11, 0.12, 0.39",
+   "groups": [
+    "net",
+    "cancel",
+    "delivery",
+    "toggle",
+    "editcopy",
+    "feval"
+   ]
+  },
+  {
+   "file": "linux-ff2.json",
+   "os": "Linux 7.0.14-linuxkit arm64",
+   "node": "v24.20.0",
+   "startedAt": "2026-11-19T20:05:32.865Z",
+   "uptimeAtStart": "20:05:32 up 1 day,  4:23,  0 user,  load average: 0.38, 0.15, 0.32",
+   "uptimeAtEnd": "20:06:07 up 1 day,  4:23,  0 user,  load average: 0.42, 0.18, 0.32",
+   "groups": [
+    "typing",
+    "anchor",
+    "feval2",
+    "clobber",
+    "coep",
+    "slip"
+   ]
+  },
+  {
+   "file": "linux-ff-feval3.json",
+   "os": "Linux 7.0.14-linuxkit arm64",
+   "node": "v24.20.0",
+   "startedAt": "2026-11-19T20:31:58.338Z",
+   "uptimeAtStart": "20:31:58 up 1 day,  4:49,  0 user,  load average: 0.29, 0.18, 0.13",
+   "uptimeAtEnd": "20:32:04 up 1 day,  4:49,  0 user,  load average: 0.34, 0.19, 0.13",
+   "groups": [
+    "feval3"
+   ]
+  },
+  {
+   "file": "linux-ffanchor2.json",
+   "os": "Linux 7.0.14-linuxkit arm64",
+   "node": "v24.20.0",
+   "startedAt": "2026-11-19T20:27:47.140Z",
+   "uptimeAtStart": "20:27:47 up 1 day,  4:45,  0 user,  load average: 0.02, 0.02, 0.08",
+   "uptimeAtEnd": "20:27:53 up 1 day,  4:45,  0 user,  load average: 0.16, 0.05, 0.09",
+   "groups": [
+    "anchor2"
+   ]
+  }
+ ],
+ "engines": {
+  "webkit": {
+   "version": "26.6",
+   "groups": {
+    "safety": {
+     "control": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "http://127.0.0.1:46721/f/webkit_control_a_1"
+       },
+       "ran": [
+        "svg-set-onbegin",
+        "dsd-onerror",
+        "nested-escalate",
+        "link-preload-onload",
+        "video-error",
+        "animationstart",
+        "body-pageshow",
+        "select-autofocus",
+        "script",
+        "input-image-error",
+        "nested-data",
+        "object-svg-onload",
+        "object-svg-script",
+        "embed-svg-onload"
+       ]
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [
+         "svg-xlink-js"
+        ],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [
+         "formaction-js"
+        ],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [
+         "js-target-top"
+        ],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [
+         "details-ontoggle"
+        ],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "called",
+       "function": "called"
+      },
+      "parentRan": [
+       "function",
+       "eval",
+       "fragment",
+       "insertAdjacentHTML",
+       "setHTMLUnsafe"
+      ],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "route": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "http://127.0.0.1:46721/f/webkit_route_a_8"
+       },
+       "ran": []
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "threw: EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' or 'trusted-ty",
+       "function": "threw: EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' or 'trusted-ty"
+      },
+      "parentRan": [],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "srcdocMeta": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "about:srcdoc"
+       },
+       "ran": []
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "threw: EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' or 'trusted-ty",
+       "function": "threw: EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' or 'trusted-ty"
+      },
+      "parentRan": [],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "routeSlip": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "http://127.0.0.1:46721/f/webkit_routeSlip_a_22"
+       },
+       "ran": []
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "threw: EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' or 'trusted-ty",
+       "function": "threw: EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' or 'trusted-ty"
+      },
+      "parentRan": [],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "consoleBlocked": 102
+    },
+    "net": {
+     "control": {
+      "css-import-foreign": "foreign+cookie",
+      "link-css-pages": "pages",
+      "img-foreign": "foreign+cookie",
+      "img-pages": "pages",
+      "font-pages": "pages",
+      "audio-pages": "pages",
+      "prefetch-foreign": "-",
+      "bg-foreign": "foreign+cookie",
+      "same-origin-img": "cab+cookie"
+     },
+     "route": {
+      "css-import-foreign": "-",
+      "link-css-pages": "-",
+      "img-foreign": "-",
+      "img-pages": "pages",
+      "font-pages": "pages",
+      "audio-pages": "-",
+      "prefetch-foreign": "-",
+      "bg-foreign": "-",
+      "same-origin-img": "-"
+     },
+     "srcdocMeta": {
+      "css-import-foreign": "-",
+      "link-css-pages": "-",
+      "img-foreign": "-",
+      "img-pages": "-",
+      "font-pages": "pages",
+      "audio-pages": "-",
+      "prefetch-foreign": "-",
+      "bg-foreign": "-",
+      "same-origin-img": "-"
+     }
+    },
+    "listeners": {
+     "route": {
+      "protoClick": 0,
+      "ownPointerdown": 0,
+      "propMousedown": 0,
+      "winScroll": 0,
+      "mo": 1,
+      "ro": 1
+     },
+     "srcdocMeta": {
+      "protoClick": 0,
+      "ownPointerdown": 0,
+      "propMousedown": 0,
+      "winScroll": 0,
+      "mo": 1,
+      "ro": 2
+     },
+     "blockedConsole": [
+      "Blocked script execution in 'http://127.0.0.1:46721/f/webkit_l_32' because the document's frame is sandboxed and the 'allow-scripts' permission is not set.",
+      "Blocked script execution in 'http://127.0.0.1:46721/f/webkit_l_32' because the document's frame is sandboxed and the 'allow-scripts' permission is not set."
+     ]
+    },
+    "cancel": {
+     "foreign site | route": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "<cab>/f/webkit_route_k_34"
+     },
+     "foreign site | route + preventDefault": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "<cab>/f/webkit_route_k_35"
+     },
+     "foreign site | srcdocMeta": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "about:srcdoc"
+     },
+     "foreign site | srcdocMeta + preventDefault": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "about:srcdoc"
+     },
+     "root of pages | route": {
+      "request": true,
+      "documentStays": false,
+      "frameUrl": "<pages>/nav?v=webkit.route.k.38link"
+     },
+     "root of pages | route + preventDefault": {
+      "request": true,
+      "documentStays": false,
+      "frameUrl": "<pages>/nav?v=webkit.route.k.39link"
+     },
+     "root of pages | srcdocMeta": {
+      "request": true,
+      "documentStays": false,
+      "frameUrl": "<pages>/nav?v=webkit.srcdocMeta.k.40link"
+     },
+     "root of pages | srcdocMeta + preventDefault": {
+      "request": true,
+      "documentStays": false,
+      "frameUrl": "<pages>/nav?v=webkit.srcdocMeta.k.41link"
+     }
+    },
+    "overlay": {
+     "route": {
+      "hover": [
+       "p",
+       "h"
+      ],
+      "picked": "h",
+      "caret": {
+       "off": 12,
+       "api": "caretPositionFromPoint",
+       "frameFocused": true,
+       "inner": "h"
+      },
+      "typed": "Кофейня у реXYёжки и пекарня",
+      "expected": "Кофейня у реXYёжки и пекарня",
+      "ok": true,
+      "mutations": 3,
+      "endSeen": "cabinet pointerdown"
+     },
+     "srcdocMeta": {
+      "hover": [
+       "p",
+       "h"
+      ],
+      "picked": "h",
+      "caret": {
+       "off": 12,
+       "api": "caretPositionFromPoint",
+       "frameFocused": true,
+       "inner": "h"
+      },
+      "typed": "Кофейня у реXYёжки и пекарня",
+      "expected": "Кофейня у реXYёжки и пекарня",
+      "ok": true,
+      "mutations": 3,
+      "endSeen": "cabinet pointerdown"
+     }
+    },
+    "delivery": {
+     "cabinet headers (route left in headers())": {
+      "access": false,
+      "ran": [],
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "iframe",
+        "site": "same-origin"
+       }
+      ]
+     },
+     "proposed headers": {
+      "access": true,
+      "ran": [],
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "iframe",
+        "site": "same-origin"
+       }
+      ]
+     },
+     "proposed + X-Frame-Options: DENY": {
+      "access": true,
+      "ran": [],
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "iframe",
+        "site": "same-origin"
+       }
+      ]
+     },
+     "top-level, proposed headers": {
+      "localStorage": [],
+      "beacons": 0,
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "document",
+        "site": "none"
+       }
+      ]
+     },
+     "top-level, no headers (control)": {
+      "localStorage": [
+       "ran:webkit.t.48s",
+       "ran:webkit.t.48e"
+      ],
+      "beacons": 4,
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "document",
+        "site": "none"
+       }
+      ]
+     }
+    },
+    "toggle": {
+     "route with the proposed CSP | source first": {
+      "viewRan": true,
+      "access": true,
+      "editScriptRan": false
+     },
+     "route with the proposed CSP | sandbox first": {
+      "viewRan": true,
+      "access": true,
+      "editScriptRan": false
+     },
+     "srcdoc without CSP | source first": {
+      "viewRan": true,
+      "access": true,
+      "editScriptRan": false
+     },
+     "srcdoc without CSP | sandbox first": {
+      "viewRan": true,
+      "access": true,
+      "editScriptRan": false
+     }
+    },
+    "anchor": {
+     "#doc-razdel": {
+      "url": "<cabinet>/cab#doc-razdel",
+      "inside": {
+       "y": 0,
+       "heading": false
+      }
+     },
+     "about:srcdoc#doc-razdel": {
+      "url": "about:srcdoc#doc-razdel",
+      "inside": {
+       "y": 2212,
+       "heading": true
+      }
+     },
+     "/uslugi/remont": {
+      "url": "<cabinet>/uslugi/remont",
+      "inside": {
+       "y": 0,
+       "heading": false
+      }
+     }
+    },
+    "editcopy": {
+     "as stored | a-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | svg-a-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | svg-a-xlink-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | mathml-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | nested-srcdoc-link": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": null
+     },
+     "edit copy | a-href": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": false
+     },
+     "edit copy | svg-a-href": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": false
+     },
+     "edit copy | svg-a-xlink-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": true
+     },
+     "edit copy | mathml-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": true
+     },
+     "edit copy | nested-srcdoc-link": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": true
+     }
+    },
+    "feval": {
+     "/cab | frame script-src none": {
+      "frame": "threw: EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' or 'trusted-types-eval' ",
+      "ran": false
+     },
+     "/cabstrict | frame script-src none": {
+      "frame": "threw: EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' or 'trusted-types-eval' is not an allowed so",
+      "own": "eval blocked in the cabinet",
+      "ran": false
+     },
+     "/cab | frame script-src 'unsafe-eval'": {
+      "frame": "called",
+      "ran": true
+     },
+     "/cabstrict | frame script-src 'unsafe-eval'": {
+      "frame": "called",
+      "own": "eval blocked in the cabinet",
+      "ran": true
+     }
+    },
+    "typing": {
+     "enter": {
+      "br": true,
+      "newline": false,
+      "div": false
+     },
+     "nbsp, white-space normal": 2,
+     "nbsp, white-space pre-wrap": 0,
+     "pastePlaintextOnly": {
+      "pasted": true,
+      "elements": false
+     }
+    },
+    "clobber": {
+     "plainAddEventListener": "object",
+     "plainBody": "IMG",
+     "plainGetSelection": "object",
+     "plainElementFromPoint": "object",
+     "plainCall": "threw TypeError",
+     "protoAddEventListener": "ok",
+     "protoBody": "BODY",
+     "protoSelection": "function",
+     "protoElementFromPoint": "HTML"
+    },
+    "coep": {
+     "route without COEP": false,
+     "route with COEP": true
+    },
+    "slip": {
+     "route": false,
+     "routeSlip": false,
+     "srcdocMeta": false,
+     "srcdocMetaSlip": true
+    },
+    "feval2": {
+     "cabinet without script-src | frame script-src 'none' | cabinet script": "blocked (threw: EvalError: Refused to evaluate a string as )",
+     "cabinet without script-src | frame script-src 'none' | playwright evaluate": "blocked (threw: EvalError: Refused to evaluate a string as )",
+     "cabinet without script-src | frame script-src 'unsafe-eval' | cabinet script": "RAN",
+     "cabinet without script-src | frame script-src 'unsafe-eval' | playwright evaluate": "RAN",
+     "cabinet without script-src | frame without CSP | cabinet script": "RAN",
+     "cabinet without script-src | frame without CSP | playwright evaluate": "RAN",
+     "cabinet script-src 'self' | frame script-src 'none' | cabinet script": "blocked (threw: EvalError: Refused to evaluate a string as )",
+     "cabinet script-src 'self' | frame script-src 'none' | playwright evaluate": "blocked (threw: EvalError: Refused to evaluate a string as )",
+     "cabinet script-src 'self' | frame script-src 'unsafe-eval' | cabinet script": "RAN",
+     "cabinet script-src 'self' | frame script-src 'unsafe-eval' | playwright evaluate": "RAN",
+     "cabinet script-src 'self' | frame without CSP | cabinet script": "RAN",
+     "cabinet script-src 'self' | frame without CSP | playwright evaluate": "RAN"
+    },
+    "feval3": {
+     "route (script-src none) | click on the cabinet": {
+      "eval": "threw EvalError",
+      "function": "threw EvalError",
+      "timeout": "not run"
+     },
+     "route (script-src none) | evaluate → cabinet function": {
+      "eval": "threw EvalError",
+      "function": "threw EvalError",
+      "timeout": "not run"
+     },
+     "route (script-src none) | evaluate inline": {
+      "eval": "threw EvalError",
+      "function": "threw EvalError",
+      "timeout": "not run"
+     },
+     "srcdoc + sandbox, no meta | click on the cabinet": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "not run"
+     },
+     "srcdoc + sandbox, no meta | evaluate → cabinet function": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "not run"
+     },
+     "srcdoc + sandbox, no meta | evaluate inline": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "not run"
+     }
+    },
+    "anchor2": {
+     "#doc-razdel": {
+      "before": "page (blue)",
+      "after": "other rgb(255,255,255)"
+     },
+     "about:srcdoc#doc-razdel": {
+      "before": "page (blue)",
+      "after": "heading (pink)"
+     },
+     "/uslugi/remont": {
+      "before": "page (blue)",
+      "after": "other rgb(255,255,255)"
+     }
+    }
+   }
+  },
+  "chromium": {
+   "version": "153.0.8010.12",
+   "groups": {
+    "safety": {
+     "control": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "http://127.0.0.1:46721/f/chromium_control_a_96"
+       },
+       "ran": [
+        "input-image-error",
+        "script",
+        "svg-set-onbegin",
+        "body-pageshow",
+        "video-error",
+        "nested-escalate",
+        "animationstart",
+        "select-autofocus",
+        "dsd-onerror",
+        "link-preload-onload",
+        "nested-data",
+        "object-svg-script",
+        "object-svg-onload",
+        "embed-svg-onload"
+       ]
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [
+         "svg-xlink-js"
+        ],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [
+         "formaction-js"
+        ],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [
+         "js-target-top"
+        ],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [
+         "details-ontoggle"
+        ],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "called",
+       "function": "called"
+      },
+      "parentRan": [
+       "insertHTML",
+       "eval",
+       "setHTMLUnsafe",
+       "function",
+       "insertAdjacentHTML",
+       "fragment"
+      ],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "route": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "http://127.0.0.1:46721/f/chromium_route_a_103"
+       },
+       "ran": []
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "threw: EvalError: Evaluating a string as JavaScript violates the following Content Security Polic",
+       "function": "threw: EvalError: Evaluating a string as JavaScript violates the following Content Security Polic"
+      },
+      "parentRan": [],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "srcdocMeta": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "about:srcdoc"
+       },
+       "ran": []
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "threw: EvalError: Evaluating a string as JavaScript violates the following Content Security Polic",
+       "function": "threw: EvalError: Evaluating a string as JavaScript violates the following Content Security Polic"
+      },
+      "parentRan": [],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "routeSlip": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "http://127.0.0.1:46721/f/chromium_routeSlip_a_117"
+       },
+       "ran": []
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "threw: EvalError: Evaluating a string as JavaScript violates the following Content Security Polic",
+       "function": "threw: EvalError: Evaluating a string as JavaScript violates the following Content Security Polic"
+      },
+      "parentRan": [],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "consoleBlocked": 45
+    },
+    "net": {
+     "control": {
+      "css-import-foreign": "foreign+cookie",
+      "link-css-pages": "pages",
+      "img-foreign": "foreign+cookie",
+      "img-pages": "pages",
+      "font-pages": "pages",
+      "audio-pages": "pages",
+      "prefetch-foreign": "foreign+cookie",
+      "bg-foreign": "foreign+cookie",
+      "same-origin-img": "cab+cookie"
+     },
+     "route": {
+      "css-import-foreign": "-",
+      "link-css-pages": "-",
+      "img-foreign": "-",
+      "img-pages": "pages",
+      "font-pages": "pages",
+      "audio-pages": "-",
+      "prefetch-foreign": "-",
+      "bg-foreign": "-",
+      "same-origin-img": "-"
+     },
+     "srcdocMeta": {
+      "css-import-foreign": "-",
+      "link-css-pages": "-",
+      "img-foreign": "-",
+      "img-pages": "-",
+      "font-pages": "pages",
+      "audio-pages": "-",
+      "prefetch-foreign": "-",
+      "bg-foreign": "-",
+      "same-origin-img": "-"
+     }
+    },
+    "listeners": {
+     "route": {
+      "protoClick": 1,
+      "ownPointerdown": 1,
+      "propMousedown": 1,
+      "winScroll": 1,
+      "mo": 1,
+      "ro": 1
+     },
+     "srcdocMeta": {
+      "protoClick": 1,
+      "ownPointerdown": 1,
+      "propMousedown": 1,
+      "winScroll": 1,
+      "mo": 1,
+      "ro": 1
+     },
+     "blockedConsole": []
+    },
+    "cancel": {
+     "foreign site | route": {
+      "request": false,
+      "documentStays": false,
+      "frameUrl": "chrome-error://chromewebdata/"
+     },
+     "foreign site | route + preventDefault": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "<cab>/f/chromium_route_k_130"
+     },
+     "foreign site | srcdocMeta": {
+      "request": false,
+      "documentStays": false,
+      "frameUrl": "chrome-error://chromewebdata/"
+     },
+     "foreign site | srcdocMeta + preventDefault": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "about:srcdoc"
+     },
+     "root of pages | route": {
+      "request": true,
+      "documentStays": false,
+      "frameUrl": "<pages>/nav?v=chromium.route.k.133link"
+     },
+     "root of pages | route + preventDefault": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "<cab>/f/chromium_route_k_134"
+     },
+     "root of pages | srcdocMeta": {
+      "request": true,
+      "documentStays": false,
+      "frameUrl": "<pages>/nav?v=chromium.srcdocMeta.k.135link"
+     },
+     "root of pages | srcdocMeta + preventDefault": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "about:srcdoc"
+     }
+    },
+    "overlay": {
+     "route": {
+      "hover": [
+       "p",
+       "h"
+      ],
+      "picked": "h",
+      "caret": {
+       "off": 12,
+       "api": "caretPositionFromPoint",
+       "frameFocused": true,
+       "inner": "h"
+      },
+      "typed": "Кофейня у реXYёжки и пекарня",
+      "expected": "Кофейня у реXYёжки и пекарня",
+      "ok": true,
+      "mutations": 3,
+      "endSeen": "cabinet pointerdown"
+     },
+     "srcdocMeta": {
+      "hover": [
+       "p",
+       "h"
+      ],
+      "picked": "h",
+      "caret": {
+       "off": 12,
+       "api": "caretPositionFromPoint",
+       "frameFocused": true,
+       "inner": "h"
+      },
+      "typed": "Кофейня у реXYёжки и пекарня",
+      "expected": "Кофейня у реXYёжки и пекарня",
+      "ok": true,
+      "mutations": 3,
+      "endSeen": "cabinet pointerdown"
+     }
+    },
+    "delivery": {
+     "cabinet headers (route left in headers())": {
+      "access": false,
+      "ran": [],
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "iframe",
+        "site": "same-origin"
+       }
+      ]
+     },
+     "proposed headers": {
+      "access": true,
+      "ran": [],
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "iframe",
+        "site": "same-origin"
+       }
+      ]
+     },
+     "proposed + X-Frame-Options: DENY": {
+      "access": true,
+      "ran": [],
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "iframe",
+        "site": "same-origin"
+       }
+      ]
+     },
+     "top-level, proposed headers": {
+      "localStorage": [],
+      "beacons": 0,
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "document",
+        "site": "none"
+       }
+      ]
+     },
+     "top-level, no headers (control)": {
+      "localStorage": [
+       "ran:chromium.t.143e",
+       "ran:chromium.t.143s"
+      ],
+      "beacons": 4,
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "document",
+        "site": "none"
+       }
+      ]
+     }
+    },
+    "toggle": {
+     "route with the proposed CSP | source first": {
+      "viewRan": true,
+      "access": false,
+      "editScriptRan": false
+     },
+     "route with the proposed CSP | sandbox first": {
+      "viewRan": true,
+      "access": true,
+      "editScriptRan": false
+     },
+     "srcdoc without CSP | source first": {
+      "viewRan": true,
+      "access": false,
+      "editScriptRan": true
+     },
+     "srcdoc without CSP | sandbox first": {
+      "viewRan": true,
+      "access": true,
+      "editScriptRan": false
+     }
+    },
+    "anchor": {
+     "#doc-razdel": {
+      "url": "chrome-error://chromewebdata/",
+      "inside": {
+       "y": 0,
+       "heading": false
+      }
+     },
+     "about:srcdoc#doc-razdel": {
+      "url": "about:srcdoc#doc-razdel",
+      "inside": {
+       "y": 2207,
+       "heading": true
+      }
+     },
+     "/uslugi/remont": {
+      "url": "<cabinet>/uslugi/remont",
+      "inside": {
+       "y": 0,
+       "heading": false
+      }
+     }
+    },
+    "editcopy": {
+     "as stored | a-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | svg-a-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | svg-a-xlink-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | mathml-href": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": null
+     },
+     "as stored | nested-srcdoc-link": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": null
+     },
+     "edit copy | a-href": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": false
+     },
+     "edit copy | svg-a-href": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": false
+     },
+     "edit copy | svg-a-xlink-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": true
+     },
+     "edit copy | mathml-href": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": true
+     },
+     "edit copy | nested-srcdoc-link": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": true
+     }
+    },
+    "feval": {
+     "/cab | frame script-src none": {
+      "frame": "threw: EvalError: Evaluating a string as JavaScript violates the following Content Security Policy directiv",
+      "ran": false
+     },
+     "/cabstrict | frame script-src none": {
+      "frame": "threw: EvalError: Evaluating a string as JavaScript violates the following Content Security Policy directive because 'unsafe-ev",
+      "own": "eval blocked in the cabinet",
+      "ran": false
+     },
+     "/cab | frame script-src 'unsafe-eval'": {
+      "frame": "called",
+      "ran": true
+     },
+     "/cabstrict | frame script-src 'unsafe-eval'": {
+      "frame": "called",
+      "own": "eval blocked in the cabinet",
+      "ran": true
+     }
+    },
+    "typing": {
+     "enter": {
+      "br": false,
+      "newline": true,
+      "div": false
+     },
+     "nbsp, white-space normal": 0,
+     "nbsp, white-space pre-wrap": 0,
+     "pastePlaintextOnly": {
+      "pasted": true,
+      "elements": false
+     }
+    },
+    "clobber": {
+     "plainAddEventListener": "object",
+     "plainBody": "IMG",
+     "plainGetSelection": "object",
+     "plainElementFromPoint": "object",
+     "plainCall": "threw TypeError",
+     "protoAddEventListener": "ok",
+     "protoBody": "BODY",
+     "protoSelection": "function",
+     "protoElementFromPoint": "HTML"
+    },
+    "coep": {
+     "route without COEP": false,
+     "route with COEP": true
+    },
+    "slip": {
+     "route": false,
+     "routeSlip": false,
+     "srcdocMeta": false,
+     "srcdocMetaSlip": true
+    },
+    "feval2": {
+     "cabinet without script-src | frame script-src 'none' | cabinet script": "blocked (threw: EvalError: Evaluating a string as JavaScrip)",
+     "cabinet without script-src | frame script-src 'none' | playwright evaluate": "blocked (threw: EvalError: Evaluating a string as JavaScrip)",
+     "cabinet without script-src | frame script-src 'unsafe-eval' | cabinet script": "RAN",
+     "cabinet without script-src | frame script-src 'unsafe-eval' | playwright evaluate": "RAN",
+     "cabinet without script-src | frame without CSP | cabinet script": "RAN",
+     "cabinet without script-src | frame without CSP | playwright evaluate": "RAN",
+     "cabinet script-src 'self' | frame script-src 'none' | cabinet script": "blocked (threw: EvalError: Evaluating a string as JavaScrip)",
+     "cabinet script-src 'self' | frame script-src 'none' | playwright evaluate": "blocked (threw: EvalError: Evaluating a string as JavaScrip)",
+     "cabinet script-src 'self' | frame script-src 'unsafe-eval' | cabinet script": "RAN",
+     "cabinet script-src 'self' | frame script-src 'unsafe-eval' | playwright evaluate": "RAN",
+     "cabinet script-src 'self' | frame without CSP | cabinet script": "RAN",
+     "cabinet script-src 'self' | frame without CSP | playwright evaluate": "RAN"
+    },
+    "feval3": {
+     "route (script-src none) | click on the cabinet": {
+      "eval": "threw EvalError",
+      "function": "threw EvalError",
+      "timeout": "not run"
+     },
+     "route (script-src none) | evaluate → cabinet function": {
+      "eval": "threw EvalError",
+      "function": "threw EvalError",
+      "timeout": "not run"
+     },
+     "route (script-src none) | evaluate inline": {
+      "eval": "threw EvalError",
+      "function": "threw EvalError",
+      "timeout": "not run"
+     },
+     "srcdoc + sandbox, no meta | click on the cabinet": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "not run"
+     },
+     "srcdoc + sandbox, no meta | evaluate → cabinet function": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "not run"
+     },
+     "srcdoc + sandbox, no meta | evaluate inline": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "not run"
+     }
+    },
+    "anchor2": {
+     "#doc-razdel": {
+      "before": "page (blue)",
+      "after": "other rgb(255,255,255)"
+     },
+     "about:srcdoc#doc-razdel": {
+      "before": "page (blue)",
+      "after": "heading (pink)"
+     },
+     "/uslugi/remont": {
+      "before": "page (blue)",
+      "after": "other rgb(255,255,255)"
+     }
+    }
+   }
+  },
+  "firefox": {
+   "version": "155.0",
+   "groups": {
+    "safety": {
+     "control": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "http://127.0.0.1:39149/f/firefox_control_a_1"
+       },
+       "ran": [
+        "nested-escalate",
+        "svg-set-onbegin",
+        "input-image-error",
+        "link-preload-onload",
+        "select-autofocus",
+        "video-error",
+        "animationstart",
+        "dsd-onerror",
+        "script",
+        "body-pageshow",
+        "object-svg-script",
+        "object-svg-onload",
+        "embed-svg-onload",
+        "nested-data"
+       ]
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [
+         "svg-xlink-js"
+        ],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [
+         "formaction-js"
+        ],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [
+         "js-target-top"
+        ],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [
+         "details-ontoggle"
+        ],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "called",
+       "function": "called"
+      },
+      "parentRan": [
+       "eval",
+       "fragment",
+       "insertAdjacentHTML",
+       "function",
+       "insertHTML",
+       "setHTMLUnsafe"
+      ],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "route": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "http://127.0.0.1:39149/f/firefox_route_a_8"
+       },
+       "ran": []
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "called",
+       "function": "called"
+      },
+      "parentRan": [
+       "function",
+       "eval"
+      ],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "srcdocMeta": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "about:srcdoc"
+       },
+       "ran": []
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "called",
+       "function": "called"
+      },
+      "parentRan": [
+       "eval",
+       "function"
+      ],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "routeSlip": {
+      "load": {
+       "mounted": {
+        "got": true,
+        "access": true,
+        "url": "http://127.0.0.1:39149/f/firefox_routeSlip_a_22"
+       },
+       "ran": []
+      },
+      "click": {
+       "svg-xlink-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "formaction-js": {
+        "ran": [],
+        "topMoved": false
+       },
+       "js-target-top": {
+        "ran": [],
+        "topMoved": false
+       },
+       "details-ontoggle": {
+        "ran": [],
+        "topMoved": false
+       }
+      },
+      "parentCalls": {
+       "insertHTMLok": true,
+       "insertHTML": "called",
+       "fragment": "called",
+       "insertAdjacentHTML": "called",
+       "setHTMLUnsafe": "called",
+       "eval": "called",
+       "function": "called"
+      },
+      "parentRan": [
+       "function",
+       "eval"
+      ],
+      "paste": {
+       "inserted": {
+        "img": true,
+        "text": "Текствставка"
+       },
+       "ran": []
+      }
+     },
+     "consoleBlocked": 0
+    },
+    "listeners": {
+     "route": {
+      "protoClick": 1,
+      "ownPointerdown": 1,
+      "propMousedown": 1,
+      "winScroll": 1,
+      "mo": 1,
+      "ro": 2
+     },
+     "srcdocMeta": {
+      "protoClick": 1,
+      "ownPointerdown": 1,
+      "propMousedown": 1,
+      "winScroll": 1,
+      "mo": 1,
+      "ro": 2
+     },
+     "blockedConsole": []
+    },
+    "overlay": {
+     "route": {
+      "hover": [
+       "p",
+       "h"
+      ],
+      "picked": "h",
+      "caret": {
+       "off": 12,
+       "api": "caretPositionFromPoint",
+       "frameFocused": true,
+       "inner": "h"
+      },
+      "typed": "Кофейня у реXYёжки и пекарня",
+      "expected": "Кофейня у реXYёжки и пекарня",
+      "ok": true,
+      "mutations": 3,
+      "endSeen": "cabinet pointerdown"
+     },
+     "srcdocMeta": {
+      "hover": [
+       "p",
+       "h"
+      ],
+      "picked": "h",
+      "caret": {
+       "off": 12,
+       "api": "caretPositionFromPoint",
+       "frameFocused": true,
+       "inner": "h"
+      },
+      "typed": "Кофейня у реXYёжки и пекарня",
+      "expected": "Кофейня у реXYёжки и пекарня",
+      "ok": true,
+      "mutations": 3,
+      "endSeen": "cabinet pointerdown"
+     }
+    },
+    "net": {
+     "control": {
+      "css-import-foreign": "foreign+cookie",
+      "link-css-pages": "pages",
+      "img-foreign": "foreign+cookie",
+      "img-pages": "pages",
+      "font-pages": "pages",
+      "audio-pages": "pages",
+      "prefetch-foreign": "foreign+cookie",
+      "bg-foreign": "foreign+cookie",
+      "same-origin-img": "cab+cookie"
+     },
+     "route": {
+      "css-import-foreign": "-",
+      "link-css-pages": "-",
+      "img-foreign": "-",
+      "img-pages": "pages",
+      "font-pages": "pages",
+      "audio-pages": "-",
+      "prefetch-foreign": "-",
+      "bg-foreign": "-",
+      "same-origin-img": "-"
+     },
+     "srcdocMeta": {
+      "css-import-foreign": "-",
+      "link-css-pages": "-",
+      "img-foreign": "-",
+      "img-pages": "-",
+      "font-pages": "pages",
+      "audio-pages": "-",
+      "prefetch-foreign": "-",
+      "bg-foreign": "-",
+      "same-origin-img": "-"
+     }
+    },
+    "cancel": {
+     "foreign site | route": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "<cab>/f/firefox_route_k_4"
+     },
+     "foreign site | route + preventDefault": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "<cab>/f/firefox_route_k_5"
+     },
+     "foreign site | srcdocMeta": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "about:srcdoc"
+     },
+     "foreign site | srcdocMeta + preventDefault": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "about:srcdoc"
+     },
+     "root of pages | route": {
+      "request": true,
+      "documentStays": false,
+      "frameUrl": "<pages>/nav?v=firefox.route.k.8link"
+     },
+     "root of pages | route + preventDefault": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "<cab>/f/firefox_route_k_9"
+     },
+     "root of pages | srcdocMeta": {
+      "request": true,
+      "documentStays": false,
+      "frameUrl": "<pages>/nav?v=firefox.srcdocMeta.k.10link"
+     },
+     "root of pages | srcdocMeta + preventDefault": {
+      "request": false,
+      "documentStays": true,
+      "frameUrl": "about:srcdoc"
+     }
+    },
+    "delivery": {
+     "cabinet headers (route left in headers())": {
+      "access": false,
+      "ran": [],
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "iframe",
+        "site": "same-origin"
+       }
+      ]
+     },
+     "proposed headers": {
+      "access": true,
+      "ran": [],
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "iframe",
+        "site": "same-origin"
+       }
+      ]
+     },
+     "proposed + X-Frame-Options: DENY": {
+      "access": true,
+      "ran": [],
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "iframe",
+        "site": "same-origin"
+       }
+      ]
+     },
+     "top-level, proposed headers": {
+      "localStorage": [],
+      "beacons": 0,
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "document",
+        "site": "none"
+       }
+      ]
+     },
+     "top-level, no headers (control)": {
+      "localStorage": [
+       "ran:firefox.t.16s",
+       "ran:firefox.t.16e"
+      ],
+      "beacons": 4,
+      "requests": [
+       {
+        "cookie": true,
+        "dest": "document",
+        "site": "none"
+       }
+      ]
+     }
+    },
+    "toggle": {
+     "route with the proposed CSP | source first": {
+      "viewRan": true,
+      "access": false,
+      "editScriptRan": false
+     },
+     "route with the proposed CSP | sandbox first": {
+      "viewRan": true,
+      "access": true,
+      "editScriptRan": false
+     },
+     "srcdoc without CSP | source first": {
+      "viewRan": true,
+      "access": false,
+      "editScriptRan": true
+     },
+     "srcdoc without CSP | sandbox first": {
+      "viewRan": true,
+      "access": true,
+      "editScriptRan": false
+     }
+    },
+    "editcopy": {
+     "as stored | a-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | svg-a-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | svg-a-xlink-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | mathml-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": null
+     },
+     "as stored | nested-srcdoc-link": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": null
+     },
+     "edit copy | a-href": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": false
+     },
+     "edit copy | svg-a-href": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": false
+     },
+     "edit copy | svg-a-xlink-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": true
+     },
+     "edit copy | mathml-href": {
+      "mounted": true,
+      "requestToForeign": true,
+      "documentStays": false,
+      "hrefLeft": true
+     },
+     "edit copy | nested-srcdoc-link": {
+      "mounted": true,
+      "requestToForeign": false,
+      "documentStays": true,
+      "hrefLeft": true
+     }
+    },
+    "feval": {
+     "/cab | frame script-src none": {
+      "frame": "called",
+      "ran": true
+     },
+     "/cabstrict | frame script-src none": {
+      "frame": "threw: EvalError: call to eval() blocked by CSP",
+      "own": "eval blocked in the cabinet",
+      "ran": false
+     },
+     "/cab | frame script-src 'unsafe-eval'": {
+      "frame": "called",
+      "ran": true
+     },
+     "/cabstrict | frame script-src 'unsafe-eval'": {
+      "frame": "called",
+      "own": "eval blocked in the cabinet",
+      "ran": true
+     }
+    },
+    "typing": {
+     "enter": {
+      "br": true,
+      "newline": false,
+      "div": false
+     },
+     "nbsp, white-space normal": 2,
+     "nbsp, white-space pre-wrap": 0,
+     "pastePlaintextOnly": {
+      "pasted": true,
+      "elements": false
+     }
+    },
+    "anchor": {
+     "#doc-razdel": {
+      "url": "about:srcdoc",
+      "inside": {
+       "timeout": "evaluate"
+      }
+     },
+     "about:srcdoc#doc-razdel": {
+      "url": "about:srcdoc#doc-razdel",
+      "inside": {
+       "y": 2212,
+       "heading": true
+      }
+     },
+     "/uslugi/remont": {
+      "url": "<cabinet>/uslugi/remont",
+      "inside": {
+       "y": 0,
+       "heading": false
+      }
+     }
+    },
+    "feval2": {
+     "cabinet without script-src | frame script-src 'none' | cabinet script": "blocked (threw: EvalError: call to eval() blocked by CSP)",
+     "cabinet without script-src | frame script-src 'none' | playwright evaluate": "RAN",
+     "cabinet without script-src | frame script-src 'unsafe-eval' | cabinet script": "RAN",
+     "cabinet without script-src | frame script-src 'unsafe-eval' | playwright evaluate": "RAN",
+     "cabinet without script-src | frame without CSP | cabinet script": "RAN",
+     "cabinet without script-src | frame without CSP | playwright evaluate": "RAN",
+     "cabinet script-src 'self' | frame script-src 'none' | cabinet script": "blocked (threw: EvalError: call to eval() blocked by CSP)",
+     "cabinet script-src 'self' | frame script-src 'none' | playwright evaluate": "RAN",
+     "cabinet script-src 'self' | frame script-src 'unsafe-eval' | cabinet script": "RAN",
+     "cabinet script-src 'self' | frame script-src 'unsafe-eval' | playwright evaluate": "RAN",
+     "cabinet script-src 'self' | frame without CSP | cabinet script": "RAN",
+     "cabinet script-src 'self' | frame without CSP | playwright evaluate": "RAN"
+    },
+    "clobber": {
+     "plainAddEventListener": "object",
+     "plainBody": "IMG",
+     "plainGetSelection": "object",
+     "plainElementFromPoint": "object",
+     "plainCall": "threw TypeError",
+     "protoAddEventListener": "ok",
+     "protoBody": "BODY",
+     "protoSelection": "function",
+     "protoElementFromPoint": "HTML"
+    },
+    "coep": {
+     "route without COEP": false,
+     "route with COEP": true
+    },
+    "slip": {
+     "route": false,
+     "routeSlip": false,
+     "srcdocMeta": false,
+     "srcdocMetaSlip": true
+    },
+    "feval3": {
+     "route (script-src none) | click on the cabinet": {
+      "eval": "threw EvalError",
+      "function": "threw EvalError",
+      "timeout": "not run"
+     },
+     "route (script-src none) | evaluate → cabinet function": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "not run"
+     },
+     "route (script-src none) | evaluate inline": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "not run"
+     },
+     "srcdoc + sandbox + meta (script-src none) | click on the cabinet": {
+      "eval": "threw EvalError",
+      "function": "threw EvalError",
+      "timeout": "not run"
+     },
+     "srcdoc + sandbox + meta (script-src none) | evaluate → cabinet function": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "not run"
+     },
+     "srcdoc + sandbox + meta (script-src none) | evaluate inline": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "not run"
+     },
+     "srcdoc + sandbox, no meta | click on the cabinet": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "RAN"
+     },
+     "srcdoc + sandbox, no meta | evaluate → cabinet function": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "RAN"
+     },
+     "srcdoc + sandbox, no meta | evaluate inline": {
+      "eval": "RAN",
+      "function": "RAN",
+      "timeout": "RAN"
+     }
+    },
+    "anchor2": {
+     "#doc-razdel": {
+      "before": "page (blue)",
+      "after": "other rgb(255,255,255)"
+     },
+     "about:srcdoc#doc-razdel": {
+      "before": "page (blue)",
+      "after": "heading (pink)"
+     },
+     "/uslugi/remont": {
+      "before": "page (blue)",
+      "after": "other rgb(255,255,255)"
+     }
+    }
+   }
+  }
+ }
+}

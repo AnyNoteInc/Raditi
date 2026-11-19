@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>frame</title>
+<style>
+html, body { margin: 0; }
+body { font: 24px/1.4 system-ui, sans-serif; background: repeating-linear-gradient(#fff 0 200px, #f3f6ff 200px 400px); }
+button { font-size: 32px; margin: 40px; }
+.anim { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: auto; }
+.anim i { position: absolute; left: 10%; width: 80%; height: 120px; background: #c58b52; border-radius: 30px; animation: slide 2s ease-in-out infinite alternate; }
+@keyframes slide { from { transform: translateX(-40px); } to { transform: translateX(40px); } }
+.ovx { width: 80%; margin: 40px auto; overflow-x: auto; white-space: nowrap; border: 2px solid #99a; }
+.ovx span { display: inline-block; width: 600px; height: 300px; background: #dfe6f4; margin: 8px; }
+</style></head>
+<body>
+<button id="b">Кнопка</button>
+<script>
+// Reports every event it receives to the parent, as data (the parent counts them).
+const sp = new URLSearchParams(location.search)
+const h = Number(sp.get('h') ?? 3000)
+// anim=1: composited animated layers over the frame (like the carousels and pulses of the mockups)
+if (sp.get('anim') === '1') { const a = document.createElement('div'); a.className = 'anim'; for (let i = 0; i < 12; i++) { const e = document.createElement('i'); e.style.top = (i * 250 + 100) + 'px'; a.appendChild(e) } document.body.appendChild(a) }
+// ovx=1: inner horizontal scrollers (overflow-x: auto) all over the frame
+if (sp.get('ovx') === '1') for (let i = 0; i < 8; i++) { const d = document.createElement('div'); d.className = 'ovx'; d.innerHTML = '<span></span><span></span><span></span>'; document.body.appendChild(d) }
+document.body.style.height = h + 'px'
+const post = (t, extra = {}) => parent.postMessage({ v: 'frame', t, ...extra }, '*')
+addEventListener('wheel', (e) => post('wheel', { ctrl: e.ctrlKey }), { passive: true })
+for (const t of ['pointerdown', 'pointermove', 'pointerup', 'dblclick', 'click']) addEventListener(t, () => post(t))
+addEventListener('keydown', () => post('keydown'))
+addEventListener('scroll', () => post('scroll', { y: scrollY }))
+addEventListener('load', () => post('ready'))
+</script>
+</body></html>

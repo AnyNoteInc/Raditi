@@ -1,0 +1,7 @@
+Layout of «Пекарня „Колос“ — лендинг» as the client sees it (390×4838, 1440×3481).
+2 problems, most serious first:
+- 390: the page scrolls sideways by 522 px. Wider than the screen: e30 <div.products> 888 px (grid-template-columns 280px 280px 280px).
+- both: low contrast 1.7:1 (needs 4.5) — e80 <p.review-author> «— Анна, постоянный гость» #c4c4c4 on #ffffff; same in e83, e86.
+OK: scripts, loads, fonts, overlaps, cut text, text size, empty areas, pictures.
+
+«Ход работы»: Проверка вёрстки «Пекарня „Колос“ — лендинг» на компьютере и телефоне: 2 замечания — на телефоне страница шире экрана, низкий контраст текста

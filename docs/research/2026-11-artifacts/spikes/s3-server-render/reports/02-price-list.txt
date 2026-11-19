@@ -1,0 +1,7 @@
+Layout of «Прайс-лист салона» as the client sees it (390×1698, 1440×1333).
+2 problems, most serious first:
+- 390: the page scrolls sideways by 274 px. Wider than the screen: e14 <table> 640 px (min-width 640px).
+- both: small text 10 px — e84 <p.note> «* Окончательная стоимость окраш…»; same in e85.
+OK: scripts, loads, fonts, overlaps, cut text, contrast, empty areas, pictures.
+
+«Ход работы»: Проверка вёрстки «Прайс-лист салона» на компьютере и телефоне: 2 замечания — на телефоне страница шире экрана, мелкий текст

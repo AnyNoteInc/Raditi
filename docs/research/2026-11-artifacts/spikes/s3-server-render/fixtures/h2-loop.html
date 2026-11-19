@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Враждебный кадр: вечный цикл</title>
+<style>body { font-family: "Golos Text", sans-serif; padding: 24px; } h1 { color: #b71c1c; }</style></head>
+<body>
+<h1>Кадр зацикливается в скрипте</h1>
+<p>Текст до скрипта виден, после — нет.</p>
+<script>
+  // The agent's mistake: a loop that never ends.
+  let i = 0
+  while (true) { i++ }
+</script>
+<p>Этот абзац парсер уже не прочитает.</p>
+</body>
+</html>

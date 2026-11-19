@@ -1,0 +1,26 @@
+{
+  "name": "spike88-s6-board",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Spike s6 of plan 88: a board of 10 frames (CSS transform vs @xyflow/react), memory and smoothness",
+  "scripts": {
+    "build": "vite build",
+    "thumbs": "node thumbs.mjs",
+    "check": "node check.mjs",
+    "measure": "node measure.mjs"
+  },
+  "dependencies": {
+    "@emotion/react": "11.14.0",
+    "@emotion/styled": "11.14.1",
+    "@mui/material": "9.4.0",
+    "@xyflow/react": "13.0.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "6.3.0",
+    "playwright-core": "1.63.0",
+    "vite": "8.3.8"
+  }
+}

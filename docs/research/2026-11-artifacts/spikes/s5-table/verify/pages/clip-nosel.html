@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>clipboard target probe, no selection</title>
+<div id="g" tabindex="0" role="grid" style="width:300px;height:120px;border:1px solid #999">a focused grid that is not editable</div>
+<input id="i" aria-label="input">
+<script>
+  window.log = []
+  const g = document.getElementById('g')
+  g.addEventListener("mousedown", (e) => { e.preventDefault(); g.focus() })
+  const name = (n) => (n && (n.id || n.tagName)) || String(n)
+  for (const type of ['copy', 'paste']) {
+    g.addEventListener(type, (e) => log.push({ where: 'grid', type, target: name(e.target) }))
+    document.addEventListener(type, (e) => {
+      log.push({
+        where: 'document',
+        type,
+        target: name(e.target),
+        active: name(document.activeElement),
+        hasData: Boolean(e.clipboardData),
+        data: e.clipboardData ? e.clipboardData.getData('text/plain') : null,
+        trusted: e.isTrusted,
+      })
+      if (type === 'copy' && e.clipboardData) {
+        e.clipboardData.setData('text/plain', 'from-document')
+        e.preventDefault()
+      }
+    })
+  }
+</script>

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Враждебный кадр: сеть</title>
+<link rel="dns-prefetch" href="//dns-prefetch.trap.test">
+<link rel="preconnect" href="{{TRAP}}/preconnect">
+<link rel="prefetch" href="{{TRAP}}/prefetch">
+<link rel="stylesheet" href="{{TRAP}}/style.css">
+<link rel="icon" href="{{TRAP}}/favicon.ico">
+<link rel="manifest" href="{{TRAP}}/manifest.json">
+<meta http-equiv="refresh" content="1;url={{TRAP}}/meta-refresh">
+<style>
+  @import url("{{TRAP}}/import.css");
+  @font-face { font-family: Trap; src: url("{{TRAP}}/font.woff2"); }
+  body { font-family: Trap, "Golos Text", sans-serif; background: url("{{TRAP}}/bg.png"); padding: 24px; }
+</style>
+<script src="{{TRAP}}/script.js"></script>
+</head>
+<body>
+<h1>Кадр пытается выйти в сеть</h1>
+<img src="{{TRAP}}/img.png" alt="">
+<img srcset="{{TRAP}}/srcset.png 2x" alt="">
+<video src="{{TRAP}}/video.mp4" poster="{{TRAP}}/poster.png"></video>
+<audio src="{{TRAP}}/audio.mp3" autoplay></audio>
+<iframe src="{{TRAP}}/frame.html"></iframe>
+<object data="{{TRAP}}/object.swf"></object>
+<embed src="{{TRAP}}/embed.swf">
+<a href="{{TRAP}}/ping-target" ping="{{TRAP}}/ping" id="link">ссылка</a>
+<form id="form" action="{{TRAP}}/form" method="post"><input name="q" value="1"></form>
+<p id="out">—</p>
+<script>
+  const T = '{{TRAP}}'
+  const tried = []
+  const attempt = (name, fn) => { try { const r = fn(); tried.push(name + ':sent'); if (r && r.catch) r.catch(() => {}) } catch (e) { tried.push(name + ':' + e.name) } }
+  attempt('fetch', () => fetch(T + '/fetch'))
+  attempt('xhr', () => { const x = new XMLHttpRequest(); x.open('GET', T + '/xhr'); x.send() })
+  attempt('ws', () => new WebSocket(T.replace('http', 'ws') + '/ws'))
+  attempt('beacon', () => navigator.sendBeacon(T + '/beacon', 'x'))
+  attempt('eventsource', () => new EventSource(T + '/sse'))
+  attempt('worker', () => new Worker('data:text/javascript,fetch("' + T + '/worker")'))
+  attempt('sw', () => navigator.serviceWorker.register(T + '/sw.js'))
+  attempt('import', () => import(T + '/module.js'))
+  attempt('open', () => window.open(T + '/popup'))
+  attempt('img', () => { const i = new Image(); i.src = T + '/img-js.png' })
+  attempt('form', () => document.getElementById('form').submit())
+  attempt('click', () => document.getElementById('link').click())
+  attempt('rtc', () => new RTCPeerConnection({ iceServers: [{ urls: 'stun:127.0.0.1:3478' }] }).createDataChannel('x'))
+  attempt('storage', () => localStorage.setItem('k', 'v'))
+  attempt('cookie', () => { document.cookie = 'a=b' })
+  attempt('alert', () => alert('Окно!'))
+  attempt('print', () => print())
+  setTimeout(() => attempt('navigate', () => { location.href = T + '/navigate' }), 200)
+  document.getElementById('out').textContent = tried.join(' ')
+</script>
+</body>
+</html>

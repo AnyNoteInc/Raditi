@@ -1,0 +1,11 @@
+{
+  "name": "spike88-s8-next-logs",
+  "private": true,
+  "description": "Spike s8 of plan 88: does a Next.js 16.3.6 production server log request URLs",
+  "scripts": { "build": "next build" },
+  "dependencies": {
+    "next": "16.3.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Лавка мёда</title>
+<style>
+  :root { --bg:#fffaf0; --ink:#3b2a00; --accent:#e0a100; --accent2:#7a4f01; --muted:#8a7650; --card:#ffffff; }
+  body.variant-b { --bg:#f7f9ff; --ink:#1d2540; --accent:#f08c00; --accent2:#3a4a8a; --muted:#6a7290; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; }
+  body { font-family:-apple-system, "Segoe UI", Roboto, Arial, sans-serif; background:var(--bg); color:var(--ink); line-height:1.5; }
+  .wrap { max-width:1240px; margin:0 auto; padding:0 32px; }
+  .promo { text-align:center; color:#fff; font-weight:700; padding:10px; background:linear-gradient(90deg, var(--accent2), var(--accent), var(--accent2)); background-size:200% 100%; animation:shift 6s linear infinite; }
+  @keyframes shift { to { background-position:200% 0; } }
+  header .wrap { display:flex; align-items:center; height:80px; gap:24px; }
+  .logo { font-weight:900; font-size:24px; }
+  .logo span { color:var(--accent); }
+  .search { flex:1; max-width:460px; margin-left:24px; padding:12px 18px; border-radius:12px; border:1px solid #0002; font-size:15px; font-family:inherit; }
+  .cart { margin-left:auto; display:flex; align-items:center; gap:8px; font-weight:700; padding:10px 16px; border-radius:12px; background:var(--card); box-shadow:0 4px 16px #0000000f; }
+  .cart b { background:var(--accent); color:#fff; border-radius:999px; min-width:26px; text-align:center; padding:2px 8px; transition:transform .2s; }
+  .cart b.bump { transform:scale(1.3); }
+  .banner { margin:12px auto 0; border-radius:28px; overflow:hidden; position:relative; min-height:380px; display:flex; align-items:flex-end; color:#fff; background:#3b2a00 url(/_files/honey-hero.jpg) center/cover; }
+  body.variant-b .banner { align-items:center; justify-content:flex-end; text-align:right; }
+  .banner::before { content:""; position:absolute; inset:0; background:linear-gradient(0deg, #000b, #0000 60%); }
+  .banner .txt { position:relative; padding:44px; max-width:640px; }
+  .banner h1 { margin:0 0 10px; font-size:52px; line-height:1.05; }
+  .banner p { margin:0; font-size:19px; opacity:.92; }
+  .chips { display:flex; gap:10px; margin:40px 0 24px; flex-wrap:wrap; }
+  .chip { padding:10px 18px; border-radius:999px; background:var(--card); border:1px solid #0001; cursor:pointer; font-size:15px; }
+  .chip.on { background:var(--ink); color:#fff; }
+  .grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:22px; }
+  .card { background:var(--card); border-radius:22px; overflow:hidden; box-shadow:0 10px 30px #3b2a0010; display:flex; flex-direction:column; }
+  .card img { width:100%; aspect-ratio:1; object-fit:cover; display:block; }
+  .card .b { padding:16px 18px 18px; display:flex; flex-direction:column; gap:6px; flex:1; }
+  .card .w { color:var(--muted); font-size:14px; }
+  .card .row { display:flex; align-items:center; justify-content:space-between; margin-top:auto; }
+  .card .p { font-weight:900; font-size:20px; }
+  .card .p s { color:var(--muted); font-weight:400; font-size:14px; margin-left:6px; }
+  .card button { border:0; border-radius:12px; padding:10px 14px; background:var(--accent); color:#fff; font-weight:700; cursor:pointer; }
+  .tag { position:absolute; margin:12px; background:#fff; border-radius:999px; padding:4px 10px; font-size:12px; font-weight:800; color:var(--accent2); }
+  .imgw { position:relative; }
+  section { padding:84px 0; }
+  h2 { font-size:38px; margin:0 0 14px; }
+  .about { display:grid; grid-template-columns:1fr 1fr; gap:48px; align-items:center; }
+  .about img { width:100%; border-radius:28px; display:block; aspect-ratio:3/2; object-fit:cover; }
+  .delivery { display:grid; grid-template-columns:repeat(3, 1fr); gap:24px; }
+  .delivery div { background:var(--card); border-radius:22px; padding:28px; }
+  .delivery b { font-size:20px; display:block; margin-bottom:8px; }
+  .sub { background:var(--ink); color:#fff; border-radius:28px; padding:44px; display:flex; gap:24px; align-items:center; justify-content:space-between; }
+  .sub input { padding:14px 18px; border-radius:12px; border:0; font-size:16px; min-width:320px; font-family:inherit; }
+  footer { padding:40px 0 56px; color:var(--muted); font-size:14px; }
+  @media (max-width:700px) {
+    .wrap { padding:0 16px; }
+    .search { display:none; }
+    .banner { min-height:300px; border-radius:20px; }
+    .banner h1 { font-size:32px; }
+    .banner .txt { padding:24px; }
+    .grid { grid-template-columns:1fr 1fr; gap:12px; }
+    .card .b { padding:12px; }
+    .card .row { flex-direction:column; align-items:stretch; gap:8px; }
+    section { padding:48px 0; }
+    h2 { font-size:28px; }
+    .about, .delivery { grid-template-columns:1fr; }
+    .sub { flex-direction:column; align-items:stretch; padding:26px; }
+    .sub input { min-width:0; }
+  }
+</style>
+</head>
+<body>
+<div class="promo">Бесплатная доставка от 3 000 ₽ · Новый урожай 2026 уже в лавке</div>
+<header><div class="wrap">
+  <div class="logo">Лавка <span>мёда</span></div>
+  <input class="search" placeholder="Найти мёд, соты, подарочный набор…">
+  <div class="cart">Корзина <b id="cart">0</b></div>
+</div></header>
+<div class="wrap">
+  <div class="banner"><div class="txt"><h1>Мёд с семейной пасеки</h1><p>Собираем на Алтае и в Башкирии, разливаем вручную и отправляем в день заказа.</p></div></div>
+  <div class="chips" id="chips"><span class="chip on" data-c="all">Все</span><span class="chip" data-c="liquid">Жидкий</span><span class="chip" data-c="cream">Крем-мёд</span><span class="chip" data-c="comb">Соты</span><span class="chip" data-c="gift">Подарки</span></div>
+  <div class="grid" id="grid"></div>
+</div>
+<section><div class="wrap about">
+  <img src="/_files/honey-apiary.jpg" alt="Пасека">
+  <div><h2>О пасеке</h2><p>Наша семья держит пчёл с 1987 года. Сегодня у нас 340 ульев в двух регионах. Мы не греем мёд выше 40 °C и не смешиваем сорта — поэтому у каждого вкус своего луга.</p><p>Каждая партия проходит лабораторную проверку. Протоколы испытаний можно попросить у менеджера.</p></div>
+</div></section>
+<section style="padding-top:0"><div class="wrap">
+  <h2>Доставка и оплата</h2>
+  <div class="delivery">
+    <div><b>Курьером</b>По городу — в день заказа, 300 ₽, бесплатно от 3 000 ₽.</div>
+    <div><b>Пункты выдачи</b>Более 20 000 пунктов по России, от 2 дней.</div>
+    <div><b>Оплата</b>Картой на сайте, СБП или при получении.</div>
+  </div>
+</div></section>
+<section style="padding-top:0"><div class="wrap">
+  <div class="sub"><div><h2 style="margin:0">Скидка 10% на первый заказ</h2><p style="margin:6px 0 0;opacity:.8">Подпишитесь — пришлём промокод и расскажем о новом урожае.</p></div><div><input placeholder="Ваша почта"></div></div>
+</div></section>
+<footer><div class="wrap">© Лавка мёда, 2026 · ИП Пчёлкин П. П. · Политика конфиденциальности · Оферта</div></footer>
+<script>
+  const items = [
+    ['Цветочный алтайский', 'liquid', 'p1', '500 г', 690, 790, 'Хит'],
+    ['Гречишный тёмный', 'liquid', 'p2', '500 г', 640, 0, ''],
+    ['Липовый', 'liquid', 'p3', '1 кг', 1290, 1450, '−11%'],
+    ['Крем-мёд с малиной', 'cream', 'p4', '250 г', 490, 0, 'Новинка'],
+    ['Крем-мёд с кедровым орехом', 'cream', 'p5', '250 г', 560, 0, ''],
+    ['Соты в рамке', 'comb', 'p6', '400 г', 1190, 0, ''],
+    ['Донниковый', 'liquid', 'p1', '500 г', 720, 0, ''],
+    ['Акациевый', 'liquid', 'p2', '500 г', 790, 0, ''],
+    ['Набор «Три вкуса»', 'gift', 'p3', '3 × 150 г', 1490, 1690, 'Подарок'],
+    ['Перга', 'comb', 'p4', '100 г', 650, 0, ''],
+    ['Набор «Чайный»', 'gift', 'p5', 'мёд и чай', 1890, 0, ''],
+    ['Таёжный', 'liquid', 'p6', '1 кг', 1390, 0, ''],
+  ]
+  const grid = document.getElementById('grid')
+  function render(c) {
+    grid.innerHTML = items.filter((x) => c === 'all' || x[1] === c).map(([n, , img, w, p, old, tag]) =>
+      `<div class="card"><div class="imgw">${tag ? `<span class="tag">${tag}</span>` : ''}<img src="/_files/honey-${img}.jpg" alt=""></div><div class="b"><b>${n}</b><span class="w">${w}</span><div class="row"><span class="p">${p} ₽${old ? `<s>${old} ₽</s>` : ''}</span><button>В корзину</button></div></div></div>`).join('')
+  }
+  render('all')
+  document.getElementById('chips').addEventListener('click', (e) => {
+    const c = e.target.closest('.chip'); if (!c) return
+    document.querySelectorAll('.chip').forEach((x) => x.classList.toggle('on', x === c)); render(c.dataset.c)
+  })
+  let n = 0; const cart = document.getElementById('cart')
+  grid.addEventListener('click', (e) => { if (!e.target.closest('button')) return; cart.textContent = String(++n); cart.classList.add('bump'); setTimeout(() => cart.classList.remove('bump'), 200) })
+</script>
+</body>
+</html>

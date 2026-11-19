@@ -1,0 +1,7 @@
+Layout of «Меню кофейни (картинки data:)» as the client sees it (390×3151, 1440×1341).
+2 problems, most serious first:
+- both: picture e49 <img> does not draw (data:image/jpeg;base64,…).
+- both: small text 9 px — e17 <p.allergens> «Содержит: молоко. Можно на овся…»; same in e26, e35, e44 and 2 more.
+OK: scripts, loads, fonts, width, overlaps, cut text, contrast, empty areas.
+
+«Ход работы»: Проверка вёрстки «Меню кофейни (картинки data:)» на компьютере и телефоне: 2 замечания — картинка не показывается, мелкий текст

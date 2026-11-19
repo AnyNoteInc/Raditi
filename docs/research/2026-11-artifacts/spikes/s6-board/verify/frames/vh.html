@@ -1,0 +1,5 @@
+<!doctype html><html><head><meta charset="utf-8"><title>vh</title>
+<style>body{margin:0;font:20px system-ui} header{height:72px;background:#222;color:#fff} .hero{min-height:100vh;background:#c58b52;display:flex;align-items:center;justify-content:center;font-size:48px} section{height:600px;border-top:1px solid #ccc}</style></head>
+<body><header>Шапка</header><div class="hero">Первый экран — min-height: 100vh</div><section>Раздел 1</section><section>Раздел 2</section>
+<script>(()=>{let last=0;const send=(t)=>{const h=Math.ceil(document.documentElement.scrollHeight);if(t==='h'&&h===last)return;last=h;parent.postMessage({raditi:'frame',t,h},'*')};addEventListener('load',()=>{send('ready');new ResizeObserver(()=>send('h')).observe(document.documentElement)})})()</script>
+</body></html>

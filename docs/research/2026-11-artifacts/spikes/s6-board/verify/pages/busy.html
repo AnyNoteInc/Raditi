@@ -1,0 +1,27 @@
+<!doctype html><html><head><meta charset="utf-8"><title>busy</title>
+<style>html,body{margin:0;height:100%;overflow:hidden} #world{position:absolute;left:0;top:0;transform-origin:0 0}
+.f{position:absolute;width:1440px;height:3000px;background:#fff} .f iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.hide .f iframe{visibility:hidden}</style></head><body><div id="world"></div><script>
+// The cabinet moves the board itself, from its own requestAnimationFrame (no input events): idle, pan
+// (translate only), zoom (scale changes every frame). hz=1 hides the frames while zooming.
+const q = new URLSearchParams(location.search), w = document.getElementById('world')
+for (const [i, mode] of [[0, q.get('busy') ?? 'split'], [1, 'none']]) {
+  const d = document.createElement('div'); d.className = 'f'; d.style.left = (i * 1600) + 'px'
+  const f = document.createElement('iframe'); f.setAttribute('sandbox', 'allow-scripts'); f.setAttribute('scrolling', 'no'); f.src = `${q.get('fo')}/busy.html?mode=${mode}`
+  d.appendChild(f); w.appendChild(d)
+}
+let x = 40, y = 40, z = 0.3
+const apply = () => { w.style.transform = `translate(${x}px, ${y}px) scale(${z})` }
+apply()
+window.__phase = async (name, ms) => {
+  const iv = []; let last = null; const t0 = performance.now()
+  if (name === 'zoom' && q.get('hz') === '1') document.body.classList.add('hide')
+  await new Promise((done) => { const loop = (t) => { if (last != null) iv.push(t - last); last = t
+    if (name === 'pan') { x = 40 + 200 * Math.sin((t - t0) / 400); apply() }
+    if (name === 'zoom') { z = 0.3 + 0.1 * Math.sin((t - t0) / 300); apply() }
+    if (t - t0 < ms) requestAnimationFrame(loop); else done() }; requestAnimationFrame(loop) })
+  document.body.classList.remove('hide')
+  const s = [...iv].sort((a, b) => a - b), p = (k) => Math.round(s[Math.min(s.length - 1, Math.floor(k * s.length))] * 10) / 10
+  return { name, frames: iv.length, fps: Math.round(iv.length / (ms / 1000) * 10) / 10, p50: p(0.5), p95: p(0.95), max: Math.round(s.at(-1) ?? 0) }
+}
+</script></body></html>

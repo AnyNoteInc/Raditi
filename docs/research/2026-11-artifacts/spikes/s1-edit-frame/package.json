@@ -1,0 +1,12 @@
+{
+  "name": "spike88-s1-edit-frame",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "esbuild": "0.28.2",
+    "parse5": "8.1.1",
+    "playwright-core": "1.63.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

@@ -1,0 +1,8 @@
+{
+ "chromium 153.0.8010.12 | anchor #doc-razdel": "chrome-error://chromewebdata/",
+ "chromium 153.0.8010.12 | link from the root /uslugi/remont": "<cabinet>/uslugi/remont",
+ "chromium 153.0.8010.12 | anchor about:srcdoc#doc-razdel": "about:srcdoc#doc-razdel",
+ "webkit 26.6 | anchor #doc-razdel": "<cabinet>/cabinet#doc-razdel",
+ "webkit 26.6 | link from the root /uslugi/remont": "<cabinet>/uslugi/remont",
+ "webkit 26.6 | anchor about:srcdoc#doc-razdel": "about:srcdoc#doc-razdel"
+}
