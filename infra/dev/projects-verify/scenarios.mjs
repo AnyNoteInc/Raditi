@@ -102,7 +102,7 @@ async function waitAnswered(
   )
 }
 
-export async function newChat(stand, { text, projectId, program, ctx = {} }) {
+export async function newChat(stand, { text, projectId, program, ctx = {}, changes = false }) {
   const taskId = stand.modules.ids.uuidv7()
   stand.owned.chats.push(taskId)
   stand.model.script(program, ctx)
@@ -110,12 +110,13 @@ export async function newChat(stand, { text, projectId, program, ctx = {} }) {
   if (created.taskId !== taskId || !created.created)
     throw new CheckFailed('task.create made no chat')
   await waitAnswered(stand, taskId, { what: `the first turn (${program}) to answer` })
+  if (changes) await waitChanges(stand, taskId, 0n, program)
   const current = stand.model.current()
   if (!current.finished) throw new CheckFailed(`the program ${program} did not finish`)
   return { taskId, facts: current.facts }
 }
 
-async function say(stand, taskId, text, program, ctx = {}) {
+async function say(stand, taskId, text, program, ctx = {}, { changes = false } = {}) {
   const results = await stand.db.taskEvent.count({ where: { taskId, type: 'feed.result' } })
   const last = await stand.db.taskEvent.findFirst({ where: { taskId }, orderBy: { id: 'desc' } })
   stand.model.script(program, ctx)
@@ -125,6 +126,7 @@ async function say(stand, taskId, text, program, ctx = {}) {
     since: last?.id ?? 0n,
     what: `the turn of ${program} to answer`,
   })
+  if (changes) await waitChanges(stand, taskId, last?.id ?? 0n, program)
   const current = stand.model.current()
   if (!current.finished) throw new CheckFailed(`the program ${program} did not finish`)
   return current.facts
@@ -190,6 +192,19 @@ const feedAfter = (stand, taskId, type, since) =>
     where: { taskId, type, id: { gt: since } },
     orderBy: { id: 'asc' },
   })
+
+/**
+ * Waits for the card of the changes of a turn (`feed.repo_changes`): core writes it as the pass
+ * settles, a moment after its answer (`feed.result`), so a push asked for at the answer may find
+ * nothing to send yet (`REPO_NOTHING_TO_PUSH`, CI of #156).
+ */
+async function waitChanges(stand, taskId, since, program) {
+  await stand.rt.until(
+    `the changes of the turn of ${program} to be recorded`,
+    async () => (await feedAfter(stand, taskId, 'feed.repo_changes', since)).length > 0,
+    { timeoutMs: 60_000, intervalMs: 500, service: stand.processes.core },
+  )
+}
 
 /** The phases the journal of a chat wrote after `since` (`turn.lifecycle`), in order. */
 async function phasesAfter(stand, taskId, since) {
@@ -1328,6 +1343,7 @@ async function scenarioF(stand) {
     projectId: state.projectId,
     program: 'appendLine',
     ctx: { file: 'opening.md', line: 'Пн–Пт: 8:00–22:00', message: 'Добавил часы работы.' },
+    changes: true,
   })
   const chatF = second2.taskId
   state.chatF = chatF
@@ -1344,11 +1360,14 @@ async function scenarioF(stand) {
   await actionDone(stand, state.projectId, firstPress.actionId, 'the first push of the second chat')
   state.branchF = first.branch
   // The commits of the client come after the turn and before the press: the push must meet them.
-  await say(stand, chatF, 'Добавьте выходные.', 'appendLine', {
-    file: 'opening.md',
-    line: 'Сб–Вс: 9:00–21:00',
-    message: 'Добавил выходные.',
-  })
+  await say(
+    stand,
+    chatF,
+    'Добавьте выходные.',
+    'appendLine',
+    { file: 'opening.md', line: 'Сб–Вс: 9:00–21:00', message: 'Добавил выходные.' },
+    { changes: true },
+  )
   const clientSha = await gitlab.commitAsClient(
     state.ownProject,
     first.branch,
@@ -1377,11 +1396,14 @@ async function scenarioF(stand) {
     `a push after a commit of the client goes on top of it: the commit of the client stays (${onTopDone.state})`,
     { state: onTopDone.state, error: onTopDone.error, parents: parentsF, clientSha },
   )
-  await say(stand, chatF, 'Добавьте праздничные дни.', 'appendLine', {
-    file: 'opening.md',
-    line: 'Праздники: 10:00–18:00',
-    message: 'Добавил праздники.',
-  })
+  await say(
+    stand,
+    chatF,
+    'Добавьте праздничные дни.',
+    'appendLine',
+    { file: 'opening.md', line: 'Праздники: 10:00–18:00', message: 'Добавил праздники.' },
+    { changes: true },
+  )
   const conflictSha = await gitlab.commitAsClient(
     state.ownProject,
     first.branch,
