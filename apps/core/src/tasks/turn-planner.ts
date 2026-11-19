@@ -6,6 +6,7 @@ import {
   projectContextSection,
   projectSection,
   repositorySection,
+  type UnavailableRepositoryFacts,
   turnProjectPath,
   type MemorySectionEntry,
   type ProjectContextFile,
@@ -182,6 +183,11 @@ export interface PassFacts {
   project?: ProjectSectionFacts | null
   /** The repository of the chat's project whose mirror is ready; null or absent — none (ПР12). */
   repositoryRow?: PassRepositoryRow | null
+  /**
+   * The repository of the chat's project whose mirror is not ready (19.11.2026): the pass goes
+   * without its code, and its instructions say why and what to tell the client.
+   */
+  repositoryUnavailable?: UnavailableRepositoryFacts | null
   /**
    * The repository prepared for this pass (§4.3, step 3); absent or null — the pass goes without
    * one: the chat has none, its mirror is not ready, or the prepare was not asked for.
@@ -586,9 +592,11 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         hiddenPaths: repository.hiddenPaths,
         ...(changed ? { changed: 'connected' as const } : {}),
       })
-    : changed && before !== null
-      ? repositorySection({ changed: 'disconnected' })
-      : ''
+    : facts.repositoryUnavailable
+      ? repositorySection(facts.repositoryUnavailable)
+      : changed && before !== null
+        ? repositorySection({ changed: 'disconnected' })
+        : ''
   const turn = task.turnNo + 1
   const sessionId = task.id
   const reasoningEffort = reasoningEffortByClass[task.modelClass]

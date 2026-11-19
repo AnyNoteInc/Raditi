@@ -285,4 +285,37 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
     expect((await facts())?.projectFiles).toBeUndefined()
     await db.projectFile.deleteMany({ where: { workspaceId } })
   })
+
+  it('reads a repository whose mirror is not ready as unavailable, a ready one as its row (19.11.2026)', async () => {
+    const { task, workspaceId, userId, facts } = await dialog()
+    const projectId = uuidv7()
+    projects.push(projectId)
+    await db.project.create({
+      data: { id: projectId, workspaceId, createdById: userId, name: 'Проект с кодом' },
+    })
+    projectTasks.push(task.id)
+    await db.task.update({ where: { id: task.id }, data: { projectId } })
+    expect((await facts())?.repositoryUnavailable).toBeNull()
+    await db.projectRepository.create({
+      data: {
+        id: uuidv7(),
+        projectId,
+        workspaceId,
+        provider: 'github',
+        host: 'github.com',
+        path: 'acme/shop',
+        webUrl: 'https://github.com/acme/shop',
+        defaultBranch: 'main',
+        mode: 'read',
+        mirrorState: 'failed',
+      },
+    })
+    const failed = await facts()
+    expect(failed?.repositoryRow).toBeNull()
+    expect(failed?.repositoryUnavailable).toEqual({ unavailable: 'failed', path: 'acme/shop' })
+    await db.projectRepository.update({ where: { projectId }, data: { mirrorState: 'ready' } })
+    const ready = await facts()
+    expect(ready?.repositoryUnavailable).toBeNull()
+    expect(ready?.repositoryRow).toMatchObject({ path: 'acme/shop', mode: 'read' })
+  })
 })

@@ -11,6 +11,7 @@ import {
 import {
   modelClassSchema,
   readFeedRow,
+  repoMirrorStates,
   repoModes,
   repoProviderKinds,
   repoSecretsFoundPaths,
@@ -19,6 +20,7 @@ import {
   type LlmBackendId,
   type ModelClass,
   type ProjectSectionFacts,
+  type UnavailableRepositoryFacts,
 } from '@repo/domain'
 
 import { poolHasRoom } from '../llm/pool-room.ts'
@@ -241,6 +243,7 @@ export async function readPassFacts(
     clientInstructions: task.createdBy?.agentInstructions?.text ?? null,
     project: projectFactsOf(task.project),
     repositoryRow: repositoryRowOf(task.project),
+    repositoryUnavailable: repositoryUnavailableOf(task.project),
     ...(projectFiles.length ? { projectFiles } : {}),
     memory: memoryEntries,
     ...(unattended ? { unattended } : {}),
@@ -307,6 +310,24 @@ function repositoryRowOf(
     mode,
     secretsFound: found,
   }
+}
+
+/**
+ * The repository of the chat's project whose mirror is not ready (19.11.2026): its state and path
+ * for the section that tells the agent why the code is not there. Null when it is ready, when the
+ * project has none or is in the trash.
+ */
+function repositoryUnavailableOf(
+  project: {
+    deletedAt: Date | null
+    repository: { path: string; mirrorState: string } | null
+  } | null,
+): UnavailableRepositoryFacts | null {
+  const repo = project?.repository
+  if (!project || project.deletedAt !== null || !repo) return null
+  const state = repoMirrorStates.find((value) => value === repo.mirrorState)
+  if (!state || state === 'ready') return null
+  return { unavailable: state, path: repo.path }
 }
 
 /** The files bound to a task as a pass tells the agent of them: never their key. */

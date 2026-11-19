@@ -790,6 +790,27 @@ describe('planTurn of a chat with a repository (docs/plan/84-projects.md, §4.3,
     )
   })
 
+  it('tells the agent why the code of a repository that is not ready is not there (19.11.2026)', async () => {
+    const plan = await planned(
+      facts({
+        repository: null,
+        repositoryUnavailable: { unavailable: 'failed', path: 'AnyNoteInc/Raditi' },
+      }),
+    )
+    expect(plan.requirements.repository).toBe(false)
+    expect(plan.request).not.toHaveProperty('repository')
+    const { instructions } = plan.request.context
+    expect(instructions).toContain('The working directory is empty')
+    expect(instructions).toContain(
+      'The project has the repository AnyNoteInc/Raditi, but its code is not in this turn: the platform could not fetch it.',
+    )
+    expect(instructions).toContain('нажмите «Обновить» на странице «Репозиторий» проекта')
+    // It stands where the repository's section would: after the rules of the platform (ПР7).
+    expect(instructions.indexOf('# Raditi platform rules')).toBeLessThan(
+      instructions.indexOf('## The repository'),
+    )
+  })
+
   it('goes on in the same repository without a word of a change', async () => {
     const plan = await planned(
       facts({
