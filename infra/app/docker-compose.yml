@@ -319,7 +319,7 @@ services:
         - -e
         - require('node:fs').statSync('/git/worker.sock').isSocket() || process.exit(1)
       <<: *node-health
-    cpus: 1
+    cpus: 2
     mem_limit: 1g
     pids_limit: 256
     networks: [git-egress]

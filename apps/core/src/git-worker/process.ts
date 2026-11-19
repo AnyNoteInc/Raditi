@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { Buffer } from 'node:buffer'
 
-import { DomainError, repositoryTooLarge } from '@repo/domain'
+import { DomainError, publicationLimits, repositoryTooLarge } from '@repo/domain'
 
 import { directoryBytes } from './disk.ts'
 import { nativeSupervisor } from './native-supervisor.ts'
@@ -46,8 +46,10 @@ export async function runProcess(
   argv: string[],
   options: ProcessOptions,
 ): Promise<ProcessResult> {
-  const timeoutMs = options.timeoutMs ?? 60_000
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 60_000)
+  const timeoutMs = options.timeoutMs ?? publicationLimits.commandMs
+  // A git command keeps 60 s (the request schema); only the worker's own gitleaks scan may take
+  // longer (publicationLimits.scanMs).
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > publicationLimits.scanMs)
     throw new DomainError('INVALID_INPUT', 'Invalid trusted command deadline', 400)
   const deadlineNs = (process.hrtime.bigint() + BigInt(timeoutMs) * 1_000_000n).toString()
   return new Promise((resolve, reject) => {

@@ -8,7 +8,7 @@ import {
 } from '../git/publication.ts'
 import { repoProviderKinds, type RepoProviderKind } from '../ports/git-provider.ts'
 import { sectionValue } from '../projects/text.ts'
-import { repoModes, type RepoMode } from './statuses.ts'
+import { repoMirrorStateWords, repoModes, type RepoMirrorState, type RepoMode } from './statuses.ts'
 
 // A turn of a chat of a project with a repository (docs/plan/84-projects.md, ПР12, ПР22, ПР32,
 // ПР35, §4.3): what its plan keeps of the repository, the files that never reach a sandbox, the
@@ -214,15 +214,64 @@ export interface RepositorySectionFacts {
 
 const HIDDEN_LISTED = 50
 
+/** A repository of the project whose mirror is not ready: the pass goes without its code. */
+export interface UnavailableRepositoryFacts {
+  unavailable: Exclude<RepoMirrorState, 'ready'>
+  /** The path of the repository at its provider (`group/sub/project`). */
+  path: string
+}
+
+const lowerFirst = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`
+
+/**
+ * Why the code is not in the turn, for the agent, and the words it gives the client — those of the
+ * page «Репозиторий» (19.11.2026: a failed mirror sent a chat to work on an empty folder, and the
+ * agent did not know why).
+ */
+const unavailableRepository = Object.freeze({
+  syncing: {
+    why: 'the platform is still fetching it',
+    words: 'Код репозитория ещё загружается — подождите минуту и напишите снова.',
+  },
+  failed: {
+    why: 'the platform could not fetch it',
+    words:
+      'Код репозитория сейчас недоступен — нажмите «Обновить» на странице «Репозиторий» проекта и напишите снова.',
+  },
+  unreachable: {
+    why: 'the platform cannot reach it',
+    words:
+      'Код репозитория сейчас недоступен — откройте страницу «Репозиторий» проекта: там сказано, что с ним.',
+  },
+  too_large: {
+    why: 'it is larger than a turn takes',
+    words: `Код репозитория недоступен: ${lowerFirst(repoMirrorStateWords.too_large)}.`,
+  },
+} satisfies Record<Exclude<RepoMirrorState, 'ready'>, { why: string; words: string }>)
+
 /**
  * `## The repository` (§4.4) — rules of the platform, so it stands before the data of the client
  * (ПР7). Every value of it is made fit for a section (`sectionValue`). A chat whose repository was
- * disconnected gets only the line that says so.
+ * disconnected gets only the line that says so; one whose repository is not ready, why its code is
+ * not there and the words to tell the client first.
  */
 export function repositorySection(
-  facts: RepositorySectionFacts | { changed: 'disconnected' } | null | undefined,
+  facts:
+    | RepositorySectionFacts
+    | UnavailableRepositoryFacts
+    | { changed: 'disconnected' }
+    | null
+    | undefined,
 ): string {
   if (!facts) return ''
+  if ('unavailable' in facts) {
+    const { why, words } = unavailableRepository[facts.unavailable]
+    return `
+## The repository
+The project has the repository ${sectionValue(facts.path, 'line')}, but its code is not in this turn: ${why}. /workspace/repo is empty.
+Begin your answer by telling the client so, in these words: «${words}» Then help with what you can without the code. Never say you read the code, and never rebuild it from memory.
+`
+  }
   if (!('provider' in facts))
     return `
 ## The repository

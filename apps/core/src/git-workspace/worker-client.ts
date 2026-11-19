@@ -27,7 +27,9 @@ const failed = () =>
   new DomainError('GIT_OPERATION_FAILED', 'Trusted repository operation failed', 502)
 
 /** A little more than the worker's own deadline: the worker answers first. */
-const CLIENT_MS = publicationLimits.commandMs + 10_000
+const clientMs = (command: GitWorkerRequest) =>
+  (command.timeoutMs ??
+    (command.tool === 'gitleaks' ? publicationLimits.scanMs : publicationLimits.commandMs)) + 10_000
 
 export class GitWorkerClient implements GitRunner {
   constructor(private readonly socket: string) {}
@@ -41,7 +43,7 @@ export class GitWorkerClient implements GitRunner {
           method: 'POST',
           path: GIT_WORKER_PATH,
           headers: { 'content-type': 'application/json', 'content-length': body.byteLength },
-          timeout: CLIENT_MS,
+          timeout: clientMs(command),
         },
         (res) => {
           const chunks: Buffer[] = []

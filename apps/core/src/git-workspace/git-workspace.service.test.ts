@@ -91,12 +91,16 @@ async function fixture(
   await writeFile(
     scanner,
     `#!${process.execPath}
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 const args = process.argv.slice(2)
-const data = readdirSync(args[1]).map((name) => readFileSync(join(args[1], name), 'latin1')).join('\\n')
+const flagged = readdirSync(args[1])
+  .filter((name) => readFileSync(join(args[1], name), 'latin1').includes('synthetic-secret-marker'))
+  .map((name) => ({ RuleID: 'synthetic', Secret: 'REDACTED', File: join(args[1], name) }))
+const report = args[args.indexOf('--report-path') + 1]
+if (args.includes('--report-path')) writeFileSync(report, JSON.stringify(flagged))
 const finding = Number(args.find((arg) => arg.startsWith('--exit-code='))?.slice(12) ?? 1)
-process.exit(data.includes('synthetic-secret-marker') ? finding : 0)
+process.exit(flagged.length ? finding : 0)
 `,
     { mode: 0o700 },
   )
@@ -553,6 +557,81 @@ describe('GitWorkspaceService', { timeout: 60_000 }, () => {
         expect(await readdir(join(f.mirrorDir, 'ops'))).toEqual([])
         expect(await f.service.findSecrets(f.projectRepositoryId, f.baseSha, 1)).toHaveLength(1)
       })
+
+      it('scans the whole tree once and reads only the file names of the report (19.11.2026)', async () => {
+        const files: Record<string, string> = { 'index.js': 'hello\n' }
+        for (let i = 0; i < 30; i++)
+          files[`test/fixture-${String(i).padStart(2, '0')}.ts`] =
+            i % 3 === 0 ? 'export const k = "synthetic-secret-marker"\n' : `export const n = ${i}\n`
+        const f = await fixture({ files })
+        await f.fetchMain()
+        f.commands.length = 0
+        const found = await f.service.hiddenFiles(f.projectRepositoryId, f.baseSha)
+        expect(found).toEqual(
+          Array.from({ length: 10 }, (_, i) => `test/fixture-${String(i * 3).padStart(2, '0')}.ts`),
+        )
+        // Halving the tree took a scan per half: one now, whatever the number of findings.
+        expect(f.commands.filter((command) => command.startsWith('gitleaks '))).toHaveLength(1)
+        expect(await readdir(join(f.mirrorDir, 'ops'))).toEqual([])
+      })
+
+      it('fails on a report that names no copy of the scan, and on a finding without a report', async () => {
+        for (const body of [
+          "writeFileSync(report, JSON.stringify([{ File: '/etc/passwd' }]))",
+          "writeFileSync(report, JSON.stringify([{ File: join(args[1], '99999') }]))",
+          "writeFileSync(report, '[]')",
+          "writeFileSync(report, 'not json')",
+          '',
+        ]) {
+          const root = await mkdtemp(join(tmpdir(), 'raditi-gitws-scanner-'))
+          roots.push(root)
+          const scanner = join(root, 'scanner.mjs')
+          await writeFile(
+            scanner,
+            `#!${process.execPath}
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+const args = process.argv.slice(2)
+const report = args[args.indexOf('--report-path') + 1]
+${body}
+process.exit(99)
+`,
+            { mode: 0o700 },
+          )
+          const f = await fixture({ gitleaks: scanner })
+          await f.fetchMain()
+          await expect(
+            f.service.findSecrets(f.projectRepositoryId, f.baseSha),
+          ).rejects.toMatchObject({ code: 'GIT_OPERATION_FAILED' })
+        }
+      })
+
+      // The real scanner, when the machine has it (P2_GITLEAKS_BINARY, gitleaks 8.30.1).
+      it.runIf(Boolean(process.env.P2_GITLEAKS_BINARY))(
+        'names the files the real gitleaks flags from its report',
+        async () => {
+          // Synthetic GitHub tokens: the shape and entropy gitleaks knows, never a real one.
+          const tokens = {
+            a: 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8',
+            b: 'Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2',
+          }
+          const token = (c: 'a' | 'b') => `ghp_${tokens[c]}`
+          const f = await fixture({
+            gitleaks: process.env.P2_GITLEAKS_BINARY!,
+            files: {
+              'index.js': 'hello\n',
+              'a/one.ts': `const t = '${token('a')}'\n`,
+              'b/two.ts': `const t = '${token('b')}'\n`,
+              'b/clean.ts': 'const t = 1\n',
+            },
+          })
+          await f.fetchMain()
+          expect(await f.service.findSecrets(f.projectRepositoryId, f.baseSha)).toEqual([
+            'a/one.ts',
+            'b/two.ts',
+          ])
+        },
+      )
 
       it('a clean tree has none; a commit of another repository is refused', async () => {
         const f = await fixture()

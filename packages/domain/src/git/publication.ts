@@ -23,6 +23,12 @@ export const publicationLimits = Object.freeze({
   repositoryFiles: 100_000,
   pathBytes: 1024,
   commandMs: 60_000,
+  /**
+   * One gitleaks scan of a whole tree (ПР12, ПР35): the tree a sandbox may get, 128 MiB, at about
+   * 1 MB/s of one core — a single scan, never the 60 s of a git command (19.11.2026: the 60 MB tree
+   * of Raditi took 69 s on the one core of the worker).
+   */
+  scanMs: 300_000,
 })
 
 /**

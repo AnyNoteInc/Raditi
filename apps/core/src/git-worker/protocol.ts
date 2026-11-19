@@ -14,6 +14,9 @@ export const gitWorkerSocketPath = (mirrorDir: string): string => join(mirrorDir
 
 export const GIT_WORKER_PATH = '/v1/run'
 
+/** The JSON report a gitleaks scan writes into the directory its fourth argument names. */
+export const GITLEAKS_REPORT = 'report.json'
+
 /** The environment a request may add to the worker's own: a grant, an identity, a repository. */
 export const gitRequestEnvNames = [
   'RADITI_GIT_AUTH',

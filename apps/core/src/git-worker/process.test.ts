@@ -6,6 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { publicationLimits } from '@repo/domain'
+
 import { directoryBytes } from './disk.ts'
 import { runProcess } from './process.ts'
 
@@ -121,7 +123,7 @@ describe('trusted native command supervision', { timeout: 30_000 }, () => {
   })
 
   it('rejects deadlines outside the fixed native-command budget before spawning', async () => {
-    for (const timeoutMs of [0, -1, NaN, Infinity, 60_001, 0.5])
+    for (const timeoutMs of [0, -1, NaN, Infinity, publicationLimits.scanMs + 1, 0.5])
       await expect(
         runProcess(process.execPath, [], { cwd: tmpdir(), env, timeoutMs }),
       ).rejects.toMatchObject({ code: 'INVALID_INPUT' })
