@@ -85,7 +85,7 @@ describe('«Ход работы»', () => {
         text,
       })
       const { rerender } = render(
-        <TurnActivityView state={read({ events: [draft('1:0', 'Сначала тема')] })} live />,
+        <TurnActivityView state={read({ events: [draft('1:0', 'Сначала тема')] })} live thinking />,
       )
       const box = screen.getByText('Сначала тема')
       fireEvent.click(box)
@@ -94,6 +94,7 @@ describe('«Ход работы»', () => {
         <TurnActivityView
           state={read({ events: [draft('2:0', 'Сначала тема, потом плагины')] })}
           live
+          thinking
         />,
       )
       const grown = screen.getByText('Сначала тема, потом плагины')
@@ -105,6 +106,22 @@ describe('«Ход работы»', () => {
       render(<TurnActivityView state={read({ events: [thought] })} live thinking />)
       expect(screen.getByText(THOUGHT)).toBeTruthy()
       expect(screen.queryByText('Агент пока ничего не вывел.')).toBeNull()
+    })
+
+    it('hides what the model is thinking now when the viewer hid the thoughts (19.11.2026)', () => {
+      const draft: ActivityEvent = {
+        id: '1:0',
+        type: 'draft',
+        kind: 'reasoning',
+        text: 'Сначала тема',
+      }
+      const words: ActivityEvent = { id: '1:1', type: 'draft', kind: 'text', text: 'Смотрю тему.' }
+      render(<TurnActivityView state={read({ events: [draft] })} live thinking={false} />)
+      expect(screen.queryByText('Сначала тема')).toBeNull()
+      expect(screen.queryByText('Агент размышляет…')).toBeNull()
+      cleanup()
+      render(<TurnActivityView state={read({ events: [words] })} live thinking={false} />)
+      expect(screen.getByText('Смотрю тему.')).toBeTruthy()
     })
 
     it('counts as nothing yet for a viewer who has not asked, and says nothing of it', () => {

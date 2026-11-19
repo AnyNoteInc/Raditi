@@ -3,10 +3,12 @@
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import IconButton from '@mui/material/IconButton'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import Link from 'next/link'
 import { useSelectedLayoutSegment } from 'next/navigation'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import {
@@ -23,19 +25,105 @@ import {
 
 import { CHATS_HREF, NEW_CHAT_HREF, NEW_CHAT_SEGMENT } from './chat-address'
 import { chatsText, listText } from './chat-texts'
+import { rememberChatsGroup, type ChatsGroup } from './chats-group'
 import { SearchDialog } from './search-dialog'
 import { ArchiveButton, DialogList, useChatsKnownEmpty } from './dialog-list'
 
-/** The page draws the panel of the tools beside a chat: the list gives the chat its room. */
+const groupNames: Readonly<Record<ChatsGroup, string>> = {
+  list: chatsText.groupList,
+  projects: chatsText.groupProjects,
+}
+
+/** The sign of the group in the head of the list, and its menu «Показывать чаты». */
+function GroupMenu({
+  value,
+  onChange,
+}: {
+  value: ChatsGroup
+  onChange: (group: ChatsGroup) => void
+}) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  const menuId = useId()
+  const titleId = useId()
+  const open = anchor !== null
+  return (
+    <>
+      <IconButton
+        aria-label={chatsText.groupButton}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        onClick={(event) => setAnchor(event.currentTarget)}
+        sx={{ width: 44, height: 44, flex: 'none', color: 'text.secondary' }}
+      >
+        <AppIcon name="group" size={18} />
+      </IconButton>
+      <Menu
+        id={menuId}
+        anchorEl={anchor}
+        open={open}
+        onClose={() => setAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        slotProps={{
+          paper: { sx: { borderRadius: '14px', minWidth: 228 } },
+          list: { 'aria-labelledby': titleId },
+        }}
+      >
+        <Typography
+          id={titleId}
+          component="li"
+          role="presentation"
+          sx={{ px: 2, py: 0.75, fontSize: 12, fontWeight: 500, color: 'text.secondary' }}
+        >
+          {chatsText.groupTitle}
+        </Typography>
+        {(Object.keys(groupNames) as ChatsGroup[]).map((group) => (
+          <MenuItem
+            key={group}
+            role="menuitemradio"
+            aria-checked={group === value}
+            selected={group === value}
+            onClick={() => {
+              setAnchor(null)
+              if (group !== value) onChange(group)
+            }}
+            sx={{ minHeight: { xs: 44 }, gap: 1.25, fontSize: 14 }}
+          >
+            <Box component="span" sx={{ flex: '1 1 auto' }}>
+              {groupNames[group]}
+            </Box>
+            <Box
+              component="span"
+              aria-hidden="true"
+              sx={{ display: 'flex', visibility: group === value ? 'visible' : 'hidden' }}
+            >
+              <AppIcon name="check" size={18} />
+            </Box>
+          </MenuItem>
+        ))}
+      </Menu>
+    </>
+  )
+}
 
 /**
  * «Чаты» laid out as «list — content» (docs/plan/61-chats-first.md, §5.11). From `md` the list is
  * a column from the top of the window to its bottom beside the rail, and it scrolls on its own.
  * Below `md` there is one area: the list at the root of the section, an item with the way back on
  * top. Which of them is on the screen is decided by styles alone, so the first paint is right on
- * every width. The panel of a chat's tools leaves the list as the viewer left it.
+ * every width. The panel of a chat's tools leaves the list as the viewer left it. The chats stand
+ * in one list or in folders of projects, as the viewer chose in «Показывать чаты».
  */
-export function ChatsFrame({ children }: { children: ReactNode }) {
+export function ChatsFrame({
+  group: chosen = 'list',
+  children,
+}: {
+  /** The choice of the viewer from its cookie. */
+  group?: ChatsGroup
+  children: ReactNode
+}) {
+  const [group, setGroup] = useState(chosen)
   const segment = useSelectedLayoutSegment()
   const selected = segment !== null
   const collapsed = selected && segment !== NEW_CHAT_SEGMENT
@@ -83,7 +171,7 @@ export function ChatsFrame({ children }: { children: ReactNode }) {
           flexDirection: 'column',
           flex: '1 0 auto',
           minWidth: 0,
-          // In the panel from `md` «Новый чат» takes a row of its own under the heading and its
+          // In the panel from `md` «Создать» takes a row of its own under the heading and its
           // buttons: the card is too narrow for all of them in one line.
           gridTemplateColumns: { sm: 'minmax(0, 1fr) auto', md: 'minmax(0, 1fr)' },
           // The last row is «Архив», pinned to the bottom of the card (docs/plan/77, Р1).
@@ -126,6 +214,15 @@ export function ChatsFrame({ children }: { children: ReactNode }) {
             {chatsText.title}
           </Typography>
           {empty ? null : (
+            <GroupMenu
+              value={group}
+              onChange={(next) => {
+                rememberChatsGroup(next)
+                setGroup(next)
+              }}
+            />
+          )}
+          {empty ? null : (
             // The loupe left of «]» opens «Поиск чатов» (docs/plan/77, Р2; docs/plan/79, П1).
             <IconButton
               aria-label={listText.search}
@@ -142,6 +239,7 @@ export function ChatsFrame({ children }: { children: ReactNode }) {
           component={Link}
           href={NEW_CHAT_HREF}
           aria-current={segment === NEW_CHAT_SEGMENT ? 'page' : undefined}
+          aria-label={chatsText.newChatLabel}
           variant="contained"
           startIcon={<AppIcon name="plus" size={18} />}
           sx={{
@@ -151,8 +249,9 @@ export function ChatsFrame({ children }: { children: ReactNode }) {
             minHeight: { xs: 48, sm: 44 },
             borderRadius: '999px',
             whiteSpace: 'nowrap',
-            // On a phone the action stays within reach under a long list.
-            position: { xs: 'sticky', sm: 'static' },
+            // On a phone the action stays within reach under a long list. Elsewhere it keeps the
+            // `relative` of a button: the wave of a press is drawn within it, not over the panel.
+            position: { xs: 'sticky', sm: 'relative' },
             bottom: { xs: 'calc(12px + env(safe-area-inset-bottom))' },
           }}
         >
@@ -167,7 +266,7 @@ export function ChatsFrame({ children }: { children: ReactNode }) {
             px: { md: 1.5 },
           }}
         >
-          <DialogList />
+          <DialogList grouped={group === 'projects'} />
         </Box>
         {/* «Архив» at the bottom of the card, whatever the length of the list (Р1). */}
         <Box

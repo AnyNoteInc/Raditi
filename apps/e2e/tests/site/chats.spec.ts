@@ -255,7 +255,8 @@ test('«Новый проект» in the menu of the pill comes back with the ne
   await window_.getByRole('textbox', { name: /Над чем вы работаете/ }).fill('Отчёты')
   await window_.getByRole('button', { name: 'Создать проект' }).click()
   await expect(pill(page, 'Проект: Отчёты')).toBeVisible()
-  await expect(page).toHaveURL(/\/chats\/new$/)
+  // The screen stays; its address names the project chosen (owner's request of 19.11.2026).
+  await expect(page).toHaveURL(/\/chats\/new\?project=[0-9a-f-]{36}$/)
   await expect(message(page)).toHaveValue('Черновик до проекта')
 })
 
@@ -272,6 +273,48 @@ test('`/chats/new?project=<id>` chooses the project, one of someone else does no
 
   await page.goto('/chats/new?project=0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17')
   await expect(pill(page, 'Без проекта')).toBeVisible()
+})
+
+test('the project chosen by the pill stays after a reload, on «Новый чат» and beside the list', async ({
+  page,
+  signedInUser,
+}) => {
+  const { projectId } = await addProject(signedInUser.id, { name: 'Колос' })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const choose = async (name: RegExp) => {
+    await page.getByRole('button', { name: /^(Без проекта|Проект: )/ }).click()
+    await page
+      .getByRole('menu', { name: 'Проект для чата' })
+      .getByRole('menuitemradio', { name })
+      .click()
+  }
+  for (const root of ['/chats/new', '/chats']) {
+    await test.step(root, async () => {
+      await page.goto(root)
+      await choose(/Колос/)
+      await expect(page).toHaveURL(new RegExp(`${root}\\?project=${projectId}$`))
+      await page.reload()
+      await expect(pill(page, 'Проект: Колос')).toBeVisible()
+      // «Без проекта» takes it out of the address too.
+      await choose(/Без проекта/)
+      await expect(page).toHaveURL(new RegExp(`${root}$`))
+      await page.reload()
+      await expect(pill(page, 'Без проекта')).toBeVisible()
+    })
+  }
+
+  await test.step('«Создать» leads to a new chat without the project the pill chose', async () => {
+    await page.goto('/chats/new')
+    await choose(/Колос/)
+    await expect(page).toHaveURL(new RegExp(`/chats/new\\?project=${projectId}$`))
+    await page
+      .getByRole('navigation', { name: 'Чаты' })
+      .getByRole('link', { name: 'Создать чат' })
+      .click()
+    await expect(page).toHaveURL(/\/chats\/new$/)
+    await expect(pill(page, 'Без проекта')).toBeVisible()
+  })
 })
 
 test('on a phone the projects of the pill come in a sheet from the bottom', async ({
@@ -294,4 +337,72 @@ test('on a phone the projects of the pill come in a sheet from the bottom', asyn
     .toBe(844)
   await sheet.getByRole('menuitemradio', { name: /Колос/ }).click()
   await expect(pill(page, 'Проект: Колос')).toBeVisible()
+})
+
+// «Показывать чаты» of the list (owner's request of 19.11.2026): one list or folders of projects.
+
+test('the list by projects: a folder per project, «Без проекта» last, the choice kept', async ({
+  page,
+  signedInUser,
+}) => {
+  const { projectId } = await addProject(signedInUser.id, { name: 'Колос' })
+  await addAnsweredChat(signedInUser.id, { ...ANSWERED, words: 'Цены пекарни', projectId })
+  await addAnsweredChat(signedInUser.id, { ...ANSWERED, words: 'Письмо поставщику' })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/chats')
+  const list = page.getByRole('navigation', { name: 'Чаты' })
+  await expect(list.getByRole('link', { name: /Цены пекарни/ })).toBeVisible()
+
+  await list.getByRole('button', { name: 'Группировка чатов' }).click()
+  await page
+    .getByRole('menu', { name: 'Показывать чаты' })
+    .getByRole('menuitemradio', { name: 'По проектам' })
+    .click()
+  const folders = list.locator('[data-chat-folder]')
+  await expect(folders).toHaveCount(2)
+  await expect(folders.nth(0)).toContainText('Колос')
+  await expect(folders.nth(1)).toContainText('Без проекта')
+  // Two folders, none of them the open chat's: both closed.
+  await expect(list.getByRole('link', { name: /Цены пекарни/ })).toHaveCount(0)
+  await folders.nth(0).click()
+  await list.getByRole('link', { name: /Цены пекарни/ }).click()
+  await expect(page).toHaveURL(/\/chats\/[0-9a-f-]{36}$/)
+
+  // The choice stays for the next visit, and the folder of the open chat opens by itself.
+  await page.reload()
+  await expect(folders).toHaveCount(2)
+  await expect(folders.nth(0)).toHaveAttribute('aria-expanded', 'true')
+  await expect(list.getByRole('link', { name: /Цены пекарни/ })).toBeVisible()
+  await expect(folders.nth(1)).toHaveAttribute('aria-expanded', 'false')
+})
+
+test('a long message of the client stands at ten lines until «Показать полностью»', async ({
+  page,
+  signedInUser,
+}) => {
+  const words = Array.from({ length: 16 }, (_, index) => `Строка задания ${index + 1}`).join('\n')
+  const { taskId } = await addAnsweredChat(signedInUser.id, {
+    ...ANSWERED,
+    words,
+    title: 'Длинное задание',
+  })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  const text = feed(page).locator('[data-message-words]')
+  await expect(text).toContainText('Строка задания 16')
+  const lineHeight = await text.evaluate((element) =>
+    parseFloat(getComputedStyle(element).lineHeight),
+  )
+  const folded = (await text.boundingBox())!.height
+  expect(Math.round(folded / lineHeight)).toBe(10)
+  await feed(page).getByRole('button', { name: 'Показать полностью' }).click()
+  await expect
+    .poll(async () => Math.round((await text.boundingBox())!.height / lineHeight))
+    .toBe(16)
+  await feed(page).getByRole('button', { name: 'Свернуть' }).click()
+  await expect
+    .poll(async () => Math.round((await text.boundingBox())!.height / lineHeight))
+    .toBe(10)
 })

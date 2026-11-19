@@ -15,12 +15,12 @@ const viewports = [
   ['desktop', 1280, 900],
 ] as const
 
-const EMPTY_LIST = 'Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.'
+const EMPTY_LIST = 'Чатов пока нет. Напишите, что нужно сделать — чат появится здесь.'
 
 const chats = (page: Page) => page.getByRole('navigation', { name: 'Чаты' })
 const rail = (page: Page) => page.getByRole('complementary', { name: 'Боковая панель' })
 const back = (page: Page) => page.getByRole('link', { name: 'К чатам' })
-const newChat = (page: Page) => chats(page).getByRole('link', { name: 'Новый чат' })
+const newChat = (page: Page) => chats(page).getByRole('link', { name: 'Создать чат' })
 const message = (page: Page) => page.getByRole('textbox', { name: 'Сообщение' })
 const send = (page: Page) => page.getByRole('button', { name: 'Отправить' })
 /**
@@ -65,7 +65,11 @@ for (const [name, width, height] of viewports) {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Чаты')
     await expect(chats(page).getByText(EMPTY_LIST)).toBeVisible()
     await expect(newChat(page)).toHaveAttribute('href', '/chats/new')
+    await expect(newChat(page)).toHaveText('Создать')
     await expect(newChat(page)).not.toHaveAttribute('aria-current')
+    // The wave of a press stays within the button (owner's request of 19.11.2026): below `sm`
+    // the action sticks to the bottom of the list, elsewhere it keeps the `relative` of a button.
+    await expect(newChat(page)).toHaveCSS('position', width < 600 ? 'sticky' : 'relative')
     await expect(back(page)).toHaveCount(0)
     await expect(page.getByRole('navigation', { name: 'Хлебные крошки' })).toHaveCount(0)
     await expectNoSidewaysScroll(page)
@@ -120,7 +124,7 @@ for (const [name, width, height] of viewports) {
   })
 }
 
-test('«Новый чат» stays within reach under a long list on a phone', async ({
+test('«Создать» stays within reach under a long list on a phone', async ({
   page,
   signedInUser,
 }) => {

@@ -1,5 +1,6 @@
 'use client'
 
+import { NO_PROJECT_FOLDER } from '@repo/domain/projects'
 import { feedStateText, taskStatusListHint } from '@repo/domain/tasks/client-feed-labels'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
@@ -7,7 +8,7 @@ import Button from '@mui/material/Button'
 import ButtonBase from '@mui/material/ButtonBase'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { useSelectedLayoutSegment } from 'next/navigation'
 import { useId, useState, type ReactNode } from 'react'
@@ -16,10 +17,11 @@ import { AppIcon } from '@/components/application/app-icon'
 import { MoveToProjectDialog, useMoveToProject } from '@/components/projects/move-to-project'
 import { useTRPCClient } from '@/trpc/client'
 
-import { chatHref } from './chat-address'
+import { chatHref, NEW_CHAT_SEGMENT } from './chat-address'
 import { dialogGroups, listTime } from './chat-format'
-import { listRepoHint, listText } from './chat-texts'
+import { chatsText, listRepoHint, listText } from './chat-texts'
 import type { DialogListItem } from './chat-types'
+import { offScreen } from './composer'
 import { ArchiveDialog, archiveText } from './archive-dialog'
 import {
   DialogMenuButton,
@@ -36,11 +38,13 @@ export { dialogListKey }
 /** The list is read again this often while the page is shown, to follow the statuses. */
 const LIST_REFRESH_MS = 15_000
 
-/** How long the words of the search rest before they are asked (ВВ21). */
+/** The folder of «По проектам» of the chats without a project (`task.list` takes the same word). */
+const NO_PROJECT = NO_PROJECT_FOLDER
 
 /**
- * The pages of one list: every chat of the user; `archive` — «Архив»
- * (docs/plan/75-chat-input-output.md, ВВ21). The first page of the list carries its pinned chats.
+ * The pages of one list: every chat of the user, of one project, or of none (`projectId` `none`,
+ * a folder of «По проектам»); `archive` — «Архив» (docs/plan/75-chat-input-output.md, ВВ21). The
+ * first page of the list carries its pinned chats.
  */
 function useChatPages(view: 'active' | 'archive' = 'active', projectId: string | null = null) {
   const client = useTRPCClient()
@@ -451,6 +455,196 @@ function OneList({ currentId }: { currentId: string | null }) {
   )
 }
 
+/** The chats of one folder of «По проектам», read once it is open: its pinned ones first. */
+function FolderChats({
+  folder,
+  labelledBy,
+  currentId,
+}: {
+  folder: string
+  labelledBy: string
+  currentId: string | null
+}) {
+  const list = useChatPages('active', folder)
+  if (list.isPending) return <ListLoading />
+  if (list.isError)
+    return <ListFailed retrying={list.isFetching} onRetry={() => void list.refetch()} />
+  return (
+    <>
+      <DialogRows
+        items={[
+          ...(list.data.pages[0]?.pinned ?? []),
+          ...list.data.pages.flatMap((page) => page.items),
+        ]}
+        labelledBy={labelledBy}
+        currentId={currentId}
+        now={new Date()}
+        showProject={false}
+      />
+      {list.hasNextPage ? (
+        <ShowMore
+          inset={1.25}
+          loading={list.isFetchingNextPage}
+          onMore={() => void list.fetchNextPage()}
+        />
+      ) : null}
+    </>
+  )
+}
+
+interface ChatFolder {
+  project: { id: string; name: string } | null
+  count: number
+  attention: boolean
+}
+
+/** A folder of «По проектам»: its line opens and closes it, and says how many chats it holds. */
+function Folder({
+  folder,
+  open,
+  onToggle,
+  children,
+}: {
+  folder: ChatFolder
+  open: boolean
+  onToggle: () => void
+  children: (labelledBy: string) => ReactNode
+}) {
+  const labelId = useId()
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+      <ButtonBase
+        aria-expanded={open}
+        data-chat-folder=""
+        onClick={onToggle}
+        sx={{
+          width: '100%',
+          minHeight: 44,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-start',
+          gap: 1,
+          pl: 0.75,
+          pr: 1.25,
+          borderRadius: '10px',
+          fontSize: 14,
+          fontWeight: 500,
+          textAlign: 'left',
+          color: 'text.primary',
+          '&:hover': { bgcolor: 'action.hover' },
+          '&:focus-visible': {
+            outline: '2px solid',
+            outlineColor: 'primary.main',
+            outlineOffset: 2,
+          },
+        }}
+      >
+        <AppIcon name={open ? 'down' : 'chevron'} size={16} />
+        <Box component="span" sx={{ display: 'flex', color: 'text.secondary' }}>
+          <AppIcon name={folder.project === null ? 'chat' : 'projects'} size={16} />
+        </Box>
+        <Box
+          id={labelId}
+          component="span"
+          sx={{
+            flex: '1 1 auto',
+            minWidth: 0,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {folder.project?.name ?? chatsText.noProject}
+        </Box>
+        {folder.attention && !open ? (
+          <>
+            <Box
+              component="span"
+              aria-hidden="true"
+              sx={{
+                flex: 'none',
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                bgcolor: 'var(--raditi-accent)',
+              }}
+            />
+            <Box component="span" sx={offScreen}>
+              {`. ${chatsText.attention}. `}
+            </Box>
+          </>
+        ) : null}
+        <Typography component="span" variant="caption" color="text.secondary">
+          {folder.count}
+        </Typography>
+      </ButtonBase>
+      {open ? children(labelId) : null}
+    </Box>
+  )
+}
+
+/**
+ * «По проектам» (owner's request of 19.11.2026, after docs/plan/61-chats-first.md, К23): the
+ * folders the server counted, «Без проекта» the last; a folder reads its chats only once it is
+ * open. The folder of the open chat is open, and so is the only one there is; the client's own
+ * press wins.
+ */
+function Folders({ currentId }: { currentId: string | null }) {
+  const client = useTRPCClient()
+  const folders = useQuery({
+    queryKey: [...dialogListKey, 'folders'],
+    queryFn: () => client.task.folders.query({}),
+    refetchInterval: LIST_REFRESH_MS,
+  })
+  // A segment of the section that is no chat names no folder.
+  const openChat = currentId === null || currentId === NEW_CHAT_SEGMENT ? null : currentId
+  const shown = useQuery({
+    queryKey: [...dialogListKey, 'chat', openChat],
+    queryFn: () => client.task.get.query({ taskId: openChat ?? '' }),
+    enabled: openChat !== null,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+  const current =
+    openChat === null ? null : shown.data ? (shown.data.project?.id ?? NO_PROJECT) : null
+  const [pressed, setPressed] = useState<Readonly<Record<string, boolean>>>({})
+  // Moving to a chat of a folder the client closed opens it again: the open chat stays in sight.
+  const [followed, setFollowed] = useState(current)
+  if (followed !== current) {
+    setFollowed(current)
+    if (current !== null && current in pressed) {
+      const { [current]: _forgotten, ...rest } = pressed
+      setPressed(rest)
+    }
+  }
+
+  if (folders.isPending) return <ListLoading />
+  if (folders.isError)
+    return <ListFailed retrying={folders.isFetching} onRetry={() => void folders.refetch()} />
+  const all = folders.data.folders
+  if (all.length === 0) return <EmptyList />
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mx: { md: -1.5 } }}>
+      {all.map((folder) => {
+        const key = folder.project?.id ?? NO_PROJECT
+        const open = pressed[key] ?? (key === current || all.length === 1)
+        return (
+          <Folder
+            key={key}
+            folder={folder}
+            open={open}
+            onToggle={() => setPressed({ ...pressed, [key]: !open })}
+          >
+            {(labelledBy) => (
+              <FolderChats folder={key} labelledBy={labelledBy} currentId={currentId} />
+            )}
+          </Folder>
+        )
+      })}
+    </Box>
+  )
+}
+
 function EmptyList() {
   return (
     <Typography variant="body2" color="text.secondary">
@@ -534,12 +728,17 @@ export function ProjectChats({
 }
 
 /**
- * The chats of the user in the column of «Чаты», each with its status in a sign and a word and
- * its time. The open chat is the current page. The list follows the statuses while the page is
- * shown.
+ * The chats of the user in the column of «Чаты», one list or folders of projects, each with its
+ * status in a sign and a word and its time. The open chat is the current page. The list follows
+ * the statuses while the page is shown.
  */
-export function DialogList() {
+export function DialogList({
+  grouped = false,
+}: {
+  /** «По проектам»; otherwise one list. */
+  grouped?: boolean
+}) {
   const segment = useSelectedLayoutSegment()
   const currentId = segment === null ? null : segment.toLowerCase()
-  return <OneList currentId={currentId} />
+  return grouped ? <Folders currentId={currentId} /> : <OneList currentId={currentId} />
 }

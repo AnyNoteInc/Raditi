@@ -184,7 +184,7 @@ function outOfCredits(input: TaskNoticeInput, tariff: NoticeTariff): TaskNotice 
           ? `${renew.charAt(0).toLocaleUpperCase('ru')}${renew.slice(1)}`
           : null
         : canResume
-          ? `${buy}, — или ${renew}`
+          ? `${buy} — или ${renew}`
           : `${buy}.`
     return {
       state: `Лимиты закончились, а тариф «${tariff.name}» действует до ${day} и не продлится.`,

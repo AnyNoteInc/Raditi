@@ -58,7 +58,27 @@ function Thoughts() {
   )
 }
 
+function LiveThoughts() {
+  const { live, toggle } = useChatThinking()
+  return (
+    <button type="button" onClick={toggle}>
+      {live ? 'идущий ход: мысли видны' : 'идущий ход: мысли скрыты'}
+    </button>
+  )
+}
+
 describe('«Размышления агента»', () => {
+  it('shows the thoughts of a turn at work until the viewer hides them (19.11.2026)', () => {
+    render(<LiveThoughts />)
+    // Nothing chosen: a turn at work shows what the model thinks (РА7).
+    expect(screen.getByText('идущий ход: мысли видны')).toBeTruthy()
+    press()
+    expect(screen.getByText('идущий ход: мысли видны')).toBeTruthy()
+    press()
+    expect(screen.getByText('идущий ход: мысли скрыты')).toBeTruthy()
+    expect(window.localStorage.getItem('raditi-chat-thinking')).toBe('0')
+  })
+
   it('starts hidden, and keeps the choice for the next visit', () => {
     const first = render(<Thoughts />)
     expect(screen.getByText('мысли скрыты')).toBeTruthy()

@@ -11,25 +11,43 @@ import { ArchiveButton, DialogList, ProjectChats } from './dialog-list'
 import { SearchDialog } from './search-dialog'
 import { declared } from './testing'
 
-const { listPage, segment, rename, remove, pin, archive, search, moveToProject, projects } =
-  vi.hoisted(() => ({
-    listPage: vi.fn<(input: { cursor?: string }) => Promise<DialogListPage>>(),
-    segment: { current: null as string | null },
-    rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
-    remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
-    pin: vi.fn<(input: { taskId: string; pinned: boolean }) => Promise<{ pinned: boolean }>>(),
-    archive:
-      vi.fn<(input: { taskId: string; archived: boolean }) => Promise<{ archived: boolean }>>(),
-    search: vi.fn<(input: { query: string }) => Promise<{ items: DialogListItem[] }>>(),
-    moveToProject:
-      vi.fn<
-        (input: {
-          taskId: string
-          projectId: string | null
-        }) => Promise<{ projectId: string | null }>
-      >(),
-    projects: vi.fn(async () => ({ items: [] as unknown[] })),
-  }))
+const {
+  listPage,
+  segment,
+  rename,
+  remove,
+  pin,
+  archive,
+  search,
+  moveToProject,
+  projects,
+  folders,
+  head,
+} = vi.hoisted(() => ({
+  listPage: vi.fn<(input: { cursor?: string }) => Promise<DialogListPage>>(),
+  segment: { current: null as string | null },
+  rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
+  remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
+  pin: vi.fn<(input: { taskId: string; pinned: boolean }) => Promise<{ pinned: boolean }>>(),
+  archive:
+    vi.fn<(input: { taskId: string; archived: boolean }) => Promise<{ archived: boolean }>>(),
+  search: vi.fn<(input: { query: string }) => Promise<{ items: DialogListItem[] }>>(),
+  moveToProject:
+    vi.fn<
+      (input: { taskId: string; projectId: string | null }) => Promise<{ projectId: string | null }>
+    >(),
+  projects: vi.fn(async () => ({ items: [] as unknown[] })),
+  folders: vi.fn<
+    () => Promise<{
+      folders: Array<{
+        project: { id: string; name: string } | null
+        count: number
+        attention: boolean
+      }>
+    }>
+  >(),
+  head: vi.fn<(input: { taskId: string }) => Promise<{ project: { id: string } | null }>>(),
+}))
 
 const mutation = <I, O>(fn: (input: I) => Promise<O>) => ({
   mutationOptions: () => ({ mutationFn: fn }),
@@ -45,6 +63,8 @@ vi.mock('@/trpc/client', () => ({
     task: {
       list: { query: listPage },
       search: { query: search },
+      folders: { query: folders },
+      get: { query: head },
     },
   }),
   useTRPC: () => ({
@@ -86,11 +106,11 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
   }
 }
 
-function showList() {
+function showList({ grouped = false }: { grouped?: boolean } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const list = () => (
     <QueryClientProvider client={queryClient}>
-      <DialogList />
+      <DialogList grouped={grouped} />
       {/* The frame pins «Архив» at the bottom of the column (docs/plan/77, Р1). */}
       <ArchiveButton />
     </QueryClientProvider>
@@ -298,7 +318,7 @@ describe('the list of dialogs', () => {
     listPage.mockResolvedValue({ pinned: [], items: [], nextCursor: null })
     showList()
     expect(
-      await screen.findByText('Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.'),
+      await screen.findByText('Чатов пока нет. Напишите, что нужно сделать — чат появится здесь.'),
     ).toBeTruthy()
   })
 
@@ -556,5 +576,99 @@ describe('pinned, archived and found chats (docs/plan/75, ВВ21)', () => {
     expect(await within(window_).findByText(/Ничего не нашлось/)).toBeTruthy()
     fireEvent.click(within(window_).getByRole('button', { name: 'Очистить поиск' }))
     expect((field as HTMLInputElement).value).toBe('')
+  })
+})
+
+describe('«По проектам» (owner’s request of 19.11.2026)', () => {
+  const KOLOS = { id: '0199a3f2-0000-7000-8000-00000000c001', name: 'Колос' }
+  const TEA = { id: '0199a3f2-0000-7000-8000-00000000c002', name: 'Магазин чая' }
+  const folderLines = () => Array.from(document.querySelectorAll('[data-chat-folder]'))
+
+  beforeEach(() => {
+    folders.mockResolvedValue({
+      folders: [
+        { project: KOLOS, count: 2, attention: true },
+        { project: TEA, count: 1, attention: false },
+        { project: null, count: 3, attention: false },
+      ],
+    })
+    listPage.mockImplementation(async (input) => {
+      const { projectId } = input as { projectId?: string }
+      if (projectId === KOLOS.id)
+        return {
+          pinned: [dialog('9', { title: 'Закреплённый в Колосе', project: KOLOS, pinned: true })],
+          items: [dialog('1', { title: 'Цены пекарни', project: KOLOS })],
+          nextCursor: null,
+        }
+      if (projectId === 'none')
+        return {
+          pinned: [],
+          items: [dialog('2', { title: 'Письмо поставщику' })],
+          nextCursor: null,
+        }
+      return { pinned: [], items: [dialog('3', { title: 'Чай', project: TEA })], nextCursor: null }
+    })
+  })
+
+  it('shows a folder per project, «Без проекта» last, and reads a folder only when it opens', async () => {
+    showList({ grouped: true })
+    const kolos = await screen.findByRole('button', { name: /Колос/ })
+    expect(folderLines().map((line) => line.textContent)).toEqual([
+      expect.stringContaining('Колос'),
+      expect.stringContaining('Магазин чая'),
+      expect.stringContaining('Без проекта'),
+    ])
+    // Closed, a folder says how many chats it holds and that one of them waits for the client.
+    expect(kolos.textContent).toContain('2')
+    expect(kolos.textContent).toContain('Есть чаты, которые ждут вас')
+    expect(listPage).not.toHaveBeenCalled()
+
+    fireEvent.click(kolos)
+    expect(kolos.getAttribute('aria-expanded')).toBe('true')
+    const chats = await screen.findByRole('list', { name: 'Колос' })
+    // Its pinned chats first; the name of the project is not repeated in its own folder.
+    expect(
+      within(chats)
+        .getAllByRole('link')
+        .map((link) => link.textContent),
+    ).toEqual([
+      expect.stringContaining('Закреплённый в Колосе'),
+      expect.stringContaining('Цены пекарни'),
+    ])
+    expect(listPage).toHaveBeenCalledWith({ projectId: KOLOS.id })
+    expect(within(chats).queryByText('Колос')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Без проекта/ }))
+    const none = await screen.findByRole('list', { name: 'Без проекта' })
+    expect(within(none).getByText('Письмо поставщику')).toBeTruthy()
+    expect(listPage).toHaveBeenCalledWith({ projectId: 'none' })
+
+    fireEvent.click(kolos)
+    expect(screen.queryByRole('list', { name: 'Колос' })).toBeNull()
+  })
+
+  it('opens the folder of the open chat by itself', async () => {
+    head.mockResolvedValue({ project: TEA })
+    segment.current = dialog('3').id
+    showList({ grouped: true })
+    const tea = await screen.findByRole('list', { name: 'Магазин чая' })
+    expect(within(tea).getByText('Чай')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Колос/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    )
+  })
+
+  it('opens the only folder there is', async () => {
+    folders.mockResolvedValueOnce({ folders: [{ project: null, count: 1, attention: false }] })
+    showList({ grouped: true })
+    expect(await screen.findByRole('list', { name: 'Без проекта' })).toBeTruthy()
+  })
+
+  it('says there are no chats when there are none', async () => {
+    folders.mockResolvedValueOnce({ folders: [] })
+    showList({ grouped: true })
+    expect(
+      await screen.findByText('Чатов пока нет. Напишите, что нужно сделать — чат появится здесь.'),
+    ).toBeTruthy()
   })
 })

@@ -276,6 +276,47 @@ describe('new chat', () => {
       expect(screen.getByRole('button', { name: 'Без проекта' })).toBeTruthy()
     })
 
+    it('writes the chosen project into the address, so a reload keeps it (19.11.2026)', async () => {
+      window.history.replaceState(null, '', '/chats/new#draft')
+      showChat()
+      fireEvent.click(screen.getByRole('button', { name: 'Без проекта' }))
+      fireEvent.click(
+        await within(await screen.findByRole('menu', { name: 'Проект для чата' })).findByRole(
+          'menuitemradio',
+          { name: /чая/ },
+        ),
+      )
+      expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
+        `/chats/new?project=${TEA}#draft`,
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Проект: Интернет-магазин чая' }))
+      fireEvent.click(
+        within(await screen.findByRole('menu', { name: 'Проект для чата' })).getByRole(
+          'menuitemradio',
+          { name: /Без проекта/ },
+        ),
+      )
+      expect(`${window.location.pathname}${window.location.search}`).toBe('/chats/new')
+      window.history.replaceState(null, '', '/')
+    })
+
+    it('starts over from an address the pill did not write, as «Создать» leads to (19.11.2026)', async () => {
+      const page = showChat()
+      fireEvent.click(screen.getByRole('button', { name: 'Без проекта' }))
+      fireEvent.click(
+        await within(await screen.findByRole('menu', { name: 'Проект для чата' })).findByRole(
+          'menuitemradio',
+          { name: /чая/ },
+        ),
+      )
+      // Next follows the address the pill replaced: the choice stays.
+      page.moved(`project=${TEA.toUpperCase()}`)
+      expect(screen.getByRole('button', { name: 'Проект: Интернет-магазин чая' })).toBeTruthy()
+      // «Создать» leads to `/chats/new`: the same screen stays mounted, the choice does not.
+      page.moved('')
+      expect(await screen.findByRole('button', { name: 'Без проекта' })).toBeTruthy()
+    })
+
     it('chooses the project of `?project=` once the list names it as the user’s', async () => {
       const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
       render(

@@ -958,3 +958,32 @@ describe('«Изменить» under the last message (docs/plan/75-chat-input-o
     cleanup()
   })
 })
+
+describe('a long message of the client (owner’s request of 19.11.2026)', () => {
+  const head = () => headOf({ status: 'awaiting_user' })
+  const long = Array.from({ length: 14 }, (_, index) => `Строка ${index + 1}`).join('\n')
+
+  it('stands at ten lines until «Показать полностью», and «Свернуть» folds it again', () => {
+    const { feed } = showFeed([requestRow('1', long)], head())
+    const words = feed.querySelector<HTMLElement>('[data-message-words]')!
+    // All the words are there for a screen reader and a search; the screen shows ten lines.
+    expect(words.textContent).toBe(long)
+    const clamp = () => getComputedStyle(words).getPropertyValue('-webkit-line-clamp')
+    expect(clamp()).toBe('10')
+    const more = within(feed).getByRole('button', { name: 'Показать полностью' })
+    expect(more.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(more)
+    const less = within(feed).getByRole('button', { name: 'Свернуть' })
+    expect(less.getAttribute('aria-expanded')).toBe('true')
+    expect(clamp()).not.toBe('10')
+    fireEvent.click(less)
+    expect(within(feed).getByRole('button', { name: 'Показать полностью' })).toBeTruthy()
+    cleanup()
+  })
+
+  it('says nothing more of a short message', () => {
+    const { feed } = showFeed([requestRow('1', 'Раз\nДва\nТри')], head())
+    expect(within(feed).queryByRole('button', { name: 'Показать полностью' })).toBeNull()
+    cleanup()
+  })
+})

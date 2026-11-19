@@ -54,7 +54,7 @@ export const scheduleSortLabels = Object.freeze({
 /** The list before the first task (Зп4). */
 export const scheduledEmptyTexts = Object.freeze({
   title: 'Запланированных задач пока нет.',
-  lead: 'Опишите, что агенту делать и когда, — он выполнит это сам, а результат придёт в новый чат.',
+  lead: 'Опишите, что агенту делать и когда — он выполнит это сам, а результат придёт в новый чат.',
   orTemplate: 'Или начните с шаблона',
 })
 
@@ -221,7 +221,7 @@ export const scheduleConfirmTexts = Object.freeze({
 /** «Стоимость» of the window and of the page (Зп30). */
 export const scheduleCostTexts = Object.freeze({
   each: (average: number) =>
-    `Каждый запуск тратит кредиты, как обычный чат, — в среднем около ${average}.`,
+    `Каждый запуск тратит кредиты, как обычный чат — в среднем около ${average}.`,
   week: (credits: number) => `Так выйдет примерно ${credits} в неделю`,
   limit: (limit: number) => `; ваш недельный лимит — ${limit}.`,
   over: 'Остальным чатам останется меньше.',

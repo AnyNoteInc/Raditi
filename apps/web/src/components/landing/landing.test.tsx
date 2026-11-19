@@ -226,7 +226,7 @@ describe('landing texts', () => {
     const slogan = hero?.querySelector('h1 + p')
     expect(plain(slogan?.textContent)).toBe('Напишите в чат. Всё сделаем.')
     expect(text).toContain(
-      'Найти, сравнить, написать письмо, собрать таблицу. Напишите обычными словами, что нужно, — Радити сделает.',
+      'Найти, сравнить, написать письмо, собрать таблицу. Напишите обычными словами, что нужно — Радити сделает.',
     )
     // Two ways on: the main action and the example under the first screen.
     expect(

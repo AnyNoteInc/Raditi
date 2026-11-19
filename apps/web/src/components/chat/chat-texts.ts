@@ -302,8 +302,9 @@ export const composerText = Object.freeze({
   /** The field after «Остановить», until core has ended the task. */
   stopping: 'Останавливаем задачу…',
   /**
-   * The paperclip of the field, and its menu: files for the message. Not «+» — «+» of a dialog is
-   * its tools (docs/plan/59-dialog-tools-panel.md, И15).
+   * «+» of the field, first in its row, and its menu: files for the message (owner's request of
+   * 19.11.2026, in place of the paperclip). «+» in the head of a dialog is its tools
+   * (docs/plan/59-dialog-tools-panel.md, И15).
    */
   attach: 'Прикрепить файлы',
   /** A command typed on «Новый чат»: there is no chat to run it in yet. */
@@ -343,6 +344,12 @@ export const messageEditText = Object.freeze({
   send: 'Отправить',
 })
 
+/** A long message of the client stands at ten lines until it is opened (owner's request of 19.11.2026). */
+export const messageClampText = Object.freeze({
+  more: 'Показать полностью',
+  less: 'Свернуть',
+})
+
 /** «Скопировать текст» of a message (owner's request of 14.11.2026). */
 export const copyText = Object.freeze({
   copy: 'Скопировать текст',
@@ -363,12 +370,22 @@ export const resultsText = Object.freeze({
 /** The section «Чаты» and its screens (docs/plan/61-chats-first.md, §5.13). */
 export const chatsText = Object.freeze({
   title: 'Чаты',
-  newChat: 'Новый чат',
+  /** The action of the list (owner's request of 19.11.2026): «Создать», read aloud as a chat. */
+  newChat: 'Создать',
+  newChatLabel: 'Создать чат',
   back: 'К чатам',
+  /** «Показывать чаты» (owner's request of 19.11.2026, after docs/plan/61, К23). */
+  groupButton: 'Группировка чатов',
+  groupTitle: 'Показывать чаты',
+  groupList: 'Одним списком',
+  groupProjects: 'По проектам',
+  /** A closed folder that holds a chat waiting for the client. */
+  attention: 'Есть чаты, которые ждут вас',
+  noProject: 'Без проекта',
 })
 
 export const listText = Object.freeze({
-  empty: 'Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.',
+  empty: 'Чатов пока нет. Напишите, что нужно сделать — чат появится здесь.',
   /** The head of the list and «Архив» (docs/plan/75-chat-input-output.md, ВВ21). */
   pinned: 'Закреплённые',
   archive: 'Архив',

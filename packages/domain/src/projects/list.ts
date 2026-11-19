@@ -50,3 +50,9 @@ export function compareProjects(
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
   }
 }
+
+/**
+ * The folder of «По проектам» with the chats without a project (owner's request of 19.11.2026,
+ * ПИ1): the key the list reads it by — beside the ids of the projects, never one of them.
+ */
+export const NO_PROJECT_FOLDER = 'none'

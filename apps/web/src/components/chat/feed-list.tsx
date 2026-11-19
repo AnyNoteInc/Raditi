@@ -62,7 +62,15 @@ import MuiLink from '@mui/material/Link'
 import Typography from '@mui/material/Typography'
 import { BrandProgress } from '@repo/ui/brand-progress'
 import Link from 'next/link'
-import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
@@ -75,6 +83,7 @@ import {
   activityText,
   browserText,
   dialogText,
+  messageClampText,
   messageEditText,
   objectLinkText,
 } from './chat-texts'
@@ -394,18 +403,7 @@ function BubbleView({
           color: 'text.primary',
         }}
       >
-        <Typography
-          component="p"
-          sx={{
-            m: 0,
-            fontSize: 16,
-            whiteSpace: 'pre-wrap',
-            overflowWrap: 'anywhere',
-            lineHeight: 1.65,
-          }}
-        >
-          {text}
-        </Typography>
+        <ClampedWords text={text} />
       </Box>
       {/* Its buttons are 44 px for a finger: the row moves up by the half of what they grew. */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: -1 }}>
@@ -431,6 +429,77 @@ function BubbleView({
         ) : null}
       </Box>
     </Box>
+  )
+}
+
+/** The lines a message of the client shows until «Показать полностью» (owner's request of 19.11.2026). */
+export const MESSAGE_CLAMP_LINES = 10
+
+/**
+ * The client's words, at most `MESSAGE_CLAMP_LINES` lines of them until «Показать полностью»
+ * opens the rest; «Свернуть» takes them back. Lines are those on the screen: a long line that
+ * wraps counts as it is drawn, so the words are measured after each change of the width.
+ */
+function ClampedWords({ text }: { text: string }) {
+  const words = useRef<HTMLParagraphElement>(null)
+  const [open, setOpen] = useState(false)
+  // More lines than the limit are long before anything is measured (and where nothing is).
+  const manyLines = text.split('\n').length > MESSAGE_CLAMP_LINES
+  const [cut, setCut] = useState(manyLines)
+  useLayoutEffect(() => {
+    const element = words.current
+    // Open, the words are whole: what was cut stays known until they are folded again.
+    if (element === null || open) return
+    const measure = () => setCut(manyLines || element.scrollHeight > element.clientHeight + 1)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [manyLines, open, text])
+  return (
+    <>
+      <Typography
+        ref={words}
+        component="p"
+        data-message-words=""
+        sx={{
+          m: 0,
+          fontSize: 16,
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
+          lineHeight: 1.65,
+          ...(open
+            ? {}
+            : {
+                display: '-webkit-box',
+                WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: MESSAGE_CLAMP_LINES,
+                overflow: 'hidden',
+              }),
+        }}
+      >
+        {text}
+      </Typography>
+      {cut ? (
+        <Button
+          size="small"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          endIcon={
+            <Box
+              component="span"
+              sx={{ display: 'flex', transform: open ? 'rotate(180deg)' : 'none' }}
+            >
+              <AppIcon name="down" size={16} />
+            </Box>
+          }
+          sx={{ minHeight: 44, ml: -1, mb: -1, color: 'text.secondary', fontSize: 13 }}
+        >
+          {open ? messageClampText.less : messageClampText.more}
+        </Button>
+      ) : null}
+    </>
   )
 }
 

@@ -347,7 +347,7 @@ export interface ScheduleCostHint {
 }
 
 /**
- * «Каждый запуск тратит кредиты, как обычный чат, — в среднем около 11. Так выйдет примерно N в
+ * «Каждый запуск тратит кредиты, как обычный чат — в среднем около 11. Так выйдет примерно N в
  * неделю; ваш недельный лимит — M.» (Зп30): N by the schedules of the window over the next 7 days,
  * M — of the tariff of the creator's personal workspace, where the task goes (Зп44). Nothing is
  * made: a user without a personal workspace yet is told without a limit.

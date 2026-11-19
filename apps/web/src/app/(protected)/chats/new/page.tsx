@@ -1,16 +1,16 @@
 import type { Metadata } from 'next'
 
+import { projectOfSearch } from '@/components/chat/chat-address'
 import { NewChat } from '@/components/chat/new-chat'
 import { requireSession, UNAVAILABLE } from '@/lib/access'
 import { speechAvailable } from '@/server/speech-runtime'
 
 export const metadata: Metadata = { title: 'Новый чат' }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 /**
  * «Новый чат»; `?project=<id>` chooses the project of the chat at once (docs/plan/84-projects.md,
- * ПР30). Whose project it is the field learns from the list of the user's projects.
+ * ПР30), and the pill writes its choice there, so a reload keeps it. Whose project it is the field
+ * learns from the list of the user's projects.
  */
 export default async function Page({
   searchParams,
@@ -20,8 +20,7 @@ export default async function Page({
   const session = await requireSession()
   // The layout says so for the whole section.
   if (session === UNAVAILABLE) return null
-  const { project } = await searchParams
-  const projectId = typeof project === 'string' && UUID.test(project) ? project : null
+  const projectId = projectOfSearch((await searchParams).project)
   return (
     <NewChat
       // A new address of a project is a new start: the field takes its project anew.

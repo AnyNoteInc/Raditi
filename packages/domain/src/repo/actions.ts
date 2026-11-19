@@ -113,7 +113,7 @@ export const repoPushRefusalTexts = Object.freeze({
   REPO_CONFIRM_INVALID: 'Карточка устарела — откройте её снова',
   REPO_PROPOSAL_LIMIT: 'Запрос на слияние в этом ходе уже предложен',
   REPO_MR_CHANGED:
-    'Запрос на слияние открылся не таким, как просили, — мы его закрыли. Попробуйте ещё раз',
+    'Запрос на слияние открылся не таким, как просили — мы его закрыли. Попробуйте ещё раз',
 } satisfies Record<string, string>)
 
 /**

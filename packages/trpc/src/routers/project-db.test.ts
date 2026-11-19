@@ -319,6 +319,54 @@ describe.skipIf(!databaseUrl)('PostgreSQL: projects and the chats in them', () =
     expect((await caller.task.list({ projectId: second })).items).toEqual([])
   })
 
+  it('counts the folders of «По проектам» and lists the chats without a project (19.11.2026)', async () => {
+    const { caller, project, chat, answered } = await owner()
+    const first = await project('Первый')
+    const empty = await project('Пустой')
+    const older = await chat(first)
+    const outside = await chat(null)
+    const newer = await chat(first)
+    await answered(older)
+    await caller.task.pin({ taskId: newer, pinned: true })
+    const archived = await chat(null)
+    await answered(archived)
+    await caller.task.archive({ taskId: archived, archived: true })
+
+    // A project without chats has no folder; «Без проекта» comes last; «Архив» is not counted.
+    // A chat that waits for the client marks its folder; one whose pass is queued does not.
+    expect((await caller.task.folders({})).folders).toEqual([
+      { project: { id: first, name: 'Первый' }, count: 2, attention: true },
+      { project: null, count: 1, attention: false },
+    ])
+    expect(empty).not.toBe(first)
+    const none = await caller.task.list({ projectId: 'none' })
+    expect(none.items.map((item) => item.id)).toEqual([outside])
+    expect(none.pinned).toEqual([])
+    const ofFirst = await caller.task.list({ projectId: first })
+    expect(ofFirst.pinned.map((item) => item.id)).toEqual([newer])
+    expect(ofFirst.items.map((item) => item.id)).toEqual([older])
+
+    // A project in «Архив» keeps its folder while it has chats, and the folder opens.
+    await caller.project.archive({ projectId: first, archived: true })
+    expect((await caller.task.folders({})).folders.map((folder) => folder.project?.id)).toEqual([
+      first,
+      undefined,
+    ])
+    expect((await caller.task.list({ projectId: first })).items.map((item) => item.id)).toEqual([
+      older,
+    ])
+
+    // A project in the trash takes its folder with it.
+    await caller.project.remove({ projectId: first })
+    expect((await caller.task.folders({})).folders).toEqual([
+      { project: null, count: 1, attention: false },
+    ])
+    // Somebody else counts only their own chats.
+    const stranger = await owner()
+    expect((await stranger.caller.task.folders({})).folders).toEqual([])
+    expect((await stranger.caller.task.list({ projectId: 'none' })).items).toEqual([])
+  })
+
   it('moves a chat into a project and out of it, never while its pass runs', async () => {
     const { caller, project, chat, answered } = await owner()
     const projectId = await project()
