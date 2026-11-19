@@ -196,14 +196,45 @@ function Columns({
               component="span"
               variant="caption"
               color="textSecondary"
-              sx={{ flex: 1, minWidth: 0, textAlign: 'center', whiteSpace: 'nowrap' }}
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                textAlign: 'center',
+                whiteSpace: 'nowrap',
+                // On a phone the number and its month stand one under the other, both centred on
+                // the column even when a month is a little wider than it.
+                display: { xs: 'flex', sm: 'block' },
+                flexDirection: 'column',
+                alignItems: 'center',
+              }}
             >
-              {nbsp(labels[index] ?? '')}
+              <DayTick label={labels[index] ?? ''} />
             </Typography>
           ))}
         </Box>
       </Box>
     </Box>
+  )
+}
+
+/**
+ * A label under a column: «13», or «13 нояб.» where the month starts. On a phone a week's column
+ * is narrower than «13 нояб.», which then lay over «14»: there the month goes under the number.
+ */
+function DayTick({ label }: { label: string }) {
+  // Any space: an engine may put a no-break one between the day and its month.
+  const space = label.search(/\s/)
+  if (space === -1) return label
+  return (
+    <>
+      <span>{label.slice(0, space)}</span>
+      <Box component="span" sx={{ display: { xs: 'block', sm: 'inline' } }}>
+        <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+          &nbsp;
+        </Box>
+        {label.slice(space + 1)}
+      </Box>
+    </>
   )
 }
 
@@ -460,31 +491,37 @@ function CreditsChart({ days }: { days: readonly UsageActivityDay[] }) {
   )
 }
 
-/** The numbers of the chart of credits as a table, for assistive technology. */
+/**
+ * The numbers of the chart of credits as a table, for assistive technology. The box that hides it
+ * is a `div`: a table is never narrower than its cells, so `width: 1px` on the table itself left
+ * it as wide as its text, and the page scrolled sideways.
+ */
 function ActivityTable({ days }: { days: readonly UsageActivityDay[] }) {
   return (
-    <Box component="table" sx={hidden}>
-      <caption>Расход кредитов по дням</caption>
-      <thead>
-        <tr>
-          <th scope="col">День</th>
-          {CREDIT_PARTS.map((part) => (
-            <th scope="col" key={part}>
-              {creditPartLabel[part]}, кредитов
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {days.map((day) => (
-          <tr key={day.date}>
-            <th scope="row">{longDayLabel(day.date)}</th>
+    <Box sx={hidden}>
+      <table>
+        <caption>Расход кредитов по дням</caption>
+        <thead>
+          <tr>
+            <th scope="col">День</th>
             {CREDIT_PARTS.map((part) => (
-              <td key={part}>{day.credits[part]}</td>
+              <th scope="col" key={part}>
+                {creditPartLabel[part]}, кредитов
+              </th>
             ))}
           </tr>
-        ))}
-      </tbody>
+        </thead>
+        <tbody>
+          {days.map((day) => (
+            <tr key={day.date}>
+              <th scope="row">{longDayLabel(day.date)}</th>
+              {CREDIT_PARTS.map((part) => (
+                <td key={part}>{day.credits[part]}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </Box>
   )
 }
