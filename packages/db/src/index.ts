@@ -219,6 +219,7 @@ export {
   projectBusyStatuses,
   projectForChat,
   projectOwnedBy,
+  purgeProjectNow,
   readProject,
   restoreProject,
   setProjectInstructions,

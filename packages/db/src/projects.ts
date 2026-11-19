@@ -2,6 +2,7 @@ import {
   compareProjects,
   projectArchived,
   projectNotFound,
+  projectNotInTrash,
   projectPurgeAfter,
   taskProjectBusy,
   taskProjectHasBranch,
@@ -196,19 +197,27 @@ const containsWords = (words: string) => words.replace(/[\\%_]/g, (sign) => `\\$
 
 /**
  * The projects of `userId` in a tab of the list (ПР4): «Все» — the live ones out of «Архив»,
- * «Избранное» — the starred among them, «Архив», «Корзина» (the trash, the soonest purged first).
- * `query` finds the words in the name or the goal, in any case. The order is the domain's
- * (`compareProjects`): the number of projects is not bounded (ПР21), but they are a person's own.
+ * «Избранное» — the starred among them, «Архив», «Корзина» (the trash, the soonest purged first:
+ * a project whose day came at `now` — «Удалить навсегда» or its 30 days, ПР38 — is no longer in it,
+ * core purges it). `query` finds the words in the name or the goal, in any case. The order is the
+ * domain's (`compareProjects`): the number of projects is not bounded (ПР21), but they are a
+ * person's own.
  */
 export async function listProjects(
   db: Pick<Tx, 'project'>,
-  input: { userId: string; view?: ProjectListView; sort?: ProjectListSort; query?: string },
+  input: {
+    userId: string
+    view?: ProjectListView
+    sort?: ProjectListSort
+    query?: string
+    now?: Date
+  },
 ): Promise<ProjectListRow[]> {
   const view = input.view ?? 'all'
   const where: Prisma.ProjectWhereInput = {
     ...ofUser(input.userId),
     ...(view === 'trash'
-      ? { deletedAt: { not: null } }
+      ? { deletedAt: { not: null }, purgeAfter: { gt: input.now ?? new Date() } }
       : view === 'archive'
         ? { deletedAt: null, archivedAt: { not: null } }
         : view === 'starred'
@@ -380,6 +389,31 @@ export async function restoreProject(
     data: { deletedAt: null, purgeAfter: null, activityAt: input.now },
   })
   if (count !== 1) throw projectNotFound()
+}
+
+/**
+ * «Удалить навсегда» (ПР38): a project of the trash goes now, not on its day — its day becomes the
+ * moment it went into the trash (`purge_after = deleted_at`). That moment is earlier than the clock
+ * of any «Вернуть», which only returns a project whose day is still ahead: a «Вернуть» that read
+ * its clock before this press and writes after it is refused too. From then on the project is out
+ * of «Корзина», and core purges it the way it purges a project whose 30 days are over
+ * (`ProjectTrash.purge`, within a minute): the files, the chats, the scheduled tasks, the memory and
+ * the mirror of the repository. A repeat, or a project whose day came already, changes nothing
+ * until core purged it — then it is PROJECT_NOT_FOUND. PROJECT_NOT_IN_TRASH — «Вернуть» came first.
+ */
+export async function purgeProjectNow(
+  db: Pick<Tx, 'project' | '$executeRaw'>,
+  input: { projectId: string; userId: string; now: Date },
+): Promise<void> {
+  const project = await projectOwnedBy(db, input.projectId, input.userId, { deleted: true })
+  if (project === null) throw projectNotFound()
+  if (project.purgeAfter === null) throw projectNotInTrash()
+  if (project.purgeAfter <= input.now) return
+  const changed = await db.$executeRaw`
+    UPDATE projects SET purge_after = deleted_at
+    WHERE id = ${project.id}::uuid AND deleted_at IS NOT NULL AND purge_after > ${input.now}`
+  // Changed meanwhile — «Вернуть», another press, or core purged it: read it again.
+  if (changed !== 1) return purgeProjectNow(db, input)
 }
 
 /** A new chat, the end of a pass: the project rises in «Недавние». */

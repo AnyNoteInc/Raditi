@@ -19,7 +19,12 @@ import { useEffect, useId, useState } from 'react'
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
-import { ProjectMenuButton, ProjectStarButton, useProjectActions } from './project-actions'
+import {
+  ProjectMenuButton,
+  ProjectPurgeButton,
+  ProjectStarButton,
+  useProjectActions,
+} from './project-actions'
 import { ProjectCreateDialog } from './project-create-dialog'
 import { projectHref, projectsText, projectUpdatedText } from './project-texts'
 import { repoText } from './repo-texts'
@@ -75,8 +80,11 @@ export function ProjectsView() {
   const loaded = all.isSuccess && archive.isSuccess && trash.isSuccess
   const failed = all.isError || archive.isError || trash.isError
   const empty = loaded && count('all') === 0 && count('archive') === 0 && count('trash') === 0
-  // The trash emptied while it was open: back to all.
-  const current: ProjectListView = view === 'trash' && loaded && count('trash') === 0 ? 'all' : view
+  // The trash emptied while it was open — «Вернуть» or «Удалить навсегда» of its last project: back
+  // to all, for good — a project deleted later does not open the trash on its own (ПР38).
+  const trashEmptied = view === 'trash' && loaded && count('trash') === 0
+  if (trashEmptied) setView('all')
+  const current: ProjectListView = trashEmptied ? 'all' : view
   const searching = count('all') + count('archive') >= projectLimits.searchFrom
   const words = searching ? search.trim().toLocaleLowerCase('ru') : ''
   const shown = ofView(current).filter((project) => fits(project, words))
@@ -337,7 +345,8 @@ function SortMenu({
 
 /**
  * A card of the list (P-list): the name, the goal in one line, «N чатов · обновлён …», the star
- * and «⋯». The card opens the project; in «Корзина» it says when it goes for good and «Вернуть».
+ * and «⋯». The card opens the project; in «Корзина» it says when it goes for good, «Вернуть» and
+ * «Удалить навсегда…» (ПР38).
  */
 function ProjectCard({
   project,
@@ -434,7 +443,7 @@ function ProjectCard({
         {project.archived && !inTrash ? ` · ${projectsText.archivedMark}` : ''}
       </Typography>
       {inTrash ? (
-        <Box>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
           <Button
             size="small"
             variant="outlined"
@@ -449,6 +458,7 @@ function ProjectCard({
           >
             {projectsText.restore}
           </Button>
+          <ProjectPurgeButton project={project} onNotice={onNotice} />
         </Box>
       ) : null}
     </Box>

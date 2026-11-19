@@ -158,6 +158,38 @@ test('the list: cards, «Избранное», «Архив», «Корзина�
     await expect(page.getByText('Проект «Сайт пекарни «Колос»» возвращён.')).toBeVisible()
     await expect(cards(page, 'Все')).toHaveCount(1)
   })
+
+  await test.step('«Удалить навсегда…» from «Корзина» asks, and takes it away at once (ПР38)', async () => {
+    await page.getByRole('button', { name: 'Действия с проектом «Сайт пекарни «Колос»»' }).click()
+    await page.getByRole('menuitem', { name: /Удалить/ }).click()
+    await page
+      .getByRole('dialog', { name: 'Удалить проект «Сайт пекарни «Колос»»?' })
+      .getByRole('button', { name: 'В корзину' })
+      .click()
+    await page.getByRole('button', { name: /Корзина/ }).click()
+    const trash = cards(page, 'Корзина')
+    const purge = trash.getByRole('button', {
+      name: 'Удалить навсегда: Сайт пекарни «Колос»',
+    })
+    const question = page.getByRole('dialog', {
+      name: 'Удалить проект «Сайт пекарни «Колос»» навсегда?',
+    })
+    // «Не удалять» changes nothing.
+    await purge.click()
+    await expect(question).toContainText('Вернуть его будет нельзя')
+    await question.getByRole('button', { name: 'Не удалять' }).click()
+    await expect(question).toHaveCount(0)
+    await expect(trash).toHaveCount(1)
+
+    await purge.click()
+    await question.getByRole('button', { name: 'Удалить навсегда' }).click()
+    await expect(page.getByText('Проект «Сайт пекарни «Колос»» удалён навсегда.')).toBeVisible()
+    // The trash is empty: its button goes, and the list is back on «Все».
+    await expect(page.getByRole('button', { name: /Корзина/ })).toHaveCount(0)
+    await expect(cards(page, 'Все')).toHaveCount(0)
+    await page.reload()
+    await expect(page.getByRole('button', { name: /Корзина/ })).toHaveCount(0)
+  })
 })
 
 test('«Перенести в проект…» and «Убрать из проекта» of a chat', async ({ page, signedInUser }) => {

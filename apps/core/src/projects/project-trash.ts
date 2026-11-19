@@ -15,8 +15,6 @@ import {
 } from '@repo/db'
 import type { ObjectStorage } from '@repo/domain'
 
-/** How often the projects whose 30 days in the trash are over are purged (docs/plan/84, §4.3). */
-export const PROJECT_PURGE_EVERY_MS = 60 * 60_000
 const BATCH = 20
 const FILE_BATCH = 100
 
@@ -37,8 +35,8 @@ export interface ProjectTrashDependencies {
 export interface ProjectTrashSweep {
   /** Chats of projects in the trash pressed to stop on this sweep. */
   stopped: number
-  /** Projects purged; null — not their hour. */
-  purged: number | null
+  /** Projects purged. */
+  purged: number
   /** Files no project took, collected after their day (ПР8). */
   collected: number
   /** Scheduled tasks of projects in «Архив» or the trash stopped on this sweep (ПР19). */
@@ -51,8 +49,10 @@ export interface ProjectTrashSweep {
  * - a chat of a project in the trash whose pass is queued or runs is stopped — the second line
  *   after «Удалить», which presses them in its own transaction (`trashProject`): a chat queued
  *   there by a race with it is stopped here;
- * - once an hour the projects past `purge_after` are purged (`purgeProject`): only their chats
- *   stay, deleted. A project with a chat that has not ended presses it and waits for the next hour.
+ * - the projects past `purge_after` are purged (`purgeProject`): only their chats stay, deleted. A
+ *   project with a chat that has not ended presses it and waits for the next sweep. Every sweep
+ *   looks — one query on `projects_purge_idx` — so a project the client deleted for good from the
+ *   trash («Удалить навсегда», ПР38) goes within a minute, not within the hour.
  *
  * - files of the context no project took within their day are collected, and the files of a
  *   project being purged go before it: their objects in raditi-inbox, then their rows (ПР8).
@@ -66,7 +66,6 @@ export interface ProjectTrashSweep {
 export class ProjectTrash {
   readonly #logger: { log(message: string): void; warn(message: string): void }
   readonly #now: () => Date
-  #purgedAt: number | null = null
 
   constructor(private readonly deps: ProjectTrashDependencies) {
     this.#logger = deps.logger ?? new Logger('ProjectTrash')
@@ -77,15 +76,11 @@ export class ProjectTrash {
     const stopped = await this.stopChats()
     const paused = await this.pauseSchedules()
     const collected = await this.collectFiles()
-    const now = this.#now().getTime()
-    const due = this.#purgedAt === null || now - this.#purgedAt >= PROJECT_PURGE_EVERY_MS
-    const purge = due ? await this.purge() : null
-    // A chat still stopping, or more projects than a batch: the next minute goes on.
-    if (purge && !purge.more) this.#purgedAt = now
-    const purged = purge?.purged ?? null
-    if (stopped > 0 || (purged ?? 0) > 0 || collected > 0 || paused > 0)
+    // A chat still stopping, or more projects than a batch: the next sweep, a minute on, goes on.
+    const purged = await this.purge()
+    if (stopped > 0 || purged > 0 || collected > 0 || paused > 0)
       this.#logger.log(
-        `project_trash stopped=${stopped} purged=${purged ?? 0} files_collected=${collected} schedules_paused=${paused}`,
+        `project_trash stopped=${stopped} purged=${purged} files_collected=${collected} schedules_paused=${paused}`,
       )
     return { stopped, purged, collected, paused }
   }
@@ -173,10 +168,11 @@ export class ProjectTrash {
   }
 
   /**
-   * Projects past their day in the trash, purged a batch at a time. `more` — a project waits for its
-   * chats to stop, or the batch was full: the sweep comes back on the next minute, not the next hour.
+   * Projects past their day in the trash, purged a batch at a time; how many went. A project that
+   * waits for its chats to stop or for its files, and those past a full batch, are left for the
+   * next sweep.
    */
-  async purge(): Promise<{ purged: number; more: boolean }> {
+  async purge(): Promise<number> {
     const { db } = this.deps
     const now = this.#now()
     const due = await projectsDueForPurge(db, now, BATCH)
@@ -192,6 +188,6 @@ export class ProjectTrash {
       else if (result.state === 'stopping') waiting++
     }
     if (waiting > 0) this.#logger.log(`project_purge_waits projects=${waiting}`)
-    return { purged, more: waiting > 0 || due.length === BATCH }
+    return purged
   }
 }
