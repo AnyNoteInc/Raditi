@@ -128,6 +128,10 @@ export async function scenarioW(stand) {
     kind: 'rerun',
   })
   rt.check(!rerun.deploy, 'the card of a rerun of a branch is a plain one, not a deploy')
+  rt.check(
+    rerun.repeats === true,
+    'the plain card of a build that passed warns that the rerun is a new build',
+  )
   const rerunPress = await owner.mutate('projectRepo.confirmRunAction', {
     confirmToken: rerun.confirmToken,
   })
@@ -256,6 +260,10 @@ export async function scenarioW(stand) {
     kind: 'rerun',
   })
   rt.check(mainCard.deploy === true, 'a rerun of a build of the main branch is a card of a deploy')
+  rt.check(
+    mainCard.repeats === false,
+    'a card of a deploy says the new build its own way and does not warn twice',
+  )
 
   // «Отменить» of the merged request !1: a new branch with the revert, a new request; main stays.
   const merged = project.mergeRequests[0]

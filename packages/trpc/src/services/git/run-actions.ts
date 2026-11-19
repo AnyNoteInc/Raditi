@@ -11,6 +11,7 @@ import {
   repoTreeFileSchema,
   repoTreeKey,
   rerunIsDeploy,
+  rerunPassedIsNewBuild,
   signRepoConfirmToken,
   type CiStatus,
   type ObjectStorage,
@@ -25,7 +26,9 @@ import { expiry, macOf, nonce, writableRepository, writePress } from './merge.ts
 // token to the build or the request as core last read them, `confirm…` writes the press and the job
 // `git.action`, and core reads the provider again before it does anything. A rerun of a build of
 // the main branch or of one with deploy jobs is a card of a deploy (ПР15): its words say so and
-// core reruns it only while its commit is the head of its branch.
+// core reruns it only while its commit is the head of its branch. A rerun of a build of any other
+// branch that passed warns (ПР36) that it starts a new build of the branch, which repeats every
+// automatic job — a deploy without a manual start included.
 
 export interface PreparedRunAction {
   kind: 'rerun' | 'cancel'
@@ -36,6 +39,8 @@ export interface PreparedRunAction {
   status: CiStatus
   /** The card of a deploy (ПР15): the main branch, deploy jobs or a workflow started by hand. */
   deploy: boolean
+  /** The plain card warns (ПР36): a rerun of this passed build is a new build of the branch. */
+  repeats: boolean
   confirmToken: string
   expiresAt: Date
 }
@@ -82,6 +87,13 @@ export async function prepareRunAction(
     event: run.event,
     manualJobs: hasManualJobs(run.jobs),
   })
+  const repeats = rerunPassedIsNewBuild({
+    ref: run.ref,
+    defaultBranch: repo.defaultBranch,
+    event: run.event,
+    manualJobs: hasManualJobs(run.jobs),
+    status,
+  })
   const expiresAt = expiry(input.now)
   const confirmToken = signRepoConfirmToken(
     {
@@ -111,6 +123,7 @@ export async function prepareRunAction(
     sha: run.sha,
     status,
     deploy,
+    repeats,
     confirmToken,
     expiresAt: new Date(expiresAt * 1000),
   }

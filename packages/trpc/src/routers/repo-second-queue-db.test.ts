@@ -247,6 +247,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the cards of the second queue (plan 8
       status: 'success',
       jobs: [{ id: '1', name: 'deploy', stage: 'deploy', status: 'manual', manual: true }],
     })
+    await run(f, { providerRunId: '479', status: 'success' })
     const plain = await f.caller.projectRepo.prepareRunAction({
       projectId: f.projectId,
       runId: '482',
@@ -255,6 +256,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the cards of the second queue (plan 8
     expect(plain).toMatchObject({
       kind: 'rerun',
       deploy: false,
+      repeats: false,
       ref: 'raditi/novoe-menyu-12345678',
     })
     expect(readRepoConfirmToken(plain.confirmToken, mac, new Date())).toMatchObject({
@@ -266,14 +268,20 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the cards of the second queue (plan 8
     })
     for (const runId of ['481', '480'])
       expect(
-        (
-          await f.caller.projectRepo.prepareRunAction({
-            projectId: f.projectId,
-            runId,
-            kind: 'rerun',
-          })
-        ).deploy,
-      ).toBe(true)
+        await f.caller.projectRepo.prepareRunAction({
+          projectId: f.projectId,
+          runId,
+          kind: 'rerun',
+        }),
+      ).toMatchObject({ deploy: true, repeats: false })
+    // A build of the branch that passed (ПР36): the plain card warns of a new build.
+    expect(
+      await f.caller.projectRepo.prepareRunAction({
+        projectId: f.projectId,
+        runId: '479',
+        kind: 'rerun',
+      }),
+    ).toMatchObject({ deploy: false, repeats: true })
     // A cancel of a build that ended, a rerun of one that goes: refused before any card.
     expect(
       await refusal(() =>

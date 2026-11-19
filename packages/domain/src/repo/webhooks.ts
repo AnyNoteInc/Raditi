@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { DomainError } from '../errors.ts'
+import type { CiStatus } from '../ports/git-provider.ts'
 
 // Webhooks of the repositories of projects and the rest of the second queue (docs/plan/84-projects.md,
 // ПР17, ПР24, §4.3, §4.6; slice 84.26). A webhook is only a hint, as a payment of ЮKassa is: web
@@ -122,6 +123,23 @@ export function rerunIsDeploy(run: {
   return run.ref === run.defaultBranch || run.manualJobs || run.event === 'workflow_dispatch'
 }
 
+/**
+ * Whether the plain card of «Запустить снова» warns of a new build (ПР36): a rerun of a build that
+ * passed starts a new build of the branch, which repeats every automatic job — a deploy that needs
+ * no manual start included (a branch like `staging`), which the plain card did not say. A card of a
+ * deploy (`rerunIsDeploy`) already says in its own words that the repeat may put the version out,
+ * so it does not warn twice.
+ */
+export function rerunPassedIsNewBuild(run: {
+  ref: string
+  defaultBranch: string
+  event: string | null
+  manualJobs: boolean
+  status: CiStatus
+}): boolean {
+  return run.status === 'success' && !rerunIsDeploy(run)
+}
+
 /** The build of the card is not there any more, or not in a state the button acts on. */
 export const repoRunGone = (): DomainError =>
   new DomainError('REPO_RUN_GONE', 'The build is not there or not in that state', 409)
@@ -178,6 +196,8 @@ export const repoRunTexts = Object.freeze({
   rerunDeployBody:
     'Это сборка основной ветки или сборка с заданиями выкладки: повтор может выкатить её версию — так, как настроена ваша сборка. Повторим, только если эта версия — последняя в ветке.',
   rerunBody: 'Сборка запустится снова на той же версии.',
+  rerunPassedWarning:
+    'Сборка уже прошла: запустится новая сборка ветки и повторит все автоматические задания — включая выкладку, если вы не запускаете её вручную.',
   cancelBody:
     'Задания, которые ещё идут, остановятся. Выкладка, которая уже началась, может остаться незаконченной.',
   revertTitle: 'Отменить принятые изменения?',

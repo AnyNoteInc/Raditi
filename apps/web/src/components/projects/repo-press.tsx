@@ -20,7 +20,8 @@ import { useTRPC } from '@/trpc/client'
 // request. Each is a trusted card, as «Выкатить» is: the card is prepared by web from what core last
 // read, the press is written once and core reads the provider again before it acts. A rerun of a
 // build of the main branch or of one with deploy jobs is a card of a deploy (ПР15): its words say
-// that it may put that version out.
+// that it may put that version out. A rerun of a build of any other branch that passed is a new
+// build of the branch (ПР36): the plain card warns that it repeats every automatic job.
 
 export const pressText = Object.freeze({
   rerun: 'Запустить снова',
@@ -31,6 +32,7 @@ export const pressText = Object.freeze({
   revertTitle: repoRunTexts.revertTitle,
   rerunBody: repoRunTexts.rerunBody,
   rerunDeployBody: repoRunTexts.rerunDeployBody,
+  rerunPassedWarning: repoRunTexts.rerunPassedWarning,
   cancelBody: repoRunTexts.cancelBody,
   revertBody: repoRunTexts.revertBody,
   commit: (ref: string, sha: string) => `Ветка ${ref}, версия ${sha.slice(0, 7)}.`,
@@ -95,6 +97,8 @@ function PressState({
 interface Card {
   title: string
   body: string
+  /** A short warning under the body, when the card says more than the plain words (ПР36). */
+  warning: string | null
   detail: string | null
   confirm: string
   token: string
@@ -175,6 +179,11 @@ function PressButton({
               <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                 {card.body}
               </Typography>
+              {card.warning ? (
+                <Typography variant="body2" sx={{ color: 'warning.main' }}>
+                  {card.warning}
+                </Typography>
+              ) : null}
             </>
           ) : null}
           {error ? (
@@ -226,6 +235,8 @@ export function RunActionButton({
               : card.deploy
                 ? pressText.rerunDeployBody
                 : pressText.rerunBody,
+          // A build that passed is rerun as a new build of its branch (ПР36): the plain card warns.
+          warning: kind === 'rerun' && card.repeats ? pressText.rerunPassedWarning : null,
           detail: pressText.commit(card.ref, card.sha),
           confirm: kind === 'rerun' ? pressText.confirmRerun : pressText.confirmCancel,
           token: card.confirmToken,
@@ -251,6 +262,7 @@ export function RevertButton({ projectId, number }: { projectId: string; number:
         return {
           title: pressText.revertTitle,
           body: pressText.revertBody,
+          warning: null,
           detail: `«${card.title}» · ${pressText.commit(card.target, card.mergeSha)}`,
           confirm: pressText.confirmRevert,
           token: card.confirmToken,
