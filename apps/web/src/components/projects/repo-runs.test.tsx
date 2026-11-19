@@ -323,6 +323,7 @@ describe('the cards of a build and of «Отменить» (plan 84, 84.26)', ()
       sha: 'e'.repeat(40),
       status: 'failed',
       deploy: true,
+      repeats: false,
       confirmToken: 'token-rerun',
       expiresAt: new Date(Date.now() + 600_000),
     })
@@ -343,6 +344,31 @@ describe('the cards of a build and of «Отменить» (plan 84, 84.26)', ()
     expect(await screen.findByText('Сборка запущена снова — она появится в списке.')).toBeTruthy()
   })
 
+  it('a build of a plain branch that passed warns that its rerun runs every automatic job again', async () => {
+    calls.run.mockResolvedValue({ run: runRow('486', 'success'), jobs: [] })
+    calls.prepareRunAction.mockResolvedValue({
+      kind: 'rerun',
+      runId: '486',
+      name: 'pipeline',
+      ref: 'raditi/novoe-menyu-0000c002',
+      sha: 'e'.repeat(40),
+      status: 'success',
+      deploy: false,
+      repeats: true,
+      confirmToken: 'token-rerun',
+      expiresAt: new Date(Date.now() + 600_000),
+    })
+    wrap(<RunView project={project} runId="486" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Запустить снова' }))
+    expect(await screen.findByText('Сборка запустится снова на той же версии.')).toBeTruthy()
+    expect(screen.getByText(/повтор снова выполнит все автоматические задания/)).toBeTruthy()
+    expect(screen.getByText(/включая выкладку, если вы не запускаете её вручную/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }))
+    await waitFor(() =>
+      expect(calls.confirmRunAction.mock.calls[0]![0]).toEqual({ confirmToken: 'token-rerun' }),
+    )
+  })
+
   it('a press refused for a sign-in names the provider of its repository (§10, «Остаток списка»)', async () => {
     calls.run.mockResolvedValue({ run: runRow('482', 'failed'), jobs: [] })
     calls.prepareRunAction.mockResolvedValue({
@@ -353,6 +379,7 @@ describe('the cards of a build and of «Отменить» (plan 84, 84.26)', ()
       sha: 'e'.repeat(40),
       status: 'failed',
       deploy: false,
+      repeats: false,
       confirmToken: 'token-rerun',
       expiresAt: new Date(Date.now() + 600_000),
     })
@@ -366,6 +393,8 @@ describe('the cards of a build and of «Отменить» (plan 84, 84.26)', ()
     wrap(<RunView project={project} runId="482" />)
     fireEvent.click(await screen.findByRole('button', { name: 'Запустить снова' }))
     await screen.findByText('Ветка raditi/novoe-menyu-0000c002, версия eeeeeee.')
+    // A build that did not pass: no warning that every automatic job runs again.
+    expect(screen.queryByText(/снова выполнит все автоматические задания/)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Запустить' }))
     expect(await screen.findByText('Нужно войти в GitHub заново.')).toBeTruthy()
   })
