@@ -274,7 +274,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the cards of the second queue (plan 8
           kind: 'rerun',
         }),
       ).toMatchObject({ deploy: true, repeats: false })
-    // A build of the branch that passed (ПР36): the plain card warns of a new build.
+    // A build of the branch that passed: the plain card warns that every automatic job runs again.
     expect(
       await f.caller.projectRepo.prepareRunAction({
         projectId: f.projectId,

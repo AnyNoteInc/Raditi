@@ -20,8 +20,8 @@ import { useTRPC } from '@/trpc/client'
 // request. Each is a trusted card, as «Выкатить» is: the card is prepared by web from what core last
 // read, the press is written once and core reads the provider again before it acts. A rerun of a
 // build of the main branch or of one with deploy jobs is a card of a deploy (ПР15): its words say
-// that it may put that version out. A rerun of a build of any other branch that passed is a new
-// build of the branch (ПР36): the plain card warns that it repeats every automatic job.
+// that it may put that version out. A rerun of a build of any other branch that passed runs every
+// automatic job again: the plain card warns of it.
 
 export const pressText = Object.freeze({
   rerun: 'Запустить снова',
@@ -235,7 +235,7 @@ export function RunActionButton({
               : card.deploy
                 ? pressText.rerunDeployBody
                 : pressText.rerunBody,
-          // A build that passed is rerun as a new build of its branch (ПР36): the plain card warns.
+          // A rerun of a build that passed runs every automatic job again: the plain card warns.
           warning: kind === 'rerun' && card.repeats ? pressText.rerunPassedWarning : null,
           detail: pressText.commit(card.ref, card.sha),
           confirm: kind === 'rerun' ? pressText.confirmRerun : pressText.confirmCancel,

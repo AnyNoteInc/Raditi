@@ -450,7 +450,7 @@ export const projectRepoRouter = router({
    * «Запустить снова» or «Остановить» of a build (ПР17; slice 84.26): the build as core last read
    * it and a token bound to it; a rerun of a build of the main branch or one with deploy jobs is a
    * card of a deploy (`deploy`, ПР15), and a rerun of a passed build of any other branch warns that
-   * it is a new build of the branch (`repeats`, ПР36).
+   * it runs every automatic job again (`repeats`).
    */
   prepareRunAction: consentedProcedure
     .input(z.strictObject({ projectId: projectRef, runId, kind: z.enum(['rerun', 'cancel']) }))

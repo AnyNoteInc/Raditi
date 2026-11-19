@@ -130,7 +130,7 @@ export async function scenarioW(stand) {
   rt.check(!rerun.deploy, 'the card of a rerun of a branch is a plain one, not a deploy')
   rt.check(
     rerun.repeats === true,
-    'the plain card of a build that passed warns that the rerun is a new build',
+    'the plain card of a build that passed warns that every automatic job runs again',
   )
   const rerunPress = await owner.mutate('projectRepo.confirmRunAction', {
     confirmToken: rerun.confirmToken,

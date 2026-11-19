@@ -124,13 +124,14 @@ export function rerunIsDeploy(run: {
 }
 
 /**
- * Whether the plain card of «Запустить снова» warns of a new build (ПР36): a rerun of a build that
- * passed starts a new build of the branch, which repeats every automatic job — a deploy that needs
- * no manual start included (a branch like `staging`), which the plain card did not say. A card of a
- * deploy (`rerunIsDeploy`) already says in its own words that the repeat may put the version out,
- * so it does not warn twice.
+ * Whether the plain card of «Запустить снова» warns that the rerun repeats every automatic job:
+ * a rerun of a build that passed runs all its automatic jobs again — a deploy that needs no manual
+ * start included (a branch like `staging`), which the plain card did not say. GitLab starts a new
+ * build of the branch (ПР36), GitHub reruns the run itself; the words fit both. A card of a deploy
+ * (`rerunIsDeploy`) already says in its own words that the repeat may put the version out, so it
+ * does not warn twice.
  */
-export function rerunPassedIsNewBuild(run: {
+export function rerunPassedRepeatsJobs(run: {
   ref: string
   defaultBranch: string
   event: string | null
@@ -197,7 +198,7 @@ export const repoRunTexts = Object.freeze({
     'Это сборка основной ветки или сборка с заданиями выкладки: повтор может выкатить её версию — так, как настроена ваша сборка. Повторим, только если эта версия — последняя в ветке.',
   rerunBody: 'Сборка запустится снова на той же версии.',
   rerunPassedWarning:
-    'Сборка уже прошла: запустится новая сборка ветки и повторит все автоматические задания — включая выкладку, если вы не запускаете её вручную.',
+    'Сборка уже прошла: повтор снова выполнит все автоматические задания — включая выкладку, если вы не запускаете её вручную.',
   cancelBody:
     'Задания, которые ещё идут, остановятся. Выкладка, которая уже началась, может остаться незаконченной.',
   revertTitle: 'Отменить принятые изменения?',
