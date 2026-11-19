@@ -91,7 +91,18 @@ export function ProjectsView() {
 
   return (
     <Box sx={{ width: '100%', maxWidth: 1200, mx: 'auto', px: { xs: 0, md: 2 } }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 48, mb: 2.5 }}>
+      {/* On a phone «Новый проект» does not fit beside the title: it goes under it, not over it. */}
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          columnGap: 1,
+          rowGap: 1.5,
+          minHeight: 48,
+          mb: 2.5,
+        }}
+      >
         <Typography
           variant="h2"
           component="h1"
@@ -217,7 +228,13 @@ export function ProjectsView() {
                 p: 0,
                 display: 'grid',
                 gap: 2.5,
-                gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' },
+                // `minmax(0, …)`: the goal of a card is one line cut with «…», and a bare `1fr`
+                // would widen its column to the whole line — past the screen of a phone.
+                gridTemplateColumns: {
+                  xs: 'minmax(0, 1fr)',
+                  md: 'repeat(2, minmax(0, 1fr))',
+                  lg: 'repeat(3, minmax(0, 1fr))',
+                },
               }}
             >
               {shown.map((project) => (

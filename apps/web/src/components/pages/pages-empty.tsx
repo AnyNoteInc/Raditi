@@ -24,7 +24,7 @@ function SiteMark() {
       aria-hidden
       sx={{
         position: 'relative',
-        width: 168,
+        width: 188,
         borderRadius: '14px',
         border: 1,
         borderColor: 'divider',
