@@ -9,6 +9,7 @@ import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
 import { ArtifactHistoryButton } from './artifact-history'
+import { ArtifactPublishButton } from './artifact-publish'
 import { ArtifactPage } from './artifact-page'
 import { galleryTexts } from './artifact-texts'
 
@@ -26,6 +27,7 @@ export function ArtifactView({ artifactId }: { artifactId: string }) {
       actions={(artifact, reread) => (
         <>
           <ArtifactHistoryButton artifact={artifact} onChanged={reread} />
+          <ArtifactPublishButton artifact={artifact} />
           {artifactRoleAtLeast(artifact.role, 'owner') ? (
             <Button
               variant="text"

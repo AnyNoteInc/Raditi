@@ -2455,6 +2455,8 @@ model Page {
   content      PageContent?
   reservations PageReservation[]
 
+  artifactPublication ArtifactPublication?
+
   @@unique([treeId, path], map: "pages_tree_path_key", where: raw("deleted_at IS NULL"))
   @@unique([treeId], map: "pages_tree_home_key", where: raw("(parent_id IS NULL) AND (deleted_at IS NULL)"))
   @@index([workspaceId, createdAt])
@@ -2576,18 +2578,19 @@ model Artifact {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  workspace Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  task      Task?                   @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  project   Project?                @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  owner     User?                   @relation("ArtifactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  sections  ArtifactBlock[]
-  versions  ArtifactVersion[]
-  content   ArtifactContent?
-  page      Page?
-  revisions ArtifactBlockRevision[]
-  batches   ArtifactBatch[]
-  ops       ArtifactOp[]
-  chats     ArtifactChat[]
+  workspace    Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task         Task?                   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  project      Project?                @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  owner        User?                   @relation("ArtifactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sections     ArtifactBlock[]
+  versions     ArtifactVersion[]
+  content      ArtifactContent?
+  page         Page?
+  revisions    ArtifactBlockRevision[]
+  batches      ArtifactBatch[]
+  ops          ArtifactOp[]
+  chats        ArtifactChat[]
+  publications ArtifactPublication[]
 
   @@index([workspaceId, createdAt])
   @@index([taskId])
@@ -3047,4 +3050,22 @@ model WorkspaceAgentSkill {
 
   @@id([workspaceId, name])
   @@map("workspace_agent_skills")
+}
+
+/// «Опубликовать как страницу» of an artifact (docs/plan/88-artifacts.md, Ар2, §7.10): the page it
+/// became and the version of the artifact the page shows; a frame of a canvas by `blockKey` (Э6).
+model ArtifactPublication {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  artifactId  String   @map("artifact_id") @db.Uuid
+  blockKey    String?  @map("block_key") @db.VarChar(40)
+  pageId      String   @unique @map("page_id") @db.Uuid
+  seq         BigInt
+  versionNo   Int      @map("version_no")
+  publishedAt DateTime @default(now()) @map("published_at") @db.Timestamptz(6)
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  page     Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([artifactId])
+  @@map("artifact_publications")
 }

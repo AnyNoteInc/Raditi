@@ -82,6 +82,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       storage: () => ({ get: async () => null }) as unknown as ObjectStorage,
       secrets: () => ({ transitEnsureKey: async () => {} }) as unknown as SecretStore,
       artifacts: null,
+      pages: { baseDomain: 'pages.localhost', scheme: 'http', port: 3110 },
     }
     return createCaller({
       prisma: db,
@@ -502,5 +503,56 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     await expect(
       boris.artifact.undoTurn({ artifactId: id, taskId: task.id, turnNo: 1 }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('publishes a document as a page — only its owner — and again as its next version (88.11б)', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const { id } = await caller.artifact.create({
+      kind: 'document',
+      title: 'Правила возврата',
+      projectId: null,
+      templateId: 'returns',
+    })
+    expect(await caller.pages.artifactPublication({ artifactId: id })).toBeNull()
+    // No version yet: the current text becomes one, and that is what goes out.
+    const first = await caller.pages.publishArtifact({ artifactId: id, versionNo: null })
+    expect(first).toMatchObject({ version: 1, versionNo: 1 })
+    expect(first.url).toMatch(/^http:\/\/[a-z0-9-]+\.pages\.localhost:3110\/$/)
+    const page = await db.pageContent.findUniqueOrThrow({ where: { pageId: first.pageId } })
+    expect(Buffer.from(page.bytes).toString('utf8')).toContain('Правила возврата')
+    expect(await caller.pages.artifactPublication({ artifactId: id })).toMatchObject({
+      pageId: first.pageId,
+      versionNo: 1,
+      current: true,
+    })
+    // An edit and a new version: «Обновить страницу» is the next version of the same page.
+    const rev = (await caller.artifact.read({ artifactId: id })).blocks[0]!.rev
+    await caller.artifact.write({
+      batch: {
+        artifactId: id,
+        opId: randomUUID(),
+        ops: [
+          {
+            op: 'replace',
+            block: 's1',
+            ifRev: rev,
+            content: 'Вернуть можно за 14 дней.',
+            props: { heading: 'Сроки' },
+          },
+        ],
+      },
+    })
+    const saved = await caller.artifact.saveVersion({ artifactId: id, label: 'Новые сроки' })
+    expect((await caller.pages.artifactPublication({ artifactId: id }))?.current).toBe(false)
+    const second = await caller.pages.publishArtifact({ artifactId: id, versionNo: saved.no })
+    expect(second).toMatchObject({ pageId: first.pageId, version: 2, versionNo: saved.no })
+    // Another person publishes nothing of it.
+    const boris = callerOf(await person('Борис'))
+    await expect(
+      boris.pages.publishArtifact({ artifactId: id, versionNo: null }),
+    ).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
   })
 })
