@@ -127,6 +127,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the plan of the agent in the journal 
         turn: 1,
         status: 'running',
         rejected: false,
+        answered: false,
         list: {
           items: items('Поменять телефон', 'Проверить сайт'),
           omitted: { completed: 1, other: 0 },
@@ -143,14 +144,45 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the plan of the agent in the journal 
     await turn(taskId, 2, 'pending')
 
     expect(await readChatTodo(db, taskId)).toEqual({
-      latest: { turn: 2, status: 'pending', rejected: false, list: null },
+      latest: { turn: 2, status: 'pending', rejected: false, answered: false, list: null },
       previous: {
         turn: 1,
         status: 'completed',
         rejected: true,
+        answered: false,
         list: { items: items('Найти', 'Сделать') },
       },
     })
+  })
+
+  it('says a turn ended with the agent answer by a feed.result row of its own (ТД17)', async () => {
+    const taskId = await chat()
+    const first = await turn(taskId, 1, 'completed')
+    await output(taskId, first, 1, [todo(items('Найти', 'Сделать'))])
+    const second = await turn(taskId, 2, 'completed')
+    await db.taskEvent.create({
+      data: {
+        taskId,
+        turnId: second,
+        type: 'feed.result',
+        clientVisible: true,
+        payload: { v: 1, turn: 2, message: 'Готово.' } as never,
+      },
+    })
+    // A question of the first turn is no answer.
+    await db.taskEvent.create({
+      data: {
+        taskId,
+        turnId: first,
+        type: 'feed.question',
+        clientVisible: true,
+        payload: { v: 1, kind: 'agent', turn: 1 } as never,
+      },
+    })
+
+    const facts = await readChatTodo(db, taskId)
+    expect(facts.latest).toMatchObject({ turn: 2, answered: true })
+    expect(facts.previous).toMatchObject({ turn: 1, answered: false })
   })
 
   it('counts only the last two turns that are not undone', async () => {
@@ -177,7 +209,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the plan of the agent in the journal 
     await output(taskId, second, 2, [{ type: 'tool_call', tool: 'todowrite', ok: false }])
 
     const facts = await readChatTodo(db, taskId)
-    expect(facts.latest).toEqual({ turn: 2, status: 'failed', rejected: false, list: null })
+    expect(facts.latest).toEqual({
+      turn: 2,
+      status: 'failed',
+      rejected: false,
+      answered: false,
+      list: null,
+    })
     expect(facts.previous?.list).not.toBeNull()
   })
 
@@ -193,8 +231,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the plan of the agent in the journal 
     ])
 
     expect(await readChatTodo(db, taskId)).toEqual({
-      latest: { turn: 2, status: 'running', rejected: false, list: null },
-      previous: { turn: 1, status: 'completed', rejected: false, list: { items: [] } },
+      latest: { turn: 2, status: 'running', rejected: false, answered: false, list: null },
+      previous: {
+        turn: 1,
+        status: 'completed',
+        rejected: false,
+        answered: false,
+        list: { items: [] },
+      },
     })
   })
 

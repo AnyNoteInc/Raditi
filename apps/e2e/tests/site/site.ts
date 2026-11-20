@@ -398,6 +398,29 @@ export async function addAnsweredChat(
 }
 
 /**
+ * Files the agent left for the client in its turn (`feed.file`, docs/plan/66-chat-visuals.md, В8):
+ * rows only — the bytes are never read by what a test of «Результаты» looks at.
+ */
+export async function addChatFiles(
+  taskId: string,
+  files: readonly { name: string; sizeBytes: number }[],
+): Promise<void> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    for (const file of files)
+      await insertFeedEvent(prisma, {
+        taskId,
+        row: {
+          type: 'feed.file',
+          payload: { v: 1, name: file.name, fileId: randomUUID(), sizeBytes: file.sizeBytes },
+        },
+      })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
  * The client writes again in an answered chat, and the agent answers with no plan this time
  * (docs/plan/89-agent-todos.md, ТД5): the next turn, completed, with no list in its journal, and
  * the chat open again.

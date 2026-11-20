@@ -5,13 +5,15 @@ import ButtonBase from '@mui/material/ButtonBase'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
-import type { ChatDocument } from '@repo/domain/tasks/chat-documents'
+import type { ChatDocument, ChatFile } from '@repo/domain/tasks/chat-documents'
 import { useCallback, useEffect, useState, type RefObject } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
 import { useAgentDocument } from './agent-document'
+import { fileSizeText } from './chat-format'
 import { resultsText, todoText } from './chat-texts'
+import { taskFileHref } from './feed-file'
 
 // «Результаты» beside the chat (owner's request of 14.11.2026, as ChatGPT shows them): a card
 // pinned to the top right of the chat that names what the agent made in it — a document it writes
@@ -131,17 +133,23 @@ function ResultLine({
   state,
   current,
   onOpen,
+  download,
 }: {
   icon: AppIconName
   title: string
   state: string
   current: boolean
-  onOpen: () => void
+  onOpen?: () => void
+  /** A file the browser saves: the line is a link to it, not a tab of «Документы». */
+  download?: string
 }) {
+  const link =
+    download === undefined ? {} : { component: 'a' as const, href: download, download: true }
   return (
     <ButtonBase
+      {...link}
       onClick={onOpen}
-      aria-label={resultsText.open(title)}
+      aria-label={download === undefined ? resultsText.open(title) : resultsText.download(title)}
       aria-current={current || undefined}
       sx={{
         width: '100%',
@@ -212,17 +220,31 @@ function AgentDocLine({
   )
 }
 
-/** The card itself: newest first, the documents of the agent and the files it left. */
+/** How many lines «Результаты» has: the card is drawn only with one at least. */
+export const resultCountOf = (parts: {
+  agentDocs: readonly string[]
+  documents: readonly ChatDocument[]
+  files: readonly ChatFile[]
+}): number => parts.agentDocs.length + parts.documents.length + parts.files.length
+
+/**
+ * The card itself, newest first: the documents of the agent, the pages and texts it left, then
+ * the other files it left — a Word or Excel file, a PDF —, which the client downloads.
+ */
 export function ResultsCard({
+  taskId,
   agentDocs,
   documents,
+  files,
   shownAgentDoc,
   onOpenAgentDoc,
   onOpenFile,
   underPlan = false,
 }: {
+  taskId: string
   agentDocs: readonly string[]
   documents: readonly ChatDocument[]
+  files: readonly ChatFile[]
   shownAgentDoc: string | null
   onOpenAgentDoc: (docId: string) => void
   onOpenFile: (fileId: string) => void
@@ -237,6 +259,7 @@ export function ResultsCard({
         width: RESULTS_WIDTH,
         maxHeight: underPlan ? 'min(40vh, 320px)' : 'min(60vh, 480px)',
         overflowY: 'auto',
+        overflowX: 'hidden',
         p: 1,
         border: 1,
         borderColor: 'divider',
@@ -272,6 +295,17 @@ export function ResultsCard({
             </li>
           )
         })}
+        {[...files].reverse().map((file) => (
+          <li key={file.name}>
+            <ResultLine
+              icon="file"
+              title={file.name}
+              state={fileSizeText(file.sizeBytes)}
+              current={false}
+              download={taskFileHref(taskId, file.fileId)}
+            />
+          </li>
+        ))}
       </Box>
     </Box>
   )
