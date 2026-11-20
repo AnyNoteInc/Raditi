@@ -112,6 +112,40 @@ export function chatDocumentsOf(rows: readonly ChatFileRow[]): ChatDocument[] {
   return documents.sort((a, b) => compareDocumentNames(a.name, b.name))
 }
 
+/**
+ * A file of the chat that is not a document — a Word or Excel file, a PDF, an archive, a
+ * picture: the client downloads it. Every row of one name is a version of it, as of a document.
+ */
+export interface ChatFile {
+  name: string
+  /** The latest version: what «Результаты» hands the client. */
+  fileId: string
+  sizeBytes: number
+  /** How many times the agent left a file of this name. */
+  versions: number
+}
+
+/**
+ * The files of a chat that are not documents (chatDocumentsOf), in the order of their names:
+ * with the documents, all the agent left for the client in the chat («Результаты»).
+ */
+export function chatFilesOf(rows: readonly ChatFileRow[]): ChatFile[] {
+  const sorted = [...rows].sort((a, b) => compareFeedIds(a.id, b.id))
+  const byName = new Map<string, ChatFile>()
+  for (const row of sorted) {
+    const file = fileRowOf(row)
+    if (file === null || documentKindOf(file.name) !== null) continue
+    const known = byName.get(file.name)
+    byName.set(file.name, {
+      name: file.name,
+      fileId: file.fileId,
+      sizeBytes: file.sizeBytes,
+      versions: (known?.versions ?? 0) + 1,
+    })
+  }
+  return [...byName.values()].sort((a, b) => compareDocumentNames(a.name, b.name))
+}
+
 /** The version of a document that a row id names, with its number from 1; null — none. */
 export function documentVersionOf(
   document: ChatDocument,
