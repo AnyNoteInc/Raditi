@@ -135,7 +135,35 @@ export interface TurnTodoFacts {
   status: TodoTurnStatus
   /** The platform refused the result of the turn (`task_turns.rejected_at`): never continued. */
   rejected: boolean
+  /**
+   * The turn ended with the agent's answer to the client (a `feed.result` row of the turn), not
+   * a question, a request for help or a failure (ТД17).
+   */
+  answered?: boolean
   list: AgentTodoList | null
+}
+
+/**
+ * The list as the end of its turn left it (ТД17, owner's answer of 20.11.2026): a turn that
+ * completed with the agent's answer did its work — the answer says so —, so the items the model
+ * forgot to close are done; the tail it left out is counted done too. A stop, a failure, a refused
+ * result and a question keep the list as the agent wrote it: unfinished is never shown as done
+ * there (§3, «Конец работы»).
+ */
+export function todoListAtEnd(facts: TurnTodoFacts): AgentTodoList | null {
+  const list = facts.list
+  if (list === null || facts.status !== 'completed' || facts.rejected || facts.answered !== true)
+    return list
+  if (!todoUnfinished(list)) return list
+  const items = list.items.map((item) =>
+    item.status === 'pending' || item.status === 'in_progress'
+      ? { ...item, status: 'completed' as const }
+      : item,
+  )
+  const omitted = list.omitted
+  return omitted === undefined
+    ? { items }
+    : { items, omitted: { completed: omitted.completed + omitted.other, other: 0 } }
 }
 
 /**
@@ -191,17 +219,20 @@ export function chatTodoOf(
   previous: TurnTodoFacts | null,
 ): ChatTodo | null {
   if (latest === null) return null
-  if (latest.list !== null && latest.list.items.length > 0)
-    return shown(latest.turn, stateOf(latest), latest.list)
+  const latestList = todoListAtEnd(latest)
+  if (latestList !== null && latestList.items.length > 0)
+    return shown(latest.turn, stateOf(latest), latestList)
   // A list the turn emptied itself is no list; one it never wrote may be carried over.
-  if (latest.list !== null || !atWork(latest.status)) return null
+  if (latestList !== null || !atWork(latest.status)) return null
+  // A plan the turn before closed with its answer is not carried on (ТД17).
+  const previousList = previous === null ? null : todoListAtEnd(previous)
   if (
     previous === null ||
     previous.status !== 'completed' ||
     previous.rejected ||
-    previous.list === null ||
-    !todoUnfinished(previous.list)
+    previousList === null ||
+    !todoUnfinished(previousList)
   )
     return null
-  return shown(previous.turn, 'carried', previous.list)
+  return shown(previous.turn, 'carried', previousList)
 }

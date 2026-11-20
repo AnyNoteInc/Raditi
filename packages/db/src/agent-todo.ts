@@ -17,6 +17,8 @@ interface TurnRow {
   turn_no: number
   status: TurnStatus
   rejected: boolean
+  /** The turn ended with the agent's answer: a `feed.result` row of it (ТД17). */
+  answered: boolean
   /** The last `todo_list` event of the newest journal row of the turn that holds one. */
   list: unknown
 }
@@ -43,7 +45,10 @@ export async function readChatTodo(
       SELECT id, turn_no, status, rejected_at FROM task_turns
       WHERE task_id = ${taskId}::uuid AND undone_at IS NULL
       ORDER BY turn_no DESC LIMIT 2)
-    SELECT r.turn_no, r.status::text AS status, r.rejected_at IS NOT NULL AS rejected, e.list
+    SELECT r.turn_no, r.status::text AS status, r.rejected_at IS NOT NULL AS rejected,
+      EXISTS (SELECT 1 FROM task_events f
+              WHERE f.turn_id = r.id AND f.type::text = 'feed.result'::text) AS answered,
+      e.list
     FROM recent r LEFT JOIN LATERAL (
       SELECT (SELECT a.ev FROM jsonb_array_elements(t.payload->'events') WITH ORDINALITY a(ev, n)
               WHERE a.ev->>'type' = 'todo_list' ORDER BY a.n DESC LIMIT 1) AS list
@@ -58,6 +63,7 @@ export async function readChatTodo(
     // TurnStatus of the database is exactly todoTurnStatuses (enums.test.ts).
     status: row.status,
     rejected: row.rejected,
+    answered: row.answered,
     list: listOf(row.list),
   }))
   return { latest: latest ?? null, previous: previous ?? null }

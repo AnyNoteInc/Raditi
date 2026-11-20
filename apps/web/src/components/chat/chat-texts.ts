@@ -365,6 +365,7 @@ export const resultsText = Object.freeze({
     total === 0 ? 'пишется' : `пишется · ${written} из ${total}`,
   version: (version: number) => `v${version}`,
   open: (title: string) => `Открыть «${title}»`,
+  download: (name: string) => `Скачать файл «${name}»`,
 })
 
 const steps = (count: number) => `${count} ${plural(count, 'шаг', 'шага', 'шагов')}`

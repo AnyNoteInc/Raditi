@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   chatDocumentsOf,
+  chatFilesOf,
   chatImageAt,
   documentImageOf,
   documentImageTypeOf,
@@ -55,6 +56,23 @@ describe('chatDocumentsOf', () => {
   it('reads rows in the order of their ids, whatever order they come in', () => {
     const documents = chatDocumentsOf([file('10', 'a.md', 'second'), file('9', 'a.md', 'first')])
     expect(documents[0]!.versions.map((v) => v.fileId)).toEqual(['first', 'second'])
+  })
+})
+
+describe('chatFilesOf', () => {
+  it('names the files that are not documents, the latest version of each, by name', () => {
+    const rows: ChatFileRow[] = [
+      file('1', 'Программа.md'),
+      file('2', 'Программа.docx', 'old'),
+      { id: '3', type: 'feed.request' },
+      file('4', 'Программа.docx', 'new'),
+      file('5', 'Акт.pdf'),
+    ]
+    expect(chatFilesOf(rows)).toEqual([
+      { name: 'Акт.pdf', fileId: 'f-5', sizeBytes: 10, versions: 1 },
+      { name: 'Программа.docx', fileId: 'new', sizeBytes: 10, versions: 2 },
+    ])
+    expect(chatFilesOf([file('1', 'a.md'), file('2', 'b.html')])).toEqual([])
   })
 })
 

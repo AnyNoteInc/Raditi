@@ -6,13 +6,14 @@ import { useRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { docId, sampleDoc } from './doc-test-fixtures'
-import { ResultsCard, ResultsToggle, useResultsCard } from './results-card'
+import { resultCountOf, ResultsCard, ResultsToggle, useResultsCard } from './results-card'
 
 const { readDoc } = vi.hoisted(() => ({ readDoc: vi.fn() }))
 
 vi.mock('@/trpc/client', async () => (await import('./doc-test-fixtures')).trpcMock({ readDoc }))
 
 const fileId = '0199a3f2-0000-7000-8000-0000000000f1'
+const taskId = '01a1f791-aab7-7096-af17-9a81e6403cc9'
 const fileRows = [
   {
     id: '5',
@@ -31,8 +32,10 @@ function show(props: Partial<Parameters<typeof ResultsCard>[0]> = {}) {
   render(
     <QueryClientProvider client={client}>
       <ResultsCard
+        taskId={taskId}
         agentDocs={[docId]}
         documents={chatDocumentsOf(fileRows as never)}
+        files={[]}
         shownAgentDoc={null}
         onOpenAgentDoc={onOpenAgentDoc}
         onOpenFile={onOpenFile}
@@ -65,6 +68,32 @@ describe('«Результаты» beside the chat (14.11.2026)', () => {
     expect(line.textContent).toContain('v2')
     fireEvent.click(screen.getByRole('button', { name: 'Открыть «отчёт»' }))
     expect(onOpenFile).toHaveBeenCalledWith(fileId)
+  })
+
+  it('names the other files the agent left — a Word file —, which the client downloads', () => {
+    // Chat 01a1f791 (20.11.2026): the text went to Word, and the card did not name the Word file.
+    const wordId = '58141998-186f-8804-a0b2-272dd4080ddb'
+    show({
+      agentDocs: [],
+      documents: [],
+      files: [{ name: 'Программа.docx', fileId: wordId, sizeBytes: 48_261, versions: 1 }],
+    })
+    const card = screen.getByRole('complementary', { name: 'Результаты' })
+    const line = within(card).getByRole('link', { name: 'Скачать файл «Программа.docx»' })
+    expect(line).toHaveAttribute('href', `/api/tasks/${taskId}/files/${wordId}`)
+    expect(line).toHaveAttribute('download')
+    expect(line.textContent).toContain('Программа.docx')
+  })
+
+  it('counts its lines: no line, no card', () => {
+    expect(resultCountOf({ agentDocs: [], documents: [], files: [] })).toBe(0)
+    expect(
+      resultCountOf({
+        agentDocs: [],
+        documents: [],
+        files: [{ name: 'a.pdf', fileId, sizeBytes: 1, versions: 1 }],
+      }),
+    ).toBe(1)
   })
 
   it('is hidden and shown by the icon in the head of the chat', () => {

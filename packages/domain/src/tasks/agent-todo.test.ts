@@ -176,6 +176,39 @@ describe('chatTodoOf', () => {
     )
   })
 
+  // ТД17 (chat 01a1f7bc, 20.11.2026): the answer said all was done, two items stayed open.
+  it('closes the plan of a turn that ended with the agent answer', () => {
+    const answered = { ...turn(3, 'completed', plan), answered: true }
+    expect(chatTodoOf(answered, null)).toEqual({
+      turn: 3,
+      state: 'ended',
+      items: [
+        item('Посмотрели текущую страницу', 'completed'),
+        item('Собрали цены из прайса', 'completed'),
+        item('Готовим текст страницы', 'completed'),
+        item('Публикуем страницу', 'completed'),
+        item('Проверяем адрес', 'cancelled'),
+      ],
+    })
+    const cut = { ...answered, list: { ...plan, omitted: { completed: 1, other: 2 } } }
+    expect(chatTodoOf(cut, null)?.omitted).toEqual({ completed: 3, other: 0 })
+    // Nor is it carried into the next turn: the answer closed it.
+    expect(chatTodoOf(turn(4, 'running', null), answered)).toBeNull()
+  })
+
+  it('keeps the list as the agent left it after a question, a stop, a failure or a refusal', () => {
+    // A turn that ended with a question has no `feed.result`: not answered.
+    expect(chatTodoOf(turn(3, 'completed', plan), null)?.items).toEqual(plan.items)
+    expect(chatTodoOf(turn(4, 'running', null), turn(3, 'completed', plan))?.state).toBe('carried')
+    for (const status of ['cancelled', 'failed', 'lost'] as const)
+      expect(chatTodoOf({ ...turn(3, status, plan), answered: true }, null)?.items).toEqual(
+        plan.items,
+      )
+    expect(
+      chatTodoOf({ ...turn(3, 'completed', plan, true), answered: true }, null)?.items,
+    ).toEqual(plan.items)
+  })
+
   it('shows a refused turn as broken off, whatever its status', () => {
     expect(chatTodoOf(turn(3, 'completed', plan, true), null)?.state).toBe('failed')
   })

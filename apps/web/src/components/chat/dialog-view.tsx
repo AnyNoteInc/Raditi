@@ -15,6 +15,7 @@ import {
 } from '@repo/domain/tasks/client-feed-labels'
 import {
   chatDocumentsOf,
+  chatFilesOf,
   documentOfFile,
   openingDocumentOf,
 } from '@repo/domain/tasks/chat-documents'
@@ -97,6 +98,7 @@ import {
   RESULTS_WIDTH,
   ResultsCard,
   ResultsToggle,
+  resultCountOf,
   useResultsCard,
   type SideHolds,
 } from './results-card'
@@ -598,6 +600,10 @@ export function DialogView({
     dispatchTools({ type: 'documentArrived', opens: wide })
   })
   const documentCount = chatDocuments.length + agentDocs.length
+  // «Результаты» name the other files the agent left too — a Word file, a PDF —: a chat whose
+  // result is such a file shows it there, and the card is never drawn without a line.
+  const chatFiles = useMemo(() => chatFilesOf(rows), [rows])
+  const resultCount = resultCountOf({ agentDocs, documents: chatDocuments, files: chatFiles })
   // «План работы» (docs/plan/89-agent-todos.md): the agent's to-do list of the last turn. `/undo`
   // and `/redo` change which turn is last with no new status: their newest row reads it again.
   const lastRewind = useMemo(
@@ -611,8 +617,8 @@ export function DialogView({
   // The column beside the chat — «План работы» over «Результаты» (owner's request of 14.11.2026;
   // docs/plan/89, ТД6): from `lg`, while the area of the feed is wide enough and the client has
   // not hidden it. A plan brings it in a chat with no documents too.
-  const results = useResultsCard(feedArea, wide && (documentCount > 0 || todo !== null))
-  const sideHolds: SideHolds = todo === null ? 'results' : documentCount > 0 ? 'both' : 'plan'
+  const results = useResultsCard(feedArea, wide && (resultCount > 0 || todo !== null))
+  const sideHolds: SideHolds = todo === null ? 'results' : resultCount > 0 ? 'both' : 'plan'
   useBrowserLaunch(head, {
     taskId,
     enabled: withBrowser && browserStreamUrl !== null,
@@ -1450,10 +1456,12 @@ export function DialogView({
               {todo !== null ? (
                 <TodoCard taskId={taskId} todo={todo} waiting={question !== null} />
               ) : null}
-              {documentCount > 0 ? (
+              {resultCount > 0 ? (
                 <ResultsCard
+                  taskId={taskId}
                   agentDocs={agentDocs}
                   documents={chatDocuments}
+                  files={chatFiles}
                   underPlan={todo !== null}
                   shownAgentDoc={
                     shown && tools.active === 'documents' && documentTarget
