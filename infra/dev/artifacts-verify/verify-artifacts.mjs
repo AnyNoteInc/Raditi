@@ -5,12 +5,14 @@
 // the batch, the agent's write held until the check, its repeat, the signal raditi_artifact on a
 // connection of its own, a version, the trash and the collector. Synthetic data only, no .env.
 //
-//   pnpm verify:artifacts [-- --keep]
+//   pnpm verify:artifacts [-- --keep] [--seconds 20]
 //
 // Slice 88.3 starts it with the database alone; 88.4 adds the check of core (`ArtifactChecks`):
 // a write with a value of the workspace's variables is refused live, a clean one shown, a failed
 // turn's writes dropped, the collector by the time of the write. The tools of mcp, the cabinet and
-// the measurement under 8 turns come with their slices.
+// the measurement under 8 turns come with their slices. 88.5 adds Redis: the relay of core carries
+// raditi_artifact to the channel of the artifact, and the commit time of a person typing is
+// measured under 8 turns writing and being checked in the same artifact (Ар20, plan 86, §4).
 
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -21,8 +23,14 @@ import { parseArgs } from 'node:util'
 const root = resolve(import.meta.dirname, '../../..')
 const IMAGE =
   'postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24'
+const REDIS_IMAGE = 'redis:8.10.2-alpine'
 const LABEL = 'raditi.artifacts-verify'
-const { values } = parseArgs({ options: { keep: { type: 'boolean', default: false } } })
+const { values } = parseArgs({
+  options: {
+    keep: { type: 'boolean', default: false },
+    seconds: { type: 'string', default: '20' },
+  },
+})
 
 function run(program, args, { env = {}, allowFailure = false } = {}) {
   return new Promise((done, fail) => {
@@ -64,6 +72,7 @@ async function codeOf(act) {
 }
 
 const name = `raditi-artifacts-${randomBytes(4).toString('hex')}`
+const redisName = `${name}-redis`
 const password = randomBytes(18).toString('base64url')
 let started = false
 
@@ -108,10 +117,30 @@ try {
   })
   check('migrations apply on an empty PostgreSQL', true)
   await scenario(databaseUrl)
+  await run('docker', [
+    'run',
+    '-d',
+    '--pull=never',
+    '--name',
+    redisName,
+    '--label',
+    `${LABEL}=1`,
+    '-p',
+    '127.0.0.1::6379',
+    REDIS_IMAGE,
+    'redis-server',
+    '--save',
+    '',
+    '--appendonly',
+    'no',
+  ])
+  const redisBinding = (await run('docker', ['port', redisName, '6379/tcp'])).output.split('\n')[0]
+  await channelAndMeasure(databaseUrl, `redis://${redisBinding}`)
   process.stdout.write(`[artifacts] ${passed} checks passed\n`)
 } finally {
-  if (started && !values.keep) await run('docker', ['rm', '-fv', name], { allowFailure: true })
-  else if (started) process.stdout.write(`[artifacts] kept ${name}\n`)
+  if (started && !values.keep)
+    await run('docker', ['rm', '-fv', name, redisName], { allowFailure: true })
+  else if (started) process.stdout.write(`[artifacts] kept ${name} ${redisName}\n`)
 }
 
 async function scenario(databaseUrl) {
@@ -324,4 +353,259 @@ async function checksOfCore({ dbModule, db, id, person, agent, chat, apply }) {
     'the collector drops a write left by a chat whose pass is over, by its time',
     (await sweeper.sweep()) === 1 && (await dbModule.pendingArtifactWrites(db, left)).length === 0,
   )
+}
+
+function percentile(sorted, share) {
+  return sorted.length === 0
+    ? 0
+    : sorted[Math.min(sorted.length - 1, Math.floor(share * sorted.length))]
+}
+
+function summary(label, samples) {
+  const sorted = [...samples].sort((a, b) => a - b)
+  const fixed = (value) => value.toFixed(1)
+  return `${label}: n=${sorted.length} p50=${fixed(percentile(sorted, 0.5))} p95=${fixed(percentile(sorted, 0.95))} max=${fixed(sorted.at(-1) ?? 0)} ms`
+}
+
+/**
+ * Slice 88.5: raditi_artifact → the relay of core → Redis, and the time of a commit of a person
+ * typing alone, then under 8 turns that write and are checked in the same artifact (Ар20).
+ */
+async function channelAndMeasure(databaseUrl, redisUrl) {
+  const dbModule = await import(resolve(root, 'packages/db/src/index.ts'))
+  const pg = await import(resolve(root, 'packages/db/node_modules/pg/lib/index.js'))
+  const { default: Redis } = await import(
+    resolve(root, 'apps/core/node_modules/ioredis/built/index.js')
+  )
+  const { TaskSignalRelay } = await import(
+    resolve(root, 'apps/core/src/task-signals/task-signal-relay.ts')
+  )
+  const { ArtifactChecks } = await import(
+    resolve(root, 'apps/core/src/artifacts/artifact-checks.ts')
+  )
+  const db = dbModule.createPrismaClient({ databaseUrl, log: [] })
+  const publisher = new Redis(redisUrl, { maxRetriesPerRequest: 1 })
+  const subscriber = new Redis(redisUrl, { maxRetriesPerRequest: 1 })
+  const relay = new TaskSignalRelay({
+    listener: () => new pg.default.Client({ connectionString: databaseUrl }),
+    publish: (channel, message) => publisher.publish(channel, message),
+    logger: { log: () => undefined, warn: () => undefined },
+  })
+  try {
+    const user = await db.user.create({
+      data: { name: 'Synthetic', email: `${randomUUID()}@example.test` },
+    })
+    const workspace = await db.workspace.create({
+      data: { name: 'Synthetic', dataClass: 'synthetic', createdById: user.id },
+    })
+    await db.member.create({ data: { workspaceId: workspace.id, userId: user.id, role: 'owner' } })
+    const person = { kind: 'user', userId: user.id }
+    const { id } = await dbModule.createArtifact(db, {
+      workspaceId: workspace.id,
+      kind: 'document',
+      title: 'Замер',
+      actor: person,
+    })
+    const turns = []
+    for (let index = 0; index < 8; index += 1)
+      turns.push(
+        (
+          await db.task.create({
+            data: { workspaceId: workspace.id, createdById: user.id, status: 'running' },
+            select: { id: true },
+          })
+        ).id,
+      )
+    const keys = ['human', ...turns.map((_, index) => `agent${index}`)]
+    await dbModule.applyArtifactOps(db, {
+      batch: {
+        artifactId: id,
+        opId: randomUUID(),
+        ops: keys.map((key, index) => ({
+          op: 'insert',
+          block: key,
+          after: index === 0 ? null : keys[index - 1],
+          kind: 'section',
+          content: `Начало ${key}`,
+          props: { heading: key },
+        })),
+      },
+      actor: person,
+    })
+
+    // The channel: a committed batch reaches the Redis channel of the artifact as `changes`.
+    const heard = []
+    subscriber.on('message', (channel, message) =>
+      heard.push({ channel, message, at: performance.now() }),
+    )
+    await subscriber.subscribe(`raditi:artifact:${id}`)
+    relay.start()
+    for (let attempt = 0; attempt < 50 && heard.length === 0; attempt += 1) {
+      await dbModule
+        .applyArtifactOps(db, {
+          batch: {
+            artifactId: id,
+            opId: randomUUID(),
+            ops: [{ op: 'props', block: 'human', props: {} }],
+          },
+          actor: person,
+        })
+        .catch(() => undefined)
+      await sleep(100)
+    }
+    heard.length = 0
+    const sent = performance.now()
+    let rev = (await dbModule.readArtifact(db, { artifactId: id, actor: person })).blocks.find(
+      (block) => block.key === 'human',
+    ).rev
+    const answer = await dbModule.applyArtifactOps(db, {
+      batch: {
+        artifactId: id,
+        opId: randomUUID(),
+        ops: [{ op: 'replace', block: 'human', ifRev: rev, content: 'Человек печатает' }],
+      },
+      actor: person,
+    })
+    rev = answer.blocks[0].rev
+    for (let attempt = 0; attempt < 40 && heard.length === 0; attempt += 1) await sleep(25)
+    check(
+      'a batch reaches the Redis channel of its artifact as `changes`, through the relay of core',
+      heard.length === 1 && heard[0].message === 'changes',
+      JSON.stringify(heard),
+    )
+    const firstLag = heard[0].at - sent
+
+    // The measurement: a person types (a replace every 100 ms) alone, then beside 8 turns.
+    const seconds = Number(values.seconds)
+    const human = async (until, samples, lags) => {
+      while (performance.now() < until) {
+        const before = performance.now()
+        heard.length = 0
+        const done = await dbModule.applyArtifactOps(db, {
+          batch: {
+            artifactId: id,
+            opId: randomUUID(),
+            ops: [
+              {
+                op: 'replace',
+                block: 'human',
+                ifRev: rev,
+                content: `Человек печатает ${randomBytes(4).toString('hex')}`,
+              },
+            ],
+          },
+          actor: person,
+        })
+        const committed = performance.now()
+        samples.push(committed - before)
+        rev = done.blocks[0].rev
+        for (let wait = 0; wait < 20 && heard.length === 0; wait += 1) await sleep(5)
+        if (heard.length > 0) lags.push(heard[0].at - committed)
+        await sleep(Math.max(0, 100 - (performance.now() - before)))
+      }
+    }
+    const alone = []
+    const aloneLags = []
+    await human(performance.now() + Math.min(5, seconds) * 1000, alone, aloneLags)
+
+    const checks = new ArtifactChecks({
+      db,
+      logger: { log: () => undefined, warn: () => undefined },
+    })
+    const refuses = () => null
+    const loaded = []
+    const loadedLags = []
+    const agentWrites = []
+    const checkTimes = []
+    const refusedAgent = []
+    const until = performance.now() + seconds * 1000
+    const agent = async (taskId, index) => {
+      let blockRev = null
+      // 8 turns at once: each writes its block every 250 ms, under 120 writes a turn.
+      let writes = 0
+      while (performance.now() < until && writes < 110) {
+        const before = performance.now()
+        if (blockRev === null)
+          blockRev = (
+            await dbModule.readArtifact(db, { artifactId: id, actor: person })
+          ).blocks.find((block) => block.key === `agent${index}`).rev
+        try {
+          const done = await dbModule.applyArtifactOps(db, {
+            batch: {
+              artifactId: id,
+              opId: randomUUID(),
+              ops: [
+                {
+                  op: 'replace',
+                  block: `agent${index}`,
+                  ifRev: blockRev,
+                  content: `Агент ${index}: ${randomBytes(16).toString('hex')}`,
+                },
+              ],
+            },
+            actor: { kind: 'agent', taskId, turnNo: 1 },
+            // Past the person's lease of the blocks they inserted for the agents (30 s).
+            now: new Date(Date.now() + 60_000),
+          })
+          blockRev = done.blocks[0].rev
+          writes += 1
+        } catch (error) {
+          refusedAgent.push(error?.code ?? 'unknown')
+          blockRev = null
+        }
+        agentWrites.push(performance.now() - before)
+        await sleep(Math.max(0, 250 - (performance.now() - before)))
+      }
+    }
+    const checker = async (taskId) => {
+      while (performance.now() < until) {
+        const before = performance.now()
+        await checks.checkLive(taskId, 1, refuses)
+        checkTimes.push(performance.now() - before)
+        await sleep(1500)
+      }
+    }
+    await Promise.all([
+      human(until, loaded, loadedLags),
+      ...turns.map((taskId, index) => agent(taskId, index)),
+      ...turns.map((taskId) => checker(taskId)),
+    ])
+    for (const taskId of turns) await checks.settle(taskId, 1, refuses)
+    const lines = [
+      `first signal ${firstLag.toFixed(1)} ms`,
+      summary('person alone, commit', alone),
+      summary('person alone, commit → next signal in Redis', aloneLags),
+      summary('person beside 8 turns, commit', loaded),
+      summary('person beside 8 turns, commit → next signal in Redis', loadedLags),
+      summary('agent write', agentWrites),
+      summary('live check of a turn', checkTimes),
+      `agent writes refused: ${refusedAgent.length} (${[...new Set(refusedAgent)].join(', ') || 'none'})`,
+    ]
+    for (const line of lines) process.stdout.write(`[measure] ${line}\n`)
+    const p95 = percentile(
+      [...loaded].sort((a, b) => a - b),
+      0.95,
+    )
+    check(
+      'a person’s commit beside 8 turns stays under 250 ms at p95',
+      loaded.length > 0 && p95 < 250,
+      `p95 ${p95.toFixed(1)} ms`,
+    )
+    check(
+      'the 8 turns wrote all the while, none of them refused',
+      agentWrites.length > 8 * seconds && refusedAgent.length === 0,
+      `${agentWrites.length} writes, ${refusedAgent.length} refused`,
+    )
+    check(
+      'every agent write passed the live check, nothing waits after the end of the turns',
+      (await db.artifactBlock.count({
+        where: { documentId: id, pendingTaskId: { not: null } },
+      })) === 0,
+    )
+  } finally {
+    await relay.stop()
+    publisher.disconnect()
+    subscriber.disconnect()
+    await db.$disconnect()
+  }
 }

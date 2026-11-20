@@ -68,7 +68,7 @@ describe('the relay of the signals of chats', () => {
     relays.push(instance)
     instance.start()
     await settle()
-    expect(listeners[0]!.queries).toEqual(['LISTEN raditi_task'])
+    expect(listeners[0]!.queries).toEqual(['LISTEN raditi_task', 'LISTEN raditi_artifact'])
     expect(published).toEqual([['raditi:tasks:resync', 'resync']])
     published.length = 0
     const listener = listeners[0]!
@@ -88,6 +88,27 @@ describe('the relay of the signals of chats', () => {
     )
   })
 
+  it('relays each artifact once per burst as `changes` (plan 88, Ар20)', async () => {
+    const { instance, listeners, published } = relay()
+    relays.push(instance)
+    instance.start()
+    await settle()
+    published.length = 0
+    const listener = listeners[0]!
+    for (let index = 0; index < 8; index += 1) listener.notify(TASK, 'raditi_artifact')
+    listener.notify(OTHER.toUpperCase(), 'raditi_artifact')
+    listener.notify(`${TASK}:feed`, 'raditi_artifact')
+    listener.notify(`${TASK}:feed`)
+    await settle(40)
+    expect(published.sort()).toEqual(
+      [
+        [`raditi:artifact:${TASK}`, 'changes'],
+        [`raditi:artifact:${OTHER}`, 'changes'],
+        [`raditi:task:${TASK}`, 'feed'],
+      ].sort(),
+    )
+  })
+
   it('connects again after a loss, with a wait that grows, and says resync each time', async () => {
     const { instance, listeners, published, warnings } = relay({ failFirst: 2 })
     relays.push(instance)
@@ -95,7 +116,7 @@ describe('the relay of the signals of chats', () => {
     await settle(100)
     // Two refused connections, then one that listens.
     expect(listeners).toHaveLength(3)
-    expect(listeners[2]!.queries).toEqual(['LISTEN raditi_task'])
+    expect(listeners[2]!.queries).toEqual(['LISTEN raditi_task', 'LISTEN raditi_artifact'])
     expect(warnings).toEqual([
       'task_signals_lost cause=Error retry_ms=10',
       'task_signals_lost cause=Error retry_ms=20',
@@ -126,7 +147,11 @@ describe('the relay of the signals of chats', () => {
     relays.push(instance)
     instance.start()
     await settle()
-    expect(listener.queries).toEqual(['LISTEN raditi_task', 'LISTEN raditi_outbox'])
+    expect(listener.queries).toEqual([
+      'LISTEN raditi_task',
+      'LISTEN raditi_artifact',
+      'LISTEN raditi_outbox',
+    ])
     // What was added while nobody listened is relayed at once.
     expect(outbox).toHaveBeenCalledOnce()
     listener.notify('', 'raditi_outbox')

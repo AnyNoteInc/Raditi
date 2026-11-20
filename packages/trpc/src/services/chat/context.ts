@@ -7,6 +7,7 @@ import {
 } from '@repo/domain'
 
 import type { PageKeys } from './page-tokens.ts'
+import type { ArtifactSignals } from '../artifacts/signals.ts'
 import type { TaskSignals } from './signals.ts'
 
 /**
@@ -61,6 +62,12 @@ export interface ChatContext {
    * here: the stream ends at once, and the page reads by its polls alone.
    */
   signals?: TaskSignals | null
+  /**
+   * The signals and presence of artifacts (`artifact.signals`, `artifact.here`;
+   * docs/plan/88-artifacts.md, Ар20). Absent or null — Redis is not set up here: nobody is shown
+   * present, and the pages read by their polls alone.
+   */
+  artifacts?: ArtifactSignals | null
 }
 
 /**
