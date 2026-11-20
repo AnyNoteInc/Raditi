@@ -178,3 +178,85 @@ test('the tab of an artifact beside the chat, and «@» that names an artifact',
     await expect(field).toHaveValue(`Дополни @artifact:${id} `)
   })
 })
+
+// «Таблица» (docs/plan/88-artifacts.md, §7.7; slice 88.14): a price list of the template, a cell
+// typed from the keyboard, a block pasted from Excel adding a row, sorting by request, CSV in the
+// browser, and the cards of the phone with the sheet of a row.
+test('a price list: a cell typed, a paste from Excel, sorting, CSV and the cards of a phone', async ({
+  page,
+  signedInUser,
+}) => {
+  void signedInUser
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/artifacts')
+  await page.getByRole('button', { name: /Прайс-лист/ }).click()
+  const dialog = page.getByRole('dialog', { name: 'Новый артефакт' })
+  await dialog.getByRole('button', { name: 'Создать' }).click()
+  await expect(page).toHaveURL(/\/artifacts\/[0-9a-f-]{36}$/)
+  const grid = page.getByRole('grid', { name: 'Таблица «Прайс-лист»' })
+  await expect(grid.getByRole('columnheader', { name: 'Цена, ₽' })).toBeVisible()
+  const cell = (text: string | RegExp) =>
+    grid.getByRole('gridcell').filter({ hasText: text }).first()
+  await expect(cell('[Товар]')).toBeVisible()
+  // The totals are the server's: 990 + 1 500 + 300.
+  await expect(grid.getByRole('row').filter({ hasText: 'Итого' })).toContainText(/2\s790/)
+
+  await test.step('a cell typed from the keyboard is kept', async () => {
+    await cell('[Товар]').click()
+    for (let i = 0; i < 3; i += 1) await page.keyboard.press('ArrowRight')
+    await page.keyboard.type('1250')
+    await page.keyboard.press('Enter')
+    await expect(cell(/1\s250/)).toBeVisible()
+    await page.reload()
+    await expect(cell(/1\s250/)).toBeVisible()
+  })
+
+  await test.step('a block from Excel goes right and down and adds a row past the end', async () => {
+    await cell('[Доставка по городу]').click()
+    await page.evaluate(() => {
+      const data = new DataTransfer()
+      data.setData('text/plain', 'Курьер\tДоставка\r\nПирог\tТовары\tшт\t450\r\n')
+      document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true }))
+    })
+    await expect(page.getByText(/добавлено строк: 1/)).toBeVisible()
+    await expect(cell('Пирог')).toBeVisible()
+    await expect(cell('Курьер')).toBeVisible()
+  })
+
+  await test.step('sorting by request, and CSV for Excel', async () => {
+    await page.getByRole('combobox', { name: 'Сортировать' }).click()
+    await page.getByRole('option', { name: 'Цена, ₽: по убыванию' }).click()
+    const rows = grid.getByRole('row')
+    // The head, then the most expensive row.
+    await expect(rows.nth(1)).toContainText('[Услуга]')
+    await page.getByRole('button', { name: 'Скачать' }).click()
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('menuitem', { name: 'CSV для Excel' }).click(),
+    ])
+    expect(download.suggestedFilename()).toBe('Прайс-лист.csv')
+    const text = await (await download.createReadStream()).toArray()
+    const csv = Buffer.concat(text as Buffer[]).toString('utf8')
+    expect(csv.startsWith('﻿Название;Категория;Ед.;Цена, ₽;В наличии;Примечание')).toBe(true)
+    expect(csv).toContain('[Товар];Товары;шт;1250;да;')
+  })
+
+  await test.step('on a phone: a card a row, and the sheet of a row', async () => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.reload()
+    const list = page.getByRole('list', { name: 'Строки таблицы «Прайс-лист»' })
+    await expect(list).toBeVisible()
+    await list.getByRole('button', { name: /^\[Услуга\], 1\s500 ₽\. Изменить$/ }).click()
+    const sheet = page.getByRole('dialog', { name: 'Строка «[Услуга]»' })
+    await expect(sheet.getByRole('textbox', { name: 'Цена, ₽' })).toHaveAttribute(
+      'inputmode',
+      'decimal',
+    )
+    await sheet.getByRole('textbox', { name: 'Цена, ₽' }).fill('1 600')
+    await sheet.getByRole('button', { name: 'Сохранить' }).click()
+    await expect(
+      list.getByRole('button', { name: /^\[Услуга\], 1\s600 ₽\. Изменить$/ }),
+    ).toBeVisible()
+  })
+})

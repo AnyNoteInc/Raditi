@@ -41,8 +41,17 @@ describe('queueJobDefaults', () => {
     })
   })
 
+  it('builds a workbook of a table three times, from 5 s doubling (docs/plan/88, question 26)', () => {
+    expect(queueJobDefaults.artifacts).toEqual({
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5_000 },
+      removeOnComplete: { age: DAY, count: 1_000 },
+      removeOnFail: { age: 7 * DAY },
+    })
+  })
+
   it('keeps completed jobs of the other queues for a day (at most 1000), failed for a week', () => {
-    const retried = ['notifications', 'leads', 'telegram', 'schedules']
+    const retried = ['notifications', 'leads', 'telegram', 'schedules', 'artifacts']
     for (const name of queueNames.filter((queue) => !retried.includes(queue))) {
       expect(queueJobDefaults[name]).toMatchObject({
         attempts: 1,

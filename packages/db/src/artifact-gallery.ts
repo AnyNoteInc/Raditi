@@ -1,3 +1,5 @@
+import { tableCellText, tableOfBlocks } from '@repo/domain/artifacts'
+
 import type { Prisma, PrismaClient } from './generated/prisma/client.ts'
 import { artifactBlockOrder, blockCheckedText } from './pages.ts'
 
@@ -29,6 +31,45 @@ export interface ArtifactGalleryRow {
 }
 
 const EXCERPT_CHARS = 240
+
+/**
+ * The preview of a card from the first blocks: the text of Markdown, or — for a table (its
+ * `columns` and `row` blocks) — the names of its columns and its first rows as words, not JSON.
+ */
+function excerptOf(
+  blocks: readonly {
+    sectionKey: string
+    blockKind: string
+    rev: number
+    state: string
+    checkedTurn: number | null
+    writtenByUserId: string | null
+    markdown: string | null
+    content: string | null
+  }[],
+): string {
+  const table = tableOfBlocks(
+    blocks.map((block) => ({
+      key: block.sectionKey,
+      kind: block.blockKind,
+      rev: block.rev,
+      content: blockCheckedText(block),
+    })),
+  )
+  if (table.columnsKey !== null)
+    return artifactExcerpt(
+      [
+        table.columns.map((column) => column.name).join(' · '),
+        ...table.rows.map((row) =>
+          table.columns
+            .map((column) => tableCellText(column, row.cells[column.key]))
+            .filter(Boolean)
+            .join(' · '),
+        ),
+      ].join('\n'),
+    )
+  return artifactExcerpt(blocks.map((block) => blockCheckedText(block) ?? '').join('\n\n'))
+}
 
 /** The beginning of Markdown as text: no marks, links by their words, lines joined. */
 export function artifactExcerpt(markdown: string, chars = EXCERPT_CHARS): string {
@@ -135,6 +176,9 @@ export async function listArtifacts(
         orderBy: [...artifactBlockOrder],
         take: 3,
         select: {
+          sectionKey: true,
+          blockKind: true,
+          rev: true,
           state: true,
           checkedTurn: true,
           writtenByUserId: true,
@@ -151,9 +195,7 @@ export async function listArtifacts(
     project: row.project,
     version: row.currentVersion,
     blocks: row._count.sections,
-    excerpt: artifactExcerpt(
-      firsts[index]!.map((block) => blockCheckedText(block) ?? '').join('\n\n'),
-    ),
+    excerpt: excerptOf(firsts[index]!),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     purgeAfter: row.purgeAfter,

@@ -1,0 +1,1 @@
+export const ARTIFACT_EXPORTS = Symbol('ARTIFACT_EXPORTS')

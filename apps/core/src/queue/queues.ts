@@ -63,6 +63,14 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
     removeOnComplete: { age: DAY, count: 1_000 },
     removeOnFail: { age: 7 * DAY },
   },
+  // A workbook of a table (docs/plan/88-artifacts.md, §7.13, question 26): three tries, from 5 s
+  // doubling; after them the export is «failed» and the person asks again. Job data holds the id only.
+  artifacts: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 5_000 },
+    removeOnComplete: { age: DAY, count: 1_000 },
+    removeOnFail: { age: 7 * DAY },
+  },
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

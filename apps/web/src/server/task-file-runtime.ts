@@ -3,9 +3,16 @@ import 'server-only'
 import { getSessionFromHeaders } from '@repo/auth'
 import { prisma } from '@repo/db'
 import { throttledLogger } from '@repo/observability'
-import { createCaller, createContext, readChatImage, readTaskFile } from '@repo/trpc'
+import {
+  createCaller,
+  createContext,
+  readArtifactExport,
+  readChatImage,
+  readTaskFile,
+} from '@repo/trpc'
 
 import { chatServices } from './chat-services'
+import type { ArtifactExportDependencies } from './artifact-export'
 import type { TaskFileDependencies } from './task-file'
 import type { TaskFileImageDependencies } from './task-file-image'
 
@@ -29,5 +36,13 @@ export const taskFileImageDependencies: TaskFileImageDependencies = {
   getSession: taskFileDependencies.getSession,
   hasRequiredConsents: taskFileDependencies.hasRequiredConsents,
   read: (input) => readChatImage(prisma, (chatServices() ?? unavailable()).storage(), input),
+  onFailure: taskFileDependencies.onFailure,
+}
+
+/** «Скачать → Excel» of a table (docs/plan/88-artifacts.md, question 26). */
+export const artifactExportDependencies: ArtifactExportDependencies = {
+  getSession: taskFileDependencies.getSession,
+  hasRequiredConsents: taskFileDependencies.hasRequiredConsents,
+  read: (input) => readArtifactExport(prisma, (chatServices() ?? unavailable()).storage(), input),
   onFailure: taskFileDependencies.onFailure,
 }
