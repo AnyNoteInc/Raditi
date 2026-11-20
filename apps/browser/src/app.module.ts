@@ -7,6 +7,7 @@ import { BrowserConfigModule } from './config/config.module.ts'
 import { BrowserHealthModule } from './health/health.module.ts'
 import { MetricsRegistryModule } from './metrics/metrics-registry.module.ts'
 import { MetricsModule } from './metrics/metrics.module.ts'
+import { RenderModule } from './render/render.module.ts'
 import { WorkerModule } from './worker/worker.module.ts'
 
 /**
@@ -29,6 +30,7 @@ export class AppModule {
         MetricsModule,
         WorkerModule,
         ApiModule,
+        RenderModule,
       ],
     }
   }

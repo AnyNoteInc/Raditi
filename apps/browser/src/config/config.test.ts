@@ -112,8 +112,11 @@ describe('loadBrowserConfig', () => {
       stream: { maxFps: 12, quality: 70, window: 2 },
       runtime: { appEnv: 'development', runtime: 'runc', refusedSubnets: [] },
     })
-    // The worker's S3 key reads the inbox; no other bucket is its setting.
-    expect(config.storage.buckets).toEqual({ inbox: 'raditi-inbox' })
+    // The worker's S3 key reads the inbox and the artifacts (the files of frames it renders).
+    expect(config.storage.buckets).toEqual({
+      inbox: 'raditi-inbox',
+      artifacts: 'raditi-artifacts',
+    })
   })
 
   it('requires a token by the rule of core, mcp and preview, and never repeats it', () => {

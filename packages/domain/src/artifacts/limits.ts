@@ -118,6 +118,8 @@ export const artifactRenderLimits = Object.freeze({
   /** One width with every output, and one call of `artifact_layout`. */
   widthMs: 30_000,
   layoutCallMs: 20_000,
+  /** Calls of `artifact_layout` a turn (§7.5). */
+  layoutsPerTurn: 20,
   layoutReportChars: 1500,
   /** Quotes of the frame's text the report may carry. */
   layoutQuoteChars: 32,

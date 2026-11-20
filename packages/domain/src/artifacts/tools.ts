@@ -23,6 +23,8 @@ export const artifactToolNames = [
   'artifact_save_version',
   'artifact_file_put',
   'artifact_import',
+  'artifact_layout',
+  'artifact_render',
 ] as const
 export type ArtifactToolName = (typeof artifactToolNames)[number]
 
@@ -129,6 +131,32 @@ export const artifactImportArgumentsSchema = z.strictObject({
 })
 export type ArtifactImportArguments = z.infer<typeof artifactImportArgumentsSchema>
 
+/**
+ * `artifact_layout` (§7.5, Ар32, slice 88.15б): the text report of the layout of a mockup or of one
+ * frame of a canvas as the client sees it, drawn by `apps/browser` at 1440 and 390 — the chat's own
+ * blocks that wait for the check included.
+ */
+export const artifactLayoutArgumentsSchema = z.strictObject({
+  artifactId: z.uuid(),
+  /** The frame of a canvas; absent — a mockup. */
+  frame: artifactBlockKeySchema.optional(),
+  /** Every finding, past the 1 500 characters of the report. */
+  detail: z.boolean().optional(),
+})
+export type ArtifactLayoutArguments = z.infer<typeof artifactLayoutArgumentsSchema>
+
+/**
+ * `artifact_render` (§7.5, Ар32, slice 88.15в): the picture of a mockup or of a frame — strips of
+ * JPEG as image results of the tool — for the helper `look`, which alone sees images.
+ */
+export const artifactRenderArgumentsSchema = z.strictObject({
+  artifactId: z.uuid(),
+  frame: artifactBlockKeySchema.optional(),
+  /** `desktop` — 1440, `phone` — 390; absent — both. */
+  view: z.enum(['desktop', 'phone']).optional(),
+})
+export type ArtifactRenderArguments = z.infer<typeof artifactRenderArgumentsSchema>
+
 export const artifactToolArgumentSchemas = {
   artifact_list: artifactListArgumentsSchema,
   artifact_read: artifactReadArgumentsSchema,
@@ -138,6 +166,8 @@ export const artifactToolArgumentSchemas = {
   artifact_save_version: artifactSaveVersionArgumentsSchema,
   artifact_file_put: artifactFilePutArgumentsSchema,
   artifact_import: artifactImportArgumentsSchema,
+  artifact_layout: artifactLayoutArgumentsSchema,
+  artifact_render: artifactRenderArgumentsSchema,
 } as const satisfies Record<ArtifactToolName, z.ZodType>
 
 /**
@@ -169,6 +199,10 @@ export function artifactToolLine(tool: string): string | null {
       return 'Добавляет файл в артефакт'
     case 'artifact_import':
       return 'Переносит файл в артефакт'
+    case 'artifact_layout':
+      return 'Проверяет вёрстку на компьютере и телефоне'
+    case 'artifact_render':
+      return 'Смотрит на макет'
     default:
       return null
   }

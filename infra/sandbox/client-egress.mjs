@@ -1009,13 +1009,19 @@ export function clientEgressConfig(env) {
   const anyPublic = flagOf(env.ALLOW_PUBLIC, 'ALLOW_PUBLIC')
   const tlsOnly = flagOf(env.PUBLIC_TLS_ONLY, 'PUBLIC_TLS_ONLY')
   if (tlsOnly && !anyPublic) throw new Error('PUBLIC_TLS_ONLY needs ALLOW_PUBLIC=1')
+  // A render container of frames of artifacts (docs/plan/88-artifacts.md, §7.12): no host at all.
+  const closed = flagOf(env.CLOSED, 'CLOSED')
+  if (closed && (anyPublic || localRoutes.size > 0 || (env.ALLOWED_HOSTS ?? '[]') !== '[]'))
+    throw new Error('CLOSED=1 takes no host, no local route and no ALLOW_PUBLIC')
   return {
     listenHost,
     listenPort,
     allow:
       anyPublic && (env.ALLOWED_HOSTS ?? '') === ''
         ? new Set()
-        : parseAllowedHosts(env.ALLOWED_HOSTS, { empty: anyPublic || localRoutes.size > 0 }),
+        : parseAllowedHosts(env.ALLOWED_HOSTS, {
+            empty: anyPublic || closed || localRoutes.size > 0,
+          }),
     refused: [...parseSubnets(env.REFUSED_SUBNETS), ...interfaceSubnets()],
     pageDomain: parsePageDomain(env.PAGE_DOMAIN),
     pageAddresses: parsePageAddresses(env.PAGE_ADDRESSES, parsePageDomain(env.PAGE_DOMAIN)),

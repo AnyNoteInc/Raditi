@@ -32,9 +32,9 @@ const insideFamilies = /^(?:page|doc|artifact)_[a-z_]+$/
 /**
  * What a page, a document or an artifact holds may have come from the web in another chat, or from
  * another person (ревью, безопасность 3; docs/plan/88-artifacts.md, Ар22, Ар25): reading one counts
- * as outside.
+ * as outside — and so does the report of a frame's layout and its picture, which quote it (Ар32).
  */
-const readsContent = /^(?:page|doc|artifact)_read$/
+const readsContent = /^(?:(?:page|doc|artifact)_read|artifact_layout|artifact_render)$/
 
 const isInside = (tool: string) =>
   inside.has(tool) || (insideFamilies.test(tool) && !readsContent.test(tool))

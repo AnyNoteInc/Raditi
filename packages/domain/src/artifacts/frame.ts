@@ -350,3 +350,61 @@ const importKinds: Readonly<Record<string, 'document' | 'mockup' | 'table'>> = O
 export function artifactImportKindOf(name: string): 'document' | 'mockup' | 'table' | null {
   return importKinds[name.slice(name.lastIndexOf('.') + 1).toLowerCase()] ?? null
 }
+
+// ---- The blocks a frame is assembled of (§7.2; slice 88.15) ----
+
+/** A block as the assembly of a frame reads it: in the order of the artifact. */
+export interface ArtifactFrameSourceBlock {
+  key: string
+  kind: string
+  parent: string | null
+  content: string | null
+}
+
+export interface ArtifactFrameBlocks<B extends ArtifactFrameSourceBlock> {
+  html: B[]
+  style: B[]
+  script: B[]
+  settings: B | null
+}
+
+/**
+ * The blocks of one frame document, the same in web (`/v/`, the edit frame) and in the renderer of
+ * `apps/browser` (Ар32: «одна функция сборки»): of a kind that is not framed (a mockup) — its blocks
+ * at the top, `frame` null; of a framed one (a canvas) — the parts of that frame, after the common
+ * style of the artifact, with its settings. Null — no such frame, or a frame asked of a mockup.
+ * Blocks without checked text (null) are left out.
+ */
+export function artifactFrameBlocksOf<B extends ArtifactFrameSourceBlock>(input: {
+  framed: boolean
+  blocks: readonly B[]
+  frame: string | null
+}): ArtifactFrameBlocks<B> | null {
+  const has = (block: B) => block.content !== null
+  const top = input.blocks.filter((block) => block.parent === null && has(block))
+  const of = (list: readonly B[], kind: string) => list.filter((block) => block.kind === kind)
+  if (!input.framed) {
+    if (input.frame !== null) return null
+    return {
+      html: of(top, 'html'),
+      style: of(top, 'style'),
+      script: of(top, 'script'),
+      settings: of(top, 'settings')[0] ?? null,
+    }
+  }
+  if (input.frame === null) return null
+  const frame = input.blocks.find(
+    (block) => block.key === input.frame && block.kind === 'frame' && block.parent === null,
+  )
+  if (!frame) return null
+  const parts = input.blocks.filter((block) => block.parent === frame.key && has(block))
+  return {
+    html: of(parts, 'html'),
+    style: [...of(top, 'style'), ...of(parts, 'style')],
+    script: of(parts, 'script'),
+    settings: of(top, 'settings')[0] ?? null,
+  }
+}
+
+/** The mark of a part of a frame for the renderer's report (Ар32): an HTML comment, never shown. */
+export const artifactFramePartMark = (key: string): string => `<!--raditi-block:${key}-->`

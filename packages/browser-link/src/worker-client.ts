@@ -25,6 +25,14 @@ import {
   type BrowserToolResult,
   type BrowserVerifyResponse,
 } from '@repo/domain'
+import {
+  ARTIFACT_RENDER_PATH,
+  artifactRenderCallMs,
+  artifactRenderRequestSchema,
+  artifactRenderResponseSchema,
+  type ArtifactRenderRequest,
+  type ArtifactRenderResponse,
+} from '@repo/domain/artifacts'
 import { z } from 'zod'
 
 import { browserWorkerOrigin } from './worker-url.ts'
@@ -35,7 +43,7 @@ import { browserWorkerOrigin } from './worker-url.ts'
 // know which. A failure is a DomainError with a fixed code and a fixed message: neither the token
 // nor the worker's address nor anything the worker sent back ever reaches an error.
 
-export type BrowserWorkerOperation = 'ensure' | 'close' | 'verify' | 'list' | 'action'
+export type BrowserWorkerOperation = 'ensure' | 'close' | 'verify' | 'list' | 'action' | 'render'
 
 /** How long each call may take, end to end (the answer read included). */
 export interface BrowserWorkerTimeouts {
@@ -47,6 +55,8 @@ export interface BrowserWorkerTimeouts {
   listMs: number
   /** Within one `web_*` call of the agent (`browserSessionTimings.toolCallBudgetMs`). */
   actionMs: number
+  /** A frame of an artifact drawn at two widths (docs/plan/88-artifacts.md, §7.12). */
+  renderMs: number
 }
 
 const COLD_START_MAX_MS = 90_000
@@ -58,6 +68,8 @@ export const browserWorkerTimeoutDefaults: Readonly<BrowserWorkerTimeouts> = Obj
   listMs: 10_000,
   // The budget less the room apps/mcp needs to admit the call and answer the agent.
   actionMs: browserSessionTimings.toolCallBudgetMs - 5_000,
+  // The call of `artifact_layout` (20 s) and the wait for a free renderer.
+  renderMs: artifactRenderCallMs + 15_000,
 })
 
 /** The longest each call may be given: a slower call would outlive its caller. */
@@ -67,6 +79,7 @@ const timeoutMax: Readonly<BrowserWorkerTimeouts> = Object.freeze({
   verifyMs: browserSessionTimings.toolCallBudgetMs,
   listMs: COLD_START_MAX_MS,
   actionMs: browserSessionTimings.toolCallBudgetMs,
+  renderMs: 90_000,
 })
 
 /**
@@ -74,6 +87,8 @@ const timeoutMax: Readonly<BrowserWorkerTimeouts> = Object.freeze({
  * 1024 short rows; anything near this is not the worker speaking.
  */
 export const BROWSER_WORKER_RESPONSE_MAX_BYTES = 1024 * 1024
+/** The answer of a render: up to four JPEG strips in base64 (Ар32, up to 1.3 MiB of pictures). */
+export const BROWSER_RENDER_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 
 /** What went wrong, in `DomainError.details`: no address, no token, nothing the worker sent. */
 export interface BrowserWorkerFailure {
@@ -118,6 +133,15 @@ export interface BrowserWorkerClient {
     request: BrowserActionRequest,
     options?: BrowserWorkerCallOptions,
   ): Promise<BrowserToolResult>
+  /**
+   * `POST /v1/render`: a frame of an artifact as its viewer sees it — the report of its layout,
+   * the strips for the helper `look`, or the thumbnails of a canvas. A refusal `RENDER_*` rejects
+   * with that code.
+   */
+  render(
+    request: ArtifactRenderRequest,
+    options?: BrowserWorkerCallOptions,
+  ): Promise<ArtifactRenderResponse>
 }
 
 export type BrowserClosed = z.infer<typeof browserCloseResponseSchema>
@@ -175,7 +199,12 @@ export function createBrowserWorkerClient(
         signal,
       })
       status = response.status
-      answer = await readJson(response)
+      answer = await readJson(
+        response,
+        operation === 'render'
+          ? BROWSER_RENDER_RESPONSE_MAX_BYTES
+          : BROWSER_WORKER_RESPONSE_MAX_BYTES,
+      )
     } catch {
       if (caller?.aborted) throw caller.reason
       // The exchange's own error names the address it failed to reach: it is dropped here.
@@ -255,6 +284,11 @@ export function createBrowserWorkerClient(
       if (answer.result.tool !== body.action.tool) throw failure('action', 'body')
       return answer.result
     },
+
+    async render(request, callOptions) {
+      const body = checked('render', artifactRenderRequestSchema, request)
+      return call('render', artifactRenderResponseSchema, ARTIFACT_RENDER_PATH, body, callOptions)
+    },
   }
 }
 
@@ -280,9 +314,9 @@ function checked<S extends z.ZodType>(
 }
 
 /** The answer as JSON, read up to its limit; `UNREADABLE` for anything else. */
-async function readJson(response: Response): Promise<unknown> {
+async function readJson(response: Response, max: number): Promise<unknown> {
   const declared = Number(response.headers.get('content-length'))
-  if (declared > BROWSER_WORKER_RESPONSE_MAX_BYTES || !response.body) {
+  if (declared > max || !response.body) {
     await response.body?.cancel()
     return UNREADABLE
   }
@@ -293,7 +327,7 @@ async function readJson(response: Response): Promise<unknown> {
     const { done, value } = await reader.read()
     if (done) break
     size += value.byteLength
-    if (size > BROWSER_WORKER_RESPONSE_MAX_BYTES) {
+    if (size > max) {
       await reader.cancel()
       return UNREADABLE
     }
@@ -316,7 +350,8 @@ function refusal(operation: BrowserWorkerOperation, status: number, answer: unkn
   if (parsed.success && status >= 400) {
     const { code } = parsed.data
     if (isTaskCode(code)) return codeError(code, { operation, failure: 'refused', status })
-    if (status < 500)
+    // The renderer's own refusals (busy, not configured) keep their codes at 503 too.
+    if (status < 500 || (operation === 'render' && code.startsWith('RENDER_')))
       return new DomainError(code, 'The browser worker refused the request', status, {
         operation,
         failure: 'refused',

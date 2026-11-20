@@ -25,7 +25,12 @@ import {
   artifactLimits,
   artifactNotFound,
   artifactOpInvalid,
+  artifactRenderLimits,
   type ArtifactBatch,
+  type ArtifactLayoutArguments,
+  type ArtifactRenderArguments,
+  type ArtifactRenderRequest,
+  type ArtifactRenderResponse,
   type ArtifactClaimArguments,
   type ArtifactCreateArguments,
   type ArtifactEditArguments,
@@ -238,11 +243,117 @@ const docSectionRefused = (issues: readonly { path: PropertyKey[]; message: stri
     .join('; '),
 })
 
+/**
+ * The renderer of frames (`apps/browser`, `POST /v1/render`): the report of a layout and the
+ * pictures for the helper `look` (docs/plan/88-artifacts.md, Ар32). Null — the browser worker is
+ * not configured here.
+ */
+export type McpFrameRenderer = (request: ArtifactRenderRequest) => Promise<ArtifactRenderResponse>
+
+/** A picture of a frame as the result of a tool gives it (MCP `type: "image"`). */
+export interface McpArtifactPicture {
+  data: string
+  mimeType: 'image/jpeg'
+  caption: string
+}
+
+const renderUnavailable = () =>
+  new DomainError(
+    'ARTIFACT_RENDER_UNAVAILABLE',
+    'The renderer of frames is not available now; try again later',
+    503,
+  )
+
 export class McpArtifactsService {
   readonly #store: McpArtifactsStore
+  readonly #render: McpFrameRenderer | null
 
-  constructor(deps: { store: McpArtifactsStore }) {
+  constructor(deps: { store: McpArtifactsStore; render?: McpFrameRenderer | null }) {
     this.#store = deps.store
+    this.#render = deps.render ?? null
+  }
+
+  /** The renderer, or a refusal the agent reads; its own refusals become the artifact's words. */
+  async #draw(request: ArtifactRenderRequest): Promise<ArtifactRenderResponse> {
+    if (this.#render === null) throw renderUnavailable()
+    try {
+      return await this.#render(request)
+    } catch (error) {
+      if (isDomainError(error) && error.code === 'RENDER_NOT_FOUND') throw artifactNotFound()
+      if (isDomainError(error) && error.code === 'RENDER_NOT_A_FRAME')
+        throw artifactOpInvalid('only a mockup or a frame of a canvas is drawn')
+      throw renderUnavailable()
+    }
+  }
+
+  /**
+   * `artifact_layout` (§7.5, Ар32): the English report of the layout of a mockup or of a frame of a
+   * canvas at 1440 and 390, as the client would see it with this chat's own unchecked blocks.
+   */
+  layout(scope: McpTurnAccess, args: ArtifactLayoutArguments): Promise<McpArtifactsAnswer> {
+    return answerOf(async () => {
+      await this.#open(scope, args.artifactId, false)
+      if (
+        !(await this.#store.admit(
+          `artifact-layout:${scope.taskId}:${scope.turn}`,
+          artifactRenderLimits.layoutsPerTurn,
+        ))
+      )
+        throw artifactLimit('layoutsPerTurn')
+      const answer = await this.#draw({
+        artifactId: args.artifactId,
+        frame: args.frame ?? null,
+        viewer: { kind: 'agent', taskId: scope.taskId, turnNo: scope.turn },
+        output: 'layout',
+        ...(args.detail ? { detail: true } : {}),
+      })
+      return { report: answer.report, problems: answer.problems, heights: answer.heights }
+    })
+  }
+
+  /**
+   * `artifact_render` (§7.5, Ар32, slice 88.15в): strips of JPEG of a mockup or a frame for the helper
+   * `look` — at most 3 checks a turn and 4 pictures a check —, with the short report beside them.
+   */
+  async render(
+    scope: McpTurnAccess,
+    args: ArtifactRenderArguments,
+  ): Promise<{ answer: McpArtifactsAnswer; pictures: McpArtifactPicture[] }> {
+    const pictures: McpArtifactPicture[] = []
+    const answer = await answerOf(async () => {
+      await this.#open(scope, args.artifactId, false)
+      if (
+        !(await this.#store.admit(
+          `artifact-render:${scope.taskId}:${scope.turn}`,
+          artifactRenderLimits.looksPerTurn,
+        ))
+      )
+        throw artifactLimit('looksPerTurn')
+      const widths =
+        args.view === 'desktop'
+          ? [artifactRenderLimits.viewportWidths.desktop]
+          : args.view === 'phone'
+            ? [artifactRenderLimits.viewportWidths.phone]
+            : [
+                artifactRenderLimits.viewportWidths.desktop,
+                artifactRenderLimits.viewportWidths.phone,
+              ]
+      const drawn = await this.#draw({
+        artifactId: args.artifactId,
+        frame: args.frame ?? null,
+        viewer: { kind: 'agent', taskId: scope.taskId, turnNo: scope.turn },
+        output: 'image',
+        widths: widths as ArtifactRenderRequest['widths'],
+      })
+      for (const picture of drawn.pictures.slice(0, artifactRenderLimits.picturesPerLook))
+        pictures.push({
+          data: picture.data,
+          mimeType: picture.type,
+          caption: `${picture.width} px wide, from y ${picture.part * artifactRenderLimits.stripPx}`,
+        })
+      return { pictures: pictures.map((picture) => picture.caption), report: drawn.report }
+    })
+    return { answer, pictures: answer.ok ? pictures : [] }
   }
 
   /** The chat opens it (Ар23) with at least this; a pass without its client writes only its own. */

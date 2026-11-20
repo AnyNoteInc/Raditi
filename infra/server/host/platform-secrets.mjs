@@ -367,12 +367,22 @@ export function serviceFiles(kv, roles, { readFile = readFileSync, bcrypt = htpa
       uid: 10007,
       files: {
         's3.json': JSON.stringify({
-          // No Admin: the buckets come from `weed shell` (s3-buckets). browser has only the inbox:
-          // it reads the task's files and writes the screenshots of `web_screenshot` there.
+          // No Admin: the buckets come from `weed shell` (s3-buckets). browser has the inbox — it
+          // reads the task's files and writes the screenshots of `web_screenshot` there — and reads
+          // the artifacts: the files of the frames it renders (docs/plan/88-artifacts.md, §7.12).
           identities: [
             ['web', web, ['Read', 'Write', 'List', 'Tagging']],
             ['core', core, ['Read', 'Write', 'List', 'Tagging']],
-            ['browser', browser, ['Read:raditi-inbox', 'Write:raditi-inbox', 'List:raditi-inbox']],
+            [
+              'browser',
+              browser,
+              [
+                'Read:raditi-inbox',
+                'Write:raditi-inbox',
+                'List:raditi-inbox',
+                'Read:raditi-artifacts',
+              ],
+            ],
           ].map(([name, keys, actions]) => ({
             name,
             credentials: [
