@@ -16,6 +16,7 @@ const calls = vi.hoisted(() => ({
   archive: vi.fn(async (input: { archived: boolean }) => ({ archived: input.archived })),
   remove: vi.fn(async () => ({ purgeAfter: new Date() })),
   restore: vi.fn(async () => ({ restored: true as const })),
+  purge: vi.fn(async () => ({ purged: true as const })),
   update: vi.fn(async () => ({ updated: true as const })),
   push: vi.fn<(href: string) => void>(),
 }))
@@ -32,7 +33,8 @@ vi.mock('@/trpc/client', () => ({
       pathKey: () => ['project'],
       list: {
         queryOptions: (input: { view: string; sort: string }) => ({
-          queryKey: ['project.list', input],
+          // Under `project.pathKey()`: a change reads the lists again, as in the cabinet.
+          queryKey: ['project', 'list', input],
           queryFn: () => calls.list(input),
         }),
       },
@@ -41,6 +43,7 @@ vi.mock('@/trpc/client', () => ({
       archive: mutation(calls.archive),
       remove: mutation(calls.remove),
       restore: mutation(calls.restore),
+      purge: mutation(calls.purge),
       update: mutation(calls.update),
     },
     gitConnection: {
@@ -193,6 +196,87 @@ describe('«Проекты» (docs/plan/84-projects.md, ПР4)', () => {
     fireEvent.click(within(trash).getByRole('button', { name: 'Вернуть: Удалённый' }))
     await waitFor(() => expect(calls.restore).toHaveBeenCalledTimes(1))
     expect(await screen.findByText('Проект «Удалённый» возвращён.')).toBeTruthy()
+  })
+
+  it('deletes a project of «Корзина» for good after a question, and keeps it on «Не удалять» (ПР38)', async () => {
+    const old = project('Старый сайт', { purgeAfter: new Date('2026-12-15T09:00:00Z') })
+    lists({ all: [project('Колос')], trash: [old] })
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: /Корзина/ }))
+    const trash = await screen.findByRole('list', { name: 'Корзина' })
+    const press = () =>
+      fireEvent.click(within(trash).getByRole('button', { name: 'Удалить навсегда: Старый сайт' }))
+
+    press()
+    const question = await screen.findByRole('dialog', {
+      name: 'Удалить проект «Старый сайт» навсегда?',
+    })
+    expect(question.textContent).toContain('Вернуть его будет нельзя')
+    fireEvent.click(within(question).getByRole('button', { name: 'Не удалять' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls.purge).not.toHaveBeenCalled()
+
+    press()
+    const again = await screen.findByRole('dialog', {
+      name: 'Удалить проект «Старый сайт» навсегда?',
+    })
+    fireEvent.click(within(again).getByRole('button', { name: 'Удалить навсегда' }))
+    await waitFor(() =>
+      expect(calls.purge).toHaveBeenCalledWith({ projectId: old.id }, expect.anything()),
+    )
+    expect(await screen.findByText('Проект «Старый сайт» удалён навсегда.')).toBeTruthy()
+  })
+
+  it('leaves «Корзина» once its last project is gone for good, and a later «Удалить» stays on «Все» (ПР38)', async () => {
+    const old = project('Старый сайт', { purgeAfter: new Date('2026-12-15T09:00:00Z') })
+    const kolos = project('Колос')
+    const state = { all: [kolos], trash: [old] }
+    calls.list.mockImplementation(async ({ view }) => ({
+      items: view === 'all' ? state.all : view === 'trash' ? state.trash : [],
+    }))
+    calls.purge.mockImplementationOnce(async () => {
+      state.trash = []
+      return { purged: true as const }
+    })
+    calls.remove.mockImplementationOnce(async () => {
+      state.all = []
+      state.trash = [kolos]
+      return { purgeAfter: new Date() }
+    })
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: /Корзина/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Удалить навсегда: Старый сайт' }))
+    const question = await screen.findByRole('dialog')
+    fireEvent.click(within(question).getByRole('button', { name: 'Удалить навсегда' }))
+    expect(await screen.findByRole('list', { name: 'Все' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Корзина/ })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Действия с проектом «Колос»' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Удалить/ }))
+    const remove = await screen.findByRole('dialog', { name: 'Удалить проект «Колос»?' })
+    fireEvent.click(within(remove).getByRole('button', { name: 'В корзину' }))
+    // The trash has a project again; the list stays where the client is, with «Корзина» under it.
+    expect(await screen.findByRole('button', { name: /Корзина/ })).toBeTruthy()
+    expect(screen.queryByRole('list', { name: 'Корзина' })).toBeNull()
+  })
+
+  it('says a refusal of «Удалить навсегда» inside its question (ПР38)', async () => {
+    calls.purge.mockRejectedValueOnce(
+      Object.assign(new Error('Проект уже вернули из корзины'), {
+        data: { domainCode: 'PROJECT_NOT_IN_TRASH' },
+      }),
+    )
+    lists({ trash: [project('Старый сайт', { purgeAfter: new Date('2026-12-15T09:00:00Z') })] })
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: /Корзина/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Удалить навсегда: Старый сайт' }))
+    const question = await screen.findByRole('dialog')
+    fireEvent.click(within(question).getByRole('button', { name: 'Удалить навсегда' }))
+    await waitFor(() => expect(calls.purge).toHaveBeenCalledTimes(1))
+    expect((await within(question).findByRole('alert')).textContent).toBe(
+      'Проект уже вернули из корзины.',
+    )
+    expect(screen.getByRole('dialog')).toBeTruthy()
   })
 
   it('finds a project by its name or goal from 7 projects on, and not before', async () => {

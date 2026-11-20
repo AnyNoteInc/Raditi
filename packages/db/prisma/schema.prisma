@@ -1142,6 +1142,9 @@ model TaskEvent {
   // What a reader of the feed reads (CHECK task_events_feed_visible_check: visible = `feed.*`).
   @@index([taskId, id], map: "task_events_feed_idx", where: raw("client_visible"))
   @@index([taskId, xact], map: "task_events_feed_xact_idx", where: raw("client_visible"))
+  // The journal rows that hold the agent's to-do list: `readChatTodo` reads the newest of a turn
+  // (docs/plan/89-agent-todos.md, ТД4). Its query repeats this predicate word for word.
+  @@index([turnId, id], map: "task_events_todo_list_idx", where: raw("type::text = 'turn.output'::text AND payload @> '{\"events\": [{\"type\": \"todo_list\"}]}'::jsonb"))
   @@map("task_events")
 }
 

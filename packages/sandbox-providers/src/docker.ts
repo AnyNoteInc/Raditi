@@ -13,6 +13,8 @@ import {
   runnerIdSchema,
   SANDBOX_SECRETS_DIR,
   SANDBOX_SECRETS_TMPFS_BYTES,
+  SANDBOX_TMP_TMPFS_BYTES,
+  SANDBOX_WORKSPACE_TMPFS_BYTES,
   sandboxCommandFailed,
   sandboxLabelsSchema,
   type NetworkPolicy,
@@ -53,14 +55,26 @@ const PROTOCOL = '1'
 // Every exec resets these for the trusted helper, so container-wide values never reach the agent.
 const helperEnvNames = new Set(HELPER_ENV.map((entry) => entry.slice(0, entry.indexOf('='))))
 const labelNames = ['workspaceId', 'siteId', 'taskId', 'sessionId', 'turn', 'leaseEpoch'] as const
+/**
+ * The tmpfs mounts of a turn container. Docker mounts a tmpfs noexec, nosuid and nodev unless its
+ * options say otherwise (moby merges these defaults with them, the later option wins), and runsc
+ * keeps the flag. /workspace is exec, so that what a repository installs for its checks runs —
+ * node_modules/.bin, native modules, pnpm; every other mount says noexec itself. noexec never
+ * kept native code out (python3 ctypes makes raw syscalls): gVisor is the boundary (spec §20,
+ * «Инструменты песочницы — решения 19.11.2026», ИП1, ИП2).
+ */
 const tmpfs = {
-  '/workspace': 'rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700',
-  '/agent-home': 'rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
-  '/tmp': 'rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700',
+  '/workspace': `rw,exec,nosuid,nodev,size=${SANDBOX_WORKSPACE_TMPFS_BYTES / 1024}k,uid=10001,gid=10001,mode=0700`,
+  '/agent-home': 'rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
+  '/tmp': `rw,noexec,nosuid,nodev,size=${SANDBOX_TMP_TMPFS_BYTES / 1024}k,uid=10001,gid=10001,mode=0700`,
   [SANDBOX_SECRETS_DIR]: `rw,noexec,nosuid,nodev,size=${SANDBOX_SECRETS_TMPFS_BYTES / 1024}k,uid=10001,gid=10001,mode=0700`,
   '/run/raditi/exec': 'rw,noexec,nosuid,nodev,size=192m,uid=10001,gid=10001,mode=0700',
   '/run/raditi/control': 'rw,noexec,nosuid,nodev,size=1m,uid=0,gid=0,mode=0755',
 }
+/** Exactly these mounts with exactly these options: no more, no fewer. */
+const mountedAs = (mounts: Record<string, string> | undefined, map: Record<string, string>) =>
+  Object.keys(mounts ?? {}).length === Object.keys(map).length &&
+  Object.entries(map).every(([path, value]) => mounts?.[path] === value)
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right)
 /** An HTTP answer of the daemon; a timeout or an abort of `bounded` has none. */
 const daemonRefused = (error: unknown): boolean =>
@@ -260,11 +274,7 @@ export function createDockerSandboxProvider(
       )
     )
       return null
-    if (
-      Object.keys(host.Tmpfs ?? {}).length !== Object.keys(tmpfs).length ||
-      Object.entries(tmpfs).some(([path, value]) => host.Tmpfs?.[path] !== value)
-    )
-      return null
+    if (!mountedAs(host.Tmpfs, tmpfs)) return null
     if (
       host.RestartPolicy?.Name !== 'no' ||
       host.AutoRemove ||

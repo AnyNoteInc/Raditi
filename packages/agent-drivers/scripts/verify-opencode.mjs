@@ -15,6 +15,11 @@ import {
   preparedRunExposesSecret,
   preparedRunSchema,
   projectSection,
+  SANDBOX_SECRETS_DIR,
+  SANDBOX_SECRETS_TMPFS_BYTES,
+  SANDBOX_TMP_TMPFS_BYTES,
+  SANDBOX_TOOLS_HOME,
+  SANDBOX_WORKSPACE_TMPFS_BYTES,
   turnResultSchema,
 } from '@repo/domain'
 import { createOpencodeDriver } from '../src/opencode.ts'
@@ -40,6 +45,19 @@ if (options.runtime !== undefined)
   assert.match(options.runtime, /^[a-z0-9][a-z0-9.-]*$/, 'Expected the name of a Docker runtime')
 
 const CLI_VERSION = '1.18.34'
+/** The pnpm of the image (packages/agent-drivers/cli), for the checks of the agent's commands. */
+const PNPM_VERSION = '12.6.0'
+/**
+ * The tmpfs of a sandbox, option for option as packages/sandbox-providers/src/docker.ts mounts
+ * them: Docker mounts each one noexec unless its options say exec, and only /workspace does — what
+ * the commands install runs there.
+ */
+const SANDBOX_TMPFS = {
+  '/tmp': `rw,noexec,nosuid,nodev,size=${SANDBOX_TMP_TMPFS_BYTES / 1024}k,uid=10001,gid=10001,mode=0700`,
+  '/agent-home': 'rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
+  '/workspace': `rw,exec,nosuid,nodev,size=${SANDBOX_WORKSPACE_TMPFS_BYTES / 1024}k,uid=10001,gid=10001,mode=0700`,
+  [SANDBOX_SECRETS_DIR]: `rw,noexec,nosuid,nodev,size=${SANDBOX_SECRETS_TMPFS_BYTES / 1024}k,uid=10001,gid=10001,mode=0700`,
+}
 const MODEL = 'glm-5.3'
 const HOME = '/agent-home/opencode'
 const DATA = `${HOME}/.local/share/opencode`
@@ -66,6 +84,8 @@ const LITERAL = 'Literal {env:HOME} and {file:/etc/hostname}.'
 const REASONING = 'Thinking about the next step.'
 /** What the scripted model answers a compaction with, and the one thing the next turn knows of it. */
 const SUMMARY = 'RADITI_G3_COMPACTED_SUMMARY'
+/** A word of the agent's to-do list: the next turn finds it only in the history of the session. */
+const TODO = 'RADITI_G3_TODO_MARKER'
 /** Texts of the site repository's own OpenCode files: none may reach the provider. */
 const hostile = {
   agentsMd: 'RADITI_G3_HOSTILE_AGENTS_MD',
@@ -762,6 +782,14 @@ async function inside() {
         triggers: db.prepare("select name from sqlite_master where type = 'trigger'").all().length,
         sessions: db.prepare('select id, agent, model, permission, directory from session').all(),
         messages: db.prepare('select count(*) as n from message').get().n,
+        // The agent's to-do list (docs/plan/89-agent-todos.md, §2): the CLI's own table of it,
+        // and the calls of its tool the history of the session keeps.
+        todo: {
+          rows: db.prepare('select count(*) as n from todo').get().n,
+          calls: db
+            .prepare("select count(*) as n from part where json_extract(data, '$.tool') = ?")
+            .get('todowrite').n,
+        },
       }
       db.close()
     } catch (error) {
@@ -984,14 +1012,7 @@ async function turn({
     '--cpus=1',
     '--memory=1024m',
     '--memory-swap=1024m',
-    '--tmpfs',
-    '/tmp:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700',
-    '--tmpfs',
-    '/agent-home:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
-    '--tmpfs',
-    '/workspace:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700',
-    '--tmpfs',
-    '/run/raditi/secrets:rw,nosuid,nodev,noexec,size=2m,uid=10001,gid=10001,mode=0700',
+    ...Object.entries(SANDBOX_TMPFS).flatMap(([path, value]) => ['--tmpfs', `${path}:${value}`]),
     imageId.value,
   ])
   const session = driver.sessionState(prepared)
@@ -1026,6 +1047,7 @@ async function turn({
           previousProject: `${projectMarker(turnNo - 1)}\n`,
           contract: 'End the turn with one JSON object',
           summary: SUMMARY,
+          todo: TODO,
           platformAgent: 'You are the Raditi website agent.',
           workdir: 'Working directory: /workspace/repo',
           prior: PRIOR,
@@ -1061,10 +1083,11 @@ async function turn({
   if (output.during) {
     assert.deepEqual(output.during.processes.hits, [], `${label}: a process environment or argv`)
     assert.deepEqual(output.during.files.hits, [], `${label}: a file during the turn`)
-    // With the client's variables the script of the shell tool stays for the CLI's life (Р13).
+    // The script of the shell tool stays for the CLI's life: on every turn it holds the places
+    // of the tools of the commands, with the client's variables their values too (Р13).
     assert.deepEqual(
       output.during.secretFiles,
-      (envValues || egressProxy) && !action ? ['shell-env.sh'] : [],
+      action ? [] : ['shell-env.sh'],
       `${label}: the secrets directory during the turn`,
     )
   }
@@ -1143,8 +1166,9 @@ function expectSuccess(run, expected, { carryOver = [], reasoning = REASONING } 
   assert.ok(firstRequest <= 15_000, `First provider request ${firstRequest} ms after the MCP check`)
   assert.deepEqual(output.after.pluginRan, [], `Code of the repository ran: ${describe()}`)
   assert.equal(output.after.preloadRan, false, `A preload of the repository ran: ${describe()}`)
-  // The site's own OpenCode files are back in the working copy, and nothing is left beside it.
-  assert.deepEqual(output.after.aboveRepo, ['inbox', 'repo'], describe())
+  // The site's own OpenCode files are back in the working copy, and nothing is left beside it
+  // but the tools' home of the agent's commands.
+  assert.deepEqual(output.after.aboveRepo, ['.cache', 'inbox', 'repo'], describe())
   assert.deepEqual(output.after.processes, [], `Processes left: ${describe()}`)
   assert.ok(
     Object.values(output.database.tables).every((rows) => rows === 0),
@@ -1270,7 +1294,12 @@ try {
       output.llm[2].toolOutputs.some((text) => text.includes(`${MCP_OK}_1`)),
       describe(),
     )
-    assert.deepEqual(output.after.tool.secretFiles, [], 'A command found a secret file')
+    // The script of its own shell, nothing else: the credentials are pipes off their paths.
+    assert.deepEqual(
+      output.after.tool.secretFiles,
+      ['shell-env.sh'],
+      'A command found a secret file',
+    )
     assert.equal(output.after.tool.uid, 10001)
     // The kernel a command of the turn sees says which runtime the container really has.
     if (options.runtime === 'runsc') assert.match(output.after.tool.kernel, /gvisor/i)
@@ -1420,6 +1449,78 @@ try {
     assert.ok(lost > 0, `The CLI left no output behind in ${times} turns of ${huge.length} B`)
     pass(
       `control of the long reasoning — ${huge.length} characters right before the answer: exit 0 and the result lost in ${lost} of ${times} turns`,
+    )
+  }
+
+  // 2c. The agent's to-do list (docs/plan/89-agent-todos.md, §2 and 89.2). The driver reads the
+  // whole list of a `todowrite` call in place of the call. The CLI's own table holds it in the
+  // turn that wrote it; the next turn, carried over by export and import, starts without it, and
+  // the model has only its call in the history of the session. So the platform keeps the last
+  // list, from its own journal.
+  {
+    const todos = [
+      { content: `Прочитать страницу ${TODO}`, status: 'completed', priority: 'high' },
+      { content: 'Подготовить текст', status: 'in_progress', priority: 'medium' },
+      { content: 'Опубликовать страницу', status: 'pending', priority: 'low' },
+    ]
+    const planned = await turn({
+      label: 'to-do list',
+      returnSnapshot: true,
+      steps: [
+        { calls: [{ name: 'todowrite', arguments: { todos } }] },
+        { text: JSON.stringify(result('Синтетический ход с планом')) },
+      ],
+    })
+    expectRequests(planned, 2)
+    const plannedSession = expectSuccess(planned, result('Синтетический ход с планом'))
+    {
+      const { output, events, describe } = planned
+      assert.deepEqual(
+        events.filter((event) => event.type === 'todo_list' || event.type === 'tool_call'),
+        [
+          {
+            type: 'todo_list',
+            items: todos.map(({ content, status }) => ({ text: content, status })),
+          },
+        ],
+        describe(),
+      )
+      // The row as the pinned CLI prints it: the list in the input and in the metadata.
+      const rows = output.stdout
+        .split('\n')
+        .filter((line) => line.includes('"tool":"todowrite"'))
+        .map((line) => JSON.parse(line))
+      assert.equal(rows.length, 1, describe())
+      const { state } = rows[0].part
+      assert.equal(state.status, 'completed', describe())
+      assert.deepEqual(state.input, { todos }, describe())
+      assert.deepEqual(state.metadata?.todos, todos, describe())
+      // The CLI's title counts the items not completed.
+      assert.equal(state.title, '2 todos', describe())
+      assert.deepEqual(output.database.todo, { rows: 3, calls: 1 }, describe())
+    }
+    const next = await turn({
+      label: 'to-do list, the next turn',
+      turnNo: 2,
+      nativeSessionId: plannedSession,
+      restored: planned.output.snapshot.map(({ path, mode, base64 }) => ({ path, mode, base64 })),
+      steps: [{ text: JSON.stringify(result('Синтетический ход после плана')) }],
+    })
+    expectRequests(next, 1)
+    assert.equal(expectSuccess(next, result('Синтетический ход после плана')), plannedSession)
+    {
+      const { output, events, describe } = next
+      assert.equal(
+        output.llm[0].body.todo,
+        true,
+        `No call of the list in the history: ${describe()}`,
+      )
+      assert.ok(!events.some((event) => event.type === 'todo_list'), describe())
+      // Nothing in this turn wrote a list: what its database holds at the end, it held at the start.
+      assert.deepEqual(output.database.todo, { rows: 0, calls: 1 }, describe())
+    }
+    pass(
+      `to-do list — the driver reads the three items of a todowrite call as one todo_list and no tool_call; the CLI's table holds 3 rows in that turn, the next turn from its session files starts with none, and the call is in the history the model gets`,
     )
   }
 
@@ -2025,6 +2126,151 @@ try {
       )
     pass(
       `client variables — the shell tool's command got ${Object.keys(envValues).length} values and HTTPS_PROXY ${egressProxy} through BASH_ENV, the CLI neither; the session the snapshot takes (${output.snapshot.map((file) => `${file.path.split('/').at(-1)} ${file.bytes} B`).join(', ')}) holds no value the command printed`,
+    )
+  }
+
+  // 13a. The tools of the agent's commands (spec §20, «Инструменты песочницы — решения
+  // 19.11.2026», ИП1, ИП3, ИП4): the pnpm of the image on the PATH, TMPDIR, the caches and the
+  // global packages under the tools' home, which only the commands get, and /workspace executes
+  // what is there while /tmp does not; a command that removes the tools' home leaves the next one
+  // its TMPDIR. No network here, so nothing is installed: no stand runs an install through the
+  // egress proxy, the installs of ИП2 were measured by hand.
+  {
+    const toolsCheck = `node -e 'const fs=require("node:fs");const {spawnSync}=require("node:child_process");const run=(file,args=[])=>{const done=spawnSync(file,args,{encoding:"utf8",timeout:30000});return {status:done.status,error:done.error?.code??null,out:(done.stdout??"").trim()}};const copy=(path)=>{fs.copyFileSync("/bin/true",path);fs.chmodSync(path,0o755);try{return run(path)}finally{fs.rmSync(path)}};const cli=fs.readFileSync("/proc/"+process.argv[1]+"/environ","utf8").split("\\0").filter(Boolean).map((entry)=>entry.split("=")[0]);const noexec=Object.fromEntries(fs.readFileSync("/proc/mounts","utf8").split("\\n").map((line)=>line.split(" ")).filter((field)=>["/workspace","/tmp","/agent-home"].includes(field[1])).map((field)=>[field[1],field[3].split(",").includes("noexec")]));fs.writeFileSync(${JSON.stringify(TOOL_DUMP)},JSON.stringify({env:process.env,cli,tmpdir:require("node:os").tmpdir(),tmpdirIsDirectory:fs.statSync(process.env.TMPDIR).isDirectory(),pnpm:run("pnpm",["--version"]),store:run("pnpm",["store","path"]),bin:run("pnpm",["bin","-g"]),trust:run("pnpm",["config","get","trust-lockfile"]),composerHome:run("composer",["config","--global","home"]),composerCache:run("composer",["config","--global","cache-dir"]),inRepo:copy("/workspace/repo/.raditi-g3-true"),inTmp:copy("/tmp/raditi-g3-true"),noexec}));console.log(${JSON.stringify(SHELL_OK)})' "$PPID"`
+    // The command after the one that removed the tools' home: a shell of its own, as every
+    // command of the shell tool is, writes into its TMPDIR and adds what it found to the record.
+    const afterRemoval = `node -e 'const fs=require("node:fs");const os=require("node:os");const record=JSON.parse(fs.readFileSync(${JSON.stringify(TOOL_DUMP)},"utf8"));const scratch=os.tmpdir()+"/raditi-g3-scratch";fs.writeFileSync(scratch,"written");const stat=fs.statSync(process.env.TMPDIR);record.afterRemoval={tmpdir:os.tmpdir(),isDirectory:stat.isDirectory(),mode:stat.mode&0o777,written:fs.readFileSync(scratch,"utf8"),home:fs.readdirSync(process.env.XDG_CACHE_HOME)};fs.writeFileSync(${JSON.stringify(TOOL_DUMP)},JSON.stringify(record));console.log(${JSON.stringify(SHELL_OK)})'`
+    const tools = await turn({
+      label: 'tools of the commands',
+      steps: [
+        { calls: [bash(toolsCheck)] },
+        // What an agent short of space may do: the path itself, which the CLI checks.
+        { calls: [bash(`rm -rf ${SANDBOX_TOOLS_HOME}`)] },
+        { calls: [bash(afterRemoval)] },
+        { text: JSON.stringify(result('Инструменты')) },
+      ],
+    })
+    expectRequests(tools, 4)
+    expectSuccess(tools, result('Инструменты'))
+    const { output, events, describe } = tools
+    assert.deepEqual(
+      events.filter((event) => event.type === 'tool_call'),
+      [
+        { type: 'tool_call', tool: 'bash', ok: true },
+        // The CLI let the command at the tools' home, outside the working copy.
+        { type: 'tool_call', tool: 'bash', ok: true },
+        { type: 'tool_call', tool: 'bash', ok: true },
+      ],
+      describe(),
+    )
+    const tool = output.after.tool
+    assert.ok(tool, `The command left no record: ${describe()}`)
+    const places = {
+      TMPDIR: `${SANDBOX_TOOLS_HOME}/tmp`,
+      XDG_CACHE_HOME: SANDBOX_TOOLS_HOME,
+      npm_config_cache: `${SANDBOX_TOOLS_HOME}/npm`,
+      npm_config_prefix: `${SANDBOX_TOOLS_HOME}/npm-global`,
+      PNPM_HOME: `${SANDBOX_TOOLS_HOME}/pnpm`,
+      // The repository's lockfile as it is, the global folder of Yarn 2 and later, composer's home.
+      pnpm_config_trust_lockfile: 'true',
+      YARN_GLOBAL_FOLDER: `${SANDBOX_TOOLS_HOME}/yarn`,
+      COMPOSER_HOME: `${SANDBOX_TOOLS_HOME}/composer`,
+    }
+    assert.deepEqual(
+      Object.fromEntries(Object.keys(places).map((name) => [name, tool.env[name]])),
+      places,
+      describe(),
+    )
+    assert.ok(
+      tool.env.PATH.startsWith(
+        `${SANDBOX_TOOLS_HOME}/npm-global/bin:${SANDBOX_TOOLS_HOME}/pnpm/bin:${SANDBOX_TOOLS_HOME}/pnpm:`,
+      ),
+      `PATH of the command: ${tool.env.PATH}`,
+    )
+    // Node of the commands takes TMPDIR, and it is there before the first one.
+    assert.equal(tool.tmpdir, places.TMPDIR, describe())
+    assert.equal(tool.tmpdirIsDirectory, true, describe())
+    // The CLI keeps its own TMPDIR, caches and PATH.
+    assert.deepEqual(
+      tool.cli.filter(
+        (name) => name in places || /^(npm|pnpm)_config_|^(YARN|COMPOSER)_/.test(name),
+      ),
+      [],
+      `The CLI holds a place of the tools: ${describe()}`,
+    )
+    assert.deepEqual(tool.pnpm, { status: 0, error: null, out: PNPM_VERSION }, describe())
+    assert.equal(tool.store.status, 0, describe())
+    assert.ok(tool.store.out.startsWith(`${places.PNPM_HOME}/store/`), `Store: ${tool.store.out}`)
+    // pnpm refuses to name its global bin directory when the PATH lacks it.
+    assert.deepEqual(tool.bin, { status: 0, error: null, out: `${places.PNPM_HOME}/bin` })
+    // pnpm and composer of the image read what the commands are given.
+    assert.deepEqual(tool.trust, { status: 0, error: null, out: 'true' }, describe())
+    assert.deepEqual(tool.composerHome, { status: 0, error: null, out: places.COMPOSER_HOME })
+    assert.deepEqual(tool.composerCache, {
+      status: 0,
+      error: null,
+      out: `${places.COMPOSER_HOME}/cache`,
+    })
+    // The stand's own mounts are a sandbox's: only /workspace executes, and its control says so.
+    assert.deepEqual(tool.noexec, { '/workspace': false, '/tmp': true, '/agent-home': true })
+    assert.deepEqual(tool.inRepo, { status: 0, error: null, out: '' }, describe())
+    assert.deepEqual(tool.inTmp, { status: null, error: 'EACCES', out: '' }, describe())
+    // The tools' home was gone whole, and the next command found its TMPDIR made again.
+    assert.deepEqual(
+      tool.afterRemoval,
+      { tmpdir: places.TMPDIR, isDirectory: true, mode: 0o700, written: 'written', home: ['tmp'] },
+      describe(),
+    )
+    pass(
+      `tools of the commands — pnpm ${tool.pnpm.out} on the PATH, its store ${tool.store.out} and global bins ${tool.bin.out}, the lockfile trusted; TMPDIR, the caches and the global packages of npm, pnpm, yarn and composer under ${SANDBOX_TOOLS_HOME} for the commands only, the CLI keeps its own; after \`rm -rf ${SANDBOX_TOOLS_HOME}\` the next command has its TMPDIR again; a copy of /bin/true runs in /workspace/repo and is refused in /tmp`,
+    )
+  }
+
+  // 13b. An output too long for the model: the CLI keeps the end of it, saves it in its data
+  // directory and names the file; the agent reads it there, and the snapshot of the session takes
+  // none of it. What the file holds of a fast command is not all: in 3 of 4 runs of `seq 1 30000`
+  // (19.11.2026) its first 600 to 7 600 lines were missing, the end never — so it is the last line
+  // that the agent looks for.
+  {
+    const saved = `${DATA}/tool-output`
+    const long = await turn({
+      label: 'a long output',
+      steps: [
+        { calls: [bash('seq 1 30000')] },
+        { calls: [{ name: 'grep', arguments: { pattern: '^30000$', path: saved } }] },
+        { text: JSON.stringify(result('Длинный вывод')) },
+      ],
+    })
+    expectRequests(long, 3)
+    expectSuccess(long, result('Длинный вывод'))
+    const { output, events, describe } = long
+    assert.deepEqual(
+      events.filter((event) => event.type === 'tool_call'),
+      [
+        { type: 'tool_call', tool: 'bash', ok: true },
+        // Outside the working copy, in the CLI's home: the platform's configuration allows it.
+        { type: 'tool_call', tool: 'grep', ok: true },
+      ],
+      describe(),
+    )
+    // What the model got of the command: the end of its output after the name of the whole.
+    const [shown] = output.llm[1].toolOutputs
+    const header = '...output truncated...\n\nFull output saved to: '
+    assert.ok(shown.startsWith(header), `The CLI named no saved output: ${JSON.stringify(shown)}`)
+    const file = shown.slice(header.length).split('\n')[0]
+    assert.match(file.slice(saved.length), /^\/tool_[A-Za-z0-9]+$/, `Saved as: ${file}`)
+    assert.ok(file.startsWith(`${saved}/`), `Saved as: ${file}`)
+    const found = output.llm[2].toolOutputs.at(-1)
+    const line = found.split(`${file}:\n`)[1]?.split('\n')[0] ?? ''
+    assert.match(line, /^ {2}Line \d+: 30000$/, `Grep found: ${found}`)
+    // In the CLI's home, gone with the container; the snapshot took the session database only.
+    assert.ok(output.after.files.files.includes(file), describe())
+    assert.ok(
+      output.snapshot.every((entry) => !entry.path.startsWith(saved)),
+      describe(),
+    )
+    pass(
+      `a long output — the CLI kept the end for the model and saved the output as ${file.split('/').at(-1)} in ${saved}, which the agent's grep read (${line.trim()}); the snapshot took ${output.snapshot.map((entry) => entry.path.split('/').at(-1)).join(', ')} only`,
     )
   }
 

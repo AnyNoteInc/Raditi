@@ -151,6 +151,7 @@ describe('a dialog of someone else', () => {
       caller.task.cancel({ taskId: ids.taskId, requestId }),
       caller.task.commands({ taskId: ids.taskId }),
       caller.task.activity({ taskId: ids.taskId, turn: 1 }),
+      caller.task.todo({ taskId: ids.taskId }),
       caller.task.resumeAgent({ taskId: ids.taskId, requestId }),
       caller.browser.streamTicket({ taskId: ids.taskId }),
       caller.attachment.list({ taskId: ids.taskId }),

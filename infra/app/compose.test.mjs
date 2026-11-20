@@ -641,12 +641,22 @@ test('every ACME resolver has exactly one challenge type', () => {
 })
 
 // The root of the domain of pages (docs/plan/67-agent-documents.md, Д3): web on the single server,
-// reads only — web's proxy answers /v/<token> and robots.txt there and 404 to anything else.
+// reads of /v/<token> and robots.txt only — the paths web's proxy answers there; anything else is
+// Traefik's 404 (the routes that take a file skip the proxy, apps/web/src/proxy.ts).
 test('the single server routes the root of the domain of pages to web, reads only', () => {
   const routes = readFileSync(new URL('../server/traefik/server.yml', import.meta.url), 'utf8')
   assert.match(
     routes,
-    /pages-root:\n {6}entryPoints: \[websecure\]\n {6}rule: 'Host\(`\{\{ env "PAGES_ROOT_HOST" \}\}`\) && \(Method\(`GET`\) \|\| Method\(`HEAD`\)\)'\n {6}service: web\n/,
+    /pages-root:\n {6}entryPoints: \[websecure\]\n {6}rule: 'Host\(`\{\{ env "PAGES_ROOT_HOST" \}\}`\) && \(Method\(`GET`\) \|\| Method\(`HEAD`\)\) && \(Path\(`\/robots\.txt`\) \|\| PathRegexp\(`\^\/v\/\[A-Za-z0-9_-\]\+\\\.\[A-Za-z0-9_-\]\+\$`\)\)'\n {6}service: web\n/,
+  )
+  // The same view as web's own (PAGES_PATHS): what the edge lets through, the proxy answers.
+  const origin = readFileSync(
+    new URL('../../apps/web/src/lib/pages-origin.ts', import.meta.url),
+    'utf8',
+  )
+  assert.match(
+    origin,
+    /export const PAGES_PATHS = \/\^\\\/v\\\/\[A-Za-z0-9_-\]\+\\\.\[A-Za-z0-9_-\]\+\$\//,
   )
   // Its own name: the router `pages` of traefik/dynamic/pages.yml is the wildcard's (plan 69).
   assert.doesNotMatch(routes, /^ {4}pages:$/m)

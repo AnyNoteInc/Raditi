@@ -1,10 +1,12 @@
+import { createRequire } from 'node:module'
+
 import { NextRequest } from 'next/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { contentSecurityPolicy } from './lib/content-security-policy'
 import { pagesOriginOf } from './lib/pages-origin'
 import { REQUEST_PATH_HEADER } from './lib/request-path'
-import { proxy } from './proxy'
+import { config, proxy } from './proxy'
 
 const page = (path = '/chats/2') => new NextRequest(`http://localhost:3000${path}`)
 
@@ -105,6 +107,52 @@ describe('proxy', () => {
           PAGES_BASE_DOMAIN: 'pages.raditi.ru',
         }),
       ).toBe('https://pages.raditi.ru')
+    })
+  })
+
+  describe('the routes that take a file', () => {
+    // How Next turns `config.matcher` into the expression it tests a path with — not in its
+    // types; read from Next 16.3.6, if it moves, look in next/dist/build/analysis.
+    const { getMiddlewareMatchers } = createRequire(import.meta.url)(
+      'next/dist/build/analysis/get-page-static-info.js',
+    ) as {
+      getMiddlewareMatchers: (matchers: string[], nextConfig: object) => { regexp: string }[]
+    }
+    const passes = (path: string) =>
+      getMiddlewareMatchers(config.matcher, {}).some(({ regexp }) => new RegExp(regexp).test(path))
+    const attachment = '/api/attachments/0196a3b2-7c4d-7e8f-9a0b-1c2d3e4f5a6b'
+
+    it('never pass the proxy, which would cut a body over 1 MB', () => {
+      for (const path of [
+        attachment,
+        '/api/project-files/0196a3b2-7c4d-7e8f-9a0b-1c2d3e4f5a6b',
+        '/api/profile/avatar',
+        '/api/speech',
+      ])
+        expect(passes(path), path).toBe(false)
+    })
+
+    it('leave every other path to it, the API included', () => {
+      for (const path of [
+        '/',
+        '/chats/1',
+        '/v/eyJ0IjoiMSJ9.c2lnbmF0dXJl',
+        '/robots.txt',
+        '/favicon.ico',
+        '/_next/static/chunks/app.js',
+        '/api/health',
+        '/api/trpc/user.me',
+        '/api/auth/get-session',
+        '/api/tasks/x/files/y',
+        '/api/attachments',
+        '/api/attachments/',
+        `${attachment}/x`,
+        '/api/project-files/x/y',
+        '/api/profile/avatars',
+        '/api/profile/avatar/x',
+        '/api/speech/x',
+      ])
+        expect(passes(path), path).toBe(true)
     })
   })
 })

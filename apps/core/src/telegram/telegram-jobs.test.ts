@@ -467,6 +467,30 @@ describe('TelegramJobs.progress', () => {
     expect(h.edits).toEqual([{ messageId: 1, text: expect.stringMatching(/Ищет в интернете/u) }])
   })
 
+  it('says the plan of the work when the agent last wrote its list, escaped (docs/plan/89, ТД9)', async () => {
+    const h = harness({
+      output: [
+        ...search,
+        {
+          type: 'todo_list',
+          items: [
+            { text: 'Собрали цены', status: 'completed' },
+            { text: 'Сверяем <цены> & скидки', status: 'in_progress' },
+            { text: 'Публикуем страницу', status: 'pending' },
+          ],
+        },
+        {
+          type: 'usage',
+          usage: { inputUncached: 10, cacheRead: 0, cacheWrite: 0, output: 2, reasoning: 0 },
+        },
+      ],
+    })
+    expect(await h.jobs.progress({ taskId: TASK })).toBe('ticked')
+    expect(h.sent[0]!.text).toMatch(
+      /\nПлан: сделано 1 из 3 · сейчас: Сверяем &lt;цены&gt; &amp; скидки$/u,
+    )
+  })
+
   it('stops an older run when a newer one takes the message over, and deletes the message when the pass ends', async () => {
     const h = harness({ output: search })
     await h.jobs.progress({ taskId: TASK })

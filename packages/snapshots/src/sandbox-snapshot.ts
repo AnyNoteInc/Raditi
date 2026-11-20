@@ -120,10 +120,10 @@ export class SandboxSnapshotTransport {
   /**
    * The session and the changes of a turn with a repository (docs/plan/84-projects.md, ПР12): the
    * home archive as `capture`, the patch of the working tree against `baseSha` — the commit the
-   * bundle checked the sandbox out at — and its new files that no ignore file hides. The home part
-   * is refused when it holds a credential or a value, as `capture`; the patch and the new files are
-   * only checked for their form here: what they say is judged by the publication, which keeps them
-   * out of the snapshot when it refuses them.
+   * bundle checked the sandbox out at — and its new files that no ignore file hides, none named
+   * node_modules or under one. The home part is refused when it holds a credential or a value, as
+   * `capture`; the patch and the new files are only checked for their form here: what they say is
+   * judged by the publication, which keeps them out of the snapshot when it refuses them.
    */
   async captureRepository(
     sandbox: Sandbox,
@@ -144,6 +144,13 @@ export class SandboxSnapshotTransport {
       'ls-files',
       '--others',
       '--exclude-standard',
+      // Installed packages are never the change of a turn, whatever the repository ignores: a
+      // pattern of the command line outranks every ignore file, and this one, without a slash,
+      // leaves out whatever is named node_modules at any depth — a folder, which git then never
+      // enters, a file, or a symbolic link, with which the capture would be refused (spec §20,
+      // «Инструменты песочницы — решения 19.11.2026», ИП5). A tracked file under one still
+      // reaches the patch through git diff.
+      '--exclude=node_modules',
       '-z',
     ])
     if (names.length > snapshotLimits.entries) throw changesTooLarge()

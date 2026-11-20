@@ -79,11 +79,28 @@ export interface OpencodeWrapperSettings {
    */
   variables: { paths: readonly string[]; names: readonly string[] } | null
   /**
-   * The script the commands of the CLI's shell tool read through BASH_ENV: the variables and the
-   * egress proxy, in the tmpfs, written just before the CLI starts and removed when it exits.
-   * Only the CLI of the turn gets BASH_ENV — never a value — and only its shell reads the file.
+   * The script the commands of the CLI's shell tool read through BASH_ENV: the variables, the
+   * egress proxy and the places of their tools, in the tmpfs, written for every turn just before
+   * the CLI starts and removed when it exits. Only the CLI of the turn gets BASH_ENV — never a
+   * value — and only its shell reads the file.
    */
   shellEnv: string
+  /**
+   * The places of the tools of those commands (spec §20, «Инструменты песочницы — решения
+   * 19.11.2026», ИП4): TMPDIR, the caches and the global packages of npm, pnpm, yarn and composer.
+   * Constants of the platform, no value of the client — nothing to mask — exported after the
+   * client's variables, so a client's variable of the same name never moves them; the CLI itself
+   * never gets them.
+   */
+  toolEnv: Readonly<Record<string, string>>
+  /** Put in front of the PATH of those commands: where the global packages put their bins. */
+  toolPath: readonly string[]
+  /**
+   * Made before the CLI starts, for the first command: TMPDIR has to be there. The script makes
+   * each again for every command that finds it gone: one that freed space with `rm -rf` of the
+   * tools' home would leave every command after it without its TMPDIR.
+   */
+  toolDirs: readonly string[]
   /** The client egress proxy of the sandbox for those commands; null — they have no way out. */
   egressProxy: string | null
   /**
@@ -350,7 +367,11 @@ process.exit(accepted ? 0 : 1);
  *    gets only BASH_ENV, the path of a script in the tmpfs; its shell tool runs commands in
  *    bash, which sources that script first, so only the agent's commands hold the values and
  *    HTTPS_PROXY of the egress proxy — the CLI, the MCP check, export and import hold neither;
- *    in the open internet of the turn the CLI alone gets the proxy variables, no value.
+ *    in the open internet of the turn the CLI alone gets the proxy variables, no value. The same
+ *    script, on every turn, gives the commands the places of their tools: TMPDIR, the caches and
+ *    the global packages of npm, pnpm, yarn and composer under /workspace/.cache, their bins in
+ *    front of PATH; the CLI keeps its own TMPDIR and caches. TMPDIR is made before the CLI starts,
+ *    and again by the script for a command that finds it gone.
  *    The script goes with the CLI. When the CLI has ended, every value — as it is and as a JSON
  *    string holds it — is masked in each text column of the session database the snapshot
  *    takes; with secure_delete on and a VACUUM after it, no page keeps what a change freed, and
@@ -436,7 +457,7 @@ const readVariables = () => {
 const shellQuote = (value) => "$'" + value.replaceAll('\\\\', '\\\\\\\\').replaceAll("'", "\\\\'") + "'";
 /** What bash sources before each command of the shell tool. */
 const shellScript = () => {
-  const lines = ['# The launch wrapper of the turn: client variables and the egress proxy (Р13).'];
+  const lines = ['# The launch wrapper of the turn: client variables, the egress proxy (Р13), the places of the tools.'];
   for (const [name, value] of variables) lines.push('export ' + name + '=' + shellQuote(value));
   if (settings.egressProxy !== null) {
     const proxy = shellQuote(settings.egressProxy);
@@ -444,6 +465,12 @@ const shellScript = () => {
     lines.push('export HTTPS_PROXY=' + proxy + ' https_proxy=' + proxy + ' NO_PROXY=' + direct + ' no_proxy=' + direct + ' NODE_USE_ENV_PROXY=1');
     if (settings.internet) lines.push('export HTTP_PROXY=' + proxy + ' http_proxy=' + proxy);
   }
+  // After the client's variables: none of them moves a place of the tools.
+  for (const [name, value] of Object.entries(settings.toolEnv)) lines.push('export ' + name + '=' + shellQuote(value));
+  if (settings.toolPath.length > 0) lines.push('export PATH=' + shellQuote(settings.toolPath.join(':')) + ':"$PATH"');
+  // A command that freed space with rm -rf of the tools' home took these along: every command
+  // after it makes them again, as the wrapper made them for the first one.
+  for (const directory of settings.toolDirs) lines.push('[ -d ' + shellQuote(directory) + ' ] || mkdir -p -m 700 ' + shellQuote(directory));
   return lines.join('\\n') + '\\n';
 };
 /** What the CLI itself is given in the open internet: the proxy and what stays direct. */
@@ -453,7 +480,9 @@ const internetEnv = () => {
   const proxy = settings.egressProxy;
   return { HTTPS_PROXY: proxy, https_proxy: proxy, HTTP_PROXY: proxy, http_proxy: proxy, NO_PROXY: direct, no_proxy: direct };
 };
-const shellEnvNeeded = () => variables.length > 0 || settings.egressProxy !== null;
+const shellEnvNeeded = () =>
+  variables.length > 0 || settings.egressProxy !== null || Object.keys(settings.toolEnv).length > 0 ||
+  settings.toolPath.length > 0 || settings.toolDirs.length > 0;
 const inJsonString = (value) => JSON.stringify(value).slice(1, -1);
 /**
  * Each value as it is, as a JSON string holds it once and twice and as the script quotes it,
@@ -685,6 +714,8 @@ try {
   // The CLI's own scratch folder (\`opencode debug paths\`: tmp): the agent's files in /tmp go
   // there too. A fresh /tmp of every turn has none, and a warm sandbox's reset empties it.
   mkdirSync('/tmp/opencode', { recursive: true, mode: 0o700 });
+  // The places of the tools of the agent's commands, with the same lifetime: only a turn runs any.
+  if (compaction === null) for (const directory of settings.toolDirs) mkdirSync(directory, { recursive: true, mode: 0o700 });
   // The relay of the model's stream: only for a turn, a compaction prints no words.
   const relay = compaction === null && settings.llmRelay !== null ? await startRelay(settings.llmRelay) : null;
   let child;

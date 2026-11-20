@@ -10,7 +10,9 @@ import {
   SANDBOX_GID,
   SANDBOX_SECRETS_DIR,
   SANDBOX_SECRETS_TMPFS_BYTES,
+  SANDBOX_TMP_TMPFS_BYTES,
   SANDBOX_UID,
+  SANDBOX_WORKSPACE_TMPFS_BYTES,
   type ExecChunk,
   type SandboxSpec,
 } from '@repo/domain'
@@ -164,6 +166,18 @@ function daemon() {
   }
 }
 const config = { runtime: 'runc' as const }
+/**
+ * The mounts a turn container had before ИП1 (19.11.2026), as Docker reports them back: /workspace
+ * of 512 MiB and noexec by Docker's defaults. The release with ИП1 still adopted them (ИП8).
+ */
+const oldMounts = {
+  '/workspace': 'rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700',
+  '/agent-home': 'rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700',
+  '/tmp': 'rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700',
+  '/run/raditi/secrets': 'rw,noexec,nosuid,nodev,size=2048k,uid=10001,gid=10001,mode=0700',
+  '/run/raditi/exec': 'rw,noexec,nosuid,nodev,size=192m,uid=10001,gid=10001,mode=0700',
+  '/run/raditi/control': 'rw,noexec,nosuid,nodev,size=1m,uid=0,gid=0,mode=0755',
+}
 const collect = async (source: AsyncIterable<ExecChunk>) => {
   const chunks = []
   for await (const chunk of source) chunks.push(chunk)
@@ -206,6 +220,71 @@ describe('Docker sandbox provider', () => {
     expect(() =>
       createDockerSandboxProvider({ ...config, socketPath: 'tcp://localhost:2375' }),
     ).toThrow(/socket/)
+  })
+
+  it('mounts /workspace exec and every other tmpfs noexec, each in its own options', async () => {
+    // Docker mounts a tmpfs noexec unless its options say exec, and runsc keeps the flag: what a
+    // repository installs for its checks runs from /workspace alone (spec §20, ИП1, ИП2).
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const mounts = fake.raw.createContainer.mock.calls[0]![0].HostConfig!.Tmpfs!
+    const options = (path: string) => mounts[path]!.split(',')
+    expect(options('/workspace')).toEqual(
+      expect.arrayContaining([
+        'rw',
+        'exec',
+        'nosuid',
+        'nodev',
+        `size=${SANDBOX_WORKSPACE_TMPFS_BYTES / 1024}k`,
+      ]),
+    )
+    expect(options('/workspace')).not.toContain('noexec')
+    expect(options('/tmp')).toContain(`size=${SANDBOX_TMP_TMPFS_BYTES / 1024}k`)
+    const others = Object.keys(mounts).filter((path) => path !== '/workspace')
+    expect(new Set(others)).toEqual(
+      new Set([
+        '/agent-home',
+        '/tmp',
+        SANDBOX_SECRETS_DIR,
+        '/run/raditi/exec',
+        '/run/raditi/control',
+      ]),
+    )
+    for (const path of others) {
+      expect(options(path), path).toEqual(
+        expect.arrayContaining(['rw', 'noexec', 'nosuid', 'nodev']),
+      )
+      expect(options(path), path).not.toContain('exec')
+    }
+    await sandbox.destroy('completed')
+  })
+
+  it('adopts a turn container only with exactly its own mounts', async () => {
+    const fake = daemon()
+    const provider = createDockerSandboxProvider(config, { client: fake.client })
+    const sandbox = await provider.create(spec())
+    const current = { ...fake.info().HostConfig.Tmpfs }
+    expect(await provider.get(sandbox.id)).not.toBeNull()
+    // The mounts before ИП1 whole, a mount of them, one more or one fewer: no container of this
+    // provider.
+    for (const mounts of [
+      { ...oldMounts },
+      { ...current, '/tmp': oldMounts['/tmp'] },
+      { ...current, '/workspace': oldMounts['/workspace'] },
+      { ...current, '/srv': current['/tmp']! },
+      Object.fromEntries(Object.entries(current).filter(([path]) => path !== '/tmp')),
+    ]) {
+      fake.info().HostConfig.Tmpfs = mounts
+      expect(await provider.get(sandbox.id)).toBeNull()
+      expect(await provider.list()).toEqual([])
+      await expect(provider.getForRemoval(sandbox.id)).rejects.toMatchObject({ code: 'CONFLICT' })
+    }
+    expect(fake.container.remove).not.toHaveBeenCalled()
+    fake.info().HostConfig.Tmpfs = current
+    expect(await provider.get(sandbox.id)).not.toBeNull()
+    await sandbox.destroy('completed')
   })
 
   it('extends a turn with leases the watchdog honours, and drops them with the sandbox', async () => {

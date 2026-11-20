@@ -920,6 +920,7 @@ test('a cached test run sees a change of a file its tests read outside their pac
     '.env.example': [
       'apps/core/src/config/config.test.ts',
       'apps/web/src/lib/legal-content.test.ts',
+      'packages/agent-drivers/src/config.test.ts',
     ],
     'apps/web/content/legal/public-offer.md': ['packages/db/prisma/seed/data.test.ts'],
     // The catalogues of the chat keep their words in functions too; a domain test reads no file.
@@ -937,6 +938,11 @@ test('a cached test run sees a change of a file its tests read outside their pac
       'apps/llm/src/gateway/sandbox-routes.contract.test.ts',
       'apps/core/src/llm/backends.test.ts',
     ],
+    // The runtime stage of the sandbox image against the lockfile of the CLIs it installs: the
+    // agent's CLI, its browser skill and the pnpm of the agent's checks.
+    'infra/sandbox/Dockerfile': ['packages/agent-drivers/src/cli-lock.test.ts'],
+    // SANDBOX_IMAGE as the env file of the app VM carries it: a placeholder the drivers refuse.
+    'infra/app/env.example': ['packages/agent-drivers/src/config.test.ts'],
     // The token command of the runner image (the runbook issues it on the sandbox VM), against
     // the RUNNER_TOKENS entries core accepts.
     'apps/runner/scripts/runner-token.mjs': ['apps/core/src/runner-api/runner-auth.test.ts'],

@@ -202,6 +202,14 @@ describe('createAppTheme', () => {
     ])
   })
 
+  it('lets an item of a menu wrap, so a long hint does not push the list sideways', () => {
+    for (const mode of ['light', 'dark'] as const) {
+      expect(createAppTheme(mode).components?.MuiMenuItem?.styleOverrides?.root).toMatchObject({
+        whiteSpace: 'normal',
+      })
+    }
+  })
+
   it('publishes the curves and the short durations of controls apart from the palette', () => {
     expect(brandCssVariables['--raditi-ease-out']).toBe('cubic-bezier(0.16, 1, 0.3, 1)')
     expect(brandCssVariables['--raditi-ease-in-out']).toBe('cubic-bezier(0.65, 0, 0.35, 1)')

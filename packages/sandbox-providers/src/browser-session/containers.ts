@@ -214,8 +214,10 @@ export function browserContainer(input: {
         NetworkMode: input.place.network.id,
         ShmSize: input.limits.shmMiB * 1024 * 1024,
         Tmpfs: {
-          // Chromium maps its own code there.
-          '/tmp': tmpfs(SERVICE_USER, '512m').replace('noexec,', ''),
+          // Chromium's home and profile; noexec, as every tmpfs of the session. Without the flag
+          // in its options Docker mounted it noexec all the same (moby adds noexec unless the
+          // options say exec: spec §20, ИП1), and Chromium never needed more.
+          '/tmp': tmpfs(SERVICE_USER, '512m'),
           [BROWSER_STATE_DIR]: tmpfs(SERVICE_USER, '1m'),
         },
       },

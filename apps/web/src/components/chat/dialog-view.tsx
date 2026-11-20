@@ -92,13 +92,22 @@ import {
   withoutRedoneRewinds,
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
-import { RESULTS_ROOM, ResultsCard, ResultsToggle, useResultsCard } from './results-card'
+import {
+  RESULTS_ROOM,
+  RESULTS_WIDTH,
+  ResultsCard,
+  ResultsToggle,
+  useResultsCard,
+  type SideHolds,
+} from './results-card'
 import { ScheduleMark } from './schedule-mark'
 import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
+import { TodoCard, TodoStrip, todoStripShows } from './todo-card'
 import { ToolsPanel } from './tools-panel'
 import { TurnActivity } from './turn-activity'
 import { useAttachments } from './use-attachments'
 import { useBrowserLaunch } from './use-browser-launch'
+import { useChatTodo } from './use-chat-todo'
 import { useDocumentArrivals } from './use-document-arrivals'
 import {
   agentDocEntry,
@@ -589,9 +598,21 @@ export function DialogView({
     dispatchTools({ type: 'documentArrived', opens: wide })
   })
   const documentCount = chatDocuments.length + agentDocs.length
-  // «Результаты» beside the chat (owner's request of 14.11.2026): from `lg`, while the area of the
-  // feed is wide enough and the client has not hidden it.
-  const results = useResultsCard(feedArea, wide && documentCount > 0)
+  // «План работы» (docs/plan/89-agent-todos.md): the agent's to-do list of the last turn. `/undo`
+  // and `/redo` change which turn is last with no new status: their newest row reads it again.
+  const lastRewind = useMemo(
+    () => rows.findLast((row) => row.type === 'feed.rewind' || row.type === 'feed.redo')?.id,
+    [rows],
+  )
+  const todo = useChatTodo(taskId, head?.task.status, head?.task.turnNo, lastRewind)
+  /** `/undo` or `/redo` taken: the plan of the turn now last is read at once. */
+  const rereadTodo = () =>
+    void queryClient.invalidateQueries({ queryKey: trpc.task.todo.queryKey({ taskId }) })
+  // The column beside the chat — «План работы» over «Результаты» (owner's request of 14.11.2026;
+  // docs/plan/89, ТД6): from `lg`, while the area of the feed is wide enough and the client has
+  // not hidden it. A plan brings it in a chat with no documents too.
+  const results = useResultsCard(feedArea, wide && (documentCount > 0 || todo !== null))
+  const sideHolds: SideHolds = todo === null ? 'results' : documentCount > 0 ? 'both' : 'plan'
   useBrowserLaunch(head, {
     taskId,
     enabled: withBrowser && browserStreamUrl !== null,
@@ -883,6 +904,7 @@ export function DialogView({
         requestId: pressId('undoTurn'),
       })
       pressed('undoTurn')
+      rereadTodo()
       if (words !== null && fieldText.current.trim() === '') setUndoneWords(words)
     } catch (failure) {
       setFieldError(callErrorText(failure))
@@ -900,6 +922,7 @@ export function DialogView({
     try {
       await undoTurn.mutateAsync({ taskId, requestId: pressId('undoTurn') })
       pressed('undoTurn')
+      rereadTodo()
     } catch (failure) {
       setFieldError(callErrorText(failure))
       refresh()
@@ -939,6 +962,7 @@ export function DialogView({
         requestId: pressId('redoTurn'),
       })
       pressed('redoTurn')
+      rereadTodo()
       if (words !== null && words === undoneWords) setRedoPress(requestEventId)
     } catch (failure) {
       setFieldError(callErrorText(failure))
@@ -1367,7 +1391,9 @@ export function DialogView({
           onRenamed={refresh}
           tools={shown ? null : menu}
           results={
-            results.fits ? <ResultsToggle shown={results.shown} onToggle={results.toggle} /> : null
+            results.fits ? (
+              <ResultsToggle shown={results.shown} onToggle={results.toggle} holds={sideHolds} />
+            ) : null
           }
         />
       </Box>
@@ -1393,7 +1419,7 @@ export function DialogView({
           position: { lg: 'relative' },
           mx: { lg: -4 },
           px: { lg: 4 },
-          // The feed keeps clear of «Результаты» on the right while it is shown.
+          // The feed keeps clear of the column beside it on the right while it is shown.
           ...(results.shown ? { pr: { lg: `${32 + RESULTS_ROOM}px` } } : {}),
           pt: { lg: 1 },
           mb: { lg: -3.5 },
@@ -1412,26 +1438,40 @@ export function DialogView({
               justifyContent: 'flex-end',
             }}
           >
-            <Box sx={{ pt: 1 }}>
-              <ResultsCard
-                agentDocs={agentDocs}
-                documents={chatDocuments}
-                shownAgentDoc={
-                  shown && tools.active === 'documents' && documentTarget
-                    ? agentDocOfEntry(documentTarget.name)
-                    : null
-                }
-                onOpenAgentDoc={(docId) => {
-                  openDocument(agentDocEntry(docId), null)
-                  openTool('documents', { by: 'menu' })
-                }}
-                onOpenFile={(fileId) => {
-                  const document = documentOfFile(chatDocuments, fileId)
-                  if (document === null) return
-                  openDocument(document.name, fileId)
-                  openTool('documents', { by: 'menu' })
-                }}
-              />
+            <Box
+              sx={{
+                pt: 1,
+                width: RESULTS_WIDTH,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px',
+              }}
+            >
+              {todo !== null ? (
+                <TodoCard taskId={taskId} todo={todo} waiting={question !== null} />
+              ) : null}
+              {documentCount > 0 ? (
+                <ResultsCard
+                  agentDocs={agentDocs}
+                  documents={chatDocuments}
+                  underPlan={todo !== null}
+                  shownAgentDoc={
+                    shown && tools.active === 'documents' && documentTarget
+                      ? agentDocOfEntry(documentTarget.name)
+                      : null
+                  }
+                  onOpenAgentDoc={(docId) => {
+                    openDocument(agentDocEntry(docId), null)
+                    openTool('documents', { by: 'menu' })
+                  }}
+                  onOpenFile={(fileId) => {
+                    const document = documentOfFile(chatDocuments, fileId)
+                    if (document === null) return
+                    openDocument(document.name, fileId)
+                    openTool('documents', { by: 'menu' })
+                  }}
+                />
+              ) : null}
             </Box>
           </Box>
         ) : null}
@@ -1548,6 +1588,17 @@ export function DialogView({
               bgcolor: 'var(--mui-palette-background-paper)',
             }}
           >
+            {/* Where the column beside the chat does not fit, the plan of the work stands over
+                the field while the agent works (docs/plan/89, ТД7); from `lg` only once the area
+                is measured, so the column does not follow the line in. */}
+            {todo !== null &&
+            todoStripShows(todo) &&
+            !results.fits &&
+            (!wide || results.measured) ? (
+              // Stays mounted from turn to turn: the opening belongs to its turn (`openTurn`), so the
+              // list of a later turn starts folded without a remount and the focus stays on the line.
+              <TodoStrip todo={todo} />
+            ) : null}
             {composer}
             {composer === null ? null : <UsageWindowHint />}
           </Box>

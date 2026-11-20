@@ -27,15 +27,16 @@
 // (verify-agent-supervisor.mjs) and never read .env (П47). --opencode runs the two-turn scenario
 // with the real CLI and local LLM/MCP fixtures, including encrypted snapshot restore, then a chat
 // whose last request is undone (docs/plan/61-chats-first.md, §5.14): it leases by its own id, two
-// turns, and a third that goes back to the snapshot of the first through the runner's links; a
-// file of the client in /workspace/inbox; and a chat of a project with a repository
-// (docs/plan/84-projects.md, ПР8, ПР12, ПР33, ПР35) — the path of production: the bundle without
-// history the runner fetches from core into /workspace/repo, the files that look like secrets
-// stubbed, the files of the project in /workspace/project, no git credential in the sandbox, the
-// candidate committed by the trusted git of core through its git worker into refs/raditi/<chat> of
-// the mirror, its snapshot with the parts `patch` and `untracked`; a kill -9 of core between that
-// snapshot and the publication, finished by the next core from those parts. Crash scenarios of
-// chats without a repository still use the P2 agent.
+// turns, and a third that goes back to the snapshot of the first through the runner's links, the
+// first writing the agent's to-do list (docs/plan/89-agent-todos.md, 89.6) that the runner reports
+// to core as one todo_list; a file of the client in /workspace/inbox; and a chat of a project
+// with a repository (docs/plan/84-projects.md, ПР8, ПР12, ПР33, ПР35) — the path of production:
+// the bundle without history the runner fetches from core into /workspace/repo, the files that
+// look like secrets stubbed, the files of the project in /workspace/project, no git credential in
+// the sandbox, the candidate committed by the trusted git of core through its git worker into
+// refs/raditi/<chat> of the mirror, its snapshot with the parts `patch` and `untracked`; a kill -9
+// of core between that snapshot and the publication, finished by the next core from those parts.
+// Crash scenarios of chats without a repository still use the P2 agent.
 //
 // Needs: disposable PostgreSQL, S3 and OpenBao (the launchers make them); with --opencode git and
 // gitleaks on PATH for the git worker;
@@ -50,7 +51,8 @@ import { existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { zstdDecompressSync } from 'node:zlib'
@@ -59,6 +61,7 @@ import { createPrismaClient } from '@repo/db'
 import {
   attachmentKey,
   HIDDEN_FILE_STUB,
+  hiddenFileStub,
   projectFileKey,
   repositorySection,
   snapshotPartFiles,
@@ -507,13 +510,13 @@ function repositoryCommand(checks, change = []) {
  * What a sandbox of a chat with a repository must be, whatever its turn (ПР12, ПР35, rule 5): gVisor
  * and the product's uid; one commit without history — the root the bundle carries, `sandboxBaseSha`
  * —, on the chat's branch, no remote, no tag, a clean tree; the files that look like secrets as the
- * stub; and no git credential anywhere — none in git's settings, no credential file, no variable of
- * git, no token of the form of GitLab in the environment of any process, in any file the agent can
- * read or in any object of the repository. The prefix of the token is put together in the shell, so
- * that the command itself, which the session keeps, does not hold it.
+ * stub of each (`hiddenFileStub`: a comment of its language, or the text); and no git credential
+ * anywhere — none in git's settings, no credential file, no variable of git, no token of the form
+ * of GitLab in the environment of any process, in any file the agent can read or in any object of
+ * the repository. The prefix of the token is put together in the shell, so that the command
+ * itself, which the session keeps, does not hold it.
  */
 function sandboxChecks({ sandboxBaseSha, branch, hidden }) {
-  const stub = sha256(HIDDEN_FILE_STUB)
   return [
     ['kernel', 'uname -r | grep -qi gvisor'],
     ['uid', '[ "$(id -u)" = 10001 ]'],
@@ -525,7 +528,7 @@ function sandboxChecks({ sandboxBaseSha, branch, hidden }) {
     ['clean', '[ -z "$(git status --porcelain)" ]'],
     ...hidden.map((path) => [
       'stub',
-      `[ "$(sha256sum < ${shellWord(path)} | cut -c1-64)" = ${stub} ]`,
+      `[ "$(sha256sum < ${shellWord(path)} | cut -c1-64)" = ${sha256(hiddenFileStub(path))} ]`,
     ]),
     [
       'git-config',
@@ -682,6 +685,34 @@ async function homeEntries(reference) {
   return entries
 }
 const homeFiles = async (reference) => [...(await homeEntries(reference)).keys()]
+
+/**
+ * The agent's to-do list in the session of a checkpoint (docs/plan/89-agent-todos.md, §2): the
+ * rows of the CLI's own table and the calls of its tool the history keeps, read from a private
+ * copy of the session database and its WAL.
+ */
+async function todoState(reference) {
+  const entries = await homeEntries(reference)
+  const directory = await mkdtemp(join(tmpdir(), 'raditi-verify-todo-'))
+  try {
+    for (const file of opencodeHome.include)
+      if (entries.has(file))
+        await writeFile(join(directory, basename(file)), entries.get(file), { mode: 0o600 })
+    const database = new DatabaseSync(join(directory, 'opencode.db'))
+    try {
+      return {
+        rows: database.prepare('select count(*) as n from todo').get().n,
+        calls: database
+          .prepare("select count(*) as n from part where json_extract(data, '$.tool') = ?")
+          .get('todowrite').n,
+      }
+    } finally {
+      database.close()
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
 
 // --- Turns ---------------------------------------------------------------------------------------
 /**
@@ -1076,7 +1107,7 @@ try {
       undefined,
       'Ответ после сжатия',
     ]
-    const chatTurn = (turn, { previous, rewound, remembered = [], forgotten = [] }) =>
+    const chatTurn = (turn, { previous, rewound, remembered = [], forgotten = [], todos }) =>
       core.request('run', {
         request: turnRequest(task, {
           turn,
@@ -1084,15 +1115,49 @@ try {
           withoutRepository: {
             prompt: words[turn - 1],
             rewound,
-            fixture: { answer: answers[turn - 1], remembered, forgotten },
+            fixture: { answer: answers[turn - 1], remembered, forgotten, todos },
           },
         }),
       })
     const kept = [words[0], answers[0]]
     const undone = [words[1], answers[1]]
-    const first = await chatTurn(1, {})
+    // The agent's to-do list (docs/plan/89-agent-todos.md, 89.6): the first turn writes one with
+    // the CLI's `todowrite` before it answers. What the runner parsed of that row reaches the
+    // journal of core as one `todo_list` and no `tool_call`; the turns after it start with the
+    // CLI's table empty and find the call only in the history of the session.
+    const todoWord = 'raditi-todo-list-words'
+    const todos = [
+      { content: `Прочитать запрос ${todoWord}`, status: 'completed', priority: 'high' },
+      { content: 'Подготовить ответ', status: 'in_progress', priority: 'medium' },
+      { content: 'Проверить ответ', status: 'pending', priority: 'low' },
+    ]
+    const first = await chatTurn(1, { todos })
+    assert.equal(first.result.client_message, answers[0], 'The turn with a list ends as before')
+    {
+      const events = (
+        await db.taskEvent.findMany({
+          where: { taskId: task.taskId, type: 'turn.output' },
+          orderBy: { id: 'asc' },
+        })
+      )
+        .filter((row) => row.payload.turn === 1)
+        .flatMap((row) => row.payload.events ?? [])
+      assert.deepEqual(
+        events.filter((event) => event.type === 'todo_list' || event.type === 'tool_call'),
+        [
+          {
+            type: 'todo_list',
+            items: todos.map(({ content, status }) => ({ text: content, status })),
+          },
+        ],
+        'The journal holds the list of the turn as one todo_list and no tool_call',
+      )
+    }
     const firstCheckpoint = reference(task, 1, first.manifest)
-    const second = await chatTurn(2, { previous: firstCheckpoint, remembered: kept })
+    const second = await chatTurn(2, {
+      previous: firstCheckpoint,
+      remembered: [...kept, todoWord],
+    })
     await db.taskTurn.update({
       where: { taskId_turnNo: { taskId: task.taskId, turnNo: 2 } },
       data: { undoneAt: new Date() },
@@ -1100,11 +1165,28 @@ try {
     const third = await chatTurn(3, {
       previous: firstCheckpoint,
       rewound: true,
-      remembered: kept,
+      remembered: [...kept, todoWord],
       forgotten: undone,
     })
     assert.equal(third.result.client_message, answers[2])
     fixture.assertRewindComplete()
+    // The checkpoint of the turn that wrote the list holds its rows — the control of the reading;
+    // the turns that went on from it wrote none, so what their sessions hold at the end they held
+    // at the start: no row, and the call in the history.
+    assert.deepEqual(
+      await todoState(firstCheckpoint),
+      { rows: todos.length, calls: 1 },
+      'The session of the turn that wrote the list holds it',
+    )
+    for (const [turn, { manifest }] of [
+      [2, second],
+      [3, third],
+    ])
+      assert.deepEqual(
+        await todoState(reference(task, turn, manifest)),
+        { rows: 0, calls: 1 },
+        `Turn ${turn} started with the to-do table of the CLI empty`,
+      )
 
     // `/compact` on the runner (docs/plan/61-chats-first.md, §5.14): the session of the first three
     // turns goes into one summary, and the next turn goes on from it. The words of the first
@@ -1187,7 +1269,7 @@ try {
     assert.equal((await leaseOf(task.taskId)).holderTaskId, null, 'The chat let its lease go')
     assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
     verified.push(
-      `real ${driverName} chat without a project: under the lease of its own id, turn 3 after an undone turn 2 restored the snapshot of turn 1 through the runner's links, the session and the provider know nothing of turn 2; turn 4 compacted the session on the runner and turn 5 went on from its summary (${Math.round((Date.now() - started) / 1000)} s)`,
+      `real ${driverName} chat without a project: under the lease of its own id, turn 3 after an undone turn 2 restored the snapshot of turn 1 through the runner's links, the session and the provider know nothing of turn 2; the to-do list of turn 1 (todowrite, 3 items) reached the journal of core through the runner as one todo_list and no tool_call, and turns 2 and 3 started with the CLI's table empty and the call in the history; turn 4 compacted the session on the runner and turn 5 went on from its summary (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 
@@ -1377,6 +1459,9 @@ try {
       projectFiles,
     })
     const hidden = ['certs/site.key', 'config/old-settings.env']
+    // Two kinds of stub (19.11.2026): the key keeps the text, the file of variables gets `#`.
+    assert.equal(hiddenFileStub('certs/site.key'), HIDDEN_FILE_STUB)
+    assert.match(hiddenFileStub('config/old-settings.env'), /^# .*\n# hidden: looks like a secret/)
     const projectChecks = (name) =>
       Object.entries(context).flatMap(([path, content]) => [
         [name, `[ "$(sha256sum < /workspace/project/${path} | cut -c1-64)" = ${sha256(content)} ]`],

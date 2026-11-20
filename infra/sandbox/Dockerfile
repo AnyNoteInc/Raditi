@@ -20,6 +20,15 @@ FROM base AS runtime
 # client offline and leaves them in /workspace/out (docs/plan/66-chat-visuals.md, В11).
 # poppler-utils: `pdftotext` reads the PDF files of a project's context in /workspace/project
 # (docs/plan/84-projects.md, ПР8).
+# pnpm for the agent's checks of a repository (spec §20, «Инструменты песочницы — решения
+# 19.11.2026», ИП3), the version this repository pins, from the same lockfile; for a repository
+# that pins another one, this pnpm fetches and runs that. Its launcher package holds placeholder
+# bins, and its install script would put the binary of its platform package in place of the one
+# named pnpm. No script runs, so the image does what the script does: a hard link of the binary
+# of the image architecture over that placeholder, where it finds the files of the launcher it
+# runs with (`dist/`, node-gyp); the musl build of the same CPU leaves the layer, and no other
+# binary of pnpm stays in it. `pnpx` is a shell script that runs the pnpm next to it. No corepack,
+# no yarn.
 # Changing a version: packages/agent-drivers/cli/README.md.
 COPY packages/agent-drivers/cli/package.json packages/agent-drivers/cli/package-lock.json /usr/local/lib/raditi/agent-clis/
 RUN apt-get update \
@@ -32,6 +41,7 @@ RUN apt-get update \
     && npm ci --ignore-scripts --no-audit --no-fund \
     && npm ls opencode-ai@1.18.34 \
     && npm ls @playwright/mcp@0.0.83 \
+    && npm ls pnpm@12.6.0 \
     && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
       node node_modules/@playwright/mcp/cli.js install-browser --with-deps --no-shell chromium \
     && rm -rf /var/lib/apt/lists/* \
@@ -44,6 +54,16 @@ RUN apt-get update \
     esac \
     && test -x "node_modules/${opencode}/bin/opencode" \
     && ln -s "/usr/local/lib/raditi/agent-clis/node_modules/${opencode}/bin/opencode" /usr/local/bin/opencode \
+    && case "$(dpkg --print-architecture)" in \
+      arm64) pnpm=@pnpm/exe.linux-arm64; rm -rf node_modules/@pnpm/exe.linux-arm64-musl ;; \
+      amd64) pnpm=@pnpm/exe.linux-x64; rm -rf node_modules/@pnpm/exe.linux-x64-musl ;; \
+      *) echo 'No pnpm binary for this architecture' >&2; exit 1 ;; \
+    esac \
+    && test "$(echo node_modules/@pnpm/exe.*)" = "node_modules/${pnpm}" \
+    && test -x "node_modules/${pnpm}/pnpm" \
+    && ln -f "node_modules/${pnpm}/pnpm" node_modules/pnpm/pnpm \
+    && ln -s /usr/local/lib/raditi/agent-clis/node_modules/pnpm/pnpm /usr/local/bin/pnpm \
+    && ln -s /usr/local/lib/raditi/agent-clis/node_modules/pnpm/pnpx /usr/local/bin/pnpx \
     && mkdir -p /workspace /agent-home /run/raditi/exec /run/raditi/secrets \
     && chown -R 10001:10001 /workspace /agent-home /run/raditi
 COPY packages/sandbox-providers/runtime/runtime.mjs /usr/local/lib/raditi/runtime.mjs

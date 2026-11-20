@@ -5,8 +5,11 @@
 #     /run/raditi/dashboard-users (bcrypt; kv/platform/app/traefik in Vault);
 #   - the stream of the cloud browser on the cabinet's host goes to the stream gateway (preview);
 #   - PAGES_ROOT_HOST: the root of the domain of pages (PAGES_BASE_DOMAIN; docs/plan/67, Д3; owner's
-#     answer of 13.11.2026: pages.raditi.ru) is web: its proxy answers /v/<token> and robots.txt
-#     there and 404 to everything else. Its subdomains are plan 69's (traefik/dynamic/pages.yml).
+#     answer of 13.11.2026: pages.raditi.ru) is web, only for reading /v/<token> and robots.txt —
+#     the paths its proxy answers there (PAGES_PATHS of apps/web/src/lib/pages-origin.ts); any
+#     other request is Traefik's 404 and never reaches web: the routes that take a file skip the
+#     proxy and would answer a method they lack 405 (web answers them 404 on this host itself).
+#     Its subdomains are plan 69's (traefik/dynamic/pages.yml).
 http:
   routers:
     dashboard:
@@ -20,7 +23,7 @@ http:
     # {{ if env "PAGES_ROOT_HOST" }}
     pages-root:
       entryPoints: [websecure]
-      rule: 'Host(`{{ env "PAGES_ROOT_HOST" }}`) && (Method(`GET`) || Method(`HEAD`))'
+      rule: 'Host(`{{ env "PAGES_ROOT_HOST" }}`) && (Method(`GET`) || Method(`HEAD`)) && (Path(`/robots.txt`) || PathRegexp(`^/v/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`))'
       service: web
       tls:
         certResolver: le

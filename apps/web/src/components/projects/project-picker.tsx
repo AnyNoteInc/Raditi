@@ -113,7 +113,14 @@ export function ProjectPicker({
         ref={list}
         id={listId}
         aria-labelledby={titleId}
-        sx={{ maxHeight: { xs: '55dvh', sm: 360 }, overflowY: 'auto', py: 0.5 }}
+        // The menu has a width of its own: what does not fit wraps (the theme's items, `textSlots`),
+        // and nothing scrolls the list sideways.
+        sx={{
+          maxHeight: { xs: '55dvh', sm: 360 },
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          py: 0.5,
+        }}
       >
         {words === '' ? (
           <MenuItem
@@ -303,7 +310,7 @@ function Check({ on }: { on: boolean }) {
 const itemSx = { gap: 1.5, py: 1, minHeight: { xs: 44 }, alignItems: 'flex-start' } as const
 const textSlots = {
   primary: { sx: { fontSize: 14, fontWeight: 500, overflowWrap: 'anywhere' } },
-  secondary: { sx: { fontSize: 13 } },
+  secondary: { sx: { fontSize: 13, overflowWrap: 'anywhere' } },
 } as const
 const offscreen = {
   position: 'absolute',

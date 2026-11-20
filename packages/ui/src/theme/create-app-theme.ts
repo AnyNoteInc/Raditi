@@ -143,6 +143,12 @@ export function createAppTheme(
       MuiAlert: {
         styleOverrides: { root: { alignItems: 'flex-start' } },
       },
+      MuiMenuItem: {
+        // MUI keeps an item on one line: a hint longer than its menu then widens the list past
+        // the paper, and the list scrolls sideways under the finger or the focus. An item wraps
+        // instead; a menu sized by its content still lays it out on one line while there is room.
+        styleOverrides: { root: { whiteSpace: 'normal' } },
+      },
     },
   })
 }

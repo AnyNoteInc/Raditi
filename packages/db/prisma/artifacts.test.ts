@@ -12,7 +12,7 @@ import { createMigratedSchema, type MigratedSchema } from './migrated-schema.ts'
 
 const databaseUrl = process.env.DATABASE_URL
 /** The last migration before artifacts. */
-const before = '20261118150000_outbox_wake'
+const before = '20261119200000_task_events_todo_list'
 const at = new Date('2026-11-19T09:00:00Z')
 type Values = Record<string, unknown>
 

@@ -14,6 +14,7 @@ import {
   subscriptionStatuses,
   taskStatuses,
   taskWaitingReasons,
+  todoTurnStatuses,
   turnAssignmentOutcomes,
   turnExecutorKinds,
   turnResultSchema,
@@ -35,6 +36,7 @@ import {
   TaskWaiting,
   TurnAssignmentOutcome,
   TurnExecutorKind,
+  TurnStatus,
 } from './index.ts'
 
 describe('database enums match the domain', () => {
@@ -76,6 +78,10 @@ describe('database enums match the domain', () => {
       'credit_gift',
       'credit_pack',
     ])
+  })
+
+  it('TurnStatus has exactly the statuses of a turn the plan of the agent reads', () => {
+    expect(Object.values(TurnStatus)).toEqual([...todoTurnStatuses])
   })
 
   it('TaskWaiting matches the head of a task in the feed', () => {

@@ -1,4 +1,10 @@
-import type { AgentEvent, TaskStatus } from '@repo/domain'
+import {
+  todoListReadsRussian,
+  todoProgressOf,
+  type AgentEvent,
+  type AgentTodoList,
+  type TaskStatus,
+} from '@repo/domain'
 
 // The message of the work of the agent in Telegram (owner's request of 15.11.2026): one message,
 // edited every few seconds while a pass goes on — a moving bar for the animation, what the agent
@@ -47,7 +53,34 @@ function toolText(tool: string): string {
 
 const cut = (text: string, max: number) => {
   const line = text.replace(/\s+/g, ' ').trim()
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line
+  if (line.length <= max) return line
+  // Whole characters: half of an astral one is no text Telegram takes.
+  let kept = ''
+  for (const char of line) {
+    if (kept.length + char.length > max - 1) break
+    kept += char
+  }
+  return `${kept}…`
+}
+
+/**
+ * The plan of the agent's work (docs/plan/89-agent-todos.md, ТД9, ТД11): what is done of it and
+ * the item at work. A list the agent did not write in Russian is told by its count alone (rule
+ * 10): the step at work, or all done.
+ */
+function todoLine(list: AgentTodoList): string {
+  if (list.items.length === 0) return 'Обновляет план работы'
+  const progress = todoProgressOf(list)
+  if (progress.abandoned) return 'Агент отменил план'
+  const { done, total } = progress
+  if (!todoListReadsRussian(list.items))
+    return done >= total
+      ? `План: сделано ${total} из ${total}`
+      : `План: шаг ${done + 1} из ${total}`
+  const counted = `План: сделано ${done} из ${total}`
+  return progress.current === null
+    ? counted
+    : `${counted} · сейчас: ${cut(list.items[progress.current]!.text, 80)}`
 }
 
 /** What the agent does now, by its last event of the turn; null — nothing to say of it. */
@@ -68,6 +101,8 @@ export function activityLine(event: AgentEvent | null): string | null {
       return `${event.change === 'delete' ? 'Удаляет' : 'Правит'} файл ${cut(event.path, 60)}`
     case 'question':
       return 'Готовит вопрос'
+    case 'todo_list':
+      return todoLine(event)
     default:
       return null
   }

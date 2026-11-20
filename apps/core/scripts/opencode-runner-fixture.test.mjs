@@ -127,7 +127,8 @@ function runShell(message, files, number, overrides = {}) {
       assert.equal(name, 'node:fs')
       return {
         readdirSync(path) {
-          if (path === '/run/raditi/secrets') return overrides.secretFiles ?? []
+          // What the wrapper leaves there on every turn: the script bash sources (ИП4).
+          if (path === '/run/raditi/secrets') return overrides.secretFiles ?? ['shell-env.sh']
           assert.equal(path, '/proc')
           return ['1', '17', 'self', 'uptime']
         },
@@ -241,7 +242,11 @@ test('the shell command refuses a sandbox that is not the one of the product', a
     { kernel: '6.12.76-linuxkit\n' },
     { uid: 0 },
     { version: '1.18.35\n' },
+    // A credential file the wrapper did not remove, beside the script or in its place; and no
+    // script, which every turn writes (ИП4).
     { secretFiles: ['llm'] },
+    { secretFiles: ['llm', 'shell-env.sh'] },
+    { secretFiles: [] },
     // The turn key or the MCP token in the command's own environment, or in any process.
     { env: { PATH: '/usr/bin', BUN_ENABLE_CRASH_REPORTING: '0', ANY_NAME: 'synthetic-llm-1' } },
     { env: { PATH: '/usr/bin', BUN_ENABLE_CRASH_REPORTING: '0', AUTH: 'Bearer synthetic-mcp-1' } },
@@ -561,6 +566,56 @@ test('a chat without a repository is no turn of the two the stand requires', asy
   assert.throws(() => fixture.addRewindTurn(rewind(1)), /Unexpected rewind turn/)
   assert.throws(() => fixture.assertComplete(), /two registered turns/)
   assert.throws(() => fixture.assertRewindComplete(), /three turns/)
+})
+
+/** The to-do list the first turn of the stand's chat writes (docs/plan/89-agent-todos.md, 89.6). */
+const TODOS = [
+  { content: 'Прочитать запрос raditi-todo', status: 'completed', priority: 'high' },
+  { content: 'Подготовить ответ', status: 'in_progress', priority: 'medium' },
+  { content: 'Проверить ответ', status: 'pending', priority: 'low' },
+]
+/** The one call of a stream, as the CLI reads it. */
+const streamCall = (text) =>
+  text
+    .split('\n')
+    .filter((line) => line.startsWith('data: {'))
+    .map((line) => JSON.parse(line.slice(6)).choices[0].delta.tool_calls?.[0])
+    .find(Boolean)
+
+test('a turn with a to-do list writes it with todowrite first and answers once it came back', async (t) => {
+  const fixture = await open(t)
+  fixture.addRewindTurn({ ...rewind(1), todos: TODOS })
+  const asked = await send(fixture, PATH, rewind(1).llmKey, rewindBody(1, []))
+  assert.equal(asked.status, 200, asked.text)
+  const call = streamCall(asked.text)
+  assert.equal(call.function.name, 'todowrite')
+  assert.deepEqual(JSON.parse(call.function.arguments), { todos: TODOS })
+  assert.throws(() => fixture.assertRewindComplete(1), /did not answer/)
+  const history = [
+    { role: 'assistant', content: '', tool_calls: [{ id: call.id, ...call }] },
+    { role: 'tool', tool_call_id: call.id, content: JSON.stringify(TODOS, null, 2) },
+  ]
+  const answered = await send(fixture, PATH, rewind(1).llmKey, rewindBody(1, history))
+  assert.equal(answered.status, 200, answered.text)
+  assert.match(answered.text, new RegExp(ANSWERS.first))
+  assert.equal(streamCall(answered.text), undefined)
+  fixture.assertRewindComplete(1)
+})
+
+test('refuses the answer of a to-do turn before its list came back, and a list it cannot write', async (t) => {
+  const fixture = await open(t)
+  assert.throws(
+    () => fixture.addRewindTurn({ ...rewind(1), todos: [{ ...TODOS[0], status: 'done' }] }),
+    /Invalid rewind turn/,
+  )
+  fixture.addRewindTurn({ ...rewind(1), todos: TODOS })
+  assert.equal((await send(fixture, PATH, rewind(1).llmKey, rewindBody(1, []))).status, 200)
+  const early = await send(fixture, PATH, rewind(1).llmKey, rewindBody(1, []))
+  assert.equal(early.status, 400)
+  assert.deepEqual(fixture.observations().problems, [
+    'The to-do list did not come back to the model',
+  ])
+  assert.throws(() => fixture.assertRewindComplete(1), /failed requests/)
 })
 
 /** The second turn of a chat of a project with a repository (`verify-runner.mjs`). */

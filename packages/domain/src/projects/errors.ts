@@ -29,6 +29,10 @@ export const projectTextHasSecret = (): DomainError =>
 export const projectArchived = (): DomainError =>
   new DomainError('PROJECT_ARCHIVED', 'The project is archived', 409)
 
+/** «Удалить навсегда» of a project that is not in the trash: «Вернуть» came first (ПР38). */
+export const projectNotInTrash = (): DomainError =>
+  new DomainError('PROJECT_NOT_IN_TRASH', 'The project is not in the trash', 409)
+
 /** The chat has a branch of the agent in the repository of its project (ПР2). */
 export const taskProjectHasBranch = (): DomainError =>
   new DomainError('TASK_PROJECT_HAS_BRANCH', 'The chat has a branch in the project repository', 409)
@@ -46,6 +50,8 @@ export const projectRefusalTexts: Readonly<Record<string, string>> = Object.free
   PROJECT_TEXT_HAS_SECRET:
     'Похоже, в тексте пароль или ключ — уберите его: агент получает этот текст в каждом чате',
   PROJECT_ARCHIVED: 'Проект в архиве — верните его, чтобы начать чат',
+  PROJECT_NOT_IN_TRASH:
+    'Проект уже вернули из корзины — чтобы удалить его навсегда, сначала удалите его снова',
   TASK_PROJECT_HAS_BRANCH:
     'Агент уже работал в этом чате с репозиторием проекта — такой чат не переносится',
   TASK_PROJECT_BUSY: 'Агент сейчас работает в этом чате — перенесите его, когда он ответит',

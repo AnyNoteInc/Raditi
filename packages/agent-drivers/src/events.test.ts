@@ -39,6 +39,14 @@ describe('pinned upstream JSONL fixture', () => {
     expect(fixture(opencode)).toEqual([
       { type: 'started', nativeSessionId: 'ses_test' },
       { type: 'reasoning', text: 'Сначала посмотрю, где лежит главная страница.' },
+      {
+        type: 'todo_list',
+        items: [
+          { text: 'Найти главную страницу', status: 'completed' },
+          { text: 'Обновить заголовок', status: 'in_progress' },
+          { text: 'Проверить страницу', status: 'pending' },
+        ],
+      },
       { type: 'tool_call', tool: 'bash', ok: true },
       {
         type: 'command',
@@ -64,11 +72,14 @@ describe('pinned upstream JSONL fixture', () => {
     ])
   })
 
-  it('emits only domain events, keeps payloads private but what a command printed, and extracts the final result', () => {
+  // Two payloads go on by design: what a command printed (owner's request of 09.11.2026) and the
+  // items of the agent's to-do list, its words to the client (docs/plan/89-agent-todos.md, ТД2) —
+  // without their priority and the tool's answer to the model.
+  it('emits only domain events, keeps payloads private but what a command printed and the to-do items, and extracts the final result', () => {
     const result = fixture(opencode)
     for (const event of result) expect(agentEventSchema.safeParse(event).success).toBe(true)
     expect(JSON.stringify(result)).not.toMatch(
-      /private tool response|private tool input|cost|tool_calls/,
+      /private tool response|private tool input|cost|tool_calls|priority|todowrite|2 todos/,
     )
     expect(opencode.extractResult(result, null)).toEqual(expectedResult)
   })

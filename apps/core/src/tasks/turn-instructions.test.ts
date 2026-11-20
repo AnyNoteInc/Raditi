@@ -1,10 +1,18 @@
+import {
+  SANDBOX_SHELL_TIMEOUT_MAX_MS,
+  SANDBOX_TMP_TMPFS_BYTES,
+  SANDBOX_TOOLS_HOME,
+  SANDBOX_WORKSPACE_TMPFS_BYTES,
+} from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
 import {
   AGENT_COMMANDS,
   INIT_PROMPT,
   openTaskInstructions,
+  REPO_RULES,
   requestedFormatsSection,
+  TURN_RESOURCES,
   unattendedSection,
 } from './turn-instructions.ts'
 
@@ -128,6 +136,159 @@ describe('openTaskInstructions (docs/plan/61-chats-first.md, §5.7)', () => {
     expect(leaving(text)).toContain('Never send a secret, a password or personal data')
     expect(text).toContain('context7 for the current documentation of a library or framework;')
     expect(text).not.toContain('the site is made with')
+  })
+})
+
+describe('the sandbox and the checks of a change (spec §20, «Инструменты песочницы — 19.11.2026», ИП7)', () => {
+  const MIB = 1024 * 1024
+  const internet = { skills: [] }
+  const kinds = () => ({
+    plain: openTaskInstructions(internet, { browser: false, inbox: null }),
+    browser: openTaskInstructions(internet, { browser: true, inbox: { files: 1, omitted: 0 } }),
+    repository: openTaskInstructions(internet, { browser: false, inbox: null, repository: true }),
+  })
+  /** The text of `## How you work`, up to the next section. */
+  const howYouWork = (text: string) => {
+    const start = text.indexOf('## How you work')
+    return text.slice(start, text.indexOf('\n## ', start))
+  }
+  /** A bullet's words without its line breaks: what it says, wherever the lines wrap. */
+  const flat = (text: string) => text.replace(/\n {2}/g, ' ')
+  const bullets = REPO_RULES.split('\n- ').map((bullet, i) => (i === 0 ? bullet : `- ${bullet}`))
+
+  it('tells a chat with a repository what the sandbox has and how to check a change', () => {
+    const { repository: text } = kinds()
+    expect(howYouWork(text)).toContain(REPO_RULES)
+    const section = flat(howYouWork(text))
+    for (const words of [
+      // What is there and what is not.
+      '- Nothing of the project is installed: no dependencies, no build output, no generated code.',
+      'The sandbox has node with npm and pnpm, python3 without pip, php with composer, git, curl, jq, rg and fd; no yarn or bun:',
+      'a repository on yarn runs the release it pins with node (`.yarn/releases`), or else `npx yarn@<version> --cwd /workspace/repo` from outside it.',
+      // How to install.
+      '- To check a change, install only what the check needs, with the package manager the repository names (`packageManager` or `devEngines` in its package.json;',
+      'pnpm switches by itself to the version pinned there) and with its lockfile as it is:',
+      '`pnpm install --frozen-lockfile --filter <package>...` installs one package of a workspace with what it uses, `npm ci` a project of npm.',
+      'When `devEngines` names another package manager, npm and npx refuse (EBADDEVENGINES): use `pnpm exec` and `pnpm dlx`.',
+      "Code the build generates (a database client, types of routes) comes from the repository's own script for it.",
+      // How to check, and how to read a check.
+      "- Check what you changed with the repository's own scripts: the tests of the changed files first, then the type check and the lint of their packages, one package at a time.",
+      'Give the shell tool a `timeout` of up to',
+      'for an install or a test run, end such a command with `; echo "exit: $?"`,',
+      'and never cut its output with tail or grep, which hide failed files and the exit code:',
+      'send a long output to a file (`> "$TMPDIR/check.log" 2>&1`) and read all of it.',
+      // Memory and space.
+      'lives in that memory;',
+      'When the sandbox runs out of memory, it stops at once and the work of the turn is lost: run one heavy command at a time.',
+      'When an install stops with ENOSPC, delete what it left',
+      "and leave that check to the project's build.",
+      'npm, pnpm and your commands keep their caches and temporary files in',
+      'installs and caches do not survive the turn.',
+      // When to stop.
+      '- When a check still does not run after about ten commands or ten minutes of setting it up, stop: finish the change and say that the check did not run.',
+      // The working tree.
+      '- Never change a file of the repository only to make a tool run — a lockfile, a configuration, a hidden file — not even for a moment, and never stage files (`git add`).',
+      "Before you answer, run `git status --porcelain`: every path it lists, except untracked node_modules, goes into the chat's branch, so remove what you made only for a check.",
+      // What to tell the client.
+      '- Tell the client exactly which checks ran and how they ended, in plain words («тесты изменённых файлов прошли» is a check of those files, not of the whole package), and which did not run and why.',
+      "A check that ran another tool in place of the project's own, or with errors filtered out, did not run.",
+    ])
+      expect(section).toContain(words)
+    // The first bullet and seven of the checks: none of the lines of before is left.
+    expect(bullets).toHaveLength(8)
+    for (const words of [
+      'two CPUs',
+      'a full suite takes many minutes',
+      "never put a cache, an install or a scratch file among the repository's files",
+      'leave that check to the build of the branch',
+      'npm refuses (EBADDEVENGINES) inside a project whose',
+      'A check passed only when it ran as the project runs it',
+      'tsc reports no type error at all',
+      'a part of the files or filtered errors are no check',
+    ])
+      expect(section).not.toContain(words)
+    // Under «How you work», before the internet.
+    expect(text.indexOf('## How you work')).toBeLessThan(text.indexOf('- Nothing of the project'))
+    expect(text.indexOf('errors filtered out, did not run.')).toBeLessThan(
+      text.indexOf('## The internet'),
+    )
+    // The answer keeps its rule: plain words, no paths, code or commands.
+    expect(text).toContain('No jargon, no English terms, no file paths, code or commands in them.')
+  })
+
+  it('takes every number and place it tells from what the sandbox mounts and gets', () => {
+    const section = flat(howYouWork(kinds().repository))
+    expect(section).toContain(
+      `- The sandbox has ${TURN_RESOURCES.cpu} CPUs and ${TURN_RESOURCES.memoryMiB / 1024} GiB of memory, and /workspace (${SANDBOX_WORKSPACE_TMPFS_BYTES / MIB} MiB: the repository, the client's files and all you install) lives in that memory; /tmp holds ${SANDBOX_TMP_TMPFS_BYTES / MIB} MiB.`,
+    )
+    expect(section).toContain(`delete what it left (node_modules and ${SANDBOX_TOOLS_HOME})`)
+    expect(section).toContain(`caches and temporary files in ${SANDBOX_TOOLS_HOME};`)
+    expect(section).toContain(
+      `Give the shell tool a \`timeout\` of up to ${SANDBOX_SHELL_TIMEOUT_MAX_MS} ms for an install`,
+    )
+    // Whole numbers, as an agent reads them.
+    for (const value of [
+      TURN_RESOURCES.memoryMiB / 1024,
+      SANDBOX_WORKSPACE_TMPFS_BYTES / MIB,
+      SANDBOX_TMP_TMPFS_BYTES / MIB,
+    ])
+      expect(Number.isInteger(value)).toBe(true)
+  })
+
+  it('says none of it to a chat without a repository', () => {
+    const { plain, browser } = kinds()
+    for (const text of [plain, browser]) {
+      for (const bullet of bullets) expect(text).not.toContain(bullet.trimEnd())
+      for (const words of [
+        'Nothing of the project is installed',
+        'EBADDEVENGINES',
+        SANDBOX_TOOLS_HOME,
+        `${SANDBOX_SHELL_TIMEOUT_MAX_MS}`,
+        'echo "exit: $?"',
+        'runs out of memory',
+        'ENOSPC',
+        'ten minutes',
+        'git add',
+        'git status --porcelain',
+        'тесты изменённых файлов прошли',
+      ])
+        expect(text).not.toContain(words)
+      expect(text).toContain('The working directory is empty and nothing you write there is kept')
+    }
+  })
+
+  it('asks every chat to tell only what it did and saw, and exactly what it checked', () => {
+    for (const text of Object.values(kinds())) {
+      expect(text).toContain(
+        '\n- Tell the client only what you did and saw: say in plain words what you checked and how it\n  ended, and what you could not check.\n',
+      )
+      // In «Answering the client», after the rule of secrets.
+      const answering = text.slice(0, text.indexOf('## Files for the client'))
+      expect(answering).toContain('Tell the client only what you did and saw')
+      expect(answering.indexOf('Never put passwords, keys, tokens')).toBeLessThan(
+        answering.indexOf('Tell the client only what you did and saw'),
+      )
+      expect(text).not.toContain('say you checked something only when the check ran')
+    }
+  })
+
+  it('tells every chat how much its scratch files hold, from the size of /tmp', () => {
+    for (const text of Object.values(kinds()))
+      expect(text).toContain(
+        `go to /tmp/opencode (it is there at the start of\n  every turn, holds ${SANDBOX_TMP_TMPFS_BYTES / MIB} MiB at most, and /tmp is gone after it): never into /workspace/out.`,
+      )
+  })
+
+  it('names pnpm and not pip among the commands that reach the internet: the image has no pip', () => {
+    for (const text of Object.values(kinds())) {
+      const internetSection = text.slice(text.indexOf('## The internet'))
+      expect(internetSection).toContain('the commands you run (curl, npm, pnpm), go through')
+      expect(internetSection).not.toMatch(/\bpip\b/)
+    }
+    // Only a chat with a repository names pip, to say there is none.
+    expect(kinds().plain).not.toMatch(/\bpip\b/)
+    expect(kinds().repository.match(/\bpip\b/g)).toEqual(['pip'])
+    expect(kinds().repository).toContain('python3 without pip')
   })
 })
 
@@ -258,6 +419,48 @@ describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11; docs/p
       expect(text).toContain('is a long\n  document of the `raditi_doc_*` tools below, not a file')
       // The old rule made every document a Word file.
       expect(text).not.toContain('is there to build .docx and .xlsx files')
+    }
+  })
+})
+
+describe('the plan of the work beside the chat (docs/plan/89-agent-todos.md, ТД10, ТД13)', () => {
+  const kinds = () =>
+    [false, true].flatMap((browser) =>
+      [false, true].map((repository) =>
+        openTaskInstructions(
+          { skills: [] },
+          { browser, inbox: { files: 1, omitted: 0 }, repository },
+        ),
+      ),
+    )
+  /** The section «How you work»: up to the next section after it. */
+  const howYouWork = (text: string) => text.split('## How you work\n')[1]!.split('\n## ')[0]!
+
+  it('tells every kind of turn, in «How you work», how to write the items the client sees', () => {
+    for (const text of kinds()) {
+      const section = howYouWork(text)
+      expect(section).toContain(
+        '- When you keep a to-do list with your to-do tool, the client sees it beside the chat as the\n  plan of your work.',
+      )
+      expect(section).toContain('7 items at most')
+      expect(section).toContain('a few plain Russian words about your own\n  work')
+      expect(section).toContain('«Готовим текст страницы»')
+      expect(section).toContain(
+        'no file paths,\n  commands, code, names of tools, secrets or values of variables.',
+      )
+      expect(section).toContain('only when a step\n  starts or ends')
+      expect(section).toContain('mark each finished item completed and each dropped item cancelled')
+      expect(section).toContain('leave the items still ahead as they are')
+      // Once, after what the working directory holds.
+      expect(text.split('your to-do tool')).toHaveLength(2)
+      expect(text.indexOf('your to-do tool')).toBeGreaterThan(text.indexOf('The working directory'))
+    }
+  })
+
+  it('never asks for a list, and names no tool of the driver (rule 7, rule 8)', () => {
+    for (const text of kinds()) {
+      expect(text).not.toMatch(/todo(write|read)|TodoWrite|update_plan|write_todos/i)
+      expect(text).not.toMatch(/(^|\. |- )(Always )?(Keep|Use|Make|Write|Start) (a|your) to-do/m)
     }
   })
 })

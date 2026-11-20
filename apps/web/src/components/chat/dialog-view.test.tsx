@@ -9,6 +9,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { ChatTodo } from '@repo/domain/tasks/agent-todo'
+
 import { plain, serverRefusal } from '@/components/billing/testing'
 
 import type * as Upload from './attachment-upload'
@@ -16,6 +18,7 @@ import { composerText } from './chat-texts'
 import type { DialogFeed, FeedRow, TurnActivityPage } from './chat-types'
 import { DialogView } from './dialog-view'
 import { forgetNewDialog, isNewDialog, markNewDialog } from './new-dialog-hint'
+import { taskSignalBus } from './task-signal-bus'
 import {
   browserAnswer,
   browserQuestionRow,
@@ -23,6 +26,7 @@ import {
   commandRow,
   feedAnswer,
   type FeedBrowserHead,
+  agentQuestionRow,
   requestRow,
   resultRow,
   SCHEDULE_ID,
@@ -52,6 +56,8 @@ const calls = vi.hoisted(() => ({
     (input: { taskId: string }, handlers: SignalHandlers) => { unsubscribe: () => void }
   >(() => ({ unsubscribe: () => undefined })),
   activity: vi.fn<(input: { after: string }) => Promise<TurnActivityPage>>(),
+  // «План работы» (docs/plan/89-agent-todos.md): none unless a test gives one.
+  todo: vi.fn<(input: { taskId: string }) => Promise<ChatTodo | null>>(),
   message: vi.fn<(input: Press & { text: string }) => Promise<Posted>>(),
   // The queue of the chat (docs/plan/75, ВВ1): empty unless a test fills it.
   queueAdd:
@@ -210,6 +216,7 @@ vi.mock('@/trpc/client', () => ({
       remove: mutation(calls.remove),
       moveToProject: mutation(calls.moveToProject),
       export: query('task.export', calls.exported),
+      todo: query('task.todo', calls.todo),
     },
     projectRepo: {
       paths: {
@@ -426,6 +433,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   calls.signals.mockImplementation(() => ({ unsubscribe: () => undefined }))
   calls.activity.mockResolvedValue({ events: [], cursor: '0', more: false })
+  calls.todo.mockResolvedValue(null)
   calls.message.mockResolvedValue(posted)
   calls.proceed.mockResolvedValue(posted)
   calls.retry.mockResolvedValue(posted)
@@ -2072,5 +2080,270 @@ describe('the queue of the chat while the agent works (docs/plan/75, ВВ1, ВВ
     await waitFor(() => expect(calls.queueSendNow).toHaveBeenCalledTimes(1))
     expect(calls.queueSendNow.mock.calls[0]![0]).toMatchObject({ taskId: TASK_ID })
     calls.queueList.mockResolvedValue({ items: [] })
+  })
+})
+
+describe('«План работы» of the agent (docs/plan/89-agent-todos.md, §6)', () => {
+  const plan = (patch: Partial<ChatTodo> = {}): ChatTodo => ({
+    turn: 1,
+    state: 'working',
+    items: [
+      { text: 'Собираем цены из прайса', status: 'completed' },
+      { text: 'Готовим текст страницы', status: 'in_progress' },
+      { text: 'Публикуем страницу', status: 'pending' },
+    ],
+    ...patch,
+  })
+  const running = (events: FeedRow[] = [requestRow('1')]) =>
+    feedAnswer({
+      status: 'running',
+      task: { turnNo: 1, runningSince: '2026-10-17T09:01:00.000Z' },
+      events,
+      cursor: String(events.length),
+    })
+  /** A text document of the chat: it brings «Результаты» into the column. */
+  const documentRow = {
+    id: '3',
+    at: '2026-10-17T09:02:00.000Z',
+    type: 'feed.file',
+    fileId: '0199a3f2-0000-7000-8000-0000000000f1',
+    name: 'прайс.md',
+    sizeBytes: 120,
+  } as unknown as FeedRow
+
+  const strip = () =>
+    screen
+      .queryAllByRole('region', { name: 'План работы' })
+      .find((region) => region.hasAttribute('data-todo-strip')) ?? null
+  const card = () =>
+    screen
+      .queryAllByRole('region', { name: /План работы/ })
+      .find((region) => !region.hasAttribute('data-todo-strip')) ?? null
+  const fieldBox = () => field().closest('[data-feed-field]') as HTMLElement
+
+  /** From `lg`, the area of the feed as wide as `width`: its observer reports it at once. */
+  function feedOfWidth(width: number) {
+    wideLayout()
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        readonly report: () => void
+        constructor(report: () => void) {
+          this.report = report
+        }
+        observe() {
+          this.report()
+        }
+        disconnect() {}
+        unobserve() {}
+      },
+    )
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(width)
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  })
+
+  it('stands over the field below `lg` while the agent works, folded, and opens by a press only', async () => {
+    calls.todo.mockResolvedValue(plan())
+    calls.queueAdd.mockResolvedValue({
+      id: '0199a3f2-0000-7000-8000-0000000000c1',
+      repeated: false,
+    })
+    showDialog(running())
+    const line = await waitFor(() => {
+      const found = strip()
+      expect(found).not.toBeNull()
+      return within(found!).getByRole('button')
+    })
+    expect(calls.todo).toHaveBeenCalledWith({ taskId: TASK_ID })
+    expect(line).toHaveTextContent('Сделано 1 из 3 · Сейчас: Готовим текст страницы')
+    expect(line).toHaveAttribute('aria-expanded', 'false')
+    // In the block of the field, over it; no column beside the chat, nor its icon.
+    expect(fieldBox().contains(line)).toBe(true)
+    expect(line.compareDocumentPosition(field()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(card()).toBeNull()
+    expect(screen.queryByRole('button', { name: /план работы/i })).toBeNull()
+    // Sending words does not open it.
+    await waitFor(() => expect(field().disabled).toBe(false))
+    type('И ещё добавьте телефон')
+    fireEvent.click(screen.getByRole('button', { name: 'Поставить в очередь' }))
+    await waitFor(() => expect(calls.queueAdd).toHaveBeenCalledTimes(1))
+    expect(within(strip()!).getByRole('button')).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(within(strip()!).getByRole('button'))
+    expect(within(strip()!).getByRole('button')).toHaveAttribute('aria-expanded', 'true')
+    expect(within(strip()!).getAllByRole('listitem')).toHaveLength(3)
+  })
+
+  it('leaves the field once the turn has ended below `lg`', async () => {
+    calls.todo.mockResolvedValue(plan({ state: 'ended' }))
+    showDialog()
+    await waitFor(() => expect(calls.todo).toHaveBeenCalled())
+    await screen.findByRole('heading', { level: 1, name: 'Поменять цену капучино' })
+    expect(strip()).toBeNull()
+    expect(card()).toBeNull()
+  })
+
+  it('brings the column beside the chat from `lg` in a chat with no documents', async () => {
+    feedOfWidth(1200)
+    calls.todo.mockResolvedValue(plan())
+    showDialog(running())
+    const shown = await waitFor(() => {
+      const found = card()
+      expect(found).not.toBeNull()
+      return found!
+    })
+    expect(within(shown).getByRole('heading', { level: 2, name: 'План работы' })).toBeTruthy()
+    expect(within(shown).getAllByRole('listitem')).toHaveLength(3)
+    expect(screen.queryByRole('complementary', { name: 'Результаты' })).toBeNull()
+    // Where the column stands, nothing stands over the field.
+    expect(strip()).toBeNull()
+    // The icon in the head hides the column, and the choice is kept under its own key.
+    fireEvent.click(screen.getByRole('button', { name: 'Скрыть план работы' }))
+    await waitFor(() => expect(card()).toBeNull())
+    expect(window.localStorage.getItem('raditi.chat.side.hidden')).toBe('1')
+    expect(screen.getByRole('button', { name: 'Показать план работы' })).toBeTruthy()
+    expect(strip()).toBeNull()
+  })
+
+  it('stands over «Результаты» from `lg`, one icon for both', async () => {
+    feedOfWidth(1200)
+    calls.todo.mockResolvedValue(plan())
+    showDialog(running([requestRow('1'), documentRow]))
+    const results = await screen.findByRole('complementary', { name: 'Результаты' })
+    const shown = card()!
+    expect(shown.compareDocumentPosition(results) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Скрыть план и результаты' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('complementary', { name: 'Результаты' })).toBeNull(),
+    )
+    expect(card()).toBeNull()
+    expect(screen.getByRole('button', { name: 'Показать план и результаты' })).toBeTruthy()
+  })
+
+  it('keeps «Результаты» alone, and their words, where the agent made no plan', async () => {
+    feedOfWidth(1200)
+    showDialog(running([requestRow('1'), documentRow]))
+    await screen.findByRole('complementary', { name: 'Результаты' })
+    expect(card()).toBeNull()
+    expect(screen.getByRole('button', { name: 'Скрыть результаты' })).toBeTruthy()
+  })
+
+  it('stands over the field from `lg` too where the feed is too narrow for the column', async () => {
+    feedOfWidth(900)
+    calls.todo.mockResolvedValue(plan())
+    showDialog(running())
+    await waitFor(() => expect(strip()).not.toBeNull())
+    expect(card()).toBeNull()
+  })
+
+  it('says the chat waits for the client where the agent asked after its plan', async () => {
+    feedOfWidth(1200)
+    calls.todo.mockResolvedValue(plan({ state: 'ended' }))
+    showDialog(
+      feedAnswer({
+        status: 'awaiting_user',
+        task: { turnNo: 1 },
+        events: [requestRow('1'), agentQuestionRow('2', 1)],
+        cursor: '2',
+      }),
+    )
+    const shown = await waitFor(() => {
+      const found = card()
+      expect(found).not.toBeNull()
+      return found!
+    })
+    expect(shown).toHaveAccessibleName('План работы: Ждём вашего ответа')
+    expect(within(shown).getAllByRole('listitem')[1]).toHaveAttribute(
+      'aria-label',
+      'Готовим текст страницы, не закончено',
+    )
+  })
+
+  it('starts the line folded for the plan of each turn, whatever the client opened before', async () => {
+    calls.todo.mockResolvedValue(plan())
+    showDialog(running())
+    const line = () => within(strip()!).getByRole('button')
+    await waitFor(() => expect(strip()).not.toBeNull())
+    fireEvent.click(line())
+    expect(line()).toHaveAttribute('aria-expanded', 'true')
+    const handlers = calls.signals.mock.calls[0]![1]
+    // The turn answers: the line leaves the field.
+    calls.todo.mockResolvedValue(plan({ state: 'ended' }))
+    calls.feed.mockResolvedValue(
+      feedAnswer({
+        status: 'awaiting_user',
+        task: { turnNo: 1 },
+        events: [resultRow('2', 1)],
+        cursor: '2',
+      }),
+    )
+    act(() => handlers.onData({ signal: 'feed' }))
+    await waitFor(() => expect(calls.todo).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(strip()).toBeNull())
+    // The next turn goes on with the plan the one before left: folded.
+    calls.todo.mockResolvedValue(plan({ state: 'carried' }))
+    calls.feed.mockResolvedValue(
+      feedAnswer({
+        status: 'running',
+        task: { turnNo: 2, runningSince: '2026-10-17T09:05:00.000Z' },
+        events: [requestRow('3', 'И ещё добавьте телефон')],
+        cursor: '3',
+      }),
+    )
+    act(() => handlers.onData({ signal: 'feed' }))
+    await waitFor(() => expect(strip()).not.toBeNull())
+    expect(line()).toHaveTextContent('С прошлого раза · сделано 1 из 3')
+    expect(line()).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(line())
+    expect(line()).toHaveAttribute('aria-expanded', 'true')
+    // That turn writes a plan of its own: folded again.
+    calls.todo.mockResolvedValue(plan({ turn: 2 }))
+    act(() => taskSignalBus.activity(TASK_ID))
+    await waitFor(() => expect(line()).toHaveTextContent('Сейчас: Готовим текст страницы'))
+    expect(line()).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('goes with the turn `/undo` took back, read again as soon as it is taken', async () => {
+    feedOfWidth(1200)
+    calls.todo.mockResolvedValue(plan({ state: 'ended' }))
+    calls.undoTurn.mockResolvedValue({ ...posted, words: 'Поменяйте цену капучино на 290 ₽' })
+    showDialog(
+      feedAnswer({
+        status: 'awaiting_user',
+        task: { turnNo: 1 },
+        commands: verdicts({ turn_undo: null }),
+        events: [requestRow('1')],
+        cursor: '1',
+      }),
+    )
+    await waitFor(() => expect(card()).not.toBeNull())
+    expect(card()).toHaveAccessibleName('План работы')
+    // core took the turn back: the chat has no plan now, and its status and turn are as they were.
+    calls.todo.mockResolvedValue(null)
+    await run(/Отменить последний запрос/)
+    await waitFor(() => expect(calls.undoTurn).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(card()).toBeNull())
+    expect(calls.todo.mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('reads the plan again as the status of the chat changes', async () => {
+    calls.todo.mockResolvedValue(plan())
+    calls.signals.mockImplementation(() => ({ unsubscribe: () => undefined }))
+    showDialog(running())
+    await waitFor(() => expect(calls.todo).toHaveBeenCalledTimes(1))
+    calls.feed.mockResolvedValue(
+      feedAnswer({
+        status: 'awaiting_user',
+        task: { turnNo: 1 },
+        events: [resultRow('2', 1)],
+        cursor: '2',
+      }),
+    )
+    const handlers = calls.signals.mock.calls[0]![1]
+    act(() => handlers.onData({ signal: 'feed' }))
+    await waitFor(() => expect(calls.todo).toHaveBeenCalledTimes(2))
   })
 })

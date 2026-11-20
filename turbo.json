@@ -193,6 +193,8 @@
         "$TURBO_ROOT$/packages/domain/src/release/chat-commands.ts",
         "$TURBO_ROOT$/infra/sandbox/gateway.mjs",
         "$TURBO_ROOT$/infra/sandbox/client-egress.mjs",
+        "$TURBO_ROOT$/infra/sandbox/Dockerfile",
+        "$TURBO_ROOT$/infra/app/env.example",
         "$TURBO_ROOT$/apps/runner/scripts/runner-token.mjs",
         "$TURBO_ROOT$/apps/runner/src/core-api/core-client.ts",
         "$TURBO_ROOT$/apps/runner/src/sandbox-runner/sandbox-runner.ts",

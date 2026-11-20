@@ -1,5 +1,11 @@
 import type { PrismaClient } from '@repo/db'
-import { agentEventSchema, agentOutputLimits, type AgentEvent } from '@repo/domain'
+import {
+  agentEventSchema,
+  agentOutputLimits,
+  agentTodoLimits,
+  agentTodoStatuses,
+  type AgentEvent,
+} from '@repo/domain'
 import { z } from 'zod'
 
 import { accessibleTask, taskNotFound } from './access.ts'
@@ -8,11 +14,14 @@ import { accessibleTask, taskNotFound } from './access.ts'
 // всю информацию, все что он выводит»): what the agent wrote, ran and changed in one turn of a
 // dialog, from the journal rows `turn.output` core wrote — after `maskTurnEvents`, so a value of
 // the client's variables never is in them. The rows stay out of the feed (`client_visible` is
-// false); this is their only reader for the page. A `failed` event's reason is raw CLI or
-// provider text and never shown (spec §8), and `started`, `usage` and `completed` say nothing to
-// the client. The turn's final message is its result object: the dialog shows it as its answer.
-// A `reasoning` event is the model's raw thought: it is given like the rest, and the page draws it
-// only for a viewer who asked (docs/plan/61-chats-first.md, К32).
+// false). They have two readers for the page: this one, and `task.todo` (services/chat/todo.ts),
+// which takes of them only the last `todo_list` of a turn — the plan of the agent beside the chat
+// (docs/plan/89-agent-todos.md). A `failed` event's reason is raw CLI or provider text and never
+// shown (spec §8), and `started`, `usage` and `completed` say nothing to the client. The turn's
+// final message is its result object: the dialog shows it as its answer. A `reasoning` event is
+// the model's raw thought: it is given like the rest, and the page draws it only for a viewer who
+// asked (docs/plan/61-chats-first.md, К32). A `todo_list` is given whole, each one: «Ход работы»
+// keeps a line of it when the count or the item at work changes (ТД8).
 
 /**
  * An answer ends after the row that reaches one of these: rows, events, or UTF-16 units of the
@@ -60,6 +69,27 @@ const shownEvent = z.discriminatedUnion('type', [
     type: z.literal('question'),
     text: z.string().max(agentOutputLimits.questionText),
     options: z.array(z.string().max(agentOutputLimits.questionOption)),
+  }),
+  /**
+   * The agent's whole to-do list at that moment (docs/plan/89-agent-todos.md, ТД8): the line
+   * «План работы» of «Ход работы» opens on it.
+   */
+  z.strictObject({
+    type: z.literal('todo_list'),
+    items: z
+      .array(
+        z.strictObject({
+          text: z.string().min(1).max(agentTodoLimits.text),
+          status: z.enum(agentTodoStatuses),
+        }),
+      )
+      .max(agentTodoLimits.items),
+    omitted: z
+      .strictObject({
+        completed: z.number().int().min(0).max(agentTodoLimits.omitted),
+        other: z.number().int().min(0).max(agentTodoLimits.omitted),
+      })
+      .optional(),
   }),
 ])
 
@@ -159,6 +189,14 @@ export function shownActivity(event: AgentEvent): z.output<typeof shownEvent> | 
       return { type: 'tool_call', tool: event.tool, ok: event.ok }
     case 'question':
       return { type: 'question', text: event.text, options: [...event.options] }
+    case 'todo_list':
+      return {
+        type: 'todo_list',
+        items: event.items.map((item) => ({ text: item.text, status: item.status })),
+        ...(event.omitted === undefined
+          ? {}
+          : { omitted: { completed: event.omitted.completed, other: event.omitted.other } }),
+      }
     case 'started':
     case 'usage':
     case 'completed':
@@ -181,6 +219,8 @@ const textOf = (event: z.output<typeof shownEvent>): number => {
       return event.tool.length
     case 'question':
       return event.text.length + event.options.reduce((sum, option) => sum + option.length, 0)
+    case 'todo_list':
+      return event.items.reduce((sum, item) => sum + item.text.length, 0)
   }
 }
 

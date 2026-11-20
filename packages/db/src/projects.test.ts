@@ -15,6 +15,7 @@ import {
   listProjects,
   moveChatToProject,
   projectOwnedBy,
+  purgeProjectNow,
   readProject,
   restoreProject,
   setProjectInstructions,
@@ -198,9 +199,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the projects of a workspace (plan 84)
     // A second «Удалить» keeps the day.
     expect(await trashProject(db, { projectId, userId: user.id, now: at(2) })).toEqual(first)
     expect(await listProjects(db, { userId: user.id })).toEqual([])
-    expect((await listProjects(db, { userId: user.id, view: 'trash' })).map((r) => r.id)).toEqual([
-      projectId,
-    ])
+    expect(
+      (await listProjects(db, { userId: user.id, view: 'trash', now: at(2) })).map((r) => r.id),
+    ).toEqual([projectId])
     expect(await codeOf(() => readProject(db, { projectId, userId: user.id }))).toBe(
       'PROJECT_NOT_FOUND',
     )
@@ -212,6 +213,58 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the projects of a workspace (plan 84)
       await codeOf(() =>
         restoreProject(db, { projectId, userId: user.id, now: new Date(Date.UTC(2026, 11, 5)) }),
       ),
+    ).toBe('PROJECT_NOT_FOUND')
+  })
+
+  it('«Удалить навсегда»: out of the trash at once, «Вернуть» refused, core takes it (ПР38)', async () => {
+    const { user, project } = await owner()
+    const { projectId } = await project()
+    const trash = (now: Date) =>
+      listProjects(db, { userId: user.id, view: 'trash', now }).then((rows) =>
+        rows.map((r) => r.id),
+      )
+    // Only from the trash: a live project is not purged by a stale press.
+    expect(
+      await codeOf(() => purgeProjectNow(db, { projectId, userId: user.id, now: at(1) })),
+    ).toBe('PROJECT_NOT_IN_TRASH')
+    await trashProject(db, { projectId, userId: user.id, now: at(1) })
+    // Someone else's is not found, and nothing changes.
+    const stranger = await owner()
+    expect(
+      await codeOf(() => purgeProjectNow(db, { projectId, userId: stranger.user.id, now: at(2) })),
+    ).toBe('PROJECT_NOT_FOUND')
+    expect(await trash(at(2))).toEqual([projectId])
+
+    await purgeProjectNow(db, { projectId, userId: user.id, now: at(3) })
+    const row = await db.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { deletedAt: true, purgeAfter: true },
+    })
+    // Its day is the moment it went into the trash: the row waits for core, as one past its 30 days.
+    expect(row).toEqual({ deletedAt: at(1), purgeAfter: at(1) })
+    expect(await trash(at(3))).toEqual([])
+    // A «Вернуть» whose clock read earlier than the press but writes after it is refused too.
+    expect(await codeOf(() => restoreProject(db, { projectId, userId: user.id, now: at(2) }))).toBe(
+      'PROJECT_NOT_FOUND',
+    )
+    expect(
+      await codeOf(() => restoreProject(db, { projectId, userId: user.id, now: at(3, 13) })),
+    ).toBe('PROJECT_NOT_FOUND')
+    // A repeat changes nothing, and «Удалить» again keeps the day it has.
+    await purgeProjectNow(db, { projectId, userId: user.id, now: at(4) })
+    expect(await trashProject(db, { projectId, userId: user.id, now: at(4) })).toEqual({
+      purgeAfter: at(1),
+    })
+    expect(
+      await db.project.findUniqueOrThrow({
+        where: { id: projectId },
+        select: { purgeAfter: true },
+      }),
+    ).toEqual({ purgeAfter: at(1) })
+    // Once core purged it, a stale press is told the project is gone.
+    await db.project.delete({ where: { id: projectId } })
+    expect(
+      await codeOf(() => purgeProjectNow(db, { projectId, userId: user.id, now: at(5) })),
     ).toBe('PROJECT_NOT_FOUND')
   })
 

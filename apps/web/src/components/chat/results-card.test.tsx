@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { chatDocumentsOf } from '@repo/domain/tasks/chat-documents'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useRef } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { docId, sampleDoc } from './doc-test-fixtures'
-import { ResultsCard, ResultsToggle } from './results-card'
+import { ResultsCard, ResultsToggle, useResultsCard } from './results-card'
 
 const { readDoc } = vi.hoisted(() => ({ readDoc: vi.fn() }))
 
@@ -73,5 +74,131 @@ describe('«Результаты» beside the chat (14.11.2026)', () => {
     expect(onToggle).toHaveBeenCalledTimes(1)
     rerender(<ResultsToggle shown={false} onToggle={onToggle} />)
     expect(screen.getByRole('button', { name: 'Показать результаты' })).toBeTruthy()
+  })
+
+  it('leaves the column room for «План работы» standing over it', () => {
+    readDoc.mockResolvedValue(sampleDoc(2))
+    show()
+    const card = screen.getByRole('complementary', { name: 'Результаты' })
+    // jsdom resolves the units against its window: min(60vh, 480px), then min(40vh, 320px).
+    const of = (vh: number, most: number) => `${Math.min((vh * window.innerHeight) / 100, most)}px`
+    expect(getComputedStyle(card).maxHeight).toBe(of(60, 480))
+    cleanup()
+    show({ underPlan: true })
+    expect(
+      getComputedStyle(screen.getByRole('complementary', { name: 'Результаты' })).maxHeight,
+    ).toBe(of(40, 320))
+  })
+
+  // The column holds «План работы» too (docs/plan/89-agent-todos.md, ТД6, §6.1).
+  it.each([
+    ['plan', 'Скрыть план работы', 'Показать план работы'],
+    ['both', 'Скрыть план и результаты', 'Показать план и результаты'],
+    ['results', 'Скрыть результаты', 'Показать результаты'],
+  ] as const)('names what the column holds — %s', (holds, hide, show) => {
+    const { rerender } = render(<ResultsToggle shown onToggle={() => undefined} holds={holds} />)
+    expect(screen.getByRole('button', { name: hide })).toHaveAttribute('aria-pressed', 'true')
+    rerender(<ResultsToggle shown={false} onToggle={() => undefined} holds={holds} />)
+    expect(screen.getByRole('button', { name: show })).toHaveAttribute('aria-pressed', 'false')
+  })
+})
+
+describe('the column beside the chat', () => {
+  /** The area of the feed as wide as `width`: the observer reports it at once. */
+  function feedOfWidth(width: number) {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        readonly report: () => void
+        constructor(report: () => void) {
+          this.report = report
+        }
+        observe() {
+          this.report()
+        }
+        disconnect() {}
+        unobserve() {}
+      },
+    )
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(width)
+  }
+
+  let column: ReturnType<typeof useResultsCard>
+  function Area({ enabled }: { enabled: boolean }) {
+    const area = useRef<HTMLDivElement>(null)
+    column = useResultsCard(area, enabled)
+    return <div ref={area} />
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
+  })
+
+  it('is measured before it says whether it fits', () => {
+    feedOfWidth(1200)
+    const { rerender } = render(<Area enabled={false} />)
+    expect(column).toMatchObject({ fits: false, measured: false, shown: false })
+    rerender(<Area enabled />)
+    expect(column).toMatchObject({ fits: true, measured: true, shown: true })
+  })
+
+  it('waits for a new reading each time it is wanted, not for a frame on the one before', () => {
+    // An observer that reports only when told, over a feed whose width the test sets.
+    let report = () => {}
+    let width = 1200
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          report = callback
+        }
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      },
+    )
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
+    const drawn: { fits: boolean; measured: boolean }[] = []
+    function Watched({ enabled }: { enabled: boolean }) {
+      const area = useRef<HTMLDivElement>(null)
+      const { fits, measured } = useResultsCard(area, enabled)
+      drawn.push({ fits, measured })
+      return <div ref={area} />
+    }
+    const { rerender } = render(<Watched enabled />)
+    act(() => report())
+    expect(drawn.at(-1)).toEqual({ fits: true, measured: true })
+    rerender(<Watched enabled={false} />)
+    expect(drawn.at(-1)).toEqual({ fits: false, measured: false })
+    // Wanted again over a feed that is narrow now: no drawing says it fits before the reading.
+    width = 900
+    drawn.length = 0
+    rerender(<Watched enabled />)
+    expect(drawn).toContainEqual({ fits: false, measured: false })
+    expect(drawn.every((one) => !one.fits && !one.measured)).toBe(true)
+    act(() => report())
+    expect(drawn.at(-1)).toEqual({ fits: false, measured: true })
+  })
+
+  it('does not fit a narrow feed, which it says once measured', () => {
+    feedOfWidth(900)
+    render(<Area enabled />)
+    expect(column).toMatchObject({ fits: false, measured: true, shown: false })
+  })
+
+  it('keeps the choice to hide it under a key of its own, not that of «Результаты» alone', () => {
+    feedOfWidth(1200)
+    // Who once hid «Результаты» still sees the plan (ТД6).
+    window.localStorage.setItem('raditi.chat.results.hidden', '1')
+    const { unmount } = render(<Area enabled />)
+    expect(column.shown).toBe(true)
+    act(() => column.toggle())
+    expect(column).toMatchObject({ hidden: true, shown: false })
+    expect(window.localStorage.getItem('raditi.chat.side.hidden')).toBe('1')
+    unmount()
+    render(<Area enabled />)
+    expect(column).toMatchObject({ hidden: true, shown: false })
   })
 })

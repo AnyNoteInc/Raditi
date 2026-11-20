@@ -7,6 +7,7 @@ import {
   REPOSITORY_ONLY,
   requirementsOf,
 } from '../tasks/task-requirements.ts'
+import { SANDBOX_WORKSPACE_TMPFS_BYTES } from './sandbox-provider.ts'
 import {
   assertTurnInbox,
   assertTurnProjectFiles,
@@ -498,19 +499,20 @@ describe('files of the project in a turn (docs/plan/84-projects.md, ПР8)', () 
     expect(refusal(() => assertTurnProjectFiles(files, mayHold))).toBe('BAD_REQUEST')
   })
 
-  it('shares /workspace so the agent keeps at least 120 MiB (§4.7)', () => {
+  it('shares /workspace so the agent keeps at least 632 MiB for its checks (§4.7)', () => {
     const plain = turnWorkspaceBudget({ repository: false })
     expect(plain).toEqual({
-      workspace: 512 * MIB,
+      workspace: SANDBOX_WORKSPACE_TMPFS_BYTES,
       repository: 0,
       inbox: 200 * MIB,
       project: 100 * MIB,
-      agent: 212 * MIB,
+      agent: 724 * MIB,
     })
+    expect(SANDBOX_WORKSPACE_TMPFS_BYTES).toBe(1024 * MIB)
     expect(plain.inbox).toBe(turnInboxLimits.bytes)
     const repo = turnWorkspaceBudget({ repository: true })
     expect(repo).toMatchObject({ repository: 192 * MIB, inbox: 100 * MIB, project: 100 * MIB })
-    expect(repo.agent).toBe(120 * MIB)
+    expect(repo.agent).toBe(632 * MIB)
     for (const budget of [plain, repo])
       expect(budget.repository + budget.inbox + budget.project + budget.agent).toBe(
         budget.workspace,

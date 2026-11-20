@@ -99,13 +99,15 @@ function shellCall(body, state) {
   )
   const { turn } = state
   // What an agent command can see under gVisor: the product's uid, the pinned CLI, no credential
-  // file, and neither credential in its own environment or in the environment of any process,
-  // the CLI included. Only digests travel in the command: a credential in a request body is
-  // refused above. The crash upload of the CLI's runtime is off and nothing can switch it on.
+  // file — of the secrets only the script bash sources before each command, which the wrapper
+  // writes on every turn (spec §20, «Инструменты песочницы», ИП4) —, and neither credential in
+  // its own environment or in the environment of any process, the CLI included. Only digests
+  // travel in the command: a credential in a request body is refused above. The crash upload of
+  // the CLI's runtime is off and nothing can switch it on.
   // The working copy of a chat without a repository starts empty at every turn (rule 5): what the
   // first turn wrote there is gone in the second, which goes on from the session alone.
   const digests = JSON.stringify([sha256(state.llmKey), sha256(state.mcpKey)])
-  const source = `const fs=require('node:fs');const assert=require('node:assert/strict');const cp=require('node:child_process');const crypto=require('node:crypto');const kernel=cp.execFileSync('uname',['-r'],{encoding:'utf8'}).trim();assert.match(kernel,/gvisor/i);assert.equal(process.getuid(),10001);assert.equal(process.getgid(),10001);assert.equal(cp.execFileSync('opencode',['--version'],{encoding:'utf8',env:{PATH:process.env.PATH,HOME:'/tmp/raditi-g3-version-home',BUN_ENABLE_CRASH_REPORTING:'0'}}).trim(),'${CLI_VERSION}');const digests=${digests};const held=(environ)=>environ.split('\\0').some((entry)=>digests.includes(crypto.createHash('sha256').update(entry.slice(entry.indexOf('=')+1).replace(/^Bearer /,'')).digest('hex')));assert.equal(held(Object.entries(process.env).map(([name,value])=>name+'='+value).join('\\0')),false);assert.deepEqual(Array.from(fs.readdirSync('/run/raditi/secrets')),[]);for(const pid of fs.readdirSync('/proc')){if(!(Number(pid)>0))continue;let environ='';try{environ=fs.readFileSync('/proc/'+pid+'/environ','utf8')}catch{}assert.equal(held(environ),false)}assert.equal(process.env.BUN_ENABLE_CRASH_REPORTING,'0');assert.equal(process.env.BUN_CRASH_REPORT_URL,undefined);${turn === 2 ? "assert.equal(fs.existsSync('index.php'),false);assert.equal(fs.existsSync('turn-1.txt'),false);" : ''}fs.appendFileSync('index.php','turn ${turn}\\n');fs.writeFileSync('turn-${turn}.txt','turn ${turn}\\n');console.log(JSON.stringify({kernel,uid:process.getuid(),gid:process.getgid(),opencode:'${CLI_VERSION}',environClean:true,secretFilesRemoved:true}));console.log('${marker(turn)}');`
+  const source = `const fs=require('node:fs');const assert=require('node:assert/strict');const cp=require('node:child_process');const crypto=require('node:crypto');const kernel=cp.execFileSync('uname',['-r'],{encoding:'utf8'}).trim();assert.match(kernel,/gvisor/i);assert.equal(process.getuid(),10001);assert.equal(process.getgid(),10001);assert.equal(cp.execFileSync('opencode',['--version'],{encoding:'utf8',env:{PATH:process.env.PATH,HOME:'/tmp/raditi-g3-version-home',BUN_ENABLE_CRASH_REPORTING:'0'}}).trim(),'${CLI_VERSION}');const digests=${digests};const held=(environ)=>environ.split('\\0').some((entry)=>digests.includes(crypto.createHash('sha256').update(entry.slice(entry.indexOf('=')+1).replace(/^Bearer /,'')).digest('hex')));assert.equal(held(Object.entries(process.env).map(([name,value])=>name+'='+value).join('\\0')),false);assert.deepEqual(Array.from(fs.readdirSync('/run/raditi/secrets')),['shell-env.sh']);for(const pid of fs.readdirSync('/proc')){if(!(Number(pid)>0))continue;let environ='';try{environ=fs.readFileSync('/proc/'+pid+'/environ','utf8')}catch{}assert.equal(held(environ),false)}assert.equal(process.env.BUN_ENABLE_CRASH_REPORTING,'0');assert.equal(process.env.BUN_CRASH_REPORT_URL,undefined);${turn === 2 ? "assert.equal(fs.existsSync('index.php'),false);assert.equal(fs.existsSync('turn-1.txt'),false);" : ''}fs.appendFileSync('index.php','turn ${turn}\\n');fs.writeFileSync('turn-${turn}.txt','turn ${turn}\\n');console.log(JSON.stringify({kernel,uid:process.getuid(),gid:process.getgid(),opencode:'${CLI_VERSION}',environClean:true,secretFilesRemoved:true}));console.log('${marker(turn)}');`
   return {
     name: 'bash',
     arguments: JSON.stringify({
@@ -398,7 +400,11 @@ export async function startOpencodeRunnerFixture() {
         }
       } else if (state.rewind) {
         // What the session behind this request holds: the stand asks it of each turn of its chat.
-        check(state.phase === 'initial', 'Unexpected request after turn completion')
+        const { todos } = state.rewind
+        check(
+          state.phase === 'initial' || (todos && state.phase === 'todo'),
+          'Unexpected request after turn completion',
+        )
         check(
           state.rewind.remembered.every((text) => serialized.includes(text)),
           'The restored session lost words of an earlier turn',
@@ -407,8 +413,29 @@ export async function startOpencodeRunnerFixture() {
           !state.rewind.forgotten.some((text) => serialized.includes(text)),
           'The words of an undone turn reached the provider',
         )
-        state.phase = 'completed'
-        item = { content: JSON.stringify(rewindResult(state.rewind.answer)) }
+        if (todos && state.phase === 'initial') {
+          // The agent's to-do list first (docs/plan/89-agent-todos.md, 89.6): the CLI's own tool.
+          check(
+            body.tools.some((tool) => tool.function?.name === 'todowrite'),
+            'The to-do tool was not advertised',
+          )
+          state.phase = 'todo'
+          state.todoCallId = `call_todo_${state.turn}`
+          item = {
+            function: { name: 'todowrite', arguments: JSON.stringify({ todos }) },
+            id: state.todoCallId,
+          }
+        } else {
+          if (todos) {
+            check(
+              toolOutput(body, state.todoCallId, todos[0].content),
+              'The to-do list did not come back to the model',
+            )
+            state.toolOutputSeen = true
+          }
+          state.phase = 'completed'
+          item = { content: JSON.stringify(rewindResult(state.rewind.answer)) }
+        }
       } else if (state.repository) {
         // The session behind this request, as for a turn without a repository, and its one command.
         check(
@@ -526,9 +553,11 @@ export async function startOpencodeRunnerFixture() {
      * One turn of the chat without a repository whose last request is undone
      * (docs/plan/61-chats-first.md, §5.14): no tool, an answer, and the check of what its session
      * held — `remembered` must stand in the request and `forgotten` must not, or the request is
-     * refused and the turn fails. No turn of the chat with the repository is one of these.
+     * refused and the turn fails. No turn of the chat with the repository is one of these. With
+     * `todos` the model first writes that to-do list with the CLI's `todowrite`
+     * (docs/plan/89-agent-todos.md, 89.6) and answers once the list came back to it.
      */
-    addRewindTurn({ turn, llmKey, mcpKey, prompt, effort, answer, remembered, forgotten }) {
+    addRewindTurn({ turn, llmKey, mcpKey, prompt, effort, answer, remembered, forgotten, todos }) {
       const key = `rewind-${turn}`
       check(!closed && Number.isInteger(turn) && !turns.has(key), 'Unexpected rewind turn')
       check(
@@ -537,11 +566,24 @@ export async function startOpencodeRunnerFixture() {
         ),
         'Invalid rewind turn',
       )
+      check(
+        todos === undefined ||
+          (Array.isArray(todos) &&
+            todos.length > 0 &&
+            todos.every(
+              (item) =>
+                typeof item?.content === 'string' &&
+                item.content.length > 0 &&
+                ['pending', 'in_progress', 'completed', 'cancelled'].includes(item.status) &&
+                ['high', 'medium', 'low'].includes(item.priority),
+            )),
+        'Invalid rewind turn',
+      )
       check(effort === (turn === 1 ? 'low' : 'high'), 'Invalid fixture effort')
       assertRotated(llmKey, mcpKey)
       turns.set(key, {
         ...freshTurn({ turn, llmKey, mcpKey, prompt, effort, model: MODEL }),
-        rewind: { answer, remembered, forgotten },
+        rewind: { answer, remembered, forgotten, ...(todos ? { todos } : {}) },
       })
       return rewindResult(answer)
     },
@@ -710,7 +752,10 @@ export async function startOpencodeRunnerFixture() {
           'A turn of the chat did not run its one command and answer',
         )
     },
-    /** The turns of the chat without a repository, each answered once by a checked request. */
+    /**
+     * The turns of the chat without a repository, each answered once by a checked request; one
+     * with a to-do list, after the request its list came back in.
+     */
     assertRewindComplete(count = 3) {
       check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
       const rewound = [...turns.values()].filter((state) => state.rewind)
@@ -718,7 +763,10 @@ export async function startOpencodeRunnerFixture() {
       this.assertCompacted()
       for (const state of rewound)
         check(
-          state.phase === 'completed' && state.llmRequests === 1,
+          state.phase === 'completed' &&
+            (state.rewind.todos
+              ? state.llmRequests === 2 && state.toolOutputSeen
+              : state.llmRequests === 1),
           'A turn without a repository did not answer its one request',
         )
     },

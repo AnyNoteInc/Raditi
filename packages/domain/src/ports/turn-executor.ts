@@ -29,6 +29,7 @@ import {
 } from './agent-driver.ts'
 import type { PresignedRequest } from './object-storage.ts'
 import {
+  SANDBOX_WORKSPACE_TMPFS_BYTES,
   sandboxSpecSchema,
   type DestroyReason,
   type ExecCursor,
@@ -459,8 +460,8 @@ export const turnInputSchema = z
 
 /**
  * What one turn gets of the files of its task: the latest, at most this many and this many
- * bytes together. A full message (ten files of 20 MiB) always fits in the 512 MiB tmpfs of
- * /workspace.
+ * bytes together. A full message (ten files of 20 MiB) always fits in the tmpfs of /workspace
+ * (SANDBOX_WORKSPACE_TMPFS_BYTES).
  */
 export const turnInboxLimits = Object.freeze({
   files: 50,
@@ -564,10 +565,11 @@ export function assertTurnProjectFiles(
 const MIB = 1024 * 1024
 
 /**
- * How the 512 MiB of `/workspace` are shared in a turn (docs/plan/84-projects.md, §4.7): without a
- * repository — the files of the chat up to 200 MiB and of the project up to 100; with one (Э6) —
- * the tree with `.git` up to 192 MiB, the files of the project up to 100, of the chat up to 100.
- * What is left — at least 120 MiB — is the agent's: `/workspace/out`, new files, dependencies.
+ * How `/workspace` (SANDBOX_WORKSPACE_TMPFS_BYTES) is shared in a turn (docs/plan/84-projects.md,
+ * §4.7): without a repository — the files of the chat up to 200 MiB and of the project up to 100;
+ * with one (Э6) — the tree with `.git` up to 192 MiB, the files of the project up to 100, of the
+ * chat up to 100. What is left — at least 632 MiB since 19.11.2026 (120 MiB of 512 before) — is
+ * the agent's: `/workspace/out`, new files, the dependencies and caches of its checks.
  */
 export function turnWorkspaceBudget(requirements: Pick<TaskRequirements, 'repository'>): {
   workspace: number
@@ -576,7 +578,7 @@ export function turnWorkspaceBudget(requirements: Pick<TaskRequirements, 'reposi
   project: number
   agent: number
 } {
-  const workspace = 512 * MIB
+  const workspace = SANDBOX_WORKSPACE_TMPFS_BYTES
   const repository = requirements.repository ? 192 * MIB : 0
   const inbox = requirements.repository ? 100 * MIB : turnInboxLimits.bytes
   const project = turnProjectFilesLimits.bytes
