@@ -30,6 +30,14 @@ import {
   trashArtifact,
   type ArtifactActor,
 } from './artifacts.ts'
+import {
+  artifactChatNews,
+  artifactPlaceholders,
+  artifactsOfTurn,
+  chatArtifactAccess,
+  chatLastRevOf,
+  listChatArtifacts,
+} from './artifact-chats.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
 import {
   createChatDocument,
@@ -815,5 +823,179 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
     await dropStaleArtifactWrites(db, writer, hour)
     expect(await staleArtifactWriters(db, hour)).not.toContain(writer)
     expect((await db.artifact.findUniqueOrThrow({ where: { id } })).pendingTitle).toBeNull()
+  })
+
+  it('keeps a skeleton of the agent as placeholders that show their intent once checked (88.6)', async () => {
+    const { workspace, chat, agent } = await owner()
+    const writer = await chat()
+    const id = (
+      await createArtifact(db, {
+        workspaceId: workspace.id,
+        kind: 'document',
+        title: 'План',
+        view: 'page',
+        actor: agent(writer),
+      })
+    ).id
+    await applyArtifactOps(db, {
+      batch: {
+        artifactId: id,
+        opId: 'skel',
+        ops: [
+          { op: 'insert', block: 'intro', after: null, kind: 'section', intent: 'Введение' },
+          { op: 'insert', block: 'end', after: 'intro', kind: 'section', intent: 'Итог' },
+        ],
+      },
+      actor: agent(writer),
+    })
+    expect(await artifactPlaceholders(db, id)).toBe(2)
+    // Nobody else sees the intent before the check (Ар19).
+    expect(
+      (
+        await readChatDocument(db, { workspaceId: workspace.id, documentId: id, reader: 'client' })
+      ).sections.map((each) => each.intent),
+    ).toEqual(['', ''])
+    const writes = await pendingArtifactWrites(db, writer)
+    await settleArtifactWrites(db, {
+      taskId: writer,
+      final: true,
+      blocks: writes.map((each) => ({
+        artifactId: each.documentId,
+        block: each.sectionKey,
+        rev: each.rev,
+        intent: each.leaseIntent,
+        refusal: null,
+      })),
+    })
+    const doc = await readChatDocument(db, {
+      workspaceId: workspace.id,
+      documentId: id,
+      reader: 'client',
+    })
+    expect(doc.view).toBe('page')
+    expect(doc.sections.map((each) => [each.key, each.state, each.intent, each.markdown])).toEqual([
+      ['intro', 'pending', 'Введение', null],
+      ['end', 'pending', 'Итог', null],
+    ])
+    expect(await artifactPlaceholders(db, id)).toBe(2)
+    // The chat fills one under the revision it last saw; then one placeholder is left.
+    const rev = await chatLastRevOf(db, { taskId: writer, artifactId: id, block: 'intro' })
+    expect(rev).toBe(1)
+    await applyArtifactOps(db, {
+      batch: {
+        artifactId: id,
+        opId: 'fill',
+        ops: [
+          {
+            op: 'replace',
+            block: 'intro',
+            ifRev: rev!,
+            content: 'Текст',
+            props: { heading: 'Введение' },
+          },
+        ],
+      },
+      actor: agent(writer),
+    })
+    expect(await artifactPlaceholders(db, id)).toBe(1)
+  })
+
+  it('opens to a chat what it made, its project and the client’s own, and tells it what others changed (88.6, Ар21, Ар23)', async () => {
+    const { workspace, chat, agent, create, apply, person } = await owner()
+    const writer = await chat()
+    const other = await chat()
+    const mine = await create('document', 'Личное')
+    const made = (
+      await createArtifact(db, {
+        workspaceId: workspace.id,
+        kind: 'document',
+        title: 'Чат',
+        actor: agent(writer),
+      })
+    ).id
+    expect(await chatArtifactAccess(db, { taskId: writer, artifactId: mine })).toMatchObject({
+      role: 'owner',
+      personal: true,
+      linked: false,
+    })
+    expect(await chatArtifactAccess(db, { taskId: writer, artifactId: made })).toMatchObject({
+      linked: true,
+    })
+    const listed = await listChatArtifacts(db, { taskId: writer })
+    expect(listed.rows.map((row) => row.id).sort()).toEqual([made, mine].sort())
+    expect(
+      (await listChatArtifacts(db, { taskId: writer, scope: 'chat' })).rows.map((row) => row.id),
+    ).toEqual([made])
+    // An artifact of a project another chat is not in stays closed to it.
+    const project = await db.project.create({
+      data: {
+        id: uuidv7(),
+        workspaceId: workspace.id,
+        name: 'Проект',
+        createdById: (await db.workspace.findUniqueOrThrow({ where: { id: workspace.id } }))
+          .createdById!,
+      },
+    })
+    const inProject = (
+      await createArtifact(db, {
+        workspaceId: workspace.id,
+        kind: 'document',
+        title: 'Проект',
+        projectId: project.id,
+        actor: person,
+      })
+    ).id
+    expect(await chatArtifactAccess(db, { taskId: writer, artifactId: inProject })).toBeNull()
+    await db.task.update({ where: { id: other }, data: { projectId: project.id } })
+    expect(await chatArtifactAccess(db, { taskId: other, artifactId: inProject })).toMatchObject({
+      personal: false,
+    })
+    // News: a person's change since the read, and the chat's own write the check refused.
+    await apply(mine, [section('a', 'Раз')])
+    expect(
+      (await artifactChatNews(db, { taskId: writer, artifactId: mine, read: true }))
+        .changedSinceYourRead,
+    ).toMatchObject({ count: 1, blocks: ['a'] })
+    expect(
+      (await artifactChatNews(db, { taskId: writer, artifactId: mine })).changedSinceYourRead.count,
+    ).toBe(0)
+    // A read opens nothing by itself.
+    expect(
+      (await listChatArtifacts(db, { taskId: writer, scope: 'chat' })).rows.map((row) => row.id),
+    ).toEqual([made])
+    await apply(
+      mine,
+      [
+        {
+          op: 'insert',
+          block: 'b',
+          after: 'a',
+          kind: 'section',
+          content: 'Два',
+          props: { heading: 'Б' },
+        },
+      ],
+      agent(writer),
+      soon(),
+    )
+    const writes = await pendingArtifactWrites(db, writer)
+    await settleArtifactWrites(db, {
+      taskId: writer,
+      blocks: writes.map((each) => ({
+        artifactId: each.documentId,
+        block: each.sectionKey,
+        rev: each.rev,
+        refusal: 'client_value',
+      })),
+    })
+    const news = await artifactChatNews(db, { taskId: writer, artifactId: mine })
+    expect(news.refusedSinceYourRead).toEqual(['b'])
+    expect(news.changedSinceYourRead.count).toBe(0)
+    const turns = await artifactsOfTurn(db, writer, 1)
+    expect(turns.find((each) => each.artifactId === mine)).toMatchObject({
+      refused: 1,
+      created: false,
+    })
+    expect(turns.find((each) => each.artifactId === made)).toMatchObject({ created: true })
   })
 })

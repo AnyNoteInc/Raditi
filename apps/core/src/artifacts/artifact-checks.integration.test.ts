@@ -220,5 +220,40 @@ describe.skipIf(!databaseUrl)(
       await db.task.update({ where: { id: running }, data: { status: 'failed' } })
       expect(await checks.sweep({ busy: (taskId) => taskId === running })).toBe(0)
     })
+
+    it('ends a turn with a version of what passed, the card of the document and its publications (88.6)', async () => {
+      const publishDocuments = vi.fn(
+        async (_taskId: string, _turnId: string | null, _refused: ReadonlySet<string>) => {},
+      )
+      const checks = new ArtifactChecks({ db, logger: quiet, pages: { publishDocuments } })
+      const id = await document()
+      const taskId = await chat()
+      await write(id, taskId, [
+        { op: 'replace', block: 'a', ifRev: 1, content: 'Капучино — 290 ₽' },
+        { op: 'replace', block: 'b', ifRev: 1, content: `Чай — ${VALUE}` },
+      ])
+      const before = (await db.artifact.findUniqueOrThrow({ where: { id } })).currentVersion
+      expect(await checks.settle(taskId, 1, refuses)).toEqual({
+        checked: 1,
+        refused: 1,
+        dropped: 0,
+      })
+      const after = await db.artifact.findUniqueOrThrow({
+        where: { id },
+        include: { content: true },
+      })
+      expect(after.currentVersion).toBe(before + 1)
+      expect(after.content?.markdown).toContain('Капучино — 290 ₽')
+      expect(after.content?.markdown).not.toContain(VALUE)
+      const rows = await db.taskEvent.findMany({
+        where: { taskId },
+        orderBy: { id: 'asc' },
+        select: { type: true, payload: true },
+      })
+      expect(rows.map((row) => row.type)).toEqual(['feed.doc_touch', 'feed.doc_left'])
+      expect(rows[1]?.payload).toEqual({ v: 1, docId: id, sections: 1, reason: 'refused' })
+      expect(publishDocuments).toHaveBeenCalledWith(taskId, null, new Set([id]))
+      await db.taskEvent.deleteMany({ where: { taskId } })
+    })
   },
 )

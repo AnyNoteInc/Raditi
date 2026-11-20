@@ -23,7 +23,6 @@ import type { PoolProbeClient } from '../llm/pool-probe-client.ts'
 import type { CompletedTurn, TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { ChatFiles } from './chat-files.ts'
 import type { ArtifactChecks } from '../artifacts/artifact-checks.ts'
-import type { DocSections } from './doc-sections.ts'
 import type { MemoryChanges } from './memory-changes.ts'
 import type { PageChanges } from './page-changes.ts'
 import type { RepoChanges, RepoTurnPreparer } from './repo-turns.ts'
@@ -94,8 +93,6 @@ export interface PassRunnerDependencies {
    * (docs/plan/66-chat-visuals.md, В8); absent — they stay with the turn's container.
    */
   chatFiles?: Pick<ChatFiles, 'deliver' | 'failPages'>
-  /** The documents of the chat (docs/plan/69-pages.md, Ст19); absent — not settled here. */
-  docs?: Pick<DocSections, 'settle'> & Partial<Pick<DocSections, 'checkLive'>>
   /**
    * The agent's writes in artifacts (docs/plan/88-artifacts.md, Ар16, Ар19): checked while the
    * turn runs and at its end; a turn that failed or was cancelled checks what it can and drops the
@@ -266,10 +263,9 @@ export class PassRunner {
    */
   #liveDocs(taskId: string, turn: number) {
     type Refuses = (text: string) => 'turn_key' | 'client_value' | null
-    const checks = [
-      this.deps.docs?.checkLive?.bind(this.deps.docs),
-      this.deps.artifacts?.checkLive.bind(this.deps.artifacts),
-    ].filter((each) => each !== undefined)
+    const checks = [this.deps.artifacts?.checkLive.bind(this.deps.artifacts)].filter(
+      (each) => each !== undefined,
+    )
     let timer: ReturnType<typeof setInterval> | null = null
     let running: Promise<void> | null = null
     let stopped = false
@@ -407,7 +403,6 @@ export class PassRunner {
     // The sections of documents the chat wrote are checked with what only the turn knew (Ст19),
     // before the answer reaches the client: a document the answer speaks of shows what passed.
     if (ending.kind === 'completed' && refusesText) {
-      await this.deps.docs?.settle(job.taskId, ending.turn, refusesText)
       await this.deps.artifacts?.settle(job.taskId, ending.turn, refusesText)
     }
     // A turn that did not complete — or completed without the values to check with — checks its

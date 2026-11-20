@@ -37,6 +37,11 @@ import {
   strongestArtifactRole,
   type ArtifactBatch,
   type ArtifactColumn,
+  artifactCreateArgumentsSchema,
+  artifactEditArgumentsSchema,
+  artifactSynonymToolNames,
+  artifactToolLine,
+  artifactToolNames,
 } from './index.ts'
 
 const artifactId = '01960000-0000-7000-8000-0000000000a1'
@@ -69,9 +74,10 @@ describe('the registry of kinds (Ар6, Ар7, §7.14)', () => {
   })
 
   it('creates only released kinds and reads a kind that left the list as history', () => {
-    expect(artifactReleasedKinds).toEqual([])
-    expect(artifactKindCreatable('document')).toBe(false)
-    expect(artifactKindCreatable('document', ['document'])).toBe(true)
+    expect(artifactReleasedKinds).toEqual(['document'])
+    expect(artifactKindCreatable('document')).toBe(true)
+    expect(artifactKindCreatable('table')).toBe(false)
+    expect(artifactKindCreatable('document', [])).toBe(false)
     expect(artifactKindCreatable('whiteboard', ['document'])).toBe(false)
     expect(artifactKindSpecOf('table')?.label).toBe('Таблица')
     expect(artifactKindSpecOf('whiteboard')).toBeNull()
@@ -393,5 +399,40 @@ describe('limits and words', () => {
     expect(artifactChangedByOthers(1)).toBe('1 блок изменили другие')
     expect(artifactChangedByOthers(3)).toBe('3 блока изменили другие')
     expect(artifactChangedByOthers(11)).toBe('11 блоков изменили другие')
+  })
+})
+
+describe('the tools of artifacts (88.6)', () => {
+  it('names every call of the family and its synonyms in Russian, and nothing else', () => {
+    for (const name of [...artifactToolNames, ...artifactSynonymToolNames]) {
+      expect(artifactToolLine(name)).toMatch(/^[А-ЯЁ][а-яё ]+$/)
+      expect(artifactToolLine(`raditi_${name}`)).toBe(artifactToolLine(name))
+    }
+    expect(artifactToolLine('page_publish')).toBeNull()
+    expect(artifactToolLine('raditi_memory_save')).toBeNull()
+  })
+
+  it('takes a skeleton that fits one batch, and the batch of §7.2 as artifact_edit', () => {
+    expect(
+      artifactCreateArgumentsSchema.safeParse({
+        kind: 'document',
+        title: 'План',
+        skeleton: [{ id: 'intro', intent: 'Введение' }],
+      }).success,
+    ).toBe(true)
+    expect(
+      artifactCreateArgumentsSchema.safeParse({
+        kind: 'document',
+        title: 'План',
+        skeleton: Array.from({ length: 50 }, (_, i) => ({ id: `s${i}`, intent: 'Раздел' })),
+      }).success,
+    ).toBe(false)
+    expect(
+      artifactEditArgumentsSchema.safeParse({
+        artifactId: '00000000-0000-4000-8000-000000000001',
+        opId: 'a1',
+        ops: [{ op: 'edit', block: 'intro', find: 'а', replace: 'б' }],
+      }).success,
+    ).toBe(true)
   })
 })

@@ -79,6 +79,17 @@ export {
 } from './attachments.ts'
 export { isArtifactRank, rankBetween, rankForIndex } from './artifact-rank.ts'
 export {
+  artifactChatNews,
+  artifactPlaceholders,
+  artifactsOfTurn,
+  chatArtifactAccess,
+  chatLastRevOf,
+  listChatArtifacts,
+  setArtifactView,
+  type ArtifactChatNews,
+  type ChatArtifactRow,
+} from './artifact-chats.ts'
+export {
   applyArtifactOps,
   artifactBlockHold,
   artifactRole,

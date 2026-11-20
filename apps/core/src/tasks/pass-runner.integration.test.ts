@@ -137,7 +137,6 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     inspect: () => Promise<unknown> = async () => null,
     options: {
       browser?: { reclaim: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
-      docs?: { settle: ReturnType<typeof vi.fn>; checkLive?: ReturnType<typeof vi.fn> }
       artifacts?: {
         settle: ReturnType<typeof vi.fn>
         checkLive: ReturnType<typeof vi.fn>
@@ -161,7 +160,6 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       db,
       supervisor,
       ...(options.browser !== undefined ? { browser: options.browser as never } : {}),
-      ...(options.docs ? { docs: options.docs as never } : {}),
       ...(options.artifacts ? { artifacts: options.artifacts as never } : {}),
       ...(options.memoryChanges ? { memoryChanges: options.memoryChanges as never } : {}),
       drivers,
@@ -382,19 +380,16 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       })
     }
 
-    it('checks the sections of documents with the turn’s own check before the answer (plan 69, Ст19)', async () => {
+    it('checks the writes in artifacts with the turn’s own check before the answer (plan 88, Ар3)', async () => {
       await rate()
       const dialog = await queued({ reserve: true })
       const refusesText = () => null
       const seen: string[] = []
-      const docs = {
+      const artifacts = {
         settle: vi.fn(async (taskId: string) => {
-          // Before the pass ends: the client reads the answer after the sections are settled.
+          // Before the pass ends: the client reads the answer after the writes are settled.
           seen.push((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status)
         }),
-      }
-      const artifacts = {
-        settle: vi.fn(async () => {}),
         checkLive: vi.fn(async () => {}),
         fail: vi.fn(async () => {}),
       }
@@ -429,10 +424,9 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           }
         },
         undefined,
-        { docs, artifacts },
+        { artifacts },
       )
       await passes.run(dialog.job)
-      expect(docs.settle).toHaveBeenCalledWith(dialog.taskId, 1, refusesText)
       expect(seen).toEqual(['running'])
       expect(artifacts.settle).toHaveBeenCalledWith(dialog.taskId, 1, refusesText)
       expect(artifacts.fail).not.toHaveBeenCalled()
@@ -442,7 +436,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       await rate()
       const dialog = await queued({ reserve: true })
       const refuses = () => null
-      const docs = { settle: vi.fn(async () => {}), checkLive: vi.fn(async () => {}) }
+      const docs = {
+        settle: vi.fn(async () => {}),
+        checkLive: vi.fn(async () => {}),
+        fail: vi.fn(async () => {}),
+      }
       const { passes } = runner(
         async (_request, _policy, _signal, hooks) => {
           await new Promise((resolve) => setTimeout(resolve, 30))
@@ -453,7 +451,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           throw new Error('the sandbox is gone')
         },
         undefined,
-        { docs },
+        { artifacts: docs },
       )
       await passes.run(dialog.job)
       expect(docs.checkLive).toHaveBeenCalledWith(dialog.taskId, 1, refuses)
@@ -465,7 +463,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     it('checks nothing while the values of the variables cannot be read (plan 74, Д2)', async () => {
       await rate()
       const dialog = await queued({ reserve: true })
-      const docs = { settle: vi.fn(async () => {}), checkLive: vi.fn(async () => {}) }
+      const docs = {
+        settle: vi.fn(async () => {}),
+        checkLive: vi.fn(async () => {}),
+        fail: vi.fn(async () => {}),
+      }
       const refusal = vi.fn(async () => {
         throw new Error('vault is down')
       })
@@ -476,7 +478,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           throw new Error('the sandbox is gone')
         },
         undefined,
-        { docs },
+        { artifacts: docs },
       )
       await passes.run(dialog.job)
       expect(docs.checkLive).not.toHaveBeenCalled()
@@ -527,21 +529,6 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       await passes.run(dialog.job)
       expect(artifacts.fail).toHaveBeenCalledTimes(1)
       expect(artifacts.fail.mock.calls[0]?.[2]).toBeNull()
-    })
-
-    it('checks no sections after a turn that failed: they wait for the next end of a turn', async () => {
-      await rate()
-      const dialog = await queued({ reserve: true })
-      const docs = { settle: vi.fn(async () => {}) }
-      const { passes } = runner(
-        async () => {
-          throw new Error('the sandbox is gone')
-        },
-        undefined,
-        { docs },
-      )
-      await passes.run(dialog.job)
-      expect(docs.settle).not.toHaveBeenCalled()
     })
 
     it('applies the notes of memory after the answer, with what the turn took in (plan 84, ПР18)', async () => {

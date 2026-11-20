@@ -13,6 +13,9 @@
 // the measurement under 8 turns come with their slices. 88.5 adds Redis: the relay of core carries
 // raditi_artifact to the channel of the artifact, and the commit time of a person typing is
 // measured under 8 turns writing and being checked in the same artifact (Ар20, plan 86, §4).
+// 88.6 adds the agent's side: the family `artifacts` of mcp over this database — its synonyms
+// doc_* of plan 69 mapped onto the operations, the news of every answer, the bounds of a chat and
+// of a pass without its client — and the end of a turn of core with its version.
 
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -250,6 +253,7 @@ async function scenario(databaseUrl) {
       `heard ${heard.length}`,
     )
     await checksOfCore({ dbModule, db, id, person, agent, chat, apply })
+    await agentTools({ dbModule, db, workspace, user, chat })
     await dbModule.trashArtifact(db, { artifactId: id, userId: user.id, by: 'client' })
     check(
       'an artifact in the trash is open to nobody',
@@ -352,6 +356,177 @@ async function checksOfCore({ dbModule, db, id, person, agent, chat, apply }) {
   check(
     'the collector drops a write left by a chat whose pass is over, by its time',
     (await sweeper.sweep()) === 1 && (await dbModule.pendingArtifactWrites(db, left)).length === 0,
+  )
+}
+
+/** Slice 88.6: the family `artifacts` of mcp and the end of a turn of core (Ар3, Ар21–Ар24). */
+async function agentTools({ dbModule, db, workspace, user, chat }) {
+  const { McpArtifactsService } = await import(
+    resolve(root, 'apps/mcp/src/artifacts/artifacts-service.ts')
+  )
+  const { postgresArtifactsStore } = await import(
+    resolve(root, 'apps/mcp/src/artifacts/artifacts-store.ts')
+  )
+  const { ArtifactChecks } = await import(
+    resolve(root, 'apps/core/src/artifacts/artifact-checks.ts')
+  )
+  const { uuidv7 } = await import(resolve(root, 'packages/db/src/uuidv7.ts'))
+  const tools = new McpArtifactsService({ store: postgresArtifactsStore(db) })
+  const value = `synthetic-variable-${randomBytes(6).toString('hex')}`
+  const refuses = (text) => (text.includes(value) ? 'client_value' : null)
+  const published = []
+  const checks = new ArtifactChecks({
+    db,
+    logger: { log() {}, warn() {} },
+    pages: {
+      publishDocuments: async (taskId, _turnId, refused) => published.push([taskId, [...refused]]),
+    },
+  })
+  const taskId = await chat()
+  const scope = {
+    keyId: randomUUID(),
+    taskId,
+    workspaceId: workspace.id,
+    sessionId: 'synthetic',
+    turn: 1,
+    firstEpoch: 1,
+    epoch: 1,
+    requirements: { repository: false, browser: false },
+  }
+  const valueOf = (answer) => {
+    if (!answer.ok) throw Object.assign(new Error(answer.message), { code: answer.code })
+    return answer.value
+  }
+  const created = valueOf(
+    await tools.docCreate(scope, {
+      title: 'План работ',
+      view: 'page',
+      sections: [
+        { id: 'intro', intent: 'Введение' },
+        { id: 'steps', intent: 'Шаги' },
+      ],
+    }),
+  )
+  const docId = created.docId
+  check(
+    'doc_create makes a document of plan 88 with its skeleton',
+    (await dbModule.artifactPlaceholders(db, docId)) === 2,
+  )
+  const early = await tools.docFinish(scope, { docId })
+  check(
+    'doc_finish waits while a placeholder is left',
+    !early.ok && early.code === 'DOC_PENDING_SECTIONS',
+  )
+  valueOf(
+    await tools.docWrite(scope, { docId, id: 'intro', heading: 'Введение', markdown: 'Начинаем.' }),
+  )
+  valueOf(
+    await tools.docWrite(scope, { docId, id: 'steps', heading: 'Шаги', markdown: `Ключ ${value}` }),
+  )
+  const own = valueOf(await tools.docRead(scope, { docId }))
+  check(
+    'doc_read gives the chat its own writes before the check',
+    own.sections.map((each) => each.markdown).join('|') === `Начинаем.|Ключ ${value}`,
+  )
+  const client = await dbModule.readChatDocument(db, {
+    workspaceId: workspace.id,
+    documentId: docId,
+    reader: 'client',
+  })
+  check(
+    'the client reads no text of the agent before the check',
+    client.sections.every((each) => each.markdown === null),
+  )
+  check(
+    'doc_finish is taken once every section is written',
+    (await tools.docFinish(scope, { docId })).ok,
+  )
+  await db.task.update({ where: { id: taskId }, data: { status: 'running' } })
+  const outcome = await checks.settle(taskId, 1, refuses)
+  const after = await db.artifact.findUniqueOrThrow({
+    where: { id: docId },
+    include: { content: true },
+  })
+  check(
+    'the end of the turn shows what passed, keeps out the value and makes the version',
+    outcome.refused === 1 &&
+      after.currentVersion === 1 &&
+      after.content?.markdown.includes('Начинаем.') === true &&
+      !after.content.markdown.includes(value),
+    JSON.stringify(outcome),
+  )
+  check(
+    'the publications of documents follow with the refused named',
+    published.length === 1 && published[0][1].includes(docId),
+  )
+  const next = { ...scope, turn: 2 }
+  const read = valueOf(await tools.read(next, { artifactId: docId }))
+  check(
+    'artifact_read tells the chat which of its writes the check sent back',
+    read.refusedSinceYourRead.includes('steps'),
+  )
+  const rev = read.blocks.find((each) => each.id === 'intro').rev
+  await dbModule.applyArtifactOps(db, {
+    batch: {
+      artifactId: docId,
+      opId: 'person-1',
+      ops: [{ op: 'edit', block: 'intro', find: 'Начинаем', replace: 'Начнём' }],
+    },
+    actor: { kind: 'user', userId: user.id },
+  })
+  const stale = await tools.edit(next, {
+    artifactId: docId,
+    opId: 'agent-1',
+    ops: [{ op: 'replace', block: 'intro', ifRev: rev, content: 'Иначе', props: { heading: 'В' } }],
+  })
+  // The person's lease of 30 s holds the block first (Ар17); the revision is stale under it too.
+  check(
+    'a block a person just edited is theirs: the agent is held off it',
+    !stale.ok && stale.code === 'ARTIFACT_BLOCK_HELD' && stale.details?.reason === 'human',
+    JSON.stringify(stale),
+  )
+  const again = valueOf(await tools.read(next, { artifactId: docId, part: 'outline' }))
+  check(
+    'the next read names the block a person changed',
+    again.changedSinceYourRead.blocks.includes('intro'),
+  )
+  const table = await tools.create(next, { kind: 'table', title: 'Цены' })
+  check(
+    'a kind whose view has not shipped is refused',
+    !table.ok && table.code === 'ARTIFACT_KIND_REFUSED',
+  )
+  const listed = valueOf(await tools.list(next, {}))
+  check(
+    'artifact_list names the chat’s document',
+    listed.artifacts.some((each) => each.id === docId),
+  )
+  // A pass without its client writes only the client's own, without a project (Ар24).
+  const project = await db.project.create({
+    data: { id: uuidv7(), workspaceId: workspace.id, name: 'Проект', createdById: user.id },
+  })
+  const inProject = await dbModule.createArtifact(db, {
+    workspaceId: workspace.id,
+    kind: 'document',
+    title: 'Проектный',
+    projectId: project.id,
+    actor: { kind: 'user', userId: user.id },
+  })
+  const scheduled = await chat()
+  await db.task.update({ where: { id: scheduled }, data: { projectId: project.id } })
+  const unattended = { ...scope, taskId: scheduled, unattended: true }
+  const refused = await tools.edit(unattended, {
+    artifactId: inProject.id,
+    opId: 'sched-1',
+    ops: [{ op: 'title', title: 'Другое' }],
+  })
+  check(
+    'a pass without its client changes no artifact of a project',
+    !refused.ok && refused.code === 'ARTIFACT_FORBIDDEN',
+  )
+  const foreign = await tools.read({ ...scope, taskId: await chat() }, { artifactId: inProject.id })
+  check(
+    'a chat outside the project does not open its artifact',
+    !foreign.ok && foreign.code === 'ARTIFACT_NOT_FOUND',
   )
 }
 

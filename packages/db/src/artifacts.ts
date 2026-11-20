@@ -408,6 +408,8 @@ export interface ArtifactCreate {
   kind: string
   title: string
   projectId?: string | null
+  /** How a document is shown (docs/plan/74, Д1): a page to read or a text to edit. */
+  view?: 'page' | 'text'
   actor: ArtifactActor
   now?: Date
 }
@@ -470,6 +472,7 @@ export async function createArtifact(
         projectId: input.projectId ?? null,
         ownerUserId: owner,
         kind,
+        ...(input.view ? { view: input.view } : {}),
         title: agent ? artifactKindSpecs[kind].label : title,
         ...(agent
           ? {
@@ -1119,6 +1122,21 @@ class BatchRun {
       block.leaseIntent = op.intent
       block.leaseIntentChecked = false
     } else if (op.intent !== undefined) block.intent = op.intent
+    // A section without its text and heading is a placeholder of a skeleton (§7.5): it holds its
+    // intent until a write fills it. The agent's intent still waits for the check (Ар19).
+    if (op.kind === 'section' && op.content === undefined && props.heading === undefined) {
+      block.rev = rev
+      if (this.#agent)
+        Object.assign(block, {
+          pendingProps: {},
+          pendingTaskId: this.actor.taskId,
+          pendingTurn: this.actor.turnNo,
+          pendingAt: this.now,
+        } satisfies Partial<ArtifactBlock>)
+      else this.#revision(work)
+      this.#journalLine('insert', key, null, block.rev, this.#agent ? 'checking' : 'applied')
+      return
+    }
     const result = this.#writeText(work, content, props)
     this.#journalLine('insert', key, null, block.rev, result)
   }
@@ -1303,6 +1321,8 @@ async function touchChat(
     create: { artifactId, taskId, how },
     update: { lastAt: new Date() },
   })
+  // A chat that only read it before makes or edits it now: the link opens it from now on (Ар23).
+  await tx.artifactChat.updateMany({ where: { artifactId, taskId, how: 'read' }, data: { how } })
 }
 
 // ———————————————————————————————————————— leases (Ар16, Ар17)
@@ -1553,6 +1573,26 @@ export async function settleArtifactWrites(
         const turnNo = block.pendingTurn
         // Whether this verdict covered the intent the block's lease holds now.
         const covered = verdict.intent === undefined || verdict.intent === block.leaseIntent
+        if (verdict.refusal === null && isPlaceholderWrite(block)) {
+          // A placeholder of a skeleton: its intent is shown, it stays to be written.
+          checked += 1
+          const after: ArtifactBlock = {
+            ...block,
+            intent: block.leaseIntent && covered ? block.leaseIntent : block.intent,
+            leaseIntent: block.leaseHolder === 'agent' ? block.leaseIntent : null,
+            leaseIntentChecked:
+              block.leaseHolder === 'agent' && block.leaseIntent !== null && covered,
+            pendingContent: null,
+            pendingProps: null,
+            pendingTaskId: null,
+            pendingTurn: null,
+            pendingAt: null,
+          }
+          await updateBlock(tx, after)
+          revisions.push(revisionOf(after, { userId: null, taskId: input.taskId, turnNo }))
+          line(after, 'checked', null, turnNo)
+          continue
+        }
         if (verdict.refusal === null) {
           checked += 1
           const props = asProps(block.pendingProps ?? block.props)
@@ -1700,6 +1740,10 @@ export async function settleArtifactWrites(
     return out
   })
 }
+
+/** The agent's placeholder of a skeleton waiting for the check of its intent: no text to show. */
+const isPlaceholderWrite = (block: ArtifactBlock) =>
+  block.blockKind === 'section' && block.pendingContent === null && checkedText(block) === null
 
 async function updateBlock(tx: Tx, block: ArtifactBlock): Promise<void> {
   const { id, documentId: _documentId, ...data } = block

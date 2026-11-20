@@ -19,6 +19,11 @@ import {
 import { MCP_REQUEST_ACCESS, MCP_REQUEST_TOOLS, type McpRequest } from './mcp-request.ts'
 import { MCP_WEB_SEARCH_KEY, type WebSearchKey } from './web-search-key.ts'
 
+const isToolCall = (body: unknown) =>
+  typeof body === 'object' &&
+  body !== null &&
+  (body as { method?: unknown }).method === 'tools/call'
+
 const unsupportedProtocolVersion = `Bad Request: Unsupported protocol version (supported versions: ${SUPPORTED_PROTOCOL_VERSIONS.join(', ')})`
 
 @Injectable()
@@ -76,6 +81,9 @@ export class McpAuthGuard implements CanActivate {
     // The web search is offered while its key is in Vault (spec §20, «Веб-поиск агента»).
     if (families.includes('search') && !(await this.searchKey.available()))
       families = families.filter((family) => family !== 'search')
+    // The synonyms `doc_*` of the artifacts (docs/plan/88-artifacts.md, Ар3): called, never listed.
+    if (families.includes('artifacts') && isToolCall(req.body))
+      families = [...families, 'artifact_synonyms']
     // A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28, Зп32):
     // a call that needs the client's word — with `confirmedByClient`, or a change of the tasks or
     // of the pages, which the pass is not offered — is answered as a refusal of its tool before

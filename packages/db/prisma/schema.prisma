@@ -2783,7 +2783,7 @@ model ArtifactOp {
 model ArtifactChat {
   artifactId String   @map("artifact_id") @db.Uuid
   taskId     String   @map("task_id") @db.Uuid
-  /// created | attached | mentioned | edited.
+  /// created | attached | mentioned | edited | read (a read opens nothing, Ар23).
   how        String   @db.VarChar(12)
   firstAt    DateTime @default(now()) @map("first_at") @db.Timestamptz(6)
   lastAt     DateTime @default(now()) @map("last_at") @db.Timestamptz(6)

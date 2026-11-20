@@ -1,5 +1,8 @@
 import {
+  artifactsOfTurn,
   dropArtifactWrites,
+  insertFeedEvent,
+  saveArtifactVersion,
   dropStaleArtifactWrites,
   pendingArtifactTitles,
   pendingArtifactWrites,
@@ -13,6 +16,7 @@ import {
 } from '@repo/db'
 import {
   hasOutwardPasswordForm,
+  type FeedRow,
   isDomainError,
   tokenReasonOf,
   type PageRefusalReason,
@@ -34,6 +38,12 @@ import {
 // recovered one — checks with what is left of the turn's values, if anything, and drops the
 // rest (Ар16). `sweep` drops the writes of chats whose pass is over and no end of a turn reached,
 // by the time of the write (`pending_at`), and runs the collector of artifacts.
+//
+// Since the tools of plan 69 became synonyms of the operations (slice 88.6, Ар3), this is also the
+// end of a turn for documents: each artifact the turn changed gets a version of what passed (Ар13;
+// `doc_finish` waits for it), the document's card in the chat is told (`feed.doc_touch`, and
+// `feed.doc_left` of what was sent back — never why) and the chat's publications of documents
+// (`page_publish({ docId })`) come true from that version.
 
 type Refuses = (text: string) => 'turn_key' | 'client_value' | null
 
@@ -52,7 +62,17 @@ export interface ArtifactChecksDependencies {
     | 'artifactBlock'
     | 'artifactBatch'
     | 'artifactOp'
+    | 'taskTurn'
+    | 'taskEvent'
   >
+  /** The chat's publications of documents, after their versions (docs/plan/69-pages.md, Ст9). */
+  pages?: {
+    publishDocuments(
+      taskId: string,
+      turnId: string | null,
+      refused: ReadonlySet<string>,
+    ): Promise<void>
+  }
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -140,7 +160,9 @@ export class ArtifactChecks {
    */
   async checkLive(taskId: string, turn: number, refuses: Refuses): Promise<ArtifactCheckOutcome> {
     try {
-      return await this.#check(taskId, refuses, false)
+      const settled = await this.#settled(taskId, refuses, false)
+      await this.#tell(taskId, turn, settled, false)
+      return outcomeOf(settled)
     } catch (error) {
       this.#warn('artifact_checks_live_failed', taskId, turn, error)
       return none
@@ -149,14 +171,98 @@ export class ArtifactChecks {
 
   /** The end of a completed turn: everything the chat left is checked, its claims end. */
   async settle(taskId: string, turn: number, refuses: Refuses): Promise<ArtifactCheckOutcome> {
+    let outcome = none
+    let refused = new Set<string>()
     try {
-      const outcome = await this.#check(taskId, refuses, true)
+      const settled = await this.#settled(taskId, refuses, true)
+      outcome = outcomeOf(settled)
       this.#log(taskId, turn, outcome)
-      return outcome
+      refused = await this.#endTurn(taskId, turn, settled)
     } catch (error) {
       this.#warn('artifact_checks_failed', taskId, turn, error)
-      return none
     }
+    try {
+      await this.#deps.pages?.publishDocuments(taskId, await this.#turnId(taskId, turn), refused)
+    } catch (error) {
+      this.#warn('artifact_publications_failed', taskId, turn, error)
+    }
+    return outcome
+  }
+
+  /**
+   * The versions of the artifacts the turn changed (Ар13) — of what passed, by the agent of the chat
+   * — and the rows of the documents' card. The ids of the artifacts with writes sent back.
+   */
+  async #endTurn(taskId: string, turn: number, settled: readonly ArtifactSettled[]) {
+    const { db } = this.#deps
+    const touched = await artifactsOfTurn(db, taskId, turn)
+    const refused = new Set<string>([
+      ...touched.filter((each) => each.refused > 0).map((each) => each.artifactId),
+      ...settled.filter((each) => each.refused > 0).map((each) => each.artifactId),
+    ])
+    for (const artifact of touched) {
+      if (artifact.checked === 0) continue
+      try {
+        await saveArtifactVersion(db, {
+          artifactId: artifact.artifactId,
+          actor: { kind: 'agent', taskId, turnNo: turn },
+        })
+      } catch (error) {
+        this.#warn('artifact_version_failed', taskId, turn, error)
+      }
+    }
+    await this.#tell(taskId, turn, settled, true, touched)
+    return refused
+  }
+
+  /**
+   * The card of the documents in the chat reads a document again when its revision grows
+   * (`feed.doc_touch`); what was sent back is told once, at the end of the turn, never why.
+   */
+  async #tell(
+    taskId: string,
+    turn: number,
+    settled: readonly ArtifactSettled[],
+    final: boolean,
+    touched: readonly { artifactId: string; kind: string; refused: number }[] = [],
+  ) {
+    const ids = [
+      ...new Set([
+        ...settled.map((each) => each.artifactId),
+        ...touched.map((each) => each.artifactId),
+      ]),
+    ]
+    if (ids.length === 0) return
+    const { db } = this.#deps
+    const documents = await db.artifact.findMany({
+      where: { id: { in: ids }, kind: 'document' },
+      select: { id: true, revision: true },
+    })
+    if (documents.length === 0) return
+    const turnId = await this.#turnId(taskId, turn)
+    const write = (row: FeedRow) => insertFeedEvent(db, { taskId, turnId, row })
+    for (const document of documents) {
+      await write({
+        type: 'feed.doc_touch',
+        payload: { v: 1, docId: document.id, revision: document.revision },
+      })
+      const sent = final
+        ? (touched.find((each) => each.artifactId === document.id)?.refused ?? 0)
+        : 0
+      if (sent > 0)
+        await write({
+          type: 'feed.doc_left',
+          payload: { v: 1, docId: document.id, sections: Math.min(sent, 1000), reason: 'refused' },
+        })
+    }
+  }
+
+  async #turnId(taskId: string, turn: number): Promise<string | null> {
+    const row = await this.#deps.db.taskTurn.findFirst({
+      where: { taskId, turnNo: turn },
+      select: { id: true },
+    })
+    return row?.id ?? null
   }
 
   /**
@@ -171,7 +277,7 @@ export class ArtifactChecks {
     refuses: Refuses | null,
   ): Promise<ArtifactCheckOutcome> {
     try {
-      const outcome = refuses ? await this.#check(taskId, refuses, false) : { ...none }
+      const outcome = refuses ? outcomeOf(await this.#settled(taskId, refuses, false)) : { ...none }
       const dropped = count(await dropArtifactWrites(this.#deps.db, taskId), 'refused')
       const total = { ...outcome, dropped }
       this.#log(taskId, turn, total)
@@ -215,7 +321,7 @@ export class ArtifactChecks {
     return dropped
   }
 
-  async #check(taskId: string, refuses: Refuses, final: boolean): Promise<ArtifactCheckOutcome> {
+  async #settled(taskId: string, refuses: Refuses, final: boolean): Promise<ArtifactSettled[]> {
     const { db } = this.#deps
     const [writes, titles] = await Promise.all([
       pendingArtifactWrites(db, taskId),
@@ -252,15 +358,8 @@ export class ArtifactChecks {
       refusal: artifactTextRefusal(refuses, [title.pendingTitle ?? '']),
     }))
     if (blocks.length === 0 && claims.length === 0 && titleVerdicts.length === 0 && !final)
-      return { ...none }
-    const settled = await settleArtifactWrites(db, {
-      taskId,
-      blocks,
-      claims,
-      titles: titleVerdicts,
-      final,
-    })
-    return { checked: count(settled, 'checked'), refused: count(settled, 'refused'), dropped: 0 }
+      return []
+    return settleArtifactWrites(db, { taskId, blocks, claims, titles: titleVerdicts, final })
   }
 
   #log(taskId: string, turn: number | null, outcome: ArtifactCheckOutcome) {
@@ -276,6 +375,12 @@ export class ArtifactChecks {
     )
   }
 }
+
+const outcomeOf = (settled: readonly ArtifactSettled[]): ArtifactCheckOutcome => ({
+  checked: count(settled, 'checked'),
+  refused: count(settled, 'refused'),
+  dropped: 0,
+})
 
 const count = (settled: readonly ArtifactSettled[], key: 'checked' | 'refused') =>
   settled.reduce((sum, each) => sum + each[key], 0)

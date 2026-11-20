@@ -195,7 +195,7 @@ describe('MCP request policy', () => {
     ]
     for (const body of allowed) {
       expect(mcpBodyAllowed(body, ['web'])).toBe(true)
-      expect(mcpBodyAllowed(body, ['search', 'docs', 'pages'])).toBe(false)
+      expect(mcpBodyAllowed(body, ['search', 'artifacts', 'pages'])).toBe(false)
       expect(mcpBodyAllowed(body)).toBe(false)
     }
     const refused = [
@@ -256,9 +256,9 @@ describe('MCP request policy', () => {
     })
     expect(mcpBodyAllowed(call({ query: 'wordpress register_post_type' }), ['search'])).toBe(true)
     // Not without the family, whatever else the request may call.
-    expect(mcpBodyAllowed(call({ query: 'wordpress register_post_type' }), ['web', 'docs'])).toBe(
-      false,
-    )
+    expect(
+      mcpBodyAllowed(call({ query: 'wordpress register_post_type' }), ['web', 'artifacts']),
+    ).toBe(false)
     for (const args of [
       {},
       { query: 'x' },
@@ -294,17 +294,36 @@ describe('MCP request policy', () => {
       ]),
     ).toBe(false)
 
-    // The documents (Ст21): every turn; each call by its own strict schema.
-    expect(mcpToolFamiliesOf(chat, { ...base, docsTools: true })).toEqual(['docs'])
+    // The artifacts (plan 88, Ар22): every turn; each call by its own strict schema. The synonyms
+    // doc_* of plan 69 only with their own family, which the guard gives to tools/call alone (Ар3).
+    expect(mcpToolFamiliesOf(chat, { ...base, artifactsTools: true })).toEqual(['artifacts'])
     const docId = access.taskId
-    expect(mcpBodyAllowed(page('doc_read', { docId }), ['docs'])).toBe(true)
-    expect(mcpBodyAllowed(page('doc_read', { docId }), ['pages'])).toBe(false)
-    expect(mcpBodyAllowed(page('doc_read', { docId, extra: 1 }), ['docs'])).toBe(false)
+    const synonyms = ['artifacts', 'artifact_synonyms'] as const
+    expect(mcpBodyAllowed(page('artifact_read', { artifactId: docId }), ['artifacts'])).toBe(true)
+    expect(mcpBodyAllowed(page('artifact_list', {}), ['artifacts'])).toBe(true)
     expect(
-      mcpBodyAllowed(page('doc_section_move', { docId, id: 'a', after: null }), ['docs']),
+      mcpBodyAllowed(page('artifact_read', { artifactId: docId, extra: 1 }), ['artifacts']),
+    ).toBe(false)
+    expect(
+      mcpBodyAllowed(
+        page('artifact_edit', {
+          artifactId: docId,
+          opId: 'a1',
+          ops: [{ op: 'edit', block: 'intro', find: 'а', replace: 'б' }],
+        }),
+        ['artifacts'],
+      ),
     ).toBe(true)
-    expect(mcpBodyAllowed(page('doc_section_move', { docId, id: 'a' }), ['docs'])).toBe(false)
-    expect(mcpBodyAllowed(page('doc_delete', { docId }), ['docs'])).toBe(false)
+    expect(mcpBodyAllowed(page('artifact_trash', { artifactId: docId }), ['artifacts'])).toBe(false)
+    expect(mcpBodyAllowed(page('doc_read', { docId }), ['artifacts'])).toBe(false)
+    expect(mcpBodyAllowed(page('doc_read', { docId }), [...synonyms])).toBe(true)
+    expect(mcpBodyAllowed(page('doc_read', { docId }), ['pages'])).toBe(false)
+    expect(mcpBodyAllowed(page('doc_read', { docId, extra: 1 }), [...synonyms])).toBe(false)
+    expect(
+      mcpBodyAllowed(page('doc_section_move', { docId, id: 'a', after: null }), [...synonyms]),
+    ).toBe(true)
+    expect(mcpBodyAllowed(page('doc_section_move', { docId, id: 'a' }), [...synonyms])).toBe(false)
+    expect(mcpBodyAllowed(page('doc_delete', { docId }), [...synonyms])).toBe(false)
 
     // The memory of the chat (plan 84, ПР18): only while it is on; each call by its own schema.
     const remembering = { ...chat, memory: { userId: access.taskId, projectId: null } }
@@ -312,7 +331,9 @@ describe('MCP request policy', () => {
     expect(mcpToolFamiliesOf(remembering, { ...base, memoryTools: true })).toEqual(['memory'])
     const id = access.taskId
     expect(mcpBodyAllowed(page('memory_save', { kind: 'fact', text: 'а' }), ['memory'])).toBe(true)
-    expect(mcpBodyAllowed(page('memory_save', { kind: 'fact', text: 'а' }), ['docs'])).toBe(false)
+    expect(mcpBodyAllowed(page('memory_save', { kind: 'fact', text: 'а' }), ['artifacts'])).toBe(
+      false,
+    )
     expect(mcpBodyAllowed(page('memory_list', {}), ['memory'])).toBe(true)
     expect(
       mcpBodyAllowed(page('memory_update', { id, text: 'б', expectedVersion: 1 }), ['memory']),
@@ -352,7 +373,14 @@ describe('MCP request policy', () => {
     for (const name of ['repo_push', 'repo_merge', 'repo_deploy', 'repo_accept', 'repo_play'])
       for (const args of [{}, { number: 7 }, { number: 7, mode: 'now' }, { jobId: '1' }])
         expect(
-          mcpBodyAllowed(page(name, args), ['repo', 'memory', 'web', 'pages', 'docs', 'search']),
+          mcpBodyAllowed(page(name, args), [
+            'repo',
+            'memory',
+            'web',
+            'pages',
+            'artifacts',
+            'search',
+          ]),
         ).toBe(false)
     // The builds (84.21): reads only, strict arguments; no rerun, no cancel.
     expect(mcpBodyAllowed(page('repo_runs', { branch: 'chat', limit: 3 }), ['repo'])).toBe(true)
@@ -410,11 +438,12 @@ describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)',
   })
 
   it('leaves a pass without its client the pages to read and nothing to change (Зп28)', () => {
-    const security: McpSecurity = { ...base, pagesTools: true, docsTools: true }
-    expect(mcpToolFamiliesOf(access, security)).toEqual(['docs', 'pages', 'pages_changes'])
+    const security: McpSecurity = { ...base, pagesTools: true, artifactsTools: true }
+    expect(mcpToolFamiliesOf(access, security)).toEqual(['artifacts', 'pages', 'pages_changes'])
     const unattended = mcpToolFamiliesOf({ ...access, unattended: true }, security)
-    // Its documents are the chat's own; a page is live for every visitor once the turn ends.
-    expect(unattended).toEqual(['docs', 'pages'])
+    // Its artifacts it reads, and changes only the client's own (Ар24, the tool's own refusal);
+    // a page is live for every visitor once the turn ends.
+    expect(unattended).toEqual(['artifacts', 'pages'])
     for (const body of [
       call('page_publish', { file: 'p.html', title: 'Акции' }),
       call('page_publish', {

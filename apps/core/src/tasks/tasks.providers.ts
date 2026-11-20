@@ -27,7 +27,6 @@ import { turnRuntimeOf } from '../turns/turn-runtime.ts'
 import { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import { TURN_EXECUTOR } from '../turns/turns.tokens.ts'
 import { ChatFiles } from './chat-files.ts'
-import { DocSections } from './doc-sections.ts'
 import { MemoryChanges } from './memory-changes.ts'
 import { RepoChanges, RepoTurnPreparer } from './repo-turns.ts'
 import type { GitJobs } from '../git/git-jobs.ts'
@@ -119,13 +118,13 @@ export const taskProviders: Provider[] = [
           logger: new Logger('ChatFiles'),
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
-        docs: new DocSections({
+        // The agent's writes in artifacts (docs/plan/88-artifacts.md, Ар16, Ар19), the versions of
+        // the turn and the publications of documents after them (Ар3).
+        artifacts: new ArtifactChecks({
           db: prisma,
-          logger: new Logger('DocSections'),
+          logger: new Logger('ArtifactChecks'),
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
-        // The agent's writes in artifacts (docs/plan/88-artifacts.md, Ар16, Ар19).
-        artifacts: new ArtifactChecks({ db: prisma, logger: new Logger('ArtifactChecks') }),
         // What a turn asked of its pages besides versions (docs/plan/73-pages-sites.md, Дер23).
         pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
         // What a turn asked of the memory of its chat (docs/plan/84-projects.md, ПР18).
@@ -226,7 +225,11 @@ export const taskProviders: Provider[] = [
         // The changes of a turn whose end recovery reached (docs/plan/84-projects.md, §10).
         pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
         // The writes in artifacts of turns the sweep ends, and their collector (Ар16, Ар50).
-        artifacts: new ArtifactChecks({ db: prisma, logger: new Logger('ArtifactChecks') }),
+        artifacts: new ArtifactChecks({
+          db: prisma,
+          logger: new Logger('ArtifactChecks'),
+          pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
+        }),
         values: credentials,
         // The card of a commit recovery published (docs/plan/84-projects.md, ПР12).
         repositories: workspace

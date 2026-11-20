@@ -177,6 +177,9 @@ describe('active at once or «Предложено»', () => {
 describe('memoryPassEvidence', () => {
   const tool = (name: string): AgentEvent => ({ type: 'tool_call', tool: name, ok: true })
   it('finds a tool of outside, a command, and an unknown tool', () => {
+    expect(memoryPassEvidence([tool('raditi_artifact_edit'), tool('artifact_list')]).outside).toBe(
+      false,
+    )
     expect(memoryPassEvidence([tool('memory_save'), tool('read'), tool('page_publish')])).toEqual({
       outside: false,
       commands: false,
@@ -193,6 +196,7 @@ describe('memoryPassEvidence', () => {
       'context7_query-docs',
       'page_read',
       'doc_read',
+      'raditi_artifact_read',
     ])
       expect(memoryPassEvidence([tool(name)]).outside, name).toBe(true)
     expect(
