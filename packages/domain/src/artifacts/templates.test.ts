@@ -1,21 +1,23 @@
 import { describe, expect, it } from 'vitest'
 
 import { artifactBlockContentProblem, artifactTitleSchema } from './blocks.ts'
-import { artifactReleasedKinds } from './kinds.ts'
+import { artifactBlockPlacementProblem, artifactReleasedKinds } from './kinds.ts'
 import { artifactTemplateOf, artifactTemplates } from './templates.ts'
 
 describe('the templates of the gallery (Ар50)', () => {
-  it('are of kinds that may be created, with sections a document accepts', () => {
+  it('are of kinds that may be created, with blocks their kind accepts', () => {
     const ids = new Set<string>()
     for (const template of artifactTemplates) {
       expect(ids.has(template.id)).toBe(false)
       ids.add(template.id)
       expect(artifactReleasedKinds).toContain(template.kind)
       expect(artifactTitleSchema.safeParse(template.title).success).toBe(true)
-      expect(template.sections.length).toBeGreaterThan(0)
-      for (const section of template.sections) {
-        expect(artifactTitleSchema.safeParse(section.heading).success).toBe(true)
-        expect(artifactBlockContentProblem('section', section.content)).toBeNull()
+      expect(template.blocks.length).toBeGreaterThan(0)
+      for (const block of template.blocks) {
+        expect(artifactBlockPlacementProblem(template.kind, block.kind, null)).toBeNull()
+        if (block.kind === 'section')
+          expect(artifactTitleSchema.safeParse(block.heading).success).toBe(true)
+        expect(artifactBlockContentProblem(block.kind, block.content)).toBeNull()
       }
     }
   })

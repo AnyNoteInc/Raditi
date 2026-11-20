@@ -112,7 +112,8 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 1,
     sharableEdit: true,
     framed: false,
-    forAgent: 'a layout, a prototype of a page, a calculator',
+    forAgent:
+      'a layout, a prototype of a page, a calculator. No skeleton: insert `html` blocks — fragments of the body, each up to 32 KiB —, `style` blocks of CSS, `script` blocks of JavaScript and one `settings` block: a JSON object of the numbers, prices and words the client may change, which the script reads by JSON.parse(document.getElementById("raditi-settings").textContent). The frame is sandboxed: no localStorage, sessionStorage, cookies, IndexedDB, service workers, pop-ups, navigation or network, no external font or script; the font Golos Text is there. A picture or a font goes in by `raditi_artifact_file_put`, its `artifact-file:<id>` where its address stands',
   },
   table: {
     label: 'Таблица',
@@ -123,7 +124,8 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 1,
     sharableEdit: true,
     framed: false,
-    forAgent: 'rows and columns: a price list, a content plan, a list to keep',
+    forAgent:
+      'rows and columns: a price list, a content plan, a list to keep. No skeleton: insert one `columns` block — a JSON list of {key, name, type: text|number|money|date|select|link|checkbox, options of a select} — then a `row` block a row, the JSON of its cells by column key (money as a string "1990.50", a date "2026-11-12"); change cells by the operation `cells`',
   },
   canvas: {
     label: 'Холст',
@@ -210,7 +212,11 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
  * the table with Э5, the canvas and the brand with Э6. The document shows in the tab «Документы»
  * of the chat until 88.10 gives it its own page.
  */
-export const artifactReleasedKinds: readonly ArtifactKind[] = Object.freeze(['document'])
+export const artifactReleasedKinds: readonly ArtifactKind[] = Object.freeze([
+  'document',
+  'mockup',
+  'table',
+])
 
 export function artifactKindKnown(value: string): value is ArtifactKind {
   return (artifactKinds as readonly string[]).includes(value)

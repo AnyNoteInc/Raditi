@@ -541,6 +541,13 @@ export interface ClientPublicationInput {
   bytes: Uint8Array
   /** The Markdown it was drawn from (Дер26). */
   markdown?: Uint8Array | null
+  /**
+   * A document target that serves HTML of its own (a mockup, docs/plan/88-artifacts.md, §7.10): the
+   * page is of kind `html`, its scripts run under the policy of a published page.
+   */
+  html?: boolean
+  /** Shared files of its site the version loads (`/_files/…`, Дер34): written with it, checked. */
+  files?: readonly { path: string; bytes: Uint8Array }[]
 }
 
 /**
@@ -614,6 +621,10 @@ export async function publishClientPage(
     // A .md and a .html serve under different policies: the page takes the kind of its new file,
     // and the name of the file it now shows (the hint of the next publication, Дер9).
     const fileKind = kindOf(null, fileName)
+    if (page !== null && documentId !== null && page.kind !== (input.html ? 'html' : 'doc')) {
+      await tx.page.update({ where: { id: page.id }, data: { kind: input.html ? 'html' : 'doc' } })
+      page = { ...page, kind: input.html ? 'html' : 'doc' }
+    }
     if (
       page !== null &&
       documentId === null &&
@@ -631,7 +642,7 @@ export async function publishClientPage(
         workspaceId: input.workspaceId,
         taskId: input.taskId,
         turnNo: null,
-        kind: kindOf(documentId, fileName),
+        kind: documentId !== null && input.html ? 'html' : kindOf(documentId, fileName),
         title: input.title,
         documentId,
         fileName,
@@ -648,6 +659,32 @@ export async function publishClientPage(
       taskId: input.taskId,
       turnNo: null,
     })
+    for (const file of input.files ?? []) {
+      const verdict = checkPageFile(file.path, file.bytes)
+      if (!verdict.ok)
+        throw new DomainError(
+          'PAGE_FILE_REFUSED',
+          `The file cannot be served: ${verdict.reason}`,
+          422,
+        )
+      if (
+        (await treeBytesOf(tx, page.treeId, file.path)) + file.bytes.byteLength >
+        pageLimits.treeBytes
+      )
+        throw pageLimitReached('treeBytes')
+      const bytes = new Uint8Array(file.bytes)
+      await tx.pageFile.upsert({
+        where: { treeId_path: { treeId: page.treeId, path: file.path } },
+        create: {
+          treeId: page.treeId,
+          path: file.path,
+          contentType: verdict.type,
+          bytes,
+          sha256: sha256(bytes),
+        },
+        update: { contentType: verdict.type, bytes, sha256: sha256(bytes), taskId: null },
+      })
+    }
     return { ...publicationOf(page), version }
   })
 }

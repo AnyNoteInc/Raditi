@@ -87,19 +87,20 @@ export async function createGalleryArtifact(
     projectId: input.projectId,
     actor,
   })
-  if (template !== null && template.sections.length > 0) {
+  if (template !== null && template.blocks.length > 0) {
     let after: string | null = null
-    const ops = template.sections.map((section, index) => {
-      const block = `s${index + 1}`
+    const ops = template.blocks.map((block, index) => {
+      // A document's sections keep the keys `s1…` of plan 88.9; the other parts are `b1…`.
+      const key = `${block.kind === 'section' ? 's' : 'b'}${index + 1}`
       const op = {
         op: 'insert' as const,
-        block,
+        block: key,
         after,
-        kind: 'section' as const,
-        content: section.content,
-        props: { heading: section.heading },
+        kind: block.kind,
+        content: block.content,
+        ...(block.heading === undefined ? {} : { props: { heading: block.heading } }),
       }
-      after = block
+      after = key
       return op
     })
     await applyArtifactOps(db, { batch: { artifactId: id, opId: randomUUID(), ops }, actor })

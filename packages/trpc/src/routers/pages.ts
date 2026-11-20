@@ -82,7 +82,12 @@ export const pagesRouter = router({
     .input(z.strictObject({ artifactId: z.uuid(), versionNo: z.number().int().min(1).nullable() }))
     .output(publicationOutput.extend({ versionNo: z.number().int().min(1) }))
     .mutation(({ ctx, input }) =>
-      publishArtifactPage(ctx.prisma, pagesAddressOf(ctx), { ...input, userId: ctx.user.id }),
+      publishArtifactPage(
+        ctx.prisma,
+        pagesAddressOf(ctx),
+        { ...input, userId: ctx.user.id },
+        ctx.chat ? () => ctx.chat!.storage() : undefined,
+      ),
     ),
 
   /** The page an artifact became, if any: its address and the version it shows. */

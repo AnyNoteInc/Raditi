@@ -122,3 +122,43 @@ export async function agentWrites(
     await prisma.$disconnect()
   }
 }
+
+/** A mockup of the signed-in user from the template «Калькулятор стоимости» (slice 88.13). */
+export async function addMockup(userId: string): Promise<{ id: string }> {
+  const { artifactTemplateOf } = await import('@repo/domain/artifacts')
+  const template = artifactTemplateOf('cost-calculator')!
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const workspace = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+    )
+    const actor = { kind: 'user' as const, userId }
+    const { id } = await createArtifact(prisma, {
+      workspaceId: workspace.id,
+      kind: 'mockup',
+      title: template.title,
+      actor,
+    })
+    let after: string | null = null
+    const ops = template.blocks.map((block, at) => {
+      const key = `b${at + 1}`
+      const op = {
+        op: 'insert' as const,
+        block: key,
+        after,
+        kind: block.kind,
+        content: block.content,
+      }
+      after = key
+      return op
+    })
+    await applyArtifactOps(prisma, { batch: { artifactId: id, opId: randomUUID(), ops }, actor })
+    await prisma.artifactBlock.updateMany({
+      where: { documentId: id },
+      data: { leaseHolder: null, leaseUserId: null, leaseUntil: null },
+    })
+    return { id }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
