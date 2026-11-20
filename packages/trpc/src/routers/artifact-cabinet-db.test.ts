@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   applyArtifactOps,
+  attachMentionedArtifacts,
   claimArtifactBlock,
   createPrismaClient,
   settleArtifactWrites,
@@ -331,6 +332,55 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       code: 'NOT_FOUND',
     })
     await expect(boris.artifact.chats({ artifactId: id })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+  })
+
+  it('lists the artifacts of a chat by group, attaching those the client mentions (88.11)', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const made = await caller.artifact.create({
+      kind: 'document',
+      title: 'Сделан',
+      projectId: null,
+      templateId: null,
+    })
+    const named = await caller.artifact.create({
+      kind: 'document',
+      title: 'Назван',
+      projectId: null,
+      templateId: null,
+    })
+    const { workspaceId } = await db.artifact.findUniqueOrThrow({
+      where: { id: made.id },
+      select: { workspaceId: true },
+    })
+    const task = await db.task.create({
+      data: { workspaceId, createdById: anna.id, title: 'Чат' },
+      select: { id: true },
+    })
+    await db.artifactChat.create({ data: { artifactId: made.id, taskId: task.id, how: 'created' } })
+    // Someone else's artifact is never attached by its id.
+    const boris = await person('Борис')
+    const foreign = await callerOf(boris).artifact.create({
+      kind: 'document',
+      title: 'Чужой',
+      projectId: null,
+      templateId: null,
+    })
+    expect(
+      await attachMentionedArtifacts(db, {
+        taskId: task.id,
+        artifactIds: [named.id, foreign.id, made.id],
+      }),
+    ).toEqual([named.id])
+    expect(
+      (await caller.artifact.ofChat({ taskId: task.id })).map((row) => [row.title, row.group]),
+    ).toEqual([
+      ['Сделан', 'made'],
+      ['Назван', 'mentioned'],
+    ])
+    await expect(callerOf(boris).artifact.ofChat({ taskId: task.id })).rejects.toMatchObject({
       code: 'NOT_FOUND',
     })
   })

@@ -279,6 +279,14 @@ export const mentionText = Object.freeze({
   none: 'У проекта нет файлов в рабочей копии.',
   nothing: 'Нет такого файла.',
   folder: (path: string) => `Папка ${path}`,
+  /** An artifact in the list of `@` (docs/plan/88-artifacts.md, Ар47). */
+  artifact: (title: string) => `Артефакт «${title}»`,
+  artifactMark: 'Артефакт',
+  /** The list of `@` that names artifacts too. */
+  withArtifacts: 'Файлы и артефакты',
+  /** «Артефакт…» in the menu «+» of the field (Ар47). */
+  addArtifact: 'Артефакт…',
+  addArtifactHint: 'Назвать артефакт агенту — через «@»',
   /** Read when the list opens. */
   opened: 'Файлы проекта. Стрелки — выбрать, Enter — вставить, Escape — закрыть.',
 })
@@ -842,7 +850,7 @@ export const toolText = Object.freeze({
   /** Why «+» bears the dot, the most pressing first (И13). */
   dot: Object.freeze({
     browser: 'браузер ждёт вас',
-    documents: 'есть новый документ',
+    results: 'есть новый результат',
   }),
   /** The landmark beside the dialog (И20). */
   panel: 'Инструменты чата',
@@ -858,16 +866,25 @@ export const toolText = Object.freeze({
   closeMenu: 'Закрыть меню',
   /** The hint of the cross of a tab; the cross itself is hidden from a screen reader (И7). */
   closeTab: (name: string) => `Закрыть вкладку «${name}»`,
-  /** The name of a tool on its tab. */
+  /** The name of the browser on its tab; an artifact or a file is named by its title (Ар44). */
   tab: Object.freeze({
     browser: browserText.view,
-    documents: 'Документы',
   }),
-  /** The name of a tool in the menu. */
+  /** The name of the browser in the menu. */
   item: Object.freeze({
     browser: browserText.view,
-    documents: 'Документы',
   }),
+  /** The groups of the menu «+» (Ар44, board B-chat-list). */
+  groups: Object.freeze({
+    tools: 'Инструменты',
+    made: 'Артефакты чата · Сделаны здесь',
+    mentioned: 'Артефакты чата · Упомянуты в чате',
+    project: 'Артефакты чата · В проекте',
+    files: 'Файлы чата',
+  }),
+  /** «Ещё N ▾»: the tabs that do not fit the strip (Ар44). */
+  more: (count: number) => `Ещё ${count}`,
+  moreLabel: (count: number) => `Ещё ${count} вкладок`,
   /** The marks on the right of the tiles (И5); a browser that holds a session says who drives it. */
   mark: Object.freeze({
     open: 'Открыто',
@@ -877,6 +894,8 @@ export const toolText = Object.freeze({
     none: 'нет',
     /** The session of the browser holds none any more. */
     browserClosed: 'Закрыт',
+    /** Open, but its tab stands in «Ещё» (Ар44). */
+    inMore: 'В «Ещё»',
   }),
 })
 
@@ -889,6 +908,8 @@ export const toolText = Object.freeze({
 export const documentText = Object.freeze({
   // A document is a document, whichever kind: a page is what the client publishes (plan 69).
   kind: Object.freeze({ page: 'Документ', markdown: 'Документ' }),
+  /** An artifact of the chat whose title is not read yet (docs/plan/88-artifacts.md, Ар44). */
+  artifact: 'Артефакт',
   version: (number: number) => `версия ${number}`,
   versionOf: (number: number, all: number) => `Версия ${number} из ${all}`,
   open: 'Открыть',

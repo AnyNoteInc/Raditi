@@ -416,3 +416,42 @@ export async function adoptLegacySectionWrites(
       AND written_by_user_id IS NULL AND pending_task_id IS NULL AND deleted_rev IS NULL
       AND markdown IS NOT NULL AND heading IS NOT NULL AND written_turn IS NOT NULL`
 }
+
+/**
+ * `@artifact:<id>` in the client's own words (Ар23, Ар47): each artifact the client may read —
+ * by the role of the client of the chat, in the chat's workspace, of a class of data the chat may
+ * read — is attached to the chat as `mentioned` and opens to it; a link it had already stays as
+ * it was, a mere read becomes a mention. The rest is left out without a word: an id of someone
+ * else's artifact tells nothing. Returns the ids attached now.
+ */
+export async function attachMentionedArtifacts(
+  db: Db,
+  input: { taskId: string; artifactIds: readonly string[]; now?: Date },
+): Promise<string[]> {
+  if (input.artifactIds.length === 0) return []
+  const chat = await chatOf(db, input.taskId)
+  if (!chat?.clientId) return []
+  const attached: string[] = []
+  for (const artifactId of input.artifactIds) {
+    const artifact = await db.artifact.findUnique({
+      where: { id: artifactId },
+      select: {
+        workspaceId: true,
+        chats: { where: { taskId: input.taskId }, select: { how: true } },
+      },
+    })
+    if (!artifact || artifact.workspaceId !== chat.workspaceId) continue
+    const role = await artifactRole(db, { artifactId, userId: chat.clientId })
+    if (!artifactRoleCan(role, 'read')) continue
+    const how = artifact.chats[0]?.how ?? null
+    if (how !== null && how !== 'read') continue
+    const at = input.now ?? new Date()
+    await db.artifactChat.upsert({
+      where: { artifactId_taskId: { artifactId, taskId: input.taskId } },
+      create: { artifactId, taskId: input.taskId, how: 'mentioned', firstAt: at, lastAt: at },
+      update: { how: 'mentioned', lastAt: at },
+    })
+    attached.push(artifactId)
+  }
+  return attached
+}

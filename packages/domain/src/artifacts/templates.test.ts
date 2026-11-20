@@ -25,3 +25,16 @@ describe('the templates of the gallery (Ар50)', () => {
     expect(artifactTemplateOf('nothing')).toBeNull()
   })
 })
+
+describe('`@artifact:<id>` in the words of the client (Ар47)', () => {
+  it('names each artifact once, in order, lower case, and nothing else', async () => {
+    const { artifactMention, artifactMentionsOf } = await import('./section.ts')
+    const a = '019F1A21-1800-7F00-8ABC-000000000001'
+    const b = '019f1a21-1800-7f00-8abc-000000000002'
+    expect(
+      artifactMentionsOf(`Допиши @artifact:${a} и @artifact:${b}, ещё @artifact:${a}`),
+    ).toEqual([a.toLowerCase(), b])
+    expect(artifactMentionsOf('почта info@artifact.ru и @artifact:не-id')).toEqual([])
+    expect(artifactMention(a)).toBe(`@artifact:${a.toLowerCase()}`)
+  })
+})

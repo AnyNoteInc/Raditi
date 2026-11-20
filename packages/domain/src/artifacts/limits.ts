@@ -57,6 +57,8 @@ export const artifactLimits = Object.freeze({
   importBytes: 2 * MiB,
   /** Leases: of a person while typing, and of the agent by `artifact_claim`. */
   humanLeaseSeconds: 30,
+  /** Artifacts one message of the client may name with `@artifact:<id>` (Ар47). */
+  mentionsPerMessage: 10,
   claimSeconds: 120,
   /** How often core checks the agent's writes, as the sections of plan 74. */
   checkIntervalMs: 1500,

@@ -93,6 +93,7 @@ export {
   artifactChatNews,
   artifactPlaceholders,
   artifactsOfTurn,
+  attachMentionedArtifacts,
   chatArtifactAccess,
   chatLastRevOf,
   discardAgentArtifact,

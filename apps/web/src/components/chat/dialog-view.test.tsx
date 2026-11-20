@@ -253,6 +253,11 @@ vi.mock('@/trpc/client', () => ({
       undoConfirm: mutation(async () => ({})),
     },
     browser: { watch: mutation(calls.watch) },
+    // The artifacts of the chat for «+» and its tabs (docs/plan/88-artifacts.md, Ар44).
+    artifact: {
+      ofChat: query('artifact.ofChat', async () => []),
+      list: query('artifact.list', async () => []),
+    },
     billing: { usage: query('billing.usage', async () => null) },
     // «Опубликовать как страницу» (docs/plan/69-pages.md, Ст32): not offered in these tests.
     pages: {

@@ -2,6 +2,7 @@ import { attemptCreditBudget } from '@repo/billing'
 import {
   chatMemory,
   classProfile,
+  attachMentionedArtifacts,
   listChatArtifacts,
   memoryEntriesOfPass,
   passUnattended,
@@ -23,6 +24,7 @@ import {
   type ProjectSectionFacts,
   type UnavailableRepositoryFacts,
 } from '@repo/domain'
+import { artifactMentionsOf } from '@repo/domain/artifacts'
 
 import type { PoolProbeClient } from '../llm/pool-probe-client.ts'
 import { poolHasRoom } from '../llm/pool-room.ts'
@@ -231,7 +233,21 @@ export async function readPassFacts(
   // The memory of the chat (docs/plan/84-projects.md, ПР18): null — off for its author.
   const memory = await chatMemory(deps.db, task.id)
   const memoryEntries = memory ? await memoryEntriesOfPass(deps.db, memory) : null
-  // The artifacts the chat made or edited (docs/plan/88-artifacts.md, Ар26): their lines, no content.
+  // The artifacts the client named in their own words (`@artifact:<id>`, docs/plan/88-artifacts.md,
+  // Ар23, Ар47) join the chat — by the client's role, never from a text an agent wrote.
+  const mentioned = [
+    ...new Set(
+      requests.flatMap((request) =>
+        // A command and the words of a command the agent carries out are the platform's.
+        request.kind !== 'command' && request.kind !== 'agent_command' && request.text
+          ? artifactMentionsOf(request.text)
+          : [],
+      ),
+    ),
+  ]
+  if (mentioned.length > 0)
+    await attachMentionedArtifacts(deps.db, { taskId: task.id, artifactIds: mentioned })
+  // The artifacts the chat made, edited or was given (Ар26): their lines, no content.
   const chatArtifacts = (await listChatArtifacts(deps.db, { taskId: task.id, scope: 'chat' })).rows
   // A pass of a run before the first words of its client goes without them (Зп27, Зп29), decided
   // by the request it answers: a cancel or an interrupt written since is for the passes after it.

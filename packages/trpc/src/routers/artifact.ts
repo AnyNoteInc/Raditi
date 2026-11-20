@@ -9,6 +9,7 @@ import {
 } from '@repo/domain/artifacts'
 import { z } from 'zod'
 
+import { chatArtifactsOf } from '../services/artifacts/chat-artifacts.ts'
 import {
   createGalleryArtifact,
   galleryOf,
@@ -161,6 +162,22 @@ export const artifactRouter = router({
       const { no } = await saveCabinetVersion(ctx.prisma, { userId: ctx.user.id, ...input })
       return { no }
     }),
+
+  /** The artifacts of a chat by group, for its «+», its tabs and «Результаты» (Ар44, Ар46). */
+  ofChat: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(
+      z.array(
+        z.strictObject({
+          id: z.uuid(),
+          kind: z.string(),
+          title: z.string(),
+          version: z.number().int().min(0),
+          group: z.enum(['made', 'mentioned', 'project']),
+        }),
+      ),
+    )
+    .query(({ ctx, input }) => chatArtifactsOf(ctx.prisma, { userId: ctx.user.id, ...input })),
 
   /** The reader's own chats of this artifact, newest first (Ар48). */
   chats: consentedProcedure

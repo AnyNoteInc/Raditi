@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 import { UsageWindowHint } from '@/components/billing/usage-window-hint'
 import { ProjectPicker, useProjectChoices } from '@/components/projects/project-picker'
 import { projectHref, projectPickerText } from '@/components/projects/project-texts'
+import { useArtifactMentions } from '@/components/artifacts/use-artifact-mentions'
 import { useContextMentions } from '@/components/projects/use-context-mentions'
 import {
   pickedOf,
@@ -83,7 +84,9 @@ export function NewChat({
   const project =
     chosen !== undefined ? chosen : projectOfAddress(projectId, loaded ? choices : null)
   // `@` names the files of the context of the chosen project (docs/plan/84-projects.md, ПР24).
-  const mentions = useContextMentions(project?.id ?? null)
+  const contextMentions = useContextMentions(project?.id ?? null)
+  // …and the artifacts of the client (docs/plan/88-artifacts.md, Ар47).
+  const mentions = useArtifactMentions(contextMentions)
   // The words kept for a new chat come back here.
   const [draft, setDraft] = useState<string | null>(null)
   // The requests this browser sent before: the arrows of the field bring them back (ВВ23).

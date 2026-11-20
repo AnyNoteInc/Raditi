@@ -168,6 +168,7 @@ export function DocumentsPane({
   onFullscreen,
   onPublish,
   standalone = false,
+  only = false,
 }: {
   taskId: string
   /** The rows of the chat: the documents, their versions and the pictures come from them. */
@@ -187,6 +188,11 @@ export function DocumentsPane({
   onPublish?: (document: ChatDocument, fileId: string) => void
   /** The window of a new tab: no new tab of it, the list beside it always. */
   standalone?: boolean
+  /**
+   * The tab of one file beside the chat (docs/plan/88-artifacts.md, Ар44): its versions, its
+   * contents and its links to other documents, no list of the documents — «+» holds that.
+   */
+  only?: boolean
 }) {
   const documents = useMemo(() => chatDocumentsOf(rows), [rows])
   const names = useMemo(() => new Set(documents.map((document) => document.name)), [documents])
@@ -286,15 +292,17 @@ export function DocumentsPane({
           minWidth: 0,
         }}
       >
-        <Button
-          size="small"
-          onClick={(event) => setListAnchor(event.currentTarget)}
-          aria-haspopup="dialog"
-          aria-expanded={listAnchor !== null}
-          sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
-        >
-          {documentText.all(documents.length + agentDocs.length)}
-        </Button>
+        {only ? null : (
+          <Button
+            size="small"
+            onClick={(event) => setListAnchor(event.currentTarget)}
+            aria-haspopup="dialog"
+            aria-expanded={listAnchor !== null}
+            sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
+          >
+            {documentText.all(documents.length + agentDocs.length)}
+          </Button>
+        )}
         <Box
           role="textbox"
           aria-readonly="true"
