@@ -81,6 +81,11 @@ export interface ArtifactKindSpec {
   sharableEdit: boolean
   /** True — its `html` and `script` live inside frames (canvas, slides, image); false — at the top. */
   framed: boolean
+  /**
+   * What the agent makes of this kind, in English for the instructions of a pass (Ар4): the
+   * result of the client's request that goes into an artifact of it.
+   */
+  forAgent: string
 }
 
 const frameParts = ['frame', 'html', 'style', 'script'] as const
@@ -95,6 +100,8 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 1,
     sharableEdit: true,
     framed: false,
+    forAgent:
+      'text to read, check or keep editing: an audit, a plan of work, a summary, an instruction, an article, a post, notes',
   },
   mockup: {
     label: 'Макет',
@@ -105,6 +112,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 1,
     sharableEdit: true,
     framed: false,
+    forAgent: 'a layout, a prototype of a page, a calculator',
   },
   table: {
     label: 'Таблица',
@@ -115,6 +123,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 1,
     sharableEdit: true,
     framed: false,
+    forAgent: 'rows and columns: a price list, a content plan, a list to keep',
   },
   canvas: {
     label: 'Холст',
@@ -125,6 +134,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 1,
     sharableEdit: true,
     framed: true,
+    forAgent: 'the screens of a new site side by side, for a computer and a phone',
   },
   brand: {
     label: 'Фирменный стиль',
@@ -135,6 +145,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 1,
     sharableEdit: false,
     framed: false,
+    forAgent: 'the colours, fonts and words of a brand',
   },
   diagram: {
     label: 'Схема',
@@ -145,6 +156,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 2,
     sharableEdit: true,
     framed: false,
+    forAgent: 'a diagram: a process, a structure, a timeline',
   },
   slides: {
     label: 'Презентация',
@@ -155,6 +167,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 2,
     sharableEdit: true,
     framed: true,
+    forAgent: 'a presentation',
   },
   image: {
     label: 'Изображение',
@@ -165,6 +178,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 2,
     sharableEdit: true,
     framed: true,
+    forAgent: 'a picture made of HTML: a banner, a card, a cover',
   },
   sitemap: {
     label: 'Структура сайта',
@@ -175,6 +189,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 2,
     sharableEdit: true,
     framed: false,
+    forAgent: 'the structure of a site: its pages and how they link',
   },
   report: {
     label: 'Отчёт',
@@ -185,6 +200,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 2,
     sharableEdit: true,
     framed: false,
+    forAgent: 'a report with charts and tables',
   },
 } satisfies Record<ArtifactKind, ArtifactKindSpec>)
 

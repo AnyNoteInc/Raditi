@@ -43,6 +43,8 @@ import {
   type UnkeyedTurnRequest,
 } from '@repo/domain'
 
+import { artifactsSection, type ChatArtifactLine } from '@repo/domain/artifacts'
+
 import { llmGatewayBaseUrl } from '../llm/backends.ts'
 import { ceilingQuestionOf } from './turn-outcome.ts'
 import {
@@ -204,6 +206,11 @@ export interface PassFacts {
    * off for the author of the chat: no section, and the agent has no tools of it.
    */
   memory?: readonly MemorySectionEntry[] | null
+  /**
+   * The artifacts the chat made or edited, newest first (docs/plan/88-artifacts.md, Ар26): the
+   * section `## Artifacts` lists them as data. Absent or empty — none yet.
+   */
+  chatArtifacts?: readonly ChatArtifactLine[]
   /**
    * The pass of a run of a scheduled task before the first words of its client (`passUnattended`,
    * docs/plan/82-scheduled-tasks.md, Зп27, Зп29), with the name of its task; absent — an ordinary
@@ -643,7 +650,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         inbox: inboxFacts,
         variables: facts.variables ?? [],
         repository: repository !== null,
-      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${memorySection(facts.memory)}`,
+      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${action ? '' : artifactsSection(facts.chatArtifacts ?? [])}${memorySection(facts.memory)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),

@@ -2,6 +2,7 @@ import { attemptCreditBudget } from '@repo/billing'
 import {
   chatMemory,
   classProfile,
+  listChatArtifacts,
   memoryEntriesOfPass,
   passUnattended,
   readyProjectFiles,
@@ -230,6 +231,8 @@ export async function readPassFacts(
   // The memory of the chat (docs/plan/84-projects.md, ПР18): null — off for its author.
   const memory = await chatMemory(deps.db, task.id)
   const memoryEntries = memory ? await memoryEntriesOfPass(deps.db, memory) : null
+  // The artifacts the chat made or edited (docs/plan/88-artifacts.md, Ар26): their lines, no content.
+  const chatArtifacts = (await listChatArtifacts(deps.db, { taskId: task.id, scope: 'chat' })).rows
   // A pass of a run before the first words of its client goes without them (Зп27, Зп29), decided
   // by the request it answers: a cancel or an interrupt written since is for the passes after it.
   const unattended =
@@ -252,6 +255,17 @@ export async function readPassFacts(
     repositoryUnavailable: repositoryUnavailableOf(task.project),
     ...(projectFiles.length ? { projectFiles } : {}),
     memory: memoryEntries,
+    ...(chatArtifacts.length
+      ? {
+          chatArtifacts: chatArtifacts.map(({ id, kind, title, version, updatedAt }) => ({
+            id,
+            kind,
+            title,
+            version,
+            updatedAt,
+          })),
+        }
+      : {}),
     ...(unattended ? { unattended } : {}),
     ...(attachments.length ? { attachments } : {}),
     requests,

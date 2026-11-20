@@ -18,6 +18,11 @@ export const sectionTagNames = [
   'project-context',
   'project-memory',
   'client-instructions',
+  // The data sections of artifacts (docs/plan/88-artifacts.md, Ар26).
+  'project-artifacts',
+  'chat-artifacts',
+  'artifact-comment',
+  'artifact-view',
 ] as const
 
 const sectionTag = new RegExp(

@@ -16,6 +16,7 @@ import {
   type TurnPlan,
   type TurnSkill,
 } from '@repo/domain'
+import { artifactsSection } from '@repo/domain/artifacts'
 import { describe, expect, it, vi } from 'vitest'
 
 import { llmGatewayBaseUrl } from '../llm/backends.ts'
@@ -527,7 +528,12 @@ describe('the sections of the instructions of a pass (docs/plan/84-projects.md, 
     const bare = (await planned(facts({ clientInstructions: words }))).request.context.instructions
     const instructions = (await planned(facts({ clientInstructions: words, project }))).request
       .context.instructions
-    expect(instructions).toBe(`${bare}${projectSection(project)}`)
+    // The section of artifacts closes the rules of every chat (docs/plan/88-artifacts.md, Ар26).
+    const artifacts = artifactsSection()
+    expect(bare.endsWith(artifacts)).toBe(true)
+    expect(instructions).toBe(
+      `${bare.slice(0, -artifacts.length)}${projectSection(project)}${artifacts}`,
+    )
     // Platform rules → the client's own instructions → the project (§4.4).
     const order = ["## The client's own instructions", '## The project', '<project-instructions>']
     const places = order.map((heading) => instructions.indexOf(heading))
@@ -539,7 +545,7 @@ describe('the sections of the instructions of a pass (docs/plan/84-projects.md, 
   it('gives the project to a chat whose client wrote no instructions of their own', async () => {
     const plan = await planned(facts({ project: { name: 'Сайт', goal: null, instructions: null } }))
     expect(plan.request.context.instructions).toMatch(
-      /\n## The project\nThis chat belongs to the client's project «Сайт»\.\n$/u,
+      /\n## The project\nThis chat belongs to the client's project «Сайт»\.\n\n## Artifacts\n/u,
     )
     expect(plan.request.context.instructions).not.toContain('client-instructions')
   })
@@ -555,9 +561,11 @@ describe('the files of the project in a pass (docs/plan/84-projects.md, ПР8)',
   it('lists them after the project and gives the turn their paths under /workspace/project', async () => {
     const plan = await planned(facts({ project, projectFiles: files }))
     const instructions = plan.request.context.instructions
-    expect(instructions.endsWith(`${projectSection(project)}${projectContextSection(files)}`)).toBe(
-      true,
-    )
+    expect(
+      instructions.endsWith(
+        `${projectSection(project)}${projectContextSection(files)}${artifactsSection()}`,
+      ),
+    ).toBe(true)
     expect(instructions.indexOf('## The project')).toBeLessThan(
       instructions.indexOf('## Project files'),
     )
@@ -595,7 +603,7 @@ describe('the memory in a pass (docs/plan/84-projects.md, ПР18)', () => {
     const instructions = plan.request.context.instructions
     expect(
       instructions.endsWith(
-        `${projectSection(project)}${projectContextSection(files)}${memorySection(memory)}`,
+        `${projectSection(project)}${projectContextSection(files)}${artifactsSection()}${memorySection(memory)}`,
       ),
     ).toBe(true)
     expect(instructions.indexOf('## Project files')).toBeLessThan(instructions.indexOf('## Memory'))
