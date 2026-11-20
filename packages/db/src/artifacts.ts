@@ -1110,8 +1110,10 @@ class BatchRun {
     const work: Work = { block, isNew: existing === undefined, dirty: true, inserted: true }
     this.#work.set(key, work)
     // The agent's intent is its text too: it is shown with the write, once checked (Ар19).
-    if (this.#agent && op.intent !== undefined) block.leaseIntent = op.intent
-    else if (op.intent !== undefined) block.intent = op.intent
+    if (this.#agent && op.intent !== undefined) {
+      block.leaseIntent = op.intent
+      block.leaseIntentChecked = false
+    } else if (op.intent !== undefined) block.intent = op.intent
     const result = this.#writeText(work, content, props)
     this.#journalLine('insert', key, null, block.rev, result)
   }
@@ -1140,6 +1142,7 @@ class BatchRun {
       leaseToken: null,
       leaseUntil: null,
       leaseIntent: null,
+      leaseIntentChecked: false,
     } satisfies Partial<ArtifactBlock>)
     work.dirty = true
     this.#revision(work)
@@ -1271,6 +1274,7 @@ function emptyBlock(documentId: string, key: string): ArtifactBlock {
     leaseToken: null,
     leaseUntil: null,
     leaseIntent: null,
+    leaseIntentChecked: false,
     writtenByUserId: null,
     deletedRev: null,
   }
@@ -1331,6 +1335,7 @@ export async function takeArtifactBlock(
         leaseTurn: taken?.turn ?? null,
         leaseToken: null,
         leaseIntent: null,
+        leaseIntentChecked: false,
         leaseUntil: new Date(now.getTime() + artifactLimits.humanLeaseSeconds * 1000),
       },
     })
@@ -1402,6 +1407,7 @@ export async function claimArtifactBlock(
         leaseToken: randomBytes(16).toString('hex'),
         // The agent's text: others see «Пишет агент» without it until core checked it (Ар19).
         leaseIntent: intent.data,
+        leaseIntentChecked: false,
         leaseUntil: until,
       },
     })
@@ -1421,6 +1427,20 @@ export interface ArtifactWriteVerdict {
    * checks it: the turn failed or was cancelled (Ар16).
    */
   refusal: PageRefusalReason | 'dropped' | null
+  /**
+   * The intent of the block's lease the check read with the write (`lease_intent`): a claim may
+   * name a new one meanwhile, which then waits for the next check. Absent — whatever it holds.
+   */
+  intent?: string | null
+}
+
+/** The check of the intent of a claim that writes nothing yet (Ар19): it is the agent's text too. */
+export interface ArtifactClaimVerdict {
+  artifactId: string
+  block: string
+  /** The intent the check read: a claim renewed with another one since is left for the next. */
+  intent: string
+  refusal: PageRefusalReason | null
 }
 
 export interface ArtifactSettled {
@@ -1441,16 +1461,32 @@ export async function settleArtifactWrites(
   input: {
     taskId: string
     blocks: readonly ArtifactWriteVerdict[]
-    titles?: readonly { artifactId: string; refusal: PageRefusalReason | 'dropped' | null }[]
+    titles?: readonly {
+      artifactId: string
+      refusal: PageRefusalReason | 'dropped' | null
+      /** The title the check read: one written again since waits for the next check. */
+      text?: string
+    }[]
+    claims?: readonly ArtifactClaimVerdict[]
     /** The end of the turn: the chat's claims end too. */
     final?: boolean
   },
 ): Promise<ArtifactSettled[]> {
   return db.$transaction(async (tx) => {
+    // The end of the turn ends the chat's claims also where it wrote nothing to check.
+    const claimed = input.final
+      ? await tx.artifactBlock.findMany({
+          where: { leaseHolder: 'agent', leaseTaskId: input.taskId },
+          select: { documentId: true },
+          distinct: ['documentId'],
+        })
+      : []
     const ids = [
       ...new Set([
         ...input.blocks.map((each) => each.artifactId),
         ...(input.titles ?? []).map((each) => each.artifactId),
+        ...(input.claims ?? []).map((each) => each.artifactId),
+        ...claimed.map((each) => each.documentId),
       ]),
     ].sort()
     const out: ArtifactSettled[] = []
@@ -1488,6 +1524,8 @@ export async function settleArtifactWrites(
         })
         if (!block || block.pendingTaskId !== input.taskId || block.rev !== verdict.rev) continue
         const turnNo = block.pendingTurn
+        // Whether this verdict covered the intent the block's lease holds now.
+        const covered = verdict.intent === undefined || verdict.intent === block.leaseIntent
         if (verdict.refusal === null) {
           checked += 1
           const props = asProps(block.pendingProps ?? block.props)
@@ -1507,8 +1545,12 @@ export async function settleArtifactWrites(
             checkedTurn: turnNo,
             refusal: null,
             intent:
-              block.leaseHolder !== 'agent' && block.leaseIntent ? block.leaseIntent : block.intent,
+              block.leaseHolder !== 'agent' && block.leaseIntent && covered
+                ? block.leaseIntent
+                : block.intent,
             leaseIntent: block.leaseHolder === 'agent' ? block.leaseIntent : null,
+            leaseIntentChecked:
+              block.leaseHolder === 'agent' && block.leaseIntent !== null && covered,
             pendingContent: null,
             pendingProps: null,
             pendingTaskId: null,
@@ -1551,7 +1593,9 @@ export async function settleArtifactWrites(
           deletedRev: inserted ? rev : null,
           refusal:
             block.state === 'pending' && verdict.refusal !== 'dropped' ? verdict.refusal : null,
-          leaseIntent: block.leaseHolder === 'agent' ? block.leaseIntent : null,
+          // What the check read and refused goes with the write; an intent named since waits.
+          leaseIntent: block.leaseHolder === 'agent' && !covered ? block.leaseIntent : null,
+          leaseIntentChecked: false,
           pendingContent: null,
           pendingProps: null,
           pendingTaskId: null,
@@ -1563,9 +1607,30 @@ export async function settleArtifactWrites(
         if (verdict.refusal === 'dropped') line(after, 'dropped', null, turnNo)
         else line(after, 'refused', verdict.refusal, turnNo)
       }
+      // A claim is no change of the artifact: its intent is shown or forgotten, without a line.
+      for (const claim of (input.claims ?? []).filter((each) => each.artifactId === artifactId))
+        await tx.artifactBlock.updateMany({
+          where: {
+            documentId: artifactId,
+            sectionKey: claim.block,
+            leaseHolder: 'agent',
+            leaseTaskId: input.taskId,
+            leaseIntent: claim.intent,
+            pendingTaskId: null,
+          },
+          data:
+            claim.refusal === null
+              ? { leaseIntentChecked: true }
+              : { leaseIntent: null, leaseIntentChecked: false },
+        })
       const title = input.titles?.find((each) => each.artifactId === artifactId)
       const titleData: Prisma.ArtifactUpdateInput = {}
-      if (title && artifact.pendingTaskId === input.taskId && artifact.pendingTitle !== null) {
+      if (
+        title &&
+        artifact.pendingTaskId === input.taskId &&
+        artifact.pendingTitle !== null &&
+        (title.text === undefined || title.text === artifact.pendingTitle)
+      ) {
         if (title.refusal === null) titleData.title = artifact.pendingTitle
         Object.assign(titleData, { pendingTitle: null, pendingTaskId: null, pendingTurn: null })
         line(
@@ -1587,6 +1652,7 @@ export async function settleArtifactWrites(
             leaseToken: null,
             leaseUntil: null,
             leaseIntent: null,
+            leaseIntentChecked: false,
           },
         })
       if (journal.length === 0) continue
@@ -1633,12 +1699,52 @@ export function pendingArtifactWrites(db: Pick<PrismaClient, 'artifactBlock'>, t
       blockKind: true,
       pendingContent: true,
       pendingProps: true,
+      leaseHolder: true,
+      leaseTaskId: true,
       leaseIntent: true,
+      leaseIntentChecked: true,
       pendingTaskId: true,
+      pendingTurn: true,
       pendingAt: true,
     },
     orderBy: [{ documentId: 'asc' }, { pendingAt: 'asc' }],
   })
+}
+
+/** The titles a chat wrote that wait for the check (Ар19), with the text to name back. */
+export function pendingArtifactTitles(db: Pick<PrismaClient, 'artifact'>, taskId: string) {
+  return db.artifact.findMany({
+    where: { pendingTaskId: taskId, pendingTitle: { not: null } },
+    select: { id: true, pendingTitle: true },
+    orderBy: { id: 'asc' },
+  })
+}
+
+/**
+ * The chats whose writes wait for a check longer than since `before` and whose pass is over — no
+ * end of a turn will check them (Ар16): for the collector to drop them. By the time of the write
+ * of a block (`pending_at`), not by the artifact's: a document others keep editing still holds an
+ * old write. A pass in `preparing` or `running` is left to the end of its turn, or to the sweep
+ * that ends it; a chat that is gone is dropped too.
+ */
+export async function staleArtifactWriters(
+  db: Pick<PrismaClient, '$queryRaw'>,
+  before: Date,
+  limit = 50,
+): Promise<string[]> {
+  const rows = await db.$queryRaw<{ task_id: string }[]>`
+    SELECT p.task_id FROM (
+      SELECT pending_task_id AS task_id FROM chat_document_sections
+      WHERE pending_task_id IS NOT NULL AND pending_at < ${before}
+      UNION
+      SELECT pending_task_id FROM chat_documents
+      WHERE pending_task_id IS NOT NULL AND updated_at < ${before}
+    ) p
+    LEFT JOIN tasks t ON t.id = p.task_id
+    WHERE t.id IS NULL OR t.status::text NOT IN ('preparing', 'running')
+    ORDER BY p.task_id
+    LIMIT ${limit}`
+  return rows.map((row) => row.task_id)
 }
 
 /**
@@ -2038,7 +2144,7 @@ export async function sweepArtifacts(
     (
       await db.artifactBlock.updateMany({
         where: { leaseUntil: { lt: now }, pendingTaskId: null },
-        data: { ...ended, leaseIntent: null },
+        data: { ...ended, leaseIntent: null, leaseIntentChecked: false },
       })
     ).count +
     (

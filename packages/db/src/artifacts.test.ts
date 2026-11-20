@@ -16,11 +16,14 @@ import {
   claimArtifactBlock,
   createArtifact,
   dropArtifactWrites,
+  pendingArtifactTitles,
+  pendingArtifactWrites,
   readArtifact,
   readArtifactVersion,
   restoreArtifact,
   saveArtifactVersion,
   settleArtifactWrites,
+  staleArtifactWriters,
   sweepArtifacts,
   takeArtifactBlock,
   trashArtifact,
@@ -701,5 +704,108 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
       orderBy: { rank: 'asc' },
     })
     expect(blocks.map((block) => block.sectionKey)).toEqual(['two', 'one'])
+  })
+
+  it('shows a claim’s intent once checked, forgets a refused one, and leaves one renewed meanwhile (88.4)', async () => {
+    const { create, apply, chat } = await owner()
+    const id = await create()
+    const now = new Date()
+    await apply(id, [section('a', 'Текст'), section('b', 'Ещё', 'a')], undefined, now)
+    const later = new Date(now.getTime() + 40_000)
+    const claimer = await chat()
+    const claim = (block: string, intent: string) =>
+      claimArtifactBlock(db, {
+        artifactId: id,
+        block,
+        actor: { kind: 'agent', taskId: claimer, turnNo: 1 },
+        intent,
+        now: later,
+      })
+    await claim('a', 'Обновлю цены')
+    await claim('b', 'Перепишу')
+    const read = await pendingArtifactWrites(db, claimer)
+    expect(
+      read.map((each) => [each.sectionKey, each.leaseIntent, each.leaseIntentChecked]),
+    ).toEqual([
+      ['a', 'Обновлю цены', false],
+      ['b', 'Перепишу', false],
+    ])
+    // The claim of b is renewed with another intent while the check runs.
+    await claim('b', 'Перепишу иначе')
+    await settleArtifactWrites(db, {
+      taskId: claimer,
+      blocks: [],
+      claims: [
+        { artifactId: id, block: 'a', intent: 'Обновлю цены', refusal: null },
+        { artifactId: id, block: 'b', intent: 'Перепишу', refusal: null },
+      ],
+    })
+    const after = await db.artifactBlock.findMany({
+      where: { documentId: id },
+      orderBy: { sectionKey: 'asc' },
+      select: { sectionKey: true, leaseIntent: true, leaseIntentChecked: true },
+    })
+    expect(after).toEqual([
+      { sectionKey: 'a', leaseIntent: 'Обновлю цены', leaseIntentChecked: true },
+      { sectionKey: 'b', leaseIntent: 'Перепишу иначе', leaseIntentChecked: false },
+    ])
+    await settleArtifactWrites(db, {
+      taskId: claimer,
+      blocks: [],
+      claims: [{ artifactId: id, block: 'b', intent: 'Перепишу иначе', refusal: 'turn_key' }],
+    })
+    expect(
+      (await db.artifactBlock.findFirstOrThrow({ where: { documentId: id, sectionKey: 'b' } }))
+        .leaseIntent,
+    ).toBeNull()
+    // A write under a claim refused: the intent the check read goes with it.
+    await apply(
+      id,
+      [{ op: 'replace', block: 'a', ifRev: 1, content: 'Секрет' }],
+      { kind: 'agent', taskId: claimer, turnNo: 1 },
+      later,
+    )
+    await settleArtifactWrites(db, {
+      taskId: claimer,
+      blocks: [{ artifactId: id, block: 'a', rev: 2, refusal: 'turn_key', intent: 'Обновлю цены' }],
+    })
+    const a = await db.artifactBlock.findFirstOrThrow({
+      where: { documentId: id, sectionKey: 'a' },
+    })
+    expect([a.leaseIntent, a.leaseIntentChecked, a.content]).toEqual([null, false, 'Текст'])
+  })
+
+  it('settles a title only as the check read it, and finds the chats whose writes are left (88.4)', async () => {
+    const { create, apply, chat, agent } = await owner()
+    const id = await create()
+    const now = new Date()
+    await apply(id, [section('a', 'Текст')], undefined, now)
+    const later = new Date(now.getTime() + 40_000)
+    const writer = await chat()
+    await apply(id, [{ op: 'title', title: 'Первое' }], agent(writer), later)
+    expect(await pendingArtifactTitles(db, writer)).toEqual([{ id, pendingTitle: 'Первое' }])
+    await apply(id, [{ op: 'title', title: 'Второе' }], agent(writer), later)
+    await settleArtifactWrites(db, {
+      taskId: writer,
+      blocks: [],
+      titles: [{ artifactId: id, refusal: null, text: 'Первое' }],
+    })
+    const kept = await db.artifact.findUniqueOrThrow({ where: { id } })
+    expect([kept.title, kept.pendingTitle]).toEqual(['Прайс', 'Второе'])
+    await apply(
+      id,
+      [{ op: 'replace', block: 'a', ifRev: 1, content: 'Новый' }],
+      agent(writer),
+      later,
+    )
+    const hour = new Date(Date.now() + 3600_000)
+    // The chat is still in its pass: left to the end of its turn.
+    await db.task.update({ where: { id: writer }, data: { status: 'running' } })
+    expect(await staleArtifactWriters(db, hour)).not.toContain(writer)
+    await db.task.update({ where: { id: writer }, data: { status: 'failed' } })
+    expect(await staleArtifactWriters(db, hour)).toContain(writer)
+    expect(await staleArtifactWriters(db, new Date(Date.now() - 3600_000))).not.toContain(writer)
+    await dropArtifactWrites(db, writer)
+    expect(await staleArtifactWriters(db, hour)).not.toContain(writer)
   })
 })

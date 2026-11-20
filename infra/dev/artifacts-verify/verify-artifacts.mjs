@@ -7,8 +7,10 @@
 //
 //   pnpm verify:artifacts [-- --keep]
 //
-// Slice 88.3 starts it with the database alone; the check of core, the tools of mcp, the cabinet
-// and the measurement under 8 turns come with their slices.
+// Slice 88.3 starts it with the database alone; 88.4 adds the check of core (`ArtifactChecks`):
+// a write with a value of the workspace's variables is refused live, a clean one shown, a failed
+// turn's writes dropped, the collector by the time of the write. The tools of mcp, the cabinet and
+// the measurement under 8 turns come with their slices.
 
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -218,6 +220,7 @@ async function scenario(databaseUrl) {
       heard.length > 0 && heard.every((payload) => payload === id) && heard.length <= 4,
       `heard ${heard.length}`,
     )
+    await checksOfCore({ dbModule, db, id, person, agent, chat, apply })
     await dbModule.trashArtifact(db, { artifactId: id, userId: user.id, by: 'client' })
     check(
       'an artifact in the trash is open to nobody',
@@ -229,4 +232,96 @@ async function scenario(databaseUrl) {
     await listener.end()
     await db.$disconnect()
   }
+}
+
+/** Slice 88.4: the check of core on the agent's writes, as a turn runs and ends (Ар16, Ар19). */
+async function checksOfCore({ dbModule, db, id, person, agent, chat, apply }) {
+  const { ArtifactChecks } = await import(
+    resolve(root, 'apps/core/src/artifacts/artifact-checks.ts')
+  )
+  const value = `synthetic-variable-${randomBytes(6).toString('hex')}`
+  const refuses = (text) => (text.includes(value) ? 'client_value' : null)
+  const lines = []
+  const logger = { log: (line) => lines.push(line), warn: (line) => lines.push(line) }
+  const checks = new ArtifactChecks({ db, logger })
+  const after = new Date(Date.now() + 120_000)
+  const read = async () =>
+    Object.fromEntries(
+      (await dbModule.readArtifact(db, { artifactId: id, actor: person })).blocks.map((block) => [
+        block.key,
+        block.content,
+      ]),
+    )
+  const turn = await chat()
+  const before = await read()
+  const rev = (await dbModule.readArtifact(db, { artifactId: id, actor: person })).blocks
+  const revOf = (key) => rev.find((block) => block.key === key).rev
+  await apply(
+    [
+      { op: 'replace', block: 'coffee', ifRev: revOf('coffee'), content: 'Капучино — 290 ₽' },
+      { op: 'replace', block: 'tea', ifRev: revOf('tea'), content: `Чай — ${value}` },
+    ],
+    agent(turn),
+    undefined,
+    after,
+  )
+  const live = await checks.checkLive(turn, 1, refuses)
+  const now = await read()
+  check(
+    'core shows a clean write live and keeps the text before one with a variable',
+    live.checked === 1 &&
+      live.refused === 1 &&
+      now.coffee === 'Капучино — 290 ₽' &&
+      now.tea === before.tea,
+    JSON.stringify(live),
+  )
+  check(
+    'nothing the check found reaches its log',
+    lines.every((line) => !line.includes(value)),
+  )
+  const failed = await chat()
+  const current = (await dbModule.readArtifact(db, { artifactId: id, actor: person })).blocks
+  await apply(
+    [
+      {
+        op: 'replace',
+        block: 'coffee',
+        ifRev: current.find((block) => block.key === 'coffee').rev,
+        content: 'Капучино — 999 ₽',
+      },
+    ],
+    agent(failed),
+    undefined,
+    after,
+  )
+  const dropped = await checks.fail(failed, 1, null)
+  check(
+    'a turn that failed without its values drops its writes',
+    dropped.dropped === 1 && (await read()).coffee === 'Капучино — 290 ₽',
+  )
+  const left = await chat()
+  const latest = (await dbModule.readArtifact(db, { artifactId: id, actor: person })).blocks
+  await apply(
+    [
+      {
+        op: 'replace',
+        block: 'tea',
+        ifRev: latest.find((block) => block.key === 'tea').rev,
+        content: 'Чай — 160 ₽',
+      },
+    ],
+    agent(left),
+    undefined,
+    after,
+  )
+  await db.task.update({ where: { id: left }, data: { status: 'failed' } })
+  const sweeper = new ArtifactChecks({
+    db,
+    logger,
+    now: () => new Date(after.getTime() + 11 * 60_000),
+  })
+  check(
+    'the collector drops a write left by a chat whose pass is over, by its time',
+    (await sweeper.sweep()) === 1 && (await dbModule.pendingArtifactWrites(db, left)).length === 0,
+  )
 }

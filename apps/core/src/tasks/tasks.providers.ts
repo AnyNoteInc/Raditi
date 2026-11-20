@@ -12,6 +12,7 @@ import type {
 import { llmBackends } from '@repo/llm-backends'
 import { PRISMA } from '@repo/service-runtime'
 
+import { ArtifactChecks } from '../artifacts/artifact-checks.ts'
 import { BrowserSessions } from '../browser/browser-sessions.ts'
 import type { CoreConfig } from '../config/config.ts'
 import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
@@ -123,6 +124,8 @@ export const taskProviders: Provider[] = [
           logger: new Logger('DocSections'),
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
+        // The agent's writes in artifacts (docs/plan/88-artifacts.md, Ар16, Ар19).
+        artifacts: new ArtifactChecks({ db: prisma, logger: new Logger('ArtifactChecks') }),
         // What a turn asked of its pages besides versions (docs/plan/73-pages-sites.md, Дер23).
         pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
         // What a turn asked of the memory of its chat (docs/plan/84-projects.md, ПР18).
@@ -222,6 +225,8 @@ export const taskProviders: Provider[] = [
         schedules: new ScheduleChanges({ db: prisma, logger: new Logger('ScheduleChanges') }),
         // The changes of a turn whose end recovery reached (docs/plan/84-projects.md, §10).
         pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
+        // The writes in artifacts of turns the sweep ends, and their collector (Ар16, Ар50).
+        artifacts: new ArtifactChecks({ db: prisma, logger: new Logger('ArtifactChecks') }),
         values: credentials,
         // The card of a commit recovery published (docs/plan/84-projects.md, ПР12).
         repositories: workspace

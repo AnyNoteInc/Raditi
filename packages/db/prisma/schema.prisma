@@ -2592,6 +2592,7 @@ model Artifact {
   @@index([projectId])
   @@index([ownerUserId])
   @@index([purgeAfter])
+  @@index([pendingTaskId])
   @@map("chat_documents")
 }
 
@@ -2599,49 +2600,51 @@ model Artifact {
 /// Its id is the former `section_key`. `content` and `props` are what core checked; the agent's
 /// write waits in `pending_*` and holds the block for its turn until the check (Ар16).
 model ArtifactBlock {
-  id              String    @id @default(uuid(7)) @db.Uuid
-  documentId      String    @map("document_id") @db.Uuid
+  id                 String    @id @default(uuid(7)) @db.Uuid
+  documentId         String    @map("document_id") @db.Uuid
   /// The id the agent or the server gave it.
-  sectionKey      String    @map("section_key") @db.VarChar(40)
+  sectionKey         String    @map("section_key") @db.VarChar(40)
   /// Release 1 writes both; the order is `rank` (a fractional key), `position` goes in release 2.
-  position        Int
-  rank            String?
-  heading         String?   @db.VarChar(200)
-  markdown        String?   @db.Text
-  intent          String    @db.VarChar(200)
+  position           Int
+  rank               String?
+  heading            String?   @db.VarChar(200)
+  markdown           String?   @db.Text
+  intent             String    @db.VarChar(200)
   /// docSectionStates: pending (no checked text), written.
-  state           String    @default("pending") @db.VarChar(16)
+  state              String    @default("pending") @db.VarChar(16)
   /// The chat and turn that wrote it; core checks a section while its turn runs, and at its end.
-  writtenTaskId   String?   @map("written_task_id") @db.Uuid
-  writtenTurn     Int?      @map("written_turn")
+  writtenTaskId      String?   @map("written_task_id") @db.Uuid
+  writtenTurn        Int?      @map("written_turn")
   /// Set once core found nothing in it: until then the cabinet gets no text.
-  checkedTurn     Int?      @map("checked_turn")
+  checkedTurn        Int?      @map("checked_turn")
   /// Why core sent it back to pending (pageRefusalReasons).
-  refusal         String?   @db.VarChar(24)
+  refusal            String?   @db.VarChar(24)
   /// The frame it stands in; NULL — at the top.
-  parentKey       String?   @map("parent_key") @db.VarChar(40)
+  parentKey          String?   @map("parent_key") @db.VarChar(40)
   /// artifactBlockKinds.
-  blockKind       String    @default("section") @map("block_kind") @db.VarChar(16)
-  props           Json      @default("{}")
+  blockKind          String    @default("section") @map("block_kind") @db.VarChar(16)
+  props              Json      @default("{}")
   /// Every change gives a new one: `replace`, `move` and `delete` name it in `ifRev` (Ар15).
-  rev             Int       @default(0)
-  content         String?
-  pendingContent  String?   @map("pending_content")
-  pendingProps    Json?     @map("pending_props")
-  pendingTaskId   String?   @map("pending_task_id") @db.Uuid
-  pendingTurn     Int?      @map("pending_turn")
-  pendingAt       DateTime? @map("pending_at") @db.Timestamptz(6)
+  rev                Int       @default(0)
+  content            String?
+  pendingContent     String?   @map("pending_content")
+  pendingProps       Json?     @map("pending_props")
+  pendingTaskId      String?   @map("pending_task_id") @db.Uuid
+  pendingTurn        Int?      @map("pending_turn")
+  pendingAt          DateTime? @map("pending_at") @db.Timestamptz(6)
   /// `human` while a person types (30 s), `agent` for `artifact_claim` (Ар17).
-  leaseHolder     String?   @map("lease_holder") @db.VarChar(8)
-  leaseUserId     String?   @map("lease_user_id") @db.Uuid
-  leaseTaskId     String?   @map("lease_task_id") @db.Uuid
-  leaseTurn       Int?      @map("lease_turn")
-  leaseToken      String?   @map("lease_token") @db.VarChar(64)
-  leaseUntil      DateTime? @map("lease_until") @db.Timestamptz(6)
-  leaseIntent     String?   @map("lease_intent") @db.VarChar(200)
-  writtenByUserId String?   @map("written_by_user_id") @db.Uuid
+  leaseHolder        String?   @map("lease_holder") @db.VarChar(8)
+  leaseUserId        String?   @map("lease_user_id") @db.Uuid
+  leaseTaskId        String?   @map("lease_task_id") @db.Uuid
+  leaseTurn          Int?      @map("lease_turn")
+  leaseToken         String?   @map("lease_token") @db.VarChar(64)
+  leaseUntil         DateTime? @map("lease_until") @db.Timestamptz(6)
+  leaseIntent        String?   @map("lease_intent") @db.VarChar(200)
+  /// Core found nothing in `lease_intent`: others may read it (Ар19). Any new intent unsets it.
+  leaseIntentChecked Boolean   @default(false) @map("lease_intent_checked")
+  writtenByUserId    String?   @map("written_by_user_id") @db.Uuid
   /// Set when deleted: the row stays as a tombstone, its revisions hold the text for versions.
-  deletedRev      Int?      @map("deleted_rev")
+  deletedRev         Int?      @map("deleted_rev")
 
   document Artifact @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
@@ -2651,6 +2654,7 @@ model ArtifactBlock {
   @@index([documentId, state])
   @@index([documentId, parentKey, rank])
   @@index([pendingTaskId, pendingTurn])
+  @@index([leaseTaskId])
   @@map("chat_document_sections")
 }
 

@@ -138,6 +138,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     options: {
       browser?: { reclaim: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
       docs?: { settle: ReturnType<typeof vi.fn>; checkLive?: ReturnType<typeof vi.fn> }
+      artifacts?: {
+        settle: ReturnType<typeof vi.fn>
+        checkLive: ReturnType<typeof vi.fn>
+        fail: ReturnType<typeof vi.fn>
+      }
       memoryChanges?: { apply: ReturnType<typeof vi.fn>; fail: ReturnType<typeof vi.fn> }
       capacity?: TurnCapacity
     } = {},
@@ -157,6 +162,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       supervisor,
       ...(options.browser !== undefined ? { browser: options.browser as never } : {}),
       ...(options.docs ? { docs: options.docs as never } : {}),
+      ...(options.artifacts ? { artifacts: options.artifacts as never } : {}),
       ...(options.memoryChanges ? { memoryChanges: options.memoryChanges as never } : {}),
       drivers,
       backends: llmBackends,
@@ -387,6 +393,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           seen.push((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status)
         }),
       }
+      const artifacts = {
+        settle: vi.fn(async () => {}),
+        checkLive: vi.fn(async () => {}),
+        fail: vi.fn(async () => {}),
+      }
       const { passes } = runner(
         async () => {
           await db.task.update({
@@ -418,11 +429,13 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           }
         },
         undefined,
-        { docs },
+        { docs, artifacts },
       )
       await passes.run(dialog.job)
       expect(docs.settle).toHaveBeenCalledWith(dialog.taskId, 1, refusesText)
       expect(seen).toEqual(['running'])
+      expect(artifacts.settle).toHaveBeenCalledWith(dialog.taskId, 1, refusesText)
+      expect(artifacts.fail).not.toHaveBeenCalled()
     })
 
     it('checks the sections while the turn runs once it holds its keys, and stops with it (plan 74, Д2)', async () => {
@@ -467,6 +480,53 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       )
       await passes.run(dialog.job)
       expect(docs.checkLive).not.toHaveBeenCalled()
+    })
+
+    it('checks the writes in artifacts while the turn runs, and lets a failed one check and drop them (plan 88, Ар16)', async () => {
+      await rate()
+      const dialog = await queued({ reserve: true })
+      const refuses = () => null
+      const artifacts = {
+        settle: vi.fn(async () => {}),
+        checkLive: vi.fn(async () => {}),
+        fail: vi.fn(async (_taskId: string, _turn: number | null, _refuses: unknown) => {}),
+      }
+      const { passes } = runner(
+        async (_request, _policy, _signal, hooks) => {
+          hooks?.onArmed?.(async () => refuses)
+          await vi.waitFor(() => expect(artifacts.checkLive).toHaveBeenCalled())
+          throw new Error('the sandbox is gone')
+        },
+        undefined,
+        { artifacts },
+      )
+      await passes.run(dialog.job)
+      expect(artifacts.checkLive).toHaveBeenCalledWith(dialog.taskId, 1, refuses)
+      expect(artifacts.settle).not.toHaveBeenCalled()
+      expect(artifacts.fail).toHaveBeenCalledTimes(1)
+      expect(artifacts.fail.mock.calls[0]?.[0]).toBe(dialog.taskId)
+      // The turn's own check, as it held it when it failed.
+      expect(artifacts.fail.mock.calls[0]?.[2]).toBe(refuses)
+    })
+
+    it('drops the writes of a turn that failed before it held its keys (plan 88, Ар16)', async () => {
+      await rate()
+      const dialog = await queued({ reserve: true })
+      const artifacts = {
+        settle: vi.fn(async () => {}),
+        checkLive: vi.fn(async () => {}),
+        fail: vi.fn(async (_taskId: string, _turn: number | null, _refuses: unknown) => {}),
+      }
+      const { passes } = runner(
+        async () => {
+          throw new Error('the sandbox is gone')
+        },
+        undefined,
+        { artifacts },
+      )
+      await passes.run(dialog.job)
+      expect(artifacts.fail).toHaveBeenCalledTimes(1)
+      expect(artifacts.fail.mock.calls[0]?.[2]).toBeNull()
     })
 
     it('checks no sections after a turn that failed: they wait for the next end of a turn', async () => {
