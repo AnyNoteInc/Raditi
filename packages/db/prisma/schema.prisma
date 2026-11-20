@@ -2565,6 +2565,8 @@ model Artifact {
   pendingTitle   String?   @map("pending_title") @db.VarChar(200)
   pendingTaskId  String?   @map("pending_task_id") @db.Uuid
   pendingTurn    Int?      @map("pending_turn")
+  /// When the agent wrote the pending title: the collector goes by it, not by `updated_at` (Ар16).
+  pendingTitleAt DateTime? @map("pending_title_at") @db.Timestamptz(6)
   /// The trash (Ар50): `client`, `agent` or `project`; gone for good after `purge_after`.
   deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
   deletedBy      String?   @map("deleted_by") @db.VarChar(8)

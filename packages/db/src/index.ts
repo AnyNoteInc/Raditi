@@ -86,6 +86,7 @@ export {
   claimArtifactBlock,
   createArtifact,
   dropArtifactWrites,
+  dropStaleArtifactWrites,
   fillArtifactRows,
   pendingArtifactTitles,
   pendingArtifactWrites,

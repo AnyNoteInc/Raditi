@@ -472,7 +472,12 @@ export async function createArtifact(
         kind,
         title: agent ? artifactKindSpecs[kind].label : title,
         ...(agent
-          ? { pendingTitle: title, pendingTaskId: actor.taskId, pendingTurn: actor.turnNo }
+          ? {
+              pendingTitle: title,
+              pendingTaskId: actor.taskId,
+              pendingTurn: actor.turnNo,
+              pendingTitleAt: new Date(),
+            }
           : {}),
         seq: 1,
         ...(actor.taskId !== null
@@ -1158,11 +1163,18 @@ class BatchRun {
         pendingTitle: title,
         pendingTaskId: this.actor.taskId,
         pendingTurn: this.actor.turnNo,
+        pendingTitleAt: this.now,
       }
       this.#title = 'checking'
     } else {
       // A person's title wins over the agent's unchecked one (Ар17).
-      this.#titleData = { title, pendingTitle: null, pendingTaskId: null, pendingTurn: null }
+      this.#titleData = {
+        title,
+        pendingTitle: null,
+        pendingTaskId: null,
+        pendingTurn: null,
+        pendingTitleAt: null,
+      }
       this.#title = 'applied'
     }
     this.#journalLine('title', null, null, null, this.#title)
@@ -1470,9 +1482,23 @@ export async function settleArtifactWrites(
     claims?: readonly ArtifactClaimVerdict[]
     /** The end of the turn: the chat's claims end too. */
     final?: boolean
+    /**
+     * The collector's drop (Ар16): only writes and a title made before this, and nothing at all
+     * while the chat's pass is in `preparing` or `running` — read under a lock of its row, so a
+     * pass another core starts meanwhile keeps its writes and claims.
+     */
+    staleBefore?: Date
   },
 ): Promise<ArtifactSettled[]> {
   return db.$transaction(async (tx) => {
+    if (input.staleBefore) {
+      const task = await tx.$queryRaw<{ status: string }[]>`
+        SELECT status::text AS status FROM tasks WHERE id = ${input.taskId}::uuid FOR SHARE`
+      const status = task[0]?.status
+      if (status === 'preparing' || status === 'running') return []
+    }
+    const stale = (at: Date | null) =>
+      !input.staleBefore || at === null || at.getTime() < input.staleBefore.getTime()
     // The end of the turn ends the chat's claims also where it wrote nothing to check.
     const claimed = input.final
       ? await tx.artifactBlock.findMany({
@@ -1523,6 +1549,7 @@ export async function settleArtifactWrites(
           where: { documentId_sectionKey: { documentId: artifactId, sectionKey: verdict.block } },
         })
         if (!block || block.pendingTaskId !== input.taskId || block.rev !== verdict.rev) continue
+        if (!stale(block.pendingAt)) continue
         const turnNo = block.pendingTurn
         // Whether this verdict covered the intent the block's lease holds now.
         const covered = verdict.intent === undefined || verdict.intent === block.leaseIntent
@@ -1629,10 +1656,16 @@ export async function settleArtifactWrites(
         title &&
         artifact.pendingTaskId === input.taskId &&
         artifact.pendingTitle !== null &&
-        (title.text === undefined || title.text === artifact.pendingTitle)
+        (title.text === undefined || title.text === artifact.pendingTitle) &&
+        stale(artifact.pendingTitleAt)
       ) {
         if (title.refusal === null) titleData.title = artifact.pendingTitle
-        Object.assign(titleData, { pendingTitle: null, pendingTaskId: null, pendingTurn: null })
+        Object.assign(titleData, {
+          pendingTitle: null,
+          pendingTaskId: null,
+          pendingTurn: null,
+          pendingTitleAt: null,
+        })
         line(
           null,
           title.refusal === null ? 'checked' : title.refusal === 'dropped' ? 'dropped' : 'refused',
@@ -1738,13 +1771,44 @@ export async function staleArtifactWriters(
       WHERE pending_task_id IS NOT NULL AND pending_at < ${before}
       UNION
       SELECT pending_task_id FROM chat_documents
-      WHERE pending_task_id IS NOT NULL AND updated_at < ${before}
+      WHERE pending_task_id IS NOT NULL
+        AND (pending_title_at IS NULL OR pending_title_at < ${before})
     ) p
     LEFT JOIN tasks t ON t.id = p.task_id
     WHERE t.id IS NULL OR t.status::text NOT IN ('preparing', 'running')
     ORDER BY p.task_id
     LIMIT ${limit}`
   return rows.map((row) => row.task_id)
+}
+
+/**
+ * The collector's drop of what a chat left (Ар16): its writes and title made before `before`, and
+ * its claims — nothing while its pass is in `preparing` or `running`, read under the lock of the
+ * chat's row: a newer turn's writes and claims stay.
+ */
+export async function dropStaleArtifactWrites(
+  db: Db,
+  taskId: string,
+  before: Date,
+): Promise<ArtifactSettled[]> {
+  const pending = (await db.$transaction((tx) => pendingArtifactWrites(tx, taskId))).filter(
+    (each) => each.pendingTaskId === taskId && each.pendingAt !== null && each.pendingAt < before,
+  )
+  const titles = await db.$transaction((tx) =>
+    tx.artifact.findMany({ where: { pendingTaskId: taskId }, select: { id: true } }),
+  )
+  return settleArtifactWrites(db, {
+    taskId,
+    final: true,
+    staleBefore: before,
+    blocks: pending.map((each) => ({
+      artifactId: each.documentId,
+      block: each.sectionKey,
+      rev: each.rev,
+      refusal: 'dropped' as const,
+    })),
+    titles: titles.map((each) => ({ artifactId: each.id, refusal: 'dropped' as const })),
+  })
 }
 
 /**

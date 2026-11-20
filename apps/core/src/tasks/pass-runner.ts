@@ -410,9 +410,10 @@ export class PassRunner {
       await this.deps.docs?.settle(job.taskId, ending.turn, refusesText)
       await this.deps.artifacts?.settle(job.taskId, ending.turn, refusesText)
     }
-    // A turn that did not complete checks its writes in artifacts with what it held, if it got so
-    // far, and drops the rest (Ар16): nothing waits for a day, nothing holds a block.
-    if (ending.kind !== 'completed')
+    // A turn that did not complete — or completed without the values to check with — checks its
+    // writes in artifacts with what it held, if it got so far, and drops the rest; its claims end
+    // (Ар16): nothing waits for the collector, nothing holds a block.
+    if (ending.kind !== 'completed' || !refusesText)
       await this.deps.artifacts?.fail(
         job.taskId,
         'turn' in ending ? ending.turn : null,

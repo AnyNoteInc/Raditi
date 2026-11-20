@@ -1,5 +1,6 @@
 import {
   dropArtifactWrites,
+  dropStaleArtifactWrites,
   pendingArtifactTitles,
   pendingArtifactWrites,
   settleArtifactWrites,
@@ -190,11 +191,13 @@ export class ArtifactChecks {
     const { db, logger } = this.#deps
     const now = this.#now()
     let dropped = 0
-    const stale = await staleArtifactWriters(db, new Date(now.getTime() - ARTIFACT_STALE_WRITE_MS))
+    const before = new Date(now.getTime() - ARTIFACT_STALE_WRITE_MS)
+    const stale = await staleArtifactWriters(db, before)
     for (const taskId of stale) {
       if (options.busy?.(taskId)) continue
       try {
-        dropped += count(await dropArtifactWrites(db, taskId), 'refused')
+        // Only what was written before, and nothing once the chat's pass started anywhere.
+        dropped += count(await dropStaleArtifactWrites(db, taskId, before), 'refused')
       } catch (error) {
         this.#warn('artifact_sweep_drop_failed', taskId, null, error)
       }

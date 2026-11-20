@@ -312,8 +312,7 @@ export class TaskSweep {
     // The writes in artifacts before the answer, as the live end checks them.
     if (ending.kind === 'completed' && refusesText)
       await this.deps.artifacts?.settle(task.id, ending.turn, refusesText)
-    else if (ending.kind !== 'completed')
-      await this.deps.artifacts?.fail(task.id, assignment.turnNo, refusesText)
+    else await this.deps.artifacts?.fail(task.id, assignment.turnNo, refusesText)
     const answer = await this.deps.settlement.settle(ref, ending)
     if (answer === 'moved' && ending.kind === 'completed' && swept)
       await this.#applyChanges(assignment, ending.turn, swept, refusesText)

@@ -16,6 +16,7 @@ import {
   claimArtifactBlock,
   createArtifact,
   dropArtifactWrites,
+  dropStaleArtifactWrites,
   pendingArtifactTitles,
   pendingArtifactWrites,
   readArtifact,
@@ -805,7 +806,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
     await db.task.update({ where: { id: writer }, data: { status: 'failed' } })
     expect(await staleArtifactWriters(db, hour)).toContain(writer)
     expect(await staleArtifactWriters(db, new Date(Date.now() - 3600_000))).not.toContain(writer)
-    await dropArtifactWrites(db, writer)
+    // The collector's drop takes nothing while the pass runs, and only what was written before.
+    await db.task.update({ where: { id: writer }, data: { status: 'running' } })
+    expect(await dropStaleArtifactWrites(db, writer, hour)).toEqual([])
+    await db.task.update({ where: { id: writer }, data: { status: 'failed' } })
+    expect(await dropStaleArtifactWrites(db, writer, new Date(Date.now() - 3600_000))).toEqual([])
+    expect((await pendingArtifactWrites(db, writer)).length).toBe(1)
+    await dropStaleArtifactWrites(db, writer, hour)
     expect(await staleArtifactWriters(db, hour)).not.toContain(writer)
+    expect((await db.artifact.findUniqueOrThrow({ where: { id } })).pendingTitle).toBeNull()
   })
 })
