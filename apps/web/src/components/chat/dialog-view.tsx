@@ -1442,6 +1442,9 @@ export function DialogView({
               mr: `-${RESULTS_ROOM}px`,
               display: 'flex',
               justifyContent: 'flex-end',
+              // The column keeps the height of its cards: stretched to this row of no height, it
+              // squeezed «Результаты» — the card that scrolls in itself — into its scrollbar (v1.74.0).
+              alignItems: 'flex-start',
             }}
           >
             <Box
@@ -1451,6 +1454,7 @@ export function DialogView({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '12px',
+                '& > *': { flexShrink: 0 },
               }}
             >
               {todo !== null ? (
