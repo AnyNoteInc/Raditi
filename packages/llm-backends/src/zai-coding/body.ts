@@ -30,12 +30,28 @@ const tool = z.strictObject({
     parameters: z.record(z.string(), z.unknown()).optional(),
   }),
 })
-const textParts = z.array(z.strictObject({ type: z.literal('text'), text: z.string() })).min(1)
+const textPart = z.strictObject({ type: z.literal('text'), text: z.string() })
+/**
+ * A picture of `artifact_render` the helper `look` sends (docs/plan/88-artifacts.md, Ар32): a JPEG or
+ * a PNG in a `data:` address, never a link the provider would fetch. Allowed only to a model that
+ * sees images, by the profile of the key that sees them.
+ */
+const imagePart = z.strictObject({
+  type: z.literal('image_url'),
+  image_url: z.strictObject({
+    url: z
+      .string()
+      .max(4 * 1024 * 1024)
+      .regex(/^data:image\/(?:jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$/),
+    detail: z.enum(['auto', 'low', 'high']).optional(),
+  }),
+})
+const mixedParts = z.array(z.union([textPart, imagePart])).min(1)
 const message = z.discriminatedUnion('role', [
   z.strictObject({ role: z.literal('system'), content: z.string() }),
   // The SDK inside the CLI writes one text part as a string and several as a list. No images:
   // the shell of this backend has no image input.
-  z.strictObject({ role: z.literal('user'), content: z.union([z.string(), textParts]) }),
+  z.strictObject({ role: z.literal('user'), content: z.union([z.string(), mixedParts]) }),
   z.strictObject({
     role: z.literal('assistant'),
     content: z.string().nullable().optional(),
@@ -50,7 +66,11 @@ const message = z.discriminatedUnion('role', [
       )
       .optional(),
   }),
-  z.strictObject({ role: z.literal('tool'), tool_call_id: z.string().min(1), content: z.string() }),
+  z.strictObject({
+    role: z.literal('tool'),
+    tool_call_id: z.string().min(1),
+    content: z.union([z.string(), mixedParts]),
+  }),
 ])
 /** Everything the pinned CLI sends on its one path, and nothing else. */
 const requestSchema = z.strictObject({
@@ -94,6 +114,9 @@ export const zaiPolicyFields = [
   'name',
   'arguments',
   'tool_call_id',
+  'image_url',
+  'url',
+  'detail',
   'tools',
   'description',
   'parameters',
@@ -128,7 +151,10 @@ const refused = (path: string) => badRequest('Request body violates Z.ai policy'
  * The request policy of one route. The shared parser bounds the tree, free-form tool schemas
  * included, before any rule of the schema runs.
  */
-export function createZaiBodyPolicy(route: LlmRoute): LlmBackend['normalizeBody'] {
+export function createZaiBodyPolicy(
+  route: LlmRoute,
+  imageModels: readonly string[] = [],
+): LlmBackend['normalizeBody'] {
   return (asked, bytes, ctx) => {
     if (asked.method !== route.method || asked.path !== route.path)
       throw badRequest('Unsupported backend route')
@@ -151,6 +177,13 @@ export function createZaiBodyPolicy(route: LlmRoute): LlmBackend['normalizeBody'
     if (!parsed.success) throw refused(fieldOf(parsed.error.issues[0]))
     const request = parsed.data
     if (request.model !== ctx.model) throw refused('model')
+    // Pictures only to a model that sees them, and only under the key's profile that does (Ар32).
+    const pictures = request.messages.some(
+      (each) =>
+        Array.isArray(each.content) && each.content.some((part) => part.type === 'image_url'),
+    )
+    if (pictures && !(ctx.images === true && imageModels.includes(request.model)))
+      throw refused('messages[].content[].image_url')
     const effort = ctx.reasoningEffort
     if (effort !== null && !(zaiReasoningEfforts as readonly string[]).includes(effort))
       throw badRequest('Invalid reasoning profile')

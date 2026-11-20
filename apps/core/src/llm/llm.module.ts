@@ -8,7 +8,7 @@ import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 import type { CoreConfig } from '../config/config.ts'
 import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
-import { backendCapacities, backendFallbacks } from './backends.ts'
+import { backendCapacities, backendFallbacks, backendImageModels } from './backends.ts'
 import { CoreCredentialRuntime } from './credential-runtime.ts'
 import { CredentialSweeper, type CredentialSweepKind } from './credential-sweeper.ts'
 import { POOL_PROBE, TURN_CREDENTIALS } from './llm.tokens.ts'
@@ -65,6 +65,8 @@ export function loggedProbe(
           capacityOf: backendCapacities(llmBackends),
           // The API after the plan (docs/plan/70-turn-without-time-limit.md, ВР25).
           fallbackOf: backendFallbacks(llmBackends),
+          // The models that take images, each backend's own word (docs/plan/88-artifacts.md, Ар32).
+          imageModelsOf: backendImageModels(llmBackends),
           ...(probe === null ? {} : { probeAccounts: probe }),
         }),
       inject: [PRISMA, SECRET_STORE, CORE_CONFIG, POOL_PROBE],

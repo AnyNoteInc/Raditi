@@ -114,6 +114,18 @@ async function handleMcp(req, res, state) {
     record.tool = name
     if (!state.mcp.tools.some((tool) => tool.name === name))
       return answer({ error: { code: -32602, message: 'Unknown tool' } })
+    // The picture of a frame for the helper look (docs/plan/88-artifacts.md, Ар32): a synthetic
+    // screen of a phone, drawn once for the stands (vision-frame.jpg).
+    if (name === 'artifact_render')
+      return answer({
+        result: {
+          content: [
+            { type: 'text', text: JSON.stringify({ pictures: ['390 px wide, from y 0'] }) },
+            { type: 'image', data: visionFrame(), mimeType: 'image/jpeg' },
+          ],
+          isError: false,
+        },
+      })
     return answer({
       result: {
         content: [
@@ -131,6 +143,13 @@ async function handleMcp(req, res, state) {
     })
   }
   return answer({ error: { code: -32601, message: 'Unknown method' } })
+}
+
+let frameBase64 = null
+/** The synthetic picture the stand's artifact_render answers, read once. */
+function visionFrame() {
+  frameBase64 ??= readFileSync(new URL('./vision-frame.jpg', import.meta.url)).toString('base64')
+  return frameBase64
 }
 
 const listen = (server, port, host) =>

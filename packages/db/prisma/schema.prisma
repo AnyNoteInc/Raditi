@@ -1395,6 +1395,9 @@ model LlmModel {
   reserveOutputTokens Int        @default(32000) @map("reserve_output_tokens")
   /// Tokens one request may hold: what `/context` of a chat measures by; NULL — not known.
   contextTokens       Int?       @map("context_tokens")
+  /// The profile that sees images for the helper `look` (docs/plan/88-artifacts.md, Ар32): never the
+  /// main model of its class.
+  vision              Boolean    @default(false)
   enabled             Boolean    @default(true)
   createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -1405,6 +1408,7 @@ model LlmModel {
   tokenUsage TokenUsage[]
   turnCost   LlmTurnCost?
   llmKeys    LlmKey[]
+  visionKeys LlmKey[]        @relation("LlmKeyVision")
   llmCalls   LlmCall[]
 
   @@unique([providerId, slug])
@@ -1621,10 +1625,14 @@ model LlmKey {
   /// With `workspace_limit`: the window of the workspace that refused (`5h`, `week`) and its reset.
   lastRefusalWindow     String?   @map("last_refusal_window") @db.VarChar(8)
   lastRefusalResetsAt   DateTime? @map("last_refusal_resets_at") @db.Timestamptz(6)
+  /// The profile of the key that sees images: the helper `look` runs on it (docs/plan/88-artifacts.md, Ар32); NULL — none.
+  visionModelId         String?   @map("vision_model_id") @db.Uuid
+  visionReasoningEffort String?   @map("vision_reasoning_effort") @db.VarChar(16)
 
   task                Task                 @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   driver              AgentDriver          @relation(fields: [driverId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   model               LlmModel             @relation(fields: [modelId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  visionModel         LlmModel?            @relation("LlmKeyVision", fields: [visionModelId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   subscriptionAccount SubscriptionAccount  @relation(fields: [subscriptionAccountId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   fallbackAccount     SubscriptionAccount? @relation("LlmKeyFallback", fields: [fallbackAccountId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   calls               LlmCall[]
@@ -1635,6 +1643,7 @@ model LlmKey {
   @@index([taskId, taskAttempt], map: "llm_keys_task_attempt_idx")
   @@index([revokeRequestedAt], map: "llm_keys_revoke_retry_idx", where: raw("revoke_requested_at IS NOT NULL AND revoked_at IS NULL"))
   @@index([revokedAt], map: "llm_keys_usage_open_idx", where: raw("usage_closed_at IS NULL"))
+  @@index([visionModelId], map: "llm_keys_vision_model_idx", where: raw("vision_model_id IS NOT NULL"))
   @@map("llm_keys")
 }
 

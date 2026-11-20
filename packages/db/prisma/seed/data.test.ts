@@ -310,19 +310,19 @@ describe('subscription catalogue defaults', () => {
   it('uses separate disabled profiles with the explicit backend output reserves', () => {
     // Every profile belongs to a backend of the domain: none is seeded for a removed provider.
     expect([...new Set(llmModelSeeds.map((model) => model.providerSlug))]).toEqual(llmBackendIds)
-    // Each backend offers every class once.
+    // Each backend offers every class once, and the profile that sees images (plan 88, Ар32).
     for (const backend of llmBackendIds)
       expect(
         llmModelSeeds
           .filter((model) => model.providerSlug === backend)
           .map((model) => model.modelClass),
-      ).toEqual(['light', 'standard', 'heavy'])
+      ).toEqual(['light', 'standard', 'heavy', 'light'])
     const naturalKeys = llmModelSeeds.map((model) => `${model.providerSlug}/${model.slug}`)
     expect(new Set(naturalKeys).size).toBe(llmModelSeeds.length)
     for (const model of llmModelSeeds) {
       expect(model.enabled).toBe(false)
       expect(model.reserveOutputTokens).toBe(32_000)
-      expect(model.contextTokens).toBe(1_000_000)
+      expect(model.contextTokens).toBe(model.slug === 'glm-5.3-flash-low' ? 200_000 : 1_000_000)
       expect(Object.keys(model).sort()).toEqual([
         'contextTokens',
         'enabled',
@@ -332,6 +332,7 @@ describe('subscription catalogue defaults', () => {
         'providerSlug',
         'reserveOutputTokens',
         'slug',
+        'vision',
       ])
     }
   })
@@ -340,12 +341,22 @@ describe('subscription catalogue defaults', () => {
     ['the Z.ai plan', 'zai-coding', 'Z.ai GLM Coding Plan'],
     ['the Z.ai pay-per-token API', 'zai-api', 'Z.ai API'],
   ])('offers one GLM model in three profiles of %s, all switched off', (_name, slug, name) => {
-    const profiles = llmModelSeeds.filter((model) => model.providerSlug === slug)
-    expect(profiles.map((model) => model.slug)).toEqual([
+    const all = llmModelSeeds.filter((model) => model.providerSlug === slug)
+    expect(all.map((model) => model.slug)).toEqual([
       'glm-5.3-light',
       'glm-5.3-standard',
       'glm-5.3-heavy',
+      'glm-5.3-flash-low',
     ])
+    // The fourth sees images for the helper look (plan 88, Ар32): switched off, no rate.
+    expect(all[3]).toMatchObject({
+      providerModelId: 'glm-5.3-flash',
+      modelClass: 'light',
+      vision: true,
+      enabled: false,
+    })
+    expect(all.slice(0, 3).every((model) => !model.vision)).toBe(true)
+    const profiles = all.slice(0, 3)
     for (const model of profiles) {
       // One model for every class: the classes differ by the level of reasoning of the turn.
       expect(model.providerModelId).toBe('glm-5.3')
@@ -379,7 +390,7 @@ describe('subscription catalogue defaults', () => {
     const profiles = llmModelSeeds.filter((model) =>
       ['zai-coding', 'zai-api'].includes(model.providerSlug),
     )
-    expect(profiles).toHaveLength(6)
+    expect(profiles).toHaveLength(8)
     for (const model of profiles)
       expect(model.reserveOutputTokens).toBeGreaterThanOrEqual(policyMaxOutputTokens)
   })

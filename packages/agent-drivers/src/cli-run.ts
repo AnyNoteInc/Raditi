@@ -56,6 +56,7 @@ export const runContextSchema = <Effort extends z.ZodType>(effort: Effort) =>
       apiKey: credential,
       model: z.string().min(1).max(200),
       reasoningEffort: effort.nullable().optional(),
+      visionModel: z.string().min(1).max(200).optional(),
     }),
     mcp: z.object({ url: endpoint, token: credential }),
     instructions: z.string().max(256 * 1024),

@@ -19,6 +19,11 @@ export const quotaAttemptCeilingsRub = Object.freeze({
  */
 export const reasoningEfforts = ['low', 'high', 'max'] as const
 export const reasoningEffortSchema = z.enum(reasoningEfforts)
+/**
+ * The level of the profile that sees images (docs/plan/88-artifacts.md, Ар32): the helper `look`
+ * of a turn looks at pictures at the lowest level of reasoning.
+ */
+export const visionReasoningEffort = 'low' as const
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>
 
 const classOfEffort = Object.freeze({

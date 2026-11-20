@@ -491,6 +491,7 @@ describe('a Z.ai offer is data', () => {
       answers: { codes: {}, codeless429: 'unconfirmed_block' },
       overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
       direct: true,
+      imageModels: ['glm-5.3-flash'],
     })
     expect(Object.isFrozen(zaiCodingPlan)).toBe(true)
   })
@@ -555,6 +556,7 @@ describe('the pay-per-token API of Z.ai', () => {
       // One origin with the plan, so one stand variable for both (llm-config refuses two).
       overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
       direct: true,
+      imageModels: ['glm-5.3-flash'],
     })
     expect(Object.isFrozen(zaiApiOffer)).toBe(true)
   })

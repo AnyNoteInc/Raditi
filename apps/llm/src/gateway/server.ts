@@ -675,6 +675,19 @@ export class LlmGateway {
       }
       const body = await abortable(readBody(request, controller.signal), controller.signal)
       requestBytes = body.byteLength
+      // A call of the helper `look` names the model of the key's profile that sees images
+      // (docs/plan/88-artifacts.md, Ар32): it goes on as that profile, pictures allowed.
+      const vision = key.vision
+      if (vision !== null && requestedModel(body) === vision.model)
+        key = {
+          ...key,
+          modelId: vision.modelId,
+          model: vision.model,
+          modelSlug: vision.modelSlug,
+          reasoningEffort: vision.reasoningEffort,
+          vision: null,
+          images: true,
+        }
       let normalized
       try {
         normalized = selected.backend.normalizeBody(selected.route, body, key)
@@ -1091,3 +1104,20 @@ export class LlmGateway {
 }
 
 export const createLlmGateway = (options: LlmGatewayOptions): LlmGateway => new LlmGateway(options)
+
+/**
+ * The model a body names at its top, without the policy of the backend: only to tell a call of the
+ * helper `look` (docs/plan/88-artifacts.md, Ar32). The backend's policy reads the body again.
+ */
+function requestedModel(body: Uint8Array): string | null {
+  try {
+    const value = JSON.parse(new TextDecoder().decode(body)) as unknown
+    return value !== null &&
+      typeof value === 'object' &&
+      typeof (value as { model?: unknown }).model === 'string'
+      ? (value as { model: string }).model
+      : null
+  } catch {
+    return null
+  }
+}

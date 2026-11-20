@@ -11,10 +11,12 @@ import { AppModule } from '../app.module.ts'
 import { MCP_ENDPOINT } from '../server/mcp-runtime.ts'
 import { mountMcp } from '../server/mount-mcp.ts'
 import { fakeInfra, testMcpConfig } from '../testing/fakes.ts'
+import { MCP_WEB } from '../web/web.tokens.ts'
 import {
   McpArtifactsService,
   type McpArtifactsStore,
   type McpChatArtifactAccess,
+  type McpFrameRenderer,
 } from './artifacts-service.ts'
 import { MCP_ARTIFACTS } from './artifacts.tokens.ts'
 
@@ -131,11 +133,21 @@ function fakeStore(
   return { store, rows }
 }
 
-async function start(store: McpArtifactsStore, scope: McpTurnAccess = base) {
+async function start(
+  store: McpArtifactsStore,
+  scope: McpTurnAccess = base,
+  options: { worker?: boolean; render?: McpFrameRenderer } = {},
+) {
   const access: McpAccessStore = {
     authenticate: async (value) => (value === token ? scope : null),
   }
-  const builder = Test.createTestingModule({ imports: [AppModule.forRoot(testMcpConfig())] })
+  const config = options.worker
+    ? {
+        ...testMcpConfig(),
+        browserWorker: { url: 'http://127.0.0.1:9', token: 'w'.repeat(48), sessionMaxHours: 4 },
+      }
+    : testMcpConfig()
+  let builder = Test.createTestingModule({ imports: [AppModule.forRoot(config)] })
     .overrideProvider(PRISMA)
     .useValue(fakeInfra().prisma)
     .overrideProvider(SECRET_STORE)
@@ -143,7 +155,10 @@ async function start(store: McpArtifactsStore, scope: McpTurnAccess = base) {
     .overrideProvider(MCP_ACCESS)
     .useValue(access)
     .overrideProvider(MCP_ARTIFACTS)
-    .useValue(new McpArtifactsService({ store }))
+    .useValue(
+      new McpArtifactsService({ store, ...(options.render ? { render: options.render } : {}) }),
+    )
+  if (options.worker) builder = builder.overrideProvider(MCP_WEB).useValue({ call: vi.fn() })
   app = (await builder.compile()).createNestApplication({ logger: false })
   await mountMcp(app)
   await app.listen(0, '127.0.0.1')
@@ -166,6 +181,66 @@ const call = (name: string, args: unknown) => ({
 type Result = { body: { result: { isError?: boolean; content: { text: string }[] } } }
 const answer = (res: Result) =>
   JSON.parse(res.body.result.content[0]!.text) as Record<string, unknown>
+
+describe('the frames drawn by the browser worker (plan 88, Ар32, 88.15б, 88.15в)', () => {
+  const drawn: Awaited<ReturnType<McpFrameRenderer>> = {
+    title: 'Сайт',
+    report: 'Layout of «Сайт» as the client sees it (1440×900, 390×844).\nNo problems found.',
+    ru: 'Проверка вёрстки на компьютере и телефоне: замечаний нет',
+    problems: 0,
+    heights: [
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+    ],
+    pictures: [
+      { width: 1440, part: 0, type: 'image/jpeg', data: '/9j/AAAA' },
+      { width: 390, part: 0, type: 'image/jpeg', data: '/9j/BBBB' },
+    ],
+  }
+  const tools = async (scope: McpTurnAccess, worker = true) => {
+    const render = vi.fn<McpFrameRenderer>(async () => drawn)
+    const server = await start(fakeStore().store, scope, { worker, render })
+    const list = await post(server, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
+    return {
+      server,
+      render,
+      names: (list.body.result.tools as { name: string }[])
+        .map((tool) => tool.name)
+        .filter((name) => name === 'artifact_layout' || name === 'artifact_render'),
+    }
+  }
+
+  it('offers artifact_layout where the worker is, artifact_render only to a turn that sees images', async () => {
+    expect((await tools(base, false)).names).toEqual([])
+    expect((await tools(base)).names).toEqual(['artifact_layout'])
+    await app?.close()
+    expect((await tools({ ...base, vision: true })).names).toEqual([
+      'artifact_layout',
+      'artifact_render',
+    ])
+  })
+
+  it('reports the layout as the chat sees it and gives the pictures as image results', async () => {
+    const { server, render } = await tools({ ...base, vision: true })
+    const layout = await post(server, call('artifact_layout', { artifactId, frame: 'home' }))
+    expect(answer(layout)).toMatchObject({ report: drawn.report, problems: 0 })
+    expect(render).toHaveBeenLastCalledWith({
+      artifactId,
+      frame: 'home',
+      viewer: { kind: 'agent', taskId: base.taskId, turnNo: base.turn },
+      output: 'layout',
+    })
+    const look = await post(server, call('artifact_render', { artifactId, frame: 'home' }))
+    const content = look.body.result.content as { type: string; data?: string; mimeType?: string }[]
+    expect(content.map((part) => part.type)).toEqual(['text', 'image', 'image'])
+    expect(content[1]).toEqual({ type: 'image', data: '/9j/AAAA', mimeType: 'image/jpeg' })
+    // A call of the helper's tool by a turn whose key does not see images is not admitted.
+    await app?.close()
+    const blind = await tools(base)
+    const refused = await post(blind.server, call('artifact_render', { artifactId }))
+    expect(refused.status).toBe(400)
+  })
+})
 
 describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () => {
   it('lists the tools of the family and none of the synonyms of plan 69', async () => {
@@ -223,7 +298,7 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
 
   it('refuses a kind whose view has not shipped (Ар7)', async () => {
     const server = await start(fakeStore().store)
-    const res = await post(server, call('artifact_create', { kind: 'canvas', title: 'Экраны' }))
+    const res = await post(server, call('artifact_create', { kind: 'diagram', title: 'Схема' }))
     expect(res.body.result.isError).toBe(true)
     expect(answer(res)).toMatchObject({ code: 'ARTIFACT_KIND_REFUSED' })
   })

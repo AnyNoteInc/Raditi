@@ -57,6 +57,8 @@ test('the limits of a live run are the numbers of the plan', () => {
     // The default of the owner's question П30: a live check of the result within 20 requests.
     results: { requests: 20, minutes: 10 },
     compaction: { requests: 10, minutes: 5 },
+    // The helper look of plan 88 (Ар32).
+    vision: { requests: 12, minutes: 6 },
   })
   assert.deepEqual(PROVIDER, { host: 'api.z.ai', port: 443 })
 })
@@ -67,6 +69,7 @@ test('a stand takes --live, --measure, --results, --compact, --rehearsal, --no-b
     measure: false,
     results: false,
     compact: false,
+    vision: false,
     api: false,
     rehearsal: false,
     noBuild: false,
@@ -117,6 +120,17 @@ test('a stand takes --live, --measure, --results, --compact, --rehearsal, --no-b
     compact: true,
     noBuild: true,
   })
+  // The helper look, live and rehearsed (docs/plan/88-artifacts.md, Ар32).
+  assert.deepEqual(standMode(['--live', '--vision'], { stand: 'gateway' }), {
+    ...plain,
+    live: true,
+    vision: true,
+  })
+  assert.throws(() => standMode(['--vision'], { stand: 'gateway' }), /--vision without --live/)
+  assert.throws(
+    () => standMode(['--live', '--vision', '--compact'], { stand: 'gateway' }),
+    /--vision with another run/,
+  )
   // The acceptance on the pay-per-token API, live and rehearsed (П15).
   assert.deepEqual(standMode(['--live', '--api', '--keep=/private/x'], { stand: 'gateway' }), {
     ...plain,

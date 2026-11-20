@@ -15,6 +15,8 @@ import {
   artifactSaveVersionArgumentsSchema,
   artifactFilePutArgumentsSchema,
   artifactImportArgumentsSchema,
+  artifactLayoutArgumentsSchema,
+  artifactRenderArgumentsSchema,
 } from '@repo/domain/artifacts'
 import {
   browserToolArgumentSchemas,
@@ -106,6 +108,12 @@ const artifactsCall = z.discriminatedUnion('name', [
   call('artifact_file_put', artifactFilePutArgumentsSchema),
   call('artifact_import', artifactImportArgumentsSchema),
 ])
+// The report of the layout of a frame (Ар32, slice 88.15б): where the renderer of the browser worker
+// is configured.
+const artifactLayoutCall = call('artifact_layout', artifactLayoutArgumentsSchema)
+// The pictures of a frame for the helper `look` (Ар32, slice 88.15в): a turn whose key has the
+// profile that sees images.
+const artifactVisionCall = call('artifact_render', artifactRenderArgumentsSchema)
 // The tools `doc_*` of plan 69 (Ар3): synonyms of the family, accepted but never listed.
 const artifactSynonymsCall = z.discriminatedUnion('name', [
   call('doc_create', docCreateArgumentsSchema),
@@ -263,6 +271,8 @@ export const mcpToolFamilies = [
   'search',
   'artifacts',
   'artifact_synonyms',
+  'artifact_layout',
+  'artifact_vision',
   'pages',
   'pages_changes',
   'memory',
@@ -278,6 +288,11 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
   if (security.webTools && access.requirements.browser) families.push('web')
   if (security.searchTools) families.push('search')
   if (security.artifactsTools) families.push('artifacts')
+  // The renderer of frames lives in the browser worker (docs/plan/88-artifacts.md, Ар32).
+  if (security.artifactsTools && security.webTools) {
+    families.push('artifact_layout')
+    if (access.vision) families.push('artifact_vision')
+  }
   if (security.pagesTools) {
     families.push('pages')
     if (!access.unattended) families.push('pages_changes')
@@ -352,6 +367,10 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       (families.includes('web') && webCall.safeParse(request.params).success) ||
       (families.includes('search') && searchCall.safeParse(request.params).success) ||
       (families.includes('artifacts') && artifactsCall.safeParse(request.params).success) ||
+      (families.includes('artifact_layout') &&
+        artifactLayoutCall.safeParse(request.params).success) ||
+      (families.includes('artifact_vision') &&
+        artifactVisionCall.safeParse(request.params).success) ||
       (families.includes('artifact_synonyms') &&
         artifactSynonymsCall.safeParse(request.params).success) ||
       (families.includes('pages') && pagesCall.safeParse(request.params).success) ||

@@ -336,6 +336,11 @@ export interface LlmBackend {
   readonly responseHeaders: readonly string[]
   /** Every provider request of this adapter; the egress and its configuration derive from it. */
   readonly egress: readonly LlmEgressOrigin[]
+  /**
+   * The provider's model ids that take images (docs/plan/88-artifacts.md, Ар32): a key's profile
+   * of one of them may send pictures, `normalizeBody` refuses them to every other. Absent — none.
+   */
+  readonly imageModels?: readonly string[]
   /** Extract facts without making the caller interpret provider-specific token fields. */
   credentialMetadata(credential: SubscriptionCredential): CredentialMetadata
   /** CLI identity is checked by its adapter before any call is reserved. */
@@ -354,7 +359,12 @@ export interface LlmBackend {
   normalizeBody(
     route: LlmRoute,
     body: Uint8Array,
-    ctx: { model: string; reasoningEffort: string | null },
+    ctx: {
+      model: string
+      reasoningEffort: string | null
+      /** The key's profile that sees images is the one of this call (Ар32). */
+      images?: boolean
+    },
   ): NormalizedBody
   upstream(
     route: LlmRoute,

@@ -33,6 +33,7 @@ import {
   type TurnCredentialSource,
   type TurnCredentialValues,
   workspaceEnvVarLimits,
+  visionReasoningEffort,
 } from '@repo/domain'
 import {
   decodeLimitWindows,
@@ -190,6 +191,12 @@ export interface GatewayTurnCredentialsOptions {
    */
   fallbackOf?: (backend: LlmBackendId) => LlmBackendId | null
   /**
+   * The models of a backend that take images (`LlmBackend.imageModels`, docs/plan/88-artifacts.md,
+   * Ар32): a key gets the enabled profile of one of them with an approved rate as its profile that
+   * sees images. Absent — no key sees images.
+   */
+  imageModelsOf?: (backend: LlmBackendId) => readonly string[]
+  /**
    * Calls the content-free gateway control probe after all SQL locks were released. `stale`:
    * the snapshot has only grown old, and the gateway probes at most once in five minutes.
    */
@@ -209,6 +216,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
   readonly #minHeadroom: number
   readonly #capacityOf: (backend: LlmBackendId) => LlmCapacity
   readonly #fallbackOf: (backend: LlmBackendId) => LlmBackendId | null
+  readonly #imageModelsOf: (backend: LlmBackendId) => readonly string[]
   readonly #probeAccounts: GatewayTurnCredentialsOptions['probeAccounts']
   readonly #requireAssignment: boolean
 
@@ -228,6 +236,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       throw new TypeError('GatewayTurnCredentials needs the capacity of each backend')
     this.#capacityOf = options.capacityOf
     this.#fallbackOf = options.fallbackOf ?? (() => null)
+    this.#imageModelsOf = options.imageModelsOf ?? (() => [])
   }
 
   /**
@@ -325,7 +334,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       const verified = await this.#admit(ref, stored)
       if (!matches(verified.key, stored, verified.now))
         throw conflict('Turn credentials are no longer valid')
-      return values(stored)
+      return { ...values(stored), ...(await this.#visionModelOf(verified.key)) }
     }
     requireSelection(prepared.decision)
     if (!stored) {
@@ -372,7 +381,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     const issued = await this.#admit(ref, stored)
     if (!matches(issued.key, stored, issued.now))
       throw conflict('Turn credential admission does not match Vault')
-    return values(stored)
+    return { ...values(stored), ...(await this.#visionModelOf(issued.key)) }
   }
 
   async recover(input: TurnCredentialRef): Promise<TurnCredentialValues | null> {
@@ -385,7 +394,9 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         now: await clock(tx),
       }))
       // The running key remains tied to its account even if that account was retired/disabled.
-      return result.key && matches(result.key, stored, result.now, false) ? values(stored) : null
+      return result.key && matches(result.key, stored, result.now, false)
+        ? { ...values(stored), ...(await this.#visionModelOf(result.key)) }
+        : null
     })
   }
 
@@ -513,9 +524,13 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       await assertCurrentFence(tx, ref)
       if (expiresAt <= now) throw conflict('Turn credentials have expired')
       const fallbackAccountId = await this.#fallbackAccount(tx, grant, task, stored.accountId)
+      const vision = await this.#visionProfile(tx, grant, selected.profile, task.now)
       const key = await tx.llmKey.create({
         data: {
           ...(fallbackAccountId ? { fallbackAccountId } : {}),
+          ...(vision === null
+            ? {}
+            : { visionModelId: vision, visionReasoningEffort: visionReasoningEffort }),
           keyHash: turnKeyHash(stored.llmApiKey),
           mcpTokenHash: turnKeyHash(stored.mcpToken),
           taskId: ref.taskId,
@@ -539,6 +554,39 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       })
       return { key, now }
     })
+  }
+
+  /**
+   * The profile of the key that sees images (docs/plan/88-artifacts.md, Ар32): an enabled profile of
+   * the same provider — cleared for the data of the task with it — whose model takes images by the
+   * declaration of the backend, with a rate approved now. null — none: the turn has no helper `look`.
+   */
+  async #visionProfile(
+    tx: Transaction,
+    grant: TurnCredentialGrant,
+    profile: Profile,
+    now: Date,
+  ): Promise<string | null> {
+    const models = this.#imageModelsOf(grant.backend)
+    if (models.length === 0) return null
+    const [row] = await tx.$queryRaw<{ id: string }[]>`
+      SELECT m.id FROM llm_models m
+      WHERE m.provider_id = ${profile.providerId}::uuid AND m.enabled AND m.vision
+        AND m.id <> ${profile.modelId}::uuid AND m.model_class = 'light'
+        AND m.provider_model_id = ANY(${[...models]}::text[]) AND m.reserve_output_tokens > 0
+        AND EXISTS (SELECT 1 FROM llm_model_prices r WHERE r.model_id = m.id AND r.effective_from <= ${now})
+      ORDER BY m.slug LIMIT 1`
+    return row?.id ?? null
+  }
+
+  /** The model id the provider knows of the key's profile that sees images; absent — none. */
+  async #visionModelOf(key: KeyRow): Promise<{ visionModel?: string }> {
+    if (!key.visionModelId) return {}
+    const id = key.visionModelId
+    const model = await this.#transaction((tx) =>
+      tx.llmModel.findUnique({ where: { id }, select: { providerModelId: true } }),
+    )
+    return model?.providerModelId ? { visionModel: model.providerModelId } : {}
   }
 
   /**

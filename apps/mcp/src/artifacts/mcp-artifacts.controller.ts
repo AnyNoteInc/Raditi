@@ -19,7 +19,9 @@ import {
   artifactEditArgumentsSchema,
   artifactFilePutArgumentsSchema,
   artifactImportArgumentsSchema,
+  artifactLayoutArgumentsSchema,
   artifactListArgumentsSchema,
+  artifactRenderArgumentsSchema,
   artifactReadArgumentsSchema,
   artifactSaveVersionArgumentsSchema,
   type ArtifactClaimArguments,
@@ -27,7 +29,9 @@ import {
   type ArtifactEditArguments,
   type ArtifactFilePutArguments,
   type ArtifactImportArguments,
+  type ArtifactLayoutArguments,
   type ArtifactListArguments,
+  type ArtifactRenderArguments,
   type ArtifactReadArguments,
   type ArtifactSaveVersionArguments,
 } from '@repo/domain/artifacts'
@@ -182,6 +186,56 @@ export class McpArtifactsController {
   async import(@Payload() args: ArtifactImportArguments, @Ctx() context: McpContext) {
     const scope = scopeOf(context)
     return scope ? answerOf(await this.artifacts.import(scope, args)) : unauthorized
+  }
+}
+
+/**
+ * The frames of mockups and canvases drawn by the browser worker (docs/plan/88-artifacts.md, Ар32):
+ * `artifact_layout` where the renderer is configured (`artifact_layout`), `artifact_render` — its
+ * pictures as image results — only to a turn whose key has the profile that sees images
+ * (`artifact_vision`): the helper `look`, which alone is allowed to call it.
+ */
+@McpController()
+export class McpArtifactFramesController {
+  constructor(@Inject(MCP_ARTIFACTS) private readonly artifacts: McpArtifactsService) {}
+
+  @ToolScopes(['artifact_layout'])
+  @Tool({
+    name: 'artifact_layout',
+    description:
+      'Check the layout of a mockup or of one frame of a canvas as the client sees it at 1440 and 390 px: overflow, overlaps, cut text, contrast, small text, empty areas, broken pictures, script errors, outside loads. Short text report.',
+    parameters: artifactLayoutArgumentsSchema,
+    annotations: reads,
+  })
+  async layout(@Payload() args: ArtifactLayoutArguments, @Ctx() context: McpContext) {
+    const scope = scopeOf(context)
+    return scope ? answerOf(await this.artifacts.layout(scope, args)) : unauthorized
+  }
+
+  @ToolScopes(['artifact_vision'])
+  @Tool({
+    name: 'artifact_render',
+    description:
+      'The picture of a mockup or of a frame of a canvas as the client sees it, in strips of 2000 px, for looking at it.',
+    parameters: artifactRenderArgumentsSchema,
+    annotations: reads,
+  })
+  async render(@Payload() args: ArtifactRenderArguments, @Ctx() context: McpContext) {
+    const scope = scopeOf(context)
+    if (!scope) return unauthorized
+    const { answer, pictures } = await this.artifacts.render(scope, args)
+    const text = answerOf(answer)
+    return {
+      ...text,
+      content: [
+        ...text.content,
+        ...pictures.map((picture) => ({
+          type: 'image',
+          data: picture.data,
+          mimeType: picture.mimeType,
+        })),
+      ],
+    }
   }
 }
 

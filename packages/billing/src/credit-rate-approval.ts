@@ -141,6 +141,11 @@ export interface CreditRateState {
     provider: string
     model: string
     modelClass: ModelClass
+    /**
+     * The profile that sees images (docs/plan/88-artifacts.md, Ар32): a helper's model, not one
+     * the class runs on, so its rate is never «mixed» with the class. Absent — false.
+     */
+    vision?: boolean
     /** null: the model has no price at that moment and cannot run. */
     prices: ModelPrices | null
     /** The prices are of this approval. */
@@ -247,8 +252,8 @@ export function creditRatePreview(state: CreditRateState): CreditRatePreview {
     return { ...model, creditsPer1m: { input, cacheRead, cacheWrite, output } }
   })
   const pricesByClass = new Map<ModelClass, Set<string>>()
-  for (const { modelClass, prices } of state.models) {
-    if (prices === null) continue
+  for (const { modelClass, prices, vision } of state.models) {
+    if (prices === null || vision === true) continue
     const seen = pricesByClass.get(modelClass) ?? new Set<string>()
     seen.add(effectivePrices(prices).join('/'))
     pricesByClass.set(modelClass, seen)
@@ -435,6 +440,7 @@ export async function approveCreditRateIn(
       id: true,
       slug: true,
       modelClass: true,
+      vision: true,
       provider: { select: { slug: true } },
       prices: { orderBy: { effectiveFrom: 'desc' }, select: priceColumns },
     },
@@ -499,6 +505,7 @@ export async function approveCreditRateIn(
         provider: model.provider.slug,
         model: model.slug,
         modelClass: model.modelClass,
+        vision: model.vision,
         listed: own !== undefined,
         prices: own?.prices ?? (inForce === undefined ? null : storedPrices(inForce)),
       }
