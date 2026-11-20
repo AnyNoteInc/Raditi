@@ -110,6 +110,8 @@ test('a section edited in place, a section the agent writes taken back, and the 
     await expect(page.getByText('Совсем другой текст.')).toBeVisible()
 
     await page.getByRole('button', { name: 'История версий' }).click()
+    // The edit since made a version of its own: the named one is no longer the current one.
+    await expect(history.locator('li', { hasText: '«Показала маме»' })).not.toContainText('сейчас')
     await history.getByText('«Показала маме»').click()
     await history.getByRole('button', { name: 'Вернуть эту версию' }).click()
     const confirm = page.getByRole('dialog', { name: /Вернуть версию \d+\?/ })

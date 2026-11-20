@@ -234,10 +234,13 @@ export async function readPassFacts(
   const memory = await chatMemory(deps.db, task.id)
   const memoryEntries = memory ? await memoryEntriesOfPass(deps.db, memory) : null
   // The artifacts the client named in their own words (`@artifact:<id>`, docs/plan/88-artifacts.md,
-  // Ар23, Ар47) join the chat — by the client's role, never from a text an agent wrote.
+  // Ар23, Ар47) join the chat — by the client's role, never from a text an agent wrote: the first
+  // request of a run of a scheduled task is its instruction, which an agent may have written
+  // (`raditi_schedule_create`), so its mentions are not read.
+  const ownWords = task.scheduledRun ? requests.slice(1) : requests
   const mentioned = [
     ...new Set(
-      requests.flatMap((request) =>
+      ownWords.flatMap((request) =>
         // A command and the words of a command the agent carries out are the platform's.
         request.kind !== 'command' && request.kind !== 'agent_command' && request.text
           ? artifactMentionsOf(request.text)

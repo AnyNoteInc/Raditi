@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import {
+  artifactBlockHeld,
   artifactForbidden,
   artifactLimits,
   artifactNotFound,
@@ -24,6 +25,25 @@ import {
 // it is. «Вернуть» is a new version, and the state before it is kept as a version first.
 
 type Db = PrismaClient
+
+/**
+ * Runs `act` in one transaction: every function of @repo/db it calls with the handle opens its
+ * «transaction» inside this one, so the batches of a restore commit together or not at all.
+ */
+function withinOne<T>(db: Db, act: (one: Db) => Promise<T>): Promise<T> {
+  return db.$transaction(
+    (tx) => {
+      const one = new Proxy(tx, {
+        get: (target, key, receiver) =>
+          key === '$transaction'
+            ? (callback: (inner: typeof tx) => Promise<unknown>) => callback(tx)
+            : Reflect.get(target, key, receiver),
+      }) as unknown as Db
+      return act(one)
+    },
+    { timeout: 30_000 },
+  )
+}
 
 const person = (userId: string) => ({ kind: 'user' as const, userId })
 
@@ -278,10 +298,14 @@ async function restorePlan(db: Db, input: { artifactId: string; no: number; user
   const ops: Op[] = []
   const touched: { key: string; rev: number }[] = []
   let held = 0
+  let heldKey: string | null = null
   let previous: string | null = null
   for (const block of version.blocks) {
     const live = now.get(block.key)
-    if (live?.hold === 'checking' || live?.hold === 'claim') held += 1
+    if (live?.hold === 'checking' || live?.hold === 'claim') {
+      held += 1
+      heldKey ??= live.key
+    }
     if (!live) {
       ops.push({
         op: 'insert',
@@ -305,11 +329,14 @@ async function restorePlan(db: Db, input: { artifactId: string; no: number; user
   }
   for (const live of current.blocks)
     if (!wanted.has(live.key)) {
-      if (live.hold === 'checking' || live.hold === 'claim') held += 1
+      if (live.hold === 'checking' || live.hold === 'claim') {
+        held += 1
+        heldKey ??= live.key
+      }
       touched.push({ key: live.key, rev: live.rev })
       ops.push({ op: 'delete', block: live.key, ifRev: live.rev })
     }
-  return { version, current, ops, touched, held }
+  return { version, current, ops, touched, held, heldKey }
 }
 
 /** What «Вернуть эту версию» would overwrite, before the person confirms it (Ар13). */
@@ -356,15 +383,20 @@ export async function restoreArtifactVersion(
   input: { artifactId: string; no: number; userId: string },
 ): Promise<{ no: number; changed: number }> {
   await requireOwnerOf(db, input.artifactId, input.userId, 'restore_version')
-  const plan = await restorePlan(db, input)
-  if (plan.ops.length === 0) return { no: plan.current.version, changed: 0 }
-  await saveArtifactVersion(db, { artifactId: input.artifactId, actor: person(input.userId) })
-  await applyInBatches(db, input.artifactId, input.userId, plan.ops)
-  const saved = await saveArtifactVersion(db, {
-    artifactId: input.artifactId,
-    actor: person(input.userId),
+  // All of it or nothing: the version before, the blocks, the version after — one transaction.
+  return withinOne(db, async (one) => {
+    const plan = await restorePlan(one, input)
+    if (plan.ops.length === 0) return { no: plan.current.version, changed: 0 }
+    // A block an agent holds is not overwritten: nothing is, until it is let go.
+    if (plan.held > 0) throw artifactBlockHeld(plan.heldKey ?? '', 'checking')
+    await saveArtifactVersion(one, { artifactId: input.artifactId, actor: person(input.userId) })
+    await applyInBatches(one, input.artifactId, input.userId, plan.ops)
+    const saved = await saveArtifactVersion(one, {
+      artifactId: input.artifactId,
+      actor: person(input.userId),
+    })
+    return { no: saved.no, changed: plan.ops.length }
   })
-  return { no: saved.no, changed: plan.ops.length }
 }
 
 /** The artifacts a turn of a chat changed, for `/undo` (Ар13): what it may offer to take back. */
@@ -468,6 +500,8 @@ export async function undoArtifactTurn(
       props: before.props,
     })
   }
-  if (undo.length > 0) await applyInBatches(db, input.artifactId, input.userId, undo)
+  // The blocks of the turn come back together, or none does.
+  if (undo.length > 0)
+    await withinOne(db, (one) => applyInBatches(one, input.artifactId, input.userId, undo))
   return { undone: undo.length, kept }
 }

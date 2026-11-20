@@ -555,4 +555,74 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       code: 'NOT_FOUND',
     })
   })
+
+  it('returns a version all at once or not at all: a block an agent writes holds it (Ар13)', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const { id } = await caller.artifact.create({
+      kind: 'document',
+      title: 'Меню',
+      projectId: null,
+      templateId: 'faq',
+    })
+    const first = await caller.artifact.saveVersion({ artifactId: id, label: 'Начало' })
+    const blocks = (await caller.artifact.read({ artifactId: id })).blocks
+    // The person changed two sections; then a turn writes the third, not checked yet.
+    for (const block of blocks.slice(0, 2)) {
+      await caller.artifact.write({
+        batch: {
+          artifactId: id,
+          opId: randomUUID(),
+          ops: [
+            {
+              op: 'replace',
+              block: block.key,
+              ifRev: block.rev,
+              content: 'Новое',
+              props: { heading: block.heading ?? 'Р' },
+            },
+          ],
+        },
+      })
+      await caller.artifact.release({ artifactId: id, block: block.key })
+    }
+    const { workspaceId } = await db.artifact.findUniqueOrThrow({
+      where: { id },
+      select: { workspaceId: true },
+    })
+    const task = await db.task.create({
+      data: { workspaceId, createdById: anna.id, title: 'Меню' },
+      select: { id: true },
+    })
+    const third = blocks[2]!
+    await caller.artifact.release({ artifactId: id, block: third.key })
+    await applyArtifactOps(db, {
+      batch: {
+        artifactId: id,
+        opId: randomUUID(),
+        ops: [
+          {
+            op: 'replace',
+            block: third.key,
+            ifRev: third.rev,
+            content: 'От агента',
+            props: { heading: third.heading ?? 'Р' },
+          },
+        ],
+      },
+      actor: { kind: 'agent', taskId: task.id, turnNo: 1 },
+    })
+    const before = await caller.artifact.read({ artifactId: id })
+    expect((await caller.artifact.restorePreview({ artifactId: id, no: first.no })).held).toBe(1)
+    await expect(
+      caller.artifact.restoreVersion({ artifactId: id, no: first.no }),
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+    })
+    const after = await caller.artifact.read({ artifactId: id })
+    expect(after.blocks.map((block) => [block.key, block.rev, block.content])).toEqual(
+      before.blocks.map((block) => [block.key, block.rev, block.content]),
+    )
+    expect(after.version).toBe(before.version)
+  })
 })
