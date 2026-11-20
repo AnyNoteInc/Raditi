@@ -162,3 +162,59 @@ export async function addMockup(userId: string): Promise<{ id: string }> {
     await prisma.$disconnect()
   }
 }
+
+/**
+ * An artifact of a template of the gallery (slices 88.15, 88.15а): the canvas «Холст для нового
+ * сайта» with its screens and their parts, or the brand, in a project of the user when one is named.
+ * The blocks are the person's writes, as «Создать» makes them.
+ */
+export async function addFromTemplate(
+  userId: string,
+  templateId: string,
+  projectId: string | null = null,
+): Promise<{ id: string }> {
+  const { artifactTemplateOf } = await import('@repo/domain/artifacts')
+  const template = artifactTemplateOf(templateId)!
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const workspace = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+    )
+    const actor = { kind: 'user' as const, userId }
+    const { id } = await createArtifact(prisma, {
+      workspaceId: workspace.id,
+      kind: template.kind,
+      title: template.title,
+      projectId,
+      actor,
+    })
+    const lastOf = new Map<string | null, string>()
+    const ops = template.blocks.map((block, at) => {
+      const key = block.key ?? `b${at + 1}`
+      const parent = block.parent ?? null
+      const props = {
+        ...(block.props ?? {}),
+        ...(block.heading === undefined ? {} : { heading: block.heading }),
+      }
+      const op = {
+        op: 'insert' as const,
+        block: key,
+        after: lastOf.get(parent) ?? null,
+        ...(parent === null ? {} : { parent }),
+        kind: block.kind,
+        content: block.content,
+        ...(Object.keys(props).length === 0 ? {} : { props }),
+      }
+      lastOf.set(parent, key)
+      return op
+    })
+    await applyArtifactOps(prisma, { batch: { artifactId: id, opId: randomUUID(), ops }, actor })
+    await prisma.artifactBlock.updateMany({
+      where: { documentId: id },
+      data: { leaseHolder: null, leaseUserId: null, leaseUntil: null },
+    })
+    return { id }
+  } finally {
+    await prisma.$disconnect()
+  }
+}

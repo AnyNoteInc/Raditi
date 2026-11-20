@@ -45,7 +45,8 @@ const place = z.strictObject({
 /** The value properties of each kind of block: «the last one wins» (Ар15). */
 export const artifactBlockValuePropsSchemas = {
   section: none,
-  frame: place,
+  // `chosen` — the variant of a screen the client chose: «Опубликовать как сайт» takes it (Ар8).
+  frame: place.extend({ chosen: z.boolean().optional() }),
   html: none,
   style: none,
   script: none,
@@ -64,6 +65,11 @@ export const artifactBlockTextPropsSchemas = {
   frame: z.strictObject({
     name: artifactTextPropSchema.optional(),
     variant: oneLine(40).optional(),
+    /** The address of its page when a canvas is published as a site: `/` or `/<segment>`. */
+    path: z
+      .string()
+      .regex(/^\/(?:[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)?$/, 'a path "/" or "/<segment>"')
+      .optional(),
   }),
   html: none,
   style: none,

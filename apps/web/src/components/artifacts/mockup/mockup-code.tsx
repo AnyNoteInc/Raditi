@@ -7,7 +7,14 @@ import type { CabinetArtifact } from '../use-artifact'
 import { mockupTexts } from './mockup-texts'
 
 /** «Код» of a mockup (§7.7): its parts to read, never to edit here — that is the agent's work. */
-export function MockupCode({ artifact }: { artifact: CabinetArtifact }) {
+export function MockupCode({
+  artifact,
+  frame = null,
+}: {
+  artifact: CabinetArtifact
+  /** A screen of a canvas: its own parts and the common ones at the top (slice 88.15). */
+  frame?: string | null
+}) {
   const groups = [
     { kind: 'html', label: mockupTexts.codeHtml },
     { kind: 'style', label: mockupTexts.codeStyle },
@@ -20,7 +27,12 @@ export function MockupCode({ artifact }: { artifact: CabinetArtifact }) {
         {mockupTexts.codeReadOnly}
       </Typography>
       {groups.map((group) => {
-        const blocks = artifact.blocks.filter((block) => block.kind === group.kind && block.content)
+        const blocks = artifact.blocks.filter(
+          (block) =>
+            block.kind === group.kind &&
+            block.content &&
+            (block.parent === null || block.parent === frame),
+        )
         if (blocks.length === 0) return null
         return (
           <Box key={group.kind} component="section" aria-label={group.label}>

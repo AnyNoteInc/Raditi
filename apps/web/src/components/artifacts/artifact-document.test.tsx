@@ -57,6 +57,8 @@ const artifact = (overrides: Partial<CabinetArtifact['blocks'][number]> = {}): C
     {
       key: 'dostavka',
       kind: 'section',
+      parent: null,
+      props: {},
       rank: '00bi',
       rev: 3,
       heading: 'Доставка',

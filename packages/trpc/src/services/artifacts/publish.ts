@@ -1,6 +1,7 @@
 import {
   artifactFilesByIds,
   artifactRole,
+  projectBrandOf,
   publishClientPage,
   readArtifactVersion,
   saveArtifactVersion,
@@ -18,7 +19,11 @@ import {
 import {
   artifactFileRefsOf,
   artifactForbidden,
+  artifactFrameBlocksOf,
   artifactFrameDocument,
+  brandCss,
+  brandTokensOf,
+  canvasPublishedScreens,
   artifactKindSpecOf,
   artifactNotFound,
   tableMarkdown,
@@ -48,6 +53,13 @@ function markdownOfTable(
   return table.columnsKey === null ? null : `${tableMarkdown(table.columns, table.rows)}\n`
 }
 
+async function projectOf(db: PrismaClient, artifactId: string): Promise<string | null> {
+  return (
+    (await db.artifact.findUnique({ where: { id: artifactId }, select: { projectId: true } }))
+      ?.projectId ?? null
+  )
+}
+
 async function ownedDocument(db: PrismaClient, artifactId: string, userId: string) {
   const role = await artifactRole(db, { artifactId, userId })
   if (role === null) throw artifactNotFound()
@@ -63,10 +75,16 @@ async function ownedDocument(db: PrismaClient, artifactId: string, userId: strin
       seq: true,
     },
   })
-  const publish = artifactKindSpecOf(artifact.kind)?.publish
-  if (publish !== 'reading-page' && publish !== 'html')
+  const spec = artifactKindSpecOf(artifact.kind)
+  const publish = spec?.publish
+  if (publish !== 'reading-page' && publish !== 'html' && publish !== 'site')
     throw new DomainError('ARTIFACT_KIND_REFUSED', 'This kind is not published as a page yet', 409)
-  return { ...artifact, publish }
+  return {
+    ...artifact,
+    publish,
+    framed: spec?.framed === true,
+    projectId: await projectOf(db, artifactId),
+  }
 }
 
 const extensionOf = (type: string) =>
@@ -89,29 +107,44 @@ const extensionOf = (type: string) =>
  * (`/_files/a/<id>.<ext>`, Дер34), the references rewritten to them: the preview and the page load
  * the same bytes.
  */
+interface VersionBlock {
+  key: string
+  kind: string | null
+  parent: string | null
+  rank: string | null
+  content: string | null
+}
+
 async function mockupPage(
   db: PrismaClient,
   storage: () => Pick<ObjectStorage, 'get'>,
   input: {
     artifactId: string
     title: string
-    blocks: readonly {
-      key: string
-      kind: string | null
-      parent: string | null
-      rank: string | null
-      content: string | null
-    }[]
+    blocks: readonly VersionBlock[]
+    /** A framed kind (a canvas): the screen it publishes; null — a mockup. */
+    framed: boolean
+    frame: string | null
+    /** The CSS variables of the project's brand (slice 88.15а). */
+    brandCss: string
   },
 ) {
-  const top = input.blocks
-    .filter((block) => block.parent === null && block.content !== null)
+  const sorted = input.blocks
+    .flatMap((block) => (block.kind === null ? [] : [{ ...block, kind: block.kind }]))
     .toSorted((a, b) =>
       (a.rank ?? '') < (b.rank ?? '') ? -1 : (a.rank ?? '') > (b.rank ?? '') ? 1 : 0,
     )
-  const of = (kind: string) =>
-    top.filter((block) => block.kind === kind).map((block) => block.content!)
-  const ids = new Set(top.flatMap((block) => artifactFileRefsOf(block.content!)))
+  // The one assembly of a frame, as `/v/` and the renderer have it (§7.2).
+  const parts = artifactFrameBlocksOf({ framed: input.framed, blocks: sorted, frame: input.frame })
+  if (parts === null) throw artifactNotFound()
+  const used = [
+    ...parts.html,
+    ...parts.style,
+    ...parts.script,
+    ...(parts.settings ? [parts.settings] : []),
+  ]
+  const of = (list: readonly { content: string | null }[]) => list.map((block) => block.content!)
+  const ids = new Set(used.flatMap((block) => artifactFileRefsOf(block.content!)))
   const files = await artifactFilesByIds(db, { artifactId: input.artifactId, ids: [...ids] })
   const paths = new Map<string, string>()
   const copied: { path: string; bytes: Uint8Array }[] = []
@@ -127,16 +160,22 @@ async function mockupPage(
   const addressed = (text: string) => withArtifactFileAddresses(text, (id) => paths.get(id) ?? null)
   const html = artifactFrameDocument({
     title: input.title,
-    platformCss: '',
+    platformCss: input.brandCss,
     bridge: false,
     parts: {
-      html: of('html').map(addressed),
-      style: of('style').map(addressed),
-      script: of('script'),
-      settings: of('settings')[0] ?? null,
+      html: of(parts.html).map(addressed),
+      style: of(parts.style).map(addressed),
+      script: of(parts.script),
+      settings: parts.settings?.content ?? null,
     },
   })
   return { bytes: encode(html), files: copied }
+}
+
+/** The CSS variables of the brand of the artifact's project; '' — none (slice 88.15а). */
+async function brandCssOf(db: PrismaClient, projectId: string | null): Promise<string> {
+  const brand = await projectBrandOf(db, projectId)
+  return brand ? brandCss(brandTokensOf(brand.settings)) : ''
 }
 
 export async function publishArtifactPage(
@@ -154,6 +193,10 @@ export async function publishArtifactPage(
       ? artifact.currentVersion
       : (await saveArtifactVersion(db, { artifactId: artifact.id, actor })).no)
   const version = await readArtifactVersion(db, { artifactId: artifact.id, no: versionNo, actor })
+  if (artifact.publish === 'site') {
+    if (storage === undefined) throw new DomainError('PAGES_UNAVAILABLE', 'No storage here', 503)
+    return publishCanvasSite(db, address, storage, { artifact, versionNo, blocks: version.blocks })
+  }
   let bytes: Uint8Array
   let markdown: string | null = null
   let files: { path: string; bytes: Uint8Array }[] = []
@@ -163,6 +206,9 @@ export async function publishArtifactPage(
       artifactId: artifact.id,
       title: artifact.title,
       blocks: version.blocks,
+      framed: false,
+      frame: null,
+      brandCss: await brandCssOf(db, artifact.projectId),
     }))
   } else {
     markdown = version.markdown ?? markdownOfTable(version.blocks)
@@ -191,6 +237,92 @@ export async function publishArtifactPage(
     pageId: page.pageId,
     url: pageAddressUrl(page.slug, address, page.path),
     version: page.version,
+    versionNo,
+  }
+}
+
+/**
+ * «Опубликовать как сайт» of a canvas (Ар8, §7.10; slice 88.15): a site of pages, one a screen — of a
+ * screen with variants the chosen one —, each the HTML of its frame. The first screen is the home
+ * page of the site, the page of the artifact; the others are pages of that site at their paths,
+ * published again into the same pages (`artifact_publications` by frame). The files every screen
+ * names go to the shared files of the site.
+ */
+async function publishCanvasSite(
+  db: PrismaClient,
+  address: PagesAddress,
+  storage: () => Pick<ObjectStorage, 'get'>,
+  input: {
+    artifact: Awaited<ReturnType<typeof ownedDocument>>
+    versionNo: number
+    blocks: readonly (VersionBlock & { rev: number; props: Readonly<Record<string, unknown>> })[]
+  },
+): Promise<{ pageId: string; url: string; version: number; versionNo: number }> {
+  const { artifact, versionNo } = input
+  const live = input.blocks
+    .flatMap((block) => (block.kind === null ? [] : [{ ...block, kind: block.kind }]))
+    .toSorted((a, b) =>
+      (a.rank ?? '') < (b.rank ?? '') ? -1 : (a.rank ?? '') > (b.rank ?? '') ? 1 : 0,
+    )
+  const screens = canvasPublishedScreens(live).toSorted((a, b) =>
+    a.path === '/' ? -1 : b.path === '/' ? 1 : 0,
+  )
+  const home = screens[0]
+  if (!home) throw new DomainError('DOC_NOT_READY', 'The canvas has no screen to publish', 409)
+  const css = await brandCssOf(db, artifact.projectId)
+  const previous = await db.artifactPublication.findMany({
+    where: { artifactId: artifact.id, page: { deletedAt: null } },
+    select: {
+      pageId: true,
+      blockKey: true,
+      page: { select: { currentVersion: true, treeId: true } },
+    },
+  })
+  let first: Awaited<ReturnType<typeof publishClientPage>> | null = null
+  for (const screen of screens) {
+    const page = await mockupPage(db, storage, {
+      artifactId: artifact.id,
+      title: `${artifact.title} — ${screen.name}`,
+      blocks: input.blocks,
+      framed: true,
+      frame: screen.key,
+      brandCss: css,
+    })
+    const verdict = checkPageContent(page.bytes)
+    if (!verdict.ok) throw pageContentRefused(verdict.reason)
+    const isHome = screen === home
+    const known = isHome ? null : previous.find((row) => row.blockKey === screen.key)
+    const published = await publishClientPage(db, {
+      workspaceId: artifact.workspaceId,
+      taskId: null,
+      title: isHome ? artifact.title : screen.name,
+      target: isHome ? { documentId: artifact.id } : { fileName: `${screen.path.slice(1)}.html` },
+      ...(isHome
+        ? {}
+        : known && known.page.treeId === first!.treeId
+          ? { into: { pageId: known.pageId, expectedVersion: known.page.currentVersion } }
+          : { place: { treeId: first!.treeId, path: screen.path } }),
+      bytes: page.bytes,
+      html: true,
+      files: page.files,
+    })
+    if (isHome) first = published
+    await db.artifactPublication.upsert({
+      where: { pageId: published.pageId },
+      create: {
+        artifactId: artifact.id,
+        pageId: published.pageId,
+        blockKey: isHome ? null : screen.key,
+        seq: artifact.seq,
+        versionNo,
+      },
+      update: { seq: artifact.seq, versionNo, publishedAt: new Date() },
+    })
+  }
+  return {
+    pageId: first!.pageId,
+    url: pageAddressUrl(first!.slug, address, first!.path),
+    version: first!.version,
     versionNo,
   }
 }

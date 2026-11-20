@@ -9,6 +9,7 @@ import {
 } from '@repo/domain/artifacts'
 import { z } from 'zod'
 
+import { canvasThumbs } from '../services/artifacts/canvas.ts'
 import { chatArtifactsOf } from '../services/artifacts/chat-artifacts.ts'
 import {
   cabinetChanges,
@@ -113,9 +114,11 @@ const readOutput = z.strictObject({
     z.strictObject({
       key: z.string(),
       kind: z.string(),
+      parent: z.string().nullable(),
       rank: z.string(),
       rev: z.number().int().min(0),
       heading: z.string().nullable(),
+      props: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
       content: z.string().nullable(),
       checking: z.boolean(),
       hold: z.enum(artifactHoldReasons).nullable(),
@@ -459,6 +462,8 @@ export const artifactRouter = router({
         mode: z.enum(['view', 'edit']),
         // The `seq` the cabinet read: a new one is a new document of the frame, a new address.
         seq: z.number().int().min(0).optional(),
+        /** The screen of a canvas (slice 88.15); absent — a mockup. */
+        frame: artifactBlockKeySchema.optional(),
       }),
     )
     .output(z.strictObject({ url: z.string(), expiresAt: z.iso.datetime() }))
@@ -467,8 +472,35 @@ export const artifactRouter = router({
         userId: ctx.user.id,
         artifactId: input.artifactId,
         mode: input.mode,
+        ...(input.frame === undefined ? {} : { frame: input.frame }),
       }),
     ),
+
+  /**
+   * The thumbnails of the screens of a canvas (§7.7, slice 88.15): an address of each drawn one,
+   * null for the rest — core is asked to draw them, the board asks again while any is missing.
+   */
+  canvasThumbs: consentedProcedure
+    .input(z.strictObject({ artifactId, seq: z.number().int().min(0).optional() }))
+    .output(
+      z.strictObject({
+        thumbs: z.array(
+          z.strictObject({
+            frame: z.string(),
+            width: z.number().int(),
+            url: z.string().nullable(),
+          }),
+        ),
+        pending: z.boolean(),
+      }),
+    )
+    .query(({ ctx, input }) => {
+      const chat = chatContextOf(ctx)
+      return canvasThumbs(ctx.prisma, chat.storage(), {
+        userId: ctx.user.id,
+        artifactId: input.artifactId,
+      })
+    }),
 
   /** «Править текст» (Ар9): the slots of text of one element, plain text, under `ifRev`. */
   editText: consentedProcedure

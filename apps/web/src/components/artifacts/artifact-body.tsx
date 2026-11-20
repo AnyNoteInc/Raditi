@@ -4,6 +4,8 @@ import Typography from '@mui/material/Typography'
 import { artifactKindSpecOf } from '@repo/domain/artifacts'
 
 import { ArtifactDocument } from './artifact-document'
+import { ArtifactBrand } from './brand/artifact-brand'
+import { ArtifactCanvas } from './canvas/artifact-canvas'
 import { ArtifactMockup } from './mockup/artifact-mockup'
 import { ArtifactTable } from './table/artifact-table'
 import type { ArtifactBodyProps } from './artifact-body-props'
@@ -32,6 +34,10 @@ export function ArtifactBody(props: ArtifactBodyProps) {
       return <ArtifactMockup {...props} />
     case 'sheet':
       return <ArtifactTable {...props} />
+    case 'canvas':
+      return <ArtifactCanvas {...props} />
+    case 'brand':
+      return <ArtifactBrand {...props} />
     default:
       return <Typography sx={{ color: 'text.secondary' }}>{bodyTexts.notShown}</Typography>
   }
@@ -40,5 +46,5 @@ export function ArtifactBody(props: ArtifactBodyProps) {
 /** Whether the view of a kind wants the whole width of the page (no outline, no 820 px column). */
 export const artifactBodyWide = (kind: string): boolean => {
   const view = artifactKindSpecOf(kind)?.view
-  return view === 'frame' || view === 'sheet'
+  return view === 'frame' || view === 'sheet' || view === 'canvas' || view === 'brand'
 }

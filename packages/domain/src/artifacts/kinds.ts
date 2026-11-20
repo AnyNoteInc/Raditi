@@ -136,7 +136,8 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 1,
     sharableEdit: true,
     framed: true,
-    forAgent: 'the screens of a new site side by side, for a computer and a phone',
+    forAgent:
+      'the screens of a new site side by side, each one adaptive page drawn for a computer (1440) and a phone (390). A screen is a `frame` block — props `name` (the screen: «Главная», «Услуги»), `variant` («А», «Б») for variants of one screen, `path` of its page when published ("/", "/uslugi") — with its own `html`, `style` and `script` blocks inside it (`parent`: the frame); a `style` block at the top is the common style of every screen, one `settings` block at the top their numbers and words. A `note` at the top is a sticky note, a `note` inside a frame a pin (props x, y in per cent). Each html block is a fragment of the body up to 32 KiB; the frame is sandboxed like a mockup. After drawing a screen check it with `raditi_artifact_layout`',
   },
   brand: {
     label: 'Фирменный стиль',
@@ -147,7 +148,8 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     wave: 1,
     sharableEdit: false,
     framed: false,
-    forAgent: 'the colours, fonts and words of a brand',
+    forAgent:
+      'the colours, fonts and words of a brand, one per project: one `settings` block — a flat JSON object of primary, accent, background, surface, text, muted (colours #rrggbb), headingFont and bodyFont (one of Golos Text, Arial, Georgia, Verdana, Courier New), radius (px), tone and avoid (words) — and a `section` with the tone of the texts. Every mockup and canvas of the project gets its colours as CSS variables --brand-primary and the rest',
   },
   diagram: {
     label: 'Схема',
@@ -216,6 +218,8 @@ export const artifactReleasedKinds: readonly ArtifactKind[] = Object.freeze([
   'document',
   'mockup',
   'table',
+  'canvas',
+  'brand',
 ])
 
 export function artifactKindKnown(value: string): value is ArtifactKind {

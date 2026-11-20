@@ -10,6 +10,8 @@ export type { TaskSignals } from './services/chat/signals.ts'
 // A snapshot the agent took of a task's browser for the client (`web_screenshot`).
 export { readTaskFile, type ChatFile } from './services/chat/files.ts'
 export { readArtifactExport } from './services/artifacts/table.ts'
+// The thumbnails of the screens of a canvas (docs/plan/88-artifacts.md, §7.7, slice 88.15).
+export { canvasThumbFile } from './services/artifacts/canvas.ts'
 // The frame of a mockup, its files and the edit frame (docs/plan/88-artifacts.md, Ар9, Ар12, Ар28).
 export {
   isArtifactFileToken,

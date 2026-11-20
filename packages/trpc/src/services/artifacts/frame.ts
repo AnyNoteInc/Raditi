@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import {
+  artifactBrandOf,
   artifactFileFor,
   artifactFilesByIds,
   artifactRole,
@@ -22,7 +23,10 @@ import { checkPageContent, DomainError, type ObjectStorage } from '@repo/domain'
 import {
   artifactFileRef,
   artifactFileRefsOf,
+  artifactFrameBlocksOf,
   artifactFrameDocument,
+  brandCss,
+  brandTokensOf,
   artifactImportKindOf,
   artifactKindCreatable,
   artifactKindRefused,
@@ -77,7 +81,7 @@ async function frameRole(db: PrismaClient, input: { userId: string; artifactId: 
 export async function issueArtifactFrame(
   db: PrismaClient,
   chat: ChatContext | null,
-  input: { userId: string; artifactId: string; mode: 'view' | 'edit' },
+  input: { userId: string; artifactId: string; mode: 'view' | 'edit'; frame?: string },
   now = Date.now(),
 ): Promise<{ url: string; expiresAt: string }> {
   const pages = pagesOf(chat)
@@ -85,13 +89,17 @@ export async function issueArtifactFrame(
   const kind = (
     await db.artifact.findUnique({ where: { id: input.artifactId }, select: { kind: true } })
   )?.kind
-  if (artifactKindSpecOf(kind ?? '')?.view !== 'frame') throw artifactNotFound()
+  const spec = artifactKindSpecOf(kind ?? '')
+  // A mockup has one frame; a canvas a frame for each screen, named by the token (slice 88.15).
+  if (spec?.view !== 'frame' && spec?.view !== 'canvas') throw artifactNotFound()
+  if (spec.framed !== (input.frame !== undefined)) throw artifactNotFound()
   const expiresAt = now + PAGE_VIEW_TTL_MS
   const label: ArtifactTokenLabel = input.mode === 'view' ? 'artifact' : 'aedit'
   const token = signArtifactToken(pages.keys.view, label, {
     artifactId: input.artifactId,
     userId: input.userId,
     expiresAt,
+    ...(input.frame === undefined ? {} : { frame: input.frame }),
   })
   return {
     url: input.mode === 'view' ? `${pages.origin}/v/${token}` : `/api/artifact-frame/${token}`,
@@ -128,11 +136,23 @@ export async function serveArtifactFrame(
     artifactId: read.artifactId,
     actor: { kind: 'user', userId: read.userId },
   })
-  if (artifactKindSpecOf(artifact.kind)?.view !== 'frame') return { ok: false, status: 404 }
-  const top = artifact.blocks.filter((block) => block.parent === null && block.content !== null)
-  const text = (kind: string) => top.filter((block) => block.kind === kind)
+  const spec = artifactKindSpecOf(artifact.kind)
+  if (spec?.view !== 'frame' && spec?.view !== 'canvas') return { ok: false, status: 404 }
+  // The one assembly of a frame, as the renderer and the publication have it (§7.2).
+  const parts = artifactFrameBlocksOf({
+    framed: spec.framed,
+    blocks: artifact.blocks,
+    frame: read.frame ?? null,
+  })
+  if (parts === null) return { ok: false, status: 404 }
+  const used = [
+    ...parts.html,
+    ...parts.style,
+    ...parts.script,
+    ...(parts.settings ? [parts.settings] : []),
+  ]
   const referenced = new Set<string>()
-  for (const block of top) for (const id of artifactFileRefsOf(block.content!)) referenced.add(id)
+  for (const block of used) for (const id of artifactFileRefsOf(block.content!)) referenced.add(id)
   const files = await artifactFilesByIds(db, { artifactId: artifact.id, ids: [...referenced] })
   const address = new Map<string, string>()
   for (const file of files)
@@ -147,20 +167,22 @@ export async function serveArtifactFrame(
     )
   const addressed = (content: string) =>
     withArtifactFileAddresses(content, (id) => address.get(id) ?? null)
-  const html = text('html').map((block) =>
+  const html = parts.html.map((block) =>
     input.mode === 'edit'
       ? artifactEditCopy(stampArtifactHtml(block.key, addressed(block.content!)))
       : addressed(block.content!),
   )
-  const settings = text('settings')[0]?.content ?? null
+  const settings = parts.settings?.content ?? null
+  // The brand of the artifact's project stands in its frames as CSS variables (slice 88.15а).
+  const brand = await artifactBrandOf(db, artifact.id)
   const document = artifactFrameDocument({
     title: artifact.title,
-    platformCss: input.fonts.css,
+    platformCss: input.fonts.css + (brand ? brandCss(brandTokensOf(brand.settings)) : ''),
     bridge: input.mode === 'view',
     parts: {
       html,
-      style: text('style').map((block) => addressed(block.content!)),
-      script: input.mode === 'view' ? text('script').map((block) => addressed(block.content!)) : [],
+      style: parts.style.map((block) => addressed(block.content!)),
+      script: input.mode === 'view' ? parts.script.map((block) => addressed(block.content!)) : [],
       settings: input.mode === 'view' ? settings : null,
     },
   })

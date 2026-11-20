@@ -33,11 +33,14 @@ export function MockupSettings({
   block,
   canEdit,
   onChanged,
+  labels = {},
 }: {
   artifact: CabinetArtifact
   block: Block
   canEdit: boolean
   onChanged: () => void
+  /** The names the client reads of the keys (a brand's tokens, slice 88.15а); absent — the key. */
+  labels?: Readonly<Record<string, string>>
 }) {
   const trpc = useTRPC()
   const write = useMutation(trpc.artifact.write.mutationOptions())
@@ -113,7 +116,7 @@ export function MockupSettings({
                   onChange={(event) => setDraft({ ...draft, [field.key]: event.target.checked })}
                 />
               }
-              label={field.key}
+              label={labels[field.key] ?? field.key}
             />
           )
         const color = artifactSettingIsColor(field.value)
@@ -123,7 +126,7 @@ export function MockupSettings({
           <TextField
             key={field.key}
             size="small"
-            label={field.key}
+            label={labels[field.key] ?? field.key}
             value={value}
             disabled={!canEdit}
             error={bad}

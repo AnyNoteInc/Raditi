@@ -54,9 +54,13 @@ export async function readCabinetArtifact(
     blocks: artifact.blocks.map((block) => ({
       key: block.key,
       kind: block.kind,
+      // The frame a part, a pin or a variant stands in (a canvas, slice 88.15); null — the top.
+      parent: block.parent,
       rank: block.rank,
       rev: block.rev,
       heading: typeof block.props.heading === 'string' ? block.props.heading : null,
+      // The properties of a block as checked: a screen's name, variant and place, a note's place.
+      props: block.props,
       content: block.content,
       checking: block.checking,
       hold: block.hold,

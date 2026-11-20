@@ -64,7 +64,9 @@ const mockup = (): CabinetArtifact => ({
     {
       key: 'b1',
       kind: 'style',
+      parent: null,
       rank: 'a',
+      props: {},
       rev: 1,
       heading: null,
       content: 'h1{}',
@@ -74,7 +76,9 @@ const mockup = (): CabinetArtifact => ({
     {
       key: 'b2',
       kind: 'html',
+      parent: null,
       rank: 'b',
+      props: {},
       rev: 1,
       heading: null,
       content: '<h1>Цена</h1>',
@@ -84,7 +88,9 @@ const mockup = (): CabinetArtifact => ({
     {
       key: 'b3',
       kind: 'settings',
+      parent: null,
       rank: 'c',
+      props: {},
       rev: 2,
       heading: null,
       content: '{"pricePerSquareMeter":6500,"note":"Замер бесплатно","dark":false,"list":[1]}',

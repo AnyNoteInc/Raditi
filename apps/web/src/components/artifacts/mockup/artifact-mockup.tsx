@@ -37,7 +37,15 @@ type Mode = 'view' | 'code' | 'select' | 'text'
 const domainCodeOf = (error: unknown) =>
   (error as { data?: { domainCode?: string } } | null)?.data?.domainCode
 
-export function ArtifactMockup({ artifact, onChanged, place }: ArtifactBodyProps) {
+export function ArtifactMockup({
+  artifact,
+  onChanged,
+  place,
+  frame: screen,
+}: ArtifactBodyProps & {
+  /** A screen of a canvas (slice 88.15): its frame, opened by «Открыть»; absent — a mockup. */
+  frame?: string
+}) {
   const trpc = useTRPC()
   const [device, setDevice] = useState<number>(place === 'pane' ? 390 : 1440)
   const [mode, setMode] = useState<Mode>('view')
@@ -58,6 +66,7 @@ export function ArtifactMockup({ artifact, onChanged, place }: ArtifactBodyProps
       artifactId: artifact.id,
       mode: frameMode,
       seq: artifact.seq,
+      ...(screen === undefined ? {} : { frame: screen }),
     }),
     enabled: mode !== 'code',
     staleTime: 4 * 60_000,
@@ -74,8 +83,11 @@ export function ArtifactMockup({ artifact, onChanged, place }: ArtifactBodyProps
   }, [])
 
   const scale = space > 0 ? Math.min(1, space / device) : 1
-  const hasHtml = artifact.blocks.some((block) => block.kind === 'html')
-  const settings = artifact.blocks.find((block) => block.kind === 'settings') ?? null
+  const hasHtml = artifact.blocks.some(
+    (block) => block.kind === 'html' && block.parent === (screen ?? null),
+  )
+  const settings =
+    artifact.blocks.find((block) => block.kind === 'settings' && block.parent === null) ?? null
 
   async function done() {
     const end = edit.current?.commit() ?? { kind: 'none' as const }
@@ -228,7 +240,7 @@ export function ArtifactMockup({ artifact, onChanged, place }: ArtifactBodyProps
           }}
         >
           {mode === 'code' ? (
-            <MockupCode artifact={artifact} />
+            <MockupCode artifact={artifact} frame={screen ?? null} />
           ) : !hasHtml ? (
             <Typography sx={{ color: 'text.secondary', p: 2 }}>{mockupTexts.empty}</Typography>
           ) : frame.isPending ? (

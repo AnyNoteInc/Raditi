@@ -88,19 +88,27 @@ export async function createGalleryArtifact(
     actor,
   })
   if (template !== null && template.blocks.length > 0) {
-    let after: string | null = null
+    // The last block written at each level: the next one of that level goes after it.
+    const lastOf = new Map<string | null, string>()
     const ops = template.blocks.map((block, index) => {
-      // A document's sections keep the keys `s1…` of plan 88.9; the other parts are `b1…`.
-      const key = `${block.kind === 'section' ? 's' : 'b'}${index + 1}`
+      // A document's sections keep the keys `s1…` of plan 88.9; the other parts are `b1…`; a
+      // canvas names its screens and their parts itself (slice 88.15).
+      const key = block.key ?? `${block.kind === 'section' ? 's' : 'b'}${index + 1}`
+      const parent = block.parent ?? null
+      const props = {
+        ...(block.props ?? {}),
+        ...(block.heading === undefined ? {} : { heading: block.heading }),
+      }
       const op = {
         op: 'insert' as const,
         block: key,
-        after,
+        after: lastOf.get(parent) ?? null,
+        ...(parent === null ? {} : { parent }),
         kind: block.kind,
         content: block.content,
-        ...(block.heading === undefined ? {} : { props: { heading: block.heading } }),
+        ...(Object.keys(props).length === 0 ? {} : { props }),
       }
-      after = key
+      lastOf.set(parent, key)
       return op
     })
     await applyArtifactOps(db, { batch: { artifactId: id, opId: randomUUID(), ops }, actor })

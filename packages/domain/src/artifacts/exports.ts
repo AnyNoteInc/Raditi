@@ -20,6 +20,13 @@ export type ArtifactExportState = (typeof artifactExportStates)[number]
 
 export const artifactExportJobSchema = z.strictObject({ exportId: z.uuid() })
 
+/**
+ * The thumbnails of the screens of a canvas (docs/plan/88-artifacts.md, §7.7, slice 88.15): core
+ * draws the missing ones in the background through the renderer of the browser worker.
+ */
+export const ARTIFACT_THUMBS_JOB = 'artifact.thumbs'
+export const artifactThumbsJobSchema = z.strictObject({ artifactId: z.uuid() })
+
 export const artifactExportLimits = Object.freeze({
   /** A workbook is kept this long after it was built; a newer export of the artifact removes older ones. */
   keepMs: 24 * 60 * 60 * 1000,

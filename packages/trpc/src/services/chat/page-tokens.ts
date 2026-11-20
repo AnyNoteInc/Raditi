@@ -97,6 +97,10 @@ export interface ArtifactViewToken {
   userId: string
   expiresAt: number
 }
+export interface ArtifactFrameToken extends ArtifactViewToken {
+  /** The frame of a canvas the token opens; absent — a mockup (slice 88.15). */
+  frame?: string
+}
 export interface ArtifactFileToken extends ArtifactViewToken {
   fileId: string
 }
@@ -107,6 +111,10 @@ export type ArtifactTokenLabel = 'artifact' | 'afile' | 'aedit'
 const artifactTokenSchema = z.strictObject({
   a: z.uuid(),
   f: z.uuid().optional(),
+  b: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{0,39}$/)
+    .optional(),
   u: z.string().min(1).max(200),
   e: z.number().int().positive(),
 })
@@ -114,12 +122,13 @@ const artifactTokenSchema = z.strictObject({
 export function signArtifactToken(
   key: Uint8Array,
   label: ArtifactTokenLabel,
-  token: ArtifactViewToken & { fileId?: string },
+  token: ArtifactViewToken & { fileId?: string; frame?: string },
 ): string {
   const data = base64url(
     JSON.stringify({
       a: token.artifactId,
       ...(token.fileId === undefined ? {} : { f: token.fileId }),
+      ...(token.frame === undefined ? {} : { b: token.frame }),
       u: token.userId,
       e: token.expiresAt,
     }),
@@ -133,7 +142,7 @@ export function readArtifactToken(
   label: ArtifactTokenLabel,
   token: string,
   now: number,
-): (ArtifactViewToken & { fileId?: string }) | 'expired' | null {
+): (ArtifactViewToken & { fileId?: string; frame?: string }) | 'expired' | null {
   const data = opened(key, token, label)
   if (data === null) return null
   let parsed: unknown
@@ -146,10 +155,13 @@ export function readArtifactToken(
   if (!read.success) return null
   // A file token names a file; the others never do.
   if ((label === 'afile') !== (read.data.f !== undefined)) return null
+  // A frame is named by the token of a frame or of the edit frame, never by one of a file.
+  if (label === 'afile' && read.data.b !== undefined) return null
   if (read.data.e <= now) return 'expired'
   return {
     artifactId: read.data.a.toLowerCase(),
     ...(read.data.f === undefined ? {} : { fileId: read.data.f.toLowerCase() }),
+    ...(read.data.b === undefined ? {} : { frame: read.data.b }),
     userId: read.data.u,
     expiresAt: read.data.e,
   }

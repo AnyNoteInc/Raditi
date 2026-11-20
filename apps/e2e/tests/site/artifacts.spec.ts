@@ -26,7 +26,7 @@ test('the gallery before the first artifact, and a document from a template', as
 
   await page.getByRole('button', { name: /Правила возврата/ }).click()
   const dialog = page.getByRole('dialog', { name: 'Новый артефакт' })
-  await expect(dialog.getByRole('radio', { name: /Холст/ })).toHaveAttribute(
+  await expect(dialog.getByRole('radio', { name: /Схема/ })).toHaveAttribute(
     'aria-disabled',
     'true',
   )

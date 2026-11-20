@@ -54,6 +54,14 @@ export const publishTexts = Object.freeze({
   cancel: 'Отмена',
   confirm: 'Опубликовать',
   close: 'Закрыть',
+  // A canvas becomes a site: one page a screen (Ар8, §7.10; slice 88.15).
+  publishSite: 'Опубликовать как сайт',
+  updateSite: 'Обновить сайт',
+  siteLead:
+    'Сайт — снимок холста для всех, у кого есть ссылка: каждый экран — своя страница, из вариантов — выбранный. Ваши дальнейшие правки на него не попадут, пока вы не обновите сайт.',
+  siteDone: 'Готово: сайт опубликован.',
+  siteUpdated: (version: number) => `Готово: на сайте версия ${version} холста.`,
+  openSite: 'Открыть сайт',
 })
 
 export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact }) {
@@ -64,7 +72,9 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
   const [versionNo, setVersionNo] = useState<number | ''>('')
   const [result, setResult] = useState<{ ok: boolean; text: string; url?: string } | null>(null)
   const owner = artifactRoleAtLeast(artifact.role, 'owner')
-  const publishable = artifactKindSpecOf(artifact.kind)?.publish === 'reading-page'
+  const kind = artifactKindSpecOf(artifact.kind)?.publish ?? null
+  const publishable = kind !== null
+  const site = kind === 'site'
   const publication = useQuery({
     ...trpc.pages.artifactPublication.queryOptions({ artifactId: artifact.id }),
     enabled: owner && publishable,
@@ -76,7 +86,13 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
   const publish = useMutation(trpc.pages.publishArtifact.mutationOptions())
   if (!owner || !publishable) return null
   const current = publication.data ?? null
-  const label = current ? publishTexts.update : publishTexts.publish
+  const label = site
+    ? current
+      ? publishTexts.updateSite
+      : publishTexts.publishSite
+    : current
+      ? publishTexts.update
+      : publishTexts.publish
   const live = open?.live ?? null
 
   return (
@@ -102,17 +118,19 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
           aria-labelledby="publish-artifact-title"
         >
           <DialogTitle id="publish-artifact-title">
-            {live ? publishTexts.updateTitle : publishTexts.title}
+            {site ? label : live ? publishTexts.updateTitle : publishTexts.title}
           </DialogTitle>
           <DialogContent>
-            <Typography sx={{ mb: 2 }}>{publishTexts.lead}</Typography>
+            <Typography sx={{ mb: 2 }}>
+              {site ? publishTexts.siteLead : publishTexts.lead}
+            </Typography>
             {live && (
               <Alert severity="info" sx={{ mb: 2 }}>
                 {publishTexts.shows(live.versionNo)} {live.current ? '' : publishTexts.stale}
                 {live.url && (
                   <Box sx={{ mt: 0.5 }}>
                     <Link href={live.url} target="_blank" rel="noopener noreferrer">
-                      {publishTexts.open}
+                      {site ? publishTexts.openSite : publishTexts.open}
                     </Link>
                   </Box>
                 )}
@@ -171,7 +189,13 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
                     .then((answer) => {
                       setResult({
                         ok: true,
-                        text: live ? publishTexts.updated(answer.versionNo) : publishTexts.done,
+                        text: site
+                          ? live
+                            ? publishTexts.siteUpdated(answer.versionNo)
+                            : publishTexts.siteDone
+                          : live
+                            ? publishTexts.updated(answer.versionNo)
+                            : publishTexts.done,
                         url: answer.url,
                       })
                       void queryClient.invalidateQueries({

@@ -19,7 +19,7 @@ export default defineConfig({
   // handler on the nodes of a frame without scripts, the cabinet's own layer must do.
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' } },
-    { name: 'webkit', use: { browserName: 'webkit' }, testMatch: /edit-frame\.spec\.ts$/ },
+    { name: 'webkit', use: { browserName: 'webkit' }, testMatch: /(edit-frame|canvas)\.spec\.ts$/ },
   ],
   // No cloud browser in this run: no worker streams it, so the browser of a chat says it cannot
   // be shown. Next loads the repository .env for every variable that is not exported: blank

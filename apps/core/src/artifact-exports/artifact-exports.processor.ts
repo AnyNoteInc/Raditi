@@ -3,13 +3,16 @@ import { Inject, Logger } from '@nestjs/common'
 import {
   ARTIFACT_EXPORT_JOB,
   ARTIFACT_QUEUE,
+  ARTIFACT_THUMBS_JOB,
   artifactExportJobSchema,
+  artifactThumbsJobSchema,
 } from '@repo/domain/artifacts'
 import { errorMessage, throttledLogger } from '@repo/observability'
 import { UnrecoverableError, type Job } from 'bullmq'
 
 import type { ArtifactExports } from './artifact-exports.ts'
-import { ARTIFACT_EXPORTS } from './artifact-exports.tokens.ts'
+import { ARTIFACT_EXPORTS, ARTIFACT_THUMBS } from './artifact-exports.tokens.ts'
+import type { ArtifactThumbs } from './artifact-thumbs.ts'
 
 /**
  * Works the queue `artifacts`: `artifact.export` builds one workbook of a table (retried by the
@@ -20,14 +23,25 @@ import { ARTIFACT_EXPORTS } from './artifact-exports.tokens.ts'
 export class ArtifactExportsProcessor extends WorkerHost {
   readonly #logger = new Logger(ArtifactExportsProcessor.name)
   readonly #exports: Pick<ArtifactExports, 'build' | 'gaveUp'>
+  readonly #thumbs: Pick<ArtifactThumbs, 'draw'>
   readonly #warn = throttledLogger((line) => this.#logger.warn(line))
 
-  constructor(@Inject(ARTIFACT_EXPORTS) exports: Pick<ArtifactExports, 'build' | 'gaveUp'>) {
+  constructor(
+    @Inject(ARTIFACT_EXPORTS) exports: Pick<ArtifactExports, 'build' | 'gaveUp'>,
+    @Inject(ARTIFACT_THUMBS) thumbs: Pick<ArtifactThumbs, 'draw'>,
+  ) {
     super()
     this.#exports = exports
+    this.#thumbs = thumbs
   }
 
   async process(job: Job): Promise<void> {
+    if (job.name === ARTIFACT_THUMBS_JOB) {
+      const data = artifactThumbsJobSchema.safeParse(job.data)
+      if (!data.success) throw new UnrecoverableError('Invalid artifact.thumbs job')
+      await this.#thumbs.draw(data.data.artifactId)
+      return
+    }
     if (job.name !== ARTIFACT_EXPORT_JOB)
       throw new UnrecoverableError(`Unknown artifacts job "${job.name}"`)
     const data = artifactExportJobSchema.safeParse(job.data)

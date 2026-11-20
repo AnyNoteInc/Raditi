@@ -62,7 +62,9 @@ function priceList(): CabinetArtifact {
     blocks: template.blocks.map((block, index) => ({
       key: index === 0 ? 'cols' : `r${index}`,
       kind: block.kind,
+      parent: null,
       rank: `0${index + 1}`,
+      props: {},
       rev: 1,
       heading: null,
       content: block.content,

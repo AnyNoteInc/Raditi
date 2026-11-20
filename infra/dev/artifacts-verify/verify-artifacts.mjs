@@ -19,6 +19,9 @@
 // 88.12 and 88.13 add the outbox of a turn into artifacts (`artifact_file_put`, `artifact_import`)
 // and the frame of a mockup in real browsers (frames.mjs): its fonts, files, scripts and bridge,
 // and the edit frame that runs nothing — Chromium and WebKit here, Firefox in Docker.
+// 88.15–88.15в add the canvas and the brand of a project (canvas.mjs): its template, the brand in
+// its frames, `artifact_layout` and `artifact_render` of mcp onto the renderer of apps/browser
+// without network, the thumbnails of core and «Опубликовать как сайт».
 
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -32,11 +35,15 @@ const IMAGE =
 const REDIS_IMAGE = 'redis:8.10.2-alpine'
 const LABEL = 'raditi.artifacts-verify'
 const { values } = parseArgs({
+  // `pnpm verify:artifacts -- --only canvas` hands the separator over as well.
+  args: process.argv.slice(2).filter((value) => value !== '--'),
   options: {
     keep: { type: 'boolean', default: false },
     // The frames of mockups in Chromium, WebKit and Firefox (Docker): on by default.
     'no-browsers': { type: 'boolean', default: false },
     seconds: { type: 'string', default: '20' },
+    // `canvas` — only the canvas, the brand and the renderer (88.15–88.15в), after the migrations.
+    only: { type: 'string' },
   },
 })
 
@@ -124,7 +131,8 @@ try {
     env: { DATABASE_URL: databaseUrl },
   })
   check('migrations apply on an empty PostgreSQL', true)
-  await scenario(databaseUrl)
+  const all = values.only === undefined
+  if (all) await scenario(databaseUrl)
   await run('docker', [
     'run',
     '-d',
@@ -143,9 +151,14 @@ try {
     'no',
   ])
   const redisBinding = (await run('docker', ['port', redisName, '6379/tcp'])).output.split('\n')[0]
-  await channelAndMeasure(databaseUrl, `redis://${redisBinding}`)
-  await outboxIntoArtifacts(databaseUrl)
+  if (all) await channelAndMeasure(databaseUrl, `redis://${redisBinding}`)
+  if (all) await outboxIntoArtifacts(databaseUrl)
   if (!values['no-browsers']) {
+    // 88.15–88.15в: the canvas, the brand and the renderer of frames on a Chromium of this machine.
+    const { canvasAndRender } = await import('./canvas.mjs')
+    await canvasAndRender({ root, databaseUrl, check })
+  }
+  if (all && !values['no-browsers']) {
     const { framesInBrowsers } = await import('./frames.mjs')
     await framesInBrowsers({ root, databaseUrl, check })
   }
