@@ -26,6 +26,8 @@ const sections: readonly RailSection[] = [
   // After «Чаты» and before «Страницы» (owner's request of 15.11.2026, docs/plan/82, Зп1). The
   // label is «Задачи»: «Расписание» is 65 px at 11 px of Golos Text, over the 60 px of an item.
   { href: '/scheduled', label: 'Задачи', name: 'Запланированные задачи', icon: 'timer' },
+  // Between «Задачи» and «Страницы» (docs/plan/88-artifacts.md, Ар43).
+  { href: '/artifacts', label: 'Артефакты', icon: 'artifacts' },
   // After «Чаты» (owner's answer of 13.11.2026, docs/plan/69-pages.md, Ст30), before «Проекты».
   { href: '/pages', label: 'Страницы', icon: 'pages' },
   // The last section (docs/plan/84-projects.md).
@@ -42,7 +44,7 @@ const within = (pathname: string, href: string) =>
   pathname === href || pathname.startsWith(`${href}/`)
 
 /**
- * The rail of the cabinet: the mark, «Чаты», «Задачи» (the scheduled tasks), «Страницы» and «Проекты», the
+ * The rail of the cabinet: the mark, «Чаты», «Задачи» (the scheduled tasks), «Артефакты», «Страницы» and «Проекты», the
  * credits over the account menu. Its width is `--app-rail-width` of the shell, which
  * stands it in. The current section follows the address.
  */
@@ -134,6 +136,8 @@ export function ApplicationRail({
                 color: 'text.secondary',
                 fontSize: 11,
                 lineHeight: '14px',
+                // «Артефакты» is half a pixel wider than an item: every label is a little tighter (Ар43).
+                letterSpacing: '-0.01em',
                 fontWeight: 500,
                 textDecoration: 'none',
                 '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },

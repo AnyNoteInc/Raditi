@@ -77,6 +77,15 @@ export {
   taskAttachments,
   type ExpiredAttachment,
 } from './attachments.ts'
+export {
+  artifactExcerpt,
+  artifactGalleryFilters,
+  artifactGallerySorts,
+  listArtifacts,
+  type ArtifactGalleryFilter,
+  type ArtifactGalleryRow,
+  type ArtifactGallerySort,
+} from './artifact-gallery.ts'
 export { isArtifactRank, rankBetween, rankForIndex } from './artifact-rank.ts'
 export {
   adoptLegacySectionWrites,

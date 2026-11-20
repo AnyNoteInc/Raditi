@@ -82,10 +82,12 @@ for (const [name, width, height] of viewports) {
       await expect(links.nth(0)).toHaveAccessibleName('Чаты')
       // The scheduled tasks after «Чаты» (docs/plan/82-scheduled-tasks.md, Зп1), then «Страницы»
       // (Зп60) and «Проекты» (docs/plan/84-projects.md, 84.6).
-      await expect(links).toHaveCount(4)
+      // «Артефакты» between the scheduled tasks and the pages (docs/plan/88-artifacts.md, Ар43).
+      await expect(links).toHaveCount(5)
       await expect(links.nth(1)).toHaveAccessibleName('Запланированные задачи')
-      await expect(links.nth(2)).toHaveAccessibleName('Страницы')
-      await expect(links.nth(3)).toHaveAccessibleName('Проекты')
+      await expect(links.nth(2)).toHaveAccessibleName('Артефакты')
+      await expect(links.nth(3)).toHaveAccessibleName('Страницы')
+      await expect(links.nth(4)).toHaveAccessibleName('Проекты')
     })
 
     if (width >= 900) {
