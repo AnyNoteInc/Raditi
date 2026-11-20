@@ -245,13 +245,25 @@ describe.skipIf(!databaseUrl)(
       expect(after.currentVersion).toBe(before + 1)
       expect(after.content?.markdown).toContain('Капучино — 290 ₽')
       expect(after.content?.markdown).not.toContain(VALUE)
-      const rows = await db.taskEvent.findMany({
-        where: { taskId },
-        orderBy: { id: 'asc' },
-        select: { type: true, payload: true },
-      })
-      expect(rows.map((row) => row.type)).toEqual(['feed.doc_touch', 'feed.doc_left'])
-      expect(rows[1]?.payload).toEqual({ v: 1, docId: id, sections: 1, reason: 'refused' })
+      const types = async () =>
+        (
+          await db.taskEvent.findMany({
+            where: { taskId },
+            orderBy: { id: 'asc' },
+            select: { type: true, payload: true },
+          })
+        ).map((row) => row)
+      expect((await types()).map((row) => row.type)).toEqual(['feed.doc_touch'])
+      // After the answer: the artifact of the turn and its writes sent back, never why (Ар46).
+      await checks.tell(taskId, 1)
+      const rows = await types()
+      expect(rows.map((row) => row.type)).toEqual([
+        'feed.doc_touch',
+        'feed.artifact',
+        'feed.artifact_left',
+      ])
+      expect(rows[1]?.payload).toEqual({ v: 1, artifactId: id, kind: 'document', created: false })
+      expect(rows[2]?.payload).toEqual({ v: 1, artifactId: id, blocks: 1, reason: 'refused' })
       expect(publishDocuments).toHaveBeenCalledWith(taskId, null, new Set([id]))
       await db.taskEvent.deleteMany({ where: { taskId } })
     })

@@ -348,11 +348,12 @@ export class McpArtifactsService {
         actorOf(scope),
       )
     }
-    if (args.kind === 'document')
-      await this.#store.feed(scope.taskId, scope.turn, {
-        type: 'feed.doc',
-        payload: { v: 1, docId: created.id },
-      })
+    // The tab beside the chat learns of it at once (a signal without text); the card of the feed
+    // comes after the answer of the turn (Ар46).
+    await this.#store.feed(scope.taskId, scope.turn, {
+      type: 'feed.doc_touch',
+      payload: { v: 1, docId: created.id, revision: await this.#store.revision(created.id) },
+    })
     return {
       artifactId: created.id,
       kind: args.kind,

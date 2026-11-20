@@ -205,7 +205,9 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
         { op: 'insert', block: 'sources', after: 'intro', kind: 'section', intent: 'Источники' },
       ],
     })
-    expect(rows).toEqual([{ type: 'feed.doc', payload: { v: 1, docId: artifactId } }])
+    expect(rows).toEqual([
+      { type: 'feed.doc_touch', payload: { v: 1, docId: artifactId, revision: 5 } },
+    ])
   })
 
   it('refuses a kind whose view has not shipped (Ар7)', async () => {

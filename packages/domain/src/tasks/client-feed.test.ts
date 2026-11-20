@@ -305,6 +305,12 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
   'feed.doc_left': [
     { v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', sections: 2, reason: 'refused' },
   ],
+  'feed.artifact': [
+    { v: 1, artifactId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', kind: 'document', created: true },
+  ],
+  'feed.artifact_left': [
+    { v: 1, artifactId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', blocks: 1, reason: 'refused' },
+  ],
   'feed.memory_change': [
     {
       v: 1,
@@ -424,6 +430,8 @@ describe('feed vocabulary', () => {
       'feed.doc',
       'feed.doc_touch',
       'feed.doc_left',
+      'feed.artifact',
+      'feed.artifact_left',
       'feed.memory_change',
       'feed.memory_left',
       'feed.repo_changes',
@@ -1394,6 +1402,8 @@ describe('reading stored rows', () => {
       'feed.doc': [{ v: 1, docId: 'документ' }],
       'feed.doc_touch': [{ v: 1, docId: 'документ', revision: 1 }],
       'feed.doc_left': [{ v: 1, docId: 'документ', sections: 1, reason: 'refused' }],
+      'feed.artifact': [{ v: 1, artifactId: 'артефакт', kind: 'document', created: true }],
+      'feed.artifact_left': [{ v: 1, artifactId: 'артефакт', blocks: 0, reason: 'refused' }],
       'feed.memory_change': [
         { v: 1, action: 'saved', entryId: 'запись', kind: 'fact', text: 'а' },
         {

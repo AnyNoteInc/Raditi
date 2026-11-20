@@ -586,7 +586,10 @@ export function DialogView({
   // The documents the agent writes section by section (docs/plan/74, Д5): one it begins while the
   // client looks at the chat opens the tab on it, as a file does, and fills there as it is written.
   const agentDocs = useMemo(
-    () => agentDocumentIdsOf(rows as readonly { type: string; docId?: string }[]),
+    () =>
+      agentDocumentIdsOf(
+        rows as readonly { type: string; docId?: string; artifactId?: string; kind?: string }[],
+      ),
     [rows],
   )
   const docRevisions = useMemo(

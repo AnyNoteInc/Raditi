@@ -898,6 +898,51 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
       actor: agent(writer),
     })
     expect(await artifactPlaceholders(db, id)).toBe(1)
+    // A refused write into a placeholder whose intent was never checked leaves a placeholder.
+    const fresh = (
+      await createArtifact(db, {
+        workspaceId: workspace.id,
+        kind: 'document',
+        title: 'Ещё',
+        actor: agent(writer),
+      })
+    ).id
+    await applyArtifactOps(db, {
+      batch: {
+        artifactId: fresh,
+        opId: 'skel-2',
+        ops: [{ op: 'insert', block: 's', after: null, kind: 'section', intent: 'Шаги' }],
+      },
+      actor: agent(writer),
+    })
+    await applyArtifactOps(db, {
+      batch: {
+        artifactId: fresh,
+        opId: 'fill-2',
+        ops: [{ op: 'replace', block: 's', ifRev: 1, content: 'Плохо', props: { heading: 'Ш' } }],
+      },
+      actor: agent(writer),
+    })
+    const pending = (await pendingArtifactWrites(db, writer)).filter(
+      (each) => each.documentId === fresh,
+    )
+    await settleArtifactWrites(db, {
+      taskId: writer,
+      blocks: pending.map((each) => ({
+        artifactId: fresh,
+        block: each.sectionKey,
+        rev: each.rev,
+        refusal: 'client_value',
+      })),
+    })
+    const left = await readChatDocument(db, {
+      workspaceId: workspace.id,
+      documentId: fresh,
+      reader: 'client',
+    })
+    expect(left.sections.map((each) => [each.key, each.state, each.intent])).toEqual([
+      ['s', 'pending', 'Раздел'],
+    ])
   })
 
   it('opens to a chat what it made, its project and the client’s own, and tells it what others changed (88.6, Ар21, Ар23)', async () => {

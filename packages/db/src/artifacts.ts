@@ -53,7 +53,7 @@ import {
 
 import { isArtifactRank, rankBetween, rankForIndex } from './artifact-rank.ts'
 import { Prisma, type ArtifactBlock, type PrismaClient } from './generated/prisma/client.ts'
-import { artifactBlockOrder, blockCheckedText, workspaceOwnerOf } from './pages.ts'
+import { artifactBlockOrder, blockCheckedText, NEUTRAL_INTENT, workspaceOwnerOf } from './pages.ts'
 
 // Artifacts in the database (docs/plan/88-artifacts.md, Ар11–Ар19, §7.1–§7.3, §7.8, slice 88.3).
 // The server is the authority: a batch of operations is checked by the rules of
@@ -1134,7 +1134,15 @@ class BatchRun {
           pendingAt: this.now,
         } satisfies Partial<ArtifactBlock>)
       else this.#revision(work)
-      this.#journalLine('insert', key, null, block.rev, this.#agent ? 'checking' : 'applied')
+      // The line remembers the placeholder: a refused write into it leaves the placeholder (§7.5).
+      this.#journalLine(
+        'insert',
+        key,
+        null,
+        block.rev,
+        this.#agent ? 'checking' : 'applied',
+        this.#agent ? { placeholder: true } : undefined,
+      )
       return
     }
     const result = this.#writeText(work, content, props)
@@ -1635,7 +1643,7 @@ export async function settleArtifactWrites(
         const insertedBy = await tx.artifactOp.findFirst({
           where: { artifactId, blockKey: block.sectionKey, kind: 'insert', taskId: input.taskId },
           orderBy: { seq: 'desc' },
-          select: { seq: true },
+          select: { seq: true, before: true },
         })
         const checkedSince = insertedBy
           ? await tx.artifactOp.findFirst({
@@ -1648,7 +1656,14 @@ export async function settleArtifactWrites(
               select: { seq: true },
             })
           : null
+        // A section of a skeleton stays a placeholder to be written again, whether or not its
+        // intent was checked first: the order of the checks is no matter of the client's (§7.5).
+        const skeleton =
+          block.blockKind === 'section' &&
+          (block.intent !== '' ||
+            (insertedBy?.before as { placeholder?: boolean } | null)?.placeholder === true)
         const inserted =
+          !skeleton &&
           insertedBy !== null &&
           checkedSince === null &&
           checkedText(block) === null &&
@@ -1658,6 +1673,8 @@ export async function settleArtifactWrites(
           ...block,
           rev,
           deletedRev: inserted ? rev : null,
+          // A placeholder whose intent the check never passed shows a neutral one (plan 69, Ст19).
+          intent: skeleton && block.intent === '' ? NEUTRAL_INTENT : block.intent,
           refusal:
             block.state === 'pending' && verdict.refusal !== 'dropped' ? verdict.refusal : null,
           // What the check read and refused goes with the write; an intent named since waits.

@@ -98,7 +98,8 @@ export interface PassRunnerDependencies {
    * turn runs and at its end; a turn that failed or was cancelled checks what it can and drops the
    * rest. Absent — they wait for the sweep, which drops them.
    */
-  artifacts?: Pick<ArtifactChecks, 'checkLive' | 'settle' | 'fail'>
+  artifacts?: Pick<ArtifactChecks, 'checkLive' | 'settle' | 'fail'> &
+    Partial<Pick<ArtifactChecks, 'tell'>>
   /** What the turn asked of the pages besides versions (docs/plan/73-pages-sites.md, Дер23). */
   pageChanges?: Pick<PageChanges, 'apply'>
   /** What the turn asked of the memory of its chat (docs/plan/84-projects.md, ПР18). */
@@ -432,6 +433,9 @@ export class PassRunner {
       // And the changes of the scheduled tasks it reserved (Зп33): «ответ агента оборвался».
       await this.deps.scheduleChanges?.failTurn(job.taskId, ending.turn)
     }
+    // The artifacts the turn made or changed stand below its answer (Ар46).
+    if (ending.kind === 'completed' && answer === 'moved')
+      await this.deps.artifacts?.tell?.(job.taskId, ending.turn)
     // After the answer of the turn, so that its files stand below it in the chat. A turn without
     // files still settles the pages it named (docs/plan/69-pages.md, Ст6).
     if (ending.kind === 'completed' && answer === 'moved')

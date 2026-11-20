@@ -435,6 +435,18 @@ export function feedDocLeftText(row: { sections: number }): string {
     : `${count} документа не прошли проверку и снова пусты. Попросите агента написать их ещё раз.`
 }
 
+/**
+ * Writes of a turn in an artifact the check sent back (`feed.artifact_left`, docs/plan/88-
+ * artifacts.md, Ар19): the text before them stays. Never why: a refusal may be a secret.
+ */
+export function feedArtifactLeftText(row: { blocks: number }): string {
+  const one = pluralRu(row.blocks, 'one', 'few', 'many') === 'one'
+  const count = `${row.blocks} ${pluralRu(row.blocks, 'правка', 'правки', 'правок')}`
+  return one
+    ? `${count} агента в артефакте не прошла проверку: там остался прежний текст. Попросите агента сделать её ещё раз.`
+    : `${count} агента в артефакте не прошли проверку: там остался прежний текст. Попросите агента сделать их ещё раз.`
+}
+
 /** A page the agent published (`feed.page`): its title and version. */
 export const feedPageText = (row: { title: string; version: number }): string =>
   `Страница «${row.title}», версия v${row.version}`

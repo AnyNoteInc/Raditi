@@ -353,6 +353,27 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
     type: 'feed.doc_touch',
     payload: { v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', revision: 4 },
   },
+  // docs/plan/88-artifacts.md, Ар46, Ар19: an artifact of the turn, writes sent back.
+  {
+    name: 'artifact v1',
+    type: 'feed.artifact',
+    payload: {
+      v: 1,
+      artifactId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1',
+      kind: 'document',
+      created: true,
+    },
+  },
+  {
+    name: 'artifact_left v1',
+    type: 'feed.artifact_left',
+    payload: {
+      v: 1,
+      artifactId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1',
+      blocks: 2,
+      reason: 'refused',
+    },
+  },
   {
     name: 'doc_left v1',
     type: 'feed.doc_left',

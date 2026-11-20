@@ -1446,33 +1446,49 @@ async function scenarioQ(stand) {
   const other = await viewPage(stand, `${page.url}v2`)
   rt.check(other.status === 404, 'another path of the page answers 404 (Ст16)', other.status)
 
-  // A document by sections: the role refuses a token, `doc_finish` waits for every section.
+  // A document artifact by blocks (docs/plan/88-artifacts.md, Ар3, Ар4): the tools of plan 88, the
+  // check of core sends back a write with a token, the text before it stays.
   const writing = await say(stand, client, taskId, 'Напишите аудит скорости сайта', 'writeDocument')
   rt.check(
     writing.docId !== null &&
       writing.written === null &&
-      writing.token === 'PAGE_CONTENT_REFUSED' &&
-      writing.early === 'DOC_PENDING_SECTIONS',
-    'doc_create makes the skeleton; a section is written; one with a JWT is refused by the role; doc_finish with a placeholder is refused',
-    writing,
+      writing.token === null &&
+      writing.readOwn === `${STAND_DOC.summary}|${STAND_DOC.token}`,
+    'artifact_create makes the skeleton; both writes are taken and wait for the check; the chat reads its own',
+    { ...writing, readOwn: writing.readOwn?.length },
   )
   const docId = writing.docId
   const card = await client.query('pages.doc', { docId })
   rt.check(
-    card.version === 0 &&
+    card.version === 1 &&
       card.progress.written === 1 &&
       card.progress.total === 2 &&
       card.sections.map((section) => section.state).join(',') === 'shown,pending' &&
       !JSON.stringify(card).includes('eyJhbGci'),
-    'the card after the end of the turn: «Разделы: 1 из 2», the checked section shown, the refused one a placeholder, no token anywhere',
-    { progress: card.progress, states: card.sections.map((section) => section.state) },
+    'the end of the turn: version 1 of what passed, «Разделы: 1 из 2», the refused write a placeholder, no token anywhere',
+    { version: card.version, progress: card.progress, states: card.sections.map((s) => s.state) },
   )
+  const artifactRows = await rowsOf(db, taskId, 'feed.artifact')
+  const leftRows = await rowsOf(db, taskId, 'feed.artifact_left')
   rt.check(
-    (await rowsOf(db, taskId, 'feed.doc')).some((row) => row.docId === docId),
-    'the feed carries the card of the document (`feed.doc`)',
+    artifactRows.some((row) => row.artifactId === docId && row.created) &&
+      leftRows.some((row) => row.artifactId === docId && row.blocks === 1) &&
+      (await rowsOf(db, taskId, 'feed.doc')).length === 0,
+    'after the answer the feed carries `feed.artifact` and `feed.artifact_left`, no `feed.doc`',
+    { artifacts: artifactRows.length, left: leftRows.length },
+  )
+  const order = await db.taskEvent.findMany({
+    where: { taskId, type: { in: ['feed.result', 'feed.artifact'] } },
+    orderBy: { id: 'asc' },
+    select: { type: true },
+  })
+  rt.check(
+    order.at(-1)?.type === 'feed.artifact' && order.at(-2)?.type === 'feed.result',
+    'the row of the artifact stands after the answer of its turn (Ар46)',
+    order.map((row) => row.type),
   )
 
-  // The last section, the version and the link the agent asked for.
+  // The next turn: the refusal named in its read, the section written again, the link asked for.
   const finished = await say(
     stand,
     client,
@@ -1484,8 +1500,12 @@ async function scenarioQ(stand) {
     },
   )
   rt.check(
-    finished.written === null && finished.finish === null && finished.code === null && finished.url,
-    'the last section, doc_finish and page_publish of the document are taken, the address comes at once',
+    Array.isArray(finished.refused) &&
+      finished.refused.includes('steps') &&
+      finished.written === null &&
+      finished.code === null &&
+      finished.url,
+    'artifact_read names the write the check sent back; the section and page_publish are taken, the address comes at once',
     finished,
   )
   const version = await db.artifact.findUniqueOrThrow({
@@ -1494,11 +1514,11 @@ async function scenarioQ(stand) {
     include: { content: true, page: { include: { tree: true } } },
   })
   rt.check(
-    version.currentVersion === 1 &&
+    version.currentVersion === 2 &&
       version.page?.state === 'live' &&
       version.page.currentVersion === 1 &&
       finished.url.includes(version.page.tree.name ?? version.page.tree.slug),
-    'the end of the turn made version 1 of the document and drew it as version 1 of its page',
+    'the end of the turn made version 2 of the document and drew it as version 1 of its page',
     { document: version.currentVersion, page: version.page?.currentVersion },
   )
   const expectedReading = await docRender.readingPage({
@@ -1522,20 +1542,16 @@ async function scenarioQ(stand) {
     { status: download.status },
   )
 
-  // A section written again: the next version; the client publishes it by link, same address.
+  // A section changed by a quote: the next version; the client publishes it by link, same address.
   const edited = await say(stand, client, taskId, 'Поправьте итог', 'editDocument', { docId })
-  rt.check(
-    edited.written === null && edited.finish === null,
-    'the edit and doc_finish are taken',
-    edited,
-  )
+  rt.check(edited.written === null, 'the edit by a quote is taken', edited)
   const second = await db.artifact.findUniqueOrThrow({
     where: { id: docId },
     include: { content: true, page: true },
   })
   rt.check(
-    second.currentVersion === 2 && second.page?.currentVersion === 1,
-    'the edit made version 2 of the document; its page keeps version 1 until it is published again',
+    second.currentVersion === 3 && second.page?.currentVersion === 1,
+    'the edit made version 3 of the document; its page keeps version 1 until it is published again',
     { document: second.currentVersion, page: second.page?.currentVersion },
   )
   const byLink = await client.mutate('pages.publishDoc', { docId })

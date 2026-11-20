@@ -141,6 +141,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         settle: ReturnType<typeof vi.fn>
         checkLive: ReturnType<typeof vi.fn>
         fail: ReturnType<typeof vi.fn>
+        tell?: ReturnType<typeof vi.fn>
       }
       memoryChanges?: { apply: ReturnType<typeof vi.fn>; fail: ReturnType<typeof vi.fn> }
       capacity?: TurnCapacity
@@ -392,6 +393,10 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         }),
         checkLive: vi.fn(async () => {}),
         fail: vi.fn(async () => {}),
+        // The rows of the artifacts stand after the answer (plan 88, Ар46).
+        tell: vi.fn(async (taskId: string) => {
+          seen.push((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status)
+        }),
       }
       const { passes } = runner(
         async () => {
@@ -427,7 +432,10 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         { artifacts },
       )
       await passes.run(dialog.job)
-      expect(seen).toEqual(['running'])
+      expect(seen[0]).toBe('running')
+      expect(seen).toHaveLength(2)
+      expect(seen[1]).not.toBe('running')
+      expect(artifacts.tell).toHaveBeenCalledWith(dialog.taskId, 1)
       expect(artifacts.settle).toHaveBeenCalledWith(dialog.taskId, 1, refusesText)
       expect(artifacts.fail).not.toHaveBeenCalled()
     })

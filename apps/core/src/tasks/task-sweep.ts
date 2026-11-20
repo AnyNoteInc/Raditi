@@ -144,7 +144,9 @@ export interface TaskSweepDependencies {
    * them with the values Vault holds now, or drops them; writes of chats whose pass is over are
    * dropped by the time they were written; the collector of artifacts runs. Absent — not swept.
    */
-  artifacts?: Pick<ArtifactChecks, 'settle' | 'fail' | 'sweep'> | null
+  artifacts?:
+    | (Pick<ArtifactChecks, 'settle' | 'fail' | 'sweep'> & Partial<Pick<ArtifactChecks, 'tell'>>)
+    | null
   /**
    * The current values of the variables of a chat's workspace (БП4): what the changes of a turn
    * the sweep ends are refused for. Absent or unanswered — the memory of that turn is closed
@@ -314,6 +316,9 @@ export class TaskSweep {
       await this.deps.artifacts?.settle(task.id, ending.turn, refusesText)
     else await this.deps.artifacts?.fail(task.id, assignment.turnNo, refusesText)
     const answer = await this.deps.settlement.settle(ref, ending)
+    // The artifacts the turn made or changed below its answer (Ар46).
+    if (answer === 'moved' && ending.kind === 'completed')
+      await this.deps.artifacts?.tell?.(task.id, ending.turn)
     if (answer === 'moved' && ending.kind === 'completed' && swept)
       await this.#applyChanges(assignment, ending.turn, swept, refusesText)
     if (answer === 'moved' && ending.kind === 'completed' && published)

@@ -25,6 +25,7 @@ import {
   feedFailureKeptText,
   feedFailureOpenText,
   feedFileLeftText,
+  feedArtifactLeftText,
   feedDocLeftText,
   feedMemoryLeftText,
   feedRepoLeftText,
@@ -1153,9 +1154,13 @@ function RowView({
     // of the turn that wrote it (`feedEntries`), the rows themselves show nothing.
     case 'feed.doc':
     case 'feed.doc_touch':
+    case 'feed.artifact':
       return null
     case 'feed.doc_left':
       return <Note text={feedDocLeftText(row)} />
+    // Writes of the turn the check sent back (docs/plan/88-artifacts.md, Ар19): never why.
+    case 'feed.artifact_left':
+      return <Note text={feedArtifactLeftText(row)} />
     // What the end of a pass did with the memory (docs/plan/84-projects.md, ПР18; P-chat).
     case 'feed.memory_change':
       return <FeedMemoryChange entryId={row.entryId} action={row.action} text={row.text} />

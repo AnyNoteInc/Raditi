@@ -41,9 +41,9 @@ import {
 //
 // Since the tools of plan 69 became synonyms of the operations (slice 88.6, Ар3), this is also the
 // end of a turn for documents: each artifact the turn changed gets a version of what passed (Ар13;
-// `doc_finish` waits for it), the document's card in the chat is told (`feed.doc_touch`, and
-// `feed.doc_left` of what was sent back — never why) and the chat's publications of documents
-// (`page_publish({ docId })`) come true from that version.
+// `doc_finish` waits for it), the tab of a document is signalled (`feed.doc_touch`) and the chat's
+// publications of documents (`page_publish({ docId })`) come true from that version. After the
+// answer, `tell` writes the rows of the feed: `feed.artifact` and `feed.artifact_left` (Ар46).
 
 type Refuses = (text: string) => 'turn_key' | 'client_value' | null
 
@@ -161,7 +161,7 @@ export class ArtifactChecks {
   async checkLive(taskId: string, turn: number, refuses: Refuses): Promise<ArtifactCheckOutcome> {
     try {
       const settled = await this.#settled(taskId, refuses, false)
-      await this.#tell(taskId, turn, settled, false)
+      await this.#signal(taskId, turn, settled)
       return outcomeOf(settled)
     } catch (error) {
       this.#warn('artifact_checks_live_failed', taskId, turn, error)
@@ -211,20 +211,20 @@ export class ArtifactChecks {
         this.#warn('artifact_version_failed', taskId, turn, error)
       }
     }
-    await this.#tell(taskId, turn, settled, true, touched)
+    await this.#signal(taskId, turn, settled, touched)
     return refused
   }
 
   /**
-   * The card of the documents in the chat reads a document again when its revision grows
-   * (`feed.doc_touch`); what was sent back is told once, at the end of the turn, never why.
+   * The tab of a document beside the chat reads it again when its revision grows
+   * (`feed.doc_touch`, a signal without text), until the cabinet listens to `artifact.signals`
+   * itself (slice 88.10).
    */
-  async #tell(
+  async #signal(
     taskId: string,
     turn: number,
     settled: readonly ArtifactSettled[],
-    final: boolean,
-    touched: readonly { artifactId: string; kind: string; refused: number }[] = [],
+    touched: readonly { artifactId: string }[] = [],
   ) {
     const ids = [
       ...new Set([
@@ -234,26 +234,58 @@ export class ArtifactChecks {
     ]
     if (ids.length === 0) return
     const { db } = this.#deps
-    const documents = await db.artifact.findMany({
-      where: { id: { in: ids }, kind: 'document' },
+    const artifacts = await db.artifact.findMany({
+      where: { id: { in: ids } },
       select: { id: true, revision: true },
     })
-    if (documents.length === 0) return
     const turnId = await this.#turnId(taskId, turn)
-    const write = (row: FeedRow) => insertFeedEvent(db, { taskId, turnId, row })
-    for (const document of documents) {
-      await write({
-        type: 'feed.doc_touch',
-        payload: { v: 1, docId: document.id, revision: document.revision },
+    for (const artifact of artifacts)
+      await insertFeedEvent(db, {
+        taskId,
+        turnId,
+        row: {
+          type: 'feed.doc_touch',
+          payload: { v: 1, docId: artifact.id, revision: artifact.revision },
+        },
       })
-      const sent = final
-        ? (touched.find((each) => each.artifactId === document.id)?.refused ?? 0)
-        : 0
-      if (sent > 0)
-        await write({
-          type: 'feed.doc_left',
-          payload: { v: 1, docId: document.id, sections: Math.min(sent, 1000), reason: 'refused' },
-        })
+  }
+
+  /**
+   * After the answer of a completed turn (Ар46, §7.3): a row `feed.artifact` for each artifact the
+   * turn created or changed, and `feed.artifact_left` for its writes the check sent back — never
+   * why. Never throws.
+   */
+  async tell(taskId: string, turn: number): Promise<void> {
+    const { db } = this.#deps
+    try {
+      const touched = await artifactsOfTurn(db, taskId, turn)
+      if (touched.length === 0) return
+      const turnId = await this.#turnId(taskId, turn)
+      const write = (row: FeedRow) => insertFeedEvent(db, { taskId, turnId, row })
+      for (const artifact of touched)
+        if (artifact.created || artifact.checked > 0)
+          await write({
+            type: 'feed.artifact',
+            payload: {
+              v: 1,
+              artifactId: artifact.artifactId,
+              kind: artifact.kind,
+              created: artifact.created,
+            },
+          })
+      for (const artifact of touched)
+        if (artifact.refused > 0)
+          await write({
+            type: 'feed.artifact_left',
+            payload: {
+              v: 1,
+              artifactId: artifact.artifactId,
+              blocks: Math.min(artifact.refused, 1000),
+              reason: 'refused',
+            },
+          })
+    } catch (error) {
+      this.#warn('artifact_feed_failed', taskId, turn, error)
     }
   }
 

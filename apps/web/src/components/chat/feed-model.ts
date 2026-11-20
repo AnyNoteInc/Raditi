@@ -1,3 +1,4 @@
+import { artifactKindSpecOf } from '@repo/domain/artifacts'
 import { documentKindOf } from '@repo/domain/tasks/chat-documents'
 import type { TaskStatus } from '@repo/domain'
 import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
@@ -134,9 +135,17 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
     if (row.type === 'skipped') return
     // A document begun or changed (docs/plan/69-pages.md, Ст22): no entry of its own, and never
     // the end of a turn's work.
-    if (row.type === 'feed.doc' || row.type === 'feed.doc_touch') {
+    if (row.type === 'feed.doc' || row.type === 'feed.doc_touch' || row.type === 'feed.artifact') {
+      // An artifact shown as Markdown is a document of this card until its own tab (plan 88, Ар46).
+      const docId =
+        row.type === 'feed.artifact'
+          ? artifactKindSpecOf(row.kind)?.view === 'markdown'
+            ? row.artifactId
+            : null
+          : row.docId
+      if (docId === null) return
       if (turnDocs.length === 0) turnDocsKey = row.id
-      if (!turnDocs.includes(row.docId)) turnDocs.push(row.docId)
+      if (!turnDocs.includes(docId)) turnDocs.push(docId)
       return
     }
     if (!isStep(row)) {
@@ -156,7 +165,8 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
           !isStep(later) &&
           later.type !== 'feed.request' &&
           later.type !== 'feed.doc' &&
-          later.type !== 'feed.doc_touch',
+          later.type !== 'feed.doc_touch' &&
+          later.type !== 'feed.artifact',
       )
     const start = Date.parse(row.at)
     const end = Date.parse(ending?.at ?? last.at)
