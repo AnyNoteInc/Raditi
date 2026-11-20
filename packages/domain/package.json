@@ -33,7 +33,8 @@
     "./pages/origin": "./src/pages/origin.ts",
     "./projects": "./src/projects/index.ts",
     "./memory": "./src/memory/index.ts",
-    "./repo": "./src/repo/index.ts"
+    "./repo": "./src/repo/index.ts",
+    "./artifacts": "./src/artifacts/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
