@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto'
 
-import { createPrismaClient, type PrismaClient, type User } from '@repo/db'
+import {
+  applyArtifactOps,
+  claimArtifactBlock,
+  createPrismaClient,
+  settleArtifactWrites,
+  type PrismaClient,
+  type User,
+} from '@repo/db'
 import { legalDocuments, type ObjectStorage, type SecretStore } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
@@ -172,5 +179,159 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     await expect(
       caller.artifact.create({ kind: 'canvas', title: 'Холст', projectId: null, templateId: null }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
+  it('reads, writes in the canonical form, holds, takes back and lists its chats (88.10)', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const { id } = await caller.artifact.create({
+      kind: 'document',
+      title: 'Тексты',
+      projectId: null,
+      templateId: null,
+    })
+    const { workspaceId } = await db.artifact.findUniqueOrThrow({
+      where: { id },
+      select: { workspaceId: true },
+    })
+    const task = await db.task.create({
+      data: { workspaceId, createdById: anna.id, title: 'Тексты для сайта' },
+      select: { id: true },
+    })
+    const agent = { kind: 'agent' as const, taskId: task.id, turnNo: 1 }
+    // The agent writes in its own manner: «*» bullets and an underscore.
+    await applyArtifactOps(db, {
+      batch: {
+        artifactId: id,
+        opId: randomUUID(),
+        ops: [
+          {
+            op: 'insert',
+            block: 'dostavka',
+            after: null,
+            kind: 'section',
+            content: '* по городу\n* _бесплатно_ от 2000 ₽',
+            props: { heading: 'Доставка' },
+          },
+        ],
+      },
+      actor: agent,
+    })
+    // Until core checked it, the person reads nothing of it and may not hold it.
+    const waiting = await caller.artifact.read({ artifactId: id })
+    expect(waiting.blocks[0]).toMatchObject({ key: 'dostavka', content: null, checking: true })
+    await expect(caller.artifact.hold({ artifactId: id, block: 'dostavka' })).rejects.toMatchObject(
+      { code: 'CONFLICT' },
+    )
+    const rev = waiting.blocks[0]!.rev
+    await settleArtifactWrites(db, {
+      taskId: task.id,
+      blocks: [{ artifactId: id, block: 'dostavka', rev, refusal: null }],
+      final: true,
+    })
+    const read = await caller.artifact.read({ artifactId: id })
+    expect(read).toMatchObject({ role: 'owner', project: null, title: 'Тексты' })
+    expect(read.blocks[0]).toMatchObject({
+      heading: 'Доставка',
+      content: '* по городу\n* _бесплатно_ от 2000 ₽',
+      checking: false,
+      hold: null,
+    })
+    const held = await caller.artifact.hold({ artifactId: id, block: 'dostavka' })
+    expect(held.rev).toBe(read.blocks[0]!.rev)
+    // An agent gets the block held by the person.
+    await expect(
+      applyArtifactOps(db, {
+        batch: {
+          artifactId: id,
+          opId: randomUUID(),
+          ops: [{ op: 'edit', block: 'dostavka', find: 'по городу', replace: 'по области' }],
+        },
+        actor: { ...agent, turnNo: 2 },
+      }),
+    ).rejects.toMatchObject({ code: 'ARTIFACT_BLOCK_HELD' })
+    // The person's first save: the agent's text is brought to the canonical form first, then the
+    // person's word — two revisions, the second changes one line.
+    const saved = await caller.artifact.write({
+      batch: {
+        artifactId: id,
+        opId: randomUUID(),
+        ops: [
+          {
+            op: 'replace',
+            block: 'dostavka',
+            ifRev: read.blocks[0]!.rev,
+            content: '- по всему городу\n- *бесплатно* от 2000 ₽',
+            props: { heading: 'Доставка' },
+          },
+        ],
+      },
+    })
+    expect(saved.blocks[0]!.rev).toBe(read.blocks[0]!.rev + 2)
+    const revisions = await db.artifactBlockRevision.findMany({
+      where: { artifactId: id, blockKey: 'dostavka' },
+      orderBy: { rev: 'asc' },
+      select: { rev: true, content: true, writtenByUserId: true },
+    })
+    expect(revisions.slice(-2).map((each) => each.content)).toEqual([
+      '- по городу\n- *бесплатно* от 2000 ₽\n',
+      '- по всему городу\n- *бесплатно* от 2000 ₽\n',
+    ])
+    // A stale revision is refused with the block as it is.
+    await expect(
+      caller.artifact.write({
+        batch: {
+          artifactId: id,
+          opId: randomUUID(),
+          ops: [{ op: 'replace', block: 'dostavka', ifRev: 1, content: 'старое' }],
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+    // The agent claims a block; «Забрать правку» takes it back.
+    await caller.artifact.release({ artifactId: id, block: 'dostavka' })
+    await claimArtifactBlock(db, {
+      artifactId: id,
+      block: 'dostavka',
+      actor: { ...agent, turnNo: 3 },
+      intent: 'Допишу про самовывоз',
+    })
+    expect((await caller.artifact.read({ artifactId: id })).blocks[0]!.hold).toBe('claim')
+    await expect(caller.artifact.hold({ artifactId: id, block: 'dostavka' })).rejects.toMatchObject(
+      { code: 'CONFLICT' },
+    )
+    await caller.artifact.take({ artifactId: id, block: 'dostavka' })
+    expect((await caller.artifact.read({ artifactId: id })).blocks[0]!.hold).toBe('human')
+    // A secret is never kept.
+    await expect(
+      caller.artifact.write({
+        batch: {
+          artifactId: id,
+          opId: randomUUID(),
+          ops: [
+            {
+              op: 'insert',
+              after: 'dostavka',
+              kind: 'section',
+              content: 'пароль ghp_0123456789abcdefghijABCDEFGHIJ012345',
+              props: { heading: 'Ключ' },
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    // Its chats: only the reader's own.
+    expect((await caller.artifact.chats({ artifactId: id })).map((chat) => chat.taskId)).toEqual([
+      task.id,
+    ])
+    const named = await caller.artifact.saveVersion({ artifactId: id, label: 'Показала маме' })
+    expect(named.no).toBeGreaterThan(0)
+    // Another person reads nothing.
+    const boris = callerOf(await person('Борис'))
+    await expect(boris.artifact.read({ artifactId: id })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    await expect(boris.artifact.chats({ artifactId: id })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
   })
 })

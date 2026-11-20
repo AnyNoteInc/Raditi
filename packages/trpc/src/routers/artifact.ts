@@ -1,7 +1,9 @@
 import { artifactGalleryFilters, artifactGallerySorts } from '@repo/db'
 import {
   artifactBlockKeySchema,
+  artifactHoldReasons,
   artifactKinds,
+  artifactRoles,
   artifactSignalLimits,
   artifactTitleSchema,
 } from '@repo/domain/artifacts'
@@ -13,6 +15,15 @@ import {
   restoreGalleryArtifact,
   trashGalleryArtifact,
 } from '../services/artifacts/gallery.ts'
+import {
+  applyCabinetOps,
+  cabinetArtifactChats,
+  holdCabinetBlock,
+  readCabinetArtifact,
+  releaseCabinetBlock,
+  saveCabinetVersion,
+  takeCabinetBlock,
+} from '../services/artifacts/editor.ts'
 import { chatContextOf } from '../services/chat/context.ts'
 
 import {
@@ -65,7 +76,106 @@ const galleryRow = z.strictObject({
   purgeAfter: z.iso.datetime().nullable(),
 })
 
+const blockInput = z.strictObject({ artifactId, block: artifactBlockKeySchema })
+
+const readOutput = z.strictObject({
+  id: z.uuid(),
+  kind: z.string(),
+  title: z.string(),
+  seq: z.number().int().min(0),
+  role: z.enum(artifactRoles),
+  version: z.number().int().min(0),
+  project: z.strictObject({ id: z.uuid(), name: z.string() }).nullable(),
+  updatedAt: z.iso.datetime(),
+  blocks: z.array(
+    z.strictObject({
+      key: z.string(),
+      kind: z.string(),
+      rank: z.string(),
+      rev: z.number().int().min(0),
+      heading: z.string().nullable(),
+      content: z.string().nullable(),
+      checking: z.boolean(),
+      hold: z.enum(artifactHoldReasons).nullable(),
+    }),
+  ),
+})
+
+const opsAnswer = z.strictObject({
+  artifactId: z.uuid(),
+  opId: z.string(),
+  seq: z.number().int().min(0),
+  blocks: z.array(
+    z.strictObject({
+      key: z.string(),
+      rev: z.number().int().min(0),
+      state: z.enum(['applied', 'checking', 'deleted']),
+    }),
+  ),
+  title: z.enum(['applied', 'checking']).nullable(),
+  repeated: z.boolean(),
+})
+
 export const artifactRouter = router({
+  /** The page of an artifact (Ар48): the checked text of its blocks and who holds each. */
+  read: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(readOutput)
+    .query(({ ctx, input }) => readCabinetArtifact(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /**
+   * A batch of a person (§7.2): applied at once or refused whole — `ARTIFACT_STALE` with the
+   * current block, `ARTIFACT_BLOCK_HELD` while an agent holds it, `ARTIFACT_SECRET_SHAPE`.
+   */
+  write: consentedProcedure
+    .input(z.strictObject({ batch: z.unknown() }))
+    .output(opsAnswer)
+    .mutation(({ ctx, input }) =>
+      applyCabinetOps(ctx.prisma, { userId: ctx.user.id, batch: input.batch }),
+    ),
+
+  /** A person types in a block (Ар17): it is held for them for 30 s, renewed by each call. */
+  hold: consentedProcedure
+    .input(blockInput)
+    .output(z.strictObject({ rev: z.number().int().min(0), until: z.iso.datetime() }))
+    .mutation(({ ctx, input }) => holdCabinetBlock(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** The editor of a block closed: the person's lease ends now. */
+  release: consentedProcedure
+    .input(blockInput)
+    .mutation(({ ctx, input }) =>
+      releaseCabinetBlock(ctx.prisma, { userId: ctx.user.id, ...input }),
+    ),
+
+  /** «Забрать правку» (Ар16, Ар17). */
+  take: consentedProcedure
+    .input(blockInput)
+    .output(z.strictObject({ rev: z.number().int().min(0) }))
+    .mutation(({ ctx, input }) => takeCabinetBlock(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** «Сохранить текущую как версию…» (Ар13). */
+  saveVersion: consentedProcedure
+    .input(z.strictObject({ artifactId, label: z.string().trim().min(1).max(60) }))
+    .output(z.strictObject({ no: z.number().int().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const { no } = await saveCabinetVersion(ctx.prisma, { userId: ctx.user.id, ...input })
+      return { no }
+    }),
+
+  /** The reader's own chats of this artifact, newest first (Ар48). */
+  chats: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(
+      z.array(
+        z.strictObject({
+          taskId: z.uuid(),
+          title: z.string().nullable(),
+          lastAt: z.iso.datetime(),
+        }),
+      ),
+    )
+    .query(({ ctx, input }) => cabinetArtifactChats(ctx.prisma, { userId: ctx.user.id, ...input })),
+
   /** The gallery (Ар50): the user's artifacts by a filter, a kind, a project and a word. */
   list: consentedProcedure
     .input(

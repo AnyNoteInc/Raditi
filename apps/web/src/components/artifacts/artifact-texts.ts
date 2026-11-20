@@ -106,3 +106,70 @@ export const createTexts = Object.freeze({
 })
 
 export const formatDateTime = (at: string | Date) => dateTime.format(new Date(at))
+
+export const editorTexts = Object.freeze({
+  heading: 'Заголовок раздела',
+  style: 'Стиль текста',
+  paragraph: 'Обычный текст',
+  headingLevel: (level: number) => `Заголовок ${level - 2}`,
+  bold: 'Жирный',
+  italic: 'Курсив',
+  strike: 'Зачёркнутый',
+  code: 'Код',
+  bullets: 'Маркированный список',
+  numbers: 'Нумерованный список',
+  tasks: 'Список задач',
+  quote: 'Цитата',
+  table: 'Вставить таблицу',
+  undo: 'Отменить',
+  redo: 'Повторить',
+  label: (heading: string) => `Текст раздела «${heading}»`,
+})
+
+export const documentTexts = Object.freeze({
+  sections: 'Разделы',
+  edit: 'Править',
+  editLabel: (heading: string) => `Править раздел «${heading}»`,
+  done: 'Готово',
+  saving: 'Сохраняем…',
+  saved: 'Сохранено',
+  unsaved: 'Не сохранено',
+  addSection: 'Добавить раздел',
+  newHeading: 'Новый раздел',
+  sectionActions: (heading: string) => `Действия с разделом «${heading}»`,
+  remove: 'Удалить раздел',
+  moveUp: 'Выше',
+  moveDown: 'Ниже',
+  untitled: 'Без заголовка',
+  empty: 'В документе пока нет разделов.',
+  agentWriting: 'Пишет агент',
+  agentWritingNamed: (label: string) => `Пишет агент · ${label}`,
+  checking: 'Агент пишет этот раздел — текст появится, как только мы его проверим',
+  humanEditing: (name: string) => `Правит ${name}`,
+  waitTitle: 'Агент пишет — вы ждёте',
+  waitText: (label: string | null) =>
+    label === null
+      ? 'Этот раздел сейчас пишет агент. Ваша правка подождёт.'
+      : `Этот раздел сейчас пишет агент «${label}». Ваша правка подождёт.`,
+  wait: 'Подождать',
+  takeBack: 'Забрать правку',
+  divergedTitle: 'Разошлись',
+  divergedLead: 'Раздел изменили, пока вы правили',
+  divergedText:
+    'Вы отошли больше чем на 30 секунд — раздел перестал быть занятым, и его успели изменить.',
+  yourText: 'Ваш текст',
+  otherText: 'Другой текст',
+  removed: 'убрано:',
+  added: 'добавлено:',
+  keepMine: 'Оставить мой',
+  takeOther: 'Взять другой',
+  mergeByHand: 'Совместить вручную',
+  bothKept: 'Обе версии сохранены в истории.',
+  byHandNote: 'Ваш текст — ниже. Перенесите из него, что нужно, и нажмите «Готово».',
+  failed: 'Не получилось сохранить правку. Попробуйте ещё раз.',
+  loadFailed: 'Не получилось открыть артефакт.',
+  notFound: 'Артефакт не найден, или к нему нет доступа.',
+  title: 'Название артефакта',
+  rename: 'Переименовать',
+  trashed: 'Артефакт в корзине.',
+})

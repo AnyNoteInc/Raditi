@@ -1408,6 +1408,77 @@ export async function takeArtifactBlock(
 }
 
 /**
+ * A person begins to type in a block, or goes on typing (Ар17): the block is held for them for
+ * 30 s — the agents get `ARTIFACT_BLOCK_HELD` (`human`) — and renewed by each call. A block an
+ * agent holds — its claim, or its write waiting for the check — is not taken: the refusal names
+ * why, and «Забрать правку» (`takeArtifactBlock`) is the person's choice. Two people do not hold
+ * each other off: their writes merge three ways (Ар18). A lease is no change of the artifact: no
+ * line of the journal, no signal (Ар20).
+ */
+export async function holdArtifactBlock(
+  db: Db,
+  input: { artifactId: string; block: string; userId: string; now?: Date },
+): Promise<{ rev: number; until: Date }> {
+  const now = input.now ?? new Date()
+  return db.$transaction(async (tx) => {
+    const artifact = await lockArtifact(tx, input.artifactId)
+    const actor = person(input.userId)
+    await requireRole(tx, artifact.id, actor, 'edit')
+    const block = await tx.artifactBlock.findUnique({
+      where: { documentId_sectionKey: { documentId: artifact.id, sectionKey: input.block } },
+    })
+    if (!block || block.deletedRev !== null)
+      throw artifactOpInvalid(`no block ${input.block}`, { block: input.block })
+    const held = holdOf(block, actor, now)
+    if (held) throw held
+    const until = new Date(now.getTime() + artifactLimits.humanLeaseSeconds * 1000)
+    // The lease of a person who took an agent's write keeps the chat it was taken from.
+    const own = block.leaseHolder === 'human' && block.leaseUserId === input.userId
+    await tx.artifactBlock.update({
+      where: { id: block.id },
+      data: {
+        leaseHolder: 'human',
+        leaseUserId: input.userId,
+        leaseTaskId: own ? block.leaseTaskId : null,
+        leaseTurn: own ? block.leaseTurn : null,
+        leaseToken: null,
+        leaseIntent: null,
+        leaseIntentChecked: false,
+        leaseUntil: until,
+      },
+    })
+    return { rev: block.rev, until }
+  })
+}
+
+/**
+ * The person closed the editor of a block: their lease ends at once, not after 30 s — unless it
+ * took an agent's write, whose chat is told `ARTIFACT_LEASE_LOST` until the lease runs out.
+ */
+export async function releaseArtifactBlock(
+  db: Pick<PrismaClient, 'artifactBlock'>,
+  input: { artifactId: string; block: string; userId: string },
+): Promise<void> {
+  await db.artifactBlock.updateMany({
+    where: {
+      documentId: input.artifactId,
+      sectionKey: input.block,
+      leaseHolder: 'human',
+      leaseUserId: input.userId,
+      leaseTaskId: null,
+    },
+    data: {
+      leaseHolder: null,
+      leaseUserId: null,
+      leaseTaskId: null,
+      leaseTurn: null,
+      leaseToken: null,
+      leaseUntil: null,
+    },
+  })
+}
+
+/**
  * `artifact_claim` (Ар17): the agent holds a block for up to two minutes with what it is about to
  * write — others get `ARTIFACT_BLOCK_HELD` (`claim`). A lease is no change of the artifact: no
  * line of the journal, no signal (Ар20).
