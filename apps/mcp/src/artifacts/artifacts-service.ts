@@ -103,7 +103,12 @@ export interface McpArtifactsStore {
     more: boolean
   }>
   read(actor: Actor, artifactId: string): Promise<McpArtifactRead>
-  news(taskId: string, artifactId: string, read: boolean): Promise<McpArtifactNews>
+  /** `readSeq` — the chat read the whole artifact as of that `seq` (Ар21). */
+  news(taskId: string, artifactId: string, readSeq?: number): Promise<McpArtifactNews>
+  /** The blocks changed after a `seq` of the artifact, by anyone. */
+  changedSince(artifactId: string, sinceSeq: number): Promise<string[]>
+  /** A new artifact of this turn whose skeleton did not go in is deleted. */
+  discard(artifactId: string, taskId: string, turnNo: number): Promise<void>
   create(input: {
     workspaceId: string
     kind: string
@@ -218,11 +223,18 @@ export class McpArtifactsService {
   }
 
   /** The chat opens it (Ар23) with at least this; a pass without its client writes only its own. */
-  async #open(scope: McpTurnAccess, artifactId: string, write: boolean) {
+  async #open(
+    scope: McpTurnAccess,
+    artifactId: string,
+    write: boolean,
+    // A claim and a version change nothing others read: a pass without its client makes them
+    // anywhere it may write (§7.5).
+    changes = write,
+  ) {
     const access = await this.#store.access(scope.taskId, artifactId)
     if (access === null) throw artifactNotFound()
     if (write && access.role !== 'edit' && access.role !== 'owner') throw artifactForbidden()
-    if (write && scope.unattended && !access.personal) throw unattendedRefusal()
+    if (changes && scope.unattended && !access.personal) throw unattendedRefusal()
     return access
   }
 
@@ -265,13 +277,19 @@ export class McpArtifactsService {
       const access = await this.#open(scope, args.artifactId, false)
       await this.#countForeign(scope, args.artifactId, access)
       const artifact = await this.#store.read(actorOf(scope), args.artifactId)
-      const news = await this.#store.news(scope.taskId, args.artifactId, true)
+      const news = await this.#store.news(scope.taskId, args.artifactId)
       let blocks = artifact.blocks
       if (args.blocks) blocks = blocks.filter((block) => args.blocks!.includes(block.key))
       if (args.sinceSeq !== undefined) {
-        const changed = new Set(news.changedSinceYourRead.blocks)
+        const changed = new Set(await this.#store.changedSince(args.artifactId, args.sinceSeq))
         blocks = blocks.filter((block) => changed.has(block.key))
       }
+      // Only a read of the whole text in one answer is a read of everything others changed (Ар21).
+      const whole =
+        args.part !== 'outline' &&
+        args.blocks === undefined &&
+        args.sinceSeq === undefined &&
+        args.from === undefined
       const start = args.from === undefined ? 0 : blocks.findIndex(({ key }) => key === args.from)
       if (start < 0) throw artifactNotFound()
       const rest = blocks.slice(start)
@@ -306,6 +324,7 @@ export class McpArtifactsService {
       }
       const part = readPart(rest.map((block) => ({ ...describe(block), content: block.content })))
       const next = rest[part.blocks.length]
+      if (whole && !next) await this.#store.news(scope.taskId, args.artifactId, artifact.seq)
       return {
         ...head,
         blocks: part.blocks,
@@ -343,10 +362,16 @@ export class McpArtifactsService {
         kind: 'section',
         intent: section.intent,
       }))
-      await this.#store.apply(
-        { artifactId: created.id, opId: `skeleton-${randomUUID()}`, ops },
-        actorOf(scope),
-      )
+      try {
+        await this.#store.apply(
+          { artifactId: created.id, opId: `skeleton-${randomUUID()}`, ops },
+          actorOf(scope),
+        )
+      } catch (error) {
+        // Not half an artifact: the call failed as a whole and costs the turn no creation.
+        await this.#store.discard(created.id, scope.taskId, scope.turn)
+        throw error
+      }
     }
     // The tab beside the chat learns of it at once (a signal without text); the card of the feed
     // comes after the answer of the turn (Ар46).
@@ -373,13 +398,13 @@ export class McpArtifactsService {
 
   claim(scope: McpTurnAccess, args: ArtifactClaimArguments): Promise<McpArtifactsAnswer> {
     return answerOf(async () => {
-      await this.#open(scope, args.artifactId, true)
+      await this.#open(scope, args.artifactId, true, false)
       const { until } = await this.#store.claim({ ...args, actor: actorOf(scope) })
       return {
         artifactId: args.artifactId,
         block: args.block,
         until: until.toISOString(),
-        ...(await this.#store.news(scope.taskId, args.artifactId, false)),
+        ...(await this.#store.news(scope.taskId, args.artifactId)),
       }
     })
   }
@@ -404,14 +429,14 @@ export class McpArtifactsService {
         // The agent's label is its text: until labels go through the check it is not kept (Ар19).
         ...(args.label ? { label: 'not kept: a version of the agent is an automatic one' } : {}),
         note: 'A version holds what the platform checked; the end of this turn makes one too.',
-        ...(await this.#store.news(scope.taskId, args.artifactId, false)),
+        ...(await this.#store.news(scope.taskId, args.artifactId)),
       }
     })
   }
 
   /** `seq`, the changes of others and the refusals of the check after a write of the chat (Ар21). */
   async #after(scope: McpTurnAccess, artifactId: string) {
-    const news = await this.#store.news(scope.taskId, artifactId, false)
+    const news = await this.#store.news(scope.taskId, artifactId)
     const revision = await this.#store.revision(artifactId)
     await this.#store.feed(scope.taskId, scope.turn, {
       type: 'feed.doc_touch',
@@ -523,7 +548,7 @@ export class McpArtifactsService {
       const access = await this.#open(scope, args.docId, false)
       await this.#countForeign(scope, args.docId, access)
       const artifact = await this.#store.read(actorOf(scope), args.docId)
-      const news = await this.#store.news(scope.taskId, args.docId, true)
+      const news = await this.#store.news(scope.taskId, args.docId)
       const sections = artifact.blocks
         .filter((block) => block.kind === 'section')
         .map((block) => ({
@@ -537,6 +562,8 @@ export class McpArtifactsService {
       if (start < 0) throw artifactNotFound()
       const part = readPart(sections.slice(start))
       const next = sections[start + part.blocks.length]
+      if (args.from === undefined && !next)
+        await this.#store.news(scope.taskId, args.docId, artifact.seq)
       return {
         docId: artifact.id,
         title: artifact.title,

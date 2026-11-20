@@ -100,6 +100,8 @@ function fakeStore(
       ],
     })),
     news: vi.fn<S['news']>(async () => news),
+    changedSince: vi.fn<S['changedSince']>(async () => ['sources']),
+    discard: vi.fn<S['discard']>(async () => undefined),
     create: vi.fn<S['create']>(async () => ({ id: artifactId, seq: 1 })),
     apply: vi.fn<S['apply']>(async () => ({
       artifactId,
@@ -231,7 +233,13 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
         { id: 'sources', checking: true, heldBy: 'checking', content: null },
       ],
     })
-    expect(store.news).toHaveBeenCalledWith(base.taskId, artifactId, true)
+    // A whole read moves the read up to the seq that read saw (Ар21); a part does not.
+    expect(store.news).toHaveBeenCalledWith(base.taskId, artifactId, 7)
+    store.news.mockClear()
+    const since = await post(server, call('artifact_read', { artifactId, sinceSeq: 3 }))
+    expect(answer(since)).toMatchObject({ blocks: [{ id: 'sources' }] })
+    expect(store.changedSince).toHaveBeenCalledWith(artifactId, 3)
+    expect(store.news.mock.calls.every((each) => each[2] === undefined)).toBe(true)
     const outline = await post(server, call('artifact_read', { artifactId, part: 'outline' }))
     expect(answer(outline)).toMatchObject({
       outline: [{ id: 'intro', bytes: 10 }, { id: 'sources' }],
@@ -315,6 +323,28 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
     expect(answer(create)).toMatchObject({ code: 'ARTIFACT_FORBIDDEN' })
     const read = await post(server, call('artifact_read', { artifactId }))
     expect(read.body.result.isError).toBeUndefined()
+    // A claim and a version change nothing others read (§7.5).
+    const claim = await post(
+      server,
+      call('artifact_claim', { artifactId, block: 'intro', intent: 'Обновлю цены' }),
+    )
+    expect(claim.body.result.isError).toBeUndefined()
+  })
+
+  it('deletes a new artifact whose skeleton did not go in', async () => {
+    const { store } = fakeStore()
+    store.apply.mockRejectedValue(artifactStale())
+    const server = await start(store)
+    const res = await post(
+      server,
+      call('artifact_create', {
+        kind: 'document',
+        title: 'План',
+        skeleton: [{ id: 'intro', intent: 'Введение' }],
+      }),
+    )
+    expect(res.body.result.isError).toBe(true)
+    expect(store.discard).toHaveBeenCalledWith(artifactId, base.taskId, 2)
   })
 
   it('saves a version, at most ten a turn, without the agent’s label', async () => {

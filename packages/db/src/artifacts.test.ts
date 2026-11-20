@@ -35,6 +35,8 @@ import {
   artifactPlaceholders,
   artifactsOfTurn,
   chatArtifactAccess,
+  adoptLegacySectionWrites,
+  artifactBlocksChangedSince,
   chatLastRevOf,
   listChatArtifacts,
 } from './artifact-chats.ts'
@@ -997,10 +999,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
     })
     // News: a person's change since the read, and the chat's own write the check refused.
     await apply(mine, [section('a', 'Раз')])
+    const before = await artifactChatNews(db, { taskId: writer, artifactId: mine })
+    expect(before.changedSinceYourRead).toMatchObject({ count: 1, blocks: ['a'] })
+    // A read moves only up to the seq it saw: a change after it is still news.
+    await artifactChatNews(db, { taskId: writer, artifactId: mine, readSeq: before.seq - 1 })
     expect(
-      (await artifactChatNews(db, { taskId: writer, artifactId: mine, read: true }))
-        .changedSinceYourRead,
-    ).toMatchObject({ count: 1, blocks: ['a'] })
+      (await artifactChatNews(db, { taskId: writer, artifactId: mine })).changedSinceYourRead.count,
+    ).toBe(1)
+    await artifactChatNews(db, { taskId: writer, artifactId: mine, readSeq: before.seq })
+    // The block changed by a person before that read is seen: the chat writes it at its current rev.
+    expect(await chatLastRevOf(db, { taskId: writer, artifactId: mine, block: 'a' })).toBeNull()
+    expect(await artifactBlocksChangedSince(db, { artifactId: mine, sinceSeq: 0 })).toEqual(['a'])
     expect(
       (await artifactChatNews(db, { taskId: writer, artifactId: mine })).changedSinceYourRead.count,
     ).toBe(0)
@@ -1042,5 +1051,74 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
       created: false,
     })
     expect(turns.find((each) => each.artifactId === made)).toMatchObject({ created: true })
+    // Refused and written again in the same turn: no refusal of the turn (its last verdict passed).
+    const again = await chat()
+    await apply(
+      mine,
+      [
+        {
+          op: 'insert',
+          block: 'c',
+          after: 'a',
+          kind: 'section',
+          content: 'Три',
+          props: { heading: 'В' },
+        },
+      ],
+      agent(again),
+      soon(),
+    )
+    const settleAll = async (refusal: 'client_value' | null) => {
+      const pending = await pendingArtifactWrites(db, again)
+      await settleArtifactWrites(db, {
+        taskId: again,
+        blocks: pending.map((each) => ({
+          artifactId: each.documentId,
+          block: each.sectionKey,
+          rev: each.rev,
+          refusal,
+        })),
+      })
+    }
+    await settleAll('client_value')
+    await apply(
+      mine,
+      [
+        {
+          op: 'insert',
+          block: 'c',
+          after: 'a',
+          kind: 'section',
+          content: 'Три, чисто',
+          props: { heading: 'В' },
+        },
+      ],
+      agent(again),
+      soon(),
+    )
+    await settleAll(null)
+    expect(
+      (await artifactsOfTurn(db, again, 1)).find((each) => each.artifactId === mine),
+    ).toMatchObject({ refused: 0 })
+    // A section the tools of plan 69 wrote and no end of a turn checked waits for the new check.
+    const legacy = await chat()
+    await db.artifactBlock.create({
+      data: {
+        documentId: mine,
+        sectionKey: 'old',
+        intent: 'Раздел',
+        heading: 'Старое',
+        markdown: 'Текст',
+        state: 'written',
+        writtenTaskId: legacy,
+        writtenTurn: 1,
+        position: 9,
+        rank: 'zz',
+      },
+    })
+    expect(await adoptLegacySectionWrites(db, legacy)).toBe(1)
+    expect((await pendingArtifactWrites(db, legacy)).map((each) => each.sectionKey)).toEqual([
+      'old',
+    ])
   })
 })

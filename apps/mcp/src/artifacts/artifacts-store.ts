@@ -1,12 +1,14 @@
 import {
   admitInWindow,
   applyArtifactOps,
+  artifactBlocksChangedSince,
   artifactChatNews,
   artifactPlaceholders,
   chatArtifactAccess,
   chatLastRevOf,
   claimArtifactBlock,
   createArtifact,
+  discardAgentArtifact,
   insertFeedEvent,
   listChatArtifacts,
   readArtifact,
@@ -54,7 +56,12 @@ export function postgresArtifactsStore(
         })),
       }
     },
-    news: (taskId, artifactId, read) => artifactChatNews(db, { taskId, artifactId, read }),
+    news: (taskId, artifactId, readSeq) =>
+      artifactChatNews(db, { taskId, artifactId, ...(readSeq === undefined ? {} : { readSeq }) }),
+    changedSince: (artifactId, sinceSeq) =>
+      artifactBlocksChangedSince(db, { artifactId, sinceSeq }),
+    discard: (artifactId, taskId, turnNo) =>
+      discardAgentArtifact(db, { artifactId, taskId, turnNo }),
     create: (input) => createArtifact(db, input),
     apply: (batch, actor) => applyArtifactOps(db, { batch, actor }),
     claim: (input) => claimArtifactBlock(db, input),

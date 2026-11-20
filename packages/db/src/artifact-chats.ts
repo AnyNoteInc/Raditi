@@ -178,12 +178,18 @@ export interface ArtifactChatNews {
 
 /**
  * What changed in an artifact since the chat's `read_seq` (Ар21, §7.3): changes by others, and
- * this chat's writes the check refused. `read` — the chat read the artifact now: its `read_seq`
- * moves to the current `seq`, a row `how = 'read'` is kept if it had none.
+ * this chat's writes the check refused. `readSeq` — the chat read the whole artifact as of that
+ * `seq` (never past what the read returned): its `read_seq` moves up to it, a row `how = 'read'`
+ * is kept if it had none.
  */
 export async function artifactChatNews(
   db: Db,
-  input: { taskId: string; artifactId: string; read?: boolean },
+  input: {
+    taskId: string
+    artifactId: string
+    /** The chat read the whole artifact as of this `seq`: its `read_seq` moves up to it. */
+    readSeq?: number
+  },
 ): Promise<ArtifactChatNews> {
   const artifact = await db.artifact.findUniqueOrThrow({
     where: { id: input.artifactId },
@@ -210,17 +216,18 @@ export async function artifactChatNews(
     if (line.result === 'checking' || line.result === 'dropped') continue
     if (!changed.includes(line.blockKey)) changed.push(line.blockKey)
   }
-  if (input.read)
+  if (input.readSeq !== undefined) {
+    const readSeq = BigInt(input.readSeq)
     await db.artifactChat.upsert({
       where: { artifactId_taskId: { artifactId: input.artifactId, taskId: input.taskId } },
-      create: {
-        artifactId: input.artifactId,
-        taskId: input.taskId,
-        how: 'read',
-        readSeq: artifact.seq,
-      },
-      update: { readSeq: artifact.seq, lastAt: new Date() },
+      create: { artifactId: input.artifactId, taskId: input.taskId, how: 'read', readSeq },
+      update: { lastAt: new Date() },
     })
+    await db.artifactChat.updateMany({
+      where: { artifactId: input.artifactId, taskId: input.taskId, readSeq: { lt: readSeq } },
+      data: { readSeq },
+    })
+  }
   const shown = artifactLimits.changedIdsShown
   return {
     seq: Number(artifact.seq),
@@ -231,6 +238,28 @@ export async function artifactChatNews(
     },
     refusedSinceYourRead: refused,
   }
+}
+
+/**
+ * The blocks changed after `sinceSeq` by anyone, the chat itself too (`artifact_read({ sinceSeq })`,
+ * §7.5): a write still waiting for its check counts once it is checked.
+ */
+export async function artifactBlocksChangedSince(
+  db: Pick<PrismaClient, 'artifactOp'>,
+  input: { artifactId: string; sinceSeq: number },
+): Promise<string[]> {
+  const lines = await db.artifactOp.findMany({
+    where: {
+      artifactId: input.artifactId,
+      seq: { gt: BigInt(input.sinceSeq) },
+      kind: { in: changingKinds },
+      result: { notIn: ['checking', 'dropped'] },
+      blockKey: { not: null },
+    },
+    select: { blockKey: true },
+    orderBy: { seq: 'asc' },
+  })
+  return [...new Set(lines.map((line) => line.blockKey!))]
 }
 
 /**
@@ -248,15 +277,25 @@ export async function artifactsOfTurn(
   const rows = await db.$queryRaw<
     { artifact_id: string; kind: string; created: boolean; refused: bigint; checked: bigint }[]
   >`
-    SELECT o.artifact_id, d.kind,
-           bool_or(o.kind = 'create') AS created,
-           count(*) FILTER (WHERE o.result = 'refused') AS refused,
-           count(*) FILTER (WHERE o.result IN ('checked', 'applied')) AS checked
-    FROM artifact_ops o JOIN chat_documents d ON d.id = o.artifact_id
-    WHERE o.task_id = ${taskId}::uuid AND o.turn_no = ${turnNo} AND o.actor <> 'user'
-      AND d.deleted_at IS NULL
-    GROUP BY o.artifact_id, d.kind
-    ORDER BY min(o.created_at), o.artifact_id`
+    WITH turn AS (
+      SELECT o.* FROM artifact_ops o
+      WHERE o.task_id = ${taskId}::uuid AND o.turn_no = ${turnNo} AND o.actor <> 'user'
+    ), last AS (
+      -- The last verdict on each block (or the title): a write refused and then fixed in the same
+      -- turn is no refusal of it.
+      SELECT DISTINCT ON (artifact_id, COALESCE(block_key, '')) artifact_id, result
+      FROM turn WHERE result IN ('checked', 'refused')
+      ORDER BY artifact_id, COALESCE(block_key, ''), seq DESC
+    )
+    SELECT t.artifact_id, d.kind,
+           bool_or(t.kind = 'create') AS created,
+           (SELECT count(*) FROM last l WHERE l.artifact_id = t.artifact_id AND l.result = 'refused')
+             AS refused,
+           count(*) FILTER (WHERE t.result IN ('checked', 'applied')) AS checked
+    FROM turn t JOIN chat_documents d ON d.id = t.artifact_id
+    WHERE d.deleted_at IS NULL
+    GROUP BY t.artifact_id, d.kind
+    ORDER BY min(t.created_at), t.artifact_id`
   return rows.map((row) => ({
     artifactId: row.artifact_id,
     kind: row.kind,
@@ -296,13 +335,34 @@ export async function artifactPlaceholders(
 /**
  * The revision of a block this chat last saw (Ар3): the last line of its own in the journal — its
  * insert, write, the check of it or its refusal. A `doc_section_write` of plan 69 carries no
- * `ifRev`: it goes with this one, so a person's change since makes it `ARTIFACT_STALE`. Null — the
- * chat never wrote the block: the caller reads the current revision.
+ * `ifRev`: it goes with this one, so a person's change since makes it `ARTIFACT_STALE` until the
+ * chat reads the artifact again. Null — the chat never wrote the block, or read it after the last
+ * change of others: the caller takes the current revision.
  */
 export async function chatLastRevOf(
-  db: Pick<PrismaClient, 'artifactOp'>,
+  db: Pick<PrismaClient, 'artifactOp' | 'artifactChat'>,
   input: { taskId: string; artifactId: string; block: string },
 ): Promise<number | null> {
+  // A change of others the chat read since (its `read_seq`, a whole read) is seen: the current
+  // revision goes — so a person's edit makes one write STALE, not every write after it.
+  const [latest, link] = await Promise.all([
+    db.artifactOp.findFirst({
+      where: {
+        artifactId: input.artifactId,
+        blockKey: input.block,
+        newRev: { not: null },
+        result: { notIn: ['checking', 'dropped'] },
+      },
+      orderBy: { seq: 'desc' },
+      select: { seq: true, taskId: true, actor: true },
+    }),
+    db.artifactChat.findUnique({
+      where: { artifactId_taskId: { artifactId: input.artifactId, taskId: input.taskId } },
+      select: { readSeq: true },
+    }),
+  ])
+  const othersChange = latest && (latest.actor === 'user' || latest.taskId !== input.taskId)
+  if (othersChange && link && latest.seq <= link.readSeq) return null
   const line = await db.artifactOp.findFirst({
     where: {
       artifactId: input.artifactId,
@@ -315,4 +375,44 @@ export async function chatLastRevOf(
     select: { newRev: true },
   })
   return line?.newRev ?? null
+}
+
+/**
+ * A new artifact of the agent whose skeleton did not go in (§7.5): deleted with its lines, so the
+ * failed call costs the turn no creation. Only one this chat created in this turn and nobody wrote.
+ */
+export async function discardAgentArtifact(
+  db: Pick<PrismaClient, 'artifact'>,
+  input: { artifactId: string; taskId: string; turnNo: number },
+): Promise<void> {
+  await db.artifact.deleteMany({
+    where: {
+      id: input.artifactId,
+      taskId: input.taskId,
+      sections: { none: {} },
+      ops: { every: { taskId: input.taskId, turnNo: input.turnNo } },
+    },
+  })
+}
+
+/**
+ * The sections a chat wrote with the tools of plan 69 that no end of a turn checked (a turn
+ * begun before the release, Ар3): they become writes waiting for the check of plan 88, so the
+ * check of this chat's end of a turn shows or refuses them as any other (Ар19).
+ */
+export async function adoptLegacySectionWrites(
+  db: Pick<PrismaClient, '$executeRaw'>,
+  taskId: string,
+): Promise<number> {
+  return db.$executeRaw`
+    UPDATE chat_document_sections
+    SET pending_content = markdown,
+        pending_props = jsonb_build_object('heading', heading),
+        pending_task_id = written_task_id,
+        pending_turn = written_turn,
+        pending_at = now(),
+        rev = rev + 1
+    WHERE written_task_id = ${taskId}::uuid AND state = 'written' AND checked_turn IS NULL
+      AND written_by_user_id IS NULL AND pending_task_id IS NULL AND deleted_rev IS NULL
+      AND markdown IS NOT NULL AND heading IS NOT NULL AND written_turn IS NOT NULL`
 }

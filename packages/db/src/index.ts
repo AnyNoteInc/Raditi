@@ -79,11 +79,14 @@ export {
 } from './attachments.ts'
 export { isArtifactRank, rankBetween, rankForIndex } from './artifact-rank.ts'
 export {
+  adoptLegacySectionWrites,
+  artifactBlocksChangedSince,
   artifactChatNews,
   artifactPlaceholders,
   artifactsOfTurn,
   chatArtifactAccess,
   chatLastRevOf,
+  discardAgentArtifact,
   listChatArtifacts,
   setArtifactView,
   type ArtifactChatNews,

@@ -1,4 +1,5 @@
 import {
+  adoptLegacySectionWrites,
   artifactsOfTurn,
   dropArtifactWrites,
   insertFeedEvent,
@@ -355,6 +356,9 @@ export class ArtifactChecks {
 
   async #settled(taskId: string, refuses: Refuses, final: boolean): Promise<ArtifactSettled[]> {
     const { db } = this.#deps
+    // Sections of a turn begun before the tools doc_* became synonyms (Ар3) wait for this check:
+    // the end of the chat's turn takes them up.
+    if (final) await adoptLegacySectionWrites(db, taskId)
     const [writes, titles] = await Promise.all([
       pendingArtifactWrites(db, taskId),
       pendingArtifactTitles(db, taskId),
