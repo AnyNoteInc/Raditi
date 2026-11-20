@@ -130,7 +130,11 @@ function ArtifactHistory({
   const [label, setLabel] = useState('')
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const artifactId = artifact.id
-  const versions = useQuery(trpc.artifact.versions.queryOptions({ artifactId }))
+  // Read anew each time the history opens: edits since made versions of their own.
+  const versions = useQuery({
+    ...trpc.artifact.versions.queryOptions({ artifactId }),
+    refetchOnMount: 'always',
+  })
   const changes = useQuery({
     ...trpc.artifact.changes.queryOptions({ artifactId }),
     enabled: tab === 'changes',

@@ -21,7 +21,7 @@ import {
   type ArtifactKind,
   type ArtifactTemplate,
 } from '@repo/domain/artifacts'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useId, useState } from 'react'
 
@@ -66,6 +66,7 @@ export function ArtifactCreateDialog({
   onClose: () => void
 }) {
   const trpc = useTRPC()
+  const queryClient = useQueryClient()
   const router = useRouter()
   const formId = useId()
   const [kind, setKind] = useState<ArtifactKind>(initial?.kind ?? 'document')
@@ -99,6 +100,8 @@ export function ArtifactCreateDialog({
       projectId: projectId || null,
       templateId: start === 'template' && templateId ? templateId : null,
     })
+    // The gallery reads itself again: the new one is in it on the way back.
+    void queryClient.invalidateQueries({ queryKey: trpc.artifact.list.pathKey() })
     router.push(`/artifacts/${created.id}`)
     onClose()
   }

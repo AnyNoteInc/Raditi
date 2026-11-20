@@ -178,8 +178,8 @@ export function ToolsMenu({
         {toolGroups.flatMap((group) => {
           const items = tiles.filter((tile) => tile.group === group)
           if (items.length === 0) return []
-          // A group is named only when the menu holds more than one: the browser alone needs none.
-          const named = tiles.some((tile) => tile.group !== group)
+          // A group is named, unless the browser stands alone in the menu (Ар44).
+          const named = group !== 'tools' || tiles.some((tile) => tile.group !== group)
           return [
             ...(named
               ? [

@@ -1,0 +1,124 @@
+import { randomUUID } from 'node:crypto'
+
+import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
+import {
+  applyArtifactOps,
+  createArtifact,
+  createPrismaClient,
+  insertFeedEvent,
+  settleArtifactWrites,
+} from '@repo/db'
+
+import { authEnv, databaseUrl } from '../../fixtures/billing-stand.ts'
+
+// The rows of artifacts the scenarios of «Артефакты» stand on (docs/plan/88-artifacts.md, stage
+// Э4): a document of the signed-in user, and the write of an agent in it, as core leaves them. No
+// core runs here: what an agent writes is written by @repo/db directly.
+
+export async function addDocument(
+  userId: string,
+  {
+    title,
+    sections,
+  }: { title: string; sections: readonly { key: string; heading: string; text: string }[] },
+): Promise<{ id: string; workspaceId: string }> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const workspace = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+    )
+    const actor = { kind: 'user' as const, userId }
+    const { id } = await createArtifact(prisma, {
+      workspaceId: workspace.id,
+      kind: 'document',
+      title,
+      actor,
+    })
+    let after: string | null = null
+    const ops = sections.map((section) => {
+      const op = {
+        op: 'insert' as const,
+        block: section.key,
+        after,
+        kind: 'section' as const,
+        content: section.text,
+        props: { heading: section.heading },
+      }
+      after = section.key
+      return op
+    })
+    await applyArtifactOps(prisma, { batch: { artifactId: id, opId: randomUUID(), ops }, actor })
+    // The person's lease of the writes ends: an agent may write next.
+    await prisma.artifactBlock.updateMany({
+      where: { documentId: id },
+      data: { leaseHolder: null, leaseUserId: null, leaseUntil: null },
+    })
+    return { id, workspaceId: workspace.id }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
+ * A chat of the user whose turn made the artifact: its link, the line of the feed after the
+ * answer — the tab, «+» and «Результаты» name it from these.
+ */
+export async function attachToChat(artifactId: string, taskId: string): Promise<void> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    await prisma.artifactChat.create({ data: { artifactId, taskId, how: 'created' } })
+    await insertFeedEvent(prisma, {
+      taskId,
+      row: {
+        type: 'feed.artifact',
+        payload: { v: 1, artifactId, kind: 'document', created: true },
+      },
+    })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** A turn of the chat writes a section and holds it: the check of core has not come yet. */
+export async function agentWrites(
+  artifactId: string,
+  taskId: string,
+  { block, text, settle = false }: { block: string; text: string; settle?: boolean },
+): Promise<void> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const current = await prisma.artifactBlock.findUniqueOrThrow({
+      where: { documentId_sectionKey: { documentId: artifactId, sectionKey: block } },
+      select: { rev: true, props: true },
+    })
+    const answer = await applyArtifactOps(prisma, {
+      batch: {
+        artifactId,
+        opId: randomUUID(),
+        ops: [
+          {
+            op: 'replace',
+            block,
+            ifRev: current.rev,
+            content: text,
+            props: current.props as Record<string, string>,
+          },
+        ],
+      },
+      actor: { kind: 'agent', taskId, turnNo: 1 },
+    })
+    if (settle)
+      await settleArtifactWrites(prisma, {
+        taskId,
+        blocks: answer.blocks.map((each) => ({
+          artifactId,
+          block: each.key,
+          rev: each.rev,
+          refusal: null,
+        })),
+        final: true,
+      })
+  } finally {
+    await prisma.$disconnect()
+  }
+}

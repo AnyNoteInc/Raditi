@@ -132,7 +132,12 @@ export async function applyCabinetOps(db: PrismaClient, input: { userId: string;
       )
     }
   }
-  return applyArtifactOps(db, { batch, actor })
+  const answer = await applyArtifactOps(db, { batch, actor })
+  // A series of a person's edits is a version (Ар13): within 5 minutes they glue into the last
+  // automatic one of the person.
+  if (!answer.repeated)
+    await saveArtifactVersion(db, { artifactId: batch.artifactId, actor, glue: true })
+  return answer
 }
 
 export async function holdCabinetBlock(

@@ -22,6 +22,13 @@ import { useTRPC } from '@/trpc/client'
 
 import type { CabinetArtifact } from './use-artifact'
 
+interface PublicationRow {
+  pageId: string
+  url: string | null
+  versionNo: number
+  current: boolean
+}
+
 // «Опубликовать как страницу» of a document (docs/plan/88-artifacts.md, Ар2, Ар23, §7.10; board
 // F-publish; slice 88.11б): only its owner; a version of it becomes a page for everyone with the
 // link — a snapshot: later edits reach the page by «Обновить страницу» only.
@@ -52,7 +59,8 @@ export const publishTexts = Object.freeze({
 export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
-  const [open, setOpen] = useState(false)
+  // The dialog keeps what it opened on: a page that appears by this very publication changes nothing.
+  const [open, setOpen] = useState<{ live: PublicationRow | null } | null>(null)
   const [versionNo, setVersionNo] = useState<number | ''>('')
   const [result, setResult] = useState<{ ok: boolean; text: string; url?: string } | null>(null)
   const owner = artifactRoleAtLeast(artifact.role, 'owner')
@@ -63,24 +71,32 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
   })
   const versions = useQuery({
     ...trpc.artifact.versions.queryOptions({ artifactId: artifact.id }),
-    enabled: open,
+    enabled: open !== null,
   })
   const publish = useMutation(trpc.pages.publishArtifact.mutationOptions())
   if (!owner || !publishable) return null
-  const live = publication.data ?? null
-  const label = live ? publishTexts.update : publishTexts.publish
+  const current = publication.data ?? null
+  const label = current ? publishTexts.update : publishTexts.publish
+  const live = open?.live ?? null
 
   return (
     <>
       <Tooltip title={label}>
-        <IconButton aria-label={label} onClick={() => setOpen(true)} sx={{ width: 40, height: 40 }}>
+        <IconButton
+          aria-label={label}
+          onClick={() => {
+            setResult(null)
+            setOpen({ live: current })
+          }}
+          sx={{ width: 40, height: 40 }}
+        >
           <AppIcon name="share" size={18} />
         </IconButton>
       </Tooltip>
-      {open && (
+      {open !== null && (
         <Dialog
           open
-          onClose={() => setOpen(false)}
+          onClose={() => setOpen(null)}
           maxWidth="sm"
           fullWidth
           aria-labelledby="publish-artifact-title"
@@ -139,7 +155,7 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
             )}
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button onClick={() => setOpen(false)}>
+            <Button onClick={() => setOpen(null)}>
               {result?.ok ? publishTexts.close : publishTexts.cancel}
             </Button>
             {!result?.ok && (
