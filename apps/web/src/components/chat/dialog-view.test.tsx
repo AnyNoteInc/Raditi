@@ -257,6 +257,8 @@ vi.mock('@/trpc/client', () => ({
     artifact: {
       ofChat: query('artifact.ofChat', async () => []),
       list: query('artifact.list', async () => []),
+      turnArtifacts: query('artifact.turnArtifacts', async () => []),
+      undoTurn: mutation(async () => ({ undone: 0, kept: 0 })),
     },
     billing: { usage: query('billing.usage', async () => null) },
     // «Опубликовать как страницу» (docs/plan/69-pages.md, Ст32): not offered in these tests.

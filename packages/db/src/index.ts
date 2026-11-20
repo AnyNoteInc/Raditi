@@ -78,6 +78,17 @@ export {
   type ExpiredAttachment,
 } from './attachments.ts'
 export {
+  artifactsChangedByTurn,
+  listArtifactChanges,
+  listArtifactVersions,
+  previewArtifactRestore,
+  restoreArtifactVersion,
+  undoArtifactTurn,
+  type ArtifactChangeRow,
+  type ArtifactRestorePreview,
+  type ArtifactVersionRow,
+} from './artifact-history.ts'
+export {
   artifactExcerpt,
   artifactGalleryFilters,
   artifactGallerySorts,

@@ -13,6 +13,7 @@ import { useCallback, useState, type ReactNode } from 'react'
 import { AppIcon } from '@/components/application/app-icon'
 
 import { ArtifactDocument } from './artifact-document'
+import { ArtifactHistoryButton } from './artifact-history'
 import { ArtifactPresenceBar, ArtifactTitle } from './artifact-page'
 import { documentTexts } from './artifact-texts'
 import { useArtifact, type CabinetArtifact } from './use-artifact'
@@ -80,6 +81,7 @@ export function ArtifactPane({
           )}
         </Box>
         <ArtifactPresenceBar presence={presence} />
+        <ArtifactHistoryButton artifact={artifact} onChanged={reread} />
         {actions?.(artifact, reread)}
         <Tooltip title={paneTexts.fullscreen}>
           <IconButton

@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation'
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
+import { ArtifactHistoryButton } from './artifact-history'
 import { ArtifactPage } from './artifact-page'
 import { galleryTexts } from './artifact-texts'
 
@@ -22,20 +23,23 @@ export function ArtifactView({ artifactId }: { artifactId: string }) {
   return (
     <ArtifactPage
       artifactId={artifactId}
-      actions={(artifact) =>
-        artifactRoleAtLeast(artifact.role, 'owner') ? (
-          <Button
-            variant="text"
-            color="inherit"
-            startIcon={<AppIcon name="trash" size={16} />}
-            onClick={() =>
-              void trash.mutateAsync({ artifactId }).then(() => router.push('/artifacts'))
-            }
-          >
-            {galleryTexts.toTrash}
-          </Button>
-        ) : null
-      }
+      actions={(artifact, reread) => (
+        <>
+          <ArtifactHistoryButton artifact={artifact} onChanged={reread} />
+          {artifactRoleAtLeast(artifact.role, 'owner') ? (
+            <Button
+              variant="text"
+              color="inherit"
+              startIcon={<AppIcon name="trash" size={16} />}
+              onClick={() =>
+                void trash.mutateAsync({ artifactId }).then(() => router.push('/artifacts'))
+              }
+            >
+              {galleryTexts.toTrash}
+            </Button>
+          ) : null}
+        </>
+      )}
     />
   )
 }

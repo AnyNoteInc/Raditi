@@ -384,4 +384,123 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       code: 'NOT_FOUND',
     })
   })
+
+  it('keeps versions, returns one, and takes back the edits of one turn (88.11а)', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const { id } = await caller.artifact.create({
+      kind: 'document',
+      title: 'Цены',
+      projectId: null,
+      templateId: null,
+    })
+    const { workspaceId } = await db.artifact.findUniqueOrThrow({
+      where: { id },
+      select: { workspaceId: true },
+    })
+    const write = (ops: unknown[]) =>
+      caller.artifact.write({ batch: { artifactId: id, opId: randomUUID(), ops } })
+    await write([
+      {
+        op: 'insert',
+        block: 'a',
+        after: null,
+        kind: 'section',
+        content: 'Старая цена',
+        props: { heading: 'Цена' },
+      },
+    ])
+    const first = await caller.artifact.saveVersion({ artifactId: id, label: 'До праздников' })
+    const rev = (await caller.artifact.read({ artifactId: id })).blocks[0]!.rev
+    await write([
+      { op: 'replace', block: 'a', ifRev: rev, content: 'Новая цена', props: { heading: 'Цена' } },
+    ])
+    // The person closed the editor; a turn of a chat edits the section and inserts another.
+    await caller.artifact.release({ artifactId: id, block: 'a' })
+    const task = await db.task.create({
+      data: { workspaceId, createdById: anna.id, title: 'Цены' },
+      select: { id: true },
+    })
+    const agent = { kind: 'agent' as const, taskId: task.id, turnNo: 1 }
+    const before = (await caller.artifact.read({ artifactId: id })).blocks[0]!.rev
+    const turn = await applyArtifactOps(db, {
+      batch: {
+        artifactId: id,
+        opId: randomUUID(),
+        ops: [
+          {
+            op: 'replace',
+            block: 'a',
+            ifRev: before,
+            content: 'Цена агента',
+            props: { heading: 'Цена' },
+          },
+          {
+            op: 'insert',
+            block: 'b',
+            after: 'a',
+            kind: 'section',
+            content: 'Доставка',
+            props: { heading: 'Доставка' },
+          },
+        ],
+      },
+      actor: agent,
+    })
+    await settleArtifactWrites(db, {
+      taskId: task.id,
+      blocks: turn.blocks.map((block) => ({
+        artifactId: id,
+        block: block.key,
+        rev: block.rev,
+        refusal: null,
+      })),
+      final: true,
+    })
+    expect(
+      (await caller.artifact.read({ artifactId: id })).blocks.map((block) => block.content),
+    ).toEqual(['Цена агента', 'Доставка'])
+    expect(await caller.artifact.turnArtifacts({ taskId: task.id, turnNo: 1 })).toEqual([
+      { id, title: 'Цены' },
+    ])
+    expect(await caller.artifact.undoTurn({ artifactId: id, taskId: task.id, turnNo: 1 })).toEqual({
+      undone: 2,
+      kept: 0,
+    })
+    expect(
+      (await caller.artifact.read({ artifactId: id })).blocks.map((block) => block.content),
+    ).toEqual(['Новая цена\n'])
+    // The version is returned: a new version, what it overwrites named first.
+    const preview = await caller.artifact.restorePreview({ artifactId: id, no: first.no })
+    expect(preview.blocks).toBe(1)
+    const restored = await caller.artifact.restoreVersion({ artifactId: id, no: first.no })
+    expect(restored.no).toBeGreaterThan(first.no)
+    expect(
+      (await caller.artifact.read({ artifactId: id })).blocks.map((block) => block.content),
+    ).toEqual(['Старая цена\n'])
+    const versions = await caller.artifact.versions({ artifactId: id })
+    expect(versions[0]).toMatchObject({ no: restored.no, current: true })
+    expect(versions.find((each) => each.no === first.no)).toMatchObject({
+      label: 'До праздников',
+      named: true,
+    })
+    expect(
+      (await caller.artifact.version({ artifactId: id, no: first.no })).blocks[0],
+    ).toMatchObject({
+      heading: 'Цена',
+      content: 'Старая цена\n',
+    })
+    const changes = await caller.artifact.changes({ artifactId: id })
+    expect(
+      changes.some((change) => change.author.kind === 'agent' && change.author.chat === 'Цены'),
+    ).toBe(true)
+    // Another person sees no history.
+    const boris = callerOf(await person('Борис'))
+    await expect(boris.artifact.versions({ artifactId: id })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    await expect(
+      boris.artifact.undoTurn({ artifactId: id, taskId: task.id, turnNo: 1 }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
 })

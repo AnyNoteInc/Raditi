@@ -73,6 +73,7 @@ import {
   type ReactNode,
 } from 'react'
 
+import { ArtifactTurnUndo } from '@/components/artifacts/artifact-turn-undo'
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 
@@ -1179,7 +1180,13 @@ function RowView({
     case 'feed.repo_left':
       return <Note text={feedRepoLeftText(row)} />
     case 'feed.rewind':
-      return <Note text={feedRewindText(row)} />
+      return (
+        <>
+          <Note text={feedRewindText(row)} />
+          {/* The edits of the turn in artifacts stay: undone in their history (Ар13). */}
+          {actions.taskId ? <ArtifactTurnUndo taskId={actions.taskId} turn={row.turn} /> : null}
+        </>
+      )
     case 'feed.redo':
       return <Note text={feedRedoText(row)} />
     // The client's edit of a file in «Терминал» (06.11.2026).

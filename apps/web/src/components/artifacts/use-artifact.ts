@@ -61,7 +61,9 @@ export function useArtifact(artifactId: string, { block = null }: { block?: stri
   }, [artifactId, client, queryClient, trpc])
 
   // The mark of presence: now, on a change of the block, and every 15 s.
-  const markHere = useEffectEvent((at: string | null) => here.mutateAsync({ artifactId, block: at }))
+  const markHere = useEffectEvent((at: string | null) =>
+    here.mutateAsync({ artifactId, block: at }),
+  )
   useEffect(() => {
     if (!read.isSuccess) return
     const say = () =>

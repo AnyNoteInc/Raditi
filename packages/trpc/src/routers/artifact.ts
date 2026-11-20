@@ -11,6 +11,15 @@ import { z } from 'zod'
 
 import { chatArtifactsOf } from '../services/artifacts/chat-artifacts.ts'
 import {
+  cabinetChanges,
+  cabinetRestore,
+  cabinetRestorePreview,
+  cabinetTurnArtifacts,
+  cabinetUndoTurn,
+  cabinetVersion,
+  cabinetVersions,
+} from '../services/artifacts/history.ts'
+import {
   createGalleryArtifact,
   galleryOf,
   restoreGalleryArtifact,
@@ -178,6 +187,102 @@ export const artifactRouter = router({
       ),
     )
     .query(({ ctx, input }) => chatArtifactsOf(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** «История версий» (Ар13, D-history): the versions, newest first. */
+  versions: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(
+      z.array(
+        z.strictObject({
+          no: z.number().int().min(1),
+          label: z.string().nullable(),
+          named: z.boolean(),
+          author: z.enum(['user', 'turn', 'schedule']),
+          chat: z.string().nullable(),
+          taskId: z.uuid().nullable(),
+          turnNo: z.number().int().nullable(),
+          createdAt: z.iso.datetime(),
+          current: z.boolean(),
+        }),
+      ),
+    )
+    .query(({ ctx, input }) => cabinetVersions(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** One version to read and compare. */
+  version: consentedProcedure
+    .input(z.strictObject({ artifactId, no: z.number().int().min(1) }))
+    .output(
+      z.strictObject({
+        no: z.number().int().min(1),
+        label: z.string().nullable(),
+        createdAt: z.iso.datetime(),
+        blocks: z.array(
+          z.strictObject({
+            key: z.string(),
+            kind: z.string().nullable(),
+            heading: z.string().nullable(),
+            content: z.string().nullable(),
+          }),
+        ),
+      }),
+    )
+    .query(({ ctx, input }) => cabinetVersion(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** «Все изменения» (D-history): the journal, newest first, without text. */
+  changes: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(
+      z.array(
+        z.strictObject({
+          seq: z.number().int(),
+          kind: z.string(),
+          block: z.string().nullable(),
+          result: z.string(),
+          author: z.discriminatedUnion('kind', [
+            z.strictObject({ kind: z.literal('person'), name: z.string(), self: z.boolean() }),
+            z.strictObject({ kind: z.literal('agent'), chat: z.string().nullable() }),
+          ]),
+          taskId: z.uuid().nullable(),
+          turnNo: z.number().int().nullable(),
+          createdAt: z.iso.datetime(),
+        }),
+      ),
+    )
+    .query(({ ctx, input }) => cabinetChanges(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** What «Вернуть эту версию» overwrites, before the owner confirms (Ар13). */
+  restorePreview: consentedProcedure
+    .input(z.strictObject({ artifactId, no: z.number().int().min(1) }))
+    .output(
+      z.strictObject({
+        blocks: z.number().int().min(0),
+        people: z.array(z.string()),
+        chats: z.array(z.string()),
+        agents: z.number().int().min(0),
+        held: z.number().int().min(0),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      cabinetRestorePreview(ctx.prisma, { userId: ctx.user.id, ...input }),
+    ),
+
+  /** «Вернуть эту версию» — only the owner; a new version. */
+  restoreVersion: consentedProcedure
+    .input(z.strictObject({ artifactId, no: z.number().int().min(1) }))
+    .output(z.strictObject({ no: z.number().int().min(0), changed: z.number().int().min(0) }))
+    .mutation(({ ctx, input }) => cabinetRestore(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** The artifacts a turn of a chat changed: `/undo` offers to take their edits back (Ар13). */
+  turnArtifacts: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), turnNo: z.number().int().min(1) }))
+    .output(z.array(z.strictObject({ id: z.uuid(), title: z.string() })))
+    .query(({ ctx, input }) => cabinetTurnArtifacts(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** «Отменить правки этого хода» (Ар13): the blocks nobody changed since go back. */
+  undoTurn: consentedProcedure
+    .input(z.strictObject({ artifactId, taskId: z.uuid(), turnNo: z.number().int().min(1) }))
+    .output(z.strictObject({ undone: z.number().int().min(0), kept: z.number().int().min(0) }))
+    .mutation(({ ctx, input }) => cabinetUndoTurn(ctx.prisma, { userId: ctx.user.id, ...input })),
 
   /** The reader's own chats of this artifact, newest first (Ар48). */
   chats: consentedProcedure
