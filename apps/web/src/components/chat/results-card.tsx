@@ -259,6 +259,7 @@ export function ResultsCard({
         width: RESULTS_WIDTH,
         maxHeight: underPlan ? 'min(40vh, 320px)' : 'min(60vh, 480px)',
         overflowY: 'auto',
+        overflowX: 'hidden',
         p: 1,
         border: 1,
         borderColor: 'divider',

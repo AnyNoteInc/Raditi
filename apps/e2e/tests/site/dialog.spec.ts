@@ -8,6 +8,7 @@ import { expect, test } from '../../fixtures/signed-in.ts'
 
 import {
   addAnsweredChat,
+  addChatFiles,
   addBrowserTask,
   addLongChat,
   addLongDialog,
@@ -742,6 +743,40 @@ const resultsCard = (page: Page) => page.getByRole('complementary', { name: 'Р�
 /** The icon in the head of the chat that hides and shows the column beside it, whatever it says. */
 const sideToggle = (page: Page) =>
   page.getByRole('button', { name: /^(Скрыть|Показать) (план|результаты)/ })
+
+test('«Результаты» from `lg`: the text and the Word file of the agent, at their full height', async ({
+  page,
+  signedInUser,
+}) => {
+  // Chat 01a1f791 (20.11.2026): the column stretched to a row of no height squeezed the card into
+  // its scrollbar, and the card named the text alone, not the Word file the client asked for.
+  const { taskId } = await addAnsweredChat(signedInUser.id, {
+    words: 'Сделайте программу обучения',
+    answer: 'Готово — программа в файле Word.',
+    thought: 'Writing the programme.',
+  })
+  await addChatFiles(taskId, [
+    { name: 'Программа обучения.md', sizeBytes: 49_086 },
+    { name: 'Программа обучения.docx', sizeBytes: 48_261 },
+  ])
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  const card = resultsCard(page)
+  await expect(card).toBeVisible()
+  await expect(card.getByRole('button', { name: 'Открыть «Программа обучения»' })).toBeVisible()
+  const word = card.getByRole('link', { name: 'Скачать файл «Программа обучения.docx»' })
+  await expect(word).toBeVisible()
+  await expect(word).toHaveAttribute('href', new RegExp(`^/api/tasks/${taskId}/files/`))
+  // The card holds its heading and both lines, nothing scrolls in it.
+  const box = await card.boundingBox()
+  expect(box?.height ?? 0).toBeGreaterThan(100)
+  const scrolls = await card.evaluate(
+    (element) =>
+      element.scrollHeight > element.clientHeight || element.scrollWidth > element.clientWidth,
+  )
+  expect(scrolls).toBe(false)
+})
 
 test('«План работы» from `lg`: a card beside a chat with no documents, read again as the agent works', async ({
   page,
