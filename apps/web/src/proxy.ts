@@ -48,5 +48,7 @@ export const config = {
   // (infra/app/traefik/dynamic/raditi.yml, `web-api-body`). Only the exact paths of the routes are
   // left out: any other path, `/api/attachments/x/y` included, still gets the proxy's 404 on the
   // domain of pages. Next takes only a literal here; proxy.test.ts compiles it as Next does.
-  matcher: ['/((?!api/(?:(?:attachments|project-files)/[^/]+$|profile/avatar$|speech$)).*)'],
+  matcher: [
+    '/((?!api/(?:(?:attachments|project-files|artifact-files)/[^/]+$|profile/avatar$|speech$)).*)',
+  ],
 }

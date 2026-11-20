@@ -5,7 +5,7 @@
 // the batch, the agent's write held until the check, its repeat, the signal raditi_artifact on a
 // connection of its own, a version, the trash and the collector. Synthetic data only, no .env.
 //
-//   pnpm verify:artifacts [-- --keep] [--seconds 20]
+//   pnpm verify:artifacts [-- --keep] [--seconds 20] [--no-browsers]
 //
 // Slice 88.3 starts it with the database alone; 88.4 adds the check of core (`ArtifactChecks`):
 // a write with a value of the workspace's variables is refused live, a clean one shown, a failed
@@ -16,6 +16,9 @@
 // 88.6 adds the agent's side: the family `artifacts` of mcp over this database — its synonyms
 // doc_* of plan 69 mapped onto the operations, the news of every answer, the bounds of a chat and
 // of a pass without its client — and the end of a turn of core with its version.
+// 88.12 and 88.13 add the outbox of a turn into artifacts (`artifact_file_put`, `artifact_import`)
+// and the frame of a mockup in real browsers (frames.mjs): its fonts, files, scripts and bridge,
+// and the edit frame that runs nothing — Chromium and WebKit here, Firefox in Docker.
 
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -31,6 +34,8 @@ const LABEL = 'raditi.artifacts-verify'
 const { values } = parseArgs({
   options: {
     keep: { type: 'boolean', default: false },
+    // The frames of mockups in Chromium, WebKit and Firefox (Docker): on by default.
+    'no-browsers': { type: 'boolean', default: false },
     seconds: { type: 'string', default: '20' },
   },
 })
@@ -139,6 +144,11 @@ try {
   ])
   const redisBinding = (await run('docker', ['port', redisName, '6379/tcp'])).output.split('\n')[0]
   await channelAndMeasure(databaseUrl, `redis://${redisBinding}`)
+  await outboxIntoArtifacts(databaseUrl)
+  if (!values['no-browsers']) {
+    const { framesInBrowsers } = await import('./frames.mjs')
+    await framesInBrowsers({ root, databaseUrl, check })
+  }
   process.stdout.write(`[artifacts] ${passed} checks passed\n`)
 } finally {
   if (started && !values.keep)
@@ -490,7 +500,7 @@ async function agentTools({ dbModule, db, workspace, user, chat }) {
     'the next read names the block a person changed',
     again.changedSinceYourRead.blocks.includes('intro'),
   )
-  const table = await tools.create(next, { kind: 'table', title: 'Цены' })
+  const table = await tools.create(next, { kind: 'canvas', title: 'Экраны' })
   check(
     'a kind whose view has not shipped is refused',
     !table.ok && table.code === 'ARTIFACT_KIND_REFUSED',
@@ -528,6 +538,99 @@ async function agentTools({ dbModule, db, workspace, user, chat }) {
     'a chat outside the project does not open its artifact',
     !foreign.ok && foreign.code === 'ARTIFACT_NOT_FOUND',
   )
+}
+
+/** `artifact_file_put` and `artifact_import` of mcp, then the outbox of the turn in core (88.12). */
+async function outboxIntoArtifacts(databaseUrl) {
+  const dbModule = await import(resolve(root, 'packages/db/src/index.ts'))
+  const { McpArtifactsService } = await import(
+    resolve(root, 'apps/mcp/src/artifacts/artifacts-service.ts')
+  )
+  const { postgresArtifactsStore } = await import(
+    resolve(root, 'apps/mcp/src/artifacts/artifacts-store.ts')
+  )
+  const { ArtifactOutbox } = await import(
+    resolve(root, 'apps/core/src/artifacts/artifact-outbox.ts')
+  )
+  const { packOutbox } = await import(resolve(root, 'packages/snapshots/src/index.ts'))
+  const { uuidv7 } = await import(resolve(root, 'packages/db/src/uuidv7.ts'))
+  const db = dbModule.createPrismaClient({ databaseUrl, log: [] })
+  try {
+    const user = await db.user.create({
+      data: { name: 'Synthetic', email: `${randomUUID()}@example.test` },
+    })
+    const workspace = await db.workspace.create({
+      data: { name: 'Synthetic outbox', dataClass: 'synthetic', createdById: user.id },
+    })
+    await db.member.create({ data: { workspaceId: workspace.id, userId: user.id, role: 'owner' } })
+    const taskId = (
+      await db.task.create({
+        data: { id: uuidv7(), workspaceId: workspace.id, createdById: user.id, status: 'running' },
+        select: { id: true },
+      })
+    ).id
+    const scope = {
+      keyId: randomUUID(),
+      taskId,
+      workspaceId: workspace.id,
+      sessionId: 'synthetic',
+      turn: 1,
+      firstEpoch: 1,
+      epoch: 1,
+      requirements: { repository: false, browser: false },
+    }
+    const tools = new McpArtifactsService({ store: postgresArtifactsStore(db) })
+    const created = await tools.create(scope, { kind: 'mockup', title: 'Лендинг' })
+    check('the agent creates a mockup without a skeleton', created.ok, JSON.stringify(created))
+    const mockupId = created.value.artifactId
+    const put = await tools.filePut(scope, { artifactId: mockupId, file: 'logo.png' })
+    check(
+      'artifact_file_put gives a reference at once',
+      put.ok && /^artifact-file:[0-9a-f-]{36}$/.test(put.value.ref),
+      JSON.stringify(put),
+    )
+    const imported = await tools.import(scope, { file: 'price.csv', title: 'Прайс' })
+    check(
+      'artifact_import names the new artifact now',
+      imported.ok && imported.value.kind === 'table',
+    )
+    const objects = []
+    const outbox = await packOutbox([
+      {
+        name: 'logo.png',
+        bytes: Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+          'base64',
+        ),
+      },
+      { name: 'price.csv', bytes: 'Название;Цена\nХлеб;120\nБатон;90\n' },
+      { name: 'report.pdf', bytes: '%PDF-1.4' },
+    ])
+    const taken = await new ArtifactOutbox({
+      db,
+      storage: { put: async (_bucket, key) => objects.push(key) },
+    }).take({ taskId, turn: 1, outbox })
+    check(
+      'core takes the reserved files of the outbox, the rest stays for the chat',
+      [...taken].toSorted().join() === 'logo.png,price.csv' && objects.length === 1,
+    )
+    const table = await dbModule.readArtifact(db, {
+      artifactId: imported.value.artifactId,
+      actor: { kind: 'agent', taskId, turnNo: 1 },
+    })
+    check(
+      'the CSV became a table of the agent’s writes waiting for the check',
+      table.kind === 'table' &&
+        table.blocks.map((block) => block.kind).join() === 'columns,row,row' &&
+        table.blocks.every((block) => block.checking),
+    )
+    check(
+      'the picture is a ready file of the mockup',
+      (await db.artifactFile.count({ where: { artifactId: mockupId, state: 'ready' } })) === 1,
+    )
+  } finally {
+    await db.$disconnect()
+  }
 }
 
 function percentile(sorted, share) {

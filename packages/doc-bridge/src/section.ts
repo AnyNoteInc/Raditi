@@ -38,3 +38,47 @@ export function sectionToDocument(markdown: string): EditorDocument {
 export function canonicalSection(markdown: string): string {
   return documentToMarkdown(sectionToDocument(markdown))
 }
+
+/**
+ * A whole Markdown file as the sections of a document (docs/plan/88-artifacts.md, §7.5,
+ * `artifact_import` and «Открыть как артефакт»): cut at its headings of the second level outside
+ * code fences; what stands before the first of them is a section named by the first heading of the
+ * first level, or «Начало». The title is that heading of the first level, if any. Each section is
+ * kept in the canonical form.
+ */
+export function markdownImportSections(markdown: string): {
+  title: string | null
+  sections: { heading: string; content: string }[]
+} {
+  const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
+  let fence: string | null = null
+  let title: string | null = null
+  const sections: { heading: string; lines: string[] }[] = [{ heading: '', lines: [] }]
+  for (const line of lines) {
+    const opens = /^ {0,3}(`{3,}|~{3,})/.exec(line)
+    if (opens) {
+      if (fence === null) fence = opens[1]![0]!
+      else if (opens[1]![0] === fence) fence = null
+    }
+    const heading = fence === null ? /^ {0,3}(#{1,2})[ \t]+(.+?)[ \t#]*$/.exec(line) : null
+    if (heading && heading[1] === '#' && title === null && sections.length === 1) {
+      title = heading[2]!.trim()
+      continue
+    }
+    if (heading && heading[1] === '##') {
+      sections.push({ heading: heading[2]!.trim(), lines: [] })
+      continue
+    }
+    sections.at(-1)!.lines.push(line)
+  }
+  const first = sections[0]!
+  if (first.lines.join('').trim() === '') sections.shift()
+  else first.heading = title ?? 'Начало'
+  return {
+    title,
+    sections: sections.map((section) => ({
+      heading: section.heading.slice(0, 200),
+      content: canonicalSection(section.lines.join('\n').trim()),
+    })),
+  }
+}

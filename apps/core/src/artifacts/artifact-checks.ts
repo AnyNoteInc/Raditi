@@ -18,6 +18,7 @@ import {
 import {
   hasOutwardPasswordForm,
   type FeedRow,
+  type ObjectStorage,
   isDomainError,
   tokenReasonOf,
   type PageRefusalReason,
@@ -63,6 +64,8 @@ export interface ArtifactChecksDependencies {
     | 'artifactBlock'
     | 'artifactBatch'
     | 'artifactOp'
+    | 'artifactFile'
+    | 'artifactExport'
     | 'taskTurn'
     | 'taskEvent'
   >
@@ -74,6 +77,8 @@ export interface ArtifactChecksDependencies {
       refused: ReadonlySet<string>,
     ): Promise<void>
   }
+  /** The artifacts bucket: the collector deletes the files and workbooks whose rows went. */
+  storage?: Pick<ObjectStorage, 'delete'>
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -345,6 +350,17 @@ export class ArtifactChecks {
     if (now.getTime() - this.#collectedAt >= ARTIFACT_COLLECT_EVERY_MS) {
       this.#collectedAt = now.getTime()
       const swept = await sweepArtifacts(db, now)
+      // Their objects in the bucket: a photo of a client never outlives its row (rule 1, §14).
+      let deleted = 0
+      for (const key of swept.objects) {
+        try {
+          await this.#deps.storage?.delete('artifacts', key)
+          deleted += 1
+        } catch {
+          logger?.warn('artifact_sweep_object_failed')
+        }
+      }
+      if (deleted > 0) logger?.log(`artifact_sweep objects=${deleted}`)
       const total = swept.purged + swept.journal + swept.batches + swept.leases + swept.filled
       if (total > 0)
         logger?.log(

@@ -6,13 +6,13 @@ import IconButton from '@mui/material/IconButton'
 import Skeleton from '@mui/material/Skeleton'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
-import { artifactKindSpecOf, artifactSavedLine } from '@repo/domain/artifacts'
+import { artifactSavedLine } from '@repo/domain/artifacts'
 import NextLink from 'next/link'
 import { useCallback, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 
-import { ArtifactDocument } from './artifact-document'
+import { ArtifactBody } from './artifact-body'
 import { ArtifactHistoryButton } from './artifact-history'
 import { ArtifactPublishButton } from './artifact-publish'
 import { ArtifactPresenceBar, ArtifactTitle } from './artifact-page'
@@ -58,7 +58,6 @@ export function ArtifactPane({
         </Alert>
       </Box>
     )
-  const markdown = artifactKindSpecOf(artifact.kind)?.view === 'markdown'
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <Box
@@ -97,16 +96,13 @@ export function ArtifactPane({
         </Tooltip>
       </Box>
       <Box sx={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto', px: 2, py: 2 }}>
-        {markdown ? (
-          <ArtifactDocument
-            artifact={artifact}
-            presence={presence}
-            onChanged={reread}
-            onEditing={onEditing}
-          />
-        ) : (
-          <Typography sx={{ color: 'text.secondary' }}>{paneTexts.notShown}</Typography>
-        )}
+        <ArtifactBody
+          artifact={artifact}
+          presence={presence}
+          onChanged={reread}
+          onEditing={onEditing}
+          place="pane"
+        />
       </Box>
     </Box>
   )

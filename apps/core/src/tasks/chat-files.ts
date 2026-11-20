@@ -61,6 +61,8 @@ export class ChatFiles {
     taskId: string
     turn: number
     outbox: Uint8Array | null
+    /** The names the artifacts took of this outbox (docs/plan/88-artifacts.md, §7.5): no files. */
+    taken?: ReadonlySet<string>
   }): Promise<number> {
     const { db, storage, logger, pages } = this.#deps
     const { taskId, turn } = input
@@ -107,6 +109,7 @@ export class ChatFiles {
       }
       const contents = await readOutboxArchive(input.outbox, {
         onFile: async (file) => {
+          if (input.taken?.has(file.name)) return
           if (reserved.has(file.name) && pages) {
             seen.add(file.name)
             // A copy: the archive reader may reuse the buffer of a file once its callback returns.

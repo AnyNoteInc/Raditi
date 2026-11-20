@@ -99,6 +99,22 @@ export {
 } from './artifact-gallery.ts'
 export { isArtifactRank, rankBetween, rankForIndex } from './artifact-rank.ts'
 export {
+  artifactFileFor,
+  artifactFilesByIds,
+  artifactFilesOfTurn,
+  artifactFileUpload,
+  artifactImportsOfTurn,
+  reserveArtifactImport,
+  settleArtifactImport,
+  type ArtifactImportRow,
+  dropArtifactFile,
+  listArtifactFiles,
+  markArtifactFileReady,
+  reserveArtifactFile,
+  startArtifactFileUpload,
+  type ArtifactFileRow,
+} from './artifact-files.ts'
+export {
   adoptLegacySectionWrites,
   artifactBlocksChangedSince,
   artifactChatNews,

@@ -928,6 +928,9 @@ export const documentText = Object.freeze({
   fullscreen: 'На весь экран',
   leaveFullscreen: 'Выйти из полноэкранного режима',
   newTab: 'Открыть в новой вкладке',
+  /** «Открыть как артефакт» of a `.md` or `.html` file (docs/plan/88-artifacts.md, Ар3). */
+  openAsArtifact: 'Открыть как артефакт',
+  openAsArtifactFailed: 'Не удалось открыть файл как артефакт.',
   publish: 'Опубликовать как страницу',
   contents: 'Оглавление',
   source: 'Текст',

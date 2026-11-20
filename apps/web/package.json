@@ -40,6 +40,7 @@
     "@repo/vault": "workspace:*",
     "@repo/yookassa": "workspace:*",
     "@tanstack/react-query": "catalog:",
+    "@tanstack/react-virtual": "catalog:",
     "@tiptap/core": "catalog:",
     "@tiptap/extension-code": "catalog:",
     "@tiptap/extension-image": "catalog:",

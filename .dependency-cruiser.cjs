@@ -248,7 +248,7 @@ module.exports = {
         pathNot: [
           '^packages/doc-bridge/',
           ...npm(
-            'unified|remark-parse|remark-gfm|remark-stringify|mdast-util-to-markdown|mdast-util-from-markdown|@types/mdast',
+            'unified|remark-parse|remark-gfm|remark-stringify|mdast-util-to-markdown|mdast-util-from-markdown|@types/mdast|parse5',
           ),
           // The types of the mdast tree: a module of @types/mdast alone, which the cruiser leaves unresolved.
           '^mdast$',

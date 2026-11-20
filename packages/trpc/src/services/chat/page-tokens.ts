@@ -87,3 +87,70 @@ export function readPageView(
     expiresAt: view.data.e,
   }
 }
+
+// ---- The tokens of artifacts (docs/plan/88-artifacts.md, Ар9, Ар12, Ар28) ----
+// The same key of views, a label of their own each: a token of one sort is never read as another.
+
+/** What names one artifact, or one file of it, for one viewer, until `expiresAt`. */
+export interface ArtifactViewToken {
+  artifactId: string
+  userId: string
+  expiresAt: number
+}
+export interface ArtifactFileToken extends ArtifactViewToken {
+  fileId: string
+}
+
+/** The frame of an artifact on `/v/`, its file on `/v/`, the edit frame of the cabinet. */
+export type ArtifactTokenLabel = 'artifact' | 'afile' | 'aedit'
+
+const artifactTokenSchema = z.strictObject({
+  a: z.uuid(),
+  f: z.uuid().optional(),
+  u: z.string().min(1).max(200),
+  e: z.number().int().positive(),
+})
+
+export function signArtifactToken(
+  key: Uint8Array,
+  label: ArtifactTokenLabel,
+  token: ArtifactViewToken & { fileId?: string },
+): string {
+  const data = base64url(
+    JSON.stringify({
+      a: token.artifactId,
+      ...(token.fileId === undefined ? {} : { f: token.fileId }),
+      u: token.userId,
+      e: token.expiresAt,
+    }),
+  )
+  return `${data}.${base64url(mac(key, `${label}\0${data}`))}`
+}
+
+/** What a token of this label names: null — not one; `expired` — one, out of its time. */
+export function readArtifactToken(
+  key: Uint8Array,
+  label: ArtifactTokenLabel,
+  token: string,
+  now: number,
+): (ArtifactViewToken & { fileId?: string }) | 'expired' | null {
+  const data = opened(key, token, label)
+  if (data === null) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(data, 'base64url').toString('utf8'))
+  } catch {
+    return null
+  }
+  const read = artifactTokenSchema.safeParse(parsed)
+  if (!read.success) return null
+  // A file token names a file; the others never do.
+  if ((label === 'afile') !== (read.data.f !== undefined)) return null
+  if (read.data.e <= now) return 'expired'
+  return {
+    artifactId: read.data.a.toLowerCase(),
+    ...(read.data.f === undefined ? {} : { fileId: read.data.f.toLowerCase() }),
+    userId: read.data.u,
+    expiresAt: read.data.e,
+  }
+}

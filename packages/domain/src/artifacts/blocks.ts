@@ -197,6 +197,16 @@ export function artifactCellProblem(column: ArtifactColumn, value: ArtifactCell)
   }
 }
 
+/**
+ * The blocks that are HTML, CSS or JavaScript of a frame: a person's text of them passes the checks
+ * of a page as written (`checkPageContent`, §7.3, Ар31); the agent's — the check of core.
+ */
+export const artifactPageBlockKinds: readonly ArtifactBlockKind[] = Object.freeze([
+  'html',
+  'style',
+  'script',
+])
+
 // ---- The content of each kind of block ----
 
 export type ArtifactContentProblem = 'too_large' | 'heading_level' | 'json' | 'shape' | 'not_empty'

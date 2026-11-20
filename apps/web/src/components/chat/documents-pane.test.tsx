@@ -9,7 +9,10 @@ import { PAGE_SANDBOX } from '@repo/domain/pages'
 import { TASK_ID } from './testing'
 
 const params: { taskId?: string } = { taskId: TASK_ID }
-vi.mock('next/navigation', () => ({ useParams: () => params }))
+vi.mock('next/navigation', () => ({
+  useParams: () => params,
+  useRouter: () => ({ push: vi.fn() }),
+}))
 
 const { pageView, text, readDoc } = vi.hoisted(() => ({
   readDoc: vi.fn(),
@@ -27,6 +30,7 @@ const { pageView, text, readDoc } = vi.hoisted(() => ({
 
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
+    artifact: { importFile: { mutationOptions: () => ({ mutationFn: vi.fn() }) } },
     document: {
       pageView: { mutationOptions: () => ({ mutationFn: pageView }) },
       text: {

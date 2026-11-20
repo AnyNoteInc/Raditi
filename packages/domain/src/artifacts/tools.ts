@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { docViewSchema } from '../pages/doc.ts'
+import { outboxFileNameSchema } from '../tasks/chat-files.ts'
 import { artifactBlockKeySchema, artifactIntentSchema, artifactTitleSchema } from './blocks.ts'
 import { artifactKindSchema } from './kinds.ts'
 import { artifactLimits } from './limits.ts'
@@ -20,6 +21,8 @@ export const artifactToolNames = [
   'artifact_edit',
   'artifact_claim',
   'artifact_save_version',
+  'artifact_file_put',
+  'artifact_import',
 ] as const
 export type ArtifactToolName = (typeof artifactToolNames)[number]
 
@@ -102,6 +105,30 @@ export const artifactSaveVersionArgumentsSchema = z.strictObject({
 })
 export type ArtifactSaveVersionArguments = z.infer<typeof artifactSaveVersionArgumentsSchema>
 
+/**
+ * `artifact_file_put` (§7.5, slice 88.12): a picture or a font the turn wrote to the outbox, for an
+ * artifact the chat may write — the content names it `artifact-file:<id>` at once, the bytes come at
+ * the end of the turn.
+ */
+export const artifactFilePutArgumentsSchema = z.strictObject({
+  artifactId: z.uuid(),
+  file: outboxFileNameSchema,
+})
+export type ArtifactFilePutArguments = z.infer<typeof artifactFilePutArgumentsSchema>
+
+/**
+ * `artifact_import` (§7.5): a `.md`, `.html`, `.svg` or `.csv` of the outbox — a new artifact (its id
+ * is in the answer, it exists at the end of the turn) or the whole new content of `artifactId`.
+ */
+export const artifactImportArgumentsSchema = z.strictObject({
+  file: outboxFileNameSchema,
+  artifactId: z.uuid().optional(),
+  title: artifactTitleSchema.optional(),
+  /** As `artifact_create`: `this_chat` — the chat's project; null — the client's own. */
+  project: z.enum(['this_chat']).nullable().optional(),
+})
+export type ArtifactImportArguments = z.infer<typeof artifactImportArgumentsSchema>
+
 export const artifactToolArgumentSchemas = {
   artifact_list: artifactListArgumentsSchema,
   artifact_read: artifactReadArgumentsSchema,
@@ -109,6 +136,8 @@ export const artifactToolArgumentSchemas = {
   artifact_edit: artifactEditArgumentsSchema,
   artifact_claim: artifactClaimArgumentsSchema,
   artifact_save_version: artifactSaveVersionArgumentsSchema,
+  artifact_file_put: artifactFilePutArgumentsSchema,
+  artifact_import: artifactImportArgumentsSchema,
 } as const satisfies Record<ArtifactToolName, z.ZodType>
 
 /**
@@ -136,6 +165,10 @@ export function artifactToolLine(tool: string): string | null {
     case 'artifact_save_version':
     case 'doc_finish':
       return 'Сохраняет версию артефакта'
+    case 'artifact_file_put':
+      return 'Добавляет файл в артефакт'
+    case 'artifact_import':
+      return 'Переносит файл в артефакт'
     default:
       return null
   }

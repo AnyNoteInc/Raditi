@@ -13,6 +13,8 @@ import {
   artifactListArgumentsSchema,
   artifactReadArgumentsSchema,
   artifactSaveVersionArgumentsSchema,
+  artifactFilePutArgumentsSchema,
+  artifactImportArgumentsSchema,
 } from '@repo/domain/artifacts'
 import {
   browserToolArgumentSchemas,
@@ -101,6 +103,8 @@ const artifactsCall = z.discriminatedUnion('name', [
   call('artifact_edit', artifactEditArgumentsSchema),
   call('artifact_claim', artifactClaimArgumentsSchema),
   call('artifact_save_version', artifactSaveVersionArgumentsSchema),
+  call('artifact_file_put', artifactFilePutArgumentsSchema),
+  call('artifact_import', artifactImportArgumentsSchema),
 ])
 // The tools `doc_*` of plan 69 (Ар3): synonyms of the family, accepted but never listed.
 const artifactSynonymsCall = z.discriminatedUnion('name', [

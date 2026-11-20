@@ -116,6 +116,13 @@ function fakeStore(
     setView: vi.fn<S['setView']>(async () => undefined),
     lastRev: vi.fn<S['lastRev']>(async () => 2),
     revision: vi.fn<S['revision']>(async () => 5),
+    reserveFile: vi.fn<S['reserveFile']>(async () => ({
+      id: '01960000-0000-7000-8000-0000000000f1',
+    })),
+    reserveImport: vi.fn<S['reserveImport']>(async (input) => ({
+      artifactId: input.artifactId ?? '01960000-0000-7000-8000-0000000000f2',
+    })),
+    kindOf: vi.fn<S['kindOf']>(async () => 'document'),
     admit: vi.fn<S['admit']>(async () => true),
     feed: vi.fn<S['feed']>(async (_taskId: string, _turn: number, row: FeedRow) => {
       rows.push(row)
@@ -161,7 +168,7 @@ const answer = (res: Result) =>
   JSON.parse(res.body.result.content[0]!.text) as Record<string, unknown>
 
 describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () => {
-  it('lists the six tools of the family and none of the synonyms of plan 69', async () => {
+  it('lists the tools of the family and none of the synonyms of plan 69', async () => {
     const server = await start(fakeStore().store)
     const list = await post(server, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
     const tools = list.body.result.tools as {
@@ -178,6 +185,8 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
       'artifact_edit',
       'artifact_claim',
       'artifact_save_version',
+      'artifact_file_put',
+      'artifact_import',
     ])
     expect(names.filter((name) => name.startsWith('doc_'))).toEqual([])
     for (const tool of family) expect(tool.inputSchema.additionalProperties, tool.name).toBe(false)
@@ -214,9 +223,27 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
 
   it('refuses a kind whose view has not shipped (Ар7)', async () => {
     const server = await start(fakeStore().store)
-    const res = await post(server, call('artifact_create', { kind: 'table', title: 'Цены' }))
+    const res = await post(server, call('artifact_create', { kind: 'canvas', title: 'Экраны' }))
     expect(res.body.result.isError).toBe(true)
     expect(answer(res)).toMatchObject({ code: 'ARTIFACT_KIND_REFUSED' })
+  })
+
+  it('creates a table without a skeleton: its blocks go by artifact_edit (88.14)', async () => {
+    const { store } = fakeStore()
+    const server = await start(store)
+    const refused = await post(
+      server,
+      call('artifact_create', {
+        kind: 'table',
+        title: 'Цены',
+        skeleton: [{ id: 'intro', intent: 'Введение' }],
+      }),
+    )
+    expect(refused.body.result.isError).toBe(true)
+    expect(answer(refused)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
+    const made = await post(server, call('artifact_create', { kind: 'table', title: 'Цены' }))
+    expect(answer(made)).toMatchObject({ artifactId, kind: 'table' })
+    expect(store.apply).not.toHaveBeenCalled()
   })
 
   it('reads by blocks with the news since the last read, and moves the read (Ар21)', async () => {
@@ -438,5 +465,36 @@ describe('the synonyms doc_* of plan 69 (Ар3)', () => {
     const done = await post(server, call('doc_finish', { docId: artifactId, view: 'text' }))
     expect(answer(done)).toMatchObject({ finished: 'when this turn ends' })
     expect(store.setView).toHaveBeenCalledWith(artifactId, 'text')
+  })
+
+  it('puts a file of the outbox into an artifact and gives its reference (88.12)', async () => {
+    const { store } = fakeStore()
+    const server = await start(store)
+    const res = await post(server, call('artifact_file_put', { artifactId, file: 'logo.png' }))
+    expect(answer(res)).toMatchObject({
+      ref: 'artifact-file:01960000-0000-7000-8000-0000000000f1',
+    })
+    expect(store.reserveFile).toHaveBeenCalledWith({
+      taskId: base.taskId,
+      turnNo: 2,
+      artifactId,
+      fileName: 'logo.png',
+    })
+    const refused = await post(server, call('artifact_file_put', { artifactId, file: 'page.html' }))
+    expect(answer(refused)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
+  })
+
+  it('imports a file of the outbox as a new artifact, or into one of its kind (88.12)', async () => {
+    const { store } = fakeStore()
+    const server = await start(store)
+    const fresh = await post(server, call('artifact_import', { file: 'plan.md', title: 'План' }))
+    expect(answer(fresh)).toMatchObject({
+      artifactId: '01960000-0000-7000-8000-0000000000f2',
+      kind: 'document',
+    })
+    const into = await post(server, call('artifact_import', { file: 'page.html', artifactId }))
+    expect(answer(into)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
+    const unknown = await post(server, call('artifact_import', { file: 'notes.txt' }))
+    expect(answer(unknown)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
   })
 })

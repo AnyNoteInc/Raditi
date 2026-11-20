@@ -12,6 +12,8 @@ import {
   insertFeedEvent,
   listChatArtifacts,
   readArtifact,
+  reserveArtifactFile,
+  reserveArtifactImport,
   saveArtifactVersion,
   setArtifactView,
   type PrismaClient,
@@ -72,6 +74,13 @@ export function postgresArtifactsStore(
     revision: async (artifactId) =>
       (await db.artifact.findUnique({ where: { id: artifactId }, select: { revision: true } }))
         ?.revision ?? 1,
+    reserveFile: (input) => reserveArtifactFile(db, input),
+    reserveImport: async (input) => ({
+      artifactId: (await reserveArtifactImport(db, input)).artifactId,
+    }),
+    kindOf: async (artifactId) =>
+      (await db.artifact.findUnique({ where: { id: artifactId }, select: { kind: true } }))?.kind ??
+      null,
     admit: (key, limit) => admitInWindow(db, { key, limit, windowMs: DAY_MS, now: now() }),
     feed: async (taskId, turnNo, row) => {
       const turn = await db.taskTurn.findFirst({ where: { taskId, turnNo }, select: { id: true } })

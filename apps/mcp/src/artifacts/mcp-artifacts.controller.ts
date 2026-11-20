@@ -17,12 +17,16 @@ import {
   artifactClaimArgumentsSchema,
   artifactCreateArgumentsSchema,
   artifactEditArgumentsSchema,
+  artifactFilePutArgumentsSchema,
+  artifactImportArgumentsSchema,
   artifactListArgumentsSchema,
   artifactReadArgumentsSchema,
   artifactSaveVersionArgumentsSchema,
   type ArtifactClaimArguments,
   type ArtifactCreateArguments,
   type ArtifactEditArguments,
+  type ArtifactFilePutArguments,
+  type ArtifactImportArguments,
   type ArtifactListArguments,
   type ArtifactReadArguments,
   type ArtifactSaveVersionArguments,
@@ -152,6 +156,32 @@ export class McpArtifactsController {
   async saveVersion(@Payload() args: ArtifactSaveVersionArguments, @Ctx() context: McpContext) {
     const scope = scopeOf(context)
     return scope ? answerOf(await this.artifacts.saveVersion(scope, args)) : unauthorized
+  }
+
+  @ToolScopes(['artifacts'])
+  @Tool({
+    name: 'artifact_file_put',
+    description:
+      'Put a picture or a font you wrote to the outbox into an artifact; returns artifact-file:<id> to write in its HTML or CSS instead of an address. The bytes arrive at the end of the turn.',
+    parameters: artifactFilePutArgumentsSchema,
+    annotations: writes,
+  })
+  async filePut(@Payload() args: ArtifactFilePutArguments, @Ctx() context: McpContext) {
+    const scope = scopeOf(context)
+    return scope ? answerOf(await this.artifacts.filePut(scope, args)) : unauthorized
+  }
+
+  @ToolScopes(['artifacts'])
+  @Tool({
+    name: 'artifact_import',
+    description:
+      'Turn a long .md, .html, .svg or .csv you wrote to the outbox into an artifact (document, mockup, table), or into the whole content of artifactId. Done at the end of the turn.',
+    parameters: artifactImportArgumentsSchema,
+    annotations: writes,
+  })
+  async import(@Payload() args: ArtifactImportArguments, @Ctx() context: McpContext) {
+    const scope = scopeOf(context)
+    return scope ? answerOf(await this.artifacts.import(scope, args)) : unauthorized
   }
 }
 

@@ -66,6 +66,8 @@ model User {
   repoActions             RepoAction[]          @relation("RepoActionCreator")
   memoryEntries           MemoryEntry[]
   scheduledTasks          ScheduledTask[]
+  artifactExports         ArtifactExport[]
+  artifactFiles           ArtifactFile[]
 
   @@map("users")
 }
@@ -952,6 +954,8 @@ model Task {
   pageFiles          PageFile[]
   artifacts          Artifact[]
   artifactChats      ArtifactChat[]
+  artifactFiles      ArtifactFile[]
+  artifactImports    ArtifactImport[]
   memorySources      MemoryEntry[]
   memoryReservations MemoryReservation[]
   repoBranch         ProjectRepoBranch?
@@ -2591,6 +2595,8 @@ model Artifact {
   ops          ArtifactOp[]
   chats        ArtifactChat[]
   publications ArtifactPublication[]
+  exports      ArtifactExport[]
+  files        ArtifactFile[]
 
   @@index([workspaceId, createdAt])
   @@index([taskId])
@@ -3068,4 +3074,77 @@ model ArtifactPublication {
 
   @@index([artifactId])
   @@map("artifact_publications")
+}
+
+/// «Скачать → Excel» of a table (docs/plan/88-artifacts.md, §7.13, question 26): core builds it.
+model ArtifactExport {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  artifactId String    @map("artifact_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  /// xlsx
+  format     String    @db.VarChar(8)
+  /// pending | ready | failed
+  state      String    @default("pending") @db.VarChar(8)
+  objectKey  String?   @map("object_key") @db.VarChar(255)
+  bytes      BigInt?
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  readyAt    DateTime? @map("ready_at") @db.Timestamptz(6)
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([artifactId, createdAt])
+  @@map("artifact_exports")
+}
+
+/// A file of an artifact (docs/plan/88-artifacts.md, Ар12; slice 88.12): its content names it by
+/// `artifact-file:<id>`; the frame gets a signed address of the domain of pages.
+model ArtifactFile {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  artifactId      String    @map("artifact_id") @db.Uuid
+  objectKey       String    @map("object_key") @db.VarChar(255)
+  name            String    @db.VarChar(200)
+  contentType     String    @map("content_type") @db.VarChar(64)
+  bytes           BigInt    @default(0)
+  sha256          String?   @db.Char(64)
+  /// uploading (a person's, bytes not yet here) | reserved (a turn's, until its end) | ready
+  state           String    @db.VarChar(10)
+  createdByUserId String?   @map("created_by_user_id") @db.Uuid
+  taskId          String?   @map("task_id") @db.Uuid
+  turnNo          Int?      @map("turn_no")
+  /// The name of the file in the outbox of the turn.
+  fileName        String?   @map("file_name") @db.VarChar(255)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  readyAt         DateTime? @map("ready_at") @db.Timestamptz(6)
+
+  artifact  Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  task      Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@unique([taskId, turnNo, fileName])
+  @@index([artifactId, createdAt])
+  @@map("artifact_files")
+}
+
+/// `artifact_import` (docs/plan/88-artifacts.md, §7.5; slice 88.12): a file of the outbox of a turn
+/// as a new artifact (`artifact_id` named at the reservation) or the content of one, at its end.
+model ArtifactImport {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  taskId       String    @map("task_id") @db.Uuid
+  turnNo       Int       @map("turn_no")
+  fileName     String    @map("file_name") @db.VarChar(255)
+  artifactId   String    @map("artifact_id") @db.Uuid
+  intoExisting Boolean   @map("into_existing")
+  title        String?   @db.VarChar(200)
+  /// A new artifact outside the project of the chat.
+  personal     Boolean   @default(false)
+  /// reserved | done | refused
+  state        String    @default("reserved") @db.VarChar(10)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  settledAt    DateTime? @map("settled_at") @db.Timestamptz(6)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, turnNo, fileName])
+  @@map("artifact_imports")
 }

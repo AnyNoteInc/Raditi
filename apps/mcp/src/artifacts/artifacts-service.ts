@@ -14,16 +14,23 @@ import {
   type FeedRow,
 } from '@repo/domain'
 import {
+  artifactFileNameSchema,
+  artifactFileRef,
   artifactForbidden,
+  artifactImportKindOf,
   artifactKindCreatable,
   artifactKindRefused,
+  artifactKindSpecs,
   artifactLimit,
   artifactLimits,
   artifactNotFound,
+  artifactOpInvalid,
   type ArtifactBatch,
   type ArtifactClaimArguments,
   type ArtifactCreateArguments,
   type ArtifactEditArguments,
+  type ArtifactFilePutArguments,
+  type ArtifactImportArguments,
   type ArtifactListArguments,
   type ArtifactListScope,
   type ArtifactOp,
@@ -129,6 +136,22 @@ export interface McpArtifactsStore {
   setView(artifactId: string, view: 'page' | 'text'): Promise<void>
   lastRev(taskId: string, artifactId: string, block: string): Promise<number | null>
   revision(artifactId: string): Promise<number>
+  reserveFile(input: {
+    taskId: string
+    turnNo: number
+    artifactId: string
+    fileName: string
+  }): Promise<{ id: string }>
+  reserveImport(input: {
+    taskId: string
+    turnNo: number
+    fileName: string
+    artifactId: string | null
+    title: string | null
+    personal: boolean
+  }): Promise<{ artifactId: string }>
+  /** The kind of an artifact; null — none. */
+  kindOf(artifactId: string): Promise<string | null>
   /** One more of a counted thing of this turn: false — its limit is reached. */
   admit(key: string, limit: number): Promise<boolean>
   feed(taskId: string, turnNo: number, row: FeedRow): Promise<void>
@@ -340,6 +363,13 @@ export class McpArtifactsService {
   async #create(scope: McpTurnAccess, args: ArtifactCreateArguments) {
     if (!artifactKindCreatable(args.kind)) throw artifactKindRefused(args.kind)
     if (scope.unattended && args.project === 'this_chat') throw unattendedRefusal()
+    // A skeleton is of sections; a kind without them (a table) writes its blocks by artifact_edit.
+    if (
+      args.skeleton &&
+      args.skeleton.length > 0 &&
+      !artifactKindSpecs[args.kind].blocks.includes('section')
+    )
+      throw artifactOpInvalid('this kind has no skeleton: write its blocks with artifact_edit')
     // A new artifact of a chat of a project goes to the project (Ар42); a pass without its client
     // makes the client's own (Ар24).
     const chatProject = await this.#store.projectOf(scope.taskId)
@@ -430,6 +460,65 @@ export class McpArtifactsService {
         ...(args.label ? { label: 'not kept: a version of the agent is an automatic one' } : {}),
         note: 'A version holds what the platform checked; the end of this turn makes one too.',
         ...(await this.#store.news(scope.taskId, args.artifactId)),
+      }
+    })
+  }
+
+  /**
+   * `artifact_file_put` (§7.5): a picture or a font of the outbox for an artifact the chat writes;
+   * the reference goes into the content now, the bytes come at the end of the turn.
+   */
+  filePut(scope: McpTurnAccess, args: ArtifactFilePutArguments): Promise<McpArtifactsAnswer> {
+    return answerOf(async () => {
+      await this.#open(scope, args.artifactId, true)
+      if (!artifactFileNameSchema.safeParse(args.file).success)
+        throw artifactOpInvalid(
+          'a file of an artifact is a picture or a font: png, jpg, gif, webp, avif, svg, woff2, woff',
+        )
+      const { id } = await this.#store.reserveFile({
+        taskId: scope.taskId,
+        turnNo: scope.turn,
+        artifactId: args.artifactId,
+        fileName: args.file,
+      })
+      return {
+        artifactId: args.artifactId,
+        ref: artifactFileRef(id),
+        live: 'at the end of this turn',
+        note: `Write ${artifactFileRef(id)} where its address goes (src, url()), never an address. Only a file of the outbox folder of this turn; copy one from the inbox or the project there first.`,
+      }
+    })
+  }
+
+  /**
+   * `artifact_import` (§7.5): a whole `.md`, `.html`, `.svg` or `.csv` of the outbox — a new artifact
+   * of its kind, or the new content of one of that kind the chat writes — at the end of the turn.
+   */
+  import(scope: McpTurnAccess, args: ArtifactImportArguments): Promise<McpArtifactsAnswer> {
+    return answerOf(async () => {
+      const kind = artifactImportKindOf(args.file)
+      if (kind === null || !artifactKindCreatable(kind))
+        throw artifactOpInvalid('import a .md (document), .html or .svg (mockup), or .csv (table)')
+      let personal = scope.unattended || args.project === null
+      if (args.artifactId !== undefined) {
+        await this.#open(scope, args.artifactId, true)
+        if ((await this.#store.kindOf(args.artifactId)) !== kind)
+          throw artifactOpInvalid(`the file makes a ${kind}: import it into one of that kind`)
+        personal = false
+      } else if (scope.unattended && args.project === 'this_chat') throw unattendedRefusal()
+      if (args.title !== undefined) assertText(args.title)
+      const { artifactId } = await this.#store.reserveImport({
+        taskId: scope.taskId,
+        turnNo: scope.turn,
+        fileName: args.file,
+        artifactId: args.artifactId ?? null,
+        title: args.title ?? null,
+        personal,
+      })
+      return {
+        artifactId,
+        kind,
+        live: 'at the end of this turn: read or edit it in the next turn',
       }
     })
   }

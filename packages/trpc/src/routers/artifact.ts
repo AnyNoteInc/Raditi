@@ -35,6 +35,18 @@ import {
   takeCabinetBlock,
 } from '../services/artifacts/editor.ts'
 import { chatContextOf } from '../services/chat/context.ts'
+import {
+  cabinetArtifactFiles,
+  editArtifactText,
+  importChatFileAsArtifact,
+  issueArtifactFrame,
+  startCabinetArtifactFile,
+} from '../services/artifacts/frame.ts'
+import {
+  artifactExportStatus,
+  cabinetTableTotals,
+  startArtifactExport,
+} from '../services/artifacts/table.ts'
 
 import {
   artifactPresence,
@@ -401,5 +413,127 @@ export const artifactRouter = router({
       const signals = ctx.chat?.artifacts ?? null
       if (signals === null) return nobody
       return artifactPresence(ctx.prisma, signals, { userId: ctx.user.id, ...input })
+    }),
+
+  /**
+   * The totals of a table (§7.7, slice 88.14): the sums of its number and money columns, counted on
+   * the server with decimal.js — over all its rows, or the rows of the screen (`rows`, a filter).
+   */
+  tableTotals: consentedProcedure
+    .input(
+      z.strictObject({
+        artifactId,
+        rows: z.array(artifactBlockKeySchema).max(5000).nullable(),
+      }),
+    )
+    .output(
+      z.strictObject({
+        totals: z.record(z.string(), z.string()),
+        rows: z.number().int().min(0),
+      }),
+    )
+    .query(({ ctx, input }) => cabinetTableTotals(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** «Скачать → Excel» of a table: core builds the workbook (§7.13, question 26). */
+  exportStart: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(z.strictObject({ exportId: z.uuid() }))
+    .mutation(({ ctx, input }) =>
+      startArtifactExport(ctx.prisma, { userId: ctx.user.id, ...input }),
+    ),
+
+  /** How an export goes; `ready` — `/api/artifact-exports/<id>` gives it to this person. */
+  exportStatus: consentedProcedure
+    .input(z.strictObject({ exportId: z.uuid() }))
+    .output(z.strictObject({ state: z.enum(['pending', 'ready', 'failed']) }))
+    .query(({ ctx, input }) => artifactExportStatus(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /**
+   * The address of the frame of a mockup for this viewer, five minutes (Ар28, Ар9): `view` — on
+   * the root of the domain of pages, with its scripts; `edit` — the edit frame of the cabinet, none.
+   */
+  frame: consentedProcedure
+    .input(
+      z.strictObject({
+        artifactId,
+        mode: z.enum(['view', 'edit']),
+        // The `seq` the cabinet read: a new one is a new document of the frame, a new address.
+        seq: z.number().int().min(0).optional(),
+      }),
+    )
+    .output(z.strictObject({ url: z.string(), expiresAt: z.iso.datetime() }))
+    .query(({ ctx, input }) =>
+      issueArtifactFrame(ctx.prisma, ctx.chat ?? null, {
+        userId: ctx.user.id,
+        artifactId: input.artifactId,
+        mode: input.mode,
+      }),
+    ),
+
+  /** «Править текст» (Ар9): the slots of text of one element, plain text, under `ifRev`. */
+  editText: consentedProcedure
+    .input(
+      z.strictObject({
+        artifactId,
+        block: artifactBlockKeySchema,
+        ifRev: z.number().int().min(0),
+        element: z.string().min(3).max(60),
+        shape: z.array(z.string().max(120)).max(500),
+        edits: z
+          .array(
+            z.strictObject({
+              slot: z.number().int().min(0).max(500),
+              text: z.string().max(8000),
+            }),
+          )
+          .min(1)
+          .max(50),
+      }),
+    )
+    .output(opsAnswer)
+    .mutation(({ ctx, input }) => editArtifactText(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** The files of an artifact (Ар12): pictures and fonts its content names `artifact-file:<id>`. */
+  files: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(
+      z.array(
+        z.strictObject({
+          id: z.uuid(),
+          ref: z.string(),
+          name: z.string(),
+          type: z.string(),
+          bytes: z.number().int().min(0),
+          createdAt: z.iso.datetime(),
+        }),
+      ),
+    )
+    .query(({ ctx, input }) => cabinetArtifactFiles(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /** «Загрузить файл»: a row for the bytes `PUT /api/artifact-files/<id>` brings. */
+  fileStart: consentedProcedure
+    .input(
+      z.strictObject({
+        artifactId,
+        name: z.string().min(1).max(200),
+        sizeBytes: z
+          .number()
+          .int()
+          .min(1)
+          .max(5 * 1024 * 1024),
+      }),
+    )
+    .output(z.strictObject({ fileId: z.uuid(), ref: z.string(), uploadUrl: z.string() }))
+    .mutation(({ ctx, input }) =>
+      startCabinetArtifactFile(ctx.prisma, { userId: ctx.user.id, ...input }),
+    ),
+
+  /** «Открыть как артефакт» of a `.md`, `.html`, `.svg` or `.csv` file of a chat (Ар3). */
+  importFile: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), fileId: z.uuid() }))
+    .output(z.strictObject({ id: z.uuid() }))
+    .mutation(({ ctx, input }) => {
+      const chat = chatContextOf(ctx)
+      return importChatFileAsArtifact(ctx.prisma, chat.storage(), { userId: ctx.user.id, ...input })
     }),
 })

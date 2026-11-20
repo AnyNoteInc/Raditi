@@ -3,11 +3,14 @@ import { createHash, randomBytes } from 'node:crypto'
 import {
   assembleDocMarkdown,
   isDomainError,
+  checkPageContent,
+  pageContentRefused,
   secretInContent,
   type PageRefusalReason,
 } from '@repo/domain'
 import {
   applyQuoteEdit,
+  artifactPageBlockKinds,
   artifactBatchHasSecretShape,
   artifactBatchProblem,
   artifactBatchSchema,
@@ -89,7 +92,17 @@ export function canonicalJson(value: unknown): string {
  */
 export type ArtifactActor =
   | { kind: 'user'; userId: string }
-  | { kind: 'agent'; taskId: string; turnNo: number; scheduled?: boolean }
+  | {
+      kind: 'agent'
+      taskId: string
+      turnNo: number
+      scheduled?: boolean
+      /**
+       * An import of a file of the outbox at the end of the turn (`artifact_import`, §7.5): bounded
+       * by the import itself (2 MiB, 5 a turn), not by the bounds of the agent's writes of a turn.
+       */
+      outbox?: boolean
+    }
 
 interface ResolvedActor {
   kind: 'user' | 'agent'
@@ -404,6 +417,8 @@ export async function fillArtifactRows(
 // ———————————————————————————————————————— create
 
 export interface ArtifactCreate {
+  /** Its id, when the caller named it before (an import reserved during the turn, 88.12). */
+  id?: string
   workspaceId: string
   kind: string
   title: string
@@ -467,6 +482,7 @@ export async function createArtifact(
     const agent = actor.kind === 'agent'
     const created = await tx.artifact.create({
       data: {
+        ...(input.id === undefined ? {} : { id: input.id }),
         workspaceId: input.workspaceId,
         taskId: actor.taskId,
         projectId: input.projectId ?? null,
@@ -561,7 +577,8 @@ export async function applyArtifactOps(
   if (!parsed.success)
     throw artifactOpInvalid(parsed.error.issues[0]?.message ?? 'the batch does not parse')
   const batch = parsed.data
-  const author = input.actor.kind === 'user' ? 'cabinet' : 'agent'
+  const outbox = input.actor.kind === 'agent' && input.actor.outbox === true
+  const author = input.actor.kind === 'user' || outbox ? 'cabinet' : 'agent'
   const problem = artifactBatchProblem(batch, author)
   if (problem !== null)
     throw problem.code === 'ARTIFACT_TOO_LARGE'
@@ -584,7 +601,8 @@ export async function applyArtifactOps(
         repeated: true,
       }
     }
-    if (actor.kind === 'agent') await checkTurnBounds(tx, artifact.id, actor, batch.ops.length)
+    if (actor.kind === 'agent' && !outbox)
+      await checkTurnBounds(tx, artifact.id, actor, batch.ops.length)
     return new BatchRun(tx, artifact, actor, now, batch, hash).run()
   })
 }
@@ -817,6 +835,11 @@ class BatchRun {
     if (kind === 'columns') this.#columns = undefined
     if (kind === 'row') await this.#checkCells(safeJson(content) as ArtifactCells)
     if (!this.#agent && secretInContent(content)) throw artifactSecretShape()
+    // A person's HTML, styles and scripts: the checks of a page on the text the block now holds.
+    if (!this.#agent && artifactPageBlockKinds.includes(kind)) {
+      const verdict = checkPageContent(new TextEncoder().encode(content))
+      if (!verdict.ok) throw pageContentRefused(verdict.reason)
+    }
   }
 
   async #checkCells(cells: ArtifactCells): Promise<void> {
@@ -2293,6 +2316,8 @@ export async function restoreArtifact(
 }
 
 export interface ArtifactSweep {
+  /** The objects of the artifacts bucket their rows no longer name: the caller deletes them. */
+  objects: string[]
   purged: number
   journal: number
   batches: number
@@ -2306,7 +2331,15 @@ export interface ArtifactSweep {
  * of batches go after 30 days; expired leases are cleared; rows of the code before are filled.
  */
 export async function sweepArtifacts(
-  db: Pick<PrismaClient, '$executeRaw' | 'artifact' | 'artifactBlock' | 'artifactBatch'>,
+  db: Pick<
+    PrismaClient,
+    | '$executeRaw'
+    | 'artifact'
+    | 'artifactBlock'
+    | 'artifactBatch'
+    | 'artifactFile'
+    | 'artifactExport'
+  >,
   now: Date,
   limit = 100,
 ): Promise<ArtifactSweep> {
@@ -2315,6 +2348,38 @@ export async function sweepArtifacts(
     select: { id: true },
     take: limit,
   })
+  const gone = expired.map((each) => each.id)
+  // The files and workbooks of artifacts gone for good (slices 88.12, 88.14), uploads that never
+  // came within two hours, reservations of turns no end reached within a day, workbooks older
+  // than a day: their rows go, their objects are the caller's to delete.
+  const hour = 60 * 60 * 1000
+  const files = await db.artifactFile.findMany({
+    where: {
+      OR: [
+        { artifactId: { in: gone } },
+        { state: 'uploading', createdAt: { lt: new Date(now.getTime() - 2 * hour) } },
+        { state: 'reserved', createdAt: { lt: new Date(now.getTime() - 24 * hour) } },
+      ],
+    },
+    select: { id: true, objectKey: true },
+    take: 1000,
+  })
+  const exports = await db.artifactExport.findMany({
+    where: {
+      OR: [
+        { artifactId: { in: gone } },
+        { createdAt: { lt: new Date(now.getTime() - 24 * hour) } },
+      ],
+    },
+    select: { id: true, objectKey: true },
+    take: 1000,
+  })
+  await db.artifactFile.deleteMany({ where: { id: { in: files.map((file) => file.id) } } })
+  await db.artifactExport.deleteMany({ where: { id: { in: exports.map((each) => each.id) } } })
+  const objects = [
+    ...files.map((file) => file.objectKey),
+    ...exports.flatMap((each) => (each.objectKey === null ? [] : [each.objectKey])),
+  ]
   const purged = expired.length
     ? (await db.artifact.deleteMany({ where: { id: { in: expired.map((each) => each.id) } } }))
         .count
@@ -2350,5 +2415,5 @@ export async function sweepArtifacts(
       })
     ).count
   const filled = await fillArtifactRows(db)
-  return { purged, journal, batches, leases, filled }
+  return { objects, purged, journal, batches, leases, filled }
 }

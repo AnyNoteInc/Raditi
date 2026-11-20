@@ -13,6 +13,7 @@ import { llmBackends } from '@repo/llm-backends'
 import { PRISMA } from '@repo/service-runtime'
 
 import { ArtifactChecks } from '../artifacts/artifact-checks.ts'
+import { ArtifactOutbox } from '../artifacts/artifact-outbox.ts'
 import { BrowserSessions } from '../browser/browser-sessions.ts'
 import type { CoreConfig } from '../config/config.ts'
 import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
@@ -117,6 +118,12 @@ export const taskProviders: Provider[] = [
           storage,
           logger: new Logger('ChatFiles'),
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
+        }),
+        // The files and imports a turn put from its outbox into artifacts (88-artifacts, §7.5).
+        artifactOutbox: new ArtifactOutbox({
+          db: prisma,
+          storage,
+          logger: new Logger('ArtifactOutbox'),
         }),
         // The agent's writes in artifacts (docs/plan/88-artifacts.md, Ар16, Ар19), the versions of
         // the turn and the publications of documents after them (Ар3).
@@ -224,9 +231,11 @@ export const taskProviders: Provider[] = [
         schedules: new ScheduleChanges({ db: prisma, logger: new Logger('ScheduleChanges') }),
         // The changes of a turn whose end recovery reached (docs/plan/84-projects.md, §10).
         pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
-        // The writes in artifacts of turns the sweep ends, and their collector (Ар16, Ар50).
+        // The writes in artifacts of turns the sweep ends, and their collector (Ар16, Ар50) with
+        // the objects of the files and workbooks it removes.
         artifacts: new ArtifactChecks({
           db: prisma,
+          storage: inbox,
           logger: new Logger('ArtifactChecks'),
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),

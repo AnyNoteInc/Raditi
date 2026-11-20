@@ -11,6 +11,7 @@ import Select from '@mui/material/Select'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { DocumentMarkdown, markdownTitleOf } from '@repo/doc-render/markdown'
+import { artifactImportKindOf, artifactKindCreatable } from '@repo/domain/artifacts'
 import { PAGE_SANDBOX } from '@repo/domain/pages'
 import {
   chatDocumentsOf,
@@ -23,6 +24,7 @@ import {
 } from '@repo/domain/tasks/chat-documents'
 import { BrandProgress } from '@repo/ui/brand-progress'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
@@ -373,6 +375,9 @@ export function DocumentsPane({
           href={taskFileHref(taskId, fileId)}
           download={document.name}
         />
+        {artifactKindCreatable(artifactImportKindOf(document.name) ?? '') ? (
+          <OpenAsArtifact taskId={taskId} fileId={fileId} />
+        ) : null}
         {onPublish ? (
           <HeadButton
             icon="share"
@@ -453,6 +458,28 @@ export function DocumentsPane({
 }
 
 /** The title of the document: its `# …` once its text is read, its name before that. */
+/**
+ * «Открыть как артефакт» (docs/plan/88-artifacts.md, Ар3; slice 88.12): a `.md` or `.html` file of
+ * the chat becomes a document or a mockup the client edits together with the agent.
+ */
+function OpenAsArtifact({ taskId, fileId }: { taskId: string; fileId: string }) {
+  const trpc = useTRPC()
+  const router = useRouter()
+  const open = useMutation(trpc.artifact.importFile.mutationOptions())
+  return (
+    <HeadButton
+      icon="artifacts"
+      label={open.isError ? documentText.openAsArtifactFailed : documentText.openAsArtifact}
+      onClick={() =>
+        void open
+          .mutateAsync({ taskId, fileId })
+          .then(({ id }) => router.push(`/artifacts/${id}`))
+          .catch(() => undefined)
+      }
+    />
+  )
+}
+
 function DocumentTitle({
   taskId,
   document,

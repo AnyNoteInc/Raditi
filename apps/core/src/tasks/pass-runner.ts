@@ -21,6 +21,7 @@ import {
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import type { PoolProbeClient } from '../llm/pool-probe-client.ts'
 import type { CompletedTurn, TurnSupervisor } from '../turns/turn-supervisor.ts'
+import type { ArtifactOutbox } from '../artifacts/artifact-outbox.ts'
 import type { ChatFiles } from './chat-files.ts'
 import type { ArtifactChecks } from '../artifacts/artifact-checks.ts'
 import type { MemoryChanges } from './memory-changes.ts'
@@ -93,6 +94,8 @@ export interface PassRunnerDependencies {
    * (docs/plan/66-chat-visuals.md, В8); absent — they stay with the turn's container.
    */
   chatFiles?: Pick<ChatFiles, 'deliver' | 'failPages'>
+  /** The files and imports of the outbox the artifacts reserved (docs/plan/88-artifacts.md, §7.5). */
+  artifactOutbox?: Pick<ArtifactOutbox, 'take'>
   /**
    * The agent's writes in artifacts (docs/plan/88-artifacts.md, Ар16, Ар19): checked while the
    * turn runs and at its end; a turn that failed or was cancelled checks what it can and drops the
@@ -401,6 +404,15 @@ export class PassRunner {
     }
     const turnNo = await this.#turnNo(job.taskId)
     if (turnNo === null) return 'ended'
+    // What the turn put from its outbox into artifacts (docs/plan/88-artifacts.md, §7.5): its
+    // imports are writes of the agent the check below reads; a turn that did not complete only
+    // closes them. The names they took are no files of the chat.
+    const takenByArtifacts =
+      (await this.deps.artifactOutbox?.take({
+        taskId: job.taskId,
+        turn: 'turn' in ending && ending.turn !== null ? ending.turn : plan.turn,
+        outbox: ending.kind === 'completed' ? (outbox ?? null) : null,
+      })) ?? new Set<string>()
     // The sections of documents the chat wrote are checked with what only the turn knew (Ст19),
     // before the answer reaches the client: a document the answer speaks of shows what passed.
     if (ending.kind === 'completed' && refusesText) {
@@ -443,6 +455,7 @@ export class PassRunner {
         taskId: job.taskId,
         turn: ending.turn,
         outbox: outbox ?? null,
+        taken: takenByArtifacts,
       })
     // Then the changes the turn asked of its pages, after their versions: a page renamed or moved
     // in the turn keeps the version the turn gave it (Дер23).

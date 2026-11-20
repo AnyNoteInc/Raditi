@@ -25,7 +25,7 @@ import { AppIcon } from '@/components/application/app-icon'
 import { uuidv7 } from '@/components/chat/uuid'
 import { useTRPC } from '@/trpc/client'
 
-import { ArtifactDocument } from './artifact-document'
+import { ArtifactBody, artifactBodyWide } from './artifact-body'
 import { ArtifactKindIcon } from './artifact-kind-icon'
 import { documentTexts, galleryTexts } from './artifact-texts'
 import { useArtifact, type ArtifactPresence, type CabinetArtifact } from './use-artifact'
@@ -344,6 +344,8 @@ export function ArtifactPage({
     )
   const spec = artifactKindSpecOf(artifact.kind)
   const chat = <ArtifactChatPanel artifact={artifact} />
+  // A mockup and a table take the width of the page: no outline, no column of text.
+  const full = artifactBodyWide(artifact.kind)
 
   return (
     <Box sx={{ width: '100%', maxWidth: 1440, mx: 'auto' }}>
@@ -394,17 +396,22 @@ export function ArtifactPage({
         sx={{
           display: 'grid',
           gap: 3,
-          gridTemplateColumns: wide ? '200px minmax(0, 1fr) 340px' : 'minmax(0, 1fr)',
+          gridTemplateColumns: wide
+            ? full
+              ? 'minmax(0, 1fr) 340px'
+              : '200px minmax(0, 1fr) 340px'
+            : 'minmax(0, 1fr)',
           alignItems: 'start',
         }}
       >
-        {wide && <Outline artifact={artifact} />}
-        <Box component="main" sx={{ minWidth: 0, maxWidth: 820 }}>
-          <ArtifactDocument
+        {wide && !full && <Outline artifact={artifact} />}
+        <Box component="main" sx={{ minWidth: 0, maxWidth: full ? 'none' : 820 }}>
+          <ArtifactBody
             artifact={artifact}
             presence={presence}
             onChanged={reread}
             onEditing={onEditing}
+            place="page"
           />
         </Box>
         {wide && (
