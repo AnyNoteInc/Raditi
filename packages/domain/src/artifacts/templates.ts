@@ -1,4 +1,5 @@
 import type { ArtifactCells, ArtifactColumn } from './blocks.ts'
+import { brandStartTokens } from './brand.ts'
 import type { ArtifactBlockKind, ArtifactKind } from './kinds.ts'
 
 /**
@@ -28,7 +29,45 @@ export interface ArtifactTemplateBlock {
   content: string
   /** The text properties of the block (a section's heading). */
   heading?: string
+  /** Its own key (a screen of a canvas and its parts); absent — `s1…`, `b1…` by order. */
+  key?: string
+  /** The frame it stands in (a part of a screen of a canvas); absent — the top. */
+  parent?: string
+  /** Its other properties: a screen's name, place and path. */
+  props?: Readonly<Record<string, string | number | boolean>>
 }
+
+/** A screen of a canvas of a template (slice 88.15): its frame and one part of HTML. */
+const screen = (
+  key: string,
+  name: string,
+  path: string,
+  place: { x: number; y: number },
+  html: string,
+): ArtifactTemplateBlock[] => [
+  { kind: 'frame', key, content: '', props: { name, path, ...place } },
+  { kind: 'html', key: `${key}-html`, parent: key, content: html },
+]
+
+/** The page of a screen of the template «Холст для нового сайта»: the brand's variables or plain. */
+const page = (title: string, body: string) =>
+  [
+    '<header class="top"><a class="logo" href="/">[Название]</a><nav><a href="/">Главная</a><a href="/uslugi">Услуги</a><a href="/kontakty">Контакты</a></nav></header>',
+    `<main class="page"><h1>${title}</h1>${body}</main>`,
+    '<footer class="bottom">[Телефон] · [Адрес]</footer>',
+  ].join('\n')
+
+const SITE_STYLE = [
+  "body{margin:0;font-family:var(--brand-font-body,'Golos Text',Arial,sans-serif);color:var(--brand-text,#1f2421);background:var(--brand-background,#fff)}",
+  'h1,h2{font-family:var(--brand-font-heading,inherit);color:var(--brand-primary,#2f5d50);line-height:1.2}',
+  '.top{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center;padding:16px 24px;background:var(--brand-surface,#f6f3ee)}',
+  '.top nav{display:flex;flex-wrap:wrap;gap:16px}.top a{color:inherit;text-decoration:none}.logo{font-weight:700}',
+  '.page{max-width:1040px;margin:0 auto;padding:48px 24px}.page p{font-size:18px;line-height:1.6;max-width:680px}',
+  '.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin:24px 0}',
+  '.card{padding:20px;border-radius:var(--brand-radius,12px);background:var(--brand-surface,#f6f3ee)}',
+  '.button{display:inline-block;padding:14px 24px;border-radius:var(--brand-radius,12px);background:var(--brand-accent,#e07a3f);color:#fff;text-decoration:none;font-weight:600}',
+  '.bottom{padding:24px;text-align:center;color:var(--brand-muted,#6b706c)}',
+].join('\n')
 
 /** A section of a document of a template. */
 const section = (heading: string, content: string): ArtifactTemplateBlock => ({
@@ -240,6 +279,55 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
           'update()',
         ].join('\n'),
       },
+    ],
+  },
+  {
+    id: 'new-site',
+    kind: 'canvas',
+    title: 'Холст для нового сайта',
+    description: 'Главная, услуги и контакты — для компьютера и телефона рядом',
+    blocks: [
+      { kind: 'style', content: SITE_STYLE },
+      ...screen(
+        'home',
+        'Главная',
+        '/',
+        { x: 0, y: 0 },
+        page(
+          '[Что вы делаете — одной фразой]',
+          '<p>[Для кого вы работаете и чем вы лучше других.]</p><p><a class="button" href="/kontakty">Записаться</a></p>',
+        ),
+      ),
+      ...screen(
+        'uslugi',
+        'Услуги',
+        '/uslugi',
+        { x: 0, y: 2400 },
+        page(
+          'Услуги',
+          '<div class="cards"><div class="card"><h2>[Услуга]</h2><p>[Цена и что входит]</p></div><div class="card"><h2>[Услуга]</h2><p>[Цена и что входит]</p></div><div class="card"><h2>[Услуга]</h2><p>[Цена и что входит]</p></div></div>',
+        ),
+      ),
+      ...screen(
+        'kontakty',
+        'Контакты',
+        '/kontakty',
+        { x: 0, y: 4800 },
+        page('Контакты', '<p>[Телефон]</p><p>[Адрес и часы работы]</p><p>[Мессенджеры]</p>'),
+      ),
+    ],
+  },
+  {
+    id: 'brand',
+    kind: 'brand',
+    title: 'Фирменный стиль',
+    description: 'Цвета, шрифты и тон текстов — для всех макетов и холстов проекта',
+    blocks: [
+      { kind: 'settings', content: JSON.stringify(brandStartTokens, null, 2) },
+      section(
+        'Тон текстов',
+        'Пишем [дружелюбно и по делу], обращаемся на «вы». Избегаем [канцелярита и обещаний, которые не выполним].',
+      ),
     ],
   },
 ] satisfies readonly ArtifactTemplate[])

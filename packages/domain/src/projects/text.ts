@@ -23,6 +23,8 @@ export const sectionTagNames = [
   'chat-artifacts',
   'artifact-comment',
   'artifact-view',
+  // The brand of the project (slice 88.15а).
+  'project-brand',
 ] as const
 
 const sectionTag = new RegExp(

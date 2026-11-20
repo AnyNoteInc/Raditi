@@ -14,7 +14,14 @@ describe('the templates of the gallery (Ар50)', () => {
       expect(artifactTitleSchema.safeParse(template.title).success).toBe(true)
       expect(template.blocks.length).toBeGreaterThan(0)
       for (const block of template.blocks) {
-        expect(artifactBlockPlacementProblem(template.kind, block.kind, null)).toBeNull()
+        // A part of a screen stands in its frame, which the template names before it.
+        const parent = block.parent
+          ? template.blocks.find((each) => each.key === block.parent)
+          : undefined
+        if (block.parent) expect(parent?.kind).toBe('frame')
+        expect(
+          artifactBlockPlacementProblem(template.kind, block.kind, parent ? 'frame' : null),
+        ).toBeNull()
         if (block.kind === 'section')
           expect(artifactTitleSchema.safeParse(block.heading).success).toBe(true)
         expect(artifactBlockContentProblem(block.kind, block.content)).toBeNull()

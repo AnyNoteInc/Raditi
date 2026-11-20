@@ -98,6 +98,7 @@ export {
   type ArtifactGallerySort,
 } from './artifact-gallery.ts'
 export { isArtifactRank, rankBetween, rankForIndex } from './artifact-rank.ts'
+export { artifactBrandOf, projectBrandOf, type ProjectBrand } from './artifact-brand.ts'
 export {
   artifactFileFor,
   artifactFilesByIds,

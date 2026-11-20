@@ -43,7 +43,11 @@ import {
   type UnkeyedTurnRequest,
 } from '@repo/domain'
 
-import { artifactsSection, type ChatArtifactLine } from '@repo/domain/artifacts'
+import {
+  artifactsSection,
+  type ArtifactSectionBrand,
+  type ChatArtifactLine,
+} from '@repo/domain/artifacts'
 
 import { llmGatewayBaseUrl } from '../llm/backends.ts'
 import { ceilingQuestionOf } from './turn-outcome.ts'
@@ -211,6 +215,11 @@ export interface PassFacts {
    * section `## Artifacts` lists them as data. Absent or empty — none yet.
    */
   chatArtifacts?: readonly ChatArtifactLine[]
+  /**
+   * The brand of the chat's project (docs/plan/88-artifacts.md, Ар42, slice 88.15а): its tokens go
+   * into the section `## Artifacts` as data. Absent — the project has none, or no project.
+   */
+  projectBrand?: ArtifactSectionBrand
   /**
    * The pass of a run of a scheduled task before the first words of its client (`passUnattended`,
    * docs/plan/82-scheduled-tasks.md, Зп27, Зп29), with the name of its task; absent — an ordinary
@@ -650,7 +659,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         inbox: inboxFacts,
         variables: facts.variables ?? [],
         repository: repository !== null,
-      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${action ? '' : artifactsSection(facts.chatArtifacts ?? [])}${memorySection(facts.memory)}`,
+      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${action ? '' : artifactsSection(facts.chatArtifacts ?? [], undefined, { brand: facts.projectBrand ?? null })}${memorySection(facts.memory)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),
