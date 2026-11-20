@@ -77,6 +77,35 @@ export {
   taskAttachments,
   type ExpiredAttachment,
 } from './attachments.ts'
+export { isArtifactRank, rankBetween, rankForIndex } from './artifact-rank.ts'
+export {
+  applyArtifactOps,
+  artifactBlockHold,
+  artifactRole,
+  canonicalJson,
+  claimArtifactBlock,
+  createArtifact,
+  dropArtifactWrites,
+  fillArtifactRows,
+  pendingArtifactWrites,
+  readArtifact,
+  readArtifactVersion,
+  restoreArtifact,
+  saveArtifactVersion,
+  settleArtifactWrites,
+  sweepArtifacts,
+  takeArtifactBlock,
+  trashArtifact,
+  type ArtifactActor,
+  type ArtifactBlockView,
+  type ArtifactCreate,
+  type ArtifactOpsAnswer,
+  type ArtifactSettled,
+  type ArtifactSweep,
+  type ArtifactTrashedBy,
+  type ArtifactVersionSave,
+  type ArtifactWriteVerdict,
+} from './artifacts.ts'
 export { classProfile, type ClassProfile } from './class-profile.ts'
 export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-events.ts'
 export {
@@ -84,6 +113,8 @@ export {
   chatAuthorManages,
   clearStaleUncheckedSections,
   createChatDocument,
+  artifactBlockOrder,
+  workspaceOwnerOf,
   AGENT_DELETES_PER_TURN,
   applyPageFile,
   applyPageChange,
