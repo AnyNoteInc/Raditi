@@ -299,6 +299,20 @@ describe('documents', () => {
     expect(sectionMarkdownProblem('```sh\n# comment\n```\nТекст')).toBeNull()
     expect(sectionMarkdownProblem('#хештег')).toBeNull()
   })
+
+  // A line of text underlined by `=` or `-` is a heading of the first or the second level too
+  // (setext): doc-render draws it so. @repo/doc-render checks this rule against its own tree.
+  it('takes an underlined line of text for the heading it is', () => {
+    expect(sectionMarkdownProblem('Итоги месяца\n---')).toBe('heading_level')
+    expect(sectionMarkdownProblem('Итоги месяца\n===')).toBe('heading_level')
+    expect(sectionMarkdownProblem('> Цитата\n> ---')).toBe('heading_level')
+    expect(sectionMarkdownProblem('- Пункт\n  ---')).toBe('heading_level')
+    expect(sectionMarkdownProblem('Текст\n\n---')).toBeNull()
+    expect(sectionMarkdownProblem('- Пункт\n---')).toBeNull()
+    expect(sectionMarkdownProblem('    код\n---')).toBeNull()
+    expect(sectionMarkdownProblem('| а | б |\n| --- | --- |\n| 1 | 2 |\n---')).toBeNull()
+    expect(sectionMarkdownProblem('```\nтекст\n---\n```')).toBeNull()
+  })
 })
 
 describe('tool arguments', () => {

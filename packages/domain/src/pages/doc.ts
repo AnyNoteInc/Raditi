@@ -32,22 +32,66 @@ export const docSectionKeySchema = z
   .string()
   .regex(/^[a-z0-9][a-z0-9-]{0,39}$/, 'a section id is 1–40 lower-case letters, digits and hyphens')
 
+/** The `>` marks a line opens with: a quote is a block of its own, its headings are headings. */
+const QUOTE_MARKS = /^(?: {0,3}>[ \t]?)*/
+/** A line that opens an item of a list: its text goes on at the width of the mark. */
+const LIST_ITEM = /^( {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+)\S/
+/** A line of `=` or `-` alone: under a line of text it makes the text a heading (setext). */
+const UNDERLINE = /^( *)(?:=+|-+)[ \t]*$/
+/** A line that closes a paragraph and is no text of its own: a heading, a rule, a quote alone. */
+const NOT_TEXT = /^(?: {0,3}#{1,6}(?:[ \t]|$)| {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$|\s*$)/
+/** The row under the head of a table: cells of hyphens between pipes. */
+const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)+\|?\s*$|^\s*\|\s*:?-+:?\s*\|\s*$/
+
 /**
  * Where a line opens a heading of the first or the second level outside a code fence: those
- * levels belong to the title and the sections, a section's own headings start at the third.
+ * levels belong to the title and the sections, a section's own headings start at the third. A
+ * heading is `#` or `##` at the start of a line, or a line of text with a line of `=` or `-` right
+ * under it (setext): doc-render draws that as `<h1>` or `<h2>` too. Only the text of a paragraph
+ * takes an underline: under a rule, a heading, code by indent, a row of a table, a blank line, or
+ * narrower than the item of a list its paragraph opens (lazy text), it is a rule or text.
  */
 export function sectionMarkdownProblem(markdown: string): 'too_large' | 'heading_level' | null {
   if (new TextEncoder().encode(markdown).byteLength > pageLimits.sectionBytes) return 'too_large'
   let fence: string | null = null
-  for (const line of markdown.split('\n')) {
+  // The paragraph the line before is text of: the width of the item of a list it opens, 0 — none
+  // opened; null — the line before is no text of a paragraph.
+  let paragraph: number | null = null
+  // How deep in quotes that paragraph opened: an underline of a lesser depth is lazy text or a rule.
+  let quoted = 0
+  let previous = ''
+  let table = false
+  for (const raw of markdown.split('\n')) {
+    const marks = QUOTE_MARKS.exec(raw)![0]
+    const depth = marks.split('>').length - 1
+    const line = raw.slice(marks.length)
     const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line)
     if (opening) {
       const mark = opening[1]!
       if (fence === null) fence = mark[0]!.repeat(mark.length)
       else if (mark[0] === fence[0] && mark.length >= fence.length) fence = null
+      paragraph = null
       continue
     }
-    if (fence === null && /^ {0,3}#{1,2}(?:[ \t]|$)/.test(line)) return 'heading_level'
+    if (fence !== null) continue
+    if (/^ {0,3}#{1,2}(?:[ \t]|$)/.test(line)) return 'heading_level'
+    const underline = UNDERLINE.exec(line)
+    if (underline && paragraph !== null && depth >= quoted) {
+      const indent = underline[1]!.length
+      if (paragraph > 0 ? indent >= paragraph : indent <= 3) return 'heading_level'
+    }
+    if (line.trim() === '') {
+      table = false
+      paragraph = null
+    } else if (paragraph !== null && previous.includes('|') && TABLE_DELIMITER.test(line)) {
+      table = true
+      paragraph = null
+    } else if (NOT_TEXT.test(line)) paragraph = null
+    else if (paragraph === null && !table && !/^(?: {4}|\t)/.test(line)) {
+      paragraph = LIST_ITEM.exec(line)?.[1]!.length ?? 0
+      quoted = depth
+    }
+    previous = line
   }
   return null
 }

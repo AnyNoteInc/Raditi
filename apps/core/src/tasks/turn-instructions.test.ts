@@ -324,6 +324,12 @@ describe('documents and pages (docs/plan/69-pages.md, Ст18, Ст20, Ст21)', 
       expect(text).toContain('Link its pages to each other from\n  the root: href="/uslugi"')
       expect(text).toContain('Delete only what the client asked in this chat')
       expect(text).not.toMatch(/`page_[a-z_]+`/)
+      // A page is a sandbox without its origin: the storages of the browser throw there.
+      const pages = text.split('## Pages and sites')[1]!
+      expect(pages).toContain('A page runs in a sandbox of its own')
+      expect(pages).toMatch(/`localStorage`,\s+`sessionStorage`, cookies/)
+      expect(pages).toContain('wraps each use in `try`')
+      expect(text).toContain('wrap any use of them in `try`')
     }
   })
 })

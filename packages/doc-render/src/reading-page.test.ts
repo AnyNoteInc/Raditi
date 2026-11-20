@@ -81,4 +81,20 @@ describe('the page for reading (docs/plan/69-pages.md, Ст11)', () => {
     )
     expect(tab).not.toContain('href="/uslugi"')
   })
+
+  // A page in the cabinet's frame `srcdoc` reads its links from the cabinet's address: a link to a
+  // heading stays in the frame, a link from the root of a site is words.
+  it('keeps a framed page on itself, and the published one as it was', async () => {
+    const markdown =
+      '## Цены\n\nСм. [раздел](#цены) и [Ремонт](/uslugi/remont).\n\nНДС[^1]\n\n[^1]: Нет.'
+    const framed = await readingPage({ title: 'Аудит', markdown, framed: true })
+    expect(framed).toContain('<a href="about:srcdoc#doc-цены">раздел</a>')
+    expect(framed).toContain('<span>Ремонт</span>')
+    expect(framed).toContain('href="about:srcdoc#doc-user-content-fn-1"')
+    expect(framed).not.toMatch(/href="[#/]/)
+    const published = await readingPage({ title: 'Аудит', markdown })
+    expect(published).toContain('<a href="#doc-цены">раздел</a>')
+    expect(published).toContain('<a href="/uslugi/remont">Ремонт</a>')
+    expect(published).not.toContain('about:srcdoc')
+  })
 })

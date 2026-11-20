@@ -76,11 +76,17 @@ const DOCUMENTS_AND_PAGES = `
   /uslugi/remont) a new page of that site under a page it has, a site made in this turn too. One
   file a page: a site of ten pages is ten files and ten calls. Link its pages to each other from
   the root: href="/uslugi", never a relative link and never <base>.
+- A page runs in a sandbox of its own, without the origin of its site: \`localStorage\`,
+  \`sessionStorage\`, cookies, \`caches\`, \`indexedDB\` and service workers throw an error there.
+  A script that uses any of them wraps each use in \`try\` and works without it: a calculator
+  keeps its numbers in variables of the page.
 - Styles, scripts, pictures and fonts its pages share go to the site once with
   \`raditi_page_file_put\` (a file of ${SANDBOX_OUT}, at /_files/style.css or /_files/img/logo.png) and
   load from the root: <link rel="stylesheet" href="/_files/style.css">. No HTML there: a page is
   published by \`raditi_page_publish\`. Only the look of the site goes there — no data: a file
-  of a site with a password can be loaded by another site too. \`raditi_page_files\` names the
+  of a site with a password can be loaded by another site too. On a site with a password its
+  fonts and modules (\`.mjs\`) from /_files/ do not load: give such a site its fonts as \`data:\`
+  addresses inside \`<style>\` and its scripts as classic ones. \`raditi_page_files\` names the
   files of a site; \`raditi_page_file_delete\` deletes one the client asked to delete.
 - Before you change a page, find it with \`raditi_page_list\` and \`raditi_page_tree\` and read it
   with \`raditi_page_read\`; then change it with \`raditi_page_edit\`, or write the whole file
@@ -166,6 +172,8 @@ const ANSWERING = `## Answering the client
   Everything inside the one file: styles in \`<style>\`, scripts in \`<script>\`, images and fonts
   as \`data:\` addresses. Nothing from the network — no CDN, no web fonts, no images of other
   sites, no \`fetch\`: the viewer blocks it and the page breaks. No forms that send anything.
+  The page runs in a sandbox: \`localStorage\`, \`sessionStorage\`, cookies, \`caches\`,
+  \`indexedDB\` and service workers throw an error there — wrap any use of them in \`try\`.
   Links to other sites with \`target="_blank" rel="noopener noreferrer"\`. Readable 440 px wide
   and on a phone, good at full width, printable (\`@media print\`).
 - The text document: UTF-8 Markdown (headings, lists, tables, task lists, code blocks, quotes)
