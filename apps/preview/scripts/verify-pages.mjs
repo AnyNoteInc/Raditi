@@ -794,11 +794,9 @@ async function sharedFiles(stand) {
       'a picture of the site loads from its own host',
     )
     rt.check(lines[0]?.fetch === 'refused', 'a request of the page to that file is refused')
-    const fontStatus = await tab.evaluate(async () => {
-      await document.fonts.load('16px StandFont', 'Привет')
-      return [...document.fonts].find((face) => face.family.replace(/["']/g, '') === 'StandFont')
-        ?.status
-    })
+    const fontStatus = await tab.evaluate(
+      "document.fonts.load('16px StandFont', 'Привет').then(() => [...document.fonts].find((face) => face.family.replace(/[\"']/g, '') === 'StandFont')?.status)",
+    )
     rt.check(
       fontStatus === 'loaded',
       'the sandboxed page loads the font of its site (FontFace.status)',
