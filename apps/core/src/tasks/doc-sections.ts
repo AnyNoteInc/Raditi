@@ -24,10 +24,7 @@ import type { PagePublications } from './page-publications.ts'
 // publications stay for the end of the turn.
 
 export interface DocSectionsDependencies {
-  db: Pick<
-    PrismaClient,
-    '$transaction' | 'chatDocument' | 'chatDocumentSection' | 'taskEvent' | 'taskTurn'
-  >
+  db: Pick<PrismaClient, '$transaction' | 'artifact' | 'artifactBlock' | 'taskEvent' | 'taskTurn'>
   pages?: Pick<PagePublications, 'publishDocuments'>
   logger?: { log(message: string): void; warn(message: string): void }
 }
@@ -57,7 +54,7 @@ export class DocSections {
     const { db, logger } = this.#deps
     try {
       const sections = await uncheckedSectionsOfTurn(db, taskId, turn)
-      const documents = await db.chatDocument.findMany({
+      const documents = await db.artifact.findMany({
         where: {
           OR: [{ taskId }, { id: { in: [...new Set(sections.map((each) => each.documentId))] } }],
         },

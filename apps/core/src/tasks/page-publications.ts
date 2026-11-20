@@ -22,7 +22,7 @@ import { pageLinkWarnings } from './page-links.ts'
 // serves its bytes.
 
 export interface PagePublicationsDependencies {
-  db: Pick<PrismaClient, '$transaction' | 'chatDocument' | 'page' | 'pageReservation' | 'taskEvent'>
+  db: Pick<PrismaClient, '$transaction' | 'artifact' | 'page' | 'pageReservation' | 'taskEvent'>
   logger?: { log(message: string): void; warn(message: string): void }
 }
 
@@ -214,7 +214,7 @@ export class PagePublications {
           await this.left(reservation, 'refused', where)
           continue
         }
-        const document = await db.chatDocument.findUnique({
+        const document = await db.artifact.findUnique({
           where: { id: row.documentId! },
           select: { title: true, content: { select: { markdown: true } } },
         })

@@ -1488,7 +1488,7 @@ async function scenarioQ(stand) {
     'the last section, doc_finish and page_publish of the document are taken, the address comes at once',
     finished,
   )
-  const version = await db.chatDocument.findUniqueOrThrow({
+  const version = await db.artifact.findUniqueOrThrow({
     where: { id: docId },
     // The host of a page is its site's since plan 73 (Дер11): the client no longer has `pages.slug`.
     include: { content: true, page: { include: { tree: true } } },
@@ -1529,7 +1529,7 @@ async function scenarioQ(stand) {
     'the edit and doc_finish are taken',
     edited,
   )
-  const second = await db.chatDocument.findUniqueOrThrow({
+  const second = await db.artifact.findUniqueOrThrow({
     where: { id: docId },
     include: { content: true, page: true },
   })

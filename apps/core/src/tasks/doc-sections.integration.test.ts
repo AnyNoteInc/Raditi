@@ -93,7 +93,7 @@ describe.skipIf(!databaseUrl)(
     afterAll(async () => {
       if (!db) return
       await db.page.deleteMany({ where: { workspaceId } })
-      await db.chatDocument.deleteMany({ where: { workspaceId } })
+      await db.artifact.deleteMany({ where: { workspaceId } })
       await db.taskEvent.deleteMany({ where: { task: { workspaceId } } })
       await db.task.deleteMany({ where: { workspaceId } })
       await releaseTariff?.()
@@ -162,7 +162,7 @@ describe.skipIf(!databaseUrl)(
         reason: 'refused',
       })
       expect(JSON.stringify(await rows(task.id))).not.toContain(VALUE)
-      const row = await db.chatDocumentSection.findFirstOrThrow({
+      const row = await db.artifactBlock.findFirstOrThrow({
         where: { documentId: ids.documentId, sectionKey: 'sources' },
       })
       expect(JSON.stringify(row)).not.toContain(VALUE)
@@ -234,7 +234,7 @@ describe.skipIf(!databaseUrl)(
       // Both sections checked, but no version while the turn runs; the finish still waits.
       expect(await currentDocMarkdown(db, { workspaceId, documentId: ids.documentId })).toBeNull()
       expect(
-        await db.chatDocument.findUniqueOrThrow({
+        await db.artifact.findUniqueOrThrow({
           where: { id: ids.documentId },
           select: { finishTurnNo: true, view: true },
         }),

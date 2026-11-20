@@ -22,7 +22,7 @@ describe.skipIf(!enabled)('postgresDocsStore', () => {
   })
   afterAll(async () => {
     if (!db) return
-    await db.chatDocument.deleteMany({ where: { workspaceId } })
+    await db.artifact.deleteMany({ where: { workspaceId } })
     await db.taskEvent.deleteMany({ where: { task: { workspaceId } } })
     await db.task.deleteMany({ where: { workspaceId } })
     await db.workspace.delete({ where: { id: workspaceId } })

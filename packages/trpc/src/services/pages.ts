@@ -299,7 +299,7 @@ export async function purgeCabinetPage(
 
 /** A document of a workspace the user is a member of, in one query; NOT_FOUND otherwise (Ст20). */
 async function readableDocument(db: PrismaClient, documentId: string, userId: string) {
-  const document = await db.chatDocument.findFirst({
+  const document = await db.artifact.findFirst({
     where: { id: documentId, workspace: { members: { some: { userId } } } },
     select: { workspaceId: true, title: true, view: true },
   })
@@ -542,7 +542,7 @@ export async function publishDocumentPage(
   address: PagesAddress,
   input: { documentId: string; userId: string },
 ): Promise<ClientPublication> {
-  const document = await db.chatDocument.findFirst({
+  const document = await db.artifact.findFirst({
     where: {
       id: input.documentId,
       workspace: { members: { some: { userId: input.userId } } },

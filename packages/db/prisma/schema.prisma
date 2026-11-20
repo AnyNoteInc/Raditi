@@ -58,6 +58,7 @@ model User {
   taskPresence            TaskPresence[]
   chatNotifications       ChatNotification[]
   speechCalls             SpeechCall[]
+  artifactsOwned          Artifact[]            @relation("ArtifactOwner")
   agentInstructions       AgentInstructions?
   projectsCreated         Project[]             @relation("ProjectCreator")
   projectFilesUploaded    ProjectFile[]         @relation("ProjectFileUploader")
@@ -193,7 +194,7 @@ model Workspace {
   webSearchCalls     WebSearchCall[]
   pages              Page[]
   pageTrees          PageTree[]
-  chatDocuments      ChatDocument[]
+  artifacts          Artifact[]
   usageWindows       WorkspaceUsageWindow[]
   envVars            WorkspaceEnvVar[]
   agentSkills        WorkspaceAgentSkill[]
@@ -438,6 +439,7 @@ model Project {
   memory         MemoryEntry[]
   repository     ProjectRepository?
   scheduledTasks ScheduledTask[]
+  artifacts      Artifact[]
   scheduledRuns  ScheduledRun[]
 
   @@index([workspaceId, createdById, activityAt(sort: Desc)], map: "projects_owner_activity_idx", where: raw("deleted_at IS NULL"))
@@ -948,7 +950,8 @@ model Task {
   pages              Page[]
   pageTrees          PageTree[]
   pageFiles          PageFile[]
-  chatDocuments      ChatDocument[]
+  artifacts          Artifact[]
+  artifactChats      ArtifactChat[]
   memorySources      MemoryEntry[]
   memoryReservations MemoryReservation[]
   repoBranch         ProjectRepoBranch?
@@ -2444,7 +2447,7 @@ model Page {
   children     Page[]            @relation("PageChildren")
   redirects    PageRedirect[]
   task         Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  document     ChatDocument?     @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  document     Artifact?         @relation(fields: [documentId], references: [id], onDelete: SetNull)
   versions     PageVersion[]
   content      PageContent?
   reservations PageReservation[]
@@ -2525,67 +2528,132 @@ model PageReservation {
   @@map("page_reservations")
 }
 
-/// A document the agent writes section by section (Ст7, Ст21). The sections' text is shown to the
-/// client only once core checked it at the end of its turn (Ст19).
-model ChatDocument {
-  id             String   @id @default(uuid(7)) @db.Uuid
-  workspaceId    String   @map("workspace_id") @db.Uuid
-  taskId         String?  @map("task_id") @db.Uuid
-  title          String   @db.VarChar(200)
+/// An artifact (docs/plan/88-artifacts.md, Ар1, Ар11, §7.1): a working object of the client and the
+/// agents — at first the document the agent writes section by section (Ст7, Ст21). The table keeps
+/// its name `chat_documents` (В7 of plan 73); release 1 of plan 88 only adds columns. What the
+/// agent writes is shown to others only once core checked it (Ст19, Ар19).
+model Artifact {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  workspaceId    String    @map("workspace_id") @db.Uuid
+  taskId         String?   @map("task_id") @db.Uuid
+  title          String    @db.VarChar(200)
   /// docViews: `page` — a page to read (.html), `text` — plain text (.md); the agent's choice.
-  view           String   @default("text") @db.VarChar(8)
+  view           String    @default("text") @db.VarChar(8)
   /// Grows with every change: the card reads the document again (`feed.doc_touch`).
-  revision       Int      @default(1)
-  /// v1, v2, …: 0 before the first `doc_finish` came true.
-  currentVersion Int      @default(0) @map("current_version")
+  revision       Int       @default(1)
+  /// v1, v2, …: 0 before the first version.
+  currentVersion Int       @default(0) @map("current_version")
   /// The chat and turn whose `doc_finish` waits for the end of that turn: a document belongs to
   /// the workspace, any chat of it may write it.
-  finishTaskId   String?  @map("finish_task_id") @db.Uuid
-  finishTurnNo   Int?     @map("finish_turn_no")
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  finishTaskId   String?   @map("finish_task_id") @db.Uuid
+  finishTurnNo   Int?      @map("finish_turn_no")
+  /// artifactKinds of `@repo/domain/artifacts`; a kind that left the list is read as history.
+  kind           String    @default("document") @db.VarChar(24)
+  projectId      String?   @map("project_id") @db.Uuid
+  /// NULL only on rows of the code before plan 88 until `fillArtifactRows`; NOT NULL in release 2.
+  ownerUserId    String?   @map("owner_user_id") @db.Uuid
+  /// The last operation of its journal (`artifact_ops.seq`).
+  seq            BigInt    @default(0)
+  /// The checked text of its live blocks, in bytes of UTF-8, kept by increments.
+  bytes          BigInt    @default(0)
+  /// «Получатели могут сделать копию себе» (Ар39).
+  recipientsCopy Boolean   @default(false) @map("recipients_copy")
+  /// A title the agent wrote, until core checked it (Ар19); the old one is shown meanwhile.
+  pendingTitle   String?   @map("pending_title") @db.VarChar(200)
+  pendingTaskId  String?   @map("pending_task_id") @db.Uuid
+  pendingTurn    Int?      @map("pending_turn")
+  /// The trash (Ар50): `client`, `agent` or `project`; gone for good after `purge_after`.
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedBy      String?   @map("deleted_by") @db.VarChar(8)
+  purgeAfter     DateTime? @map("purge_after") @db.Timestamptz(6)
+  takenDownAt    DateTime? @map("taken_down_at") @db.Timestamptz(6)
+  takenDownBy    String?   @map("taken_down_by") @db.VarChar(8)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  workspace Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  task      Task?                 @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  sections  ChatDocumentSection[]
-  versions  ChatDocumentVersion[]
-  content   ChatDocumentContent?
+  workspace Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task?                   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  project   Project?                @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  owner     User?                   @relation("ArtifactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sections  ArtifactBlock[]
+  versions  ArtifactVersion[]
+  content   ArtifactContent?
   page      Page?
+  revisions ArtifactBlockRevision[]
+  batches   ArtifactBatch[]
+  ops       ArtifactOp[]
+  chats     ArtifactChat[]
 
   @@index([workspaceId, createdAt])
   @@index([taskId])
+  @@index([projectId])
+  @@index([ownerUserId])
+  @@index([purgeAfter])
   @@map("chat_documents")
 }
 
-model ChatDocumentSection {
-  id            String  @id @default(uuid(7)) @db.Uuid
-  documentId    String  @map("document_id") @db.Uuid
-  /// The id the agent gave it.
-  sectionKey    String  @map("section_key") @db.VarChar(40)
-  position      Int
-  heading       String? @db.VarChar(200)
-  markdown      String? @db.Text
-  intent        String  @db.VarChar(200)
-  /// docSectionStates: pending, written.
-  state         String  @default("pending") @db.VarChar(16)
+/// A block of an artifact (§7.1): a section of a document, a frame and its parts, a row of a table.
+/// Its id is the former `section_key`. `content` and `props` are what core checked; the agent's
+/// write waits in `pending_*` and holds the block for its turn until the check (Ар16).
+model ArtifactBlock {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  documentId      String    @map("document_id") @db.Uuid
+  /// The id the agent or the server gave it.
+  sectionKey      String    @map("section_key") @db.VarChar(40)
+  /// Release 1 writes both; the order is `rank` (a fractional key), `position` goes in release 2.
+  position        Int
+  rank            String?
+  heading         String?   @db.VarChar(200)
+  markdown        String?   @db.Text
+  intent          String    @db.VarChar(200)
+  /// docSectionStates: pending (no checked text), written.
+  state           String    @default("pending") @db.VarChar(16)
   /// The chat and turn that wrote it; core checks a section while its turn runs, and at its end.
-  writtenTaskId String? @map("written_task_id") @db.Uuid
-  writtenTurn   Int?    @map("written_turn")
+  writtenTaskId   String?   @map("written_task_id") @db.Uuid
+  writtenTurn     Int?      @map("written_turn")
   /// Set once core found nothing in it: until then the cabinet gets no text.
-  checkedTurn   Int?    @map("checked_turn")
+  checkedTurn     Int?      @map("checked_turn")
   /// Why core sent it back to pending (pageRefusalReasons).
-  refusal       String? @db.VarChar(24)
+  refusal         String?   @db.VarChar(24)
+  /// The frame it stands in; NULL — at the top.
+  parentKey       String?   @map("parent_key") @db.VarChar(40)
+  /// artifactBlockKinds.
+  blockKind       String    @default("section") @map("block_kind") @db.VarChar(16)
+  props           Json      @default("{}")
+  /// Every change gives a new one: `replace`, `move` and `delete` name it in `ifRev` (Ар15).
+  rev             Int       @default(0)
+  content         String?
+  pendingContent  String?   @map("pending_content")
+  pendingProps    Json?     @map("pending_props")
+  pendingTaskId   String?   @map("pending_task_id") @db.Uuid
+  pendingTurn     Int?      @map("pending_turn")
+  pendingAt       DateTime? @map("pending_at") @db.Timestamptz(6)
+  /// `human` while a person types (30 s), `agent` for `artifact_claim` (Ар17).
+  leaseHolder     String?   @map("lease_holder") @db.VarChar(8)
+  leaseUserId     String?   @map("lease_user_id") @db.Uuid
+  leaseTaskId     String?   @map("lease_task_id") @db.Uuid
+  leaseTurn       Int?      @map("lease_turn")
+  leaseToken      String?   @map("lease_token") @db.VarChar(64)
+  leaseUntil      DateTime? @map("lease_until") @db.Timestamptz(6)
+  leaseIntent     String?   @map("lease_intent") @db.VarChar(200)
+  writtenByUserId String?   @map("written_by_user_id") @db.Uuid
+  /// Set when deleted: the row stays as a tombstone, its revisions hold the text for versions.
+  deletedRev      Int?      @map("deleted_rev")
 
-  document ChatDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document Artifact @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@unique([documentId, sectionKey])
   @@index([documentId, position])
   @@index([writtenTaskId, writtenTurn])
+  @@index([documentId, state])
+  @@index([documentId, parentKey, rank])
+  @@index([pendingTaskId, pendingTurn])
   @@map("chat_document_sections")
 }
 
-/// The history of the versions of a document; the Markdown of the current one is in `chat_document_contents`.
-model ChatDocumentVersion {
+/// The history of the versions of an artifact; the Markdown of the current one of a document is in
+/// `chat_document_contents`. A version of plan 88 is the list of its blocks' revisions (Ар13).
+model ArtifactVersion {
   id         String   @id @default(uuid(7)) @db.Uuid
   documentId String   @map("document_id") @db.Uuid
   no         Int
@@ -2593,28 +2661,131 @@ model ChatDocumentVersion {
   sha256     String   @db.Char(64)
   taskId     String?  @map("task_id") @db.Uuid
   turnNo     Int?     @map("turn_no")
-  /// The Markdown of this version; NULL — finished before its text was kept (14.11.2026).
+  /// The Markdown of this version; NULL — finished before its text was kept (14.11.2026), or not a document.
   markdown   String?  @db.Text
+  /// «Сохранить версию» with a label; `named` — by a person (those of the agent count as automatic).
+  label      String?  @db.VarChar(60)
+  named      Boolean  @default(false)
+  seq        BigInt?
+  /// [{ key, rev }] of the blocks; NULL on versions before plan 88.
+  blocks     Json?
+  /// user | turn | schedule.
+  authorKind String?  @map("author_kind") @db.VarChar(8)
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  document ChatDocument         @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  content  ChatDocumentContent?
+  document Artifact         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  content  ArtifactContent?
 
   @@unique([documentId, no])
   @@map("chat_document_versions")
 }
 
-model ChatDocumentContent {
+model ArtifactContent {
   documentId String   @id @map("document_id") @db.Uuid
   versionNo  Int      @map("version_no")
   markdown   String   @db.Text
   updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  document ChatDocument        @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  version  ChatDocumentVersion @relation(fields: [documentId, versionNo], references: [documentId, no])
+  document Artifact        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version  ArtifactVersion @relation(fields: [documentId, versionNo], references: [documentId, no])
 
   @@unique([documentId, versionNo])
   @@map("chat_document_contents")
+}
+
+/// A revision of a block (Ар13): what it was at `rev`. The text and properties of one hash are
+/// kept once per artifact — on the first revision that carried them; later ones (a move, the same
+/// text again) point to it by `sha256`.
+model ArtifactBlockRevision {
+  artifactId      String   @map("artifact_id") @db.Uuid
+  blockKey        String   @map("block_key") @db.VarChar(40)
+  rev             Int
+  /// SHA-256 of the canonical JSON of { content, props }.
+  sha256          String   @db.Char(64)
+  blockKind       String   @map("block_kind") @db.VarChar(16)
+  parentKey       String?  @map("parent_key") @db.VarChar(40)
+  rank            String
+  deleted         Boolean  @default(false)
+  content         String?
+  props           Json?
+  writtenByUserId String?  @map("written_by_user_id") @db.Uuid
+  taskId          String?  @map("task_id") @db.Uuid
+  turnNo          Int?     @map("turn_no")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+
+  @@id([artifactId, blockKey, rev])
+  @@unique([artifactId, sha256], map: "artifact_block_revisions_text_key", where: raw("(props IS NOT NULL)"))
+  @@map("artifact_block_revisions")
+}
+
+/// A batch of operations once applied (Ар14): its repeat with the same `opId` and hash gets the
+/// same answer, with another hash — `ARTIFACT_OP_REUSED`.
+model ArtifactBatch {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  artifactId String   @map("artifact_id") @db.Uuid
+  opId       String   @map("op_id") @db.VarChar(64)
+  sha256     String   @db.Char(64)
+  answer     Json
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  artifact Artifact     @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  ops      ArtifactOp[]
+
+  @@unique([artifactId, opId])
+  @@index([createdAt])
+  @@map("artifact_batches")
+}
+
+/// The journal of operations (§7.1): no text — what changed, by whom, from which revision to
+/// which. Kept 30 days or the last 10 000 of an artifact. Its insert signals `raditi_artifact`.
+model ArtifactOp {
+  artifactId String   @map("artifact_id") @db.Uuid
+  seq        BigInt
+  batchId    String?  @map("batch_id") @db.Uuid
+  /// user | agent | schedule.
+  actor      String   @db.VarChar(8)
+  userId     String?  @map("user_id") @db.Uuid
+  taskId     String?  @map("task_id") @db.Uuid
+  turnNo     Int?     @map("turn_no")
+  kind       String   @db.VarChar(16)
+  blockKey   String?  @map("block_key") @db.VarChar(40)
+  baseRev    Int?     @map("base_rev")
+  newRev     Int?     @map("new_rev")
+  /// Only of an unchecked write of the agent: the revision and properties it replaced.
+  before     Json?
+  /// applied | checking | checked | refused | dropped | taken.
+  result     String   @db.VarChar(12)
+  refusal    String?  @db.VarChar(24)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  artifact Artifact       @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  batch    ArtifactBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@id([artifactId, seq])
+  @@index([taskId, turnNo])
+  @@index([createdAt])
+  @@map("artifact_ops")
+}
+
+/// The chats an artifact is in (§7.1, Ар21): created, attached, mentioned or edited there, and the
+/// `seq` that chat last read.
+model ArtifactChat {
+  artifactId String   @map("artifact_id") @db.Uuid
+  taskId     String   @map("task_id") @db.Uuid
+  /// created | attached | mentioned | edited.
+  how        String   @db.VarChar(12)
+  firstAt    DateTime @default(now()) @map("first_at") @db.Timestamptz(6)
+  lastAt     DateTime @default(now()) @map("last_at") @db.Timestamptz(6)
+  readSeq    BigInt   @default(0) @map("read_seq")
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  task     Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@id([artifactId, taskId])
+  @@index([taskId])
+  @@map("artifact_chats")
 }
 
 /// The window of 5 hours or of the week a workspace opened with its first call (plan 71): what
