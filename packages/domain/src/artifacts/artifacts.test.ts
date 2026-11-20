@@ -457,7 +457,9 @@ describe('the section of artifacts in the instructions of a pass (88.7)', () => 
     // The title cannot close the section or open another.
     expect(text.match(/<\/chat-artifacts>/g)).toHaveLength(1)
     expect(text).not.toContain('<project-memory>')
-    expect(text).toContain('- 01960000-0000-7000-8000-0000000000aa · document · «План  работ» · v3 · 19.11')
+    expect(text).toContain(
+      '- 01960000-0000-7000-8000-0000000000aa · document · «План  работ» · v3 · 19.11',
+    )
     expect(artifactsSection()).not.toContain('<chat-artifacts>')
     expect(artifactsSection([], ['document', 'mockup'])).toContain('- mockup (Макет)')
   })

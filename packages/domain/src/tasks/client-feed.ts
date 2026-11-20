@@ -1720,8 +1720,7 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
     1: (payload) => readWith(readDocLeft, payload, (data) => ({ type: 'feed.doc_left', ...data })),
   },
   'feed.artifact': {
-    1: (payload) =>
-      readWith(readArtifact, payload, (data) => ({ type: 'feed.artifact', ...data })),
+    1: (payload) => readWith(readArtifact, payload, (data) => ({ type: 'feed.artifact', ...data })),
   },
   'feed.artifact_left': {
     1: (payload) =>
