@@ -296,7 +296,10 @@ describe('MCP request policy', () => {
 
     // The artifacts (plan 88, Ар22): every turn; each call by its own strict schema. The synonyms
     // doc_* of plan 69 only with their own family, which the guard gives to tools/call alone (Ар3).
-    expect(mcpToolFamiliesOf(chat, { ...base, artifactsTools: true })).toEqual(['artifacts'])
+    expect(mcpToolFamiliesOf(chat, { ...base, artifactsTools: true })).toEqual([
+      'artifacts',
+      'artifact_replies',
+    ])
     const docId = access.taskId
     const synonyms = ['artifacts', 'artifact_synonyms'] as const
     expect(mcpBodyAllowed(page('artifact_read', { artifactId: docId }), ['artifacts'])).toBe(true)
@@ -439,11 +442,24 @@ describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)',
 
   it('leaves a pass without its client the pages to read and nothing to change (Зп28)', () => {
     const security: McpSecurity = { ...base, pagesTools: true, artifactsTools: true }
-    expect(mcpToolFamiliesOf(access, security)).toEqual(['artifacts', 'pages', 'pages_changes'])
+    expect(mcpToolFamiliesOf(access, security)).toEqual([
+      'artifacts',
+      'artifact_replies',
+      'pages',
+      'pages_changes',
+    ])
     const unattended = mcpToolFamiliesOf({ ...access, unattended: true }, security)
     // Its artifacts it reads, and changes only the client's own (Ар24, the tool's own refusal);
     // a page is live for every visitor once the turn ends.
     expect(unattended).toEqual(['artifacts', 'pages'])
+    // Nor does it reply in a note (Ар24, 88.18г): the tool is withheld, not just refused.
+    const reply = call('artifact_reply', {
+      threadId: access.taskId,
+      opId: access.taskId,
+      body: 'Готово',
+    })
+    expect(mcpBodyAllowed(reply, unattended)).toBe(false)
+    expect(mcpCallNeedsClient(reply)).toBe(true)
     for (const body of [
       call('page_publish', { file: 'p.html', title: 'Акции' }),
       call('page_publish', {

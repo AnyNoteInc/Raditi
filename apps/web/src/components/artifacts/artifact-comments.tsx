@@ -323,13 +323,23 @@ export function ArtifactComments({
                   aria-label="Ответы на заметку"
                   sx={{ listStyle: 'none', pl: 1.5, my: 1, borderLeft: 1, borderColor: 'divider' }}
                 >
-                  {comment.replies.map(({ id, body: text }) => (
+                  {comment.replies.map(({ id, body: text, byAgent }) => (
                     <Typography
                       key={id}
                       component="li"
                       variant="body2"
                       sx={{ py: 0.5, whiteSpace: 'pre-wrap' }}
                     >
+                      {byAgent && (
+                        <Typography
+                          component="span"
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: 'block' }}
+                        >
+                          Агент
+                        </Typography>
+                      )}
                       {text}
                     </Typography>
                   ))}

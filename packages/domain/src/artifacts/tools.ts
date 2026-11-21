@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { docViewSchema } from '../pages/doc.ts'
 import { outboxFileNameSchema } from '../tasks/chat-files.ts'
 import { artifactBlockKeySchema, artifactIntentSchema, artifactTitleSchema } from './blocks.ts'
+import { artifactCommentBodySchema } from './comments.ts'
 import { artifactKindSchema } from './kinds.ts'
 import { artifactLimits } from './limits.ts'
 import { artifactBatchSchema } from './ops.ts'
@@ -25,6 +26,8 @@ export const artifactToolNames = [
   'artifact_import',
   'artifact_layout',
   'artifact_render',
+  'artifact_comments',
+  'artifact_reply',
 ] as const
 export type ArtifactToolName = (typeof artifactToolNames)[number]
 
@@ -157,6 +160,27 @@ export const artifactRenderArgumentsSchema = z.strictObject({
 })
 export type ArtifactRenderArguments = z.infer<typeof artifactRenderArgumentsSchema>
 
+/**
+ * `artifact_comments` (§7.5, slice 88.18г): the notes the client sent to this chat, with their state
+ * and this chat's replies. Absent `artifactId` — of every artifact.
+ */
+export const artifactCommentsArgumentsSchema = z.strictObject({
+  artifactId: z.uuid().optional(),
+})
+export type ArtifactCommentsArguments = z.infer<typeof artifactCommentsArgumentsSchema>
+
+/**
+ * `artifact_reply` (§7.5, slice 88.18г): a reply in a note sent to this chat; `resolve` closes the
+ * note once the reply passes the check. The same `opId` with the same text — the same reply.
+ */
+export const artifactReplyArgumentsSchema = z.strictObject({
+  threadId: z.uuid(),
+  opId: z.uuid(),
+  body: artifactCommentBodySchema,
+  resolve: z.boolean().optional(),
+})
+export type ArtifactReplyArguments = z.infer<typeof artifactReplyArgumentsSchema>
+
 export const artifactToolArgumentSchemas = {
   artifact_list: artifactListArgumentsSchema,
   artifact_read: artifactReadArgumentsSchema,
@@ -168,6 +192,8 @@ export const artifactToolArgumentSchemas = {
   artifact_import: artifactImportArgumentsSchema,
   artifact_layout: artifactLayoutArgumentsSchema,
   artifact_render: artifactRenderArgumentsSchema,
+  artifact_comments: artifactCommentsArgumentsSchema,
+  artifact_reply: artifactReplyArgumentsSchema,
 } as const satisfies Record<ArtifactToolName, z.ZodType>
 
 /**
@@ -203,6 +229,10 @@ export function artifactToolLine(tool: string): string | null {
       return 'Проверяет вёрстку на компьютере и телефоне'
     case 'artifact_render':
       return 'Смотрит на макет'
+    case 'artifact_comments':
+      return 'Читает заметки к артефакту'
+    case 'artifact_reply':
+      return 'Отвечает на заметку'
     default:
       return null
   }

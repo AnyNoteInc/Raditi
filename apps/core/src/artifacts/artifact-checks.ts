@@ -1,8 +1,12 @@
 import {
   adoptLegacySectionWrites,
   artifactsOfTurn,
+  dropAgentCommentReplies,
   dropArtifactWrites,
+  dropStaleAgentCommentReplies,
   insertFeedEvent,
+  pendingAgentCommentReplies,
+  settleAgentCommentReplies,
   saveArtifactVersion,
   dropStaleArtifactWrites,
   pendingArtifactTitles,
@@ -66,6 +70,7 @@ export interface ArtifactChecksDependencies {
     | 'artifactOp'
     | 'artifactFile'
     | 'artifactExport'
+    | 'artifactCommentReply'
     | 'taskTurn'
     | 'taskEvent'
   >
@@ -168,7 +173,7 @@ export class ArtifactChecks {
     try {
       const settled = await this.#settled(taskId, refuses, false)
       await this.#signal(taskId, turn, settled)
-      return outcomeOf(settled)
+      return plus(outcomeOf(settled), await this.#replies(taskId, refuses))
     } catch (error) {
       this.#warn('artifact_checks_live_failed', taskId, turn, error)
       return none
@@ -181,7 +186,7 @@ export class ArtifactChecks {
     let refused = new Set<string>()
     try {
       const settled = await this.#settled(taskId, refuses, true)
-      outcome = outcomeOf(settled)
+      outcome = plus(outcomeOf(settled), await this.#replies(taskId, refuses))
       this.#log(taskId, turn, outcome)
       refused = await this.#endTurn(taskId, turn, settled)
     } catch (error) {
@@ -315,8 +320,15 @@ export class ArtifactChecks {
     refuses: Refuses | null,
   ): Promise<ArtifactCheckOutcome> {
     try {
-      const outcome = refuses ? outcomeOf(await this.#settled(taskId, refuses, false)) : { ...none }
-      const dropped = count(await dropArtifactWrites(this.#deps.db, taskId), 'refused')
+      const outcome = refuses
+        ? plus(
+            outcomeOf(await this.#settled(taskId, refuses, false)),
+            await this.#replies(taskId, refuses),
+          )
+        : { ...none }
+      const dropped =
+        count(await dropArtifactWrites(this.#deps.db, taskId), 'refused') +
+        (await dropAgentCommentReplies(this.#deps.db, taskId))
       const total = { ...outcome, dropped }
       this.#log(taskId, turn, total)
       return total
@@ -345,6 +357,12 @@ export class ArtifactChecks {
       } catch (error) {
         this.#warn('artifact_sweep_drop_failed', taskId, null, error)
       }
+    }
+    try {
+      // Replies in notes (88.18г) of chats whose pass is over: one statement, no lock of the chat.
+      dropped += await dropStaleAgentCommentReplies(db, before, options.busy)
+    } catch (error) {
+      this.#warn('artifact_sweep_replies_failed', 'none', null, error)
     }
     if (dropped > 0) logger?.log(`artifact_sweep_dropped writes=${dropped} chats=${stale.length}`)
     if (now.getTime() - this.#collectedAt >= ARTIFACT_COLLECT_EVERY_MS) {
@@ -414,6 +432,25 @@ export class ArtifactChecks {
     return settleArtifactWrites(db, { taskId, blocks, claims, titles: titleVerdicts, final })
   }
 
+  /**
+   * The chat's replies in notes (88.18г, §7.3) by the same check as its blocks: one that passes is
+   * shown to the owner and closes its note if asked, a refused one is deleted.
+   */
+  async #replies(taskId: string, refuses: Refuses): Promise<ArtifactCheckOutcome> {
+    const { db } = this.#deps
+    const replies = await pendingAgentCommentReplies(db, taskId)
+    if (replies.length === 0) return none
+    const settled = await settleAgentCommentReplies(db, {
+      taskId,
+      now: this.#now(),
+      verdicts: replies.map((reply) => ({
+        id: reply.id,
+        refused: artifactTextRefusal(refuses, [reply.body]) !== null,
+      })),
+    })
+    return { ...settled, dropped: 0 }
+  }
+
   #log(taskId: string, turn: number | null, outcome: ArtifactCheckOutcome) {
     if (outcome.checked + outcome.refused + outcome.dropped === 0) return
     this.#deps.logger?.log(
@@ -432,6 +469,12 @@ const outcomeOf = (settled: readonly ArtifactSettled[]): ArtifactCheckOutcome =>
   checked: count(settled, 'checked'),
   refused: count(settled, 'refused'),
   dropped: 0,
+})
+
+const plus = (a: ArtifactCheckOutcome, b: ArtifactCheckOutcome): ArtifactCheckOutcome => ({
+  checked: a.checked + b.checked,
+  refused: a.refused + b.refused,
+  dropped: a.dropped + b.dropped,
 })
 
 const count = (settled: readonly ArtifactSettled[], key: 'checked' | 'refused') =>

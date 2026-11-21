@@ -1,4 +1,5 @@
 import {
+  addAgentCommentReply,
   admitInWindow,
   applyArtifactOps,
   artifactBlocksChangedSince,
@@ -12,6 +13,7 @@ import {
   insertFeedEvent,
   listChatArtifacts,
   readArtifact,
+  readChatArtifactComments,
   reserveArtifactFile,
   reserveArtifactImport,
   saveArtifactVersion,
@@ -86,5 +88,8 @@ export function postgresArtifactsStore(
       const turn = await db.taskTurn.findFirst({ where: { taskId, turnNo }, select: { id: true } })
       await insertFeedEvent(db, { taskId, turnId: turn?.id ?? null, row })
     },
+    comments: (taskId, artifactId) =>
+      readChatArtifactComments(db, { taskId, ...(artifactId === undefined ? {} : { artifactId }) }),
+    reply: (input) => addAgentCommentReply(db, { ...input, now: new Date(now()) }),
   }
 }

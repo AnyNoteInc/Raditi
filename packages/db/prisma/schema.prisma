@@ -929,47 +929,48 @@ model Task {
   /// When the contact map the `web_*` tools wrote for this task was removed (К38).
   webMasksPurgedAt     DateTime? @map("web_masks_purged_at") @db.Timestamptz(6)
 
-  workspace          Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  chatSession        ChatSession?          @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
-  createdBy          User?                 @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  revertsTask        Task?                 @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
-  project            Project?              @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  revertedBy         Task[]                @relation("TaskReverts")
-  telegramCurrentOf  ChannelIdentity[]     @relation("ChannelCurrentTask")
-  pricingRule        PricingRule?          @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
-  turns              TaskTurn[]
-  events             TaskEvent[]
-  queuedMessages     TaskQueuedMessage[]
-  presence           TaskPresence[]
-  notifications      ChatNotification[]
-  attachments        Attachment[]
-  tokenUsage         TokenUsage[]
-  creditHolds        CreditHold[]
-  ledgerEntries      CreditLedger[]
-  leases             SiteLease[]
-  turnAssignments    TurnAssignment[]
-  llmKeys            LlmKey[]
-  accountBinding     TaskAccountBinding?
-  browserSessions    BrowserSession[]
-  browserCheckpoints BrowserCheckpoint[]
-  pages              Page[]
-  pageTrees          PageTree[]
-  pageFiles          PageFile[]
-  artifacts          Artifact[]
-  artifactChats      ArtifactChat[]
-  artifactFiles      ArtifactFile[]
-  artifactImports    ArtifactImport[]
-  memorySources      MemoryEntry[]
-  memoryReservations MemoryReservation[]
-  repoBranch         ProjectRepoBranch?
-  mergeRequests      ProjectMergeRequest[]
-  repoReservations   RepoReservation[]
-  repoActions        RepoAction[]
+  workspace              Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  chatSession            ChatSession?           @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
+  createdBy              User?                  @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  revertsTask            Task?                  @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
+  project                Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  revertedBy             Task[]                 @relation("TaskReverts")
+  telegramCurrentOf      ChannelIdentity[]      @relation("ChannelCurrentTask")
+  pricingRule            PricingRule?           @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
+  turns                  TaskTurn[]
+  events                 TaskEvent[]
+  queuedMessages         TaskQueuedMessage[]
+  presence               TaskPresence[]
+  notifications          ChatNotification[]
+  attachments            Attachment[]
+  tokenUsage             TokenUsage[]
+  creditHolds            CreditHold[]
+  ledgerEntries          CreditLedger[]
+  leases                 SiteLease[]
+  turnAssignments        TurnAssignment[]
+  llmKeys                LlmKey[]
+  accountBinding         TaskAccountBinding?
+  browserSessions        BrowserSession[]
+  browserCheckpoints     BrowserCheckpoint[]
+  pages                  Page[]
+  pageTrees              PageTree[]
+  pageFiles              PageFile[]
+  artifacts              Artifact[]
+  artifactChats          ArtifactChat[]
+  artifactFiles          ArtifactFile[]
+  artifactImports        ArtifactImport[]
+  artifactCommentReplies ArtifactCommentReply[]
+  memorySources          MemoryEntry[]
+  memoryReservations     MemoryReservation[]
+  repoBranch             ProjectRepoBranch?
+  mergeRequests          ProjectMergeRequest[]
+  repoReservations       RepoReservation[]
+  repoActions            RepoAction[]
   /// The run of a scheduled task this chat was started by (docs/plan/82-scheduled-tasks.md, Зп17).
-  scheduledRun       ScheduledRun?
+  scheduledRun           ScheduledRun?
   /// Scheduled tasks its agent set up (Зп33), and the changes of them its turns reserved.
-  setUpSchedules     ScheduledTask[]       @relation("ScheduledTaskSource")
-  scheduleChanges    ScheduleReservation[]
+  setUpSchedules         ScheduledTask[]        @relation("ScheduledTaskSource")
+  scheduleChanges        ScheduleReservation[]
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([workspaceId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_workspace_updated_idx")
@@ -3117,18 +3118,27 @@ model ArtifactComment {
 
 /// Separate storage keeps quote notes readable by the previous release (Ар53, slice 88.18б).
 model ArtifactCommentReply {
-  id           String   @id @default(uuid(7)) @db.Uuid
-  threadId     String   @map("thread_id") @db.Uuid
-  requestId    String   @map("request_id") @db.Uuid
-  authorUserId String?  @map("author_user_id") @db.Uuid
-  body         String   @db.VarChar(2000)
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id            String    @id @default(uuid(7)) @db.Uuid
+  threadId      String    @map("thread_id") @db.Uuid
+  requestId     String    @map("request_id") @db.Uuid
+  authorUserId  String?   @map("author_user_id") @db.Uuid
+  body          String    @db.VarChar(2000)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// An agent's reply (88.18г): its turn wrote it; until `pending_at` clears only that chat sees it.
+  byAgent       Boolean   @default(false) @map("by_agent")
+  authorTaskId  String?   @map("author_task_id") @db.Uuid
+  authorTurnNo  Int?      @map("author_turn_no")
+  pendingAt     DateTime? @map("pending_at") @db.Timestamptz(6)
+  /// The agent asked to close the note: done when the reply passes the check.
+  resolveOnPass Boolean   @default(false) @map("resolve_on_pass")
 
-  thread ArtifactComment @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  author User?           @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+  thread     ArtifactComment @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author     User?           @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+  authorTask Task?           @relation(fields: [authorTaskId], references: [id], onDelete: SetNull)
 
   @@unique([threadId, requestId])
   @@index([authorUserId])
+  @@index([authorTaskId], map: "artifact_comment_replies_pending_idx", where: raw("pending_at IS NOT NULL"))
   @@map("artifact_comment_replies")
 }
 

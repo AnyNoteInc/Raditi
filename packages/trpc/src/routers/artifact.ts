@@ -177,6 +177,8 @@ export const artifactRouter = router({
               id: z.uuid(),
               body: artifactCommentBodySchema,
               createdAt: z.iso.datetime(),
+              /** A reply of the owner's agent, shown after the check of core (88.18г). */
+              byAgent: z.boolean(),
             }),
           ),
         }),

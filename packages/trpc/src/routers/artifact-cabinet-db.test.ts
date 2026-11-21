@@ -2,12 +2,17 @@ import { randomUUID } from 'node:crypto'
 
 import { placeReserve } from '@repo/billing/testing'
 import {
+  addAgentCommentReply,
   applyArtifactOps,
   attachMentionedArtifacts,
   claimArtifactBlock,
   createPrismaClient,
+  dropAgentCommentReplies,
+  dropStaleAgentCommentReplies,
   insertFeedEvent,
   readArtifactComments,
+  readChatArtifactComments,
+  settleAgentCommentReplies,
   settleArtifactWrites,
   type Prisma,
   type PrismaClient,
@@ -493,7 +498,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
         body,
         resolved: true,
         moved: false,
-        replies: [{ id: saved.id, body: reply.body, createdAt: expect.any(String) }],
+        replies: [
+          { id: saved.id, body: reply.body, createdAt: expect.any(String), byAgent: false },
+        ],
       },
     ])
     await expect(
@@ -739,6 +746,158 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     ).toMatchObject([
       { type: 'turn.run', payload: { taskId, requestEventId: sent.requestEventId } },
     ])
+  })
+
+  /** A note with the owner's reply, sent by «Отправить агенту» to a chat of the owner (88.18в). */
+  async function sentNote() {
+    const { user, caller, artifactId, anchor } = await quoteDocument()
+    const { workspaceId } = await db.artifact.findUniqueOrThrow({ where: { id: artifactId } })
+    const { taskId } = await commentDestination({
+      workspaceId,
+      createdById: user.id,
+      modelClass: 'standard',
+    })
+    dispatchChatIds.push(taskId)
+    const now = new Date()
+    await placeReserve(db, {
+      workspaceId,
+      taskId,
+      attempt: 1,
+      now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    })
+    const { id: threadId } = await caller.artifact.addComment({
+      artifactId,
+      anchor,
+      body: 'Добавить цены на июль.',
+    })
+    await caller.artifact.addCommentReply({
+      artifactId,
+      threadId,
+      requestId: randomUUID(),
+      body: 'И на август.',
+    })
+    await caller.artifact.dispatchComments({
+      artifactId,
+      target: { kind: 'existing', taskId },
+      requestId: randomUUID(),
+      threadIds: [threadId],
+      text: '',
+    })
+    const reply = (
+      body: string,
+      extra: { requestId?: string; resolve?: boolean; now?: Date } = {},
+    ) =>
+      addAgentCommentReply(db, {
+        taskId,
+        turnNo: 2,
+        threadId,
+        requestId: extra.requestId ?? randomUUID(),
+        body,
+        resolve: extra.resolve ?? false,
+        now: extra.now ?? new Date(),
+      })
+    return { user, caller, artifactId, workspaceId, taskId, threadId, reply }
+  }
+
+  it('lets the agent read the notes sent to its chat and reply after the check (88.18г)', async () => {
+    const { user, caller, artifactId, workspaceId, taskId, threadId, reply } = await sentNote()
+    expect(await readChatArtifactComments(db, { taskId })).toEqual([
+      {
+        threadId,
+        artifactId,
+        block: 'delivery',
+        quote: 'хлеб & булочки.',
+        body: 'Добавить цены на июль.',
+        ownerReplies: ['И на август.'],
+        resolved: false,
+        yourReplies: [],
+      },
+    ])
+    // Another chat of the same owner was never sent the note: it neither reads nor replies.
+    const { taskId: other } = await commentDestination({
+      workspaceId,
+      createdById: user.id,
+      modelClass: 'standard',
+    })
+    expect(await readChatArtifactComments(db, { taskId: other })).toEqual([])
+    await expect(
+      addAgentCommentReply(db, {
+        taskId: other,
+        turnNo: 1,
+        threadId,
+        requestId: randomUUID(),
+        body: 'Готово.',
+        resolve: false,
+        now: new Date(),
+      }),
+    ).rejects.toMatchObject({ code: 'ARTIFACT_COMMENT_UNAVAILABLE' })
+
+    const requestId = randomUUID()
+    const first = await reply('Добавил цены на июль и август.', { requestId, resolve: true })
+    expect(first).toEqual({ id: expect.any(String), artifactId, repeated: false })
+    await expect(
+      reply('Добавил цены на июль и август.', { requestId, resolve: true }),
+    ).resolves.toEqual({ ...first, repeated: true })
+    await expect(reply('Другой текст.', { requestId, resolve: true })).rejects.toMatchObject({
+      code: 'ARTIFACT_OP_REUSED',
+    })
+    // Until the check, only the writing chat sees the reply; the note stays open.
+    const [waiting] = await caller.artifact.comments({ artifactId })
+    expect(waiting).toMatchObject({ resolved: false, replies: [{ body: 'И на август.' }] })
+    expect(waiting!.replies).toHaveLength(1)
+    expect((await readChatArtifactComments(db, { taskId }))[0]!.yourReplies).toEqual([
+      { id: first.id, body: 'Добавил цены на июль и август.', checking: true },
+    ])
+
+    await expect(
+      settleAgentCommentReplies(db, {
+        taskId,
+        now: new Date(),
+        verdicts: [{ id: first.id, refused: false }],
+      }),
+    ).resolves.toEqual({ checked: 1, refused: 0 })
+    const [shown] = await caller.artifact.comments({ artifactId })
+    expect(shown).toMatchObject({
+      resolved: true,
+      replies: [
+        { body: 'И на август.', byAgent: false },
+        { body: 'Добавил цены на июль и август.', byAgent: true },
+      ],
+    })
+    await expect(reply('Ещё одно.')).rejects.toMatchObject({
+      code: 'ARTIFACT_COMMENT_UNAVAILABLE',
+    })
+  })
+
+  it('deletes a refused reply, drops those of a failed turn and stale ones (88.18г)', async () => {
+    const { caller, artifactId, taskId, reply } = await sentNote()
+    const refused = await reply('Ответ, который не прошёл.', { resolve: true })
+    await expect(
+      settleAgentCommentReplies(db, {
+        taskId,
+        now: new Date(),
+        verdicts: [{ id: refused.id, refused: true }],
+      }),
+    ).resolves.toEqual({ checked: 0, refused: 1 })
+    const [note] = await caller.artifact.comments({ artifactId })
+    expect(note).toMatchObject({ resolved: false })
+    expect(note!.replies).toHaveLength(1)
+
+    await reply('Ход упал.')
+    await expect(dropAgentCommentReplies(db, taskId)).resolves.toBe(1)
+
+    const hourAgo = new Date(Date.now() - 60 * 60 * 1000)
+    const stale = await reply('Завис.', { now: hourAgo })
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000)
+    // A chat this core still runs keeps its reply, as the collector of blocks does.
+    await dropStaleAgentCommentReplies(db, tenMinutesAgo, (id) => id === taskId)
+    expect(await db.artifactCommentReply.findUnique({ where: { id: stale.id } })).not.toBeNull()
+    await expect(
+      dropStaleAgentCommentReplies(db, new Date(Date.now() - 10 * 60 * 1000)),
+    ).resolves.toBeGreaterThanOrEqual(1)
+    expect(await db.artifactCommentReply.findUnique({ where: { id: stale.id } })).toBeNull()
+    expect((await readChatArtifactComments(db, { taskId }))[0]!.yourReplies).toEqual([])
   })
 
   it('reads notes and their access decision at the same snapshot during a takedown', async () => {

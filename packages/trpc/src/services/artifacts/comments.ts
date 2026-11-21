@@ -34,10 +34,11 @@ export async function cabinetComments(db: PrismaClient, input: Owner) {
         body: comment.body,
         resolved: comment.resolvedAt !== null,
         moved: !hasUniqueCommentQuote(texts.get(anchor.data.block) ?? '', anchor.data.quote),
-        replies: comment.replies.map(({ id, body, createdAt }) => ({
+        replies: comment.replies.map(({ id, body, createdAt, byAgent }) => ({
           id,
           body,
           createdAt: createdAt.toISOString(),
+          byAgent,
         })),
       },
     ]

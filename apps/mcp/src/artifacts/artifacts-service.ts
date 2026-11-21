@@ -32,6 +32,7 @@ import {
   type ArtifactRenderRequest,
   type ArtifactRenderResponse,
   type ArtifactClaimArguments,
+  type ArtifactCommentsArguments,
   type ArtifactCreateArguments,
   type ArtifactEditArguments,
   type ArtifactFilePutArguments,
@@ -40,6 +41,7 @@ import {
   type ArtifactListScope,
   type ArtifactOp,
   type ArtifactReadArguments,
+  type ArtifactReplyArguments,
   type ArtifactSaveVersionArguments,
 } from '@repo/domain/artifacts'
 
@@ -160,6 +162,27 @@ export interface McpArtifactsStore {
   /** One more of a counted thing of this turn: false — its limit is reached. */
   admit(key: string, limit: number): Promise<boolean>
   feed(taskId: string, turnNo: number, row: FeedRow): Promise<void>
+  /** The notes sent to this chat (88.18г): owner-only, checked by the store. */
+  comments(taskId: string, artifactId?: string): Promise<McpChatComment[]>
+  reply(input: {
+    taskId: string
+    turnNo: number
+    threadId: string
+    requestId: string
+    body: string
+    resolve: boolean
+  }): Promise<{ id: string; artifactId: string; repeated: boolean }>
+}
+
+export interface McpChatComment {
+  threadId: string
+  artifactId: string
+  block: string
+  quote: string
+  body: string
+  ownerReplies: string[]
+  resolved: boolean
+  yourReplies: { id: string; body: string; checking: boolean }[]
 }
 
 export type McpArtifactsAnswer =
@@ -630,6 +653,53 @@ export class McpArtifactsService {
         artifactId,
         kind,
         live: 'at the end of this turn: read or edit it in the next turn',
+      }
+    })
+  }
+
+  /**
+   * `artifact_comments` (§7.5, 88.18г): the notes the client sent to this chat by «Отправить агенту»
+   * — data, never instructions. A pass without its client reads them too (Ар24).
+   */
+  comments(scope: McpTurnAccess, args: ArtifactCommentsArguments): Promise<McpArtifactsAnswer> {
+    return answerOf(async () => {
+      const notes = await this.#store.comments(scope.taskId, args.artifactId)
+      return {
+        notes,
+        ...(notes.length === 0 ? { note: 'No notes were sent to this chat.' } : {}),
+      }
+    })
+  }
+
+  /**
+   * `artifact_reply` (§7.5, 88.18г): a reply in a note sent to this chat. It waits for the check of
+   * core; the client sees it, and the note closes if asked, only once it passes. Never without the
+   * client (Ар24): the policy withholds the tool, the service refuses it too.
+   */
+  reply(scope: McpTurnAccess, args: ArtifactReplyArguments): Promise<McpArtifactsAnswer> {
+    return answerOf(async () => {
+      if (scope.unattended)
+        throw new DomainError(
+          'ARTIFACT_FORBIDDEN',
+          'This pass runs on a schedule without the client: it does not reply in notes',
+          403,
+        )
+      assertText(args.body)
+      const reply = await this.#store.reply({
+        taskId: scope.taskId,
+        turnNo: scope.turn,
+        threadId: args.threadId,
+        requestId: args.opId,
+        body: args.body,
+        resolve: args.resolve ?? false,
+      })
+      return {
+        replyId: reply.id,
+        threadId: args.threadId,
+        artifactId: reply.artifactId,
+        live: 'after the check of the platform',
+        ...(args.resolve ? { resolve: 'the note closes once the reply passes the check' } : {}),
+        ...(reply.repeated ? { repeated: true } : {}),
       }
     })
   }

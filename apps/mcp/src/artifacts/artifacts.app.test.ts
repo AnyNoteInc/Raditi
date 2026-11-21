@@ -36,6 +36,8 @@ const base = {
   requirements: { repository: false, browser: false },
 } satisfies McpTurnAccess
 const artifactId = '01960000-0000-7000-8000-0000000000dd'
+const threadId = '01960000-0000-7000-8000-0000000000ee'
+const opId = '01960000-0000-7000-8000-0000000000ef'
 const news = {
   seq: 7,
   changedSinceYourRead: { count: 1, blocks: ['b1'], more: false },
@@ -129,6 +131,23 @@ function fakeStore(
     feed: vi.fn<S['feed']>(async (_taskId: string, _turn: number, row: FeedRow) => {
       rows.push(row)
     }),
+    comments: vi.fn<S['comments']>(async () => [
+      {
+        threadId,
+        artifactId,
+        block: 'intro',
+        quote: 'Цены на лето',
+        body: 'Добавьте цены на июль',
+        ownerReplies: [],
+        resolved: false,
+        yourReplies: [],
+      },
+    ]),
+    reply: vi.fn<S['reply']>(async () => ({
+      id: '01960000-0000-7000-8000-0000000000f3',
+      artifactId,
+      repeated: false,
+    })),
   } satisfies McpArtifactsStore
   return { store, rows }
 }
@@ -262,6 +281,8 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
       'artifact_save_version',
       'artifact_file_put',
       'artifact_import',
+      'artifact_comments',
+      'artifact_reply',
     ])
     expect(names.filter((name) => name.startsWith('doc_'))).toEqual([])
     for (const tool of family) expect(tool.inputSchema.additionalProperties, tool.name).toBe(false)
@@ -571,5 +592,44 @@ describe('the synonyms doc_* of plan 69 (Ар3)', () => {
     expect(answer(into)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
     const unknown = await post(server, call('artifact_import', { file: 'notes.txt' }))
     expect(answer(unknown)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
+  })
+
+  it('reads the notes sent to this chat and replies in one, closing it after the check (88.18г)', async () => {
+    const { store } = fakeStore()
+    const server = await start(store)
+    const notes = await post(server, call('artifact_comments', { artifactId }))
+    expect(answer(notes)).toMatchObject({ notes: [{ threadId, quote: 'Цены на лето' }] })
+    expect(store.comments).toHaveBeenCalledWith(base.taskId, artifactId)
+    const reply = await post(
+      server,
+      call('artifact_reply', { threadId, opId, body: 'Добавил цены на июль', resolve: true }),
+    )
+    expect(answer(reply)).toMatchObject({
+      threadId,
+      artifactId,
+      live: 'after the check of the platform',
+    })
+    expect(store.reply).toHaveBeenCalledWith({
+      taskId: base.taskId,
+      turnNo: base.turn,
+      threadId,
+      requestId: opId,
+      body: 'Добавил цены на июль',
+      resolve: true,
+    })
+  })
+
+  it('never replies in a note in a pass without its client (Ар24)', async () => {
+    const { store } = fakeStore()
+    const server = await start(store, { ...base, unattended: true })
+    const list = await post(server, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
+    const names = (list.body.result.tools as { name: string }[]).map((tool) => tool.name)
+    expect(names).toContain('artifact_comments')
+    expect(names).not.toContain('artifact_reply')
+    const notes = await post(server, call('artifact_comments', {}))
+    expect(answer(notes)).toMatchObject({ notes: [{ threadId }] })
+    const reply = await post(server, call('artifact_reply', { threadId, opId, body: 'Готово' }))
+    expect(reply.body.result?.isError ?? reply.body.error).toBeTruthy()
+    expect(store.reply).not.toHaveBeenCalled()
   })
 })

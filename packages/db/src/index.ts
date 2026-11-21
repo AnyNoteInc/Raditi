@@ -166,11 +166,17 @@ export {
   type ArtifactWriteVerdict,
 } from './artifacts.ts'
 export {
+  addAgentCommentReply,
   addArtifactComment,
   addArtifactCommentReply,
+  dropAgentCommentReplies,
+  dropStaleAgentCommentReplies,
+  pendingAgentCommentReplies,
   readArtifactCommentDispatch,
   readArtifactComments,
+  readChatArtifactComments,
   resolveArtifactComment,
+  settleAgentCommentReplies,
   snapshotArtifactComments,
 } from './artifact-comments.ts'
 export { accessibleTasks } from './chat-access.ts'

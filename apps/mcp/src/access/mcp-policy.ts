@@ -8,10 +8,12 @@ import {
 } from '@modelcontextprotocol/core'
 import {
   artifactClaimArgumentsSchema,
+  artifactCommentsArgumentsSchema,
   artifactCreateArgumentsSchema,
   artifactEditArgumentsSchema,
   artifactListArgumentsSchema,
   artifactReadArgumentsSchema,
+  artifactReplyArgumentsSchema,
   artifactSaveVersionArgumentsSchema,
   artifactFilePutArgumentsSchema,
   artifactImportArgumentsSchema,
@@ -107,6 +109,12 @@ const artifactsCall = z.discriminatedUnion('name', [
   call('artifact_save_version', artifactSaveVersionArgumentsSchema),
   call('artifact_file_put', artifactFilePutArgumentsSchema),
   call('artifact_import', artifactImportArgumentsSchema),
+  call('artifact_comments', artifactCommentsArgumentsSchema.optional()),
+])
+// A reply in a note speaks to the client in the cabinet (Ар24, slice 88.18г): only a turn its
+// client watches is offered it.
+const artifactRepliesCall = z.discriminatedUnion('name', [
+  call('artifact_reply', artifactReplyArgumentsSchema),
 ])
 // The report of the layout of a frame (Ар32, slice 88.15б): where the renderer of the browser worker
 // is configured.
@@ -170,7 +178,7 @@ const scheduleChangeCall = z.discriminatedUnion('name', [
 ])
 /** The names of the tools a pass without its client is not offered (`mcpToolFamiliesOf`). */
 const unattendedWithheldTools: ReadonlySet<string> = new Set(
-  [pagesChangeCall, scheduleChangeCall].flatMap((union) =>
+  [pagesChangeCall, scheduleChangeCall, artifactRepliesCall].flatMap((union) =>
     union.options.map((option) => option.shape.name.value),
   ),
 )
@@ -270,6 +278,7 @@ export const mcpToolFamilies = [
   'web',
   'search',
   'artifacts',
+  'artifact_replies',
   'artifact_synonyms',
   'artifact_layout',
   'artifact_vision',
@@ -288,6 +297,7 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
   if (security.webTools && access.requirements.browser) families.push('web')
   if (security.searchTools) families.push('search')
   if (security.artifactsTools) families.push('artifacts')
+  if (security.artifactsTools && !access.unattended) families.push('artifact_replies')
   // The renderer of frames lives in the browser worker (docs/plan/88-artifacts.md, Ар32).
   if (security.artifactsTools && security.webTools) {
     families.push('artifact_layout')
@@ -367,6 +377,8 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       (families.includes('web') && webCall.safeParse(request.params).success) ||
       (families.includes('search') && searchCall.safeParse(request.params).success) ||
       (families.includes('artifacts') && artifactsCall.safeParse(request.params).success) ||
+      (families.includes('artifact_replies') &&
+        artifactRepliesCall.safeParse(request.params).success) ||
       (families.includes('artifact_layout') &&
         artifactLayoutCall.safeParse(request.params).success) ||
       (families.includes('artifact_vision') &&
