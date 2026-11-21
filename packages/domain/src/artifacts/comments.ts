@@ -28,6 +28,26 @@ export const artifactCommentBodySchema = z
   .max(artifactLimits.commentChars)
   .refine(storableText)
 
+/** Bounds an explicitly sent snapshot, both at storage and before it becomes turn data. */
+export const artifactCommentDispatchLimits = { threads: 16, entries: 48, bytes: 24 * 1024 } as const
+export const artifactCommentSnapshotSchema = z
+  .array(
+    z.strictObject({
+      id: z.uuid(),
+      anchor: artifactQuoteAnchorSchema,
+      body: artifactCommentBodySchema,
+      replies: z.array(artifactCommentBodySchema).max(artifactCommentDispatchLimits.entries),
+    }),
+  )
+  .min(1)
+  .max(artifactCommentDispatchLimits.threads)
+  .refine(
+    (roots) =>
+      roots.reduce((count, root) => count + 1 + root.replies.length, 0) <=
+      artifactCommentDispatchLimits.entries,
+  )
+export type ArtifactCommentSnapshot = z.infer<typeof artifactCommentSnapshotSchema>
+
 /** Both inputs are normalized visible text, not Markdown source or editor offsets. */
 export function hasUniqueCommentQuote(text: string, quote: string): boolean {
   const first = text.indexOf(quote)

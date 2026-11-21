@@ -24,6 +24,7 @@ export const artifactRefusalCodes = [
   'ARTIFACT_NOT_FOUND',
   'ARTIFACT_OP_INVALID',
   'ARTIFACT_COMMENT_UNAVAILABLE',
+  'ARTIFACT_COMMENT_DISPATCH_TOO_LARGE',
 ] as const
 export type ArtifactRefusalCode = (typeof artifactRefusalCodes)[number]
 
@@ -116,6 +117,9 @@ export const artifactNotFound = (): DomainError =>
 export const artifactCommentUnavailable = (): DomainError =>
   refusal('ARTIFACT_COMMENT_UNAVAILABLE', 'The comment is not open for replies', 409)
 
+export const artifactCommentDispatchTooLarge = (): DomainError =>
+  refusal('ARTIFACT_COMMENT_DISPATCH_TOO_LARGE', 'The selected notes do not fit one request', 409)
+
 export const artifactOpInvalid = (problem: string, details?: unknown): DomainError =>
   refusal('ARTIFACT_OP_INVALID', `The batch is invalid: ${problem}`, 400, details)
 
@@ -136,6 +140,8 @@ export const artifactRefusalTexts = Object.freeze({
   ARTIFACT_NOT_FOUND: 'Артефакт не найден или к нему нет доступа',
   ARTIFACT_OP_INVALID: 'Правку не удалось применить',
   ARTIFACT_COMMENT_UNAVAILABLE: 'Заметка недоступна для ответа',
+  ARTIFACT_COMMENT_DISPATCH_TOO_LARGE:
+    'Заметки вместе с ответами не помещаются в один запрос. Выберите меньше заметок. Если не помещается одна заметка, отправьте нужную часть сообщением в чате',
 } satisfies Record<ArtifactRefusalCode, string>)
 
 /** A quote can become ambiguous as well as stale; the note editor needs its own next step. */

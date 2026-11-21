@@ -1,5 +1,10 @@
 import type { Prisma } from '@repo/db'
-import { readFeedRow, type FeedCeilingReason, type FeedCreditsState } from '@repo/domain'
+import {
+  readFeedRow,
+  type FeedCeilingReason,
+  type FeedCreditsState,
+  type TaskStatus,
+} from '@repo/domain'
 
 /**
  * Rows of the feed (`feed.*`) are exactly the rows `client_visible` marks
@@ -186,9 +191,10 @@ export async function wordsOfTurn(
       createdAt: { lte: until, ...(since === null ? {} : { gt: since }) },
     },
     orderBy: { id: 'asc' },
-    select: { payload: true },
+    select: { payload: true, artifactCommentHasWords: true },
   })
   const words = rows.flatMap((row) => {
+    if (row.artifactCommentHasWords === false) return []
     const event = readFeedRow('feed.request', row.payload)
     return event.type === 'feed.request' && 'text' in event && typeof event.text === 'string'
       ? [event.text]
@@ -227,6 +233,23 @@ export async function openCeilingQuestion(
 ): Promise<DialogQuestion | null> {
   const question = await lastQuestion(db, taskId)
   return question !== null && question.kind === 'ceiling' && !question.answered ? question : null
+}
+
+/** Where the next message goes. The writer calls this again under the dialog lock. */
+export async function dialogMessageTarget(
+  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
+  task: { id: string; status: TaskStatus; needsBrowser: boolean },
+) {
+  if (task.needsBrowser && (await cancelPending(db, task.id)))
+    return { kind: 'cancel_pending' } as const
+  if (task.status !== 'awaiting_user' && task.status !== 'awaiting_approval')
+    return { kind: 'not_waiting' } as const
+  const question = await lastQuestion(db, task.id)
+  const open = question !== null && !question.answered ? question : null
+  if (open?.kind === 'ceiling') return { kind: 'ceiling', question: open } as const
+  if (task.status === 'awaiting_approval') return { kind: 'not_waiting' } as const
+  const id = open?.id ?? (await openResult(db, task.id))
+  return id === null ? ({ kind: 'no_open_event' } as const) : ({ kind: 'answer', id } as const)
 }
 
 /**

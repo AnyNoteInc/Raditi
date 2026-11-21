@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 import { type FeedRow } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -6,6 +8,7 @@ import {
   schemaClient,
   type MigratedSchema,
 } from '../prisma/migrated-schema.ts'
+import { insertFeedEvent } from './feed-events.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
 import {
   cancelWaitingTask,
@@ -319,6 +322,38 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     })
   })
 
+  async function requestPass(taskId: string, text: string) {
+    const id = await insertFeedEvent(db, {
+      taskId,
+      row: {
+        type: 'feed.request',
+        payload: { v: 1, kind: 'first', authorId: randomUUID(), requestId: randomUUID(), text },
+      },
+    })
+    return { taskId, attempt: 1, requestEventId: String(id) }
+  }
+
+  it('does not let a delayed job claim a newer request under the same attempt', async () => {
+    const { id } = await task()
+    const old = await requestPass(id, 'Заметки к артефакту')
+    const current = await requestPass(id, 'Новая просьба')
+    const interrupt = await insertFeedEvent(db, {
+      taskId: id,
+      row: {
+        type: 'feed.request',
+        payload: { v: 1, kind: 'interrupt', authorId: randomUUID(), requestId: randomUUID() },
+      },
+    })
+    await expect(claimQueuedPass(db, { ...old, workspaceLimit: 1 })).resolves.toBeNull()
+    await expect(
+      claimQueuedPass(db, { ...current, requestEventId: String(interrupt), workspaceLimit: 1 }),
+    ).resolves.toBeNull()
+    expect(await db.task.findUnique({ where: { id } })).toMatchObject({ status: 'queued' })
+    await expect(claimQueuedPass(db, { ...current, workspaceLimit: 1 })).resolves.toMatchObject({
+      turnNo: 0,
+    })
+  })
+
   it('claims exactly as many passes of a workspace as its limit, of nine at once', async () => {
     // docs/plan/70-turn-without-time-limit.md, ВР13: none goes past the limit, none gives way
     // for nothing.
@@ -332,8 +367,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
       ),
     )
     const ids = [first.id, ...others.map((row) => row.id)]
+    const jobs = await Promise.all(ids.map((taskId) => requestPass(taskId, 'Новая просьба')))
     const claims = await Promise.all(
-      ids.map((taskId) => claimQueuedPass(db, { taskId, attempt: 1, workspaceLimit: 8 })),
+      jobs.map((job) => claimQueuedPass(db, { ...job, workspaceLimit: 8 })),
     )
     expect(claims.filter((claim) => claim === 'full')).toHaveLength(1)
     expect(claims.filter((claim) => claim !== null && claim !== 'full')).toHaveLength(8)
@@ -345,15 +381,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
       attempt: 1,
     })
     // A pass of another attempt, or one already taken, is no claim at all.
-    expect(await claimQueuedPass(db, { taskId: kept, attempt: 2, workspaceLimit: 8 })).toBeNull()
+    const keptJob = jobs.find(({ taskId }) => taskId === kept)!
+    expect(await claimQueuedPass(db, { ...keptJob, attempt: 2, workspaceLimit: 8 })).toBeNull()
     // One ends: the kept one goes.
     await db.task.update({
       where: { id: ids.find((id) => id !== kept)! },
       data: { status: 'done' },
     })
-    expect(
-      await claimQueuedPass(db, { taskId: kept, attempt: 1, workspaceLimit: 8 }),
-    ).toMatchObject({ turnNo: 0 })
+    expect(await claimQueuedPass(db, { ...keptJob, workspaceLimit: 8 })).toMatchObject({
+      turnNo: 0,
+    })
   })
 
   it('claims a queued pass of its attempt once, and clears why it waited', async () => {

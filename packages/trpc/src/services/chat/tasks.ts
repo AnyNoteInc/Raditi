@@ -46,9 +46,9 @@ import { moveTo, personalWorkspaceOf, underDialogLock, WRITE, writeRequest } fro
 import {
   cancelPending,
   creditsAfterReturn,
+  dialogMessageTarget,
   lastQuestion,
   openCeilingQuestion,
-  openResult,
   requestOf,
   wordsOfTurn,
   wordsOfUndonePress,
@@ -71,6 +71,15 @@ import {
 import { dialogTitle, requestPayload, requestText } from './request-text.ts'
 
 type Tx = Prisma.TransactionClient
+
+/** An explicit attachment to a single request, committed with its reserve and outbox row. */
+export interface DialogRequestBinding {
+  lock(tx: Tx): Promise<void>
+  authorize(tx: Tx, taskId: string): Promise<void>
+  replay(db: Tx): Promise<{ taskId: string; requestEventId: string } | null>
+  bind(tx: Tx, ids: { taskId: string; workspaceId: string; requestEventId: string }): Promise<void>
+  collision(): Error
+}
 
 /** What a press or words of the client came to. */
 export interface PostedRequest {
@@ -128,6 +137,7 @@ export interface CreateDialogInput {
 
 export interface CreatedDialog {
   taskId: string
+  requestEventId?: string
   /** false — the same request was delivered before, nothing was written now. */
   created: boolean
 }
@@ -172,6 +182,7 @@ export async function createDialog(
   db: PrismaClient,
   chat: ChatContext,
   input: CreateDialogInput,
+  binding?: DialogRequestBinding,
 ): Promise<CreatedDialog> {
   const { userId, now } = input
   const taskId = input.taskId.toLowerCase()
@@ -188,8 +199,13 @@ export async function createDialog(
   })
   if (!UUID_V7.safeParse(taskId).success) throw taskIdInvalid()
 
-  const earlier = await sameDialog(db, { taskId, userId })
-  if (earlier !== null) return earlier
+  if (binding) {
+    const earlier = await binding.replay(db)
+    if (earlier !== null) return { ...earlier, created: false }
+  } else {
+    const earlier = await sameDialog(db, { taskId, userId })
+    if (earlier !== null) return earlier
+  }
 
   const projectId = input.projectId?.toLowerCase() ?? null
   const workspaceId =
@@ -201,6 +217,11 @@ export async function createDialog(
   const modelClass = modelClassOfEffort(input.effort ?? 'high')
 
   return db.$transaction(async (tx) => {
+    if (binding) {
+      await binding.lock(tx)
+      const earlier = await binding.replay(tx)
+      if (earlier !== null) return { ...earlier, created: false }
+    }
     // The task of the run first, as the tick takes it; a run closed meanwhile gets no chat.
     if (input.scheduledRunId !== undefined && !(await lockWaitingRun(tx, input.scheduledRunId)))
       throw scheduledRunClosed()
@@ -233,6 +254,7 @@ export async function createDialog(
     if (inserted.count === 0) {
       const raced = await sameDialog(tx, { taskId, userId })
       if (raced === null) throw taskNotFound()
+      if (binding) throw binding.collision()
       return raced
     }
     if (input.scheduledRunId !== undefined) {
@@ -257,13 +279,11 @@ export async function createDialog(
       userId,
       workspaceId,
     })
-    const requestEventId = await insertFeedEvent(tx, {
-      taskId,
-      row: { type: 'feed.request', payload },
-    })
-    await enqueueAgentTurn(tx, { taskId, attempt: 1, requestEventId: String(requestEventId) })
+    const requestEventId = await writeRequest(tx, taskId, payload)
+    await binding?.bind(tx, { taskId, workspaceId, requestEventId })
+    await enqueueAgentTurn(tx, { taskId, attempt: 1, requestEventId })
     if (projectId !== null) await touchProjectActivity(tx, projectId, now)
-    return { taskId, created: true }
+    return { taskId, created: true, ...(binding ? { requestEventId } : {}) }
   }, WRITE)
 }
 
@@ -364,6 +384,7 @@ async function nextPassAttempt(
 export async function postDialogMessage(
   db: PrismaClient,
   input: DialogMessageInput,
+  binding?: DialogRequestBinding,
 ): Promise<PostedRequest> {
   const { userId, now } = input
   const requestId = input.requestId.toLowerCase()
@@ -372,65 +393,58 @@ export async function postDialogMessage(
   // Checked before the transaction, so the words are refused in the client's terms.
   requestPayload({ v: 1, kind: 'first', authorId: userId, requestId, text, ...attachments })
 
-  return underDialogLock(db, input, async (tx, task) => {
-    const repeated = await requestOf(tx, task.id, requestId)
-    if (repeated !== null) return { requestEventId: String(repeated), repeated: true }
-    // «Остановить» of a task in the browser is final: core is closing it (Б24).
-    if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
-
-    let payload: FeedRequestPayload
-    const ceiling =
-      task.status === 'awaiting_user' || task.status === 'awaiting_approval'
-        ? await openCeilingQuestion(tx, task.id)
-        : null
-    if (ceiling !== null) {
-      payload = {
-        v: 1,
-        kind: 'answer',
-        authorId: userId,
-        requestId,
-        text,
-        ...attachments,
-        answersEventId: String(ceiling.id),
+  return underDialogLock(
+    db,
+    input,
+    async (tx, task) => {
+      if (binding) {
+        await binding.authorize(tx, task.id)
+        const earlier = await binding.replay(tx)
+        if (earlier !== null) return { requestEventId: earlier.requestEventId, repeated: true }
       }
-    } else if (task.status === 'awaiting_user') {
-      const question = await lastQuestion(tx, task.id)
-      // The words answer the open question, or the ending that left the dialog open.
-      const answers =
-        question !== null && !question.answered ? question.id : await openResult(tx, task.id)
-      if (answers === null)
+      const repeated = await requestOf(tx, task.id, requestId)
+      if (repeated !== null) {
+        if (binding) throw binding.collision()
+        return { requestEventId: String(repeated), repeated: true }
+      }
+      const target = await dialogMessageTarget(tx, {
+        ...task,
+        needsBrowser: task.requirements.browser,
+      })
+      if (target.kind === 'cancel_pending') throw taskFinished()
+      if (target.kind === 'not_waiting') throw notWaiting(task.status)
+      if (target.kind === 'no_open_event')
         throw conflict('The dialog waits for an answer without an open question')
-      payload = {
+      const payload: FeedRequestPayload = {
         v: 1,
         kind: 'answer',
         authorId: userId,
         requestId,
         text,
         ...attachments,
-        answersEventId: String(answers),
+        answersEventId: String(target.kind === 'ceiling' ? target.question.id : target.id),
       }
-    } else {
-      throw notWaiting(task.status)
-    }
-
-    const attempt =
-      ceiling !== null
-        ? await wordsAfterCeiling(tx, task, ceiling, now)
-        : await nextPassAttempt(tx, task, 'message', now)
-    await moveTo(tx, task, 'queued', attempt === task.attempt ? {} : { attempt })
-    await bindMessageAttachments(tx, {
-      ids: attachments.attachments ?? [],
-      taskId: task.id,
-      userId,
-      workspaceId: task.workspaceId,
-    })
-    const requestEventId = await writeRequest(tx, task.id, payload)
-    // A message to an archived chat brings it back to the list (docs/plan/75, ВВ21).
-    await tx.$executeRaw`
+      const attempt =
+        target.kind === 'ceiling'
+          ? await wordsAfterCeiling(tx, task, target.question, now)
+          : await nextPassAttempt(tx, task, 'message', now)
+      await moveTo(tx, task, 'queued', attempt === task.attempt ? {} : { attempt })
+      await bindMessageAttachments(tx, {
+        ids: attachments.attachments ?? [],
+        taskId: task.id,
+        userId,
+        workspaceId: task.workspaceId,
+      })
+      const requestEventId = await writeRequest(tx, task.id, payload)
+      await binding?.bind(tx, { taskId: task.id, workspaceId: task.workspaceId, requestEventId })
+      // A message to an archived chat brings it back to the list (docs/plan/75, ВВ21).
+      await tx.$executeRaw`
       UPDATE tasks SET archived_at = NULL WHERE id = ${task.id}::uuid AND archived_at IS NOT NULL`
-    await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
-    return { requestEventId, repeated: false }
-  })
+      await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
+      return { requestEventId, repeated: false }
+    },
+    binding?.lock,
+  )
 }
 
 /**

@@ -3,7 +3,10 @@ import { randomInt, randomUUID } from 'node:crypto'
 import { ensurePersonalWorkspaceWithGift, grantTariffCredits } from '@repo/billing'
 import { settleTaskCharge, underPrivateCreditRate } from '@repo/billing/testing'
 import {
+  addArtifactCommentReply,
+  createArtifact,
   createPrismaClient,
+  resolveArtifactComment,
   ensurePersonalWorkspace,
   insertFeedEvent,
   markAttachmentReady,
@@ -26,6 +29,7 @@ import {
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { dispatchArtifactComments } from '../services/artifacts/comment-dispatch.ts'
 import type { ChatContext } from '../services/chat/context.ts'
 import { commandRefusal, dialogFacts } from '../services/chat/dialog-facts.ts'
 import { dialogPageQuery } from '../services/chat/dialog-list.ts'
@@ -231,6 +235,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     // Files of messages: a file nobody sent holds its workspace.
     await db.attachment.deleteMany({ where: owned })
     await db.turnAssignment.deleteMany({ where: { task: owned } })
+    await db.artifact.deleteMany({ where: owned })
     await db.task.deleteMany({ where: owned })
     // The chats bound to Telegram (docs/plan/80-telegram.md) hold their workspace.
     await db.chatSession.deleteMany({ where: owned })
@@ -407,6 +412,253 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
     })
   }
+
+  describe('artifact comment dispatch', () => {
+    const chat: ChatContext = {
+      appEnv: 'test',
+      browser: null,
+      storage: () => storage,
+      secrets: () => vault.secrets,
+    }
+    const anchor = { kind: 'quote', block: 'delivery', rev: 1, quote: 'Доставляем утром.' }
+
+    async function notesOf(owner: User, workspaceId: string) {
+      const { id: artifactId } = await createArtifact(db, {
+        workspaceId,
+        kind: 'document',
+        title: 'Доставка',
+        actor: { kind: 'user', userId: owner.id },
+      })
+      const make = (body: string, authorUserId = owner.id) =>
+        db.artifactComment.create({
+          data: { artifactId, authorUserId, blockKey: anchor.block, anchor, body },
+        })
+      const note = await make('Сверить часы доставки.')
+      const reply = (body: string) =>
+        addArtifactCommentReply(db, {
+          artifactId,
+          userId: owner.id,
+          threadId: note.id,
+          requestId: randomUUID(),
+          body,
+        })
+      return { artifactId, note, make, reply }
+    }
+
+    function sendTo(
+      artifactId: string,
+      taskId: string,
+      kind: 'new' | 'existing',
+      threadId: string,
+    ) {
+      return {
+        artifactId,
+        target: { kind, taskId },
+        requestId: randomUUID(),
+        threadIds: [threadId],
+        text: 'Проверьте условия.',
+      }
+    }
+
+    const send = (owner: User, input: Parameters<typeof dispatchArtifactComments>[3]) =>
+      dispatchArtifactComments(underRate(db), chat, owner.id, input, new Date())
+
+    function ask(taskId: string) {
+      return asked(taskId, {
+        kind: 'agent',
+        intro: 'Нужно уточнить.',
+        questions: [{ text: 'Какие условия?', options: [] }],
+      })
+    }
+
+    it.each(['new', 'existing'] as const)(
+      'binds one immutable snapshot to the exact request in a %s chat',
+      async (kind) => {
+        const { owner, workspaceId } = await chatOwner()
+        const { artifactId, note, reply, make } = await notesOf(owner, workspaceId)
+        const other = await make('Личная заметка, не выбранная для отправки.')
+        await reply('В субботу время другое.')
+        const taskId = kind === 'new' ? chatId() : (await newDialog(callerOf(owner))).taskId
+        if (kind === 'existing') await ask(taskId)
+        const initialFeed = await feedOf(taskId)
+        const initialOutbox = await outboxOf(taskId)
+        const input = sendTo(artifactId, taskId, kind, note.id)
+
+        const results = await Promise.all([send(owner, input), send(owner, input)])
+        expect(results.map((result) => result.repeated).sort()).toEqual([false, true])
+        const requestEventId = results[0]!.requestEventId
+        expect(results).toEqual(
+          results.map(({ repeated }) => ({ taskId, requestEventId, repeated })),
+        )
+        await reply('Этот ответ добавлен после отправки.')
+        await expect(send(owner, input)).resolves.toEqual({
+          taskId,
+          requestEventId,
+          repeated: true,
+        })
+        const changes = [
+          { text: 'Другая просьба.' },
+          { threadIds: [other.id] },
+          { target: { kind, taskId: chatId() } },
+        ]
+        for (const change of changes)
+          await expect(send(owner, { ...input, ...change })).rejects.toMatchObject({
+            code: 'ARTIFACT_OP_REUSED',
+          })
+
+        const request = (await feedOf(taskId)).slice(initialFeed.length)
+        expect(request).toHaveLength(1)
+        expect(request[0]).toMatchObject({
+          id: BigInt(requestEventId),
+          type: 'feed.request',
+          payload: { text: input.text },
+        })
+        expect(JSON.stringify(request[0]!.payload)).not.toContain(note.body)
+        const outbox = (await outboxOf(taskId)).slice(initialOutbox.length)
+        expect(outbox).toHaveLength(1)
+        expect(outbox[0]).toMatchObject({ type: 'turn.run', payload: { taskId, requestEventId } })
+        expect(await activeHolds(taskId)).toHaveLength(1)
+        const dispatches = await db.artifactCommentDispatch.findMany({
+          where: { userId: owner.id },
+        })
+        expect(dispatches).toHaveLength(1)
+        expect(dispatches[0]).toMatchObject({
+          artifactId,
+          requestEventId: BigInt(requestEventId),
+          notes: [{ id: note.id, anchor, body: note.body, replies: ['В субботу время другое.'] }],
+        })
+        expect(await db.artifactChat.count({ where: { artifactId, taskId } })).toBe(1)
+        await db.task.update({ where: { id: taskId }, data: { deletedAt: new Date() } })
+        await expect(send(owner, input)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+        await db.task.update({ where: { id: taskId }, data: { deletedAt: null } })
+        const deletedAt = new Date()
+        await db.artifact.update({
+          where: { id: artifactId },
+          data: {
+            deletedAt,
+            deletedBy: 'client',
+            purgeAfter: new Date(deletedAt.getTime() + 30 * 86_400_000),
+          },
+        })
+        await expect(send(owner, input)).rejects.toMatchObject({ code: 'ARTIFACT_NOT_FOUND' })
+        await db.artifact.delete({ where: { id: artifactId } })
+        const key = { userId: owner.id, requestId: input.requestId }
+        expect(
+          await db.artifactCommentDispatch.findUnique({ where: { userId_requestId: key } }),
+        ).toBeNull()
+        expect(
+          await db.artifactCommentDispatchKey.findUnique({ where: { userId_requestId: key } }),
+        ).toEqual(key)
+        const replacement = await notesOf(owner, workspaceId)
+        await expect(
+          send(owner, {
+            ...input,
+            artifactId: replacement.artifactId,
+            threadIds: [replacement.note.id],
+            target: { kind: 'new', taskId: chatId() },
+          }),
+        ).rejects.toMatchObject({ code: 'ARTIFACT_NOT_FOUND' })
+        expect((await feedOf(taskId)).slice(initialFeed.length)).toEqual(request)
+        expect((await outboxOf(taskId)).slice(initialOutbox.length)).toEqual(outbox)
+      },
+    )
+
+    it('rolls back every write when notes or credits are refused', async () => {
+      const { owner, workspaceId } = await chatOwner()
+      const { artifactId, note, make } = await notesOf(owner, workspaceId)
+      const foreign = await make('Чужая заметка.', (await person()).id)
+      await resolveArtifactComment(db, {
+        artifactId,
+        userId: owner.id,
+        commentId: note.id,
+        resolved: true,
+      })
+      const taskId = chatId()
+      const input = sendTo(artifactId, taskId, 'new', note.id)
+      for (const threadId of [note.id, foreign.id])
+        await expect(send(owner, { ...input, threadIds: [threadId] })).rejects.toMatchObject({
+          code: 'ARTIFACT_COMMENT_UNAVAILABLE',
+        })
+      await resolveArtifactComment(db, {
+        artifactId,
+        userId: owner.id,
+        commentId: note.id,
+        resolved: false,
+      })
+      await expect(
+        dispatchArtifactComments(underRate(db, { rate: false }), chat, owner.id, input, new Date()),
+      ).rejects.toMatchObject({
+        code: 'BILLING_CREDIT_RATE_MISSING',
+      })
+      expect(await db.task.count({ where: { id: taskId } })).toBe(0)
+      expect(await feedOf(taskId)).toEqual([])
+      expect(await activeHolds(taskId)).toEqual([])
+      expect(await outboxOf(taskId)).toEqual([])
+      expect(await db.artifactCommentDispatch.count({ where: { artifactId } })).toBe(0)
+      expect(await db.artifactChat.count({ where: { artifactId } })).toBe(0)
+    })
+
+    it('keeps the existing dialog unchanged if a single selected thread is too large', async () => {
+      const { owner, workspaceId } = await chatOwner()
+      const { artifactId, note } = await notesOf(owner, workspaceId)
+      const { taskId } = await newDialog(callerOf(owner))
+      await ask(taskId)
+      const input = sendTo(artifactId, taskId, 'existing', note.id)
+      await db.artifactCommentReply.createMany({
+        data: Array.from({ length: 8 }, () => ({
+          threadId: note.id,
+          authorUserId: owner.id,
+          requestId: randomUUID(),
+          body: 'я'.repeat(1900),
+        })),
+      })
+      const [feed, outbox, holds] = await Promise.all([
+        feedOf(taskId),
+        outboxOf(taskId),
+        activeHolds(taskId),
+      ])
+      await expect(send(owner, input)).rejects.toMatchObject({
+        code: 'ARTIFACT_COMMENT_DISPATCH_TOO_LARGE',
+      })
+      expect(await feedOf(taskId)).toEqual(feed)
+      expect(await outboxOf(taskId)).toEqual(outbox)
+      expect(await activeHolds(taskId)).toEqual(holds)
+      expect(await db.task.findUnique({ where: { id: taskId }, select: { status: true } })).toEqual(
+        { status: 'awaiting_user' },
+      )
+      expect(await db.artifactCommentDispatchKey.count({ where: { userId: owner.id } })).toBe(0)
+    })
+
+    it('rejects a visible chat by another author, another workspace, and a prior ordinary request', async () => {
+      const { owner, workspaceId } = await chatOwner()
+      const guest = await person()
+      const { artifactId, note } = await notesOf(owner, workspaceId)
+      const { taskId } = await newDialog(callerOf(owner))
+      await ask(taskId)
+      await db.member.create({ data: { workspaceId, userId: guest.id } })
+      const input = sendTo(artifactId, taskId, 'existing', note.id)
+      await db.task.update({ where: { id: taskId }, data: { createdById: guest.id } })
+      await expect(send(owner, input)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      await db.task.update({ where: { id: taskId }, data: { createdById: owner.id } })
+      const separate = await chatOwner()
+      const foreign = await notesOf(separate.owner, separate.workspaceId)
+      await db.member.create({ data: { workspaceId, userId: separate.owner.id } })
+      await db.task.update({ where: { id: taskId }, data: { createdById: separate.owner.id } })
+      await expect(
+        send(separate.owner, sendTo(foreign.artifactId, taskId, 'existing', foreign.note.id)),
+      ).rejects.toMatchObject({ code: 'ARTIFACT_NOT_FOUND' })
+      await db.task.update({ where: { id: taskId }, data: { createdById: owner.id } })
+      await callerOf(owner).task.message({ taskId, requestId: input.requestId, text: input.text })
+      const feed = await feedOf(taskId)
+      await expect(send(owner, input)).rejects.toMatchObject({ code: 'ARTIFACT_OP_REUSED' })
+      expect(await feedOf(taskId)).toEqual(feed)
+      expect(
+        await db.artifactCommentDispatch.count({
+          where: { userId: { in: [owner.id, separate.owner.id] } },
+        }),
+      ).toBe(0)
+    })
+  })
 
   describe('task.message', () => {
     it('answers the question of the agent: the same attempt goes on under the same reserve', async () => {
@@ -1464,6 +1716,67 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           words: 'Покажите пример',
         })
       })
+
+      const commentCaption = 'Заметки к артефакту'
+      it.each([
+        { kind: 'client words matching the caption', text: commentCaption, words: commentCaption },
+        { kind: 'a generated caption', text: '', words: null },
+      ])(
+        'restores only client words for $kind, even on replay after purge',
+        async ({ text, words }) => {
+          const { owner, workspaceId } = await chatOwner()
+          const caller = callerOf(owner)
+          const { id: artifactId } = await createArtifact(db, {
+            workspaceId,
+            kind: 'document',
+            title: 'Доставка',
+            actor: { kind: 'user', userId: owner.id },
+          })
+          const note = await db.artifactComment.create({
+            data: {
+              artifactId,
+              authorUserId: owner.id,
+              blockKey: 'delivery',
+              anchor: { kind: 'quote', block: 'delivery', rev: 1, quote: 'Доставляем утром.' },
+              body: 'Сверить часы доставки.',
+            },
+          })
+          const taskId = chatId()
+          const dispatch = await dispatchArtifactComments(
+            underRate(db),
+            { appEnv: 'test', browser: null, storage: () => storage, secrets: () => vault.secrets },
+            owner.id,
+            {
+              artifactId,
+              target: { kind: 'new', taskId },
+              requestId: randomUUID(),
+              threadIds: [note.id],
+              text,
+            },
+            new Date(),
+          )
+          expect(await feedOf(taskId)).toMatchObject([
+            {
+              id: BigInt(dispatch.requestEventId),
+              type: 'feed.request',
+              payload: { text: commentCaption },
+            },
+          ])
+          await answered(taskId)
+          await charged(taskId)
+          const input = { taskId, requestId: randomUUID() }
+          const undone = await caller.task.undoTurn(input)
+          expect(undone).toMatchObject({ repeated: false, words })
+          const replay = { requestEventId: undone.requestEventId, repeated: true, words }
+          const feed = await feedOf(taskId)
+          await expect(caller.task.undoTurn(input)).resolves.toEqual(replay)
+
+          await db.artifact.delete({ where: { id: artifactId } })
+          expect(await db.artifactCommentDispatch.count({ where: { artifactId } })).toBe(0)
+          await expect(caller.task.undoTurn(input)).resolves.toEqual(replay)
+          expect(await feedOf(taskId)).toEqual(feed)
+        },
+      )
 
       it('gives no words to a repeat once the chat moved on from that `/undo`', async () => {
         const caller = callerOf(await person())

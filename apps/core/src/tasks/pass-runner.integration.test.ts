@@ -253,6 +253,13 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     held()
     expect(capacity.held).toBe(0)
 
+    await insertFeedEvent(db, {
+      taskId: dialog.taskId,
+      row: {
+        type: 'feed.request',
+        payload: { v: 1, kind: 'interrupt', authorId: dialog.userId, requestId: randomUUID() },
+      },
+    })
     // Another pass of its workspace takes the place and ends: the waiting pass is woken. The
     // waiting chat joins the workspace of the other one; nothing settles it afterwards.
     const other = await queued({ reserve: true })
@@ -265,7 +272,13 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     expect(capacity.held).toBe(0)
     expect(
       await db.outboxEvent.count({
-        where: { payload: { path: ['taskId'], equals: dialog.taskId } },
+        where: {
+          type: 'turn.run',
+          AND: [
+            { payload: { path: ['taskId'], equals: dialog.taskId } },
+            { payload: { path: ['requestEventId'], equals: dialog.job.requestEventId } },
+          ],
+        },
       }),
     ).toBeGreaterThan(wakes)
   })

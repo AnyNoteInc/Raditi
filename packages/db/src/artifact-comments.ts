@@ -1,5 +1,8 @@
 import { secretInContent } from '@repo/domain'
 import {
+  artifactCommentDispatchLimits,
+  artifactCommentDispatchTooLarge,
+  artifactCommentSnapshotSchema,
   artifactCommentUnavailable,
   artifactKindSpecOf,
   artifactLimit,
@@ -151,6 +154,103 @@ export async function addArtifactCommentReply(
       select: { id: true },
     })
   })
+}
+
+const {
+  threads: dispatchMaxThreads,
+  entries: dispatchMaxEntries,
+  bytes: dispatchMaxBytes,
+} = artifactCommentDispatchLimits
+
+/** The owner explicitly chose these notes, not everything a chat can read. The artifact lock
+ * orders the snapshot with private replies and changes in the state of a note. */
+export async function snapshotArtifactComments(
+  tx: Prisma.TransactionClient,
+  input: Owner & { workspaceId: string; threadIds: readonly string[] },
+) {
+  const artifact = await lockOwnedArtifact(tx, input)
+  if (artifact.workspaceId !== input.workspaceId || !artifactKindSpecOf(artifact.kind)?.quoteNotes)
+    throw artifactNotFound()
+  if (input.threadIds.length === 0 || input.threadIds.length > dispatchMaxThreads)
+    throw artifactCommentDispatchTooLarge()
+  const roots = await tx.artifactComment.findMany({
+    where: { ...authoredBy(input), id: { in: [...input.threadIds] }, resolvedAt: null },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      anchor: true,
+      body: true,
+      replies: {
+        where: { authorUserId: input.userId },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { body: true },
+        take: dispatchMaxEntries,
+      },
+    },
+  })
+  if (roots.length !== input.threadIds.length) throw artifactCommentUnavailable()
+  const snapshot = roots.map(({ id, anchor, body, replies }) => ({
+    id,
+    anchor,
+    body,
+    replies: replies.map((reply) => reply.body),
+  }))
+  if (
+    roots.reduce((count, root) => count + 1 + root.replies.length, 0) > dispatchMaxEntries ||
+    Buffer.byteLength(JSON.stringify(snapshot)) > dispatchMaxBytes
+  )
+    throw artifactCommentDispatchTooLarge()
+  const checked = artifactCommentSnapshotSchema.safeParse(snapshot)
+  if (!checked.success) throw artifactCommentUnavailable()
+  return checked.data
+}
+
+/** Read one explicit snapshot under current access, never the live thread or chat history. */
+export function readArtifactCommentDispatch(
+  db: Db,
+  input: { taskId: string; requestEventId: bigint; authorId: string },
+) {
+  return db.$transaction(
+    async (tx) => {
+      const row = await tx.artifactCommentDispatch.findUnique({
+        where: { requestEventId: input.requestEventId },
+        select: {
+          userId: true,
+          artifactId: true,
+          notes: true,
+          artifact: { select: { workspaceId: true } },
+          request: { select: { taskId: true, type: true } },
+        },
+      })
+      if (
+        !row ||
+        row.userId !== input.authorId ||
+        row.request.taskId !== input.taskId ||
+        row.request.type !== 'feed.request'
+      )
+        throw artifactNotFound()
+      const chat = await tx.task.findFirst({
+        where: {
+          id: input.taskId,
+          workspaceId: row.artifact.workspaceId,
+          createdById: row.userId,
+          billable: true,
+          deletedAt: null,
+          workspace: { members: { some: { userId: row.userId } } },
+          OR: [{ projectId: null }, { project: { deletedAt: null, createdById: row.userId } }],
+        },
+        select: { id: true },
+      })
+      if (!chat) throw artifactNotFound()
+      await requireOwner(tx, row)
+      if (Buffer.byteLength(JSON.stringify(row.notes)) > dispatchMaxBytes)
+        throw artifactCommentUnavailable()
+      const notes = artifactCommentSnapshotSchema.safeParse(row.notes)
+      if (!notes.success) throw artifactCommentUnavailable()
+      return { artifactId: row.artifactId, notes: notes.data }
+    },
+    { isolationLevel: 'RepeatableRead' },
+  )
 }
 
 export async function resolveArtifactComment(

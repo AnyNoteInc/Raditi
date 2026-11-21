@@ -35,6 +35,7 @@ export async function underDialogLock<T>(
   db: PrismaClient,
   ids: { userId: string; taskId: string },
   act: (tx: Tx, task: LockedTask) => Promise<T>,
+  beforeLock?: (tx: Tx) => Promise<void>,
 ): Promise<T> {
   const visible = await db.task.findFirst({
     where: accessibleTask(ids.userId, ids.taskId),
@@ -42,6 +43,7 @@ export async function underDialogLock<T>(
   })
   if (visible === null) throw taskNotFound()
   return db.$transaction(async (tx) => {
+    await beforeLock?.(tx)
     const task = await lockTask(tx, visible.id)
     if (task === null) throw taskNotFound()
     return act(tx, task)

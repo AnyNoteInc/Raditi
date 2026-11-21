@@ -87,7 +87,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           image,
         },
       })
-    await insertFeedEvent(db, {
+    const requestEventId = await insertFeedEvent(db, {
       taskId,
       row: {
         type: 'feed.request',
@@ -107,7 +107,13 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       now: NOW,
       expiresAt: new Date(NOW.getTime() + 3_600_000),
     })
-    return { userId, workspaceId: workspace.id, taskId, turnNo: status === 'running' ? 1 : 0 }
+    return {
+      userId,
+      workspaceId: workspace.id,
+      taskId,
+      requestEventId,
+      turnNo: status === 'running' ? 1 : 0,
+    }
   }
 
   const settlement = () => new PassSettlement({ db, logger: quiet, now: () => NOW })
@@ -350,10 +356,21 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       left: 0,
     }
 
-    expect(await settlement().settle(ref(task), { kind: 'ceiling', question })).toBe('moved')
+    expect(
+      await settlement().settle(ref(task), {
+        kind: 'ceiling',
+        question,
+        artifactCommentSourceId: task.requestEventId,
+      }),
+    ).toBe('moved')
 
     expect(await status(task.taskId)).toBe('awaiting_user')
     expect(await feed(task.taskId)).toEqual([['feed.question', question]])
+    expect(
+      await db.taskEvent.findFirstOrThrow({
+        where: { taskId: task.taskId, type: 'feed.question' },
+      }),
+    ).toMatchObject({ turnId: null, artifactCommentSourceId: task.requestEventId })
   })
 
   it('writes nothing while a turn of the task is still assigned', async () => {

@@ -2,6 +2,7 @@ import {
   assertTransition,
   badRequest,
   conflict,
+  feedEventIdSchema,
   feedRowSchema,
   modelClassSchema,
   taskWaitingReasons,
@@ -13,6 +14,7 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
+import { latestPassRequestId } from './chat-outbox.ts'
 import { insertFeedEvent } from './feed-events.ts'
 import type { Prisma } from './generated/prisma/client.ts'
 
@@ -71,6 +73,7 @@ export async function claimQueuedTask(
 }
 
 const passClaimSchema = claimSchema.extend({
+  requestEventId: feedEventIdSchema,
   /** At most this many passes of one workspace at once (WORKSPACE_TURN_LIMIT). */
   workspaceLimit: z.number().int().min(1).max(64),
 })
@@ -86,11 +89,11 @@ export async function claimQueuedPass(
   db: Pick<Prisma.TransactionClient, '$queryRaw'> & {
     $transaction<T>(work: (tx: Tx) => Promise<T>): Promise<T>
   },
-  input: TaskClaimInput & { workspaceLimit: number },
+  input: z.input<typeof passClaimSchema>,
 ): Promise<ClaimedTask | 'full' | null> {
   const parsed = passClaimSchema.safeParse(input)
   if (!parsed.success) throw badRequest('Invalid task claim')
-  const { taskId, attempt, workspaceLimit } = parsed.data
+  const { taskId, attempt, requestEventId, workspaceLimit } = parsed.data
   return db.$transaction(async (tx) => {
     const [task] = await tx.$queryRaw<Array<{ workspace_id: string }>>`
       SELECT workspace_id FROM tasks
@@ -100,6 +103,15 @@ export async function claimQueuedPass(
     await tx.$queryRaw`
       SELECT 1 AS locked FROM pg_advisory_xact_lock(
         hashtextextended(${`raditi:workspace-passes:${task.workspace_id}`}, 0))`
+    // The cabinet writes the request under the task row lock. Re-read in a separate statement
+    // after acquiring that lock, so a newer message committed while we waited is visible.
+    const [queued] = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM tasks
+      WHERE id = ${taskId}::uuid AND status = 'queued' AND attempt = ${attempt}
+      FOR UPDATE`
+    if (!queued) return null
+    const latest = await latestPassRequestId(tx, taskId)
+    if (latest?.toString() !== requestEventId) return null
     const [busy] = await tx.$queryRaw<Array<{ n: number }>>`
       SELECT count(*)::int AS n FROM tasks
       WHERE workspace_id = ${task.workspace_id}::uuid AND id <> ${taskId}::uuid

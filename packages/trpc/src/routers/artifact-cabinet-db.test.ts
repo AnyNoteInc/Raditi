@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto'
 
+import { placeReserve } from '@repo/billing/testing'
 import {
   applyArtifactOps,
   attachMentionedArtifacts,
   claimArtifactBlock,
   createPrismaClient,
+  insertFeedEvent,
   readArtifactComments,
   settleArtifactWrites,
+  type Prisma,
   type PrismaClient,
   type User,
 } from '@repo/db'
@@ -37,11 +40,18 @@ const v7 = () => {
 describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
   let db: PrismaClient
   const userIds: string[] = []
+  const dispatchChatIds: string[] = []
 
   beforeAll(() => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
   })
   afterEach(async () => {
+    const chats = dispatchChatIds.splice(0)
+    if (chats.length > 0) {
+      await db.outboxEvent.deleteMany({
+        where: { OR: chats.map((id) => ({ dedupeKey: { startsWith: `turn.run:${id}:` } })) },
+      })
+    }
     const users = userIds.splice(0)
     const workspaces = await db.workspace.findMany({
       where: { createdById: { in: users } },
@@ -52,10 +62,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     await db.page.deleteMany({ where: owned })
     await db.pageTree.deleteMany({ where: owned })
     await db.artifact.deleteMany({ where: owned })
-    await db.task.deleteMany({ where: owned })
-    await db.project.deleteMany({ where: owned })
     await db.creditLedger.deleteMany({ where: { account: owned } })
     await db.creditHold.deleteMany({ where: { account: owned } })
+    await db.task.deleteMany({ where: owned })
+    await db.project.deleteMany({ where: owned })
     await db.billingAccount.deleteMany({ where: owned })
     await db.auditLog.deleteMany({ where: owned })
     await db.member.deleteMany({ where: owned })
@@ -538,6 +548,196 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     await caller.artifact.restore({ artifactId })
     expect(await caller.artifact.comments({ artifactId })).toMatchObject([
       { id: threadId, replies: [{ id: replyId, body: reply.body }] },
+    ])
+  })
+
+  async function commentDestination(
+    data: Prisma.TaskUncheckedCreateInput,
+    waitingFor: 'agent' | 'ceiling' | null = 'agent',
+  ) {
+    const { id: taskId } = await db.task.create({
+      data: { status: 'awaiting_user', turnNo: 1, ...data },
+      select: { id: true },
+    })
+    const questionId =
+      waitingFor === null
+        ? null
+        : await db.$transaction((tx) =>
+            insertFeedEvent(tx, {
+              taskId,
+              row: {
+                type: 'feed.question',
+                payload:
+                  waitingFor === 'ceiling'
+                    ? {
+                        v: 1,
+                        kind: 'ceiling',
+                        turn: 1,
+                        reason: 'credits',
+                        spent: 5,
+                        held: 5,
+                        left: 0,
+                      }
+                    : {
+                        v: 1,
+                        kind: 'agent',
+                        turn: 1,
+                        intro: 'Нужно уточнить.',
+                        questions: [{ text: 'Что уточнить о доставке?', options: [] }],
+                      },
+              },
+            }),
+          )
+    return { taskId, questionId }
+  }
+
+  it('offers only the owner’s chats that can take notes in the same workspace (88.18в)', async () => {
+    const { user, caller, artifactId } = await quoteDocument()
+    const { workspaceId } = await db.artifact.findUniqueOrThrow({ where: { id: artifactId } })
+    const guest = await quoteDocument()
+    const separate = await db.artifact.findUniqueOrThrow({ where: { id: guest.artifactId } })
+    // Both out-of-scope chats would be visible to the sender in the ordinary chat list.
+    await db.member.createMany({
+      data: [
+        { workspaceId, userId: guest.user.id },
+        { workspaceId: separate.workspaceId, userId: user.id },
+      ],
+    })
+    const own = { workspaceId, createdById: user.id }
+    const question = await commentDestination({
+      ...own,
+      title: 'Уточнение агента',
+      updatedAt: new Date('2026-11-19T10:00:00Z'),
+    })
+    const ceiling = await commentDestination(
+      {
+        ...own,
+        status: 'awaiting_approval',
+        updatedAt: new Date('2026-11-20T10:00:00Z'),
+      },
+      'ceiling',
+    )
+    await commentDestination({ ...own, createdById: guest.user.id, title: 'Другой автор' })
+    await commentDestination({
+      ...own,
+      workspaceId: separate.workspaceId,
+      title: 'Другое пространство',
+    })
+    await commentDestination({ ...own, billable: false, title: 'Без оплаты' })
+    await commentDestination({ ...own, status: 'running', title: 'Агент работает' })
+    await commentDestination({ ...own, deletedAt: new Date(), title: 'Удалённый' })
+    await commentDestination({ ...own, status: 'awaiting_approval', title: 'Не вопрос о кредитах' })
+    // More than one page of newer candidates must not hide the older eligible chats.
+    await db.task.createMany({
+      data: Array.from({ length: 41 }, () => ({
+        ...own,
+        status: 'awaiting_user',
+        title: 'Нет открытого события',
+        updatedAt: new Date('2026-11-21T10:00:00Z'),
+      })),
+    })
+    const cancelling = await commentDestination({
+      ...own,
+      title: 'Браузер останавливается',
+      needsBrowser: true,
+    })
+    await insertFeedEvent(db, {
+      taskId: cancelling.taskId,
+      row: {
+        type: 'feed.request',
+        payload: {
+          v: 1,
+          kind: 'command',
+          command: 'cancel',
+          authorId: user.id,
+          requestId: randomUUID(),
+        },
+      },
+    })
+
+    expect(await caller.artifact.commentDispatchChats({ artifactId })).toEqual([
+      { taskId: ceiling.taskId, title: null },
+      { taskId: question.taskId, title: 'Уточнение агента' },
+    ])
+    await expect(guest.caller.artifact.commentDispatchChats({ artifactId })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+  })
+
+  it('sends notes through the cabinet once and keeps their text out of the chat feed (88.18в)', async () => {
+    const { user, caller, artifactId, anchor } = await quoteDocument()
+    const { workspaceId } = await db.artifact.findUniqueOrThrow({ where: { id: artifactId } })
+    const { taskId, questionId } = await commentDestination({
+      workspaceId,
+      createdById: user.id,
+      modelClass: 'standard',
+    })
+    dispatchChatIds.push(taskId)
+    const now = new Date()
+    await placeReserve(db, {
+      workspaceId,
+      taskId,
+      attempt: 1,
+      now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    })
+    const body = 'Уточнить время у пекаря.'
+    const reply = 'В субботу можно после девяти.'
+    const { id: threadId } = await caller.artifact.addComment({ artifactId, anchor, body })
+    await caller.artifact.addCommentReply({
+      artifactId,
+      threadId,
+      requestId: randomUUID(),
+      body: reply,
+    })
+    const input = {
+      artifactId,
+      target: { kind: 'existing' as const, taskId },
+      requestId: randomUUID(),
+      threadIds: [threadId],
+      text: '  ',
+    }
+
+    const sent = await caller.artifact.dispatchComments(input)
+    expect(sent).toEqual({
+      taskId,
+      requestEventId: expect.stringMatching(/^\d+$/u),
+      repeated: false,
+    })
+    await expect(caller.artifact.dispatchComments({ ...input, text: '' })).resolves.toEqual({
+      ...sent,
+      repeated: true,
+    })
+    await expect(
+      caller.artifact.dispatchComments({ ...input, text: 'Новая просьба.' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', cause: { code: 'ARTIFACT_OP_REUSED' } })
+    await expect(
+      caller.artifact.dispatchComments({ ...input, requestId: randomUUID() }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', cause: { code: 'TASK_BUSY' } })
+    expect(await caller.artifact.commentDispatchChats({ artifactId })).toEqual([])
+
+    const feed = await caller.task.feed({ taskId })
+    expect(feed.task.status).toBe('queued')
+    expect(feed.events.filter((event) => event.type === 'feed.request')).toMatchObject([
+      {
+        id: sent.requestEventId,
+        kind: 'answer',
+        answersEventId: String(questionId),
+        text: 'Заметки к артефакту',
+      },
+    ])
+    expect(JSON.stringify(feed.events)).not.toContain(body)
+    expect(JSON.stringify(feed.events)).not.toContain(reply)
+    expect(await caller.artifact.ofChat({ taskId })).toMatchObject([
+      { id: artifactId, group: 'mentioned' },
+    ])
+    expect(
+      await db.outboxEvent.findMany({
+        where: { dedupeKey: { startsWith: `turn.run:${taskId}:` } },
+        select: { type: true, payload: true },
+      }),
+    ).toMatchObject([
+      { type: 'turn.run', payload: { taskId, requestEventId: sent.requestEventId } },
     ])
   })
 

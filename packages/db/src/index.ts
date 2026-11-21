@@ -31,6 +31,7 @@ export {
   enqueueAgentTurn,
   enqueueBrowserEnsure,
   enqueueAgentWaitingPasses,
+  latestPassRequestId,
 } from './chat-outbox.ts'
 export { enqueueChatNotify, enqueueQueueDrain, enqueueTurnCancel } from './task-commands-outbox.ts'
 export {
@@ -167,8 +168,10 @@ export {
 export {
   addArtifactComment,
   addArtifactCommentReply,
+  readArtifactCommentDispatch,
   readArtifactComments,
   resolveArtifactComment,
+  snapshotArtifactComments,
 } from './artifact-comments.ts'
 export { classProfile, type ClassProfile } from './class-profile.ts'
 export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-events.ts'

@@ -407,6 +407,13 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     const { taskId, userId } = await dialog('queued', 0)
     const words = await firstWords(taskId, userId)
     await press(taskId, userId, 'update')
+    await insertFeedEvent(db, {
+      taskId,
+      row: {
+        type: 'feed.request',
+        payload: { v: 1, kind: 'interrupt', authorId: userId, requestId: randomUUID() },
+      },
+    })
     await db.$executeRaw`UPDATE tasks SET updated_at = now() - interval '6 minutes'
       WHERE id = ${taskId}::uuid`
     const fresh = await dialog('queued', 0)

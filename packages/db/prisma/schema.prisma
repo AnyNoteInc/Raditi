@@ -41,35 +41,36 @@ model User {
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  sessions                Session[]
-  accounts                Account[]
-  consents                UserConsent[]
-  memberships             Member[]
-  channelIdentities       ChannelIdentity[]
-  telegramLinkCodes       TelegramLinkCode[]
-  workspacesCreated       Workspace[]
-  tasksCreated            Task[]
-  attachments             Attachment[]
-  orders                  Order[]
-  browserTickets          BrowserStreamTicket[]
-  workspaceEnvVarsCreated WorkspaceEnvVar[]     @relation("WorkspaceEnvVarCreator")
-  notificationSetting     NotificationSetting?
-  pushSubscriptions       PushSubscription[]
-  taskPresence            TaskPresence[]
-  chatNotifications       ChatNotification[]
-  speechCalls             SpeechCall[]
-  artifactsOwned          Artifact[]            @relation("ArtifactOwner")
-  agentInstructions       AgentInstructions?
-  projectsCreated         Project[]             @relation("ProjectCreator")
-  projectFilesUploaded    ProjectFile[]         @relation("ProjectFileUploader")
-  gitConnections          GitConnection[]       @relation("GitConnectionCreator")
-  repoActions             RepoAction[]          @relation("RepoActionCreator")
-  memoryEntries           MemoryEntry[]
-  scheduledTasks          ScheduledTask[]
-  artifactExports         ArtifactExport[]
-  artifactFiles           ArtifactFile[]
-  artifactComments        ArtifactComment[]
-  artifactCommentReplies  ArtifactCommentReply[]
+  sessions                    Session[]
+  accounts                    Account[]
+  consents                    UserConsent[]
+  memberships                 Member[]
+  channelIdentities           ChannelIdentity[]
+  telegramLinkCodes           TelegramLinkCode[]
+  workspacesCreated           Workspace[]
+  tasksCreated                Task[]
+  attachments                 Attachment[]
+  orders                      Order[]
+  browserTickets              BrowserStreamTicket[]
+  workspaceEnvVarsCreated     WorkspaceEnvVar[]            @relation("WorkspaceEnvVarCreator")
+  notificationSetting         NotificationSetting?
+  pushSubscriptions           PushSubscription[]
+  taskPresence                TaskPresence[]
+  chatNotifications           ChatNotification[]
+  speechCalls                 SpeechCall[]
+  artifactsOwned              Artifact[]                   @relation("ArtifactOwner")
+  agentInstructions           AgentInstructions?
+  projectsCreated             Project[]                    @relation("ProjectCreator")
+  projectFilesUploaded        ProjectFile[]                @relation("ProjectFileUploader")
+  gitConnections              GitConnection[]              @relation("GitConnectionCreator")
+  repoActions                 RepoAction[]                 @relation("RepoActionCreator")
+  memoryEntries               MemoryEntry[]
+  scheduledTasks              ScheduledTask[]
+  artifactExports             ArtifactExport[]
+  artifactFiles               ArtifactFile[]
+  artifactComments            ArtifactComment[]
+  artifactCommentReplies      ArtifactCommentReply[]
+  artifactCommentDispatchKeys ArtifactCommentDispatchKey[]
 
   @@map("users")
 }
@@ -1121,23 +1122,28 @@ enum TurnAssignmentOutcome {
 /// Task history for the chat and SSE (spec §7). The bigint id orders events and is the
 /// Last-Event-ID a browser resumes from. Large bodies live in S3 under s3_key.
 model TaskEvent {
-  id            BigInt               @id @default(autoincrement())
-  taskId        String               @map("task_id") @db.Uuid
-  turnId        String?              @map("turn_id") @db.Uuid
+  id                      BigInt               @id @default(autoincrement())
+  taskId                  String               @map("task_id") @db.Uuid
+  turnId                  String?              @map("turn_id") @db.Uuid
   /// A common agent event (started, message, command, …, failed) or a platform event.
-  type          String               @db.VarChar(64)
-  payload       Json
+  type                    String               @db.VarChar(64)
+  payload                 Json
+  /// NULL for ordinary requests; false if the request text is only a label for the feed.
+  artifactCommentHasWords Boolean?             @map("artifact_comment_has_words")
+  /// Original dispatch request, only on a credit question written before its turn started.
+  artifactCommentSourceId BigInt?              @map("artifact_comment_source_id")
   /// Shown to the client in the chat; the rest is for operators.
-  clientVisible Boolean              @default(false) @map("client_visible")
+  clientVisible           Boolean              @default(false) @map("client_visible")
   /// Key in raditi-logs or raditi-artifacts when the body is too large for payload.
-  s3Key         String?              @map("s3_key") @db.VarChar(1024)
-  createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  s3Key                   String?              @map("s3_key") @db.VarChar(1024)
+  createdAt               DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
   /// The transaction that wrote the row (`pg_current_xact_id()`); NULL for rows before 18.11.2026.
   /// A read of the feed takes again the rows of transactions its last read could not see.
-  xact          Unsupported("xid8")? @default(dbgenerated("pg_current_xact_id()"))
+  xact                    Unsupported("xid8")? @default(dbgenerated("pg_current_xact_id()"))
 
-  task Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  turn TaskTurn? @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  task                    Task                     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  turn                    TaskTurn?                @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  artifactCommentDispatch ArtifactCommentDispatch?
 
   @@index([taskId, id])
   @@index([turnId])
@@ -2593,22 +2599,23 @@ model Artifact {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  workspace    Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  task         Task?                   @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  project      Project?                @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  owner        User?                   @relation("ArtifactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  sections     ArtifactBlock[]
-  versions     ArtifactVersion[]
-  content      ArtifactContent?
-  page         Page?
-  revisions    ArtifactBlockRevision[]
-  batches      ArtifactBatch[]
-  ops          ArtifactOp[]
-  chats        ArtifactChat[]
-  publications ArtifactPublication[]
-  comments     ArtifactComment[]
-  exports      ArtifactExport[]
-  files        ArtifactFile[]
+  workspace         Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task              Task?                     @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  project           Project?                  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  owner             User?                     @relation("ArtifactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  sections          ArtifactBlock[]
+  versions          ArtifactVersion[]
+  content           ArtifactContent?
+  page              Page?
+  revisions         ArtifactBlockRevision[]
+  batches           ArtifactBatch[]
+  ops               ArtifactOp[]
+  chats             ArtifactChat[]
+  publications      ArtifactPublication[]
+  comments          ArtifactComment[]
+  commentDispatches ArtifactCommentDispatch[]
+  exports           ArtifactExport[]
+  files             ArtifactFile[]
 
   @@index([workspaceId, createdAt])
   @@index([taskId])
@@ -3123,6 +3130,35 @@ model ArtifactCommentReply {
   @@unique([threadId, requestId])
   @@index([authorUserId])
   @@map("artifact_comment_replies")
+}
+
+/// Private snapshot of the notes explicitly sent with one feed.request (Ар53, slice 88.18в).
+model ArtifactCommentDispatchKey {
+  userId    String @map("user_id") @db.Uuid
+  requestId String @map("request_id") @db.Uuid
+
+  sender   User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  snapshot ArtifactCommentDispatch?
+
+  @@id([userId, requestId])
+  @@map("artifact_comment_dispatch_keys")
+}
+
+model ArtifactCommentDispatch {
+  userId         String @map("user_id") @db.Uuid
+  requestId      String @map("request_id") @db.Uuid
+  artifactId     String @map("artifact_id") @db.Uuid
+  requestEventId BigInt @unique @map("request_event_id")
+  sha256         String @db.Char(64)
+  notes          Json
+
+  key      ArtifactCommentDispatchKey @relation(fields: [userId, requestId], references: [userId, requestId], onDelete: Cascade)
+  artifact Artifact                   @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  request  TaskEvent                  @relation(fields: [requestEventId], references: [id], onDelete: Cascade)
+
+  @@id([userId, requestId])
+  @@index([artifactId])
+  @@map("artifact_comment_dispatches")
 }
 
 /// «Скачать → Excel» of a table (docs/plan/88-artifacts.md, §7.13, question 26): core builds it.

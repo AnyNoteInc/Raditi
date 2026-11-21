@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 
 import type { Page } from '@playwright/test'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
+import { placeReserve, settleTaskCharge } from '@repo/billing/testing'
 import {
   createPrismaClient,
   insertFeedEvent,
@@ -365,6 +366,7 @@ export async function addAnsweredChat(
     projectId = null,
     title = words,
     plan,
+    charged = false,
   }: {
     words: string
     answer: string
@@ -373,6 +375,8 @@ export async function addAnsweredChat(
     /** The name of the chat, when its words are longer than a name may be. */
     title?: string
     plan?: PlanItems
+    /** Set up the settled reserve when the browser will queue another paid pass. */
+    charged?: boolean
   },
 ): Promise<{ taskId: string }> {
   const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
@@ -391,6 +395,22 @@ export async function addAnsweredChat(
       events: [{ type: 'reasoning', text: thought }, ...(plan ? [planEvent(plan)] : [])],
     })
     await insertFeedEvent(prisma, { taskId, row: answerRow(1, answer) })
+    if (charged) {
+      const { workspaceId } = await prisma.task.update({
+        where: { id: taskId },
+        data: { modelClass: 'standard' },
+        select: { workspaceId: true },
+      })
+      const now = new Date()
+      await placeReserve(prisma, {
+        taskId,
+        workspaceId,
+        attempt: 1,
+        now,
+        expiresAt: new Date(now.getTime() + 60_000),
+      })
+      await prisma.$transaction((tx) => settleTaskCharge(tx, { taskId, credits: 5, now }))
+    }
     return { taskId }
   } finally {
     await prisma.$disconnect()

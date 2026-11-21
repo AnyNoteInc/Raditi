@@ -88,7 +88,7 @@ export type PassEnding =
   /** The pass stopped because the client cancelled it. */
   | { kind: 'cancelled'; turn: number | null }
   /** Before a turn: the key could not cover a first call (Р8). */
-  | { kind: 'ceiling'; question: CeilingQuestion }
+  | { kind: 'ceiling'; question: CeilingQuestion; artifactCommentSourceId?: bigint }
   /** Before a turn: the pass cannot be run at all. */
   | { kind: 'refused'; code: FeedFailureCode }
   /** The lease or the pool of agents is busy: back to the queue, not a failure. */
@@ -387,7 +387,7 @@ export class PassSettlement {
       case 'cancelled':
         return this.#cancelled(pass, context, ending.turn, ending)
       case 'ceiling':
-        return this.#ceiling(pass, context, null, ending.question)
+        return this.#ceiling(pass, context, null, ending.question, ending.artifactCommentSourceId)
       case 'refused':
         return this.#failure(pass, context, null, ending.code)
       case 'busy':
@@ -652,6 +652,7 @@ export class PassSettlement {
     context: SettleContext,
     turn: number | null,
     question: CeilingQuestion,
+    artifactCommentSourceId?: bigint,
   ): Promise<SettleAnswer> {
     const to: SettledTaskStatus = 'awaiting_user'
     return this.#transaction(async (tx, now) => {
@@ -666,6 +667,11 @@ export class PassSettlement {
       })
       if (!moved.moved) throw new NotMoved()
       await this.#assertNotCancelled(tx, pass.taskId)
+      if (turn === null && artifactCommentSourceId !== undefined)
+        await tx.taskEvent.update({
+          where: { id: moved.eventIds[0]! },
+          data: { artifactCommentSourceId },
+        })
       await this.#notify(tx, pass, 'limit', now)
       if (!context.task.billable) return
       // The turn worked until the step ran out: that work is charged (26.10.2026), and

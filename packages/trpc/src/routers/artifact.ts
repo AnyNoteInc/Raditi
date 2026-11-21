@@ -4,6 +4,7 @@ import {
   artifactGallerySorts,
   resolveArtifactComment,
 } from '@repo/db'
+import { feedEventIdSchema } from '@repo/domain'
 import {
   artifactBlockKeySchema,
   artifactCommentBodySchema,
@@ -18,6 +19,11 @@ import { z } from 'zod'
 
 import { canvasThumbs } from '../services/artifacts/canvas.ts'
 import { chatArtifactsOf } from '../services/artifacts/chat-artifacts.ts'
+import {
+  commentDispatchChats,
+  commentDispatchInput,
+  dispatchArtifactComments,
+} from '../services/artifacts/comment-dispatch.ts'
 import { cabinetComments, createCabinetComment } from '../services/artifacts/comments.ts'
 import {
   cabinetChanges,
@@ -203,6 +209,24 @@ export const artifactRouter = router({
     .output(z.strictObject({ id: z.uuid() }))
     .mutation(({ ctx, input }) =>
       addArtifactCommentReply(ctx.prisma, { userId: ctx.user.id, ...input }),
+    ),
+
+  commentDispatchChats: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(z.array(z.strictObject({ taskId: z.uuid(), title: z.string().nullable() })))
+    .query(({ ctx, input }) => commentDispatchChats(ctx.prisma, ctx.user.id, input.artifactId)),
+
+  dispatchComments: consentedProcedure
+    .input(commentDispatchInput)
+    .output(
+      z.strictObject({
+        taskId: z.uuid(),
+        requestEventId: feedEventIdSchema,
+        repeated: z.boolean(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      dispatchArtifactComments(ctx.prisma, chatContextOf(ctx), ctx.user.id, input, new Date()),
     ),
 
   resolveComment: consentedProcedure

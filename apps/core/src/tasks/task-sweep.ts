@@ -7,6 +7,7 @@ import {
   closeStaleRepoProposals,
   dropAbandonedPages,
   insertFeedEvent,
+  latestPassRequestId,
   purgeExpiredPages,
   recordRunOutcome,
   stalePageReservations,
@@ -763,12 +764,9 @@ export class TaskSweep {
    * of a command moves nothing; `agent_command` — `/init` — is a pass, and it is put again.
    */
   async #put(taskId: string, attempt: number, tag: string): Promise<boolean> {
-    const [request] = await this.deps.db.$queryRaw<Array<{ id: bigint | null }>>`
-      SELECT max(id) AS id FROM task_events
-      WHERE task_id = ${taskId}::uuid AND type = 'feed.request'
-        AND payload->>'kind' IS DISTINCT FROM 'command'`
-    if (!request?.id) return false
-    const job = { taskId, attempt, requestEventId: request.id.toString() }
+    const request = await latestPassRequestId(this.deps.db, taskId)
+    if (request === null) return false
+    const job = { taskId, attempt, requestEventId: request.toString() }
     await this.deps.queue.enqueue(AGENT_TURN_QUEUE, AGENT_TURN_JOB, job, {
       jobId: agentTurnRetryJobId(job, tag),
     })

@@ -3,6 +3,8 @@
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import Checkbox from '@mui/material/Checkbox'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
@@ -11,6 +13,7 @@ import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { separatesSectionText } from '@repo/doc-render/markdown'
 import {
+  artifactCommentDispatchLimits,
   artifactCommentRefusalText,
   artifactLimits,
   artifactQuoteAnchorSchema,
@@ -22,6 +25,7 @@ import { useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState } f
 import { useTRPC, useTRPCClient } from '@/trpc/client'
 
 import { artifactAccessLost, artifactErrorData, readPrivateArtifact } from './artifact-access-error'
+import { ArtifactCommentDispatch } from './artifact-comment-dispatch'
 import type { CabinetArtifact } from './use-artifact'
 
 function selectionQuote(root: HTMLElement, selected: Selection | null): ArtifactQuoteAnchor | null {
@@ -102,6 +106,8 @@ export function ArtifactComments({
   const activeReply = useRef<AbortController | null>(null)
   const replyTitleId = useId()
   const [resolved, setResolved] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
+  const [dispatch, setDispatch] = useState<string[] | null>(null)
   const [body, setBody] = useState('')
   const [addError, setAddError] = useState<string | null>(null)
   const [resolveError, setResolveError] = useState(false)
@@ -142,6 +148,8 @@ export function ArtifactComments({
     add.reset()
     resolve.reset()
     closeReply()
+    setDispatch(null)
+    setSelected([])
     close()
     onAccessLost()
   })
@@ -229,6 +237,10 @@ export function ArtifactComments({
 
   if (denied || list.isPending) return null
   const visible = list.data?.filter((comment) => comment.resolved === resolved) ?? []
+  const selectedOpen = resolved
+    ? []
+    : visible.filter(({ id }) => selected.includes(id)).map(({ id }) => id)
+  const selectionFull = selectedOpen.length >= artifactCommentDispatchLimits.threads
   return (
     <Box
       component="section"
@@ -255,7 +267,17 @@ export function ArtifactComments({
         >
           Решённые
         </Button>
+        {selectedOpen.length > 0 && (
+          <Button size="small" variant="contained" onClick={() => setDispatch(selectedOpen)}>
+            Отправить агенту ({selectedOpen.length})
+          </Button>
+        )}
       </Box>
+      {selectionFull && (
+        <Typography variant="caption" color="text.secondary">
+          За раз можно отправить до {artifactCommentDispatchLimits.threads} заметок.
+        </Typography>
+      )}
       {list.isError && <Alert severity="error">Не удалось загрузить заметки.</Alert>}
       {resolveError && <Alert severity="error">{failed}</Alert>}
       {list.isSuccess && visible.length === 0 && (
@@ -314,9 +336,28 @@ export function ArtifactComments({
                 </Box>
               )}
               {!comment.resolved && (
-                <Button size="small" onClick={() => setReply({ threadId: comment.id, body: '' })}>
-                  Ответить
-                </Button>
+                <>
+                  <FormControlLabel
+                    label="Выбрать для отправки"
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={selectedOpen.includes(comment.id)}
+                        disabled={selectionFull && !selectedOpen.includes(comment.id)}
+                        onChange={(_, checked) =>
+                          setSelected(
+                            checked
+                              ? [...selectedOpen, comment.id]
+                              : selectedOpen.filter((id) => id !== comment.id),
+                          )
+                        }
+                      />
+                    }
+                  />
+                  <Button size="small" onClick={() => setReply({ threadId: comment.id, body: '' })}>
+                    Ответить
+                  </Button>
+                </>
               )}
               <Button
                 size="small"
@@ -328,6 +369,15 @@ export function ArtifactComments({
             </Box>
           ))}
         </Box>
+      )}
+      {dispatch && (
+        <ArtifactCommentDispatch
+          artifactId={artifactId}
+          threadIds={dispatch}
+          onClose={() => setDispatch(null)}
+          onAccessLost={() => setReplyDenied(true)}
+          onSent={() => setSelected([])}
+        />
       )}
       {reply && (
         <Dialog open aria-labelledby={replyTitleId} onClose={closeReply} fullWidth maxWidth="sm">

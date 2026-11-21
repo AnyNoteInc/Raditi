@@ -1,7 +1,7 @@
 import { expect, test } from '../../fixtures/signed-in.ts'
 
 import { addDocument, agentWrites, attachToChat, expireArtifactReaderSession } from './artifacts.ts'
-import { addAnsweredChat, hideDevIndicator } from './site.ts'
+import { addAnsweredChat, hideDevIndicator, priceDialogClass } from './site.ts'
 
 // «Артефакты» in a real browser (docs/plan/88-artifacts.md, stage Э4: 88.9–88.11б): the gallery
 // before the first one and «Создать» from a template, a section edited in Tiptap and kept, a
@@ -329,6 +329,169 @@ test('private note replies on the document and in its chat tab survive a lost re
   const savedReply = notes.getByText(tabReply, { exact: true })
   await expect(savedReply).toBeVisible()
   await expect(savedReply).toHaveCount(1)
+})
+
+test.describe('sending private artifact notes to the agent', () => {
+  // No core runs: the real web handlers reserve credits and queue a pass, but nothing runs it.
+  let restorePrices: (() => Promise<void>) | undefined
+  test.beforeAll(async () => {
+    restorePrices = await priceDialogClass()
+  })
+  test.afterAll(async () => {
+    await restorePrices?.()
+  })
+
+  for (const { title: scenario, target } of [
+    {
+      title: 'notes from the document page reach an existing chat once after a lost response',
+      target: 'existing',
+    },
+    {
+      title: 'notes from the chat tab create only one new chat after a lost response',
+      target: 'new',
+    },
+  ] as const) {
+    test(scenario, async ({ page, signedInUser }) => {
+      await hideDevIndicator(page)
+      await page.setViewportSize({ width: 1440, height: 900 })
+      const title = 'Сроки доставки'
+      const quote = 'Заказы привозим утром.'
+      const note = 'Согласовать расписание с диспетчером.'
+      const reply = 'Диспетчер предложил время до полудня.'
+      const words = target === 'existing' ? 'Исправьте расписание доставки.' : ''
+      const chatTitle = 'Утренние заказы'
+      const { id } = await addDocument(signedInUser.id, {
+        title,
+        sections: [{ key: 'delivery', heading: 'Доставка', text: quote }],
+      })
+      const { taskId } = await addAnsweredChat(signedInUser.id, {
+        words: chatTitle,
+        answer: 'Расписание готово.',
+        thought: 'Уточняю расписание.',
+        charged: target === 'existing',
+      })
+      if (target === 'new') {
+        await attachToChat(id, taskId)
+        await page.goto(`/chats/${taskId}`)
+        await page.getByRole('button', { name: /^Инструменты/ }).click()
+        await page.getByRole('menuitem', { name: title, exact: true }).click()
+      } else {
+        await page.goto(`/artifacts/${id}`)
+      }
+
+      const paragraph = page.locator('#section-delivery p')
+      await expect(paragraph).toHaveText(quote)
+      await paragraph.evaluate((element) => {
+        const range = document.createRange()
+        range.selectNodeContents(element)
+        const selection = document.getSelection()!
+        selection.removeAllRanges()
+        selection.addRange(range)
+      })
+      await page.getByRole('button', { name: 'Добавить заметку к цитате' }).click()
+      const noteDialog = page.getByRole('dialog', { name: 'Заметка к цитате' })
+      await noteDialog.getByRole('textbox', { name: 'Заметка' }).fill(note)
+      await noteDialog.getByRole('button', { name: 'Сохранить заметку' }).click()
+
+      const notes = page.getByRole('region', { name: 'Заметки к документу' })
+      await expect(notes.getByText(note, { exact: true })).toBeVisible()
+      await notes.getByRole('button', { name: 'Ответить', exact: true }).click()
+      const replyDialog = page.getByRole('dialog', { name: 'Ответ на заметку' })
+      await replyDialog.getByRole('textbox', { name: 'Ответ', exact: true }).fill(reply)
+      await replyDialog.getByRole('button', { name: 'Сохранить ответ' }).click()
+      await expect(notes.getByText(reply, { exact: true })).toBeVisible()
+      await notes.getByRole('checkbox', { name: 'Выбрать для отправки' }).check()
+      await notes.getByRole('button', { name: 'Отправить агенту (1)' }).click()
+
+      const dispatch = page.getByRole('dialog', { name: 'Отправить заметки агенту' })
+      const chat = dispatch.getByRole('combobox', { name: 'Чат' })
+      const message = dispatch.getByRole('textbox', { name: 'Сообщение агенту (необязательно)' })
+      const send = dispatch.getByRole('button', { name: 'Отправить агенту (1)' })
+      await expect(dispatch).toContainText('Выбрано заметок: 1.')
+      if (target === 'existing') {
+        // Wait until the candidate list is ready before opening the select.
+        await expect(dispatch.getByText('Загружаем список чатов…')).toHaveCount(0)
+        await chat.click()
+        await page.getByRole('option', { name: chatTitle, exact: true }).click()
+        await message.fill(words)
+      } else {
+        await expect(chat).toContainText('Новый чат')
+      }
+
+      const origin = new URL(page.url()).origin
+      const writesDispatch = (url: URL) =>
+        url.origin === origin && url.pathname === '/api/trpc/artifact.dispatchComments'
+      type Receipt = { taskId: string; requestEventId: string; repeated: boolean }
+      const receipt = (body: unknown) =>
+        (body as { result?: { data?: { json?: Receipt } } }).result?.data?.json
+
+      const firstDispatch = Promise.withResolvers<{
+        status: number
+        accepted: Receipt | undefined
+        domainCode: string | undefined
+      }>()
+      await page.route(
+        writesDispatch,
+        async (route) => {
+          const response = await route.fetch({ maxRedirects: 0 })
+          const body: unknown = await response.json()
+          const accepted = response.ok() ? receipt(body) : undefined
+          const domainCode = (body as { error?: { json?: { data?: { domainCode?: string } } } })
+            .error?.json?.data?.domainCode
+          // Drop only a successful receipt; keep real server refusals visible.
+          if (accepted) await route.abort()
+          else await route.fulfill({ response })
+          firstDispatch.resolve({ status: response.status(), accepted, domainCode })
+        },
+        { times: 1 },
+      )
+      await send.click()
+      const { status, accepted, domainCode } = await firstDispatch.promise
+      expect(status, domainCode).toBe(200)
+      expect(accepted).toEqual({
+        taskId: target === 'existing' ? taskId : expect.any(String),
+        requestEventId: expect.stringMatching(/^\d+$/),
+        repeated: false,
+      })
+      if (target === 'new') expect(accepted?.taskId).not.toBe(taskId)
+      await expect(dispatch.getByRole('alert')).toContainText('Не удалось подтвердить отправку.')
+      await expect(message).toHaveValue(words)
+      await expect(chat).toContainText(target === 'existing' ? chatTitle : 'Новый чат')
+
+      const [response] = await Promise.all([
+        page.waitForResponse((candidate) => writesDispatch(new URL(candidate.url()))),
+        send.click(),
+      ])
+      expect(response.ok()).toBe(true)
+      expect(receipt(await response.json())).toEqual({ ...accepted, repeated: true })
+      await expect(dispatch.getByText('Заметки отправлены в чат.')).toBeVisible()
+      const open = dispatch.getByRole('link', { name: 'Открыть чат' })
+      const path = `/chats/${accepted?.taskId}`
+      await expect(open).toHaveAttribute('href', path)
+      await open.click()
+      await expect(page).toHaveURL(new URL(path, origin).href)
+
+      const caption = 'Заметки к артефакту'
+      const feed = page.getByRole('list', { name: 'Сообщения чата' })
+      const request = feed.getByText(words || caption, { exact: true })
+      await expect(request).toBeVisible()
+      await expect(request).toHaveCount(1)
+      if (target === 'existing') {
+        await expect(feed.getByText(chatTitle, { exact: true })).toBeVisible()
+      } else {
+        await page.reload()
+        const chats = page.getByRole('navigation', { name: 'Чаты' })
+        const created = chats.getByRole('link', { name: caption })
+        await expect(created).toHaveAttribute('href', path)
+        await expect(created).toHaveCount(1)
+        await expect(chats.getByRole('link', { name: chatTitle })).toBeVisible()
+        await expect(request).toBeVisible()
+      }
+      // The quote and private thread stay in the artifact, not in the chat feed.
+      for (const privateText of [quote, note, reply])
+        await expect(feed).not.toContainText(privateText)
+    })
+  }
 })
 
 for (const { surface, reason } of [

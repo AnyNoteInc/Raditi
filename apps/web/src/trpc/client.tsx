@@ -35,8 +35,10 @@ export function TRPCReactProvider({ userId, children }: { userId: string; childr
           condition: (op) => op.type === 'subscription',
           true: httpSubscriptionLink({ url: TRPC_URL, transformer: superjson }),
           false: splitLink({
-            // A reply must be abortable even while unrelated requests are in flight.
-            condition: (op) => op.type === 'mutation' && op.path === 'artifact.addCommentReply',
+            // Private note writes must be independently abortable.
+            condition: (op) =>
+              op.type === 'mutation' &&
+              (op.path === 'artifact.addCommentReply' || op.path === 'artifact.dispatchComments'),
             true: httpLink({ url: TRPC_URL, transformer: superjson }),
             false: httpBatchLink({
               url: TRPC_URL,

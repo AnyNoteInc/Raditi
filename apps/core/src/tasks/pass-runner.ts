@@ -162,6 +162,7 @@ export class PassRunner {
     const claimed = await claimQueuedPass(this.deps.db, {
       taskId: job.taskId,
       attempt: job.attempt,
+      requestEventId: job.requestEventId,
       workspaceLimit: this.deps.workspaceTurnLimit ?? DEFAULT_WORKSPACE_TURN_LIMIT,
     })
     if (claimed === 'full') {
@@ -341,7 +342,7 @@ export class PassRunner {
       return 'ended'
     }
     if (plan.kind === 'ceiling') {
-      await settlement.settle(ref, { kind: 'ceiling', question: plan.question })
+      await settlement.settle(ref, plan)
       return 'ended'
     }
     const browser = plan.requirements.browser

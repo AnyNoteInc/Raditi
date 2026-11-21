@@ -8,6 +8,7 @@ import {
   SANDBOX_SECRET_FILES,
   SANDBOX_SECRETS_DIR,
   turnInputSchema,
+  turnPlanLimits,
   turnSkillsSchema,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -59,7 +60,7 @@ export const runContextSchema = <Effort extends z.ZodType>(effort: Effort) =>
       visionModel: z.string().min(1).max(200).optional(),
     }),
     mcp: z.object({ url: endpoint, token: credential }),
-    instructions: z.string().max(256 * 1024),
+    instructions: z.string().max(turnPlanLimits.instructions),
     nativeSessionId: nativeSessionIdSchema.optional(),
     // Names the shell, the runtime and the platform read are refused here as on the form.
     envValues: z

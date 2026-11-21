@@ -392,7 +392,8 @@ export function withoutTurnCredentials(request: TurnRequest): UnkeyedTurnRequest
 
 export const turnPlanLimits = Object.freeze({
   prompt: 100_000,
-  instructions: 256 * 1024,
+  // An explicit note dispatch can add about 150 KiB of escaped JSON to the usual instructions.
+  instructions: 512 * 1024,
   attachments: 100,
   url: 2048,
 })
