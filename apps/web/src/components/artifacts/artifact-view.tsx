@@ -12,36 +12,46 @@ import { ArtifactHistoryButton } from './artifact-history'
 import { ArtifactPublishButton } from './artifact-publish'
 import { ArtifactPage } from './artifact-page'
 import { galleryTexts } from './artifact-texts'
+import { DictationAvailable } from '@/components/chat/dictation-button'
 
 /**
  * The page of an artifact with what its owner does from its head (Ар23): «В корзину» now; the
  * history (88.11а) and «Опубликовать как страницу» (88.11б) stand beside it.
  */
-export function ArtifactView({ artifactId }: { artifactId: string }) {
+export function ArtifactView({
+  artifactId,
+  speech = false,
+}: {
+  artifactId: string
+  /** Dictation into the fields of notes (SpeechKit, docs/plan/75, ВВ16). */
+  speech?: boolean
+}) {
   const trpc = useTRPC()
   const router = useRouter()
   const trash = useMutation(trpc.artifact.trash.mutationOptions())
   return (
-    <ArtifactPage
-      artifactId={artifactId}
-      actions={(artifact, reread) => (
-        <>
-          <ArtifactHistoryButton artifact={artifact} onChanged={reread} />
-          <ArtifactPublishButton artifact={artifact} />
-          {artifactRoleAtLeast(artifact.role, 'owner') ? (
-            <Button
-              variant="text"
-              color="inherit"
-              startIcon={<AppIcon name="trash" size={16} />}
-              onClick={() =>
-                void trash.mutateAsync({ artifactId }).then(() => router.push('/artifacts'))
-              }
-            >
-              {galleryTexts.toTrash}
-            </Button>
-          ) : null}
-        </>
-      )}
-    />
+    <DictationAvailable.Provider value={speech}>
+      <ArtifactPage
+        artifactId={artifactId}
+        actions={(artifact, reread) => (
+          <>
+            <ArtifactHistoryButton artifact={artifact} onChanged={reread} />
+            <ArtifactPublishButton artifact={artifact} />
+            {artifactRoleAtLeast(artifact.role, 'owner') ? (
+              <Button
+                variant="text"
+                color="inherit"
+                startIcon={<AppIcon name="trash" size={16} />}
+                onClick={() =>
+                  void trash.mutateAsync({ artifactId }).then(() => router.push('/artifacts'))
+                }
+              >
+                {galleryTexts.toTrash}
+              </Button>
+            ) : null}
+          </>
+        )}
+      />
+    </DictationAvailable.Provider>
   )
 }

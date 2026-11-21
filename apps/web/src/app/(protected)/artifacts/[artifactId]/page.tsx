@@ -5,6 +5,7 @@ import { ApplicationShell } from '@/components/application/application-shell'
 import { ArtifactView } from '@/components/artifacts/artifact-view'
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
 import { requireSession, UNAVAILABLE } from '@/lib/access'
+import { speechAvailable } from '@/server/speech-runtime'
 
 export const metadata: Metadata = { title: 'Артефакт' }
 
@@ -24,7 +25,11 @@ export default async function ArtifactRoute({ params }: { params: Params }) {
   if (session === UNAVAILABLE) return <ServiceUnavailable />
   return (
     <ApplicationShell user={session.user} toolbar={false}>
-      <ArtifactView key={artifactId} artifactId={artifactId.toLowerCase()} />
+      <ArtifactView
+        key={artifactId}
+        artifactId={artifactId.toLowerCase()}
+        speech={speechAvailable()}
+      />
     </ApplicationShell>
   )
 }

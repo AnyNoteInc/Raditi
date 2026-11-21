@@ -25,6 +25,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState } from 'react'
 
+import { DictationButton, withDictatedWords } from '@/components/chat/dictation-button'
 import { useTRPC, useTRPCClient } from '@/trpc/client'
 
 import { artifactAccessLost, artifactErrorData, readPrivateArtifact } from './artifact-access-error'
@@ -115,6 +116,10 @@ function AnchorText({ anchor }: { anchor: ArtifactCommentAnchor }) {
 }
 
 type ReplyDraft = { threadId: string; body: string }
+
+/** Dictated words after the written ones, within the length of a note (Ар53: диктовка). */
+const dictated = (written: string, words: string) =>
+  Array.from(withDictatedWords(written, words)).slice(0, artifactLimits.commentChars).join('')
 
 export function ArtifactComments({
   artifact,
@@ -450,6 +455,14 @@ export function ArtifactComments({
                 disabled={replyPending}
                 slotProps={{ htmlInput: { maxLength: artifactLimits.commentChars } }}
               />
+              <DictationButton
+                disabled={replyPending}
+                onWords={(words) =>
+                  setReply(
+                    (current) => current && { ...current, body: dictated(current.body, words) },
+                  )
+                }
+              />
               {replyError && (
                 <Alert severity="error" sx={{ mt: 1 }}>
                   {replyError}
@@ -504,6 +517,10 @@ export function ArtifactComments({
               minRows={3}
               disabled={add.isPending}
               slotProps={{ htmlInput: { maxLength: artifactLimits.commentChars } }}
+            />
+            <DictationButton
+              disabled={add.isPending}
+              onWords={(words) => setBody((written) => dictated(written, words))}
             />
             {addError && (
               <Alert severity="error" sx={{ mt: 1 }}>

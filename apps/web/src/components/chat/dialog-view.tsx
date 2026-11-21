@@ -123,6 +123,7 @@ import { useDocumentArrivals } from './use-document-arrivals'
 import { agentDocumentIdsOf, useAgentDocumentArrivals } from './agent-document'
 import { DocumentsPane, type DocumentTarget } from './documents-pane'
 import { ArtifactPane } from '@/components/artifacts/artifact-pane'
+import { DictationAvailable } from '@/components/chat/dictation-button'
 import { artifactKindIcon } from '@/components/artifacts/artifact-kind-icon'
 import { PublishTargetDialog, usePagePublish, type PublishTarget } from './page-publish'
 import { useBrowserStream } from './use-browser-stream'
@@ -1346,7 +1347,11 @@ export function DialogView({
     const kind = toolKindOf(tool)
     switch (kind.kind) {
       case 'artifact':
-        return <ArtifactPane artifactId={kind.id} />
+        return (
+          <DictationAvailable.Provider value={speech}>
+            <ArtifactPane artifactId={kind.id} />
+          </DictationAvailable.Provider>
+        )
       case 'browser':
         return (
           <BrowserPane

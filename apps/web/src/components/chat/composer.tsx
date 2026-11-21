@@ -31,6 +31,7 @@ import { plural } from '@/lib/plural'
 
 import { AttachmentChips } from './attachment-chips'
 import { dictationText, useDictation } from './dictation'
+import { withDictatedWords } from './dictation-button'
 import {
   MentionList,
   mentionAt,
@@ -337,8 +338,7 @@ export function Composer({
   // The words of a dictation go after what is written, a space between (ВВ16).
   const dictation = useDictation()
   const recording = dictation.state === 'recording'
-  const withWords = (written: string, words: string) =>
-    written.trim() === '' ? words : `${written.trimEnd()} ${words}`
+  const withWords = withDictatedWords
   /** «Стоп»: the words go into the field, for the client to read and send (docs/plan/77, Р4). */
   async function stopDictation() {
     const words = await dictation.finish()
