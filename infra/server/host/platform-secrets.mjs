@@ -4,7 +4,7 @@
 // the multi-VM design (infra/app/README.md, «Секреты»). Run as root on the host, Node 26:
 //   platform-secrets.mjs seed               creates every missing generated value; never rewrites
 //   platform-secrets.mjs set <path> <field> the value from stdin (keys the owner gives: SmartCaptcha,
-//                                           Sendsay, the leads bot, the GitLab and GitHub apps),
+//                                           Sendsay, the leads bot, YooKassa, the GitLab and GitHub apps),
 //                                           never an argument; `< file` for the GitHub App's key
 //   platform-secrets.mjs render [service…]  /run/raditi/<service>/ for the containers (raditi-secrets.service:
 //                                           all of them at boot); a running service keeps working only
@@ -75,6 +75,9 @@ export const PROVIDED = {
   // The GitHub App of Raditi (Э10): web — slug, client and webhook secret; core — the app id and
   // the private key, which it gets as a file (/run/raditi/core/github-app.pem), never in app.env
   'github-app': ['app_id', 'slug', 'client_id', 'client_secret', 'webhook_secret', 'private_key'],
+  // YooKassa shop (docs/plan/51-yookassa-shop-setup.md): both or neither; web creates payments and
+  // settles notifications, core charges renewals. Empty — payments stay off.
+  yookassa: ['shop_id', 'secret_key'],
   // reg.ru API (an alternative password, the server's IP allowed): DNS-01 of *.pages.raditi.ru
   'app/traefik': ['regru_username', 'regru_password'],
   // YANDEX_CLIENT_*: the Yandex ID app of sign-in (oauth.yandex.ru), both or neither
@@ -101,6 +104,7 @@ export const MULTILINE = { 'github-app': ['private_key'] }
 export const WHOLE = {
   'gitlab-oauth': PROVIDED['gitlab-oauth'],
   'github-app': PROVIDED['github-app'],
+  yookassa: PROVIDED.yookassa,
 }
 
 const fail = (message) => {
@@ -210,8 +214,12 @@ export function serviceFiles(kv, roles, { readFile = readFileSync, bcrypt = htpa
   // The apps of the repositories of projects (docs/plan/84-projects.md, §4.2, §4.5)
   const gitlab = wholeGroup('gitlab-oauth', kv['gitlab-oauth'])
   const github = wholeGroup('github-app', kv['github-app'])
+  const yookassa = wholeGroup('yookassa', kv.yookassa)
   const gitlabEnv = gitlab
     ? { GITLAB_OAUTH_CLIENT_ID: gitlab.client_id, GITLAB_OAUTH_CLIENT_SECRET: gitlab.client_secret }
+    : {}
+  const yookassaEnv = yookassa
+    ? { YOOKASSA_SHOP_ID: yookassa.shop_id, YOOKASSA_SECRET_KEY: yookassa.secret_key }
     : {}
   const db = `postgresql://raditi:${shared.pg_password}@postgres:5432/raditi`
   // browser runs in the host network: the database on the private address (docker-compose.server.yml)
@@ -262,6 +270,7 @@ export function serviceFiles(kv, roles, { readFile = readFileSync, bcrypt = htpa
           PAGES_SIGNING_SECRET: web.PAGES_SIGNING_SECRET,
           REPO_CONFIRM_SECRET: shared.repo_confirm_secret,
           ...gitlabEnv,
+          ...yookassaEnv,
           ...(github
             ? {
                 GITHUB_APP_SLUG: github.slug,
@@ -301,6 +310,7 @@ export function serviceFiles(kv, roles, { readFile = readFileSync, bcrypt = htpa
           BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,
           REPO_CONFIRM_SECRET: shared.repo_confirm_secret,
           ...gitlabEnv,
+          ...yookassaEnv,
           ...(github
             ? { GITHUB_APP_ID: github.app_id, GITHUB_APP_PRIVATE_KEY_FILE: GITHUB_APP_KEY_FILE }
             : {}),

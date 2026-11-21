@@ -46,6 +46,10 @@ x-platform-env: &platform-env
   # subscribes browsers with it, core signs with it and the private key of its app.env. Empty —
   # no notifications in browsers.
   WEB_PUSH_VAPID_PUBLIC: ${WEB_PUSH_VAPID_PUBLIC:-}
+  # YooKassa autopayments switch (docs/plan/51-yookassa-shop-setup.md): on or off; required in
+  # production whenever YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY are set in app.env, same for web
+  # and core.
+  YOOKASSA_AUTOPAYMENTS: ${YOOKASSA_AUTOPAYMENTS:-}
 
 # Vault by its pinned TLS name for every service that talks to it: no resolver is involved, and
 # core writes the turn keys to the very host llm reads them from.

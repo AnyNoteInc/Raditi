@@ -692,3 +692,18 @@ test('the single server gives preview a network that reaches the browser worker'
     `preview has only internal networks: ${listed.join(', ')}`,
   )
 })
+
+test('web and core share YOOKASSA_AUTOPAYMENTS while shop credentials stay in Vault secrets', () => {
+  assert.equal(services.web.environment.YOOKASSA_AUTOPAYMENTS, 'off')
+  assert.equal(services.core.environment.YOOKASSA_AUTOPAYMENTS, 'off')
+  for (const service of ['web', 'core']) {
+    assert.equal(services[service].environment.YOOKASSA_SHOP_ID, undefined)
+    assert.equal(services[service].environment.YOOKASSA_SECRET_KEY, undefined)
+    const secrets = readFileSync(
+      new URL(`./secrets.example/${service}/app.env`, import.meta.url),
+      'utf8',
+    )
+    assert.match(secrets, /YOOKASSA_SHOP_ID=/)
+    assert.match(secrets, /YOOKASSA_SECRET_KEY=/)
+  }
+})
