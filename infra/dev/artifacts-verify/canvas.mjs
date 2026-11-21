@@ -53,7 +53,7 @@ export async function canvasAndRender({ root, databaseUrl, check }) {
   const { canvasThumbs } = await import(
     resolve(root, 'packages/trpc/src/services/artifacts/canvas.ts')
   )
-  const { publishArtifactPage } = await import(
+  const { artifactPublicationOf, publishArtifactPage } = await import(
     resolve(root, 'packages/trpc/src/services/artifacts/publish.ts')
   )
   const { createGalleryArtifact } = await import(
@@ -278,10 +278,66 @@ export async function canvasAndRender({ root, databaseUrl, check }) {
       'the board finds no thumbnail and asks core once',
       asked.pending && asked.thumbs.every((thumb) => thumb.url === null) && enqueued === 1,
     )
-    await canvasThumbs(db, bucket, { userId: user.id, artifactId: canvas.id })
+    const stale = new ArtifactThumbs({
+      db,
+      storage: bucket,
+      render: async ({ widths }) => ({
+        thumbKey: '0'.repeat(26),
+        pictures: [{ width: widths[0], part: 0, type: 'image/jpeg', data: '/9j/' }],
+      }),
+    })
+    const staleError = await stale.draw(canvas.id).then(
+      () => null,
+      (error) => error.message,
+    )
     check(
-      'asking again for the same revision asks nothing more',
-      (await db.outboxEvent.count({ where: { type: domain.ARTIFACT_THUMBS_JOB } })) === 1,
+      'a different renderer key fails the job for retry without storing a wrong thumbnail',
+      staleError === 'Artifact thumbnail renderer returned an incompatible key' &&
+        bucket.objects.size === 0,
+    )
+    const thumbBlock = 'home-thumb-text'
+    const pendingWrite = await tools.edit(scope, {
+      artifactId: canvas.id,
+      opId: 'write-before-thumb',
+      ops: [
+        {
+          op: 'insert',
+          block: thumbBlock,
+          parent: 'home',
+          after: null,
+          kind: 'html',
+          content: '<p>Хлеб</p>',
+        },
+      ],
+    })
+    if (!pendingWrite.ok) throw new Error('The thumbnail fixture did not write its pending block')
+    const pending = (
+      await dbModule.readArtifact(db, { artifactId: canvas.id, actor: person })
+    ).blocks.find((each) => each.key === thumbBlock)
+    let approvedDuringRender = false
+    const raced = new ArtifactThumbs({
+      db,
+      storage: bucket,
+      render: async ({ artifactId, frame, viewer, widths }) => {
+        if (!approvedDuringRender) {
+          approvedDuringRender = true
+          await dbModule.settleArtifactWrites(db, {
+            taskId,
+            final: true,
+            blocks: [{ artifactId, block: thumbBlock, rev: pending.rev, refusal: null }],
+          })
+        }
+        const { thumbKey } = await renderer.source({ artifactId, frame, viewer })
+        return {
+          thumbKey,
+          pictures:
+            frame === 'home' ? [{ width: widths[0], type: 'image/jpeg', data: '/9j/' }] : [],
+        }
+      },
+    })
+    check(
+      'approving frame text at the same revision skips the stale thumbnail without failing the job',
+      (await raced.draw(canvas.id)) === 0 && bucket.objects.size === 0,
     )
     const thumbs = new ArtifactThumbs({
       db,
@@ -333,6 +389,196 @@ export async function canvasAndRender({ root, databaseUrl, check }) {
       'publishing again updates the same pages',
       again.pageId === page.pageId &&
         (await db.artifactPublication.count({ where: { artifactId: canvas.id } })) === 3,
+    )
+    const servicePage = pages.find((row) => row.page.path === '/uslugi')
+    const variantText = 'Другой вариант страницы услуг'
+    await dbModule.applyArtifactOps(db, {
+      actor: person,
+      batch: {
+        artifactId: canvas.id,
+        opId: `variant-${randomUUID()}`,
+        ops: [
+          {
+            op: 'insert',
+            block: 'uslugi-b',
+            after: 'uslugi',
+            kind: 'frame',
+            content: '',
+            props: {
+              name: screens.find((screen) => screen.key === 'uslugi').name,
+              variant: 'Б',
+              chosen: true,
+            },
+          },
+          {
+            op: 'insert',
+            block: 'uslugi-b-html',
+            parent: 'uslugi-b',
+            after: null,
+            kind: 'html',
+            content: `<h1>${variantText}</h1>`,
+          },
+        ],
+      },
+    })
+    await dbModule.saveArtifactVersion(db, { artifactId: canvas.id, actor: person })
+    await publishArtifactPage(
+      db,
+      { baseDomain: 'pages.localhost', scheme: 'http', port: 3000 },
+      { artifactId: canvas.id, userId: user.id, versionNo: null },
+      () => bucket,
+    )
+    const updated = await db.page.findUniqueOrThrow({
+      where: { id: servicePage.pageId },
+      select: { path: true, currentVersion: true },
+    })
+    const content = await db.pageContent.findUniqueOrThrow({
+      where: { pageId: servicePage.pageId },
+    })
+    check(
+      'changing the variant updates the existing page at its address',
+      updated.path === '/uslugi' &&
+        updated.currentVersion === 3 &&
+        Buffer.from(content.bytes).toString('utf8').includes(variantText) &&
+        (await db.artifactPublication.count({ where: { artifactId: canvas.id } })) === 3,
+    )
+
+    // The first implementation stored the key of the selected frame, not the screen.
+    await db.artifactPublication.update({
+      where: { pageId: servicePage.pageId },
+      data: { blockKey: 'uslugi-b' },
+    })
+    const publish = () =>
+      publishArtifactPage(
+        db,
+        { baseDomain: 'pages.localhost', scheme: 'http', port: 3000 },
+        { artifactId: canvas.id, userId: user.id, versionNo: null },
+        () => bucket,
+      )
+    const existingService = () => db.page.findUniqueOrThrow({ where: { id: servicePage.pageId } })
+    const publicationCount = () =>
+      db.artifactPublication.count({ where: { artifactId: canvas.id } })
+    await publish()
+    const legacy = await existingService()
+    check(
+      'a previous publication keyed by its selected variant is reused',
+      legacy.path === '/uslugi' && legacy.currentVersion === 4 && (await publicationCount()) === 3,
+    )
+
+    const current = await dbModule.readArtifact(db, { artifactId: canvas.id, actor: person })
+    await dbModule.applyArtifactOps(db, {
+      actor: person,
+      batch: {
+        artifactId: canvas.id,
+        opId: `reorder-${randomUUID()}`,
+        ops: [
+          {
+            op: 'move',
+            block: 'uslugi-b',
+            ifRev: current.blocks.find((block) => block.key === 'uslugi-b').rev,
+            after: null,
+          },
+        ],
+      },
+    })
+    await dbModule.saveArtifactVersion(db, { artifactId: canvas.id, actor: person })
+    const reordered = await publish()
+    const childAfterMove = await existingService()
+    const homeAfterMove = await db.pageContent.findUniqueOrThrow({ where: { pageId: page.pageId } })
+    check(
+      'moving a child variant before the home frame preserves both published pages',
+      reordered.pageId === page.pageId &&
+        childAfterMove.path === '/uslugi' &&
+        childAfterMove.currentVersion === 5 &&
+        !Buffer.from(homeAfterMove.bytes).toString('utf8').includes(variantText) &&
+        (await publicationCount()) === 3,
+    )
+
+    // Simulate a home published by the older code, before its frame key was recorded.
+    await db.artifactPublication.update({
+      where: { pageId: page.pageId },
+      data: { blockKey: null, versionNo: again.versionNo },
+    })
+    const newScreenText = 'Новости нашей пекарни'
+    await dbModule.applyArtifactOps(db, {
+      actor: person,
+      batch: {
+        artifactId: canvas.id,
+        opId: 'insert-before-home',
+        ops: [
+          {
+            op: 'insert',
+            block: 'news',
+            after: null,
+            kind: 'frame',
+            content: '',
+            props: { name: 'Новости' },
+          },
+          {
+            op: 'insert',
+            block: 'news-html',
+            parent: 'news',
+            after: null,
+            kind: 'html',
+            content: `<h1>${newScreenText}</h1>`,
+          },
+        ],
+      },
+    })
+    await dbModule.saveArtifactVersion(db, { artifactId: canvas.id, actor: person })
+    const expanded = await publish()
+    const rootLink = await db.artifactPublication.findUniqueOrThrow({
+      where: { pageId: page.pageId },
+    })
+    const homeAfterInsert = await db.pageContent.findUniqueOrThrow({
+      where: { pageId: page.pageId },
+    })
+    const news = await db.artifactPublication.findFirstOrThrow({
+      where: { artifactId: canvas.id, blockKey: 'news' },
+      include: { page: { select: { path: true } } },
+    })
+    const publication = await artifactPublicationOf(db, null, {
+      artifactId: canvas.id,
+      userId: user.id,
+    })
+    check(
+      'adding a screen before a legacy home keeps the home and publishes the new screen below it',
+      expanded.pageId === page.pageId &&
+        publication?.pageId === page.pageId &&
+        publication.current &&
+        rootLink.blockKey === 'home' &&
+        !Buffer.from(homeAfterInsert.bytes).toString('utf8').includes(newScreenText) &&
+        news.page.path === '/novosti' &&
+        (await publicationCount()) === 4,
+    )
+
+    const withNews = await dbModule.readArtifact(db, { artifactId: canvas.id, actor: person })
+    await dbModule.applyArtifactOps(db, {
+      actor: person,
+      batch: {
+        artifactId: canvas.id,
+        opId: 'remove-published-variant',
+        ops: [
+          {
+            op: 'delete',
+            block: 'uslugi-b',
+            ifRev: withNews.blocks.find((block) => block.key === 'uslugi-b').rev,
+          },
+        ],
+      },
+    })
+    await dbModule.saveArtifactVersion(db, { artifactId: canvas.id, actor: person })
+    await publish()
+    const afterDelete = await existingService()
+    const childLink = await db.artifactPublication.findUniqueOrThrow({
+      where: { pageId: servicePage.pageId },
+    })
+    check(
+      'removing a published variant keeps the surviving screen on the same page',
+      afterDelete.path === '/uslugi' &&
+        afterDelete.currentVersion === 7 &&
+        childLink.blockKey === 'uslugi' &&
+        (await publicationCount()) === 4,
     )
   } finally {
     await pool.close()

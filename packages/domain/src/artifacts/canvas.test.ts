@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { artifactsSection } from './section.ts'
 import { brandCss, brandForAgent, brandTokensOf } from './brand.ts'
 import {
+  canvasLegacyHome,
   canvasLiveFrames,
   canvasNotesOf,
   canvasPublishedScreens,
@@ -44,7 +45,7 @@ describe('the canvas (Ар8, §7.7, slice 88.15)', () => {
     expect(screens.map((screen) => [screen.key, screen.path])).toEqual([
       ['home', '/'],
       ['a', '/uslugi'],
-      ['b', '/uslugi-2'],
+      ['b', '/uslugi'],
       ['c', '/o-nas'],
     ])
     expect(screens[2]).toMatchObject({ variant: 'Б', chosen: true, x: 10, y: 20 })
@@ -53,11 +54,19 @@ describe('the canvas (Ар8, §7.7, slice 88.15)', () => {
   })
 
   it('publishes one page a screen: of variants the chosen one', () => {
-    expect(canvasPublishedScreens(canvas).map((screen) => screen.key)).toEqual(['home', 'b', 'c'])
+    const selected = canvasPublishedScreens(canvas)
+    expect(selected.map((screen) => screen.key)).toEqual(['home', 'b', 'c'])
+    expect(selected[1]).toMatchObject({ key: 'b', frameKeys: ['a', 'b'], path: '/uslugi' })
     const none = canvas.map((each) =>
       each.key === 'b' ? { ...each, props: { name: 'Услуги', variant: 'Б' } } : each,
     )
     expect(canvasPublishedScreens(none).map((screen) => screen.key)).toEqual(['home', 'a', 'c'])
+  })
+
+  it('recovers the legacy home when the first frame’s selected variant had another path', () => {
+    const frames = [canvas[4]!, canvas[1]!, canvas[6]!]
+    expect(canvasPublishedScreens(frames)[0]).toMatchObject({ key: 'b', path: '/' })
+    expect(canvasLegacyHome(frames)).toEqual(['home'])
   })
 
   it('reads sticky notes of the board and pins of its frames', () => {
@@ -81,17 +90,18 @@ describe('the canvas (Ар8, §7.7, slice 88.15)', () => {
   })
 
   it('keys a thumbnail by the revisions of its document: a note or another screen changes nothing', () => {
-    const key = canvasThumbKey({ blocks: canvas, frame: 'b', brand: null })
+    const input = { frame: 'b', title: 'Холст', brand: null }
+    const key = canvasThumbKey({ ...input, blocks: canvas })
     expect(key).toMatch(/^[0-9a-f]{26}$/)
     const other = canvas.map((each) =>
       each.key === 'a-html' || each.key === 'pin' ? { ...each, rev: 9 } : each,
     )
-    expect(canvasThumbKey({ blocks: other, frame: 'b', brand: null })).toBe(key)
+    expect(canvasThumbKey({ ...input, blocks: other })).toBe(key)
     const mine = canvas.map((each) => (each.key === 'b-html' ? { ...each, rev: 2 } : each))
-    expect(canvasThumbKey({ blocks: mine, frame: 'b', brand: null })).not.toBe(key)
+    expect(canvasThumbKey({ ...input, blocks: mine })).not.toBe(key)
     const common = canvas.map((each) => (each.key === 'common' ? { ...each, rev: 2 } : each))
-    expect(canvasThumbKey({ blocks: common, frame: 'b', brand: null })).not.toBe(key)
-    expect(canvasThumbKey({ blocks: canvas, frame: 'b', brand: { id: 'x', seq: 1 } })).not.toBe(key)
+    expect(canvasThumbKey({ ...input, blocks: common })).not.toBe(key)
+    expect(canvasThumbKey({ ...input, blocks: canvas, brand: { id: 'x', seq: 1 } })).not.toBe(key)
     expect(stringHash('a')).not.toBe(stringHash('b'))
     expect(
       canvasThumbObjectKey({

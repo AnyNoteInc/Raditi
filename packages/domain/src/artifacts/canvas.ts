@@ -1,3 +1,4 @@
+import { artifactFrameBlocksOf } from './frame.ts'
 import { artifactLimits, artifactRenderLimits } from './limits.ts'
 
 /**
@@ -117,24 +118,30 @@ const pathPattern = /^\/(?:[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)?$/
  * name for the others; a second screen of the same address gets `-2`, `-3`.
  */
 export function canvasScreensOf(blocks: readonly CanvasBlock[]): CanvasScreen[] {
+  return canvasScreens(blocks, false)
+}
+
+function canvasScreens(blocks: readonly CanvasBlock[], legacyPaths: boolean): CanvasScreen[] {
   const frames = blocks.filter((block) => block.kind === 'frame' && block.parent === null)
   const used = new Set<string>()
-  const names = new Set<string>()
+  const pathsByName = new Map<string, string>()
   const width = canvasViews[0].width + canvasGap + canvasViews[1].width + canvasGap * 2
   return frames.map((frame, index) => {
     const name = str(frame.props.name) ?? `Экран ${index + 1}`
-    const asked = str(frame.props.path)
-    const first = !names.has(name)
-    names.add(name)
-    let path =
-      asked !== null && pathPattern.test(asked)
-        ? asked
-        : index === 0 || (first && used.size === 0)
-          ? '/'
-          : `/${canvasSegmentOf(name)}`
-    const base = path
-    for (let n = 2; used.has(path); n += 1) path = base === '/' ? `/page-${n}` : `${base}-${n}`
-    used.add(path)
+    let path = legacyPaths ? undefined : pathsByName.get(name)
+    if (path === undefined) {
+      const asked = str(frame.props.path)
+      const base =
+        asked !== null && pathPattern.test(asked)
+          ? asked
+          : index === 0
+            ? '/'
+            : `/${canvasSegmentOf(name)}`
+      path = base
+      for (let n = 2; used.has(path); n += 1) path = base === '/' ? `/page-${n}` : `${base}-${n}`
+      used.add(path)
+      pathsByName.set(name, path)
+    }
     return {
       key: frame.key,
       name,
@@ -166,14 +173,29 @@ export function canvasNotesOf(blocks: readonly CanvasBlock[]): CanvasNote[] {
  * The screens «Опубликовать как сайт» makes pages of (Ар8, §7.10): one page a screen — of a
  * screen with variants the chosen one, or the first when none is chosen.
  */
-export function canvasPublishedScreens(blocks: readonly CanvasBlock[]): CanvasScreen[] {
-  const screens = canvasScreensOf(blocks)
+export function canvasPublishedScreens(
+  blocks: readonly CanvasBlock[],
+): (CanvasScreen & { frameKeys: readonly string[] })[] {
+  return publishedVariants(canvasScreensOf(blocks))
+}
+
+function publishedVariants(screens: readonly CanvasScreen[]) {
   const byName = new Map<string, CanvasScreen[]>()
   for (const screen of screens)
     byName.set(screen.name, [...(byName.get(screen.name) ?? []), screen])
-  const out: CanvasScreen[] = []
-  for (const group of byName.values()) out.push(group.find((screen) => screen.chosen) ?? group[0]!)
-  return screens.filter((screen) => out.includes(screen))
+  return [...byName.values()].map((group) => ({
+    ...(group.find((screen) => screen.chosen) ?? group[0]!),
+    frameKeys: group.map((screen) => screen.key).toSorted(),
+  }))
+}
+
+/** Older publications left the home frame unset: replay their selection on the saved blocks. */
+export function canvasLegacyHome(blocks: readonly CanvasBlock[]): readonly string[] {
+  const screens = canvasScreens(blocks, true)
+  const selected = new Map(publishedVariants(screens).map((screen) => [screen.key, screen]))
+  const first = screens.find((screen) => selected.has(screen.key))
+  const root = screens.find((screen) => screen.path === '/' && selected.has(screen.key))
+  return (root ? selected.get(root.key) : first && selected.get(first.key))?.frameKeys ?? []
 }
 
 /** Which frames the board shows live (§7.7, spike 6): in view, at 30 % and more, at most four. */
@@ -192,28 +214,33 @@ export function canvasLiveFrames(input: {
 }
 
 /**
- * The key of the thumbnails of one frame (§7.7, spike 3): the revisions of everything its document
- * is assembled of — the frame and its parts, the common style and settings of the canvas, the
- * brand that stands in it — and the version of the renderer. A new revision is a new key; the
- * key of the same document is the same in web and in core.
+ * The thumbnail key includes the assembled, checked parts in render order. A pending agent
+ * write takes its revision before approval, so revisions alone cannot identify the visible text.
  */
 export function canvasThumbKey(input: {
-  blocks: readonly Pick<CanvasBlock, 'key' | 'kind' | 'parent' | 'rev'>[]
+  blocks: readonly Pick<CanvasBlock, 'key' | 'kind' | 'parent' | 'rev' | 'content'>[]
   frame: string
+  title: string
   /** The brand of the canvas: its artifact and its `seq`; null — none. */
   brand: { id: string; seq: number } | null
 }): string {
-  const used = input.blocks
-    .filter(
-      (block) =>
-        block.key === input.frame ||
-        block.parent === input.frame ||
-        (block.parent === null && (block.kind === 'style' || block.kind === 'settings')),
-    )
-    .filter((block) => block.kind !== 'note')
-    .map((block) => `${block.key}:${block.rev}`)
-    .sort()
-  return stringHash(JSON.stringify({ v: CANVAS_RENDER_VERSION, used, brand: input.brand }))
+  const parts = artifactFrameBlocksOf({ framed: true, blocks: input.blocks, frame: input.frame })
+  const entry = (block: (typeof input.blocks)[number]) => [block.key, block.rev, block.content]
+  const used = parts && {
+    html: parts.html.map(entry),
+    style: parts.style.map(entry),
+    script: parts.script.map(entry),
+    settings: parts.settings && entry(parts.settings),
+  }
+  return stringHash(
+    JSON.stringify({
+      v: CANVAS_RENDER_VERSION,
+      frame: input.frame,
+      title: input.title,
+      used,
+      brand: input.brand,
+    }),
+  )
 }
 
 /**
@@ -237,7 +264,7 @@ export function stringHash(text: string): string {
 }
 
 /** The version of the renderer of frames: a change of how a frame is drawn draws them again. */
-export const CANVAS_RENDER_VERSION = 1
+export const CANVAS_RENDER_VERSION = 2
 
 /** Where a thumbnail lies in the artifacts bucket (spec §14). */
 export const canvasThumbObjectKey = (input: {

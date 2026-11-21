@@ -62,15 +62,13 @@ export class RenderPool {
     if (!this.available || this.#closed)
       throw new DomainError('RENDER_UNAVAILABLE', 'The renderer is not configured', 503)
     const entry = await this.#slot()
-    entry.active += 1
-    entry.renders += 1
     try {
       const renderer = await entry.renderer
       return await work(renderer)
     } finally {
       entry.active -= 1
       void this.#recycle(entry)
-      this.#waiting.shift()?.()
+      this.#waiting[0]?.()
     }
   }
 
@@ -78,20 +76,32 @@ export class RenderPool {
     const deadline = this.#deps.now() + WAIT_MS
     for (;;) {
       await this.#dropDead()
+      if (this.#closed) throw new DomainError('RENDER_UNAVAILABLE', 'The renderer is closed', 503)
       const free = this.#entries.find(
         (entry) => !entry.retiring && entry.active < artifactRenderLimits.rendersPerContainer,
       )
-      if (free) return free
-      if (this.#entries.filter((entry) => !entry.retiring).length < this.#deps.containers)
-        return this.#start()
+      const entry =
+        free ??
+        (this.#entries.filter((entry) => !entry.retiring).length < this.#deps.containers
+          ? this.#start()
+          : null)
+      if (entry) {
+        // Claim the slot before returning to the caller (an async boundary).
+        entry.active += 1
+        entry.renders += 1
+        return entry
+      }
       const left = deadline - this.#deps.now()
       if (left <= 0) throw new DomainError('RENDER_BUSY', 'Every renderer is busy', 503)
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, Math.min(left, 1000))
-        this.#waiting.push(() => {
+        const wake = () => {
           clearTimeout(timer)
+          const index = this.#waiting.indexOf(wake)
+          if (index !== -1) this.#waiting.splice(index, 1)
           resolve()
-        })
+        }
+        const timer = setTimeout(wake, Math.min(left, 1000))
+        this.#waiting.push(wake)
       })
     }
   }
@@ -162,6 +172,7 @@ export class RenderPool {
 
   async close(): Promise<void> {
     this.#closed = true
+    for (const wake of this.#waiting.splice(0)) wake()
     await Promise.allSettled([...this.#entries].map((entry) => this.#remove(entry)))
   }
 }

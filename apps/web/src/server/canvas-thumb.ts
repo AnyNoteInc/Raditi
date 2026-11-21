@@ -2,7 +2,7 @@ import 'server-only'
 
 // A thumbnail of a screen of a canvas (docs/plan/88-artifacts.md, §7.7, slice 88.15): a JPEG the
 // renderer of the browser worker drew, for a person who may open the canvas now. Its address names
-// the revisions it was drawn of, so it never changes: kept by the browser for a day.
+// the revisions it was drawn of, but the viewer's access may change between requests.
 
 export interface CanvasThumbDependencies {
   getSession: (headers: Headers) => Promise<{ user: { id: string } } | null>
@@ -35,7 +35,7 @@ export async function getCanvasThumb(
       headers: {
         'content-type': 'image/jpeg',
         'content-length': String(bytes.byteLength),
-        'cache-control': 'private, max-age=86400, immutable',
+        'cache-control': 'private, no-store',
         'x-content-type-options': 'nosniff',
         'cross-origin-resource-policy': 'same-origin',
         'content-security-policy': "default-src 'none'; sandbox",

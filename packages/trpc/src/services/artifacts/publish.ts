@@ -23,7 +23,9 @@ import {
   artifactFrameDocument,
   brandCss,
   brandTokensOf,
+  canvasLegacyHome,
   canvasPublishedScreens,
+  canvasSegmentOf,
   artifactKindSpecOf,
   artifactNotFound,
   tableMarkdown,
@@ -195,7 +197,12 @@ export async function publishArtifactPage(
   const version = await readArtifactVersion(db, { artifactId: artifact.id, no: versionNo, actor })
   if (artifact.publish === 'site') {
     if (storage === undefined) throw new DomainError('PAGES_UNAVAILABLE', 'No storage here', 503)
-    return publishCanvasSite(db, address, storage, { artifact, versionNo, blocks: version.blocks })
+    return publishCanvasSite(db, address, storage, {
+      artifact,
+      actor,
+      versionNo,
+      blocks: version.blocks,
+    })
   }
   let bytes: Uint8Array
   let markdown: string | null = null
@@ -241,12 +248,19 @@ export async function publishArtifactPage(
   }
 }
 
+type CanvasVersionBlock = VersionBlock & { rev: number; props: Readonly<Record<string, unknown>> }
+
+function orderedLiveBlocks(blocks: readonly CanvasVersionBlock[]) {
+  return blocks
+    .flatMap((block) => (block.kind === null ? [] : [{ ...block, kind: block.kind }]))
+    .toSorted((a, b) =>
+      (a.rank ?? '') < (b.rank ?? '') ? -1 : (a.rank ?? '') > (b.rank ?? '') ? 1 : 0,
+    )
+}
+
 /**
- * «Опубликовать как сайт» of a canvas (Ар8, §7.10; slice 88.15): a site of pages, one a screen — of a
- * screen with variants the chosen one —, each the HTML of its frame. The first screen is the home
- * page of the site, the page of the artifact; the others are pages of that site at their paths,
- * published again into the same pages (`artifact_publications` by frame). The files every screen
- * names go to the shared files of the site.
+ * «Опубликовать как сайт» (Ар8, §7.10): one page per screen, showing its selected variant. The
+ * first publication picks a home; updates keep its screen and the other pages by their frames.
  */
 async function publishCanvasSite(
   db: PrismaClient,
@@ -254,32 +268,77 @@ async function publishCanvasSite(
   storage: () => Pick<ObjectStorage, 'get'>,
   input: {
     artifact: Awaited<ReturnType<typeof ownedDocument>>
+    actor: { kind: 'user'; userId: string }
     versionNo: number
-    blocks: readonly (VersionBlock & { rev: number; props: Readonly<Record<string, unknown>> })[]
+    blocks: readonly CanvasVersionBlock[]
   },
 ): Promise<{ pageId: string; url: string; version: number; versionNo: number }> {
-  const { artifact, versionNo } = input
-  const live = input.blocks
-    .flatMap((block) => (block.kind === null ? [] : [{ ...block, kind: block.kind }]))
-    .toSorted((a, b) =>
-      (a.rank ?? '') < (b.rank ?? '') ? -1 : (a.rank ?? '') > (b.rank ?? '') ? 1 : 0,
-    )
-  const screens = canvasPublishedScreens(live).toSorted((a, b) =>
-    a.path === '/' ? -1 : b.path === '/' ? 1 : 0,
+  const { artifact, actor, versionNo } = input
+  const screens = canvasPublishedScreens(orderedLiveBlocks(input.blocks)).toSorted(
+    (a, b) => Number(b.path === '/') - Number(a.path === '/'),
   )
-  const home = screens[0]
-  if (!home) throw new DomainError('DOC_NOT_READY', 'The canvas has no screen to publish', 409)
+  if (screens.length === 0)
+    throw new DomainError('DOC_NOT_READY', 'The canvas has no screen to publish', 409)
   const css = await brandCssOf(db, artifact.projectId)
   const previous = await db.artifactPublication.findMany({
     where: { artifactId: artifact.id, page: { deletedAt: null } },
     select: {
       pageId: true,
       blockKey: true,
-      page: { select: { currentVersion: true, treeId: true } },
+      versionNo: true,
+      page: { select: { currentVersion: true, treeId: true, path: true, documentId: true } },
     },
+    orderBy: [{ page: { createdAt: 'asc' } }, { pageId: 'asc' }],
   })
+  const previousHome = previous.find((row) => row.page.documentId === artifact.id)
+  const children = previous.filter(
+    (row) => row.page.treeId === previousHome?.page.treeId && row.page.documentId === null,
+  )
+  type Screen = (typeof screens)[number]
+  const byFrame = new Map(
+    screens.flatMap((screen) => screen.frameKeys.map((key) => [key, screen] as const)),
+  )
+  const snapshots = new Map<number, ReturnType<typeof orderedLiveBlocks>>()
+  const snapshot = async (no: number) => {
+    const cached = snapshots.get(no)
+    if (cached) return cached
+    // Unnamed versions may have aged out.
+    const exists = await db.artifactVersion.findUnique({
+      where: { documentId_no: { documentId: artifact.id, no } },
+      select: { id: true },
+    })
+    const saved = exists
+      ? orderedLiveBlocks(
+          (await readArtifactVersion(db, { artifactId: artifact.id, no, actor })).blocks,
+        )
+      : []
+    snapshots.set(no, saved)
+    return saved
+  }
+  const screenOf = async (row: (typeof previous)[number]) => {
+    const key = row.blockKey
+    const direct = key === null ? undefined : byFrame.get(key)
+    if (direct) return direct
+    const saved = await snapshot(row.versionNo)
+    // Older home publications had no frame key. Replay the old selection on the saved version.
+    const priorKeys =
+      key === null
+        ? canvasLegacyHome(saved)
+        : canvasPublishedScreens(saved).find((screen) => screen.frameKeys.includes(key))?.frameKeys
+    return priorKeys?.map((frame) => byFrame.get(frame)).find((screen) => screen !== undefined)
+  }
+  const knownChildren = new Map<Screen, (typeof children)[number]>()
+  for (const child of children) {
+    const screen = await screenOf(child)
+    if (screen && !knownChildren.has(screen)) knownChildren.set(screen, child)
+  }
+  const home =
+    (previousHome && (await screenOf(previousHome))) ??
+    screens.find((screen) => !knownChildren.has(screen)) ??
+    screens[0]!
+  const usedPaths = new Set(['/', ...children.map((child) => child.page.path)])
   let first: Awaited<ReturnType<typeof publishClientPage>> | null = null
-  for (const screen of screens) {
+  for (const screen of [home, ...screens.filter((screen) => screen !== home)]) {
     const page = await mockupPage(db, storage, {
       artifactId: artifact.id,
       title: `${artifact.title} — ${screen.name}`,
@@ -291,17 +350,23 @@ async function publishCanvasSite(
     const verdict = checkPageContent(page.bytes)
     if (!verdict.ok) throw pageContentRefused(verdict.reason)
     const isHome = screen === home
-    const known = isHome ? null : previous.find((row) => row.blockKey === screen.key)
+    const known = isHome ? undefined : knownChildren.get(screen)
+    const basePath = screen.path === '/' ? `/${canvasSegmentOf(screen.name)}` : screen.path
+    let path = known?.page.path ?? basePath
+    if (!isHome && !known) {
+      for (let n = 2; usedPaths.has(path); n += 1) path = `${basePath}-${n}`
+      usedPaths.add(path)
+    }
     const published = await publishClientPage(db, {
       workspaceId: artifact.workspaceId,
       taskId: null,
       title: isHome ? artifact.title : screen.name,
-      target: isHome ? { documentId: artifact.id } : { fileName: `${screen.path.slice(1)}.html` },
+      target: isHome ? { documentId: artifact.id } : { fileName: `${path.slice(1)}.html` },
       ...(isHome
         ? {}
-        : known && known.page.treeId === first!.treeId
+        : known
           ? { into: { pageId: known.pageId, expectedVersion: known.page.currentVersion } }
-          : { place: { treeId: first!.treeId, path: screen.path } }),
+          : { place: { treeId: first!.treeId, path } }),
       bytes: page.bytes,
       html: true,
       files: page.files,
@@ -312,11 +377,11 @@ async function publishCanvasSite(
       create: {
         artifactId: artifact.id,
         pageId: published.pageId,
-        blockKey: isHome ? null : screen.key,
+        blockKey: screen.key,
         seq: artifact.seq,
         versionNo,
       },
-      update: { seq: artifact.seq, versionNo, publishedAt: new Date() },
+      update: { blockKey: screen.key, seq: artifact.seq, versionNo, publishedAt: new Date() },
     })
   }
   return {
@@ -336,7 +401,10 @@ export async function artifactPublicationOf(
   const role = await artifactRole(db, input)
   if (role === null) throw artifactNotFound()
   const row = await db.artifactPublication.findFirst({
-    where: { artifactId: input.artifactId, blockKey: null, page: { deletedAt: null } },
+    where: {
+      artifactId: input.artifactId,
+      page: { deletedAt: null, documentId: input.artifactId },
+    },
     orderBy: { publishedAt: 'desc' },
     select: {
       pageId: true,

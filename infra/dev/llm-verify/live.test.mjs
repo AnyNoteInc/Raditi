@@ -24,6 +24,7 @@ import {
   liveServices,
   liveStartRefusal,
   longestReasoningRow,
+  parseVisionRequestBody,
   PROVIDER,
   readLedger,
   requestMessagesText,
@@ -48,6 +49,18 @@ before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'raditi-live-test-'))
 })
 after(async () => rm(directory, { recursive: true, force: true }))
+
+test('vision requires valid observer JSON without quoting the body or parser error', () => {
+  const body = { model: 'glm-5.3-flash', messages: [] }
+  const message = 'Vision acceptance: the observer request body is not valid JSON'
+  assert.deepEqual(parseVisionRequestBody(JSON.stringify(body)), body)
+  for (const malformed of ['', 'synthetic-private-body']) {
+    assert.throws(
+      () => parseVisionRequestBody(malformed),
+      (error) => error.constructor === Error && error.message === message && !('cause' in error),
+    )
+  }
+})
 
 test('the limits of a live run are the numbers of the plan', () => {
   assert.deepEqual(LIVE_LIMITS, {

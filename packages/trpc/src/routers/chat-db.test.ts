@@ -147,7 +147,7 @@ async function underPricedModel<T>(
   options: PricedModel = {},
 ): Promise<T> {
   const model = await tx.llmModel.findFirst({
-    where: { modelClass, providerModelId: { not: null } },
+    where: { modelClass, providerModelId: { not: null }, vision: false },
     orderBy: [{ slug: 'asc' }, { provider: { slug: 'asc' } }],
     select: { id: true, enabled: true, provider: { select: { id: true, enabled: true } } },
   })

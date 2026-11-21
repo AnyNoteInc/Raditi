@@ -513,10 +513,10 @@ async function agentTools({ dbModule, db, workspace, user, chat }) {
     'the next read names the block a person changed',
     again.changedSinceYourRead.blocks.includes('intro'),
   )
-  const table = await tools.create(next, { kind: 'canvas', title: 'Экраны' })
+  const diagram = await tools.create(next, { kind: 'diagram', title: 'Схема' })
   check(
     'a kind whose view has not shipped is refused',
-    !table.ok && table.code === 'ARTIFACT_KIND_REFUSED',
+    !diagram.ok && diagram.code === 'ARTIFACT_KIND_REFUSED',
   )
   const listed = valueOf(await tools.list(next, {}))
   check(

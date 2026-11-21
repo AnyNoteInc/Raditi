@@ -75,6 +75,11 @@ export const artifactRenderResponseSchema = z.strictObject({
     }),
   ),
   pictures: z.array(artifactRenderPictureSchema).max(16),
+  /** Only for canvas thumbnails: the revision key of the actual render source. */
+  thumbKey: z
+    .string()
+    .regex(/^[0-9a-f]{26}$/)
+    .optional(),
 })
 export type ArtifactRenderResponse = z.infer<typeof artifactRenderResponseSchema>
 

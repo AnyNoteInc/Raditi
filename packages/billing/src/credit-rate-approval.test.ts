@@ -536,6 +536,7 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
           model: sol.model,
           modelClass: 'standard',
           listed: true,
+          vision: false,
           creditsPer1m: {
             input: '38.75',
             cacheRead: '3.88',
@@ -929,6 +930,7 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
             model: sol.model,
             modelClass: 'standard',
             listed: false,
+            vision: false,
             creditsPer1m: {
               input: '42.27',
               cacheRead: '4.23',

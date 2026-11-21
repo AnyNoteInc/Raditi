@@ -810,6 +810,15 @@ export async function keepExchanges(holder, directory, exchanges) {
   return { written: files.length, held: false }
 }
 
+/** Require valid JSON without letting the parser quote the observer's request body. */
+export function parseVisionRequestBody(requestBody) {
+  try {
+    return JSON.parse(requestBody)
+  } catch {
+    throw new Error('Vision acceptance: the observer request body is not valid JSON')
+  }
+}
+
 /** What a chat completions request of the CLI says, by names and counts; null when unreadable. */
 export function chatRequestSummary(requestBody) {
   let body

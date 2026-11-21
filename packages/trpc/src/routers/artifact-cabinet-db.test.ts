@@ -179,7 +179,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
   it('refuses a kind whose view has not shipped (Ар7)', async () => {
     const caller = callerOf(await person())
     await expect(
-      caller.artifact.create({ kind: 'canvas', title: 'Холст', projectId: null, templateId: null }),
+      caller.artifact.create({
+        kind: 'diagram',
+        title: 'Схема',
+        projectId: null,
+        templateId: null,
+      }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
   })
 

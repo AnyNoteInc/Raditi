@@ -327,7 +327,7 @@ export function ArtifactCanvas({ artifact, onChanged, place }: ArtifactBodyProps
         block: screen.key,
         ifRev: source.rev,
         content: '',
-        props: { name: screen.name, variant: 'А' },
+        props: { ...source.props, name: screen.name, variant: 'А' },
       })
     const at = placeOf(screen)
     ops.push({

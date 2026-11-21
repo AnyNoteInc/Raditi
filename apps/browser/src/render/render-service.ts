@@ -25,6 +25,7 @@ import {
   artifactRenderLimits,
   brandCss,
   brandTokensOf,
+  canvasThumbKey,
   canvasThumbMaxCssPx,
   canvasThumbScale,
   withArtifactFileAddresses,
@@ -150,7 +151,16 @@ export class RenderService {
         ...fileUrls.filter(([, file]) => file.type.startsWith('font/')).map(([url]) => url),
       ],
     })
-    return { title: artifact.title, html, policy, files }
+    const thumbKey =
+      spec.view === 'canvas' && request.frame !== null
+        ? canvasThumbKey({
+            blocks: artifact.blocks,
+            frame: request.frame,
+            title: artifact.title,
+            brand: brand && { id: brand.id, seq: brand.seq },
+          })
+        : null
+    return { title: artifact.title, html, policy, files, thumbKey }
   }
 
   async render(request: ArtifactRenderRequest): Promise<ArtifactRenderResponse> {
@@ -219,6 +229,9 @@ export class RenderService {
       problems: report?.problems ?? 0,
       heights: asked.map((width) => ({ width, height: byWidth.get(width)?.docHeight ?? null })),
       pictures,
+      ...(request.output === 'thumbs' && source.thumbKey !== null
+        ? { thumbKey: source.thumbKey }
+        : {}),
     }
   }
 }

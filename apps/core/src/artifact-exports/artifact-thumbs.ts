@@ -56,15 +56,24 @@ export class ArtifactThumbs {
     )
       return 0
     const viewer = { kind: 'user' as const, userId: row.ownerUserId }
-    const artifact = await readArtifact(db as PrismaClient, { artifactId, actor: viewer })
-    const brand = await artifactBrandOf(db as PrismaClient, artifactId)
+    const snapshot = async () => {
+      const artifact = await readArtifact(db as PrismaClient, { artifactId, actor: viewer })
+      const brand = await artifactBrandOf(db as PrismaClient, artifactId)
+      return {
+        screens: canvasScreensOf(artifact.blocks),
+        keyOf: (frame: string) =>
+          canvasThumbKey({
+            blocks: artifact.blocks,
+            frame,
+            title: artifact.title,
+            brand: brand && { id: brand.id, seq: brand.seq },
+          }),
+      }
+    }
+    const initial = await snapshot()
     let drawn = 0
-    for (const screen of canvasScreensOf(artifact.blocks)) {
-      const key = canvasThumbKey({
-        blocks: artifact.blocks,
-        frame: screen.key,
-        brand: brand && { id: brand.id, seq: brand.seq },
-      })
+    for (const screen of initial.screens) {
+      const key = initial.keyOf(screen.key)
       for (const view of canvasViews) {
         const objectKey = canvasThumbObjectKey({
           workspaceId: row.workspaceId,
@@ -80,6 +89,13 @@ export class ArtifactThumbs {
           output: 'thumbs',
           widths: [view.width],
         })
+        if (answer.thumbKey !== key) {
+          // An edit can advance the key, but an unchanged key means an incompatible renderer.
+          // Fail the job so the queue retries while the browser worker is being replaced.
+          if ((await snapshot()).keyOf(screen.key) === key)
+            throw new Error('Artifact thumbnail renderer returned an incompatible key')
+          continue
+        }
         const picture = answer.pictures.find((each) => each.width === view.width)
         if (!picture) {
           this.#deps.logger?.warn(`artifact_thumb_not_drawn width=${view.width}`)

@@ -9,6 +9,7 @@ import type { ObjectStorage } from '@repo/domain'
 import {
   ARTIFACT_QUEUE,
   ARTIFACT_THUMBS_JOB,
+  CANVAS_RENDER_VERSION,
   artifactKindSpecOf,
   artifactNotFound,
   canvasScreensOf,
@@ -19,8 +20,9 @@ import {
 
 // The thumbnails of a canvas (docs/plan/88-artifacts.md, Ар8, Ар49, §7.7; slice 88.15): the board
 // shows each view of a screen as a picture the renderer of the browser worker drew, keyed by the
-// revisions its document is made of (`canvasThumbKey`). A missing one is asked of core — once for
-// the `seq` of the artifact — and the board reads them again until they come.
+// revisions its document is made of (`canvasThumbKey`). Deduplicate each revision and render
+// version for a minute: if a job exhausts its retries, an open board can ask again.
+const thumbRetryWindowMs = 60_000
 
 export interface CanvasThumb {
   frame: string
@@ -51,6 +53,7 @@ export async function canvasThumbs(
     const key = canvasThumbKey({
       blocks: artifact.blocks,
       frame: screen.key,
+      title: artifact.title,
       brand: brand && { id: brand.id, seq: brand.seq },
     })
     for (const view of canvasViews) {
@@ -71,14 +74,15 @@ export async function canvasThumbs(
       })
     }
   }
-  if (pending)
+  if (pending) {
+    const window = Math.floor(Date.now() / thumbRetryWindowMs)
     await enqueueOutbox(db, {
       topic: ARTIFACT_QUEUE,
       type: ARTIFACT_THUMBS_JOB,
       payload: { artifactId: artifact.id },
-      // A new revision of the canvas or of its brand is a new key, and a new request of core.
-      dedupeKey: `${ARTIFACT_THUMBS_JOB}:${artifact.id}:${artifact.seq}:${brand?.id ?? '-'}:${brand?.seq ?? 0}`,
+      dedupeKey: `${ARTIFACT_THUMBS_JOB}:${artifact.id}:${artifact.seq}:${brand?.id ?? '-'}:${brand?.seq ?? 0}:v${CANVAS_RENDER_VERSION}:${window}`,
     })
+  }
   return { thumbs, pending }
 }
 

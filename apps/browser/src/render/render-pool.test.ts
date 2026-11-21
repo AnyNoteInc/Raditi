@@ -48,6 +48,31 @@ describe('the pool of render containers', () => {
     expect(runtime.stop).toHaveBeenCalledWith(spec.sessionId)
   })
 
+  it('reserves the last slot before another request can take it', async () => {
+    const pool = new RenderPool({
+      runtime: null,
+      local: true,
+      containers: 1,
+      create: async () => renderer(),
+    })
+    const first = Promise.withResolvers<void>()
+    const next = Promise.withResolvers<void>()
+    const running = vi.fn(() => next.promise)
+    const held = pool.run(() => first.promise)
+    const second = pool.run(running)
+    const third = pool.run(running)
+    try {
+      await vi.waitFor(() => expect(running).toHaveBeenCalledTimes(1))
+      first.resolve()
+      await vi.waitFor(() => expect(running).toHaveBeenCalledTimes(2))
+    } finally {
+      first.resolve()
+      next.resolve()
+      await Promise.all([held, second, third])
+      await pool.close()
+    }
+  })
+
   it('replaces a renderer after its renders, and one whose browser went away', async () => {
     const made = [renderer(), renderer(), renderer()]
     let at = 0

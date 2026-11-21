@@ -760,6 +760,7 @@ export async function priceDialogClass(): Promise<() => Promise<void>> {
     where: {
       modelClass: 'standard',
       providerModelId: { not: null },
+      vision: false,
       // The seeded providers are the backends of Z.ai, both of the kind the planner takes.
       provider: { kind: 'subscription' },
     },
