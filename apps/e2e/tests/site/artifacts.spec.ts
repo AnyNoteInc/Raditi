@@ -219,6 +219,118 @@ test('a private quote note survives reload and a removed section', async ({
   await expect(last).toHaveCount(0)
 })
 
+test('private note replies on the document and in its chat tab survive a lost response', async ({
+  page,
+  signedInUser,
+}) => {
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const title = 'Условия доставки'
+  const { id } = await addDocument(signedInUser.id, {
+    title,
+    sections: [{ key: 'delivery', heading: 'Доставка', text: 'Доставляем утром.' }],
+  })
+  const { taskId } = await addAnsweredChat(signedInUser.id, {
+    words: 'Напишите про доставку',
+    answer: 'Готово.',
+    thought: 'Доставка.',
+  })
+  await attachToChat(id, taskId)
+
+  const notes = page.getByRole('region', { name: 'Заметки к документу' })
+  const replyDialog = page.getByRole('dialog', { name: 'Ответ на заметку' })
+  const reply = replyDialog.getByRole('textbox', { name: 'Ответ', exact: true })
+  const saveReply = replyDialog.getByRole('button', { name: 'Сохранить ответ', exact: true })
+  const noteBody = 'Уточнить время доставки.'
+  const pageReply = 'Курьер выезжает в девять.'
+  const tabReply = 'По субботам курьер выезжает в десять.'
+
+  await test.step('save a reply on the document page', async () => {
+    await page.goto(`/artifacts/${id}`)
+    const paragraph = page.locator('#section-delivery p')
+    await expect(paragraph).toHaveText('Доставляем утром.')
+    await paragraph.evaluate((element) => {
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      const selection = document.getSelection()!
+      selection.removeAllRanges()
+      selection.addRange(range)
+    })
+    await page.getByRole('button', { name: 'Добавить заметку к цитате' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Заметка к цитате' })
+    await dialog.getByRole('textbox', { name: 'Заметка' }).fill(noteBody)
+    await dialog.getByRole('button', { name: 'Сохранить заметку' }).click()
+    await expect(notes.getByText(noteBody, { exact: true })).toBeVisible()
+    await notes.getByRole('button', { name: 'Ответить', exact: true }).click()
+    await reply.fill(pageReply)
+    await saveReply.click()
+    await expect(reply).toHaveCount(0)
+    await expect(notes.getByText(pageReply, { exact: true })).toBeVisible()
+  })
+
+  await test.step('retry from the chat tab after the server saved the first attempt', async () => {
+    await page.goto(`/chats/${taskId}`)
+    await page.getByRole('button', { name: /^Инструменты/ }).click()
+    await page.getByRole('menuitem', { name: title }).click()
+    await expect(notes.getByText(pageReply, { exact: true })).toBeVisible()
+    await notes.getByRole('button', { name: 'Ответить', exact: true }).click()
+    await reply.fill(tabReply)
+
+    const origin = new URL(page.url()).origin
+    const writesReply = (url: URL) =>
+      url.origin === origin && url.pathname === '/api/trpc/artifact.addCommentReply'
+    const idFrom = (json: unknown) =>
+      (json as { result?: { data?: { json?: { id?: string } } } }).result?.data?.json?.id
+
+    await page.context().setOffline(true)
+    try {
+      await saveReply.click()
+      await expect(replyDialog.getByRole('alert')).toContainText('Не удалось сохранить ответ.')
+      await expect(reply).toHaveValue(tabReply)
+    } finally {
+      await page.context().setOffline(false)
+    }
+    await expect(saveReply).toBeEnabled()
+    let savedId: string | undefined
+    await page.route(
+      writesReply,
+      async (route) => {
+        // Do not fake the write: only lose the response to the browser, after the real server answers.
+        try {
+          const response = await route.fetch({ maxRedirects: 0 })
+          if (response.ok()) savedId = idFrom(await response.json())
+        } finally {
+          await route.abort()
+        }
+      },
+      { times: 1 },
+    )
+    await Promise.all([
+      page.waitForEvent('requestfailed', (request) => writesReply(new URL(request.url()))),
+      saveReply.click(),
+    ])
+    expect(savedId).toEqual(expect.any(String))
+    await expect(saveReply).toBeEnabled()
+    await expect(reply).toHaveValue(tabReply)
+
+    const [response] = await Promise.all([
+      page.waitForResponse((candidate) => writesReply(new URL(candidate.url()))),
+      saveReply.click(),
+    ])
+    expect(response.ok()).toBe(true)
+    expect(idFrom(await response.json())).toBe(savedId)
+    await expect(reply).toHaveCount(0)
+    await expect(notes.getByText(tabReply, { exact: true })).toBeVisible()
+  })
+
+  await page.goto(`/artifacts/${id}`)
+  await expect(notes.getByText(noteBody, { exact: true })).toBeVisible()
+  await expect(notes.getByText(pageReply, { exact: true })).toBeVisible()
+  const savedReply = notes.getByText(tabReply, { exact: true })
+  await expect(savedReply).toBeVisible()
+  await expect(savedReply).toHaveCount(1)
+})
+
 for (const { surface, reason } of [
   { surface: 'page', reason: 'session expiry' },
   { surface: 'tab', reason: 'session expiry' },
@@ -277,7 +389,6 @@ for (const { surface, reason } of [
     const url = page.url()
 
     const assertHidden = async () => {
-      await expect(page).toHaveURL(url)
       await expect(paragraph).toHaveCount(0)
       await expect(notes).toHaveCount(0)
       await expect(dialog).toHaveCount(0)
@@ -291,6 +402,7 @@ for (const { surface, reason } of [
         const other = await context.newPage()
         await other.goto('/chats')
         await expect(page.getByText('Вход изменился. Откройте кабинет заново.')).toBeVisible()
+        await expect(page).toHaveURL(url)
         await assertHidden()
         await other.close()
       } finally {
@@ -311,12 +423,17 @@ for (const { surface, reason } of [
         // The mutation gets a real refusal; the document cannot learn it from its own read.
         await dialog.getByRole('button', { name: 'Сохранить заметку' }).click()
         await failedRead
+        await expect(page.getByText('Артефакт не найден, или к нему нет доступа.')).toBeVisible()
+        await expect(page).toHaveURL(url)
       } else {
         await expireArtifactReaderSession(signedInUser.id)
+        // The cabinet can notice the expired session before the document's own poll.
+        await expect(
+          page
+            .getByText('Артефакт не найден, или к нему нет доступа.')
+            .or(page.getByRole('heading', { name: 'Вход в кабинет' })),
+        ).toBeVisible({ timeout: 15_000 })
       }
-      await expect(page.getByText('Артефакт не найден, или к нему нет доступа.')).toBeVisible({
-        timeout: 15_000,
-      })
       await assertHidden()
     }
   })

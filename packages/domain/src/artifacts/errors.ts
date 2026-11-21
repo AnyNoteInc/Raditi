@@ -23,6 +23,7 @@ export const artifactRefusalCodes = [
   'ARTIFACT_DATA_CLASS',
   'ARTIFACT_NOT_FOUND',
   'ARTIFACT_OP_INVALID',
+  'ARTIFACT_COMMENT_UNAVAILABLE',
 ] as const
 export type ArtifactRefusalCode = (typeof artifactRefusalCodes)[number]
 
@@ -112,6 +113,9 @@ export const artifactDataClass = (): DomainError =>
 export const artifactNotFound = (): DomainError =>
   refusal('ARTIFACT_NOT_FOUND', 'No such artifact open to this chat', 404)
 
+export const artifactCommentUnavailable = (): DomainError =>
+  refusal('ARTIFACT_COMMENT_UNAVAILABLE', 'The comment is not open for replies', 409)
+
 export const artifactOpInvalid = (problem: string, details?: unknown): DomainError =>
   refusal('ARTIFACT_OP_INVALID', `The batch is invalid: ${problem}`, 400, details)
 
@@ -131,6 +135,7 @@ export const artifactRefusalTexts = Object.freeze({
   ARTIFACT_DATA_CLASS: 'Этот артефакт нельзя открыть в этом чате',
   ARTIFACT_NOT_FOUND: 'Артефакт не найден или к нему нет доступа',
   ARTIFACT_OP_INVALID: 'Правку не удалось применить',
+  ARTIFACT_COMMENT_UNAVAILABLE: 'Заметка недоступна для ответа',
 } satisfies Record<ArtifactRefusalCode, string>)
 
 /** A quote can become ambiguous as well as stale; the note editor needs its own next step. */
@@ -140,8 +145,10 @@ export function artifactCommentRefusalText(code: string | null | undefined): str
       return 'Не удалось привязать заметку к выделенному месту. Выделите цитату заново.'
     case 'ARTIFACT_LIMIT':
       return 'Достигнут предел заметок для этого артефакта.'
+    case 'ARTIFACT_COMMENT_UNAVAILABLE':
+    case 'ARTIFACT_OP_REUSED':
     case 'ARTIFACT_SECRET_SHAPE':
-      return `${artifactRefusalTexts.ARTIFACT_SECRET_SHAPE}.`
+      return `${artifactRefusalTexts[code]}.`
     default:
       return undefined
   }

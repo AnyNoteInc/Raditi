@@ -2,7 +2,13 @@
 
 import type { AppRouter } from '@repo/trpc'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { createTRPCClient, httpBatchLink, httpSubscriptionLink, splitLink } from '@trpc/client'
+import {
+  createTRPCClient,
+  httpBatchLink,
+  httpLink,
+  httpSubscriptionLink,
+  splitLink,
+} from '@trpc/client'
 import { createTRPCContext } from '@trpc/tanstack-react-query'
 import { useEffect, useState, type ReactNode } from 'react'
 import superjson from 'superjson'
@@ -28,10 +34,15 @@ export function TRPCReactProvider({ userId, children }: { userId: string; childr
         splitLink({
           condition: (op) => op.type === 'subscription',
           true: httpSubscriptionLink({ url: TRPC_URL, transformer: superjson }),
-          false: httpBatchLink({
-            url: TRPC_URL,
-            transformer: superjson,
-            maxItems: MAX_BATCH_SIZE,
+          false: splitLink({
+            // A reply must be abortable even while unrelated requests are in flight.
+            condition: (op) => op.type === 'mutation' && op.path === 'artifact.addCommentReply',
+            true: httpLink({ url: TRPC_URL, transformer: superjson }),
+            false: httpBatchLink({
+              url: TRPC_URL,
+              transformer: superjson,
+              maxItems: MAX_BATCH_SIZE,
+            }),
           }),
         }),
       ],

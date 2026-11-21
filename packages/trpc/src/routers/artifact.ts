@@ -1,4 +1,9 @@
-import { artifactGalleryFilters, artifactGallerySorts, resolveArtifactComment } from '@repo/db'
+import {
+  addArtifactCommentReply,
+  artifactGalleryFilters,
+  artifactGallerySorts,
+  resolveArtifactComment,
+} from '@repo/db'
 import {
   artifactBlockKeySchema,
   artifactCommentBodySchema,
@@ -161,6 +166,13 @@ export const artifactRouter = router({
           body: artifactCommentBodySchema,
           resolved: z.boolean(),
           moved: z.boolean(),
+          replies: z.array(
+            z.strictObject({
+              id: z.uuid(),
+              body: artifactCommentBodySchema,
+              createdAt: z.iso.datetime(),
+            }),
+          ),
         }),
       ),
     )
@@ -177,6 +189,20 @@ export const artifactRouter = router({
     .output(z.strictObject({ id: z.uuid() }))
     .mutation(({ ctx, input }) =>
       createCabinetComment(ctx.prisma, { userId: ctx.user.id, ...input }),
+    ),
+
+  addCommentReply: consentedProcedure
+    .input(
+      z.strictObject({
+        artifactId,
+        threadId: z.uuid(),
+        requestId: z.uuid(),
+        body: artifactCommentBodySchema,
+      }),
+    )
+    .output(z.strictObject({ id: z.uuid() }))
+    .mutation(({ ctx, input }) =>
+      addArtifactCommentReply(ctx.prisma, { userId: ctx.user.id, ...input }),
     ),
 
   resolveComment: consentedProcedure

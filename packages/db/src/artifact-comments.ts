@@ -1,9 +1,11 @@
 import { secretInContent } from '@repo/domain'
 import {
+  artifactCommentUnavailable,
   artifactKindSpecOf,
   artifactLimit,
   artifactLimits,
   artifactNotFound,
+  artifactOpReused,
   artifactSecretShape,
   artifactStale,
   type ArtifactQuoteAnchor,
@@ -33,9 +35,20 @@ export async function readArtifactComments(db: Db, input: Owner) {
     async (tx) => {
       await requireOwner(tx, input)
       const comments = await tx.artifactComment.findMany({
-        where: { artifactId: input.artifactId, authorUserId: input.userId },
+        where: authoredBy(input),
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        select: { id: true, blockKey: true, anchor: true, body: true, resolvedAt: true },
+        select: {
+          id: true,
+          blockKey: true,
+          anchor: true,
+          body: true,
+          resolvedAt: true,
+          replies: {
+            where: { authorUserId: input.userId },
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+            select: { id: true, body: true, createdAt: true },
+          },
+        },
       })
       const blocks = await tx.artifactBlock.findMany({
         where: {
@@ -52,6 +65,19 @@ export async function readArtifactComments(db: Db, input: Owner) {
     },
     { isolationLevel: 'RepeatableRead' },
   )
+}
+
+const authoredBy = (input: Owner) => ({
+  artifactId: input.artifactId,
+  authorUserId: input.userId,
+})
+
+async function requireCommentRoom(tx: Prisma.TransactionClient, artifactId: string) {
+  const [roots, replies] = await Promise.all([
+    tx.artifactComment.count({ where: { artifactId } }),
+    tx.artifactCommentReply.count({ where: { thread: { artifactId } } }),
+  ])
+  if (roots + replies >= artifactLimits.comments) throw artifactLimit('comments')
 }
 
 export async function addArtifactComment(
@@ -81,8 +107,7 @@ export async function addArtifactComment(
       !validateQuote(text, input.anchor.quote)
     )
       throw artifactStale()
-    const count = await tx.artifactComment.count({ where: { artifactId: input.artifactId } })
-    if (count >= artifactLimits.comments) throw artifactLimit('comments')
+    await requireCommentRoom(tx, input.artifactId)
     return tx.artifactComment.create({
       data: {
         artifactId: input.artifactId,
@@ -96,13 +121,45 @@ export async function addArtifactComment(
   })
 }
 
+export async function addArtifactCommentReply(
+  db: Db,
+  input: Owner & { threadId: string; requestId: string; body: string },
+) {
+  return db.$transaction(async (tx) => {
+    const artifact = await lockOwnedArtifact(tx, input)
+    if (!artifactKindSpecOf(artifact.kind)?.quoteNotes) throw artifactNotFound()
+    const thread = await tx.artifactComment.findFirst({
+      where: { ...authoredBy(input), id: input.threadId },
+      select: { resolvedAt: true },
+    })
+    if (!thread) throw artifactCommentUnavailable()
+    const key = { threadId: input.threadId, requestId: input.requestId }
+    const existing = await tx.artifactCommentReply.findUnique({
+      where: { threadId_requestId: key },
+      select: { id: true, body: true, authorUserId: true },
+    })
+    if (existing) {
+      if (existing.authorUserId !== input.userId) throw artifactCommentUnavailable()
+      if (existing.body !== input.body) throw artifactOpReused(input.requestId)
+      return { id: existing.id }
+    }
+    if (thread.resolvedAt !== null) throw artifactCommentUnavailable()
+    if (secretInContent(input.body)) throw artifactSecretShape()
+    await requireCommentRoom(tx, input.artifactId)
+    return tx.artifactCommentReply.create({
+      data: { ...key, authorUserId: input.userId, body: input.body },
+      select: { id: true },
+    })
+  })
+}
+
 export async function resolveArtifactComment(
   db: Db,
   input: Owner & { commentId: string; resolved: boolean },
 ) {
   return db.$transaction(async (tx) => {
     await lockOwnedArtifact(tx, input)
-    const where = { id: input.commentId, artifactId: input.artifactId, authorUserId: input.userId }
+    const where = { ...authoredBy(input), id: input.commentId }
     const comment = await tx.artifactComment.findFirst({ where, select: { resolvedAt: true } })
     if (comment === null) throw artifactNotFound()
     if ((comment.resolvedAt !== null) !== input.resolved)

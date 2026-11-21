@@ -17,9 +17,9 @@ import {
   type ArtifactQuoteAnchor,
 } from '@repo/domain/artifacts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useEffectEvent, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState } from 'react'
 
-import { useTRPC } from '@/trpc/client'
+import { useTRPC, useTRPCClient } from '@/trpc/client'
 
 import { artifactAccessLost, artifactErrorData, readPrivateArtifact } from './artifact-access-error'
 import type { CabinetArtifact } from './use-artifact'
@@ -66,6 +66,8 @@ export function useArtifactQuote(enabled: boolean) {
 
 const failed = 'Не удалось сохранить заметку. Попробуйте ещё раз.'
 
+type ReplyDraft = { threadId: string; body: string }
+
 export function ArtifactComments({
   artifact,
   draft,
@@ -80,6 +82,7 @@ export function ArtifactComments({
   onAccessLost: () => void
 }) {
   const trpc = useTRPC()
+  const trpcClient = useTRPCClient()
   const client = useQueryClient()
   const artifactId = artifact.id
   const query = trpc.artifact.comments.queryOptions({ artifactId })
@@ -91,6 +94,13 @@ export function ArtifactComments({
   })
   const add = useMutation(trpc.artifact.addComment.mutationOptions())
   const resolve = useMutation(trpc.artifact.resolveComment.mutationOptions())
+  const [reply, setReply] = useState<ReplyDraft | null>(null)
+  const [replyPending, setReplyPending] = useState(false)
+  const [replyError, setReplyError] = useState<string | null>(null)
+  const [replyDenied, setReplyDenied] = useState(false)
+  const replyAttempts = useRef(new Map<string, string>())
+  const activeReply = useRef<AbortController | null>(null)
+  const replyTitleId = useId()
   const [resolved, setResolved] = useState(false)
   const [body, setBody] = useState('')
   const [addError, setAddError] = useState<string | null>(null)
@@ -102,15 +112,36 @@ export function ArtifactComments({
     onClose()
   }
 
+  function closeReply() {
+    activeReply.current?.abort()
+    activeReply.current = null
+    replyAttempts.current.clear()
+    setReply(null)
+    setReplyPending(false)
+    setReplyError(null)
+  }
+
   const denied =
     list.data === null ||
     artifactAccessLost(add.error) ||
+    replyDenied ||
     artifactErrorData(resolve.error)?.code === 'UNAUTHORIZED'
+  useLayoutEffect(() => {
+    const attempts = replyAttempts.current
+    // Stop a late completion before passive effects run on teardown or access loss.
+    return () => {
+      activeReply.current?.abort()
+      activeReply.current = null
+      attempts.clear()
+    }
+  }, [denied])
+
   const refreshAccess = useEffectEvent(() => {
     void client.cancelQueries({ queryKey: query.queryKey, exact: true })
     client.setQueryData([...query.queryKey], null)
     add.reset()
     resolve.reset()
+    closeReply()
     close()
     onAccessLost()
   })
@@ -137,6 +168,47 @@ export function ArtifactComments({
     } catch (error) {
       setAddError(artifactCommentRefusalText(artifactErrorData(error)?.domainCode) ?? failed)
     }
+  }
+
+  async function saveReply() {
+    if (!reply || denied || activeReply.current) return
+    const text = reply.body.trim()
+    if (!text) return
+    const { threadId } = reply
+    // Another failed draft must not replace the key of an earlier unconfirmed save.
+    const attemptKey = JSON.stringify([threadId, text])
+    const requestId = replyAttempts.current.get(attemptKey) ?? crypto.randomUUID()
+    replyAttempts.current.set(attemptKey, requestId)
+    const controller = new AbortController()
+    activeReply.current = controller
+    setReplyPending(true)
+    setReplyError(null)
+    try {
+      // A private draft is never put in the mutation cache or resumed on reconnect.
+      await trpcClient.artifact.addCommentReply.mutate(
+        { artifactId, threadId, requestId, body: text },
+        { signal: controller.signal },
+      )
+    } catch (error) {
+      if (activeReply.current !== controller) return
+      activeReply.current = null
+      setReplyPending(false)
+      if (artifactAccessLost(error)) {
+        closeReply()
+        setReplyDenied(true)
+        return
+      }
+      const code = artifactErrorData(error)?.domainCode
+      setReplyError(
+        artifactCommentRefusalText(code) ?? 'Не удалось сохранить ответ. Попробуйте ещё раз.',
+      )
+      if (code === 'ARTIFACT_COMMENT_UNAVAILABLE') void reread()
+      return
+    }
+    if (activeReply.current !== controller) return
+    activeReply.current = null
+    closeReply()
+    void reread()
   }
 
   async function toggle(commentId: string, isResolved: boolean) {
@@ -223,6 +295,29 @@ export function ArtifactComments({
               <Typography variant="body2" sx={{ mt: 0.75, whiteSpace: 'pre-wrap' }}>
                 {comment.body}
               </Typography>
+              {comment.replies.length > 0 && (
+                <Box
+                  component="ul"
+                  aria-label="Ответы на заметку"
+                  sx={{ listStyle: 'none', pl: 1.5, my: 1, borderLeft: 1, borderColor: 'divider' }}
+                >
+                  {comment.replies.map(({ id, body: text }) => (
+                    <Typography
+                      key={id}
+                      component="li"
+                      variant="body2"
+                      sx={{ py: 0.5, whiteSpace: 'pre-wrap' }}
+                    >
+                      {text}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
+              {!comment.resolved && (
+                <Button size="small" onClick={() => setReply({ threadId: comment.id, body: '' })}>
+                  Ответить
+                </Button>
+              )}
               <Button
                 size="small"
                 disabled={resolve.isPending}
@@ -233,6 +328,47 @@ export function ArtifactComments({
             </Box>
           ))}
         </Box>
+      )}
+      {reply && (
+        <Dialog open aria-labelledby={replyTitleId} onClose={closeReply} fullWidth maxWidth="sm">
+          <DialogTitle id={replyTitleId}>Ответ на заметку</DialogTitle>
+          <Box
+            component="form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void saveReply()
+            }}
+          >
+            <DialogContent>
+              <TextField
+                label="Ответ"
+                value={reply.body}
+                onChange={(event) => setReply({ ...reply, body: event.target.value })}
+                autoFocus
+                fullWidth
+                multiline
+                minRows={3}
+                disabled={replyPending}
+                slotProps={{ htmlInput: { maxLength: artifactLimits.commentChars } }}
+              />
+              {replyError && (
+                <Alert severity="error" sx={{ mt: 1 }}>
+                  {replyError}
+                </Alert>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={closeReply}>Отмена</Button>
+              <Button
+                type="submit"
+                variant="contained"
+                disabled={replyPending || !reply.body.trim()}
+              >
+                Сохранить ответ
+              </Button>
+            </DialogActions>
+          </Box>
+        </Dialog>
       )}
       <Dialog
         open={list.isSuccess && draft !== null}

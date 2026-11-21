@@ -393,7 +393,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     await expect(add(`${anchor.quote}\0`)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     const { id } = await add(' хлеб   & булочки. ')
     const read = () => caller.artifact.comments({ artifactId })
-    expect(await read()).toEqual([{ id, anchor, body, resolved: false, moved: false }])
+    expect(await read()).toEqual([{ id, anchor, body, resolved: false, moved: false, replies: [] }])
 
     const other = callerOf(await person('Борис'))
     const set = { artifactId, commentId: id, resolved: true }
@@ -454,6 +454,91 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     expect(await read()).toMatchObject([{ id, moved: true, resolved: false }])
     await db.artifact.delete({ where: { id: artifactId } })
     expect(await db.artifactComment.count({ where: { artifactId } })).toBe(0)
+  })
+
+  it('lists a private reply once and replays it even after the note is closed (88.18б)', async () => {
+    const { caller, artifactId, anchor } = await quoteDocument()
+    const body = 'Уточнить время доставки'
+    const { id: threadId } = await caller.artifact.addComment({ artifactId, anchor, body })
+    const reply = { artifactId, threadId, requestId: randomUUID(), body: 'Доставим к девяти' }
+    const saved = await caller.artifact.addCommentReply(reply)
+    expect(saved.id).not.toBe(threadId)
+    await expect(caller.artifact.addCommentReply(reply)).resolves.toEqual(saved)
+    await expect(
+      caller.artifact.addCommentReply({ ...reply, body: `  ${reply.body}\n` }),
+    ).resolves.toEqual(saved)
+
+    await caller.artifact.resolveComment({ artifactId, commentId: threadId, resolved: true })
+    await expect(caller.artifact.addCommentReply(reply)).resolves.toEqual(saved)
+    await expect(
+      caller.artifact.addCommentReply({ ...reply, body: 'Доставим к десяти' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', cause: { code: 'ARTIFACT_OP_REUSED' } })
+    await expect(
+      caller.artifact.addCommentReply({ ...reply, requestId: randomUUID() }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', cause: { code: 'ARTIFACT_COMMENT_UNAVAILABLE' } })
+    expect(await caller.artifact.comments({ artifactId })).toEqual([
+      {
+        id: threadId,
+        anchor,
+        body,
+        resolved: true,
+        moved: false,
+        replies: [{ id: saved.id, body: reply.body, createdAt: expect.any(String) }],
+      },
+    ])
+    await expect(
+      caller.artifact.resolveComment({ artifactId, commentId: saved.id, resolved: true }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', cause: { code: 'ARTIFACT_NOT_FOUND' } })
+    await caller.artifact.resolveComment({ artifactId, commentId: threadId, resolved: false })
+    const next = { ...reply, requestId: randomUUID(), body: 'В субботу позже' }
+    const [first, repeated] = await Promise.all([
+      caller.artifact.addCommentReply(next),
+      caller.artifact.addCommentReply(next),
+    ])
+    expect(repeated).toEqual(first)
+    expect(await caller.artifact.comments({ artifactId })).toMatchObject([
+      { id: threadId, resolved: false, replies: [{ id: saved.id }, { id: first.id }] },
+    ])
+  })
+
+  it('only accepts the owner’s open root and checks access before replaying a reply (88.18б)', async () => {
+    const { caller, artifactId, anchor } = await quoteDocument()
+    const otherUser = await person('Борис')
+    const other = callerOf(otherUser)
+    const { id: threadId } = await caller.artifact.addComment({
+      artifactId,
+      anchor,
+      body: 'Согласовать время',
+    })
+    const reply = { artifactId, threadId, requestId: randomUUID(), body: 'После девяти' }
+    const { id: replyId } = await caller.artifact.addCommentReply(reply)
+    const { id: foreignRootId } = await db.artifactComment.create({
+      data: {
+        artifactId,
+        blockKey: anchor.block,
+        anchor,
+        authorUserId: otherUser.id,
+        body: 'Чужая заметка',
+      },
+      select: { id: true },
+    })
+
+    for (const unavailable of [randomUUID(), replyId, foreignRootId]) {
+      await expect(
+        caller.artifact.addCommentReply({ ...reply, threadId: unavailable }),
+      ).rejects.toMatchObject({ code: 'CONFLICT', cause: { code: 'ARTIFACT_COMMENT_UNAVAILABLE' } })
+    }
+    const accessLost = { code: 'NOT_FOUND', cause: { code: 'ARTIFACT_NOT_FOUND' } }
+    await expect(other.artifact.addCommentReply(reply)).rejects.toMatchObject(accessLost)
+    await expect(other.artifact.comments({ artifactId })).rejects.toMatchObject(accessLost)
+
+    await caller.artifact.trash({ artifactId })
+    await expect(caller.artifact.addCommentReply(reply)).rejects.toMatchObject(accessLost)
+    await expect(caller.artifact.comments({ artifactId })).rejects.toMatchObject(accessLost)
+    await caller.artifact.restore({ artifactId })
+    expect(await caller.artifact.comments({ artifactId })).toMatchObject([
+      { id: threadId, replies: [{ id: replyId, body: reply.body }] },
+    ])
   })
 
   it('reads notes and their access decision at the same snapshot during a takedown', async () => {
@@ -531,6 +616,66 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       reason: { code: 'CONFLICT', cause: { code: 'ARTIFACT_LIMIT' } },
     })
     expect(await db.artifactComment.count({ where: { artifactId } })).toBe(artifactLimits.comments)
+  })
+
+  it('shares the last comment slot between roots and replies and still replays at the limit (88.18б)', async () => {
+    const { user, caller, artifactId, anchor } = await quoteDocument()
+    const input = { artifactId, anchor, body: 'Согласовать время' }
+    const { id: threadId } = await caller.artifact.addComment(input)
+    const reply = { artifactId, threadId, requestId: randomUUID(), body: 'После девяти' }
+    const saved = await caller.artifact.addCommentReply(reply)
+    await db.artifactComment.createMany({
+      data: Array.from({ length: artifactLimits.comments - 3 }, () => ({
+        ...input,
+        authorUserId: user.id,
+        blockKey: anchor.block,
+      })),
+    })
+    const lastReply = { ...reply, requestId: randomUUID(), body: 'До полудня' }
+    const outcomes = await Promise.allSettled([
+      caller.artifact.addComment({ ...input, body: 'Новая заметка' }),
+      caller.artifact.addCommentReply(lastReply),
+    ])
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+    expect(outcomes.find((outcome) => outcome.status === 'rejected')).toMatchObject({
+      reason: { code: 'CONFLICT', cause: { code: 'ARTIFACT_LIMIT' } },
+    })
+    await expect(caller.artifact.addCommentReply(reply)).resolves.toEqual(saved)
+    await expect(
+      caller.artifact.addCommentReply({ ...lastReply, requestId: randomUUID() }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', cause: { code: 'ARTIFACT_LIMIT' } })
+  })
+
+  it('keeps replies out of the previous reader and deletes them with their root (88.18б)', async () => {
+    const { user, caller, artifactId, anchor } = await quoteDocument()
+    const { id: threadId } = await caller.artifact.addComment({
+      artifactId,
+      anchor,
+      body: 'Согласовать время',
+    })
+    const { id: replyId } = await caller.artifact.addCommentReply({
+      artifactId,
+      threadId,
+      requestId: randomUUID(),
+      body: 'После девяти',
+    })
+    expect(await db.artifactCommentReply.findUnique({ where: { id: replyId } })).toMatchObject({
+      threadId,
+    })
+    // Keep the previous version's read shape to verify that the migration is additive.
+    expect(
+      await db.artifactComment.findMany({
+        where: { artifactId, authorUserId: user.id },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, blockKey: true, anchor: true, body: true, resolvedAt: true },
+      }),
+    ).toEqual([
+      { id: threadId, blockKey: anchor.block, anchor, body: 'Согласовать время', resolvedAt: null },
+    ])
+    // There is no delete-note procedure; deleting the root exercises the database cascade.
+    await db.artifactComment.delete({ where: { id: threadId } })
+    expect(await db.artifactCommentReply.findUnique({ where: { id: replyId } })).toBeNull()
+    expect(await caller.artifact.comments({ artifactId })).toEqual([])
   })
 
   it('keeps existing notes but rejects new anchors while an agent revision awaits review', async () => {

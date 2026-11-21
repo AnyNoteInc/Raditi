@@ -166,6 +166,7 @@ export {
 } from './artifacts.ts'
 export {
   addArtifactComment,
+  addArtifactCommentReply,
   readArtifactComments,
   resolveArtifactComment,
 } from './artifact-comments.ts'

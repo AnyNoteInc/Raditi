@@ -69,6 +69,7 @@ model User {
   artifactExports         ArtifactExport[]
   artifactFiles           ArtifactFile[]
   artifactComments        ArtifactComment[]
+  artifactCommentReplies  ArtifactCommentReply[]
 
   @@map("users")
 }
@@ -3087,7 +3088,7 @@ model ArtifactPublication {
   @@map("artifact_publications")
 }
 
-/// Owner's private quote notes (Ар53, slice 88.18а). Each row is a thread root.
+/// Owner's private quote notes (Ар53, slice 88.18а).
 model ArtifactComment {
   id           String    @id @default(uuid(7)) @db.Uuid
   artifactId   String    @map("artifact_id") @db.Uuid
@@ -3098,12 +3099,30 @@ model ArtifactComment {
   resolvedAt   DateTime? @map("resolved_at") @db.Timestamptz(6)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
-  author   User?    @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+  artifact Artifact               @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  author   User?                  @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+  replies  ArtifactCommentReply[]
 
   @@index([artifactId, createdAt, id])
   @@index([authorUserId])
   @@map("artifact_comments")
+}
+
+/// Separate storage keeps quote notes readable by the previous release (Ар53, slice 88.18б).
+model ArtifactCommentReply {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  threadId     String   @map("thread_id") @db.Uuid
+  requestId    String   @map("request_id") @db.Uuid
+  authorUserId String?  @map("author_user_id") @db.Uuid
+  body         String   @db.VarChar(2000)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  thread ArtifactComment @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author User?           @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  @@unique([threadId, requestId])
+  @@index([authorUserId])
+  @@map("artifact_comment_replies")
 }
 
 /// «Скачать → Excel» of a table (docs/plan/88-artifacts.md, §7.13, question 26): core builds it.

@@ -736,7 +736,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
     await claim('b', 'Перепишу')
     const read = await pendingArtifactWrites(db, claimer)
     expect(
-      read.map((each) => [each.sectionKey, each.leaseIntent, each.leaseIntentChecked]),
+      read
+        .toSorted((a, b) => a.sectionKey.localeCompare(b.sectionKey))
+        .map((each) => [each.sectionKey, each.leaseIntent, each.leaseIntentChecked]),
     ).toEqual([
       ['a', 'Обновлю цены', false],
       ['b', 'Перепишу', false],

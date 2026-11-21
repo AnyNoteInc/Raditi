@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,7 +10,10 @@ import type { ArtifactPresence, CabinetArtifact } from './use-artifact'
 // section opens in its editor only once it is held for the person; one an agent writes waits,
 // or is taken back; a save that met another change merges, and where it cannot — «Разошлись».
 
-const { hold, release, take, write, listNotes, resolveNote } = vi.hoisted(() => ({
+const { hold, release, take, write, listNotes, resolveNote, replyToNote } = vi.hoisted(() => ({
+  replyToNote: vi.fn(async (_input: unknown, _options: { signal: AbortSignal }) => ({
+    id: 'reply',
+  })),
   listNotes: vi.fn<() => Promise<unknown[]>>(async () => []),
   resolveNote: vi.fn(async (_input: unknown) => undefined),
   hold: vi.fn(async (_input: unknown) => ({ rev: 3, until: '2026-11-20T10:00:30.000Z' })),
@@ -47,7 +50,10 @@ vi.mock('@/trpc/client', () => {
       resolveComment: mutation(resolveNote),
     },
   }
-  return { useTRPC: () => trpc }
+  return {
+    useTRPC: () => trpc,
+    useTRPCClient: () => ({ artifact: { addCommentReply: { mutate: replyToNote } } }),
+  }
 })
 
 const refusal = (domainCode: string, artifact?: unknown) =>
@@ -227,8 +233,15 @@ describe('the document of an artifact (88.10)', () => {
     async (outcome) => {
       const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
       const notes = [
-        { id: 'first', anchor, body: 'Уточнить адрес', resolved: false, moved: false },
-        { id: 'second', anchor, body: 'Уточнить время', resolved: false, moved: false },
+        { id: 'first', anchor, body: 'Уточнить адрес', resolved: false, moved: false, replies: [] },
+        {
+          id: 'second',
+          anchor,
+          body: 'Уточнить время',
+          resolved: false,
+          moved: false,
+          replies: [],
+        },
       ]
       listNotes.mockResolvedValue(notes)
       try {
@@ -262,7 +275,7 @@ describe('the document of an artifact (88.10)', () => {
     const queryKey = ['artifact', 'comments']
     const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
     listNotes.mockResolvedValue([
-      { id: 'note', anchor, body: 'Уточнить адрес', resolved: false, moved: false },
+      { id: 'note', anchor, body: 'Уточнить адрес', resolved: false, moved: false, replies: [] },
     ])
     try {
       const { lost, queryClient } = show(artifact())
@@ -283,6 +296,121 @@ describe('the document of an artifact (88.10)', () => {
       expect(queryClient.getQueryData(queryKey)).toBeNull()
       expect(screen.queryByText('Уточнить адрес')).toBeNull()
     } finally {
+      listNotes.mockReset()
+    }
+  })
+
+  it('keeps a failed offline reply local until the user explicitly retries', async () => {
+    const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
+    listNotes.mockResolvedValue([
+      { id: 'note', anchor, body: 'Уточнить адрес', resolved: false, moved: false, replies: [] },
+    ])
+    try {
+      const { queryClient } = show(artifact())
+      fireEvent.click(await screen.findByRole('button', { name: 'Ответить' }))
+      const dialog = screen.getByRole('dialog', { name: 'Ответ на заметку' })
+      const field = within(dialog).getByRole('textbox', { name: 'Ответ' })
+      const save = within(dialog).getByRole('button', { name: 'Сохранить ответ' })
+      act(() => onlineManager.setOnline(false))
+      replyToNote.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      fireEvent.change(field, { target: { value: '  После девяти  ' } })
+      fireEvent.click(save)
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+        'Не удалось сохранить ответ. Попробуйте ещё раз.',
+      )
+      expect(save).toBeEnabled()
+      expect(field).toHaveValue('  После девяти  ')
+      expect(queryClient.getMutationCache().getAll()).toEqual([])
+      const [input] = replyToNote.mock.calls[0]!
+      expect(input).toMatchObject({ body: 'После девяти', requestId: expect.any(String) })
+
+      await act(async () => onlineManager.setOnline(true))
+      expect(replyToNote).toHaveBeenCalledOnce()
+      fireEvent.change(field, { target: { value: 'После девяти' } })
+      fireEvent.click(save)
+      await waitFor(() => expect(replyToNote).toHaveBeenCalledTimes(2))
+      expect(replyToNote.mock.calls[1]![0]).toEqual(input)
+      await waitFor(() => expect(dialog).not.toBeInTheDocument())
+    } finally {
+      act(() => onlineManager.setOnline(true))
+      listNotes.mockReset()
+    }
+  })
+
+  it('reuses an unconfirmed reply key after another text also fails', async () => {
+    const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
+    listNotes.mockResolvedValue([
+      { id: 'note', anchor, body: 'Уточнить адрес', resolved: false, moved: false, replies: [] },
+    ])
+    try {
+      show(artifact())
+      fireEvent.click(await screen.findByRole('button', { name: 'Ответить' }))
+      const dialog = screen.getByRole('dialog', { name: 'Ответ на заметку' })
+      const field = within(dialog).getByRole('textbox', { name: 'Ответ' })
+      const save = within(dialog).getByRole('button', { name: 'Сохранить ответ' })
+      replyToNote
+        .mockRejectedValueOnce(new TypeError('Response lost'))
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      for (const body of ['После девяти', 'После десяти']) {
+        fireEvent.change(field, { target: { value: body } })
+        fireEvent.click(save)
+        await within(dialog).findByRole('alert')
+      }
+      fireEvent.change(field, { target: { value: '  После девяти  ' } })
+      fireEvent.click(save)
+      await waitFor(() => expect(dialog).not.toBeInTheDocument())
+
+      const inputs = replyToNote.mock.calls.map(([input]) => input)
+      expect(inputs).toEqual([
+        expect.objectContaining({ body: 'После девяти', requestId: expect.any(String) }),
+        expect.objectContaining({ body: 'После десяти', requestId: expect.any(String) }),
+        inputs[0],
+      ])
+      expect(inputs[1]).not.toMatchObject({
+        requestId: (inputs[0] as { requestId: string }).requestId,
+      })
+    } finally {
+      listNotes.mockReset()
+    }
+  })
+
+  it('aborts a pending reply and ignores its late success after access was lost', async () => {
+    const queryKey = ['artifact', 'comments']
+    const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
+    listNotes.mockResolvedValue([
+      { id: 'note', anchor, body: 'Уточнить адрес', resolved: false, moved: false, replies: [] },
+    ])
+    const reply = Promise.withResolvers<{ id: string }>()
+    replyToNote.mockReturnValueOnce(reply.promise)
+    try {
+      const { lost, queryClient } = show(artifact())
+      fireEvent.click(await screen.findByRole('button', { name: 'Ответить' }))
+      const dialog = screen.getByRole('dialog', { name: 'Ответ на заметку' })
+      fireEvent.change(within(dialog).getByRole('textbox', { name: 'Ответ' }), {
+        target: { value: 'После девяти' },
+      })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить ответ' }))
+      await waitFor(() => expect(replyToNote).toHaveBeenCalledOnce())
+      const { signal } = replyToNote.mock.calls[0]![1]
+      expect(signal.aborted).toBe(false)
+      expect(queryClient.getMutationCache().getAll()).toEqual([])
+
+      listNotes.mockRejectedValueOnce(refusal('ARTIFACT_NOT_FOUND'))
+      await act(async () => {
+        await queryClient.invalidateQueries({ queryKey })
+      })
+      await waitFor(() => expect(lost).toHaveBeenCalledOnce())
+      expect(screen.queryByRole('dialog', { name: 'Ответ на заметку' })).toBeNull()
+      expect(queryClient.getQueryData(queryKey)).toBeNull()
+      expect(signal.aborted).toBe(true)
+      const reads = listNotes.mock.calls.length
+
+      await act(async () => reply.resolve({ id: 'reply' }))
+      expect(listNotes).toHaveBeenCalledTimes(reads)
+      expect(queryClient.getQueryData(queryKey)).toBeNull()
+      expect(screen.queryByText('Уточнить адрес')).toBeNull()
+    } finally {
+      reply.resolve({ id: 'reply' })
       listNotes.mockReset()
     }
   })
