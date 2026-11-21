@@ -522,6 +522,7 @@ export const taskRouter = router({
         folders: z.array(
           z.strictObject({
             project: chatProjectSchema.nullable(),
+            archived: z.boolean(),
             count: z.number().int().nonnegative(),
             attention: z.boolean(),
           }),

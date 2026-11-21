@@ -443,6 +443,8 @@ export const chatsText = Object.freeze({
   /** The action of the list (owner's request of 19.11.2026): «Создать», read aloud as a chat. */
   newChat: 'Создать',
   newChatLabel: 'Создать чат',
+  /** «+» beside a project folder in «По проектам»: a new chat with that project chosen. */
+  newProjectChat: (projectName: string) => `Новый чат в проекте «${projectName}»`,
   back: 'К чатам',
   /** «Показывать чаты» (owner's request of 19.11.2026, after docs/plan/61, К23). */
   groupButton: 'Группировка чатов',

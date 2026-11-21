@@ -6,7 +6,9 @@ import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import ButtonBase from '@mui/material/ButtonBase'
+import IconButton from '@mui/material/IconButton'
 import Skeleton from '@mui/material/Skeleton'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
@@ -19,7 +21,7 @@ import { AppIcon } from '@/components/application/app-icon'
 import { MoveToProjectDialog, useMoveToProject } from '@/components/projects/move-to-project'
 import { useTRPCClient } from '@/trpc/client'
 
-import { chatHref, NEW_CHAT_SEGMENT, projectOfSearch } from './chat-address'
+import { chatHref, NEW_CHAT_SEGMENT, newChatHref, projectOfSearch } from './chat-address'
 import { dialogGroups, listTime } from './chat-format'
 import { chatsText, listRepoHint, listText } from './chat-texts'
 import type { DialogListItem } from './chat-types'
@@ -496,11 +498,15 @@ function FolderChats({
 
 interface ChatFolder {
   project: { id: string; name: string } | null
+  archived: boolean
   count: number
   attention: boolean
 }
 
-/** A folder of «По проектам»: its line opens and closes it, and says how many chats it holds. */
+/**
+ * A folder of «По проектам»: its line opens and closes it, and says how many chats it holds. A
+ * live project folder carries «+» beside it to open a new chat with that project chosen.
+ */
 function Folder({
   folder,
   open,
@@ -513,73 +519,103 @@ function Folder({
   children: (labelledBy: string) => ReactNode
 }) {
   const labelId = useId()
+  const activeProject = folder.project !== null && !folder.archived ? folder.project : null
+  const newChatLabel = activeProject !== null ? chatsText.newProjectChat(activeProject.name) : null
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-      <ButtonBase
-        aria-expanded={open}
-        data-chat-folder=""
-        onClick={onToggle}
-        sx={{
-          width: '100%',
-          minHeight: 44,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-start',
-          gap: 1,
-          pl: 0.75,
-          pr: 1.25,
-          borderRadius: '10px',
-          fontSize: 14,
-          fontWeight: 500,
-          textAlign: 'left',
-          color: 'text.primary',
-          '&:hover': { bgcolor: 'action.hover' },
-          '&:focus-visible': {
-            outline: '2px solid',
-            outlineColor: 'primary.main',
-            outlineOffset: 2,
-          },
-        }}
-      >
-        <AppIcon name={open ? 'down' : 'chevron'} size={16} />
-        <Box component="span" sx={{ display: 'flex', color: 'text.secondary' }}>
-          <AppIcon name={folder.project === null ? 'chat' : 'projects'} size={16} />
-        </Box>
-        <Box
-          id={labelId}
-          component="span"
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+        <ButtonBase
+          aria-expanded={open}
+          data-chat-folder=""
+          onClick={onToggle}
           sx={{
             flex: '1 1 auto',
             minWidth: 0,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
+            minHeight: 44,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-start',
+            gap: 1,
+            pl: 0.75,
+            pr: activeProject !== null ? 0.75 : 1.25,
+            borderRadius: '10px',
+            fontSize: 14,
+            fontWeight: 500,
+            textAlign: 'left',
+            color: 'text.primary',
+            '&:hover': { bgcolor: 'action.hover' },
+            '&:focus-visible': {
+              outline: '2px solid',
+              outlineColor: 'primary.main',
+              outlineOffset: 2,
+            },
           }}
         >
-          {folder.project?.name ?? chatsText.noProject}
-        </Box>
-        {folder.attention && !open ? (
-          <>
-            <Box
-              component="span"
-              aria-hidden="true"
+          <AppIcon name={open ? 'down' : 'chevron'} size={16} />
+          <Box component="span" sx={{ display: 'flex', color: 'text.secondary' }}>
+            <AppIcon name={folder.project === null ? 'chat' : 'projects'} size={16} />
+          </Box>
+          <Box
+            id={labelId}
+            component="span"
+            sx={{
+              flex: '1 1 auto',
+              minWidth: 0,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {folder.project?.name ?? chatsText.noProject}
+          </Box>
+          {folder.attention && !open ? (
+            <>
+              <Box
+                component="span"
+                aria-hidden="true"
+                sx={{
+                  flex: 'none',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  bgcolor: 'var(--raditi-accent)',
+                }}
+              />
+              <Box component="span" sx={offScreen}>
+                {`. ${chatsText.attention}. `}
+              </Box>
+            </>
+          ) : null}
+          <Typography component="span" variant="caption" color="text.secondary">
+            {folder.count}
+          </Typography>
+        </ButtonBase>
+        {activeProject !== null && newChatLabel !== null ? (
+          <Tooltip title={newChatLabel}>
+            <IconButton
+              component={Link}
+              href={newChatHref(activeProject.id)}
+              aria-label={newChatLabel}
+              data-folder-new-chat=""
               sx={{
+                width: 44,
+                height: 44,
                 flex: 'none',
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                bgcolor: 'var(--raditi-accent)',
+                borderRadius: '10px',
+                color: 'text.secondary',
+                '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+                '&:focus-visible': {
+                  outline: '2px solid',
+                  outlineColor: 'primary.main',
+                  outlineOffset: 2,
+                },
               }}
-            />
-            <Box component="span" sx={offScreen}>
-              {`. ${chatsText.attention}. `}
-            </Box>
-          </>
+            >
+              <AppIcon name="plus" size={16} />
+            </IconButton>
+          </Tooltip>
         ) : null}
-        <Typography component="span" variant="caption" color="text.secondary">
-          {folder.count}
-        </Typography>
-      </ButtonBase>
+      </Box>
       {open ? children(labelId) : null}
     </Box>
   )
