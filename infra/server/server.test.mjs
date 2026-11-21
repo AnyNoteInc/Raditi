@@ -111,6 +111,7 @@ const kv = () => ({
   traefik: { dashboard_user: 'admin', dashboard_password: 'x' },
   'gitlab-oauth': {},
   'github-app': {},
+  yookassa: {},
 })
 const roles = { web: null, core: null, llm: null, mcp: null }
 const render = (values) =>
@@ -181,16 +182,40 @@ test('render: an app set in part is not rendered and is named without its values
   const values = kv()
   values['gitlab-oauth'] = { client_id: 'gl-id' }
   values['github-app'] = { app_id: '1', slug: 'raditi' }
+  values.yookassa = { shop_id: '1535900' }
   const files = render(values)
   for (const service of ['web', 'core']) {
-    assert.doesNotMatch(files[service].files['app.env'], /GITLAB|GITHUB|REPO_CONFIRM/, service)
+    assert.doesNotMatch(
+      files[service].files['app.env'],
+      /GITLAB|GITHUB|YOOKASSA|REPO_CONFIRM/,
+      service,
+    )
     assert.equal(files[service].files['github-app.pem'], undefined)
   }
   assert.deepEqual(partialGroups(values), [
     'gitlab-oauth (client_secret)',
     'github-app (client_id, client_secret, webhook_secret, private_key)',
+    'yookassa (secret_key)',
   ])
   assert.deepEqual(partialGroups(kv()), [])
+})
+
+test('render: yookassa credentials go to web and core only', () => {
+  assert.deepEqual(PROVIDED.yookassa, ['shop_id', 'secret_key'])
+  assert.deepEqual(storedValue('yookassa', 'shop_id', ' 123456 \n'), { value: '123456' })
+  assert.match(storedValue('yookassa', 'secret_key', 'a\nb').problem, /newline/)
+
+  const values = kv()
+  values.yookassa = { shop_id: '123456', secret_key: 'live_synthetic_key' }
+  const files = render(values)
+  for (const service of ['web', 'core']) {
+    const env = envOf(files[service].files['app.env'])
+    assert.equal(env.YOOKASSA_SHOP_ID, '123456', service)
+    assert.equal(env.YOOKASSA_SECRET_KEY, 'live_synthetic_key', service)
+  }
+  for (const service of ['llm', 'mcp', 'browser', 'preview', 'migrate']) {
+    assert.doesNotMatch(files[service].files['app.env'], /YOOKASSA/, service)
+  }
 })
 
 test('the host firewall keeps the git worker off the host and the private addresses', async () => {
