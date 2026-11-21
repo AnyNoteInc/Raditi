@@ -315,6 +315,11 @@ describe('new chat', () => {
       // «Создать» leads to `/chats/new`: the same screen stays mounted, the choice does not.
       page.moved('')
       expect(await screen.findByRole('button', { name: 'Без проекта' })).toBeTruthy()
+      // «+» beside a project folder leads to `/chats/new?project=<id>`: picks that project at once.
+      page.moved(`project=${KOLOS}`)
+      expect(
+        await screen.findByRole('button', { name: 'Проект: Сайт пекарни «Колос»' }),
+      ).toBeTruthy()
     })
 
     it('chooses the project of `?project=` once the list names it as the user’s', async () => {

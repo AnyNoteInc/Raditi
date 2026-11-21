@@ -76,12 +76,14 @@ export function NewChat({
   const [seen, setSeen] = useState(addressed)
   if (addressed !== seen) {
     setSeen(addressed)
-    if (chosen !== undefined && (chosen?.id ?? undefined) !== addressed)
-      setChosen(addressed === undefined ? null : undefined)
+    if (addressed === undefined) setChosen(null)
+    else if (chosen !== undefined && (chosen?.id ?? undefined) !== addressed) setChosen(undefined)
   }
   const { choices, loaded } = useProjectChoices(chosen === undefined)
   const project =
-    chosen !== undefined ? chosen : projectOfAddress(projectId, loaded ? choices : null)
+    chosen !== undefined
+      ? chosen
+      : projectOfAddress(addressed ?? projectId, loaded ? choices : null)
   // `@` names the files of the context of the chosen project (docs/plan/84-projects.md, ПР24).
   const mentions = useContextMentions(project?.id ?? null)
   // The words kept for a new chat come back here.

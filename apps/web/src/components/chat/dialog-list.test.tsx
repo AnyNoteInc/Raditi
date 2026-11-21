@@ -44,6 +44,7 @@ const {
     () => Promise<{
       folders: Array<{
         project: { id: string; name: string } | null
+        archived: boolean
         count: number
         attention: boolean
       }>
@@ -592,9 +593,9 @@ describe('«По проектам» (owner’s request of 19.11.2026)', () => {
   beforeEach(() => {
     folders.mockResolvedValue({
       folders: [
-        { project: KOLOS, count: 2, attention: true },
-        { project: TEA, count: 1, attention: false },
-        { project: null, count: 3, attention: false },
+        { project: KOLOS, archived: false, count: 2, attention: true },
+        { project: TEA, archived: false, count: 1, attention: false },
+        { project: null, archived: false, count: 3, attention: false },
       ],
     })
     listPage.mockImplementation(async (input) => {
@@ -715,9 +716,35 @@ describe('«По проектам» (owner’s request of 19.11.2026)', () => {
   })
 
   it('opens the only folder there is', async () => {
-    folders.mockResolvedValueOnce({ folders: [{ project: null, count: 1, attention: false }] })
+    folders.mockResolvedValueOnce({
+      folders: [{ project: null, archived: false, count: 1, attention: false }],
+    })
     showList({ grouped: true })
     expect(await screen.findByRole('list', { name: 'Без проекта' })).toBeTruthy()
+  })
+
+  it('offers «+» beside each live project folder to start a new chat in it, not for «Без проекта» or an archived project', async () => {
+    const ARCHIVED = { id: '0199a3f2-0000-7000-8000-00000000c003', name: 'Старый сайт' }
+    folders.mockResolvedValueOnce({
+      folders: [
+        { project: KOLOS, archived: false, count: 2, attention: true },
+        { project: ARCHIVED, archived: true, count: 1, attention: false },
+        { project: null, archived: false, count: 3, attention: false },
+      ],
+    })
+    showList({ grouped: true })
+    const kolosNew = await screen.findByRole('link', { name: 'Новый чат в проекте «Колос»' })
+    expect(kolosNew.getAttribute('href')).toBe(`/chats/new?project=${KOLOS.id}`)
+    // Sibling of the folder button: pressing «+» does not toggle the folder itself.
+    const kolosFolder = screen.getByRole('button', { name: /Колос/ })
+    expect(kolosFolder.contains(kolosNew)).toBe(false)
+    kolosNew.addEventListener('click', (event) => event.preventDefault(), { once: true })
+    fireEvent.click(kolosNew)
+    expect(kolosFolder.getAttribute('aria-expanded')).toBe('false')
+    // Neither an archived project nor «Без проекта» carries «+».
+    expect(screen.queryByRole('link', { name: /Старый сайт/ })).toBeNull()
+    expect(screen.queryByRole('link', { name: /Без проекта/ })).toBeNull()
+    expect(document.querySelectorAll('[data-folder-new-chat]')).toHaveLength(1)
   })
 
   it('says there are no chats when there are none', async () => {

@@ -102,7 +102,9 @@ describe('the frame of «Чаты»', () => {
 
   it('shows the chats by projects from «Показывать чаты», and remembers it (19.11.2026)', async () => {
     folders.mockResolvedValue({
-      folders: [{ project: { id: chat.id, name: 'Колос' }, count: 1, attention: false }],
+      folders: [
+        { project: { id: chat.id, name: 'Колос' }, archived: false, count: 1, attention: false },
+      ],
     })
     document.cookie = 'raditi-chats-group=; max-age=0; path=/'
     showFrame(null)
@@ -120,7 +122,9 @@ describe('the frame of «Чаты»', () => {
   })
 
   it('draws the folders at once when the cookie chose them', async () => {
-    folders.mockResolvedValue({ folders: [{ project: null, count: 1, attention: false }] })
+    folders.mockResolvedValue({
+      folders: [{ project: null, archived: false, count: 1, attention: false }],
+    })
     showFrame(null, 'projects')
     expect(await within(list()).findByRole('button', { name: /Без проекта/ })).toBeTruthy()
   })
