@@ -173,6 +173,7 @@ export {
   resolveArtifactComment,
   snapshotArtifactComments,
 } from './artifact-comments.ts'
+export { accessibleTasks } from './chat-access.ts'
 export { classProfile, type ClassProfile } from './class-profile.ts'
 export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-events.ts'
 export { readChatTodo, type ChatTodoTurns } from './agent-todo.ts'

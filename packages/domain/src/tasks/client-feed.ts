@@ -581,6 +581,25 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
 ])
 export type FeedRequestPayload = z.infer<typeof feedRequestPayloadSchema>
 
+/**
+ * The kinds of `feed.request` a pass of the agent answers (`turn.run`). A command press and
+ * «Отправить сейчас» enqueue none. Every kind is in one list or the other (a test checks it).
+ */
+export const feedPassRequestKinds = [
+  'first',
+  'answer',
+  'continue',
+  'resume',
+  'agent_command',
+  'queued',
+  'retry',
+  'revision',
+] as const satisfies readonly FeedRequestPayload['kind'][]
+export const feedPresslessRequestKinds = [
+  'command',
+  'interrupt',
+] as const satisfies readonly FeedRequestPayload['kind'][]
+
 /** `feed.step` v1 — the work reached a stage. No text, no path, no counter. */
 export const feedStepPayloadSchema = z.strictObject({
   v: version,

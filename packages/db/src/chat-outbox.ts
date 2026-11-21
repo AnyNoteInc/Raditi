@@ -8,6 +8,7 @@ import {
   agentTurnRetryJobId,
   browserEnsureDedupeKey,
   browserEnsureJobSchema,
+  feedPassRequestKinds,
   type AgentTurnJob,
   type BrowserEnsureJob,
   tierQueuePriority,
@@ -31,8 +32,7 @@ const lower = (id: string): string => id.toLowerCase()
 function passRequestIdSql(taskId: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`(SELECT id FROM task_events
     WHERE task_id = ${taskId} AND client_visible AND type = 'feed.request'
-      AND payload->>'kind' IN ('first', 'answer', 'continue', 'resume', 'agent_command',
-        'queued', 'retry', 'revision')
+      AND payload->>'kind' IN (${Prisma.join(feedPassRequestKinds)})
     ORDER BY id DESC LIMIT 1)`
 }
 

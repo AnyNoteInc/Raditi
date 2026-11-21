@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { agentDriverIds, agentOutputLimits } from '../ports/agent-driver.ts'
 import {
+  feedPassRequestKinds,
+  feedPresslessRequestKinds,
   feedCancelledBys,
   feedCeilingReasons,
   feedCreditsStates,
@@ -792,6 +794,12 @@ describe('nothing raw reaches the customer', () => {
 })
 
 describe('feed.request', () => {
+  it('names every kind once: either a pass answers it or nothing is enqueued', () => {
+    const named = [...feedPassRequestKinds, ...feedPresslessRequestKinds].sort()
+    const kinds = feedRequestPayloadSchema.options.map((option) => option.shape.kind.value).sort()
+    expect(named).toEqual(kinds)
+  })
+
   const text = (value: string) => accepts('feed.request', { ...first, text: value })
 
   it('bounds the text at 4000 characters after trimming', () => {
