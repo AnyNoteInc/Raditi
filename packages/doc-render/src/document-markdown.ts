@@ -25,6 +25,54 @@ export interface DocumentMarkdownProps extends Omit<DocumentRules, 'documentLink
   onAnchor?: (id: string) => void
 }
 
+/** A node of the Markdown tree, as far as the break below reads it. */
+interface MarkdownNode {
+  type: string
+  value?: string
+  children?: MarkdownNode[]
+}
+
+/** The nodes whose children are words: a `<br>` among them is a break of the line. */
+const PHRASING_PARENTS = new Set([
+  'paragraph',
+  'heading',
+  'tableCell',
+  'emphasis',
+  'strong',
+  'delete',
+  'link',
+  'linkReference',
+  'footnoteDefinition',
+])
+
+/**
+ * `<br>` in the text — agents write it in paragraphs and cells of tables though the instructions
+ * ask for no HTML — is a break of the line. Raw HTML is skipped, and with it the `<br>` would glue
+ * the words on both sides («окно.Вторая»).
+ */
+function remarkHtmlBreaks() {
+  const walk = (node: MarkdownNode) => {
+    if (!node.children) return
+    if (PHRASING_PARENTS.has(node.type))
+      node.children = node.children.map((child) =>
+        child.type === 'html' && /^<br\s*\/?>$/i.test(child.value?.trim() ?? '')
+          ? { type: 'break' }
+          : child,
+      )
+    node.children.forEach(walk)
+  }
+  return walk
+}
+
+/**
+ * The heading of the footnotes. remark-rehype names it «Footnotes» and hides it by a class, which
+ * the rules drop: it is shown, and in Russian (rule 10). The link back is a «↩» without words.
+ */
+const REMARK_REHYPE = Object.freeze({
+  footnoteLabel: 'Примечания',
+  footnoteBackLabel: 'Назад к тексту',
+})
+
 const plain = (event: MouseEvent) =>
   event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
 
@@ -34,6 +82,7 @@ export function DocumentMarkdown({
   imageSrc,
   documentLinks = true,
   treeLinks = false,
+  anchorBase,
   onDocument,
   onAnchor,
 }: DocumentMarkdownProps): ReactElement {
@@ -73,8 +122,11 @@ export function DocumentMarkdown({
     },
   }
   return createElement(Markdown, {
-    remarkPlugins: [remarkGfm],
-    rehypePlugins: [[rehypeDocumentRules, { documents, imageSrc, documentLinks, treeLinks }]],
+    remarkPlugins: [remarkGfm, remarkHtmlBreaks],
+    remarkRehypeOptions: REMARK_REHYPE,
+    rehypePlugins: [
+      [rehypeDocumentRules, { documents, imageSrc, documentLinks, treeLinks, anchorBase }],
+    ],
     // The rules read every address themselves: nothing is rewritten before them.
     urlTransform: (url: string) => url,
     components,

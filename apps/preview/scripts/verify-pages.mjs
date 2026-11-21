@@ -702,7 +702,8 @@ async function siteOfPages(stand) {
 /**
  * The shared files and the own name of a site (docs/plan/73-pages-sites.md, Дер32–Дер35): a page
  * loads the CSS and a picture of its site from its own host in Chromium — `'self'` of its policy —,
- * a request of it to the same file stays closed; a site with a password gives its files only with
+ * and its font and its module, which the opaque origin asks for by CORS (`Access-Control-Allow-
+ * Origin: *`), the font drawing the text; a request of it to the same file stays closed; a site with a password gives its files only with
  * its cookie, which goes with the requests of a sandboxed page (SameSite=None); a site asked by its
  * slug sends the viewer on to its own name.
  */
@@ -716,7 +717,10 @@ async function sharedFiles(stand) {
     chat,
     'Файлы',
     `<!doctype html><link rel="stylesheet" href="/_files/style.css">
+<style>@font-face{font-family:StandFont;src:url(/_files/stand.woff2) format('woff2')}#f{font-family:StandFont,serif}#g{font-family:serif}#f,#g{display:inline-block;font-size:40px}</style>
 <p id="v">Файлы</p><img id="logo" src="/_files/logo.png" alt="">
+<span id="f">Шрифт сайта</span> <span id="g">Шрифт сайта</span>
+<script type="module" src="/_files/probe.mjs"></script>
 <script>fetch('/_files/style.css').then(() => console.log('${PROBE_MARK}' + JSON.stringify({ fetch: 'reached' })), () => console.log('${PROBE_MARK}' + JSON.stringify({ fetch: 'refused' })))</script>`,
     30,
     port,
@@ -737,13 +741,29 @@ async function sharedFiles(stand) {
   }
   await put('style.css', '/_files/style.css', html('#v{color:rgb(1, 2, 3)}'), 31)
   await put('logo.png', '/_files/logo.png', new Uint8Array(png), 32)
+  // A font and a module the page asks for by a CORS request from its opaque origin (Chromium and
+  // Firefox for the font, every engine for the module): they load only with
+  // `Access-Control-Allow-Origin: *`.
+  const font = await readFile(
+    createRequire(join(root, 'apps/web/package.json')).resolve(
+      '@fontsource-variable/golos-text/files/golos-text-cyrillic-wght-normal.woff2',
+    ),
+  )
+  await put('stand.woff2', '/_files/stand.woff2', new Uint8Array(font), 33)
+  await put(
+    'probe.mjs',
+    '/_files/probe.mjs',
+    html(`console.log('${PROBE_MARK}' + JSON.stringify({ module: 'ran' }))`),
+    34,
+  )
   const host = (label) => `${label}.${BASE}:${port}`
   const file = await hit(port, host(page.slug), { path: '/_files/style.css' })
   rt.check(
     file.status === 200 &&
       file.headers['content-type'] === 'text/css; charset=utf-8' &&
       file.headers['cross-origin-resource-policy'] === 'cross-origin' &&
-      file.headers['x-content-type-options'] === 'nosniff',
+      file.headers['x-content-type-options'] === 'nosniff' &&
+      file.headers['access-control-allow-origin'] === '*',
     'a shared file goes with its own type, loadable by a page, read as nothing else',
   )
   rt.check(
@@ -762,9 +782,30 @@ async function sharedFiles(stand) {
       if (text.startsWith(PROBE_MARK)) lines.push(JSON.parse(text.slice(PROBE_MARK.length)))
     })
     await tab.goto(page.url)
-    await rt.until('the page tried its request', async () => lines.length > 0, {
-      timeoutMs: 10_000,
-    })
+    await rt
+      .until(
+        'the page tried its request and ran its module',
+        async () => lines.some((line) => line.fetch) && lines.some((line) => line.module),
+        { timeoutMs: 10_000 },
+      )
+      .catch(() => {})
+    rt.check(
+      lines.some((line) => line.module === 'ran'),
+      'a module of the site from /_files/ runs on the page (CORS from its opaque origin)',
+    )
+    await tab.evaluate('document.fonts.ready')
+    const fontState = await tab.evaluate(`(() => {
+      const face = [...document.fonts].find((f) => f.family.replace(/["']/g, '') === 'StandFont')
+      return {
+        status: face?.status ?? 'none',
+        own: document.getElementById('f').getBoundingClientRect().width,
+        fallback: document.getElementById('g').getBoundingClientRect().width,
+      }
+    })()`)
+    rt.check(
+      fontState.status === 'loaded' && fontState.own !== fontState.fallback,
+      `a font of the site from /_files/ loads and draws the text (${JSON.stringify(fontState)})`,
+    )
     rt.check(
       (await tab.evaluate("getComputedStyle(document.getElementById('v')).color")) ===
         'rgb(1, 2, 3)',
@@ -774,7 +815,10 @@ async function sharedFiles(stand) {
       (await tab.evaluate("document.getElementById('logo').naturalWidth")) === 1,
       'a picture of the site loads from its own host',
     )
-    rt.check(lines[0]?.fetch === 'refused', 'a request of the page to that file is refused')
+    rt.check(
+      lines.find((line) => line.fetch)?.fetch === 'refused',
+      'a request of the page to that file is refused',
+    )
 
     // A site with a password: its files only with its cookie, sent by the sandboxed page too.
     await db.setPagePassword(prisma, {

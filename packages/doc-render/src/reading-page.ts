@@ -46,6 +46,12 @@ export interface ReadingPageInput {
   title: string
   /** The Markdown of the document, its own `# …` heading included (`assembleDocMarkdown`). */
   markdown: string
+  /**
+   * The page is shown in a frame `srcdoc` of the cabinet, not published: its address is the
+   * cabinet's, so a link to a heading is `about:srcdoc#doc-…`, and links from the root of a site
+   * are words — the document has no site there, and they would take the frame to the cabinet.
+   */
+  framed?: boolean
 }
 
 /**
@@ -53,7 +59,11 @@ export interface ReadingPageInput {
  * chat becomes its words, a picture of the chat by name becomes its words too — only a `data:`
  * picture inside the text is drawn.
  */
-export async function readingPage({ title, markdown }: ReadingPageInput): Promise<string> {
+export async function readingPage({
+  title,
+  markdown,
+  framed = false,
+}: ReadingPageInput): Promise<string> {
   const { renderToStaticMarkup } = await import('react-dom/server')
   const article = createElement(DocumentMarkdown, {
     text: markdown,
@@ -61,7 +71,8 @@ export async function readingPage({ title, markdown }: ReadingPageInput): Promis
     imageSrc: () => null,
     documentLinks: false,
     // A page for reading is a page of a site of pages: its links from the root stay (Дер20).
-    treeLinks: true,
+    treeLinks: !framed,
+    ...(framed ? { anchorBase: 'about:srcdoc' } : {}),
   })
   const html = createElement(
     'html',

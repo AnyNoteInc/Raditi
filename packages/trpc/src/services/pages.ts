@@ -455,7 +455,8 @@ export async function cabinetDocMarkdown(
 /**
  * The finished document of the view `page` as the tab beside the chat shows it (docs/plan/74, Д1):
  * the page to read of its current version, drawn by `@repo/doc-render` from text core checked —
- * the same page «Опубликовать по ссылке» gives. null — no version yet, or the view is `text`.
+ * the page «Опубликовать по ссылке» gives, but for its links, which stay in the frame `srcdoc`.
+ * null — no version yet, or the view is `text`.
  */
 export async function cabinetDocPage(
   db: PrismaClient,
@@ -469,7 +470,8 @@ export async function cabinetDocPage(
   })
   if (current === null) return null
   return {
-    html: await readingPage({ title: document.title, markdown: current.markdown }),
+    // Shown in a frame `srcdoc`: its links must keep the frame on the document (`framed`).
+    html: await readingPage({ title: document.title, markdown: current.markdown, framed: true }),
     version: current.version,
   }
 }
@@ -507,7 +509,11 @@ export async function cabinetDocVersion(
     markdown,
     html:
       document.view === 'page'
-        ? await readingPage({ title: markdownTitleOf(markdown) ?? document.title, markdown })
+        ? await readingPage({
+            title: markdownTitleOf(markdown) ?? document.title,
+            markdown,
+            framed: true,
+          })
         : null,
   }
 }

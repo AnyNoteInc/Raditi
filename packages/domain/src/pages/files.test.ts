@@ -63,6 +63,7 @@ describe('the headers of a shared file', () => {
     expect(css).toMatchObject({
       'X-Content-Type-Options': 'nosniff',
       'Cross-Origin-Resource-Policy': 'cross-origin',
+      'Access-Control-Allow-Origin': '*',
       'Content-Security-Policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
     })
     expect(pageFileHeaders('image/svg+xml')['Content-Security-Policy']).toContain('sandbox')
