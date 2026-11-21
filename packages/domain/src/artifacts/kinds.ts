@@ -79,8 +79,8 @@ export interface ArtifactKindSpec {
   wave: ArtifactWave
   /** False — it never opens to others with «Правит»: it goes into every turn of a project (Ар25). */
   sharableEdit: boolean
-  /** A checked section can carry private quote notes (Ар53, 88.18а). */
-  quoteNotes?: true
+  /** What private notes anchor to (Ар53): a quote of a section (88.18а), a cell (88.18д). */
+  notes?: 'quote' | 'cell'
   /** True — its `html` and `script` live inside frames (canvas, slides, image); false — at the top. */
   framed: boolean
   /**
@@ -101,7 +101,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     exports: ['md', 'pdf', 'docx'],
     wave: 1,
     sharableEdit: true,
-    quoteNotes: true,
+    notes: 'quote',
     framed: false,
     forAgent:
       'text to read, check or keep editing: an audit, a plan of work, a summary, an instruction, an article, a post, notes',
@@ -126,6 +126,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     exports: ['csv', 'xlsx'],
     wave: 1,
     sharableEdit: true,
+    notes: 'cell',
     framed: false,
     forAgent:
       'rows and columns: a price list, a content plan, a list to keep. No skeleton: insert one `columns` block — a JSON list of {key, name, type: text|number|money|date|select|link|checkbox, options of a select} — then a `row` block a row, the JSON of its cells by column key (money as a string "1990.50", a date "2026-11-12"); change cells by the operation `cells`',

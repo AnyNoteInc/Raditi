@@ -19,19 +19,23 @@ import TextField from '@mui/material/TextField'
 import Tooltip from '@mui/material/Tooltip'
 import {
   artifactColumnSchema,
+  artifactKindSpecOf,
+  tableCellText,
   tableCsv,
   tableOrder,
+  type ArtifactCellAnchorInput,
   type ArtifactColumn,
   type ArtifactColumnType,
   type TableSort,
 } from '@repo/domain/artifacts'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC, useTRPCClient } from '@/trpc/client'
 
 import type { ArtifactBodyProps } from '../artifact-body-props'
+import { ArtifactComments } from '../artifact-comments'
 import { TableCards } from './table-cards'
 import { TableGrid } from './table-grid'
 import {
@@ -85,10 +89,36 @@ function download(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000)
 }
 
-export function ArtifactTable({ artifact, onChanged }: ArtifactBodyProps) {
+export function ArtifactTable({
+  artifact,
+  onChanged,
+  onAccessLost,
+}: ArtifactBodyProps & { onAccessLost?: () => void }) {
   const trpc = useTRPC()
   const client = useTRPCClient()
   const state = useTable(artifact, onChanged)
+  // Private notes to a cell (88.18д): the owner's, as the notes to a quote of a document.
+  const canComment =
+    artifact.role === 'owner' && artifactKindSpecOf(artifact.kind)?.notes === 'cell'
+  const [activeCell, setActiveCell] = useState<{ row: string; column: string } | null>(null)
+  const onActiveCell = useCallback(
+    (cell: { row: string; column: string } | null) => setActiveCell(cell),
+    [],
+  )
+  const [commentDraft, setCommentDraft] = useState<{
+    anchor: ArtifactCellAnchorInput
+    label: string
+  } | null>(null)
+  const noteToCell = () => {
+    const row = state.rows.find((each) => each.key === activeCell?.row)
+    const column = state.columns.find((each) => each.key === activeCell?.column)
+    if (!row || !column) return
+    const text = tableCellText(column, row.cells[column.key])
+    setCommentDraft({
+      anchor: { kind: 'cell', block: row.key, column: column.key, rev: row.rev },
+      label: `${column.name}: ${text || 'пустая ячейка'}`,
+    })
+  }
   const { ref, width } = useWidth()
   const [stored, setStored] = useState<Partial<ColumnLayout> | null>(() =>
     typeof window === 'undefined' ? null : readLayout(artifact.id),
@@ -287,6 +317,11 @@ export function ArtifactTable({ artifact, onChanged }: ArtifactBodyProps) {
             {tableTexts.addRow}
           </Button>
         )}
+        {canComment && !cards && (
+          <Button variant="text" color="inherit" disabled={!activeCell} onClick={noteToCell}>
+            Заметка к ячейке
+          </Button>
+        )}
         <Button
           variant="text"
           color="inherit"
@@ -297,6 +332,17 @@ export function ArtifactTable({ artifact, onChanged }: ArtifactBodyProps) {
           {preparing ? tableTexts.xlsxWaiting : tableTexts.download}
         </Button>
       </Stack>
+      {canComment && (
+        <ArtifactComments
+          key={artifact.id}
+          artifact={artifact}
+          draft={commentDraft?.anchor ?? null}
+          draftLabel={commentDraft?.label}
+          onClose={() => setCommentDraft(null)}
+          onChanged={onChanged}
+          onAccessLost={onAccessLost ?? (() => {})}
+        />
+      )}
       {!state.canEdit && <Alert severity="info">{tableTexts.readOnly}</Alert>}
       {state.columns.length === 0 ? (
         <Alert severity="info">{tableTexts.noColumns}</Alert>
@@ -315,6 +361,7 @@ export function ArtifactTable({ artifact, onChanged }: ArtifactBodyProps) {
               totals={totals.data?.totals ?? {}}
               onMessage={setMessage}
               onHeader={(column, at) => setHeader({ column, at })}
+              onActiveCell={canComment ? onActiveCell : undefined}
             />
           )}
         </Box>

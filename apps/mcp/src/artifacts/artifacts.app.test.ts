@@ -135,8 +135,7 @@ function fakeStore(
       {
         threadId,
         artifactId,
-        block: 'intro',
-        quote: 'Цены на лето',
+        anchor: { kind: 'quote' as const, block: 'intro', rev: 3, quote: 'Цены на лето' },
         body: 'Добавьте цены на июль',
         ownerReplies: [],
         resolved: false,
@@ -598,7 +597,9 @@ describe('the synonyms doc_* of plan 69 (Ар3)', () => {
     const { store } = fakeStore()
     const server = await start(store)
     const notes = await post(server, call('artifact_comments', { artifactId }))
-    expect(answer(notes)).toMatchObject({ notes: [{ threadId, quote: 'Цены на лето' }] })
+    expect(answer(notes)).toMatchObject({
+      notes: [{ threadId, anchor: { kind: 'quote', quote: 'Цены на лето' } }],
+    })
     expect(store.comments).toHaveBeenCalledWith(base.taskId, artifactId)
     const reply = await post(
       server,

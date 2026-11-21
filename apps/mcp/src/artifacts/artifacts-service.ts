@@ -32,6 +32,7 @@ import {
   type ArtifactRenderRequest,
   type ArtifactRenderResponse,
   type ArtifactClaimArguments,
+  type ArtifactCommentAnchor,
   type ArtifactCommentsArguments,
   type ArtifactCreateArguments,
   type ArtifactEditArguments,
@@ -177,8 +178,8 @@ export interface McpArtifactsStore {
 export interface McpChatComment {
   threadId: string
   artifactId: string
-  block: string
-  quote: string
+  /** A quote of a section, or a cell of a table with its column and text (88.18д). */
+  anchor: ArtifactCommentAnchor
   body: string
   ownerReplies: string[]
   resolved: boolean

@@ -1,10 +1,12 @@
 import { addArtifactComment, readArtifactComments, type PrismaClient } from '@repo/db'
 import { artifactSectionText } from '@repo/doc-render/markdown'
 import {
-  artifactQuoteAnchorSchema,
+  artifactCommentAnchorSchema,
   hasUniqueCommentQuote,
   normalizeCommentQuote,
-  type ArtifactQuoteAnchor,
+  type ArtifactColumn,
+  type ArtifactCommentAnchor,
+  type ArtifactCommentAnchorInput,
 } from '@repo/domain/artifacts'
 
 type Owner = { artifactId: string; userId: string }
@@ -12,20 +14,32 @@ const quoteText = (markdown: string) => normalizeCommentQuote(artifactSectionTex
 
 export function createCabinetComment(
   db: PrismaClient,
-  input: Owner & { anchor: ArtifactQuoteAnchor; body: string },
+  input: Owner & { anchor: ArtifactCommentAnchorInput; body: string },
 ) {
   return addArtifactComment(db, input, (markdown, quote) =>
     hasUniqueCommentQuote(quoteText(markdown), quote),
   )
 }
 
+/**
+ * «Место изменилось»: a quote no longer found once in its section; a cell whose row or column is
+ * gone. A new value of the cell keeps its place.
+ */
+function anchorMoved(
+  anchor: ArtifactCommentAnchor,
+  blocks: ReadonlyMap<string, string | null>,
+  columns: readonly ArtifactColumn[],
+): boolean {
+  const text = blocks.get(anchor.block)
+  if (anchor.kind === 'cell')
+    return text == null || !columns.some((column) => column.key === anchor.column)
+  return !hasUniqueCommentQuote(text == null ? '' : quoteText(text), anchor.quote)
+}
+
 export async function cabinetComments(db: PrismaClient, input: Owner) {
-  const { comments, sections } = await readArtifactComments(db, input)
-  const texts = new Map(
-    [...sections].map(([key, markdown]) => [key, markdown === null ? '' : quoteText(markdown)]),
-  )
+  const { comments, blocks, columns } = await readArtifactComments(db, input)
   return comments.flatMap((comment) => {
-    const anchor = artifactQuoteAnchorSchema.safeParse(comment.anchor)
+    const anchor = artifactCommentAnchorSchema.safeParse(comment.anchor)
     if (!anchor.success || anchor.data.block !== comment.blockKey) return []
     return [
       {
@@ -33,7 +47,7 @@ export async function cabinetComments(db: PrismaClient, input: Owner) {
         anchor: anchor.data,
         body: comment.body,
         resolved: comment.resolvedAt !== null,
-        moved: !hasUniqueCommentQuote(texts.get(anchor.data.block) ?? '', anchor.data.quote),
+        moved: anchorMoved(anchor.data, blocks, columns),
         replies: comment.replies.map(({ id, body, createdAt, byAgent }) => ({
           id,
           body,

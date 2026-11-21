@@ -806,8 +806,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       {
         threadId,
         artifactId,
-        block: 'delivery',
-        quote: 'хлеб & булочки.',
+        anchor: {
+          kind: 'quote',
+          block: 'delivery',
+          rev: expect.any(Number),
+          quote: 'хлеб & булочки.',
+        },
         body: 'Добавить цены на июль.',
         ownerReplies: ['И на август.'],
         resolved: false,
@@ -898,6 +902,100 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     ).resolves.toBeGreaterThanOrEqual(1)
     expect(await db.artifactCommentReply.findUnique({ where: { id: stale.id } })).toBeNull()
     expect((await readChatArtifactComments(db, { taskId }))[0]!.yourReplies).toEqual([])
+  })
+
+  it('anchors a private note to a cell of a table and sends it with the cell (88.18д)', async () => {
+    const user = await person()
+    const caller = callerOf(user)
+    const { id: artifactId } = await caller.artifact.create({
+      kind: 'table',
+      title: 'Прайс',
+      projectId: null,
+      templateId: null,
+    })
+    const write = (ops: unknown[]) =>
+      caller.artifact.write({ batch: { artifactId, opId: randomUUID(), ops } })
+    const columns = [
+      { key: 'name', name: 'Товар', type: 'text' },
+      { key: 'note', name: 'Примечание', type: 'text' },
+    ]
+    const created = await write([
+      {
+        op: 'insert',
+        block: 'cols',
+        after: null,
+        kind: 'columns',
+        content: JSON.stringify(columns),
+      },
+      {
+        op: 'insert',
+        block: 'r1',
+        after: 'cols',
+        kind: 'row',
+        content: JSON.stringify({ name: 'Хлеб', note: 'утром' }),
+      },
+    ])
+    const row = created.blocks.find((block) => block.key === 'r1')!
+    const cell = { kind: 'cell' as const, block: 'r1', column: 'name', rev: row.rev }
+    // A table takes notes to its cells, never to a quote; a stale row or an unknown column is refused.
+    await expect(
+      caller.artifact.addComment({
+        artifactId,
+        anchor: { kind: 'quote', block: 'r1', rev: row.rev, quote: 'Хлеб' },
+        body: 'Проверить',
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(
+      caller.artifact.addComment({ artifactId, anchor: { ...cell, rev: row.rev + 1 }, body: 'А' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(
+      caller.artifact.addComment({ artifactId, anchor: { ...cell, column: 'price' }, body: 'А' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+
+    const { id: threadId } = await caller.artifact.addComment({
+      artifactId,
+      anchor: cell,
+      body: 'Добавить ржаной',
+    })
+    const stored = { ...cell, columnName: 'Товар', text: 'Хлеб' }
+    expect(await caller.artifact.comments({ artifactId })).toMatchObject([
+      { id: threadId, anchor: stored, moved: false, resolved: false },
+    ])
+    // A new value keeps the place; a deleted row moves it.
+    await write([{ op: 'cells', block: 'r1', cells: { name: 'Батон' } }])
+    expect((await caller.artifact.comments({ artifactId }))[0]).toMatchObject({ moved: false })
+    const r1 = (await caller.artifact.read({ artifactId })).blocks.find((b) => b.key === 'r1')!
+    await write([{ op: 'delete', block: 'r1', ifRev: r1.rev }])
+    expect((await caller.artifact.comments({ artifactId }))[0]).toMatchObject({
+      anchor: stored,
+      moved: true,
+    })
+
+    const { workspaceId } = await db.artifact.findUniqueOrThrow({ where: { id: artifactId } })
+    const { taskId } = await commentDestination({
+      workspaceId,
+      createdById: user.id,
+      modelClass: 'standard',
+    })
+    dispatchChatIds.push(taskId)
+    const now = new Date()
+    await placeReserve(db, {
+      workspaceId,
+      taskId,
+      attempt: 1,
+      now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    })
+    await caller.artifact.dispatchComments({
+      artifactId,
+      target: { kind: 'existing', taskId },
+      requestId: randomUUID(),
+      threadIds: [threadId],
+      text: '',
+    })
+    expect(await readChatArtifactComments(db, { taskId })).toMatchObject([
+      { threadId, artifactId, anchor: stored, body: 'Добавить ржаной' },
+    ])
   })
 
   it('reads notes and their access decision at the same snapshot during a takedown', async () => {

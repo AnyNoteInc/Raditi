@@ -21,6 +21,43 @@ export const artifactQuoteAnchorSchema = z.strictObject({
 
 export type ArtifactQuoteAnchor = z.infer<typeof artifactQuoteAnchorSchema>
 
+/** The text of a cell an anchor keeps, as the client reads it (88.18д). */
+export const commentCellTextChars = 200
+export const commentCellText = (text: string): string =>
+  Array.from(normalizeCommentQuote(text)).slice(0, commentCellTextChars).join('')
+
+/** A cell of a table as the cabinet names it: the server fills its column name and text. */
+export const artifactCellAnchorInputSchema = z.strictObject({
+  kind: z.literal('cell'),
+  block: artifactBlockKeySchema,
+  column: artifactBlockKeySchema,
+  rev: z.number().int().nonnegative(),
+})
+export type ArtifactCellAnchorInput = z.infer<typeof artifactCellAnchorInputSchema>
+
+export const artifactCellAnchorSchema = artifactCellAnchorInputSchema.extend({
+  columnName: z.string().max(80).refine(storableText),
+  text: z
+    .string()
+    .max(commentCellTextChars * 2)
+    .refine(storableText),
+})
+export type ArtifactCellAnchor = z.infer<typeof artifactCellAnchorSchema>
+
+/** What a note is anchored to: a quote of a document or a cell of a table (Ар53). */
+export const artifactCommentAnchorSchema = z.discriminatedUnion('kind', [
+  artifactQuoteAnchorSchema,
+  artifactCellAnchorSchema,
+])
+export type ArtifactCommentAnchor = z.infer<typeof artifactCommentAnchorSchema>
+
+/** The anchor the cabinet sends: a cell without what the server reads for it. */
+export const artifactCommentAnchorInputSchema = z.discriminatedUnion('kind', [
+  artifactQuoteAnchorSchema,
+  artifactCellAnchorInputSchema,
+])
+export type ArtifactCommentAnchorInput = z.infer<typeof artifactCommentAnchorInputSchema>
+
 export const artifactCommentBodySchema = z
   .string()
   .trim()
@@ -34,7 +71,7 @@ export const artifactCommentSnapshotSchema = z
   .array(
     z.strictObject({
       id: z.uuid(),
-      anchor: artifactQuoteAnchorSchema,
+      anchor: artifactCommentAnchorSchema,
       body: artifactCommentBodySchema,
       replies: z.array(artifactCommentBodySchema).max(artifactCommentDispatchLimits.entries),
     }),

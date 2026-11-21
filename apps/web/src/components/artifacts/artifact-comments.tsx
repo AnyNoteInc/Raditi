@@ -15,8 +15,11 @@ import { separatesSectionText } from '@repo/doc-render/markdown'
 import {
   artifactCommentDispatchLimits,
   artifactCommentRefusalText,
+  artifactKindSpecOf,
   artifactLimits,
   artifactQuoteAnchorSchema,
+  type ArtifactCommentAnchor,
+  type ArtifactCommentAnchorInput,
   type ArtifactQuoteAnchor,
 } from '@repo/domain/artifacts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -70,17 +73,50 @@ export function useArtifactQuote(enabled: boolean) {
 
 const failed = 'Не удалось сохранить заметку. Попробуйте ещё раз.'
 
+/** The words of the panel by what notes of this kind anchor to (88.18а, 88.18д). */
+const noteTexts = {
+  quote: {
+    dialog: 'Заметка к цитате',
+    region: 'Заметки к документу',
+    empty: 'Выделите текст в разделе, чтобы оставить заметку.',
+  },
+  cell: {
+    dialog: 'Заметка к ячейке',
+    region: 'Заметки к таблице',
+    empty: 'Выберите ячейку и нажмите «Заметка к ячейке».',
+  },
+} as const
+
+/** Where a note stands, as the list shows it. */
+function AnchorText({ anchor }: { anchor: ArtifactCommentAnchor }) {
+  const sx = { m: 0, pl: 1, borderLeft: 2, borderColor: 'divider' }
+  if (anchor.kind === 'cell')
+    return (
+      <Typography variant="body2" color="text.secondary" sx={sx}>
+        {anchor.columnName}: {anchor.text || 'пустая ячейка'}
+      </Typography>
+    )
+  return (
+    <Typography component="blockquote" variant="body2" color="text.secondary" sx={sx}>
+      {anchor.quote}
+    </Typography>
+  )
+}
+
 type ReplyDraft = { threadId: string; body: string }
 
 export function ArtifactComments({
   artifact,
   draft,
+  draftLabel,
   onClose,
   onChanged,
   onAccessLost,
 }: {
   artifact: CabinetArtifact
-  draft: ArtifactQuoteAnchor | null
+  draft: ArtifactCommentAnchorInput | null
+  /** How the cabinet names a cell of the draft: «колонка: текст» (the server reads its own). */
+  draftLabel?: string
   onClose: () => void
   onChanged: () => void
   onAccessLost: () => void
@@ -89,6 +125,7 @@ export function ArtifactComments({
   const trpcClient = useTRPCClient()
   const client = useQueryClient()
   const artifactId = artifact.id
+  const texts = noteTexts[artifactKindSpecOf(artifact.kind)?.notes ?? 'quote']
   const query = trpc.artifact.comments.queryOptions({ artifactId })
   const list = useQuery({
     queryKey: query.queryKey,
@@ -244,7 +281,7 @@ export function ArtifactComments({
   return (
     <Box
       component="section"
-      aria-label="Заметки к документу"
+      aria-label={texts.region}
       sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, mb: 1 }}
     >
       <Typography component="h2" variant="subtitle1">
@@ -282,9 +319,7 @@ export function ArtifactComments({
       {resolveError && <Alert severity="error">{failed}</Alert>}
       {list.isSuccess && visible.length === 0 && (
         <Typography variant="body2" color="text.secondary">
-          {resolved
-            ? 'Решённых заметок пока нет.'
-            : 'Выделите текст в разделе, чтобы оставить заметку.'}
+          {resolved ? 'Решённых заметок пока нет.' : texts.empty}
         </Typography>
       )}
       {visible.length > 0 && (
@@ -301,14 +336,7 @@ export function ArtifactComments({
                 overflowWrap: 'anywhere',
               }}
             >
-              <Typography
-                component="blockquote"
-                variant="body2"
-                color="text.secondary"
-                sx={{ m: 0, pl: 1, borderLeft: 2, borderColor: 'divider' }}
-              >
-                {comment.anchor.quote}
-              </Typography>
+              <AnchorText anchor={comment.anchor} />
               {comment.moved && (
                 <Typography variant="caption" color="warning.main">
                   Место изменилось
@@ -438,7 +466,7 @@ export function ArtifactComments({
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>Заметка к цитате</DialogTitle>
+        <DialogTitle>{texts.dialog}</DialogTitle>
         <Box
           component="form"
           onSubmit={(event) => {
@@ -453,7 +481,7 @@ export function ArtifactComments({
               color="text.secondary"
               sx={{ mx: 0, mt: 0, overflowWrap: 'anywhere' }}
             >
-              {draft?.quote}
+              {draft?.kind === 'quote' ? draft.quote : draftLabel}
             </Typography>
             <TextField
               label="Заметка"

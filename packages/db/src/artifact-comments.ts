@@ -11,8 +11,15 @@ import {
   artifactOpReused,
   artifactSecretShape,
   artifactStale,
+  artifactCellsSchema,
+  commentCellText,
+  tableCellText,
+  tableOfBlocks,
+  type ArtifactCellAnchor,
+  type ArtifactCellAnchorInput,
+  type ArtifactCommentAnchor,
+  type ArtifactCommentAnchorInput,
   type ArtifactCommentSnapshot,
-  type ArtifactQuoteAnchor,
 } from '@repo/domain/artifacts'
 
 import { artifactRole, lockArtifact } from './artifacts.ts'
@@ -35,20 +42,39 @@ async function lockOwnedArtifact(tx: Prisma.TransactionClient, input: Owner) {
   return artifact
 }
 
-/** The owner's artifact of a kind that takes quote notes, under its lock. */
+/** The owner's artifact of a kind that takes notes, under its lock, and what they anchor to. */
 async function lockNotedArtifact(tx: Prisma.TransactionClient, input: Owner) {
   const artifact = await lockOwnedArtifact(tx, input)
-  if (!artifactKindSpecOf(artifact.kind)?.quoteNotes) throw artifactNotFound()
-  return artifact
+  const notes = artifactKindSpecOf(artifact.kind)?.notes
+  if (!notes) throw artifactNotFound()
+  return { ...artifact, notes }
 }
 
-/** A live section of a document by its key: a note anchors to a section, never to an offset. */
-const liveSections = (artifactId: string, keys: string | { in: string[] }) => ({
+/** A live block a note anchors to — a section of a document, a row of a table — never an offset. */
+const liveAnchors = (artifactId: string, keys: string | { in: string[] }, kind: string) => ({
   documentId: artifactId,
   sectionKey: keys,
-  blockKind: 'section',
+  blockKind: kind,
   deletedRev: null,
 })
+
+const anchorBlockKind = { quote: 'section', cell: 'row' } as const
+
+/** The checked columns of a table: its first `columns` block in order that parses. */
+async function checkedColumns(tx: Prisma.TransactionClient, artifactId: string) {
+  const blocks = await tx.artifactBlock.findMany({
+    where: { documentId: artifactId, blockKind: 'columns', deletedRev: null },
+    orderBy: [{ rank: 'asc' }, { sectionKey: 'asc' }],
+  })
+  return tableOfBlocks(
+    blocks.map((block) => ({
+      key: block.sectionKey,
+      kind: 'columns',
+      rev: block.rev,
+      content: blockCheckedText(block),
+    })),
+  ).columns
+}
 
 /** A note shows only its author's replies, oldest first. */
 const ownReplies = <S extends Prisma.ArtifactCommentReplySelect>(userId: string, select: S) => ({
@@ -81,13 +107,21 @@ export async function readArtifactComments(db: Db, input: Owner) {
         },
       })
       const blocks = await tx.artifactBlock.findMany({
-        where: liveSections(input.artifactId, {
-          in: [...new Set(comments.map((comment) => comment.blockKey))],
-        }),
+        where: {
+          ...liveAnchors(
+            input.artifactId,
+            { in: [...new Set(comments.map((comment) => comment.blockKey))] },
+            'section',
+          ),
+          blockKind: { in: Object.values(anchorBlockKind) },
+        },
       })
+      const hasCells = blocks.some((block) => block.blockKind === 'row')
       return {
         comments,
-        sections: new Map(blocks.map((block) => [block.sectionKey, blockCheckedText(block)])),
+        /** The checked text of each live anchored block (a section, or a row's JSON). */
+        blocks: new Map(blocks.map((block) => [block.sectionKey, blockCheckedText(block)])),
+        columns: hasCells ? await checkedColumns(tx, input.artifactId) : [],
       }
     },
     { isolationLevel: 'RepeatableRead' },
@@ -125,34 +159,62 @@ async function requireCommentRoom(tx: Prisma.TransactionClient, artifactId: stri
   if (roots + replies >= artifactLimits.comments) throw artifactLimit('comments')
 }
 
+/** What the server stores of a cell: its column's name and text, read from checked blocks. */
+async function cellAnchor(
+  tx: Prisma.TransactionClient,
+  artifactId: string,
+  input: ArtifactCellAnchorInput,
+  row: string,
+): Promise<ArtifactCellAnchor> {
+  let value: unknown
+  try {
+    value = JSON.parse(row) as unknown
+  } catch {
+    throw artifactStale()
+  }
+  const cells = artifactCellsSchema.safeParse(value)
+  const column = (await checkedColumns(tx, artifactId)).find((each) => each.key === input.column)
+  if (!cells.success || !column) throw artifactStale()
+  return {
+    ...input,
+    columnName: column.name,
+    text: commentCellText(tableCellText(column, cells.data[column.key])),
+  }
+}
+
 export async function addArtifactComment(
   db: Db,
-  input: Owner & { anchor: ArtifactQuoteAnchor; body: string },
+  input: Owner & { anchor: ArtifactCommentAnchorInput; body: string },
   validateQuote: (markdown: string, quote: string) => boolean,
 ) {
   return db.$transaction(async (tx) => {
-    await lockNotedArtifact(tx, input)
-    if (secretInContent(input.body) || secretInContent(input.anchor.quote))
+    const { notes } = await lockNotedArtifact(tx, input)
+    const { anchor } = input
+    if (anchor.kind !== notes) throw artifactNotFound()
+    if (secretInContent(input.body) || (anchor.kind === 'quote' && secretInContent(anchor.quote)))
       throw artifactSecretShape()
     const block = await tx.artifactBlock.findFirst({
-      where: liveSections(input.artifactId, input.anchor.block),
+      where: liveAnchors(input.artifactId, anchor.block, anchorBlockKind[anchor.kind]),
     })
     const text = block && blockCheckedText(block)
     if (
       block === null ||
       block.pendingTaskId !== null ||
-      block.rev !== input.anchor.rev ||
+      block.rev !== anchor.rev ||
       text === null ||
-      !validateQuote(text, input.anchor.quote)
+      (anchor.kind === 'quote' && !validateQuote(text, anchor.quote))
     )
       throw artifactStale()
+    const stored: ArtifactCommentAnchor =
+      anchor.kind === 'quote' ? anchor : await cellAnchor(tx, input.artifactId, anchor, text)
+    if (stored.kind === 'cell' && secretInContent(stored.text)) throw artifactSecretShape()
     await requireCommentRoom(tx, input.artifactId)
     return tx.artifactComment.create({
       data: {
         artifactId: input.artifactId,
         authorUserId: input.userId,
-        blockKey: input.anchor.block,
-        anchor: input.anchor,
+        blockKey: anchor.block,
+        anchor: stored,
         body: input.body,
       },
       select: { id: true },
@@ -376,8 +438,7 @@ export function readChatArtifactComments(db: Db, input: { taskId: string; artifa
           {
             threadId: note.id,
             artifactId,
-            block: note.anchor.block,
-            quote: note.anchor.quote,
+            anchor: note.anchor,
             body: note.body,
             ownerReplies: note.replies,
             resolved: row.resolvedAt !== null,

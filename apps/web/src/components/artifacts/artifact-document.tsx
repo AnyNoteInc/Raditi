@@ -465,7 +465,7 @@ export function ArtifactDocument({
   const [failed, setFailed] = useState(false)
   const canEdit = artifactRoleAtLeast(artifact.role, 'edit')
   const canComment =
-    artifact.role === 'owner' && artifactKindSpecOf(artifact.kind)?.quoteNotes === true
+    artifact.role === 'owner' && artifactKindSpecOf(artifact.kind)?.notes === 'quote'
   const { root: quoteRoot, quote } = useArtifactQuote(canComment)
   const [commentDraft, setCommentDraft] = useState<ArtifactQuoteAnchor | null>(null)
   const sections = artifact.blocks.filter((block) => block.kind === 'section')

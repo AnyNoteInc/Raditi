@@ -105,6 +105,8 @@ export interface TableGridProps {
   totals: Record<string, string>
   onMessage: (text: string) => void
   onHeader: (column: ArtifactColumn, anchor: HTMLElement) => void
+  /** The cell with the cursor, for «Заметка к ячейке» (88.18д); null — none. */
+  onActiveCell?: (cell: { row: string; column: string } | null) => void
 }
 
 export function TableGrid({
@@ -117,6 +119,7 @@ export function TableGrid({
   totals,
   onMessage,
   onHeader,
+  onActiveCell,
 }: TableGridProps) {
   const scroller = useRef<HTMLDivElement>(null)
   const grid = useRef<HTMLDivElement>(null)
@@ -370,6 +373,14 @@ export function TableGrid({
   const items = virtualizer.getVirtualItems()
   const activeKey = view[focus.r]
   const activeColumn = columns[focus.c]
+  const activeColumnKey = activeColumn?.key
+  useEffect(() => {
+    onActiveCell?.(
+      activeKey !== undefined && activeColumnKey !== undefined
+        ? { row: activeKey, column: activeColumnKey }
+        : null,
+    )
+  }, [activeKey, activeColumnKey, onActiveCell])
   const sticky = (index: number) => index < pinned
   const hasTotals = Object.keys(totals).length > 0
 

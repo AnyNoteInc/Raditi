@@ -10,7 +10,8 @@ import {
   artifactCommentBodySchema,
   artifactHoldReasons,
   artifactKinds,
-  artifactQuoteAnchorSchema,
+  artifactCommentAnchorInputSchema,
+  artifactCommentAnchorSchema,
   artifactRoles,
   artifactSignalLimits,
   artifactTitleSchema,
@@ -168,7 +169,7 @@ export const artifactRouter = router({
       z.array(
         z.strictObject({
           id: z.uuid(),
-          anchor: artifactQuoteAnchorSchema,
+          anchor: artifactCommentAnchorSchema,
           body: artifactCommentBodySchema,
           resolved: z.boolean(),
           moved: z.boolean(),
@@ -190,7 +191,7 @@ export const artifactRouter = router({
     .input(
       z.strictObject({
         artifactId,
-        anchor: artifactQuoteAnchorSchema,
+        anchor: artifactCommentAnchorInputSchema,
         body: artifactCommentBodySchema,
       }),
     )

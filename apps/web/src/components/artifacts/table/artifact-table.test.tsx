@@ -15,7 +15,8 @@ import { batchesOf, layoutOf, shownColumns } from './table-model'
 
 const ARTIFACT = '019f1a21-1800-7f00-8abc-0000000000a1'
 
-const { write, totals, exportStart, exportStatus } = vi.hoisted(() => ({
+const { write, totals, exportStart, exportStatus, addComment } = vi.hoisted(() => ({
+  addComment: vi.fn(async (_input: unknown) => ({ id: '019f1a21-1800-7f00-8abc-0000000000c1' })),
   write: vi.fn(async (_input: unknown) => ({
     artifactId: '019f1a21-1800-7f00-8abc-0000000000a1',
     opId: 'x',
@@ -42,9 +43,21 @@ vi.mock('@/trpc/client', () => ({
           queryFn: () => totals(input),
         }),
       },
+      // Private notes to a cell (88.18д): none yet.
+      comments: {
+        queryOptions: (input: unknown) => ({
+          queryKey: ['comments', input],
+          queryFn: async () => [],
+        }),
+        queryKey: (input: unknown) => ['comments', input],
+      },
+      addComment: { mutationOptions: () => ({ mutationFn: addComment }) },
+      resolveComment: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
     },
   }),
-  useTRPCClient: () => ({ artifact: { exportStatus: { query: exportStatus } } }),
+  useTRPCClient: () => ({
+    artifact: { exportStatus: { query: exportStatus }, addCommentReply: { mutate: vi.fn() } },
+  }),
 }))
 
 /** The price list of the template as the server reads it back. */
@@ -117,6 +130,39 @@ const batchOf = (call: number) =>
   (write.mock.calls[call]![0] as { batch: { ops: Record<string, unknown>[] } }).batch
 
 describe('the grid of a table', () => {
+  it('opens a private note to the cell with the cursor, named by its column (88.18д)', async () => {
+    show()
+    const grid = screen.getByRole('grid')
+    act(() => grid.focus())
+    for (let i = 0; i < 3; i += 1)
+      fireEvent.keyDown(grid, { code: 'ArrowRight', key: 'ArrowRight' })
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: 'Заметки к таблице' })).toBeTruthy(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Заметка к ячейке' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Заметка к ячейке' })
+    expect(within(dialog).getByText(/^Цена, ₽: /)).toBeTruthy()
+    fireEvent.change(within(dialog).getByLabelText('Заметка'), {
+      target: { value: 'Проверить цену' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить заметку' }))
+    await waitFor(() =>
+      expect(addComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          artifactId: ARTIFACT,
+          anchor: { kind: 'cell', block: 'r1', column: 'price', rev: 1 },
+          body: 'Проверить цену',
+        }),
+        expect.anything(),
+      ),
+    )
+  })
+
+  it('offers no note to a cell to one who does not own the table', () => {
+    show({ ...priceList(), role: 'edit' })
+    expect(screen.queryByRole('button', { name: 'Заметка к ячейке' })).toBeNull()
+  })
+
   it('shows the columns, the rows and the totals of the server, with the roles of a grid', async () => {
     show()
     const grid = screen.getByRole('grid', { name: 'Таблица «Прайс-лист»' })
