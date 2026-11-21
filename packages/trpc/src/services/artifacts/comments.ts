@@ -1,4 +1,10 @@
-import { addArtifactComment, readArtifactComments, type PrismaClient } from '@repo/db'
+import {
+  addArtifactComment,
+  readArtifactComments,
+  type ArtifactAnchorReaders,
+  type PrismaClient,
+} from '@repo/db'
+import { artifactElementOf } from '@repo/doc-bridge'
 import { artifactSectionText } from '@repo/doc-render/markdown'
 import {
   artifactCommentAnchorSchema,
@@ -16,14 +22,17 @@ export function createCabinetComment(
   db: PrismaClient,
   input: Owner & { anchor: ArtifactCommentAnchorInput; body: string },
 ) {
-  return addArtifactComment(db, input, (markdown, quote) =>
-    hasUniqueCommentQuote(quoteText(markdown), quote),
-  )
+  return addArtifactComment(db, input, anchorReaders)
+}
+
+const anchorReaders: ArtifactAnchorReaders = {
+  quote: (markdown, quote) => hasUniqueCommentQuote(quoteText(markdown), quote),
+  element: artifactElementOf,
 }
 
 /**
  * «Место изменилось»: a quote no longer found once in its section; a cell whose row or column is
- * gone. A new value of the cell keeps its place.
+ * gone (a new value keeps its place); an element no longer found once by its id.
  */
 function anchorMoved(
   anchor: ArtifactCommentAnchor,
@@ -33,6 +42,11 @@ function anchorMoved(
   const text = blocks.get(anchor.block)
   if (anchor.kind === 'cell')
     return text == null || !columns.some((column) => column.key === anchor.column)
+  if (anchor.kind === 'element')
+    return (
+      text == null ||
+      artifactElementOf({ block: anchor.block, html: text, id: anchor.element }) === null
+    )
   return !hasUniqueCommentQuote(text == null ? '' : quoteText(text), anchor.quote)
 }
 

@@ -79,8 +79,11 @@ export interface ArtifactKindSpec {
   wave: ArtifactWave
   /** False — it never opens to others with «Правит»: it goes into every turn of a project (Ар25). */
   sharableEdit: boolean
-  /** What private notes anchor to (Ар53): a quote of a section (88.18а), a cell (88.18д). */
-  notes?: 'quote' | 'cell'
+  /**
+   * What private notes anchor to (Ар53): a quote of a section (88.18а), a cell (88.18д), an
+   * element of a frame (88.18е).
+   */
+  notes?: 'quote' | 'cell' | 'element'
   /** True — its `html` and `script` live inside frames (canvas, slides, image); false — at the top. */
   framed: boolean
   /**
@@ -114,6 +117,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     exports: ['html', 'png', 'pdf'],
     wave: 1,
     sharableEdit: true,
+    notes: 'element',
     framed: false,
     forAgent:
       'a layout, a prototype of a page, a calculator. No skeleton: insert `html` blocks — fragments of the body, each up to 32 KiB —, `style` blocks of CSS, `script` blocks of JavaScript and one `settings` block: a JSON object of the numbers, prices and words the client may change, which the script reads by JSON.parse(document.getElementById("raditi-settings").textContent). The frame is sandboxed: no localStorage, sessionStorage, cookies, IndexedDB, service workers, pop-ups, navigation or network, no external font or script; the font Golos Text is there. A picture or a font goes in by `raditi_artifact_file_put`, its `artifact-file:<id>` where its address stands',
@@ -139,6 +143,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     exports: ['html', 'png'],
     wave: 1,
     sharableEdit: true,
+    notes: 'element',
     framed: true,
     forAgent:
       'the screens of a new site side by side, each one adaptive page drawn for a computer (1440) and a phone (390). A screen is a `frame` block — props `name` (the screen: «Главная», «Услуги»), `variant` («А», «Б») for variants of one screen, `path` of its page when published ("/", "/uslugi") — with its own `html`, `style` and `script` blocks inside it (`parent`: the frame); a `style` block at the top is the common style of every screen, one `settings` block at the top their numbers and words. A `note` at the top is a sticky note, a `note` inside a frame a pin (props x, y in per cent). Each html block is a fragment of the body up to 32 KiB; the frame is sandboxed like a mockup. After drawing a screen check it with `raditi_artifact_layout`',

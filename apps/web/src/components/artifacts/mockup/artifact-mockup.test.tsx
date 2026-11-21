@@ -29,22 +29,28 @@ const { frame, write } = vi.hoisted(() => ({
 
 const ARTIFACT = '019f1a21-1800-7f00-8abc-000000000001'
 
-vi.mock('@/trpc/client', () => ({
-  useTRPC: () => ({
-    artifact: {
-      frame: {
-        queryOptions: (input: { mode: string }) => ({
-          queryKey: ['artifact.frame', input],
-          queryFn: () => frame(input),
-        }),
+vi.mock('@/trpc/client', async () => {
+  const { notesTrpcMock } = await import('../notes-trpc.testing')
+  const notes = notesTrpcMock()
+  return {
+    useTRPC: () => ({
+      artifact: {
+        ...notes.artifact,
+        frame: {
+          queryOptions: (input: { mode: string }) => ({
+            queryKey: ['artifact.frame', input],
+            queryFn: () => frame(input),
+          }),
+        },
+        files: { queryOptions: () => ({ queryKey: ['artifact.files'], queryFn: async () => [] }) },
+        fileStart: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+        editText: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+        write: { mutationOptions: () => ({ mutationFn: write }) },
       },
-      files: { queryOptions: () => ({ queryKey: ['artifact.files'], queryFn: async () => [] }) },
-      fileStart: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
-      editText: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
-      write: { mutationOptions: () => ({ mutationFn: write }) },
-    },
-  }),
-}))
+    }),
+    useTRPCClient: () => ({ artifact: notes.client }),
+  }
+})
 
 class Observer {
   observe() {}

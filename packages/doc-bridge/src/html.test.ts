@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   artifactEditCopy,
+  artifactElementOf,
   artifactHtmlParts,
   artifactSvgPart,
   patchArtifactText,
@@ -187,5 +188,29 @@ describe('artifactImportOf', () => {
     })
     expect(artifactImportOf('a.docx', 'x', bounds)).toEqual({ ok: false, problem: 'type' })
     expect(artifactImportOf('a.md', '   ', bounds)).toEqual({ ok: false, problem: 'empty' })
+  })
+})
+
+describe('the element a note anchors to (88.18е)', () => {
+  const html = '<section><h2>Цены</h2><p>Хлеб <b>120 ₽</b></p><script>var x = 1</script></section>'
+  const ids = (source: string) =>
+    [...stampArtifactHtml('b1', source).matchAll(/data-rid="([^"]+)"/gu)].map((m) => m[1]!)
+
+  it('reads the tag and the text inside from the source, by the id the server stamps', () => {
+    const [section, h2, p] = ids(html)
+    expect(artifactElementOf({ block: 'b1', html, id: h2! })).toEqual({ tag: 'h2', text: 'Цены' })
+    expect(artifactElementOf({ block: 'b1', html, id: p! })).toEqual({
+      tag: 'p',
+      text: 'Хлеб  120 ₽',
+    })
+    // Raw text inside is never read.
+    expect(artifactElementOf({ block: 'b1', html, id: section! })?.text).not.toContain('var x')
+  })
+
+  it('names nothing for an id of another block, a gone element or one inside a script', () => {
+    const [, , , , script] = ids(html)
+    expect(artifactElementOf({ block: 'b2', html, id: 'b1.2' })).toBeNull()
+    expect(artifactElementOf({ block: 'b1', html, id: 'b1.99' })).toBeNull()
+    expect(artifactElementOf({ block: 'b1', html, id: script! })).toBeNull()
   })
 })

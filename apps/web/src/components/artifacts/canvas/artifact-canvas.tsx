@@ -120,7 +120,12 @@ function LiveFrame({
   )
 }
 
-export function ArtifactCanvas({ artifact, onChanged, place }: ArtifactBodyProps) {
+export function ArtifactCanvas({
+  artifact,
+  onChanged,
+  onAccessLost,
+  place,
+}: ArtifactBodyProps & { onAccessLost?: () => void }) {
   const trpc = useTRPC()
   const router = useRouter()
   const me = useQuery(trpc.user.me.queryOptions())
@@ -883,6 +888,7 @@ export function ArtifactCanvas({ artifact, onChanged, place }: ArtifactBodyProps
                 artifact={artifact}
                 presence={null}
                 onChanged={onChanged}
+                {...(onAccessLost ? { onAccessLost } : {})}
                 place={narrow ? 'pane' : 'page'}
                 frame={openedScreen.key}
               />

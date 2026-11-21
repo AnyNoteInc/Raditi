@@ -29,40 +29,46 @@ const { frame, write, width } = vi.hoisted(() => ({
 const ARTIFACT = '019f1a21-1800-7f00-8abc-000000000001'
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }))
-vi.mock('@/trpc/client', () => ({
-  useTRPC: () => ({
-    user: {
-      me: { queryOptions: () => ({ queryKey: ['me'], queryFn: async () => ({ id: 'u1' }) }) },
-    },
-    artifact: {
-      frame: {
-        queryOptions: (input: { mode: string; frame?: string }) => ({
-          queryKey: ['artifact.frame', input],
-          queryFn: () => frame(input),
-        }),
+vi.mock('@/trpc/client', async () => {
+  const { notesTrpcMock } = await import('../notes-trpc.testing')
+  const notes = notesTrpcMock()
+  return {
+    useTRPC: () => ({
+      user: {
+        me: { queryOptions: () => ({ queryKey: ['me'], queryFn: async () => ({ id: 'u1' }) }) },
       },
-      canvasThumbs: {
-        queryOptions: () => ({
-          queryKey: ['artifact.canvasThumbs'],
-          queryFn: async () => ({
-            pending: false,
-            thumbs: ['home', 'uslugi'].flatMap((key) =>
-              [1440, 390].map((each) => ({
-                frame: key,
-                width: each,
-                url: `/api/artifact-thumbs/${ARTIFACT}/${'a'.repeat(26)}-${each}.jpg`,
-              })),
-            ),
+      artifact: {
+        ...notes.artifact,
+        frame: {
+          queryOptions: (input: { mode: string; frame?: string }) => ({
+            queryKey: ['artifact.frame', input],
+            queryFn: () => frame(input),
           }),
-        }),
+        },
+        canvasThumbs: {
+          queryOptions: () => ({
+            queryKey: ['artifact.canvasThumbs'],
+            queryFn: async () => ({
+              pending: false,
+              thumbs: ['home', 'uslugi'].flatMap((key) =>
+                [1440, 390].map((each) => ({
+                  frame: key,
+                  width: each,
+                  url: `/api/artifact-thumbs/${ARTIFACT}/${'a'.repeat(26)}-${each}.jpg`,
+                })),
+              ),
+            }),
+          }),
+        },
+        files: { queryOptions: () => ({ queryKey: ['artifact.files'], queryFn: async () => [] }) },
+        fileStart: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+        editText: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+        write: { mutationOptions: () => ({ mutationFn: write }) },
       },
-      files: { queryOptions: () => ({ queryKey: ['artifact.files'], queryFn: async () => [] }) },
-      fileStart: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
-      editText: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
-      write: { mutationOptions: () => ({ mutationFn: write }) },
-    },
-  }),
-}))
+    }),
+    useTRPCClient: () => ({ artifact: notes.client }),
+  }
+})
 
 class Observer {
   readonly callback: ResizeObserverCallback

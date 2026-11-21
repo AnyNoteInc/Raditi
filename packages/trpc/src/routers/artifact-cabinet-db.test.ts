@@ -998,6 +998,64 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     ])
   })
 
+  it('anchors a private note to an element of a mockup by the id the server stamps (88.18е)', async () => {
+    const user = await person()
+    const caller = callerOf(user)
+    const { id: artifactId } = await caller.artifact.create({
+      kind: 'mockup',
+      title: 'Лендинг',
+      projectId: null,
+      templateId: null,
+    })
+    const write = (ops: unknown[]) =>
+      caller.artifact.write({ batch: { artifactId, opId: randomUUID(), ops } })
+    const created = await write([
+      {
+        op: 'insert',
+        block: 'hero',
+        after: null,
+        kind: 'html',
+        content: '<section><h2>Цены</h2><p>Хлеб <b>120 ₽</b></p></section>',
+      },
+    ])
+    const hero = created.blocks.find((block) => block.key === 'hero')!
+    // section — hero.1, h2 — hero.2, p — hero.3.
+    const element = { kind: 'element' as const, block: 'hero', element: 'hero.2', rev: hero.rev }
+    await expect(
+      caller.artifact.addComment({
+        artifactId,
+        anchor: { kind: 'quote', block: 'hero', rev: hero.rev, quote: 'Цены' },
+        body: 'А',
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(
+      caller.artifact.addComment({
+        artifactId,
+        anchor: { ...element, element: 'hero.9' },
+        body: 'А',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(
+      caller.artifact.addComment({
+        artifactId,
+        anchor: { ...element, rev: hero.rev + 1 },
+        body: 'А',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+
+    const { id } = await caller.artifact.addComment({
+      artifactId,
+      anchor: element,
+      body: 'Сделать заголовок крупнее',
+    })
+    expect(await caller.artifact.comments({ artifactId })).toMatchObject([
+      { id, anchor: { ...element, tag: 'h2', text: 'Цены' }, moved: false },
+    ])
+    // The heading is gone: the id names another element no more, the place moved.
+    await write([{ op: 'replace', block: 'hero', ifRev: hero.rev, content: '<p>Хлеб</p>' }])
+    expect((await caller.artifact.comments({ artifactId }))[0]).toMatchObject({ moved: true })
+  })
+
   it('reads notes and their access decision at the same snapshot during a takedown', async () => {
     const { user, caller, artifactId, anchor } = await quoteDocument()
     const { id } = await caller.artifact.addComment({ artifactId, anchor, body: 'Старая заметка' })

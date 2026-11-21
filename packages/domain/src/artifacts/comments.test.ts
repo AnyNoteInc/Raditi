@@ -36,6 +36,20 @@ describe('the anchors of notes', () => {
     ).toMatchObject({ quote: 'хлеб и' })
   })
 
+  it('takes an element of its own block, and stores it with its tag and text (88.18е)', () => {
+    const element = { kind: 'element', block: 'hero', element: 'hero.2', rev: 1 } as const
+    expect(artifactCommentAnchorInputSchema.safeParse(element).success).toBe(true)
+    expect(
+      artifactCommentAnchorInputSchema.safeParse({ ...element, element: 'other.2' }).success,
+    ).toBe(false)
+    expect(
+      artifactCommentAnchorInputSchema.safeParse({ ...element, element: 'hero.0' }).success,
+    ).toBe(false)
+    expect(
+      artifactCommentAnchorSchema.parse({ ...element, tag: 'h2', text: 'Цены' }),
+    ).toMatchObject({ kind: 'element', tag: 'h2' })
+  })
+
   it('keeps a cell text on one line, at most 200 characters, never half a pair', () => {
     expect(commentCellText(' Хлеб\n\tржаной ')).toBe('Хлеб ржаной')
     const long = commentCellText('😀'.repeat(300))

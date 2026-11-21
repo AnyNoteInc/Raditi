@@ -178,6 +178,7 @@ export {
   resolveArtifactComment,
   settleAgentCommentReplies,
   snapshotArtifactComments,
+  type ArtifactAnchorReaders,
 } from './artifact-comments.ts'
 export { accessibleTasks } from './chat-access.ts'
 export { classProfile, type ClassProfile } from './class-profile.ts'

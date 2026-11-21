@@ -80,6 +80,11 @@ const noteTexts = {
     region: 'Заметки к документу',
     empty: 'Выделите текст в разделе, чтобы оставить заметку.',
   },
+  element: {
+    dialog: 'Заметка к элементу',
+    region: 'Заметки к макету',
+    empty: 'Включите «Выбрать элемент», выберите элемент и нажмите «Заметка к элементу».',
+  },
   cell: {
     dialog: 'Заметка к ячейке',
     region: 'Заметки к таблице',
@@ -94,6 +99,12 @@ function AnchorText({ anchor }: { anchor: ArtifactCommentAnchor }) {
     return (
       <Typography variant="body2" color="text.secondary" sx={sx}>
         {anchor.columnName}: {anchor.text || 'пустая ячейка'}
+      </Typography>
+    )
+  if (anchor.kind === 'element')
+    return (
+      <Typography variant="body2" color="text.secondary" sx={sx}>
+        {anchor.text ? `«${anchor.text}»` : 'Элемент без текста'} · {anchor.tag}
       </Typography>
     )
   return (

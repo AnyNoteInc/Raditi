@@ -32,33 +32,29 @@ const { write, totals, exportStart, exportStatus, addComment } = vi.hoisted(() =
   exportStatus: vi.fn(async (_input: unknown) => ({ state: 'ready' as const })),
 }))
 
-vi.mock('@/trpc/client', () => ({
-  useTRPC: () => ({
-    artifact: {
-      write: { mutationOptions: () => ({ mutationFn: write }) },
-      exportStart: { mutationOptions: () => ({ mutationFn: exportStart }) },
-      tableTotals: {
-        queryOptions: (input: unknown) => ({
-          queryKey: ['tableTotals', input],
-          queryFn: () => totals(input),
-        }),
+vi.mock('@/trpc/client', async () => {
+  // Private notes to a cell (88.18д): none yet.
+  const { notesTrpcMock } = await import('../notes-trpc.testing')
+  const notes = notesTrpcMock(addComment)
+  return {
+    useTRPC: () => ({
+      artifact: {
+        ...notes.artifact,
+        write: { mutationOptions: () => ({ mutationFn: write }) },
+        exportStart: { mutationOptions: () => ({ mutationFn: exportStart }) },
+        tableTotals: {
+          queryOptions: (input: unknown) => ({
+            queryKey: ['tableTotals', input],
+            queryFn: () => totals(input),
+          }),
+        },
       },
-      // Private notes to a cell (88.18д): none yet.
-      comments: {
-        queryOptions: (input: unknown) => ({
-          queryKey: ['comments', input],
-          queryFn: async () => [],
-        }),
-        queryKey: (input: unknown) => ['comments', input],
-      },
-      addComment: { mutationOptions: () => ({ mutationFn: addComment }) },
-      resolveComment: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
-    },
-  }),
-  useTRPCClient: () => ({
-    artifact: { exportStatus: { query: exportStatus }, addCommentReply: { mutate: vi.fn() } },
-  }),
-}))
+    }),
+    useTRPCClient: () => ({
+      artifact: { ...notes.client, exportStatus: { query: exportStatus } },
+    }),
+  }
+})
 
 /** The price list of the template as the server reads it back. */
 function priceList(): CabinetArtifact {

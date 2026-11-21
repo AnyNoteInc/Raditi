@@ -7,13 +7,18 @@ import Skeleton from '@mui/material/Skeleton'
 import ToggleButton from '@mui/material/ToggleButton'
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Typography from '@mui/material/Typography'
-import { artifactRoleAtLeast } from '@repo/domain/artifacts'
+import {
+  artifactKindSpecOf,
+  artifactRoleAtLeast,
+  type ArtifactElementAnchorInput,
+} from '@repo/domain/artifacts'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 
 import { useTRPC } from '@/trpc/client'
 
 import type { ArtifactBodyProps } from '../artifact-body-props'
+import { ArtifactComments } from '../artifact-comments'
 import { EditFrame, type EditFrameHandle, type PickedElement } from './edit-frame'
 import { MockupCode } from './mockup-code'
 import { MockupFilesButton } from './mockup-files'
@@ -40,11 +45,13 @@ const domainCodeOf = (error: unknown) =>
 export function ArtifactMockup({
   artifact,
   onChanged,
+  onAccessLost,
   place,
   frame: screen,
 }: ArtifactBodyProps & {
   /** A screen of a canvas (slice 88.15): its frame, opened by «Открыть»; absent — a mockup. */
   frame?: string
+  onAccessLost?: () => void
 }) {
   const trpc = useTRPC()
   const [device, setDevice] = useState<number>(place === 'pane' ? 390 : 1440)
@@ -59,6 +66,23 @@ export function ArtifactMockup({
   const area = useRef<HTMLDivElement>(null)
   const edit = useRef<EditFrameHandle>(null)
   const canEdit = artifactRoleAtLeast(artifact.role, 'edit')
+  // Private notes to an element of the frame (88.18е): the owner's, picked in «Выбрать элемент».
+  const canComment =
+    artifact.role === 'owner' && artifactKindSpecOf(artifact.kind)?.notes === 'element'
+  const [commentDraft, setCommentDraft] = useState<{
+    anchor: ArtifactElementAnchorInput
+    label: string
+  } | null>(null)
+  const noteToElement = () => {
+    if (!picked) return
+    const block = picked.element.slice(0, picked.element.lastIndexOf('.'))
+    const rev = artifact.blocks.find((each) => each.key === block && each.kind === 'html')?.rev
+    if (rev === undefined) return
+    setCommentDraft({
+      anchor: { kind: 'element', block, element: picked.element, rev },
+      label: mockupTexts.selected(picked.tag, picked.text),
+    })
+  }
   const frameMode = mode === 'select' || mode === 'text' ? 'edit' : 'view'
   const frame = useQuery({
     // A new revision is a new document of the frame: the address is asked again.
@@ -219,9 +243,27 @@ export function ArtifactMockup({
           </Box>
         )}
         {picked && mode === 'select' && (
-          <Typography variant="body2" role="status" data-testid="mockup-picked">
-            {mockupTexts.selected(picked.tag, picked.text)}
-          </Typography>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+            <Typography variant="body2" role="status" data-testid="mockup-picked">
+              {mockupTexts.selected(picked.tag, picked.text)}
+            </Typography>
+            {canComment && (
+              <Button size="small" variant="outlined" onClick={noteToElement}>
+                Заметка к элементу
+              </Button>
+            )}
+          </Box>
+        )}
+        {canComment && (
+          <ArtifactComments
+            key={artifact.id}
+            artifact={artifact}
+            draft={commentDraft?.anchor ?? null}
+            draftLabel={commentDraft?.label}
+            onClose={() => setCommentDraft(null)}
+            onChanged={onChanged}
+            onAccessLost={onAccessLost ?? (() => {})}
+          />
         )}
         {notice && (
           <Alert severity={notice.severity} onClose={() => setNotice(null)}>

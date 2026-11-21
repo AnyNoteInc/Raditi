@@ -58,7 +58,20 @@ const liveAnchors = (artifactId: string, keys: string | { in: string[] }, kind: 
   deletedRev: null,
 })
 
-const anchorBlockKind = { quote: 'section', cell: 'row' } as const
+const anchorBlockKind = { quote: 'section', cell: 'row', element: 'html' } as const
+
+/**
+ * What the role reads of an anchor in the checked text of its block (the layers keep parsers of
+ * Markdown and HTML out of the database package): a quote found exactly once; an element by its id.
+ */
+export interface ArtifactAnchorReaders {
+  quote: (markdown: string, quote: string) => boolean
+  element: (input: {
+    block: string
+    html: string
+    id: string
+  }) => { tag: string; text: string } | null
+}
 
 /** The checked columns of a table: its first `columns` block in order that parses. */
 async function checkedColumns(tx: Prisma.TransactionClient, artifactId: string) {
@@ -182,10 +195,31 @@ async function cellAnchor(
   }
 }
 
+/** The anchor as stored: a quote as it came, a cell and an element with what the server read. */
+async function storedAnchor(
+  tx: Prisma.TransactionClient,
+  artifactId: string,
+  anchor: ArtifactCommentAnchorInput,
+  text: string,
+  readers: ArtifactAnchorReaders,
+): Promise<ArtifactCommentAnchor> {
+  switch (anchor.kind) {
+    case 'quote':
+      return anchor
+    case 'cell':
+      return cellAnchor(tx, artifactId, anchor, text)
+    case 'element': {
+      const element = readers.element({ block: anchor.block, html: text, id: anchor.element })
+      if (!element) throw artifactStale()
+      return { ...anchor, tag: element.tag.slice(0, 32), text: commentCellText(element.text) }
+    }
+  }
+}
+
 export async function addArtifactComment(
   db: Db,
   input: Owner & { anchor: ArtifactCommentAnchorInput; body: string },
-  validateQuote: (markdown: string, quote: string) => boolean,
+  readers: ArtifactAnchorReaders,
 ) {
   return db.$transaction(async (tx) => {
     const { notes } = await lockNotedArtifact(tx, input)
@@ -202,12 +236,11 @@ export async function addArtifactComment(
       block.pendingTaskId !== null ||
       block.rev !== anchor.rev ||
       text === null ||
-      (anchor.kind === 'quote' && !validateQuote(text, anchor.quote))
+      (anchor.kind === 'quote' && !readers.quote(text, anchor.quote))
     )
       throw artifactStale()
-    const stored: ArtifactCommentAnchor =
-      anchor.kind === 'quote' ? anchor : await cellAnchor(tx, input.artifactId, anchor, text)
-    if (stored.kind === 'cell' && secretInContent(stored.text)) throw artifactSecretShape()
+    const stored = await storedAnchor(tx, input.artifactId, anchor, text, readers)
+    if (stored.kind !== 'quote' && secretInContent(stored.text)) throw artifactSecretShape()
     await requireCommentRoom(tx, input.artifactId)
     return tx.artifactComment.create({
       data: {

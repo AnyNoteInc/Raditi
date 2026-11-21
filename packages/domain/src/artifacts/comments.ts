@@ -44,17 +44,53 @@ export const artifactCellAnchorSchema = artifactCellAnchorInputSchema.extend({
 })
 export type ArtifactCellAnchor = z.infer<typeof artifactCellAnchorSchema>
 
-/** What a note is anchored to: a quote of a document or a cell of a table (Ар53). */
-export const artifactCommentAnchorSchema = z.discriminatedUnion('kind', [
+/** The id the server stamps into an element of an `html` block: `<block>.<n>` (Ар9). */
+const elementIdSchema = z
+  .string()
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+\.[1-9][0-9]{0,5}$/u)
+
+/** An element of a frame as the cabinet picks it: the server reads its tag and text (Ар27). */
+export const artifactElementAnchorInputSchema = z
+  .strictObject({
+    kind: z.literal('element'),
+    block: artifactBlockKeySchema,
+    element: elementIdSchema,
+    rev: z.number().int().nonnegative(),
+  })
+  .refine((anchor) => anchor.element.startsWith(`${anchor.block}.`), {
+    message: 'the element is of its block',
+  })
+export type ArtifactElementAnchorInput = z.infer<typeof artifactElementAnchorInputSchema>
+
+export const artifactElementAnchorSchema = z
+  .strictObject({
+    kind: z.literal('element'),
+    block: artifactBlockKeySchema,
+    element: elementIdSchema,
+    rev: z.number().int().nonnegative(),
+    tag: z.string().max(32).refine(storableText),
+    text: z
+      .string()
+      .max(commentCellTextChars * 2)
+      .refine(storableText),
+  })
+  .refine((anchor) => anchor.element.startsWith(`${anchor.block}.`))
+export type ArtifactElementAnchor = z.infer<typeof artifactElementAnchorSchema>
+
+/** What a note is anchored to: a quote, a cell of a table, an element of a frame (Ар53). */
+export const artifactCommentAnchorSchema = z.union([
   artifactQuoteAnchorSchema,
   artifactCellAnchorSchema,
+  artifactElementAnchorSchema,
 ])
 export type ArtifactCommentAnchor = z.infer<typeof artifactCommentAnchorSchema>
 
 /** The anchor the cabinet sends: a cell without what the server reads for it. */
-export const artifactCommentAnchorInputSchema = z.discriminatedUnion('kind', [
+export const artifactCommentAnchorInputSchema = z.union([
   artifactQuoteAnchorSchema,
   artifactCellAnchorInputSchema,
+  artifactElementAnchorInputSchema,
 ])
 export type ArtifactCommentAnchorInput = z.infer<typeof artifactCommentAnchorInputSchema>
 

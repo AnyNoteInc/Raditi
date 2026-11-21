@@ -275,6 +275,36 @@ export function patchArtifactText(input: {
   return { ok: true, html }
 }
 
+/** The text inside an element as a reader sees it in order, without raw text (script, style…). */
+function visibleText(element: Element): string {
+  const pieces: string[] = []
+  walk(element, (node, parents) => {
+    if (!isText(node)) return
+    if (parents.some((parent) => NOT_EDITABLE.has(parent.tagName))) return
+    pieces.push(node.value)
+  })
+  return pieces.join(' ')
+}
+
+/**
+ * The element of block `block` a note anchors to (Ар53, Ар27, slice 88.18е): its tag and the text
+ * inside, read on the server from the checked source — never what a frame sent. Null — no element by
+ * this id, two (a clone), or one inside raw text.
+ */
+export function artifactElementOf(input: {
+  block: string
+  html: string
+  id: string
+}): { tag: string; text: string } | null {
+  if (!input.id.startsWith(`${input.block}.`)) return null
+  const found = byId(stampArtifactHtml(input.block, input.html)).get(input.id) ?? []
+  if (found.length !== 1) return null
+  const { element, parents } = found[0]!
+  if (NOT_EDITABLE.has(element.tagName) || parents.some((p) => NOT_EDITABLE.has(p.tagName)))
+    return null
+  return { tag: element.tagName, text: visibleText(element) }
+}
+
 // ---- Import of a whole HTML file (§7.2: a big one is cut by its top elements) ----
 
 export interface ArtifactHtmlParts {
