@@ -1,5 +1,6 @@
 // Artifacts: working objects of the client and the agents (docs/plan/88-artifacts.md, Ар1–Ар60).
 export * from './blocks.ts'
+export * from './comments.ts'
 export * from './errors.ts'
 export * from './exports.ts'
 export * from './kinds.ts'

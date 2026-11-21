@@ -133,6 +133,20 @@ export const artifactRefusalTexts = Object.freeze({
   ARTIFACT_OP_INVALID: 'Правку не удалось применить',
 } satisfies Record<ArtifactRefusalCode, string>)
 
+/** A quote can become ambiguous as well as stale; the note editor needs its own next step. */
+export function artifactCommentRefusalText(code: string | null | undefined): string | undefined {
+  switch (code) {
+    case 'ARTIFACT_STALE':
+      return 'Не удалось привязать заметку к выделенному месту. Выделите цитату заново.'
+    case 'ARTIFACT_LIMIT':
+      return 'Достигнут предел заметок для этого артефакта.'
+    case 'ARTIFACT_SECRET_SHAPE':
+      return `${artifactRefusalTexts.ARTIFACT_SECRET_SHAPE}.`
+    default:
+      return undefined
+  }
+}
+
 /** «Этот блок сейчас правят» told by who holds it. */
 export const artifactHoldTexts = Object.freeze({
   human: 'Этот блок сейчас правит человек',

@@ -19,14 +19,16 @@ export const bodyTexts = Object.freeze({
   notShown: 'Этот вид пока не открывается.',
 })
 
-export function ArtifactBody(props: ArtifactBodyProps) {
+export function ArtifactBody(props: ArtifactBodyProps & { onAccessLost: () => void }) {
   switch (artifactKindSpecOf(props.artifact.kind)?.view) {
     case 'markdown':
       return (
         <ArtifactDocument
+          key={props.artifact.id}
           artifact={props.artifact}
           presence={props.presence}
           onChanged={props.onChanged}
+          onAccessLost={props.onAccessLost}
           onEditing={props.onEditing}
         />
       )

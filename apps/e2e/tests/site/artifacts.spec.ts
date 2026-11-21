@@ -1,6 +1,6 @@
 import { expect, test } from '../../fixtures/signed-in.ts'
 
-import { addDocument, agentWrites, attachToChat } from './artifacts.ts'
+import { addDocument, agentWrites, attachToChat, expireArtifactReaderSession } from './artifacts.ts'
 import { addAnsweredChat, hideDevIndicator } from './site.ts'
 
 // «Артефакты» in a real browser (docs/plan/88-artifacts.md, stage Э4: 88.9–88.11б): the gallery
@@ -107,7 +107,8 @@ test('a section edited in place, a section the agent writes taken back, and the 
     await page.keyboard.press('ControlOrMeta+A')
     await page.keyboard.type('Совсем другой текст.')
     await page.getByRole('button', { name: 'Готово' }).click()
-    await expect(page.getByText('Совсем другой текст.')).toBeVisible()
+    await expect(page.getByRole('textbox', { name: 'Текст раздела «О нас»' })).toHaveCount(0)
+    await expect(page.locator('#section-onas p')).toHaveText('Совсем другой текст.')
 
     await page.getByRole('button', { name: 'История версий' }).click()
     // The edit since made a version of its own: the named one is no longer the current one.
@@ -132,6 +133,194 @@ test('a section edited in place, a section the agent writes taken back, and the 
     await expect(page.getByRole('button', { name: 'Обновить страницу' })).toBeVisible()
   })
 })
+
+test('a private quote note survives reload and a removed section', async ({
+  page,
+  signedInUser,
+}) => {
+  await hideDevIndicator(page)
+  const { id } = await addDocument(signedInUser.id, {
+    title: 'Тексты для пекарни',
+    sections: [
+      { key: 'onas', heading: 'О нас', text: 'Печём **хлеб** &amp; булочки.' },
+      { key: 'dostavka', heading: 'Доставка', text: 'Утром.' },
+    ],
+  })
+  await page.goto(`/artifacts/${id}`)
+  const first = page.locator('#section-onas p')
+  const last = page.locator('#section-dostavka p')
+  await expect(first).toHaveText('Печём хлеб & булочки.')
+  await expect(last).toBeVisible()
+  const add = page.getByRole('button', { name: 'Добавить заметку к цитате' })
+  await first.evaluate((paragraph) => {
+    const range = document.createRange()
+    range.setStartBefore(paragraph)
+    range.setEndAfter(document.querySelector('#section-dostavka p')!)
+    const selection = document.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+  })
+  await expect(add).toHaveCount(0)
+  await first.evaluate((paragraph) => {
+    const range = document.createRange()
+    range.selectNodeContents(paragraph)
+    const selection = document.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+  })
+  await add.click()
+  const dialog = page.getByRole('dialog', { name: 'Заметка к цитате' })
+  await expect(dialog.getByText('Печём хлеб & булочки.')).toBeVisible()
+  const body = 'Уточнить ассортимент на завтра.'
+  await dialog.getByRole('textbox', { name: 'Заметка' }).fill(body)
+  await dialog.getByRole('button', { name: 'Сохранить заметку' }).click()
+
+  const notes = page.getByRole('region', { name: 'Заметки к документу' })
+  await expect(notes.getByText(body)).toBeVisible()
+  await page.reload()
+  await expect(notes.getByText(body)).toBeVisible()
+  await notes.getByRole('button', { name: 'Отметить решённой' }).click()
+  await expect(notes.getByText(body)).toHaveCount(0)
+  await notes.getByRole('button', { name: 'Решённые', exact: true }).click()
+  await expect(notes.getByText(body)).toBeVisible()
+  await notes.getByRole('button', { name: 'Открыть заново' }).click()
+  await notes.getByRole('button', { name: 'Нерешённые', exact: true }).click()
+  await expect(notes.getByText(body)).toBeVisible()
+
+  await page.getByRole('button', { name: 'Действия с разделом «О нас»' }).click()
+  await page.getByRole('menuitem', { name: 'Удалить раздел' }).click()
+  await expect(first).toHaveCount(0)
+  await expect(notes.getByText('Место изменилось')).toBeVisible()
+  await expect(notes.getByText(body)).toBeVisible()
+
+  await last.evaluate((paragraph) => {
+    const range = document.createRange()
+    range.selectNodeContents(paragraph)
+    const selection = document.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+  })
+  await add.click()
+  await dialog.getByRole('textbox', { name: 'Заметка' }).fill('Незаконченная заметка.')
+  const otherTab = await page.context().newPage()
+  try {
+    await otherTab.goto(`/artifacts/${id}`)
+    await otherTab.getByRole('button', { name: 'В корзину', exact: true }).click()
+    await expect(otherTab).toHaveURL(/\/artifacts$/)
+  } finally {
+    await otherTab.close()
+  }
+  await page.bringToFront()
+  await expect(page.getByText('Артефакт не найден, или к нему нет доступа.')).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(notes).toHaveCount(0)
+  await expect(dialog).toHaveCount(0)
+  await expect(last).toHaveCount(0)
+})
+
+for (const { surface, reason } of [
+  { surface: 'page', reason: 'session expiry' },
+  { surface: 'tab', reason: 'session expiry' },
+  { surface: 'page', reason: 'note refused while document read fails' },
+  { surface: 'tab', reason: 'note refused while document read fails' },
+  { surface: 'page', reason: 'account switch' },
+] as const) {
+  test(`${reason} hides the document and private notes on its ${surface}`, async ({
+    page,
+    signedInUser,
+    accounts,
+    context,
+  }) => {
+    await hideDevIndicator(page)
+    await page.setViewportSize({ width: 1440, height: 900 })
+    const { id } = await addDocument(signedInUser.id, {
+      title: 'Тексты для подписчиков',
+      sections: [{ key: 'onas', heading: 'О нас', text: 'Работаем до десяти.' }],
+    })
+    if (surface === 'tab') {
+      const { taskId } = await addAnsweredChat(signedInUser.id, {
+        words: 'Напишите про график',
+        answer: 'Готово.',
+        thought: 'График.',
+      })
+      await attachToChat(id, taskId)
+      await page.goto(`/chats/${taskId}`)
+      await page.getByRole('button', { name: /^Инструменты/ }).click()
+      await page.getByRole('menuitem', { name: /Тексты для подписчиков/ }).click()
+    } else {
+      await page.goto(`/artifacts/${id}`)
+    }
+
+    const paragraph = page.locator('#section-onas p')
+    const notes = page.getByRole('region', { name: 'Заметки к документу' })
+    const dialog = page.getByRole('dialog', { name: 'Заметка к цитате' })
+    await expect(paragraph).toHaveText('Работаем до десяти.')
+    await expect(notes).toBeVisible()
+    const openNote = async () => {
+      await paragraph.evaluate((element) => {
+        const range = document.createRange()
+        range.selectNodeContents(element)
+        const selection = document.getSelection()!
+        selection.removeAllRanges()
+        selection.addRange(range)
+      })
+      await page.getByRole('button', { name: 'Добавить заметку к цитате' }).click()
+    }
+    await openNote()
+    const body = 'Проверить график на выходных.'
+    await dialog.getByRole('textbox', { name: 'Заметка' }).fill(body)
+    await dialog.getByRole('button', { name: 'Сохранить заметку' }).click()
+    await expect(notes.getByText(body)).toBeVisible()
+    await openNote()
+    await dialog.getByRole('textbox', { name: 'Заметка' }).fill('Несохранённая заметка.')
+    const url = page.url()
+
+    const assertHidden = async () => {
+      await expect(page).toHaveURL(url)
+      await expect(paragraph).toHaveCount(0)
+      await expect(notes).toHaveCount(0)
+      await expect(dialog).toHaveCount(0)
+    }
+    if (reason === 'account switch') {
+      // The old tab cannot refresh its data; the new cabinet still signals it locally.
+      await page.route('**/api/trpc/**', (route) => route.abort())
+      const next = await accounts.create()
+      try {
+        await context.addCookies(next.cookies)
+        const other = await context.newPage()
+        await other.goto('/chats')
+        await expect(page.getByText('Вход изменился. Откройте кабинет заново.')).toBeVisible()
+        await assertHidden()
+        await other.close()
+      } finally {
+        await accounts.remove(next.user.id)
+      }
+    } else {
+      if (reason === 'note refused while document read fails') {
+        const readsDocument = (url: string) =>
+          new URL(url).pathname.split('/').at(-1)?.split(',').includes('artifact.read') ?? false
+        await page.route(
+          (url) => readsDocument(url.href),
+          (route) => route.abort(),
+        )
+        await expireArtifactReaderSession(signedInUser.id)
+        const failedRead = page.waitForEvent('requestfailed', (request) =>
+          readsDocument(request.url()),
+        )
+        // The mutation gets a real refusal; the document cannot learn it from its own read.
+        await dialog.getByRole('button', { name: 'Сохранить заметку' }).click()
+        await failedRead
+      } else {
+        await expireArtifactReaderSession(signedInUser.id)
+      }
+      await expect(page.getByText('Артефакт не найден, или к нему нет доступа.')).toBeVisible({
+        timeout: 15_000,
+      })
+      await assertHidden()
+    }
+  })
+}
 
 test('the tab of an artifact beside the chat, and «@» that names an artifact', async ({
   page,

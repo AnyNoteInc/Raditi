@@ -79,6 +79,8 @@ export interface ArtifactKindSpec {
   wave: ArtifactWave
   /** False — it never opens to others with «Правит»: it goes into every turn of a project (Ар25). */
   sharableEdit: boolean
+  /** A checked section can carry private quote notes (Ар53, 88.18а). */
+  quoteNotes?: true
   /** True — its `html` and `script` live inside frames (canvas, slides, image); false — at the top. */
   framed: boolean
   /**
@@ -99,6 +101,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     exports: ['md', 'pdf', 'docx'],
     wave: 1,
     sharableEdit: true,
+    quoteNotes: true,
     framed: false,
     forAgent:
       'text to read, check or keep editing: an audit, a plan of work, a summary, an instruction, an article, a post, notes',

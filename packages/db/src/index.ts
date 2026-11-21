@@ -164,6 +164,11 @@ export {
   type ArtifactVersionSave,
   type ArtifactWriteVerdict,
 } from './artifacts.ts'
+export {
+  addArtifactComment,
+  readArtifactComments,
+  resolveArtifactComment,
+} from './artifact-comments.ts'
 export { classProfile, type ClassProfile } from './class-profile.ts'
 export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-events.ts'
 export { readChatTodo, type ChatTodoTurns } from './agent-todo.ts'

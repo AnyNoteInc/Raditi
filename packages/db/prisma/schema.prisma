@@ -68,6 +68,7 @@ model User {
   scheduledTasks          ScheduledTask[]
   artifactExports         ArtifactExport[]
   artifactFiles           ArtifactFile[]
+  artifactComments        ArtifactComment[]
 
   @@map("users")
 }
@@ -2604,6 +2605,7 @@ model Artifact {
   ops          ArtifactOp[]
   chats        ArtifactChat[]
   publications ArtifactPublication[]
+  comments     ArtifactComment[]
   exports      ArtifactExport[]
   files        ArtifactFile[]
 
@@ -3083,6 +3085,25 @@ model ArtifactPublication {
 
   @@index([artifactId])
   @@map("artifact_publications")
+}
+
+/// Owner's private quote notes (Ар53, slice 88.18а). Each row is a thread root.
+model ArtifactComment {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  artifactId   String    @map("artifact_id") @db.Uuid
+  blockKey     String    @map("block_key") @db.VarChar(40)
+  anchor       Json
+  authorUserId String?   @map("author_user_id") @db.Uuid
+  body         String    @db.VarChar(2000)
+  resolvedAt   DateTime? @map("resolved_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  author   User?    @relation(fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  @@index([artifactId, createdAt, id])
+  @@index([authorUserId])
+  @@map("artifact_comments")
 }
 
 /// «Скачать → Excel» of a table (docs/plan/88-artifacts.md, §7.13, question 26): core builds it.

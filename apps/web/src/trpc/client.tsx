@@ -4,8 +4,10 @@ import type { AppRouter } from '@repo/trpc'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createTRPCClient, httpBatchLink, httpSubscriptionLink, splitLink } from '@trpc/client'
 import { createTRPCContext } from '@trpc/tanstack-react-query'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import superjson from 'superjson'
+
+import { cabinetSessionChannel } from '@/lib/cabinet-session-signal'
 
 import { MAX_BATCH_SIZE } from './batch'
 import { consentRedirectLink } from './consent-redirect'
@@ -35,6 +37,29 @@ export function TRPCReactProvider({ userId, children }: { userId: string; childr
       ],
     }),
   )
+
+  const [discardedUser, setDiscardedUser] = useState<string | null>(null)
+  useEffect(() => {
+    const channel = cabinetSessionChannel()
+    if (channel === null) return
+    channel.onmessage = ({ data }: MessageEvent<unknown>) => {
+      if (data !== null && (typeof data !== 'string' || data === userId)) return
+      queryClient.clear()
+      setDiscardedUser(userId)
+    }
+    channel.postMessage(userId)
+    return () => channel.close()
+  }, [queryClient, userId])
+
+  if (discardedUser === userId)
+    return (
+      <main>
+        <p>Вход изменился. Откройте кабинет заново.</p>
+        <button type="button" onClick={() => window.location.reload()}>
+          Открыть кабинет
+        </button>
+      </main>
+    )
 
   return (
     <QueryClientProvider client={queryClient}>

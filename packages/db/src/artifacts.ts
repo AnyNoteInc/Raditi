@@ -208,7 +208,7 @@ async function requireRole(
   return role
 }
 
-async function lockArtifact(tx: Tx, artifactId: string) {
+export async function lockArtifact(tx: Tx, artifactId: string) {
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT id FROM chat_documents WHERE id = ${artifactId}::uuid FOR NO KEY UPDATE`
   if (rows.length === 0) throw artifactNotFound()

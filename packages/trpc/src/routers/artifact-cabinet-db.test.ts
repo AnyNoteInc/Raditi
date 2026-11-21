@@ -5,11 +5,13 @@ import {
   attachMentionedArtifacts,
   claimArtifactBlock,
   createPrismaClient,
+  readArtifactComments,
   settleArtifactWrites,
   type PrismaClient,
   type User,
 } from '@repo/db'
 import { legalDocuments, type ObjectStorage, type SecretStore } from '@repo/domain'
+import { artifactLimits } from '@repo/domain/artifacts'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { createCaller } from '../router.ts'
@@ -340,6 +342,241 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     await expect(boris.artifact.chats({ artifactId: id })).rejects.toMatchObject({
       code: 'NOT_FOUND',
     })
+  })
+
+  async function quoteDocument() {
+    const user = await person()
+    const caller = callerOf(user)
+    const { id: artifactId } = await caller.artifact.create({
+      kind: 'document',
+      title: 'Заметки о доставке',
+      projectId: null,
+      templateId: null,
+    })
+    const write = (ops: unknown[]) =>
+      caller.artifact.write({ batch: { artifactId, opId: randomUUID(), ops } })
+    const created = await write([
+      {
+        op: 'insert',
+        block: 'delivery',
+        after: null,
+        kind: 'section',
+        content: 'Печём **хлеб** &amp; булочки.\n\nДоставка утром.',
+        props: { heading: 'Доставка' },
+      },
+    ])
+    const anchor = {
+      kind: 'quote' as const,
+      block: 'delivery',
+      rev: created.blocks[0]!.rev,
+      quote: 'хлеб & булочки.',
+    }
+    return { user, caller, artifactId, anchor, write }
+  }
+
+  it('anchors private notes to checked words, independently of document revisions', async () => {
+    const { caller, artifactId, anchor, write } = await quoteDocument()
+    const body = 'Уточнить у пекаря'
+    const add = (quote: string, rev = anchor.rev) =>
+      caller.artifact.addComment({ artifactId, anchor: { ...anchor, quote, rev }, body })
+    await expect(add('хлеб** &amp; булочки.')).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(add(anchor.quote, anchor.rev + 1)).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(
+      caller.artifact.addComment({ artifactId, anchor, body: ' '.repeat(20) }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(
+      caller.artifact.addComment({ artifactId, anchor, body: 'А'.repeat(2001) }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(
+      caller.artifact.addComment({ artifactId, anchor, body: 'Заметка\0' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(add(`${anchor.quote}\0`)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    const { id } = await add(' хлеб   & булочки. ')
+    const read = () => caller.artifact.comments({ artifactId })
+    expect(await read()).toEqual([{ id, anchor, body, resolved: false, moved: false }])
+
+    const other = callerOf(await person('Борис'))
+    const set = { artifactId, commentId: id, resolved: true }
+    await expect(other.artifact.comments({ artifactId })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    await expect(other.artifact.addComment({ artifactId, anchor, body })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    await expect(other.artifact.resolveComment(set)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    const sameOwnerOther = await caller.artifact.create({
+      kind: 'document',
+      title: 'Другой документ',
+      projectId: null,
+      templateId: null,
+    })
+    await expect(
+      caller.artifact.resolveComment({ ...set, artifactId: sameOwnerOther.id }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+
+    await caller.artifact.resolveComment(set)
+    const stored = await db.artifactComment.findUniqueOrThrow({ where: { id } })
+    await caller.artifact.resolveComment(set)
+    expect((await db.artifactComment.findUniqueOrThrow({ where: { id } })).resolvedAt).toEqual(
+      stored.resolvedAt,
+    )
+    expect(await read()).toMatchObject([{ resolved: true, moved: false }])
+    await caller.artifact.resolveComment({ ...set, resolved: false })
+
+    const change = (rev: number, content: string) =>
+      write([
+        { op: 'replace', block: anchor.block, ifRev: rev, content, props: { heading: 'Доставка' } },
+      ])
+    const edited = await change(anchor.rev, 'Ещё печём хлеб & булочки.')
+    expect(await read()).toMatchObject([{ resolved: false, moved: false }])
+    const repeated = await change(edited.blocks[0]!.rev, 'хлеб & булочки.\n\nхлеб & булочки.')
+    expect(await read()).toMatchObject([{ moved: true }])
+    await expect(add(anchor.quote, repeated.blocks[0]!.rev)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    })
+    await write([{ op: 'delete', block: anchor.block, ifRev: repeated.blocks[0]!.rev }])
+    expect(await read()).toMatchObject([{ id, moved: true }])
+
+    await db.artifact.update({
+      where: { id: artifactId },
+      data: { takenDownAt: new Date(), takenDownBy: 'operator' },
+    })
+    await expect(read()).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(caller.artifact.resolveComment(set)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await db.artifact.update({
+      where: { id: artifactId },
+      data: { takenDownAt: null, takenDownBy: null },
+    })
+    await caller.artifact.trash({ artifactId })
+    await expect(read()).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(caller.artifact.resolveComment(set)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await caller.artifact.restore({ artifactId })
+    expect(await read()).toMatchObject([{ id, moved: true, resolved: false }])
+    await db.artifact.delete({ where: { id: artifactId } })
+    expect(await db.artifactComment.count({ where: { artifactId } })).toBe(0)
+  })
+
+  it('reads notes and their access decision at the same snapshot during a takedown', async () => {
+    const { user, caller, artifactId, anchor } = await quoteDocument()
+    const { id } = await caller.artifact.addComment({ artifactId, anchor, body: 'Старая заметка' })
+    const duringTakedown = db.$extends({
+      query: {
+        artifactComment: {
+          async findMany({ args, query }) {
+            // In this fixture, the access decision has already been read. Change both facts
+            // on a different connection, before the reader asks for the notes.
+            await db.$transaction([
+              db.artifact.update({
+                where: { id: artifactId },
+                data: { takenDownAt: new Date(), takenDownBy: 'operator' },
+              }),
+              db.artifactComment.update({ where: { id }, data: { body: 'Новая заметка' } }),
+            ])
+            return query(args)
+          },
+        },
+      },
+    })
+    // The extension wraps one query; it does not change any model or the transaction API.
+    const before = await readArtifactComments(duringTakedown as unknown as PrismaClient, {
+      artifactId,
+      userId: user.id,
+    })
+    expect(before.comments).toMatchObject([{ id, body: 'Старая заметка' }])
+    await expect(caller.artifact.comments({ artifactId })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+  })
+
+  it('keeps a note without its deleted author and never shows it in the private list', async () => {
+    const { caller, artifactId, anchor } = await quoteDocument()
+    const author = await person('Борис')
+    const body = 'Уточнить детали'
+    const { id } = await db.artifactComment.create({
+      data: { artifactId, blockKey: anchor.block, anchor, authorUserId: author.id, body },
+      select: { id: true },
+    })
+    await db.user.delete({ where: { id: author.id } })
+    expect(await db.artifactComment.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      authorUserId: null,
+      anchor,
+      body,
+    })
+    expect(await caller.artifact.comments({ artifactId })).toEqual([])
+    await expect(
+      caller.artifact.resolveComment({ artifactId, commentId: id, resolved: true }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await db.artifact.delete({ where: { id: artifactId } })
+    expect(await db.artifactComment.findUnique({ where: { id } })).toBeNull()
+  })
+
+  it('admits only one concurrent note when just one slot remains', async () => {
+    const { caller, artifactId, anchor } = await quoteDocument()
+    const input = { artifactId, anchor, body: 'Решить с доставкой' }
+    const { id } = await caller.artifact.addComment(input)
+    const { authorUserId, blockKey } = await db.artifactComment.findUniqueOrThrow({ where: { id } })
+    await db.artifactComment.createMany({
+      data: Array.from({ length: artifactLimits.comments - 2 }, () => ({
+        ...input,
+        authorUserId,
+        blockKey,
+      })),
+    })
+    const outcomes = await Promise.allSettled([
+      caller.artifact.addComment({ ...input, body: 'Первый' }),
+      caller.artifact.addComment({ ...input, body: 'Второй' }),
+    ])
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+    expect(outcomes.find((outcome) => outcome.status === 'rejected')).toMatchObject({
+      reason: { code: 'CONFLICT', cause: { code: 'ARTIFACT_LIMIT' } },
+    })
+    expect(await db.artifactComment.count({ where: { artifactId } })).toBe(artifactLimits.comments)
+  })
+
+  it('keeps existing notes but rejects new anchors while an agent revision awaits review', async () => {
+    const { user, caller, artifactId, anchor } = await quoteDocument()
+    const { id: workspaceId } = await db.workspace.findFirstOrThrow({
+      where: { createdById: user.id },
+      select: { id: true },
+    })
+    const saved = await caller.artifact.addComment({ artifactId, anchor, body: 'Первая заметка' })
+    await caller.artifact.release({ artifactId, block: anchor.block })
+    const { id: taskId } = await db.task.create({
+      data: { workspaceId, createdById: user.id, title: 'Уточнить доставку' },
+      select: { id: true },
+    })
+    const changed = await applyArtifactOps(db, {
+      batch: {
+        artifactId,
+        opId: randomUUID(),
+        ops: [
+          {
+            op: 'edit',
+            block: anchor.block,
+            find: 'Доставка утром.',
+            replace: 'Доставка вечером.',
+          },
+        ],
+      },
+      actor: { kind: 'agent', taskId, turnNo: 1 },
+    })
+    const rev = changed.blocks[0]!.rev
+    const input = { artifactId, anchor: { ...anchor, rev }, body: 'Вторая заметка' }
+    const [block] = (await caller.artifact.read({ artifactId })).blocks
+    expect(block).toMatchObject({ checking: true, rev, content: expect.stringContaining('утром') })
+    await expect(caller.artifact.addComment(input)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      cause: { code: 'ARTIFACT_STALE' },
+    })
+    expect(await caller.artifact.comments({ artifactId })).toMatchObject([
+      { id: saved.id, moved: false },
+    ])
+    await settleArtifactWrites(db, {
+      taskId,
+      blocks: [{ artifactId, block: anchor.block, rev, refusal: null }],
+      final: true,
+    })
+    await expect(caller.artifact.addComment(input)).resolves.toHaveProperty('id')
   })
 
   it('lists the artifacts of a chat by group, attaching those the client mentions (88.11)', async () => {

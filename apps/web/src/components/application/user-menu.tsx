@@ -15,6 +15,7 @@ import { useId, useState, useTransition } from 'react'
 
 import { signOut } from '@/app/(protected)/app/actions'
 import { PLANS_PAGE, PlansDialog } from '@/components/billing/plans-dialog'
+import { announceCabinetSignOut } from '@/lib/cabinet-session-signal'
 import { hardNavigate } from '@/lib/hard-navigate'
 
 import { AppIcon } from './app-icon'
@@ -70,7 +71,7 @@ export function UserMenu({
   const close = () => setAnchor(null)
   const leave = () =>
     startTransition(async () => {
-      await signOut().catch(() => undefined)
+      await signOut().then(announceCabinetSignOut, () => undefined)
       hardNavigate('/sign-in')
     })
   return (

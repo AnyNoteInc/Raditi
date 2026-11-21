@@ -34,7 +34,7 @@ export const brandTexts = Object.freeze({
   tone: 'Тон текстов',
 })
 
-export function ArtifactBrand(props: ArtifactBodyProps) {
+export function ArtifactBrand(props: ArtifactBodyProps & { onAccessLost: () => void }) {
   const { artifact, onChanged } = props
   const canEdit = artifactRoleAtLeast(artifact.role, 'edit')
   const settings =
@@ -152,6 +152,7 @@ export function ArtifactBrand(props: ArtifactBodyProps) {
             artifact={artifact}
             presence={props.presence}
             onChanged={onChanged}
+            onAccessLost={props.onAccessLost}
             onEditing={props.onEditing}
           />
         </Box>

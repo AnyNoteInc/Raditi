@@ -59,6 +59,20 @@ export async function addDocument(
   }
 }
 
+/** Expire the synthetic user's session without reloading any of their open pages. */
+export async function expireArtifactReaderSession(userId: string): Promise<void> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const { count } = await prisma.session.updateMany({
+      where: { userId },
+      data: { expiresAt: new Date(0) },
+    })
+    if (count === 0) throw new Error('The artifact reader has no session to expire')
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
 /**
  * A chat of the user whose turn made the artifact: its link, the line of the feed after the
  * answer — the tab, «+» and «Результаты» name it from these.

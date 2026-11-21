@@ -38,7 +38,7 @@ export function ArtifactPane({
   actions?: (artifact: CabinetArtifact, reread: () => void) => ReactNode
 }) {
   const [block, setBlock] = useState<string | null>(null)
-  const { read, presence, reread } = useArtifact(artifactId, { block })
+  const { read, accessLost, presence, reread, discardAccess } = useArtifact(artifactId, { block })
   const onEditing = useCallback((key: string | null) => setBlock(key), [])
   const artifact = read.data
   if (read.isPending)
@@ -47,14 +47,11 @@ export function ArtifactPane({
         <Skeleton variant="rounded" height={200} />
       </Box>
     )
-  if (!artifact)
+  if (!artifact || accessLost)
     return (
       <Box sx={{ p: 2 }}>
         <Alert severity="error">
-          {(read.error as { data?: { domainCode?: string } } | null)?.data?.domainCode ===
-          'ARTIFACT_NOT_FOUND'
-            ? documentTexts.notFound
-            : documentTexts.loadFailed}
+          {accessLost ? documentTexts.notFound : documentTexts.loadFailed}
         </Alert>
       </Box>
     )
@@ -100,6 +97,7 @@ export function ArtifactPane({
           artifact={artifact}
           presence={presence}
           onChanged={reread}
+          onAccessLost={discardAccess}
           onEditing={onEditing}
           place="pane"
         />

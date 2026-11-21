@@ -8,6 +8,8 @@ import { useEffect, useEffectEvent, useState } from 'react'
 
 import { useTRPC, useTRPCClient } from '@/trpc/client'
 
+import { readPrivateArtifact } from './artifact-access-error'
+
 // One artifact on a page (docs/plan/88-artifacts.md, Ар20, §7.4): its blocks, read again on the
 // signals of `artifact.signals` (SSE) and, slower, by a poll that stands in for a signal lost on
 // the way; who else is here — a mark of presence every 15 s with the block the reader is in, gone
@@ -25,14 +27,18 @@ export function useArtifact(artifactId: string, { block = null }: { block?: stri
   const client = useTRPCClient()
   const queryClient = useQueryClient()
   const [signalled, setSignalled] = useState(false)
+  const query = trpc.artifact.read.queryOptions({ artifactId })
   const read = useQuery({
-    ...trpc.artifact.read.queryOptions({ artifactId }),
+    queryKey: query.queryKey,
+    queryFn: (context) => readPrivateArtifact(() => query.queryFn!(context)),
+    gcTime: 0,
     refetchInterval: signalled ? POLL_SIGNALLED_MS : POLL_UNSIGNALLED_MS,
     refetchIntervalInBackground: false,
   })
+  const readable = read.isSuccess && read.data !== null
   const presence = useQuery({
     ...trpc.artifact.presence.queryOptions({ artifactId }),
-    enabled: read.isSuccess,
+    enabled: readable,
     refetchInterval: artifactSignalLimits.presenceMarkMs,
   })
   const here = useMutation(trpc.artifact.here.mutationOptions())
@@ -65,21 +71,66 @@ export function useArtifact(artifactId: string, { block = null }: { block?: stri
     here.mutateAsync({ artifactId, block: at }),
   )
   useEffect(() => {
-    if (!read.isSuccess) return
+    if (!readable) return
     const say = () =>
       void markHere(block)
-        .then((people) =>
-          queryClient.setQueryData(trpc.artifact.presence.queryKey({ artifactId }), people),
-        )
+        .then((people) => {
+          if (queryClient.getQueryData(trpc.artifact.read.queryKey({ artifactId })) != null)
+            queryClient.setQueryData(trpc.artifact.presence.queryKey({ artifactId }), people)
+        })
         .catch(() => undefined)
     say()
     const timer = window.setInterval(say, artifactSignalLimits.presenceMarkMs)
     return () => window.clearInterval(timer)
-  }, [artifactId, block, read.isSuccess, queryClient, trpc])
+  }, [artifactId, block, readable, queryClient, trpc])
   const gone = useEffectEvent(() => leave.mutate({ artifactId }))
   useEffect(() => () => gone(), [artifactId])
 
-  const reread = () =>
+  const reread = () => {
     void queryClient.invalidateQueries({ queryKey: trpc.artifact.read.queryKey({ artifactId }) })
-  return { read, presence: presence.data ?? null, reread }
+    // An edit can finish after the history drawer has already opened.
+    void queryClient.invalidateQueries({
+      queryKey: trpc.artifact.versions.queryKey({ artifactId }),
+    })
+    void queryClient.invalidateQueries({ queryKey: trpc.artifact.changes.queryKey({ artifactId }) })
+  }
+  const accessLost = read.data === null
+  const clearRelatedReads = useEffectEvent(() => {
+    const readHash = queryClient.getQueryCache().find({ queryKey: query.queryKey })?.queryHash
+    const related = trpc.artifact.pathFilter({
+      predicate: ({ queryKey, queryHash }) => {
+        const details = queryKey.at(-1)
+        return (
+          queryHash !== readHash &&
+          details != null &&
+          typeof details === 'object' &&
+          'input' in details &&
+          details.input != null &&
+          typeof details.input === 'object' &&
+          'artifactId' in details.input &&
+          details.input.artifactId === artifactId
+        )
+      },
+    })
+    // Removing a query also cancels it. Old snapshots must not survive a failed refresh.
+    queryClient.removeQueries(related)
+    queryClient.removeQueries(trpc.pages.artifactPublication.queryFilter({ artifactId }))
+  })
+  useEffect(() => {
+    if (accessLost) clearRelatedReads()
+  }, [accessLost, artifactId])
+  const discardAccess = () => {
+    // A refusal from another artifact procedure is already authoritative. Don't wait for the
+    // next read, and don't let a response that was in flight before the refusal restore the data.
+    void queryClient.cancelQueries({ queryKey: query.queryKey, exact: true })
+    queryClient.setQueryData([...query.queryKey], null)
+    void queryClient.invalidateQueries({ queryKey: query.queryKey, exact: true })
+  }
+  return {
+    read,
+    accessLost,
+    presence: presence.data ?? null,
+    reread,
+    discardAccess,
+  }
 }

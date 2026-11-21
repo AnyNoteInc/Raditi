@@ -1,8 +1,10 @@
-import { artifactGalleryFilters, artifactGallerySorts } from '@repo/db'
+import { artifactGalleryFilters, artifactGallerySorts, resolveArtifactComment } from '@repo/db'
 import {
   artifactBlockKeySchema,
+  artifactCommentBodySchema,
   artifactHoldReasons,
   artifactKinds,
+  artifactQuoteAnchorSchema,
   artifactRoles,
   artifactSignalLimits,
   artifactTitleSchema,
@@ -11,6 +13,7 @@ import { z } from 'zod'
 
 import { canvasThumbs } from '../services/artifacts/canvas.ts'
 import { chatArtifactsOf } from '../services/artifacts/chat-artifacts.ts'
+import { cabinetComments, createCabinetComment } from '../services/artifacts/comments.ts'
 import {
   cabinetChanges,
   cabinetRestore,
@@ -147,6 +150,40 @@ export const artifactRouter = router({
     .input(z.strictObject({ artifactId }))
     .output(readOutput)
     .query(({ ctx, input }) => readCabinetArtifact(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  comments: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(
+      z.array(
+        z.strictObject({
+          id: z.uuid(),
+          anchor: artifactQuoteAnchorSchema,
+          body: artifactCommentBodySchema,
+          resolved: z.boolean(),
+          moved: z.boolean(),
+        }),
+      ),
+    )
+    .query(({ ctx, input }) => cabinetComments(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  addComment: consentedProcedure
+    .input(
+      z.strictObject({
+        artifactId,
+        anchor: artifactQuoteAnchorSchema,
+        body: artifactCommentBodySchema,
+      }),
+    )
+    .output(z.strictObject({ id: z.uuid() }))
+    .mutation(({ ctx, input }) =>
+      createCabinetComment(ctx.prisma, { userId: ctx.user.id, ...input }),
+    ),
+
+  resolveComment: consentedProcedure
+    .input(z.strictObject({ artifactId, commentId: z.uuid(), resolved: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      resolveArtifactComment(ctx.prisma, { userId: ctx.user.id, ...input }),
+    ),
 
   /**
    * A batch of a person (§7.2): applied at once or refused whole — `ARTIFACT_STALE` with the

@@ -13,14 +13,19 @@ import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import { canonicalSection } from '@repo/doc-bridge'
-import { DocumentMarkdown } from '@repo/doc-render/markdown'
-import { artifactRoleAtLeast } from '@repo/domain/artifacts'
+import { ArtifactSectionMarkdown } from '@repo/doc-render/markdown'
+import {
+  artifactKindSpecOf,
+  artifactRoleAtLeast,
+  type ArtifactQuoteAnchor,
+} from '@repo/domain/artifacts'
 import { useMutation } from '@tanstack/react-query'
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
+import { ArtifactComments, useArtifactQuote } from './artifact-comments'
 import { documentTexts, editorTexts } from './artifact-texts'
 import { SectionEditor, type SectionEditorHandle } from './editor/section-editor'
 import { mergeThree, wordDiff, type DiffPiece } from './merge'
@@ -54,18 +59,8 @@ export const documentSx = {
   '& img': { maxWidth: '100%', height: 'auto', borderRadius: '8px' },
 } as const
 
-const noDocuments: ReadonlySet<string> = new Set()
-const noImage = () => null
-
 export function SectionText({ text }: { text: string }) {
-  return (
-    <DocumentMarkdown
-      text={text}
-      documents={noDocuments}
-      imageSrc={noImage}
-      documentLinks={false}
-    />
-  )
+  return <ArtifactSectionMarkdown text={text} />
 }
 
 /** An id of a new section by the rule of `section_key` (§7.2). */
@@ -451,12 +446,14 @@ export function ArtifactDocument({
   artifact,
   presence,
   onChanged,
+  onAccessLost,
   onEditing,
   header,
 }: {
   artifact: CabinetArtifact
   presence: ArtifactPresence | null
   onChanged: () => void
+  onAccessLost: () => void
   /** The block the person is in, for their mark of presence. */
   onEditing?: (block: string | null) => void
   header?: ReactNode
@@ -467,6 +464,10 @@ export function ArtifactDocument({
   const [menu, setMenu] = useState<{ anchor: HTMLElement; block: Block } | null>(null)
   const [failed, setFailed] = useState(false)
   const canEdit = artifactRoleAtLeast(artifact.role, 'edit')
+  const canComment =
+    artifact.role === 'owner' && artifactKindSpecOf(artifact.kind)?.quoteNotes === true
+  const { root: quoteRoot, quote } = useArtifactQuote(canComment)
+  const [commentDraft, setCommentDraft] = useState<ArtifactQuoteAnchor | null>(null)
   const sections = artifact.blocks.filter((block) => block.kind === 'section')
   const editingBlock = sections.find((block) => block.key === editing) ?? null
 
@@ -504,8 +505,18 @@ export function ArtifactDocument({
   }
 
   return (
-    <Box>
+    <Box ref={quoteRoot}>
       {header}
+      {canComment && (
+        <ArtifactComments
+          key={artifact.id}
+          artifact={artifact}
+          draft={commentDraft}
+          onClose={() => setCommentDraft(null)}
+          onChanged={onChanged}
+          onAccessLost={onAccessLost}
+        />
+      )}
       {failed && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setFailed(false)}>
           {documentTexts.failed}
@@ -519,6 +530,7 @@ export function ArtifactDocument({
           const agent = agentOf(presence, block.key)
           const person = presence?.people.find((each) => !each.self && each.block === block.key)
           const agentHolds = block.hold === 'checking' || block.hold === 'claim'
+          const canAnchor = canComment && !block.checking
           if (editingBlock?.key === block.key)
             return (
               <SectionEditing
@@ -602,9 +614,23 @@ export function ArtifactDocument({
                   {documentTexts.checking}
                 </Typography>
               ) : (
-                <Box sx={documentSx}>
+                <Box
+                  sx={documentSx}
+                  data-quote-block={canAnchor ? block.key : undefined}
+                  data-quote-rev={canAnchor ? block.rev : undefined}
+                >
                   <SectionText text={block.content} />
                 </Box>
+              )}
+              {canAnchor && quote && quote.block === block.key && quote.rev === block.rev && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => setCommentDraft(quote)}
+                >
+                  Добавить заметку к цитате
+                </Button>
               )}
               {agent?.intent && (
                 <Typography variant="caption" sx={{ color: 'text.secondary' }}>

@@ -326,20 +326,17 @@ export function ArtifactPage({
   actions?: (artifact: CabinetArtifact, reread: () => void) => ReactNode
 }) {
   const [block, setBlock] = useState<string | null>(null)
-  const { read, presence, reread } = useArtifact(artifactId, { block })
+  const { read, accessLost, presence, reread, discardAccess } = useArtifact(artifactId, { block })
   const wide = useMediaQuery('(min-width:1200px)', { noSsr: true })
   const [chatOpen, setChatOpen] = useState(false)
   const onEditing = useCallback((key: string | null) => setBlock(key), [])
   const artifact = read.data
 
   if (read.isPending) return <Skeleton variant="rounded" height={320} />
-  if (!artifact)
+  if (!artifact || accessLost)
     return (
       <Alert severity="error">
-        {(read.error as { data?: { domainCode?: string } } | null)?.data?.domainCode ===
-        'ARTIFACT_NOT_FOUND'
-          ? documentTexts.notFound
-          : documentTexts.loadFailed}
+        {accessLost ? documentTexts.notFound : documentTexts.loadFailed}
       </Alert>
     )
   const spec = artifactKindSpecOf(artifact.kind)
@@ -410,6 +407,7 @@ export function ArtifactPage({
             artifact={artifact}
             presence={presence}
             onChanged={reread}
+            onAccessLost={discardAccess}
             onEditing={onEditing}
             place="page"
           />

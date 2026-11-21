@@ -10,7 +10,9 @@ import type { ArtifactPresence, CabinetArtifact } from './use-artifact'
 // section opens in its editor only once it is held for the person; one an agent writes waits,
 // or is taken back; a save that met another change merges, and where it cannot — «Разошлись».
 
-const { hold, release, take, write } = vi.hoisted(() => ({
+const { hold, release, take, write, listNotes, resolveNote } = vi.hoisted(() => ({
+  listNotes: vi.fn<() => Promise<unknown[]>>(async () => []),
+  resolveNote: vi.fn(async (_input: unknown) => undefined),
   hold: vi.fn(async (_input: unknown) => ({ rev: 3, until: '2026-11-20T10:00:30.000Z' })),
   release: vi.fn(async (_input: unknown) => undefined),
   take: vi.fn(async (_input: unknown) => ({ rev: 4 })),
@@ -26,20 +28,27 @@ const { hold, release, take, write } = vi.hoisted(() => ({
 
 const ARTIFACT = '019f1a21-1800-7f00-8abc-000000000001'
 
-const mutation = (fn: (input: unknown) => Promise<unknown>) => ({
-  mutationOptions: () => ({ mutationFn: fn }),
-})
-
-vi.mock('@/trpc/client', () => ({
-  useTRPC: () => ({
+vi.mock('@/trpc/client', () => {
+  const mutation = (fn: (input: unknown) => Promise<unknown>) => ({
+    mutationOptions: () => ({ mutationFn: fn }),
+  })
+  const queryKey = ['artifact', 'comments']
+  const trpc = {
     artifact: {
       hold: mutation(hold),
       release: mutation(release),
       take: mutation(take),
       write: mutation(write),
+      comments: {
+        queryKey: () => queryKey,
+        queryOptions: () => ({ queryKey, queryFn: listNotes }),
+      },
+      addComment: mutation(async () => ({ id: 'note' })),
+      resolveComment: mutation(resolveNote),
     },
-  }),
-}))
+  }
+  return { useTRPC: () => trpc }
+})
 
 const refusal = (domainCode: string, artifact?: unknown) =>
   Object.assign(new Error(domainCode), { data: { domainCode, ...(artifact ? { artifact } : {}) } })
@@ -73,14 +82,22 @@ const artifact = (overrides: Partial<CabinetArtifact['blocks'][number]> = {}): C
 const nobody: ArtifactPresence = { people: [], morePeople: 0, agents: [] }
 
 function show(value: CabinetArtifact, presence: ArtifactPresence = nobody) {
-  const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
   const changed = vi.fn()
+  const lost = vi.fn()
   render(
     <QueryClientProvider client={queryClient}>
-      <ArtifactDocument artifact={value} presence={presence} onChanged={changed} />
+      <ArtifactDocument
+        artifact={value}
+        presence={presence}
+        onChanged={changed}
+        onAccessLost={lost}
+      />
     </QueryClientProvider>,
   )
-  return { changed }
+  return { changed, lost, queryClient }
 }
 
 /** The Tiptap editor behind its element: what a person types goes through it. */
@@ -203,6 +220,71 @@ describe('the document of an artifact (88.10)', () => {
       ifRev: 5,
       content: 'Ежедневно. Привозим с 8 до 21.\n\nЗвоним за полчаса.\n',
     })
+  })
+
+  it.each(['note removed', 'access lost'])(
+    'refreshes access and clears cached notes: %s',
+    async (outcome) => {
+      const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
+      const notes = [
+        { id: 'first', anchor, body: 'Уточнить адрес', resolved: false, moved: false },
+        { id: 'second', anchor, body: 'Уточнить время', resolved: false, moved: false },
+      ]
+      listNotes.mockResolvedValue(notes)
+      try {
+        const { changed, lost } = show(artifact())
+        const list = await screen.findByRole('region', { name: 'Заметки к документу' })
+        expect(await within(list).findByText('Уточнить адрес')).toBeTruthy()
+        const refreshed = Promise.withResolvers<unknown[]>()
+        listNotes.mockReturnValueOnce(refreshed.promise)
+        resolveNote.mockRejectedValueOnce(refusal('ARTIFACT_NOT_FOUND'))
+        fireEvent.click(within(list).getAllByRole('button', { name: 'Отметить решённой' })[0]!)
+        await waitFor(() => expect(changed).toHaveBeenCalled())
+        expect(lost).not.toHaveBeenCalled()
+        await waitFor(() => expect(screen.queryByText('Уточнить время')).toBeNull())
+
+        if (outcome === 'access lost') {
+          await act(() => refreshed.reject(refusal('ARTIFACT_NOT_FOUND')))
+          await waitFor(() => expect(lost).toHaveBeenCalledOnce())
+          expect(screen.queryByRole('region', { name: 'Заметки к документу' })).toBeNull()
+        } else {
+          refreshed.resolve(notes.slice(1))
+          expect(await screen.findByText('Уточнить время')).toBeTruthy()
+          expect(screen.queryByText('Уточнить адрес')).toBeNull()
+        }
+      } finally {
+        listNotes.mockReset()
+      }
+    },
+  )
+
+  it('discards private notes when the session expires, even if the next read fails', async () => {
+    const queryKey = ['artifact', 'comments']
+    const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
+    listNotes.mockResolvedValue([
+      { id: 'note', anchor, body: 'Уточнить адрес', resolved: false, moved: false },
+    ])
+    try {
+      const { lost, queryClient } = show(artifact())
+      expect(await screen.findByText('Уточнить адрес')).toBeTruthy()
+
+      listNotes.mockRejectedValue(Object.assign(new Error(), { data: { code: 'UNAUTHORIZED' } }))
+      await act(async () => {
+        await queryClient.invalidateQueries({ queryKey })
+      })
+      await waitFor(() => expect(lost).toHaveBeenCalledOnce())
+      expect(queryClient.getQueryData(queryKey)).toBeNull()
+      expect(screen.queryByText('Уточнить адрес')).toBeNull()
+
+      listNotes.mockRejectedValue(new Error('Temporary connection loss'))
+      await act(async () => {
+        await queryClient.invalidateQueries({ queryKey })
+      })
+      expect(queryClient.getQueryData(queryKey)).toBeNull()
+      expect(screen.queryByText('Уточнить адрес')).toBeNull()
+    } finally {
+      listNotes.mockReset()
+    }
   })
 
   it('shows a section the agent writes as checking, and offers no editing to a viewer', () => {
