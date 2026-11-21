@@ -8,7 +8,7 @@ import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
 import { z } from 'zod'
 
 import { turnCredentialRefSchema } from '@repo/turn-keys'
-import { backendCapacities } from '../dist/llm/backends.js'
+import { backendCapacities, backendImageModels } from '../dist/llm/backends.js'
 import { CredentialSweeper } from '../dist/llm/credential-sweeper.js'
 import { createPoolProbeClient } from '../dist/llm/pool-probe-client.js'
 import { GatewayTurnCredentials } from '../dist/llm/turn-credentials.js'
@@ -166,6 +166,8 @@ async function main() {
     minTurnHeadroomPct: config.minTurnHeadroomPct,
     // As LlmModule composes it: the pool reads an account by the capacity of its backend.
     capacityOf: backendCapacities(llmBackends),
+    // The models that take images (docs/plan/88-artifacts.md, Ар32), as LlmModule composes them.
+    imageModelsOf: backendImageModels(llmBackends),
     ...(config.llmControlUrl === undefined
       ? {}
       : { probeAccounts: createPoolProbeClient(config.llmControlUrl, env.METRICS_TOKEN) }),

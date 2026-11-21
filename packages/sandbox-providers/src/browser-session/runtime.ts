@@ -140,14 +140,19 @@ function parseSpec(value: BrowserSessionRuntimeSpec, localSitesAllowed: boolean)
     if (!route || route[0] in routes) throw badRequest('Invalid browser local sites')
     routes[route[0]] = route[1]
   }
+  const closed = value.closed === true
+  // A render container goes nowhere on purpose (docs/plan/88-artifacts.md, §7.12), and only it.
+  if (closed && (hosts.length > 0 || sites.length > 0 || value.openWeb === true))
+    throw badRequest('A closed browser session has no way out')
   // Only a chat without a site has no host of its own: it goes on the open internet (К12).
-  if (hosts.length === 0 && sites.length === 0 && value.openWeb !== true)
+  if (!closed && hosts.length === 0 && sites.length === 0 && value.openWeb !== true)
     throw badRequest('A browser session goes nowhere')
   return {
     identity: { sessionId, taskId, siteId } satisfies BrowserSessionIdentity,
     deadline,
     allowedHosts: [...hosts],
     localRoutes: routes,
+    closed,
   }
 }
 
@@ -494,7 +499,9 @@ export function createDockerBrowserSessionRuntime(
         allowedHosts: spec.allowedHosts,
         localRoutes: spec.localRoutes,
         refusedSubnets: config.refusedSubnets,
-        ...(config.pageDomain
+        closed: spec.closed,
+        // A closed container reaches no page of the agent either.
+        ...(config.pageDomain && !spec.closed
           ? { pageDomain: config.pageDomain, pageAddresses: config.pageAddresses }
           : {}),
         maxTunnels: config.maxTunnels,

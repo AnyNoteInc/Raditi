@@ -150,6 +150,11 @@ const isRecord = (value) => value !== null && typeof value === 'object' && !Arra
 const whole = (value, max) => Number.isSafeInteger(value) && value >= 0 && value <= max
 
 const SCENARIO_OPTIONS = new Set([
+  // The scenario of the requests of one model (the helper look of docs/plan/88-artifacts.md, Ар32).
+  'models',
+  // The rounds count every tool step of the conversation, not only those since the last message of
+  // the user: OpenCode hands a picture of a tool to the helper look as a message of the user.
+  'roundsOverall',
   'scenario',
   'text',
   'reasoning',
@@ -196,6 +201,17 @@ function scenarioOptions(value = {}) {
   // How long a stream is held after its first frame: a call the role keeps open meanwhile.
   if (value.delayMs !== undefined && !whole(value.delayMs, 120_000)) throw invalid('delay')
   usageOption(value)
+  if (value.roundsOverall !== undefined && value.roundsOverall !== true)
+    throw invalid('roundsOverall')
+  // `models`: a scenario of its own for the requests that name a model (a helper on another model).
+  if (value.models !== undefined) {
+    if (!isRecord(value.models) || Object.keys(value.models).length > 4) throw invalid('models')
+    for (const [model, each] of Object.entries(value.models)) {
+      if (!ZAI_MODELS.includes(model) || (isRecord(each) && each.models !== undefined))
+        throw invalid('models')
+      value.models[model] = scenarioOptions(each)
+    }
+  }
   return { ...value, scenario }
 }
 
@@ -542,7 +558,9 @@ export function zaiFrames(body, config, sequence) {
   })
   const messages = Array.isArray(body.messages) ? body.messages : []
   // The tool steps of this turn: what the request holds after the last message of the user.
-  const turn = messages.slice(messages.findLastIndex((message) => message?.role === 'user') + 1)
+  const turn = config.roundsOverall
+    ? messages
+    : messages.slice(messages.findLastIndex((message) => message?.role === 'user') + 1)
   const round = turn.filter(
     (message) => message?.role === 'assistant' && Array.isArray(message.tool_calls),
   ).length
@@ -646,8 +664,10 @@ export async function handleZai(req, res, state) {
   record.body = body
   const sequence = ++state.counters.chat
   if (refusedChat(res, sequence, { state, record, body, apiPath })) return
-  const config = state.config
-  const scenario = attemptScenario(state)
+  // A model with a scenario of its own answers by it, and counts no attempt of the others.
+  const own = state.config.models?.[body.model]
+  const config = own ?? state.config
+  const scenario = own ? own.scenario : attemptScenario(state)
   if (scenario === 'error')
     return chatError(
       res,

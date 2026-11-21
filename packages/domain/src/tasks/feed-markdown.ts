@@ -20,6 +20,7 @@ import {
   feedFailureKeptText,
   feedFailureOpenText,
   feedFileLeftText,
+  feedArtifactLeftText,
   feedDocLeftText,
   feedDocText,
   feedPageChangeText,
@@ -273,6 +274,11 @@ function rowBlock(row: FeedItem, withSite: boolean, h: Heading = heading): strin
       return null
     case 'feed.doc_left':
       return block([h(feedExportText.agent, row.at), feedDocLeftText(row)])
+    // An artifact is read by its own tab, not by the export of the chat (Ар46).
+    case 'feed.artifact':
+      return null
+    case 'feed.artifact_left':
+      return block([h(feedExportText.agent, row.at), feedArtifactLeftText(row)])
     case 'feed.page_left':
       return block([h(feedExportText.agent, row.at), feedPageLeftText(row)])
     case 'feed.page_change':

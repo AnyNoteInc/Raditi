@@ -95,10 +95,13 @@ describe('packages', () => {
   it('sends none of its headers on a page of the agent (docs/plan/67, Д3)', async () => {
     const [rule] = await config.headers!()
     // Next never lets a route replace a header the config set: /v/ answers with its own.
-    expect(rule!.source).toBe('/((?!v/).*)')
+    expect(rule!.source).toBe('/((?!v/|api/artifact-frame/).*)')
     const matches = (path: string) => new RegExp(`^${rule!.source}$`).test(path)
     for (const path of ['/', '/chats/1', '/api/health', '/v', '/vacancies'])
       expect(matches(path), path).toBe(true)
     expect(matches('/v/a.b')).toBe(false)
+    // The edit frame of a mockup sends its own policy too (docs/plan/88-artifacts.md, Ар9, §7.9).
+    expect(matches('/api/artifact-frame/a.b')).toBe(false)
+    expect(matches('/api/artifact-files/1')).toBe(true)
   })
 })

@@ -7,6 +7,18 @@ import {
   PingRequestSchema,
 } from '@modelcontextprotocol/core'
 import {
+  artifactClaimArgumentsSchema,
+  artifactCreateArgumentsSchema,
+  artifactEditArgumentsSchema,
+  artifactListArgumentsSchema,
+  artifactReadArgumentsSchema,
+  artifactSaveVersionArgumentsSchema,
+  artifactFilePutArgumentsSchema,
+  artifactImportArgumentsSchema,
+  artifactLayoutArgumentsSchema,
+  artifactRenderArgumentsSchema,
+} from '@repo/domain/artifacts'
+import {
   browserToolArgumentSchemas,
   browserToolNames,
   docCreateArgumentsSchema,
@@ -85,7 +97,25 @@ const webCall = z
       browserToolArgumentSchemas[request.name].safeParse(request.arguments ?? {}).success,
   )
 const searchCall = call('search_web', webSearchArgumentsSchema)
-const docsCall = z.discriminatedUnion('name', [
+// The artifacts of the workspace (docs/plan/88-artifacts.md, Ар22, §7.5): each tool its own branch.
+const artifactsCall = z.discriminatedUnion('name', [
+  call('artifact_list', artifactListArgumentsSchema.optional()),
+  call('artifact_read', artifactReadArgumentsSchema),
+  call('artifact_create', artifactCreateArgumentsSchema),
+  call('artifact_edit', artifactEditArgumentsSchema),
+  call('artifact_claim', artifactClaimArgumentsSchema),
+  call('artifact_save_version', artifactSaveVersionArgumentsSchema),
+  call('artifact_file_put', artifactFilePutArgumentsSchema),
+  call('artifact_import', artifactImportArgumentsSchema),
+])
+// The report of the layout of a frame (Ар32, slice 88.15б): where the renderer of the browser worker
+// is configured.
+const artifactLayoutCall = call('artifact_layout', artifactLayoutArgumentsSchema)
+// The pictures of a frame for the helper `look` (Ар32, slice 88.15в): a turn whose key has the
+// profile that sees images.
+const artifactVisionCall = call('artifact_render', artifactRenderArgumentsSchema)
+// The tools `doc_*` of plan 69 (Ар3): synonyms of the family, accepted but never listed.
+const artifactSynonymsCall = z.discriminatedUnion('name', [
   call('doc_create', docCreateArgumentsSchema),
   // The shape only: the tool itself says what is wrong with the text of a section.
   call('doc_section_write', docSectionWriteShapeSchema),
@@ -186,8 +216,11 @@ export interface McpSecurity {
    * watches (docs/plan/82-scheduled-tasks.md, Зп28, Зп32).
    */
   pagesTools?: boolean
-  /** The documents of a workspace (docs/plan/69-pages.md, Ст21): every turn, every composition. */
-  docsTools?: boolean
+  /**
+   * The artifacts of a workspace (docs/plan/88-artifacts.md, Ар22): every turn, every composition;
+   * the synonyms `doc_*` of plan 69 only for `tools/call` (Ар3).
+   */
+  artifactsTools?: boolean
   /**
    * The memory of a chat (docs/plan/84-projects.md, ПР18): every composition, a turn whose chat has
    * its memory on.
@@ -213,7 +246,7 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
     allowLocalOrigin: config.appEnv !== 'production',
     ...(worker ? { webTools: true } : {}),
     searchTools: true,
-    docsTools: true,
+    artifactsTools: true,
     memoryTools: true,
     repoTools: true,
     ...(config.pages ? { pagesTools: true } : {}),
@@ -224,8 +257,9 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
 /**
  * Tool families beside site_info; a request sees and calls only those of its scope. `web` — the
  * cloud browser of a chat (docs/plan/57-browser-tasks.md, Б20); `search` — the web search of any
- * turn, while its key is in Vault; `docs` — the documents of the workspace, any turn
- * (docs/plan/69-pages.md, Ст21); `pages` — its pages read, while the pages are configured (Ст20);
+ * turn, while its key is in Vault; `artifacts` — the artifacts of the workspace, any turn
+ * (docs/plan/88-artifacts.md, Ар22), and `artifact_synonyms` — the tools `doc_*` of plan 69 it
+ * replaces, given only to `tools/call` so that `tools/list` never shows them (Ар3); `pages` — its pages read, while the pages are configured (Ст20);
  * `pages_changes` — their publication and every change, only by a turn the client watches: they
  * are live for every visitor once the turn ends (docs/plan/82-scheduled-tasks.md, Зп28, Зп32).
  * `schedule` — the scheduled tasks of the chat's author, read by any turn; `schedule_changes` —
@@ -235,7 +269,10 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
 export const mcpToolFamilies = [
   'web',
   'search',
-  'docs',
+  'artifacts',
+  'artifact_synonyms',
+  'artifact_layout',
+  'artifact_vision',
   'pages',
   'pages_changes',
   'memory',
@@ -250,7 +287,12 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
   const families: McpToolFamily[] = []
   if (security.webTools && access.requirements.browser) families.push('web')
   if (security.searchTools) families.push('search')
-  if (security.docsTools) families.push('docs')
+  if (security.artifactsTools) families.push('artifacts')
+  // The renderer of frames lives in the browser worker (docs/plan/88-artifacts.md, Ар32).
+  if (security.artifactsTools && security.webTools) {
+    families.push('artifact_layout')
+    if (access.vision) families.push('artifact_vision')
+  }
   if (security.pagesTools) {
     families.push('pages')
     if (!access.unattended) families.push('pages_changes')
@@ -324,7 +366,13 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       siteInfoCall.safeParse(request.params).success ||
       (families.includes('web') && webCall.safeParse(request.params).success) ||
       (families.includes('search') && searchCall.safeParse(request.params).success) ||
-      (families.includes('docs') && docsCall.safeParse(request.params).success) ||
+      (families.includes('artifacts') && artifactsCall.safeParse(request.params).success) ||
+      (families.includes('artifact_layout') &&
+        artifactLayoutCall.safeParse(request.params).success) ||
+      (families.includes('artifact_vision') &&
+        artifactVisionCall.safeParse(request.params).success) ||
+      (families.includes('artifact_synonyms') &&
+        artifactSynonymsCall.safeParse(request.params).success) ||
       (families.includes('pages') && pagesCall.safeParse(request.params).success) ||
       (families.includes('pages_changes') && pagesChangeCall.safeParse(request.params).success) ||
       (families.includes('memory') && memoryCall.safeParse(request.params).success) ||

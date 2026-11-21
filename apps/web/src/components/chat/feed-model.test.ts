@@ -91,6 +91,34 @@ describe('feedEntries', () => {
     expect(entries[5]).toMatchObject({ kind: 'agentDocs', docIds: [doc] })
   })
 
+  it('puts the artifact of a turn into the card its answer placed, once (plan 88, Ар46)', () => {
+    const doc = '0199a3f2-0000-7000-8000-0000000000d1'
+    const other = '0199a3f2-0000-7000-8000-0000000000d2'
+    const at = '2026-10-17T09:00:00.000Z'
+    const artifact = (id: string, artifactId: string): FeedRow => ({
+      id,
+      at,
+      type: 'feed.artifact',
+      artifactId,
+      kind: 'document',
+      created: true,
+    })
+    const rows: FeedRow[] = [
+      requestRow('1'),
+      { id: '2', at, type: 'feed.doc_touch', docId: doc, revision: 2 },
+      resultRow('3', 1),
+      artifact('4', doc),
+      requestRow('5'),
+      resultRow('6', 2),
+      // A turn whose document sent no signal while it ran: its own card after its answer.
+      artifact('7', other),
+    ]
+    const entries = feedEntries(rows, null)
+    expect(entries.map((entry) => entry.key)).toEqual(['1', '3', 'docs-2', '5', '6', 'docs-7'])
+    expect(entries[2]).toMatchObject({ kind: 'agentDocs', docIds: [doc] })
+    expect(entries[5]).toMatchObject({ kind: 'agentDocs', docIds: [other] })
+  })
+
   it('never shows a stage the page does not know', () => {
     const rows: FeedRow[] = [
       requestRow('1'),

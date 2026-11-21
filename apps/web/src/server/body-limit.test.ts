@@ -183,6 +183,9 @@ describe('API routes', () => {
     // project-file.ts does the same for a file of a project (docs/plan/84-projects.md, ПР8),
     // reading a text whole only within its announced size: 20 MiB at most.
     'project-files/[id]': /uploadProjectFile\(request, await params, projectFileDependencies\)/,
+    // artifact-file.ts reads at most the announced size of a file of an artifact, 5 MiB
+    // (docs/plan/88-artifacts.md, Ар12).
+    'artifact-files/[id]': /uploadArtifactFile\(request, await params, artifactFileDependencies\)/,
     // speech.ts reads the sound after the session, the origin, the consents and a declared length
     // of at most 30 seconds of PCM (docs/plan/75-chat-input-output.md, ВВ17).
     speech: /recognizeSpeech\(request, speechDependencies\)/,

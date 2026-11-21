@@ -26,6 +26,8 @@ export const queueNames = [
   'git',
   // The tick of the scheduled tasks and the starts of their runs (docs/plan/82-scheduled-tasks.md, Зп19).
   'schedules',
+  // The workbooks of tables of artifacts that core builds (docs/plan/88-artifacts.md, question 26).
+  'artifacts',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

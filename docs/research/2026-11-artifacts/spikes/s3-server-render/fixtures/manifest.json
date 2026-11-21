@@ -1,0 +1,45 @@
+{
+  "about": "Planted layout bugs of the ten typical frames (spike s3 of plan 88). kind — the detector that must report it; width — 1440, 390 or both; mark — the data-bug attribute the stamper takes out (null: a page-level finding). B19 is expected only when the scroll pass is off.",
+  "frames": {
+    "01-bakery-landing": { "title": "Пекарня «Колос» — лендинг", "bugs": [
+      { "id": "B1", "kind": "hscroll", "width": 390, "what": "grid of three fixed 280 px columns on a phone" },
+      { "id": "B2", "kind": "contrast", "width": "both", "what": "grey review author #c4c4c4 on white" }
+    ] },
+    "02-price-list": { "title": "Прайс-лист салона", "bugs": [
+      { "id": "B3", "kind": "small-text", "width": "both", "what": "10 px footnotes" },
+      { "id": "B4", "kind": "hscroll", "width": 390, "what": "table with min-width 640 px" }
+    ] },
+    "03-contacts": { "title": "Контакты автосервиса", "bugs": [
+      { "id": "B5", "kind": "hscroll", "width": 390, "what": "map picture 800 px wide" },
+      { "id": "B18", "kind": "blocked", "width": "both", "what": "map widget script from an outside CDN" }
+    ] },
+    "04-calculator": { "title": "Калькулятор стоимости ремонта", "bugs": [
+      { "id": "B6", "kind": "script-error", "width": "both", "what": "localStorage throws in the sandbox, the total is never computed" }
+    ] },
+    "05-promo-banner": { "title": "Баннер акции −30%", "bugs": [
+      { "id": "B7", "kind": "overlap", "width": "both", "what": "absolute badge over the headline" },
+      { "id": "B8", "kind": "contrast", "width": "both", "what": "white headline on a light yellow gradient" },
+      { "id": "B20", "kind": "no-viewport", "width": "both", "what": "no meta viewport" }
+    ] },
+    "06-menu": { "title": "Меню кофейни (картинки data:)", "bugs": [
+      { "id": "B9", "kind": "small-text", "width": "both", "what": "9 px allergens" },
+      { "id": "B10", "kind": "broken-img", "width": "both", "what": "truncated data: JPEG" }
+    ] },
+    "07-booking-form": { "title": "Запись в барбершоп", "bugs": [
+      { "id": "B11", "kind": "clipped", "width": 390, "what": "button text cut by a 120 px width on a phone" }
+    ] },
+    "08-about-team": { "title": "О компании и команда", "bugs": [
+      { "id": "B12", "kind": "empty", "width": "both", "what": "values section min-height 1100 px with two lines" },
+      { "id": "B17", "kind": "blocked", "width": "both", "what": "Google Fonts stylesheet" },
+      { "id": "B17f", "kind": "font-missing", "width": "both", "mark": null, "what": "headings ask for Montserrat, which is not there" }
+    ] },
+    "09-faq-accordion": { "title": "Частые вопросы (аккордеон)", "bugs": [] },
+    "10-one-page-site": { "title": "Одностраничный сайт сервиса", "bugs": [
+      { "id": "B13", "kind": "empty", "width": "both", "what": "empty video placeholder 900/520 px" },
+      { "id": "B14", "kind": "contrast", "width": "both", "what": "footer links #555 on #333" },
+      { "id": "B15", "kind": "small-text", "width": "both", "what": "11 px legal line" },
+      { "id": "B16", "kind": "overlap", "width": 390, "what": "badge over the card title on a phone" },
+      { "id": "B19", "kind": "invisible", "width": "both", "scrollPassOff": true, "what": "reveal-on-scroll sections stay transparent in a full-page render" }
+    ] }
+  }
+}

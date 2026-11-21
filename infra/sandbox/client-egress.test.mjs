@@ -1389,3 +1389,15 @@ test('a page host is a slug or a site’s own name on 443, under the page domain
   assert.equal(at('shop.other.ru'), false)
   assert.equal(pageTargetOf(null)({ host: 'shop.pages.raditi.ru', port: 443 }), false)
 })
+
+test('CLOSED=1 is a proxy that lets nothing through: a render container (plan 88, §7.12)', () => {
+  const base = { LISTEN_HOST: '10.200.0.5', LISTEN_PORT: '3128', ALLOWED_HOSTS: '[]' }
+  // Without it an empty list is refused: a session must go somewhere.
+  assert.throws(() => clientEgressConfig(base), /ALLOWED_HOSTS must list/)
+  const closed = clientEgressConfig({ ...base, CLOSED: '1' })
+  assert.equal(closed.allow.size, 0)
+  assert.equal(closed.anyPublic, false)
+  assert.equal(closed.localRoutes.size, 0)
+  for (const extra of [{ ALLOW_PUBLIC: '1' }, { ALLOWED_HOSTS: '["site.example.ru:443"]' }])
+    assert.throws(() => clientEgressConfig({ ...base, CLOSED: '1', ...extra }), /CLOSED=1/)
+})

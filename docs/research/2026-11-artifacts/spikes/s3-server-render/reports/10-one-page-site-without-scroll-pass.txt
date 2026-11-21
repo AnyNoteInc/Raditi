@@ -1,0 +1,10 @@
+Layout of «Одностраничный сайт сервиса» as the client sees it (390×11131, 1440×7332).
+4 problems, most serious first:
+- both: low contrast 1.7:1 (needs 4.5) — e152 <a> «Замена экрана» #555555 on #333333; same in e153, e154, e157 and 2 more.
+- both: small text 11 px — e160 <p.legal> «ИП Смирнов А. В., ОГРНИП 300000…».
+- both: empty area 9889 px tall at y 686.
+- both: 8 blocks with text stay transparent until a script shows them (e17 <section.reveal>, e47 <section.reveal>, e110 <section.reveal>): PNG, PDF and thumbnails show them empty.
+Note both: 2 text blocks lie on pictures; contrast there was not measured.
+OK: scripts, loads, fonts, width, overlaps, cut text, pictures.
+
+«Ход работы»: Проверка вёрстки «Одностраничный сайт сервиса» на компьютере и телефоне: 4 замечания — низкий контраст текста, мелкий текст, большое пустое место и другое

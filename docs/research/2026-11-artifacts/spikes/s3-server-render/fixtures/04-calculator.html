@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Калькулятор стоимости ремонта — «Ремстрой»</title>
+<style>
+  :root { --accent: #1e5eff; --ink: #14213d; --muted: #5c677d; --line: #e3e8f2; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Golos Text", Inter, sans-serif; color: var(--ink); background: linear-gradient(180deg, #eef3ff 0%, #ffffff 60%); min-height: 100vh; }
+  .shell { max-width: 1080px; margin: 0 auto; padding: 56px 24px 72px; display: grid; grid-template-columns: 1.4fr 1fr; gap: 32px; align-items: start; }
+  h1 { grid-column: 1 / -1; font-size: 42px; margin: 0; }
+  .sub { grid-column: 1 / -1; margin: -16px 0 8px; font-size: 18px; color: var(--muted); }
+  .panel { background: #fff; border: 1px solid var(--line); border-radius: 20px; padding: 28px; }
+  .field { margin-bottom: 26px; }
+  .field > label, .field > .label { display: block; font-weight: 600; margin-bottom: 10px; font-size: 17px; }
+  .area { display: flex; gap: 16px; align-items: center; }
+  .area input[type=range] { flex: 1; accent-color: var(--accent); }
+  .area input[type=number] { width: 110px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; font-size: 17px; font-family: inherit; }
+  .types { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .type { border: 2px solid var(--line); border-radius: 16px; padding: 16px; cursor: pointer; display: block; }
+  .type input { position: absolute; opacity: 0; pointer-events: none; }
+  .type b { display: block; font-size: 16px; margin-bottom: 4px; }
+  .type span { color: var(--muted); font-size: 14px; }
+  .type.selected { border-color: var(--accent); background: #f2f6ff; }
+  .extras label { display: flex; gap: 12px; align-items: center; padding: 10px 0; font-size: 16px; border-bottom: 1px solid var(--line); }
+  .extras input { width: 22px; height: 22px; accent-color: var(--accent); }
+  .extras em { margin-left: auto; font-style: normal; color: var(--muted); font-size: 15px; }
+  .result { position: sticky; top: 24px; background: var(--ink); color: #fff; border-radius: 20px; padding: 32px; }
+  .result h2 { margin: 0 0 8px; font-size: 20px; color: #c9d4ef; font-weight: 500; }
+  .total { font-size: 48px; font-weight: 800; margin: 0 0 4px; }
+  .per { color: #c9d4ef; margin: 0 0 24px; font-size: 16px; }
+  .result ul { list-style: none; padding: 0; margin: 0 0 24px; font-size: 15px; color: #e3e9f7; }
+  .result li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
+  .result button { width: 100%; padding: 16px; border-radius: 14px; border: 0; background: #ffd166; color: var(--ink); font-size: 17px; font-weight: 700; cursor: pointer; }
+  .hint { font-size: 14px; color: #c9d4ef; margin: 16px 0 0; }
+  @media (max-width: 820px) {
+    .shell { grid-template-columns: 1fr; padding: 32px 16px 56px; }
+    h1 { font-size: 32px; }
+    .types { grid-template-columns: 1fr; }
+    .result { position: static; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <h1>Сколько стоит ремонт квартиры</h1>
+  <p class="sub">Посчитайте за минуту. Точную смету пришлём после бесплатного замера.</p>
+
+  <form class="panel" id="calc" onsubmit="return false">
+    <div class="field">
+      <label for="area">Площадь квартиры, м²</label>
+      <div class="area">
+        <input type="range" id="area-range" min="20" max="200" value="54">
+        <input type="number" id="area" min="20" max="200" value="54">
+      </div>
+    </div>
+    <div class="field">
+      <div class="label">Тип ремонта</div>
+      <div class="types">
+        <label class="type selected"><input type="radio" name="type" value="4500" checked><b>Косметический</b><span>от 4 500 ₽/м²</span></label>
+        <label class="type"><input type="radio" name="type" value="9000"><b>Капитальный</b><span>от 9 000 ₽/м²</span></label>
+        <label class="type"><input type="radio" name="type" value="15000"><b>Дизайнерский</b><span>от 15 000 ₽/м²</span></label>
+      </div>
+    </div>
+    <div class="field extras">
+      <div class="label">Дополнительно</div>
+      <label><input type="checkbox" name="extra" value="35000"> Демонтаж старой отделки <em>35 000 ₽</em></label>
+      <label><input type="checkbox" name="extra" value="60000"> Замена электропроводки <em>60 000 ₽</em></label>
+      <label><input type="checkbox" name="extra" value="48000"> Тёплый пол в санузле <em>48 000 ₽</em></label>
+      <label><input type="checkbox" name="extra" value="25000"> Вывоз мусора <em>25 000 ₽</em></label>
+    </div>
+  </form>
+
+  <aside class="result">
+    <h2>Предварительная стоимость</h2>
+    <p class="total" id="total" data-bug="B6">— ₽</p>
+    <p class="per" id="per">Выберите параметры слева</p>
+    <ul id="lines"></ul>
+    <button type="button" id="order">Вызвать замерщика</button>
+    <p class="hint">Цена материалов не входит в расчёт.</p>
+  </aside>
+</div>
+
+<script type="application/json" id="raditi-settings">{"currency":"₽","discountFrom":100,"discount":0.05}</script>
+<script>
+  const settings = JSON.parse(document.getElementById('raditi-settings').textContent)
+  // Remember the client's last answers between visits.
+  const saved = JSON.parse(localStorage.getItem('remstroy-calc') || '{}')
+  const money = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 })
+  const form = document.getElementById('calc')
+  const range = document.getElementById('area-range')
+  const area = document.getElementById('area')
+  if (saved.area) { range.value = saved.area; area.value = saved.area }
+
+  function recalc() {
+    const m2 = Number(area.value) || 0
+    const rate = Number(form.querySelector('input[name=type]:checked').value)
+    const extras = [...form.querySelectorAll('input[name=extra]:checked')].map((box) => Number(box.value))
+    let sum = m2 * rate + extras.reduce((a, b) => a + b, 0)
+    if (m2 >= settings.discountFrom) sum = sum * (1 - settings.discount)
+    document.getElementById('total').textContent = money.format(sum) + ' ' + settings.currency
+    document.getElementById('per').textContent = money.format(Math.round(sum / Math.max(m2, 1))) + ' ₽ за м² с учётом работ'
+    document.getElementById('lines').innerHTML = '<li><span>Работы</span><span>' + money.format(m2 * rate) + ' ₽</span></li>' +
+      '<li><span>Дополнительно</span><span>' + money.format(extras.reduce((a, b) => a + b, 0)) + ' ₽</span></li>'
+    localStorage.setItem('remstroy-calc', JSON.stringify({ area: m2 }))
+  }
+  range.addEventListener('input', () => { area.value = range.value; recalc() })
+  area.addEventListener('input', () => { range.value = area.value; recalc() })
+  form.addEventListener('change', (event) => {
+    if (event.target.name === 'type') form.querySelectorAll('.type').forEach((card) => card.classList.toggle('selected', card.contains(form.querySelector('input[name=type]:checked'))))
+    recalc()
+  })
+  recalc()
+</script>
+</body>
+</html>

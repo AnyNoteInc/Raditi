@@ -39,6 +39,7 @@ const key: GatewayKey = {
   maxConcurrentRequests: 2,
   staleWindows: false,
   fallback: null,
+  vision: null,
 }
 const makeCall = (estimatedInputTokens = 10, estimatedCacheReadTokens = 0): GatewayCall => ({
   ...key,

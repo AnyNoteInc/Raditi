@@ -25,6 +25,7 @@ import {
   feedFailureKeptText,
   feedFailureOpenText,
   feedFileLeftText,
+  feedArtifactLeftText,
   feedDocLeftText,
   feedMemoryLeftText,
   feedRepoLeftText,
@@ -72,6 +73,7 @@ import {
   type ReactNode,
 } from 'react'
 
+import { ArtifactTurnUndo } from '@/components/artifacts/artifact-turn-undo'
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 
@@ -1153,9 +1155,13 @@ function RowView({
     // of the turn that wrote it (`feedEntries`), the rows themselves show nothing.
     case 'feed.doc':
     case 'feed.doc_touch':
+    case 'feed.artifact':
       return null
     case 'feed.doc_left':
       return <Note text={feedDocLeftText(row)} />
+    // Writes of the turn the check sent back (docs/plan/88-artifacts.md, Ар19): never why.
+    case 'feed.artifact_left':
+      return <Note text={feedArtifactLeftText(row)} />
     // What the end of a pass did with the memory (docs/plan/84-projects.md, ПР18; P-chat).
     case 'feed.memory_change':
       return <FeedMemoryChange entryId={row.entryId} action={row.action} text={row.text} />
@@ -1174,7 +1180,13 @@ function RowView({
     case 'feed.repo_left':
       return <Note text={feedRepoLeftText(row)} />
     case 'feed.rewind':
-      return <Note text={feedRewindText(row)} />
+      return (
+        <>
+          <Note text={feedRewindText(row)} />
+          {/* The edits of the turn in artifacts stay: undone in their history (Ар13). */}
+          {actions.taskId ? <ArtifactTurnUndo taskId={actions.taskId} turn={row.turn} /> : null}
+        </>
+      )
     case 'feed.redo':
       return <Note text={feedRedoText(row)} />
     // The client's edit of a file in «Терминал» (06.11.2026).

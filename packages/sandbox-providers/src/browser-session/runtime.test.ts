@@ -483,6 +483,32 @@ describe('Docker browser session runtime', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
   })
 
+  it('starts a render container whose proxy lets nothing through (plan 88, §7.12)', async () => {
+    const fake = daemon()
+    const runtime = createDockerBrowserSessionRuntime(
+      { ...config(), pageDomain: 'pages.example.ru', pageAddresses: ['10.0.0.9'] },
+      { client: fake.client },
+    )
+    await runtime.start({ ...spec({ allowedHosts: [] }), closed: true })
+    const egress = [...fake.containers.values()].find(
+      (container) => role(container.options) === 'egress',
+    )
+    const env = egress?.options.Env ?? []
+    expect(env).toContain('ALLOWED_HOSTS=[]')
+    expect(env).toContain('CLOSED=1')
+    // No public host, no page of the agent: the routes of the renderer are its only way.
+    expect(
+      env.some((each) => /^(ALLOW_PUBLIC|PUBLIC_TLS_ONLY|PAGE_DOMAIN|PAGE_ADDRESSES)=/.test(each)),
+    ).toBe(false)
+    // A closed container with a way out is no closed container.
+    await expect(
+      runtime.start({ ...spec({ allowedHosts: [] }), openWeb: true, closed: true }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(
+      runtime.start({ ...spec({ allowedHosts: ['news.example.ru:443'] }), closed: true }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
   it('gives local sites to the egress proxy only where allowed, plain http and by name', async () => {
     const fake = daemon()
     const runtime = createDockerBrowserSessionRuntime(config({ localSites: true }), {

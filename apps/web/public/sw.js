@@ -44,6 +44,7 @@ const GENERAL = Object.freeze({
 /** The sections of the cabinet: a window on one of them listens for `raditi:navigate`. */
 const CABINET_SECTIONS = Object.freeze([
   '/app',
+  '/artifacts',
   '/chats',
   '/pages',
   '/profile',

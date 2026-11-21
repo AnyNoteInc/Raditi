@@ -28,6 +28,7 @@
     "verify:vault": "node infra/vault/verify-local.mjs",
     "perf:chat": "exec node infra/dev/perf-verify/perf.mjs",
     "verify:billing": "exec node infra/dev/billing-verify/verify-billing.mjs",
+    "verify:artifacts": "exec node infra/dev/artifacts-verify/verify-artifacts.mjs",
     "verify:db": "node infra/dev/db-verify/verify-db.mjs",
     "verify:browser-task": "exec node infra/dev/browser-task-verify/verify-browser-task.mjs",
     "verify:pages": "exec node apps/preview/scripts/verify-pages.mjs",

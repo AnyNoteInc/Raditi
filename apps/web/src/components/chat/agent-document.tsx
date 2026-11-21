@@ -8,6 +8,7 @@ import LinearProgress from '@mui/material/LinearProgress'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { DocumentMarkdown } from '@repo/doc-render/markdown'
+import { artifactKindSpecOf } from '@repo/domain/artifacts'
 import { BrandProgress } from '@repo/ui/brand-progress'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AppRouter } from '@repo/trpc'
@@ -70,12 +71,23 @@ export const agentDocEntry = (docId: string): string => `doc:${docId}`
 export const agentDocOfEntry = (name: string): string | null =>
   name.startsWith('doc:') ? name.slice(4) : null
 
-/** The documents the agent began in the chat (`feed.doc`), oldest first, each once. */
-export function agentDocumentIdsOf(rows: readonly { type: string; docId?: string }[]): string[] {
+/**
+ * The documents the agent began or changed in the chat, oldest first, each once: the artifacts of
+ * the feed shown as Markdown (`feed.artifact`, docs/plan/88-artifacts.md, Ар46), the signals of a
+ * turn under way (`feed.doc_touch`) and the documents of plan 69 before them (`feed.doc`, history).
+ */
+export function agentDocumentIdsOf(
+  rows: readonly { type: string; docId?: string; artifactId?: string; kind?: string }[],
+): string[] {
   const ids: string[] = []
-  for (const row of rows)
-    if (row.type === 'feed.doc' && typeof row.docId === 'string' && !ids.includes(row.docId))
-      ids.push(row.docId)
+  const add = (id: string | undefined) => {
+    if (typeof id === 'string' && !ids.includes(id)) ids.push(id)
+  }
+  for (const row of rows) {
+    if (row.type === 'feed.doc' || row.type === 'feed.doc_touch') add(row.docId)
+    if (row.type === 'feed.artifact' && artifactKindSpecOf(row.kind ?? '')?.view === 'markdown')
+      add(row.artifactId)
+  }
   return ids
 }
 

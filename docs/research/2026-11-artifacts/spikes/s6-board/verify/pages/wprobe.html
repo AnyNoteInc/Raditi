@@ -1,0 +1,6 @@
+<!doctype html><html><head><meta charset="utf-8"><title>w</title><style>body{margin:0} iframe{border:0;display:block}</style></head><body><script>
+// six 1440-wide frames, the first on screen, the rest below the fold (900 px tall each)
+const q = new URLSearchParams(location.search); window.__m = {}
+addEventListener('message', (e) => { if (!e.data?.wp) return; const i = [...document.querySelectorAll('iframe')].findIndex((f) => f.contentWindow === e.source); (window.__m[i] ??= []).push(`${e.data.t}:${e.data.iw}/${e.data.sh}`) })
+for (let i = 0; i < 6; i++) { const f = document.createElement('iframe'); f.width = 1440; f.height = 900; f.setAttribute('sandbox', 'allow-scripts'); f.src = `${q.get('fo')}/wprobe.html?i=${i}`; document.body.appendChild(f) }
+</script></body></html>

@@ -1616,7 +1616,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         refusal: 'client_value',
         intent: 'Новый раздел',
       })
-      const row = await db.chatDocumentSection.findFirstOrThrow({
+      const row = await db.artifactBlock.findFirstOrThrow({
         where: { documentId: ids.documentId, sectionKey: 'extra' },
       })
       expect(JSON.stringify(row)).not.toContain('секрет')
@@ -1672,7 +1672,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         markdown === 'плохо' ? 'turn_key' : null,
       )
       expect(settled?.version).toBeNull()
-      const document = await db.chatDocument.findUniqueOrThrow({ where: { id: ids.documentId } })
+      const document = await db.artifact.findUniqueOrThrow({ where: { id: ids.documentId } })
       expect(document).toMatchObject({ currentVersion: 0, finishTaskId: null, finishTurnNo: null })
     })
 
@@ -1710,7 +1710,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
 
     it('makes neutral a title and intents the end of the turn refused, counted as sent back', async () => {
       const ids = await skeleton()
-      const sections = await db.chatDocumentSection.findMany({
+      const sections = await db.artifactBlock.findMany({
         where: { documentId: ids.documentId },
       })
       const [settled] = await settleTurnSections(db, {
@@ -1739,19 +1739,19 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
       const [settled] = await endOfTurn(ids.taskId, 1)
       expect(settled?.version).toBeNull()
       expect(
-        (await db.chatDocument.findUniqueOrThrow({ where: { id: ids.documentId } })).finishTurnNo,
+        (await db.artifact.findUniqueOrThrow({ where: { id: ids.documentId } })).finishTurnNo,
       ).toBe(2)
     })
 
     it('clears text no end of a turn checked, once its document is left a day', async () => {
       const ids = await skeleton()
       await write(ids, 'summary', 'непроверенное')
-      await db.chatDocument.update({
+      await db.artifact.update({
         where: { id: ids.documentId },
         data: { updatedAt: new Date('2020-01-01') },
       })
       expect(await clearStaleUncheckedSections(db, new Date('2021-01-01'))).toBe(1)
-      const row = await db.chatDocumentSection.findFirstOrThrow({
+      const row = await db.artifactBlock.findFirstOrThrow({
         where: { documentId: ids.documentId, sectionKey: 'summary' },
       })
       expect(row).toMatchObject({ state: 'pending', markdown: null, intent: 'Итог: три причины' })
@@ -1780,7 +1780,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
       const [byB] = await endOfTurn(other.id, 1)
       expect(byB?.version).toBeNull()
       expect(
-        (await db.chatDocument.findUniqueOrThrow({ where: { id: ids.documentId } })).finishTaskId,
+        (await db.artifact.findUniqueOrThrow({ where: { id: ids.documentId } })).finishTaskId,
       ).toBe(other.id)
       // The end of the turn of chat A makes it.
       const [byA] = await endOfTurn(ids.taskId, 1)

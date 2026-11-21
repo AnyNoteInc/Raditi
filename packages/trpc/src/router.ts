@@ -1,3 +1,4 @@
+import { artifactRouter } from './routers/artifact.ts'
 import { attachmentRouter } from './routers/attachment.ts'
 import { billingRouter } from './routers/billing.ts'
 import { browserRouter } from './routers/browser.ts'
@@ -33,6 +34,8 @@ export const appRouter = router({
   attachment: attachmentRouter,
   // The pages and text documents the agent makes in a chat (docs/plan/67-agent-documents.md).
   document: documentRouter,
+  // Artifacts (docs/plan/88-artifacts.md): the live channel and presence for now (88.5).
+  artifact: artifactRouter,
   // «Страницы»: the published pages of the user's workspaces (docs/plan/69-pages.md).
   pages: pagesRouter,
   // «Проекты»: chats of one matter with their instructions (docs/plan/84-projects.md).

@@ -91,6 +91,8 @@ export function egressContainer(input: {
   /** `host:port` of a local site's origin → its fixed `host:port`. */
   localRoutes: Readonly<Record<string, string>>
   refusedSubnets: readonly string[]
+  /** A render container (docs/plan/88-artifacts.md, §7.12): no public host either. */
+  closed?: boolean
   /** PAGES_BASE_DOMAIN: a page host of the agent passes `refusedSubnets` on 443 (Ст26). */
   pageDomain?: string
   /** BROWSER_PAGE_ADDRESSES: the only addresses of `refusedSubnets` a page host reaches. */
@@ -116,8 +118,7 @@ export function egressContainer(input: {
         // A page of the site may take the browser on to another site: a payment, a sign-in
         // service (owner's decision of 30.10.2026), over TLS only — its pages open over https
         // alone. Addresses that are not public stay refused.
-        'ALLOW_PUBLIC=1',
-        'PUBLIC_TLS_ONLY=1',
+        ...(input.closed ? ['CLOSED=1'] : ['ALLOW_PUBLIC=1', 'PUBLIC_TLS_ONLY=1']),
         `MAX_TUNNELS=${input.maxTunnels}`,
         ...(input.refusedSubnets.length
           ? [`REFUSED_SUBNETS=${input.refusedSubnets.join(',')}`]

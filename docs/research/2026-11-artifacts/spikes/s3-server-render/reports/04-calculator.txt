@@ -1,0 +1,7 @@
+Layout of «Калькулятор стоимости ремонта» as the client sees it (390×1373, 1440×900).
+2 problems, most serious first:
+- both: script error — SecurityError: Failed to read the 'localStorage' property from 'Window': The docume…. The frame is sandboxed: no storage, cookies, network or pop-ups.
+- 390: 1 touch target smaller than 24 px: e9 <input> 170×16.
+OK: loads, fonts, width, overlaps, cut text, contrast, text size, empty areas, pictures.
+
+«Ход работы»: Проверка вёрстки «Калькулятор стоимости ремонта» на компьютере и телефоне: 2 замечания — ошибка в скрипте, мелкие кнопки на телефоне

@@ -21,8 +21,9 @@ import {
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import type { PoolProbeClient } from '../llm/pool-probe-client.ts'
 import type { CompletedTurn, TurnSupervisor } from '../turns/turn-supervisor.ts'
+import type { ArtifactOutbox } from '../artifacts/artifact-outbox.ts'
 import type { ChatFiles } from './chat-files.ts'
-import type { DocSections } from './doc-sections.ts'
+import type { ArtifactChecks } from '../artifacts/artifact-checks.ts'
 import type { MemoryChanges } from './memory-changes.ts'
 import type { PageChanges } from './page-changes.ts'
 import type { RepoChanges, RepoTurnPreparer } from './repo-turns.ts'
@@ -93,8 +94,15 @@ export interface PassRunnerDependencies {
    * (docs/plan/66-chat-visuals.md, В8); absent — they stay with the turn's container.
    */
   chatFiles?: Pick<ChatFiles, 'deliver' | 'failPages'>
-  /** The documents of the chat (docs/plan/69-pages.md, Ст19); absent — not settled here. */
-  docs?: Pick<DocSections, 'settle'> & Partial<Pick<DocSections, 'checkLive'>>
+  /** The files and imports of the outbox the artifacts reserved (docs/plan/88-artifacts.md, §7.5). */
+  artifactOutbox?: Pick<ArtifactOutbox, 'take'>
+  /**
+   * The agent's writes in artifacts (docs/plan/88-artifacts.md, Ар16, Ар19): checked while the
+   * turn runs and at its end; a turn that failed or was cancelled checks what it can and drops the
+   * rest. Absent — they wait for the sweep, which drops them.
+   */
+  artifacts?: Pick<ArtifactChecks, 'checkLive' | 'settle' | 'fail'> &
+    Partial<Pick<ArtifactChecks, 'tell'>>
   /** What the turn asked of the pages besides versions (docs/plan/73-pages-sites.md, Дер23). */
   pageChanges?: Pick<PageChanges, 'apply'>
   /** What the turn asked of the memory of its chat (docs/plan/84-projects.md, ПР18). */
@@ -252,13 +260,16 @@ export class PassRunner {
   }
 
   /**
-   * The sections of documents the turn writes, checked while it runs (docs/plan/74, Д2): every
-   * `LIVE_DOC_CHECK_MS` once the turn holds its keys and values, one check at a time; a section
-   * that passed is shown at once. The end of the turn checks what is left, as before.
+   * The sections of documents and the writes in artifacts the turn makes, checked while it runs
+   * (docs/plan/74, Д2; docs/plan/88-artifacts.md, Ар19): every `LIVE_DOC_CHECK_MS` once the turn
+   * holds its keys and values, one check at a time; what passed is shown at once. The end of the
+   * turn checks what is left, as before; `refuses()` gives it to a turn that did not complete.
    */
   #liveDocs(taskId: string, turn: number) {
     type Refuses = (text: string) => 'turn_key' | 'client_value' | null
-    const check = this.deps.docs?.checkLive?.bind(this.deps.docs)
+    const checks = [this.deps.artifacts?.checkLive.bind(this.deps.artifacts)].filter(
+      (each) => each !== undefined,
+    )
     let timer: ReturnType<typeof setInterval> | null = null
     let running: Promise<void> | null = null
     let stopped = false
@@ -273,9 +284,12 @@ export class PassRunner {
       return refuses
     }
     const tick = () => {
-      if (running || stopped || !check || !refusal) return
+      if (running || stopped || checks.length === 0 || !refusal) return
       running = fresh()
-        .then((refuses) => (stopped ? undefined : check(taskId, turn, refuses)))
+        .then(async (refuses) => {
+          if (stopped) return
+          await Promise.all(checks.map((check) => check(taskId, turn, refuses)))
+        })
         .catch(() => undefined)
         .finally(() => {
           running = null
@@ -283,8 +297,9 @@ export class PassRunner {
     }
     return {
       arm: (armed: () => Promise<Refuses>) => {
-        if (stopped || !check || timer) return
+        if (stopped || timer) return
         refusal = armed
+        if (checks.length === 0) return
         timer = setInterval(tick, this.deps.liveDocCheckMs ?? LIVE_DOC_CHECK_MS)
         timer.unref?.()
       },
@@ -293,6 +308,9 @@ export class PassRunner {
         if (timer) clearInterval(timer)
         await running
       },
+      /** The turn's own check, if it got that far and Vault answers; null — nothing to check with. */
+      refuses: async (): Promise<Refuses | null> =>
+        refusal ? await fresh().catch(() => null) : null,
     }
   }
 
@@ -386,10 +404,29 @@ export class PassRunner {
     }
     const turnNo = await this.#turnNo(job.taskId)
     if (turnNo === null) return 'ended'
+    // What the turn put from its outbox into artifacts (docs/plan/88-artifacts.md, §7.5): its
+    // imports are writes of the agent the check below reads; a turn that did not complete only
+    // closes them. The names they took are no files of the chat.
+    const takenByArtifacts =
+      (await this.deps.artifactOutbox?.take({
+        taskId: job.taskId,
+        turn: 'turn' in ending && ending.turn !== null ? ending.turn : plan.turn,
+        outbox: ending.kind === 'completed' ? (outbox ?? null) : null,
+      })) ?? new Set<string>()
     // The sections of documents the chat wrote are checked with what only the turn knew (Ст19),
     // before the answer reaches the client: a document the answer speaks of shows what passed.
-    if (ending.kind === 'completed' && refusesText)
-      await this.deps.docs?.settle(job.taskId, ending.turn, refusesText)
+    if (ending.kind === 'completed' && refusesText) {
+      await this.deps.artifacts?.settle(job.taskId, ending.turn, refusesText)
+    }
+    // A turn that did not complete — or completed without the values to check with — checks its
+    // writes in artifacts with what it held, if it got so far, and drops the rest; its claims end
+    // (Ар16): nothing waits for the collector, nothing holds a block.
+    if (ending.kind !== 'completed' || !refusesText)
+      await this.deps.artifacts?.fail(
+        job.taskId,
+        'turn' in ending ? ending.turn : null,
+        await live.refuses(),
+      )
     const answer = await this.#settle({ ...ref, turnNo }, ending, browser)
     this.#logger.log(
       `pass_settled task=${job.taskId} ending=${ending.kind} answer=${answer}${cause ? ` cause=${cause}` : ''}`,
@@ -408,6 +445,9 @@ export class PassRunner {
       // And the changes of the scheduled tasks it reserved (Зп33): «ответ агента оборвался».
       await this.deps.scheduleChanges?.failTurn(job.taskId, ending.turn)
     }
+    // The artifacts the turn made or changed stand below its answer (Ар46).
+    if (ending.kind === 'completed' && answer === 'moved')
+      await this.deps.artifacts?.tell?.(job.taskId, ending.turn)
     // After the answer of the turn, so that its files stand below it in the chat. A turn without
     // files still settles the pages it named (docs/plan/69-pages.md, Ст6).
     if (ending.kind === 'completed' && answer === 'moved')
@@ -415,6 +455,7 @@ export class PassRunner {
         taskId: job.taskId,
         turn: ending.turn,
         outbox: outbox ?? null,
+        taken: takenByArtifacts,
       })
     // Then the changes the turn asked of its pages, after their versions: a page renamed or moved
     // in the turn keeps the version the turn gave it (Дер23).

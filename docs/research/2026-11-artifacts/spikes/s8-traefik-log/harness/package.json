@@ -1,0 +1,9 @@
+{
+  "name": "spike88-s8-traefik-log",
+  "private": true,
+  "type": "module",
+  "description": "Spike s8 of plan 88: does the edge log the query of /a?k=…, and does the fragment of /a#… reach the server",
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

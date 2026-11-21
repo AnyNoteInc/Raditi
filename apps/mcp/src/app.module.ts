@@ -5,9 +5,9 @@ import { mcpProfilesOf, type McpConfig } from './config/config.ts'
 import { McpConfigModule } from './config/config.module.ts'
 import { McpHealthModule } from './health/health.module.ts'
 import { InfraModule } from './infra/infra.module.ts'
+import { ArtifactsModule } from './artifacts/artifacts.module.ts'
 import { MemoryModule } from './memory/memory.module.ts'
 import { assertMcpNestToolAuthorization } from './server/mcp-runtime.ts'
-import { DocsModule } from './pages/docs.module.ts'
 import { PagesModule } from './pages/pages.module.ts'
 import { RepoModule } from './repo/repo.module.ts'
 import { ScheduleModule } from './schedule/schedule.module.ts'
@@ -26,12 +26,13 @@ import { WebModule } from './web/web.module.ts'
  * docs/plan/57-browser-tasks.md, Б20) is there wherever the browser worker is configured
  * (BROWSER_WORKER_URL). The web search (search_web, SearchModule) is offered while its access is
  * in Vault (`subs/search/yandex`). The pages of the workspace (page_*, PagesModule,
- * docs/plan/69-pages.md) — where PAGES_BASE_DOMAIN is set; its documents (doc_*, DocsModule) and
+ * docs/plan/69-pages.md) — where PAGES_BASE_DOMAIN is set; its artifacts (artifact_*, ArtifactsModule,
+ * docs/plan/88-artifacts.md, with the synonyms doc_* of plan 69) and
  * the scheduled tasks of the chat's author (schedule_*, ScheduleModule,
  * docs/plan/82-scheduled-tasks.md) — always. The memory of a chat (memory_*, MemoryModule,
  * docs/plan/84-projects.md, ПР18) — always, offered to a turn whose chat has its memory on. The
  * repository of a chat's project (repo_*, RepoModule, §4.4) — always, offered to a turn whose plan
- * names one. The modules come in this order — site_info, web, search, docs, pages, memory, repo,
+ * names one. The modules come in this order — site_info, web, search, artifacts, pages, memory, repo,
  * schedule — and so do their tools.
  */
 @Module({})
@@ -53,7 +54,7 @@ export class AppModule {
         SiteInfoModule,
         ...(worker ? [WebModule] : []),
         SearchModule,
-        DocsModule,
+        ArtifactsModule,
         ...(config.pages ? [PagesModule] : []),
         MemoryModule,
         RepoModule,

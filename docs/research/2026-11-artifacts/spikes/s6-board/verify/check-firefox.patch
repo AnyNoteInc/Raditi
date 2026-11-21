@@ -1,0 +1,28 @@
+--- a/check.mjs
++++ b/check.mjs
+@@ -43,8 +43,8 @@
+ 
+ // --- E: events over live frames ------------------------------------------------------------------
+ async function eventChecks(engine, launch, ctxOpts, origins, pes = ['none', 'shield', 'drag', 'auto']) {
+-  for (const impl of ['a', 'b']) {
+-    for (const pe of pes) {
++  for (const impl of (process.env.IMPLS ?? 'a,b').split(',')) {
++    for (const pe of (process.env.PES ? process.env.PES.split(',') : pes)) {
+       const browser = await launch()
+       const page = await (await browser.newContext(ctxOpts)).newPage()
+       const cond = `${engine} ${impl === 'a' ? 'CSS' : 'xyflow'} pe=${pe}`
+@@ -56,9 +56,12 @@
+         let a0 = await vp(page); await wheel(page, { x: c.left - 40, y: c.y }, { dy: 60, n: 6 }); await sleep(350); let b0 = await vp(page)
+         rec('E', 'колёсико над пустым холстом двигает холст (контроль)', cond, moved(a0, b0), Math.abs(moved(a0, b0).dy) > 40)
+         await focusFrame(page); await sleep(350); c = await frameCenter(page)
+-        // W1: ctrl+wheel over the frame zooms the board
+-        let a = await vp(page); await wheel(page, c, { dy: -10, n: 6, ctrl: true }); await sleep(350); let b = await vp(page)
++        // W1: ctrl+wheel over the frame zooms the board (SKIPCTRL=1: skipped, to see what the later steps do without it)
++        let a = await vp(page); if (!process.env.SKIPCTRL) await wheel(page, c, { dy: -10, n: 6, ctrl: true }); await sleep(350); let b = await vp(page)
+         let m = moved(a, b); rec('E', 'ctrl+wheel над кадром масштабирует холст', cond, m, Math.abs(m.dz) > 2)
++        // verification: does the ctrl+wheel zoom the whole tab (browser zoom)? ZOOMFIX=1 resets it
++        rec('E', 'innerWidth после ctrl+wheel', cond, await page.evaluate(() => innerWidth), null)
++        if (process.env.ZOOMFIX) { await page.keyboard.press('Control+0'); await sleep(300); rec('E', 'innerWidth после Ctrl+0', cond, await page.evaluate(() => innerWidth), null) }
+         await focusFrame(page); await sleep(350); c = await frameCenter(page)
+         // W2: wheel over the frame pans the board
+         a = await vp(page); await wheel(page, c, { dy: 60, n: 6 }); await sleep(350); b = await vp(page)

@@ -1,0 +1,5 @@
+Layout of «Частые вопросы (аккордеон)» as the client sees it (390×1420, 1440×1185).
+No problems found.
+OK: scripts, loads, fonts, width, overlaps, cut text, contrast, text size, empty areas, pictures.
+
+«Ход работы»: Проверка вёрстки «Частые вопросы (аккордеон)» на компьютере и телефоне: замечаний нет

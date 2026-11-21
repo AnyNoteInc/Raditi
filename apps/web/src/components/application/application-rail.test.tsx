@@ -28,11 +28,11 @@ beforeEach(() => {
 })
 
 describe('the rail of the cabinet', () => {
-  it('stands «Чаты», the scheduled tasks, «Страницы» and «Проекты», and the mark leads to the chats', () => {
+  it('stands «Чаты», the scheduled tasks, «Артефакты», «Страницы» and «Проекты», and the mark leads to the chats', () => {
     const all = links()
-    // The four sections of the cabinet (plan 82, Зп60; plan 84).
-    expect(all).toHaveLength(4)
-    const [chats, scheduled, pages, projects] = all
+    // The five sections of the cabinet (plan 82, Зп60; plan 84; plan 88, Ар43).
+    expect(all).toHaveLength(5)
+    const [chats, scheduled, artifacts, pages, projects] = all
     expect(chats).toHaveAccessibleName('Чаты')
     expect(chats).toHaveAttribute('href', '/chats')
     // After the chats and before the pages (owner's request of 15.11.2026, plan 82, Зп1): the
@@ -40,6 +40,9 @@ describe('the rail of the cabinet', () => {
     expect(scheduled).toHaveAccessibleName('Запланированные задачи')
     expect(scheduled).toHaveAttribute('href', '/scheduled')
     expect(scheduled).toHaveTextContent('Задачи')
+    // Between the scheduled tasks and the pages (docs/plan/88-artifacts.md, Ар43).
+    expect(artifacts).toHaveAccessibleName('Артефакты')
+    expect(artifacts).toHaveAttribute('href', '/artifacts')
     expect(pages).toHaveAccessibleName('Страницы')
     expect(pages).toHaveAttribute('href', '/pages')
     // The last section (docs/plan/84-projects.md).
@@ -58,9 +61,11 @@ describe('the rail of the cabinet', () => {
     ['/scheduled', 1],
     ['/scheduled/templates', 1],
     ['/scheduled/0199a3f2-0000-7000-8000-000000000002', 1],
-    ['/pages', 2],
-    ['/projects', 3],
-    ['/projects/new', 3],
+    ['/artifacts', 2],
+    ['/artifacts/0199a3f2-0000-7000-8000-000000000003', 2],
+    ['/pages', 3],
+    ['/projects', 4],
+    ['/projects/new', 4],
   ])('marks the section of %s, and only it', (pathname, current) => {
     mocks.pathname = pathname
     const all = links()

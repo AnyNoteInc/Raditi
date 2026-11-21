@@ -164,6 +164,35 @@ describe('OpenCode driver: prepared files and argv', () => {
     expect(Object.keys(value.agent)).toEqual(['raditi'])
   })
 
+  it('gives the helper look the model that sees images, and the pictures to it alone (plan 88, Ар32)', async () => {
+    const value = config(
+      await driver.prepare({ ...context, llm: { ...context.llm, visionModel: 'glm-5.3-flash' } }),
+    )
+    const models = (
+      value.provider as { raditi: { models: Record<string, Record<string, unknown>> } }
+    ).raditi.models
+    expect(Object.keys(models)).toEqual([context.llm.model, 'glm-5.3-flash'])
+    // Only the model of the helper is told it takes images.
+    expect(models[context.llm.model]!.modalities).toBeUndefined()
+    expect(models['glm-5.3-flash']!.modalities).toEqual({
+      input: ['text', 'image'],
+      output: ['text'],
+    })
+    const look = (value.agent as Record<string, Record<string, unknown>>).look!
+    expect(look).toMatchObject({ mode: 'subagent', model: 'raditi/glm-5.3-flash' })
+    expect(look.permission).toEqual({
+      '*': 'deny',
+      raditi_artifact_render: 'allow',
+      raditi_artifact_layout: 'allow',
+    })
+    expect(value.permission.task).toEqual({ '*': 'deny', look: 'allow' })
+    expect(value.permission.raditi_artifact_render).toBe('deny')
+    // Without it: no helper, no task, no second model.
+    const plain = config(await driver.prepare(context))
+    expect(Object.keys(plain.agent)).toEqual(['raditi'])
+    expect(plain.permission.task).toBe('deny')
+  })
+
   it('switches off what would reach the network and allows or denies every tool outright', async () => {
     const value = config(await driver.prepare(context))
     expect(value).toMatchObject({
@@ -206,6 +235,7 @@ describe('OpenCode driver: prepared files and argv', () => {
         [`${toolOutput}/*`]: 'allow',
       },
       'raditi_*': 'allow',
+      raditi_artifact_render: 'deny',
     })
     // The last matching rule wins: the inbox, outbox, /tmp, cache and tool output exceptions come
     // after the denial.

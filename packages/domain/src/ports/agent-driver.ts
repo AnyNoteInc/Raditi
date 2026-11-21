@@ -70,6 +70,12 @@ export interface RunContext {
     model: string
     /** Profile ceiling; null or absence leaves the provider's default unchanged. */
     reasoningEffort?: string | null
+    /**
+     * The model of the turn's key that sees images (docs/plan/88-artifacts.md, Ар32): the helper
+     * `look` of the driver runs on it and alone gets the pictures of `artifact_render`. Absent —
+     * the turn has no vision.
+     */
+    visionModel?: string
   }
   /** Per-turn MCP token scoped to the site and the task. */
   mcp: { url: string; token: string }

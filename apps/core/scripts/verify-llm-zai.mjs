@@ -46,6 +46,7 @@ import {
   ZAI_BACKEND as BACKEND,
   ZAI_MODEL as MODEL,
   ZAI_OFFERS,
+  ZAI_STAND_RATES,
   zaiDirectEnvironment,
   zaiLogin,
   zaiOperator,
@@ -478,6 +479,75 @@ export async function verifyZai(ctx) {
   })
   passed(
     'final gateway refusals (budget, revoked key, foreign model, profile level, account): one request, exit 1 within 10 s',
+  )
+
+  setStage('the profile that sees images (docs/plan/88-artifacts.md, Ар32)')
+  // The seeds bring it switched off and without a rate (the owner approves its numbers): the
+  // stand gives it the synthetic rate of the stand, on its disposable database alone.
+  const plan = await db.llmProvider.findUniqueOrThrow({ where: { slug: ZAI_OFFERS.plan.backend } })
+  const flash = await db.llmModel.findFirstOrThrow({
+    where: { providerId: plan.id, slug: 'glm-5.3-flash-low' },
+  })
+  assert.partialDeepStrictEqual(flash, { providerModelId: 'glm-5.3-flash', enabled: false })
+  const blind = await issued()
+  assert.equal(blind.values.visionModel, undefined, 'A key saw images with the profile off')
+  await revoke(blind)
+  await db.llmModelPrice.create({
+    data: {
+      modelId: flash.id,
+      effectiveFrom: new Date(Date.now() - 60_000),
+      ...ZAI_STAND_RATES,
+      sourceUrl: 'https://synthetic.invalid/b13-vision-rates',
+    },
+  })
+  await db.llmModel.update({ where: { id: flash.id }, data: { enabled: true } })
+  const seeing = await issued()
+  assert.equal(seeing.values.visionModel, 'glm-5.3-flash')
+  assert.partialDeepStrictEqual(await keyRow(seeing), {
+    visionModelId: flash.id,
+    visionReasoningEffort: 'low',
+  })
+  const jpeg = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//2Q=='
+  const pictured = (model) => ({
+    ...zaiForms.body(),
+    model,
+    messages: [
+      { role: 'user', content: 'Look at the frame.' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'The strip:' },
+          { type: 'image_url', image_url: { url: jpeg } },
+        ],
+      },
+    ],
+  })
+  await zai({ scenario: { scenario: 'text' } })
+  const looked = await roleRequest(seeing, { body: pictured('glm-5.3-flash') })
+  assert.equal(looked.status, 200, await looked.clone().text())
+  await looked.arrayBuffer()
+  const [lookCall] = await settled(seeing, 1)
+  assert.equal(lookCall.modelId, flash.id, 'The call of the helper is not counted as its model')
+  const sentToZai = (await zai()).requests
+    .filter((request) => request.path === ZAI_OFFERS.plan.providerPath)
+    .at(-1)
+  assert.equal(sentToZai.body.model, 'glm-5.3-flash')
+  assert.equal(sentToZai.body.reasoning_effort, 'low')
+  assert.deepEqual(sentToZai.body.messages[1].content[1], {
+    type: 'image_url',
+    image_url: { url: jpeg },
+  })
+  // The main model of the same key never takes a picture.
+  const mainPicture = await roleRequest(seeing, { body: pictured(MODEL) })
+  assert.equal(mainPicture.status, 400)
+  assert.deepEqual(
+    (({ code, field }) => ({ code, field }))(JSON.parse(await mainPicture.text()).error),
+    { code: 'raditi_policy', field: 'messages[].content[].image_url' },
+  )
+  await revoke(seeing)
+  await db.llmModel.update({ where: { id: flash.id }, data: { enabled: false } })
+  passed(
+    'the profile that sees images: off and without a rate no key has it; on, the key carries it, a picture goes to its model at the level low, priced and counted as it, and the main model of the key is refused a picture',
   )
 
   setStage('refusals of the provider by its codes')

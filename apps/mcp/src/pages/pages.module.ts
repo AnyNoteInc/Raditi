@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common'
 import {
   listTreeFiles,
   listWorkspacePages,
+  chatArtifactAccess,
   readChatDocument,
   readPageSource,
   reservePageChange,
@@ -22,6 +23,8 @@ import { MCP_PAGES } from './pages.tokens.ts'
 export function postgresPagesStore(db: PrismaClient): McpPagesStore {
   return {
     reserve: (input) => reservePagePublication(db, input),
+    documentOwned: async (taskId, documentId) =>
+      (await chatArtifactAccess(db, { taskId, artifactId: documentId }))?.role === 'owner',
     documentTitle: async (workspaceId, documentId) =>
       (await readChatDocument(db, { workspaceId, documentId, reader: 'client' })).title,
     list: (workspaceId) => listWorkspacePages(db, workspaceId),

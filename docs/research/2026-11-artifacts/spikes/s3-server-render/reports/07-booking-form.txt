@@ -1,0 +1,6 @@
+Layout of «Запись в барбершоп» as the client sees it (390×1404, 1440×982).
+1 problem, most serious first:
+- 390: text of e52 <button.callback> «Перезвоните мне за 5 минут» is cut: needs 241 px, has 118 px.
+OK: scripts, loads, fonts, width, overlaps, contrast, text size, empty areas, pictures.
+
+«Ход работы»: Проверка вёрстки «Запись в барбершоп» на компьютере и телефоне: 1 замечание — текст обрезан

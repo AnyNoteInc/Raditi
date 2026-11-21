@@ -43,6 +43,7 @@ import { PanelToggle } from '@/components/application/cabinet-panel'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
 import { MoveToProjectDialog, useMoveToProject } from '@/components/projects/move-to-project'
 import { moveText, projectHref } from '@/components/projects/project-texts'
+import { useArtifactMentions } from '@/components/artifacts/use-artifact-mentions'
 import { useContextMentions } from '@/components/projects/use-context-mentions'
 import { ScheduleDialog, type ScheduleDialogOpening } from '@/components/scheduled/schedule-dialog'
 import { downloadText } from '@/lib/download-text'
@@ -63,6 +64,7 @@ import {
   composerText,
   queueText,
   dialogText,
+  documentText,
   effortText,
   listText,
   taskWayText,
@@ -72,13 +74,20 @@ import { Composer, offScreen } from './composer'
 import { DialogMenuButton, dialogListKey, RemoveDialogConfirm, RenameField } from './dialog-actions'
 import { DialogNotFound } from './dialog-not-found'
 import {
+  artifactTool,
+  browserIcon,
+  browserName,
   closedTools,
+  fileTool,
   movesFocus,
+  toolKindOf,
   toolsDot,
   toolsReducer,
   toolsShown,
   toolTabId,
   toolTilesOf,
+  type ChatArtifactItem,
+  type ChatFileItem,
   type DialogTool,
   type ToolOpener,
 } from './dialog-tools'
@@ -111,15 +120,10 @@ import { useAttachments } from './use-attachments'
 import { useBrowserLaunch } from './use-browser-launch'
 import { useChatTodo } from './use-chat-todo'
 import { useDocumentArrivals } from './use-document-arrivals'
-import {
-  agentDocEntry,
-  agentDocOfEntry,
-  agentDocumentIdsOf,
-  DocRevisions,
-  docRevisionsOf,
-  useAgentDocumentArrivals,
-} from './agent-document'
+import { agentDocumentIdsOf, useAgentDocumentArrivals } from './agent-document'
 import { DocumentsPane, type DocumentTarget } from './documents-pane'
+import { ArtifactPane } from '@/components/artifacts/artifact-pane'
+import { artifactKindIcon } from '@/components/artifacts/artifact-kind-icon'
 import { PublishTargetDialog, usePagePublish, type PublishTarget } from './page-publish'
 import { useBrowserStream } from './use-browser-stream'
 import { useBrowserWatching } from './use-browser-watching'
@@ -570,36 +574,88 @@ export function DialogView({
     if (!held.isConnected || held.getClientRects().length === 0)
       document.getElementById(TOOLS_BUTTON_ID)?.focus()
   }, [shown])
-  // The pages and text documents of the agent (docs/plan/67-agent-documents.md, Д4): one that comes
-  // while the client looks at the chat opens «Документы» on it — beside the dialog from `lg`, never
-  // in its place below: there only «+» says so.
+  // The pages and text documents of the agent (docs/plan/67-agent-documents.md, Д4), since plan 88
+  // (Ар44, Ар45) each a tab of its own: one that comes while the client looks at the chat opens its
+  // tab once in the showing — beside the dialog from `lg`, never in its place below: there only «+»
+  // says so. The version a tab shows is its own target.
   const chatDocuments = useMemo(() => chatDocumentsOf(rows), [rows])
-  const [documentTarget, setDocumentTarget] = useState<DocumentTarget | null>(null)
+  const [fileTargets, setFileTargets] = useState<Readonly<Record<string, DocumentTarget>>>({})
   const openDocument = useCallback((name: string, fileId: string | null) => {
-    setDocumentTarget((before) => ({ name, fileId, seq: (before?.seq ?? 0) + 1 }))
+    setFileTargets((before) => ({
+      ...before,
+      [name]: { name, fileId, seq: (before[name]?.seq ?? 0) + 1 },
+    }))
   }, [])
   useDocumentArrivals(rows, head !== null, (names) => {
     const name = openingDocumentOf(names)
     if (name === null) return
-    // The tab shows what came, whether it opens now or later; its history keeps what was before.
     openDocument(name, null)
-    dispatchTools({ type: 'documentArrived', opens: wide })
+    dispatchTools({ type: 'arrived', tool: fileTool(name), opens: wide })
   })
-  // The documents the agent writes section by section (docs/plan/74, Д5): one it begins while the
-  // client looks at the chat opens the tab on it, as a file does, and fills there as it is written.
+  // The artifacts the agent makes (docs/plan/88-artifacts.md, Ар45): one it begins while the
+  // client looks at the chat opens its tab, and fills there as it is written.
   const agentDocs = useMemo(
-    () => agentDocumentIdsOf(rows as readonly { type: string; docId?: string }[]),
-    [rows],
-  )
-  const docRevisions = useMemo(
-    () => docRevisionsOf(rows as readonly { type: string; docId?: string; revision?: number }[]),
+    () =>
+      agentDocumentIdsOf(
+        rows as readonly { type: string; docId?: string; artifactId?: string; kind?: string }[],
+      ),
     [rows],
   )
   useAgentDocumentArrivals(agentDocs, head !== null, (docId) => {
-    openDocument(agentDocEntry(docId), null)
-    dispatchTools({ type: 'documentArrived', opens: wide })
+    dispatchTools({ type: 'arrived', tool: artifactTool(docId), opens: wide })
   })
-  const documentCount = chatDocuments.length + agentDocs.length
+  // The artifacts of the chat by group (Ар44): made here, mentioned, of its project. Read again
+  // as a new one comes in the feed.
+  const chatArtifacts = useQuery({
+    ...trpc.artifact.ofChat.queryOptions({ taskId }),
+    enabled: head !== null,
+  })
+  const agentDocKey = agentDocs.join(',')
+  useEffect(() => {
+    if (agentDocKey === '') return
+    void queryClient.invalidateQueries({ queryKey: trpc.artifact.ofChat.queryKey({ taskId }) })
+  }, [agentDocKey, queryClient, trpc, taskId])
+  const artifactItems = useMemo<ChatArtifactItem[]>(() => {
+    const listed = chatArtifacts.data ?? []
+    const items: ChatArtifactItem[] = listed.map((artifact) => ({
+      id: artifact.id,
+      title: artifact.title,
+      icon: artifactKindIcon(artifact.kind),
+      group: artifact.group,
+    }))
+    // An artifact of the feed the list has not read yet stands among those made here.
+    for (const id of agentDocs)
+      if (!items.some((item) => item.id === id))
+        items.push({ id, title: documentText.artifact, icon: 'document', group: 'made' })
+    return items
+  }, [chatArtifacts.data, agentDocs])
+  const fileItems = useMemo<ChatFileItem[]>(
+    () =>
+      chatDocuments.map((document) => ({
+        name: document.name,
+        title: document.title,
+        icon: document.kind === 'page' ? 'pages' : 'document',
+      })),
+    [chatDocuments],
+  )
+  /** The name on a tab and its sign (Ар44): the browser's, an artifact's title, a file's. */
+  const labelOf = (tool: DialogTool): string => {
+    const kind = toolKindOf(tool)
+    if (kind.kind === 'artifact')
+      return artifactItems.find((item) => item.id === kind.id)?.title ?? documentText.artifact
+    if (kind.kind === 'file')
+      return fileItems.find((item) => item.name === kind.name)?.title ?? kind.name
+    return browserName
+  }
+  const iconOf = (tool: DialogTool) => {
+    const kind = toolKindOf(tool)
+    if (kind.kind === 'artifact')
+      return artifactItems.find((item) => item.id === kind.id)?.icon ?? 'document'
+    if (kind.kind === 'file')
+      return fileItems.find((item) => item.name === kind.name)?.icon ?? 'document'
+    return browserIcon
+  }
+  const activeKind = shown && tools.active !== null ? toolKindOf(tools.active) : null
   // «Результаты» name the other files the agent left too — a Word file, a PDF —: a chat whose
   // result is such a file shows it there, and the card is never drawn without a line.
   const chatFiles = useMemo(() => chatFilesOf(rows), [rows])
@@ -629,7 +685,9 @@ export function DialogView({
   useBrowserWatching({ taskId, enabled: browserLive })
   const attachments = useAttachments()
   // `@` in a chat of a project names the files of its context (docs/plan/84-projects.md, ПР24).
-  const mentions = useContextMentions(head?.task.project?.id ?? null)
+  const contextMentions = useContextMentions(head?.task.project?.id ?? null)
+  // …and the artifacts of the client (docs/plan/88-artifacts.md, Ар47).
+  const mentions = useArtifactMentions(contextMentions)
   // The names of the files the messages sent: read once a message has one.
   const sentIds = rows.flatMap((row) =>
     row.type === 'feed.request' && 'attachments' in row && Array.isArray(row.attachments)
@@ -1097,16 +1155,10 @@ export function DialogView({
       const document = documentOfFile(chatDocuments, fileId)
       if (document === null) return
       openDocument(document.name, fileId)
-      openTool('documents', { by: 'menu' })
+      openTool(fileTool(document.name), { by: 'menu' })
     },
-    onOpenAgentDocument: (docId) => {
-      openDocument(agentDocEntry(docId), null)
-      openTool('documents', { by: 'menu' })
-    },
-    shownAgentDocument:
-      shown && tools.active === 'documents' && documentTarget
-        ? agentDocOfEntry(documentTarget.name)
-        : null,
+    onOpenAgentDocument: (docId) => openTool(artifactTool(docId), { by: 'menu' }),
+    shownAgentDocument: activeKind?.kind === 'artifact' ? activeKind.id : null,
     onContinue: () => void press('continue', proceed.mutateAsync),
     onTakeControl: takeControl,
     onResumeAgent: resumeWork,
@@ -1268,7 +1320,14 @@ export function DialogView({
   // Its dot says what is new behind it, never while the panel is open (И13); below `lg` its menu
   // comes up from the bottom of the screen (И14). A chat with no tool has no «+» at all (К19).
   const tiles =
-    head === null ? [] : toolTilesOf(head, tools, { answered, rewound, documents: documentCount })
+    head === null
+      ? []
+      : toolTilesOf(head, tools, {
+          answered,
+          rewound,
+          artifacts: artifactItems,
+          files: fileItems,
+        })
   const menu =
     head === null || tiles.length === 0 ? null : (
       <ToolsMenu
@@ -1284,7 +1343,10 @@ export function DialogView({
 
   /** What the panel of a tool holds. */
   function toolContent(tool: DialogTool): ReactNode {
-    switch (tool) {
+    const kind = toolKindOf(tool)
+    switch (kind.kind) {
+      case 'artifact':
+        return <ArtifactPane artifactId={kind.id} />
       case 'browser':
         return (
           <BrowserPane
@@ -1309,14 +1371,14 @@ export function DialogView({
             rewound={rewound}
           />
         )
-      case 'documents':
+      case 'file':
         return (
-          <DocRevisions.Provider value={docRevisions}>
+          <>
             <DocumentsPane
               taskId={taskId}
               rows={rows}
-              agentDocs={agentDocs}
-              target={documentTarget}
+              only
+              target={fileTargets[kind.name] ?? { name: kind.name, fileId: null, seq: 0 }}
               fullscreen={fullscreen}
               onFullscreen={setFullscreen}
               {...(canPublishPages.data === true
@@ -1341,7 +1403,7 @@ export function DialogView({
                 onClose={() => setPublishing(null)}
               />
             )}
-          </DocRevisions.Provider>
+          </>
         )
     }
   }
@@ -1467,20 +1529,13 @@ export function DialogView({
                   documents={chatDocuments}
                   files={chatFiles}
                   underPlan={todo !== null}
-                  shownAgentDoc={
-                    shown && tools.active === 'documents' && documentTarget
-                      ? agentDocOfEntry(documentTarget.name)
-                      : null
-                  }
-                  onOpenAgentDoc={(docId) => {
-                    openDocument(agentDocEntry(docId), null)
-                    openTool('documents', { by: 'menu' })
-                  }}
+                  shownAgentDoc={activeKind?.kind === 'artifact' ? activeKind.id : null}
+                  onOpenAgentDoc={(docId) => openTool(artifactTool(docId), { by: 'menu' })}
                   onOpenFile={(fileId) => {
                     const document = documentOfFile(chatDocuments, fileId)
                     if (document === null) return
                     openDocument(document.name, fileId)
-                    openTool('documents', { by: 'menu' })
+                    openTool(fileTool(document.name), { by: 'menu' })
                   }}
                 />
               ) : null}
@@ -1637,6 +1692,8 @@ export function DialogView({
         onCloseAll={closeTools}
         onBack={backToDialog}
         content={toolContent}
+        labelOf={labelOf}
+        iconOf={iconOf}
       />
 
       {userId !== null ? (

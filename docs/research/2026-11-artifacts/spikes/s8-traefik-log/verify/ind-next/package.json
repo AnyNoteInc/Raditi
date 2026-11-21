@@ -1,0 +1,6 @@
+{
+  "name": "spike88-s8v-ind-next",
+  "private": true,
+  "description": "Independent Next.js 16.3.6 checks of spike s8: client router requests from /a#… and /a?k=…, error logs",
+  "dependencies": { "next": "16.3.6", "react": "19.3.0", "react-dom": "19.3.0" }
+}

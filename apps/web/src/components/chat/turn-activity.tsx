@@ -1,5 +1,6 @@
 'use client'
 
+import { artifactToolLine } from '@repo/domain/artifacts'
 import { todoListReadsRussian, todoProgressOf, todoStepKey } from '@repo/domain/tasks/agent-todo'
 import { fontFamilies } from '@repo/ui/theme/tokens'
 import Box from '@mui/material/Box'
@@ -297,16 +298,19 @@ function ActivityLine({ event }: { event: ActivityEvent }) {
       )
     case 'command':
       return <CommandBlock event={event} />
-    case 'tool_call':
+    case 'tool_call': {
+      // A tool of artifacts says what it does in the client's words (docs/plan/88, 88.8).
+      const line = artifactToolLine(event.tool)
       return (
         <Label
           icon={event.ok ? 'check' : 'warning'}
-          text={activityText.tool}
-          subject={event.tool}
+          text={line ?? activityText.tool}
+          {...(line ? {} : { subject: event.tool })}
           outcome={activityText.toolDone(event.ok)}
           failed={!event.ok}
         />
       )
+    }
     case 'file_change':
       return <Label icon="file" text={activityText.file[event.change]} subject={event.path} />
     case 'todo_list':

@@ -265,7 +265,7 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
 
   it('keeps the page of a document, which a viewer may have seen as «Документ ещё пишется»', async () => {
     const task = await chat()
-    const document = await db.chatDocument.create({
+    const document = await db.artifact.create({
       data: { workspaceId, taskId: task.id, title: 'Аудит' },
     })
     const page = await reservePagePublication(db, {

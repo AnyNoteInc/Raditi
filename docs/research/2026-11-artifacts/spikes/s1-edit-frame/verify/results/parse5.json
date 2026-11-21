@@ -1,0 +1,119 @@
+{
+ "noscript": {
+  "scriptingEnabledDefault": 0,
+  "scriptingEnabledFalse": 1
+ },
+ "adoption": {
+  "stamped": 3,
+  "duplicates": [
+   "e2"
+  ],
+  "bs": [
+   "e2",
+   "e2"
+  ],
+  "patchOriginal": "AMBIGUOUS_ID"
+ },
+ "foster": {
+  "misplaced": []
+ },
+ "patches": {
+  "pre with a leading newline": {
+   "ok": true,
+   "refusal": null,
+   "check": {
+    "slotNow": "новая",
+    "before": true,
+    "after": true,
+    "scripts": 0
+   }
+  },
+  "CRLF inside text": {
+   "ok": true,
+   "refusal": null,
+   "check": {
+    "slotNow": "три",
+    "before": true,
+    "after": true,
+    "scripts": 0
+   }
+  },
+  "ampersand without semicolon": {
+   "ok": true,
+   "refusal": null,
+   "check": {
+    "slotNow": "D",
+    "before": true,
+    "after": true,
+    "scripts": 0
+   }
+  },
+  "list items with implied ends": {
+   "ok": true,
+   "refusal": null,
+   "check": {
+    "slotNow": "новый",
+    "before": true,
+    "after": true,
+    "scripts": 0
+   }
+  },
+  "UPPERCASE tags": {
+   "ok": true,
+   "refusal": null,
+   "check": {
+    "slotNow": "Новый",
+    "before": true,
+    "after": true,
+    "scripts": 0
+   }
+  },
+  "svg text": {
+   "ok": true,
+   "refusal": null,
+   "check": {
+    "slotNow": "новая",
+    "before": true,
+    "after": true,
+    "scripts": 0
+   }
+  },
+  "markup in the new text": {
+   "ok": true,
+   "refusal": null,
+   "check": {
+    "slotNow": "</p><script>x()</script>",
+    "before": true,
+    "after": true,
+    "scripts": 0
+   }
+  },
+  "nbsp entity in the slot": {
+   "ok": true,
+   "refusal": null,
+   "check": {
+    "slotNow": "с семи",
+    "before": true,
+    "after": true,
+    "scripts": 0
+   }
+  },
+  "empty slot after an element with an implied end": {
+   "ok": false,
+   "refusal": "CHECK_FAILED",
+   "check": null
+  }
+ },
+ "plantedIds": {
+  "html": "<!doctype html><body data-rid=\"e2\"><p data-rid=\"e1\">a</p><p data-rid=\"e3\">b</p><p data-rid=\"e9\" data-rid=\"e1\">c</p>",
+  "duplicates": []
+ },
+ "editCopy": {
+  "left": [
+   "/x",
+   "/m",
+   "/f",
+   "/b"
+  ]
+ }
+}

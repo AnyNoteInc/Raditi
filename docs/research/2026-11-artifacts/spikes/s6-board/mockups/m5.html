@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ремонт квартир «Мастер»</title>
+<style>
+  :root { --bg:#f4f5f7; --ink:#141a22; --accent:#ff6b1a; --accent2:#1f3b57; --muted:#5f6b78; --card:#fff; }
+  body.variant-b { --bg:#f6f7f2; --ink:#18221a; --accent:#3aa655; --accent2:#22313f; --muted:#5f6a60; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; }
+  body { font-family:-apple-system, "Segoe UI", Roboto, Arial, sans-serif; background:var(--bg); color:var(--ink); line-height:1.5; }
+  .wrap { max-width:1220px; margin:0 auto; padding:0 32px; }
+  header { background:var(--accent2); color:#fff; }
+  header .wrap { display:flex; align-items:center; height:76px; gap:26px; }
+  .logo { font-weight:900; font-size:22px; letter-spacing:.04em; }
+  .logo b { color:var(--accent); }
+  nav { margin-left:auto; display:flex; gap:22px; opacity:.85; }
+  .btn { border:0; border-radius:10px; padding:14px 24px; background:var(--accent); color:#fff; font-weight:800; font-size:16px; cursor:pointer; }
+  .hero { background:linear-gradient(90deg, #141a22ee, #141a2299), url(/_files/repair-hero.jpg) center/cover; color:#fff; }
+  .hero .wrap { display:grid; grid-template-columns:1.2fr .8fr; gap:48px; align-items:center; padding-top:70px; padding-bottom:70px; }
+  body.variant-b .hero .wrap { grid-template-columns:.8fr 1.2fr; }
+  body.variant-b .calc { order:-1; }
+  .hero h1 { font-size:58px; line-height:1.05; margin:0 0 18px; }
+  .hero ul { padding:0; list-style:none; margin:0; display:grid; gap:10px; font-size:18px; }
+  .hero li::before { content:"✓ "; color:var(--accent); font-weight:900; }
+  .calc { background:var(--card); color:var(--ink); border-radius:22px; padding:30px; display:grid; gap:14px; box-shadow:0 30px 80px #0006; }
+  .calc label { display:grid; gap:6px; font-size:14px; color:var(--muted); }
+  .calc input[type=range] { width:100%; accent-color:var(--accent); }
+  .calc select { padding:12px; border-radius:10px; border:1px solid #0002; font-size:16px; font-family:inherit; }
+  .calc .opts { display:flex; flex-wrap:wrap; gap:10px 18px; font-size:15px; }
+  .calc .sum { font-size:34px; font-weight:900; }
+  .calc .sum small { display:block; font-size:14px; font-weight:400; color:var(--muted); }
+  .counters { display:grid; grid-template-columns:repeat(4, 1fr); gap:24px; text-align:center; }
+  .counters b { font-size:52px; color:var(--accent); display:block; font-variant-numeric:tabular-nums; }
+  section { padding:88px 0; }
+  h2 { font-size:40px; margin:0 0 30px; }
+  .steps { display:grid; grid-template-columns:repeat(3, 1fr); gap:22px; counter-reset:s; }
+  .step { background:var(--card); border-radius:18px; padding:26px; position:relative; }
+  .step::before { counter-increment:s; content:counter(s); position:absolute; right:22px; top:16px; font-size:56px; font-weight:900; color:#0000000f; }
+  .step b { font-size:19px; display:block; margin-bottom:8px; }
+  .works { display:grid; grid-template-columns:repeat(3, 1fr); gap:20px; }
+  .work { background:var(--card); border-radius:20px; overflow:hidden; }
+  .work .ba { display:grid; grid-template-columns:1fr 1fr; }
+  .work img { width:100%; aspect-ratio:3/4; object-fit:cover; display:block; }
+  .work img:first-child { filter:grayscale(1) brightness(.85); }
+  .work .t { padding:16px 18px; }
+  .work .t span { color:var(--muted); font-size:14px; }
+  .tiers { display:grid; grid-template-columns:repeat(3, 1fr); gap:22px; align-items:stretch; }
+  .tier { background:var(--card); border-radius:22px; padding:30px; display:flex; flex-direction:column; gap:12px; border:2px solid transparent; }
+  .tier.best { border-color:var(--accent); transform:translateY(-10px); }
+  .tier .p { font-size:32px; font-weight:900; }
+  .tier ul { margin:0; padding-left:20px; color:var(--muted); flex:1; }
+  .contact { background:var(--accent2); color:#fff; border-radius:28px; padding:46px; display:grid; grid-template-columns:1fr 1fr; gap:36px; }
+  .contact form { display:grid; gap:12px; }
+  .contact input, .contact textarea { padding:14px; border-radius:10px; border:0; font-size:16px; font-family:inherit; }
+  footer { padding:40px 0; color:var(--muted); font-size:14px; }
+  @media (max-width:700px) {
+    .wrap { padding:0 16px; }
+    nav { display:none; }
+    header .btn { margin-left:auto; padding:10px 14px; font-size:14px; }
+    .hero .wrap, body.variant-b .hero .wrap { grid-template-columns:1fr; padding-top:36px; padding-bottom:36px; }
+    .hero h1 { font-size:34px; }
+    .counters { grid-template-columns:1fr 1fr; }
+    .counters b { font-size:38px; }
+    section { padding:54px 0; }
+    h2 { font-size:28px; }
+    .steps, .works, .tiers, .contact { grid-template-columns:1fr; }
+    .tier.best { transform:none; }
+    .contact { padding:26px; }
+  }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="logo">МАСТЕР<b>.</b></div>
+  <nav><a>Услуги</a><a>Работы</a><a>Цены</a><a>Отзывы</a><a>Контакты</a></nav>
+  <button class="btn">Вызвать замерщика</button>
+</div></header>
+<div class="hero"><div class="wrap">
+  <div>
+    <h1>Ремонт квартир под ключ с фиксированной сметой</h1>
+    <ul><li>Смета не меняется после подписания договора</li><li>Гарантия 3 года на все работы</li><li>Фотоотчёт каждый день в мессенджере</li><li>Уборка после ремонта — бесплатно</li></ul>
+  </div>
+  <form class="calc" id="calc" onsubmit="return false">
+    <b style="font-size:22px">Рассчитайте стоимость</b>
+    <label>Площадь: <span id="areaV">54</span> м²<input type="range" id="area" min="20" max="200" value="54"></label>
+    <label>Тип ремонта<select id="kind"><option value="4500">Косметический — 4 500 ₽/м²</option><option value="8900" selected>Капитальный — 8 900 ₽/м²</option><option value="14500">Дизайнерский — 14 500 ₽/м²</option></select></label>
+    <div class="opts"><label style="display:flex;gap:6px"><input type="checkbox" id="o1" checked>Черновые материалы</label><label style="display:flex;gap:6px"><input type="checkbox" id="o2">Электрика</label><label style="display:flex;gap:6px"><input type="checkbox" id="o3">Сантехника</label></div>
+    <div class="sum"><span id="sum">0</span> ₽<small>Предварительно. Точную смету составим после замера.</small></div>
+    <button class="btn">Получить смету</button>
+  </form>
+</div></div>
+<section><div class="wrap counters" id="counters">
+  <div><b data-to="1240">0</b>квартир отремонтировали</div><div><b data-to="14">0</b>лет на рынке</div><div><b data-to="86">0</b>мастеров в штате</div><div><b data-to="98">0</b>% сдаём в срок</div>
+</div></section>
+<section style="padding-top:0"><div class="wrap">
+  <h2>Как мы работаем</h2>
+  <div class="steps">
+    <div class="step"><b>Замер и консультация</b>Приезжаем бесплатно в удобное время, обсуждаем задачи.</div>
+    <div class="step"><b>Смета и договор</b>Фиксируем стоимость и сроки. Ничего не прибавим.</div>
+    <div class="step"><b>Черновые работы</b>Демонтаж, стены, стяжка, электрика и сантехника.</div>
+    <div class="step"><b>Чистовая отделка</b>Плитка, обои или покраска, полы, двери.</div>
+    <div class="step"><b>Приёмка</b>Проверяем вместе по чек-листу из 60 пунктов.</div>
+    <div class="step"><b>Гарантия</b>3 года — приезжаем и исправляем бесплатно.</div>
+  </div>
+</div></section>
+<section style="padding-top:0"><div class="wrap">
+  <h2>Наши работы: до и после</h2>
+  <div class="works">
+    <div class="work"><div class="ba"><img src="/_files/repair-r1.jpg" alt=""><img src="/_files/repair-r2.jpg" alt=""></div><div class="t"><b>Двушка на Ленина</b><br><span>54 м² · 9 недель · 612 000 ₽</span></div></div>
+    <div class="work"><div class="ba"><img src="/_files/repair-r3.jpg" alt=""><img src="/_files/repair-r4.jpg" alt=""></div><div class="t"><b>Студия в новостройке</b><br><span>28 м² · 6 недель · 290 000 ₽</span></div></div>
+    <div class="work"><div class="ba"><img src="/_files/repair-r5.jpg" alt=""><img src="/_files/repair-r6.jpg" alt=""></div><div class="t"><b>Трёшка с перепланировкой</b><br><span>82 м² · 14 недель · 1 180 000 ₽</span></div></div>
+  </div>
+</div></section>
+<section style="padding-top:0"><div class="wrap">
+  <h2>Пакеты</h2>
+  <div class="tiers">
+    <div class="tier"><b>Косметический</b><div class="p">4 500 ₽/м²</div><ul><li>Покраска или обои</li><li>Замена напольного покрытия</li><li>Срок от 3 недель</li></ul><button class="btn">Выбрать</button></div>
+    <div class="tier best"><b>Капитальный</b><div class="p">8 900 ₽/м²</div><ul><li>Выравнивание стен и пола</li><li>Новая электрика и сантехника</li><li>Срок от 8 недель</li></ul><button class="btn">Выбрать</button></div>
+    <div class="tier"><b>Дизайнерский</b><div class="p">14 500 ₽/м²</div><ul><li>Дизайн-проект в подарок</li><li>Авторский надзор</li><li>Срок от 12 недель</li></ul><button class="btn">Выбрать</button></div>
+  </div>
+</div></section>
+<section style="padding-top:0"><div class="wrap">
+  <div class="contact"><div><h2 style="margin-bottom:12px">Обсудим ваш ремонт?</h2><p>Оставьте телефон — инженер перезвонит в течение часа и ответит на вопросы.</p></div>
+  <form onsubmit="return false"><input placeholder="Имя"><input placeholder="Телефон"><textarea rows="3" placeholder="Что нужно сделать"></textarea><button class="btn">Жду звонка</button></form></div>
+</div></section>
+<footer><div class="wrap">© «Мастер», 2026 · ООО «Мастер ремонта» · ИНН 0000000000 · Политика конфиденциальности</div></footer>
+<script>
+  const $ = (id) => document.getElementById(id)
+  const fmt = (n) => Math.round(n).toLocaleString('ru-RU')
+  function calc() {
+    const a = +$('area').value; $('areaV').textContent = a
+    let s = a * +$('kind').value
+    if ($('o1').checked) s += a * 1900
+    if ($('o2').checked) s += a * 1300
+    if ($('o3').checked) s += 45000
+    $('sum').textContent = fmt(s)
+  }
+  $('calc').addEventListener('input', calc); calc()
+  const io = new IntersectionObserver((es) => es.forEach((e) => {
+    if (!e.isIntersecting) return; io.disconnect()
+    const els = [...document.querySelectorAll('#counters b')]; const t0 = performance.now()
+    const tick = (t) => { const k = Math.min(1, (t - t0) / 1600); els.forEach((el) => { el.textContent = fmt(+el.dataset.to * (1 - Math.pow(1 - k, 3))) }); if (k < 1) requestAnimationFrame(tick) }
+    requestAnimationFrame(tick)
+  }), { threshold: 0.3 })
+  io.observe($('counters'))
+</script>
+</body>
+</html>

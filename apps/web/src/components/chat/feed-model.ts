@@ -1,3 +1,4 @@
+import { artifactKindSpecOf } from '@repo/domain/artifacts'
 import { documentKindOf } from '@repo/domain/tasks/chat-documents'
 import type { TaskStatus } from '@repo/domain'
 import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
@@ -125,20 +126,37 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
   // The documents the turn under way began or changed: their card waits for the end of the turn.
   let turnDocs: string[] = []
   let turnDocsKey = ''
+  // The documents of the card placed last: `feed.artifact` after the same answer names them again.
+  let lastCard: string[] = []
   const flushDocs = () => {
     if (turnDocs.length === 0) return
     entries.push({ kind: 'agentDocs', key: `docs-${turnDocsKey}`, docIds: turnDocs })
+    lastCard = turnDocs
     turnDocs = []
   }
   rows.forEach((row, index) => {
     if (row.type === 'skipped') return
     // A document begun or changed (docs/plan/69-pages.md, Ст22): no entry of its own, and never
     // the end of a turn's work.
+    // An artifact shown as Markdown (plan 88, Ар46) stands after the answer of its turn: it joins
+    // the card that answer already placed, or makes one of its own there — never the next turn's.
+    if (row.type === 'feed.artifact') {
+      const docId = artifactKindSpecOf(row.kind)?.view === 'markdown' ? row.artifactId : null
+      if (docId === null || lastCard.includes(docId) || turnDocs.includes(docId)) return
+      if (turnDocs.length > 0) {
+        turnDocs.push(docId)
+        return
+      }
+      entries.push({ kind: 'agentDocs', key: `docs-${row.id}`, docIds: [docId] })
+      lastCard = [...lastCard, docId]
+      return
+    }
     if (row.type === 'feed.doc' || row.type === 'feed.doc_touch') {
       if (turnDocs.length === 0) turnDocsKey = row.id
       if (!turnDocs.includes(row.docId)) turnDocs.push(row.docId)
       return
     }
+    if (row.type === 'feed.request') lastCard = []
     if (!isStep(row)) {
       entries.push({ kind: 'row', key: row.id, row })
       if (TURN_ENDS.has(row.type)) flushDocs()
@@ -156,7 +174,8 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
           !isStep(later) &&
           later.type !== 'feed.request' &&
           later.type !== 'feed.doc' &&
-          later.type !== 'feed.doc_touch',
+          later.type !== 'feed.doc_touch' &&
+          later.type !== 'feed.artifact',
       )
     const start = Date.parse(row.at)
     const end = Date.parse(ending?.at ?? last.at)

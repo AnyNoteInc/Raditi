@@ -41,9 +41,12 @@ export const browserMaxSessionsBounds = Object.freeze({ min: 1, max: 1024, defau
 /** JPEG quality of the screencast. */
 export const browserStreamQualityBounds = Object.freeze({ min: 10, max: 100 })
 
-/** S3 of the worker: the connection and the inbox bucket alone (Б26, spec §14). */
+/**
+ * S3 of the worker: the connection, the inbox bucket (Б26, spec §14) and, to read the files of the
+ * frames it renders, the artifacts bucket (docs/plan/88-artifacts.md, §7.12, slice 88.15б).
+ */
 export type BrowserInboxStorageConfig = Omit<StorageConfig, 'buckets' | 'presignEndpoint'> & {
-  buckets: Pick<StorageConfig['buckets'], 'inbox'>
+  buckets: Pick<StorageConfig['buckets'], 'inbox' | 'artifacts'>
 }
 
 /**
@@ -159,6 +162,7 @@ const BROWSER_STORAGE_VARIABLES = [
   'S3_SECRET_ACCESS_KEY',
   'S3_FORCE_PATH_STYLE',
   'S3_BUCKET_INBOX',
+  'S3_BUCKET_ARTIFACTS',
 ] as const
 
 /**
@@ -226,7 +230,7 @@ export function loadBrowserConfig(env: Env): BrowserWorkerConfig {
     accessKeyId: read.accessKeyId,
     secretAccessKey: read.secretAccessKey,
     forcePathStyle: read.forcePathStyle,
-    buckets: { inbox: read.buckets.inbox },
+    buckets: { inbox: read.buckets.inbox, artifacts: read.buckets.artifacts },
   }
 
   const runtimeKind: SessionRuntimeKind = own.BROWSER_RUNTIME ?? (production ? 'runsc' : 'runc')

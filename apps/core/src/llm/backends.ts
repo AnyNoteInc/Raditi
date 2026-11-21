@@ -15,6 +15,17 @@ export function backendCapacities(
   }
 }
 
+/**
+ * The models of each backend of the registry that take images (`LlmBackend.imageModels`,
+ * docs/plan/88-artifacts.md, Ар32): the adapters' own word, no name of a model here.
+ */
+export function backendImageModels(
+  backends: readonly LlmBackend[],
+): (backend: LlmBackendId) => readonly string[] {
+  const declared = new Map(backends.map((backend) => [backend.id, backend.imageModels ?? []]))
+  return (backend) => declared.get(backend) ?? []
+}
+
 const chatCompletions = '/chat/completions'
 
 /**

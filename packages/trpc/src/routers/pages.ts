@@ -12,6 +12,7 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
+import { artifactPublicationOf, publishArtifactPage } from '../services/artifacts/publish.ts'
 import { chatContextOf } from '../services/chat/context.ts'
 import {
   cabinetDocPage,
@@ -73,6 +74,39 @@ const publicationOutput = z.strictObject({
 })
 
 export const pagesRouter = router({
+  /**
+   * «Опубликовать как страницу» of an artifact (docs/plan/88-artifacts.md, Ар2, §7.10) — only its
+   * owner: a version of it, the current one by default; again — «Обновить страницу».
+   */
+  publishArtifact: consentedProcedure
+    .input(z.strictObject({ artifactId: z.uuid(), versionNo: z.number().int().min(1).nullable() }))
+    .output(publicationOutput.extend({ versionNo: z.number().int().min(1) }))
+    .mutation(({ ctx, input }) =>
+      publishArtifactPage(
+        ctx.prisma,
+        pagesAddressOf(ctx),
+        { ...input, userId: ctx.user.id },
+        ctx.chat ? () => ctx.chat!.storage() : undefined,
+      ),
+    ),
+
+  /** The page an artifact became, if any: its address and the version it shows. */
+  artifactPublication: consentedProcedure
+    .input(z.strictObject({ artifactId: z.uuid() }))
+    .output(
+      z
+        .strictObject({
+          pageId: z.uuid(),
+          url: z.url().nullable(),
+          versionNo: z.number().int().min(1),
+          current: z.boolean(),
+        })
+        .nullable(),
+    )
+    .query(({ ctx, input }) =>
+      artifactPublicationOf(ctx.prisma, ctx.chat?.pages ?? null, { ...input, userId: ctx.user.id }),
+    ),
+
   /** `enabled` false — PAGES_BASE_DOMAIN is unset here: no pages. */
   list: consentedProcedure
     .output(z.strictObject({ enabled: z.boolean(), pages: z.array(pageOutput) }))

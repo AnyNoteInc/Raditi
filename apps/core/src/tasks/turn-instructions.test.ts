@@ -293,19 +293,16 @@ describe('the sandbox and the checks of a change (spec §20, «Инструме�
 })
 
 describe('documents and pages (docs/plan/69-pages.md, Ст18, Ст20, Ст21)', () => {
-  it('tells every kind of turn the eight steps of a document and when a page is published', () => {
+  it('leaves documents to the section of artifacts and says when a page is published (plan 88, Ар3, Ар4)', () => {
     for (const text of [
       openTaskInstructions({ skills: [] }, { browser: false, inbox: null }),
       openTaskInstructions({ skills: [] }, { browser: true, inbox: null }),
     ]) {
-      expect(text).toContain('## Long documents')
-      for (const step of [
-        '1. `raditi_doc_create` first',
-        '6. Read it whole with `raditi_doc_read`',
-        '8. Later changes',
-      ])
-        expect(text).toContain(step)
+      // The tools of plan 69 are synonyms the model is never taught (Ар3).
+      expect(text).not.toContain('## Long documents')
+      expect(text).not.toContain('raditi_doc_')
       expect(text).toContain('When `raditi_page_publish` is among your tools')
+      expect(text).toContain('Publish only when the\n  client asks for a page, a site or a link')
       expect(text).toContain('close the page\n  with a password in the cabinet')
       expect(text).not.toMatch(/`doc_[a-z_]+`/)
       // Sites of pages (docs/plan/73-pages-sites.md, §6): paths, links from the root, the trash.
@@ -414,9 +411,11 @@ describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11; docs/p
       expect(text).toContain('never SVG')
       expect(text).toContain('`00-оглавление.md`')
       expect(text).toContain('write it again under the same file name')
-      expect(text).toContain("never\n  paste a document's content into the message")
-      // A long text to read is a document of the doc tools (docs/plan/69-pages.md), not a file.
-      expect(text).toContain('is a long\n  document of the `raditi_doc_*` tools below, not a file')
+      expect(text).toContain('To change an artifact, edit its blocks.')
+      expect(text).toContain('never\n  paste their content into the message')
+      // Any other text is a document artifact (docs/plan/88-artifacts.md, Ар4), not a file.
+      expect(text).toContain('any other text is a document artifact')
+      expect(text).toContain('A file is for a result no kind of artifact fits')
       // The old rule made every document a Word file.
       expect(text).not.toContain('is there to build .docx and .xlsx files')
     }

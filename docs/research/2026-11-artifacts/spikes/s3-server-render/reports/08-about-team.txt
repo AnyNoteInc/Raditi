@@ -1,0 +1,9 @@
+Layout of «О компании и команда» as the client sees it (390×3470, 1440×2594).
+3 problems, most serious first:
+- both: blocked stylesheet https://fonts.googleapis.com/css2?family=Montserrat:wgh… — a frame loads nothing from outside; use the platform fonts and artifact files.
+- both: font «Montserrat» is not available (11 blocks fall back to another font).
+- both: empty area 940 px tall at y 2258 in e35 <section.values>.
+Note both: the frame kept changing for 1 s (an animation or a timer); it was drawn mid-way.
+OK: scripts, width, overlaps, cut text, contrast, text size, pictures.
+
+«Ход работы»: Проверка вёрстки «О компании и команда» на компьютере и телефоне: 3 замечания — внешние файлы не загружаются, нет шрифта, большое пустое место

@@ -1,6 +1,8 @@
 import { z } from 'zod'
 
 import {
+  feedArtifactLeftPayloadSchema,
+  feedArtifactPayloadSchema,
   feedDocLeftPayloadSchema,
   feedDocPayloadSchema,
   feedDocTouchPayloadSchema,
@@ -121,6 +123,9 @@ export const feedEventTypes = [
   'feed.doc',
   'feed.doc_touch',
   'feed.doc_left',
+  // An artifact the turn created or changed, and writes the check sent back (plan 88, Ар46, Ар19).
+  'feed.artifact',
+  'feed.artifact_left',
   // What the end of a pass did with the notes of memory the agent reserved, and a note it did not
   // keep (docs/plan/84-projects.md, ПР18).
   'feed.memory_change',
@@ -968,6 +973,8 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.doc': feedDocPayloadSchema,
   'feed.doc_touch': feedDocTouchPayloadSchema,
   'feed.doc_left': feedDocLeftPayloadSchema,
+  'feed.artifact': feedArtifactPayloadSchema,
+  'feed.artifact_left': feedArtifactLeftPayloadSchema,
   'feed.memory_change': feedMemoryChangePayloadSchema,
   'feed.memory_left': feedMemoryLeftPayloadSchema,
   'feed.repo_changes': feedRepoChangesPayloadSchema,
@@ -1016,6 +1023,8 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.doc', feedDocPayloadSchema),
       row('feed.doc_touch', feedDocTouchPayloadSchema),
       row('feed.doc_left', feedDocLeftPayloadSchema),
+      row('feed.artifact', feedArtifactPayloadSchema),
+      row('feed.artifact_left', feedArtifactLeftPayloadSchema),
       row('feed.memory_change', feedMemoryChangePayloadSchema),
       row('feed.memory_left', feedMemoryLeftPayloadSchema),
       row('feed.repo_changes', feedRepoChangesPayloadSchema),
@@ -1350,6 +1359,16 @@ const readPageLeft = z.object({
     ),
 })
 
+const readArtifact = z.object({
+  artifactId: z.uuid(),
+  kind: z.string().max(24),
+  created: z.boolean(),
+})
+const readArtifactLeft = z.object({
+  artifactId: z.uuid(),
+  blocks: z.number().int().min(1),
+  reason: known(['refused'] as const, 'refused' as const),
+})
 const readDoc = z.object({ docId: z.uuid() })
 const readDocTouch = z.object({ docId: z.uuid(), revision: z.number().int().min(1) })
 const readDocLeft = z.object({
@@ -1531,6 +1550,8 @@ export type FeedEvent =
   | ({ type: 'feed.doc' } & z.infer<typeof readDoc>)
   | ({ type: 'feed.doc_touch' } & z.infer<typeof readDocTouch>)
   | ({ type: 'feed.doc_left' } & z.infer<typeof readDocLeft>)
+  | ({ type: 'feed.artifact' } & z.infer<typeof readArtifact>)
+  | ({ type: 'feed.artifact_left' } & z.infer<typeof readArtifactLeft>)
   | ({ type: 'feed.memory_change' } & z.infer<typeof readMemoryChange>)
   | ({ type: 'feed.memory_left' } & z.infer<typeof readMemoryLeft>)
   | ({ type: 'feed.repo_changes' } & z.infer<typeof readRepoChanges>)
@@ -1697,6 +1718,13 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   },
   'feed.doc_left': {
     1: (payload) => readWith(readDocLeft, payload, (data) => ({ type: 'feed.doc_left', ...data })),
+  },
+  'feed.artifact': {
+    1: (payload) => readWith(readArtifact, payload, (data) => ({ type: 'feed.artifact', ...data })),
+  },
+  'feed.artifact_left': {
+    1: (payload) =>
+      readWith(readArtifactLeft, payload, (data) => ({ type: 'feed.artifact_left', ...data })),
   },
   'feed.memory_change': {
     1: (payload) =>

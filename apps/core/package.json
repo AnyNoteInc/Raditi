@@ -38,6 +38,7 @@
     "@repo/billing": "workspace:*",
     "@repo/browser-link": "workspace:*",
     "@repo/db": "workspace:*",
+    "@repo/doc-bridge": "workspace:*",
     "@repo/doc-render": "workspace:*",
     "@repo/domain": "workspace:*",
     "@repo/git-providers": "workspace:*",
@@ -63,6 +64,7 @@
     "rxjs": "catalog:",
     "tar-stream": "catalog:",
     "web-push": "4.0.0",
+    "write-excel-file": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -79,6 +81,7 @@
     "@types/web-push": "3.6.4",
     "@typescript/native": "catalog:",
     "eslint": "catalog:",
+    "read-excel-file": "catalog:",
     "supertest": "catalog:",
     "typescript": "catalog:",
     "unplugin-swc": "catalog:",

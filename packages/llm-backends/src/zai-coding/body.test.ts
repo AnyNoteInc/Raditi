@@ -212,9 +212,12 @@ describe('the closed shape of a Z.ai request', () => {
 
   it('refuses images and every content part that is not text', () => {
     const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }
+    // A picture to a model that sees none, or under a profile that does not: refused as a picture.
+    for (const content of [[image], [{ type: 'text', text: 'a' }, image]])
+      expect(refusedField(cli({ messages: [{ role: 'user', content }] }))).toBe(
+        'messages[].content[].image_url',
+      )
     for (const content of [
-      [image],
-      [{ type: 'text', text: 'a' }, image],
       [{ type: 'input_audio', input_audio: { data: 'AAAA', format: 'wav' } }],
       [{ type: 'video_url', video_url: { url: 'https://example.invalid/v.mp4' } }],
       [{ type: 'file_url', file_url: { url: 'https://example.invalid/f.pdf' } }],
@@ -232,6 +235,42 @@ describe('the closed shape of a Z.ai request', () => {
     expect(sent(cli({ messages: [{ role: 'user', content: parts }] })).messages).toEqual([
       { role: 'user', content: parts },
     ])
+  })
+
+  it('takes pictures of data: only from the profile that sees images, to its model (plan 88, Ар32)', () => {
+    const vision = createZaiBodyPolicy(route, ['glm-5.3-flash'])
+    const look = { model: 'glm-5.3-flash', reasoningEffort: 'low', images: true }
+    const picture = { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,/9j/AAAA' } }
+    const body = (url = picture) => ({
+      ...cli({ model: 'glm-5.3-flash' }),
+      messages: [
+        { role: 'user', content: 'Look.' },
+        { role: 'tool', tool_call_id: 'c1', content: [{ type: 'text', text: 'strip 1' }, url] },
+        { role: 'user', content: [{ type: 'text', text: 'the strip' }, url] },
+      ],
+    })
+    const taken = decode(vision(route, encodeJson(body()), look).body)
+    expect(taken.model).toBe('glm-5.3-flash')
+    expect(taken.reasoning_effort).toBe('low')
+    const refuse = (asked: unknown, profile: Record<string, unknown>) => {
+      try {
+        vision(route, encodeJson(asked), profile as typeof look)
+      } catch (error) {
+        return ((error as DomainError).details as { path?: string }).path
+      }
+      return 'accepted'
+    }
+    // Without the flag of the profile, or to another model, or a link the provider would fetch.
+    expect(refuse(body(), { ...look, images: false })).toBe('messages[].content[].image_url')
+    expect(refuse({ ...body(), model: 'glm-5.3' }, { ...look, model: 'glm-5.3' })).toBe(
+      'messages[].content[].image_url',
+    )
+    expect(
+      refuse(
+        body({ type: 'image_url', image_url: { url: 'https://example.invalid/a.jpg' } }),
+        look,
+      ),
+    ).not.toBe('accepted')
   })
 
   it.each([

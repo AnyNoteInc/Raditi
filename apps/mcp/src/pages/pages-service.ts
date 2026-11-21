@@ -60,6 +60,11 @@ export interface McpPagesStore {
     place?: { treeId: string; path: string }
   }): Promise<{ pageId: string; slug: string; path: string; treeId: string; version: number }>
   /** The title of a document of the workspace; throws DOC_NOT_FOUND. */
+  /**
+   * Whether the chat opens the document and its client owns it (docs/plan/88-artifacts.md, Ар23):
+   * only the owner publishes an artifact.
+   */
+  documentOwned(taskId: string, documentId: string): Promise<boolean>
   documentTitle(workspaceId: string, documentId: string): Promise<string>
   list(workspaceId: string): Promise<McpListedPage[]>
   read(input: { workspaceId: string; pageId: string }): Promise<{
@@ -134,6 +139,10 @@ export class McpPagesService {
       )
     try {
       const input = parsed.data
+      // A document of the artifacts is published by its owner, from a chat that opens it (Ар23):
+      // another's, or one the chat does not open, is never told apart from «not there».
+      if ('docId' in input && !(await this.#store.documentOwned(scope.taskId, input.docId)))
+        return { ok: false, code: 'ARTIFACT_NOT_FOUND', message: 'No such document for this chat' }
       const target = 'file' in input ? { fileName: input.file } : { documentId: input.docId }
       const title =
         'file' in input

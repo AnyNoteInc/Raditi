@@ -126,6 +126,7 @@ describe('proxy', () => {
       for (const path of [
         attachment,
         '/api/project-files/0196a3b2-7c4d-7e8f-9a0b-1c2d3e4f5a6b',
+        '/api/artifact-files/0196a3b2-7c4d-7e8f-9a0b-1c2d3e4f5a6b',
         '/api/profile/avatar',
         '/api/speech',
       ])
@@ -148,6 +149,8 @@ describe('proxy', () => {
         '/api/attachments/',
         `${attachment}/x`,
         '/api/project-files/x/y',
+        '/api/artifact-files/x/y',
+        '/api/artifact-frame/a.b',
         '/api/profile/avatars',
         '/api/profile/avatar/x',
         '/api/speech/x',

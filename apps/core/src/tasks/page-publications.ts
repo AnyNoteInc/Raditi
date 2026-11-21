@@ -1,4 +1,10 @@
-import { applyPageFile, applyPageVersion, insertFeedEvent, type PrismaClient } from '@repo/db'
+import {
+  applyPageFile,
+  applyPageVersion,
+  chatArtifactAccess,
+  insertFeedEvent,
+  type PrismaClient,
+} from '@repo/db'
 import { markdownTitleOf, readingPage } from '@repo/doc-render'
 import {
   checkPageContent,
@@ -22,7 +28,18 @@ import { pageLinkWarnings } from './page-links.ts'
 // serves its bytes.
 
 export interface PagePublicationsDependencies {
-  db: Pick<PrismaClient, '$transaction' | 'chatDocument' | 'page' | 'pageReservation' | 'taskEvent'>
+  db: Pick<
+    PrismaClient,
+    | '$transaction'
+    | '$queryRaw'
+    | 'artifact'
+    | 'artifactChat'
+    | 'artifactOp'
+    | 'page'
+    | 'pageReservation'
+    | 'task'
+    | 'taskEvent'
+  >
   logger?: { log(message: string): void; warn(message: string): void }
 }
 
@@ -210,11 +227,18 @@ export class PagePublications {
           versionNo: row.versionNo,
         }
         const where = { taskId, turnId }
+        // Only the owner of a document publishes it, from a chat that opens it (docs/plan/88-
+        // artifacts.md, Ар23): mcp asked at the reservation, the end of the turn asks again.
+        const access = await chatArtifactAccess(db, { taskId, artifactId: row.documentId! })
+        if (access?.role !== 'owner') {
+          await this.left(reservation, 'refused', where)
+          continue
+        }
         if (refusedDocuments.has(row.documentId!)) {
           await this.left(reservation, 'refused', where)
           continue
         }
-        const document = await db.chatDocument.findUnique({
+        const document = await db.artifact.findUnique({
           where: { id: row.documentId! },
           select: { title: true, content: { select: { markdown: true } } },
         })

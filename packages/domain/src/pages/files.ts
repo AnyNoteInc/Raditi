@@ -106,6 +106,9 @@ export function pageFileHeaders(type: string): Record<string, string> {
     'Referrer-Policy': 'no-referrer',
     'X-Robots-Tag': 'noindex, nofollow, noarchive',
     'Cross-Origin-Resource-Policy': 'cross-origin',
+    // A sandboxed page asks a font or a module by CORS from an opaque origin (`Origin: null`):
+    // without this Chromium and Firefox refuse it (docs/plan/88-artifacts.md, spike 2, question 25).
+    'Access-Control-Allow-Origin': '*',
     ...(type === 'application/pdf' ? { 'Content-Disposition': 'attachment' } : {}),
   }
 }

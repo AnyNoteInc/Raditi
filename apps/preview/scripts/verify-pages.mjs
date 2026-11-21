@@ -716,7 +716,8 @@ async function sharedFiles(stand) {
     chat,
     'Файлы',
     `<!doctype html><link rel="stylesheet" href="/_files/style.css">
-<p id="v">Файлы</p><img id="logo" src="/_files/logo.png" alt="">
+<style>@font-face{font-family:'StandFont';src:url(/_files/golos.woff2) format('woff2')}</style>
+<p id="v">Файлы</p><img id="logo" src="/_files/logo.png" alt=""><span id="f" style="font-family:StandFont,monospace">Привет</span>
 <script>fetch('/_files/style.css').then(() => console.log('${PROBE_MARK}' + JSON.stringify({ fetch: 'reached' })), () => console.log('${PROBE_MARK}' + JSON.stringify({ fetch: 'refused' })))</script>`,
     30,
     port,
@@ -737,6 +738,17 @@ async function sharedFiles(stand) {
   }
   await put('style.css', '/_files/style.css', html('#v{color:rgb(1, 2, 3)}'), 31)
   await put('logo.png', '/_files/logo.png', new Uint8Array(png), 32)
+  // A font of the site (docs/plan/88-artifacts.md, spike 2, question 25): a sandboxed page asks it
+  // by CORS from an opaque origin, so it loads only with `Access-Control-Allow-Origin: *`.
+  const { artifactFontSources } = await import(
+    join(root, 'apps/web/src/server/artifact-fonts.generated.ts')
+  )
+  await put(
+    'golos.woff2',
+    '/_files/golos.woff2',
+    new Uint8Array(Buffer.from(artifactFontSources['lib-golos-cyr'].base64, 'base64')),
+    33,
+  )
   const host = (label) => `${label}.${BASE}:${port}`
   const file = await hit(port, host(page.slug), { path: '/_files/style.css' })
   rt.check(
@@ -749,6 +761,13 @@ async function sharedFiles(stand) {
   rt.check(
     (await hit(port, host(page.slug), { path: '/_files/index.html' })).status === 404,
     'no HTML is a shared file',
+  )
+  const font = await hit(port, host(page.slug), { path: '/_files/golos.woff2' })
+  rt.check(
+    font.status === 200 &&
+      font.headers['content-type'] === 'font/woff2' &&
+      font.headers['access-control-allow-origin'] === '*',
+    'a font of the site goes with Access-Control-Allow-Origin: * (question 25)',
   )
   const require = createRequire(join(root, 'packages/browser-providers/package.json'))
   const { chromium } = require('playwright-core')
@@ -775,6 +794,14 @@ async function sharedFiles(stand) {
       'a picture of the site loads from its own host',
     )
     rt.check(lines[0]?.fetch === 'refused', 'a request of the page to that file is refused')
+    const fontStatus = await tab.evaluate(
+      "document.fonts.load('16px StandFont', 'Привет').then(() => [...document.fonts].find((face) => face.family.replace(/[\"']/g, '') === 'StandFont')?.status)",
+    )
+    rt.check(
+      fontStatus === 'loaded',
+      'the sandboxed page loads the font of its site (FontFace.status)',
+      String(fontStatus),
+    )
 
     // A site with a password: its files only with its cookie, sent by the sandboxed page too.
     await db.setPagePassword(prisma, {
