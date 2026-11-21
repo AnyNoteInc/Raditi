@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 
 // Two choices of this viewer in this browser (docs/plan/61-chats-first.md, §5.14), kept in
 // `localStorage`; a blocked or empty storage means the default.
@@ -39,6 +39,7 @@ function viewerChoice(key: string) {
     } catch {
       held = next ? 'on' : 'off'
     }
+    noteChoiceMade()
     for (const listener of listeners) listener()
   }
 
@@ -101,6 +102,40 @@ export function useTurnAtWorkShown(live: boolean): void {
 
 const useDetails = viewerChoice('raditi-chat-details')
 const useThinking = viewerChoice('raditi-chat-thinking')
+
+// The choices made on the dialog (owner's request of 21.11.2026): a chat that has just been
+// opened folds the lines «Агент работал …» of its finished turns whatever this browser chose
+// before, so the lines follow `/details` and `/thinking` only from the moment one of them is
+// chosen on the dialog. A stored choice is not that: it comes back with the page itself, on the
+// first client read of the storage, and would open the lines as if chosen.
+let choicesMade = 0
+const madeListeners = new Set<() => void>()
+
+function noteChoiceMade() {
+  choicesMade += 1
+  for (const listener of madeListeners) listener()
+}
+
+function subscribeMade(listener: () => void) {
+  madeListeners.add(listener)
+  return () => {
+    madeListeners.delete(listener)
+  }
+}
+
+/**
+ * Whether `/details` or `/thinking` was chosen on this dialog, apart from what this browser chose
+ * before it was opened: counted from the writes that came after the dialog mounted.
+ */
+export function useChatChoiceMadeHere(): boolean {
+  const writes = useSyncExternalStore(
+    subscribeMade,
+    () => choicesMade,
+    () => 0,
+  )
+  const atOpen = useRef(writes)
+  return writes > atOpen.current
+}
 
 export function useChatDetails(): { details: boolean; toggle: () => boolean } {
   const { on, toggle } = useDetails()

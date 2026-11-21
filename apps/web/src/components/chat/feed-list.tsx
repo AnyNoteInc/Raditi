@@ -1206,7 +1206,12 @@ export function FeedList({
   actions: FeedActions
   /** The files a message sent, by their ids, as their chips name them. */
   filesOf?: (ids: readonly string[]) => SentFile[]
-  /** «Подробности работы» (`/details`): «Ход работы» of finished turns stands open. */
+  /**
+   * «Подробности работы» (`/details`) with «Размышления агента» (`/thinking`): «Ход работы» of
+   * finished turns stands open while the choice holds. The dialog passes the choice made on it
+   * (owner's request of 21.11.2026): a chat that has just been opened folds every line whatever
+   * this browser chose before.
+   */
   details?: boolean
   /** «Ход работы» of a finished turn (owner's decision of 26.10.2026). */
   activityOf?: (turn: number) => ReactNode
