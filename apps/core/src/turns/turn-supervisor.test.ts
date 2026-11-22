@@ -2526,5 +2526,43 @@ describe.each(executorKinds)(
       expect(second.f.order.filter((step) => step === 'prepare')).toHaveLength(2)
       expect(first.f.order.filter((step) => step === 'prepare')).toHaveLength(1)
     })
+
+    // The chat of 21.11.2026: the agent renamed the chat as turn 3 ended, the branch row took the
+    // new name, and turn 4 failed with CONFLICT on a checkpoint of the old one.
+    it('goes on from a checkpoint whose branch had another name', async () => {
+      const { f } = await repositoryTurn(kind)
+      const previous = {
+        workspaceId: labels.workspaceId,
+        sessionId: labels.sessionId,
+        turn: 1,
+        image,
+        driver: { id: sampleDriverId, version: '1.0.0' },
+        home,
+      }
+      f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+      f.request.context = { ...f.request.context, turn: 2 }
+      f.request.previous = previous
+      f.snapshots.restoreSource.mockResolvedValue({
+        manifest: {
+          ...previous,
+          schemaVersion: 1,
+          createdAt: f.request.committedAt,
+          parts: [],
+          git: { branch: 'raditi/staroe-imya-0000aaaa' },
+        } as unknown as SnapshotManifest,
+        parts: {
+          home: {
+            method: 'GET',
+            url: 'https://s3.invalid/home',
+            headers: {},
+            expiresAt: new Date(Date.now() + 60_000),
+          },
+        },
+        dataKey: async () => new Uint8Array(32),
+      })
+      // Past the check: the turn goes on to its prepare, which this fake checkpoint then fails.
+      await expect(f.run()).rejects.not.toThrow('Previous checkpoint differs')
+      expect(f.order.filter((step) => step === 'prepare')).toHaveLength(2)
+    })
   },
 )

@@ -120,6 +120,28 @@ describe.skipIf(!databaseUrl)(
       expect((await ensureChatBranch(db, { ...base, taskId: c })).branch).toBe(`${one.branch}-2`)
     })
 
+    // The chat of 21.11.2026: the agent renamed the chat as its first turn ended; the row keeps
+    // the name the turn worked under, which its checkpoint holds.
+    it('names the branch as the turn worked with it, and suffixes it only when it is taken', async () => {
+      const own = await owner()
+      const [a, b] = sameMinuteIds()
+      await chat(own.workspaceId, own.projectId, a)
+      await chat(own.workspaceId, own.projectId, b)
+      const base = {
+        projectRepositoryId: own.repository.id,
+        title: 'Новое меню',
+        baseSha: 'a'.repeat(40),
+      }
+      const worked = `raditi/staroe-imya-${a.slice(-8)}`
+      expect((await ensureChatBranch(db, { ...base, taskId: a, branch: worked })).branch).toBe(
+        worked,
+      )
+      // Another chat that names the same branch takes a name of its own title.
+      const other = await ensureChatBranch(db, { ...base, taskId: b, branch: worked })
+      expect(other.branch).not.toBe(worked)
+      expect(other.branch).toMatch(/^raditi\/novoe-menyu-[0-9a-f]{8}-2$/)
+    })
+
     it('refuses a branch outside raditi/, an unknown state and a half-sent branch', async () => {
       const own = await owner()
       const task = await chat(own.workspaceId, own.projectId)

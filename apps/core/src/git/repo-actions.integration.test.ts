@@ -395,7 +395,8 @@ describe.skipIf(!enabled)(
       )
       expect(done).toMatchObject({ state: 'done', error: null })
       expect(await gitText(f.remote, 'rev-parse', `refs/heads/${done.branch}`)).toBe(head)
-      expect(done.branch).toBe(`raditi/novoe-menyu-${f.task.id.replaceAll('-', '').slice(-8)}`)
+      // The name the turn worked under (its plan's), as its checkpoint keeps it.
+      expect(done.branch).toBe('raditi/chat')
       const posted = f.fake.calls.find((call) => call.method === 'POST')!
       expect(posted.body).toMatchObject({ source_branch: done.branch, target_branch: 'main' })
       const body = posted.body as { title: string; description: string }
