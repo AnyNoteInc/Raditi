@@ -227,6 +227,11 @@ export interface PassFacts {
    */
   chatArtifacts?: readonly ChatArtifactLine[]
   /**
+   * The artifacts of the chat's project (Ар26, slice 88.20): `<project-artifacts>` lists those not
+   * in `chatArtifacts`, up to 30, without content. Absent — no project, or none.
+   */
+  projectArtifacts?: readonly ChatArtifactLine[]
+  /**
    * The brand of the chat's project (docs/plan/88-artifacts.md, Ар42, slice 88.15а): its tokens go
    * into the section `## Artifacts` as data. Absent — the project has none, or no project.
    */
@@ -694,7 +699,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         inbox: inboxFacts,
         variables: facts.variables ?? [],
         repository: repository !== null,
-      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${action ? '' : artifactsSection(facts.chatArtifacts ?? [], undefined, { brand: facts.projectBrand ?? null })}${memorySection(facts.memory)}${comments ? artifactCommentsSection(comments) : ''}`,
+      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${action ? '' : artifactsSection(facts.chatArtifacts ?? [], undefined, { brand: facts.projectBrand ?? null, project: facts.projectArtifacts ?? [] })}${memorySection(facts.memory)}${comments ? artifactCommentsSection(comments) : ''}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),

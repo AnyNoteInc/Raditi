@@ -185,6 +185,16 @@ describe('the pages of a workspace through the gateway (plan 69, Ст20)', () =>
     )
   })
 
+  it('names the document by artifactId as by docId (plan 88, 88.20)', async () => {
+    const { server, store } = await start({ ...testMcpConfig(), pages: address })
+    const artifactId = '01960000-0000-7000-8000-0000000000bb'
+    await post(server, call('page_publish', { artifactId, title: 'Аудит' }))
+    expect(store.documentOwned).toHaveBeenCalledWith(scope.taskId, artifactId)
+    expect(store.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Аудит', target: { documentId: artifactId } }),
+    )
+  })
+
   it('publishes a document only of the owner, from a chat that opens it (plan 88, Ар23)', async () => {
     const store = fakeStore()
     store.documentOwned.mockResolvedValue(false)

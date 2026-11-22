@@ -298,7 +298,7 @@ describe('MCP request policy', () => {
     // doc_* of plan 69 only with their own family, which the guard gives to tools/call alone (Ар3).
     expect(mcpToolFamiliesOf(chat, { ...base, artifactsTools: true })).toEqual([
       'artifacts',
-      'artifact_replies',
+      'artifact_changes',
     ])
     const docId = access.taskId
     const synonyms = ['artifacts', 'artifact_synonyms'] as const
@@ -444,7 +444,7 @@ describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)',
     const security: McpSecurity = { ...base, pagesTools: true, artifactsTools: true }
     expect(mcpToolFamiliesOf(access, security)).toEqual([
       'artifacts',
-      'artifact_replies',
+      'artifact_changes',
       'pages',
       'pages_changes',
     ])

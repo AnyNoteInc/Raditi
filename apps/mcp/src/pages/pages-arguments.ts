@@ -28,10 +28,11 @@ export const pagePublishToolArgumentsSchema = z
     file: outboxFileNameSchema
       .optional()
       .describe('A file you wrote to the outbox folder in this turn, e.g. price.html or report.md'),
-    docId: z
+    artifactId: z
       .uuid()
       .optional()
-      .describe('A document of doc_create, to publish its finished version'),
+      .describe('An artifact of the kind document, to publish its finished version as a page'),
+    docId: z.uuid().optional().describe('The same as artifactId (an older name)'),
     title: pageTitleSchema.optional().describe('The title of the page, one line'),
     pageId: z
       .uuid()
@@ -53,7 +54,7 @@ export const pagePublishToolArgumentsSchema = z
   })
   .refine((args) => pagePublishArgumentsSchema.safeParse(args).success, {
     message:
-      'give either file with title (and pageId for a new version, or treeId with path for a new page of a site) or docId',
+      'give either file with title (and pageId for a new version, or treeId with path for a new page of a site) or artifactId',
   })
 export type PagePublishToolArguments = z.infer<typeof pagePublishToolArgumentsSchema>
 

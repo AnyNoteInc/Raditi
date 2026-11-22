@@ -44,6 +44,7 @@ import {
   type ArtifactReadArguments,
   type ArtifactReplyArguments,
   type ArtifactSaveVersionArguments,
+  type ArtifactTrashArguments,
 } from '@repo/domain/artifacts'
 
 import type { McpTurnAccess } from '../access/mcp-access.ts'
@@ -173,6 +174,8 @@ export interface McpArtifactsStore {
     body: string
     resolve: boolean
   }): Promise<{ id: string; artifactId: string; repeated: boolean }>
+  /** Into the trash by the agent of the chat, for its client (`deleted_by = 'agent'`). */
+  trash(taskId: string, artifactId: string): Promise<{ purgeAfter: Date }>
 }
 
 export interface McpChatComment {
@@ -701,6 +704,39 @@ export class McpArtifactsService {
         live: 'after the check of the platform',
         ...(args.resolve ? { resolve: 'the note closes once the reply passes the check' } : {}),
         ...(reply.repeated ? { repeated: true } : {}),
+      }
+    })
+  }
+
+  /**
+   * `artifact_trash` (§7.5, Ар23, slice 88.20): only an artifact the client owns, on their word
+   * (`confirmedByClient`), at most 20 a turn; never without the client (Ар24) — the policy
+   * withholds it, the service refuses it too. 30 days in the trash, «Вернуть» is the client's.
+   */
+  trash(scope: McpTurnAccess, args: ArtifactTrashArguments): Promise<McpArtifactsAnswer> {
+    return answerOf(async () => {
+      if (scope.unattended)
+        throw new DomainError(
+          'ARTIFACT_FORBIDDEN',
+          'This pass runs on a schedule without the client: it does not delete artifacts',
+          403,
+        )
+      const access = await this.#store.access(scope.taskId, args.artifactId)
+      if (access === null) throw artifactNotFound()
+      if (access.role !== 'owner') throw artifactForbidden()
+      if (
+        !(await this.#store.admit(
+          `artifact-trash:${scope.taskId}:${scope.turn}`,
+          artifactLimits.agentTrashPerTurn,
+        ))
+      )
+        throw artifactLimit('agentTrashPerTurn')
+      const { purgeAfter } = await this.#store.trash(scope.taskId, args.artifactId)
+      return {
+        artifactId: args.artifactId,
+        trashed: true,
+        purgeAfter: purgeAfter.toISOString(),
+        note: 'The client can bring it back from «Корзина» of «Артефакты» until then.',
       }
     })
   }

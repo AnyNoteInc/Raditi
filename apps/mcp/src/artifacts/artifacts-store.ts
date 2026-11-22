@@ -18,8 +18,10 @@ import {
   reserveArtifactImport,
   saveArtifactVersion,
   setArtifactView,
+  trashArtifact,
   type PrismaClient,
 } from '@repo/db'
+import { artifactNotFound } from '@repo/domain/artifacts'
 
 import type { McpArtifactsStore } from './artifacts-service.ts'
 
@@ -91,5 +93,19 @@ export function postgresArtifactsStore(
     comments: (taskId, artifactId) =>
       readChatArtifactComments(db, { taskId, ...(artifactId === undefined ? {} : { artifactId }) }),
     reply: (input) => addAgentCommentReply(db, { ...input, now: new Date(now()) }),
+    trash: async (taskId, artifactId) => {
+      // The chat acts with the rights of its client (Ар21): the owner check is the client's.
+      const task = await db.task.findUnique({
+        where: { id: taskId },
+        select: { createdById: true },
+      })
+      if (!task?.createdById) throw artifactNotFound()
+      return trashArtifact(db, {
+        artifactId,
+        userId: task.createdById,
+        by: 'agent',
+        now: new Date(now()),
+      })
+    },
   }
 }

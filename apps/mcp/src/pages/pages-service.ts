@@ -135,14 +135,23 @@ export class McpPagesService {
     const parsed = pagePublishArgumentsSchema.safeParse(args)
     if (!parsed.success)
       return badRequest(
-        'Give either file with title (and pageId for a new version, or treeId with path for a new page of a site) or docId',
+        'Give either file with title (and pageId for a new version, or treeId with path for a new page of a site) or artifactId',
       )
     try {
-      const input = parsed.data
+      // `artifactId` and `docId` name the same document (docs/plan/88-artifacts.md, slice 88.20).
+      const input =
+        'artifactId' in parsed.data
+          ? { docId: parsed.data.artifactId, title: parsed.data.title }
+          : parsed.data
       // A document of the artifacts is published by its owner, from a chat that opens it (Ар23):
       // another's, or one the chat does not open, is never told apart from «not there».
       if ('docId' in input && !(await this.#store.documentOwned(scope.taskId, input.docId)))
-        return { ok: false, code: 'ARTIFACT_NOT_FOUND', message: 'No such document for this chat' }
+        return {
+          ok: false,
+          code: 'ARTIFACT_NOT_FOUND',
+          message:
+            'No such document of the client for this chat: page_publish takes an artifact of the kind document; the client publishes a mockup or a canvas from the cabinet',
+        }
       const target = 'file' in input ? { fileName: input.file } : { documentId: input.docId }
       const title =
         'file' in input

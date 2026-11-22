@@ -26,6 +26,7 @@ import {
   artifactReadArgumentsSchema,
   artifactReplyArgumentsSchema,
   artifactSaveVersionArgumentsSchema,
+  artifactTrashArgumentsSchema,
   type ArtifactClaimArguments,
   type ArtifactCommentsArguments,
   type ArtifactCreateArguments,
@@ -38,6 +39,7 @@ import {
   type ArtifactReadArguments,
   type ArtifactReplyArguments,
   type ArtifactSaveVersionArguments,
+  type ArtifactTrashArguments,
 } from '@repo/domain/artifacts'
 
 import { MCP_REQUEST_ACCESS, type McpRequest } from '../access/mcp-request.ts'
@@ -205,7 +207,7 @@ export class McpArtifactsController {
     return scope ? answerOf(await this.artifacts.comments(scope, args)) : unauthorized
   }
 
-  @ToolScopes(['artifact_replies'])
+  @ToolScopes(['artifact_changes'])
   @Tool({
     name: 'artifact_reply',
     description:
@@ -216,6 +218,24 @@ export class McpArtifactsController {
   async reply(@Payload() args: ArtifactReplyArguments, @Ctx() context: McpContext) {
     const scope = scopeOf(context)
     return scope ? answerOf(await this.artifacts.reply(scope, args)) : unauthorized
+  }
+
+  @ToolScopes(['artifact_changes'])
+  @Tool({
+    name: 'artifact_trash',
+    description:
+      'Move an artifact of the client into the trash, only when the client asked in this message; they can bring it back for 30 days.',
+    parameters: artifactTrashArgumentsSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  })
+  async trash(@Payload() args: ArtifactTrashArguments, @Ctx() context: McpContext) {
+    const scope = scopeOf(context)
+    return scope ? answerOf(await this.artifacts.trash(scope, args)) : unauthorized
   }
 }
 

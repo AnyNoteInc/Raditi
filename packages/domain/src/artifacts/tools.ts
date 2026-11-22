@@ -28,6 +28,7 @@ export const artifactToolNames = [
   'artifact_render',
   'artifact_comments',
   'artifact_reply',
+  'artifact_trash',
 ] as const
 export type ArtifactToolName = (typeof artifactToolNames)[number]
 
@@ -181,6 +182,16 @@ export const artifactReplyArgumentsSchema = z.strictObject({
 })
 export type ArtifactReplyArguments = z.infer<typeof artifactReplyArgumentsSchema>
 
+/**
+ * `artifact_trash` (§7.5, Ар23, slice 88.20): an artifact of the client into the trash, only when
+ * the client asked in this message — 30 days there, «Вернуть» is theirs. Only the owner's.
+ */
+export const artifactTrashArgumentsSchema = z.strictObject({
+  artifactId: z.uuid(),
+  confirmedByClient: z.literal(true),
+})
+export type ArtifactTrashArguments = z.infer<typeof artifactTrashArgumentsSchema>
+
 export const artifactToolArgumentSchemas = {
   artifact_list: artifactListArgumentsSchema,
   artifact_read: artifactReadArgumentsSchema,
@@ -194,6 +205,7 @@ export const artifactToolArgumentSchemas = {
   artifact_render: artifactRenderArgumentsSchema,
   artifact_comments: artifactCommentsArgumentsSchema,
   artifact_reply: artifactReplyArgumentsSchema,
+  artifact_trash: artifactTrashArgumentsSchema,
 } as const satisfies Record<ArtifactToolName, z.ZodType>
 
 /**
@@ -233,6 +245,8 @@ export function artifactToolLine(tool: string): string | null {
       return 'Читает заметки к артефакту'
     case 'artifact_reply':
       return 'Отвечает на заметку'
+    case 'artifact_trash':
+      return 'Убирает артефакт в корзину'
     default:
       return null
   }

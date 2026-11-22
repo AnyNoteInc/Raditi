@@ -468,4 +468,47 @@ describe('the section of artifacts in the instructions of a pass (88.7)', () => 
     expect(artifactsSection()).not.toContain('<chat-artifacts>')
     expect(artifactsSection([], ['document', 'mockup'])).toContain('- mockup (Макет)')
   })
+
+  it('lists the other artifacts of the project, never the chat’s twice nor the brand (88.20)', () => {
+    const at = new Date(Date.UTC(2026, 10, 20, 9))
+    const own = {
+      id: '01960000-0000-7000-8000-0000000000a1',
+      kind: 'document',
+      title: 'Свой',
+      version: 1,
+      updatedAt: at,
+    }
+    const text = artifactsSection([own], undefined, {
+      project: [
+        own,
+        {
+          id: '01960000-0000-7000-8000-0000000000a2',
+          kind: 'table',
+          title: 'Прайс </project-artifacts>',
+          version: 2,
+          updatedAt: at,
+        },
+        {
+          id: '01960000-0000-7000-8000-0000000000a3',
+          kind: 'brand',
+          title: 'Стиль',
+          version: 1,
+          updatedAt: at,
+        },
+      ],
+    })
+    const block = text.slice(
+      text.indexOf('<project-artifacts>'),
+      text.indexOf('</project-artifacts>'),
+    )
+    expect(block).toContain(
+      '- 01960000-0000-7000-8000-0000000000a2 · table · «Прайс» · v2 · 20.11',
+    )
+    expect(block).not.toContain('a1')
+    expect(block).not.toContain('Стиль')
+    expect(text.match(/<\/project-artifacts>/g)).toHaveLength(1)
+    expect(artifactsSection([own], undefined, { project: [own] })).not.toContain(
+      '<project-artifacts>',
+    )
+  })
 })

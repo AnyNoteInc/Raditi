@@ -147,6 +147,7 @@ function fakeStore(
       artifactId,
       repeated: false,
     })),
+    trash: vi.fn<S['trash']>(async () => ({ purgeAfter: new Date('2026-12-20T10:00:00Z') })),
   } satisfies McpArtifactsStore
   return { store, rows }
 }
@@ -282,6 +283,7 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
       'artifact_import',
       'artifact_comments',
       'artifact_reply',
+      'artifact_trash',
     ])
     expect(names.filter((name) => name.startsWith('doc_'))).toEqual([])
     for (const tool of family) expect(tool.inputSchema.additionalProperties, tool.name).toBe(false)
@@ -632,5 +634,27 @@ describe('the synonyms doc_* of plan 69 (Ар3)', () => {
     const reply = await post(server, call('artifact_reply', { threadId, opId, body: 'Готово' }))
     expect(reply.body.result?.isError ?? reply.body.error).toBeTruthy()
     expect(store.reply).not.toHaveBeenCalled()
+  })
+
+  it('trashes an artifact the client owns on their word, never one they do not own (88.20)', async () => {
+    const { store } = fakeStore()
+    const server = await start(store)
+    const res = await post(server, call('artifact_trash', { artifactId, confirmedByClient: true }))
+    expect(answer(res)).toMatchObject({ artifactId, trashed: true })
+    expect(store.trash).toHaveBeenCalledWith(base.taskId, artifactId)
+    // Without the client's word the call is not even a call of the tool.
+    const unconfirmed = await post(server, call('artifact_trash', { artifactId }))
+    expect(unconfirmed.body.result?.isError ?? unconfirmed.body.error).toBeTruthy()
+  })
+
+  it('never trashes an artifact the client does not own (88.20)', async () => {
+    const shared = fakeStore({ role: 'edit', personal: false, linked: true })
+    const other = await start(shared.store)
+    const refused = await post(
+      other,
+      call('artifact_trash', { artifactId, confirmedByClient: true }),
+    )
+    expect(answer(refused)).toMatchObject({ code: 'ARTIFACT_FORBIDDEN' })
+    expect(shared.store.trash).not.toHaveBeenCalled()
   })
 })

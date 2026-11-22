@@ -310,6 +310,18 @@ export async function readPassFacts(
       : null
   // The artifacts the chat made, edited or was given (Ар26): their lines, no content.
   const chatArtifacts = (await listChatArtifacts(deps.db, { taskId: task.id, scope: 'chat' })).rows
+  // The artifacts of its project (Ар26, slice 88.20): every turn of the project knows them by line.
+  const projectArtifacts =
+    task.project && task.project.deletedAt === null
+      ? (await listChatArtifacts(deps.db, { taskId: task.id, scope: 'project' })).rows
+      : []
+  const lineOf = ({ id, kind, title, version, updatedAt }: (typeof chatArtifacts)[number]) => ({
+    id,
+    kind,
+    title,
+    version,
+    updatedAt,
+  })
   return {
     task: {
       id: task.id,
@@ -325,17 +337,8 @@ export async function readPassFacts(
     repositoryUnavailable: repositoryUnavailableOf(task.project),
     ...(projectFiles.length ? { projectFiles } : {}),
     memory: memoryEntries,
-    ...(chatArtifacts.length
-      ? {
-          chatArtifacts: chatArtifacts.map(({ id, kind, title, version, updatedAt }) => ({
-            id,
-            kind,
-            title,
-            version,
-            updatedAt,
-          })),
-        }
-      : {}),
+    ...(chatArtifacts.length ? { chatArtifacts: chatArtifacts.map(lineOf) } : {}),
+    ...(projectArtifacts.length ? { projectArtifacts: projectArtifacts.map(lineOf) } : {}),
     ...(brand ? { projectBrand: brand } : {}),
     ...(dispatch ?? {}),
     ...(unattended ? { unattended } : {}),
