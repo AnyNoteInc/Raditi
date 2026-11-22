@@ -20,19 +20,23 @@ export type DiagramDraw = (
   request: ArtifactDiagramRenderRequest,
 ) => Promise<ArtifactDiagramRenderResponse>
 
+export interface ArtifactDiagramDeps {
+  db: Pick<PrismaClient, 'artifact' | 'artifactBlock' | 'artifactDiagramRender'>
+  /** The browser worker; null — not configured: the cabinet keeps saying «рисуем». */
+  draw: DiagramDraw | null
+}
+
+/** Plain class: the stand loads it from its sources. */
 export class ArtifactDiagram {
   readonly #logger = new Logger('ArtifactDiagram')
+  readonly #deps: ArtifactDiagramDeps
 
-  constructor(
-    private readonly deps: {
-      db: Pick<PrismaClient, 'artifact' | 'artifactBlock' | 'artifactDiagramRender'>
-      /** The browser worker; null — not configured: the cabinet keeps saying «рисуем». */
-      draw: DiagramDraw | null
-    },
-  ) {}
+  constructor(deps: ArtifactDiagramDeps) {
+    this.#deps = deps
+  }
 
   async run(job: ArtifactDiagramJob): Promise<void> {
-    const { db, draw } = this.deps
+    const { db, draw } = this.#deps
     if (draw === null) {
       this.#logger.warn('A diagram was asked for, and no browser worker draws it')
       return

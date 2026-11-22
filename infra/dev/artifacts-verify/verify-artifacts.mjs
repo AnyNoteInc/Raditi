@@ -42,7 +42,8 @@ const { values } = parseArgs({
     // The frames of mockups in Chromium, WebKit and Firefox (Docker): on by default.
     'no-browsers': { type: 'boolean', default: false },
     seconds: { type: 'string', default: '20' },
-    // `canvas` — only the canvas, the brand and the renderer (88.15–88.15в), after the migrations.
+    // `canvas` — only the canvas, the brand and the renderer (88.15–88.15в), after the migrations;
+    // `diagrams` — only «Схема» (88.24г).
     only: { type: 'string' },
   },
 })
@@ -155,8 +156,13 @@ try {
   if (all) await outboxIntoArtifacts(databaseUrl)
   if (!values['no-browsers']) {
     // 88.15–88.15в: the canvas, the brand and the renderer of frames on a Chromium of this machine.
-    const { canvasAndRender } = await import('./canvas.mjs')
-    await canvasAndRender({ root, databaseUrl, check })
+    if (values.only !== 'diagrams') {
+      const { canvasAndRender } = await import('./canvas.mjs')
+      await canvasAndRender({ root, databaseUrl, check })
+    }
+    // 88.24г: «Схема» — the corpus of spike 7 through the renderer, and the road to the page.
+    const { diagramsOnChromium } = await import('./diagrams.mjs')
+    await diagramsOnChromium({ root, databaseUrl, check })
   }
   if (all && !values['no-browsers']) {
     const { framesInBrowsers } = await import('./frames.mjs')
