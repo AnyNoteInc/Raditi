@@ -32,6 +32,14 @@ const PLAN_CALL = Prisma.sql`EXISTS (SELECT 1 FROM subscription_accounts a
   JOIN llm_plan_rates r ON r.provider_id = a.provider_id
   WHERE a.id = u.subscription_account_id)`
 
+/**
+ * A call of a chain not charged yet that the tariff pays for: its attempt holds an active reserve
+ * row on the tariff credits. Once the chain is charged, its tariff part is in the ledger.
+ */
+const TARIFF_CHAIN = Prisma.sql`EXISTS (SELECT 1 FROM credit_holds h
+  WHERE h.task_id = u.task_id AND h.attempt = u.task_attempt
+    AND h.status = 'active' AND h.unit = 'credit_tariff')`
+
 /** What a workspace is bounded by: the tier of its live paid tariff and its windows. */
 export interface WorkspaceUsageTerms {
   tier: WorkspaceTier
@@ -94,18 +102,41 @@ interface WindowRow {
 }
 
 /**
- * The windows of the workspace at `now` with what its work took in each (Л1, Л7): Σ
- * `cost_rub / rub_per_credit` by the credit rate in force at each `occurred_at`, over the
- * billable rows of its tasks in the open window. A window not open — '0', no reset: it starts with
- * the first call. A row without a rate in force counts nothing: no task is taken without one.
+ * The windows of the workspace at `now` with what its tariff credits took in each (Л1, Л2, Л7;
+ * owner's answer of 22.11.2026): the windows bound the tariff credits only, so only what the
+ * tariff paid fills them — the tariff charges of the ledger stamped inside the open window, and
+ * the work of the chains not charged yet whose reserve stands on the tariff (an active
+ * `credit_tariff` row of their attempt): Σ `cost_rub / rub_per_credit` by the credit rate in force
+ * at each `occurred_at`, over the billable plan calls of the window. What the gift or a pack paid
+ * never fills a window, so a spent window lets the work go on on them and the tariff comes back
+ * when the window resets. `excludeTaskId` leaves out the live work of one task: its charge asks
+ * how much room the others left it, not how much its own work took. A window not open — '0', no
+ * reset: it starts with the first call. A row without a rate in force counts nothing: no task is
+ * taken without one.
  */
 export async function workspaceWindowUsage(
   db: Db,
-  input: { workspaceId: string; now: Date; limits: Record<UsageWindowKind, number | null> },
+  input: {
+    workspaceId: string
+    now: Date
+    limits: Record<UsageWindowKind, number | null>
+    excludeTaskId?: string
+  },
 ): Promise<UsageWindowState[]> {
+  const excluded =
+    input.excludeTaskId === undefined
+      ? Prisma.empty
+      : Prisma.sql`AND u.task_id <> ${input.excludeTaskId}::uuid`
   const rows = await db.$queryRaw<WindowRow[]>`
     SELECT w.kind, w.started_at AS "startedAt", w.ends_at AS "endsAt",
-      COALESCE((
+      (COALESCE((
+        SELECT -SUM(l.amount)
+        FROM credit_ledger l
+        JOIN billing_accounts b ON b.id = l.account_id AND b.unit = l.unit
+        WHERE b.workspace_id = w.workspace_id AND l.unit = 'credit_tariff'
+          AND l.kind = 'charge' AND l.task_id IS NOT NULL
+          AND l.created_at >= w.started_at AND l.created_at < w.ends_at
+      ), 0) + COALESCE((
         SELECT SUM(u.cost_rub / r.rub_per_credit)
         FROM token_usage u
         JOIN tasks t ON t.id = u.task_id
@@ -115,8 +146,9 @@ export async function workspaceWindowUsage(
         ) r
         WHERE t.workspace_id = w.workspace_id AND u.billable AND t.billable
           AND u.occurred_at >= w.started_at AND u.occurred_at < w.ends_at
+          AND ${TARIFF_CHAIN} ${excluded}
           AND ${PLAN_CALL}
-      ), 0)::numeric(14,4)::text AS used
+      ), 0))::numeric(14,4)::text AS used
     FROM workspace_usage_windows w
     WHERE w.workspace_id = ${input.workspaceId}::uuid
       AND w.started_at <= ${input.now} AND w.ends_at > ${input.now}`
@@ -133,7 +165,8 @@ export async function workspaceWindowUsage(
 
 /**
  * What the open calls of the workspace have set aside, in credits at the rate in force at `now`
- * (Л19): a call is counted against the window from its admission, not only once it closed.
+ * (Л19): a call is counted against the window from its admission, not only once it closed. Only
+ * the calls of tasks whose reserve stands on the tariff: the windows bound the tariff alone.
  */
 export async function openReservedWindowCredits(
   db: Db,
@@ -148,6 +181,8 @@ export async function openReservedWindowCredits(
     JOIN llm_keys k ON k.id = c.key_id
     JOIN tasks t ON t.id = k.task_id
     WHERE t.workspace_id = ${input.workspaceId}::uuid AND c.state = 'open' AND t.billable
+      AND EXISTS (SELECT 1 FROM credit_holds h WHERE h.task_id = t.id
+        AND h.status = 'active' AND h.unit = 'credit_tariff')
       AND EXISTS (SELECT 1 FROM subscription_accounts a
         JOIN llm_plan_rates r ON r.provider_id = a.provider_id
         WHERE a.id = c.subscription_account_id)`

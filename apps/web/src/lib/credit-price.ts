@@ -50,13 +50,13 @@ export function smallEditPrice(price: string, credits: number, from = ''): strin
 
 /**
  * The rule of the charge (Ц14), in words that hold while a chat is charged pass by pass (spec
- * §17, how a chat is paid for): a pass that broke off on a failure is not charged — its turn is
- * rejected and its model calls stay out of the charge —, while passes that ended stay charged
- * even when the chat is dropped later or its release is rolled back. So the sentence promises
- * no return of credits for a task that «не получилась».
+ * §17, how a chat is paid for): what the agent did is charged, a pass that broke off on a failure
+ * too (owner's answer of 22.11.2026, docs/plan/90) — only the calls the platform cut off are free
+ * —, and passes that ended stay charged even when the chat is dropped later. So the sentence
+ * promises no return of credits for a task that «не получилась».
  */
 export const CHARGED_FOR_DONE_WORK =
-  'Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.'
+  'Списываем за проделанную работу, даже если её прервал сбой: платите только за то, что Радити успел сделать.'
 
 /**
  * What becomes of the tariff credits a period leaves (Ц7, from 06.11.2026): they live one more

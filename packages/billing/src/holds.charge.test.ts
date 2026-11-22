@@ -628,10 +628,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
     it('charges nothing for a done task whose only calls were the fault of the platform, and gives its reserve back', async () => {
       const { model, workspaceId, taskId } = await taskInWork()
-      // Estimates the platform caused are not billable; a turn that ended lost is never billed.
+      // Estimates the platform caused are not billable.
       await worked(model, taskId, '30', { estimateReason: 'aborted_platform' })
       await worked(model, taskId, '20', { estimateReason: 'lost', occurredAt: minutesAfter(6) })
-      await worked(model, taskId, '40', { turnNo: 2, turnStatus: 'lost' })
       await ended(taskId)
 
       // No minimum (КР5): nothing billable is nothing charged.
@@ -645,33 +644,34 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       const { model, taskId } = await taskInWork()
       await worked(model, taskId, '101.37', { turnStatus: 'completed' })
       await worked(model, taskId, '200', { estimateReason: 'aborted_platform' })
+      // A lost turn's recorded calls are charged (owner's answer of 22.11.2026).
       await worked(model, taskId, '150', { turnNo: 2, turnStatus: 'lost' })
       // The client's abort stays billable.
       await worked(model, taskId, '24', { estimateReason: 'aborted_client', turnNo: 3 })
       await ended(taskId)
 
-      // (101.37 + 24) ÷ 6.00 = 20.895.
-      expect(await charge(taskId)).toMatchObject({ credits: 21 })
+      // (101.37 + 150 + 24) ÷ 6.00 = 45.895.
+      expect(await charge(taskId)).toMatchObject({ credits: 46 })
       expect(await chargeMeta(taskId)).toMatchObject({
-        costRub: '125.3700000000',
-        rawCredits: '20.895',
+        costRub: '275.3700000000',
+        rawCredits: '45.895',
       })
     })
 
-    // docs/plan/53, «Попробовать ещё (18.10)»: a dialog kept its candidate after a failed pass
-    // and is released without a retry — the failed pass is not the client's to pay.
-    it('leaves the calls of a turn whose pass ended in a failure out of the charge', async () => {
+    // Owner's answer of 22.11.2026: the work of a failed pass is charged — the next pass goes on
+    // with it (until then docs/plan/53 left it out).
+    it('charges the calls of a turn whose pass ended in a failure', async () => {
       const { model, taskId } = await taskInWork()
       await worked(model, taskId, '60', { turnStatus: 'completed' })
       await worked(model, taskId, '90', { turnNo: 2, turnStatus: 'failed', turnRejected: true })
       await worked(model, taskId, '30', { turnNo: 3, turnStatus: 'completed', turnRejected: true })
       await ended(taskId)
 
-      // 60 ÷ 6.00.
-      expect(await charge(taskId)).toMatchObject({ credits: 10 })
+      // (60 + 90 + 30) ÷ 6.00.
+      expect(await charge(taskId)).toMatchObject({ credits: 30 })
       expect(await chargeMeta(taskId)).toMatchObject({
-        costRub: '60.0000000000',
-        rawCredits: '10',
+        costRub: '180.0000000000',
+        rawCredits: '30',
       })
     })
 
@@ -768,16 +768,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       return placedBefore(workspaceId, taskId, { attempt, now: minutesAfter(10), retry: true })
     }
 
-    it('charges a retried dialog for the candidate and the retry, not for the pass that failed, whatever that one left open', async () => {
+    // Owner's answer of 22.11.2026: the pass that failed is charged with the others.
+    it('charges a retried dialog for the candidate, the pass that failed and the retry', async () => {
       const { model, workspaceId, taskId } = await taskInWork({ byStep: true })
       // Turn 1 built the candidate: 120 RUB, 20 credits. The pass of turn 2 failed after
-      // 150 RUB of calls, and the accounting of its key never closed.
+      // 150 RUB of calls, 25 credits.
       await worked(model, taskId, '120', { turnNo: 1, turnStatus: 'completed' })
       await worked(model, taskId, '150', {
         turnNo: 2,
         turnStatus: 'failed',
         turnRejected: true,
-        usageClosed: false,
       })
       await retried(workspaceId, taskId)
       // The retry replaced turn 2: 90 RUB, 15 credits.
@@ -786,7 +786,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
 
       const charged = await charge(taskId)
 
-      expect(charged).toMatchObject({ credits: 35, reserved: 120, applied: true })
+      expect(charged).toMatchObject({ credits: 60, reserved: 120, applied: true })
       expect(await reserve(taskId)).toEqual(['#1 tariff 45 released', '#2 tariff 120 captured'])
       // Asked again, the charge answers with what it settled: the reserve of the retry.
       expect(await charge(taskId)).toEqual({ ...charged, applied: false })
@@ -796,11 +796,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         firstAttempt: 1,
         lastAttempt: 2,
         reserved: 120,
-        charged: 35,
-        costRub: '210.0000000000',
-        rawCredits: '35',
+        charged: 60,
+        costRub: '360.0000000000',
+        rawCredits: '60',
       })
-      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(265) })
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(240) })
     })
 
     // A failure the client can bring about on purpose — a change of `.github/` refused, a secret
@@ -822,16 +822,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       })
       await ended(taskId)
 
-      // The 40 credits of turn 1, from the reserve of the retry.
-      expect(await charge(taskId)).toMatchObject({ credits: 40, reserved: 120 })
+      // (240 + 30 + 60) ÷ 6.00: the refused turns are charged too (22.11.2026).
+      expect(await charge(taskId)).toMatchObject({ credits: 55, reserved: 120 })
       expect(await chargeMeta(taskId)).toMatchObject({
         attempts: 2,
         givenBack: 1,
-        charged: 40,
-        costRub: '240.0000000000',
-        rawCredits: '40',
+        charged: 55,
+        costRub: '330.0000000000',
+        rawCredits: '55',
       })
-      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(260) })
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(245) })
     })
 
     it('waits for the usage of a given-back attempt whose calls it counts', async () => {
@@ -1602,15 +1602,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
       const { model, taskId } = await taskInWork()
       await worked(model, taskId, '60')
       await worked(model, taskId, '20', { estimateReason: 'aborted_platform' })
-      await worked(model, taskId, '12', { turnNo: 2, turnStatus: 'lost' })
-      // A turn whose pass ended in a failure (docs/plan/53, «Попробовать ещё (18.10)»).
-      await worked(model, taskId, '10', { turnNo: 3, turnStatus: 'failed', turnRejected: true })
+      await worked(model, taskId, '20', { estimateReason: 'lost', turnNo: 2 })
 
       expect(await budget(model, taskId)).toMatchObject({
         used: '10',
         // (300 − 10) × 6.00.
         customerLeftRub: '1740.0000000000',
-        // 1740 + 46.50: a lost call and a rejected turn are not the customer's.
+        // 1740 + 46.50: the calls the platform cut off are not the customer's.
         budgetRub: '1786.50',
       })
     })
@@ -1829,12 +1827,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL charge from token usage', () => {
         attempt: 2,
         chainAttempts: 1,
         reserved: 1,
-        // Turn 1 alone: the failed pass is not the client's to pay.
-        used: '40',
-        // (1 + 299 − 40) × 6.00.
-        customerLeftRub: '1560.0000000000',
-        // 1560 + 46.50.
-        budgetRub: '1606.50',
+        // Turn 1 and the failed pass, charged since 22.11.2026: (240 + 90) ÷ 6.00.
+        used: '55',
+        // (1 + 299 − 55) × 6.00.
+        customerLeftRub: '1470.0000000000',
+        // 1470 + 46.50.
+        budgetRub: '1516.50',
       })
     })
 

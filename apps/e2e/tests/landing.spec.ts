@@ -1552,7 +1552,7 @@ test.describe('pricing', () => {
           heading: text(section.querySelector('h2')).left,
           plans: [...section.querySelectorAll('article h3')].map((name) => text(name).left),
           included: text(paragraph('В каждый тариф')).left,
-          charged: text(paragraph('Списываем только за выполненную работу')).left,
+          charged: text(paragraph('Списываем за проделанную работу')).left,
           packs: text(paragraph('Кредитов не хватит')).left,
           vat: text(paragraph('Цены в')).left,
           action: { left: action.left, right: action.right },
@@ -1749,7 +1749,7 @@ test.describe('navigation and questions', () => {
     await expect(question).toHaveAttribute('open', '')
     await expect(question.locator('p')).toBeVisible()
     await expect(question.locator('p')).toHaveText(
-      'Работу мы считаем в кредитах. Короткий ответ или небольшой текст — обычно 5 кредитов, документ, таблица или страница — 15–25. Сколько это в рублях, написано в карточке каждого тарифа. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
+      'Работу мы считаем в кредитах. Короткий ответ или небольшой текст — обычно 5 кредитов, документ, таблица или страница — 15–25. Сколько это в рублях, написано в карточке каждого тарифа. Списываем за проделанную работу, даже если её прервал сбой: платите только за то, что Радити успел сделать.',
     )
     // The lead of the section with its «?» is gone: the heading alone stands over the questions.
     await expect(page.locator('#faq-title')).toHaveText('Вопросы')
