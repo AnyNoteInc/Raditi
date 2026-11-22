@@ -52,13 +52,16 @@ export function ArtifactMockup({
   onAccessLost,
   place,
   frame: screen,
+  slide,
 }: ArtifactBodyProps & {
   /** A screen of a canvas (slice 88.15): its frame, opened by «Открыть»; absent — a mockup. */
   frame?: string
+  /** A slide of «Презентация» (88.25): one view of 1280×720, no choice of a device. */
+  slide?: { width: number; height: number }
   onAccessLost?: () => void
 }) {
   const trpc = useTRPC()
-  const [device, setDevice] = useState<number>(place === 'pane' ? 390 : 1440)
+  const [device, setDevice] = useState<number>(slide ? slide.width : place === 'pane' ? 390 : 1440)
   const [mode, setMode] = useState<Mode>('view')
   const [picked, setPicked] = useState<PickedElement | null>(null)
   const [editing, setEditing] = useState<{ dirty: boolean } | null>(null)
@@ -182,23 +185,25 @@ export function ArtifactMockup({
     >
       <Box sx={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
-          <ToggleButtonGroup
-            size="small"
-            exclusive
-            value={device}
-            aria-label={mockupTexts.devices}
-            onChange={(_event, value: number | null) => value !== null && setDevice(value)}
-          >
-            {mockupDevices.map((each) => (
-              <ToggleButton
-                key={each.width}
-                value={each.width}
-                aria-label={`${each.label}, ${each.width}`}
-              >
-                {each.label}
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
+          {!slide && (
+            <ToggleButtonGroup
+              size="small"
+              exclusive
+              value={device}
+              aria-label={mockupTexts.devices}
+              onChange={(_event, value: number | null) => value !== null && setDevice(value)}
+            >
+              {mockupDevices.map((each) => (
+                <ToggleButton
+                  key={each.width}
+                  value={each.width}
+                  aria-label={`${each.label}, ${each.width}`}
+                >
+                  {each.label}
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+          )}
           <ToggleButtonGroup
             size="small"
             exclusive
@@ -306,6 +311,7 @@ export function ArtifactMockup({
               width={device}
               scale={scale}
               title={frameTitle}
+              {...(slide ? { fixedHeight: slide.height } : {})}
             />
           ) : (
             <EditFrame
@@ -315,6 +321,7 @@ export function ArtifactMockup({
               width={device}
               scale={scale}
               title={frameTitle}
+              {...(slide ? { fixedHeight: slide.height } : {})}
               mode={mode === 'text' ? 'text' : 'select'}
               onPick={setPicked}
               onEditing={setEditing}

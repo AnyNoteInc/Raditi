@@ -8,6 +8,7 @@ import { ArtifactBrand } from './brand/artifact-brand'
 import { ArtifactCanvas } from './canvas/artifact-canvas'
 import { ArtifactDiagram } from './diagram/artifact-diagram'
 import { ArtifactMockup } from './mockup/artifact-mockup'
+import { ArtifactSlides } from './slides/artifact-slides'
 import { ArtifactTable } from './table/artifact-table'
 import type { ArtifactBodyProps } from './artifact-body-props'
 
@@ -21,6 +22,8 @@ export const bodyTexts = Object.freeze({
 })
 
 export function ArtifactBody(props: ArtifactBodyProps & { onAccessLost: () => void }) {
+  // «Презентация» is framed as the canvas is (its frames, thumbnails, `/v/`), shown as slides (88.25).
+  if (props.artifact.kind === 'slides') return <ArtifactSlides {...props} />
   switch (artifactKindSpecOf(props.artifact.kind)?.view) {
     case 'markdown':
       return (

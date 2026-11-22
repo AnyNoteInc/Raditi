@@ -15,7 +15,7 @@ import {
   canvasScreensOf,
   canvasThumbKey,
   canvasThumbObjectKey,
-  canvasViews,
+  artifactFrameViewsOf,
 } from '@repo/domain/artifacts'
 
 // The thumbnails of a canvas (docs/plan/88-artifacts.md, Ар8, Ар49, §7.7; slice 88.15): the board
@@ -56,7 +56,7 @@ export async function canvasThumbs(
       title: artifact.title,
       brand: brand && { id: brand.id, seq: brand.seq },
     })
-    for (const view of canvasViews) {
+    for (const view of artifactFrameViewsOf(artifact.kind)) {
       const ready = await storage.exists(
         'artifacts',
         canvasThumbObjectKey({
@@ -92,7 +92,7 @@ export async function canvasThumbFile(
   storage: Pick<ObjectStorage, 'get'>,
   input: { userId: string; artifactId: string; file: string },
 ): Promise<Uint8Array | null> {
-  const match = /^([0-9a-f]{26})-(1440|390)\.jpg$/.exec(input.file)
+  const match = /^([0-9a-f]{26})-(1440|390|1280)\.jpg$/.exec(input.file)
   if (!match) return null
   if ((await artifactRole(db, input)) === null) return null
   const row = await db.artifact.findUnique({

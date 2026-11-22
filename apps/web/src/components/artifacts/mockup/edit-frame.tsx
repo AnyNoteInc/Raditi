@@ -125,9 +125,12 @@ export function EditFrame({
   onPick,
   onEditing,
   ref,
+  fixedHeight,
 }: {
   src: string
   width: number
+  /** A slide of «Презентация» (88.25): its 720 px, whatever the copy measures. */
+  fixedHeight?: number
   scale: number
   title: string
   mode: 'select' | 'text'
@@ -137,7 +140,7 @@ export function EditFrame({
   ref?: Ref<EditFrameHandle>
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
-  const [height, setHeight] = useState(900)
+  const [height, setHeight] = useState(fixedHeight ?? 900)
   const [outline, setOutline] = useState<Box4 | null>(null)
   const editing = useRef<{
     element: Element
@@ -161,7 +164,8 @@ export function EditFrame({
     const measure = () => {
       const doc = documentOf()
       if (!doc) return
-      setHeight(Math.min(Math.max(scrollHeightOf(rootOf(doc)), 100), 20_000))
+      if (fixedHeight === undefined)
+        setHeight(Math.min(Math.max(scrollHeightOf(rootOf(doc)), 100), 20_000))
       editing.current = null
       selected.current = null
       setOutline(null)
@@ -169,7 +173,7 @@ export function EditFrame({
     element.addEventListener('load', measure, { signal: controller.signal })
     measure()
     return () => controller.abort()
-  }, [src])
+  }, [src, fixedHeight])
 
   // The outline follows the element on the cabinet's own frames of animation.
   useEffect(() => {

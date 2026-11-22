@@ -33,14 +33,17 @@ export function ViewFrame({
   width,
   scale,
   title,
+  fixedHeight,
 }: {
   src: string
   width: number
   scale: number
   title: string
+  /** A slide of «Презентация» (88.25): its 720 px, whatever the frame says. */
+  fixedHeight?: number
 }) {
   const ref = useRef<HTMLIFrameElement>(null)
-  const [height, setHeight] = useState(deviceHeights[width] ?? 900)
+  const [height, setHeight] = useState(fixedHeight ?? deviceHeights[width] ?? 900)
   const [link, setLink] = useState<string | null>(null)
 
   useEffect(() => {
@@ -49,13 +52,13 @@ export function ViewFrame({
       if (event.source === null || event.source !== ref.current?.contentWindow) return
       const message = artifactBridgeMessageSchema.safeParse(event.data)
       if (!message.success) return
-      if (message.data.type === 'size' && message.data.width === width)
+      if (message.data.type === 'size' && message.data.width === width && fixedHeight === undefined)
         setHeight(Math.min(Math.max(message.data.height, 100), MAX_HEIGHT))
       if (message.data.type === 'link') setLink(message.data.href)
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [width, src])
+  }, [width, src, fixedHeight])
 
   return (
     <>

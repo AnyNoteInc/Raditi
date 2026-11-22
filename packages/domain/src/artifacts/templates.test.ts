@@ -10,7 +10,9 @@ describe('the templates of the gallery (Ар50)', () => {
     for (const template of artifactTemplates) {
       expect(ids.has(template.id)).toBe(false)
       ids.add(template.id)
-      expect(artifactReleasedKinds).toContain(template.kind)
+      // A kind not released yet keeps its template back until its view ships (88.25).
+      if (!artifactReleasedKinds.includes(template.kind))
+        expect(artifactTemplateOf(template.id)).toBeNull()
       expect(artifactTitleSchema.safeParse(template.title).success).toBe(true)
       expect(template.blocks.length).toBeGreaterThan(0)
       for (const block of template.blocks) {

@@ -1,6 +1,6 @@
 import type { ArtifactCells, ArtifactColumn } from './blocks.ts'
 import { brandStartTokens } from './brand.ts'
-import type { ArtifactBlockKind, ArtifactKind } from './kinds.ts'
+import { artifactReleasedKinds, type ArtifactBlockKind, type ArtifactKind } from './kinds.ts'
 
 /**
  * The templates «С чего начать» of the gallery and of «Создать» (docs/plan/88-artifacts.md, Ар50,
@@ -48,6 +48,23 @@ const screen = (
   { kind: 'frame', key, content: '', props: { name, path, ...place } },
   { kind: 'html', key: `${key}-html`, parent: key, content: html },
 ]
+
+/** A slide of a presentation of a template (slice 88.25): its frame, its HTML and its notes. */
+const slide = (key: string, name: string, html: string, notes: string): ArtifactTemplateBlock[] => [
+  { kind: 'frame', key, content: '', props: { name } },
+  { kind: 'html', key: `${key}-html`, parent: key, content: html },
+  { kind: 'note', key: `${key}-note`, parent: key, content: notes },
+]
+
+/** The common style of the slides: 1280×720, the brand's variables or plain (slice 88.25). */
+const SLIDE_STYLE = [
+  "html,body{margin:0;width:1280px;height:720px;overflow:hidden;font-family:var(--brand-font-body,'Golos Text',Arial,sans-serif);color:var(--brand-text,#1f2421);background:var(--brand-background,#fff)}",
+  '.slide{box-sizing:border-box;width:1280px;height:720px;padding:72px 96px;display:flex;flex-direction:column;justify-content:center;gap:24px}',
+  'h1,h2{margin:0;font-family:var(--brand-font-heading,inherit);color:var(--brand-primary,#2f5d50);line-height:1.15}',
+  'h1{font-size:64px}h2{font-size:48px}p,li{font-size:28px;line-height:1.45;margin:0}ul{margin:0;padding-left:1.2em;display:grid;gap:12px}',
+  '.accent{color:var(--brand-accent,#e07a3f);font-weight:700}.muted{color:var(--brand-muted,#6b706c)}',
+  '.cover{background:var(--brand-surface,#f6f3ee)}',
+].join('\n')
 
 /** The page of a screen of the template «Холст для нового сайта»: the brand's variables or plain. */
 const page = (title: string, body: string) =>
@@ -331,6 +348,45 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
     ],
   },
   {
+    id: 'company-deck',
+    kind: 'slides',
+    title: 'Презентация компании',
+    description: 'Пять слайдов: кто вы, что предлагаете, почему вы, цены и как связаться',
+    blocks: [
+      { kind: 'style', key: 'deck-style', content: SLIDE_STYLE },
+      ...slide(
+        'slide1',
+        'Обложка',
+        '<section class="slide cover"><h1>[Название компании]</h1><p class="muted">[Чем вы полезны клиенту — одной строкой]</p></section>',
+        'Поздоровайтесь и назовите себя. Скажите, о чём будет разговор, за 10 секунд.',
+      ),
+      ...slide(
+        'slide2',
+        'Что мы делаем',
+        '<section class="slide"><h2>Что мы делаем</h2><ul><li>[Услуга или товар 1]</li><li>[Услуга или товар 2]</li><li>[Услуга или товар 3]</li></ul></section>',
+        'Коротко о главном: что покупают у вас чаще всего.',
+      ),
+      ...slide(
+        'slide3',
+        'Почему мы',
+        '<section class="slide"><h2>Почему выбирают нас</h2><ul><li><span class="accent">[Цифра]</span> [довольных клиентов]</li><li>[Ваше отличие от конкурентов]</li><li>[Гарантия или срок]</li></ul></section>',
+        'Приведите один пример клиента, которому вы помогли.',
+      ),
+      ...slide(
+        'slide4',
+        'Цены',
+        '<section class="slide"><h2>Сколько стоит</h2><p>[Услуга] — <span class="accent">от [цена] ₽</span></p><p class="muted">[Что входит в цену]</p></section>',
+        'Назовите цену уверенно и сразу скажите, что в неё входит.',
+      ),
+      ...slide(
+        'slide5',
+        'Контакты',
+        '<section class="slide cover"><h2>Давайте работать вместе</h2><p>[Телефон] · [Сайт] · [Адрес]</p></section>',
+        'Спросите, остались ли вопросы, и договоритесь о следующем шаге.',
+      ),
+    ],
+  },
+  {
     id: 'customer-journey',
     kind: 'diagram',
     title: 'Путь клиента',
@@ -355,5 +411,10 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
 
 /** The template of an id, of a kind that may be created now; null — no such template. */
 export function artifactTemplateOf(id: string): ArtifactTemplate | null {
-  return artifactTemplates.find((template) => template.id === id) ?? null
+  // A template of a kind not released yet waits for its view (88.25): it is never offered.
+  return (
+    artifactTemplates.find(
+      (template) => template.id === id && artifactReleasedKinds.includes(template.kind),
+    ) ?? null
+  )
 }

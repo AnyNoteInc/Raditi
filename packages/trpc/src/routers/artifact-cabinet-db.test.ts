@@ -25,6 +25,7 @@ import { artifactLimits } from '@repo/domain/artifacts'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { canvasThumbs } from '../services/artifacts/canvas.ts'
 import type { ChatContext } from '../services/chat/context.ts'
 
 // The procedures of artifacts in the cabinet on PostgreSQL (docs/plan/88-artifacts.md, stage Э4):
@@ -200,8 +201,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     const caller = callerOf(await person())
     await expect(
       caller.artifact.create({
-        kind: 'slides',
-        title: 'Презентация',
+        kind: 'image',
+        title: 'Баннер',
         projectId: null,
         templateId: null,
       }),
@@ -1741,6 +1742,39 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     ).rejects.toMatchObject({
       code: 'NOT_FOUND',
     })
+  })
+
+  it('creates «Презентация» from its template: slides with notes, one thumbnail each (88.25)', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const { id } = await caller.artifact.create({
+      kind: 'slides',
+      title: 'Презентация компании',
+      projectId: null,
+      templateId: 'company-deck',
+    })
+    const blocks = (await caller.artifact.read({ artifactId: id })).blocks
+    const frames = blocks.filter((block) => block.kind === 'frame')
+    expect(frames.map((frame) => frame.props.name)).toEqual([
+      'Обложка',
+      'Что мы делаем',
+      'Почему мы',
+      'Цены',
+      'Контакты',
+    ])
+    expect(blocks.filter((block) => block.kind === 'note').map((note) => note.parent)).toEqual(
+      frames.map((frame) => frame.key),
+    )
+    expect(blocks.find((block) => block.kind === 'style')?.parent).toBeNull()
+    // A slide is drawn once, at 1280×720; core is asked for what is missing.
+    const thumbs = await canvasThumbs(
+      db,
+      { exists: async () => false },
+      { userId: anna.id, artifactId: id },
+    )
+    expect(thumbs.pending).toBe(true)
+    expect(thumbs.thumbs.map((thumb) => thumb.width)).toEqual([1280, 1280, 1280, 1280, 1280])
+    await db.outboxEvent.deleteMany({ where: { dedupeKey: { contains: id } } })
   })
 
   it('creates «Схема» from its template and publishes its drawn picture as a page (88.24в)', async () => {

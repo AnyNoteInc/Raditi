@@ -56,7 +56,9 @@ export interface RenderServiceDeps {
 const heightOf = (width: ArtifactRenderWidth) =>
   width === artifactRenderLimits.viewportWidths.phone
     ? artifactRenderLimits.viewportHeights.phone
-    : artifactRenderLimits.viewportHeights.desktop
+    : width === artifactRenderLimits.viewportWidths.slide
+      ? artifactRenderLimits.viewportHeights.slide
+      : artifactRenderLimits.viewportHeights.desktop
 
 const notFound = () => new DomainError('RENDER_NOT_FOUND', 'No such artifact or frame', 404)
 
@@ -69,6 +71,24 @@ async function bytesOf(stream: AsyncIterable<Uint8Array>, max: number): Promise<
     chunks.push(chunk)
   }
   return new Uint8Array(Buffer.concat(chunks, length))
+}
+
+/**
+ * A slide taller than its 720 px is cut in the show (88.25): the first problem of its report, in the
+ * agent's words and the client's.
+ */
+export function withSlideHeight(
+  report: ReturnType<typeof layoutReport>,
+  height: number | null,
+): ReturnType<typeof layoutReport> {
+  const limit = artifactRenderLimits.viewportHeights.slide
+  if (height === null || height <= limit) return report
+  return {
+    ...report,
+    text: `The slide is ${height} px tall, over its ${limit}: shorten the text or make it smaller.\n${report.text}`,
+    ru: `Слайд не помещается: ${height} px при высоте ${limit}. ${report.ru}`.trim(),
+    problems: report.problems + 1,
+  }
 }
 
 export class RenderService {
@@ -160,15 +180,25 @@ export class RenderService {
             brand: brand && { id: brand.id, seq: brand.seq },
           })
         : null
-    return { title: artifact.title, html, policy, files, thumbKey }
+    return {
+      title: artifact.title,
+      html,
+      policy,
+      files,
+      thumbKey,
+      slides: artifact.kind === 'slides',
+    }
   }
 
   async render(request: ArtifactRenderRequest): Promise<ArtifactRenderResponse> {
     const source = await this.source(request)
-    const asked: ArtifactRenderWidth[] = request.widths ?? [
-      artifactRenderLimits.viewportWidths.desktop,
-      artifactRenderLimits.viewportWidths.phone,
-    ]
+    // A slide of «Презентация» is one view of 1280×720, whatever was asked (88.25).
+    const asked: ArtifactRenderWidth[] = source.slides
+      ? [artifactRenderLimits.viewportWidths.slide]
+      : (request.widths ?? [
+          artifactRenderLimits.viewportWidths.desktop,
+          artifactRenderLimits.viewportWidths.phone,
+        ])
     const outputs = (width: ArtifactRenderWidth) =>
       request.output === 'layout'
         ? { map: true }
@@ -179,7 +209,10 @@ export class RenderService {
               thumb: {
                 // The board shows thumbnails at half the CSS pixels; the phone list at 2× (Ар49).
                 scale: width === artifactRenderLimits.viewportWidths.phone ? 1 : canvasThumbScale,
-                maxCssPx: canvasThumbMaxCssPx,
+                // A slide is its 720 px; a screen of a site goes on down.
+                maxCssPx: source.slides
+                  ? artifactRenderLimits.viewportHeights.slide
+                  : canvasThumbMaxCssPx,
               },
             }
     const results = await Promise.all(
@@ -202,7 +235,10 @@ export class RenderService {
     const report =
       request.output === 'thumbs'
         ? null
-        : layoutReport({ title: source.title, byWidth, detail: request.detail === true })
+        : withSlideHeight(
+            layoutReport({ title: source.title, byWidth, detail: request.detail === true }),
+            source.slides ? (byWidth.get(asked[0]!)?.docHeight ?? null) : null,
+          )
     const pictures: ArtifactRenderPicture[] = []
     for (const [width, result] of byWidth) {
       const w = width as ArtifactRenderWidth

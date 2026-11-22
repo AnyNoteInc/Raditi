@@ -338,7 +338,7 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
 
   it('refuses a kind whose view has not shipped (Ар7)', async () => {
     const server = await start(fakeStore().store)
-    const res = await post(server, call('artifact_create', { kind: 'slides', title: 'Презентация' }))
+    const res = await post(server, call('artifact_create', { kind: 'image', title: 'Баннер' }))
     expect(res.body.result.isError).toBe(true)
     expect(answer(res)).toMatchObject({ code: 'ARTIFACT_KIND_REFUSED' })
   })

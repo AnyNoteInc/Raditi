@@ -123,8 +123,9 @@ export const artifactRenderLimits = Object.freeze({
   layoutReportChars: 1500,
   /** Quotes of the frame's text the report may carry. */
   layoutQuoteChars: 32,
-  viewportWidths: { desktop: 1440, phone: 390 },
-  viewportHeights: { desktop: 900, phone: 844 },
+  /** A slide of «Презентация» is one view of 1280×720 (16:9, 88.25). */
+  viewportWidths: { desktop: 1440, phone: 390, slide: 1280 },
+  viewportHeights: { desktop: 900, phone: 844, slide: 720 },
   v8HeapMb: 512,
   rendersPerContainer: 2,
   /** A render container: 1 CPU, memory, shm; recreated after 200 renders or 30 minutes. */

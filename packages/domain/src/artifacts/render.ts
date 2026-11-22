@@ -21,8 +21,14 @@ export type ArtifactRenderOutput = (typeof artifactRenderOutputs)[number]
 const widths = [
   artifactRenderLimits.viewportWidths.desktop,
   artifactRenderLimits.viewportWidths.phone,
+  artifactRenderLimits.viewportWidths.slide,
 ] as const
-export const artifactRenderWidthSchema = z.union([z.literal(widths[0]), z.literal(widths[1])])
+/** A computer, a phone, or a slide of «Презентация» (88.25: the renderer draws a slide at 1280 only). */
+export const artifactRenderWidthSchema = z.union([
+  z.literal(widths[0]),
+  z.literal(widths[1]),
+  z.literal(widths[2]),
+])
 export type ArtifactRenderWidth = z.infer<typeof artifactRenderWidthSchema>
 
 /** Who looks: the agent of a turn (with its own unchecked blocks) or a person. */

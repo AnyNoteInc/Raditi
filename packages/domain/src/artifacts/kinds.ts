@@ -220,7 +220,8 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
 /**
  * The kinds whose view has shipped: `artifact_create` and «Создать» accept only these (Ар7). Each
  * slice that ships a view adds its kind here — the document with 88.6 and 88.10, the mockup and
- * the table with Э5, the canvas and the brand with Э6, the diagram with 88.24в. The document shows in the tab «Документы»
+ * the table with Э5, the canvas and the brand with Э6, the diagram with 88.24в, the slides with
+ * 88.25б. The document shows in the tab «Документы»
  * of the chat until 88.10 gives it its own page.
  */
 export const artifactReleasedKinds: readonly ArtifactKind[] = Object.freeze([
@@ -231,6 +232,8 @@ export const artifactReleasedKinds: readonly ArtifactKind[] = Object.freeze([
   'brand',
   // «Схема» with 88.24в: the picture drawn on the server, the text edited in the cabinet.
   'diagram',
+  // «Презентация» with 88.25б: slides of 1280×720 on the frames of the canvas, «Показать».
+  'slides',
 ])
 
 export function artifactKindKnown(value: string): value is ArtifactKind {

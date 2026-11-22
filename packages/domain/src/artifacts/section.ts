@@ -76,6 +76,12 @@ export function artifactsSection(
           'When `raditi_artifact_layout` is offered, check every mockup or screen of a canvas you drew or changed with it (the mockup, or `frame`: the screen) and fix what it reports before you answer. When the task tool offers the helper `look`, ask it once at the end of such a turn to look at the pictures: give it the artifactId and the frame; at most 3 a turn.',
         ]
       : []),
+    // The slides of «Презентация» (§7.6, 88.25).
+    ...(released.includes('slides')
+      ? [
+          'A presentation is slides of 1280×720: one `frame` a slide (`props.name` — its title), its `html` inside — one `<section>` the size of the slide —, one common `style` at the top, the speaker notes as a `note` inside the frame. A slide is a heading and three to five short lines, text from 28 px; no scrolling, no animation that hides the text. Check every slide with `raditi_artifact_layout` (`frame`: its key): it reports a slide taller than 720 px.',
+        ]
+      : []),
     // The rules of Mermaid the platform's renderer keeps (§7.6, 88.24; spike 7).
     ...(released.includes('diagram')
       ? [
