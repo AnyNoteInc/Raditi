@@ -205,17 +205,18 @@ export class PostgresGatewayStore implements GatewayStore {
       // The workspace of a key never changes, so it is read before any lock.
       // `onTariff`: an active reserve of the task stands on tariff credits. The windows bound those
       // only (owner's answer of 14.11.2026): a pass reserved on the gift or a pack goes on.
-      // `otherCredits`: the gift or a pack of the workspace has free credits — a spent window then
-      // lets the pass go on, its charge takes the rest from them (owner's answer of 22.11.2026).
+      // `otherCredits`: the gift and packs of the workspace have free credits above its debt (КР7,
+      // on the pack account) — a spent window then lets the pass go on, its charge takes the rest
+      // from them (owner's answer of 22.11.2026).
       const [owner] = await tx.$queryRaw<
         { workspaceId: string; billable: boolean; onTariff: boolean; otherCredits: boolean }[]
       >`
         SELECT t.workspace_id AS "workspaceId", t.billable,
           EXISTS (SELECT 1 FROM credit_holds h WHERE h.task_id = t.id AND h.status = 'active'
             AND h.unit = 'credit_tariff') AS "onTariff",
-          EXISTS (SELECT 1 FROM billing_accounts b WHERE b.workspace_id = t.workspace_id
-            AND b.unit IN ('credit_gift', 'credit_pack')
-            AND b.balance - b.held > 0) AS "otherCredits"
+          COALESCE((SELECT SUM(b.balance - b.held - b.debt) FROM billing_accounts b
+            WHERE b.workspace_id = t.workspace_id
+              AND b.unit IN ('credit_gift', 'credit_pack')), 0) > 0 AS "otherCredits"
         FROM llm_keys k JOIN tasks t ON t.id = k.task_id WHERE k.key_hash = ${value.keyHash}`
       if (!owner) return { kind: 'refused', reason: 'unauthorized' }
       await lockUsageWindows(tx, owner.workspaceId)

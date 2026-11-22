@@ -81,7 +81,7 @@ describe('smallEditPrice', () => {
 describe('CHARGED_FOR_DONE_WORK', () => {
   it('is the rule of the charge, word for word', () => {
     expect(CHARGED_FOR_DONE_WORK).toBe(
-      'Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
+      'Списываем за проделанную работу, даже если её прервал сбой: платите только за то, что Радити успел сделать.',
     )
   })
 })
