@@ -20,3 +20,11 @@ describe('the height of a slide in its report', () => {
     expect(withSlideHeight(report as never, null)).toBe(report)
   })
 })
+
+describe('the height of a picture in its report (88.26)', () => {
+  it('names a picture taller than its size', () => {
+    const told = withSlideHeight(report as never, 1500, 1080, 'picture')
+    expect(told.text).toMatch(/^The picture is 1500 px tall, over its 1080/)
+    expect(told.ru).toContain('Изображение не помещается: 1500 px при высоте 1080')
+  })
+})

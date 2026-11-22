@@ -56,7 +56,8 @@ export async function canvasThumbs(
       title: artifact.title,
       brand: brand && { id: brand.id, seq: brand.seq },
     })
-    for (const view of artifactFrameViewsOf(artifact.kind)) {
+    const frameProps = artifact.blocks.find((block) => block.key === screen.key)?.props
+    for (const view of artifactFrameViewsOf(artifact.kind, frameProps)) {
       const ready = await storage.exists(
         'artifacts',
         canvasThumbObjectKey({
@@ -92,7 +93,7 @@ export async function canvasThumbFile(
   storage: Pick<ObjectStorage, 'get'>,
   input: { userId: string; artifactId: string; file: string },
 ): Promise<Uint8Array | null> {
-  const match = /^([0-9a-f]{26})-(1440|390|1280)\.jpg$/.exec(input.file)
+  const match = /^([0-9a-f]{26})-(\d{3,4})\.jpg$/.exec(input.file)
   if (!match) return null
   if ((await artifactRole(db, input)) === null) return null
   const row = await db.artifact.findUnique({

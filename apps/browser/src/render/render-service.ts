@@ -32,7 +32,7 @@ import {
   type ArtifactRenderPicture,
   type ArtifactRenderRequest,
   type ArtifactRenderResponse,
-  type ArtifactRenderWidth,
+  artifactFrameSizeOf,
 } from '@repo/domain/artifacts'
 
 import type { RenderPool } from './render-pool.ts'
@@ -53,12 +53,13 @@ export interface RenderServiceDeps {
   pool: Pick<RenderPool, 'run'>
 }
 
-const heightOf = (width: ArtifactRenderWidth) =>
+const heightOf = (width: number) =>
   width === artifactRenderLimits.viewportWidths.phone
     ? artifactRenderLimits.viewportHeights.phone
-    : width === artifactRenderLimits.viewportWidths.slide
-      ? artifactRenderLimits.viewportHeights.slide
-      : artifactRenderLimits.viewportHeights.desktop
+    : artifactRenderLimits.viewportHeights.desktop
+
+/** A thumbnail of a fixed frame is about 640 px wide: a slide at a half, a story at a little more. */
+const fixedThumbScale = (width: number) => Math.min(1, 640 / width)
 
 const notFound = () => new DomainError('RENDER_NOT_FOUND', 'No such artifact or frame', 404)
 
@@ -74,19 +75,21 @@ async function bytesOf(stream: AsyncIterable<Uint8Array>, max: number): Promise<
 }
 
 /**
- * A slide taller than its 720 px is cut in the show (88.25): the first problem of its report, in the
- * agent's words and the client's.
+ * A fixed frame taller than its size is cut (88.25, 88.26): the first problem of its report, in the
+ * agent's words and the client's — a slide in the show, a picture in its file.
  */
 export function withSlideHeight(
   report: ReturnType<typeof layoutReport>,
   height: number | null,
+  limit: number = artifactRenderLimits.viewportHeights.slide,
+  what: 'slide' | 'picture' = 'slide',
 ): ReturnType<typeof layoutReport> {
-  const limit = artifactRenderLimits.viewportHeights.slide
   if (height === null || height <= limit) return report
+  const [en, ru] = what === 'slide' ? ['slide', 'Слайд'] : ['picture', 'Изображение']
   return {
     ...report,
-    text: `The slide is ${height} px tall, over its ${limit}: shorten the text or make it smaller.\n${report.text}`,
-    ru: `Слайд не помещается: ${height} px при высоте ${limit}. ${report.ru}`.trim(),
+    text: `The ${en} is ${height} px tall, over its ${limit}: shorten the text or make it smaller.\n${report.text}`,
+    ru: `${ru} не помещается: ${height} px при высоте ${limit}. ${report.ru}`.trim(),
     problems: report.problems + 1,
   }
 }
@@ -148,15 +151,18 @@ export class RenderService {
       withArtifactFileAddresses(text, (id) => address.get(id) ?? null)
     const fonts = renderFontCss(RENDER_FILES_ORIGIN)
     const brand = await artifactBrandOf(this.#deps.db as PrismaClient, artifact.id)
+    // A slide or a picture has a size of its own; a screen of a canvas is adaptive (88.25, 88.26).
+    const frameBlock = artifact.blocks.find((block) => block.key === request.frame)
+    const fixed = artifactFrameSizeOf(artifact.kind, frameBlock?.props)
     const html = artifactFrameDocument({
       title: artifact.title,
       platformCss:
         fonts.css +
         (brand ? brandCss(brandTokensOf(brand.settings)) : '') +
-        // A slide clipped by its own style still has its height measured (88.25): the renderer
-        // takes the clip off the document; its pictures are cut at 720 all the same.
-        (artifact.kind === 'slides'
-          ? 'html,body{height:auto!important;min-height:720px;overflow:visible!important}'
+        // A fixed frame clipped by its own style still has its height measured (88.25, 88.26):
+        // the renderer takes the clip off the document; its pictures are cut at its size.
+        (fixed
+          ? `html,body{height:auto!important;min-height:${fixed.height}px;overflow:visible!important}`
           : ''),
       bridge: false,
       parts: {
@@ -193,46 +199,51 @@ export class RenderService {
       policy,
       files,
       thumbKey,
+      fixed,
       slides: artifact.kind === 'slides',
     }
   }
 
   async render(request: ArtifactRenderRequest): Promise<ArtifactRenderResponse> {
     const source = await this.source(request)
-    // A slide of «Презентация» is one view of 1280×720, whatever was asked (88.25).
-    const asked: ArtifactRenderWidth[] = source.slides
-      ? [artifactRenderLimits.viewportWidths.slide]
+    const fixed = source.fixed
+    // A fixed frame is one view of its size, whatever was asked (88.25, 88.26).
+    const asked: number[] = fixed
+      ? [fixed.width]
       : (request.widths ?? [
           artifactRenderLimits.viewportWidths.desktop,
           artifactRenderLimits.viewportWidths.phone,
         ])
-    if (request.output === 'slide' && !source.slides)
-      throw new DomainError('RENDER_NOT_A_FRAME', 'Only a slide is drawn for an export', 409)
-    const outputs = (width: ArtifactRenderWidth) =>
+    if ((request.output === 'slide' || request.output === 'png') && !fixed)
+      throw new DomainError('RENDER_NOT_A_FRAME', 'Only a fixed frame is drawn for a file', 409)
+    const outputs = (width: number) =>
       request.output === 'slide'
         ? // A slide for its PDF and PPTX: 1920×1080, sharp enough to read (88.25в).
-          {
-            thumb: {
-              scale: 1.5,
-              maxCssPx: artifactRenderLimits.viewportHeights.slide,
-              quality: 90,
-            },
-          }
-        : request.output === 'layout'
-          ? { map: true }
-          : request.output === 'image'
-            ? // Four pictures a check (Ар32): two strips a width at most.
-              { map: true, strips: Math.floor(artifactRenderLimits.picturesPerLook / asked.length) }
-            : {
-                thumb: {
-                  // The board shows thumbnails at half the CSS pixels; the phone list at 2× (Ар49).
-                  scale: width === artifactRenderLimits.viewportWidths.phone ? 1 : canvasThumbScale,
-                  // A slide is its 720 px; a screen of a site goes on down.
-                  maxCssPx: source.slides
-                    ? artifactRenderLimits.viewportHeights.slide
-                    : canvasThumbMaxCssPx,
-                },
-              }
+          { thumb: { scale: 1.5, maxCssPx: fixed!.height, quality: 90 } }
+        : request.output === 'png'
+          ? // A picture in its own size, lossless, for «Скачать PNG» (88.26).
+            { thumb: { scale: 1, maxCssPx: fixed!.height, format: 'png' as const } }
+          : request.output === 'layout'
+            ? { map: true }
+            : request.output === 'image'
+              ? // Four pictures a check (Ар32): two strips a width at most.
+                {
+                  map: true,
+                  strips: Math.floor(artifactRenderLimits.picturesPerLook / asked.length),
+                }
+              : {
+                  thumb: fixed
+                    ? // A fixed frame is its size and nothing below.
+                      { scale: fixedThumbScale(fixed.width), maxCssPx: fixed.height }
+                    : {
+                        // The board shows thumbnails at half the CSS pixels; the phone list at 2× (Ар49).
+                        scale:
+                          width === artifactRenderLimits.viewportWidths.phone
+                            ? 1
+                            : canvasThumbScale,
+                        maxCssPx: canvasThumbMaxCssPx,
+                      },
+                }
     const results = await Promise.all(
       asked.map((width) =>
         this.#deps.pool.run((renderer) =>
@@ -241,7 +252,7 @@ export class RenderService {
             policy: source.policy,
             files: source.files,
             width,
-            height: heightOf(width),
+            height: fixed ? fixed.height : heightOf(width),
             outputs: outputs(width),
           }),
         ),
@@ -251,20 +262,22 @@ export class RenderService {
       asked.map((width, at) => [width, results[at]!]),
     )
     const report =
-      request.output === 'thumbs' || request.output === 'slide'
+      request.output === 'thumbs' || request.output === 'slide' || request.output === 'png'
         ? null
         : withSlideHeight(
             layoutReport({ title: source.title, byWidth, detail: request.detail === true }),
-            source.slides ? (byWidth.get(asked[0]!)?.docHeight ?? null) : null,
+            fixed ? (byWidth.get(asked[0]!)?.docHeight ?? null) : null,
+            fixed?.height,
+            source.slides ? 'slide' : 'picture',
           )
     const pictures: ArtifactRenderPicture[] = []
     for (const [width, result] of byWidth) {
-      const w = width as ArtifactRenderWidth
+      const w = width
       if (result.thumb)
         pictures.push({
           width: w,
           part: 0,
-          type: 'image/jpeg',
+          type: request.output === 'png' ? 'image/png' : 'image/jpeg',
           data: Buffer.from(result.thumb).toString('base64'),
         })
       result.strips.forEach((strip, part) =>
@@ -283,7 +296,7 @@ export class RenderService {
       problems: report?.problems ?? 0,
       heights: asked.map((width) => ({ width, height: byWidth.get(width)?.docHeight ?? null })),
       pictures,
-      ...((request.output === 'thumbs' || request.output === 'slide') && source.thumbKey !== null
+      ...(request.output !== 'layout' && request.output !== 'image' && source.thumbKey !== null
         ? { thumbKey: source.thumbKey }
         : {}),
     }

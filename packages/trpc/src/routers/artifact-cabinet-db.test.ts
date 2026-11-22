@@ -201,8 +201,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     const caller = callerOf(await person())
     await expect(
       caller.artifact.create({
-        kind: 'image',
-        title: 'Баннер',
+        kind: 'sitemap',
+        title: 'Структура',
         projectId: null,
         templateId: null,
       }),
@@ -1805,6 +1805,51 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
         .map((row) => row.pageId)
         .toSorted(),
     ).toEqual(pages.map((row) => row.pageId).toSorted())
+  })
+
+  it('creates «Изображение» from its template: pictures in their sizes, a PNG of one (88.26)', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const { id } = await caller.artifact.create({
+      kind: 'image',
+      title: 'Пост для соцсетей',
+      projectId: null,
+      templateId: 'social-post',
+    })
+    const frames = (await caller.artifact.read({ artifactId: id })).blocks.filter(
+      (block) => block.kind === 'frame',
+    )
+    expect(frames.map((frame) => frame.props.size)).toEqual(['post', 'story'])
+    // Each picture is drawn once, in the width of its size.
+    const thumbs = await canvasThumbs(
+      db,
+      { exists: async () => false },
+      { userId: anna.id, artifactId: id },
+    )
+    expect(thumbs.thumbs.map((thumb) => thumb.width)).toEqual([1080, 1080])
+    // A PNG names its picture; without one there is nothing to draw.
+    await expect(
+      caller.artifact.exportStart({ artifactId: id, format: 'png' }),
+    ).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    const { exportId } = await caller.artifact.exportStart({
+      artifactId: id,
+      format: 'png',
+      frame: 'story',
+    })
+    expect(await db.artifactExport.findUniqueOrThrow({ where: { id: exportId } })).toMatchObject({
+      format: 'png',
+      blockKey: 'story',
+    })
+    // A workbook is no file of a picture.
+    await expect(
+      caller.artifact.exportStart({ artifactId: id, format: 'xlsx' }),
+    ).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    await db.outboxEvent.deleteMany({ where: { dedupeKey: { contains: id } } })
+    await db.outboxEvent.deleteMany({ where: { dedupeKey: { contains: exportId } } })
   })
 
   it('creates «Схема» from its template and publishes its drawn picture as a page (88.24в)', async () => {

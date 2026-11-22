@@ -7,6 +7,7 @@ import { ArtifactDocument } from './artifact-document'
 import { ArtifactBrand } from './brand/artifact-brand'
 import { ArtifactCanvas } from './canvas/artifact-canvas'
 import { ArtifactDiagram } from './diagram/artifact-diagram'
+import { ArtifactImages } from './images/artifact-images'
 import { ArtifactMockup } from './mockup/artifact-mockup'
 import { ArtifactSlides } from './slides/artifact-slides'
 import { ArtifactTable } from './table/artifact-table'
@@ -24,6 +25,8 @@ export const bodyTexts = Object.freeze({
 export function ArtifactBody(props: ArtifactBodyProps & { onAccessLost: () => void }) {
   // «Презентация» is framed as the canvas is (its frames, thumbnails, `/v/`), shown as slides (88.25).
   if (props.artifact.kind === 'slides') return <ArtifactSlides {...props} />
+  // «Изображение» too: pictures in the sizes of their places (88.26).
+  if (props.artifact.kind === 'image') return <ArtifactImages {...props} />
   switch (artifactKindSpecOf(props.artifact.kind)?.view) {
     case 'markdown':
       return (

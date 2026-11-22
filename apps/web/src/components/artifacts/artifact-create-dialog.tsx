@@ -41,6 +41,8 @@ const order: readonly ArtifactKind[] = [
   'slides',
   'image',
   'brand',
+  'sitemap',
+  'report',
 ]
 
 type Start = 'empty' | 'template' | 'agent'

@@ -318,7 +318,7 @@ export type McpFrameRenderer = (request: ArtifactRenderRequest) => Promise<Artif
 /** A picture of a frame as the result of a tool gives it (MCP `type: "image"`). */
 export interface McpArtifactPicture {
   data: string
-  mimeType: 'image/jpeg'
+  mimeType: 'image/jpeg' | 'image/png'
   caption: string
 }
 

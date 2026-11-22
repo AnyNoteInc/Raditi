@@ -3286,6 +3286,8 @@ model ArtifactExport {
   userId     String    @map("user_id") @db.Uuid
   /// xlsx
   format     String    @db.VarChar(8)
+  /// The frame a PNG draws: a picture of «Изображение» (88.26); null — the whole artifact.
+  blockKey   String?   @map("block_key") @db.VarChar(40)
   /// pending | ready | failed
   state      String    @default("pending") @db.VarChar(8)
   objectKey  String?   @map("object_key") @db.VarChar(255)

@@ -15,8 +15,11 @@ import { artifactRenderLimits } from './limits.ts'
 
 export const ARTIFACT_RENDER_PATH = '/v1/render'
 
-/** `slide` — one slide of «Презентация» at 1.5× for its PDF and PPTX (88.25в). */
-export const artifactRenderOutputs = ['layout', 'image', 'thumbs', 'slide'] as const
+/**
+ * `slide` — one fixed frame (a slide) at 1.5× in JPEG for a PDF and a PPTX (88.25в); `png` — one
+ * fixed frame (a picture of «Изображение») in its own size as PNG, for «Скачать PNG» (88.26).
+ */
+export const artifactRenderOutputs = ['layout', 'image', 'thumbs', 'slide', 'png'] as const
 export type ArtifactRenderOutput = (typeof artifactRenderOutputs)[number]
 
 const widths = [
@@ -56,13 +59,16 @@ export const artifactRenderRequestSchema = z.strictObject({
 })
 export type ArtifactRenderRequest = z.infer<typeof artifactRenderRequestSchema>
 
-const base64 = z.string().max(4 * 1024 * 1024)
+const base64 = z.string().max(12 * 1024 * 1024)
+
+/** The width a frame was drawn at: a view, or the size of a fixed frame (88.26). */
+export const artifactDrawnWidthSchema = z.number().int().min(100).max(4096)
 
 export const artifactRenderPictureSchema = z.strictObject({
-  width: artifactRenderWidthSchema,
+  width: artifactDrawnWidthSchema,
   /** The number of the strip from the top: 0, 1 (`stripPx` each), or 0 for a thumbnail. */
   part: z.number().int().min(0).max(16),
-  type: z.literal('image/jpeg'),
+  type: z.enum(['image/jpeg', 'image/png']),
   data: base64,
 })
 export type ArtifactRenderPicture = z.infer<typeof artifactRenderPictureSchema>
@@ -77,7 +83,7 @@ export const artifactRenderResponseSchema = z.strictObject({
   /** The height of the document at each width; null — not drawn. */
   heights: z.array(
     z.strictObject({
-      width: artifactRenderWidthSchema,
+      width: artifactDrawnWidthSchema,
       height: z.number().int().min(0).nullable(),
     }),
   ),

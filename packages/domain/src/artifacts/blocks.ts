@@ -45,8 +45,12 @@ const place = z.strictObject({
 /** The value properties of each kind of block: «the last one wins» (Ар15). */
 export const artifactBlockValuePropsSchemas = {
   section: none,
-  // `chosen` — the variant of a screen the client chose: «Опубликовать как сайт» takes it (Ар8).
-  frame: place.extend({ chosen: z.boolean().optional() }),
+  // `chosen` — the variant of a screen the client chose: «Опубликовать как сайт» takes it (Ар8);
+  // `size` — the size of a picture of «Изображение», by the name of its place (88.26).
+  frame: place.extend({
+    chosen: z.boolean().optional(),
+    size: z.enum(['post', 'portrait', 'story', 'vk-cover', 'banner', 'wide']).optional(),
+  }),
   html: none,
   style: none,
   script: none,

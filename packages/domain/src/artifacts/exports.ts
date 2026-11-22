@@ -13,7 +13,7 @@ export const ARTIFACT_QUEUE = 'artifacts' as const
 export const ARTIFACT_EXPORT_JOB = 'artifact.export'
 
 /** The workbook of a table; the PDF and the PPTX of «Презентация» (88.25в). */
-export const artifactExportFormats = ['xlsx', 'pdf', 'pptx'] as const
+export const artifactExportFormats = ['xlsx', 'pdf', 'pptx', 'png'] as const
 export type ArtifactExportFormat = (typeof artifactExportFormats)[number]
 
 export const artifactExportContentTypes: Readonly<Record<ArtifactExportFormat, string>> =
@@ -21,6 +21,7 @@ export const artifactExportContentTypes: Readonly<Record<ArtifactExportFormat, s
     xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     pdf: 'application/pdf',
     pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    png: 'image/png',
   })
 
 export const artifactExportStates = ['pending', 'ready', 'failed'] as const

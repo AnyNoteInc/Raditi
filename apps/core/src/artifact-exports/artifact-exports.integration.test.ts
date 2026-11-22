@@ -171,6 +171,63 @@ describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
     expect(await blind.build(pdf.id)).toBe('failed')
   })
 
+  it('builds the PNG of one picture of «Изображение» in its size (88.26)', async () => {
+    const actor = { kind: 'user' as const, userId }
+    const { id: artifactId } = await createArtifact(db, {
+      workspaceId,
+      kind: 'image',
+      title: 'Пост',
+      actor,
+    })
+    await applyArtifactOps(db, {
+      batch: {
+        artifactId,
+        opId: randomUUID(),
+        ops: [
+          {
+            op: 'insert',
+            block: 'p',
+            after: null,
+            kind: 'frame',
+            content: '',
+            props: { size: 'story' },
+          },
+          {
+            op: 'insert',
+            block: 'p-html',
+            after: null,
+            parent: 'p',
+            kind: 'html',
+            content: '<section>Пост</section>',
+          },
+        ],
+      },
+      actor,
+    })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64')
+    const render = vi.fn(async () => ({
+      title: 'Пост',
+      report: '',
+      ru: '',
+      problems: 0,
+      heights: [{ width: 1080, height: 1920 }],
+      pictures: [{ width: 1080, part: 0, type: 'image/png' as const, data: png }],
+    }))
+    const exports = new ArtifactExports({ db, storage, logger: quiet, render })
+    const row = await db.artifactExport.create({
+      data: { artifactId, userId, format: 'png', blockKey: 'p' },
+    })
+    expect(await exports.build(row.id)).toBe('ready')
+    expect(render).toHaveBeenCalledWith(
+      expect.objectContaining({ artifactId, frame: 'p', output: 'png', viewer: actor }),
+    )
+    const key = artifactExportKey({ workspaceId, artifactId, exportId: row.id, format: 'png' })
+    expect(Buffer.from(objects.get(key)!).subarray(0, 4).toString('latin1')).toBe('\x89PNG')
+    // A PNG of no frame is no file.
+    const none = await db.artifactExport.create({ data: { artifactId, userId, format: 'png' } })
+    expect(await exports.build(none.id)).toBe('failed')
+  })
+
   it('forgets the workbooks of a day ago', async () => {
     const artifactId = await table()
     const old = await db.artifactExport.create({

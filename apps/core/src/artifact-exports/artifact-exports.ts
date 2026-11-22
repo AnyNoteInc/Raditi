@@ -84,6 +84,16 @@ export class ArtifactExports {
         rows: table.rows,
       })
       count = table.rows.length
+    } else if (format === 'png') {
+      const picture =
+        row.blockKey === null ? null : await this.#png(row.userId, artifact.id, row.blockKey)
+      if (picture === null) {
+        await this.#fail(exportId)
+        logger?.warn(`artifact_export_refused export=${exportId} reason=render`)
+        return 'failed'
+      }
+      bytes = picture
+      count = 1
     } else {
       const deck = await this.#deck(row.userId, artifact)
       if (deck === null) {
@@ -112,6 +122,26 @@ export class ArtifactExports {
     logger?.log(`artifact_export_ready export=${exportId} format=${format} parts=${count}`)
     await this.#forgetOld(row.artifactId, now)
     return 'ready'
+  }
+
+  /** One picture of «Изображение» in its own size, as the person who asked reads it (88.26). */
+  async #png(userId: string, artifactId: string, frame: string): Promise<Uint8Array | null> {
+    const render = this.#deps.render ?? null
+    if (render === null) return null
+    try {
+      const drawn = await render({
+        artifactId,
+        frame,
+        viewer: { kind: 'user', userId },
+        output: 'png',
+      })
+      const picture = drawn.pictures[0]
+      return picture ? new Uint8Array(Buffer.from(picture.data, 'base64')) : null
+    } catch (error) {
+      // A frame gone, or not theirs: a refusal of the renderer fails the export.
+      if (isDomainError(error)) return null
+      throw error
+    }
   }
 
   /**

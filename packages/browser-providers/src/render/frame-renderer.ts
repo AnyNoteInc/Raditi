@@ -64,7 +64,7 @@ export interface FrameRenderJob {
     /** JPEG q70 strips of `stripPx` for the helper `look`, at most this many. */
     strips?: number
     /** A JPEG of the page from the top at this scale, at most `maxCssPx` CSS px of it. */
-    thumb?: { scale: number; maxCssPx: number; quality?: number }
+    thumb?: { scale: number; maxCssPx: number; quality?: number; format?: 'jpeg' | 'png' }
   }
   /** One width end to end; past it the context is closed. */
   deadlineMs?: number
@@ -408,11 +408,11 @@ async function renderOn(browser: Browser, job: FrameRenderJob): Promise<FrameRen
       return new Uint8Array(Buffer.from(data, 'base64'))
     }
     if (job.outputs.thumb) {
-      const { scale, maxCssPx, quality = 70 } = job.outputs.thumb
+      const { scale, maxCssPx, quality = 70, format = 'jpeg' } = job.outputs.thumb
       out.thumb = await capture(
         {
-          format: 'jpeg',
-          quality,
+          format,
+          ...(format === 'jpeg' ? { quality } : {}),
           clip: { x: 0, y: 0, width: job.width, height: Math.min(docHeight, maxCssPx), scale },
         },
         'thumbnail',

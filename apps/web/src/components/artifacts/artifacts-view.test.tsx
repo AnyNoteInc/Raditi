@@ -177,7 +177,7 @@ describe('«Артефакты» (plan 88, Ар50)', () => {
     show()
     fireEvent.click(await screen.findByRole('button', { name: 'Создать' }))
     const dialog = await screen.findByRole('dialog', { name: 'Новый артефакт' })
-    expect(within(dialog).getByRole('radio', { name: /Изображение/ })).toHaveAttribute(
+    expect(within(dialog).getByRole('radio', { name: /Структура сайта/ })).toHaveAttribute(
       'aria-disabled',
       'true',
     )

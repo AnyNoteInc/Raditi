@@ -913,7 +913,14 @@ export const artifactRouter = router({
    * «Презентация» (88.25в). Absent — the workbook.
    */
   exportStart: consentedProcedure
-    .input(z.strictObject({ artifactId, format: z.enum(artifactExportFormats).optional() }))
+    .input(
+      z.strictObject({
+        artifactId,
+        format: z.enum(artifactExportFormats).optional(),
+        /** The picture of «Изображение» a PNG draws (88.26). */
+        frame: artifactBlockKeySchema.optional(),
+      }),
+    )
     .output(z.strictObject({ exportId: z.uuid() }))
     .mutation(({ ctx, input }) =>
       startArtifactExport(ctx.prisma, { userId: ctx.user.id, ...input }),

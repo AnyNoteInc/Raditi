@@ -186,7 +186,8 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
   image: {
     label: 'Изображение',
     blocks: ['frame', 'html', 'style'],
-    view: 'frame',
+    // Frames of their own sizes, with thumbnails and `/v/` as the canvas has (88.26).
+    view: 'canvas',
     publish: null,
     exports: ['png'],
     wave: 2,
@@ -235,6 +236,8 @@ export const artifactReleasedKinds: readonly ArtifactKind[] = Object.freeze([
   'diagram',
   // «Презентация» with 88.25б: slides of 1280×720 on the frames of the canvas, «Показать».
   'slides',
+  // «Изображение» with 88.26б: pictures of HTML in the sizes of their places, «Скачать PNG».
+  'image',
 ])
 
 export function artifactKindKnown(value: string): value is ArtifactKind {

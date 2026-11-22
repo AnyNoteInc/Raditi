@@ -46,3 +46,40 @@ describe('the slides of a presentation', () => {
     expect(artifactsSection([], ['document', 'slides'])).toContain('slides of 1280×720')
   })
 })
+
+describe('the pictures of «Изображение» (88.26)', () => {
+  it('draws a picture once in the size of its place, a post by default', async () => {
+    const { artifactFrameSizeOf, artifactImageSizes } = await import('./slides.ts')
+    expect(artifactFrameSizeOf('image', { size: 'story' })).toMatchObject({
+      width: 1080,
+      height: 1920,
+    })
+    expect(artifactFrameSizeOf('image', {})).toMatchObject({ width: 1080, height: 1080 })
+    expect(artifactFrameSizeOf('image', { size: 'giant' })).toMatchObject({
+      width: 1080,
+      height: 1080,
+    })
+    expect(artifactFrameSizeOf('slides')).toMatchObject({ width: 1280, height: 720 })
+    expect(artifactFrameSizeOf('canvas')).toBeNull()
+    expect(artifactFrameViewsOf('image', { size: 'banner' }).map((view) => view.width)).toEqual([
+      1200,
+    ])
+    expect(artifactImageSizes['vk-cover']).toMatchObject({ width: 1920, height: 768 })
+    // The schema of a frame takes exactly the sizes the registry knows.
+    const { artifactBlockValuePropsSchemas } = await import('./blocks.ts')
+    for (const size of Object.keys(artifactImageSizes))
+      expect(artifactBlockValuePropsSchemas.frame.safeParse({ size }).success).toBe(true)
+    expect(artifactBlockValuePropsSchemas.frame.safeParse({ size: 'giant' }).success).toBe(false)
+  })
+
+  it('gives its thumbnail a new key when its size changes', async () => {
+    const { canvasThumbKey } = await import('./canvas.ts')
+    const blocks = (size: string) => [
+      block('p', 'frame', null, '', { size }),
+      block('p-html', 'html', 'p', '<section></section>'),
+    ]
+    const key = (size: string) =>
+      canvasThumbKey({ blocks: blocks(size), frame: 'p', title: 'Пост', brand: null })
+    expect(key('post')).not.toBe(key('story'))
+  })
+})

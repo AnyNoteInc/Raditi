@@ -45,7 +45,7 @@ export async function cabinetTableTotals(
 /** «Скачать → Excel»: a new export of the table, built by core. */
 export async function startArtifactExport(
   db: PrismaClient,
-  input: { userId: string; artifactId: string; format?: ArtifactExportFormat },
+  input: { userId: string; artifactId: string; format?: ArtifactExportFormat; frame?: string },
 ): Promise<{ exportId: string }> {
   const format = input.format ?? 'xlsx'
   return db.$transaction(async (tx) => {
@@ -62,12 +62,19 @@ export async function startArtifactExport(
       )
     )
       throw artifactNotFound()
+    // A PNG draws one picture of «Изображение», named here (88.26).
+    if (format === 'png' && input.frame === undefined) throw artifactNotFound()
     const waiting = await tx.artifactExport.count({
       where: { artifactId: input.artifactId, userId: input.userId, state: 'pending' },
     })
     if (waiting >= artifactExportLimits.pendingPerArtifact) throw artifactLimit('exports')
     const row = await tx.artifactExport.create({
-      data: { artifactId: input.artifactId, userId: input.userId, format },
+      data: {
+        artifactId: input.artifactId,
+        userId: input.userId,
+        format,
+        blockKey: format === 'png' ? (input.frame ?? null) : null,
+      },
       select: { id: true },
     })
     await enqueueOutbox(tx, {

@@ -61,6 +61,7 @@ export class ArtifactThumbs {
       const brand = await artifactBrandOf(db as PrismaClient, artifactId)
       return {
         screens: canvasScreensOf(artifact.blocks),
+        propsOf: (frame: string) => artifact.blocks.find((block) => block.key === frame)?.props,
         keyOf: (frame: string) =>
           canvasThumbKey({
             blocks: artifact.blocks,
@@ -74,8 +75,8 @@ export class ArtifactThumbs {
     let drawn = 0
     for (const screen of initial.screens) {
       const key = initial.keyOf(screen.key)
-      // A screen of a canvas at both widths, a slide of «Презентация» once at 1280 (88.25).
-      for (const view of artifactFrameViewsOf(row.kind)) {
+      // A screen of a canvas at both widths, a slide or a picture once in its size (88.25, 88.26).
+      for (const view of artifactFrameViewsOf(row.kind, initial.propsOf(screen.key))) {
         const objectKey = canvasThumbObjectKey({
           workspaceId: row.workspaceId,
           artifactId,

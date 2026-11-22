@@ -232,10 +232,17 @@ export function canvasThumbKey(input: {
     script: parts.script.map(entry),
     settings: parts.settings && entry(parts.settings),
   }
+  // The size of a picture of «Изображение» is a property of its frame (88.26): a new size, a new
+  // thumbnail.
+  const size = (
+    input.blocks.find((block) => block.key === input.frame) as
+      { props?: Readonly<Record<string, unknown>> } | undefined
+  )?.props?.size
   return stringHash(
     JSON.stringify({
       v: CANVAS_RENDER_VERSION,
       frame: input.frame,
+      ...(typeof size === 'string' ? { size } : {}),
       title: input.title,
       used,
       brand: input.brand,

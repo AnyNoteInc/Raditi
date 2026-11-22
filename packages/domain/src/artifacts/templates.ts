@@ -387,6 +387,40 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
     ],
   },
   {
+    id: 'social-post',
+    kind: 'image',
+    title: 'Пост для соцсетей',
+    description: 'Квадратный пост и история с предложением, в цветах вашего бренда',
+    blocks: [
+      {
+        kind: 'style',
+        key: 'picture-style',
+        content: [
+          "html,body{margin:0;overflow:hidden;font-family:var(--brand-font-body,'Golos Text',Arial,sans-serif);color:var(--brand-text,#1f2421)}",
+          '.picture{box-sizing:border-box;width:100%;height:100vh;padding:96px;display:flex;flex-direction:column;justify-content:center;gap:32px;background:var(--brand-surface,#f6f3ee)}',
+          'h1{margin:0;font-family:var(--brand-font-heading,inherit);color:var(--brand-primary,#2f5d50);font-size:96px;line-height:1.05}',
+          'p{margin:0;font-size:44px;line-height:1.3}.price{color:var(--brand-accent,#e07a3f);font-weight:700}',
+        ].join('\n'),
+      },
+      { kind: 'frame', key: 'post', content: '', props: { name: 'Пост', size: 'post' } },
+      {
+        kind: 'html',
+        key: 'post-html',
+        parent: 'post',
+        content:
+          '<section class="picture"><h1>[Ваше предложение]</h1><p>[Чем оно полезно — одной строкой]</p><p class="price">от [цена] ₽</p></section>',
+      },
+      { kind: 'frame', key: 'story', content: '', props: { name: 'История', size: 'story' } },
+      {
+        kind: 'html',
+        key: 'story-html',
+        parent: 'story',
+        content:
+          '<section class="picture"><h1>[Ваше предложение]</h1><p>[Чем оно полезно]</p><p class="price">от [цена] ₽</p><p>[Как записаться]</p></section>',
+      },
+    ],
+  },
+  {
     id: 'customer-journey',
     kind: 'diagram',
     title: 'Путь клиента',

@@ -1,7 +1,7 @@
 import { canvasViews, type CanvasBlock } from './canvas.ts'
 import { artifactRenderLimits } from './limits.ts'
 
-// «Презентация» (docs/plan/88-artifacts.md, §7.13, Э11, slice 88.25): slides of 1280×720 on the
+// «Презентация» and «Изображение» (docs/plan/88-artifacts.md, §7.13, Э11, slices 88.25, 88.26): slides of 1280×720 on the
 // mechanics of the canvas — a slide is a frame with its parts (`html`, `style`, `script`) and its
 // speaker notes (`note` inside it), the common style at the top, the order of the slides the order
 // of the frames. Pure: what the views of a framed kind are, and the slides read from the blocks.
@@ -17,9 +17,48 @@ export const slideViews = Object.freeze([
 
 export type FrameView = { width: number; height: number; label: string }
 
-/** The views a frame of a kind is drawn at: a screen of a canvas twice, a slide once. */
-export function artifactFrameViewsOf(kind: string): readonly FrameView[] {
-  return kind === 'slides' ? slideViews : canvasViews
+/**
+ * The pictures of «Изображение» (88.26): a post, a story, a cover or a banner in the size of its
+ * place, without a model that draws. The size of a frame is its `props.size`; absent — a post.
+ */
+export const artifactImageSizes = Object.freeze({
+  post: { width: 1080, height: 1080, label: 'Пост' },
+  portrait: { width: 1080, height: 1350, label: 'Пост 4:5' },
+  story: { width: 1080, height: 1920, label: 'История' },
+  'vk-cover': { width: 1920, height: 768, label: 'Обложка ВКонтакте' },
+  banner: { width: 1200, height: 630, label: 'Баннер и превью ссылки' },
+  wide: { width: 1920, height: 1080, label: 'Широкое' },
+} as const)
+export type ArtifactImageSize = keyof typeof artifactImageSizes
+export const artifactImageSizeNames = Object.keys(artifactImageSizes) as ArtifactImageSize[]
+
+export function artifactImageSizeOf(props: Readonly<Record<string, unknown>> | undefined) {
+  const asked = props?.size
+  return typeof asked === 'string' && asked in artifactImageSizes
+    ? (asked as ArtifactImageSize)
+    : 'post'
+}
+
+/**
+ * The fixed size a frame of a kind is drawn at: a slide 1280×720, a picture its size; null — an
+ * adaptive screen of a canvas, drawn at the widths of a computer and a phone.
+ */
+export function artifactFrameSizeOf(
+  kind: string,
+  frameProps?: Readonly<Record<string, unknown>>,
+): FrameView | null {
+  if (kind === 'slides') return slideViews[0]
+  if (kind === 'image') return artifactImageSizes[artifactImageSizeOf(frameProps)]
+  return null
+}
+
+/** The views a frame of a kind is drawn at: a screen of a canvas twice, a fixed frame once. */
+export function artifactFrameViewsOf(
+  kind: string,
+  frameProps?: Readonly<Record<string, unknown>>,
+): readonly FrameView[] {
+  const fixed = artifactFrameSizeOf(kind, frameProps)
+  return fixed ? [fixed] : canvasViews
 }
 
 export interface ArtifactSlide {

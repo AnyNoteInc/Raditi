@@ -82,6 +82,12 @@ export function artifactsSection(
           'A presentation is slides of 1280×720: one `frame` a slide (`props.name` — its title), its `html` inside — one `<section>` the size of the slide —, one common `style` at the top, the speaker notes as a `note` inside the frame. A slide is a heading and three to five short lines, text from 28 px; no scrolling, no animation that hides the text. Check every slide with `raditi_artifact_layout` (`frame`: its key): it reports a slide taller than 720 px.',
         ]
       : []),
+    // The pictures of «Изображение» (§7.6, 88.26).
+    ...(released.includes('image')
+      ? [
+          "An image is pictures made of HTML, no generated picture: one `frame` a picture with `props.size` one of post (1080×1080), portrait (1080×1350), story (1080×1920), vk-cover (1920×768), banner (1200×630), wide (1920×1080), its `html` inside filling exactly that size, one common `style` at the top. Use the brand's variables and the client's photos (`raditi_artifact_file_put`); large readable text, little of it. Check every picture with `raditi_artifact_layout` (`frame`: its key): it reports a picture taller than its size.",
+        ]
+      : []),
     // The rules of Mermaid the platform's renderer keeps (§7.6, 88.24; spike 7).
     ...(released.includes('diagram')
       ? [
