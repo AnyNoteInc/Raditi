@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer'
 import { artifactRenderLimits } from '@repo/domain/artifacts'
 import { chromium, type Browser, type CDPSession, type Route } from 'playwright-core'
 
+import { createDiagramRenderer, type DiagramRawResult } from './diagram-renderer.ts'
 import { renderFontFaces } from './fonts.ts'
 import { LAYOUT_PROBE_SOURCE } from './probe-source.ts'
 
@@ -105,6 +106,8 @@ export interface FrameRenderResult {
 
 export interface FrameRenderer {
   render(job: FrameRenderJob): Promise<FrameRenderResult>
+  /** A diagram of «Схема» on the page of its workspace (88.24а): the SVG Mermaid drew, uncleaned. */
+  diagram(job: { workspaceId: string; source: string }): Promise<DiagramRawResult>
   /** False after the browser went away: the pool replaces it. */
   connected(): boolean
   close(): Promise<void>
@@ -470,9 +473,14 @@ export async function createPlaywrightFrameRenderer(
           proxy: { server: 'http://127.0.0.1:9', bypass: '<-loopback>' },
           ...(target.executablePath ? { executablePath: target.executablePath } : {}),
         })
+  const diagrams = createDiagramRenderer(browser)
   return {
     render: (job) => renderOn(browser, job),
+    diagram: (job) => diagrams.render(job),
     connected: () => browser.isConnected(),
-    close: () => browser.close().catch(() => undefined),
+    close: async () => {
+      await diagrams.close()
+      await browser.close().catch(() => undefined)
+    },
   }
 }

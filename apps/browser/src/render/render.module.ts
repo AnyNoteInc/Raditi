@@ -14,8 +14,9 @@ import { SESSION_RUNTIME } from '../sessions/sessions.tokens.ts'
 import { createArtifactFiles } from './artifact-files.ts'
 import { RenderPool } from './render-pool.ts'
 import { RenderService, type ArtifactFilesReader } from './render-service.ts'
-import { RenderController } from './render.controller.ts'
-import { ARTIFACT_FILES, RENDER_POOL, RENDER_SERVICE } from './render.tokens.ts'
+import { DiagramService } from './diagram-service.ts'
+import { DiagramController, RenderController } from './render.controller.ts'
+import { ARTIFACT_FILES, DIAGRAM_SERVICE, RENDER_POOL, RENDER_SERVICE } from './render.tokens.ts'
 
 /** Render containers at most: each draws two frames at a time (§7.12). */
 const RENDER_CONTAINERS = 2
@@ -27,7 +28,7 @@ const RENDER_CONTAINERS = 2
  */
 @Module({
   imports: [SessionsModule],
-  controllers: [RenderController],
+  controllers: [RenderController, DiagramController],
   providers: [
     {
       provide: RENDER_POOL,
@@ -55,6 +56,11 @@ const RENDER_CONTAINERS = 2
       useFactory: (prisma: PrismaClient, files: ArtifactFilesReader, pool: RenderPool) =>
         new RenderService({ db: prisma, files, pool }),
       inject: [PRISMA, ARTIFACT_FILES, RENDER_POOL],
+    },
+    {
+      provide: DIAGRAM_SERVICE,
+      useFactory: (pool: RenderPool) => new DiagramService(pool),
+      inject: [RENDER_POOL],
     },
     {
       provide: WORKER_TOKEN,
