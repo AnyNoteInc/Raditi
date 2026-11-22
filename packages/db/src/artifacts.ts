@@ -60,6 +60,7 @@ import {
 } from '@repo/domain/artifacts'
 
 import { isArtifactRank, rankBetween, rankForIndex } from './artifact-rank.ts'
+import { recordOriWrites, retainPurgedArtifacts, type OriOrigin } from './ori.ts'
 import { Prisma, type ArtifactBlock, type PrismaClient } from './generated/prisma/client.ts'
 import { artifactBlockOrder, blockCheckedText, NEUTRAL_INTENT, workspaceOwnerOf } from './pages.ts'
 
@@ -596,7 +597,7 @@ const serverKey = () =>
  */
 export async function applyArtifactOps(
   db: Db,
-  input: { batch: unknown; actor: ArtifactActor; now?: Date },
+  input: { batch: unknown; actor: ArtifactActor; now?: Date; origin?: OriOrigin | null },
 ): Promise<ArtifactOpsAnswer> {
   const parsed = artifactBatchSchema.safeParse(input.batch)
   if (!parsed.success)
@@ -628,7 +629,18 @@ export async function applyArtifactOps(
     }
     if (actor.kind === 'agent' && !outbox)
       await checkTurnBounds(tx, artifact.id, actor, batch.ops.length)
-    return new BatchRun(tx, artifact, actor, now, batch, hash).run()
+    const answer = await new BatchRun(tx, artifact, actor, now, batch, hash).run()
+    // A person's write in an artifact opened to others is a message between users (Ар56): kept in
+    // full 6 months. An agent's unchecked text waits for the check (88.17) — never a secret here.
+    if (actor.kind === 'user')
+      await recordOriWrites(tx, {
+        artifactId: artifact.id,
+        userId: actor.userId,
+        origin: input.origin ?? null,
+        ops: batch.ops,
+        now,
+      })
+    return answer
   })
 }
 
@@ -2589,6 +2601,8 @@ export async function sweepArtifacts(
     ...files.map((file) => file.objectKey),
     ...exports.flatMap((each) => (each.objectKey === null ? [] : [each.objectKey])),
   ]
+  // An artifact ever opened to others keeps its last content hidden 6 months (Ар56).
+  await retainPurgedArtifacts(db, gone, now)
   const purged = expired.length
     ? (await db.artifact.deleteMany({ where: { id: { in: expired.map((each) => each.id) } } }))
         .count

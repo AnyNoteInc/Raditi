@@ -14,6 +14,7 @@ import {
   settleArtifactWrites,
   staleArtifactWriters,
   sweepArtifacts,
+  sweepOriJournals,
   type ArtifactClaimVerdict,
   type ArtifactSettled,
   type ArtifactWriteVerdict,
@@ -368,6 +369,14 @@ export class ArtifactChecks {
     if (now.getTime() - this.#collectedAt >= ARTIFACT_COLLECT_EVERY_MS) {
       this.#collectedAt = now.getTime()
       const swept = await sweepArtifacts(db, now)
+      // The journals of an organiser of distribution of information past their term (Ар56).
+      try {
+        const ori = await sweepOriJournals(db, now)
+        if (ori.facts + ori.messages > 0)
+          logger?.log(`ori_sweep facts=${ori.facts} messages=${ori.messages}`)
+      } catch (error) {
+        this.#warn('ori_sweep_failed', 'none', null, error)
+      }
       // Their objects in the bucket: a photo of a client never outlives its row (rule 1, §14).
       let deleted = 0
       for (const key of swept.objects) {

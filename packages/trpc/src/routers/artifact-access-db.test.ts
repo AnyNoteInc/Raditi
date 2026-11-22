@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto'
 
-import { createPrismaClient, type PrismaClient, type User } from '@repo/db'
+import {
+  createPrismaClient,
+  recordOriFact,
+  sweepOriJournals,
+  type PrismaClient,
+  type User,
+} from '@repo/db'
 import { legalDocuments, type ObjectStorage, type SecretStore } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
@@ -377,5 +383,64 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
     // A recipient's copy lands in their own workspace.
     const row = await db.artifact.findUniqueOrThrow({ where: { id: copyId } })
     expect(row.ownerUserId).toBe(viewer.id)
+  })
+
+  it('keeps the facts and messages of a shared artifact, append only (88.16а-1, Ар56)', async () => {
+    const { owner, viewer, editor, as, artifactId } = await shared()
+    const write = (caller: ReturnType<typeof callerOf>) =>
+      caller.artifact.write({ batch: { artifactId, opId: randomUUID(), ops: [insertOp()] } })
+    // Not shared yet: the owner's own writes are no messages between users.
+    await write(as.owner)
+    expect(await db.oriMessage.count({ where: { artifactId } })).toBe(0)
+
+    const { token } = await as.owner.artifact.shareLink({ artifactId, role: 'edit', term: null })
+    await as.editor.artifact.shareOpen({ token })
+    await as.viewer.artifact.shareOpen({ token })
+    const opened = await db.oriFact.findMany({
+      where: { artifactId, kind: 'access_open' },
+      orderBy: { id: 'asc' },
+    })
+    expect(opened.map((fact) => fact.userId)).toEqual([editor.id, viewer.id])
+    expect(opened[0]!.addressees).toEqual([owner.id])
+
+    await write(as.editor)
+    const messages = await db.oriMessage.findMany({ where: { artifactId } })
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ userId: editor.id, kind: 'write' })
+    expect(JSON.parse(messages[0]!.content!)).toMatchObject({ op: 'insert', content: 'Новый\n' })
+    expect([...messages[0]!.addressees].sort()).toEqual([owner.id, viewer.id].sort())
+    const written = await db.oriFact.findFirstOrThrow({
+      where: { artifactId, kind: 'artifact_write' },
+    })
+    // A fact never carries the content (Decree № 1526, p. 4).
+    expect(JSON.stringify({ ...written, id: String(written.id) })).not.toContain('Новый')
+
+    // Append only: neither an update nor a delete of a row within its term.
+    await expect(
+      db.$executeRaw`UPDATE ori_messages SET content = 'x' WHERE artifact_id = ${artifactId}::uuid`,
+    ).rejects.toThrow(/append only/)
+    await expect(
+      db.$executeRaw`DELETE FROM ori_facts WHERE artifact_id = ${artifactId}::uuid`,
+    ).rejects.toThrow(/append only/)
+  })
+
+  it('lets the collector delete only what is past its term', async () => {
+    const userId = randomUUID()
+    const longAgo = new Date(Date.now() - 4 * 365 * 24 * 60 * 60 * 1000)
+    await recordOriFact(db, {
+      kind: 'sign_in',
+      userId,
+      origin: { ip: '203.0.113.7' },
+      now: longAgo,
+    })
+    await recordOriFact(db, { kind: 'sign_in', userId, origin: { ip: '203.0.113.8' } })
+    const swept = await sweepOriJournals(db)
+    expect(swept.facts).toBeGreaterThanOrEqual(1)
+    const left = await db.oriFact.findMany({ where: { userId } })
+    expect(left.map((fact) => fact.ip)).toEqual(['203.0.113.8'])
+    // Without the collector's setting even an expired row stays.
+    await expect(
+      db.$executeRaw`DELETE FROM ori_facts WHERE user_id = ${userId}::uuid`,
+    ).rejects.toThrow(/append only/)
   })
 })

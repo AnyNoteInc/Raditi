@@ -23,6 +23,7 @@ import {
 } from '@repo/domain/artifacts'
 
 import { artifactRole, lockArtifact } from './artifacts.ts'
+import { artifactAddressees, recordOriFact, type OriOrigin } from './ori.ts'
 import type { Prisma, PrismaClient } from './generated/prisma/client.ts'
 
 // Access of other users to an artifact (docs/plan/88-artifacts.md, Ар33–Ар36, §7.8; slice
@@ -114,7 +115,7 @@ export async function revokeArtifactLink(
  */
 export async function openArtifactLink(
   db: Db,
-  input: { token: string; userId: string; now: Date },
+  input: { token: string; userId: string; now: Date; origin?: OriOrigin | null },
 ): Promise<{ artifactId: string; role: ArtifactRole }> {
   return db.$transaction(async (tx) => {
     const link = await tx.artifactLink.findUnique({
@@ -159,6 +160,19 @@ export async function openArtifactLink(
     })
     const role = await artifactRole(tx, { artifactId: link.artifactId, userId: input.userId })
     if (role === null) throw artifactLinkGone()
+    // A fact of access (Ар56): who opened what, from where, and who else it is shared with.
+    const shared = await artifactAddressees(tx, link.artifactId)
+    await recordOriFact(tx, {
+      kind: 'access_open',
+      userId: input.userId,
+      origin: input.origin ?? null,
+      artifactId: link.artifactId,
+      addressees: [shared.owner, ...shared.others].filter(
+        (id): id is string => !!id && id !== input.userId,
+      ),
+      detail: { source: 'link', role },
+      now: input.now,
+    })
     return { artifactId: link.artifactId, role }
   })
 }
@@ -464,7 +478,7 @@ export async function myArtifactInvites(
 /** «Принять» (Ар35): a grant by invitation of its role; the address goes. */
 export async function acceptArtifactInvite(
   db: Db,
-  input: { userId: string; inviteId: string; now: Date },
+  input: { userId: string; inviteId: string; now: Date; origin?: OriOrigin | null },
 ): Promise<{ artifactId: string; role: ArtifactRole }> {
   return db.$transaction(async (tx) => {
     const email = await confirmedEmailOf(tx, input.userId)
@@ -516,6 +530,16 @@ export async function acceptArtifactInvite(
     })
     const role = await artifactRole(tx, { artifactId: artifact.id, userId: input.userId })
     if (role === null) throw artifactInviteGone()
+    const { owner, others } = await artifactAddressees(tx, artifact.id)
+    await recordOriFact(tx, {
+      kind: 'access_grant',
+      userId: input.userId,
+      origin: input.origin ?? null,
+      artifactId: artifact.id,
+      addressees: [owner, ...others].filter((id): id is string => !!id && id !== input.userId),
+      detail: { source: 'invite', role },
+      now: input.now,
+    })
     return { artifactId: artifact.id, role }
   })
 }

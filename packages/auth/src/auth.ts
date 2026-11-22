@@ -1,4 +1,4 @@
-import { prisma as defaultPrisma, type PrismaClient } from '@repo/db'
+import { prisma as defaultPrisma, recordOriFact, type PrismaClient } from '@repo/db'
 import { notify, type NotificationPayload } from '@repo/notifications'
 import { betterAuth } from 'better-auth'
 import { prismaAdapter } from 'better-auth/adapters/prisma'
@@ -30,6 +30,18 @@ export interface CreateAuthOptions {
   notifier?: AuthNotifier
   /** Transport for captcha checks; tests replace it. */
   fetch?: typeof fetch
+}
+
+/**
+ * A fact of the journal of an organiser of distribution of information (plan 88, Ар56): a failed
+ * write never stops a sign-in — it is told to the log, without the user, for the operator to see.
+ */
+async function oriFact(prisma: PrismaClient, fact: Parameters<typeof recordOriFact>[1]) {
+  try {
+    await recordOriFact(prisma, fact)
+  } catch {
+    console.error(`[auth] ori_fact_failed kind=${fact.kind}`)
+  }
 }
 
 const expiresAt = (ttlSeconds: number): string =>
@@ -69,6 +81,23 @@ export function createAuth({
             typeof session.userAgent === 'string' && session.userAgent.length > USER_AGENT_MAX
               ? { data: { userAgent: session.userAgent.slice(0, USER_AGENT_MAX) } }
               : undefined,
+          // A fact of every sign-in, with the address of the session (149-FZ, art. 10.1; plan
+          // 88, Ар56): the journal keeps it 3 years, past the account.
+          after: async (session) => {
+            await oriFact(prisma, {
+              kind: 'sign_in',
+              userId: session.userId,
+              origin: { ip: typeof session.ipAddress === 'string' ? session.ipAddress : null },
+            })
+          },
+        },
+      },
+      user: {
+        create: {
+          // A fact of the registration (Ар56); the address comes with the first session.
+          after: async (user) => {
+            await oriFact(prisma, { kind: 'register', userId: user.id })
+          },
         },
       },
     },

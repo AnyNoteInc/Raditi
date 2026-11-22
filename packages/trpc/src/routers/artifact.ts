@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 
+import { clientIp } from '@repo/auth'
 import {
   acceptArtifactInvite,
   addArtifactCommentReply,
@@ -280,7 +281,12 @@ export const artifactRouter = router({
     .input(z.strictObject({ batch: z.unknown() }))
     .output(opsAnswer)
     .mutation(({ ctx, input }) =>
-      applyCabinetOps(ctx.prisma, { userId: ctx.user.id, batch: input.batch }),
+      applyCabinetOps(ctx.prisma, {
+        userId: ctx.user.id,
+        batch: input.batch,
+        // Where the write came from, for the facts of a shared artifact (Ар56).
+        origin: { ip: clientIp(ctx.headers) },
+      }),
     ),
 
   /** A person types in a block (Ар17): it is held for them for 30 s, renewed by each call. */
@@ -654,7 +660,12 @@ export const artifactRouter = router({
     .output(z.strictObject({ artifactId: z.uuid(), role: z.enum(artifactRoles) }))
     .mutation(({ ctx, input }) => {
       requireSharing(ctx)
-      return acceptArtifactInvite(ctx.prisma, { userId: ctx.user.id, ...input, now: new Date() })
+      return acceptArtifactInvite(ctx.prisma, {
+        userId: ctx.user.id,
+        ...input,
+        now: new Date(),
+        origin: { ip: clientIp(ctx.headers) },
+      })
     }),
 
   inviteDecline: consentedProcedure
@@ -742,6 +753,7 @@ export const artifactRouter = router({
         token: input.token,
         userId: ctx.user.id,
         now: new Date(),
+        origin: { ip: clientIp(ctx.headers) },
       })
     }),
 

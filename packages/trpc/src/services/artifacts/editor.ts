@@ -8,6 +8,7 @@ import {
   saveArtifactVersion,
   takeArtifactBlock,
   type PrismaClient,
+  type OriOrigin,
 } from '@repo/db'
 import { canonicalSection } from '@repo/doc-bridge'
 import {
@@ -91,7 +92,10 @@ function canonicalBatch(batch: ArtifactBatch, sections: ReadonlySet<string>): Ar
  * is preceded by a write of that same text in the canonical form, under the person's name and its
  * own revision; the person's write then names the revision after it.
  */
-export async function applyCabinetOps(db: PrismaClient, input: { userId: string; batch: unknown }) {
+export async function applyCabinetOps(
+  db: PrismaClient,
+  input: { userId: string; batch: unknown; origin?: OriOrigin | null },
+) {
   const parsed = artifactBatchSchema.safeParse(input.batch)
   if (!parsed.success) throw artifactOpInvalid('the batch does not fit the schema')
   // The form of a secret is looked for in the words as typed: the canonical form escapes some
@@ -136,7 +140,7 @@ export async function applyCabinetOps(db: PrismaClient, input: { userId: string;
       )
     }
   }
-  const answer = await applyArtifactOps(db, { batch, actor })
+  const answer = await applyArtifactOps(db, { batch, actor, origin: input.origin ?? null })
   // A series of a person's edits is a version (Ар13): within 5 minutes they glue into the last
   // automatic one of the person.
   if (!answer.repeated)

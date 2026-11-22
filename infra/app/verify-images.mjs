@@ -168,6 +168,8 @@ export const OPERATOR_SCRIPTS = {
     // The pool and the windows of the workspaces (docs/plan/71-usage-limits.md, §4.4).
     'llm-plan-rates.mjs',
     'llm-usage.mjs',
+    // The export for a request of an authorised body (docs/plan/88-artifacts.md, Ар56).
+    'ori-export.mjs',
     // The support's take-down and return of a site of pages (docs/plan/73-pages-sites.md, Дер18).
     'pages-return.mjs',
     'pages-take-down.mjs',

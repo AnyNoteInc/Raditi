@@ -3340,3 +3340,44 @@ model ArtifactImport {
   @@unique([taskId, turnNo, fileName])
   @@map("artifact_imports")
 }
+
+/// A fact of the storage of an organiser of distribution of information (149-FZ, art. 10.1;
+/// docs/plan/88-artifacts.md, Ар56, 88.16а-1): kept 3 years after the action; append only (a
+/// trigger), no foreign keys — it outlives a deleted account and a purged artifact.
+model OriFact {
+  id         BigInt   @id @default(autoincrement())
+  at         DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  kind       String   @db.VarChar(24)
+  userId     String?  @map("user_id") @db.Uuid
+  ip         String?  @db.Inet
+  port       Int?
+  artifactId String?  @map("artifact_id") @db.Uuid
+  addressees String[] @default([]) @db.Uuid
+  detail     Json     @default("{}")
+  keepUntil  DateTime @map("keep_until") @db.Timestamptz(6)
+
+  @@index([userId, at])
+  @@index([artifactId, at], where: raw("artifact_id IS NOT NULL"))
+  @@index([keepUntil])
+  @@map("ori_facts")
+}
+
+/// A message of a shared artifact kept in full 6 months (Decree № 256; Ар56, 88.16а-1): every
+/// write in an artifact opened to others, and its snapshot when it is purged. Append only.
+model OriMessage {
+  id         BigInt   @id @default(autoincrement())
+  at         DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  artifactId String   @map("artifact_id") @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  taskId     String?  @map("task_id") @db.Uuid
+  blockKey   String?  @map("block_key") @db.VarChar(40)
+  kind       String   @db.VarChar(16)
+  content    String?
+  addressees String[] @default([]) @db.Uuid
+  keepUntil  DateTime @map("keep_until") @db.Timestamptz(6)
+
+  @@index([artifactId, at])
+  @@index([userId, at])
+  @@index([keepUntil])
+  @@map("ori_messages")
+}

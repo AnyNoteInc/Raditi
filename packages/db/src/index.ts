@@ -185,6 +185,17 @@ export {
 } from './artifact-comments.ts'
 export { accessibleTasks } from './chat-access.ts'
 export {
+  artifactAddressees,
+  exportOriJournals,
+  oriTerms,
+  recordOriFact,
+  recordOriWrites,
+  retainPurgedArtifacts,
+  sweepOriJournals,
+  type OriFactKind,
+  type OriOrigin,
+} from './ori.ts'
+export {
   acceptArtifactInvite,
   artifactAccessState,
   artifactCopyAllowedFor,
