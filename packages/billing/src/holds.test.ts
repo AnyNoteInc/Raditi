@@ -829,6 +829,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       await window(workspaceId, 'week', started)
       const model = await planModelPool()
       const busy = await task(workspaceId)
+      // The work of a chain on the tariff fills the window (owner's answer of 22.11.2026).
+      await place(workspaceId, busy)
       // 1 260 ₽ at 6 ₽ a credit: 210 credits two days ago, outside every window of 5 hours.
       await worked(model, busy, '1260', { occurredAt: minutesAfter(-2 * 24 * 60) })
       const taskId = await task(workspaceId)
@@ -858,7 +860,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       })
       await window(workspaceId, 'week', minutesAfter(-3 * 24 * 60))
       const model = await planModelPool()
-      await worked(model, await task(workspaceId), '1260', {
+      const busy = await task(workspaceId)
+      await place(workspaceId, busy)
+      await worked(model, busy, '1260', {
         occurredAt: minutesAfter(-2 * 24 * 60),
       })
       const placed = await place(workspaceId, await task(workspaceId))
@@ -874,9 +878,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       await window(workspaceId, 'week', minutesAfter(-60))
       const model = await planModelPool()
       const busy = await task(workspaceId)
+      await place(workspaceId, busy)
       await worked(model, busy, '60', { occurredAt: minutesAfter(-30) })
       expect(await place(workspaceId, await task(workspaceId))).toMatchObject({ applied: true })
-      await worked(model, busy, '60', { occurredAt: minutesAfter(-20), attempt: 2 })
+      await worked(model, busy, '60', { occurredAt: minutesAfter(-20) })
       expect(await refused(workspaceId, await task(workspaceId))).toMatchObject({
         details: { reason: 'window_limit', window: { kind: '5h', limit: 20, used: 20 } },
       })
@@ -887,6 +892,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       await window(workspaceId, '5h', minutesAfter(-60))
       const model = await planModelPool()
       const busy = await task(workspaceId)
+      await place(workspaceId, busy)
       await worked(model, busy, '150', { occurredAt: minutesAfter(-30) })
       const taskId = await task(workspaceId)
       expect(await refused(workspaceId, taskId)).toMatchObject({
@@ -898,6 +904,63 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         data: { creditsPer5h: 70, creditsPerWeek: 210 },
       })
       expect(await place(workspaceId, taskId)).toMatchObject({ applied: true })
+    })
+
+    // Owner's answer of 22.11.2026 (docs/plan/90-window-tariff-charges.md): only what the tariff
+    // paid fills a window — its charges in the ledger and the live work of chains on the tariff.
+    it('counts nothing of the work of a chain that holds no reserve on the tariff', async () => {
+      const { workspaceId } = await funded({
+        gift: 300,
+        plan: { creditsPer5h: null, creditsPerWeek: 210 },
+      })
+      await window(workspaceId, 'week', minutesAfter(-3 * 24 * 60))
+      const model = await planModelPool()
+      // 1 260 ₽ — 210 credits of a chain that the gift paid for: it holds no tariff row.
+      await worked(model, await task(workspaceId), '1260', { occurredAt: minutesAfter(-60) })
+      const placed = await place(workspaceId, await task(workspaceId))
+      expect(placed.holds.map((hold) => kindOf(hold.unit))).toEqual(['tariff'])
+    })
+
+    it('fills the window with the tariff charges of the ledger', async () => {
+      const { workspaceId } = await funded({ plan: { creditsPer5h: null, creditsPerWeek: 30 } })
+      await window(workspaceId, 'week', minutesAfter(-3 * 24 * 60))
+      const busy = await task(workspaceId)
+      await place(workspaceId, busy)
+      const charged = await settle(busy, 30, { now: LATER })
+      expect(charged.from).toMatchObject({ tariff: 30, gift: 0, pack: 0 })
+      expect(await refused(workspaceId, await task(workspaceId), { now: LATER })).toMatchObject({
+        details: { reason: 'window_limit', window: { kind: 'week', limit: 30, used: 30 } },
+      })
+    })
+
+    it('charges the tariff no more than the room the others left, the rest from the gift', async () => {
+      const { workspaceId } = await funded({
+        gift: 300,
+        plan: { creditsPer5h: null, creditsPerWeek: 30 },
+      })
+      await window(workspaceId, 'week', minutesAfter(-3 * 24 * 60))
+      const model = await planModelPool()
+      const other = await task(workspaceId)
+      await place(workspaceId, other)
+      // 120 ₽ — 20 credits of another chain on the tariff, still at work: 10 are left.
+      await worked(model, other, '120', { occurredAt: minutesAfter(-60) })
+      const busy = await task(workspaceId)
+      await place(workspaceId, busy)
+      // Its own 180 ₽ — 30 credits — do not take the room it is charged by.
+      await worked(model, busy, '180', { occurredAt: minutesAfter(-30) })
+      // The live work of the other chain is counted at the rate in force at its calls.
+      const charged = await booked(workspaceId, () =>
+        db.$transaction(
+          (tx) =>
+            underPrivateCreditRate(tx, () =>
+              settleTaskCharge(tx, { taskId: busy, credits: 30, now: LATER }),
+            ),
+          patient,
+        ),
+      )
+      expect(charged.from.tariff).toBeLessThanOrEqual(11)
+      expect(charged.from.tariff).toBeGreaterThanOrEqual(10)
+      expect(charged.from.tariff + charged.from.gift).toBe(30)
     })
 
     it('counts nothing of a call through the API paid by the token (owner, 13.11.2026)', async () => {

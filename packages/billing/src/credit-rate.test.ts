@@ -333,7 +333,9 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
       })
     })
 
-    it('leaves out the rows of a key whose turn ended lost', async () => {
+    // Owner's answer of 22.11.2026: the work of a lost turn is charged — the next pass goes on with
+    // it; what the platform cut off is recorded not billable.
+    it('counts the billable rows of a key whose turn ended lost', async () => {
       await rolledBack(async (tx) => {
         const { taskId } = await taskIn(tx)
         const { pool, priceId } = await pricedPool(tx, T1)
@@ -355,22 +357,15 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
 
         const raw = await taskRawCredits(tx, { taskId, attempts: [1] })
 
-        // (60 + 24 + 6) ÷ 6: the two calls of the lost turn are out.
-        expect(raw).toMatchObject({ convertible: true, costRub: '90.0000000000' })
-        expect(raw.convertible && raw.credits.toFixed(2)).toBe('15.00')
-
-        // The same rows count once the turn is not lost.
-        await tx.taskTurn.updateMany({
-          where: { taskId, turnNo: 1 },
-          data: { status: 'completed' },
-        })
-        const counted = await taskRawCredits(tx, { taskId, attempts: [1] })
-        expect(counted.convertible && counted.credits.toFixed(2)).toBe('35.00')
+        // (90 + 30 + 60 + 24 + 6) ÷ 6: the calls of the lost turn count with the others.
+        expect(raw).toMatchObject({ convertible: true, costRub: '210.0000000000' })
+        expect(raw.convertible && raw.credits.toFixed(2)).toBe('35.00')
       })
     })
 
-    // docs/plan/53, «Попробовать ещё (18.10)»: the pass ended in a `feed.failure`.
-    it('leaves out the rows of a key whose turn was rejected, whatever its status', async () => {
+    // The pass ended in a `feed.failure`: charged since 22.11.2026 (until then docs/plan/53 left
+    // it out).
+    it('counts the rows of a key whose turn was rejected, whatever its status', async () => {
       await rolledBack(async (tx) => {
         const { taskId } = await taskIn(tx)
         const { pool, priceId } = await pricedPool(tx, T1)
@@ -393,9 +388,9 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
         })
 
         const raw = await taskRawCredits(tx, { taskId, attempts: [1] })
-        // 60 ÷ 6: the turns the platform refused are out.
-        expect(raw).toMatchObject({ convertible: true, costRub: '60.0000000000' })
-        expect(raw.convertible && raw.credits.toFixed(2)).toBe('10.00')
+        // (60 + 90 + 30) ÷ 6: the turns of failed passes count.
+        expect(raw).toMatchObject({ convertible: true, costRub: '180.0000000000' })
+        expect(raw.convertible && raw.credits.toFixed(2)).toBe('30.00')
       })
     })
 
@@ -499,15 +494,8 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
         const { pool, priceId } = await pricedPool(tx, BEFORE)
         await writeCreditRate(tx, { effectiveFrom: T1 })
         const call = { taskId, pool, priceId, costRub: '60' }
-        // Before any rate, and each left out for its own reason: not billable, a lost turn,
-        // another attempt.
+        // Before any rate, and each left out for its own reason: not billable, another attempt.
         await writeModelCall(tx, { ...call, occurredAt: after(BEFORE), estimateReason: 'lost' })
-        await writeModelCall(tx, {
-          ...call,
-          occurredAt: after(BEFORE),
-          turnNo: 2,
-          turnStatus: 'lost',
-        })
         await writeModelCall(tx, { ...call, occurredAt: after(BEFORE), attempt: 2, turnNo: 3 })
         await writeModelCall(tx, { ...call, occurredAt: after(T1), turnNo: 4 })
 

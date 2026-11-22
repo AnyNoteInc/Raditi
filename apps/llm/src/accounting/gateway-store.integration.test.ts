@@ -857,6 +857,24 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       expect(await store.admit(k.input)).toMatchObject({ reason: 'workspace_limit' })
     })
 
+    it('lets a pass on the tariff go on past a spent window while the gift has credits (owner, 22.11.2026)', async () => {
+      const f = await fixture({ budget: '5000' })
+      await onTariff(f.task)
+      const k = await f.key()
+      expect(await store.finish((await admitted(k.input)).id, heavy())).toBe(true)
+      expect(await store.admit(k.input)).toMatchObject({ reason: 'workspace_limit' })
+      // Free gift credits: the charge pays the tariff up to the window, the rest from the gift.
+      const gift = await db.billingAccount.upsert({
+        where: { workspaceId_unit: { workspaceId: f.task.workspaceId, unit: 'credit_gift' } },
+        create: { workspaceId: f.task.workspaceId, unit: 'credit_gift', balance: '50', held: '0' },
+        update: { balance: '50' },
+      })
+      expect(await store.finish((await admitted(k.input)).id, actual())).toBe(true)
+      // A gift held to the last credit frees nothing: the window stops the pass again.
+      await db.billingAccount.update({ where: { id: gift.id }, data: { held: '50' } })
+      expect(await store.admit(k.input)).toMatchObject({ reason: 'workspace_limit' })
+    })
+
     it('does not bound a pass reserved on the gift or a pack, nor a workspace without a tariff (owner, 14.11.2026)', async () => {
       const f = await fixture({ budget: '5000' })
       await onTariff(f.task)

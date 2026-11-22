@@ -205,12 +205,17 @@ export class PostgresGatewayStore implements GatewayStore {
       // The workspace of a key never changes, so it is read before any lock.
       // `onTariff`: an active reserve of the task stands on tariff credits. The windows bound those
       // only (owner's answer of 14.11.2026): a pass reserved on the gift or a pack goes on.
+      // `otherCredits`: the gift or a pack of the workspace has free credits — a spent window then
+      // lets the pass go on, its charge takes the rest from them (owner's answer of 22.11.2026).
       const [owner] = await tx.$queryRaw<
-        { workspaceId: string; billable: boolean; onTariff: boolean }[]
+        { workspaceId: string; billable: boolean; onTariff: boolean; otherCredits: boolean }[]
       >`
         SELECT t.workspace_id AS "workspaceId", t.billable,
           EXISTS (SELECT 1 FROM credit_holds h WHERE h.task_id = t.id AND h.status = 'active'
-            AND h.unit = 'credit_tariff') AS "onTariff"
+            AND h.unit = 'credit_tariff') AS "onTariff",
+          EXISTS (SELECT 1 FROM billing_accounts b WHERE b.workspace_id = t.workspace_id
+            AND b.unit IN ('credit_gift', 'credit_pack')
+            AND b.balance - b.held > 0) AS "otherCredits"
         FROM llm_keys k JOIN tasks t ON t.id = k.task_id WHERE k.key_hash = ${value.keyHash}`
       if (!owner) return { kind: 'refused', reason: 'unauthorized' }
       await lockUsageWindows(tx, owner.workspaceId)
@@ -314,9 +319,11 @@ export class PostgresGatewayStore implements GatewayStore {
       // Only a call of a plan with windows: a call of the API paid by the token is bounded by the
       // credits of the customer alone (owner's answer of 13.11.2026). Only a pass whose reserve
       // stands on tariff credits: the windows do not bound the gift and the packs (owner's answer
-      // of 14.11.2026).
+      // of 14.11.2026). A spent window stops the pass only when nothing else can pay for it: with
+      // free gift or pack credits it goes on, and the charge pays the tariff no more than the
+      // window's room (owner's answer of 22.11.2026). Its calls still open the windows.
       const windowed = owner.billable && owner.onTariff && value.capacity === 'windows' && !fallback
-      if (windowed) {
+      if (windowed && !owner.otherCredits) {
         const spent = await this.#windowRefusal(tx, row.keyId, owner.workspaceId, row.serverNow)
         if (spent) return spent
       }
