@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 
 // Two choices of this viewer in this browser (docs/plan/61-chats-first.md, §5.14), kept in
 // `localStorage`; a blocked or empty storage means the default.
@@ -133,8 +133,10 @@ export function useChatChoiceMadeHere(): boolean {
     () => choicesMade,
     () => 0,
   )
-  const atOpen = useRef(writes)
-  return writes > atOpen.current
+  // Taken once, as the dialog mounts (`dialog-view` is keyed by the chat, so every chat counts
+  // from its own opening).
+  const [atOpen] = useState(() => choicesMade)
+  return writes > atOpen
 }
 
 export function useChatDetails(): { details: boolean; toggle: () => boolean } {
