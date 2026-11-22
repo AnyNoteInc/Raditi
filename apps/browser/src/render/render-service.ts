@@ -150,7 +150,14 @@ export class RenderService {
     const brand = await artifactBrandOf(this.#deps.db as PrismaClient, artifact.id)
     const html = artifactFrameDocument({
       title: artifact.title,
-      platformCss: fonts.css + (brand ? brandCss(brandTokensOf(brand.settings)) : ''),
+      platformCss:
+        fonts.css +
+        (brand ? brandCss(brandTokensOf(brand.settings)) : '') +
+        // A slide clipped by its own style still has its height measured (88.25): the renderer
+        // takes the clip off the document; its pictures are cut at 720 all the same.
+        (artifact.kind === 'slides'
+          ? 'html,body{height:auto!important;min-height:720px;overflow:visible!important}'
+          : ''),
       bridge: false,
       parts: {
         html: parts.html.map(

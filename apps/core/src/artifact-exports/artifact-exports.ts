@@ -123,7 +123,12 @@ export class ArtifactExports {
     artifact: Awaited<ReturnType<typeof readArtifact>>,
   ): Promise<{ title: string; slides: { picture: Uint8Array; notes: string }[] } | null> {
     const render = this.#deps.render ?? null
-    const slides = artifactSlidesOf(artifact.blocks)
+    // A slide whose text waits for the check is not in the file: a blank page is no slide.
+    const slides = artifactSlidesOf(artifact.blocks).filter((slide) =>
+      artifact.blocks.some(
+        (block) => block.parent === slide.key && block.kind === 'html' && block.content,
+      ),
+    )
     if (render === null || slides.length === 0) return null
     const out: { picture: Uint8Array; notes: string }[] = []
     for (const slide of slides) {

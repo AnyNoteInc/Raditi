@@ -43,7 +43,7 @@ const { values } = parseArgs({
     'no-browsers': { type: 'boolean', default: false },
     seconds: { type: 'string', default: '20' },
     // `canvas` — only the canvas, the brand and the renderer (88.15–88.15в), after the migrations;
-    // `diagrams` — only «Схема» (88.24г).
+    // `diagrams` — only «Схема» (88.24г); `slides` — only «Презентация» (88.25г).
     only: { type: 'string' },
   },
 })
@@ -156,13 +156,20 @@ try {
   if (all) await outboxIntoArtifacts(databaseUrl)
   if (!values['no-browsers']) {
     // 88.15–88.15в: the canvas, the brand and the renderer of frames on a Chromium of this machine.
-    if (values.only !== 'diagrams') {
+    if (values.only !== 'diagrams' && values.only !== 'slides') {
       const { canvasAndRender } = await import('./canvas.mjs')
       await canvasAndRender({ root, databaseUrl, check })
     }
     // 88.24г: «Схема» — the corpus of spike 7 through the renderer, and the road to the page.
-    const { diagramsOnChromium } = await import('./diagrams.mjs')
-    await diagramsOnChromium({ root, databaseUrl, check })
+    if (values.only !== 'slides') {
+      const { diagramsOnChromium } = await import('./diagrams.mjs')
+      await diagramsOnChromium({ root, databaseUrl, check })
+    }
+    // 88.25г: «Презентация» — the slides at 1280×720, their files and their site.
+    if (values.only !== 'diagrams') {
+      const { slidesOnChromium } = await import('./slides.mjs')
+      await slidesOnChromium({ root, databaseUrl, check })
+    }
   }
   if (all && !values['no-browsers']) {
     const { framesInBrowsers } = await import('./frames.mjs')
