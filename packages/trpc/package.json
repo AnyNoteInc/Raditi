@@ -19,6 +19,7 @@
     "@repo/doc-bridge": "workspace:*",
     "@repo/doc-render": "workspace:*",
     "@repo/domain": "workspace:*",
+    "@repo/notifications": "workspace:*",
     "@repo/telegram": "workspace:*",
     "@repo/yookassa": "workspace:*",
     "@trpc/server": "catalog:",

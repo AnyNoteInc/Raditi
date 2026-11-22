@@ -41,15 +41,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
     await db.member.deleteMany({ where: owned })
     await db.workspace.deleteMany({ where: { id: owned.workspaceId } })
     await db.rateLimit.deleteMany({ where: { key: { startsWith: 'artifact-open' } } })
+    await db.outboxEvent.deleteMany({ where: { dedupeKey: { startsWith: 'artifact.invite:' } } })
     await db.user.deleteMany({ where: { id: { in: users } } })
   })
   afterAll(async () => {
     await db.$disconnect()
   })
 
-  async function person(name: string): Promise<User> {
+  async function person(name: string, emailVerified = true): Promise<User> {
     const row = await db.user.create({
-      data: { name, email: `${randomUUID()}@artifacts-access.example.ru` },
+      data: { name, email: `${randomUUID()}@artifacts-access.example.ru`, emailVerified },
     })
     userIds.push(row.id)
     await db.userConsent.createMany({
@@ -61,6 +62,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
   function callerOf(user: User, appEnv: 'test' | 'production' = 'test') {
     const chat: ChatContext = {
       appEnv,
+      appUrl: 'https://raditi.test',
       browser: null,
       storage: () => ({ get: async () => null }) as unknown as ObjectStorage,
       secrets: () => ({ transitEnsureKey: async () => {} }) as unknown as SecretStore,
@@ -261,5 +263,88 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
     await expect(
       callerOf(owner, 'production').artifact.shareLink({ artifactId, role: 'view', term: null }),
     ).rejects.toMatchObject({ cause: { code: 'ARTIFACT_SHARING_CLOSED' } })
+  })
+
+  it('invites by an address, sends our words only, and opens to that confirmed address alone (88.16-2)', async () => {
+    const { owner, viewer, editor, as, artifactId } = await shared()
+    // The address as typed: the owner sees it, the letter goes whether it has an account or not.
+    await expect(
+      as.owner.artifact.shareInvite({
+        artifactId,
+        email: viewer.email.toUpperCase(),
+        role: 'edit',
+      }),
+    ).resolves.toEqual({ sent: true })
+    await as.owner.artifact.shareInvite({
+      artifactId,
+      email: 'nobody-yet@artifacts-access.example.ru',
+      role: 'view',
+    })
+    const state = await as.owner.artifact.shareState({ artifactId })
+    expect(state.invites.map(({ email, role }) => ({ email, role }))).toEqual([
+      { email: viewer.email.toLowerCase(), role: 'edit' },
+      { email: 'nobody-yet@artifacts-access.example.ru', role: 'view' },
+    ])
+    const letters = await db.outboxEvent.findMany({
+      where: { type: 'artifact.invite', dedupeKey: { startsWith: 'artifact.invite:' } },
+      select: { payload: true },
+    })
+    expect(letters).toHaveLength(2)
+    expect(letters[0]!.payload).toMatchObject({
+      to: viewer.email.toLowerCase(),
+      inviterName: 'Анна',
+      kindWord: 'документ',
+      url: 'https://raditi.test/artifacts?invites=1',
+    })
+    expect(JSON.stringify(letters)).not.toContain('План')
+    // An owner never invites themselves.
+    await expect(
+      as.owner.artifact.shareInvite({ artifactId, email: owner.email, role: 'view' }),
+    ).rejects.toMatchObject({ cause: { code: 'ARTIFACT_GRANT_REFUSED' } })
+
+    // Only the confirmed owner of the address sees it and accepts it.
+    expect(await as.editor.artifact.myInvites()).toEqual([])
+    const [invite] = await as.viewer.artifact.myInvites()
+    expect(invite).toMatchObject({ artifactId, title: 'План', ownerName: 'Анна', role: 'edit' })
+    await expect(
+      as.editor.artifact.inviteAccept({ inviteId: invite!.inviteId }),
+    ).rejects.toMatchObject({ cause: { code: 'ARTIFACT_INVITE_GONE' } })
+    await expect(as.viewer.artifact.inviteAccept({ inviteId: invite!.inviteId })).resolves.toEqual({
+      artifactId,
+      role: 'edit',
+    })
+    expect((await as.viewer.artifact.read({ artifactId })).role).toBe('edit')
+    expect(
+      (await db.artifactInvite.findUniqueOrThrow({ where: { id: invite!.inviteId } })).email,
+    ).toBeNull()
+    await expect(
+      as.viewer.artifact.inviteAccept({ inviteId: invite!.inviteId }),
+    ).rejects.toMatchObject({ cause: { code: 'ARTIFACT_INVITE_GONE' } })
+
+    // An unconfirmed address sees nothing.
+    const unconfirmed = await person('Дина', false)
+    await as.owner.artifact.shareInvite({ artifactId, email: unconfirmed.email, role: 'view' })
+    expect(await callerOf(unconfirmed).artifact.myInvites()).toEqual([])
+    // «Закрыть доступ всем» closes the waiting ones too.
+    await as.owner.artifact.shareCloseAll({ artifactId })
+    expect((await as.owner.artifact.shareState({ artifactId })).invites).toEqual([])
+    expect(editor.id).not.toBe(viewer.id)
+  })
+
+  it('sends at most 10 invitations an artifact a day', async () => {
+    const { as, artifactId } = await shared()
+    for (let n = 0; n < 10; n++)
+      await as.owner.artifact.shareInvite({
+        artifactId,
+        email: `guest-${n}-${randomUUID()}@artifacts-access.example.ru`,
+        role: 'view',
+      })
+    await expect(
+      as.owner.artifact.shareInvite({
+        artifactId,
+        email: `guest-11-${randomUUID()}@artifacts-access.example.ru`,
+        role: 'view',
+      }),
+    ).rejects.toMatchObject({ cause: { code: 'ARTIFACT_LIMIT' } })
   })
 })

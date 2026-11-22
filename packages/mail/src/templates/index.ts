@@ -1,3 +1,4 @@
+import { renderArtifactInvite } from './artifact-invite.ts'
 import { renderChatWaiting } from './chat-waiting.ts'
 import { renderPaymentFailed } from './payment-failed.ts'
 import { renderPaymentSucceeded } from './payment-succeeded.ts'
@@ -17,6 +18,7 @@ const renderers: { [K in MailKind]: (data: MailData[K], now: Date) => RenderedEm
   'payment-failed': renderPaymentFailed,
   'subscription-ended': renderSubscriptionEnded,
   'chat-waiting': renderChatWaiting,
+  'artifact-invite': renderArtifactInvite,
 }
 
 /**

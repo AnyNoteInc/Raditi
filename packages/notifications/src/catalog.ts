@@ -61,6 +61,13 @@ export const notificationCatalog = {
     payload: mailDataSchemas['chat-waiting'].extend(recipient),
     deliver: ({ to, ...data }, { mailer }) => mailer.sendMail({ kind: 'chat-waiting', to, data }),
   }),
+  // An invitation to an artifact (docs/plan/88-artifacts.md, Ар35): to the address the owner typed.
+  'artifact.invite': defineNotification({
+    channel: 'email',
+    payload: mailDataSchemas['artifact-invite'].extend(recipient),
+    deliver: ({ to, ...data }, { mailer }) =>
+      mailer.sendMail({ kind: 'artifact-invite', to, data }),
+  }),
   'billing.subscription_ended': defineNotification({
     channel: 'email',
     payload: mailDataSchemas['subscription-ended'].extend(recipient),

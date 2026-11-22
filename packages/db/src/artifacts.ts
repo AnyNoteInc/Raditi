@@ -2623,6 +2623,10 @@ export async function sweepArtifacts(
         data: ended,
       })
     ).count
+  // An invitation nobody accepted in 30 days closes, its address gone (Ар35, §7.1).
+  await db.$executeRaw`
+    UPDATE artifact_invites SET email = NULL, closed_at = ${now}
+    WHERE accepted_at IS NULL AND closed_at IS NULL AND expires_at < ${now}`
   const filled = await fillArtifactRows(db)
   return { objects, purged, journal, batches, leases, filled }
 }

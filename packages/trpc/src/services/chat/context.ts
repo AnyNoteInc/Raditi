@@ -18,6 +18,8 @@ import type { TaskSignals } from './signals.ts'
 export interface ChatContext {
   /** APP_ENV: outside production a dialog is taken only in a synthetic workspace (rule 1). */
   appEnv: AppEnv
+  /** APP_URL, no trailing slash: the letters of invitations lead back to it (plan 88, Ар35). */
+  appUrl?: string
   /**
    * The cloud browser of tasks (docs/plan/57-browser-tasks.md, Б9, Б12): `streamUrl` is where the
    * cabinet opens the stream of a session (BROWSER_STREAM_PUBLIC_URL, `ws(s)://…`). Absent or

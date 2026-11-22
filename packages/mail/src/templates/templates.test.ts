@@ -51,6 +51,11 @@ const samples: MailData = {
     url: 'https://raditi.ru/chats/0199a3f2-0000-7000-8000-000000000001',
     settingsUrl: 'https://raditi.ru/settings',
   },
+  'artifact-invite': {
+    inviterName: 'Анна Петрова',
+    kindWord: 'документ',
+    url: 'https://raditi.ru/artifacts?invites=1',
+  },
 }
 
 function linkOf(kind: MailKind): string {
@@ -308,5 +313,20 @@ describe('the letter of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп3
     })
     expect(out.text).not.toContain('Проверка сайта')
     expect(out.html).not.toContain('Проверка сайта')
+  })
+})
+
+describe('the invitation to an artifact (plan 88, Ар35)', () => {
+  it('names the inviter only when it is safe, and never a title', () => {
+    const named = renderTemplate('artifact-invite', samples['artifact-invite'])
+    expect(named.subject).toBe('Анна Петрова приглашает вас в Радити')
+    expect(named.text).toContain('Анна Петрова приглашает вас открыть документ в Радити')
+    const crafted = renderTemplate('artifact-invite', {
+      ...samples['artifact-invite'],
+      inviterName: 'Служба безопасности evil.ru',
+    })
+    expect(crafted.subject).toBe('Вас приглашают в Радити')
+    expect(crafted.text).not.toContain('evil.ru')
+    expect(crafted.text).toContain('Вас приглашают открыть документ в Радити')
   })
 })

@@ -185,15 +185,21 @@ export {
 } from './artifact-comments.ts'
 export { accessibleTasks } from './chat-access.ts'
 export {
+  acceptArtifactInvite,
   artifactAccessState,
   closeArtifactAccess,
   createArtifactLink,
+  declineArtifactInvite,
+  inviteToArtifact,
   leaveArtifactAccess,
+  myArtifactInvites,
   openArtifactLink,
   removeArtifactRecipient,
+  revokeArtifactInvite,
   revokeArtifactLink,
   setArtifactRecipientRole,
   type ArtifactAccessState,
+  type ArtifactInviteSent,
 } from './artifact-access.ts'
 export {
   artifactNamedByRun,

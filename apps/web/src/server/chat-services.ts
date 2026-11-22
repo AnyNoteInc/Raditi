@@ -56,6 +56,7 @@ export function chatServices(): ChatContext | null {
     const web = env.web()
     built = {
       appEnv: web.appEnv,
+      appUrl: web.appUrl,
       browser: web.browserStreamUrl === null ? null : { streamUrl: web.browserStreamUrl },
       webPushPublicKey: web.webPushPublicKey,
       telegramBot: telegramBot(),

@@ -1,14 +1,19 @@
 import { createHash } from 'node:crypto'
 
 import {
+  acceptArtifactInvite,
   addArtifactCommentReply,
   admitInWindow,
   artifactAccessState,
   closeArtifactAccess,
   createArtifactLink,
+  declineArtifactInvite,
+  inviteToArtifact,
   leaveArtifactAccess,
+  myArtifactInvites,
   openArtifactLink,
   removeArtifactRecipient,
+  revokeArtifactInvite,
   revokeArtifactLink,
   setArtifactRecipientRole,
   artifactGalleryFilters,
@@ -25,6 +30,8 @@ import {
   artifactCommentAnchorInputSchema,
   artifactCommentAnchorSchema,
   artifactGrantRoles,
+  artifactInviteEmailSchema,
+  artifactInviteKindWord,
   artifactLinkTokenSchema,
   artifactOpenGrantRoles,
   artifactSharingClosed,
@@ -33,6 +40,7 @@ import {
   artifactSignalLimits,
   artifactTitleSchema,
 } from '@repo/domain/artifacts'
+import { enqueueNotification } from '@repo/notifications'
 import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 
@@ -503,6 +511,14 @@ export const artifactRouter = router({
             sources: z.array(z.enum(['invite', 'link'])),
           }),
         ),
+        invites: z.array(
+          z.strictObject({
+            id: z.uuid(),
+            email: z.string(),
+            role: z.enum(artifactGrantRoles),
+            createdAt: z.iso.datetime(),
+          }),
+        ),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -520,7 +536,95 @@ export const artifactRouter = router({
           opens: state.link.opens,
         },
         people: state.people,
+        invites: state.invites.map((invite) => ({
+          ...invite,
+          role: invite.role as (typeof artifactGrantRoles)[number],
+          createdAt: invite.createdAt.toISOString(),
+        })),
       }
+    }),
+
+  /**
+   * «Пригласить» by an address (Ар35): the letter goes to the outbox in the same transaction, with
+   * our words only. The answer never tells whether the address has an account.
+   */
+  shareInvite: consentedProcedure
+    .input(
+      z.strictObject({
+        artifactId,
+        email: artifactInviteEmailSchema,
+        role: z.enum(artifactOpenGrantRoles),
+      }),
+    )
+    .output(z.strictObject({ sent: z.literal(true) }))
+    .mutation(async ({ ctx, input }) => {
+      requireSharing(ctx)
+      const appUrl = chatContextOf(ctx).appUrl
+      if (!appUrl) throw new TRPCError({ code: 'SERVICE_UNAVAILABLE', message: 'No APP_URL' })
+      await ctx.prisma.$transaction(async (tx) => {
+        const sent = await inviteToArtifact(tx, {
+          userId: ctx.user.id,
+          artifactId: input.artifactId,
+          email: input.email,
+          role: input.role,
+          now: new Date(),
+        })
+        await enqueueNotification(
+          'artifact.invite',
+          {
+            to: input.email,
+            inviterName: sent.inviterName,
+            kindWord: artifactInviteKindWord(sent.kind),
+            url: `${appUrl}/artifacts?invites=1`,
+          },
+          { db: tx, dedupeKey: `artifact.invite:${sent.inviteId}` },
+        )
+      })
+      return { sent: true as const }
+    }),
+
+  shareInviteRevoke: consentedProcedure
+    .input(z.strictObject({ artifactId, inviteId: z.uuid() }))
+    .output(z.strictObject({ revoked: z.boolean() }))
+    .mutation(({ ctx, input }) => {
+      requireSharing(ctx)
+      return revokeArtifactInvite(ctx.prisma, { userId: ctx.user.id, ...input, now: new Date() })
+    }),
+
+  /** «Приглашения» of the signed-in user: those to their confirmed address. */
+  myInvites: consentedProcedure
+    .output(
+      z.array(
+        z.strictObject({
+          inviteId: z.uuid(),
+          artifactId: z.uuid(),
+          kind: z.string(),
+          title: z.string(),
+          ownerName: z.string(),
+          role: z.enum(artifactGrantRoles),
+        }),
+      ),
+    )
+    .query(async ({ ctx }) => {
+      if (!artifactSharingOpen(chatContextOf(ctx).appEnv)) return []
+      const rows = await myArtifactInvites(ctx.prisma, { userId: ctx.user.id, now: new Date() })
+      return rows.map((row) => ({ ...row, role: row.role as (typeof artifactGrantRoles)[number] }))
+    }),
+
+  inviteAccept: consentedProcedure
+    .input(z.strictObject({ inviteId: z.uuid() }))
+    .output(z.strictObject({ artifactId: z.uuid(), role: z.enum(artifactRoles) }))
+    .mutation(({ ctx, input }) => {
+      requireSharing(ctx)
+      return acceptArtifactInvite(ctx.prisma, { userId: ctx.user.id, ...input, now: new Date() })
+    }),
+
+  inviteDecline: consentedProcedure
+    .input(z.strictObject({ inviteId: z.uuid() }))
+    .output(z.strictObject({ declined: z.boolean() }))
+    .mutation(({ ctx, input }) => {
+      requireSharing(ctx)
+      return declineArtifactInvite(ctx.prisma, { userId: ctx.user.id, ...input, now: new Date() })
     }),
 
   /** «Новая ссылка»: the token once — the cabinet makes `/a#<token>`; the link before is revoked. */

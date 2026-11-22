@@ -2316,6 +2316,9 @@ importers:
       '@repo/domain':
         specifier: workspace:*
         version: link:../domain
+      '@repo/notifications':
+        specifier: workspace:*
+        version: link:../notifications
       '@repo/telegram':
         specifier: workspace:*
         version: link:../telegram

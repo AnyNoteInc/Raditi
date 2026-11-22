@@ -3,7 +3,11 @@ import { createHash, randomBytes } from 'node:crypto'
 import {
   artifactGrantAllowed,
   artifactGrantRefused,
+  artifactInviteDays,
+  artifactInviteGone,
+  artifactInviteLimits,
   artifactKindSpecOf,
+  artifactLimit,
   artifactLinkGone,
   artifactNotFound,
   artifactOpenGrantRoles,
@@ -159,6 +163,7 @@ export async function openArtifactLink(
 
 export interface ArtifactAccessState {
   link: { role: string; createdAt: Date; expiresAt: Date | null; opens: number } | null
+  invites: { id: string; email: string; role: string; createdAt: Date }[]
   people: {
     userId: string
     name: string
@@ -217,6 +222,7 @@ export async function artifactAccessState(
             }
           : null,
         people: [...people.values()],
+        invites: await artifactInvitesOf(tx, input),
       }
     },
     { isolationLevel: 'RepeatableRead' },
@@ -265,6 +271,11 @@ export async function closeArtifactAccess(
       data: { revokedAt: input.now },
     })
     const grants = await tx.artifactGrant.deleteMany({ where: { artifactId: input.artifactId } })
+    // The waiting invitations close too, their addresses gone.
+    await tx.artifactInvite.updateMany({
+      where: { artifactId: input.artifactId, acceptedAt: null, closedAt: null },
+      data: { closedAt: input.now, email: null },
+    })
     return { links: links.count, grants: grants.count }
   })
 }
@@ -280,5 +291,237 @@ export async function leaveArtifactAccess(
       where: { artifactId: input.artifactId, userId: input.userId },
     })
     return { left: count > 0 }
+  })
+}
+
+// ———————————————————————————————— invitations (Ар35, slice 88.16-2)
+
+export interface ArtifactInviteSent {
+  inviteId: string
+  kind: string
+  inviterName: string
+}
+
+/**
+ * «Пригласить» by an address the owner typed, in the caller's transaction (the letter goes to the
+ * outbox in it). The owner sees only the address and «Приглашение отправлено» — whether it has an
+ * account is never told (Ар35). A waiting one to the same address gets the new role and goes again.
+ */
+export async function inviteToArtifact(
+  tx: Tx,
+  input: {
+    artifactId: string
+    userId: string
+    email: string
+    role: ArtifactOpenGrantRole
+    now: Date
+  },
+): Promise<ArtifactInviteSent> {
+  const artifact = await lockShared(tx, input)
+  requireGrantable(artifact.kind, input.role)
+  const inviter = await tx.user.findUniqueOrThrow({
+    where: { id: input.userId },
+    select: { name: true, email: true },
+  })
+  if (inviter.email.toLowerCase() === input.email) throw artifactGrantRefused()
+  const dayAgo = new Date(input.now.getTime() - DAY_MS)
+  const [byUser, byArtifact] = await Promise.all([
+    tx.artifactInvite.count({ where: { invitedBy: input.userId, createdAt: { gt: dayAgo } } }),
+    tx.artifactInvite.count({ where: { artifactId: artifact.id, createdAt: { gt: dayAgo } } }),
+  ])
+  if (
+    byUser >= artifactInviteLimits.perUserDay ||
+    byArtifact >= artifactInviteLimits.perArtifactDay
+  )
+    throw artifactLimit('invites')
+  const expiresAt = new Date(input.now.getTime() + artifactInviteDays * DAY_MS)
+  const waiting = await tx.artifactInvite.findFirst({
+    where: { artifactId: artifact.id, email: input.email, acceptedAt: null, closedAt: null },
+    select: { id: true },
+  })
+  // A repeat is a new row: the limits count what was sent, and the old one closes.
+  if (waiting)
+    await tx.artifactInvite.update({
+      where: { id: waiting.id },
+      data: { closedAt: input.now, email: null },
+    })
+  const invite = await tx.artifactInvite.create({
+    data: {
+      artifactId: artifact.id,
+      email: input.email,
+      role: input.role,
+      invitedBy: input.userId,
+      createdAt: input.now,
+      expiresAt,
+    },
+    select: { id: true },
+  })
+  return { inviteId: invite.id, kind: artifact.kind, inviterName: inviter.name }
+}
+
+/** «Отозвать приглашение» of the owner: the address goes with it. */
+export async function revokeArtifactInvite(
+  db: Db,
+  input: { artifactId: string; userId: string; inviteId: string; now: Date },
+): Promise<{ revoked: boolean }> {
+  return db.$transaction(async (tx) => {
+    await lockShared(tx, input)
+    const { count } = await tx.artifactInvite.updateMany({
+      where: { id: input.inviteId, artifactId: input.artifactId, acceptedAt: null, closedAt: null },
+      data: { closedAt: input.now, email: null },
+    })
+    return { revoked: count > 0 }
+  })
+}
+
+/** The waiting invitations of an owner's artifact: the address, the role, when. */
+export async function artifactInvitesOf(
+  tx: Tx,
+  input: { artifactId: string; now: Date },
+): Promise<{ id: string; email: string; role: string; createdAt: Date }[]> {
+  const rows = await tx.artifactInvite.findMany({
+    where: {
+      artifactId: input.artifactId,
+      acceptedAt: null,
+      closedAt: null,
+      expiresAt: { gt: input.now },
+      email: { not: null },
+    },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, email: true, role: true, createdAt: true },
+  })
+  return rows.map((row) => ({ ...row, email: row.email! }))
+}
+
+/** The user's confirmed address, or null: an invitation opens only to its confirmed owner. */
+async function confirmedEmailOf(tx: Pick<Tx, 'user'>, userId: string) {
+  const user = await tx.user.findUnique({
+    where: { id: userId },
+    select: { email: true, emailVerified: true },
+  })
+  return user?.emailVerified ? user.email.toLowerCase() : null
+}
+
+/**
+ * «Приглашения» of a signed-in user (§7.8): those waiting for their confirmed address, of a live
+ * artifact — who invites, the kind and the title, which they see now, after sign-in.
+ */
+export async function myArtifactInvites(
+  db: Pick<PrismaClient, '$transaction'>,
+  input: { userId: string; now: Date },
+): Promise<
+  {
+    inviteId: string
+    artifactId: string
+    kind: string
+    title: string
+    ownerName: string
+    role: string
+  }[]
+> {
+  return db.$transaction(async (tx) => {
+    const email = await confirmedEmailOf(tx, input.userId)
+    if (email === null) return []
+    const rows = await tx.artifactInvite.findMany({
+      where: {
+        email,
+        acceptedAt: null,
+        closedAt: null,
+        expiresAt: { gt: input.now },
+        artifact: { deletedAt: null, takenDownAt: null },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: {
+        id: true,
+        role: true,
+        artifact: {
+          select: { id: true, kind: true, title: true, owner: { select: { name: true } } },
+        },
+      },
+    })
+    return rows.map((row) => ({
+      inviteId: row.id,
+      artifactId: row.artifact.id,
+      kind: row.artifact.kind,
+      title: row.artifact.title,
+      ownerName: row.artifact.owner?.name ?? '',
+      role: row.role,
+    }))
+  })
+}
+
+/** «Принять» (Ар35): a grant by invitation of its role; the address goes. */
+export async function acceptArtifactInvite(
+  db: Db,
+  input: { userId: string; inviteId: string; now: Date },
+): Promise<{ artifactId: string; role: ArtifactRole }> {
+  return db.$transaction(async (tx) => {
+    const email = await confirmedEmailOf(tx, input.userId)
+    const invite = await tx.artifactInvite.findUnique({
+      where: { id: input.inviteId },
+      select: {
+        id: true,
+        artifactId: true,
+        email: true,
+        role: true,
+        invitedBy: true,
+        acceptedAt: true,
+        closedAt: true,
+        expiresAt: true,
+      },
+    })
+    if (
+      email === null ||
+      !invite ||
+      invite.email !== email ||
+      invite.acceptedAt !== null ||
+      invite.closedAt !== null ||
+      invite.expiresAt <= input.now
+    )
+      throw artifactInviteGone()
+    const artifact = await lockArtifact(tx, invite.artifactId)
+    if (artifact.deletedAt !== null || artifact.takenDownAt !== null) throw artifactInviteGone()
+    if ((await artifactRole(tx, { artifactId: artifact.id, userId: input.userId })) === 'owner')
+      throw artifactInviteGone()
+    const granted = await tx.artifactGrant.findFirst({
+      where: { artifactId: artifact.id, userId: input.userId, source: 'invite' },
+      select: { id: true },
+    })
+    if (granted)
+      await tx.artifactGrant.update({ where: { id: granted.id }, data: { role: invite.role } })
+    else
+      await tx.artifactGrant.create({
+        data: {
+          artifactId: artifact.id,
+          userId: input.userId,
+          source: 'invite',
+          role: invite.role,
+          grantedBy: invite.invitedBy,
+        },
+      })
+    await tx.artifactInvite.update({
+      where: { id: invite.id },
+      data: { acceptedAt: input.now, acceptedBy: input.userId, email: null },
+    })
+    const role = await artifactRole(tx, { artifactId: artifact.id, userId: input.userId })
+    if (role === null) throw artifactInviteGone()
+    return { artifactId: artifact.id, role }
+  })
+}
+
+/** «Отклонить»: the invitation closes, its address goes; the owner sees it no more. */
+export async function declineArtifactInvite(
+  db: Db,
+  input: { userId: string; inviteId: string; now: Date },
+): Promise<{ declined: boolean }> {
+  return db.$transaction(async (tx) => {
+    const email = await confirmedEmailOf(tx, input.userId)
+    if (email === null) return { declined: false }
+    const { count } = await tx.artifactInvite.updateMany({
+      where: { id: input.inviteId, email, acceptedAt: null, closedAt: null },
+      data: { closedAt: input.now, email: null },
+    })
+    return { declined: count > 0 }
   })
 }

@@ -74,6 +74,8 @@ model User {
   artifactLinksCreated        ArtifactLink[]               @relation("ArtifactLinkCreator")
   artifactGrants              ArtifactGrant[]              @relation("ArtifactGrantUser")
   artifactGrantsGiven         ArtifactGrant[]              @relation("ArtifactGrantGranter")
+  artifactInvitesSent         ArtifactInvite[]             @relation("ArtifactInviteInviter")
+  artifactInvitesAccepted     ArtifactInvite[]             @relation("ArtifactInviteAcceptor")
 
   @@map("users")
 }
@@ -2611,6 +2613,7 @@ model Artifact {
   scheduledTasks    ScheduledTaskArtifact[]
   links             ArtifactLink[]
   grants            ArtifactGrant[]
+  invites           ArtifactInvite[]
   versions          ArtifactVersion[]
   content           ArtifactContent?
   page              Page?
@@ -3001,6 +3004,30 @@ model ArtifactGrant {
   @@index([userId])
   @@index([linkId])
   @@map("artifact_grants")
+}
+
+/// An invitation to an artifact by e-mail (Ар35, slice 88.16-2): waits until a signed-in user with
+/// this confirmed address accepts it; the address goes once it is accepted, closed or 30 days old.
+model ArtifactInvite {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  artifactId String    @map("artifact_id") @db.Uuid
+  email      String?   @db.VarChar(320)
+  role       String    @db.VarChar(8)
+  invitedBy  String?   @map("invited_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  acceptedAt DateTime? @map("accepted_at") @db.Timestamptz(6)
+  acceptedBy String?   @map("accepted_by") @db.Uuid
+  closedAt   DateTime? @map("closed_at") @db.Timestamptz(6)
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  inviter  User?    @relation("ArtifactInviteInviter", fields: [invitedBy], references: [id], onDelete: SetNull)
+  acceptor User?    @relation("ArtifactInviteAcceptor", fields: [acceptedBy], references: [id], onDelete: SetNull)
+
+  @@unique([artifactId, email], map: "artifact_invites_waiting_key", where: raw("accepted_at IS NULL AND closed_at IS NULL"))
+  @@index([email], map: "artifact_invites_email_idx", where: raw("accepted_at IS NULL AND closed_at IS NULL"))
+  @@index([invitedBy, createdAt])
+  @@map("artifact_invites")
 }
 
 /// The artifacts a scheduled task names in its window (docs/plan/88-artifacts.md, Ар24, 88.20б): a

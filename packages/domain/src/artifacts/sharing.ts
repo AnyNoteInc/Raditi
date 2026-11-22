@@ -19,7 +19,10 @@ export function artifactSharingOpen(appEnv: AppEnv): boolean {
 }
 
 /** The roles a link or an invitation gives now (Ар36): «Комментирует» comes with Э10а. */
-export const artifactOpenGrantRoles = ['view', 'edit'] as const satisfies readonly ArtifactGrantRole[]
+export const artifactOpenGrantRoles = [
+  'view',
+  'edit',
+] as const satisfies readonly ArtifactGrantRole[]
 export type ArtifactOpenGrantRole = (typeof artifactOpenGrantRoles)[number]
 
 /** How long a link lives (Ар33): no term by default, or 7 or 30 days. */
@@ -32,3 +35,33 @@ export const artifactLinkTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
 /** The address of a link: only `https://<cabinet>/a#<token>` (Ар33, spike 8). */
 export const artifactLinkUrl = (cabinetOrigin: string, token: string): string =>
   `${cabinetOrigin.replace(/\/$/, '')}/a#${token}`
+
+/** How long an invitation waits, and its address is kept (Ар35, §7.1). */
+export const artifactInviteDays = 30
+/** At most this many invitations a user sends a day, and an artifact gets a day (Ар35). */
+export const artifactInviteLimits = { perUserDay: 50, perArtifactDay: 10 } as const
+
+/** The kind of an artifact as the letter of an invitation says it — no title (Ар35). */
+export function artifactInviteKindWord(
+  kind: string,
+): 'документ' | 'макет' | 'таблицу' | 'холст' | 'фирменный стиль' | 'артефакт' {
+  switch (kind) {
+    case 'document':
+      return 'документ'
+    case 'mockup':
+      return 'макет'
+    case 'table':
+      return 'таблицу'
+    case 'canvas':
+      return 'холст'
+    case 'brand':
+      return 'фирменный стиль'
+    default:
+      return 'артефакт'
+  }
+}
+
+export const artifactInviteEmailSchema = z
+  .email()
+  .max(320)
+  .transform((email) => email.toLowerCase())
