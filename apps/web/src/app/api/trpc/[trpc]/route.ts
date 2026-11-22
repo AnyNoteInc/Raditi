@@ -6,6 +6,7 @@ import { env } from '@/env'
 import { MAX_TRPC_BODY_BYTES, withBodyLimit } from '@/server/body-limit'
 import { chatServices } from '@/server/chat-services'
 import { mcpServerServices } from '@/server/mcp-servers'
+import { withOriFactHeader } from '@/server/ori-fact-header'
 import { gitServices } from '@/server/git-services'
 import { paymentShop } from '@/server/payment-shop'
 import { refusedCrossOriginPost } from '@/server/trpc-origin'
@@ -35,7 +36,8 @@ function appUrl(): string | null {
 
 // The fetch adapter of tRPC reads a body whole and has no limit of its own. A POST of another
 // origin — a published page is the same site as the cabinet — is refused first (plan 69, Ст3).
-const handler = withBodyLimit(MAX_TRPC_BODY_BYTES, async (req) => {
+// An action with a fact of the ORI names it to the edge in its answer (88.16а-2).
+const serve = withOriFactHeader(async (req) => {
   const app = appUrl()
   // Without the settings the origin cannot be checked: a POST is not taken unchecked.
   if (app === null && req.method === 'POST') return new Response(null, { status: 503 })
@@ -60,5 +62,7 @@ const handler = withBodyLimit(MAX_TRPC_BODY_BYTES, async (req) => {
     },
   })
 })
+
+const handler = withBodyLimit(MAX_TRPC_BODY_BYTES, serve)
 
 export { handler as GET, handler as POST }

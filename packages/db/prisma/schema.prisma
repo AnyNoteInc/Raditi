@@ -3365,11 +3365,24 @@ model OriFact {
   addressees String[] @default([]) @db.Uuid
   detail     Json     @default("{}")
   keepUntil  DateTime @map("keep_until") @db.Timestamptz(6)
+  /// The random key web gives the edge in `X-Raditi-Fact` (88.16а-2): the port comes back by it.
+  edgeKey    String?  @unique @map("edge_key") @db.Uuid
 
   @@index([userId, at])
   @@index([artifactId, at], where: raw("artifact_id IS NOT NULL"))
   @@index([keepUntil])
   @@map("ori_facts")
+}
+
+/// The port of the client the edge saw for a fact (plan 88, 88.16а-2); append only.
+model OriFactPort {
+  edgeKey   String   @id @map("edge_key") @db.Uuid
+  port      Int
+  edgeAt    DateTime @map("edge_at") @db.Timestamptz(6)
+  keepUntil DateTime @map("keep_until") @db.Timestamptz(6)
+
+  @@index([keepUntil])
+  @@map("ori_fact_ports")
 }
 
 /// A message of a shared artifact kept in full 6 months (Decree № 256; Ар56, 88.16а-1): every

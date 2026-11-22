@@ -598,6 +598,12 @@ test('Traefik: static config only as flags, dashboard off by default, no Docker 
     '--accesslog.fields.headers.defaultmode=drop',
   ])
     assert.equal(command.filter((each) => each.startsWith(flag.split('=')[0])).length, 1, flag)
+  // One header is kept by name — web's random key of a fact of the ORI (88.16а-2) — and nothing
+  // else: a `keep` of another header would put Cookie, Referer or Location in the log.
+  assert.deepEqual(
+    command.filter((flag) => /--accesslog\.fields\.headers\./.test(flag) && /=keep$/i.test(flag)),
+    ['--accesslog.fields.headers.names.X-Raditi-Fact=keep'],
+  )
   assert.doesNotMatch(flags, /--configfile/i)
   assert.deepEqual(
     command.filter((flag) => flag.startsWith('--log.level')),

@@ -4,9 +4,12 @@ import {
   applyArtifactOps,
   attachMentionedArtifacts,
   chatArtifactAccess,
+  collectOriFactKeys,
   createPrismaClient,
+  exportOriJournals,
   listChatArtifacts,
   recordOriFact,
+  recordOriFactPorts,
   sweepOriJournals,
   type PrismaClient,
   type User,
@@ -462,6 +465,36 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
     // Without the collector's setting even an expired row stays.
     await expect(
       db.$executeRaw`DELETE FROM ori_facts WHERE user_id = ${userId}::uuid`,
+    ).rejects.toThrow(/append only/)
+  })
+
+  it('brings the client’s port of a fact back from the edge by its random key (88.16а-2)', async () => {
+    const userId = randomUUID()
+    const { keys } = await collectOriFactKeys(() =>
+      recordOriFact(db, { kind: 'sign_in', userId, origin: { ip: '203.0.113.9' } }),
+    )
+    expect(keys).toHaveLength(1)
+    const edgeAt = new Date()
+    const ports = [
+      { edgeKey: keys[0]!, port: 59154, edgeAt },
+      // A key no fact has (its transaction rolled back) is left out.
+      { edgeKey: randomUUID(), port: 1, edgeAt },
+    ]
+    expect(await recordOriFactPorts(db, ports)).toBe(1)
+    // The collector reads a line again after a failure: nothing twice.
+    expect(await recordOriFactPorts(db, ports)).toBe(0)
+    const day = 24 * 60 * 60 * 1000
+    const exported = await exportOriJournals(db, {
+      userId,
+      from: new Date(Date.now() - day),
+      to: new Date(Date.now() + day),
+      messages: false,
+    })
+    expect(exported.facts).toMatchObject([{ kind: 'sign_in', ip: '203.0.113.9', port: 59154 }])
+    // Our key is not the user's: it stays out of the export.
+    expect(JSON.stringify(exported)).not.toContain(keys[0]!)
+    await expect(
+      db.$executeRaw`UPDATE ori_fact_ports SET port = 2 WHERE edge_key = ${keys[0]!}::uuid`,
     ).rejects.toThrow(/append only/)
   })
 

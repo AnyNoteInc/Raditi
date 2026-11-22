@@ -1,0 +1,12 @@
+# /etc/systemd/system/raditi-ori-ports.timer: every 10 minutes, and after a boot. journald keeps the
+# edge's lines 90 days, so a long stop loses nothing; the cursor is in /var/lib/raditi/ori-ports.
+[Unit]
+Description=Raditi: ports of the facts of the ORI every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

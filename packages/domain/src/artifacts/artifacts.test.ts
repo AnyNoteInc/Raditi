@@ -501,9 +501,7 @@ describe('the section of artifacts in the instructions of a pass (88.7)', () => 
       text.indexOf('<project-artifacts>'),
       text.indexOf('</project-artifacts>'),
     )
-    expect(block).toContain(
-      '- 01960000-0000-7000-8000-0000000000a2 · table · «Прайс» · v2 · 20.11',
-    )
+    expect(block).toContain('- 01960000-0000-7000-8000-0000000000a2 · table · «Прайс» · v2 · 20.11')
     expect(block).not.toContain('a1')
     expect(block).not.toContain('Стиль')
     expect(text.match(/<\/project-artifacts>/g)).toHaveLength(1)

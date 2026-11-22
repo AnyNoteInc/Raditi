@@ -202,12 +202,7 @@ export async function dispatchArtifactComments(
   if (!artifact) throw artifactNotFound()
   // A recipient's new chat is of their personal workspace, not the owner's project (88.17а).
   const projectId = role === 'owner' ? artifact.projectId : null
-  const created = await createDialog(
-    db,
-    chat,
-    { userId, taskId, projectId, text, now },
-    binding,
-  )
+  const created = await createDialog(db, chat, { userId, taskId, projectId, text, now }, binding)
   if (created.requestEventId === undefined) throw new Error('The bound first request has no event')
   return {
     taskId: created.taskId,

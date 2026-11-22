@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { randomUUID } from 'node:crypto'
+
 import type { Prisma, PrismaClient } from './generated/prisma/client.ts'
 
 // The storage of an organiser of distribution of information (149-FZ, art. 10.1;
@@ -30,6 +33,37 @@ export interface OriOrigin {
 
 const ipOf = (ip: string | null | undefined) => (ip && /^[0-9a-fA-F:.]{2,45}$/.test(ip) ? ip : null)
 
+/**
+ * The keys of the facts one request of web wrote (88.16а-2): web gives them to the edge in the
+ * header `X-Raditi-Fact`, and the edge's access line brings the client's port back by them. Outside
+ * a request — core, a job — nothing collects them, and the fact keeps no port.
+ */
+const oriFactKeys = new AsyncLocalStorage<string[]>()
+
+/** Runs one request of web, collecting the edge keys of the facts it writes. */
+export async function collectOriFactKeys<T>(
+  work: () => Promise<T>,
+): Promise<{ result: T; keys: string[] }> {
+  const keys: string[] = []
+  const result = await oriFactKeys.run(keys, work)
+  return { result, keys }
+}
+
+/**
+ * The kinds whose action is the request of web itself; a payment applied while a client comes back
+ * from the shop is not that request, and the port of the request is not the payment's.
+ */
+const requestFacts: ReadonlySet<OriFactKind> = new Set([
+  'register',
+  'sign_in',
+  'email_change',
+  'account_deleted',
+  'access_open',
+  'access_grant',
+  'artifact_write',
+  'artifact_comment',
+])
+
 export async function recordOriFact(
   tx: Pick<Tx, '$executeRaw'>,
   input: {
@@ -44,12 +78,41 @@ export async function recordOriFact(
 ): Promise<void> {
   const now = input.now ?? new Date()
   const keepUntil = new Date(now.getTime() + oriTerms.factsDays * DAY_MS)
+  // A key only within a request of web: there is an edge line to find it in.
+  const keys = requestFacts.has(input.kind) ? oriFactKeys.getStore() : undefined
+  const edgeKey = keys ? randomUUID() : null
   await tx.$executeRaw`
-    INSERT INTO ori_facts (kind, user_id, ip, port, artifact_id, addressees, detail, keep_until)
+    INSERT INTO ori_facts (kind, user_id, ip, port, artifact_id, addressees, detail, keep_until, edge_key)
     VALUES (${input.kind}, ${input.userId}::uuid, ${ipOf(input.origin?.ip)}::inet,
             ${input.origin?.port ?? null}::int, ${input.artifactId ?? null}::uuid,
             ${[...(input.addressees ?? [])]}::uuid[], ${JSON.stringify(input.detail ?? {})}::jsonb,
-            ${keepUntil})`
+            ${keepUntil}, ${edgeKey}::uuid)`
+  if (keys && edgeKey) keys.push(edgeKey)
+}
+
+/** What the collector of the host read in one access line of the edge (88.16а-2). */
+export interface OriEdgePort {
+  edgeKey: string
+  port: number
+  edgeAt: Date
+}
+
+/**
+ * The collector's write: the port of each fact the edge answered, once. A key no fact has — its
+ * transaction rolled back — is left out; one already moved is skipped. Returns how many it kept.
+ */
+export async function recordOriFactPorts(
+  db: Pick<PrismaClient, '$executeRaw'>,
+  ports: readonly OriEdgePort[],
+): Promise<number> {
+  if (ports.length === 0) return 0
+  return db.$executeRaw`
+    INSERT INTO ori_fact_ports (edge_key, port, edge_at, keep_until)
+    SELECT p.edge_key, p.port, p.edge_at, f.keep_until
+    FROM unnest(${ports.map((p) => p.edgeKey)}::uuid[], ${ports.map((p) => p.port)}::int[],
+                ${ports.map((p) => p.edgeAt)}::timestamptz[]) AS p(edge_key, port, edge_at)
+    JOIN ori_facts f ON f.edge_key = p.edge_key
+    ON CONFLICT (edge_key) DO NOTHING`
 }
 
 /**
@@ -145,6 +208,7 @@ export async function sweepOriJournals(
   return db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('raditi.ori_sweep', 'on', true)`
     const facts = await tx.$executeRaw`DELETE FROM ori_facts WHERE keep_until < ${now}`
+    await tx.$executeRaw`DELETE FROM ori_fact_ports WHERE keep_until < ${now}`
     const messages = await tx.$executeRaw`DELETE FROM ori_messages WHERE keep_until < ${now}`
     return { facts, messages }
   })
@@ -152,16 +216,31 @@ export async function sweepOriJournals(
 
 /** The operator's export of one user over a period (Decree № 1526, p. 3; plan 88, 88.16а-3). */
 export async function exportOriJournals(
-  db: Pick<PrismaClient, 'oriFact' | 'oriMessage'>,
+  db: Pick<PrismaClient, 'oriFact' | 'oriMessage' | 'oriFactPort'>,
   input: { userId: string; from: Date; to: Date; messages: boolean },
 ) {
   const where = { userId: input.userId, at: { gte: input.from, lt: input.to } }
   const facts = await db.oriFact.findMany({ where, orderBy: { at: 'asc' } })
+  // The port the edge saw (88.16а-2), by the key; the key itself is ours, not the user's.
+  const keys = facts.flatMap((fact) => (fact.edgeKey ? [fact.edgeKey] : []))
+  const ports = new Map(
+    (
+      await db.oriFactPort.findMany({
+        where: { edgeKey: { in: keys } },
+        select: { edgeKey: true, port: true },
+      })
+    ).map((row) => [row.edgeKey, row.port]),
+  )
   const messages = input.messages
     ? await db.oriMessage.findMany({ where, orderBy: { at: 'asc' } })
     : []
   return {
-    facts: facts.map((fact) => ({ ...fact, id: String(fact.id), at: fact.at.toISOString() })),
+    facts: facts.map(({ edgeKey, ...fact }) => ({
+      ...fact,
+      port: fact.port ?? (edgeKey ? (ports.get(edgeKey) ?? null) : null),
+      id: String(fact.id),
+      at: fact.at.toISOString(),
+    })),
     messages: messages.map((m) => ({ ...m, id: String(m.id), at: m.at.toISOString() })),
   }
 }

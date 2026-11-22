@@ -181,7 +181,8 @@ export const artifactRefusalTexts = Object.freeze({
   ARTIFACT_LINK_GONE: 'Ссылка больше не работает. Попросите владельца прислать новую',
   ARTIFACT_GRANT_REFUSED: 'Такой доступ к этому артефакту дать нельзя',
   ARTIFACT_INVITE_GONE: 'Приглашение больше не действует',
-  ARTIFACT_COPY_REFUSED: 'Этот артефакт пока нельзя скопировать: в нём есть файлы или данные, которые нельзя перенести в ваше пространство',
+  ARTIFACT_COPY_REFUSED:
+    'Этот артефакт пока нельзя скопировать: в нём есть файлы или данные, которые нельзя перенести в ваше пространство',
 } satisfies Record<ArtifactRefusalCode, string>)
 
 /** A quote can become ambiguous as well as stale; the note editor needs its own next step. */
