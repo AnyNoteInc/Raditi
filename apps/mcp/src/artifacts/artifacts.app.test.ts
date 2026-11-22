@@ -140,7 +140,7 @@ function fakeStore(
         artifactId,
         anchor: { kind: 'quote' as const, block: 'intro', rev: 3, quote: 'Цены на лето' },
         body: 'Добавьте цены на июль',
-        ownerReplies: [],
+        replies: [],
         resolved: false,
         yourReplies: [],
       },
@@ -620,6 +620,25 @@ describe('the synonyms doc_* of plan 69 (Ар3)', () => {
     expect(answer(unknown)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
   })
 
+  it('marks a turn that read words of other people in a thread (88.17в, Ар25)', async () => {
+    const { store } = fakeStore()
+    store.comments.mockResolvedValueOnce([
+      {
+        threadId,
+        artifactId,
+        anchor: { kind: 'quote', block: 's1', rev: 1, quote: 'Цены на лето' },
+        body: 'Проверьте цены',
+        by: 'other',
+        replies: [],
+        resolved: false,
+        yourReplies: [],
+      },
+    ])
+    const server = await start(store)
+    await post(server, call('artifact_comments', { artifactId }))
+    expect(store.markReadOther).toHaveBeenCalledWith(base.taskId, base.turn)
+  })
+
   it('reads the notes sent to this chat and replies in one, closing it after the check (88.18г)', async () => {
     const { store } = fakeStore()
     const server = await start(store)
@@ -628,6 +647,8 @@ describe('the synonyms doc_* of plan 69 (Ар3)', () => {
       notes: [{ threadId, anchor: { kind: 'quote', quote: 'Цены на лето' } }],
     })
     expect(store.comments).toHaveBeenCalledWith(base.taskId, artifactId)
+    // The client's own words only: the turn is not marked as one that read others.
+    expect(store.markReadOther).not.toHaveBeenCalled()
     const reply = await post(
       server,
       call('artifact_reply', { threadId, opId, body: 'Добавил цены на июль', resolve: true }),

@@ -426,7 +426,8 @@ export function ArtifactComments({
               )}
               {!comment.resolved && (
                 <>
-                  {owner && comment.author.own && (
+                  {/* Own private notes, and threads of all for «Комментирует» (88.17а). */}
+                  {(comment.shared ? writable : owner && comment.author.own) && (
                     <FormControlLabel
                       label="Выбрать для отправки"
                       control={

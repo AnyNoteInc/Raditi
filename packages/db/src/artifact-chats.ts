@@ -41,7 +41,7 @@ async function chatOf(db: Pick<PrismaClient, 'task'>, taskId: string): Promise<C
  * Whether the data of the artifact's workspace may go to a chat of this one (Ар38): the data of a
  * client never go to a synthetic workspace. One workspace — always.
  */
-async function dataClassesAllow(
+export async function dataClassesAllow(
   db: Pick<PrismaClient, '$queryRaw'>,
   chatWorkspaceId: string,
   artifactWorkspaceId: string,

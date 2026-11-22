@@ -8,6 +8,7 @@ import {
   memoryEntriesOfPass,
   passUnattended,
   readArtifactCommentDispatch,
+  markArtifactReadOther,
   readyProjectFiles,
   taskAttachments,
   type PrismaClient,
@@ -27,7 +28,7 @@ import {
   type ProjectSectionFacts,
   type UnavailableRepositoryFacts,
 } from '@repo/domain'
-import { artifactMentionsOf } from '@repo/domain/artifacts'
+import { artifactCommentsByOthers, artifactMentionsOf } from '@repo/domain/artifacts'
 import { z } from 'zod'
 
 import type { PoolProbeClient } from '../llm/pool-probe-client.ts'
@@ -184,6 +185,13 @@ export async function readPassFacts(
       : null
   const dispatch = unattended ? null : await dispatchOfPass(db, task.id, answered, rows)
   if (dispatch === false) return null
+  // Threads with words of other people mark the turn as one that read others (Ар25, 88.17в).
+  if (dispatch && artifactCommentsByOthers(dispatch.artifactComments.notes))
+    await markArtifactReadOther(db, {
+      taskId: task.id,
+      turnNo: input.turnNo,
+      now: input.now.getTime(),
+    })
   const requests: ClientRequest[] = rows.map((row) => {
     const event = readFeedRow('feed.request', row.payload)
     const text =

@@ -3,6 +3,7 @@ import {
   artifactAddressees,
   artifactNamedByRun,
   admitInWindow,
+  markArtifactReadOther,
   applyArtifactOps,
   artifactBlocksChangedSince,
   artifactChatNews,
@@ -130,12 +131,7 @@ export function postgresArtifactsStore(
       await insertFeedEvent(db, { taskId, turnId: turn?.id ?? null, row })
     },
     markReadOther: async (taskId, turnNo) => {
-      await admitInWindow(db, {
-        key: `artifact-read-other:${taskId}:${turnNo}`,
-        limit: 1_000_000,
-        windowMs: DAY_MS,
-        now: now(),
-      })
+      await markArtifactReadOther(db, { taskId, turnNo, now: now() })
     },
     readOther: async (taskId, turnNo) =>
       (await db.rateLimit.findUnique({

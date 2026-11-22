@@ -101,6 +101,15 @@ export const artifactCommentBodySchema = z
   .max(artifactLimits.commentChars)
   .refine(storableText)
 
+/** Whether threads carry words of another person than the one who sent them (88.17в, Ар25). */
+export function artifactCommentsByOthers(
+  notes: readonly { by?: 'other'; replies: readonly (string | { by: 'other' })[] }[],
+): boolean {
+  return notes.some(
+    (note) => note.by === 'other' || note.replies.some((reply) => typeof reply !== 'string'),
+  )
+}
+
 /** Bounds an explicitly sent snapshot, both at storage and before it becomes turn data. */
 export const artifactCommentDispatchLimits = { threads: 16, entries: 48, bytes: 24 * 1024 } as const
 export const artifactCommentSnapshotSchema = z
@@ -109,7 +118,16 @@ export const artifactCommentSnapshotSchema = z
       id: z.uuid(),
       anchor: artifactCommentAnchorSchema,
       body: artifactCommentBodySchema,
-      replies: z.array(artifactCommentBodySchema).max(artifactCommentDispatchLimits.entries),
+      /** Written by another person with access, not the one who sent it (88.17а, Ар25). */
+      by: z.literal('other').optional(),
+      replies: z
+        .array(
+          z.union([
+            artifactCommentBodySchema,
+            z.strictObject({ body: artifactCommentBodySchema, by: z.literal('other') }),
+          ]),
+        )
+        .max(artifactCommentDispatchLimits.entries),
     }),
   )
   .min(1)

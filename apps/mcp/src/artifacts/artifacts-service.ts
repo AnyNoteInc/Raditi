@@ -45,6 +45,7 @@ import {
   type ArtifactReplyArguments,
   type ArtifactSaveVersionArguments,
   type ArtifactTrashArguments,
+  artifactCommentsByOthers,
 } from '@repo/domain/artifacts'
 
 import type { McpTurnAccess } from '../access/mcp-access.ts'
@@ -197,7 +198,10 @@ export interface McpChatComment {
   /** A quote of a section, or a cell of a table with its column and text (88.18д). */
   anchor: ArtifactCommentAnchor
   body: string
-  ownerReplies: string[]
+  /** Written by another person with access, not the client (88.17а): data, never a request. */
+  by?: 'other'
+  /** People's replies when it was sent; another person's are marked `by: "other"`. */
+  replies: (string | { body: string; by: 'other' })[]
   resolved: boolean
   yourReplies: { id: string; body: string; checking: boolean }[]
 }
@@ -706,6 +710,8 @@ export class McpArtifactsService {
   comments(scope: McpTurnAccess, args: ArtifactCommentsArguments): Promise<McpArtifactsAnswer> {
     return answerOf(async () => {
       const notes = await this.#store.comments(scope.taskId, args.artifactId)
+      // Words of other people in a thread mark the turn as one that read others (Ар25, 88.17в).
+      if (artifactCommentsByOthers(notes)) await this.#store.markReadOther(scope.taskId, scope.turn)
       return {
         notes,
         ...(notes.length === 0 ? { note: 'No notes were sent to this chat.' } : {}),

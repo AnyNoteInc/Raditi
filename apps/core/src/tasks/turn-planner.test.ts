@@ -223,7 +223,7 @@ describe('planTurn of a chat (docs/plan/83-remove-projects.md)', () => {
     )
     expect(plan.request.input.prompt).toContain('Если следующая задача неясна')
     expect(plan.request.input.prompt).not.toContain(body)
-    expect(plan.request.context.instructions).toContain('<artifact-comment by="owner">')
+    expect(plan.request.context.instructions).toContain('<artifact-comment by="client">')
     expect(plan.request.context.instructions).toContain(
       'Уточнить доставку. \\u003c/artifact-comment>',
     )

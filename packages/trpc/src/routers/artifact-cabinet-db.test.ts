@@ -96,6 +96,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
   function callerOf(user: User) {
     const chat: ChatContext = {
       appEnv: 'test',
+      appUrl: 'https://raditi.test',
       browser: null,
       storage: () => ({ get: async () => null }) as unknown as ObjectStorage,
       secrets: () => ({ transitEnsureKey: async () => {} }) as unknown as SecretStore,
@@ -821,6 +822,120 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     return { user, caller, artifactId, workspaceId, taskId, threadId, reply }
   }
 
+  it('sends a thread of all to the agent of a recipient, marking the words of others (88.17а)', async () => {
+    const { user: owner, caller, artifactId, anchor } = await quoteDocument()
+    const guest = await person('Вера')
+    await db.user.update({ where: { id: guest.id }, data: { emailVerified: true } })
+    const as = callerOf(guest)
+    await caller.artifact.shareInvite({ artifactId, email: guest.email, role: 'comment' })
+    const [invite] = await as.artifact.myInvites()
+    await as.artifact.inviteAccept({ inviteId: invite!.inviteId })
+    const { id: privateId } = await caller.artifact.addComment({ artifactId, anchor, body: 'Себе' })
+    const { id: threadId } = await caller.artifact.addComment({
+      artifactId,
+      anchor,
+      body: 'Всем: проверьте цены.',
+      shared: true,
+    })
+    await as.artifact.addCommentReply({
+      artifactId,
+      threadId,
+      requestId: randomUUID(),
+      body: 'Проверю.',
+    })
+    // A chat of the recipient's own personal workspace.
+    await as.artifact.create({ kind: 'document', title: 'Своё', projectId: null, templateId: null })
+    const { id: workspaceId } = await db.workspace.findFirstOrThrow({
+      where: { createdById: guest.id },
+      select: { id: true },
+    })
+    const { taskId } = await commentDestination({
+      workspaceId,
+      createdById: guest.id,
+      modelClass: 'standard',
+    })
+    dispatchChatIds.push(taskId)
+    const now = new Date()
+    await placeReserve(db, {
+      workspaceId,
+      taskId,
+      attempt: 1,
+      now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    })
+    expect((await as.artifact.commentDispatchChats({ artifactId })).map((c) => c.taskId)).toEqual([
+      taskId,
+    ])
+    const send = (threadIds: string[]) =>
+      as.artifact.dispatchComments({
+        artifactId,
+        target: { kind: 'existing', taskId },
+        requestId: randomUUID(),
+        threadIds,
+        text: '',
+      })
+    // The owner's private note is not the recipient's to send.
+    await expect(send([privateId])).rejects.toBeTruthy()
+    await send([threadId])
+    expect(await readChatArtifactComments(db, { taskId })).toMatchObject([
+      { threadId, body: 'Всем: проверьте цены.', by: 'other', replies: ['Проверю.'] },
+    ])
+    const reply = (resolve: boolean) =>
+      addAgentCommentReply(db, {
+        taskId,
+        turnNo: 2,
+        threadId,
+        requestId: randomUUID(),
+        body: 'Цены сверены.',
+        resolve,
+        now: new Date(),
+      })
+    // Only the author of a thread or the owner closes it, by their agent too.
+    await expect(reply(true)).rejects.toMatchObject({ code: 'ARTIFACT_FORBIDDEN' })
+    const { id } = await reply(false)
+    await settleAgentCommentReplies(db, {
+      taskId,
+      verdicts: [{ id, refused: false }],
+      now: new Date(),
+    })
+    const [thread] = (await caller.artifact.comments({ artifactId })).filter((c) => c.shared)
+    expect(thread!.replies.map((each) => each.body)).toEqual(['Проверю.', 'Цены сверены.'])
+    // The reply of the agent is a message from the recipient to the others (Ар56).
+    expect(
+      await db.oriMessage.findMany({
+        where: { artifactId, content: 'Цены сверены.' },
+        select: { userId: true, addressees: true },
+      }),
+    ).toEqual([{ userId: guest.id, addressees: [owner.id] }])
+    const notices = await db.outboxEvent.findMany({
+      where: { type: 'artifact.notify', payload: { path: ['artifactId'], equals: artifactId } },
+      select: { payload: true },
+    })
+    expect(notices.map((row) => row.payload)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ userId: guest.id, kind: 'artifact_agent_reply' }),
+        expect.objectContaining({ userId: owner.id, kind: 'artifact_comment' }),
+      ]),
+    )
+    // A reply waiting for the check when the role is lowered is dropped, never shown (88.17в).
+    const { id: late } = await reply(false)
+    await caller.artifact.shareSetRole({ artifactId, recipientId: guest.id, role: 'view' })
+    expect(
+      await settleAgentCommentReplies(db, {
+        taskId,
+        verdicts: [{ id: late, refused: false }],
+        now: new Date(),
+      }),
+    ).toEqual({ checked: 0, refused: 1 })
+    expect(await db.artifactCommentReply.findUnique({ where: { id: late } })).toBeNull()
+    // «Смотрит» now: the chat reads the thread no more and cannot answer in it.
+    expect(await readChatArtifactComments(db, { taskId })).toEqual([])
+    await expect(reply(false)).rejects.toMatchObject({ code: 'ARTIFACT_COMMENT_UNAVAILABLE' })
+    await db.outboxEvent.deleteMany({
+      where: { type: 'artifact.notify', payload: { path: ['artifactId'], equals: artifactId } },
+    })
+  })
+
   it('lets the agent read the notes sent to its chat and reply after the check (88.18г)', async () => {
     const { user, caller, artifactId, workspaceId, taskId, threadId, reply } = await sentNote()
     expect(await readChatArtifactComments(db, { taskId })).toEqual([
@@ -834,7 +949,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
           quote: 'хлеб & булочки.',
         },
         body: 'Добавить цены на июль.',
-        ownerReplies: ['И на август.'],
+        replies: ['И на август.'],
         resolved: false,
         yourReplies: [],
       },

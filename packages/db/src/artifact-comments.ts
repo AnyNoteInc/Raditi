@@ -22,8 +22,10 @@ import {
   type ArtifactCommentSnapshot,
   artifactForbidden,
   artifactRoleAtLeast,
+  type ArtifactRole,
 } from '@repo/domain/artifacts'
 
+import { dataClassesAllow } from './artifact-chats.ts'
 import { artifactRole, lockArtifact } from './artifacts.ts'
 import { artifactAddressees, oriTerms, recordOriFact, type OriOrigin } from './ori.ts'
 import { enqueueArtifactNotify } from './task-commands-outbox.ts'
@@ -110,13 +112,6 @@ async function checkedColumns(tx: Prisma.TransactionClient, artifactId: string) 
   ).columns
 }
 
-/** A note shows only its author's replies, oldest first. */
-const ownReplies = <S extends Prisma.ArtifactCommentReplySelect>(userId: string, select: S) => ({
-  where: { authorUserId: userId },
-  orderBy: [{ createdAt: 'asc' as const }, { id: 'asc' as const }],
-  select,
-})
-
 export async function readArtifactComments(db: Db, input: Owner) {
   // The access decision, notes, and checked words must describe the same snapshot.
   return db.$transaction(
@@ -184,28 +179,62 @@ export async function readArtifactComments(db: Db, input: Owner) {
   )
 }
 
-/** The user's own billable chat they may still open, in the artifact's workspace. */
+/**
+ * The user's own billable chat. The owner's is of the artifact's workspace (88.18в); a recipient's
+ * is of their own, one that may take the data of the artifact's (Ар38, 88.17а).
+ */
 async function requireOwnChat(
   tx: Prisma.TransactionClient,
-  input: { taskId: string; userId: string; workspaceId: string },
+  input: { taskId: string; userId: string; artifactId: string; artifactWorkspaceId: string },
 ) {
   const chat = await tx.task.findFirst({
     where: {
       id: input.taskId,
       ...accessibleTasks(input.userId),
-      workspaceId: input.workspaceId,
       createdById: input.userId,
       billable: true,
     },
-    select: { id: true },
+    select: { workspaceId: true },
   })
   if (!chat) throw artifactNotFound()
+  if (chat.workspaceId === input.artifactWorkspaceId) return
+  const role = await artifactRole(tx, input)
+  if (
+    role === null ||
+    role === 'owner' ||
+    !(await dataClassesAllow(tx, chat.workspaceId, input.artifactWorkspaceId))
+  )
+    throw artifactNotFound()
 }
 
-const authoredBy = (input: Owner) => ({
-  artifactId: input.artifactId,
-  authorUserId: input.userId,
+/**
+ * What a reader may send to an agent and have it answer (88.17а): threads of all from
+ * «Комментирует» up, private notes only their owner's own.
+ */
+const dispatchable = (role: ArtifactRole | null, userId: string) => ({
+  OR: [
+    ...(role !== null && artifactRoleAtLeast(role, 'comment') ? [{ shared: true }] : []),
+    ...(role === 'owner' ? [{ shared: false, authorUserId: userId }] : []),
+  ],
 })
+
+/** Of these threads, the ones the reader may still send, under the role they have now. */
+async function dispatchableThreads(
+  tx: Prisma.TransactionClient,
+  input: Owner & { threadIds: readonly string[] },
+): Promise<Set<string>> {
+  const role = await artifactRole(tx, input)
+  if (role === null || input.threadIds.length === 0) return new Set()
+  const rows = await tx.artifactComment.findMany({
+    where: {
+      artifactId: input.artifactId,
+      id: { in: [...input.threadIds] },
+      ...dispatchable(role, input.userId),
+    },
+    select: { id: true },
+  })
+  return new Set(rows.map((row) => row.id))
+}
 
 async function requireCommentRoom(tx: Prisma.TransactionClient, artifactId: string) {
   const [roots, replies] = await Promise.all([
@@ -369,32 +398,60 @@ const {
   bytes: dispatchMaxBytes,
 } = artifactCommentDispatchLimits
 
-/** The owner explicitly chose these notes, not everything a chat can read. The artifact lock
- * orders the snapshot with private replies and changes in the state of a note. */
+/**
+ * The reader explicitly chose these threads, not everything a chat can read: the owner's private
+ * notes, and threads of all from «Комментирует» up (88.17а). Words of other people are marked
+ * `by: "other"` — the agent never takes them for the client's (Ар25). The artifact lock orders the
+ * snapshot with replies and changes in the state of a thread. `workspaceId` is the chat's.
+ */
 export async function snapshotArtifactComments(
   tx: Prisma.TransactionClient,
   input: Owner & { workspaceId: string; threadIds: readonly string[] },
 ) {
-  const artifact = await lockNotedArtifact(tx, input)
-  if (artifact.workspaceId !== input.workspaceId) throw artifactNotFound()
+  const artifact = await lockNotesFor(tx, input, 'view')
+  if (
+    input.workspaceId !== artifact.workspaceId &&
+    (artifact.role === 'owner' ||
+      !(await dataClassesAllow(tx, input.workspaceId, artifact.workspaceId)))
+  )
+    throw artifactNotFound()
   if (input.threadIds.length === 0 || input.threadIds.length > dispatchMaxThreads)
     throw artifactCommentDispatchTooLarge()
   const roots = await tx.artifactComment.findMany({
-    where: { ...authoredBy(input), id: { in: [...input.threadIds] }, resolvedAt: null },
+    where: {
+      artifactId: input.artifactId,
+      id: { in: [...input.threadIds] },
+      resolvedAt: null,
+      ...dispatchable(artifact.role, input.userId),
+    },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     select: {
       id: true,
       anchor: true,
       body: true,
-      replies: { ...ownReplies(input.userId, { body: true }), take: dispatchMaxEntries },
+      authorUserId: true,
+      replies: {
+        // People's replies: the reader's own, and everyone's in a thread of all.
+        where: {
+          byAgent: false,
+          OR: [{ authorUserId: input.userId }, { thread: { shared: true } }],
+        },
+        orderBy: [{ createdAt: 'asc' as const }, { id: 'asc' as const }],
+        select: { body: true, authorUserId: true },
+        take: dispatchMaxEntries,
+      },
     },
   })
   if (roots.length !== input.threadIds.length) throw artifactCommentUnavailable()
-  const snapshot = roots.map(({ id, anchor, body, replies }) => ({
+  const own = (authorUserId: string | null) => authorUserId === input.userId
+  const snapshot = roots.map(({ id, anchor, body, authorUserId, replies }) => ({
     id,
     anchor,
     body,
-    replies: replies.map((reply) => reply.body),
+    ...(own(authorUserId) ? {} : { by: 'other' as const }),
+    replies: replies.map((reply) =>
+      own(reply.authorUserId) ? reply.body : { body: reply.body, by: 'other' as const },
+    ),
   }))
   if (
     roots.reduce((count, root) => count + 1 + root.replies.length, 0) > dispatchMaxEntries ||
@@ -433,14 +490,22 @@ export function readArtifactCommentDispatch(
       await requireOwnChat(tx, {
         taskId: input.taskId,
         userId: row.userId,
-        workspaceId: row.artifact.workspaceId,
+        artifactId: row.artifactId,
+        artifactWorkspaceId: row.artifact.workspaceId,
       })
-      await requireOwner(tx, row)
       if (Buffer.byteLength(JSON.stringify(row.notes)) > dispatchMaxBytes)
         throw artifactCommentUnavailable()
       const notes = artifactCommentSnapshotSchema.safeParse(row.notes)
       if (!notes.success) throw artifactCommentUnavailable()
-      return { artifactId: row.artifactId, notes: notes.data }
+      // Under the access of now: a thread the sender may no longer send is left out.
+      const allowed = await dispatchableThreads(tx, {
+        artifactId: row.artifactId,
+        userId: row.userId,
+        threadIds: notes.data.map((note) => note.id),
+      })
+      const kept = notes.data.filter((note) => allowed.has(note.id))
+      if (kept.length === 0) throw artifactNotFound()
+      return { artifactId: row.artifactId, notes: kept }
     },
     { isolationLevel: 'RepeatableRead' },
   )
@@ -477,7 +542,7 @@ export async function resolveArtifactComment(
 
 type AgentTurn = { taskId: string; turnNo: number }
 
-/** The chat and its author: the notes of an artifact are its owner's, the chat must be theirs. */
+/** The chat's author: the one who sent it the threads, whose chat it must be. */
 async function chatAuthorOf(tx: Prisma.TransactionClient, taskId: string) {
   const task = await tx.task.findUnique({
     where: { id: taskId },
@@ -487,7 +552,7 @@ async function chatAuthorOf(tx: Prisma.TransactionClient, taskId: string) {
   return task.createdById
 }
 
-/** A chat sees a note only while one of its requests carried it (88.18в) and the owner owns it. */
+/** A chat sees a thread only while one of its requests carried it (88.18в) and its sender may. */
 const sentToChat = (taskId: string, userId: string, threadId: string) => ({
   userId,
   request: { taskId },
@@ -497,8 +562,8 @@ const sentToChat = (taskId: string, userId: string, threadId: string) => ({
 const maxChatNotes = 50
 
 /**
- * `artifact_comments`: the notes the owner sent to this chat, latest snapshot first, with their
- * state now and this chat's replies. The owner's replies written after a dispatch never come here.
+ * `artifact_comments`: the threads the client sent to this chat, latest snapshot first, with their
+ * state now and this chat's replies. Replies written after a dispatch never come here.
  */
 export function readChatArtifactComments(db: Db, input: { taskId: string; artifactId?: string }) {
   return db.$transaction(
@@ -523,9 +588,9 @@ export function readChatArtifactComments(db: Db, input: { taskId: string; artifa
             await requireOwnChat(tx, {
               taskId: input.taskId,
               userId,
-              workspaceId: dispatch.artifact.workspaceId,
+              artifactId: dispatch.artifactId,
+              artifactWorkspaceId: dispatch.artifact.workspaceId,
             })
-            await requireOwner(tx, { artifactId: dispatch.artifactId, userId })
           } catch {
             allowed = false
           }
@@ -538,8 +603,16 @@ export function readChatArtifactComments(db: Db, input: { taskId: string; artifa
           if (!notes.has(note.id) && notes.size < maxChatNotes)
             notes.set(note.id, { artifactId: dispatch.artifactId, note })
       }
+      const allowed = new Set<string>()
+      for (const artifactId of new Set([...notes.values()].map((each) => each.artifactId))) {
+        const threadIds = [...notes.values()]
+          .filter((each) => each.artifactId === artifactId)
+          .map((each) => each.note.id)
+        for (const id of await dispatchableThreads(tx, { artifactId, userId, threadIds }))
+          allowed.add(id)
+      }
       const live = await tx.artifactComment.findMany({
-        where: { id: { in: [...notes.keys()] }, authorUserId: userId },
+        where: { id: { in: [...allowed] } },
         select: {
           id: true,
           resolvedAt: true,
@@ -560,7 +633,8 @@ export function readChatArtifactComments(db: Db, input: { taskId: string; artifa
             artifactId,
             anchor: note.anchor,
             body: note.body,
-            ownerReplies: note.replies,
+            ...(note.by === undefined ? {} : { by: note.by }),
+            replies: note.replies,
             resolved: row.resolvedAt !== null,
             yourReplies: row.replies.map((reply) => ({
               id: reply.id,
@@ -576,8 +650,9 @@ export function readChatArtifactComments(db: Db, input: { taskId: string; artifa
 }
 
 /**
- * `artifact_reply`: a reply of the agent in an open note sent to its chat. It waits for the check of
- * core (§7.3); the owner sees it, and the note closes if asked, only once it passes.
+ * `artifact_reply`: a reply of the agent in an open thread sent to its chat. It waits for the check
+ * of core (§7.3); people see it, and the thread closes if asked, only once it passes. Only one who
+ * may close a thread — its author or the owner — has it closed by their agent (88.17а).
  */
 export async function addAgentCommentReply(
   db: Db,
@@ -591,14 +666,28 @@ export async function addAgentCommentReply(
 ) {
   return db.$transaction(async (tx) => {
     const userId = await chatAuthorOf(tx, input.taskId)
-    const thread = await tx.artifactComment.findFirst({
-      where: { id: input.threadId, authorUserId: userId },
-      select: { artifactId: true },
+    const thread = await tx.artifactComment.findUnique({
+      where: { id: input.threadId },
+      select: { artifactId: true, authorUserId: true },
     })
     if (!thread) throw artifactCommentUnavailable()
-    const owner = { artifactId: thread.artifactId, userId }
-    const artifact = await lockNotedArtifact(tx, owner)
-    await requireOwnChat(tx, { taskId: input.taskId, userId, workspaceId: artifact.workspaceId })
+    const reader = { artifactId: thread.artifactId, userId }
+    let artifact
+    try {
+      artifact = await lockNotesFor(tx, reader, 'view')
+    } catch {
+      throw artifactCommentUnavailable()
+    }
+    await requireOwnChat(tx, {
+      taskId: input.taskId,
+      userId,
+      artifactId: thread.artifactId,
+      artifactWorkspaceId: artifact.workspaceId,
+    })
+    const may = await dispatchableThreads(tx, { ...reader, threadIds: [input.threadId] })
+    if (!may.has(input.threadId)) throw artifactCommentUnavailable()
+    if (input.resolve && artifact.role !== 'owner' && thread.authorUserId !== userId)
+      throw artifactForbidden()
     const sent = await tx.artifactCommentDispatch.findFirst({
       where: { artifactId: thread.artifactId, ...sentToChat(input.taskId, userId, input.threadId) },
       select: { requestEventId: true },
@@ -661,7 +750,9 @@ export function pendingAgentCommentReplies(
 
 /**
  * What core decided of the chat's replies: one that passed is shown and closes its note if asked;
- * a refused one is deleted with its text. Returns the counts.
+ * a refused one is deleted with its text. One whose sender may no longer send the thread — or
+ * close it, when asked — is dropped as refused: access is read again now (88.17в). Returns the
+ * counts.
  */
 export async function settleAgentCommentReplies(
   db: Db,
@@ -678,35 +769,102 @@ export async function settleAgentCommentReplies(
       }
       const reply = await tx.artifactCommentReply.findFirst({
         where,
-        select: { threadId: true, resolveOnPass: true },
+        select: {
+          threadId: true,
+          resolveOnPass: true,
+          body: true,
+          thread: { select: { artifactId: true, shared: true, authorUserId: true } },
+        },
       })
       if (!reply) return
+      const { thread } = reply
+      const sender = (
+        await tx.task.findUnique({ where: { id: input.taskId }, select: { createdById: true } })
+      )?.createdById
+      if (!sender || !(await senderMayStill(tx, { taskId: input.taskId, sender, reply }))) {
+        refused += (await tx.artifactCommentReply.deleteMany({ where })).count
+        return
+      }
       await tx.artifactCommentReply.updateMany({ where, data: { pendingAt: null } })
       if (reply.resolveOnPass)
         await tx.artifactComment.updateMany({
           where: { id: reply.threadId, resolvedAt: null },
           data: { resolvedAt: input.now },
         })
-      // Its author is told the agent answered (Ар54): the note was theirs, the words are not said.
-      const thread = await tx.artifactComment.findUnique({
-        where: { id: reply.threadId },
-        select: { artifactId: true, authorUserId: true },
-      })
-      if (thread?.authorUserId)
+      // Who sent the thread is told the agent answered (Ар54); the words are not said. In a thread of
+      // all the reply is a message to the others, written for the sender (Ар56, 88.17а).
+      {
         await enqueueArtifactNotify(
           tx,
           {
             artifactId: thread.artifactId,
-            userId: thread.authorUserId,
+            userId: sender,
             kind: 'artifact_agent_reply',
             actorUserId: null,
           },
           verdict.id,
         )
+        if (thread.shared)
+          await recordOriComment(tx, {
+            artifactId: thread.artifactId,
+            userId: sender,
+            origin: null,
+            body: reply.body,
+            key: verdict.id,
+          })
+      }
       checked += 1
     })
   }
   return { checked, refused }
+}
+
+/** Whether the sender of a thread may still have their agent's reply shown, and close it if asked. */
+async function senderMayStill(
+  tx: Prisma.TransactionClient,
+  input: {
+    taskId: string
+    sender: string
+    reply: {
+      threadId: string
+      resolveOnPass: boolean
+      thread: { artifactId: string; authorUserId: string | null }
+    }
+  },
+): Promise<boolean> {
+  const { artifactId, authorUserId } = input.reply.thread
+  const reader = { artifactId, userId: input.sender }
+  const artifact = await lockArtifact(tx, artifactId)
+  try {
+    await requireOwnChat(tx, {
+      taskId: input.taskId,
+      userId: input.sender,
+      artifactId,
+      artifactWorkspaceId: artifact.workspaceId,
+    })
+  } catch {
+    return false
+  }
+  const may = await dispatchableThreads(tx, { ...reader, threadIds: [input.reply.threadId] })
+  if (!may.has(input.reply.threadId)) return false
+  return (
+    !input.reply.resolveOnPass ||
+    authorUserId === input.sender ||
+    (await artifactRole(tx, reader)) === 'owner'
+  )
+}
+
+/** The mark of a turn that read words of other people (Ар25): it writes to no unnamed shared one. */
+export async function markArtifactReadOther(
+  db: Parameters<typeof admitInWindow>[0],
+  input: { taskId: string; turnNo: number; now: number },
+) {
+  await admitInWindow(db, {
+    key: `artifact-read-other:${input.taskId}:${input.turnNo}`,
+    limit: 1_000_000,
+    windowMs: 24 * 60 * 60 * 1000,
+    now: input.now,
+  })
 }
 
 /** A failed or cancelled turn's replies nobody will check: dropped (Ар16). */

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
   artifactRole,
   attachMentionedArtifacts,
+  dataClassesAllow,
   snapshotArtifactComments,
   type Prisma,
   type PrismaClient,
@@ -12,6 +13,7 @@ import {
   artifactCommentDispatchLimits,
   artifactNotFound,
   artifactOpReused,
+  artifactRoleAtLeast,
 } from '@repo/domain/artifacts'
 import { z } from 'zod'
 
@@ -49,11 +51,29 @@ const ownBillableChats = (userId: string) => ({
   billable: true,
 })
 
-/** Recent candidates, not an authorization to send. The message writer checks again under lock. */
+/**
+ * Who may send threads to an agent at all (88.17а): the owner their notes, «Комментирует» and up
+ * the threads of all. Which threads — `snapshotArtifactComments` decides under the lock.
+ */
+async function requireSender(
+  db: Parameters<typeof artifactRole>[0],
+  userId: string,
+  artifactId: string,
+) {
+  const role = await artifactRole(db, { userId, artifactId })
+  if (role === null || !artifactRoleAtLeast(role, 'comment')) throw artifactNotFound()
+  return role
+}
+
+/**
+ * Recent candidates, not an authorization to send: the user's own chats of the artifact's
+ * workspace, or — for a recipient — of their own workspaces. The message writer checks again
+ * under lock, and the data classes too.
+ */
 export async function commentDispatchChats(db: PrismaClient, userId: string, artifactId: string) {
   return db.$transaction(
     async (tx) => {
-      if ((await artifactRole(tx, { userId, artifactId })) !== 'owner') throw artifactNotFound()
+      const role = await requireSender(tx, userId, artifactId)
       const artifact = await tx.artifact.findUniqueOrThrow({
         where: { id: artifactId },
         select: { workspaceId: true },
@@ -65,15 +85,17 @@ export async function commentDispatchChats(db: PrismaClient, userId: string, art
         const recent = await tx.task.findMany({
           where: {
             ...ownBillableChats(userId),
-            workspaceId: artifact.workspaceId,
+            ...(role === 'owner' ? { workspaceId: artifact.workspaceId } : {}),
             status: { in: ['awaiting_user', 'awaiting_approval'] },
           },
           orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
           take: batchSize,
           ...(after === undefined ? {} : { cursor: { id: after }, skip: 1 }),
-          select: { id: true, title: true, status: true, needsBrowser: true },
+          select: { id: true, title: true, status: true, needsBrowser: true, workspaceId: true },
         })
         for (const task of recent) {
+          // A workspace that may not take the artifact's data is no choice (Ар38).
+          if (!(await dataClassesAllow(tx, task.workspaceId, artifact.workspaceId))) continue
           const target = await dialogMessageTarget(tx, task)
           if (target.kind === 'answer' || target.kind === 'ceiling')
             choices.push({ taskId: task.id, title: task.title })
@@ -129,8 +151,7 @@ function dispatchBinding(userId: string, input: DispatchInput, now: Date): Dialo
       const row = receipt.snapshot
       if (!row) throw artifactNotFound()
       const taskId = row.request.taskId
-      if ((await artifactRole(db, { userId, artifactId: row.artifactId })) !== 'owner')
-        throw artifactNotFound()
+      await requireSender(db, userId, row.artifactId)
       await authorizeChat(db, userId, taskId)
       if (row.sha256 !== sha256) throw artifactOpReused(requestId)
       return { taskId, requestEventId: String(row.requestEventId) }
@@ -162,8 +183,7 @@ export async function dispatchArtifactComments(
   const binding = dispatchBinding(userId, input, now)
   const earlier = await binding.replay(db)
   if (earlier) return { ...earlier, repeated: true }
-  if ((await artifactRole(db, { userId, artifactId: input.artifactId })) !== 'owner')
-    throw artifactNotFound()
+  const role = await requireSender(db, userId, input.artifactId)
 
   const { taskId } = input.target
   const text = input.text || 'Заметки к артефакту'
@@ -180,10 +200,12 @@ export async function dispatchArtifactComments(
     select: { projectId: true },
   })
   if (!artifact) throw artifactNotFound()
+  // A recipient's new chat is of their personal workspace, not the owner's project (88.17а).
+  const projectId = role === 'owner' ? artifact.projectId : null
   const created = await createDialog(
     db,
     chat,
-    { userId, taskId, projectId: artifact.projectId, text, now },
+    { userId, taskId, projectId, text, now },
     binding,
   )
   if (created.requestEventId === undefined) throw new Error('The bound first request has no event')

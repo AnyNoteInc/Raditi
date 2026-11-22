@@ -251,6 +251,20 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
         expect((await read(resumedAgain))?.artifactComments?.notes).toEqual(second.notes)
         expect((await read(await continueAfter(null)))?.artifactComments).toBeUndefined()
 
+        // Only the client's own words: the turn is not marked as one that read others (Ар25).
+        const readOther = { key: `artifact-read-other:${taskId}:0` }
+        expect(await db.rateLimit.findUnique({ where: readOther })).toBeNull()
+        // A reply of another person in the snapshot marks it (88.17в).
+        const othersNotes = [
+          { ...second.notes[0]!, replies: [{ body: 'Цены старые.', by: 'other' as const }] },
+        ]
+        await db.artifactCommentDispatch.update({
+          where: { requestEventId: second.requestEventId },
+          data: { notes: othersNotes },
+        })
+        expect((await read(second.requestEventId))?.artifactComments?.notes).toEqual(othersNotes)
+        expect(await db.rateLimit.findUnique({ where: readOther })).not.toBeNull()
+
         await db.member.delete({ where: { workspaceId_userId: { workspaceId, userId } } })
         await expect(read(first.requestEventId)).rejects.toMatchObject({
           code: 'ARTIFACT_NOT_FOUND',
@@ -264,6 +278,7 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
         ).toBeNull()
       } finally {
         await db.artifact.deleteMany({ where: { id: artifactId } })
+        await db.rateLimit.deleteMany({ where: { key: `artifact-read-other:${taskId}:0` } })
       }
     },
   )
