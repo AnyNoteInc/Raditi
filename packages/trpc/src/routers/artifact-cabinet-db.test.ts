@@ -197,12 +197,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     ).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
-  it('refuses a kind whose view has not shipped (Ар7)', async () => {
+  it('refuses a kind the registry does not know (Ар7)', async () => {
     const caller = callerOf(await person())
     await expect(
       caller.artifact.create({
-        kind: 'sitemap',
-        title: 'Структура',
+        kind: 'whiteboard' as never,
+        title: 'Доска',
         projectId: null,
         templateId: null,
       }),
@@ -1827,6 +1827,20 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       { userId: anna.id, artifactId: id },
     )
     expect(thumbs.thumbs.map((thumb) => thumb.width)).toEqual([1080, 1080])
+    // The size is a value of the frame: «Размер» writes it by `props` (Ар15).
+    await caller.artifact.write({
+      batch: {
+        artifactId: id,
+        opId: randomUUID(),
+        ops: [{ op: 'props', block: 'post', props: { size: 'banner' } }],
+      },
+    })
+    const resized = await canvasThumbs(
+      db,
+      { exists: async () => false },
+      { userId: anna.id, artifactId: id },
+    )
+    expect(resized.thumbs.map((thumb) => thumb.width)).toEqual([1200, 1080])
     // A PNG names its picture; without one there is nothing to draw.
     await expect(
       caller.artifact.exportStart({ artifactId: id, format: 'png' }),
@@ -1850,6 +1864,93 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     })
     await db.outboxEvent.deleteMany({ where: { dedupeKey: { contains: id } } })
     await db.outboxEvent.deleteMany({ where: { dedupeKey: { contains: exportId } } })
+  })
+
+  it('creates «Структура сайта» from its template and moves a page under another (88.27)', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const { id } = await caller.artifact.create({
+      kind: 'sitemap',
+      title: 'Структура сайта услуг',
+      projectId: null,
+      templateId: 'service-site',
+    })
+    const nodes = (await caller.artifact.read({ artifactId: id })).blocks
+    expect(nodes.map((node) => node.props.title)).toEqual([
+      'Главная',
+      'Услуги',
+      'Цены',
+      'Отзывы',
+      'Контакты',
+    ])
+    const prices = nodes.find((node) => node.props.title === 'Цены')!
+    await caller.artifact.write({
+      batch: {
+        artifactId: id,
+        opId: randomUUID(),
+        ops: [
+          {
+            op: 'replace',
+            block: prices.key,
+            ifRev: prices.rev,
+            content: prices.content ?? '',
+            props: { title: 'Цены', action: 'Записаться' },
+          },
+          // The parent is a value: «the last one wins» (Ар15).
+          { op: 'props', block: prices.key, props: { up: 'services' } },
+        ],
+      },
+    })
+    const moved = (await caller.artifact.read({ artifactId: id })).blocks.find(
+      (node) => node.key === prices.key,
+    )
+    expect(moved?.props).toMatchObject({ up: 'services', title: 'Цены', action: 'Записаться' })
+    // A structure is no site itself: «Сделать сайт» asks the agent for a canvas.
+    await expect(
+      caller.pages.publishArtifact({ artifactId: id, versionNo: null }),
+    ).rejects.toBeTruthy()
+  })
+
+  it('creates «Отчёт» from its template, draws its charts and publishes it as a page (88.28)', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const { id } = await caller.artifact.create({
+      kind: 'report',
+      title: 'Отчёт о продажах за месяц',
+      projectId: null,
+      templateId: 'sales-report',
+    })
+    const blocks = (await caller.artifact.read({ artifactId: id })).blocks
+    expect(blocks.map((block) => block.kind)).toEqual([
+      'section',
+      'chart',
+      'chart',
+      'columns',
+      'row',
+      'row',
+      'section',
+    ])
+    const drawn = await caller.artifact.chart({ artifactId: id, block: 'revenue' })
+    expect(drawn).toMatchObject({ state: 'drawn', width: 720, height: 360 })
+    if (drawn.state === 'drawn') expect(drawn.svg).toContain('Выручка по неделям')
+    // A chart that is not the spec is refused at the write.
+    await expect(
+      caller.artifact.write({
+        batch: {
+          artifactId: id,
+          opId: randomUUID(),
+          ops: [{ op: 'insert', after: null, kind: 'chart', content: '{"series": []}' }],
+        },
+      }),
+    ).rejects.toBeTruthy()
+    const published = await caller.pages.publishArtifact({ artifactId: id, versionNo: null })
+    const html = Buffer.from(
+      (await db.pageContent.findUniqueOrThrow({ where: { pageId: published.pageId } })).bytes,
+    ).toString('utf8')
+    expect(html).toContain('<h1>Отчёт о продажах за месяц</h1>')
+    expect(html.match(/<img src="\/_files\/a\/c-[0-9a-f]{32}\.svg"/g)).toHaveLength(2)
+    expect(html).toContain('<th scope="col">Товар</th>')
+    expect(html).not.toMatch(/<script/i)
   })
 
   it('creates «Схема» from its template and publishes its drawn picture as a page (88.24в)', async () => {

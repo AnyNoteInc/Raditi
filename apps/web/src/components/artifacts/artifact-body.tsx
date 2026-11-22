@@ -8,6 +8,8 @@ import { ArtifactBrand } from './brand/artifact-brand'
 import { ArtifactCanvas } from './canvas/artifact-canvas'
 import { ArtifactDiagram } from './diagram/artifact-diagram'
 import { ArtifactImages } from './images/artifact-images'
+import { ArtifactReport } from './report/artifact-report'
+import { ArtifactSitemap } from './sitemap/artifact-sitemap'
 import { ArtifactMockup } from './mockup/artifact-mockup'
 import { ArtifactSlides } from './slides/artifact-slides'
 import { ArtifactTable } from './table/artifact-table'
@@ -27,6 +29,10 @@ export function ArtifactBody(props: ArtifactBodyProps & { onAccessLost: () => vo
   if (props.artifact.kind === 'slides') return <ArtifactSlides {...props} />
   // «Изображение» too: pictures in the sizes of their places (88.26).
   if (props.artifact.kind === 'image') return <ArtifactImages {...props} />
+  // «Структура сайта»: an outline of the pages of a future site (88.27).
+  if (props.artifact.kind === 'sitemap') return <ArtifactSitemap {...props} />
+  // «Отчёт»: sections, charts drawn on the server and a table (88.28).
+  if (props.artifact.kind === 'report') return <ArtifactReport {...props} />
   switch (artifactKindSpecOf(props.artifact.kind)?.view) {
     case 'markdown':
       return (

@@ -82,6 +82,18 @@ export function artifactsSection(
           'A presentation is slides of 1280×720: one `frame` a slide (`props.name` — its title), its `html` inside — one `<section>` the size of the slide —, one common `style` at the top, the speaker notes as a `note` inside the frame. A slide is a heading and three to five short lines, text from 28 px; no scrolling, no animation that hides the text. Check every slide with `raditi_artifact_layout` (`frame`: its key): it reports a slide taller than 720 px.',
         ]
       : []),
+    // The charts and tables of «Отчёт» (§7.6, 88.28).
+    ...(released.includes('report')
+      ? [
+          'A report is `section` blocks (Markdown, `props.heading`), `chart` blocks and one table (`columns`, then a `row` a line) in the order of the report. A chart is JSON: {"type": "bar"|"line"|"pie", "title"?, "categories": [labels], "series": [{"name", "values": [a number a category]}], "unit"?, "stacked"?}; a pie is one series of no negative value; up to 50 categories and 8 series. Numbers only from the data the client gave or you found — name the source in the text.',
+        ]
+      : []),
+    // The pages of «Структура сайта» (§7.6, 88.27).
+    ...(released.includes('sitemap')
+      ? [
+          'The structure of a site is one `node` a page, in the order of the site: `props.title` (the page), `props.goal` (why a visitor comes), `props.action` (the one thing they should do), the brief of its text as content; `up` — the key of its parent page (absent — the top), `path` — its address (`/` the home). Five to twelve pages for a small business; a canvas of the site is made from it when the client asks.',
+        ]
+      : []),
     // The pictures of «Изображение» (§7.6, 88.26).
     ...(released.includes('image')
       ? [

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import {
   artifactFilesByIds,
   artifactRole,
@@ -8,7 +10,8 @@ import {
   type PrismaClient,
   artifactDiagramOf,
 } from '@repo/db'
-import { diagramPage, readingPage } from '@repo/doc-render'
+import { diagramPage, readingPage, reportPage, type ReportPagePart } from '@repo/doc-render'
+import { chartSvg } from '@repo/doc-render/chart'
 import {
   checkPageContent,
   DomainError,
@@ -33,6 +36,8 @@ import {
   tableOfBlocks,
   withArtifactFileAddresses,
   artifactSlidesOf,
+  artifactChartOf,
+  tableCellText,
 } from '@repo/domain/artifacts'
 
 // The bridge from an artifact to pages (docs/plan/88-artifacts.md, Ар2, Ар23, §7.10; slice 88.11б):
@@ -212,6 +217,57 @@ async function diagramPublication(
   return { bytes: encode(await diagramPage({ title: input.title, pictures })), files }
 }
 
+/**
+ * A version of «Отчёт» as a page (§7.10, 88.28): its sections, its charts drawn on the server — files
+ * of the site —, its table, in the order of the blocks. A chart whose spec does not parse is left
+ * out of the page rather than shown broken.
+ */
+async function reportPublication(input: { title: string; blocks: readonly VersionBlock[] }) {
+  const ordered = input.blocks
+    .filter((block) => block.parent === null && block.kind !== null)
+    .toSorted((a, b) =>
+      (a.rank ?? '') < (b.rank ?? '') ? -1 : (a.rank ?? '') > (b.rank ?? '') ? 1 : 0,
+    )
+  if (ordered.length === 0)
+    throw new DomainError('DOC_NOT_READY', 'The version has no text to publish', 409)
+  const table = tableOfBlocks(
+    ordered.flatMap((block) =>
+      block.kind === 'columns' || block.kind === 'row'
+        ? [{ key: block.key, kind: block.kind, rev: 0, content: block.content }]
+        : [],
+    ),
+  )
+  const files: { path: string; bytes: Uint8Array }[] = []
+  const parts: ReportPagePart[] = []
+  for (const block of ordered) {
+    if (block.kind === 'section') {
+      const heading = (block as { props?: Record<string, unknown> }).props?.heading
+      parts.push({
+        kind: 'section',
+        heading: typeof heading === 'string' && heading.trim() !== '' ? heading : null,
+        markdown: block.content ?? '',
+      })
+    } else if (block.kind === 'chart') {
+      const chart = artifactChartOf(block.content)
+      if (!chart.ok) continue
+      const picture = chartSvg(chart.spec)
+      const path = `/_files/a/c-${createHash('sha256').update(picture.svg).digest('hex').slice(0, 32)}.svg`
+      if (!files.some((file) => file.path === path))
+        files.push({ path, bytes: encode(picture.svg) })
+      parts.push({ kind: 'picture', src: path, width: picture.width, height: picture.height })
+    } else if (block.kind === 'columns' && table.columns.length > 0) {
+      parts.push({
+        kind: 'table',
+        head: table.columns.map((column) => column.name),
+        rows: table.rows.map((row) =>
+          table.columns.map((column) => tableCellText(column, row.cells[column.key])),
+        ),
+      })
+    }
+  }
+  return { bytes: encode(await reportPage({ title: input.title, parts })), files }
+}
+
 /** The CSS variables of the brand of the artifact's project; '' — none (slice 88.15а). */
 async function brandCssOf(db: PrismaClient, projectId: string | null): Promise<string> {
   const brand = await projectBrandOf(db, projectId)
@@ -261,6 +317,8 @@ export async function publishArtifactPage(
       frame: null,
       brandCss: await brandCssOf(db, artifact.projectId),
     }))
+  } else if (artifact.kind === 'report') {
+    ;({ bytes, files } = await reportPublication({ title: artifact.title, blocks: version.blocks }))
   } else if (artifact.kind === 'diagram') {
     ;({ bytes, files } = await diagramPublication(db, {
       artifactId: artifact.id,

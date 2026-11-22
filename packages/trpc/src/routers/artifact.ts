@@ -51,6 +51,7 @@ import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 
 import { canvasThumbs } from '../services/artifacts/canvas.ts'
+import { reportChart } from '../services/artifacts/chart.ts'
 import { chatArtifactsOf } from '../services/artifacts/chat-artifacts.ts'
 import {
   commentDispatchChats,
@@ -902,6 +903,35 @@ export const artifactRouter = router({
     )
     .query(({ ctx, input }) =>
       readArtifactDiagram(ctx.prisma, {
+        userId: ctx.user.id,
+        artifactId: input.artifactId,
+        block: input.block,
+      }),
+    ),
+
+  /** The picture of a chart of «Отчёт» (§7.13, 88.28): the checked spec drawn on the server. */
+  chart: consentedProcedure
+    .input(
+      z.strictObject({
+        artifactId,
+        block: artifactBlockKeySchema,
+        /** The revision the cabinet holds: a key of its cache only. */
+        rev: z.number().int().min(0).optional(),
+      }),
+    )
+    .output(
+      z.discriminatedUnion('state', [
+        z.strictObject({
+          state: z.literal('drawn'),
+          svg: z.string().max(512 * 1024),
+          width: z.number().int().positive(),
+          height: z.number().int().positive(),
+        }),
+        z.strictObject({ state: z.literal('failed') }),
+      ]),
+    )
+    .query(({ ctx, input }) =>
+      reportChart(ctx.prisma, {
         userId: ctx.user.id,
         artifactId: input.artifactId,
         block: input.block,

@@ -199,7 +199,8 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     label: 'Структура сайта',
     blocks: ['node'],
     view: 'canvas',
-    publish: 'site',
+    // Not a site itself: «Сделать сайт» asks the agent for a canvas of its pages (88.27).
+    publish: null,
     exports: [],
     wave: 2,
     sharableEdit: true,
@@ -238,6 +239,10 @@ export const artifactReleasedKinds: readonly ArtifactKind[] = Object.freeze([
   'slides',
   // «Изображение» with 88.26б: pictures of HTML in the sizes of their places, «Скачать PNG».
   'image',
+  // «Структура сайта» with 88.27: the outline of the pages of a future site, «Сделать сайт».
+  'sitemap',
+  // «Отчёт» with 88.28: sections, charts drawn on the server and a table.
+  'report',
 ])
 
 export function artifactKindKnown(value: string): value is ArtifactKind {

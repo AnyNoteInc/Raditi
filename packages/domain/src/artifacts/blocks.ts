@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { docSectionKeySchema, sectionMarkdownProblem } from '../pages/doc.ts'
 import type { ArtifactBlockKind } from './kinds.ts'
 import { artifactLimits, artifactRenderLimits } from './limits.ts'
+import { artifactChartSpecSchema } from './report.ts'
 
 /**
  * The blocks of an artifact (docs/plan/88-artifacts.md, Ар14, Ар15, §7.1, §7.2): what the content
@@ -59,7 +60,15 @@ export const artifactBlockValuePropsSchemas = {
   columns: none,
   row: none,
   diagram: none,
-  node: place,
+  // A page of «Структура сайта» (88.27): its parent page (`up`, absent — the top) and its address.
+  node: place.extend({
+    // '' — no parent: a value is changed by `props`, which merges, so the top is said out loud.
+    up: z.union([artifactBlockKeySchema, z.literal('')]).optional(),
+    path: z
+      .string()
+      .regex(/^\/(?:[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)?$/, 'a path "/" or "/<segment>"')
+      .optional(),
+  }),
   chart: none,
 } satisfies Record<ArtifactBlockKind, z.ZodObject>
 
@@ -86,6 +95,8 @@ export const artifactBlockTextPropsSchemas = {
   node: z.strictObject({
     title: artifactTextPropSchema.optional(),
     goal: artifactTextPropSchema.optional(),
+    /** The one thing a visitor should do on the page: «Записаться», «Позвонить» (88.27). */
+    action: artifactTextPropSchema.optional(),
   }),
   chart: none,
 } satisfies Record<ArtifactBlockKind, z.ZodObject>
@@ -253,11 +264,16 @@ export function artifactBlockContentProblem(
       return content === '' ? null : 'not_empty'
     case 'note':
       return content.length > artifactLimits.commentChars ? 'too_large' : null
-    case 'settings':
-    case 'chart': {
+    case 'settings': {
       const value = jsonOf(content)
       if (value === undefined) return 'json'
       return jsonObject.safeParse(value).success ? null : 'shape'
+    }
+    // A chart of «Отчёт» is its narrow spec (88.28): what the server can draw.
+    case 'chart': {
+      const value = jsonOf(content)
+      if (value === undefined) return 'json'
+      return artifactChartSpecSchema.safeParse(value).success ? null : 'shape'
     }
     case 'columns': {
       const value = jsonOf(content)

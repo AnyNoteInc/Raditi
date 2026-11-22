@@ -143,7 +143,7 @@ describe('«Изображение» in the cabinet', () => {
     await waitFor(() => expect(write).toHaveBeenCalled())
     expect(write.mock.calls[0]![0]).toMatchObject({
       batch: {
-        ops: [{ op: 'replace', block: 'post', ifRev: 4, props: { name: 'Пост', size: 'banner' } }],
+        ops: [{ op: 'props', block: 'post', props: { size: 'banner' } }],
       },
     })
   })

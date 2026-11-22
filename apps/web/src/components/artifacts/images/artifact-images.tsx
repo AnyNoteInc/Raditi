@@ -86,18 +86,10 @@ export function ArtifactImages(props: ArtifactBodyProps & { onAccessLost: () => 
     }
   }
 
+  /** The size of a picture is a value of its frame: «the last one wins» (Ар15). */
   function resize(key: string, size: ArtifactImageSize) {
-    const frame = frameOf(key)
-    if (!frame) return
-    void apply([
-      {
-        op: 'replace',
-        block: key,
-        ifRev: frame.rev,
-        content: frame.content ?? '',
-        props: { ...(frame.props as Record<string, string | number | boolean>), size },
-      },
-    ])
+    if (!frameOf(key)) return
+    void apply([{ op: 'props', block: key, props: { size } }])
   }
 
   function add() {

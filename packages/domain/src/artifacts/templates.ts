@@ -49,6 +49,21 @@ const screen = (
   { kind: 'html', key: `${key}-html`, parent: key, content: html },
 ]
 
+/** A page of a structure of a site of a template (slice 88.27): its node with its brief. */
+const sitePage = (
+  key: string,
+  title: string,
+  goal: string,
+  action: string,
+  brief: string,
+  place: { up?: string; path?: string },
+): ArtifactTemplateBlock => ({
+  kind: 'node',
+  key,
+  content: brief,
+  props: { title, goal, action, ...place },
+})
+
 /** A slide of a presentation of a template (slice 88.25): its frame, its HTML and its notes. */
 const slide = (key: string, name: string, html: string, notes: string): ArtifactTemplateBlock[] => [
   { kind: 'frame', key, content: '', props: { name } },
@@ -418,6 +433,95 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
         content:
           '<section class="picture"><h1>[Ваше предложение]</h1><p>[Чем оно полезно]</p><p class="price">от [цена] ₽</p><p>[Как записаться]</p></section>',
       },
+    ],
+  },
+  {
+    id: 'service-site',
+    kind: 'sitemap',
+    title: 'Структура сайта услуг',
+    description: 'Главная, услуги, цены, отзывы и контакты — с целью и действием каждой страницы',
+    blocks: [
+      sitePage(
+        'home',
+        'Главная',
+        'Понять, что вы делаете',
+        'Записаться',
+        'Кто вы и чем полезны, три главные услуги, кнопка записи.',
+        { path: '/' },
+      ),
+      sitePage(
+        'services',
+        'Услуги',
+        'Выбрать услугу',
+        'Узнать цену',
+        'Каждая услуга: что входит, сколько длится, для кого.',
+        { up: 'home' },
+      ),
+      sitePage(
+        'prices',
+        'Цены',
+        'Узнать стоимость',
+        'Записаться',
+        'Таблица цен от и до, что входит в цену.',
+        { up: 'home' },
+      ),
+      sitePage(
+        'reviews',
+        'Отзывы',
+        'Поверить вам',
+        'Записаться',
+        'Пять-шесть отзывов с именами и фото, если клиенты согласны.',
+        { up: 'home' },
+      ),
+      sitePage(
+        'contacts',
+        'Контакты',
+        'Найти вас',
+        'Позвонить',
+        'Адрес, карта, телефон, часы работы, как добраться.',
+        { up: 'home' },
+      ),
+    ],
+  },
+  {
+    id: 'sales-report',
+    kind: 'report',
+    title: 'Отчёт о продажах за месяц',
+    description: 'Итоги месяца, график выручки, доля каналов и таблица по товарам',
+    blocks: [
+      section(
+        'Итоги месяца',
+        'За [месяц] выручка составила **[сумма] ₽** — на [N] % больше, чем месяцем раньше.',
+      ),
+      {
+        kind: 'chart',
+        key: 'revenue',
+        content: JSON.stringify({
+          type: 'bar',
+          title: 'Выручка по неделям',
+          categories: ['1 неделя', '2 неделя', '3 неделя', '4 неделя'],
+          series: [{ name: 'Выручка', values: [0, 0, 0, 0] }],
+          unit: '₽',
+        }),
+      },
+      {
+        kind: 'chart',
+        key: 'channels',
+        content: JSON.stringify({
+          type: 'pie',
+          title: 'Откуда клиенты',
+          categories: ['Сайт', 'Соцсети', 'Рекомендации'],
+          series: [{ name: 'Клиенты', values: [1, 1, 1] }],
+        }),
+      },
+      columns([
+        { key: 'item', name: 'Товар', type: 'text' },
+        { key: 'sold', name: 'Продано', type: 'number' },
+        { key: 'sum', name: 'Сумма', type: 'money' },
+      ]),
+      row({ item: '[Товар 1]', sold: 0, sum: '0.00' }),
+      row({ item: '[Товар 2]', sold: 0, sum: '0.00' }),
+      section('Что дальше', '- [Что сделать в следующем месяце]'),
     ],
   },
   {

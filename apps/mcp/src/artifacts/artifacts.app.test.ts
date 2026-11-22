@@ -336,11 +336,11 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
     ])
   })
 
-  it('refuses a kind whose view has not shipped (Ар7)', async () => {
+  it('refuses a kind the registry does not know (Ар7)', async () => {
+    // Every kind of the registry has shipped (88.28): a kind outside it is refused by the schema.
     const server = await start(fakeStore().store)
-    const res = await post(server, call('artifact_create', { kind: 'sitemap', title: 'Структура' }))
-    expect(res.body.result.isError).toBe(true)
-    expect(answer(res)).toMatchObject({ code: 'ARTIFACT_KIND_REFUSED' })
+    const res = await post(server, call('artifact_create', { kind: 'whiteboard', title: 'Доска' }))
+    expect(res.body.result?.isError ?? res.body.error !== undefined).toBe(true)
   })
 
   it('creates a table without a skeleton: its blocks go by artifact_edit (88.14)', async () => {

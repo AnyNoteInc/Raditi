@@ -172,20 +172,17 @@ describe('«Артефакты» (plan 88, Ар50)', () => {
     await waitFor(() => expect(restore).toHaveBeenCalled())
   })
 
-  it('marks the kinds that have not shipped «Скоро», and the agent starts in a new chat', async () => {
+  it('offers every kind of the registry, and the agent starts in a new chat', async () => {
     list.mockResolvedValue([row()])
     show()
     fireEvent.click(await screen.findByRole('button', { name: 'Создать' }))
     const dialog = await screen.findByRole('dialog', { name: 'Новый артефакт' })
-    expect(within(dialog).getByRole('radio', { name: /Структура сайта/ })).toHaveAttribute(
-      'aria-disabled',
-      'true',
-    )
-    // «Схема» shipped with 88.24в.
-    expect(within(dialog).getByRole('radio', { name: /Схема/ })).not.toHaveAttribute(
-      'aria-disabled',
-      'true',
-    )
+    // Every kind has shipped (88.28): none is marked «Скоро».
+    for (const name of [/Схема/, /Презентация/, /Изображение/, /Структура сайта/, /Отчёт/])
+      expect(within(dialog).getByRole('radio', { name })).not.toHaveAttribute(
+        'aria-disabled',
+        'true',
+      )
     expect(within(dialog).getByRole('radio', { name: /Документ/ })).toHaveAttribute(
       'aria-checked',
       'true',
