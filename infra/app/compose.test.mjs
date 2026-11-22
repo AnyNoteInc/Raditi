@@ -590,6 +590,19 @@ test('Traefik: static config only as flags, dashboard off by default, no Docker 
     '--providers.file.directory=/etc/traefik/dynamic',
   ])
     assert.ok(command.includes(flag), flag)
+  // The address of a link to an artifact stays out of the access log (plan 88, Ар33; spike 8):
+  // exactly one drop of the query and of the headers, never a config file that would replace the
+  // flags, and the log at INFO — DEBUG prints requests whole.
+  for (const flag of [
+    '--accesslog.fields.queryparameters.defaultmode=drop',
+    '--accesslog.fields.headers.defaultmode=drop',
+  ])
+    assert.equal(command.filter((each) => each.startsWith(flag.split('=')[0])).length, 1, flag)
+  assert.doesNotMatch(flags, /--configfile/i)
+  assert.deepEqual(
+    command.filter((flag) => flag.startsWith('--log.level')),
+    ['--log.level=INFO'],
+  )
   // A static config file would silently switch every flag off.
   for (const volume of volumes) assert.doesNotMatch(volume.target, /^\/etc\/traefik\/traefik\./)
   for (const variable of Object.keys(environment ?? {})) assert.doesNotMatch(variable, /^TRAEFIK_/)

@@ -33,6 +33,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import http from 'node:http'
+import http2 from 'node:http2'
 import https from 'node:https'
 import { connect, createServer } from 'node:net'
 import { networkInterfaces, tmpdir } from 'node:os'
@@ -308,6 +309,39 @@ function request(url, { method = 'GET', headers = {}, host, port, servername, ca
 }
 
 /** The error code of a TCP connection attempt, or 'connected'. */
+/**
+ * A GET over HTTP/2 (spike 8 of plan 88: the access log must drop the query of an h2 request too),
+ * or one the client abandons right after sending (`abort`): the status, or null for the abandoned.
+ */
+function h2Get({ host, port, servername, ca, path, abort = false }) {
+  return new Promise((resolve, reject) => {
+    const session = http2.connect(`https://${servername}:${port}`, {
+      ca,
+      servername,
+      createConnection: () => tls.connect({ host, port, servername, ca, ALPNProtocols: ['h2'] }),
+    })
+    session.on('error', (error) => (abort ? resolve(null) : reject(error)))
+    const stream = session.request({ ':method': 'GET', ':path': path })
+    if (abort) {
+      stream.on('error', () => {})
+      setTimeout(() => {
+        stream.close(http2.constants.NGHTTP2_CANCEL)
+        session.destroy()
+        resolve(null)
+      }, 50)
+      return
+    }
+    let status = 0
+    stream.on('response', (headers) => (status = Number(headers[':status'])))
+    stream.on('data', () => {})
+    stream.on('end', () => {
+      session.close()
+      resolve(status)
+    })
+    stream.on('error', reject)
+  })
+}
+
 function tcpConnect(host, port) {
   return new Promise((resolve) => {
     const socket = connect({ host, port, timeout: 5000 })
@@ -910,10 +944,18 @@ try {
       await edge(name, '/api/auth/reset-password/TOKENPATH123')
     await edge(DOMAIN, '/api/auth/verify-email?token=TOKENQUERY123')
     await edge(DOMAIN, '/api/health?probe=verify-edge')
+    // The page of a link to an artifact (plan 88, Ар33; spike 8): over HTTP/2 and abandoned by the
+    // client, the query stays out of the log as well.
+    const h2 = { host: edgeHost, port: PORTS.https, servername: DOMAIN, ca }
+    assert.ok((await h2Get({ ...h2, path: '/a?k=TOKENHTWO123' })) > 0, 'no answer over HTTP/2')
+    await h2Get({ ...h2, path: '/a?k=TOKENABORT123', abort: true })
     await sleep(1000)
     const logs = (await compose(['logs', 'traefik'])).stdout
     // assert.ok, not assert.match: a failure must not print the whole log
-    assert.ok(!/TOKENPATH123|TOKENQUERY123|probe=verify-edge/.test(logs), 'a token is logged')
+    assert.ok(
+      !/TOKENPATH123|TOKENQUERY123|probe=verify-edge|TOKENHTWO123|TOKENABORT123/.test(logs),
+      'a token is logged',
+    )
     assert.ok(/"RequestPath":"\/api\/health"/.test(logs), 'the access log is not written')
     assert.ok(/"RequestPath":"\/api\/auth\/verify-email"/.test(logs), 'the path is not logged')
   })
