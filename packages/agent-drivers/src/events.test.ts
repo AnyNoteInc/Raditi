@@ -9,7 +9,12 @@ import {
 } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
-import { events as boundedEvents, MAX_EVENTS_PER_LINE, MAX_JSONL_BYTES } from './jsonl.ts'
+import {
+  events as boundedEvents,
+  escapeControlsInStrings,
+  MAX_EVENTS_PER_LINE,
+  MAX_JSONL_BYTES,
+} from './jsonl.ts'
 import { createOpencodeDriver } from './opencode.ts'
 import { RESULT_SIZE_NOTE } from './output-schema.ts'
 
@@ -295,6 +300,35 @@ describe('untrusted stdout boundary', () => {
         JSON.stringify({ ...expectedResult, secret: 'must not pass' }),
       ),
     ).toBeNull()
+  })
+
+  // What GLM wrote in task 01a204e8 (22.11.2026): a multi-line client_message with real line
+  // breaks inside the JSON string, which JSON.parse refuses.
+  it('accepts a result whose strings hold raw line breaks and tabs, as the model meant them', () => {
+    const result = {
+      ...expectedResult,
+      client_message: 'Здравствуйте!\n\nПОДПИСКА:\n\t• Lite, "кавычки" и \\ слеш\r\n',
+    }
+    const raw = JSON.stringify({ ...expectedResult, client_message: '@' }).replace(
+      '"@"',
+      () => '"Здравствуйте!\n\nПОДПИСКА:\n\t• Lite, \\"кавычки\\" и \\\\ слеш\r\n"',
+    )
+    expect(() => JSON.parse(raw) as unknown).toThrow()
+    expect(driver.extractResult(turn(''), raw)).toEqual(result)
+    expect(driver.extractResult(turn(raw), null)).toEqual(result)
+    expect(driver.extractResult(turn(''), `\`\`\`json\n${raw}\n\`\`\``)).toEqual(result)
+    // The repair turns no other text into a result, and the schema still decides.
+    expect(driver.extractResult(turn(''), `prefix ${raw}`)).toBeNull()
+    expect(driver.extractResult(turn(''), raw.replace('"low"', '"lo\nw"'))).toBeNull()
+  })
+})
+
+describe('escapeControlsInStrings', () => {
+  it('escapes control characters inside strings only, and keeps escapes as they are', () => {
+    expect(escapeControlsInStrings('{\n  "a": "x\ny\tz\u0001",\n  "b": "\\"\n"\n}')).toBe(
+      '{\n  "a": "x\\ny\\tz\\u0001",\n  "b": "\\"\\n"\n}',
+    )
+    expect(escapeControlsInStrings('{"a":"\\\\"}\n')).toBe('{"a":"\\\\"}\n')
   })
 })
 
