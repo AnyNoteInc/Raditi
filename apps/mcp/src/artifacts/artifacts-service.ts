@@ -46,6 +46,8 @@ import {
   type ArtifactSaveVersionArguments,
   type ArtifactTrashArguments,
   artifactCommentsByOthers,
+  type ArtifactDiagramRenderRequest,
+  type ArtifactDiagramRenderResponse,
 } from '@repo/domain/artifacts'
 
 import type { McpTurnAccess } from '../access/mcp-access.ts'
@@ -139,6 +141,22 @@ export interface McpArtifactsStore {
     actor: Actor
   }): Promise<{ id: string; seq: number }>
   apply(batch: ArtifactBatch, actor: Actor): Promise<unknown>
+  /**
+   * The texts of «Схема» as this chat sees them (88.24б): its own text before the check, or the
+   * checked one; with the workspace of the artifact and whether a picture of each is kept.
+   */
+  diagramTexts(
+    taskId: string,
+    artifactId: string,
+  ): Promise<{
+    workspaceId: string
+    texts: { block: string; text: string; kept: McpKeptDiagram | null }[]
+  } | null>
+  saveDiagram(
+    artifactId: string,
+    text: string,
+    result: ArtifactDiagramRenderResponse,
+  ): Promise<void>
   claim(input: {
     artifactId: string
     block: string
@@ -311,13 +329,31 @@ const renderUnavailable = () =>
     503,
   )
 
+/** A kept picture of a text of «Схема», as the agent is told of it. */
+export type McpKeptDiagram =
+  { ok: true; width: number; height: number } | { ok: false; line: number | null; message: string }
+
+/** The browser worker's drawing of a diagram (`POST /v1/diagram`, 88.24а). */
+export type McpDiagramRenderer = (
+  request: ArtifactDiagramRenderRequest,
+) => Promise<ArtifactDiagramRenderResponse>
+
+/** Diagrams drawn after one write at most: a diagram is one block as a rule. */
+const DIAGRAMS_A_WRITE = 5
+
 export class McpArtifactsService {
   readonly #store: McpArtifactsStore
   readonly #render: McpFrameRenderer | null
+  readonly #diagram: McpDiagramRenderer | null
 
-  constructor(deps: { store: McpArtifactsStore; render?: McpFrameRenderer | null }) {
+  constructor(deps: {
+    store: McpArtifactsStore
+    render?: McpFrameRenderer | null
+    diagram?: McpDiagramRenderer | null
+  }) {
     this.#store = deps.store
     this.#render = deps.render ?? null
+    this.#diagram = deps.diagram ?? null
   }
 
   /** The renderer, or a refusal the agent reads; its own refusals become the artifact's words. */
@@ -602,8 +638,51 @@ export class McpArtifactsService {
       await this.#open(scope, args.artifactId, true)
       await this.#guardOthersText(scope, args.artifactId)
       const answer = await this.#store.apply(args, actorOf(scope))
-      return { ...(answer as object), ...(await this.#after(scope, args.artifactId)) }
+      const diagrams = await this.#diagrams(scope, args.artifactId)
+      return {
+        ...(answer as object),
+        ...(diagrams ? { diagrams } : {}),
+        ...(await this.#after(scope, args.artifactId)),
+      }
     })
+  }
+
+  /**
+   * A write to «Схема» is drawn at once (§7.5, 88.24б): the agent reads in the answer whether each
+   * diagram parsed, and the line of its error. The client sees the picture once the text is checked.
+   */
+  async #diagrams(scope: McpTurnAccess, artifactId: string) {
+    const target = await this.#store.diagramTexts(scope.taskId, artifactId)
+    if (target === null || target.texts.length === 0) return null
+    const told: Record<string, unknown>[] = []
+    for (const { block, text, kept } of target.texts.slice(0, DIAGRAMS_A_WRITE)) {
+      let result: McpKeptDiagram | null = kept
+      if (result === null && this.#diagram !== null) {
+        try {
+          const drawn = await this.#diagram({ workspaceId: target.workspaceId, source: text })
+          await this.#store.saveDiagram(artifactId, text, drawn)
+          result = drawn.ok
+            ? { ok: true, width: drawn.width, height: drawn.height }
+            : { ok: false, line: drawn.line, message: drawn.message }
+        } catch {
+          result = null
+        }
+      }
+      told.push(
+        result === null
+          ? { block, drawn: null, note: 'Not drawn now: the client sees the picture once it is.' }
+          : result.ok
+            ? { block, drawn: true, width: result.width, height: result.height }
+            : {
+                block,
+                drawn: false,
+                ...(result.line === null ? {} : { line: result.line }),
+                error: result.message,
+                fix: 'Fix the text of the diagram and write it again.',
+              },
+      )
+    }
+    return told
   }
 
   claim(scope: McpTurnAccess, args: ArtifactClaimArguments): Promise<McpArtifactsAnswer> {

@@ -15,7 +15,7 @@ const FORMAT_TAGS =
 const FENCE = /^\s*(`{3,}|~{3,})[ \t]*(?:mermaid)?[ \t]*\n([\s\S]*?)\n[ \t]*\1[ \t]*$/i
 /** `%%{init: …}%%` and its kin: a directive would change the labels, the font or the CSS. */
 const DIRECTIVE = /%%\{[\s\S]*?\}%%/g
-const NO_BREAK = /[   ]/g
+const NO_BREAK = /[\u00a0\u2007\u202f]/g
 
 /**
  * The text the engine sees (§7.13): no fence, no no-break space, no directive, no `config` of the
@@ -58,6 +58,8 @@ export function diagramErrorRu(line: number | null): string {
     ? 'Схема не нарисована: в тексте ошибка'
     : `Схема не нарисована: ошибка в строке ${line}`
 }
+
+export const ARTIFACT_DIAGRAM_PATH = '/v1/diagram'
 
 /** `POST /v1/diagram` of `apps/browser`: one text, drawn on the page of its workspace. */
 export const artifactDiagramRenderRequestSchema = z.strictObject({

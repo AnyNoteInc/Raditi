@@ -567,3 +567,12 @@ export type {
   Workspace,
   WorkspaceEnvVar,
 } from './generated/prisma/client.ts'
+export {
+  artifactDiagramJobSource,
+  artifactDiagramOf,
+  diagramSourceKey,
+  enqueueArtifactDiagram,
+  readArtifactDiagram,
+  saveArtifactDiagram,
+  type ArtifactDiagramView,
+} from './artifact-diagrams.ts'

@@ -16,6 +16,8 @@ import {
   insertFeedEvent,
   listChatArtifacts,
   readArtifact,
+  artifactDiagramOf,
+  saveArtifactDiagram,
   readChatArtifactComments,
   reserveArtifactFile,
   reserveArtifactImport,
@@ -110,6 +112,37 @@ export function postgresArtifactsStore(
       discardAgentArtifact(db, { artifactId, taskId, turnNo }),
     create: (input) => createArtifact(db, input),
     apply: (batch, actor) => applyArtifactOps(db, { batch, actor }),
+    diagramTexts: async (taskId, artifactId) => {
+      const artifact = await db.artifact.findUnique({
+        where: { id: artifactId },
+        select: { workspaceId: true, kind: true },
+      })
+      if (artifact?.kind !== 'diagram') return null
+      const blocks = await db.artifactBlock.findMany({
+        where: { documentId: artifactId, blockKind: 'diagram', deletedRev: null },
+        orderBy: [{ rank: 'asc' }, { sectionKey: 'asc' }],
+        select: { sectionKey: true, content: true, pendingContent: true, pendingTaskId: true },
+      })
+      const texts = []
+      for (const block of blocks) {
+        // The chat's own text before the check, or the checked one (Ар19).
+        const text = block.pendingTaskId === taskId ? block.pendingContent : block.content
+        if (!text || text.trim() === '') continue
+        const kept = await artifactDiagramOf(db, { artifactId, source: text })
+        texts.push({
+          block: block.sectionKey,
+          text,
+          kept: kept
+            ? kept.ok
+              ? { ok: true as const, width: kept.width ?? 1, height: kept.height ?? 1 }
+              : { ok: false as const, line: kept.errorLine, message: kept.errorMessage ?? '' }
+            : null,
+        })
+      }
+      return { workspaceId: artifact.workspaceId, texts }
+    },
+    saveDiagram: (artifactId, text, result) =>
+      saveArtifactDiagram(db, { artifactId, source: text, result }),
     claim: (input) => claimArtifactBlock(db, input),
     saveVersion: (artifactId, actor) => saveArtifactVersion(db, { artifactId, actor }),
     placeholders: (artifactId) => artifactPlaceholders(db, artifactId),

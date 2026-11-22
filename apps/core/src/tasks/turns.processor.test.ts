@@ -17,16 +17,25 @@ function processor() {
   const queue = { run: vi.fn(async () => 'moved' as const) }
   const notify = { run: vi.fn(async () => 'sent' as const) }
   const artifactNotify = { run: vi.fn(async () => {}) }
+  const artifactDiagram = { run: vi.fn(async () => {}) }
   return {
     passes,
     queue,
     notify,
     artifactNotify,
-    processor: new TurnsProcessor(passes, queue, notify, artifactNotify),
+    artifactDiagram,
+    processor: new TurnsProcessor(passes, queue, notify, artifactNotify, artifactDiagram),
   }
 }
 
 describe('TurnsProcessor', () => {
+  it('draws a picture of «Схема» the cabinet asked for (docs/plan/88, 88.24б)', async () => {
+    const { artifactDiagram, processor: worker } = processor()
+    const data = { artifactId: TASK, block: 'd1' }
+    await worker.process(job('artifact.diagram', data))
+    expect(artifactDiagram.run).toHaveBeenCalledWith(data)
+  })
+
   it('tells a reader of an artifact by its job (docs/plan/88, Ар54)', async () => {
     const { artifactNotify, processor: worker } = processor()
     const data = {

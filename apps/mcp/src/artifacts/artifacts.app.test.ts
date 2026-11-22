@@ -16,6 +16,7 @@ import {
   McpArtifactsService,
   type McpArtifactsStore,
   type McpChatArtifactAccess,
+  type McpDiagramRenderer,
   type McpFrameRenderer,
 } from './artifacts-service.ts'
 import { MCP_ARTIFACTS } from './artifacts.tokens.ts'
@@ -158,6 +159,9 @@ function fakeStore(
     readOther: vi.fn<S['readOther']>(async () => readOther),
     sharedWithOthers: vi.fn<S['sharedWithOthers']>(async () => false),
     namedThisPass: vi.fn<S['namedThisPass']>(async () => false),
+    // Not «Схема» by default (88.24б).
+    diagramTexts: vi.fn<S['diagramTexts']>(async () => null),
+    saveDiagram: vi.fn<S['saveDiagram']>(async () => undefined),
   } satisfies McpArtifactsStore
   return { store, rows }
 }
@@ -165,7 +169,7 @@ function fakeStore(
 async function start(
   store: McpArtifactsStore,
   scope: McpTurnAccess = base,
-  options: { worker?: boolean; render?: McpFrameRenderer } = {},
+  options: { worker?: boolean; render?: McpFrameRenderer; diagram?: McpDiagramRenderer } = {},
 ) {
   const access: McpAccessStore = {
     authenticate: async (value) => (value === token ? scope : null),
@@ -185,7 +189,11 @@ async function start(
     .useValue(access)
     .overrideProvider(MCP_ARTIFACTS)
     .useValue(
-      new McpArtifactsService({ store, ...(options.render ? { render: options.render } : {}) }),
+      new McpArtifactsService({
+        store,
+        ...(options.render ? { render: options.render } : {}),
+        ...(options.diagram ? { diagram: options.diagram } : {}),
+      }),
     )
   if (options.worker) builder = builder.overrideProvider(MCP_WEB).useValue({ call: vi.fn() })
   app = (await builder.compile()).createNestApplication({ logger: false })
@@ -414,6 +422,46 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
     expect(rows).toEqual([
       { type: 'feed.doc_touch', payload: { v: 1, docId: artifactId, revision: 5 } },
     ])
+  })
+
+  it('draws a write to «Схема» at once and tells the agent the line of its error (88.24б)', async () => {
+    const { store } = fakeStore()
+    const broken = 'flowchart LR\n  A --> ((('
+    store.diagramTexts.mockResolvedValue({
+      workspaceId: base.workspaceId,
+      texts: [
+        { block: 'd1', text: broken, kept: null },
+        { block: 'd2', text: 'flowchart LR\n  A --> B', kept: { ok: true, width: 80, height: 40 } },
+      ],
+    })
+    const diagram = vi.fn<McpDiagramRenderer>(async () => ({
+      ok: false,
+      reason: 'parse',
+      line: 2,
+      message: 'Parse error on line 2',
+    }))
+    const server = await start(store, base, { diagram })
+    const batch = {
+      artifactId,
+      opId: 'd-1',
+      ops: [{ op: 'replace', block: 'd1', ifRev: 1, content: broken }],
+    }
+    const res = await post(server, call('artifact_edit', batch))
+    expect(answer(res)).toMatchObject({
+      diagrams: [
+        { block: 'd1', drawn: false, line: 2, error: 'Parse error on line 2' },
+        { block: 'd2', drawn: true, width: 80, height: 40 },
+      ],
+    })
+    // Only the text without a kept picture is drawn, on the page of the artifact's workspace.
+    expect(diagram).toHaveBeenCalledTimes(1)
+    expect(diagram).toHaveBeenCalledWith({ workspaceId: base.workspaceId, source: broken })
+    expect(store.saveDiagram).toHaveBeenCalledWith(artifactId, broken, {
+      ok: false,
+      reason: 'parse',
+      line: 2,
+      message: 'Parse error on line 2',
+    })
   })
 
   it('passes a stale write back with the current block (Ар15)', async () => {

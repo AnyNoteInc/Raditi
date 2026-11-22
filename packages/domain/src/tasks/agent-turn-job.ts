@@ -96,6 +96,18 @@ export const artifactNotifyJobSchema = z.strictObject({
 })
 export type ArtifactNotifyJob = z.infer<typeof artifactNotifyJobSchema>
 
+/**
+ * A picture of «Схема» to draw (docs/plan/88-artifacts.md, §7.13, 88.24б): the cabinet asked for
+ * the checked text of a block and found no picture of it. core draws it by the browser worker and
+ * keeps it by the hash of the text. Ids only.
+ */
+export const ARTIFACT_DIAGRAM_JOB = 'artifact.diagram'
+export const artifactDiagramJobSchema = z.strictObject({
+  artifactId: z.uuid(),
+  block: z.string().min(1).max(40),
+})
+export type ArtifactDiagramJob = z.infer<typeof artifactDiagramJobSchema>
+
 export const CHAT_NOTIFY_JOB = 'chat.notify'
 export const CHAT_NOTIFY_DELAY_MS = 45_000
 export const chatNotifyKinds = ['answered', 'question', 'ready', 'failed', 'limit'] as const

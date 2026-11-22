@@ -76,6 +76,12 @@ export function artifactsSection(
           'When `raditi_artifact_layout` is offered, check every mockup or screen of a canvas you drew or changed with it (the mockup, or `frame`: the screen) and fix what it reports before you answer. When the task tool offers the helper `look`, ask it once at the end of such a turn to look at the pictures: give it the artifactId and the frame; at most 3 a turn.',
         ]
       : []),
+    // The rules of Mermaid the platform's renderer keeps (§7.6, 88.24; spike 7).
+    ...(released.includes('diagram')
+      ? [
+          'A diagram is one `diagram` block of Mermaid text (flowchart, sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, gantt, journey, timeline, mindmap, pie, quadrantChart, xychart): no ``` fence, no %%{init}%%, no config, icons or `click`; labels with brackets, quotes or commas go inside "…"; never `end` as an id; no `;` inside the text of a message; no HTML but <br>; the categories of an xychart in quotes; at most 200 edges. The platform draws it at once: the answer of `raditi_artifact_edit` says in `diagrams` whether it parsed and the line of an error — fix it and write again.',
+        ]
+      : []),
   ]
   const brand = extra.brand ?? null
   if (brand !== null) {

@@ -26,10 +26,16 @@ import {
   type BrowserVerifyResponse,
 } from '@repo/domain'
 import {
+  ARTIFACT_DIAGRAM_PATH,
   ARTIFACT_RENDER_PATH,
+  artifactDiagramRenderRequestSchema,
+  artifactDiagramRenderResponseSchema,
   artifactRenderCallMs,
+  artifactRenderLimits,
   artifactRenderRequestSchema,
   artifactRenderResponseSchema,
+  type ArtifactDiagramRenderRequest,
+  type ArtifactDiagramRenderResponse,
   type ArtifactRenderRequest,
   type ArtifactRenderResponse,
 } from '@repo/domain/artifacts'
@@ -43,7 +49,8 @@ import { browserWorkerOrigin } from './worker-url.ts'
 // know which. A failure is a DomainError with a fixed code and a fixed message: neither the token
 // nor the worker's address nor anything the worker sent back ever reaches an error.
 
-export type BrowserWorkerOperation = 'ensure' | 'close' | 'verify' | 'list' | 'action' | 'render'
+export type BrowserWorkerOperation =
+  'ensure' | 'close' | 'verify' | 'list' | 'action' | 'render' | 'diagram'
 
 /** How long each call may take, end to end (the answer read included). */
 export interface BrowserWorkerTimeouts {
@@ -57,6 +64,8 @@ export interface BrowserWorkerTimeouts {
   actionMs: number
   /** A frame of an artifact drawn at two widths (docs/plan/88-artifacts.md, §7.12). */
   renderMs: number
+  /** A diagram of «Схема»: 10 s of the engine and the wait for a free renderer (88.24). */
+  diagramMs: number
 }
 
 const COLD_START_MAX_MS = 90_000
@@ -70,6 +79,7 @@ export const browserWorkerTimeoutDefaults: Readonly<BrowserWorkerTimeouts> = Obj
   actionMs: browserSessionTimings.toolCallBudgetMs - 5_000,
   // The call of `artifact_layout` (20 s) and the wait for a free renderer.
   renderMs: artifactRenderCallMs + 15_000,
+  diagramMs: artifactRenderLimits.diagramRenderMs + 15_000 + 5_000,
 })
 
 /** The longest each call may be given: a slower call would outlive its caller. */
@@ -80,6 +90,7 @@ const timeoutMax: Readonly<BrowserWorkerTimeouts> = Object.freeze({
   listMs: COLD_START_MAX_MS,
   actionMs: browserSessionTimings.toolCallBudgetMs,
   renderMs: 90_000,
+  diagramMs: 60_000,
 })
 
 /**
@@ -142,6 +153,14 @@ export interface BrowserWorkerClient {
     request: ArtifactRenderRequest,
     options?: BrowserWorkerCallOptions,
   ): Promise<ArtifactRenderResponse>
+  /**
+   * `POST /v1/diagram`: the Mermaid text of «Схема» drawn and cleaned (88.24). A text that does not
+   * parse is an answer `{ ok: false, line }`; a refusal `RENDER_*` rejects with that code.
+   */
+  diagram(
+    request: ArtifactDiagramRenderRequest,
+    options?: BrowserWorkerCallOptions,
+  ): Promise<ArtifactDiagramRenderResponse>
 }
 
 export type BrowserClosed = z.infer<typeof browserCloseResponseSchema>
@@ -288,6 +307,16 @@ export function createBrowserWorkerClient(
     async render(request, callOptions) {
       const body = checked('render', artifactRenderRequestSchema, request)
       return call('render', artifactRenderResponseSchema, ARTIFACT_RENDER_PATH, body, callOptions)
+    },
+    async diagram(request, callOptions) {
+      const body = checked('diagram', artifactDiagramRenderRequestSchema, request)
+      return call(
+        'diagram',
+        artifactDiagramRenderResponseSchema,
+        ARTIFACT_DIAGRAM_PATH,
+        body,
+        callOptions,
+      )
     },
   }
 }

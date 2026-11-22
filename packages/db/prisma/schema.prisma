@@ -2636,6 +2636,7 @@ model Artifact {
   commentDispatches ArtifactCommentDispatch[]
   exports           ArtifactExport[]
   files             ArtifactFile[]
+  diagramRenders    ArtifactDiagramRender[]
 
   @@index([workspaceId, createdAt])
   @@index([taskId])
@@ -3403,4 +3404,25 @@ model OriMessage {
   @@index([userId, at])
   @@index([keepUntil])
   @@map("ori_messages")
+}
+
+/// The picture of a text of «Схема» (plan 88, §7.13, 88.24б), by the SHA-256 of the normalised text
+/// within its artifact: an SVG for `<img>`, or the error — its line for people, its words for the agent.
+model ArtifactDiagramRender {
+  artifactId   String   @map("artifact_id") @db.Uuid
+  sourceSha256 String   @map("source_sha256") @db.Char(64)
+  ok           Boolean
+  svg          String?
+  width        Int?
+  height       Int?
+  diagramType  String?  @map("diagram_type") @db.VarChar(40)
+  reason       String?  @db.VarChar(16)
+  errorLine    Int?     @map("error_line")
+  errorMessage String?  @map("error_message") @db.VarChar(300)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  artifact     Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+
+  @@id([artifactId, sourceSha256])
+  @@index([createdAt])
+  @@map("artifact_diagram_renders")
 }

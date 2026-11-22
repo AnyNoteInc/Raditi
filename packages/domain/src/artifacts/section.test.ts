@@ -36,3 +36,14 @@ describe('the notes supplied for a request', () => {
     expect(text).not.toContain('</artifact-comment>"')
   })
 })
+
+describe('the rules of diagrams in the section of artifacts (88.24)', () => {
+  it('gives the rules of Mermaid only when «Схема» is released', async () => {
+    const { artifactsSection } = await import('./section.ts')
+    expect(artifactsSection([], ['document'])).not.toContain('Mermaid')
+    const text = artifactsSection([], ['document', 'diagram'])
+    expect(text).toContain('- diagram (Схема)')
+    expect(text).toContain('never `end` as an id')
+    expect(text).toContain('`diagrams`')
+  })
+})

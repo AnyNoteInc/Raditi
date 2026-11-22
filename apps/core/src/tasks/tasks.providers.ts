@@ -1,6 +1,7 @@
 import { Counter, type Registry } from '@prometheus-io/client'
 import { Logger, type Provider } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
+import { createBrowserWorkerClient } from '@repo/browser-link'
 import type { PrismaClient } from '@repo/db'
 import type {
   JobQueue,
@@ -42,6 +43,7 @@ import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { QueueDrain } from './queue-drain.ts'
+import { ArtifactDiagram } from './artifact-diagram.ts'
 import { ArtifactNotify } from './artifact-notify.ts'
 import { ChatNotify } from './chat-notify.ts'
 import { NotificationDelivery, notificationDeliveryOf } from './notification-delivery.ts'
@@ -198,6 +200,20 @@ export const taskProviders: Provider[] = [
     useFactory: (prisma: PrismaClient, delivery: NotificationDelivery) =>
       new ArtifactNotify({ db: prisma, delivery }),
     inject: [PRISMA, NotificationDelivery],
+  },
+  {
+    // A picture of «Схема» the cabinet asked for (docs/plan/88-artifacts.md, §7.13, 88.24б).
+    provide: ArtifactDiagram,
+    useFactory: (prisma: PrismaClient, config: CoreConfig) => {
+      const client = config.browser
+        ? createBrowserWorkerClient({ baseUrl: config.browser.url, token: config.browser.token })
+        : null
+      return new ArtifactDiagram({
+        db: prisma,
+        draw: client ? (request) => client.diagram(request) : null,
+      })
+    },
+    inject: [PRISMA, CORE_CONFIG],
   },
   {
     // The queue of a chat after its pass ended (docs/plan/75-chat-input-output.md, ВВ2).

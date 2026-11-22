@@ -477,3 +477,34 @@ describe('the renderer of frames (docs/plan/88-artifacts.md, Ар32, §7.12)', (
     expect(calls).toHaveLength(0)
   })
 })
+
+describe('the diagrams of «Схема» (docs/plan/88-artifacts.md, §7.13, 88.24)', () => {
+  const request = {
+    workspaceId: '0196abcd-0000-7000-8000-0000000000bb',
+    source: 'flowchart LR\n  A[Заказ] --> B[Оплата]',
+  }
+
+  it('posts the text to /v1/diagram and reads a picture or an error with its line', async () => {
+    const picture = {
+      ok: true,
+      svg: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="5"/>',
+      width: 10,
+      height: 5,
+      type: 'flowchart-v2',
+    }
+    const { client, calls } = workerWith(() => json(picture))
+    await expect(client.diagram(request)).resolves.toEqual(picture)
+    expect(calls[0]!.url).toBe(`${BASE_URL}/v1/diagram`)
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual(request)
+    const broken = { ok: false, reason: 'parse', line: 2, message: 'Parse error on line 2' }
+    await expect(clientOf(json(broken)).diagram(request)).resolves.toEqual(broken)
+  })
+
+  it('refuses a text over the limit before any call', async () => {
+    const { client, calls } = workerWith(() => json({}))
+    await expect(client.diagram({ ...request, source: 'я'.repeat(50_001) })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+    expect(calls).toHaveLength(0)
+  })
+})
