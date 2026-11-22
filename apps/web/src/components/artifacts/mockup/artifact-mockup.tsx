@@ -13,12 +13,16 @@ import {
   type ArtifactElementAnchorInput,
 } from '@repo/domain/artifacts'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 
 import { useTRPC } from '@/trpc/client'
 
 import type { ArtifactBodyProps } from '../artifact-body-props'
-import { ArtifactComments } from '../artifact-comments'
+import {
+  ArtifactComments,
+  ArtifactSharingAvailable,
+  artifactNotesWritable,
+} from '../artifact-comments'
 import { EditFrame, type EditFrameHandle, type PickedElement } from './edit-frame'
 import { MockupCode } from './mockup-code'
 import { MockupFilesButton } from './mockup-files'
@@ -67,8 +71,10 @@ export function ArtifactMockup({
   const edit = useRef<EditFrameHandle>(null)
   const canEdit = artifactRoleAtLeast(artifact.role, 'edit')
   // Private notes to an element of the frame (88.18е): the owner's, picked in «Выбрать элемент».
+  const sharing = useContext(ArtifactSharingAvailable)
   const canComment =
-    artifact.role === 'owner' && artifactKindSpecOf(artifact.kind)?.notes === 'element'
+    (artifact.role === 'owner' || sharing) && artifactKindSpecOf(artifact.kind)?.notes === 'element'
+  const writable = canComment && artifactNotesWritable(artifact.role, sharing)
   const [commentDraft, setCommentDraft] = useState<{
     anchor: ArtifactElementAnchorInput
     label: string
@@ -247,7 +253,7 @@ export function ArtifactMockup({
             <Typography variant="body2" role="status" data-testid="mockup-picked">
               {mockupTexts.selected(picked.tag, picked.text)}
             </Typography>
-            {canComment && (
+            {writable && (
               <Button size="small" variant="outlined" onClick={noteToElement}>
                 Заметка к элементу
               </Button>

@@ -206,6 +206,8 @@ export const artifactRouter = router({
           id: z.uuid(),
           anchor: artifactCommentAnchorSchema,
           body: artifactCommentBodySchema,
+          shared: z.boolean(),
+          author: z.strictObject({ name: z.string(), own: z.boolean() }),
           resolved: z.boolean(),
           moved: z.boolean(),
           replies: z.array(
@@ -215,6 +217,9 @@ export const artifactRouter = router({
               createdAt: z.iso.datetime(),
               /** A reply of the owner's agent, shown after the check of core (88.18г). */
               byAgent: z.boolean(),
+              /** Who wrote it, in a thread of all (88.17а); empty of an agent. */
+              authorName: z.string(),
+              own: z.boolean(),
             }),
           ),
         }),
@@ -228,12 +233,19 @@ export const artifactRouter = router({
         artifactId,
         anchor: artifactCommentAnchorInputSchema,
         body: artifactCommentBodySchema,
+        /** A thread everyone with access sees (88.17а); absent — a private note of the owner. */
+        shared: z.boolean().optional(),
       }),
     )
     .output(z.strictObject({ id: z.uuid() }))
-    .mutation(({ ctx, input }) =>
-      createCabinetComment(ctx.prisma, { userId: ctx.user.id, ...input }),
-    ),
+    .mutation(({ ctx, input }) => {
+      if (input.shared) requireSharing(ctx)
+      return createCabinetComment(ctx.prisma, {
+        userId: ctx.user.id,
+        ...input,
+        origin: { ip: clientIp(ctx.headers) },
+      })
+    }),
 
   addCommentReply: consentedProcedure
     .input(
@@ -246,7 +258,11 @@ export const artifactRouter = router({
     )
     .output(z.strictObject({ id: z.uuid() }))
     .mutation(({ ctx, input }) =>
-      addArtifactCommentReply(ctx.prisma, { userId: ctx.user.id, ...input }),
+      addArtifactCommentReply(ctx.prisma, {
+        userId: ctx.user.id,
+        ...input,
+        origin: { ip: clientIp(ctx.headers) },
+      }),
     ),
 
   commentDispatchChats: consentedProcedure

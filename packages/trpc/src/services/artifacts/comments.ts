@@ -2,6 +2,7 @@ import {
   addArtifactComment,
   readArtifactComments,
   type ArtifactAnchorReaders,
+  type OriOrigin,
   type PrismaClient,
 } from '@repo/db'
 import { artifactElementOf } from '@repo/doc-bridge'
@@ -20,7 +21,12 @@ const quoteText = (markdown: string) => normalizeCommentQuote(artifactSectionTex
 
 export function createCabinetComment(
   db: PrismaClient,
-  input: Owner & { anchor: ArtifactCommentAnchorInput; body: string },
+  input: Owner & {
+    anchor: ArtifactCommentAnchorInput
+    body: string
+    shared?: boolean
+    origin?: OriOrigin | null
+  },
 ) {
   return addArtifactComment(db, input, anchorReaders)
 }
@@ -60,13 +66,21 @@ export async function cabinetComments(db: PrismaClient, input: Owner) {
         id: comment.id,
         anchor: anchor.data,
         body: comment.body,
+        // A thread of all names its people; a private note is the reader's own (88.17а).
+        shared: comment.shared,
+        author: {
+          name: comment.author?.name ?? '',
+          own: comment.authorUserId === input.userId,
+        },
         resolved: comment.resolvedAt !== null,
         moved: anchorMoved(anchor.data, blocks, columns),
-        replies: comment.replies.map(({ id, body, createdAt, byAgent }) => ({
+        replies: comment.replies.map(({ id, body, createdAt, byAgent, author, authorUserId }) => ({
           id,
           body,
           createdAt: createdAt.toISOString(),
           byAgent,
+          authorName: byAgent ? '' : (author?.name ?? ''),
+          own: !byAgent && authorUserId === input.userId,
         })),
       },
     ]

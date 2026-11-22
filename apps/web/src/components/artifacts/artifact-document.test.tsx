@@ -233,11 +233,22 @@ describe('the document of an artifact (88.10)', () => {
     async (outcome) => {
       const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
       const notes = [
-        { id: 'first', anchor, body: 'Уточнить адрес', resolved: false, moved: false, replies: [] },
+        {
+          id: 'first',
+          anchor,
+          body: 'Уточнить адрес',
+          shared: false,
+          author: { name: 'Анна', own: true },
+          resolved: false,
+          moved: false,
+          replies: [],
+        },
         {
           id: 'second',
           anchor,
           body: 'Уточнить время',
+          shared: false,
+          author: { name: 'Анна', own: true },
           resolved: false,
           moved: false,
           replies: [],
@@ -275,7 +286,16 @@ describe('the document of an artifact (88.10)', () => {
     const queryKey = ['artifact', 'comments']
     const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
     listNotes.mockResolvedValue([
-      { id: 'note', anchor, body: 'Уточнить адрес', resolved: false, moved: false, replies: [] },
+      {
+        id: 'note',
+        anchor,
+        body: 'Уточнить адрес',
+        shared: false,
+        author: { name: 'Анна', own: true },
+        resolved: false,
+        moved: false,
+        replies: [],
+      },
     ])
     try {
       const { lost, queryClient } = show(artifact())
@@ -303,7 +323,16 @@ describe('the document of an artifact (88.10)', () => {
   it('keeps a failed offline reply local until the user explicitly retries', async () => {
     const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
     listNotes.mockResolvedValue([
-      { id: 'note', anchor, body: 'Уточнить адрес', resolved: false, moved: false, replies: [] },
+      {
+        id: 'note',
+        anchor,
+        body: 'Уточнить адрес',
+        shared: false,
+        author: { name: 'Анна', own: true },
+        resolved: false,
+        moved: false,
+        replies: [],
+      },
     ])
     try {
       const { queryClient } = show(artifact())
@@ -340,7 +369,16 @@ describe('the document of an artifact (88.10)', () => {
   it('reuses an unconfirmed reply key after another text also fails', async () => {
     const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
     listNotes.mockResolvedValue([
-      { id: 'note', anchor, body: 'Уточнить адрес', resolved: false, moved: false, replies: [] },
+      {
+        id: 'note',
+        anchor,
+        body: 'Уточнить адрес',
+        shared: false,
+        author: { name: 'Анна', own: true },
+        resolved: false,
+        moved: false,
+        replies: [],
+      },
     ])
     try {
       show(artifact())
@@ -378,7 +416,16 @@ describe('the document of an artifact (88.10)', () => {
     const queryKey = ['artifact', 'comments']
     const anchor = { kind: 'quote', block: 'dostavka', rev: 3, quote: 'Звоним за полчаса.' }
     listNotes.mockResolvedValue([
-      { id: 'note', anchor, body: 'Уточнить адрес', resolved: false, moved: false, replies: [] },
+      {
+        id: 'note',
+        anchor,
+        body: 'Уточнить адрес',
+        shared: false,
+        author: { name: 'Анна', own: true },
+        resolved: false,
+        moved: false,
+        replies: [],
+      },
     ])
     const reply = Promise.withResolvers<{ id: string }>()
     replyToNote.mockReturnValueOnce(reply.promise)

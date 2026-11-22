@@ -18,9 +18,10 @@ export function artifactSharingOpen(appEnv: AppEnv): boolean {
   return !isProduction(appEnv) || artifactSharingInProduction
 }
 
-/** The roles a link or an invitation gives now (Ар36): «Комментирует» comes with Э10а. */
+/** The roles a link or an invitation gives (Ар36): «Комментирует» with the threads of Э10а. */
 export const artifactOpenGrantRoles = [
   'view',
+  'comment',
   'edit',
 ] as const satisfies readonly ArtifactGrantRole[]
 export type ArtifactOpenGrantRole = (typeof artifactOpenGrantRoles)[number]

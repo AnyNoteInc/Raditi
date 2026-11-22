@@ -20,9 +20,12 @@ import {
   type ArtifactCommentAnchor,
   type ArtifactCommentAnchorInput,
   type ArtifactCommentSnapshot,
+  artifactForbidden,
+  artifactRoleAtLeast,
 } from '@repo/domain/artifacts'
 
 import { artifactRole, lockArtifact } from './artifacts.ts'
+import { artifactAddressees, oriTerms, recordOriFact, type OriOrigin } from './ori.ts'
 import { accessibleTasks } from './chat-access.ts'
 import type { Prisma, PrismaClient } from './generated/prisma/client.ts'
 import { admitInWindow } from './page-passwords.ts'
@@ -40,6 +43,23 @@ async function lockOwnedArtifact(tx: Prisma.TransactionClient, input: Owner) {
   const artifact = await lockArtifact(tx, input.artifactId)
   await requireOwner(tx, input)
   return artifact
+}
+
+/**
+ * The artifact of a kind that takes notes, under its lock, for a reader of at least `needed`
+ * (88.17а): an owner's private note needs the owner, a shared thread «Комментирует».
+ */
+async function lockNotesFor(
+  tx: Prisma.TransactionClient,
+  input: Owner,
+  needed: 'view' | 'comment' | 'owner',
+) {
+  const artifact = await lockArtifact(tx, input.artifactId)
+  const role = await artifactRole(tx, input)
+  const notes = artifactKindSpecOf(artifact.kind)?.notes
+  if (role === null || !notes) throw artifactNotFound()
+  if (!artifactRoleAtLeast(role, needed)) throw artifactForbidden()
+  return { ...artifact, notes, role }
 }
 
 /** The owner's artifact of a kind that takes notes, under its lock, and what they anchor to. */
@@ -100,22 +120,44 @@ export async function readArtifactComments(db: Db, input: Owner) {
   // The access decision, notes, and checked words must describe the same snapshot.
   return db.$transaction(
     async (tx) => {
-      await requireOwner(tx, input)
+      const role = await artifactRole(tx, input)
+      if (role === null) throw artifactNotFound()
+      // The owner's private notes are theirs alone; a thread of all is seen by all (88.17а).
       const comments = await tx.artifactComment.findMany({
-        where: authoredBy(input),
+        where: {
+          artifactId: input.artifactId,
+          OR: [
+            { shared: true },
+            ...(role === 'owner' ? [{ shared: false, authorUserId: input.userId }] : []),
+          ],
+        },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: {
           id: true,
           blockKey: true,
           anchor: true,
           body: true,
+          shared: true,
           resolvedAt: true,
+          authorUserId: true,
+          author: { select: { name: true } },
           replies: {
             where: {
-              OR: [{ authorUserId: input.userId }, { byAgent: true, pendingAt: null }],
+              OR: [
+                { authorUserId: input.userId },
+                { byAgent: true, pendingAt: null },
+                { byAgent: false, thread: { shared: true } },
+              ],
             },
             orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-            select: { id: true, body: true, createdAt: true, byAgent: true },
+            select: {
+              id: true,
+              body: true,
+              createdAt: true,
+              byAgent: true,
+              authorUserId: true,
+              author: { select: { name: true } },
+            },
           },
         },
       })
@@ -218,11 +260,20 @@ async function storedAnchor(
 
 export async function addArtifactComment(
   db: Db,
-  input: Owner & { anchor: ArtifactCommentAnchorInput; body: string },
+  input: Owner & {
+    anchor: ArtifactCommentAnchorInput
+    body: string
+    /** A thread everyone with access sees (88.17а); absent — the owner's private note. */
+    shared?: boolean
+    origin?: OriOrigin | null
+  },
   readers: ArtifactAnchorReaders,
 ) {
   return db.$transaction(async (tx) => {
-    const { notes } = await lockNotedArtifact(tx, input)
+    const shared = input.shared === true
+    const { notes } = shared
+      ? await lockNotesFor(tx, input, 'comment')
+      : await lockNotedArtifact(tx, input)
     const { anchor } = input
     if (anchor.kind !== notes) throw artifactNotFound()
     if (secretInContent(input.body) || (anchor.kind === 'quote' && secretInContent(anchor.quote)))
@@ -242,30 +293,44 @@ export async function addArtifactComment(
     const stored = await storedAnchor(tx, input.artifactId, anchor, text, readers)
     if (stored.kind !== 'quote' && secretInContent(stored.text)) throw artifactSecretShape()
     await requireCommentRoom(tx, input.artifactId)
-    return tx.artifactComment.create({
+    const created = await tx.artifactComment.create({
       data: {
         artifactId: input.artifactId,
         authorUserId: input.userId,
         blockKey: anchor.block,
         anchor: stored,
         body: input.body,
+        shared,
       },
       select: { id: true },
     })
+    // A thread of all is a message between users (Ар56): kept in full 6 months.
+    if (shared)
+      await recordOriComment(tx, {
+        artifactId: input.artifactId,
+        userId: input.userId,
+        origin: input.origin ?? null,
+        body: input.body,
+      })
+    return created
   })
 }
 
 export async function addArtifactCommentReply(
   db: Db,
-  input: Owner & { threadId: string; requestId: string; body: string },
+  input: Owner & { threadId: string; requestId: string; body: string; origin?: OriOrigin | null },
 ) {
   return db.$transaction(async (tx) => {
-    await lockNotedArtifact(tx, input)
+    const { role } = await lockNotesFor(tx, input, 'view')
     const thread = await tx.artifactComment.findFirst({
-      where: { ...authoredBy(input), id: input.threadId },
-      select: { resolvedAt: true },
+      where: { artifactId: input.artifactId, id: input.threadId },
+      select: { resolvedAt: true, shared: true, authorUserId: true },
     })
-    if (!thread) throw artifactCommentUnavailable()
+    // A private note answers only its owner; a thread of all — anyone who comments (88.17а).
+    const allowed = thread?.shared
+      ? artifactRoleAtLeast(role, 'comment')
+      : role === 'owner' && thread?.authorUserId === input.userId
+    if (!thread || !allowed) throw artifactCommentUnavailable()
     const key = { threadId: input.threadId, requestId: input.requestId }
     const existing = await tx.artifactCommentReply.findUnique({
       where: { threadId_requestId: key },
@@ -279,10 +344,18 @@ export async function addArtifactCommentReply(
     if (thread.resolvedAt !== null) throw artifactCommentUnavailable()
     if (secretInContent(input.body)) throw artifactSecretShape()
     await requireCommentRoom(tx, input.artifactId)
-    return tx.artifactCommentReply.create({
+    const reply = await tx.artifactCommentReply.create({
       data: { ...key, authorUserId: input.userId, body: input.body },
       select: { id: true },
     })
+    if (thread.shared)
+      await recordOriComment(tx, {
+        artifactId: input.artifactId,
+        userId: input.userId,
+        origin: input.origin ?? null,
+        body: input.body,
+      })
+    return reply
   })
 }
 
@@ -374,10 +447,20 @@ export async function resolveArtifactComment(
   input: Owner & { commentId: string; resolved: boolean },
 ) {
   return db.$transaction(async (tx) => {
-    await lockOwnedArtifact(tx, input)
-    const where = { ...authoredBy(input), id: input.commentId }
-    const comment = await tx.artifactComment.findFirst({ where, select: { resolvedAt: true } })
-    if (comment === null) throw artifactNotFound()
+    const { role } = await lockNotesFor(tx, input, 'view')
+    const where = { artifactId: input.artifactId, id: input.commentId }
+    const comment = await tx.artifactComment.findFirst({
+      where,
+      select: { resolvedAt: true, shared: true, authorUserId: true },
+    })
+    // A thread of all is closed by its author or the owner; a private note by its owner (88.17а).
+    const allowed =
+      comment !== null &&
+      (comment.shared
+        ? role === 'owner' ||
+          (artifactRoleAtLeast(role, 'comment') && comment.authorUserId === input.userId)
+        : role === 'owner' && comment.authorUserId === input.userId)
+    if (!allowed) throw artifactNotFound()
     if ((comment.resolvedAt !== null) !== input.resolved)
       await tx.artifactComment.updateMany({
         where,
@@ -644,4 +727,28 @@ export async function dropStaleAgentCommentReplies(
       AND NOT EXISTS (
         SELECT 1 FROM tasks t
         WHERE t.id = r.author_task_id AND t.status::text IN ('preparing', 'running'))`
+}
+
+/** A comment or a reply in a thread of all: a message and a fact (Ар56, 88.17а). */
+async function recordOriComment(
+  tx: Prisma.TransactionClient,
+  input: { artifactId: string; userId: string; origin: OriOrigin | null; body: string },
+) {
+  const { owner, others } = await artifactAddressees(tx, input.artifactId)
+  const addressees = [owner, ...others].filter(
+    (id): id is string => id !== null && id !== input.userId,
+  )
+  if (addressees.length === 0) return
+  const keepUntil = new Date(Date.now() + oriTerms.messagesDays * 24 * 60 * 60 * 1000)
+  await tx.$executeRaw`
+    INSERT INTO ori_messages (artifact_id, user_id, kind, content, addressees, keep_until)
+    VALUES (${input.artifactId}::uuid, ${input.userId}::uuid, 'comment', ${input.body},
+            ${addressees}::uuid[], ${keepUntil})`
+  await recordOriFact(tx, {
+    kind: 'artifact_comment',
+    userId: input.userId,
+    origin: input.origin,
+    artifactId: input.artifactId,
+    addressees,
+  })
 }

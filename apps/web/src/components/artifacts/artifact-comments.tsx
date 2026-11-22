@@ -23,7 +23,16 @@ import {
   type ArtifactQuoteAnchor,
 } from '@repo/domain/artifacts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 
 import { DictationButton, withDictatedWords } from '@/components/chat/dictation-button'
 import { useTRPC, useTRPCClient } from '@/trpc/client'
@@ -73,6 +82,17 @@ export function useArtifactQuote(enabled: boolean) {
 }
 
 const failed = 'Не удалось сохранить заметку. Попробуйте ещё раз.'
+
+/**
+ * Threads other people see (docs/plan/88-artifacts.md, Э10а, 88.17а) are open here: the page says
+ * so from the flag of production; a tab beside a chat leaves the owner private notes only.
+ */
+export const ArtifactSharingAvailable = createContext(false)
+
+/** Whether a reader may write a note or a comment: the owner always, «Комментирует» in threads of all. */
+export function artifactNotesWritable(role: CabinetArtifact['role'], sharing: boolean): boolean {
+  return role === 'owner' || (sharing && (role === 'comment' || role === 'edit'))
+}
 
 /** The words of the panel by what notes of this kind anchor to (88.18а, 88.18д). */
 const noteTexts = {
@@ -142,6 +162,11 @@ export function ArtifactComments({
   const client = useQueryClient()
   const artifactId = artifact.id
   const texts = noteTexts[artifactKindSpecOf(artifact.kind)?.notes ?? 'quote']
+  const sharing = useContext(ArtifactSharingAvailable)
+  const owner = artifact.role === 'owner'
+  const writable = artifactNotesWritable(artifact.role, sharing)
+  // The owner chooses; another reader writes only into threads of all (88.17а).
+  const [forAll, setForAll] = useState(!owner)
   const query = trpc.artifact.comments.queryOptions({ artifactId })
   const list = useQuery({
     queryKey: query.queryKey,
@@ -222,7 +247,12 @@ export function ArtifactComments({
     if (!draft || !body.trim()) return
     setAddError(null)
     try {
-      await add.mutateAsync({ artifactId, anchor: draft, body })
+      await add.mutateAsync({
+        artifactId,
+        anchor: draft,
+        body,
+        ...(forAll && sharing ? { shared: true } : {}),
+      })
       setResolved(false)
       close()
       void reread()
@@ -301,7 +331,7 @@ export function ArtifactComments({
       sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, mb: 1 }}
     >
       <Typography component="h2" variant="subtitle1">
-        Личные заметки
+        {sharing ? 'Заметки и комментарии' : 'Личные заметки'}
       </Typography>
       <Box role="group" aria-label="Состояние заметок" sx={{ display: 'flex', gap: 1, my: 0.5 }}>
         <Button
@@ -352,6 +382,11 @@ export function ArtifactComments({
                 overflowWrap: 'anywhere',
               }}
             >
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                {comment.shared
+                  ? `${comment.author.own ? 'Вы' : comment.author.name || 'Пользователь'} · для всех`
+                  : 'Личная заметка'}
+              </Typography>
               <AnchorText anchor={comment.anchor} />
               {comment.moved && (
                 <Typography variant="caption" color="warning.main">
@@ -367,21 +402,21 @@ export function ArtifactComments({
                   aria-label="Ответы на заметку"
                   sx={{ listStyle: 'none', pl: 1.5, my: 1, borderLeft: 1, borderColor: 'divider' }}
                 >
-                  {comment.replies.map(({ id, body: text, byAgent }) => (
+                  {comment.replies.map(({ id, body: text, byAgent, authorName, own }) => (
                     <Typography
                       key={id}
                       component="li"
                       variant="body2"
                       sx={{ py: 0.5, whiteSpace: 'pre-wrap' }}
                     >
-                      {byAgent && (
+                      {(byAgent || comment.shared) && (
                         <Typography
                           component="span"
                           variant="caption"
                           color="text.secondary"
                           sx={{ display: 'block' }}
                         >
-                          Агент
+                          {byAgent ? 'Агент' : own ? 'Вы' : authorName || 'Пользователь'}
                         </Typography>
                       )}
                       {text}
@@ -391,35 +426,44 @@ export function ArtifactComments({
               )}
               {!comment.resolved && (
                 <>
-                  <FormControlLabel
-                    label="Выбрать для отправки"
-                    control={
-                      <Checkbox
-                        size="small"
-                        checked={selectedOpen.includes(comment.id)}
-                        disabled={selectionFull && !selectedOpen.includes(comment.id)}
-                        onChange={(_, checked) =>
-                          setSelected(
-                            checked
-                              ? [...selectedOpen, comment.id]
-                              : selectedOpen.filter((id) => id !== comment.id),
-                          )
-                        }
-                      />
-                    }
-                  />
-                  <Button size="small" onClick={() => setReply({ threadId: comment.id, body: '' })}>
-                    Ответить
-                  </Button>
+                  {owner && comment.author.own && (
+                    <FormControlLabel
+                      label="Выбрать для отправки"
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={selectedOpen.includes(comment.id)}
+                          disabled={selectionFull && !selectedOpen.includes(comment.id)}
+                          onChange={(_, checked) =>
+                            setSelected(
+                              checked
+                                ? [...selectedOpen, comment.id]
+                                : selectedOpen.filter((id) => id !== comment.id),
+                            )
+                          }
+                        />
+                      }
+                    />
+                  )}
+                  {(comment.shared ? writable : owner) && (
+                    <Button
+                      size="small"
+                      onClick={() => setReply({ threadId: comment.id, body: '' })}
+                    >
+                      Ответить
+                    </Button>
+                  )}
                 </>
               )}
-              <Button
-                size="small"
-                disabled={resolve.isPending}
-                onClick={() => void toggle(comment.id, comment.resolved)}
-              >
-                {comment.resolved ? 'Открыть заново' : 'Отметить решённой'}
-              </Button>
+              {(owner || (comment.shared && writable && comment.author.own)) && (
+                <Button
+                  size="small"
+                  disabled={resolve.isPending}
+                  onClick={() => void toggle(comment.id, comment.resolved)}
+                >
+                  {comment.resolved ? 'Открыть заново' : 'Отметить решённой'}
+                </Button>
+              )}
             </Box>
           ))}
         </Box>
@@ -522,6 +566,18 @@ export function ArtifactComments({
               disabled={add.isPending}
               onWords={(words) => setBody((written) => dictated(written, words))}
             />
+            {owner && sharing && (
+              <FormControlLabel
+                label="Видят все, у кого есть доступ"
+                control={
+                  <Checkbox
+                    checked={forAll}
+                    onChange={(event) => setForAll(event.target.checked)}
+                    disabled={add.isPending}
+                  />
+                }
+              />
+            )}
             {addError && (
               <Alert severity="error" sx={{ mt: 1 }}>
                 {addError}

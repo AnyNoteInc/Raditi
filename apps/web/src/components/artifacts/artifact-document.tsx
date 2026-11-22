@@ -20,12 +20,17 @@ import {
   type ArtifactQuoteAnchor,
 } from '@repo/domain/artifacts'
 import { useMutation } from '@tanstack/react-query'
-import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react'
+import { useContext, useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
-import { ArtifactComments, useArtifactQuote } from './artifact-comments'
+import {
+  ArtifactComments,
+  ArtifactSharingAvailable,
+  artifactNotesWritable,
+  useArtifactQuote,
+} from './artifact-comments'
 import { documentTexts, editorTexts } from './artifact-texts'
 import { SectionEditor, type SectionEditorHandle } from './editor/section-editor'
 import { mergeThree, wordDiff, type DiffPiece } from './merge'
@@ -464,9 +469,12 @@ export function ArtifactDocument({
   const [menu, setMenu] = useState<{ anchor: HTMLElement; block: Block } | null>(null)
   const [failed, setFailed] = useState(false)
   const canEdit = artifactRoleAtLeast(artifact.role, 'edit')
+  // The owner's notes, and threads of all where they are open (88.17а).
+  const sharing = useContext(ArtifactSharingAvailable)
   const canComment =
-    artifact.role === 'owner' && artifactKindSpecOf(artifact.kind)?.notes === 'quote'
-  const { root: quoteRoot, quote } = useArtifactQuote(canComment)
+    (artifact.role === 'owner' || sharing) && artifactKindSpecOf(artifact.kind)?.notes === 'quote'
+  const writable = canComment && artifactNotesWritable(artifact.role, sharing)
+  const { root: quoteRoot, quote } = useArtifactQuote(writable)
   const [commentDraft, setCommentDraft] = useState<ArtifactQuoteAnchor | null>(null)
   const sections = artifact.blocks.filter((block) => block.kind === 'section')
   const editingBlock = sections.find((block) => block.key === editing) ?? null
@@ -530,7 +538,7 @@ export function ArtifactDocument({
           const agent = agentOf(presence, block.key)
           const person = presence?.people.find((each) => !each.self && each.block === block.key)
           const agentHolds = block.hold === 'checking' || block.hold === 'claim'
-          const canAnchor = canComment && !block.checking
+          const canAnchor = writable && !block.checking
           if (editingBlock?.key === block.key)
             return (
               <SectionEditing

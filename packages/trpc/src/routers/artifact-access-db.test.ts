@@ -190,9 +190,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
       ).rejects.toMatchObject({ code: 'NOT_FOUND' })
       await expect(caller.artifact.trash({ artifactId })).rejects.toBeTruthy()
       await expect(caller.artifact.move({ artifactId, projectId: null })).rejects.toBeTruthy()
-      await expect(caller.artifact.comments({ artifactId })).rejects.toMatchObject({
-        code: 'NOT_FOUND',
-      })
+      // A recipient reads only threads of all (88.17a): the owner's private notes never.
+      if (caller === outsider)
+        await expect(caller.artifact.comments({ artifactId })).rejects.toMatchObject({
+          code: 'NOT_FOUND',
+        })
+      else expect(await caller.artifact.comments({ artifactId })).toEqual([])
     }
     // «Доступные мне», without the owner's project
     expect(await as.viewer.artifact.list({ filter: 'shared' })).toMatchObject([
@@ -507,5 +510,70 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
     expect(await chatArtifactAccess(db, { taskId, artifactId })).toBeNull()
     expect(viewer.id).not.toBe(editor.id)
     await db.task.delete({ where: { id: taskId } })
+  })
+
+  it('opens threads of all to everyone with access, writable by «Комментирует» (88.17а)', async () => {
+    const { owner, viewer, editor, as, artifactId } = await shared()
+    const view = await as.owner.artifact.shareLink({ artifactId, role: 'view', term: null })
+    await as.viewer.artifact.shareOpen({ token: view.token })
+    await as.owner.artifact.shareSetRole({ artifactId, recipientId: viewer.id, role: 'view' })
+    // «Комментирует» by an invitation: a new link would revoke the one before.
+    await as.owner.artifact.shareInvite({ artifactId, email: editor.email, role: 'comment' })
+    const [invite] = await as.editor.artifact.myInvites()
+    await as.editor.artifact.inviteAccept({ inviteId: invite!.inviteId })
+    const read = await as.owner.artifact.read({ artifactId })
+    const s1 = read.blocks.find((block) => block.key === 's1')!
+    const anchor = { kind: 'quote' as const, block: 's1', rev: s1.rev, quote: 'Текст' }
+
+    // The owner's private note stays theirs; a thread of all is seen by all.
+    await as.owner.artifact.addComment({ artifactId, anchor, body: 'Себе' })
+    const { id: threadId } = await as.owner.artifact.addComment({
+      artifactId,
+      anchor,
+      body: 'Всем: проверьте цены',
+      shared: true,
+    })
+    expect((await as.viewer.artifact.comments({ artifactId })).map((note) => note.body)).toEqual([
+      'Всем: проверьте цены',
+    ])
+    expect(
+      (await as.owner.artifact.comments({ artifactId })).map((note) => note.body).sort(),
+    ).toEqual(['Всем: проверьте цены', 'Себе'])
+    // «Смотрит» only reads; «Комментирует» writes a thread and replies.
+    await expect(
+      as.viewer.artifact.addComment({ artifactId, anchor, body: 'Я тоже', shared: true }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    await expect(
+      as.viewer.artifact.addCommentReply({
+        artifactId,
+        threadId,
+        requestId: randomUUID(),
+        body: 'Ответ',
+      }),
+    ).rejects.toMatchObject({ cause: { code: 'ARTIFACT_COMMENT_UNAVAILABLE' } })
+    await as.editor.artifact.addCommentReply({
+      artifactId,
+      threadId,
+      requestId: randomUUID(),
+      body: 'Цены верные',
+    })
+    const [thread] = await as.viewer.artifact.comments({ artifactId })
+    expect(thread).toMatchObject({
+      shared: true,
+      author: { name: 'Анна', own: false },
+      replies: [{ body: 'Цены верные', authorName: 'Вера', own: false }],
+    })
+    // A note of the owner is not anyone's to answer or close.
+    const mine = (await as.owner.artifact.comments({ artifactId })).find((n) => n.body === 'Себе')!
+    await expect(
+      as.editor.artifact.resolveComment({ artifactId, commentId: mine.id, resolved: true }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    // The thread and its reply are messages between users (Ар56).
+    expect(
+      (await db.oriMessage.findMany({ where: { artifactId, kind: 'comment' } })).map(
+        (m) => m.content,
+      ),
+    ).toEqual(['Всем: проверьте цены', 'Цены верные'])
+    expect(owner.id).not.toBe(editor.id)
   })
 })

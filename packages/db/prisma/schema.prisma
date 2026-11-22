@@ -3201,6 +3201,8 @@ model ArtifactComment {
   anchor       Json
   authorUserId String?   @map("author_user_id") @db.Uuid
   body         String    @db.VarChar(2000)
+  /// Seen by everyone with access (88.17а); false — the owner's private note.
+  shared       Boolean   @default(false)
   resolvedAt   DateTime? @map("resolved_at") @db.Timestamptz(6)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 

@@ -29,13 +29,17 @@ import {
   type TableSort,
 } from '@repo/domain/artifacts'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC, useTRPCClient } from '@/trpc/client'
 
 import type { ArtifactBodyProps } from '../artifact-body-props'
-import { ArtifactComments } from '../artifact-comments'
+import {
+  ArtifactComments,
+  ArtifactSharingAvailable,
+  artifactNotesWritable,
+} from '../artifact-comments'
 import { TableCards } from './table-cards'
 import { TableGrid } from './table-grid'
 import {
@@ -98,8 +102,10 @@ export function ArtifactTable({
   const client = useTRPCClient()
   const state = useTable(artifact, onChanged)
   // Private notes to a cell (88.18д): the owner's, as the notes to a quote of a document.
+  const sharing = useContext(ArtifactSharingAvailable)
   const canComment =
-    artifact.role === 'owner' && artifactKindSpecOf(artifact.kind)?.notes === 'cell'
+    (artifact.role === 'owner' || sharing) && artifactKindSpecOf(artifact.kind)?.notes === 'cell'
+  const writable = canComment && artifactNotesWritable(artifact.role, sharing)
   const [activeCell, setActiveCell] = useState<{ row: string; column: string } | null>(null)
   const onActiveCell = useCallback(
     (cell: { row: string; column: string } | null) => setActiveCell(cell),
@@ -317,7 +323,7 @@ export function ArtifactTable({
             {tableTexts.addRow}
           </Button>
         )}
-        {canComment && !cards && (
+        {writable && !cards && (
           <Button variant="text" color="inherit" disabled={!activeCell} onClick={noteToCell}>
             Заметка к ячейке
           </Button>
@@ -361,7 +367,7 @@ export function ArtifactTable({
               totals={totals.data?.totals ?? {}}
               onMessage={setMessage}
               onHeader={(column, at) => setHeader({ column, at })}
-              onActiveCell={canComment ? onActiveCell : undefined}
+              onActiveCell={writable ? onActiveCell : undefined}
             />
           )}
         </Box>

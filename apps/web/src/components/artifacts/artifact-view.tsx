@@ -9,6 +9,7 @@ import { AppIcon } from '@/components/application/app-icon'
 import { DictationAvailable } from '@/components/chat/dictation-button'
 import { useTRPC } from '@/trpc/client'
 
+import { ArtifactSharingAvailable } from './artifact-comments'
 import { ArtifactHistoryButton } from './artifact-history'
 import { ArtifactMoveButton } from './artifact-move'
 import { ArtifactCopyButton, ArtifactLeaveButton, ArtifactShareButton } from './artifact-share'
@@ -36,31 +37,33 @@ export function ArtifactView({
   const trash = useMutation(trpc.artifact.trash.mutationOptions())
   return (
     <DictationAvailable.Provider value={speech}>
-      <ArtifactPage
-        artifactId={artifactId}
-        actions={(artifact, reread) => (
-          <>
-            <ArtifactHistoryButton artifact={artifact} onChanged={reread} />
-            <ArtifactPublishButton artifact={artifact} />
-            <ArtifactMoveButton artifact={artifact} onChanged={reread} />
-            {sharing ? <ArtifactShareButton artifact={artifact} /> : null}
-            {sharing ? <ArtifactCopyButton artifact={artifact} /> : null}
-            {sharing ? <ArtifactLeaveButton artifact={artifact} /> : null}
-            {artifactRoleAtLeast(artifact.role, 'owner') ? (
-              <Button
-                variant="text"
-                color="inherit"
-                startIcon={<AppIcon name="trash" size={16} />}
-                onClick={() =>
-                  void trash.mutateAsync({ artifactId }).then(() => router.push('/artifacts'))
-                }
-              >
-                {galleryTexts.toTrash}
-              </Button>
-            ) : null}
-          </>
-        )}
-      />
+      <ArtifactSharingAvailable.Provider value={sharing}>
+        <ArtifactPage
+          artifactId={artifactId}
+          actions={(artifact, reread) => (
+            <>
+              <ArtifactHistoryButton artifact={artifact} onChanged={reread} />
+              <ArtifactPublishButton artifact={artifact} />
+              <ArtifactMoveButton artifact={artifact} onChanged={reread} />
+              {sharing ? <ArtifactShareButton artifact={artifact} /> : null}
+              {sharing ? <ArtifactCopyButton artifact={artifact} /> : null}
+              {sharing ? <ArtifactLeaveButton artifact={artifact} /> : null}
+              {artifactRoleAtLeast(artifact.role, 'owner') ? (
+                <Button
+                  variant="text"
+                  color="inherit"
+                  startIcon={<AppIcon name="trash" size={16} />}
+                  onClick={() =>
+                    void trash.mutateAsync({ artifactId }).then(() => router.push('/artifacts'))
+                  }
+                >
+                  {galleryTexts.toTrash}
+                </Button>
+              ) : null}
+            </>
+          )}
+        />
+      </ArtifactSharingAvailable.Provider>
     </DictationAvailable.Provider>
   )
 }

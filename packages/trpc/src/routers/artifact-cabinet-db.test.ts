@@ -409,7 +409,18 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     await expect(add(`${anchor.quote}\0`)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     const { id } = await add(' хлеб   & булочки. ')
     const read = () => caller.artifact.comments({ artifactId })
-    expect(await read()).toEqual([{ id, anchor, body, resolved: false, moved: false, replies: [] }])
+    expect(await read()).toEqual([
+      {
+        id,
+        anchor,
+        body,
+        shared: false,
+        author: { name: 'Анна', own: true },
+        resolved: false,
+        moved: false,
+        replies: [],
+      },
+    ])
 
     const other = callerOf(await person('Борис'))
     const set = { artifactId, commentId: id, resolved: true }
@@ -497,10 +508,19 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
         id: threadId,
         anchor,
         body,
+        shared: false,
+        author: { name: 'Анна', own: true },
         resolved: true,
         moved: false,
         replies: [
-          { id: saved.id, body: reply.body, createdAt: expect.any(String), byAgent: false },
+          {
+            id: saved.id,
+            body: reply.body,
+            createdAt: expect.any(String),
+            byAgent: false,
+            authorName: expect.any(String),
+            own: true,
+          },
         ],
       },
     ])
