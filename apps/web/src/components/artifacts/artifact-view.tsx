@@ -11,6 +11,7 @@ import { useTRPC } from '@/trpc/client'
 
 import { ArtifactHistoryButton } from './artifact-history'
 import { ArtifactMoveButton } from './artifact-move'
+import { ArtifactLeaveButton, ArtifactShareButton } from './artifact-share'
 import { ArtifactPublishButton } from './artifact-publish'
 import { ArtifactPage } from './artifact-page'
 import { galleryTexts } from './artifact-texts'
@@ -22,10 +23,13 @@ import { galleryTexts } from './artifact-texts'
 export function ArtifactView({
   artifactId,
   speech = false,
+  sharing = false,
 }: {
   artifactId: string
   /** Dictation into the fields of notes (SpeechKit, docs/plan/75, ВВ16). */
   speech?: boolean
+  /** Access of other users is open here (docs/plan/88-artifacts.md, 88.16; the flag of production). */
+  sharing?: boolean
 }) {
   const trpc = useTRPC()
   const router = useRouter()
@@ -39,6 +43,8 @@ export function ArtifactView({
             <ArtifactHistoryButton artifact={artifact} onChanged={reread} />
             <ArtifactPublishButton artifact={artifact} />
             <ArtifactMoveButton artifact={artifact} onChanged={reread} />
+            {sharing ? <ArtifactShareButton artifact={artifact} /> : null}
+            {sharing ? <ArtifactLeaveButton artifact={artifact} /> : null}
             {artifactRoleAtLeast(artifact.role, 'owner') ? (
               <Button
                 variant="text"

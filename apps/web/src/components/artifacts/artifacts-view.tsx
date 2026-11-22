@@ -32,6 +32,7 @@ import { SectionHeading } from '@/components/application/section-heading'
 import { useTRPC } from '@/trpc/client'
 
 import { ArtifactCreateDialog } from './artifact-create-dialog'
+import { ArtifactInvites } from './artifact-invites'
 import { ArtifactKindIcon } from './artifact-kind-icon'
 import { emptyTexts, galleryTexts } from './artifact-texts'
 
@@ -308,6 +309,8 @@ export function ArtifactsView({
         )}
       </Box>
 
+      {/* Invitations to the user's confirmed address (plan 88, Ар35): above everything. */}
+      <ArtifactInvites />
       {list.isError && <Alert severity="error">{galleryTexts.failed}</Alert>}
       {(any.isPending || list.isPending) && !list.isError && (
         <Skeleton variant="rounded" height={160} />

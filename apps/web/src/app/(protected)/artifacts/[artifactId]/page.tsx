@@ -1,9 +1,11 @@
+import { artifactSharingOpen } from '@repo/domain/artifacts'
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 
 import { ApplicationShell } from '@/components/application/application-shell'
 import { ArtifactView } from '@/components/artifacts/artifact-view'
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
+import { env } from '@/env'
 import { requireSession, UNAVAILABLE } from '@/lib/access'
 import { speechAvailable } from '@/server/speech-runtime'
 
@@ -29,6 +31,7 @@ export default async function ArtifactRoute({ params }: { params: Params }) {
         key={artifactId}
         artifactId={artifactId.toLowerCase()}
         speech={speechAvailable()}
+        sharing={artifactSharingOpen(env.web().appEnv)}
       />
     </ApplicationShell>
   )

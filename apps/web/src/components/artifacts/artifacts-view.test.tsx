@@ -53,6 +53,13 @@ vi.mock('@/trpc/client', () => ({
       create: mutation(create),
       trash: mutation(trash),
       restore: mutation(restore),
+      // Invitations (plan 88, 88.16-2): none here.
+      myInvites: {
+        queryKey: () => ['artifact', 'myInvites'],
+        queryOptions: () => ({ queryKey: ['artifact', 'myInvites'], queryFn: async () => [] }),
+      },
+      inviteAccept: mutation(vi.fn()),
+      inviteDecline: mutation(vi.fn()),
     },
     project: {
       list: { queryOptions: () => ({ queryKey: ['project', 'list'], queryFn: projects }) },
