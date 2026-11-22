@@ -39,7 +39,8 @@ describe.skipIf(!local)('presigned URLs on the local S3', () => {
     fetch(signed.url, {
       method: signed.method,
       headers,
-      body,
+      // A copy over a plain ArrayBuffer: `fetch` takes no view of a shared one.
+      body: body === undefined ? undefined : new Uint8Array(body),
       redirect: 'error',
       signal: AbortSignal.timeout(10_000),
     })
