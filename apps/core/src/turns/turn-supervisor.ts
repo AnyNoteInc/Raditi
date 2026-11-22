@@ -68,6 +68,7 @@ export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
 const presignTtlMs = (guard: LeaseGuard) => Math.min(MAX_PRESIGN_TTL_MS, guard.leaseRemainingMs)
 
 const renewLogger = new Logger('TurnLease')
+const supervisorLogger = new Logger('TurnSupervisor')
 
 /** What the caller of a turn may follow while it runs. */
 export interface TurnRunHooks {
@@ -196,13 +197,18 @@ export class TurnSupervisor {
           this.deps.snapshots.restoreSource(request.previous, presignTtlMs(guard)),
         )
         // Only the session comes back (TurnRestoreSource): the working copy of a turn with a
-        // repository comes from its bundle. A turn with one goes on from a checkpoint with the
-        // same branch, unless the repository of the chat changed since (ПР32) — then only the
-        // session of that checkpoint is taken. A turn without one never reads a working copy.
+        // repository comes from its bundle. A turn with one goes on from a checkpoint of a turn
+        // with a repository, unless the repository of the chat changed since (ПР32) — then only
+        // the session of that checkpoint is taken. A turn without one never reads a working copy.
+        // The name of the branch may differ: the chat's branch row was named after the agent
+        // renamed the chat (the chat of 21.11.2026); the bundle brings the working copy all the
+        // same, so only the session is taken and the pass goes on.
         if (plan.repository && plan.repository.repositoryChanged !== true) {
           const saved = source.manifest.git
-          if (saved === undefined || saved.branch !== plan.repository.branch)
+          if (saved === undefined)
             throw conflict('Previous checkpoint differs from the repository of the turn')
+          if (saved.branch !== plan.repository.branch)
+            supervisorLogger.warn(`turn_checkpoint_branch_renamed task=${labels.taskId}`)
         }
         // The data key leaves core only while this owner still holds the site.
         restore = {

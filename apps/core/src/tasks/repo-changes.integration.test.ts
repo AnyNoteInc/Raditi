@@ -150,10 +150,11 @@ describe.skipIf(!enabled)(
       expect(told).toHaveLength(1)
       expect(told[0]).toMatchObject({ type: 'feed.repo_changes', turnId, clientVisible: true })
       const own = await db.projectRepoBranch.findUniqueOrThrow({ where: { taskId } })
-      // The branch of the chat: its row by the chat, its name by the chat's title (ПР13).
+      // The branch of the chat: its row by the chat, its name the one the turn worked under —
+      // the plan's, which its checkpoint keeps, not the title the chat got since (21.11.2026).
       expect(own).toMatchObject({
         projectRepositoryId,
-        branch: `raditi/zimnee-menyu-${taskId.replaceAll('-', '').slice(-8)}`,
+        branch,
         baseSha: base,
         mirrorSha: null,
         remoteSha: null,

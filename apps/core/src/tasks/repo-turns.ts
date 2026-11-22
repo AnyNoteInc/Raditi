@@ -327,12 +327,15 @@ export class RepoChanges {
             where: { id: turnId },
             data: { baseSha: outcome.baseSha, headSha: outcome.headSha },
           })
-        // The chat's branch row comes with its first card, its name free in the repository (ПР13).
+        // The chat's branch row comes with its first card, its name free in the repository (ПР13),
+        // under the name the turn worked with: the agent may have renamed the chat as the turn
+        // ended, and the checkpoint the next turn goes on from keeps the plan's branch.
         const branch = await ensureChatBranch(tx, {
           taskId,
           projectRepositoryId: plan.projectRepositoryId,
           title: task?.title ?? null,
           baseSha: outcome.baseSha,
+          branch: plan.branch,
         })
         await tx.projectRepoBranch.update({
           where: { taskId },
