@@ -2,7 +2,12 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { useChatDetails, useChatThinking, useTurnAtWorkShown } from './chat-details'
+import {
+  useChatChoiceMadeHere,
+  useChatDetails,
+  useChatThinking,
+  useTurnAtWorkShown,
+} from './chat-details'
 
 function Shown() {
   const { details, toggle } = useChatDetails()
@@ -54,6 +59,17 @@ function Thoughts() {
   return (
     <button type="button" onClick={toggle}>
       {thinking ? 'мысли видны' : 'мысли скрыты'}
+    </button>
+  )
+}
+
+/** A dialog as `dialog-view` holds it: the lines follow the choices made after it was opened. */
+function MadeHere() {
+  const madeHere = useChatChoiceMadeHere()
+  const { toggle } = useChatDetails()
+  return (
+    <button type="button" onClick={toggle}>
+      {madeHere ? 'выбор сделан здесь' : 'выбора здесь нет'}
     </button>
   )
 }
@@ -152,5 +168,23 @@ describe('«Размышления агента»', () => {
     expect(screen.getByText('мысли видны')).toBeTruthy()
     press()
     expect(screen.getByText('мысли скрыты')).toBeTruthy()
+  })
+})
+
+describe('the choices made on a dialog that was just opened (21.11.2026)', () => {
+  it('counts a choice only once it is made on that dialog, never one kept by the browser', () => {
+    // A chat opened with the choice already kept in this browser: its lines stay folded.
+    window.localStorage.setItem('raditi-chat-details', '1')
+    const first = render(<MadeHere />)
+    expect(screen.getByText('выбора здесь нет')).toBeTruthy()
+    press()
+    expect(screen.getByText('выбор сделан здесь')).toBeTruthy()
+    first.unmount()
+    // The next chat opens with the choice kept — and its lines stay folded all the same, until
+    // a choice is made there too.
+    render(<MadeHere />)
+    expect(screen.getByText('выбора здесь нет')).toBeTruthy()
+    press()
+    expect(screen.getByText('выбор сделан здесь')).toBeTruthy()
   })
 })
