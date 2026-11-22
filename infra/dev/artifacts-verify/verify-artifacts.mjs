@@ -533,11 +533,9 @@ async function agentTools({ dbModule, db, workspace, user, chat }) {
     'the next read names the block a person changed',
     again.changedSinceYourRead.blocks.includes('intro'),
   )
+  // Every kind of the registry has shipped (88.28): the agent creates a diagram too.
   const diagram = await tools.create(next, { kind: 'diagram', title: 'Схема' })
-  check(
-    'a kind whose view has not shipped is refused',
-    !diagram.ok && diagram.code === 'ARTIFACT_KIND_REFUSED',
-  )
+  check('a kind of the second wave is created by the agent', diagram.ok, JSON.stringify(diagram))
   const listed = valueOf(await tools.list(next, {}))
   check(
     'artifact_list names the chat’s document',

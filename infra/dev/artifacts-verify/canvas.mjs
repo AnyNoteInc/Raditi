@@ -8,6 +8,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 /** A memory of the artifacts bucket: what the renderer reads and core writes. */
@@ -68,12 +69,28 @@ export async function canvasAndRender({ root, databaseUrl, check }) {
   await new Promise((done) => trap.listen(0, '127.0.0.1', done))
   const trapUrl = `http://127.0.0.1:${trap.address().port}`
 
+  // Playwright's Chromium, or a system Chrome where it is not installed (a machine of a developer).
+  const { chromium } = (
+    await import(
+      resolve(
+        root,
+        'node_modules/.pnpm/playwright-core@1.63.0/node_modules/playwright-core/index.js',
+      )
+    )
+  ).default
+  const executablePath = [
+    chromium.executablePath(),
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  ].find((path) => existsSync(path))
   const db = dbModule.createPrismaClient({ databaseUrl, log: [] })
   const pool = new RenderPool({
     runtime: null,
     local: true,
     containers: 1,
-    create: createPlaywrightFrameRenderer,
+    create: (target) =>
+      createPlaywrightFrameRenderer(
+        'launch' in target && executablePath ? { ...target, executablePath } : target,
+      ),
   })
   try {
     const bucket = memoryBucket()
