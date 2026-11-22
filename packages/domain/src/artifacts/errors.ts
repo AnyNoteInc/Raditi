@@ -27,6 +27,9 @@ export const artifactRefusalCodes = [
   'ARTIFACT_COMMENT_DISPATCH_TOO_LARGE',
   'ARTIFACT_PROJECT_UNAVAILABLE',
   'ARTIFACT_PROJECT_IN_TRASH',
+  'ARTIFACT_SHARING_CLOSED',
+  'ARTIFACT_LINK_GONE',
+  'ARTIFACT_GRANT_REFUSED',
 ] as const
 export type ArtifactRefusalCode = (typeof artifactRefusalCodes)[number]
 
@@ -128,6 +131,17 @@ export const artifactProjectUnavailable = (): DomainError =>
 export const artifactProjectInTrash = (): DomainError =>
   refusal('ARTIFACT_PROJECT_IN_TRASH', 'The project of the artifact is in the trash', 409)
 
+export const artifactSharingClosed = (): DomainError =>
+  refusal('ARTIFACT_SHARING_CLOSED', 'Access of other users is not open yet', 403)
+
+/** A link revoked, expired or never made — told apart from nothing else. */
+export const artifactLinkGone = (): DomainError =>
+  refusal('ARTIFACT_LINK_GONE', 'The link no longer opens anything', 404)
+
+/** A role this kind does not open with (Ар25), or one not open yet (Ар36). */
+export const artifactGrantRefused = (): DomainError =>
+  refusal('ARTIFACT_GRANT_REFUSED', 'This access cannot be given to this artifact', 409)
+
 export const artifactOpInvalid = (problem: string, details?: unknown): DomainError =>
   refusal('ARTIFACT_OP_INVALID', `The batch is invalid: ${problem}`, 400, details)
 
@@ -153,6 +167,9 @@ export const artifactRefusalTexts = Object.freeze({
   ARTIFACT_PROJECT_UNAVAILABLE:
     'Этот проект недоступен: он удалён, в архиве или в другом пространстве',
   ARTIFACT_PROJECT_IN_TRASH: 'Артефакт в проекте, который в корзине. Сначала верните проект',
+  ARTIFACT_SHARING_CLOSED: 'Делиться артефактами пока нельзя',
+  ARTIFACT_LINK_GONE: 'Ссылка больше не работает. Попросите владельца прислать новую',
+  ARTIFACT_GRANT_REFUSED: 'Такой доступ к этому артефакту дать нельзя',
 } satisfies Record<ArtifactRefusalCode, string>)
 
 /** A quote can become ambiguous as well as stale; the note editor needs its own next step. */

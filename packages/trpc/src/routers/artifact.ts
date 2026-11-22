@@ -1,5 +1,16 @@
+import { createHash } from 'node:crypto'
+
 import {
   addArtifactCommentReply,
+  admitInWindow,
+  artifactAccessState,
+  closeArtifactAccess,
+  createArtifactLink,
+  leaveArtifactAccess,
+  openArtifactLink,
+  removeArtifactRecipient,
+  revokeArtifactLink,
+  setArtifactRecipientRole,
   artifactGalleryFilters,
   artifactGallerySorts,
   moveArtifact,
@@ -13,10 +24,16 @@ import {
   artifactKinds,
   artifactCommentAnchorInputSchema,
   artifactCommentAnchorSchema,
+  artifactGrantRoles,
+  artifactLinkTokenSchema,
+  artifactOpenGrantRoles,
+  artifactSharingClosed,
+  artifactSharingOpen,
   artifactRoles,
   artifactSignalLimits,
   artifactTitleSchema,
 } from '@repo/domain/artifacts'
+import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 
 import { canvasThumbs } from '../services/artifacts/canvas.ts'
@@ -72,7 +89,7 @@ import {
   readArtifactSignals,
   type ArtifactPresence,
 } from '../services/artifacts/signals.ts'
-import { consentedProcedure, router } from '../trpc.ts'
+import { consentedProcedure, router, type Context } from '../trpc.ts'
 
 // Artifacts in the cabinet (docs/plan/88-artifacts.md, §7.4, §7.9): the gallery and «Создать»
 // (88.9), the live channel and presence (88.5); the editor, the tabs, the history and the bridge
@@ -156,6 +173,11 @@ const opsAnswer = z.strictObject({
   title: z.enum(['applied', 'checking']).nullable(),
   repeated: z.boolean(),
 })
+
+/** The flag of production (Э9, 88.16а): until it is on, nobody is given access there. */
+function requireSharing(ctx: Context) {
+  if (!artifactSharingOpen(chatContextOf(ctx).appEnv)) throw artifactSharingClosed()
+}
 
 export const artifactRouter = router({
   /** The page of an artifact (Ар48): the checked text of its blocks and who holds each. */
@@ -456,6 +478,139 @@ export const artifactRouter = router({
     .mutation(({ ctx, input }) =>
       restoreGalleryArtifact(ctx.prisma, { userId: ctx.user.id, ...input }),
     ),
+
+  // ———— access of other users (Ар33–Ар36, slice 88.16-1), behind the flag of production
+
+  /** «Поделиться»: the live link and those with access — only the owner. */
+  shareState: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(
+      z.strictObject({
+        link: z
+          .strictObject({
+            role: z.enum(artifactGrantRoles),
+            createdAt: z.iso.datetime(),
+            expiresAt: z.iso.datetime().nullable(),
+            opens: z.number().int().min(0),
+          })
+          .nullable(),
+        people: z.array(
+          z.strictObject({
+            userId: z.uuid(),
+            name: z.string(),
+            email: z.string(),
+            role: z.enum(artifactRoles),
+            sources: z.array(z.enum(['invite', 'link'])),
+          }),
+        ),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      requireSharing(ctx)
+      const state = await artifactAccessState(ctx.prisma, {
+        userId: ctx.user.id,
+        artifactId: input.artifactId,
+        now: new Date(),
+      })
+      return {
+        link: state.link && {
+          role: state.link.role as (typeof artifactGrantRoles)[number],
+          createdAt: state.link.createdAt.toISOString(),
+          expiresAt: state.link.expiresAt?.toISOString() ?? null,
+          opens: state.link.opens,
+        },
+        people: state.people,
+      }
+    }),
+
+  /** «Новая ссылка»: the token once — the cabinet makes `/a#<token>`; the link before is revoked. */
+  shareLink: consentedProcedure
+    .input(
+      z.strictObject({
+        artifactId,
+        role: z.enum(artifactOpenGrantRoles),
+        term: z.union([z.literal(7), z.literal(30)]).nullable(),
+      }),
+    )
+    .output(
+      z.strictObject({ token: artifactLinkTokenSchema, expiresAt: z.iso.datetime().nullable() }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      requireSharing(ctx)
+      const link = await createArtifactLink(ctx.prisma, {
+        userId: ctx.user.id,
+        artifactId: input.artifactId,
+        role: input.role,
+        term: input.term,
+        now: new Date(),
+      })
+      return { token: link.token, expiresAt: link.expiresAt?.toISOString() ?? null }
+    }),
+
+  shareRevoke: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(z.strictObject({ revoked: z.boolean() }))
+    .mutation(({ ctx, input }) => {
+      requireSharing(ctx)
+      return revokeArtifactLink(ctx.prisma, { userId: ctx.user.id, ...input, now: new Date() })
+    }),
+
+  shareSetRole: consentedProcedure
+    .input(
+      z.strictObject({ artifactId, recipientId: z.uuid(), role: z.enum(artifactOpenGrantRoles) }),
+    )
+    .output(z.strictObject({ changed: z.number().int().min(0) }))
+    .mutation(({ ctx, input }) => {
+      requireSharing(ctx)
+      return setArtifactRecipientRole(ctx.prisma, { userId: ctx.user.id, ...input })
+    }),
+
+  shareRemove: consentedProcedure
+    .input(z.strictObject({ artifactId, recipientId: z.uuid() }))
+    .output(z.strictObject({ removed: z.number().int().min(0) }))
+    .mutation(({ ctx, input }) => {
+      requireSharing(ctx)
+      return removeArtifactRecipient(ctx.prisma, { userId: ctx.user.id, ...input })
+    }),
+
+  /** «Закрыть доступ всем»: the links revoked, every grant gone, in one transaction. */
+  shareCloseAll: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(z.strictObject({ links: z.number().int().min(0), grants: z.number().int().min(0) }))
+    .mutation(({ ctx, input }) => {
+      requireSharing(ctx)
+      return closeArtifactAccess(ctx.prisma, { userId: ctx.user.id, ...input, now: new Date() })
+    }),
+
+  /**
+   * «Открыть» by the token of a link, after sign-in and consent (Ар33): a POST, never a GET. At
+   * most 30 opens an hour per address and per user — a guess of tokens goes nowhere.
+   */
+  shareOpen: consentedProcedure
+    .input(z.strictObject({ token: artifactLinkTokenSchema }))
+    .output(z.strictObject({ artifactId: z.uuid(), role: z.enum(artifactRoles) }))
+    .mutation(async ({ ctx, input }) => {
+      requireSharing(ctx)
+      const now = Date.now()
+      const address = createHash('sha256').update(input.token).digest('hex').slice(0, 32)
+      for (const key of [`artifact-open:${address}`, `artifact-open-user:${ctx.user.id}`])
+        if (!(await admitInWindow(ctx.prisma, { key, limit: 30, windowMs: 60 * 60_000, now })))
+          throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'Too many opens of links' })
+      return openArtifactLink(ctx.prisma, {
+        token: input.token,
+        userId: ctx.user.id,
+        now: new Date(),
+      })
+    }),
+
+  /** «Выйти» of a recipient. */
+  shareLeave: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(z.strictObject({ left: z.boolean() }))
+    .mutation(({ ctx, input }) => {
+      requireSharing(ctx)
+      return leaveArtifactAccess(ctx.prisma, { userId: ctx.user.id, ...input })
+    }),
 
   /**
    * «Перенести в проект…» and «Сделать личным» (Ар42): only the owner; `projectId` null — personal.

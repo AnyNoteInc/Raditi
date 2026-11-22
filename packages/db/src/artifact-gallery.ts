@@ -108,9 +108,26 @@ export async function listArtifacts(
   },
 ): Promise<ArtifactGalleryRow[]> {
   const filter = input.filter ?? 'all'
-  // Nobody shares yet (88.16): the artifacts of others are none of the list.
-  if (filter === 'shared') return []
   const query = input.query?.trim() ?? ''
+  const now = new Date()
+  // «Доступные мне» (Ар34, 88.16-1): those of others the user holds a live grant of — by an
+  // invitation, or by a link neither revoked nor expired. Every read checks the role again.
+  const shared: Prisma.ArtifactWhereInput = {
+    takenDownAt: null,
+    deletedAt: null,
+    NOT: { ownerUserId: input.userId },
+    grants: {
+      some: {
+        userId: input.userId,
+        OR: [
+          { source: 'invite' },
+          { link: { revokedAt: null, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] } },
+        ],
+      },
+    },
+    ...(query === '' ? {} : { title: { contains: query, mode: 'insensitive' as const } }),
+    ...(input.kind ? { kind: input.kind } : {}),
+  }
   const owned: Prisma.ArtifactWhereInput = {
     takenDownAt: null,
     workspace: { members: { some: { userId: input.userId } } },
@@ -144,7 +161,7 @@ export async function listArtifacts(
     ],
     deletedAt: filter === 'trash' ? { not: null } : null,
     // Purged with its project (Ар42): its day has come, the collector takes it within minutes.
-    ...(filter === 'trash' ? { purgeAfter: { gt: new Date() } } : {}),
+    ...(filter === 'trash' ? { purgeAfter: { gt: now } } : {}),
     ...(filter === 'mine' ? { projectId: null } : {}),
     ...(filter === 'projects' ? { projectId: { not: null } } : {}),
     ...(input.kind ? { kind: input.kind } : {}),
@@ -156,7 +173,7 @@ export async function listArtifacts(
       ? [{ title: 'asc' }, { id: 'asc' }]
       : [{ updatedAt: sort === 'newest' ? 'desc' : 'asc' }, { id: 'asc' }]
   const rows = await db.artifact.findMany({
-    where: owned,
+    where: filter === 'shared' ? shared : owned,
     orderBy,
     take: Math.min(Math.max(input.limit ?? 200, 1), 500),
     select: {
@@ -194,7 +211,8 @@ export async function listArtifacts(
     id: row.id,
     kind: row.kind,
     title: row.title,
-    project: row.project,
+    // The owner's project is none of a recipient's business (Ар35).
+    project: filter === 'shared' ? null : row.project,
     version: row.currentVersion,
     blocks: row._count.sections,
     excerpt: excerptOf(firsts[index]!),

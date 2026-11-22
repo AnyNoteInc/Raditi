@@ -185,6 +185,17 @@ export {
 } from './artifact-comments.ts'
 export { accessibleTasks } from './chat-access.ts'
 export {
+  artifactAccessState,
+  closeArtifactAccess,
+  createArtifactLink,
+  leaveArtifactAccess,
+  openArtifactLink,
+  removeArtifactRecipient,
+  revokeArtifactLink,
+  setArtifactRecipientRole,
+  type ArtifactAccessState,
+} from './artifact-access.ts'
+export {
   artifactNamedByRun,
   attachScheduledTaskArtifacts,
   readScheduledTaskArtifacts,

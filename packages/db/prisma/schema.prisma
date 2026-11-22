@@ -71,6 +71,9 @@ model User {
   artifactComments            ArtifactComment[]
   artifactCommentReplies      ArtifactCommentReply[]
   artifactCommentDispatchKeys ArtifactCommentDispatchKey[]
+  artifactLinksCreated        ArtifactLink[]               @relation("ArtifactLinkCreator")
+  artifactGrants              ArtifactGrant[]              @relation("ArtifactGrantUser")
+  artifactGrantsGiven         ArtifactGrant[]              @relation("ArtifactGrantGranter")
 
   @@map("users")
 }
@@ -2606,6 +2609,8 @@ model Artifact {
   owner             User?                     @relation("ArtifactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   sections          ArtifactBlock[]
   scheduledTasks    ScheduledTaskArtifact[]
+  links             ArtifactLink[]
+  grants            ArtifactGrant[]
   versions          ArtifactVersion[]
   content           ArtifactContent?
   page              Page?
@@ -2950,6 +2955,52 @@ model ScheduledTask {
   @@index([sourceTaskId])
   @@index([projectId], map: "scheduled_tasks_project_id_idx", where: raw("(project_id IS NOT NULL)"))
   @@map("scheduled_tasks")
+}
+
+/// A link to an artifact (docs/plan/88-artifacts.md, Ар33, slice 88.16-1): only the SHA-256 of
+/// its token is kept; one live link an artifact — a new one revokes the one before.
+model ArtifactLink {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  artifactId   String    @map("artifact_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash") @db.Char(64)
+  role         String    @db.VarChar(8)
+  createdBy    String?   @map("created_by") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt    DateTime? @map("expires_at") @db.Timestamptz(6)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(6)
+  opens        Int       @default(0)
+  lastOpenedAt DateTime? @map("last_opened_at") @db.Timestamptz(6)
+
+  artifact Artifact        @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  creator  User?           @relation("ArtifactLinkCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  grants   ArtifactGrant[]
+
+  @@unique([artifactId], map: "artifact_links_live_key", where: raw("revoked_at IS NULL"))
+  @@map("artifact_links")
+}
+
+/// A grant of access to an artifact by its source (Ар34): an invitation, or a link — while that
+/// link lives. The role of a user is the strongest of their live grants.
+model ArtifactGrant {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  artifactId String   @map("artifact_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  source     String   @db.VarChar(8)
+  linkId     String?  @map("link_id") @db.Uuid
+  role       String   @db.VarChar(8)
+  grantedBy  String?  @map("granted_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  artifact Artifact      @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  user     User          @relation("ArtifactGrantUser", fields: [userId], references: [id], onDelete: Cascade)
+  link     ArtifactLink? @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  granter  User?         @relation("ArtifactGrantGranter", fields: [grantedBy], references: [id], onDelete: SetNull)
+
+  @@unique([artifactId, userId], map: "artifact_grants_invite_key", where: raw("source::text = 'invite'::text"))
+  @@unique([artifactId, userId, linkId], map: "artifact_grants_link_key", where: raw("source::text = 'link'::text"))
+  @@index([userId])
+  @@index([linkId])
+  @@map("artifact_grants")
 }
 
 /// The artifacts a scheduled task names in its window (docs/plan/88-artifacts.md, Ар24, 88.20б): a

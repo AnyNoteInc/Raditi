@@ -9,6 +9,9 @@ import {
   type PageRefusalReason,
 } from '@repo/domain'
 import {
+  artifactGrantRoles,
+  strongestArtifactRole,
+  type ArtifactGrantRole,
   applyQuoteEdit,
   artifactPageBlockKinds,
   artifactBatchHasSecretShape,
@@ -161,11 +164,25 @@ export async function artifactRole(
   input: { artifactId: string; userId: string; trashed?: boolean },
 ): Promise<ArtifactRole | null> {
   const rows = await db.$queryRaw<
-    { owner: string | null; deleted: boolean; taken_down: boolean; member: boolean }[]
+    {
+      owner: string | null
+      deleted: boolean
+      taken_down: boolean
+      member: boolean
+      grants: string[] | null
+    }[]
   >`
     SELECT o.owner,
            d.deleted_at IS NOT NULL AS deleted,
            d.taken_down_at IS NOT NULL AS taken_down,
+           -- The live grants of the user (Ар34, 88.16-1): an invitation's always, a link's while the
+           -- link is neither revoked nor expired.
+           (SELECT array_agg(g.role) FROM artifact_grants g
+            LEFT JOIN artifact_links l ON l.id = g.link_id
+            WHERE g.artifact_id = d.id AND g.user_id = ${input.userId}::uuid
+              AND (g.source = 'invite'
+                OR (l.revoked_at IS NULL AND (l.expires_at IS NULL OR l.expires_at > now()))))
+             AS grants,
            EXISTS (SELECT 1 FROM members m
                    WHERE m.workspace_id = d.workspace_id AND m.user_id = o.owner)
              AND (d.project_id IS NULL OR EXISTS (
@@ -178,8 +195,14 @@ export async function artifactRole(
     WHERE d.id = ${input.artifactId}::uuid`
   const row = rows[0]
   if (!row || row.owner === null || !row.member || row.taken_down) return null
-  if (row.deleted && !input.trashed) return null
-  return row.owner === input.userId ? 'owner' : null
+  if (row.owner === input.userId) return row.deleted && !input.trashed ? null : 'owner'
+  // The trash is the owner's alone: a recipient opens nothing deleted.
+  if (row.deleted) return null
+  return strongestArtifactRole(
+    (row.grants ?? []).filter((role): role is ArtifactGrantRole =>
+      (artifactGrantRoles as readonly string[]).includes(role),
+    ),
+  )
 }
 
 /**
