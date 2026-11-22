@@ -25,6 +25,8 @@ export const artifactRefusalCodes = [
   'ARTIFACT_OP_INVALID',
   'ARTIFACT_COMMENT_UNAVAILABLE',
   'ARTIFACT_COMMENT_DISPATCH_TOO_LARGE',
+  'ARTIFACT_PROJECT_UNAVAILABLE',
+  'ARTIFACT_PROJECT_IN_TRASH',
 ] as const
 export type ArtifactRefusalCode = (typeof artifactRefusalCodes)[number]
 
@@ -120,6 +122,12 @@ export const artifactCommentUnavailable = (): DomainError =>
 export const artifactCommentDispatchTooLarge = (): DomainError =>
   refusal('ARTIFACT_COMMENT_DISPATCH_TOO_LARGE', 'The selected notes do not fit one request', 409)
 
+export const artifactProjectUnavailable = (): DomainError =>
+  refusal('ARTIFACT_PROJECT_UNAVAILABLE', 'No such live project of the owner here', 409)
+
+export const artifactProjectInTrash = (): DomainError =>
+  refusal('ARTIFACT_PROJECT_IN_TRASH', 'The project of the artifact is in the trash', 409)
+
 export const artifactOpInvalid = (problem: string, details?: unknown): DomainError =>
   refusal('ARTIFACT_OP_INVALID', `The batch is invalid: ${problem}`, 400, details)
 
@@ -142,6 +150,9 @@ export const artifactRefusalTexts = Object.freeze({
   ARTIFACT_COMMENT_UNAVAILABLE: 'Заметка недоступна для ответа',
   ARTIFACT_COMMENT_DISPATCH_TOO_LARGE:
     'Заметки вместе с ответами не помещаются в один запрос. Выберите меньше заметок. Если не помещается одна заметка, отправьте нужную часть сообщением в чате',
+  ARTIFACT_PROJECT_UNAVAILABLE:
+    'Этот проект недоступен: он удалён, в архиве или в другом пространстве',
+  ARTIFACT_PROJECT_IN_TRASH: 'Артефакт в проекте, который в корзине. Сначала верните проект',
 } satisfies Record<ArtifactRefusalCode, string>)
 
 /** A quote can become ambiguous as well as stale; the note editor needs its own next step. */

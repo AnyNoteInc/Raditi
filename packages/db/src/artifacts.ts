@@ -35,6 +35,8 @@ import {
   artifactLimits,
   artifactNotFound,
   artifactOpInvalid,
+  artifactProjectInTrash,
+  artifactProjectUnavailable,
   artifactOpReused,
   artifactPropsProblem,
   artifactRoleCan,
@@ -2253,7 +2255,7 @@ async function journalOne(
   tx: Tx,
   artifact: LockedArtifact,
   userId: string,
-  kind: 'trash' | 'restore',
+  kind: 'trash' | 'restore' | 'move',
 ): Promise<bigint> {
   const seq = artifact.seq + 1n
   await tx.artifactOp.create({
@@ -2301,6 +2303,16 @@ export async function restoreArtifact(
     await requireRole(tx, artifact.id, person(input.userId), 'trash', true)
     if (artifact.deletedAt === null) return false
     if (input.onlyBy !== undefined && artifact.deletedBy !== input.onlyBy) return false
+    // Purged with its project (Ар42): its day has come, the collector takes it.
+    if (artifact.purgeAfter !== null && artifact.purgeAfter <= new Date()) return false
+    // An artifact of a project in the trash comes back with the project, not alone.
+    if (artifact.projectId !== null) {
+      const project = await tx.project.findUnique({
+        where: { id: artifact.projectId },
+        select: { deletedAt: true },
+      })
+      if (project?.deletedAt != null) throw artifactProjectInTrash()
+    }
     await tx.artifact.update({
       where: { id: artifact.id },
       data: {
@@ -2313,6 +2325,120 @@ export async function restoreArtifact(
     })
     return true
   })
+}
+
+/**
+ * «Перенести в проект…» and «Сделать личным» (Ар42) — only the owner (`move`). The project is a
+ * live one of the owner, out of «Архив», in the artifact's workspace; null — personal. The links
+ * to chats stay: a chat that made or attached it still opens it.
+ */
+export async function moveArtifact(
+  db: Db,
+  input: { artifactId: string; userId: string; projectId: string | null },
+): Promise<{ moved: boolean }> {
+  return db.$transaction(async (tx) => {
+    const artifact = await lockArtifact(tx, input.artifactId)
+    await requireRole(tx, artifact.id, person(input.userId), 'move')
+    if (artifact.deletedAt !== null) throw artifactNotFound()
+    if (artifact.projectId === input.projectId) return { moved: false }
+    if (input.projectId !== null) {
+      const project = await tx.project.findFirst({
+        where: {
+          id: input.projectId,
+          workspaceId: artifact.workspaceId,
+          createdById: input.userId,
+          deletedAt: null,
+          archivedAt: null,
+        },
+        select: { id: true },
+      })
+      if (!project) throw artifactProjectUnavailable()
+    }
+    await tx.artifact.update({
+      where: { id: artifact.id },
+      data: {
+        projectId: input.projectId,
+        revision: { increment: 1 },
+        seq: await journalOne(tx, artifact, input.userId, 'move'),
+      },
+    })
+    return { moved: true }
+  })
+}
+
+/**
+ * «Удалить» of a project (Ар42), in its transaction: its live artifacts go into the trash with
+ * `deleted_by = 'project'` and the project's day, each with its journal row (an open tab hears it).
+ */
+export async function trashProjectArtifacts(
+  tx: Tx,
+  input: { projectId: string; userId: string; now: Date; purgeAfter: Date },
+): Promise<number> {
+  const live = await tx.artifact.findMany({
+    where: { projectId: input.projectId, deletedAt: null },
+    orderBy: { id: 'asc' },
+    select: { id: true },
+  })
+  for (const { id } of live) {
+    const artifact = await lockArtifact(tx, id)
+    if (artifact.deletedAt !== null) continue
+    await tx.artifact.update({
+      where: { id },
+      data: {
+        deletedAt: input.now,
+        deletedBy: 'project',
+        purgeAfter: input.purgeAfter,
+        revision: { increment: 1 },
+        seq: await journalOne(tx, artifact, input.userId, 'trash'),
+      },
+    })
+  }
+  return live.length
+}
+
+/** «Вернуть» of a project (Ар42): only the artifacts its «Удалить» put into the trash. */
+export async function restoreProjectArtifacts(
+  tx: Tx,
+  input: { projectId: string; userId: string },
+): Promise<number> {
+  const trashed = await tx.artifact.findMany({
+    where: { projectId: input.projectId, deletedBy: 'project', deletedAt: { not: null } },
+    orderBy: { id: 'asc' },
+    select: { id: true },
+  })
+  for (const { id } of trashed) {
+    const artifact = await lockArtifact(tx, id)
+    if (artifact.deletedBy !== 'project' || artifact.deletedAt === null) continue
+    await tx.artifact.update({
+      where: { id },
+      data: {
+        deletedAt: null,
+        deletedBy: null,
+        purgeAfter: null,
+        revision: { increment: 1 },
+        seq: await journalOne(tx, artifact, input.userId, 'restore'),
+      },
+    })
+  }
+  return trashed.length
+}
+
+/**
+ * The purge of a project (Ар42), before its row goes: its artifacts get a day already past — the
+ * collector deletes them with their files — instead of `project_id` going NULL and leaving them
+ * personal.
+ */
+export async function purgeProjectArtifacts(
+  tx: Pick<Tx, '$executeRaw'>,
+  input: { projectId: string; now: Date },
+): Promise<number> {
+  const past = new Date(input.now.getTime() - 1)
+  return tx.$executeRaw`
+    UPDATE chat_documents
+    SET deleted_at = COALESCE(deleted_at, ${input.now}),
+        deleted_by = COALESCE(deleted_by, 'project'),
+        purge_after = ${past}
+    WHERE project_id = ${input.projectId}::uuid`
 }
 
 export interface ArtifactSweep {

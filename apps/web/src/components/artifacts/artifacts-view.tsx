@@ -233,14 +233,21 @@ function RowActions({
  * «Корзина», a kind, a project, an order and a word of the title or text; cards or a list. Before
  * the first one: the empty screen with templates.
  */
-export function ArtifactsView({ userId }: { userId: string }) {
+export function ArtifactsView({
+  userId,
+  initialProjectId = '',
+}: {
+  userId: string
+  /** «Все артефакты проекта» of «Контекст» opens the gallery filtered by it (Ар42). */
+  initialProjectId?: string
+}) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
   const [filter, setFilter] = useState<Filter>('all')
   const [search, setSearch] = useState('')
   const query = useDeferredValue(search.trim())
   const [kind, setKind] = useState<string>('')
-  const [projectId, setProjectId] = useState<string>('')
+  const [projectId, setProjectId] = useState<string>(initialProjectId)
   const [sort, setSort] = useState<Sort>('newest')
   const [layout, setLayout] = useLayout()
   const [creating, setCreating] = useState<{ template: ArtifactTemplate | null } | null>(null)

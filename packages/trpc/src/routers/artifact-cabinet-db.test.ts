@@ -1056,6 +1056,97 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     expect((await caller.artifact.comments({ artifactId }))[0]).toMatchObject({ moved: true })
   })
 
+  it('moves an artifact into a live project of its owner and back to personal (88.19)', async () => {
+    const user = await person()
+    const caller = callerOf(user)
+    // The first artifact makes the personal workspace the project goes in.
+    const { id: artifactId } = await caller.artifact.create({
+      kind: 'document',
+      title: 'План',
+      projectId: null,
+      templateId: null,
+    })
+    const project = await projectOf(user)
+    await expect(caller.artifact.move({ artifactId, projectId: project.id })).resolves.toEqual({
+      moved: true,
+    })
+    expect((await caller.artifact.read({ artifactId })).project).toEqual({
+      id: project.id,
+      name: 'Пекарня',
+    })
+    await expect(caller.artifact.move({ artifactId, projectId: project.id })).resolves.toEqual({
+      moved: false,
+    })
+    await expect(caller.artifact.move({ artifactId, projectId: null })).resolves.toEqual({
+      moved: true,
+    })
+    expect((await caller.artifact.read({ artifactId })).project).toBeNull()
+
+    // Not a project of the owner, or one in «Архив»: refused; another person never moves it.
+    const other = await person('Борис')
+    await callerOf(other).artifact.create({
+      kind: 'document',
+      title: 'Своё',
+      projectId: null,
+      templateId: null,
+    })
+    const foreign = await projectOf(other)
+    await expect(caller.artifact.move({ artifactId, projectId: foreign.id })).rejects.toMatchObject(
+      { cause: { code: 'ARTIFACT_PROJECT_UNAVAILABLE' } },
+    )
+    await caller.project.archive({ projectId: project.id, archived: true })
+    await expect(caller.artifact.move({ artifactId, projectId: project.id })).rejects.toMatchObject(
+      { cause: { code: 'ARTIFACT_PROJECT_UNAVAILABLE' } },
+    )
+    await expect(
+      callerOf(other).artifact.move({ artifactId, projectId: foreign.id }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('takes the artifacts of a project into the trash with it and back, only its own (88.19)', async () => {
+    const user = await person()
+    const caller = callerOf(user)
+    // A personal artifact: the trash of a project never touches it.
+    const { id: personal } = await caller.artifact.create({
+      kind: 'document',
+      title: 'Личный',
+      projectId: null,
+      templateId: null,
+    })
+    const project = await projectOf(user)
+    const create = (title: string) =>
+      caller.artifact.create({ kind: 'document', title, projectId: project.id, templateId: null })
+    const { id: kept } = await create('Живой')
+    const { id: earlier } = await create('Удалён раньше')
+    await caller.artifact.trash({ artifactId: earlier })
+
+    await caller.project.remove({ projectId: project.id })
+    const trashed = await db.artifact.findUniqueOrThrow({ where: { id: kept } })
+    expect(trashed).toMatchObject({ deletedBy: 'project' })
+    expect(trashed.deletedAt).not.toBeNull()
+    expect((await db.artifact.findUniqueOrThrow({ where: { id: earlier } })).deletedBy).toBe(
+      'client',
+    )
+    expect((await db.artifact.findUniqueOrThrow({ where: { id: personal } })).deletedAt).toBeNull()
+    // Alone it does not come back while its project is in the trash.
+    await expect(caller.artifact.restore({ artifactId: kept })).rejects.toMatchObject({
+      cause: { code: 'ARTIFACT_PROJECT_IN_TRASH' },
+    })
+
+    await caller.project.restore({ projectId: project.id })
+    expect(await db.artifact.findUniqueOrThrow({ where: { id: kept } })).toMatchObject({
+      deletedAt: null,
+      deletedBy: null,
+      purgeAfter: null,
+    })
+    expect((await db.artifact.findUniqueOrThrow({ where: { id: earlier } })).deletedBy).toBe(
+      'client',
+    )
+    expect(
+      (await caller.artifact.list({ filter: 'all', projectId: project.id })).map((row) => row.id),
+    ).toEqual([kept])
+  })
+
   it('reads notes and their access decision at the same snapshot during a takedown', async () => {
     const { user, caller, artifactId, anchor } = await quoteDocument()
     const { id } = await caller.artifact.addComment({ artifactId, anchor, body: 'Старая заметка' })

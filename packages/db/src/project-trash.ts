@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import { terminalTaskStatuses } from '@repo/domain'
 
+import { purgeProjectArtifacts } from './artifacts.ts'
 import { insertFeedEvent } from './feed-events.ts'
 import type { Prisma, PrismaClient, TaskStatus } from './generated/prisma/client.ts'
 import { enqueueRepoGone, repoHookSelect } from './outbox.ts'
@@ -155,6 +156,9 @@ export async function purgeProject(
       select: repoHookSelect,
     })
     for (const repo of repos) await enqueueRepoGone(tx, repo)
+    // Its artifacts go for good (Ар42): `project_id` is ON DELETE SET NULL, they would stay
+    // personal. A day already past — the collector deletes them with their files.
+    await purgeProjectArtifacts(tx, { projectId: project.id, now: input.now })
     // `tasks.project_id` is ON DELETE SET NULL: every chat of the project, deleted before or now,
     // stays without it.
     await tx.$executeRaw`DELETE FROM projects WHERE id = ${project.id}::uuid`

@@ -143,6 +143,8 @@ export async function listArtifacts(
           ]),
     ],
     deletedAt: filter === 'trash' ? { not: null } : null,
+    // Purged with its project (Ар42): its day has come, the collector takes it within minutes.
+    ...(filter === 'trash' ? { purgeAfter: { gt: new Date() } } : {}),
     ...(filter === 'mine' ? { projectId: null } : {}),
     ...(filter === 'projects' ? { projectId: { not: null } } : {}),
     ...(input.kind ? { kind: input.kind } : {}),

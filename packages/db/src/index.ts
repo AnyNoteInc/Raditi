@@ -147,6 +147,7 @@ export {
   readArtifact,
   readArtifactVersion,
   releaseArtifactBlock,
+  moveArtifact,
   restoreArtifact,
   saveArtifactVersion,
   settleArtifactWrites,

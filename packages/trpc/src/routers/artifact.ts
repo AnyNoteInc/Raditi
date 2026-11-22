@@ -2,6 +2,7 @@ import {
   addArtifactCommentReply,
   artifactGalleryFilters,
   artifactGallerySorts,
+  moveArtifact,
   resolveArtifactComment,
 } from '@repo/db'
 import { feedEventIdSchema } from '@repo/domain'
@@ -454,6 +455,21 @@ export const artifactRouter = router({
     .output(z.boolean())
     .mutation(({ ctx, input }) =>
       restoreGalleryArtifact(ctx.prisma, { userId: ctx.user.id, ...input }),
+    ),
+
+  /**
+   * «Перенести в проект…» and «Сделать личным» (Ар42): only the owner; `projectId` null — personal.
+   * ARTIFACT_PROJECT_UNAVAILABLE — not a live project of the owner here, out of «Архив».
+   */
+  move: consentedProcedure
+    .input(z.strictObject({ artifactId, projectId: z.uuid().nullable() }))
+    .output(z.strictObject({ moved: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      moveArtifact(ctx.prisma, {
+        userId: ctx.user.id,
+        artifactId: input.artifactId,
+        projectId: input.projectId?.toLowerCase() ?? null,
+      }),
     ),
 
   /**

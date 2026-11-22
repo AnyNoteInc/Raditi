@@ -4,6 +4,7 @@ import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { billingFixtures } from '@repo/billing/testing'
 import {
   bindProjectFiles,
+  createArtifact,
   createPrismaClient,
   createProjectFile,
   markProjectFileReady,
@@ -12,6 +13,7 @@ import {
   purgeProject,
   purgeProjectNow,
   restoreProject,
+  sweepArtifacts,
   trashProject,
   type PrismaClient,
 } from '@repo/db'
@@ -294,6 +296,33 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
       projectId: null,
       deletedAt: pressed,
     })
+  })
+
+  it('the purge deletes the artifacts of the project, never leaves them personal (88.19, Ар42)', async () => {
+    const now = new Date()
+    const { userId, projectId } = await projectWith([], now)
+    const project = await db.project.findUniqueOrThrow({ where: { id: projectId } })
+    const { id: artifactId } = await createArtifact(db, {
+      workspaceId: project.workspaceId,
+      kind: 'document',
+      title: 'План сайта',
+      projectId,
+      actor: { kind: 'user', userId },
+    })
+    await trashProject(db, { projectId, userId, now })
+    expect(await db.artifact.findUniqueOrThrow({ where: { id: artifactId } })).toMatchObject({
+      deletedBy: 'project',
+    })
+    const pressed = new Date(now.getTime() + DAY)
+    await purgeProjectNow(db, { projectId, userId, now: pressed })
+    const trash = new ProjectTrash({ db, logger: quiet, now: () => pressed })
+    expect((await trash.sweep()).purged).toBe(1)
+    // The row of the project is gone: its artifact lost the project, but its day is past.
+    const left = await db.artifact.findUniqueOrThrow({ where: { id: artifactId } })
+    expect(left.projectId).toBeNull()
+    expect(left.purgeAfter!.getTime()).toBeLessThan(pressed.getTime())
+    await sweepArtifacts(db, new Date(pressed.getTime() + 1000))
+    expect(await db.artifact.count({ where: { id: artifactId } })).toBe(0)
   })
 
   it('a project restored before the purge took it is kept', async () => {

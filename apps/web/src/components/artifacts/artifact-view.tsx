@@ -6,13 +6,14 @@ import { useMutation } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { DictationAvailable } from '@/components/chat/dictation-button'
 import { useTRPC } from '@/trpc/client'
 
 import { ArtifactHistoryButton } from './artifact-history'
+import { ArtifactMoveButton } from './artifact-move'
 import { ArtifactPublishButton } from './artifact-publish'
 import { ArtifactPage } from './artifact-page'
 import { galleryTexts } from './artifact-texts'
-import { DictationAvailable } from '@/components/chat/dictation-button'
 
 /**
  * The page of an artifact with what its owner does from its head (Ар23): «В корзину» now; the
@@ -37,6 +38,7 @@ export function ArtifactView({
           <>
             <ArtifactHistoryButton artifact={artifact} onChanged={reread} />
             <ArtifactPublishButton artifact={artifact} />
+            <ArtifactMoveButton artifact={artifact} onChanged={reread} />
             {artifactRoleAtLeast(artifact.role, 'owner') ? (
               <Button
                 variant="text"
