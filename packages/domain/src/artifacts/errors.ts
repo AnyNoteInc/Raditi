@@ -31,6 +31,7 @@ export const artifactRefusalCodes = [
   'ARTIFACT_LINK_GONE',
   'ARTIFACT_GRANT_REFUSED',
   'ARTIFACT_INVITE_GONE',
+  'ARTIFACT_COPY_REFUSED',
 ] as const
 export type ArtifactRefusalCode = (typeof artifactRefusalCodes)[number]
 
@@ -147,6 +148,10 @@ export const artifactGrantRefused = (): DomainError =>
 export const artifactInviteGone = (): DomainError =>
   refusal('ARTIFACT_INVITE_GONE', 'The invitation no longer opens anything', 404)
 
+/** A copy of an artifact with files, or of data a workspace may not hold (Ар38). */
+export const artifactCopyRefused = (): DomainError =>
+  refusal('ARTIFACT_COPY_REFUSED', 'This artifact cannot be copied here', 409)
+
 export const artifactOpInvalid = (problem: string, details?: unknown): DomainError =>
   refusal('ARTIFACT_OP_INVALID', `The batch is invalid: ${problem}`, 400, details)
 
@@ -176,6 +181,7 @@ export const artifactRefusalTexts = Object.freeze({
   ARTIFACT_LINK_GONE: 'Ссылка больше не работает. Попросите владельца прислать новую',
   ARTIFACT_GRANT_REFUSED: 'Такой доступ к этому артефакту дать нельзя',
   ARTIFACT_INVITE_GONE: 'Приглашение больше не действует',
+  ARTIFACT_COPY_REFUSED: 'Этот артефакт пока нельзя скопировать: в нём есть файлы или данные, которые нельзя перенести в ваше пространство',
 } satisfies Record<ArtifactRefusalCode, string>)
 
 /** A quote can become ambiguous as well as stale; the note editor needs its own next step. */

@@ -187,6 +187,8 @@ export { accessibleTasks } from './chat-access.ts'
 export {
   acceptArtifactInvite,
   artifactAccessState,
+  artifactCopyAllowedFor,
+  artifactCopySource,
   closeArtifactAccess,
   createArtifactLink,
   declineArtifactInvite,
@@ -197,6 +199,7 @@ export {
   removeArtifactRecipient,
   revokeArtifactInvite,
   revokeArtifactLink,
+  setArtifactCopyAllowed,
   setArtifactRecipientRole,
   type ArtifactAccessState,
   type ArtifactInviteSent,

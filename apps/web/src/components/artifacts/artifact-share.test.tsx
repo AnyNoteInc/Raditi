@@ -37,6 +37,7 @@ vi.mock('@/trpc/client', () => ({
               },
             ],
             invites: [],
+            copyAllowed: false,
           }),
         }),
       },
@@ -47,6 +48,7 @@ vi.mock('@/trpc/client', () => ({
       shareSetRole: mutation(vi.fn()),
       shareRemove: mutation(vi.fn()),
       shareCloseAll: mutation(vi.fn()),
+      shareSetCopy: mutation(vi.fn()),
     },
   }),
 }))

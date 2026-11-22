@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto'
 
 import {
   applyArtifactOps,
+  artifactCopySource,
   createArtifact,
   listArtifacts,
+  readArtifact,
   restoreArtifact,
   trashArtifact,
   type ArtifactGalleryFilter,
@@ -12,6 +14,7 @@ import {
 } from '@repo/db'
 import type { AppEnv } from '@repo/domain'
 import {
+  artifactBatchSchema,
   artifactKindCreatable,
   artifactKindRefused,
   artifactNotFound,
@@ -125,3 +128,68 @@ export const restoreGalleryArtifact = (
   db: PrismaClient,
   input: { userId: string; artifactId: string },
 ) => restoreArtifact(db, input)
+
+/** A batch of a copy stays well under the limits of a batch (§7.2: 50 operations, 90 KiB). */
+const COPY_OPS = 40
+const COPY_BYTES = 60 * 1024
+
+/**
+ * «Сделать копию» of a recipient (docs/plan/88-artifacts.md, §7.8, slice 88.16-4): the checked
+ * blocks as they read them, into a new artifact of their personal workspace, «Копия: …», by the
+ * operations of the cabinet with all their checks. Allowed by the owner, without files, of a class
+ * of data the workspace may hold. The copy is theirs: revoking access does not touch it.
+ */
+export async function copyArtifactForRecipient(
+  db: PrismaClient,
+  input: { userId: string; appEnv: AppEnv; artifactId: string },
+): Promise<{ id: string }> {
+  const workspaceId = (
+    await personalWorkspaceOf(db, { userId: input.userId, appEnv: input.appEnv })
+  ).id
+  const source = await artifactCopySource(db, {
+    artifactId: input.artifactId,
+    userId: input.userId,
+    targetWorkspaceId: workspaceId,
+  })
+  const actor = { kind: 'user' as const, userId: input.userId }
+  const read = await readArtifact(db, { artifactId: input.artifactId, actor })
+  const title = Array.from(`Копия: ${source.title}`).slice(0, 200).join('')
+  const { id } = await createArtifact(db, {
+    workspaceId,
+    kind: source.kind,
+    title,
+    projectId: null,
+    actor,
+  })
+  const lastOf = new Map<string | null, string>()
+  let batch: unknown[] = []
+  let bytes = 0
+  const flush = async () => {
+    if (batch.length === 0) return
+    await applyArtifactOps(db, {
+      batch: artifactBatchSchema.parse({ artifactId: id, opId: randomUUID(), ops: batch }),
+      actor,
+    })
+    batch = []
+    bytes = 0
+  }
+  for (const block of read.blocks) {
+    const parent = block.parent ?? null
+    const op = {
+      op: 'insert' as const,
+      block: block.key,
+      after: lastOf.get(parent) ?? null,
+      ...(parent === null ? {} : { parent }),
+      kind: block.kind,
+      content: block.content ?? '',
+      ...(Object.keys(block.props).length === 0 ? {} : { props: block.props }),
+    }
+    lastOf.set(parent, block.key)
+    const size = Buffer.byteLength(JSON.stringify(op))
+    if (batch.length >= COPY_OPS || bytes + size > COPY_BYTES) await flush()
+    batch.push(op)
+    bytes += size
+  }
+  await flush()
+  return { id }
+}

@@ -7,7 +7,9 @@ import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
+import Checkbox from '@mui/material/Checkbox'
 import Divider from '@mui/material/Divider'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import IconButton from '@mui/material/IconButton'
 import MenuItem from '@mui/material/MenuItem'
 import TextField from '@mui/material/TextField'
@@ -59,6 +61,8 @@ export const shareTexts = Object.freeze({
   closeAll: 'Закрыть доступ всем',
   close: 'Готово',
   leave: 'Выйти из артефакта',
+  allowCopy: 'Разрешить получателям делать себе копию',
+  makeCopy: 'Сделать копию',
   failed: 'Не удалось. Попробуйте ещё раз.',
   personalData:
     'Если в артефакте есть данные других людей, лучше пригласите поимённо, чем по ссылке: её может переслать любой получатель.',
@@ -117,6 +121,7 @@ export function ArtifactShareButton({ artifact }: { artifact: CabinetArtifact })
   const setRecipient = useMutation(trpc.artifact.shareSetRole.mutationOptions())
   const remove = useMutation(trpc.artifact.shareRemove.mutationOptions())
   const closeAll = useMutation(trpc.artifact.shareCloseAll.mutationOptions())
+  const setCopy = useMutation(trpc.artifact.shareSetCopy.mutationOptions())
   if (!artifactRoleAtLeast(artifact.role, 'owner')) return null
   const editAllowed = artifactGrantAllowed(artifact.kind as ArtifactKind, 'edit')
   const shownRoles = roles.filter((each) => each !== 'edit' || editAllowed)
@@ -352,6 +357,20 @@ export function ArtifactShareButton({ artifact }: { artifact: CabinetArtifact })
               </>
             )}
           </Box>
+          <FormControlLabel
+            label={shareTexts.allowCopy}
+            control={
+              <Checkbox
+                checked={data?.copyAllowed === true}
+                disabled={!data || setCopy.isPending}
+                onChange={(event) =>
+                  void run(() =>
+                    setCopy.mutateAsync({ artifactId, allowed: event.target.checked }),
+                  )()
+                }
+              />
+            }
+          />
           {notice && <Alert severity={notice.severity}>{notice.text}</Alert>}
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between' }}>
@@ -396,5 +415,45 @@ export function ArtifactLeaveButton({ artifact }: { artifact: CabinetArtifact })
     >
       {shareTexts.leave}
     </Button>
+  )
+}
+
+/** «Сделать копию» of a recipient, when the owner allowed it (§7.8, 88.16-4). */
+export function ArtifactCopyButton({ artifact }: { artifact: CabinetArtifact }) {
+  const trpc = useTRPC()
+  const router = useRouter()
+  const mine = useQuery({
+    ...trpc.artifact.shareMine.queryOptions({ artifactId: artifact.id }),
+    enabled: !artifactRoleAtLeast(artifact.role, 'owner'),
+  })
+  const copy = useMutation(trpc.artifact.shareCopy.mutationOptions())
+  const [error, setError] = useState<string | null>(null)
+  if (artifactRoleAtLeast(artifact.role, 'owner') || mine.data?.copyAllowed !== true) return null
+  return (
+    <>
+      <Button
+        variant="text"
+        color="inherit"
+        startIcon={<AppIcon name="copy" size={16} />}
+        disabled={copy.isPending}
+        onClick={() => {
+          setError(null)
+          void copy
+            .mutateAsync({ artifactId: artifact.id })
+            .then(({ id }) => router.push(`/artifacts/${id}`))
+            .catch((failure: unknown) => {
+              const code = artifactErrorData(failure)?.domainCode
+              setError(
+                code === 'ARTIFACT_COPY_REFUSED'
+                  ? `${artifactRefusalTexts[code]}.`
+                  : shareTexts.failed,
+              )
+            })
+        }}
+      >
+        {shareTexts.makeCopy}
+      </Button>
+      {error && <Alert severity="warning">{error}</Alert>}
+    </>
   )
 }

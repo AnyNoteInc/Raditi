@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto'
 
 import {
+  artifactCopyRefused,
+  artifactDataClassAllows,
   artifactGrantAllowed,
   artifactGrantRefused,
   artifactInviteDays,
@@ -164,6 +166,7 @@ export async function openArtifactLink(
 export interface ArtifactAccessState {
   link: { role: string; createdAt: Date; expiresAt: Date | null; opens: number } | null
   invites: { id: string; email: string; role: string; createdAt: Date }[]
+  copyAllowed: boolean
   people: {
     userId: string
     name: string
@@ -223,6 +226,13 @@ export async function artifactAccessState(
           : null,
         people: [...people.values()],
         invites: await artifactInvitesOf(tx, input),
+        copyAllowed:
+          (
+            await tx.artifact.findUnique({
+              where: { id: input.artifactId },
+              select: { copyAllowed: true },
+            })
+          )?.copyAllowed === true,
       }
     },
     { isolationLevel: 'RepeatableRead' },
@@ -524,4 +534,60 @@ export async function declineArtifactInvite(
     })
     return { declined: count > 0 }
   })
+}
+
+// ———————————————————————————————— a copy of one's own (§7.8, slice 88.16-4)
+
+/** «Разрешить копию»: only the owner; those it is opened to may then make a copy of their own. */
+export async function setArtifactCopyAllowed(
+  db: Db,
+  input: { artifactId: string; userId: string; allowed: boolean },
+): Promise<{ allowed: boolean }> {
+  return db.$transaction(async (tx) => {
+    await lockShared(tx, input)
+    await tx.artifact.update({
+      where: { id: input.artifactId },
+      data: { copyAllowed: input.allowed },
+    })
+    return { allowed: input.allowed }
+  })
+}
+
+/** What a recipient reads of the access they have: whether a copy is allowed. */
+export async function artifactCopyAllowedFor(
+  db: Pick<PrismaClient, '$queryRaw' | 'artifact'>,
+  input: { artifactId: string; userId: string },
+): Promise<boolean> {
+  const role = await artifactRole(db, input)
+  if (!artifactRoleCan(role, 'read') || role === 'owner') return false
+  const artifact = await db.artifact.findUnique({
+    where: { id: input.artifactId },
+    select: { copyAllowed: true },
+  })
+  return artifact?.copyAllowed === true
+}
+
+/**
+ * The source of a copy for a recipient: allowed by the owner, readable by them, without files —
+ * the objects of a file are its artifact's and go with it — and of a class of data the target
+ * workspace may hold (Ар38: the data of a client never go into a synthetic workspace).
+ */
+export async function artifactCopySource(
+  db: Pick<PrismaClient, '$queryRaw' | 'artifact' | 'artifactFile' | 'workspace'>,
+  input: { artifactId: string; userId: string; targetWorkspaceId: string },
+): Promise<{ kind: string; title: string }> {
+  if (!(await artifactCopyAllowedFor(db, input))) throw artifactNotFound()
+  const artifact = await db.artifact.findUniqueOrThrow({
+    where: { id: input.artifactId },
+    select: { kind: true, title: true, workspace: { select: { dataClass: true } } },
+  })
+  const files = await db.artifactFile.count({ where: { artifactId: input.artifactId } })
+  if (files > 0) throw artifactCopyRefused()
+  const target = await db.workspace.findUniqueOrThrow({
+    where: { id: input.targetWorkspaceId },
+    select: { dataClass: true },
+  })
+  if (!artifactDataClassAllows(target.dataClass, artifact.workspace.dataClass))
+    throw artifactCopyRefused()
+  return { kind: artifact.kind, title: artifact.title }
 }

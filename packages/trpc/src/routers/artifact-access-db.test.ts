@@ -347,4 +347,35 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
       }),
     ).rejects.toMatchObject({ cause: { code: 'ARTIFACT_LIMIT' } })
   })
+
+  it('lets a recipient make a copy of their own only when the owner allows it (88.16-4)', async () => {
+    const { viewer, as, artifactId } = await shared()
+    const { token } = await as.owner.artifact.shareLink({ artifactId, role: 'view', term: null })
+    await as.viewer.artifact.shareOpen({ token })
+    expect(await as.viewer.artifact.shareMine({ artifactId })).toEqual({ copyAllowed: false })
+    await expect(as.viewer.artifact.shareCopy({ artifactId })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    await as.owner.artifact.shareSetCopy({ artifactId, allowed: true })
+    expect((await as.owner.artifact.shareState({ artifactId })).copyAllowed).toBe(true)
+    expect(await as.viewer.artifact.shareMine({ artifactId })).toEqual({ copyAllowed: true })
+    const { id: copyId } = await as.viewer.artifact.shareCopy({ artifactId })
+    const copy = await as.viewer.artifact.read({ artifactId: copyId })
+    expect(copy).toMatchObject({ title: 'Копия: План', role: 'owner' })
+    // The checked blocks as the recipient read them, in the canonical form of the source.
+    const source = await as.viewer.artifact.read({ artifactId })
+    const blocksOf = (read: typeof copy) =>
+      read.blocks.map(({ key, content }) => ({ key, content }))
+    expect(blocksOf(copy)).toEqual(blocksOf(source))
+    expect(blocksOf(copy)).toHaveLength(1)
+    // The copy is theirs: losing access to the source does not touch it.
+    await as.owner.artifact.shareCloseAll({ artifactId })
+    expect((await as.viewer.artifact.read({ artifactId: copyId })).id).toBe(copyId)
+    await expect(as.owner.artifact.read({ artifactId: copyId })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    // A recipient's copy lands in their own workspace.
+    const row = await db.artifact.findUniqueOrThrow({ where: { id: copyId } })
+    expect(row.ownerUserId).toBe(viewer.id)
+  })
 })

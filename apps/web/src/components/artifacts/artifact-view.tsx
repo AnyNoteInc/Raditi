@@ -11,7 +11,7 @@ import { useTRPC } from '@/trpc/client'
 
 import { ArtifactHistoryButton } from './artifact-history'
 import { ArtifactMoveButton } from './artifact-move'
-import { ArtifactLeaveButton, ArtifactShareButton } from './artifact-share'
+import { ArtifactCopyButton, ArtifactLeaveButton, ArtifactShareButton } from './artifact-share'
 import { ArtifactPublishButton } from './artifact-publish'
 import { ArtifactPage } from './artifact-page'
 import { galleryTexts } from './artifact-texts'
@@ -44,6 +44,7 @@ export function ArtifactView({
             <ArtifactPublishButton artifact={artifact} />
             <ArtifactMoveButton artifact={artifact} onChanged={reread} />
             {sharing ? <ArtifactShareButton artifact={artifact} /> : null}
+            {sharing ? <ArtifactCopyButton artifact={artifact} /> : null}
             {sharing ? <ArtifactLeaveButton artifact={artifact} /> : null}
             {artifactRoleAtLeast(artifact.role, 'owner') ? (
               <Button

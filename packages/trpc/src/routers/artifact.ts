@@ -5,6 +5,7 @@ import {
   addArtifactCommentReply,
   admitInWindow,
   artifactAccessState,
+  artifactCopyAllowedFor,
   closeArtifactAccess,
   createArtifactLink,
   declineArtifactInvite,
@@ -15,6 +16,7 @@ import {
   removeArtifactRecipient,
   revokeArtifactInvite,
   revokeArtifactLink,
+  setArtifactCopyAllowed,
   setArtifactRecipientRole,
   artifactGalleryFilters,
   artifactGallerySorts,
@@ -62,6 +64,7 @@ import {
   cabinetVersions,
 } from '../services/artifacts/history.ts'
 import {
+  copyArtifactForRecipient,
   createGalleryArtifact,
   galleryOf,
   restoreGalleryArtifact,
@@ -519,6 +522,7 @@ export const artifactRouter = router({
             createdAt: z.iso.datetime(),
           }),
         ),
+        copyAllowed: z.boolean(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -541,7 +545,41 @@ export const artifactRouter = router({
           role: invite.role as (typeof artifactGrantRoles)[number],
           createdAt: invite.createdAt.toISOString(),
         })),
+        copyAllowed: state.copyAllowed,
       }
+    }),
+
+  /** «Разрешить копию» (§7.8, 88.16-4): only the owner. */
+  shareSetCopy: consentedProcedure
+    .input(z.strictObject({ artifactId, allowed: z.boolean() }))
+    .output(z.strictObject({ allowed: z.boolean() }))
+    .mutation(({ ctx, input }) => {
+      requireSharing(ctx)
+      return setArtifactCopyAllowed(ctx.prisma, { userId: ctx.user.id, ...input })
+    }),
+
+  /** What a recipient may do beside reading: a copy of their own. */
+  shareMine: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(z.strictObject({ copyAllowed: z.boolean() }))
+    .query(async ({ ctx, input }) => {
+      if (!artifactSharingOpen(chatContextOf(ctx).appEnv)) return { copyAllowed: false }
+      return {
+        copyAllowed: await artifactCopyAllowedFor(ctx.prisma, { userId: ctx.user.id, ...input }),
+      }
+    }),
+
+  /** «Сделать копию» of a recipient: a new artifact of their personal workspace. */
+  shareCopy: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(z.strictObject({ id: z.uuid() }))
+    .mutation(({ ctx, input }) => {
+      requireSharing(ctx)
+      return copyArtifactForRecipient(ctx.prisma, {
+        userId: ctx.user.id,
+        appEnv: chatContextOf(ctx).appEnv,
+        artifactId: input.artifactId,
+      })
     }),
 
   /**

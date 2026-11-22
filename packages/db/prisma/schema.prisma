@@ -2600,6 +2600,8 @@ model Artifact {
   deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
   deletedBy      String?   @map("deleted_by") @db.VarChar(8)
   purgeAfter     DateTime? @map("purge_after") @db.Timestamptz(6)
+  /// Those it is opened to may make a copy of their own (88.16-4); only the owner sets it.
+  copyAllowed    Boolean   @default(false) @map("copy_allowed")
   takenDownAt    DateTime? @map("taken_down_at") @db.Timestamptz(6)
   takenDownBy    String?   @map("taken_down_by") @db.VarChar(8)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
