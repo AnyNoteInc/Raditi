@@ -42,6 +42,7 @@ import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { QueueDrain } from './queue-drain.ts'
+import { ArtifactNotify } from './artifact-notify.ts'
 import { ChatNotify } from './chat-notify.ts'
 import { NotificationDelivery, notificationDeliveryOf } from './notification-delivery.ts'
 import { ScheduleChanges } from './schedule-changes.ts'
@@ -189,6 +190,13 @@ export const taskProviders: Provider[] = [
         delivery,
         schedules: new ScheduleNotify({ db: prisma, delivery }),
       }),
+    inject: [PRISMA, NotificationDelivery],
+  },
+  {
+    // A notice of an artifact (docs/plan/88-artifacts.md, Ар54).
+    provide: ArtifactNotify,
+    useFactory: (prisma: PrismaClient, delivery: NotificationDelivery) =>
+      new ArtifactNotify({ db: prisma, delivery }),
     inject: [PRISMA, NotificationDelivery],
   },
   {

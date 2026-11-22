@@ -8,11 +8,41 @@ import { chatNotifyKinds, type ChatNotifyKind } from '../tasks/agent-turn-job.ts
  * scheduled task itself — it did not start, it paused, it missed a run.
  */
 
-export const notificationKinds = [...chatNotifyKinds, 'not_started', 'paused', 'missed'] as const
+/**
+ * Notices of artifacts (docs/plan/88-artifacts.md, Ар54): someone opened one to you, a new comment
+ * in a thread of all, the agent answered your note, another person changed yours. A letter and a
+ * push name neither the artifact nor its words — only what happened, with a link to the cabinet.
+ */
+export const artifactNoticeKinds = [
+  'artifact_shared',
+  'artifact_comment',
+  'artifact_agent_reply',
+  'artifact_changed',
+] as const
+export type ArtifactNoticeKind = (typeof artifactNoticeKinds)[number]
+
+export const notificationKinds = [
+  ...chatNotifyKinds,
+  'not_started',
+  'paused',
+  'missed',
+  ...artifactNoticeKinds,
+] as const
 export type NotificationKind = (typeof notificationKinds)[number]
 
 export const isNotificationKind = (kind: string): kind is NotificationKind =>
   (notificationKinds as readonly string[]).includes(kind)
+
+export const isArtifactNoticeKind = (kind: string): kind is ArtifactNoticeKind =>
+  (artifactNoticeKinds as readonly string[]).includes(kind)
+
+/** The title of a notice of an artifact: ours only, no title or words of anyone (Ар54). */
+export const artifactNoticeTitles: Readonly<Record<ArtifactNoticeKind, string>> = Object.freeze({
+  artifact_shared: 'С вами поделились артефактом',
+  artifact_comment: 'Новый комментарий в артефакте',
+  artifact_agent_reply: 'Агент ответил на заметку',
+  artifact_changed: 'Ваш артефакт изменили',
+})
 
 /** What stopped a pass at its limit, by the row of its feed: credits or the weekly limit. */
 export type NoticeLimitCause = 'credits' | 'weekly_limit'
@@ -54,6 +84,8 @@ export function scheduledNoticeTitle(kind: NotificationKind, cause?: NoticeLimit
       return 'Запланированная задача приостановлена'
     case 'missed':
       return 'Запланированная задача пропустила запуск'
+    default:
+      return artifactNoticeTitles[kind]
   }
 }
 
@@ -112,7 +144,7 @@ export const notificationPushPayloadSchema = z.strictObject({
     .regex(/^\/(?!\/)[A-Za-z0-9/_-]*$/, 'a path of the cabinet'),
   kind: z.enum(notificationKinds),
   scheduled: z.boolean(),
-  tag: z.string().regex(/^(?:schedule|chat):[0-9a-f-]{36}$/),
+  tag: z.string().regex(/^(?:schedule|chat|artifact):[0-9a-f-]{36}$/),
   at: z.int().positive(),
 })
 export type NotificationPushPayload = z.infer<typeof notificationPushPayloadSchema>

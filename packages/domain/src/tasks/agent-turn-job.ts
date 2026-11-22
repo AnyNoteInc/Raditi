@@ -82,6 +82,20 @@ export const queueDrainDedupeKey = (job: QueueDrainJob): string =>
  * tells the client — Web Push, a letter — unless the client looks at the chat. Written by core in
  * the transaction of the ending, due `CHAT_NOTIFY_DELAY_MS` later. Ids and the kind only.
  */
+/**
+ * A notice of an artifact (docs/plan/88-artifacts.md, Ар54): written in the transaction of what
+ * happened, core decides whether the reader still has access and tells them. Ids and the kind only.
+ */
+export const ARTIFACT_NOTIFY_JOB = 'artifact.notify'
+export const artifactNotifyJobSchema = z.strictObject({
+  artifactId: z.uuid(),
+  userId: z.uuid(),
+  kind: z.enum(['artifact_shared', 'artifact_comment', 'artifact_agent_reply', 'artifact_changed']),
+  /** Who did it: their name is shown in the cabinet, never in a letter or a push. */
+  actorUserId: z.uuid().nullable(),
+})
+export type ArtifactNotifyJob = z.infer<typeof artifactNotifyJobSchema>
+
 export const CHAT_NOTIFY_JOB = 'chat.notify'
 export const CHAT_NOTIFY_DELAY_MS = 45_000
 export const chatNotifyKinds = ['answered', 'question', 'ready', 'failed', 'limit'] as const

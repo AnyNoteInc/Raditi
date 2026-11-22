@@ -120,6 +120,18 @@ export const mailDataSchemas = {
     /** «Уведомления» of the settings, where the letters are turned off. */
     settingsUrl: httpUrl,
   }),
+  // A notice of an artifact (docs/plan/88-artifacts.md, Ар54): what happened in our words, a link
+  // to the cabinet and to the settings where letters are turned off — no title, no words of anyone.
+  'artifact-notice': z.object({
+    kind: z.enum([
+      'artifact_shared',
+      'artifact_comment',
+      'artifact_agent_reply',
+      'artifact_changed',
+    ]),
+    url: httpUrl,
+    settingsUrl: httpUrl,
+  }),
   // An invitation to an artifact (docs/plan/88-artifacts.md, Ар35, slice 88.16-2): to any address
   // the owner typed, so its words are ours alone — the inviter's name only if greetingName finds it
   // safe, the kind as a word, never a title or anything of the artifact.

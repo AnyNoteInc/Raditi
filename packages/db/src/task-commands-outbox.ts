@@ -4,8 +4,10 @@ import {
   agentTurnCancelDedupeKey,
   agentTurnCancelJobSchema,
   CHAT_NOTIFY_DELAY_MS,
+  ARTIFACT_NOTIFY_JOB,
   CHAT_NOTIFY_JOB,
   chatNotifyDedupeKey,
+  artifactNotifyJobSchema,
   chatNotifyJobSchema,
   QUEUE_DRAIN_JOB,
   queueDrainDedupeKey,
@@ -13,6 +15,7 @@ import {
   type AgentTurnCancelJob,
   type ChatNotifyJob,
   type QueueDrainJob,
+  type ArtifactNotifyJob,
 } from '@repo/domain'
 
 import type { Prisma } from './generated/prisma/client.ts'
@@ -57,6 +60,25 @@ export async function enqueueQueueDrain(
     type: QUEUE_DRAIN_JOB,
     payload,
     dedupeKey: queueDrainDedupeKey(payload),
+  })
+}
+
+/**
+ * A notice of an artifact (docs/plan/88-artifacts.md, Ар54), in the transaction of what happened:
+ * core decides whether the reader still has access and tells them. `key` — what it is of (the
+ * comment, the reply, the grant), so a repeat of the transaction writes one job.
+ */
+export async function enqueueArtifactNotify(
+  tx: OutboxWriter,
+  job: ArtifactNotifyJob,
+  key: string,
+): Promise<boolean> {
+  const payload = artifactNotifyJobSchema.parse(job)
+  return enqueueOutbox(tx, {
+    topic: AGENT_TURN_QUEUE,
+    type: ARTIFACT_NOTIFY_JOB,
+    payload,
+    dedupeKey: `${ARTIFACT_NOTIFY_JOB}:${payload.kind}:${payload.userId}:${key}`,
   })
 }
 

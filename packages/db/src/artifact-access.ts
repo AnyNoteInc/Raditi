@@ -24,6 +24,7 @@ import {
 
 import { artifactRole, lockArtifact } from './artifacts.ts'
 import { artifactAddressees, recordOriFact, type OriOrigin } from './ori.ts'
+import { enqueueArtifactNotify } from './task-commands-outbox.ts'
 import type { Prisma, PrismaClient } from './generated/prisma/client.ts'
 
 // Access of other users to an artifact (docs/plan/88-artifacts.md, Ар33–Ар36, §7.8; slice
@@ -380,6 +381,23 @@ export async function inviteToArtifact(
     },
     select: { id: true },
   })
+  // A user of this confirmed address hears of it in the cabinet too (Ар54); the owner never learns
+  // whether there is one.
+  const invitee = await tx.user.findFirst({
+    where: { email: { equals: input.email, mode: 'insensitive' }, emailVerified: true },
+    select: { id: true },
+  })
+  if (invitee)
+    await enqueueArtifactNotify(
+      tx,
+      {
+        artifactId: artifact.id,
+        userId: invitee.id,
+        kind: 'artifact_shared',
+        actorUserId: input.userId,
+      },
+      invite.id,
+    )
   return { inviteId: invite.id, kind: artifact.kind, inviterName: inviter.name }
 }
 

@@ -51,6 +51,11 @@ const samples: MailData = {
     url: 'https://raditi.ru/chats/0199a3f2-0000-7000-8000-000000000001',
     settingsUrl: 'https://raditi.ru/settings',
   },
+  'artifact-notice': {
+    kind: 'artifact_comment',
+    url: 'https://raditi.ru/artifacts/0199a3f2-0000-7000-8000-000000000001',
+    settingsUrl: 'https://raditi.ru/settings',
+  },
   'artifact-invite': {
     inviterName: 'Анна Петрова',
     kindWord: 'документ',

@@ -52,6 +52,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
     await db.workspace.deleteMany({ where: { id: owned.workspaceId } })
     await db.rateLimit.deleteMany({ where: { key: { startsWith: 'artifact-open' } } })
     await db.outboxEvent.deleteMany({ where: { dedupeKey: { startsWith: 'artifact.invite:' } } })
+    await db.outboxEvent.deleteMany({ where: { type: 'artifact.notify' } })
     await db.user.deleteMany({ where: { id: { in: users } } })
   })
   afterAll(async () => {
@@ -575,5 +576,47 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
       ),
     ).toEqual(['Всем: проверьте цены', 'Цены верные'])
     expect(owner.id).not.toBe(editor.id)
+  })
+
+  it('asks core to tell the people of an artifact, without their words (Ар54)', async () => {
+    const { owner, viewer, editor, as, artifactId } = await shared()
+    const notices = async () =>
+      (
+        await db.outboxEvent.findMany({
+          where: { type: 'artifact.notify', payload: { path: ['artifactId'], equals: artifactId } },
+          orderBy: { createdAt: 'asc' },
+          select: { payload: true },
+        })
+      ).map((row) => row.payload as { userId: string; kind: string; actorUserId: string | null })
+    // An invitation to a confirmed address of a user: they hear of it.
+    await as.owner.artifact.shareInvite({ artifactId, email: editor.email, role: 'edit' })
+    const [invite] = await as.editor.artifact.myInvites()
+    await as.editor.artifact.inviteAccept({ inviteId: invite!.inviteId })
+    // Another person changed the owner's artifact: the owner hears of it.
+    await as.editor.artifact.write({ batch: { artifactId, opId: randomUUID(), ops: [insertOp()] } })
+    // A thread of all: everyone else with access hears of it.
+    const view = await as.owner.artifact.shareLink({ artifactId, role: 'view', term: null })
+    await as.viewer.artifact.shareOpen({ token: view.token })
+    const read = await as.owner.artifact.read({ artifactId })
+    const s1 = read.blocks.find((block) => block.key === 's1')!
+    await as.editor.artifact.addComment({
+      artifactId,
+      anchor: { kind: 'quote', block: 's1', rev: s1.rev, quote: 'Текст' },
+      body: 'Проверьте раздел',
+      shared: true,
+    })
+    const sent = await notices()
+    expect(sent).toEqual(
+      expect.arrayContaining([
+        { artifactId, userId: editor.id, kind: 'artifact_shared', actorUserId: owner.id },
+        { artifactId, userId: owner.id, kind: 'artifact_changed', actorUserId: editor.id },
+        { artifactId, userId: owner.id, kind: 'artifact_comment', actorUserId: editor.id },
+        { artifactId, userId: viewer.id, kind: 'artifact_comment', actorUserId: editor.id },
+      ]),
+    )
+    expect(JSON.stringify(sent)).not.toContain('Проверьте раздел')
+    expect(sent.some((row) => row.userId === editor.id && row.kind === 'artifact_comment')).toBe(
+      false,
+    )
   })
 })

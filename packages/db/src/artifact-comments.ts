@@ -26,6 +26,7 @@ import {
 
 import { artifactRole, lockArtifact } from './artifacts.ts'
 import { artifactAddressees, oriTerms, recordOriFact, type OriOrigin } from './ori.ts'
+import { enqueueArtifactNotify } from './task-commands-outbox.ts'
 import { accessibleTasks } from './chat-access.ts'
 import type { Prisma, PrismaClient } from './generated/prisma/client.ts'
 import { admitInWindow } from './page-passwords.ts'
@@ -304,13 +305,15 @@ export async function addArtifactComment(
       },
       select: { id: true },
     })
-    // A thread of all is a message between users (Ар56): kept in full 6 months.
+    // A thread of all is a message between users (Ар56): kept in full 6 months; everyone else with
+    // access is told of it, without its words (Ар54).
     if (shared)
       await recordOriComment(tx, {
         artifactId: input.artifactId,
         userId: input.userId,
         origin: input.origin ?? null,
         body: input.body,
+        key: created.id,
       })
     return created
   })
@@ -354,6 +357,7 @@ export async function addArtifactCommentReply(
         userId: input.userId,
         origin: input.origin ?? null,
         body: input.body,
+        key: reply.id,
       })
     return reply
   })
@@ -683,6 +687,22 @@ export async function settleAgentCommentReplies(
           where: { id: reply.threadId, resolvedAt: null },
           data: { resolvedAt: input.now },
         })
+      // Its author is told the agent answered (Ар54): the note was theirs, the words are not said.
+      const thread = await tx.artifactComment.findUnique({
+        where: { id: reply.threadId },
+        select: { artifactId: true, authorUserId: true },
+      })
+      if (thread?.authorUserId)
+        await enqueueArtifactNotify(
+          tx,
+          {
+            artifactId: thread.artifactId,
+            userId: thread.authorUserId,
+            kind: 'artifact_agent_reply',
+            actorUserId: null,
+          },
+          verdict.id,
+        )
       checked += 1
     })
   }
@@ -732,7 +752,13 @@ export async function dropStaleAgentCommentReplies(
 /** A comment or a reply in a thread of all: a message and a fact (Ар56, 88.17а). */
 async function recordOriComment(
   tx: Prisma.TransactionClient,
-  input: { artifactId: string; userId: string; origin: OriOrigin | null; body: string },
+  input: {
+    artifactId: string
+    userId: string
+    origin: OriOrigin | null
+    body: string
+    key: string
+  },
 ) {
   const { owner, others } = await artifactAddressees(tx, input.artifactId)
   const addressees = [owner, ...others].filter(
@@ -751,4 +777,10 @@ async function recordOriComment(
     artifactId: input.artifactId,
     addressees,
   })
+  for (const userId of addressees)
+    await enqueueArtifactNotify(
+      tx,
+      { artifactId: input.artifactId, userId, kind: 'artifact_comment', actorUserId: input.userId },
+      input.key,
+    )
 }

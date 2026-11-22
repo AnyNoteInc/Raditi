@@ -33,7 +33,12 @@ export {
   enqueueAgentWaitingPasses,
   latestPassRequestId,
 } from './chat-outbox.ts'
-export { enqueueChatNotify, enqueueQueueDrain, enqueueTurnCancel } from './task-commands-outbox.ts'
+export {
+  enqueueArtifactNotify,
+  enqueueChatNotify,
+  enqueueQueueDrain,
+  enqueueTurnCancel,
+} from './task-commands-outbox.ts'
 export {
   enqueueTelegramDeliver,
   enqueueTelegramProgress,

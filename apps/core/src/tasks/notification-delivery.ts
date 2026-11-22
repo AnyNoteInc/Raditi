@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common'
 import { enqueueTelegramSend, type PrismaClient } from '@repo/db'
 import {
+  isArtifactNoticeKind,
   isPushEndpoint,
   notificationPushPayloadSchema,
   urgentNotificationKinds,
@@ -61,6 +62,8 @@ export interface Notice {
   chat: { taskId: string; attempt: number; turnNo: number } | null
   /** The scheduled task it is of (a pass without its client, or the task itself), and its run. */
   schedule: { id: string; runId: string | null } | null
+  /** The artifact it is of (docs/plan/88-artifacts.md, Ар54), and who did it; absent — none. */
+  artifact?: { id: string; actorUserId: string | null } | null
   /** The path of the cabinet it opens: the chat, or the page of the task. */
   path: string
   /** Whether a letter may tell of it at all (Зп39). */
@@ -117,6 +120,8 @@ export class NotificationDelivery {
           turnNo: notice.chat?.turnNo ?? null,
           scheduledTaskId: notice.schedule?.id ?? null,
           scheduledRunId: notice.schedule?.runId ?? null,
+          artifactId: notice.artifact?.id ?? null,
+          actorUserId: notice.artifact?.actorUserId ?? null,
         },
       ],
       skipDuplicates: true,
@@ -175,7 +180,11 @@ export class NotificationDelivery {
         kind: notice.kind,
         scheduled: notice.schedule !== null,
         // A newer run of the task replaces the notice of the one before it (Зп40).
-        tag: notice.schedule ? `schedule:${notice.schedule.id}` : `chat:${notice.chat?.taskId}`,
+        tag: notice.artifact
+          ? `artifact:${notice.artifact.id}`
+          : notice.schedule
+            ? `schedule:${notice.schedule.id}`
+            : `chat:${notice.chat?.taskId}`,
         // When the row was written: the worker never lets a push that arrives late replace a newer
         // notice under the tag. Within a tick a missed run is told before the start's refusal.
         at: now.getTime(),
@@ -242,18 +251,36 @@ export class NotificationDelivery {
         userId: notice.userId,
         emailed: true,
         createdAt: { gt: new Date(now.getTime() - LETTER_PAUSE_MS) },
-        ...(notice.schedule
-          ? { scheduledTaskId: notice.schedule.id }
-          : { taskId: notice.chat?.taskId ?? null }),
+        ...(notice.artifact
+          ? { artifactId: notice.artifact.id }
+          : notice.schedule
+            ? { scheduledTaskId: notice.schedule.id }
+            : { taskId: notice.chat?.taskId ?? null }),
       },
     })
     if (recent > 0) return false
+    const { artifact } = notice
+    if (artifact && isArtifactNoticeKind(notice.kind)) {
+      // No title and no words of anyone: what happened, and the way to turn such letters off.
+      const kind = notice.kind
+      await db.$transaction(async (tx) => {
+        await enqueueNotification(
+          'artifact.notice',
+          { to, kind, url: `${appUrl}${notice.path}`, settingsUrl: `${appUrl}/settings` },
+          { db: tx, dedupeKey: `artifact.notice:${id}` },
+        )
+        await tx.chatNotification.update({ where: { id }, data: { emailed: true } })
+      })
+      return true
+    }
+    if (isArtifactNoticeKind(notice.kind)) return false
+    const chatKind = notice.kind
     await db.$transaction(async (tx) => {
       await enqueueNotification(
         'chat.waiting',
         {
           to,
-          kind: notice.kind,
+          kind: chatKind,
           ...(notice.schedule ? { scheduled: true } : {}),
           url: `${appUrl}${notice.path}`,
           settingsUrl: `${appUrl}/settings`,

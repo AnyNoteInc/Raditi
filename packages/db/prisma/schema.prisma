@@ -76,6 +76,7 @@ model User {
   artifactGrantsGiven         ArtifactGrant[]              @relation("ArtifactGrantGranter")
   artifactInvitesSent         ArtifactInvite[]             @relation("ArtifactInviteInviter")
   artifactInvitesAccepted     ArtifactInvite[]             @relation("ArtifactInviteAcceptor")
+  chatNotificationsActed      ChatNotification[]           @relation("ChatNotificationActor")
 
   @@map("users")
 }
@@ -1259,8 +1260,13 @@ model ChatNotification {
   emailed         Boolean  @default(false)
   pushed          Int      @default(0)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// A notice of an artifact (docs/plan/88-artifacts.md, Ар54) and who did what it tells of.
+  artifactId      String?  @map("artifact_id") @db.Uuid
+  actorUserId     String?  @map("actor_user_id") @db.Uuid
 
   task          Task?          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  artifact      Artifact?      @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  actor         User?          @relation("ChatNotificationActor", fields: [actorUserId], references: [id], onDelete: SetNull)
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   scheduledTask ScheduledTask? @relation(fields: [scheduledTaskId], references: [id], onDelete: Cascade)
   scheduledRun  ScheduledRun?  @relation(fields: [scheduledRunId], references: [id], onDelete: Cascade)
@@ -1269,6 +1275,7 @@ model ChatNotification {
   @@unique([scheduledRunId, kind], map: "chat_notifications_run_key", where: raw("(scheduled_run_id IS NOT NULL)"))
   @@index([taskId, userId, createdAt])
   @@index([scheduledTaskId, createdAt])
+  @@index([artifactId, userId, createdAt], where: raw("artifact_id IS NOT NULL"))
   @@map("chat_notifications")
 }
 
@@ -2616,6 +2623,7 @@ model Artifact {
   links             ArtifactLink[]
   grants            ArtifactGrant[]
   invites           ArtifactInvite[]
+  notifications     ChatNotification[]
   versions          ArtifactVersion[]
   content           ArtifactContent?
   page              Page?

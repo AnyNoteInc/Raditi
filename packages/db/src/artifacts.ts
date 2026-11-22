@@ -61,6 +61,7 @@ import {
 
 import { isArtifactRank, rankBetween, rankForIndex } from './artifact-rank.ts'
 import { recordOriWrites, retainPurgedArtifacts, type OriOrigin } from './ori.ts'
+import { enqueueArtifactNotify } from './task-commands-outbox.ts'
 import { Prisma, type ArtifactBlock, type PrismaClient } from './generated/prisma/client.ts'
 import { artifactBlockOrder, blockCheckedText, NEUTRAL_INTENT, workspaceOwnerOf } from './pages.ts'
 
@@ -644,7 +645,7 @@ export async function applyArtifactOps(
     const answer = await new BatchRun(tx, artifact, actor, now, batch, hash).run()
     // A person's write in an artifact opened to others is a message between users (Ар56): kept in
     // full 6 months. An agent's unchecked text waits for the check (88.17) — never a secret here.
-    if (actor.kind === 'user')
+    if (actor.kind === 'user') {
       await recordOriWrites(tx, {
         artifactId: artifact.id,
         userId: actor.userId,
@@ -652,6 +653,23 @@ export async function applyArtifactOps(
         ops: batch.ops,
         now,
       })
+      // Another person changed the owner's artifact (Ар54): core tells the owner once a series.
+      if (
+        artifact.ownerUserId !== null &&
+        artifact.ownerUserId !== actor.userId &&
+        !answer.repeated
+      )
+        await enqueueArtifactNotify(
+          tx,
+          {
+            artifactId: artifact.id,
+            userId: artifact.ownerUserId,
+            kind: 'artifact_changed',
+            actorUserId: actor.userId,
+          },
+          `${actor.userId}:${batch.opId}`,
+        )
+    }
     return answer
   })
 }
