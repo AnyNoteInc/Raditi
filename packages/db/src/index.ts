@@ -182,6 +182,13 @@ export {
   type ArtifactAnchorReaders,
 } from './artifact-comments.ts'
 export { accessibleTasks } from './chat-access.ts'
+export {
+  artifactNamedByRun,
+  attachScheduledTaskArtifacts,
+  readScheduledTaskArtifacts,
+  scheduledTaskArtifactLimit,
+  setScheduledTaskArtifacts,
+} from './scheduled-task-artifacts.ts'
 export { classProfile, type ClassProfile } from './class-profile.ts'
 export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-events.ts'
 export { readChatTodo, type ChatTodoTurns } from './agent-todo.ts'

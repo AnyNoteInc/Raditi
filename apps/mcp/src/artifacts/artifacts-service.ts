@@ -67,6 +67,8 @@ export interface McpChatArtifactAccess {
   role: 'view' | 'comment' | 'edit' | 'owner'
   personal: boolean
   linked: boolean
+  /** The scheduled task of the chat's run names it (Ар24, 88.20б): its run may change it. */
+  named?: boolean
 }
 
 export interface McpArtifactBlock {
@@ -215,11 +217,14 @@ const actorOf = (scope: McpTurnAccess): Actor => ({
   ...(scope.unattended ? { scheduled: true } : {}),
 })
 
-/** A pass without its client changes only the client's own artifacts without a project (Ар24). */
+/**
+ * A pass without its client changes only the client's own artifacts without a project and those
+ * its scheduled task names (Ар24).
+ */
 const unattendedRefusal = () =>
   new DomainError(
     'ARTIFACT_FORBIDDEN',
-    'This pass runs on a schedule without the client: change only the client’s own artifacts without a project',
+    'This pass runs on a schedule without the client: change only the client’s own artifacts without a project and those the task names',
     403,
   )
 
@@ -395,7 +400,7 @@ export class McpArtifactsService {
     const access = await this.#store.access(scope.taskId, artifactId)
     if (access === null) throw artifactNotFound()
     if (write && access.role !== 'edit' && access.role !== 'owner') throw artifactForbidden()
-    if (changes && scope.unattended && !access.personal) throw unattendedRefusal()
+    if (changes && scope.unattended && !access.personal && !access.named) throw unattendedRefusal()
     return access
   }
 

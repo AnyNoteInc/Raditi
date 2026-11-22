@@ -2605,6 +2605,7 @@ model Artifact {
   project           Project?                  @relation(fields: [projectId], references: [id], onDelete: SetNull)
   owner             User?                     @relation("ArtifactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   sections          ArtifactBlock[]
+  scheduledTasks    ScheduledTaskArtifact[]
   versions          ArtifactVersion[]
   content           ArtifactContent?
   page              Page?
@@ -2934,12 +2935,13 @@ model ScheduledTask {
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  workspace     Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy     User                  @relation(fields: [createdById], references: [id], onDelete: Restrict)
-  project       Project?              @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  sourceTask    Task?                 @relation("ScheduledTaskSource", fields: [sourceTaskId], references: [id], onDelete: SetNull)
+  workspace     Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy     User                    @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  project       Project?                @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  sourceTask    Task?                   @relation("ScheduledTaskSource", fields: [sourceTaskId], references: [id], onDelete: SetNull)
   runs          ScheduledRun[]
   reservations  ScheduleReservation[]
+  artifacts     ScheduledTaskArtifact[]
   notifications ChatNotification[]
 
   @@index([nextRunAt], map: "scheduled_tasks_due_idx", where: raw("(enabled AND (deleted_at IS NULL) AND (next_run_at IS NOT NULL))"))
@@ -2948,6 +2950,21 @@ model ScheduledTask {
   @@index([sourceTaskId])
   @@index([projectId], map: "scheduled_tasks_project_id_idx", where: raw("(project_id IS NOT NULL)"))
   @@map("scheduled_tasks")
+}
+
+/// The artifacts a scheduled task names in its window (docs/plan/88-artifacts.md, Ар24, 88.20б): a
+/// run without its client may change them, beside the client's own without a project.
+model ScheduledTaskArtifact {
+  scheduledTaskId String   @map("scheduled_task_id") @db.Uuid
+  artifactId      String   @map("artifact_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  scheduledTask ScheduledTask @relation(fields: [scheduledTaskId], references: [id], onDelete: Cascade)
+  artifact      Artifact      @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+
+  @@id([scheduledTaskId, artifactId])
+  @@index([artifactId])
+  @@map("scheduled_task_artifacts")
 }
 
 /// A run of a scheduled task (Зп14, Зп19–Зп24): by its schedule at a due moment, or «Запустить

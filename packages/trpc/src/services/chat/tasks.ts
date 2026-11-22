@@ -6,6 +6,7 @@ import {
   taskChainAttempts,
 } from '@repo/billing'
 import {
+  attachScheduledTaskArtifacts,
   enqueueAgentTurn,
   enqueueTurnCancel,
   insertFeedEvent,
@@ -265,6 +266,12 @@ export async function createDialog(
         now,
       )
       if (!bound.recorded) throw scheduledRunClosed()
+      // The artifacts its task names are given to the chat (docs/plan/88-artifacts.md, Ар24).
+      await attachScheduledTaskArtifacts(tx, {
+        taskId,
+        scheduledRunId: input.scheduledRunId,
+        now,
+      })
     }
     await placeCreditHold(tx, {
       workspaceId,

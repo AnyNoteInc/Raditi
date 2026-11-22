@@ -1,5 +1,6 @@
 import {
   addAgentCommentReply,
+  artifactNamedByRun,
   admitInWindow,
   applyArtifactOps,
   artifactBlocksChangedSince,
@@ -38,7 +39,12 @@ export function postgresArtifactsStore(
     projectOf: async (taskId) =>
       (await db.task.findUnique({ where: { id: taskId }, select: { projectId: true } }))
         ?.projectId ?? null,
-    access: (taskId, artifactId) => chatArtifactAccess(db, { taskId, artifactId }),
+    access: async (taskId, artifactId) => {
+      const access = await chatArtifactAccess(db, { taskId, artifactId })
+      if (access === null) return null
+      // Named in the window of the run's scheduled task (Ар24, 88.20б): the run may change it.
+      return { ...access, named: await artifactNamedByRun(db, { taskId, artifactId }) }
+    },
     list: (input) => listChatArtifacts(db, input),
     read: async (actor, artifactId) => {
       const artifact = await readArtifact(db, { artifactId, actor })

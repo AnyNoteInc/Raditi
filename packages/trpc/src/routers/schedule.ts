@@ -7,6 +7,11 @@ import {
   scheduleTriggerListSchema,
   type AppEnv,
 } from '@repo/domain'
+import {
+  readScheduledTaskArtifacts,
+  scheduledTaskArtifactLimit,
+  setScheduledTaskArtifacts,
+} from '@repo/db'
 import { z } from 'zod'
 
 import { chatContextOf } from '../services/chat/context.ts'
@@ -220,6 +225,29 @@ export const scheduleRouter = router({
         confirmToken: input.confirmToken,
         now: new Date(),
       }),
+    ),
+
+  /**
+   * «Артефакты задачи» (docs/plan/88-artifacts.md, Ар24, slice 88.20б): what a run without its
+   * client may change beside the client's own artifacts without a project. Only the cabinet sets it.
+   */
+  artifacts: consentedProcedure
+    .input(scheduleInput)
+    .output(z.array(z.strictObject({ id: z.uuid(), kind: z.string(), title: z.string() })))
+    .query(({ ctx, input }) =>
+      readScheduledTaskArtifacts(ctx.prisma, { userId: ctx.user.id, scheduleId: input.scheduleId }),
+    ),
+
+  setArtifacts: consentedProcedure
+    .input(
+      z.strictObject({
+        scheduleId: z.uuid(),
+        artifactIds: z.array(z.uuid()).max(scheduledTaskArtifactLimit),
+      }),
+    )
+    .output(z.strictObject({ artifactIds: z.array(z.uuid()) }))
+    .mutation(({ ctx, input }) =>
+      setScheduledTaskArtifacts(ctx.prisma, { userId: ctx.user.id, ...input }),
     ),
 
   /** «Удалить» (Зп23): the task goes, the chats of its runs stay. */

@@ -427,6 +427,21 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
     })
   })
 
+  it('in a pass without its client changes an artifact its scheduled task names (Ар24, 88.20б)', async () => {
+    const named = fakeStore({ role: 'owner', personal: false, linked: true, named: true })
+    const server = await start(named.store, { ...base, unattended: true })
+    const edit = await post(
+      server,
+      call('artifact_edit', {
+        artifactId,
+        opId: 'a4',
+        ops: [{ op: 'edit', block: 'intro', find: 'Текст', replace: 'Т' }],
+      }),
+    )
+    expect(edit.body.result.isError).toBeUndefined()
+    expect(named.store.apply).toHaveBeenCalled()
+  })
+
   it('in a pass without its client changes only the client’s own artifacts (Ар24)', async () => {
     const shared = fakeStore({ role: 'owner', personal: false, linked: true })
     const server = await start(shared.store, { ...base, unattended: true })

@@ -212,6 +212,8 @@ export function unattendedSection(
 - Publish or change no page and no site of pages: the tools that change them are not offered in
   this pass, whatever «Pages and sites» says about publishing a plain result or updating a site.
   Prepare the page and ask the client at the end.
+- Change only the client's personal artifacts and those the task names (attached to this chat);
+  delete no artifact and reply in no note — those tools are not offered in this pass.
 - Call no tool of the MCP servers of the workspace (skills): the platform refuses them in this pass.
   Say what you would do with them and ask the client at the end.
 - The client's variables are in your commands as always: use them only to read. Change, send and
