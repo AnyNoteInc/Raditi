@@ -21,7 +21,11 @@ import { dialogListKey } from '@/components/chat/dialog-actions'
 import { uuidv7 } from '@/components/chat/uuid'
 import { useTRPC, useTRPCClient } from '@/trpc/client'
 
-import { artifactAccessLost, artifactErrorData, readPrivateArtifact } from './artifact-access-error'
+import {
+  artifactAccessLost,
+  artifactErrorData,
+  privateArtifactQuery,
+} from './artifact-access-error'
 
 export function ArtifactCommentDispatch({
   artifactId,
@@ -45,9 +49,7 @@ export function ArtifactCommentDispatch({
   const titleId = useId()
   const query = trpc.artifact.commentDispatchChats.queryOptions({ artifactId })
   const chats = useQuery({
-    queryKey: query.queryKey,
-    queryFn: (context) => readPrivateArtifact(() => query.queryFn!(context)),
-    gcTime: 0,
+    ...privateArtifactQuery(query),
   })
   const [choice, setChoice] = useState({ id: 'new', title: 'Новый чат' })
   const [text, setText] = useState('')

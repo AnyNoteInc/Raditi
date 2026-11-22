@@ -8,7 +8,7 @@ import { useEffect, useEffectEvent, useState } from 'react'
 
 import { useTRPC, useTRPCClient } from '@/trpc/client'
 
-import { readPrivateArtifact } from './artifact-access-error'
+import { privateArtifactQuery } from './artifact-access-error'
 
 // One artifact on a page (docs/plan/88-artifacts.md, Ар20, §7.4): its blocks, read again on the
 // signals of `artifact.signals` (SSE) and, slower, by a poll that stands in for a signal lost on
@@ -29,9 +29,7 @@ export function useArtifact(artifactId: string, { block = null }: { block?: stri
   const [signalled, setSignalled] = useState(false)
   const query = trpc.artifact.read.queryOptions({ artifactId })
   const read = useQuery({
-    queryKey: query.queryKey,
-    queryFn: (context) => readPrivateArtifact(() => query.queryFn!(context)),
-    gcTime: 0,
+    ...privateArtifactQuery(query),
     refetchInterval: signalled ? POLL_SIGNALLED_MS : POLL_UNSIGNALLED_MS,
     refetchIntervalInBackground: false,
   })

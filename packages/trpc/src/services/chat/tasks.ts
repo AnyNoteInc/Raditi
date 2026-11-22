@@ -77,6 +77,10 @@ type Tx = Prisma.TransactionClient
 export interface DialogRequestBinding {
   lock(tx: Tx): Promise<void>
   authorize(tx: Tx, taskId: string): Promise<void>
+  /**
+   * The earlier receipt under this key, its access checked again. The caller of `createDialog`
+   * calls it first; both writers call it again under `lock`.
+   */
   replay(db: Tx): Promise<{ taskId: string; requestEventId: string } | null>
   bind(tx: Tx, ids: { taskId: string; workspaceId: string; requestEventId: string }): Promise<void>
   collision(): Error
@@ -200,10 +204,8 @@ export async function createDialog(
   })
   if (!UUID_V7.safeParse(taskId).success) throw taskIdInvalid()
 
-  if (binding) {
-    const earlier = await binding.replay(db)
-    if (earlier !== null) return { ...earlier, created: false }
-  } else {
+  // The caller of a bound request has replayed it already; it replays again under its lock below.
+  if (!binding) {
     const earlier = await sameDialog(db, { taskId, userId })
     if (earlier !== null) return earlier
   }

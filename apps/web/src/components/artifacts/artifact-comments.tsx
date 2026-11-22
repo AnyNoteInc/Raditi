@@ -37,7 +37,11 @@ import {
 import { DictationButton, withDictatedWords } from '@/components/chat/dictation-button'
 import { useTRPC, useTRPCClient } from '@/trpc/client'
 
-import { artifactAccessLost, artifactErrorData, readPrivateArtifact } from './artifact-access-error'
+import {
+  artifactAccessLost,
+  artifactErrorData,
+  privateArtifactQuery,
+} from './artifact-access-error'
 import { ArtifactCommentDispatch } from './artifact-comment-dispatch'
 import type { CabinetArtifact } from './use-artifact'
 
@@ -169,9 +173,7 @@ export function ArtifactComments({
   const [forAll, setForAll] = useState(!owner)
   const query = trpc.artifact.comments.queryOptions({ artifactId })
   const list = useQuery({
-    queryKey: query.queryKey,
-    queryFn: (context) => readPrivateArtifact(() => query.queryFn!(context)),
-    gcTime: 0,
+    ...privateArtifactQuery(query),
     refetchInterval: 20_000,
   })
   const add = useMutation(trpc.artifact.addComment.mutationOptions())
@@ -179,7 +181,7 @@ export function ArtifactComments({
   const [reply, setReply] = useState<ReplyDraft | null>(null)
   const [replyPending, setReplyPending] = useState(false)
   const [replyError, setReplyError] = useState<string | null>(null)
-  const [replyDenied, setReplyDenied] = useState(false)
+  const [accessDenied, setAccessDenied] = useState(false)
   const replyAttempts = useRef(new Map<string, string>())
   const activeReply = useRef<AbortController | null>(null)
   const replyTitleId = useId()
@@ -209,7 +211,7 @@ export function ArtifactComments({
   const denied =
     list.data === null ||
     artifactAccessLost(add.error) ||
-    replyDenied ||
+    accessDenied ||
     artifactErrorData(resolve.error)?.code === 'UNAUTHORIZED'
   useLayoutEffect(() => {
     const attempts = replyAttempts.current
@@ -287,7 +289,7 @@ export function ArtifactComments({
       setReplyPending(false)
       if (artifactAccessLost(error)) {
         closeReply()
-        setReplyDenied(true)
+        setAccessDenied(true)
         return
       }
       const code = artifactErrorData(error)?.domainCode
@@ -488,7 +490,7 @@ export function ArtifactComments({
           artifactId={artifactId}
           threadIds={dispatch}
           onClose={() => setDispatch(null)}
-          onAccessLost={() => setReplyDenied(true)}
+          onAccessLost={() => setAccessDenied(true)}
           onSelectionStale={() => {
             // The list read again drops what is no longer open from the selection.
             setDispatch(null)

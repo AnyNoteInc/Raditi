@@ -65,6 +65,11 @@ async function requireSender(
   return role
 }
 
+/** Candidates read at a time, and at most this many looked at for one list of choices. */
+const dispatchChatBatch = 40
+const dispatchChatScanLimit = 200
+const dispatchChatChoices = 20
+
 /**
  * Recent candidates, not an authorization to send: the user's own chats of the artifact's
  * workspace, or — for a recipient — of their own workspaces. The message writer checks again
@@ -79,7 +84,17 @@ export async function commentDispatchChats(db: PrismaClient, userId: string, art
         select: { workspaceId: true },
       })
       const choices: { taskId: string; title: string | null }[] = []
-      const batchSize = 40
+      // Whether a workspace may take the artifact's data, read once per workspace (Ар38).
+      const allowed = new Map<string, boolean>()
+      const allows = async (workspaceId: string) => {
+        let known = allowed.get(workspaceId)
+        if (known === undefined) {
+          known = await dataClassesAllow(tx, workspaceId, artifact.workspaceId)
+          allowed.set(workspaceId, known)
+        }
+        return known
+      }
+      let scanned = 0
       let after: string | undefined
       for (;;) {
         const recent = await tx.task.findMany({
@@ -89,20 +104,24 @@ export async function commentDispatchChats(db: PrismaClient, userId: string, art
             status: { in: ['awaiting_user', 'awaiting_approval'] },
           },
           orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
-          take: batchSize,
+          take: dispatchChatBatch,
           ...(after === undefined ? {} : { cursor: { id: after }, skip: 1 }),
           select: { id: true, title: true, status: true, needsBrowser: true, workspaceId: true },
         })
         for (const task of recent) {
           // A workspace that may not take the artifact's data is no choice (Ар38).
-          if (!(await dataClassesAllow(tx, task.workspaceId, artifact.workspaceId))) continue
+          if (!(await allows(task.workspaceId))) continue
           const target = await dialogMessageTarget(tx, task)
           if (target.kind === 'answer' || target.kind === 'ceiling')
             choices.push({ taskId: task.id, title: task.title })
-          if (choices.length === 20) return choices
+          if (choices.length === dispatchChatChoices) return choices
         }
         after = recent.at(-1)?.id
-        if (recent.length < batchSize || after === undefined) return choices
+        scanned += recent.length
+        if (recent.length < dispatchChatBatch || after === undefined) return choices
+        // Each candidate costs a few reads under the snapshot: a long tail of chats that cannot
+        // take a message is cut, not walked to its end. Sending checks the chosen chat anyway.
+        if (scanned >= dispatchChatScanLimit) return choices
       }
     },
     { isolationLevel: 'RepeatableRead' },

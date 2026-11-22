@@ -186,8 +186,11 @@ export async function readPassFacts(
     (await passUnattended(db, task.id, { requestEventId: input.requestEventId }))
       ? { name: task.scheduledRun.name }
       : null
-  const dispatch = unattended ? null : await dispatchOfPass(db, task.id, answered, rows)
-  if (dispatch === false) return null
+  const carried: PassDispatch = unattended
+    ? { kind: 'none' }
+    : await dispatchOfPass(db, task.id, answered, rows)
+  if (carried.kind === 'invalid') return null
+  const dispatch = carried.kind === 'notes' ? carried.facts : null
   // Threads with words of other people mark the turn as one that read others (Ар25, 88.17в).
   if (dispatch && artifactCommentsByOthers(dispatch.artifactComments.notes))
     await markArtifactReadOther(db, {
@@ -367,30 +370,42 @@ export async function readPassFacts(
 
 type PassRequestRow = { id: bigint; payload: unknown; artifactCommentHasWords: boolean | null }
 
+/** What a pass carries of a dispatch of notes: none, notes, or links that do not hold. */
+type PassDispatch =
+  | { kind: 'none' }
+  | { kind: 'invalid' }
+  | {
+      kind: 'notes'
+      facts: Required<Pick<PassFacts, 'artifactCommentSourceId' | 'artifactComments'>>
+    }
+
 /**
  * The notes of the dispatch this pass carries: of the request it answers, or of the dispatch the
- * ceiling question it continues names (`artifactCommentSourceOf`). null — none; false — the link
- * does not hold, and the pass is not planned.
+ * ceiling question it continues names (`artifactCommentSourceOf`). `invalid` — the link does not
+ * hold, and the pass is not planned.
  */
 async function dispatchOfPass(
   db: PrismaClient,
   taskId: string,
   answered: PassRequestRow,
   history: readonly PassRequestRow[],
-) {
+): Promise<PassDispatch> {
+  const none = { kind: 'none' } as const
+  const invalid = { kind: 'invalid' } as const
   const event = readFeedRow('feed.request', answered.payload)
-  if (event.type !== 'feed.request') return answered.artifactCommentHasWords === null ? null : false
+  if (event.type !== 'feed.request')
+    return answered.artifactCommentHasWords === null ? none : invalid
   const sourceId = await artifactCommentSourceOf(db, { taskId, requestEventId: answered.id })
-  if (sourceId === null) return null
+  if (sourceId === null) return none
   const original = history.find(({ id }) => id === sourceId)
-  if (!original || original.artifactCommentHasWords === null) return false
+  if (!original || original.artifactCommentHasWords === null) return invalid
   const request = readFeedRow('feed.request', original.payload)
   if (
     request.type !== 'feed.request' ||
     (request.kind !== 'first' && request.kind !== 'answer') ||
     request.authorId !== event.authorId
   )
-    return false
+    return invalid
   const artifactComments = await readArtifactCommentDispatch(db, {
     taskId,
     requestEventId: original.id,
@@ -398,7 +413,7 @@ async function dispatchOfPass(
   }).catch((error: unknown) => {
     throw notesWithdrawn(error)
   })
-  return { artifactCommentSourceId: original.id, artifactComments }
+  return { kind: 'notes', facts: { artifactCommentSourceId: original.id, artifactComments } }
 }
 
 /**

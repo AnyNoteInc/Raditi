@@ -692,6 +692,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     await expect(guest.caller.artifact.commentDispatchChats({ artifactId })).rejects.toMatchObject({
       code: 'NOT_FOUND',
     })
+
+    // The search is bounded: past 200 newer chats that cannot take a message it stops looking.
+    await db.task.createMany({
+      data: Array.from({ length: 200 }, () => ({
+        ...own,
+        status: 'awaiting_user',
+        title: 'Нет открытого события',
+        updatedAt: new Date('2026-12-01T10:00:00Z'),
+      })),
+    })
+    expect(await caller.artifact.commentDispatchChats({ artifactId })).toEqual([])
   })
 
   it('sends notes through the cabinet once and keeps their text out of the chat feed (88.18в)', async () => {
