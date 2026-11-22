@@ -1,5 +1,6 @@
 import {
   addAgentCommentReply,
+  artifactAddressees,
   artifactNamedByRun,
   admitInWindow,
   applyArtifactOps,
@@ -50,8 +51,39 @@ export function postgresArtifactsStore(
       const artifact = await readArtifact(db, { artifactId, actor })
       const intents = await db.artifactBlock.findMany({
         where: { documentId: artifactId, deletedRev: null },
-        select: { sectionKey: true, intent: true, leaseIntent: true, pendingTaskId: true },
+        select: {
+          sectionKey: true,
+          intent: true,
+          leaseIntent: true,
+          pendingTaskId: true,
+          writtenByUserId: true,
+          writtenTaskId: true,
+        },
       })
+      // Who wrote each block last (Ар25): another person, or another person's agent, is `other`.
+      const client = (
+        await db.task.findUnique({ where: { id: actor.taskId }, select: { createdById: true } })
+      )?.createdById
+      const writerChats = [
+        ...new Set(intents.flatMap((each) => (each.writtenTaskId ? [each.writtenTaskId] : []))),
+      ]
+      const chatOwners = new Map(
+        (
+          await db.task.findMany({
+            where: { id: { in: writerChats } },
+            select: { id: true, createdById: true },
+          })
+        ).map((task) => [task.id, task.createdById]),
+      )
+      const other = new Set(
+        intents
+          .filter(
+            (each) =>
+              (each.writtenByUserId !== null && each.writtenByUserId !== client) ||
+              (each.writtenTaskId !== null && chatOwners.get(each.writtenTaskId) !== client),
+          )
+          .map((each) => each.sectionKey),
+      )
       // The chat reads the intent it wrote before the check, others only the checked one (Ар19).
       const intentOf = new Map(
         intents.map((each) => [
@@ -65,6 +97,7 @@ export function postgresArtifactsStore(
         blocks: artifact.blocks.map((block) => ({
           ...block,
           intent: intentOf.get(block.key) ?? '',
+          ...(other.has(block.key) ? { by: 'other' as const } : {}),
         })),
       }
     },
@@ -95,6 +128,44 @@ export function postgresArtifactsStore(
     feed: async (taskId, turnNo, row) => {
       const turn = await db.taskTurn.findFirst({ where: { taskId, turnNo }, select: { id: true } })
       await insertFeedEvent(db, { taskId, turnId: turn?.id ?? null, row })
+    },
+    markReadOther: async (taskId, turnNo) => {
+      await admitInWindow(db, {
+        key: `artifact-read-other:${taskId}:${turnNo}`,
+        limit: 1_000_000,
+        windowMs: DAY_MS,
+        now: now(),
+      })
+    },
+    readOther: async (taskId, turnNo) =>
+      (await db.rateLimit.findUnique({
+        where: { key: `artifact-read-other:${taskId}:${turnNo}` },
+        select: { key: true },
+      })) !== null,
+    sharedWithOthers: async (taskId, artifactId) => {
+      const client = (
+        await db.task.findUnique({ where: { id: taskId }, select: { createdById: true } })
+      )?.createdById
+      const { owner, others } = await artifactAddressees(db, artifactId)
+      return [owner, ...others].some((id) => id !== null && id !== client)
+    },
+    namedThisPass: async (taskId, turnNo, artifactId) => {
+      const turn = await db.taskTurn.findFirst({
+        where: { taskId, turnNo },
+        select: { startedAt: true, createdAt: true },
+      })
+      const since = turn?.startedAt ?? turn?.createdAt
+      if (!since) return false
+      // The client's mention of this request attaches it as the pass begins (Ар47).
+      const link = await db.artifactChat.findUnique({
+        where: { artifactId_taskId: { artifactId, taskId } },
+        select: { how: true, lastAt: true },
+      })
+      return (
+        link !== null &&
+        ['attached', 'mentioned'].includes(link.how) &&
+        link.lastAt >= new Date(since.getTime() - 60_000)
+      )
     },
     comments: (taskId, artifactId) =>
       readChatArtifactComments(db, { taskId, ...(artifactId === undefined ? {} : { artifactId }) }),

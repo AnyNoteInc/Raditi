@@ -1,4 +1,10 @@
-import { artifactLimits, artifactRoleCan, type ArtifactListScope } from '@repo/domain/artifacts'
+import {
+  artifactDataClassAllows,
+  artifactLimits,
+  artifactRoleCan,
+  type ArtifactDataClass,
+  type ArtifactListScope,
+} from '@repo/domain/artifacts'
 
 import type { Prisma, PrismaClient } from './generated/prisma/client.ts'
 import { artifactRole } from './artifacts.ts'
@@ -29,6 +35,25 @@ async function chatOf(db: Pick<PrismaClient, 'task'>, taskId: string): Promise<C
   return task
     ? { workspaceId: task.workspaceId, projectId: task.projectId, clientId: task.createdById }
     : null
+}
+
+/**
+ * Whether the data of the artifact's workspace may go to a chat of this one (Ар38): the data of a
+ * client never go to a synthetic workspace. One workspace — always.
+ */
+async function dataClassesAllow(
+  db: Pick<PrismaClient, '$queryRaw'>,
+  chatWorkspaceId: string,
+  artifactWorkspaceId: string,
+): Promise<boolean> {
+  if (chatWorkspaceId === artifactWorkspaceId) return true
+  const rows = await db.$queryRaw<{ id: string; data_class: ArtifactDataClass }[]>`
+    SELECT id, data_class::text AS data_class FROM workspaces
+    WHERE id IN (${chatWorkspaceId}::uuid, ${artifactWorkspaceId}::uuid)`
+  const of = new Map(rows.map((row) => [row.id, row.data_class]))
+  const reader = of.get(chatWorkspaceId)
+  const source = of.get(artifactWorkspaceId)
+  return reader !== undefined && source !== undefined && artifactDataClassAllows(reader, source)
 }
 
 /** Which of the chat's places an artifact is in; null — none: the chat does not open it. */
@@ -66,14 +91,20 @@ export async function chatArtifactAccess(
       chats: { where: { taskId: input.taskId }, select: { how: true } },
     },
   })
-  if (!artifact || artifact.workspaceId !== chat.workspaceId) return null
+  if (!artifact) return null
   const linked = artifact.chats.some((link) =>
     (openingLinks as readonly string[]).includes(link.how),
   )
-  if (placeOf({ ...artifact, linked }, chat) === null) return null
+  // An artifact of another workspace (slice 88.17) — one opened to the client — only once the
+  // client attached it to this chat, by the role their grant gives, and of a class of data the
+  // chat may read. It is never «personal»: a pass without the client does not write there.
+  const foreign = artifact.workspaceId !== chat.workspaceId
+  if (foreign && (!linked || !(await dataClassesAllow(db, chat.workspaceId, artifact.workspaceId))))
+    return null
+  if (!foreign && placeOf({ ...artifact, linked }, chat) === null) return null
   const role = await artifactRole(db, { artifactId: input.artifactId, userId: chat.clientId })
   if (role === null) return null
-  return { role, personal: artifact.projectId === null, linked }
+  return { role, personal: !foreign && artifact.projectId === null, linked }
 }
 
 export interface ChatArtifactRow {
@@ -103,12 +134,18 @@ export async function listChatArtifacts(
   if (wants('project') && chat.projectId) places.push({ projectId: chat.projectId })
   if (wants('mine')) places.push({ projectId: null, ownerUserId: chat.clientId })
   if (places.length === 0) return { rows: [], more: false }
+  const linkedHere = { chats: { some: { taskId: input.taskId, how: { in: [...openingLinks] } } } }
   const found = await db.artifact.findMany({
     where: {
-      workspaceId: chat.workspaceId,
       deletedAt: null,
       takenDownAt: null,
-      OR: places,
+      // Its own workspace by place; another's only attached to this chat (88.17).
+      OR: [
+        { workspaceId: chat.workspaceId, OR: places },
+        ...(wants('chat') || wants('attached')
+          ? [{ workspaceId: { not: chat.workspaceId }, ...linkedHere }]
+          : []),
+      ],
       ...(input.kind ? { kind: input.kind } : {}),
       ...(input.query ? { title: { contains: input.query, mode: 'insensitive' } } : {}),
     },
@@ -122,6 +159,7 @@ export async function listChatArtifacts(
       updatedAt: true,
       projectId: true,
       ownerUserId: true,
+      workspaceId: true,
       chats: { where: { taskId: input.taskId }, select: { how: true } },
     },
   })
@@ -131,8 +169,10 @@ export async function listChatArtifacts(
     const linked = artifact.chats.some((link) =>
       (openingLinks as readonly string[]).includes(link.how),
     )
-    const place = placeOf({ ...artifact, linked }, chat)
+    const foreign = artifact.workspaceId !== chat.workspaceId
+    const place = foreign ? (linked ? 'chat' : null) : placeOf({ ...artifact, linked }, chat)
     if (place === null) continue
+    if (foreign && !(await dataClassesAllow(db, chat.workspaceId, artifact.workspaceId))) continue
     // The role of every row, as every path reads it (Ар37).
     const role = await artifactRole(db, { artifactId: artifact.id, userId: chat.clientId })
     if (!artifactRoleCan(role, 'read')) continue
@@ -440,7 +480,8 @@ export async function attachMentionedArtifacts(
         chats: { where: { taskId: input.taskId }, select: { how: true } },
       },
     })
-    if (!artifact || artifact.workspaceId !== chat.workspaceId) continue
+    // Of another workspace — one opened to the client (88.17) — when its data may come here.
+    if (!artifact || !(await dataClassesAllow(db, chat.workspaceId, artifact.workspaceId))) continue
     const role = await artifactRole(db, { artifactId, userId: chat.clientId })
     if (!artifactRoleCan(role, 'read')) continue
     const how = artifact.chats[0]?.how ?? null

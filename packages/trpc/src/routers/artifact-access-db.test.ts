@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto'
 
 import {
+  applyArtifactOps,
+  attachMentionedArtifacts,
+  chatArtifactAccess,
   createPrismaClient,
+  listChatArtifacts,
   recordOriFact,
   sweepOriJournals,
   type PrismaClient,
@@ -442,5 +446,66 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
     await expect(
       db.$executeRaw`DELETE FROM ori_facts WHERE user_id = ${userId}::uuid`,
     ).rejects.toThrow(/append only/)
+  })
+
+  it('lets a recipient’s agent open only an artifact the recipient attached, by their role (88.17)', async () => {
+    const { viewer, editor, as, artifactId } = await shared()
+    const { token } = await as.owner.artifact.shareLink({ artifactId, role: 'edit', term: null })
+    await as.editor.artifact.shareOpen({ token })
+    // A chat of the recipient, in their own personal workspace.
+    await as.editor.artifact.create({
+      kind: 'document',
+      title: 'Своё',
+      projectId: null,
+      templateId: null,
+    })
+    const { id: workspaceId } = await db.workspace.findFirstOrThrow({
+      where: { createdById: editor.id },
+      select: { id: true },
+    })
+    const { id: taskId } = await db.task.create({
+      data: {
+        workspaceId,
+        createdById: editor.id,
+        status: 'running',
+        turnNo: 1,
+        modelClass: 'standard',
+      },
+      select: { id: true },
+    })
+    // Not attached yet: the chat neither opens nor lists it.
+    expect(await chatArtifactAccess(db, { taskId, artifactId })).toBeNull()
+    expect((await listChatArtifacts(db, { taskId })).rows.map((row) => row.id)).not.toContain(
+      artifactId,
+    )
+    await expect(
+      applyArtifactOps(db, {
+        batch: { artifactId, opId: randomUUID(), ops: [insertOp()] },
+        actor: { kind: 'agent', taskId, turnNo: 1 },
+      }),
+    ).rejects.toMatchObject({ code: 'ARTIFACT_NOT_FOUND' })
+    // The recipient's own words name it: attached, by the role their grant gives.
+    expect(await attachMentionedArtifacts(db, { taskId, artifactIds: [artifactId] })).toEqual([
+      artifactId,
+    ])
+    expect(await chatArtifactAccess(db, { taskId, artifactId })).toEqual({
+      role: 'edit',
+      personal: false,
+      linked: true,
+    })
+    expect((await listChatArtifacts(db, { taskId })).rows.map((row) => row.id)).toContain(
+      artifactId,
+    )
+    await expect(
+      applyArtifactOps(db, {
+        batch: { artifactId, opId: randomUUID(), ops: [insertOp()] },
+        actor: { kind: 'agent', taskId, turnNo: 1 },
+      }),
+    ).resolves.toMatchObject({ artifactId })
+    // Access gone — the chat opens it no more, attached or not.
+    await as.owner.artifact.shareRemove({ artifactId, recipientId: editor.id })
+    expect(await chatArtifactAccess(db, { taskId, artifactId })).toBeNull()
+    expect(viewer.id).not.toBe(editor.id)
+    await db.task.delete({ where: { id: taskId } })
   })
 })

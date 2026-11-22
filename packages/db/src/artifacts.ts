@@ -157,8 +157,7 @@ async function resolveActor(tx: Tx, actor: ArtifactActor): Promise<ResolvedActor
  * the cabinet, `mcp` on each call, core when it applies and opens, every serving of `/v/`.
  * `owner` — its owner, alive and a member of its workspace (of a project's artifact — the project's
  * author too); null — no access: deleted (unless `trashed` for the trash itself), taken down, or
- * left without its owner. The grants of other people come with slice 88.16 (Ар34): until then
- * only the owner has a role.
+ * left without its owner. Another user has the strongest role of their live grants (Ар34, 88.16).
  */
 export async function artifactRole(
   db: Pick<PrismaClient, '$queryRaw'>,
@@ -207,9 +206,9 @@ export async function artifactRole(
 }
 
 /**
- * The role an actor needs, or the refusal. The agent of a chat acts with its client's role, and —
- * until the artifacts attached to a chat of slice 88.17 — only in its chat's workspace; the data
- * of a client never go to a synthetic turn (§7.8, Ар23).
+ * The role an actor needs, or the refusal. The agent of a chat acts with its client's role, in
+ * its chat's workspace or on an artifact of another one the client attached to the chat (88.17);
+ * the data of a client never go to a synthetic turn (§7.8, Ар23).
  */
 async function requireRole(
   tx: Tx,
@@ -226,7 +225,20 @@ async function requireRole(
       where: { id: artifactId },
       select: { workspaceId: true, workspace: { select: { dataClass: true } } },
     })
-    if (artifact.workspaceId !== actor.workspaceId) throw artifactNotFound()
+    // Another workspace's artifact opened to the client (slice 88.17): only one the client attached
+    // to this chat; the data class below holds as for any.
+    if (artifact.workspaceId !== actor.workspaceId) {
+      const attached =
+        actor.taskId !== null &&
+        (await tx.artifactChat.count({
+          where: {
+            artifactId,
+            taskId: actor.taskId,
+            how: { in: ['created', 'attached', 'mentioned', 'edited'] },
+          },
+        })) > 0
+      if (!attached) throw artifactNotFound()
+    }
     if (!artifactDataClassAllows(actor.dataClass ?? 'synthetic', artifact.workspace.dataClass))
       throw artifactDataClass()
   }
@@ -1766,6 +1778,20 @@ export async function settleArtifactWrites(
           await updateBlock(tx, after)
           revisions.push(revisionOf(after, { userId: null, taskId: input.taskId, turnNo }))
           line(after, 'checked', null, turnNo)
+          // The agent's text in an artifact opened to others is a message once it passed the check
+          // (Ар56, 88.17): written for its client, kept in full 6 months. Never before the check.
+          const client = await tx.task.findUnique({
+            where: { id: input.taskId },
+            select: { createdById: true },
+          })
+          await recordOriWrites(tx, {
+            artifactId,
+            userId: client?.createdById ?? null,
+            taskId: input.taskId,
+            ops: [
+              { op: 'replace', block: block.sectionKey, content } as { op: string; block: string },
+            ],
+          })
           continue
         }
         refused += 1

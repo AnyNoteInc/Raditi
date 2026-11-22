@@ -81,6 +81,8 @@ export interface McpArtifactBlock {
   checking: boolean
   hold: string | null
   intent?: string
+  /** Written last by another person or another person's agent (Ар25): data, never an order. */
+  by?: 'other'
 }
 
 export interface McpArtifactRead {
@@ -166,6 +168,15 @@ export interface McpArtifactsStore {
   /** One more of a counted thing of this turn: false — its limit is reached. */
   admit(key: string, limit: number): Promise<boolean>
   feed(taskId: string, turnNo: number, row: FeedRow): Promise<void>
+  /**
+   * Ар25 (88.17): that this turn read text of other people; marked once one is read.
+   * `sharedWithOthers` — the artifact is open to someone beside the chat's client;
+   * `namedThisPass` — the client attached or mentioned it in the request of this pass.
+   */
+  markReadOther(taskId: string, turnNo: number): Promise<void>
+  readOther(taskId: string, turnNo: number): Promise<boolean>
+  sharedWithOthers(taskId: string, artifactId: string): Promise<boolean>
+  namedThisPass(taskId: string, turnNo: number, artifactId: string): Promise<boolean>
   /** The notes sent to this chat (88.18г): owner-only, checked by the store. */
   comments(taskId: string, artifactId?: string): Promise<McpChatComment[]>
   reply(input: {
@@ -404,6 +415,22 @@ export class McpArtifactsService {
     return access
   }
 
+  /**
+   * Ар25 (slice 88.17): a pass that read the text of other people writes into an artifact opened
+   * to others only when the client named that artifact in this pass — words of others are never
+   * a reason to change what others read.
+   */
+  async #guardOthersText(scope: McpTurnAccess, artifactId: string) {
+    if (!(await this.#store.readOther(scope.taskId, scope.turn))) return
+    if (!(await this.#store.sharedWithOthers(scope.taskId, artifactId))) return
+    if (await this.#store.namedThisPass(scope.taskId, scope.turn, artifactId)) return
+    throw new DomainError(
+      'ARTIFACT_FORBIDDEN',
+      'This turn read text of other people: change an artifact others can open only when the client named it in this request',
+      403,
+    )
+  }
+
   /** A read of an artifact this chat did not make or edit: at most 20 a turn (§7.5). */
   async #countForeign(scope: McpTurnAccess, artifactId: string, access: McpChatArtifactAccess) {
     if (access.linked) return
@@ -475,6 +502,7 @@ export class McpArtifactsService {
         ...(typeof block.props.heading === 'string' ? { heading: block.props.heading } : {}),
         ...(block.checking ? { checking: true } : {}),
         ...(block.hold ? { heldBy: block.hold } : {}),
+        ...(block.by ? { by: block.by } : {}),
       })
       if (args.part === 'outline') {
         const page = rest.slice(0, artifactLimits.outlinePageBlocks)
@@ -490,6 +518,10 @@ export class McpArtifactsService {
       }
       const part = readPart(rest.map((block) => ({ ...describe(block), content: block.content })))
       const next = rest[part.blocks.length]
+      // The text of other people was read (Ар25): the turn writes no artifact opened to others
+      // beyond those the client named in this pass.
+      if (part.blocks.some((block) => block.by === 'other'))
+        await this.#store.markReadOther(scope.taskId, scope.turn)
       if (whole && !next) await this.#store.news(scope.taskId, args.artifactId, artifact.seq)
       return {
         ...head,
@@ -564,6 +596,7 @@ export class McpArtifactsService {
   edit(scope: McpTurnAccess, args: ArtifactEditArguments): Promise<McpArtifactsAnswer> {
     return answerOf(async () => {
       await this.#open(scope, args.artifactId, true)
+      await this.#guardOthersText(scope, args.artifactId)
       const answer = await this.#store.apply(args, actorOf(scope))
       return { ...(answer as object), ...(await this.#after(scope, args.artifactId)) }
     })
