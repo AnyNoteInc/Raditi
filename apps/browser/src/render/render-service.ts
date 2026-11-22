@@ -199,22 +199,33 @@ export class RenderService {
           artifactRenderLimits.viewportWidths.desktop,
           artifactRenderLimits.viewportWidths.phone,
         ])
+    if (request.output === 'slide' && !source.slides)
+      throw new DomainError('RENDER_NOT_A_FRAME', 'Only a slide is drawn for an export', 409)
     const outputs = (width: ArtifactRenderWidth) =>
-      request.output === 'layout'
-        ? { map: true }
-        : request.output === 'image'
-          ? // Four pictures a check (Ар32): two strips a width at most.
-            { map: true, strips: Math.floor(artifactRenderLimits.picturesPerLook / asked.length) }
-          : {
-              thumb: {
-                // The board shows thumbnails at half the CSS pixels; the phone list at 2× (Ар49).
-                scale: width === artifactRenderLimits.viewportWidths.phone ? 1 : canvasThumbScale,
-                // A slide is its 720 px; a screen of a site goes on down.
-                maxCssPx: source.slides
-                  ? artifactRenderLimits.viewportHeights.slide
-                  : canvasThumbMaxCssPx,
-              },
-            }
+      request.output === 'slide'
+        ? // A slide for its PDF and PPTX: 1920×1080, sharp enough to read (88.25в).
+          {
+            thumb: {
+              scale: 1.5,
+              maxCssPx: artifactRenderLimits.viewportHeights.slide,
+              quality: 90,
+            },
+          }
+        : request.output === 'layout'
+          ? { map: true }
+          : request.output === 'image'
+            ? // Four pictures a check (Ар32): two strips a width at most.
+              { map: true, strips: Math.floor(artifactRenderLimits.picturesPerLook / asked.length) }
+            : {
+                thumb: {
+                  // The board shows thumbnails at half the CSS pixels; the phone list at 2× (Ар49).
+                  scale: width === artifactRenderLimits.viewportWidths.phone ? 1 : canvasThumbScale,
+                  // A slide is its 720 px; a screen of a site goes on down.
+                  maxCssPx: source.slides
+                    ? artifactRenderLimits.viewportHeights.slide
+                    : canvasThumbMaxCssPx,
+                },
+              }
     const results = await Promise.all(
       asked.map((width) =>
         this.#deps.pool.run((renderer) =>
@@ -233,7 +244,7 @@ export class RenderService {
       asked.map((width, at) => [width, results[at]!]),
     )
     const report =
-      request.output === 'thumbs'
+      request.output === 'thumbs' || request.output === 'slide'
         ? null
         : withSlideHeight(
             layoutReport({ title: source.title, byWidth, detail: request.detail === true }),
@@ -265,7 +276,7 @@ export class RenderService {
       problems: report?.problems ?? 0,
       heights: asked.map((width) => ({ width, height: byWidth.get(width)?.docHeight ?? null })),
       pictures,
-      ...(request.output === 'thumbs' && source.thumbKey !== null
+      ...((request.output === 'thumbs' || request.output === 'slide') && source.thumbKey !== null
         ? { thumbKey: source.thumbKey }
         : {}),
     }

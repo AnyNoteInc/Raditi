@@ -1,12 +1,19 @@
 import { readArtifact, type PrismaClient } from '@repo/db'
 import { isDomainError, type ObjectStorage } from '@repo/domain'
 import {
+  artifactExportContentTypes,
+  artifactExportFormats,
   artifactExportKey,
   artifactExportLimits,
   artifactKindSpecOf,
+  artifactSlidesOf,
   tableOfBlocks,
+  type ArtifactExportFormat,
+  type ArtifactRenderRequest,
+  type ArtifactRenderResponse,
 } from '@repo/domain/artifacts'
 
+import { deckPdf, deckPptx } from './deck.ts'
 import { workbookBytes } from './workbook.ts'
 
 // The workbooks of tables (docs/plan/88-artifacts.md, §7.13, question 26): a person asked for
@@ -18,6 +25,8 @@ import { workbookBytes } from './workbook.ts'
 export interface ArtifactExportsDependencies {
   db: PrismaClient
   storage: Pick<ObjectStorage, 'put' | 'delete'>
+  /** The renderer of the browser worker: the pictures of slides (88.25в); null — none. */
+  render?: ((request: ArtifactRenderRequest) => Promise<ArtifactRenderResponse>) | null
   logger?: { log(line: string): void; warn(line: string): void }
   now?: () => Date
 }
@@ -52,24 +61,47 @@ export class ArtifactExports {
       logger?.warn(`artifact_export_refused export=${exportId} reason=${error.code}`)
       return 'failed'
     }
-    if (!artifactKindSpecOf(artifact.kind)?.exports.includes('xlsx')) {
+    const format = (artifactExportFormats as readonly string[]).includes(row.format)
+      ? (row.format as ArtifactExportFormat)
+      : null
+    if (
+      format === null ||
+      !(artifactKindSpecOf(artifact.kind)?.exports as readonly string[] | undefined)?.includes(
+        format,
+      )
+    ) {
       await this.#fail(exportId)
       logger?.warn(`artifact_export_refused export=${exportId} reason=kind`)
       return 'failed'
     }
-    const table = tableOfBlocks(artifact.blocks)
-    const bytes = await workbookBytes({
-      title: artifact.title,
-      columns: table.columns,
-      rows: table.rows,
-    })
+    let bytes: Uint8Array
+    let count: number
+    if (format === 'xlsx') {
+      const table = tableOfBlocks(artifact.blocks)
+      bytes = await workbookBytes({
+        title: artifact.title,
+        columns: table.columns,
+        rows: table.rows,
+      })
+      count = table.rows.length
+    } else {
+      const deck = await this.#deck(row.userId, artifact)
+      if (deck === null) {
+        await this.#fail(exportId)
+        logger?.warn(`artifact_export_refused export=${exportId} reason=render`)
+        return 'failed'
+      }
+      bytes = format === 'pdf' ? await deckPdf(deck) : await deckPptx(deck)
+      count = deck.slides.length
+    }
     const key = artifactExportKey({
       workspaceId: row.artifact.workspaceId,
       artifactId: row.artifactId,
       exportId,
+      format,
     })
     await storage.put('artifacts', key, bytes, {
-      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      contentType: artifactExportContentTypes[format],
       sizeBytes: bytes.byteLength,
     })
     const now = this.#now()
@@ -77,9 +109,35 @@ export class ArtifactExports {
       where: { id: exportId, state: 'pending' },
       data: { state: 'ready', objectKey: key, bytes: BigInt(bytes.byteLength), readyAt: now },
     })
-    logger?.log(`artifact_export_ready export=${exportId} rows=${table.rows.length}`)
+    logger?.log(`artifact_export_ready export=${exportId} format=${format} parts=${count}`)
     await this.#forgetOld(row.artifactId, now)
     return 'ready'
+  }
+
+  /**
+   * The pictures of the slides as the person who asked reads them (88.25в), drawn one by one; null —
+   * no renderer, or no slide, or a slide the renderer could not draw.
+   */
+  async #deck(
+    userId: string,
+    artifact: Awaited<ReturnType<typeof readArtifact>>,
+  ): Promise<{ title: string; slides: { picture: Uint8Array; notes: string }[] } | null> {
+    const render = this.#deps.render ?? null
+    const slides = artifactSlidesOf(artifact.blocks)
+    if (render === null || slides.length === 0) return null
+    const out: { picture: Uint8Array; notes: string }[] = []
+    for (const slide of slides) {
+      const drawn = await render({
+        artifactId: artifact.id,
+        frame: slide.key,
+        viewer: { kind: 'user', userId },
+        output: 'slide',
+      })
+      const picture = drawn.pictures[0]
+      if (!picture) return null
+      out.push({ picture: new Uint8Array(Buffer.from(picture.data, 'base64')), notes: slide.notes })
+    }
+    return { title: artifact.title, slides: out }
   }
 
   /** The workbooks of this artifact older than a day: their objects and rows go. Never throws. */

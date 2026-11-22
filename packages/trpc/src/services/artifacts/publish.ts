@@ -32,6 +32,7 @@ import {
   tableMarkdown,
   tableOfBlocks,
   withArtifactFileAddresses,
+  artifactSlidesOf,
 } from '@repo/domain/artifacts'
 
 // The bridge from an artifact to pages (docs/plan/88-artifacts.md, Ар2, Ар23, §7.10; slice 88.11б):
@@ -234,6 +235,12 @@ export async function publishArtifactPage(
   const version = await readArtifactVersion(db, { artifactId: artifact.id, no: versionNo, actor })
   if (artifact.publish === 'site') {
     if (storage === undefined) throw new DomainError('PAGES_UNAVAILABLE', 'No storage here', 503)
+    if (artifact.kind === 'slides')
+      return publishSlidesSite(db, address, storage, {
+        artifact,
+        versionNo,
+        blocks: version.blocks,
+      })
     return publishCanvasSite(db, address, storage, {
       artifact,
       actor,
@@ -425,6 +432,134 @@ async function publishCanvasSite(
         versionNo,
       },
       update: { blockKey: screen.key, seq: artifact.seq, versionNo, publishedAt: new Date() },
+    })
+  }
+  return {
+    pageId: first!.pageId,
+    url: pageAddressUrl(first!.slug, address, first!.path),
+    version: first!.version,
+    versionNo,
+  }
+}
+
+/**
+ * What a published slide adds to its page (88.25в): the slide fitted to the window, a line with its
+ * number and the links to its neighbours — they work without the script —, and the arrows, the space
+ * and PageUp / PageDown of the keyboard. The paths are the platform's own (`/`, `/2`…).
+ */
+export function slideDeckChrome(input: {
+  at: number
+  all: number
+  previous: string | null
+  next: string | null
+}): string {
+  const link = (href: string | null, rel: 'prev' | 'next', text: string, label: string) =>
+    href === null
+      ? `<span aria-hidden="true" style="opacity:.3">${text}</span>`
+      : `<a href="${href}" rel="${rel}" aria-label="${label}" style="color:#fff;text-decoration:none">${text}</a>`
+  return [
+    '<nav aria-label="Слайды" style="position:fixed;right:16px;bottom:12px;z-index:2147483647;display:flex;gap:12px;align-items:center;padding:6px 12px;border-radius:999px;background:rgba(0,0,0,.6);color:#fff;font:14px/1.2 Arial,sans-serif">',
+    link(input.previous, 'prev', '←', 'Предыдущий слайд'),
+    `<span>${input.at} из ${input.all}</span>`,
+    link(input.next, 'next', '→', 'Следующий слайд'),
+    '</nav>',
+    '<script>(()=>{const fit=()=>{document.documentElement.style.zoom=String(Math.min(innerWidth/1280,innerHeight/720))};fit();addEventListener("resize",fit);addEventListener("keydown",(e)=>{const rel=e.key==="ArrowRight"||e.key===" "||e.key==="PageDown"?"next":e.key==="ArrowLeft"||e.key==="PageUp"?"prev":null;const a=rel&&document.querySelector("a[rel="+rel+"]");if(a){e.preventDefault();location.href=a.getAttribute("href")}})})()</script>',
+  ].join('')
+}
+
+/**
+ * «Презентация» as a site (88.25в): each slide a page of 1280×720 by the one assembly of a frame —
+ * the first at the root, the others at `/2`, `/3`… —, with the chrome of the deck; a republication
+ * keeps the pages of the slides it published before, by their frames.
+ */
+async function publishSlidesSite(
+  db: PrismaClient,
+  address: PagesAddress,
+  storage: () => Pick<ObjectStorage, 'get'>,
+  input: {
+    artifact: Awaited<ReturnType<typeof ownedDocument>>
+    versionNo: number
+    blocks: readonly CanvasVersionBlock[]
+  },
+): Promise<{ pageId: string; url: string; version: number; versionNo: number }> {
+  const { artifact, versionNo } = input
+  const slides = artifactSlidesOf(orderedLiveBlocks(input.blocks))
+  if (slides.length === 0)
+    throw new DomainError('DOC_NOT_READY', 'The presentation has no slide to publish', 409)
+  const css = await brandCssOf(db, artifact.projectId)
+  const previous = await db.artifactPublication.findMany({
+    where: { artifactId: artifact.id, page: { deletedAt: null } },
+    select: {
+      pageId: true,
+      blockKey: true,
+      page: { select: { currentVersion: true, treeId: true, path: true, documentId: true } },
+    },
+  })
+  const home = previous.find((row) => row.page.documentId === artifact.id)
+  const children = new Map(
+    previous
+      .filter((row) => row.page.treeId === home?.page.treeId && row.page.documentId === null)
+      .flatMap((row) => (row.blockKey === null ? [] : [[row.blockKey, row] as const])),
+  )
+  // The paths first: each page links to its neighbours.
+  const used = new Set(['/', ...[...children.values()].map((row) => row.page.path)])
+  const plan = slides.map((slide, index) => {
+    if (index === 0) return { slide, known: undefined, path: '/' }
+    const known = children.get(slide.key)
+    let path = known?.page.path ?? `/${index + 1}`
+    if (!known) {
+      for (let n = 2; used.has(path); n += 1) path = `/${index + 1}-${n}`
+      used.add(path)
+    }
+    return { slide, known, path }
+  })
+  let first: Awaited<ReturnType<typeof publishClientPage>> | null = null
+  for (const [index, { slide, known, path }] of plan.entries()) {
+    const page = await mockupPage(db, storage, {
+      artifactId: artifact.id,
+      title: `${artifact.title} — ${slide.name}`,
+      blocks: input.blocks,
+      framed: true,
+      frame: slide.key,
+      brandCss: css,
+    })
+    const html = new TextDecoder().decode(page.bytes)
+    const end = html.lastIndexOf('</body>')
+    const chrome = slideDeckChrome({
+      at: index + 1,
+      all: plan.length,
+      previous: plan[index - 1]?.path ?? null,
+      next: plan[index + 1]?.path ?? null,
+    })
+    const bytes = encode(end < 0 ? html + chrome : html.slice(0, end) + chrome + html.slice(end))
+    const verdict = checkPageContent(bytes)
+    if (!verdict.ok) throw pageContentRefused(verdict.reason)
+    const isHome = index === 0
+    const published = await publishClientPage(db, {
+      workspaceId: artifact.workspaceId,
+      taskId: null,
+      title: isHome ? artifact.title : slide.name,
+      target: isHome ? { documentId: artifact.id } : { fileName: `${path.slice(1)}.html` },
+      ...(isHome
+        ? {}
+        : known
+          ? { into: { pageId: known.pageId, expectedVersion: known.page.currentVersion } }
+          : { place: { treeId: first!.treeId, path } }),
+      bytes,
+      html: true,
+      files: page.files,
+    })
+    if (isHome) first = published
+    await db.artifactPublication.upsert({
+      where: { pageId: published.pageId },
+      create: {
+        artifactId: artifact.id,
+        pageId: published.pageId,
+        blockKey: slide.key,
+        seq: artifact.seq,
+        versionNo,
+      },
+      update: { blockKey: slide.key, seq: artifact.seq, versionNo, publishedAt: new Date() },
     })
   }
   return {

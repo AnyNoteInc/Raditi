@@ -68,6 +68,8 @@
     "rxjs": "catalog:",
     "tar-stream": "catalog:",
     "web-push": "4.0.0",
+    "pdf-lib": "catalog:",
+    "pptxgenjs": "catalog:",
     "write-excel-file": "catalog:",
     "zod": "catalog:"
   },

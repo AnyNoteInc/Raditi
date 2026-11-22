@@ -15,7 +15,8 @@ import { artifactRenderLimits } from './limits.ts'
 
 export const ARTIFACT_RENDER_PATH = '/v1/render'
 
-export const artifactRenderOutputs = ['layout', 'image', 'thumbs'] as const
+/** `slide` — one slide of «Презентация» at 1.5× for its PDF and PPTX (88.25в). */
+export const artifactRenderOutputs = ['layout', 'image', 'thumbs', 'slide'] as const
 export type ArtifactRenderOutput = (typeof artifactRenderOutputs)[number]
 
 const widths = [

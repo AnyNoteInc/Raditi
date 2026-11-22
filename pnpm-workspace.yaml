@@ -58,6 +58,9 @@ catalog:
   # Runtime
   # The diagrams of artifacts (plan 88, 88.24; spike 7): Mermaid 12 in a Chromium, DOMPurify in jsdom
   mermaid: 12.3.0
+  # The PDF and the PPTX of «Презентация» (plan 88, 88.25в): a picture of each slide
+  pptxgenjs: 4.0.1
+  pdf-lib: 1.17.1
   dompurify: 3.4.18
   dockerode: ^5.0.1
   '@types/dockerode': ^4.0.1

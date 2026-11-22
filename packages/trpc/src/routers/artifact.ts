@@ -44,6 +44,7 @@ import {
   artifactSignalLimits,
   artifactTitleSchema,
   artifactRenderLimits,
+  artifactExportFormats,
 } from '@repo/domain/artifacts'
 import { enqueueNotification } from '@repo/notifications'
 import { TRPCError } from '@trpc/server'
@@ -907,9 +908,12 @@ export const artifactRouter = router({
       }),
     ),
 
-  /** «Скачать → Excel» of a table: core builds the workbook (§7.13, question 26). */
+  /**
+   * «Скачать» built by core (§7.13, question 26): the workbook of a table, the PDF and the PPTX of
+   * «Презентация» (88.25в). Absent — the workbook.
+   */
   exportStart: consentedProcedure
-    .input(z.strictObject({ artifactId }))
+    .input(z.strictObject({ artifactId, format: z.enum(artifactExportFormats).optional() }))
     .output(z.strictObject({ exportId: z.uuid() }))
     .mutation(({ ctx, input }) =>
       startArtifactExport(ctx.prisma, { userId: ctx.user.id, ...input }),

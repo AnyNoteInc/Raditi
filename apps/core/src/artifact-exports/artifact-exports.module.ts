@@ -20,15 +20,20 @@ import { ARTIFACT_EXPORTS, ARTIFACT_THUMBS } from './artifact-exports.tokens.ts'
   providers: [
     {
       provide: ARTIFACT_EXPORTS,
-      useFactory: (prisma: PrismaClient, storage: ObjectStorage) => {
+      useFactory: (prisma: PrismaClient, storage: ObjectStorage, config: CoreConfig) => {
         const logger = new Logger('ArtifactExports')
+        // The slides of a PDF and a PPTX are drawn by the browser worker (88.25в).
+        const client = config.browser
+          ? createBrowserWorkerClient({ baseUrl: config.browser.url, token: config.browser.token })
+          : null
         return new ArtifactExports({
           db: prisma,
           storage,
+          render: client ? (request) => client.render(request) : null,
           logger: { log: (line) => logger.log(line), warn: (line) => logger.warn(line) },
         })
       },
-      inject: [PRISMA, OBJECT_STORAGE],
+      inject: [PRISMA, OBJECT_STORAGE, CORE_CONFIG],
     },
     {
       provide: ARTIFACT_THUMBS,

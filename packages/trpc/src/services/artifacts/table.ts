@@ -11,6 +11,9 @@ import {
   tableOfBlocks,
   tableTotals,
   type ArtifactExportState,
+  artifactExportContentTypes,
+  artifactExportFormats,
+  type ArtifactExportFormat,
 } from '@repo/domain/artifacts'
 import { z } from 'zod'
 
@@ -42,8 +45,9 @@ export async function cabinetTableTotals(
 /** «Скачать → Excel»: a new export of the table, built by core. */
 export async function startArtifactExport(
   db: PrismaClient,
-  input: { userId: string; artifactId: string },
+  input: { userId: string; artifactId: string; format?: ArtifactExportFormat },
 ): Promise<{ exportId: string }> {
+  const format = input.format ?? 'xlsx'
   return db.$transaction(async (tx) => {
     const role = await artifactRole(tx, { artifactId: input.artifactId, userId: input.userId })
     if (role === null) throw artifactNotFound()
@@ -51,13 +55,19 @@ export async function startArtifactExport(
       where: { id: input.artifactId },
       select: { kind: true },
     })
-    if (!artifactKindSpecOf(artifact.kind)?.exports.includes('xlsx')) throw artifactNotFound()
+    // The formats of its kind only: a table's workbook, a presentation's PDF and PPTX (88.25в).
+    if (
+      !(artifactKindSpecOf(artifact.kind)?.exports as readonly string[] | undefined)?.includes(
+        format,
+      )
+    )
+      throw artifactNotFound()
     const waiting = await tx.artifactExport.count({
       where: { artifactId: input.artifactId, userId: input.userId, state: 'pending' },
     })
     if (waiting >= artifactExportLimits.pendingPerArtifact) throw artifactLimit('exports')
     const row = await tx.artifactExport.create({
-      data: { artifactId: input.artifactId, userId: input.userId, format: 'xlsx' },
+      data: { artifactId: input.artifactId, userId: input.userId, format },
       select: { id: true },
     })
     await enqueueOutbox(tx, {
@@ -98,12 +108,19 @@ export async function readArtifactExport(
   db: PrismaClient,
   storage: Pick<ObjectStorage, 'get'>,
   input: { userId: string; exportId: string },
-): Promise<{ name: string; bytes: Uint8Array } | null> {
+): Promise<{ name: string; bytes: Uint8Array; contentType: string } | null> {
   const row = await exportOf(db, input)
   if (row === null || row.state !== 'ready' || row.objectKey === null) return null
   const body = await storage.get('artifacts', row.objectKey)
   if (body === null) return null
   const parts: Uint8Array[] = []
   for await (const part of body) parts.push(part)
-  return { name: artifactExportFileName(row.artifact.title, 'xlsx'), bytes: Buffer.concat(parts) }
+  const format = (artifactExportFormats as readonly string[]).includes(row.format)
+    ? (row.format as ArtifactExportFormat)
+    : 'xlsx'
+  return {
+    name: artifactExportFileName(row.artifact.title, format),
+    bytes: Buffer.concat(parts),
+    contentType: artifactExportContentTypes[format],
+  }
 }

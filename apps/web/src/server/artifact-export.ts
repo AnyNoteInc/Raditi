@@ -13,7 +13,7 @@ export interface ArtifactExportDependencies {
   read: (input: {
     userId: string
     exportId: string
-  }) => Promise<{ name: string; bytes: Uint8Array } | null>
+  }) => Promise<{ name: string; bytes: Uint8Array; contentType: string } | null>
   onFailure?: (operation: string, error: unknown) => void
 }
 
@@ -34,7 +34,7 @@ export async function getArtifactExport(
     if (!file) return answer(404, 'Файл не найден.')
     return new Response(new Uint8Array(file.bytes), {
       headers: {
-        'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'content-type': file.contentType,
         'content-length': String(file.bytes.byteLength),
         'content-disposition': attachmentDisposition(file.name),
         'cache-control': 'private, no-store',

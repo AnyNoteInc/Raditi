@@ -107,6 +107,70 @@ describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
     )
   })
 
+  it('builds the PDF and the PPTX of a presentation from a picture of each slide (88.25в)', async () => {
+    const actor = { kind: 'user' as const, userId }
+    const { id: artifactId } = await createArtifact(db, {
+      workspaceId,
+      kind: 'slides',
+      title: 'Презентация',
+      actor,
+    })
+    await applyArtifactOps(db, {
+      batch: {
+        artifactId,
+        opId: randomUUID(),
+        ops: ['a', 'b'].flatMap((key) => [
+          {
+            op: 'insert',
+            block: key,
+            after: null,
+            kind: 'frame',
+            content: '',
+            props: { name: key },
+          },
+          {
+            op: 'insert',
+            block: `${key}-html`,
+            after: null,
+            parent: key,
+            kind: 'html',
+            content: '<section>Слайд</section>',
+          },
+        ]),
+      },
+      actor,
+    })
+    // A real 1×1 JPEG stands for the picture the renderer draws.
+    const jpeg =
+      '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q=='
+    const render = vi.fn(async () => ({
+      title: 'Презентация',
+      report: '',
+      ru: '',
+      problems: 0,
+      heights: [{ width: 1280 as const, height: 720 }],
+      pictures: [{ width: 1280 as const, part: 0, type: 'image/jpeg' as const, data: jpeg }],
+    }))
+    const exports = new ArtifactExports({ db, storage, logger: quiet, render })
+    for (const format of ['pdf', 'pptx'] as const) {
+      const row = await db.artifactExport.create({ data: { artifactId, userId, format } })
+      expect(await exports.build(row.id)).toBe('ready')
+      const key = artifactExportKey({ workspaceId, artifactId, exportId: row.id, format })
+      expect(key.endsWith(`.${format}`)).toBe(true)
+      expect(objects.get(key)?.byteLength).toBeGreaterThan(0)
+    }
+    // Each slide as the person who asked reads it, for an export.
+    expect(render).toHaveBeenCalledWith(
+      expect.objectContaining({ artifactId, frame: 'a', output: 'slide', viewer: actor }),
+    )
+    // A workbook is not of a presentation; without a renderer there is no file.
+    const xlsx = await db.artifactExport.create({ data: { artifactId, userId, format: 'xlsx' } })
+    expect(await exports.build(xlsx.id)).toBe('failed')
+    const blind = new ArtifactExports({ db, storage, logger: quiet })
+    const pdf = await db.artifactExport.create({ data: { artifactId, userId, format: 'pdf' } })
+    expect(await blind.build(pdf.id)).toBe('failed')
+  })
+
   it('forgets the workbooks of a day ago', async () => {
     const artifactId = await table()
     const old = await db.artifactExport.create({

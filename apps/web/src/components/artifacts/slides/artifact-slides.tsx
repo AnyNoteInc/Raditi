@@ -18,7 +18,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 
 import { uuidv7 } from '@/components/chat/uuid'
-import { useTRPC } from '@/trpc/client'
+import { useTRPC, useTRPCClient } from '@/trpc/client'
 
 import type { ArtifactBodyProps } from '../artifact-body-props'
 import { ArtifactMockup } from '../mockup/artifact-mockup'
@@ -46,6 +46,10 @@ export const slidesTexts = Object.freeze({
   previous: 'Предыдущий слайд',
   next: 'Следующий слайд',
   newSlide: 'Новый слайд',
+  pdf: 'Скачать PDF',
+  pptx: 'Скачать PPTX',
+  preparing: 'Готовим файл…',
+  exportFailed: 'Не получилось подготовить файл. Попробуйте ещё раз.',
   newSlideHtml:
     '<section class="slide"><h2>Заголовок слайда</h2><p>Две-три короткие строки о главном.</p></section>',
   of: (at: number, all: number) => `${at} из ${all}`,
@@ -53,6 +57,10 @@ export const slidesTexts = Object.freeze({
 
 const domainCodeOf = (error: unknown) =>
   (error as { data?: { domainCode?: string } } | null)?.data?.domainCode
+
+/** A file of the deck takes a picture of each slide: up to two minutes, asked every 2 s. */
+const EXPORT_POLL_MS = 2000
+const EXPORT_POLLS = 60
 
 const newKey = () => `slide${uuidv7().replace(/-/g, '').slice(-8)}`
 
@@ -236,6 +244,9 @@ export function ArtifactSlides(props: ArtifactBodyProps & { onAccessLost: () => 
   const [showing, setShowing] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const write = useMutation(trpc.artifact.write.mutationOptions())
+  const client = useTRPCClient()
+  const exportStart = useMutation(trpc.artifact.exportStart.mutationOptions())
+  const [preparing, setPreparing] = useState<'pdf' | 'pptx' | null>(null)
   const thumbs = useQuery({
     ...trpc.artifact.canvasThumbs.queryOptions({ artifactId: artifact.id, seq: artifact.seq }),
     refetchInterval: (query) => (query.state.data?.pending ? 3000 : false),
@@ -259,6 +270,33 @@ export function ArtifactSlides(props: ArtifactBodyProps & { onAccessLost: () => 
       onChanged()
     } catch (error) {
       setProblem(domainCodeOf(error) === 'ARTIFACT_STALE' ? slidesTexts.stale : slidesTexts.failed)
+    }
+  }
+
+  /** «Скачать PDF» / «Скачать PPTX»: core draws each slide and builds the file (88.25в). */
+  async function download(format: 'pdf' | 'pptx') {
+    setPreparing(format)
+    setProblem(null)
+    try {
+      const { exportId } = await exportStart.mutateAsync({ artifactId: artifact.id, format })
+      for (let poll = 0; poll < EXPORT_POLLS; poll += 1) {
+        await new Promise((resolve) => setTimeout(resolve, EXPORT_POLL_MS))
+        const { state } = await client.artifact.exportStatus.query({ exportId })
+        if (state === 'ready') {
+          const link = document.createElement('a')
+          link.href = `/api/artifact-exports/${exportId}`
+          document.body.append(link)
+          link.click()
+          link.remove()
+          return
+        }
+        if (state === 'failed') break
+      }
+      setProblem(slidesTexts.exportFailed)
+    } catch {
+      setProblem(slidesTexts.exportFailed)
+    } finally {
+      setPreparing(null)
     }
   }
 
@@ -377,6 +415,12 @@ export function ArtifactSlides(props: ArtifactBodyProps & { onAccessLost: () => 
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
           <Button variant="contained" onClick={() => setShowing(true)}>
             {slidesTexts.show}
+          </Button>
+          <Button onClick={() => void download('pdf')} disabled={preparing !== null}>
+            {preparing === 'pdf' ? slidesTexts.preparing : slidesTexts.pdf}
+          </Button>
+          <Button onClick={() => void download('pptx')} disabled={preparing !== null}>
+            {preparing === 'pptx' ? slidesTexts.preparing : slidesTexts.pptx}
           </Button>
           {canEdit && (
             <>

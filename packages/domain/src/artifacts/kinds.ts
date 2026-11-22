@@ -175,7 +175,8 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     label: 'Презентация',
     blocks: [...frameParts, 'note'],
     view: 'canvas',
-    publish: 'html',
+    // A small site of its slides, one page each, the first at the root (88.25в).
+    publish: 'site',
     exports: ['pdf', 'pptx'],
     wave: 2,
     sharableEdit: true,

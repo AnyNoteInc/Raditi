@@ -12,8 +12,16 @@ import { DomainError } from '../errors.ts'
 export const ARTIFACT_QUEUE = 'artifacts' as const
 export const ARTIFACT_EXPORT_JOB = 'artifact.export'
 
-export const artifactExportFormats = ['xlsx'] as const
+/** The workbook of a table; the PDF and the PPTX of «Презентация» (88.25в). */
+export const artifactExportFormats = ['xlsx', 'pdf', 'pptx'] as const
 export type ArtifactExportFormat = (typeof artifactExportFormats)[number]
+
+export const artifactExportContentTypes: Readonly<Record<ArtifactExportFormat, string>> =
+  Object.freeze({
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    pdf: 'application/pdf',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  })
 
 export const artifactExportStates = ['pending', 'ready', 'failed'] as const
 export type ArtifactExportState = (typeof artifactExportStates)[number]
@@ -39,12 +47,13 @@ export function artifactExportKey(input: {
   workspaceId: string
   artifactId: string
   exportId: string
+  format?: ArtifactExportFormat
 }): string {
   const ids = z.uuid()
   for (const id of [input.workspaceId, input.artifactId, input.exportId])
     if (!ids.safeParse(id).success)
       throw new DomainError('BAD_REQUEST', 'An export key is built from three ids', 400)
-  return `artifacts/${input.workspaceId.toLowerCase()}/${input.artifactId.toLowerCase()}/exports/${input.exportId.toLowerCase()}.xlsx`
+  return `artifacts/${input.workspaceId.toLowerCase()}/${input.artifactId.toLowerCase()}/exports/${input.exportId.toLowerCase()}.${input.format ?? 'xlsx'}`
 }
 
 /** The name of a downloaded file: the title without what a file system refuses. */

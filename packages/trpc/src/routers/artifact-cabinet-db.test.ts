@@ -1775,6 +1775,36 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     expect(thumbs.pending).toBe(true)
     expect(thumbs.thumbs.map((thumb) => thumb.width)).toEqual([1280, 1280, 1280, 1280, 1280])
     await db.outboxEvent.deleteMany({ where: { dedupeKey: { contains: id } } })
+
+    // Published as a small site: a page a slide, the first at the root, each linked to its
+    // neighbours (88.25в).
+    const first = await caller.pages.publishArtifact({ artifactId: id, versionNo: null })
+    const pages = await db.artifactPublication.findMany({
+      where: { artifactId: id },
+      select: { pageId: true, blockKey: true, page: { select: { path: true } } },
+    })
+    expect(pages.map((row) => row.page.path).toSorted()).toEqual(['/', '/2', '/3', '/4', '/5'])
+    const htmlOf = async (path: string) => {
+      const row = pages.find((each) => each.page.path === path)!
+      return Buffer.from(
+        (await db.pageContent.findUniqueOrThrow({ where: { pageId: row.pageId } })).bytes,
+      ).toString('utf8')
+    }
+    const cover = await htmlOf('/')
+    expect(cover).toContain('[Название компании]')
+    expect(cover).toContain('<a href="/2" rel="next"')
+    expect(cover).toContain('1 из 5')
+    const last = await htmlOf('/5')
+    expect(last).toContain('<a href="/4" rel="prev"')
+    expect(last).not.toContain('rel="next"')
+    // Again: the same pages, by their slides.
+    const again = await caller.pages.publishArtifact({ artifactId: id, versionNo: null })
+    expect(again.pageId).toBe(first.pageId)
+    expect(
+      (await db.artifactPublication.findMany({ where: { artifactId: id } }))
+        .map((row) => row.pageId)
+        .toSorted(),
+    ).toEqual(pages.map((row) => row.pageId).toSorted())
   })
 
   it('creates «Схема» from its template and publishes its drawn picture as a page (88.24в)', async () => {

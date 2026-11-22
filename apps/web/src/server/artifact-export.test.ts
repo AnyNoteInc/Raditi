@@ -12,7 +12,11 @@ function deps(patch: Partial<ArtifactExportDependencies> = {}) {
   return {
     getSession: vi.fn(async () => ({ user: { id: '0199a3f2-0000-7000-8000-0000000000a1' } })),
     hasRequiredConsents: vi.fn(async () => true),
-    read: vi.fn(async () => ({ name: 'Прайс-лист.xlsx', bytes })),
+    read: vi.fn(async () => ({
+      name: 'Прайс-лист.xlsx',
+      bytes,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })),
     onFailure: vi.fn(),
     ...patch,
   } satisfies ArtifactExportDependencies

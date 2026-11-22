@@ -11,7 +11,10 @@ import { ArtifactSlides, slidesTexts } from './artifact-slides'
 
 const ARTIFACT = '019f1a21-1800-7f00-8abc-0000000000e1'
 
-const { write, frame } = vi.hoisted(() => ({
+const { write, frame, exportStart } = vi.hoisted(() => ({
+  exportStart: vi.fn(async (_input: unknown) => ({
+    exportId: '019f1a21-1800-7f00-8abc-0000000000f1',
+  })),
   write: vi.fn(async (_input: unknown) => ({ seq: 2 })),
   frame: vi.fn(async (_input: unknown) => ({
     url: 'https://pages.test/v/token',
@@ -27,6 +30,7 @@ vi.mock('@/trpc/client', async () => {
       artifact: {
         ...notes.artifact,
         write: { mutationOptions: () => ({ mutationFn: write }) },
+        exportStart: { mutationOptions: () => ({ mutationFn: exportStart }) },
         editText: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
         files: { queryOptions: () => ({ queryKey: ['artifact.files'], queryFn: async () => [] }) },
         fileStart: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
@@ -50,7 +54,9 @@ vi.mock('@/trpc/client', async () => {
         },
       },
     }),
-    useTRPCClient: () => ({ artifact: notes.client }),
+    useTRPCClient: () => ({
+      artifact: { ...notes.client, exportStatus: { query: async () => ({ state: 'ready' }) } },
+    }),
   }
 })
 
@@ -205,6 +211,17 @@ describe('«Презентация» in the cabinet', () => {
     await waitFor(() =>
       expect(frame).toHaveBeenCalledWith(
         expect.objectContaining({ frame: 'slide2', mode: 'view' }),
+      ),
+    )
+  })
+
+  it('asks core for the PDF and the PPTX of the slides', async () => {
+    show(deck('view'))
+    fireEvent.click(screen.getByRole('button', { name: slidesTexts.pdf }))
+    await waitFor(() =>
+      expect(exportStart).toHaveBeenCalledWith(
+        { artifactId: ARTIFACT, format: 'pdf' },
+        expect.anything(),
       ),
     )
   })
