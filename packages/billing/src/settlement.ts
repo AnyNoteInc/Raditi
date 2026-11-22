@@ -28,6 +28,7 @@ import type { BillingTx } from './accounts.ts'
 import { writeBillingAudit, type BillingAuditEntry } from './audit.ts'
 import type { BillingDeps } from './deps.ts'
 import { orderFailureReasons } from './failure-text.ts'
+import { recordPaymentFact } from './payment-fact.ts'
 import { carryTariffRemainder, grantPackCredits, grantTariffCredits } from './ledger.ts'
 import { getCreditBalances } from './read-models.ts'
 import { isRenewalOrder, renewedPeriodEnd } from './renewal-order.ts'
@@ -542,6 +543,7 @@ async function applyFirstPayment(deps: ApplyDeps, order: Order, payment: Payment
         data: { status: 'paid', paidAt },
       })
       if (paid.count === 0) return
+      await recordPaymentFact(tx, order, payment, paidAt)
 
       // Two paid orders of one workspace decide one after the other who starts the tariff.
       await tx.$queryRaw`SELECT id FROM workspaces WHERE id = ${workspaceId}::uuid FOR NO KEY UPDATE`
@@ -730,6 +732,7 @@ async function applyPackPayment(deps: ApplyDeps, order: Order, payment: Payment)
         data: { status: 'paid', paidAt },
       })
       if (paid.count === 0) return
+      await recordPaymentFact(tx, order, payment, paidAt)
 
       const pack = await tx.plan.findUniqueOrThrow({ where: { id: planId } })
       if (pack.kind !== 'pack' || pack.packCredits === null) {
@@ -878,6 +881,7 @@ async function applyRenewalPayment(deps: ApplyDeps, order: Order, payment: Payme
         data: { status: 'paid', paidAt },
       })
       if (paid.count === 0) return
+      await recordPaymentFact(tx, order, payment, paidAt)
 
       const subscription = await lockRenewedSubscription(tx, subscriptionId)
       if (!awaitsRenewal(subscription, renewed)) {
@@ -995,6 +999,7 @@ async function applyPastDuePayment(deps: ApplyDeps, order: Order, payment: Payme
         data: { status: 'paid', paidAt },
       })
       if (paid.count === 0) return
+      await recordPaymentFact(tx, order, payment, paidAt)
 
       const subscription = await lockRenewedSubscription(tx, subscriptionId)
       if (subscription?.status !== 'past_due') {
