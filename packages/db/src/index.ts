@@ -148,6 +148,7 @@ export {
   readArtifactVersion,
   releaseArtifactBlock,
   moveArtifact,
+  operatorArtifactDecision,
   restoreArtifact,
   saveArtifactVersion,
   settleArtifactWrites,
@@ -163,6 +164,7 @@ export {
   type ArtifactSettled,
   type ArtifactSweep,
   type ArtifactTrashedBy,
+  type OperatorArtifactResult,
   type ArtifactVersionSave,
   type ArtifactWriteVerdict,
 } from './artifacts.ts'

@@ -20,6 +20,8 @@
     "billing:refunds-needed": "node scripts/billing-refunds-needed.mjs",
     "billing:settle-payment": "node scripts/billing-settle-payment.mjs",
     "billing:rates": "node scripts/billing-rates.mjs",
+    "artifacts:take-down": "node scripts/artifacts-take-down.mjs",
+    "artifacts:return": "node scripts/artifacts-return.mjs",
     "pages:take-down": "node scripts/pages-take-down.mjs",
     "pages:return": "node scripts/pages-return.mjs",
     "llm:usage": "node scripts/llm-usage.mjs",

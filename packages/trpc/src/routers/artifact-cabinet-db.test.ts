@@ -10,6 +10,7 @@ import {
   dropAgentCommentReplies,
   dropStaleAgentCommentReplies,
   insertFeedEvent,
+  operatorArtifactDecision,
   readArtifactComments,
   readChatArtifactComments,
   settleAgentCommentReplies,
@@ -1145,6 +1146,52 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     expect(
       (await caller.artifact.list({ filter: 'all', projectId: project.id })).map((row) => row.id),
     ).toEqual([kept])
+  })
+
+  it('closes an artifact by the support’s decision and opens it again (88.23, Ар57)', async () => {
+    const user = await person()
+    const caller = callerOf(user)
+    const { id: artifactId } = await caller.artifact.create({
+      kind: 'document',
+      title: 'По жалобе',
+      projectId: null,
+      templateId: null,
+    })
+    const decide = (decision: 'take_down' | 'return') =>
+      operatorArtifactDecision(db, {
+        artifactId,
+        decision,
+        reason: 'Жалоба №7',
+        operator: 'support',
+      })
+    await expect(decide('take_down')).resolves.toMatchObject({ kind: 'done', artifactId })
+    await expect(decide('take_down')).resolves.toMatchObject({ kind: 'repeated' })
+    // Its owner no longer opens it, nor finds it in the gallery.
+    await expect(caller.artifact.read({ artifactId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect((await caller.artifact.list({ filter: 'all' })).map((row) => row.id)).not.toContain(
+      artifactId,
+    )
+    await expect(decide('return')).resolves.toMatchObject({ kind: 'done' })
+    await expect(decide('return')).resolves.toMatchObject({ kind: 'repeated' })
+    expect((await caller.artifact.read({ artifactId })).id).toBe(artifactId)
+    expect(
+      await db.auditLog.findMany({
+        where: { targetId: artifactId },
+        orderBy: { createdAt: 'asc' },
+        select: { action: true, actorType: true, meta: true },
+      }),
+    ).toEqual([
+      { action: 'artifacts.take_down', actorType: 'operator', meta: { reason: 'Жалоба №7' } },
+      { action: 'artifacts.put_back', actorType: 'operator', meta: { reason: 'Жалоба №7' } },
+    ])
+    await expect(
+      operatorArtifactDecision(db, {
+        artifactId: '019f1a21-1800-7f00-8abc-0000000000ff',
+        decision: 'take_down',
+        reason: 'Нет такого',
+        operator: 'support',
+      }),
+    ).resolves.toEqual({ kind: 'not_found' })
   })
 
   it('reads notes and their access decision at the same snapshot during a takedown', async () => {

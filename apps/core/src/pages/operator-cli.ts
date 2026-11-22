@@ -1,5 +1,3 @@
-import { userInfo } from 'node:os'
-
 import { createPrismaClient, dbConfigFromEnv, operatorPageDecision } from '@repo/db'
 import {
   appEnvSchema,
@@ -8,7 +6,13 @@ import {
   pagesBaseDomainSchema,
   type Env,
 } from '@repo/domain'
-import { z } from 'zod'
+
+import {
+  OperatorCommandError,
+  operatorName,
+  parseOperatorArguments,
+  type OperatorOptions,
+} from '../operator/operator-args.ts'
 
 // The operator's commands of published pages (docs/plan/73-pages-sites.md, Дер18; Ст31):
 //
@@ -28,53 +32,14 @@ import { z } from 'zod'
 export type PagesCommand = 'take-down' | 'return'
 type Write = (text: string) => void
 
-class OperatorCommandError extends Error {}
 const invalid = () =>
   new OperatorCommandError('Неверные параметры команды страниц. Используйте --help.')
 
-const oneLine = (max: number) =>
-  z
-    .string()
-    .trim()
-    .min(1)
-    .max(max)
-    .refine((value) => !/\p{Cc}/u.test(value))
-
-const optionsSchema = z.strictObject({
-  address: z.string().min(1).max(700),
-  reason: oneLine(500),
-  operator: oneLine(128).optional(),
-})
-
-export type PagesOptions = { help: true } | { help: false; value: z.output<typeof optionsSchema> }
-
-const flags: Record<string, keyof z.input<typeof optionsSchema>> = {
-  '--reason': 'reason',
-  '--operator': 'operator',
-}
+export type PagesOptions = OperatorOptions
 
 /** Strict argument parsing completes before reading the environment or connecting anywhere. */
-export function parsePagesArguments(written: readonly string[]): PagesOptions {
-  const args = written[0] === '--' ? written.slice(1) : written
-  if (args.length === 1 && ['--help', '-h'].includes(args[0]!)) return { help: true }
-  const value: Record<string, unknown> = {}
-  for (let at = 0; at < args.length; at++) {
-    const arg = args[at]!
-    if (!arg.startsWith('-')) {
-      if (Object.hasOwn(value, 'address')) throw invalid()
-      value.address = arg
-      continue
-    }
-    const name = flags[arg]
-    if (!name || Object.hasOwn(value, name)) throw invalid()
-    const next = args[++at]
-    if (!next || next.startsWith('--')) throw invalid()
-    value[name] = next
-  }
-  const parsed = optionsSchema.safeParse(value)
-  if (!parsed.success) throw invalid()
-  return { help: false, value: parsed.data }
-}
+export const parsePagesArguments = (written: readonly string[]): PagesOptions =>
+  parseOperatorArguments(written, invalid)
 
 /**
  * The site and the path of an address: one label under a base domain and a canonical path. The
@@ -107,20 +72,6 @@ export const pagesHelp = (command: PagesCommand) =>
   'Решение пишется в журнал аудита с причиной; повтор ничего не меняет.\n' +
   '--operator — имя оператора для журнала; без него берётся имя пользователя ОС.\n' +
   'Окружение задаётся явно; команда не загружает .env автоматически. Нужны APP_ENV и DATABASE_URL.\n'
-
-function operatorName(given: string | undefined): string {
-  if (given !== undefined) return given
-  let name: string | undefined
-  try {
-    name = userInfo().username
-  } catch {
-    // A uid without a passwd entry: a container.
-  }
-  const parsed = oneLine(128).safeParse(name)
-  if (!parsed.success)
-    throw new OperatorCommandError('Имя оператора не определено: укажите --operator <имя>.')
-  return parsed.data
-}
 
 export async function runPagesCommand(
   command: PagesCommand,

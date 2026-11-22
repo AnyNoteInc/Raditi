@@ -2255,13 +2255,73 @@ async function journalOne(
   tx: Tx,
   artifact: LockedArtifact,
   userId: string,
-  kind: 'trash' | 'restore' | 'move',
+  kind: 'trash' | 'restore' | 'move' | 'take_down' | 'put_back',
 ): Promise<bigint> {
   const seq = artifact.seq + 1n
   await tx.artifactOp.create({
     data: { artifactId: artifact.id, seq, actor: 'user', userId, kind, result: 'applied' },
   })
   return seq
+}
+
+export type OperatorArtifactResult =
+  { kind: 'done' | 'repeated'; artifactId: string; workspaceId: string } | { kind: 'not_found' }
+
+/**
+ * The support's decision on a complaint (Ар57, slice 88.23): `take_down` — nobody opens the
+ * artifact, not its owner nor anyone it was opened to, nor an agent; `return` — only what the
+ * support took down comes back. The trash and the purge do not undo it. An audit entry with the
+ * reason; a repeat changes nothing. Its pages are pages: `pages:take-down` takes them down.
+ */
+export async function operatorArtifactDecision(
+  db: Db,
+  input: { artifactId: string; decision: 'take_down' | 'return'; reason: string; operator: string },
+): Promise<OperatorArtifactResult> {
+  return db.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM chat_documents WHERE id = ${input.artifactId}::uuid FOR NO KEY UPDATE`
+    if (rows.length === 0) return { kind: 'not_found' as const }
+    const artifact = await tx.artifact.findUniqueOrThrow({ where: { id: input.artifactId } })
+    const changed =
+      input.decision === 'take_down'
+        ? artifact.takenDownBy !== 'operator'
+        : artifact.takenDownBy === 'operator'
+    const result = { artifactId: artifact.id, workspaceId: artifact.workspaceId }
+    if (!changed) return { kind: 'repeated' as const, ...result }
+    // The journal row wakes the open tabs: their next read is refused.
+    const actorId = artifact.ownerUserId ?? (await workspaceOwnerOf(tx, artifact.workspaceId))
+    await tx.artifact.update({
+      where: { id: artifact.id },
+      data: {
+        ...(input.decision === 'take_down'
+          ? { takenDownAt: new Date(), takenDownBy: 'operator' }
+          : { takenDownAt: null, takenDownBy: null }),
+        revision: { increment: 1 },
+        ...(actorId
+          ? {
+              seq: await journalOne(
+                tx,
+                artifact,
+                actorId,
+                input.decision === 'take_down' ? 'take_down' : 'put_back',
+              ),
+            }
+          : {}),
+      },
+    })
+    await tx.auditLog.create({
+      data: {
+        actorType: 'operator',
+        actorId: input.operator,
+        workspaceId: artifact.workspaceId,
+        action: input.decision === 'take_down' ? 'artifacts.take_down' : 'artifacts.put_back',
+        targetType: 'artifact',
+        targetId: artifact.id,
+        meta: { reason: input.reason },
+      },
+    })
+    return { kind: 'done' as const, ...result }
+  })
 }
 
 export type ArtifactTrashedBy = 'client' | 'agent' | 'project'

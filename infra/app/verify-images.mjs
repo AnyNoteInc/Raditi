@@ -157,6 +157,9 @@ export const STAND_FILE =
 export const OPERATOR_SCRIPTS = {
   // Run in its image on the app VM (`docker compose run --entrypoint node core scripts/… …`).
   core: [
+    // The support's take-down and return of an artifact (docs/plan/88-artifacts.md, Ар57).
+    'artifacts-return.mjs',
+    'artifacts-take-down.mjs',
     'billing-rates.mjs',
     'billing-refund.mjs',
     'billing-refunds-needed.mjs',
