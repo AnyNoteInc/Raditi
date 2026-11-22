@@ -51,6 +51,7 @@ import {
   feedFailureTextOf,
 } from './client-feed-failures.ts'
 import { feedFixtures } from './client-feed-fixtures.ts'
+import { feedArtifactTelegramText } from './client-feed-labels.ts'
 import { feedText } from './client-feed-text.ts'
 import { taskStatuses } from './task-status.ts'
 
@@ -2170,5 +2171,22 @@ describe('the requirements of a task in its head', () => {
     expect(parse({ repository: false, browser: false }).success).toBe(true)
     expect(parse({ repository: true }).success).toBe(false)
     expect(parse({ repository: true, browser: false, preview: true }).success).toBe(false)
+  })
+})
+
+describe('an artifact in Telegram (docs/plan/88-artifacts.md, Ар55)', () => {
+  it('names the client’s own by its kind and title, and nothing of another’s', () => {
+    expect(feedArtifactTelegramText({ kind: 'document', created: true, title: 'План' })).toBe(
+      'Создан документ «План»',
+    )
+    expect(feedArtifactTelegramText({ kind: 'table', created: false, title: 'Прайс' })).toBe(
+      'Обновлена таблица «Прайс»',
+    )
+    expect(feedArtifactTelegramText({ kind: 'diagram', created: false, title: 'Схема' })).toBe(
+      'Обновлён артефакт «Схема»',
+    )
+    expect(feedArtifactTelegramText({ kind: 'document', created: true, title: null })).toBe(
+      'Артефакт обновлён',
+    )
   })
 })

@@ -447,6 +447,32 @@ export function feedArtifactLeftText(row: { blocks: number }): string {
     : `${count} агента в артефакте не прошли проверку: там остался прежний текст. Попросите агента сделать их ещё раз.`
 }
 
+/** The names of the kinds in a line of Telegram, by the registry of `@repo/domain/artifacts`. */
+const artifactKindWords: Readonly<Record<string, string>> = Object.freeze({
+  document: 'документ',
+  mockup: 'макет',
+  table: 'таблица',
+  canvas: 'холст',
+  brand: 'фирменный стиль',
+})
+
+/**
+ * An artifact the turn created or changed (`feed.artifact`) as Telegram tells it (docs/plan/88-
+ * artifacts.md, Ар55): by its title only when it is the client's own — `title` null — of another,
+ * or gone: «Артефакт обновлён», no title, no file.
+ */
+export function feedArtifactTelegramText(row: {
+  kind: string
+  created: boolean
+  title: string | null
+}): string {
+  if (row.title === null) return 'Артефакт обновлён'
+  const word = artifactKindWords[row.kind] ?? 'артефакт'
+  const feminine = word === 'таблица'
+  const done = row.created ? (feminine ? 'Создана' : 'Создан') : feminine ? 'Обновлена' : 'Обновлён'
+  return `${done} ${word} «${row.title}»`
+}
+
 /** A page the agent published (`feed.page`): its title and version. */
 export const feedPageText = (row: { title: string; version: number }): string =>
   `Страница «${row.title}», версия v${row.version}`

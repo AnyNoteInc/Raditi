@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { PrismaClient } from '@repo/db'
 import {
   agentEventSchema,
+  feedArtifactTelegramText,
   feedRowMarkdown,
   readFeedRow,
   telegramRowsToldAlone,
@@ -64,7 +65,13 @@ export interface TelegramLogger {
 export interface TelegramJobsDeps {
   prisma: Pick<
     PrismaClient,
-    'telegramUpdate' | 'task' | 'taskTurn' | 'taskEvent' | 'chatSession' | 'channelIdentity'
+    | 'telegramUpdate'
+    | 'task'
+    | 'taskTurn'
+    | 'taskEvent'
+    | 'chatSession'
+    | 'channelIdentity'
+    | 'artifact'
   >
   bot: Pick<
     TelegramBotApi,
@@ -120,6 +127,8 @@ const TOLD: ReadonlySet<string> = new Set([
   'feed.doc_left',
   // Writes in an artifact of the chat's own client the check sent back (plan 88, Ар55).
   'feed.artifact_left',
+  // An artifact the turn made or changed (plan 88, Ар55): by title only the client's own.
+  'feed.artifact',
   // What the end of a pass did with the memory (docs/plan/84-projects.md, ПР18): a proposal is
   // saved in the cabinet, the button «Открыть в кабинете» leads there.
   'feed.memory_change',
@@ -371,9 +380,10 @@ export class TelegramJobs {
       id: String(event.id),
       at: event.createdAt.toISOString(),
     }))
+    const artifactLines = await this.#artifactLines(job.taskId, rows)
     const markdown = rows
       // A chat has no site (docs/plan/83-remove-projects.md).
-      .map((row) => feedRowMarkdown(row, false))
+      .map((row) => artifactLines.get(row.id) ?? feedRowMarkdown(row, false))
       .filter((block): block is string => block !== null)
       .join('\n\n')
     await this.#clearProgress(job.taskId)
@@ -389,6 +399,49 @@ export class TelegramJobs {
       },
     ])
     return this.#sendParts(place, parts, buttons)
+  }
+
+  /**
+   * The lines of `feed.artifact` rows (docs/plan/88-artifacts.md, Ар55): the title only of a live
+   * artifact the chat's own client owns; of another's, or one gone, «Артефакт обновлён». Telegram
+   * is the client's own consent (Т1): nobody else's words go there. Files never — the cabinet.
+   */
+  async #artifactLines(taskId: string, rows: readonly FeedItem[]): Promise<Map<string, string>> {
+    const lines = new Map<string, string>()
+    const told = rows.filter((row) => row.type === 'feed.artifact')
+    if (told.length === 0) return lines
+    const { prisma } = this.#deps
+    const task = await prisma.task.findUnique({
+      where: { id: taskId },
+      select: { createdById: true },
+    })
+    const ids = [
+      ...new Set(told.map((row) => (row.type === 'feed.artifact' ? row.artifactId : ''))),
+    ]
+    const artifacts = await prisma.artifact.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, title: true, ownerUserId: true, deletedAt: true, takenDownAt: true },
+    })
+    const byId = new Map(artifacts.map((artifact) => [artifact.id, artifact]))
+    for (const row of told) {
+      if (row.type !== 'feed.artifact') continue
+      const artifact = byId.get(row.artifactId)
+      const own =
+        artifact !== undefined &&
+        task?.createdById != null &&
+        artifact.ownerUserId === task.createdById &&
+        artifact.deletedAt === null &&
+        artifact.takenDownAt === null
+      lines.set(
+        row.id,
+        feedArtifactTelegramText({
+          kind: row.kind,
+          created: row.created,
+          title: own ? artifact.title : null,
+        }),
+      )
+    }
+    return lines
   }
 
   /**

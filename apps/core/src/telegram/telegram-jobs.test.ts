@@ -14,6 +14,14 @@ function harness(options: {
   taken?: number[]
   session?: { externalChatId: string | null; telegramTopicId: number | null } | null
   events?: { id: bigint; type: string; payload: unknown }[]
+  /** The artifacts the rows `feed.artifact` name (plan 88, Ар55). */
+  artifacts?: {
+    id: string
+    title: string
+    ownerUserId: string | null
+    deletedAt: Date | null
+    takenDownAt: Date | null
+  }[]
   topics?: boolean
   /** The Telegram account of the chat was unlinked since. */
   unlinked?: boolean
@@ -63,6 +71,7 @@ function harness(options: {
         deletedAt: null,
         title: 'Заголовок',
         chatSession: session,
+        createdById: 'u1',
       })),
       findUniqueOrThrow: vi.fn(async () => ({
         siteId: null,
@@ -89,6 +98,7 @@ function harness(options: {
     channelIdentity: {
       findUnique: vi.fn(async () => (options.unlinked ? null : { userId: 'u1' })),
     },
+    artifact: { findMany: vi.fn(async () => options.artifacts ?? []) },
     chatSession: {
       update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
         if (session) Object.assign(session, data)
@@ -351,6 +361,42 @@ describe('TelegramJobs.deliver', () => {
     expect(h.sent.at(-1)?.text).toContain(
       'Агент предлагает запомнить: Блоки сезонных товаров — под шапкой',
     )
+  })
+
+  it('names an artifact only of the chat’s own client, another’s as «Артефакт обновлён» (plan 88, Ар55)', async () => {
+    const own = '0199a3f2-0000-7000-8000-0000000a0001'
+    const foreign = '0199a3f2-0000-7000-8000-0000000a0002'
+    const gone = '0199a3f2-0000-7000-8000-0000000a0003'
+    const row = (id: bigint, artifactId: string, kind: string, created: boolean) => ({
+      id,
+      type: 'feed.artifact',
+      payload: { v: 1, artifactId, kind, created },
+    })
+    const h = harness({
+      events: [
+        result,
+        row(3n, own, 'table', true),
+        row(4n, foreign, 'document', false),
+        row(5n, gone, 'document', false),
+      ],
+      artifacts: [
+        { id: own, title: 'Прайс', ownerUserId: 'u1', deletedAt: null, takenDownAt: null },
+        { id: foreign, title: 'Чужой план', ownerUserId: 'u2', deletedAt: null, takenDownAt: null },
+        {
+          id: gone,
+          title: 'Удалённый',
+          ownerUserId: 'u1',
+          deletedAt: new Date(),
+          takenDownAt: null,
+        },
+      ],
+    })
+    await h.jobs.deliver({ taskId: TASK, kind: 'answered', attempt: 1, turnNo: 2 })
+    const text = h.sent.at(-1)?.text ?? ''
+    expect(text).toContain('Создана таблица «Прайс»')
+    expect(text).not.toContain('Чужой план')
+    expect(text).not.toContain('Удалённый')
+    expect(text.match(/Артефакт обновлён/g)).toHaveLength(2)
   })
 
   it('offers «Продолжить» for the question of the ceiling and skips a chat not bound to Telegram', async () => {
