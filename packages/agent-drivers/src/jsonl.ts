@@ -114,6 +114,41 @@ export function failed(value?: unknown): AgentEvent[] {
   })
 }
 
+const CONTROL_ESCAPES: Readonly<Record<string, string>> = { '\n': '\\n', '\r': '\\r', '\t': '\\t' }
+
+/**
+ * A model writing a multi-line client_message by hand tends to put real line breaks inside the
+ * JSON string instead of `\n`, which JSON.parse refuses (task 01a204e8, 22.11.2026). Only control
+ * characters inside string literals are escaped — the text they stand for is what the model meant,
+ * and whitespace between tokens stays as it is. Nothing else is repaired: the object still has to
+ * parse and pass the schema as a whole.
+ */
+export function escapeControlsInStrings(text: string): string {
+  let out = ''
+  let inString = false
+  let escaped = false
+  for (const char of text) {
+    if (!inString) {
+      if (char === '"') inString = true
+      out += char
+      continue
+    }
+    if (escaped) {
+      escaped = false
+      out += char
+      continue
+    }
+    if (char === '\\') escaped = true
+    else if (char === '"') inString = false
+    else if (char < ' ') {
+      out += CONTROL_ESCAPES[char] ?? `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
+      continue
+    }
+    out += char
+  }
+  return out
+}
+
 /** Only the current final message is eligible; never recover an older successful result. */
 export function extractJsonResult(
   source: readonly AgentEvent[],
@@ -124,7 +159,8 @@ export function extractJsonResult(
   if (candidate === undefined || candidate.length > MAX_JSONL_BYTES) return null
   const trimmed = candidate.trim()
   const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(trimmed)
-  const raw = parseJsonObject(fenced?.[1] ?? trimmed)
+  const body = fenced?.[1] ?? trimmed
+  const raw = parseJsonObject(body) ?? parseJsonObject(escapeControlsInStrings(body))
   if (!raw) return null
   const result = turnResultSchema.safeParse(raw)
   return result.success ? result.data : null
