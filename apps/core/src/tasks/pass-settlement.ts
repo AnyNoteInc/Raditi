@@ -7,6 +7,7 @@ import {
   type ReturnedTaskHolds,
 } from '@repo/billing'
 import {
+  artifactCommentSourceOf,
   cancelWaitingTask,
   insertFeedEvent,
   rejectTurn,
@@ -667,11 +668,7 @@ export class PassSettlement {
       })
       if (!moved.moved) throw new NotMoved()
       await this.#assertNotCancelled(tx, pass.taskId)
-      if (turn === null && artifactCommentSourceId !== undefined)
-        await tx.taskEvent.update({
-          where: { id: moved.eventIds[0]! },
-          data: { artifactCommentSourceId },
-        })
+      await this.#linkCommentSource(tx, pass, moved.eventIds[0]!, artifactCommentSourceId)
       await this.#notify(tx, pass, 'limit', now)
       if (!context.task.billable) return
       // The turn worked until the step ran out: that work is charged (26.10.2026), and
@@ -684,6 +681,32 @@ export class PassSettlement {
           expiresAt: taskHoldExpiry(now, 'waiting'),
         })
     })
+  }
+
+  /**
+   * The ceiling question of a pass that carried notes names their dispatch, so «Продолжить» —
+   * before a turn or inside one — carries the same notes (88.18в). Only the request the job named
+   * counts: a pass the sweep settles, whose request it does not know, links nothing.
+   */
+  async #linkCommentSource(
+    tx: Prisma.TransactionClient,
+    pass: PassRef,
+    questionEventId: bigint,
+    known?: bigint,
+  ): Promise<void> {
+    const source =
+      known ??
+      (pass.requestEventId === undefined
+        ? null
+        : await artifactCommentSourceOf(tx, {
+            taskId: pass.taskId,
+            requestEventId: BigInt(pass.requestEventId),
+          }))
+    if (source !== null && source < questionEventId)
+      await tx.taskEvent.update({
+        where: { id: questionEventId },
+        data: { artifactCommentSourceId: source },
+      })
   }
 
   /**

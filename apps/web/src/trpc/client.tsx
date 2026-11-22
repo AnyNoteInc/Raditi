@@ -13,7 +13,7 @@ import { createTRPCContext } from '@trpc/tanstack-react-query'
 import { useEffect, useState, type ReactNode } from 'react'
 import superjson from 'superjson'
 
-import { cabinetSessionChannel } from '@/lib/cabinet-session-signal'
+import { cabinetSessionChannel, cabinetSigningOutHere } from '@/lib/cabinet-session-signal'
 
 import { MAX_BATCH_SIZE } from './batch'
 import { consentRedirectLink } from './consent-redirect'
@@ -57,6 +57,7 @@ export function TRPCReactProvider({ userId, children }: { userId: string; childr
     if (channel === null) return
     channel.onmessage = ({ data }: MessageEvent<unknown>) => {
       if (data !== null && (typeof data !== 'string' || data === userId)) return
+      if (data === null && cabinetSigningOutHere()) return
       queryClient.clear()
       setDiscardedUser(userId)
     }

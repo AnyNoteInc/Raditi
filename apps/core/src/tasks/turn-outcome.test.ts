@@ -51,6 +51,9 @@ describe('feedFailureOf', () => {
     expect(feedFailureOf({ errorCode: 'GIT_CONNECTION_REAUTH', policyFlagged: false })).toBe(
       'repo_reauth',
     )
+    expect(feedFailureOf({ errorCode: 'ARTIFACT_COMMENTS_WITHDRAWN', policyFlagged: false })).toBe(
+      'notes_unavailable',
+    )
     expect(feedFailureOf({ errorCode: 'SITE_HELD', policyFlagged: false })).toBe('site_held')
     expect(feedFailureOf({ errorCode: 'CROSS_BORDER_NOT_CLEARED', policyFlagged: false })).toBe(
       'not_accepted',

@@ -1,4 +1,4 @@
-import { secretInContent } from '@repo/domain'
+import { readFeedRow, secretInContent } from '@repo/domain'
 import {
   artifactCommentDispatchLimits,
   artifactCommentDispatchTooLarge,
@@ -509,6 +509,35 @@ export function readArtifactCommentDispatch(
     },
     { isolationLevel: 'RepeatableRead' },
   )
+}
+
+/**
+ * The dispatch whose notes a pass carries (88.18в): the request it answers, when that request sent
+ * notes, or the dispatch the ceiling question it continues («Продолжить») names — before a turn
+ * or inside one. Only this explicit link counts, never the order of the feed. null — none.
+ */
+export async function artifactCommentSourceOf(
+  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
+  input: { taskId: string; requestEventId: bigint },
+): Promise<bigint | null> {
+  const request = await db.taskEvent.findFirst({
+    where: { id: input.requestEventId, taskId: input.taskId, type: 'feed.request' },
+    select: { id: true, payload: true, artifactCommentHasWords: true },
+  })
+  if (!request) return null
+  if (request.artifactCommentHasWords !== null) return request.id
+  const event = readFeedRow('feed.request', request.payload)
+  if (event.type !== 'feed.request' || event.kind !== 'continue') return null
+  const question = await db.taskEvent.findFirst({
+    where: {
+      id: { equals: BigInt(event.questionEventId), lt: request.id },
+      taskId: input.taskId,
+      type: 'feed.question',
+      clientVisible: true,
+    },
+    select: { artifactCommentSourceId: true },
+  })
+  return question?.artifactCommentSourceId ?? null
 }
 
 export async function resolveArtifactComment(

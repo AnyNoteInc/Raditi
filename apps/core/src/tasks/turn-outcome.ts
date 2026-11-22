@@ -60,6 +60,8 @@ const errorCodes: Readonly<Record<string, FeedFailureCode>> = Object.freeze({
   BILLING_CREDIT_RATE_MISSING: 'unavailable',
   CROSS_BORDER_NOT_CLEARED: 'not_accepted',
   LLM_PRICE_MISSING: 'not_accepted',
+  // The notes of a dispatch could not be read under the access of now (88.18в).
+  ARTIFACT_COMMENTS_WITHDRAWN: 'notes_unavailable',
 })
 
 /** Reasons in `DomainError.details.reason` that name the failure better than its code. */

@@ -22,6 +22,7 @@ import type {
   FeedStep,
   TaskWaitingReason,
 } from './client-feed.ts'
+import type { FeedFailureCode } from './client-feed-failures.ts'
 import type { TaskStatus } from './task-status.ts'
 import {
   repoActionText,
@@ -711,6 +712,13 @@ export const feedFailureKeptText = 'Изменения, готовые до эт
  */
 export const feedFailureOpenText =
   'Чат не закрыт: напишите «продолжи», и агент продолжит с того места, где остановился.'
+
+/**
+ * That sentence for a failure of this code, or null: notes that could no longer be read (88.18в)
+ * stopped a pass that never started, and «продолжи» would not bring them back.
+ */
+export const feedFailureOpenTextOf = (code: FeedFailureCode): string | null =>
+  code === 'notes_unavailable' ? null : feedFailureOpenText
 
 /**
  * The last sentence of a result that left the dialog open (`feed.result` with `next:

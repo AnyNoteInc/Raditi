@@ -18,7 +18,7 @@ import {
   feedDoneSiteText,
   feedEndedSiteText,
   feedFailureKeptText,
-  feedFailureOpenText,
+  feedFailureOpenTextOf,
   feedFileLeftText,
   feedArtifactLeftText,
   feedDocLeftText,
@@ -199,7 +199,7 @@ function rowBlock(row: FeedItem, withSite: boolean, h: Heading = heading): strin
           feedEndedSiteText[row.site],
           feedCreditsSentence(row.credits),
           row.next === 'awaiting_approval' ? feedFailureKeptText : null,
-          row.next === 'awaiting_user' ? feedFailureOpenText : null,
+          row.next === 'awaiting_user' ? feedFailureOpenTextOf(row.code) : null,
         ]),
         objectList(row.objects, feedObjectText.ended),
       ])

@@ -6,6 +6,7 @@ import {
   attachMentionedArtifacts,
   listChatArtifacts,
   memoryEntriesOfPass,
+  artifactCommentSourceOf,
   passUnattended,
   readArtifactCommentDispatch,
   markArtifactReadOther,
@@ -14,6 +15,8 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import {
+  DomainError,
+  isDomainError,
   modelClassSchema,
   readFeedRow,
   repoMirrorStates,
@@ -364,7 +367,11 @@ export async function readPassFacts(
 
 type PassRequestRow = { id: bigint; payload: unknown; artifactCommentHasWords: boolean | null }
 
-/** A continuation follows only the exact question written before the original dispatch ran. */
+/**
+ * The notes of the dispatch this pass carries: of the request it answers, or of the dispatch the
+ * ceiling question it continues names (`artifactCommentSourceOf`). null — none; false — the link
+ * does not hold, and the pass is not planned.
+ */
 async function dispatchOfPass(
   db: PrismaClient,
   taskId: string,
@@ -373,24 +380,10 @@ async function dispatchOfPass(
 ) {
   const event = readFeedRow('feed.request', answered.payload)
   if (event.type !== 'feed.request') return answered.artifactCommentHasWords === null ? null : false
-  let original = answered
-  if (event.kind === 'continue') {
-    const question = await db.taskEvent.findFirst({
-      where: {
-        id: { equals: BigInt(event.questionEventId), lt: answered.id },
-        taskId,
-        type: 'feed.question',
-        clientVisible: true,
-        turnId: null,
-      },
-      select: { artifactCommentSourceId: true },
-    })
-    if (question?.artifactCommentSourceId == null) return null
-    const source = history.find(({ id }) => id === question.artifactCommentSourceId)
-    if (!source || source.artifactCommentHasWords === null) return false
-    original = source
-  } else if (original.artifactCommentHasWords === null) return null
-
+  const sourceId = await artifactCommentSourceOf(db, { taskId, requestEventId: answered.id })
+  if (sourceId === null) return null
+  const original = history.find(({ id }) => id === sourceId)
+  if (!original || original.artifactCommentHasWords === null) return false
   const request = readFeedRow('feed.request', original.payload)
   if (
     request.type !== 'feed.request' ||
@@ -398,14 +391,27 @@ async function dispatchOfPass(
     request.authorId !== event.authorId
   )
     return false
-  return {
-    artifactCommentSourceId: original.id,
-    artifactComments: await readArtifactCommentDispatch(db, {
-      taskId,
-      requestEventId: original.id,
-      authorId: request.authorId,
-    }),
-  }
+  const artifactComments = await readArtifactCommentDispatch(db, {
+    taskId,
+    requestEventId: original.id,
+    authorId: request.authorId,
+  }).catch((error: unknown) => {
+    throw notesWithdrawn(error)
+  })
+  return { artifactCommentSourceId: original.id, artifactComments }
+}
+
+/**
+ * The artifact was deleted or its access lost since the dispatch: the client is told so. A snapshot
+ * that no longer passes its schema stays a technical failure.
+ */
+function notesWithdrawn(error: unknown): unknown {
+  if (!isDomainError(error) || error.code !== 'ARTIFACT_NOT_FOUND') return error
+  return new DomainError(
+    'ARTIFACT_COMMENTS_WITHDRAWN',
+    'The notes sent with the request are no longer available',
+    409,
+  )
 }
 
 /**

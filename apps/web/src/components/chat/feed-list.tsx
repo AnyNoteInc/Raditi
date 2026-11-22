@@ -23,7 +23,7 @@ import {
   feedDoneSiteText,
   feedEndedSiteText,
   feedFailureKeptText,
-  feedFailureOpenText,
+  feedFailureOpenTextOf,
   feedFileLeftText,
   feedArtifactLeftText,
   feedDocLeftText,
@@ -1011,7 +1011,7 @@ function RowView({
               // The dialog kept its candidate: the card of the changes above says what to do.
               row.next === 'awaiting_approval' ? feedFailureKeptText : null,
               // The dialog stays open: the client writes «продолжи» (28.10.2026).
-              row.next === 'awaiting_user' ? feedFailureOpenText : null,
+              row.next === 'awaiting_user' ? feedFailureOpenTextOf(row.code) : null,
             ]}
           />
           <SiteObjects objects={row.objects ?? []} heading={feedObjectText.ended} />

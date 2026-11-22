@@ -1801,6 +1801,7 @@ describe('failure catalogue', () => {
       'repo_unsupported',
       'repo_unreachable',
       'repo_reauth',
+      'notes_unavailable',
     ])
   })
 
@@ -1829,6 +1830,7 @@ describe('failure catalogue', () => {
       'repo_too_large',
       'repo_unsupported',
       'repo_reauth',
+      'notes_unavailable',
     ])
   })
 

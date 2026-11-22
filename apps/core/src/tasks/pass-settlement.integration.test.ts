@@ -508,6 +508,37 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       ).toEqual([['feed.question', 'ceiling']])
     })
 
+    const ceilingQuestion = (taskId: string) =>
+      db.taskEvent.findFirstOrThrow({
+        where: { taskId, type: 'feed.question' },
+        select: { turnId: true, artifactCommentSourceId: true },
+      })
+    const dispatchedRefusal = async () => {
+      const task = await refused('1.0100000000')
+      await db.taskEvent.update({
+        where: { id: task.requestEventId },
+        data: { artifactCommentHasWords: false },
+      })
+      return task
+    }
+
+    it('names the dispatch of notes in a ceiling inside its turn (88.18в)', async () => {
+      const task = await dispatchedRefusal()
+      const pass = { ...ref(task), requestEventId: String(task.requestEventId) }
+
+      expect(await settlement().settle(pass, failedTurn)).toBe('moved')
+      const question = await ceilingQuestion(task.taskId)
+      expect(question.turnId).not.toBeNull()
+      expect(question.artifactCommentSourceId).toBe(task.requestEventId)
+    })
+
+    it('links nothing when the sweep settles: it does not know the request of the pass', async () => {
+      const task = await dispatchedRefusal()
+
+      expect(await settlement().settle(ref(task), failedTurn)).toBe('moved')
+      expect((await ceilingQuestion(task.taskId)).artifactCommentSourceId).toBeNull()
+    })
+
     it('fails the pass when the key still had money: the gateway stopped its pace', async () => {
       const task = await refused('750.0000000000')
 

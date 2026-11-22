@@ -178,6 +178,7 @@ export {
   addAgentCommentReply,
   addArtifactComment,
   addArtifactCommentReply,
+  artifactCommentSourceOf,
   dropAgentCommentReplies,
   dropStaleAgentCommentReplies,
   pendingAgentCommentReplies,

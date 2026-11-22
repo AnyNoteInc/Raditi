@@ -28,12 +28,15 @@ export function ArtifactCommentDispatch({
   threadIds,
   onClose,
   onAccessLost,
+  onSelectionStale,
   onSent,
 }: {
   artifactId: string
   threadIds: string[]
   onClose: () => void
   onAccessLost: () => void
+  /** A selected note was resolved or became unavailable: the same request cannot succeed. */
+  onSelectionStale: () => void
   onSent: () => void
 }) {
   const trpc = useTRPC()
@@ -107,6 +110,10 @@ export function ArtifactCommentDispatch({
       if (active.current !== controller) return
       if (artifactAccessLost(failure)) {
         onAccessLost()
+        return
+      }
+      if (artifactErrorData(failure)?.domainCode === 'ARTIFACT_COMMENT_UNAVAILABLE') {
+        onSelectionStale()
         return
       }
       setError(

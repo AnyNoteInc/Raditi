@@ -89,6 +89,19 @@ describe('the chat as a Markdown file', () => {
     expect(out([failure], true)).toContain('При работе с сайтом произошёл сбой')
   })
 
+  it('does not offer «продолжи» after notes that could no longer be read (88.18в)', () => {
+    const failure = row({
+      type: 'feed.failure',
+      turn: null,
+      code: 'notes_unavailable',
+      site: 'none',
+      credits: 'returned',
+      next: 'awaiting_user',
+    })
+    expect(out([failure], false)).toContain('заметки, отправленные ему, больше недоступны')
+    expect(out([failure], false)).not.toContain(feedFailureOpenText)
+  })
+
   it('asks for the help of the client as the chat does, with a site or without one', () => {
     const login = row({
       type: 'feed.question',

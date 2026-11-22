@@ -186,6 +186,7 @@ export function ArtifactComments({
   const [resolved, setResolved] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   const [dispatch, setDispatch] = useState<string[] | null>(null)
+  const [dispatchStale, setDispatchStale] = useState(false)
   const [body, setBody] = useState('')
   const [addError, setAddError] = useState<string | null>(null)
   const [resolveError, setResolveError] = useState(false)
@@ -351,7 +352,14 @@ export function ArtifactComments({
           Решённые
         </Button>
         {selectedOpen.length > 0 && (
-          <Button size="small" variant="contained" onClick={() => setDispatch(selectedOpen)}>
+          <Button
+            size="small"
+            variant="contained"
+            onClick={() => {
+              setDispatchStale(false)
+              setDispatch(selectedOpen)
+            }}
+          >
             Отправить агенту ({selectedOpen.length})
           </Button>
         )}
@@ -363,6 +371,12 @@ export function ArtifactComments({
       )}
       {list.isError && <Alert severity="error">Не удалось загрузить заметки.</Alert>}
       {resolveError && <Alert severity="error">{failed}</Alert>}
+      {dispatchStale && (
+        <Alert severity="warning" onClose={() => setDispatchStale(false)}>
+          Одна из выбранных заметок решена или больше недоступна. Проверьте выбор и отправьте
+          заметки заново.
+        </Alert>
+      )}
       {list.isSuccess && visible.length === 0 && (
         <Typography variant="body2" color="text.secondary">
           {resolved ? 'Решённых заметок пока нет.' : texts.empty}
@@ -475,6 +489,12 @@ export function ArtifactComments({
           threadIds={dispatch}
           onClose={() => setDispatch(null)}
           onAccessLost={() => setReplyDenied(true)}
+          onSelectionStale={() => {
+            // The list read again drops what is no longer open from the selection.
+            setDispatch(null)
+            setDispatchStale(true)
+            void reread()
+          }}
           onSent={() => setSelected([])}
         />
       )}

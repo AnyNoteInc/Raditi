@@ -266,13 +266,14 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
         expect(await db.rateLimit.findUnique({ where: readOther })).not.toBeNull()
 
         await db.member.delete({ where: { workspaceId_userId: { workspaceId, userId } } })
+        // The pass fails in the client's words, not as a technical failure.
         await expect(read(first.requestEventId)).rejects.toMatchObject({
-          code: 'ARTIFACT_NOT_FOUND',
+          code: 'ARTIFACT_COMMENTS_WITHDRAWN',
         })
         await db.member.create({ data: { workspaceId, userId, role: 'owner' } })
         await db.artifact.delete({ where: { id: artifactId } })
         for (const id of [first.requestEventId, resumedAgain])
-          await expect(read(id)).rejects.toMatchObject({ code: 'ARTIFACT_NOT_FOUND' })
+          await expect(read(id)).rejects.toMatchObject({ code: 'ARTIFACT_COMMENTS_WITHDRAWN' })
         expect(
           (await read(ordinary))?.requests.find(({ id }) => id === first.requestEventId)?.text,
         ).toBeNull()
