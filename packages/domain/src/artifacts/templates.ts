@@ -330,6 +330,27 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
       ),
     ],
   },
+  {
+    id: 'customer-journey',
+    kind: 'diagram',
+    title: 'Путь клиента',
+    description: 'Как клиент находит вас, выбирает и покупает — по шагам',
+    blocks: [
+      {
+        kind: 'diagram',
+        content: [
+          'flowchart LR',
+          '  A[Узнал о вас] --> B[Зашёл на сайт]',
+          '  B --> C{Нашёл, что искал?}',
+          '  C -->|да| D[Оставил заявку]',
+          '  C -->|нет| E[Ушёл к конкурентам]',
+          '  D --> F[Получил ответ]',
+          '  F --> G[Купил]',
+          '  G --> H[Пришёл снова]',
+        ].join('\n'),
+      },
+    ],
+  },
 ] satisfies readonly ArtifactTemplate[])
 
 /** The template of an id, of a kind that may be created now; null — no such template. */

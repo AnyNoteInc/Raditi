@@ -6,6 +6,7 @@ import { artifactKindSpecOf } from '@repo/domain/artifacts'
 import { ArtifactDocument } from './artifact-document'
 import { ArtifactBrand } from './brand/artifact-brand'
 import { ArtifactCanvas } from './canvas/artifact-canvas'
+import { ArtifactDiagram } from './diagram/artifact-diagram'
 import { ArtifactMockup } from './mockup/artifact-mockup'
 import { ArtifactTable } from './table/artifact-table'
 import type { ArtifactBodyProps } from './artifact-body-props'
@@ -40,6 +41,8 @@ export function ArtifactBody(props: ArtifactBodyProps & { onAccessLost: () => vo
       return <ArtifactCanvas {...props} />
     case 'brand':
       return <ArtifactBrand {...props} />
+    case 'diagram':
+      return <ArtifactDiagram {...props} />
     default:
       return <Typography sx={{ color: 'text.secondary' }}>{bodyTexts.notShown}</Typography>
   }
@@ -48,5 +51,11 @@ export function ArtifactBody(props: ArtifactBodyProps & { onAccessLost: () => vo
 /** Whether the view of a kind wants the whole width of the page (no outline, no 820 px column). */
 export const artifactBodyWide = (kind: string): boolean => {
   const view = artifactKindSpecOf(kind)?.view
-  return view === 'frame' || view === 'sheet' || view === 'canvas' || view === 'brand'
+  return (
+    view === 'frame' ||
+    view === 'sheet' ||
+    view === 'canvas' ||
+    view === 'brand' ||
+    view === 'diagram'
+  )
 }

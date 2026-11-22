@@ -50,6 +50,8 @@ export const publishTexts = Object.freeze({
   done: 'Готово: страница опубликована.',
   updated: (version: number) => `Готово: на странице версия ${version}.`,
   failed: 'Не получилось опубликовать. Попробуйте ещё раз.',
+  /** «Схема» whose text has no drawn picture yet, or did not parse (88.24в). */
+  notDrawn: 'Схема ещё не нарисована или в её тексте ошибка: исправьте текст и опубликуйте снова.',
   off: 'Страницы здесь не настроены.',
   cancel: 'Отмена',
   confirm: 'Опубликовать',
@@ -207,11 +209,14 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
                     .catch((error: unknown) =>
                       setResult({
                         ok: false,
-                        text:
-                          (error as { data?: { domainCode?: string } }).data?.domainCode ===
-                          'PAGES_OFF'
+                        text: ((code) =>
+                          code === 'PAGES_OFF'
                             ? publishTexts.off
-                            : publishTexts.failed,
+                            : code === 'ARTIFACT_DIAGRAM_NOT_DRAWN'
+                              ? publishTexts.notDrawn
+                              : publishTexts.failed)(
+                          (error as { data?: { domainCode?: string } }).data?.domainCode,
+                        ),
                       }),
                     )
                 }

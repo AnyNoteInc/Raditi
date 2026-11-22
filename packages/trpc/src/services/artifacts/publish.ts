@@ -6,8 +6,9 @@ import {
   readArtifactVersion,
   saveArtifactVersion,
   type PrismaClient,
+  artifactDiagramOf,
 } from '@repo/db'
-import { readingPage } from '@repo/doc-render'
+import { diagramPage, readingPage } from '@repo/doc-render'
 import {
   checkPageContent,
   DomainError,
@@ -174,6 +175,42 @@ async function mockupPage(
   return { bytes: encode(html), files: copied }
 }
 
+/**
+ * A version of «Схема» as a page (§7.10, 88.24в): each diagram block by the picture kept of its text
+ * — the SVG the server drew and cleaned — copied into the files of the site. A text without a drawn
+ * picture is not published: the client sees why.
+ */
+async function diagramPublication(
+  db: PrismaClient,
+  input: { artifactId: string; title: string; blocks: readonly VersionBlock[] },
+) {
+  const diagrams = input.blocks
+    .filter((block) => block.kind === 'diagram' && block.content && block.content.trim() !== '')
+    .toSorted((a, b) =>
+      (a.rank ?? '') < (b.rank ?? '') ? -1 : (a.rank ?? '') > (b.rank ?? '') ? 1 : 0,
+    )
+  if (diagrams.length === 0)
+    throw new DomainError('DOC_NOT_READY', 'The version has no diagram to publish', 409)
+  const files: { path: string; bytes: Uint8Array }[] = []
+  const pictures: { src: string; width: number; height: number }[] = []
+  for (const block of diagrams) {
+    const kept = await artifactDiagramOf(db, {
+      artifactId: input.artifactId,
+      source: block.content!,
+    })
+    if (!kept?.ok || !kept.svg || !kept.width || !kept.height)
+      throw new DomainError(
+        'ARTIFACT_DIAGRAM_NOT_DRAWN',
+        'A diagram of the version is not drawn',
+        409,
+      )
+    const path = `/_files/a/d-${kept.sourceSha256.slice(0, 32)}.svg`
+    if (!files.some((file) => file.path === path)) files.push({ path, bytes: encode(kept.svg) })
+    pictures.push({ src: path, width: kept.width, height: kept.height })
+  }
+  return { bytes: encode(await diagramPage({ title: input.title, pictures })), files }
+}
+
 /** The CSS variables of the brand of the artifact's project; '' — none (slice 88.15а). */
 async function brandCssOf(db: PrismaClient, projectId: string | null): Promise<string> {
   const brand = await projectBrandOf(db, projectId)
@@ -216,6 +253,12 @@ export async function publishArtifactPage(
       framed: false,
       frame: null,
       brandCss: await brandCssOf(db, artifact.projectId),
+    }))
+  } else if (artifact.kind === 'diagram') {
+    ;({ bytes, files } = await diagramPublication(db, {
+      artifactId: artifact.id,
+      title: artifact.title,
+      blocks: version.blocks,
     }))
   } else {
     markdown = version.markdown ?? markdownOfTable(version.blocks)

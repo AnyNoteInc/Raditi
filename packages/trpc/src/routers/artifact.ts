@@ -23,6 +23,7 @@ import {
   artifactGallerySorts,
   moveArtifact,
   resolveArtifactComment,
+  readArtifactDiagram,
 } from '@repo/db'
 import { feedEventIdSchema } from '@repo/domain'
 import {
@@ -42,6 +43,7 @@ import {
   artifactRoles,
   artifactSignalLimits,
   artifactTitleSchema,
+  artifactRenderLimits,
 } from '@repo/domain/artifacts'
 import { enqueueNotification } from '@repo/notifications'
 import { TRPCError } from '@trpc/server'
@@ -867,6 +869,43 @@ export const artifactRouter = router({
       }),
     )
     .query(({ ctx, input }) => cabinetTableTotals(ctx.prisma, { userId: ctx.user.id, ...input })),
+
+  /**
+   * The picture of a block of «Схема» (§7.13, 88.24): the checked text drawn — kept by the hash of
+   * the text, or asked of core when missing (`drawing`: the cabinet asks again). An error is its line.
+   */
+  diagram: consentedProcedure
+    .input(
+      z.strictObject({
+        artifactId,
+        block: artifactBlockKeySchema,
+        /** The revision the cabinet holds: a key of its cache only — the server reads the block. */
+        rev: z.number().int().min(0).optional(),
+      }),
+    )
+    .output(
+      z.discriminatedUnion('state', [
+        z.strictObject({ state: z.literal('empty') }),
+        z.strictObject({ state: z.literal('drawing') }),
+        z.strictObject({
+          state: z.literal('drawn'),
+          svg: z.string().max(artifactRenderLimits.diagramSvgBytes),
+          width: z.number().int().positive(),
+          height: z.number().int().positive(),
+        }),
+        z.strictObject({
+          state: z.literal('failed'),
+          line: z.number().int().positive().nullable(),
+        }),
+      ]),
+    )
+    .query(({ ctx, input }) =>
+      readArtifactDiagram(ctx.prisma, {
+        userId: ctx.user.id,
+        artifactId: input.artifactId,
+        block: input.block,
+      }),
+    ),
 
   /** «Скачать → Excel» of a table: core builds the workbook (§7.13, question 26). */
   exportStart: consentedProcedure

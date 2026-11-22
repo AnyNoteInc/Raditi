@@ -13,6 +13,7 @@ import {
   operatorArtifactDecision,
   readArtifactComments,
   readChatArtifactComments,
+  saveArtifactDiagram,
   settleAgentCommentReplies,
   settleArtifactWrites,
   type Prisma,
@@ -199,8 +200,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     const caller = callerOf(await person())
     await expect(
       caller.artifact.create({
-        kind: 'diagram',
-        title: 'Схема',
+        kind: 'slides',
+        title: 'Презентация',
         projectId: null,
         templateId: null,
       }),
@@ -1729,6 +1730,47 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     ).rejects.toMatchObject({
       code: 'NOT_FOUND',
     })
+  })
+
+  it('creates «Схема» from its template and publishes its drawn picture as a page (88.24в)', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const { id } = await caller.artifact.create({
+      kind: 'diagram',
+      title: 'Путь клиента',
+      projectId: null,
+      templateId: 'customer-journey',
+    })
+    const [block] = (await caller.artifact.read({ artifactId: id })).blocks
+    expect(block).toMatchObject({ kind: 'diagram' })
+    // Not drawn yet: core is asked, and the page does not go out without the picture.
+    expect(await caller.artifact.diagram({ artifactId: id, block: block!.key })).toEqual({
+      state: 'drawing',
+    })
+    await expect(
+      caller.pages.publishArtifact({ artifactId: id, versionNo: null }),
+    ).rejects.toMatchObject({ cause: { code: 'ARTIFACT_DIAGRAM_NOT_DRAWN' } })
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="90"><text>Купил</text></svg>'
+    await saveArtifactDiagram(db, {
+      artifactId: id,
+      source: block!.content!,
+      result: { ok: true, svg, width: 400, height: 90, type: 'flowchart-v2' },
+    })
+    expect(await caller.artifact.diagram({ artifactId: id, block: block!.key })).toEqual({
+      state: 'drawn',
+      svg,
+      width: 400,
+      height: 90,
+    })
+    const published = await caller.pages.publishArtifact({ artifactId: id, versionNo: null })
+    const page = await db.pageContent.findUniqueOrThrow({ where: { pageId: published.pageId } })
+    const html = Buffer.from(page.bytes).toString('utf8')
+    expect(html).toContain('<h1>Путь клиента</h1>')
+    expect(html).toMatch(/<img src="\/_files\/a\/d-[0-9a-f]{32}\.svg" width="400" height="90"/)
+    expect(html).not.toMatch(/<script|mermaid/i)
+    const files = await db.pageFile.findMany({ where: { path: { startsWith: '/_files/a/d-' } } })
+    expect(files.map((file) => Buffer.from(file.bytes).toString('utf8'))).toContain(svg)
   })
 
   it('returns a version all at once or not at all: a block an agent writes holds it (Ар13)', async () => {

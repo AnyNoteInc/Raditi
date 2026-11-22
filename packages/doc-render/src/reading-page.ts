@@ -83,3 +83,56 @@ export async function readingPage({ title, markdown }: ReadingPageInput): Promis
   )
   return `<!doctype html>${renderToStaticMarkup(html)}`
 }
+
+export interface DiagramPageInput {
+  title: string
+  /** The pictures of «Схема», files of the site (`/_files/a/…`), in the order of their blocks. */
+  pictures: readonly { src: string; width: number; height: number }[]
+}
+
+/**
+ * A published «Схема» (docs/plan/88-artifacts.md, §7.10, 88.24в): the reading page with its title
+ * and the SVG the server drew and cleaned, as `<img>` — no script, nothing of Mermaid on the page.
+ */
+export async function diagramPage({ title, pictures }: DiagramPageInput): Promise<string> {
+  const { renderToStaticMarkup } = await import('react-dom/server')
+  const html = createElement(
+    'html',
+    { lang: 'ru' },
+    createElement(
+      'head',
+      null,
+      createElement('meta', { charSet: 'utf-8' }),
+      createElement('meta', { name: 'viewport', content: 'width=device-width, initial-scale=1' }),
+      createElement('meta', { name: 'robots', content: 'noindex, nofollow' }),
+      createElement('title', null, title),
+      createElement('style', { dangerouslySetInnerHTML: { __html: READING_PAGE_CSS } }),
+    ),
+    createElement(
+      'body',
+      null,
+      createElement(
+        'main',
+        null,
+        createElement(
+          'article',
+          null,
+          createElement('h1', null, title),
+          ...pictures.map((picture, index) =>
+            createElement(
+              'figure',
+              { key: index, style: { margin: '24px 0' } },
+              createElement('img', {
+                src: picture.src,
+                width: picture.width,
+                height: picture.height,
+                alt: title,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+  return `<!doctype html>${renderToStaticMarkup(html)}`
+}
