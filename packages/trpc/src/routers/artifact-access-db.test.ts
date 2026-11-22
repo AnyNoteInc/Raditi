@@ -43,6 +43,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
       select: { id: true },
     })
     const owned = { workspaceId: { in: workspaces.map(({ id }) => id) } }
+    // Only this suite's notices: other suites write theirs to the same database at once.
+    const artifacts = await db.artifact.findMany({ where: owned, select: { id: true } })
+    if (artifacts.length > 0)
+      await db.outboxEvent.deleteMany({
+        where: {
+          type: 'artifact.notify',
+          OR: artifacts.map(({ id }) => ({ payload: { path: ['artifactId'], equals: id } })),
+        },
+      })
     await db.artifact.deleteMany({ where: owned })
     await db.creditLedger.deleteMany({ where: { account: owned } })
     await db.creditHold.deleteMany({ where: { account: owned } })
@@ -52,7 +61,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
     await db.workspace.deleteMany({ where: { id: owned.workspaceId } })
     await db.rateLimit.deleteMany({ where: { key: { startsWith: 'artifact-open' } } })
     await db.outboxEvent.deleteMany({ where: { dedupeKey: { startsWith: 'artifact.invite:' } } })
-    await db.outboxEvent.deleteMany({ where: { type: 'artifact.notify' } })
     await db.user.deleteMany({ where: { id: { in: users } } })
   })
   afterAll(async () => {
@@ -299,12 +307,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
       { email: viewer.email.toLowerCase(), role: 'edit' },
       { email: 'nobody-yet@artifacts-access.example.ru', role: 'view' },
     ])
-    const letters = await db.outboxEvent.findMany({
-      where: { type: 'artifact.invite', dedupeKey: { startsWith: 'artifact.invite:' } },
-      select: { payload: true },
-    })
+    // This test's letters only, in no order: other suites invite at the same time.
+    const addresses = [viewer.email.toLowerCase(), 'nobody-yet@artifacts-access.example.ru']
+    const letters = (
+      await db.outboxEvent.findMany({
+        where: { type: 'artifact.invite', dedupeKey: { startsWith: 'artifact.invite:' } },
+        select: { payload: true },
+      })
+    ).filter((row) => addresses.includes((row.payload as { to: string }).to))
     expect(letters).toHaveLength(2)
-    expect(letters[0]!.payload).toMatchObject({
+    const toViewer = letters.find((row) => (row.payload as { to: string }).to === addresses[0])
+    expect(toViewer!.payload).toMatchObject({
       to: viewer.email.toLowerCase(),
       inviterName: 'Анна',
       kindWord: 'документ',
