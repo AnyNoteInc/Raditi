@@ -1,0 +1,76 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>pointer</title>
+<style>
+html, body { margin: 0; height: 100%; overflow: hidden; }
+#board { position: fixed; inset: 0; background: #e9ecf1; overflow: hidden; touch-action: none; user-select: none; }
+/* layout=flex: the board is a plain flex child under a top bar, as in the spike's cabinet (not fixed) */
+.flex { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.flex > header { height: 52px; border-bottom: 1px solid #ccd; flex: none; }
+.flex > #board { position: relative; inset: auto; flex: 1; }
+#world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.frame { position: absolute; background: #fff; }
+.frame > iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+.m-none .frame > iframe, .m-shield .frame > iframe { pointer-events: none; }
+.m-shield .frame::after { content: ""; position: absolute; inset: 0; z-index: 1; }
+.m-coveronly .frame::after { content: ""; position: absolute; inset: 0; z-index: 1; }
+</style></head>
+<body>
+<div id="board"><div id="world"><div class="frame" id="fr"></div></div></div>
+<script>
+// An independent check page: one sandboxed frame on a board, three protections, counters only.
+// The board never moves, so a drag from the background really crosses into the frame.
+const q = new URLSearchParams(location.search)
+const mode = q.get('mode') ?? 'auto'                 // auto | none | shield | coveronly
+const scale = Number(q.get('scale') ?? 0.35)
+const W = Number(q.get('w') ?? 1440), H = Number(q.get('h') ?? 3000)
+const fh = Number(q.get('fh') ?? H)                  // iframe height (fh < h: the frame scrolls itself)
+const cap = q.get('cap') ?? 'none'                   // none | down | move: setPointerCapture strategy
+if (q.get('layout') === 'flex') { const w = document.createElement('div'); w.className = 'flex'; w.appendChild(document.createElement('header')); const bd = document.getElementById('board'); bd.replaceWith(w); w.appendChild(bd) }
+const board = document.getElementById('board'), world = document.getElementById('world'), fr = document.getElementById('fr')
+board.className = 'm-' + mode
+world.style.transform = `translate(${Number(q.get('x') ?? 300)}px, ${Number(q.get('y') ?? 60)}px) scale(${scale})`
+fr.style.width = W + 'px'; fr.style.height = fh + 'px'
+const ifr = document.createElement('iframe')
+ifr.setAttribute('sandbox', 'allow-scripts')
+if (q.get('scrolling') === 'no') ifr.setAttribute('scrolling', 'no')
+ifr.src = q.get('doc') ? `${q.get('fo')}/${q.get('doc')}` : `${q.get('fo')}/tall.html?h=${H}&anim=${q.get('anim') ?? 0}&ovx=${q.get('ovx') ?? 0}`
+ifr.addEventListener('load', () => { if (q.get('ready') === 'load') window.__v.ready = true })
+fr.appendChild(ifr)
+const zero = () => ({ wheel: 0, wheelCtrl: 0, pdown: 0, pmove: 0, pup: 0, dbl: 0, key: 0, click: 0, maxX: -1, movesOverFrame: 0, scrollY: 0 })
+window.__v = { board: zero(), frame: zero(), ready: false, mode, cap }
+window.__reset = () => { const r = window.__v.ready; window.__v.board = zero(); window.__v.frame = zero(); window.__v.ready = r }
+window.__frameRect = () => { const r = fr.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, cx: (r.left + Math.min(r.right, innerWidth)) / 2, cy: (r.top + Math.min(r.bottom, innerHeight)) / 2 } }
+window.__at = (x, y) => { const e = document.elementFromPoint(x, y); return e ? (e.tagName + (e.id ? '#' + e.id : '') + (e.className ? '.' + e.className : '')) : null }
+const over = (e) => { const r = fr.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom }
+const b = () => window.__v.board
+board.addEventListener('wheel', (e) => { e.preventDefault(); b().wheel++; if (e.ctrlKey) b().wheelCtrl++ }, { passive: false })
+board.addEventListener('pointerdown', (e) => { b().pdown++; if (cap === 'down') try { board.setPointerCapture(e.pointerId) } catch {} ; board._p = { x: e.clientX, y: e.clientY, c: false } })
+board.addEventListener('pointermove', (e) => {
+  b().pmove++; b().maxX = Math.max(b().maxX, e.clientX); if (over(e)) b().movesOverFrame++
+  const p = board._p
+  if (cap === 'move' && p && !p.c && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 3) { p.c = true; try { board.setPointerCapture(e.pointerId) } catch {} }
+})
+board.addEventListener('pointerup', (e) => { b().pup++; board._p = null })
+board.addEventListener('dblclick', () => { b().dbl++ })
+board.addEventListener('click', () => { b().click++ })
+addEventListener('keydown', () => { b().key++ })
+// a log of what the cabinet's window sees during a drag (capture phase), to see where moves stop
+window.__log = []
+for (const t of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'gotpointercapture', 'lostpointercapture', 'dragstart', 'mousemove', 'mouseup', 'selectstart']) addEventListener(t, (e) => { if (window.__log.length < 400) window.__log.push(t + ':' + Math.round(e.clientX ?? -1)) }, { capture: true })
+if (q.get('noframe') === '1') ifr.style.display = 'none'
+addEventListener('message', (e) => {
+  const d = e.data
+  if (!d || d.v !== 'frame') return
+  const f = window.__v.frame
+  if (d.t === 'ready') { window.__v.ready = true; return }
+  if (d.t === 'wheel') { f.wheel++; if (d.ctrl) f.wheelCtrl++ }
+  else if (d.t === 'pointerdown') f.pdown++
+  else if (d.t === 'pointermove') f.pmove++
+  else if (d.t === 'pointerup') f.pup++
+  else if (d.t === 'dblclick') f.dbl++
+  else if (d.t === 'keydown') f.key++
+  else if (d.t === 'click') f.click++
+  else if (d.t === 'scroll') f.scrollY = d.y
+})
+</script>
+</body></html>

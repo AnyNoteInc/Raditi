@@ -1,5 +1,6 @@
 import { createElement, type MouseEvent, type ReactElement } from 'react'
-import Markdown, { type Components } from 'react-markdown'
+import type { ElementContent, Root, RootContent } from 'hast'
+import Markdown, { type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { rehypeDocumentRules, type DocumentRules } from './rules.ts'
@@ -27,6 +28,28 @@ export interface DocumentMarkdownProps extends Omit<DocumentRules, 'documentLink
 
 const plain = (event: MouseEvent) =>
   event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+
+function markdownOptions(text: string, rules: DocumentRules): Options {
+  return {
+    remarkPlugins: [remarkGfm],
+    rehypePlugins: [[rehypeDocumentRules, rules]],
+    // The rules read every address themselves: nothing is rewritten before them.
+    urlTransform: (url) => url,
+    skipHtml: true,
+    children: text,
+  }
+}
+
+const sectionRules = {
+  documents: new Set<string>(),
+  imageSrc: () => null,
+  documentLinks: false,
+} satisfies DocumentRules
+
+/** Text in a standalone artifact section is the same for its reader and its quote anchors. */
+export function ArtifactSectionMarkdown({ text }: { text: string }): ReactElement {
+  return createElement(DocumentMarkdown, { text, ...sectionRules })
+}
 
 export function DocumentMarkdown({
   text,
@@ -73,12 +96,57 @@ export function DocumentMarkdown({
     },
   }
   return createElement(Markdown, {
-    remarkPlugins: [remarkGfm],
-    rehypePlugins: [[rehypeDocumentRules, { documents, imageSrc, documentLinks, treeLinks }]],
-    // The rules read every address themselves: nothing is rewritten before them.
-    urlTransform: (url: string) => url,
+    ...markdownOptions(text, { documents, imageSrc, documentLinks, treeLinks }),
     components,
-    skipHtml: true,
-    children: text,
   })
+}
+
+const textSeparators = new Set([
+  'p',
+  'br',
+  'hr',
+  'ul',
+  'ol',
+  'li',
+  'blockquote',
+  'pre',
+  'table',
+  'tr',
+  'th',
+  'td',
+  'section',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+])
+
+/** Used by both the checked Markdown tree and the selection from its rendered DOM. */
+export const separatesSectionText = (tag: string): boolean => textSeparators.has(tag)
+
+export function artifactSectionText(markdown: string): string {
+  const options = markdownOptions(markdown, sectionRules)
+  const pieces: string[] = []
+  // Use react-markdown's synchronous pipeline without mounting elements. The last plugin sees
+  // the sanitized tree, including visible link hosts and image labels.
+  Markdown({
+    ...options,
+    rehypePlugins: [
+      ...(options.rehypePlugins ?? []),
+      () => (tree: Root) => {
+        const collect = (node: RootContent | ElementContent) => {
+          if (node.type === 'text') pieces.push(node.value)
+          if (node.type !== 'element') return
+          const separates = separatesSectionText(node.tagName)
+          if (separates) pieces.push(' ')
+          node.children.forEach(collect)
+          if (separates) pieces.push(' ')
+        }
+        tree.children.forEach(collect)
+      },
+    ],
+  })
+  return pieces.join('')
 }

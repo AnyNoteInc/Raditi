@@ -14,8 +14,7 @@ import { AppIcon } from '@/components/application/app-icon'
 import { toolText } from './chat-texts'
 import { offScreen } from './composer'
 import {
-  toolIcons,
-  toolMenuNames,
+  toolGroups,
   toolsLabel,
   type DialogTool,
   type ToolsDot,
@@ -23,7 +22,9 @@ import {
 } from './dialog-tools'
 
 // «+» of a dialog and its menu «Инструменты» (docs/plan/59-dialog-tools-panel.md, И4, И5, И13,
-// И14): the tools the dialog has, as tiles in two columns, each with what it holds or who drives it.
+// И14): the tools the dialog has, as tiles in two columns, each with what it holds or who drives it;
+// since plan 88 (Ар44, board B-chat-list) in groups — «Инструменты», the artifacts of the chat made
+// here, mentioned in it and of its project, and «Файлы чата» — each item opening its own tab.
 // The button stands in the top right corner of the dialog — in its head while the panel is closed,
 // at the end of the tabs while it is open; a dot on it says that something new is behind it. From
 // `lg` the menu is a card beside the button, below it comes up from the bottom as a sheet. Opened
@@ -174,55 +175,84 @@ export function ToolsMenu({
           outline: 'none',
         }}
       >
-        {tiles.map(({ tool, open: shown, mark }) => (
-          <MenuItem
-            key={tool}
-            onClick={() => {
-              close()
-              onOpen(tool)
-            }}
-            sx={sheet ? sheetTileSx : tileSx}
-          >
-            <Box component="span" sx={{ gridArea: 'sign', display: 'flex' }}>
-              <AppIcon name={toolIcons[tool]} size={sheet ? 22 : 20} />
-            </Box>
-            <Box
-              component="span"
-              sx={
-                sheet
-                  ? { gridArea: 'name', minWidth: 0, overflowWrap: 'anywhere' }
-                  : // Beside a mark the name takes a second line rather than losing its end: two
-                    // lines of it keep the tile 52px high.
-                    {
-                      flex: '1 1 auto',
-                      minWidth: 0,
-                      whiteSpace: 'normal',
-                      overflowWrap: 'anywhere',
-                      lineHeight: 1.3,
-                    }
-              }
-            >
-              {toolMenuNames[tool]}
-            </Box>
-            {mark === null ? null : (
-              <>
-                {/* Read after the name as «Файлы и изменения, 4». */}
-                <Box component="span" sx={offScreen}>
-                  ,{' '}
+        {toolGroups.flatMap((group) => {
+          const items = tiles.filter((tile) => tile.group === group)
+          if (items.length === 0) return []
+          // A group is named, unless the browser stands alone in the menu (Ар44).
+          const named = group !== 'tools' || tiles.some((tile) => tile.group !== group)
+          return [
+            ...(named
+              ? [
+                  <Box
+                    key={`group-${group}`}
+                    component="li"
+                    role="separator"
+                    aria-label={toolText.groups[group]}
+                    sx={{
+                      gridColumn: '1 / -1',
+                      px: 0.5,
+                      pt: 0.5,
+                      fontSize: 12.5,
+                      fontWeight: 500,
+                      color: 'text.secondary',
+                      listStyle: 'none',
+                    }}
+                  >
+                    {toolText.groups[group]}
+                  </Box>,
+                ]
+              : []),
+            ...items.map(({ tool, open: shown, mark, label, icon }) => (
+              <MenuItem
+                key={tool}
+                onClick={() => {
+                  close()
+                  onOpen(tool)
+                }}
+                sx={sheet ? sheetTileSx : tileSx}
+              >
+                <Box component="span" sx={{ gridArea: 'sign', display: 'flex' }}>
+                  <AppIcon name={icon} size={sheet ? 22 : 20} />
                 </Box>
                 <Box
                   component="span"
-                  sx={{
-                    ...markSx(shown),
-                    ...(sheet ? { gridArea: 'mark', justifySelf: 'end' } : {}),
-                  }}
+                  sx={
+                    sheet
+                      ? { gridArea: 'name', minWidth: 0, overflowWrap: 'anywhere' }
+                      : // Beside a mark the name takes a second line rather than losing its end:
+                        // two lines of it keep the tile 52px high.
+                        {
+                          flex: '1 1 auto',
+                          minWidth: 0,
+                          whiteSpace: 'normal',
+                          overflowWrap: 'anywhere',
+                          lineHeight: 1.3,
+                        }
+                  }
                 >
-                  {mark}
+                  {label}
                 </Box>
-              </>
-            )}
-          </MenuItem>
-        ))}
+                {mark === null ? null : (
+                  <>
+                    {/* Read after the name as «Браузер, Открыто». */}
+                    <Box component="span" sx={offScreen}>
+                      ,{' '}
+                    </Box>
+                    <Box
+                      component="span"
+                      sx={{
+                        ...markSx(shown),
+                        ...(sheet ? { gridArea: 'mark', justifySelf: 'end' } : {}),
+                      }}
+                    >
+                      {mark}
+                    </Box>
+                  </>
+                )}
+              </MenuItem>
+            )),
+          ]
+        })}
       </MenuList>
     </>
   )

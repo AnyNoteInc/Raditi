@@ -1,0 +1,10 @@
+Layout of «Контакты автосервиса» as the client sees it (390×2041, 1440×1648).
+5 problems, most serious first:
+- both: blocked script https://maps.cdn-widgets.test/v3/widget.js — a frame loads nothing from outside; use the platform fonts and artifact files.
+- 390: the page scrolls sideways by 442 px. Wider than the screen: e43 <img.map> 800 px (width: 800px; height: auto;).
+- both: low contrast 3.8:1 (needs 4.5) — e24 <a.btn> «Позвонить» #ffffff on #e65100.
+- both: low contrast 3:1 (needs 4.5) — e25 <a.btn.tg> «Написать в Telegram» #ffffff on #229ed9.
+- both: low contrast 3.8:1 (needs 4.5) — e33 <td> «Суббота» #e65100 on #ffffff; same in e34.
+OK: scripts, fonts, overlaps, cut text, text size, empty areas, pictures.
+
+«Ход работы»: Проверка вёрстки «Контакты автосервиса» на компьютере и телефоне: 5 замечаний — внешние файлы не загружаются, на телефоне страница шире экрана, низкий контраст текста

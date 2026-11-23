@@ -27,6 +27,9 @@ export const feedFailureCodes = [
   'repo_unsupported',
   'repo_unreachable',
   'repo_reauth',
+  // The private notes sent with the request are gone before the pass read them: the artifact was
+  // deleted or its access was lost (docs/plan/88-artifacts.md, 88.18в).
+  'notes_unavailable',
 ] as const
 export type FeedFailureCode = (typeof feedFailureCodes)[number]
 
@@ -68,6 +71,8 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
   repo_unreachable: 'Не удалось получить репозиторий — попробуем в следующем сообщении.',
   repo_reauth:
     'Нужно заново войти туда, где лежит репозиторий: откройте проект и подключите репозиторий ещё раз.',
+  notes_unavailable:
+    'Агент не начал работу: заметки, отправленные ему, больше недоступны — артефакт удалён или доступ к нему закрыт. Если артефакт снова доступен, выберите заметки и отправьте их ещё раз.',
 })
 
 /**
@@ -113,6 +118,7 @@ export const feedFailureRetry: Readonly<Record<FeedFailureCode, boolean>> = Obje
   repo_unsupported: false,
   repo_unreachable: true,
   repo_reauth: false,
+  notes_unavailable: false,
 })
 
 const moscowTime = new Intl.DateTimeFormat('ru-RU', {

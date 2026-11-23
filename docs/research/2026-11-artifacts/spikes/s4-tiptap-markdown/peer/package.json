@@ -1,0 +1,24 @@
+{
+  "name": "spike88-s4-peer",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@emotion/react": "11.14.0",
+    "@emotion/styled": "11.14.1",
+    "@mui/icons-material": "9.4.0",
+    "@mui/material": "9.4.0",
+    "@tiptap/core": "3.34.0",
+    "@tiptap/extension-heading": "3.34.0",
+    "@tiptap/extension-image": "3.34.0",
+    "@tiptap/extension-table": "3.34.0",
+    "@tiptap/extension-unique-id": "3.34.0",
+    "@tiptap/markdown": "3.34.0",
+    "@tiptap/pm": "3.34.0",
+    "@tiptap/react": "3.34.0",
+    "@tiptap/starter-kit": "3.34.0",
+    "jsdom": "31.0.1",
+    "mui-tiptap": "1.31.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

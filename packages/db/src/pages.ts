@@ -33,6 +33,9 @@ import {
   type PageRefusalReason,
 } from '@repo/domain'
 
+import { artifactBlockHeld } from '@repo/domain/artifacts'
+
+import { rankForIndex } from './artifact-rank.ts'
 import { insertFeedEvent } from './feed-events.ts'
 import { Prisma, type PrismaClient } from './generated/prisma/client.ts'
 
@@ -104,7 +107,7 @@ async function lockDocument(tx: Tx, documentId: string, workspaceId: string) {
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT id FROM chat_documents WHERE id = ${documentId}::uuid FOR UPDATE`
   if (rows.length === 0) throw docNotFound()
-  const document = await tx.chatDocument.findUniqueOrThrow({ where: { id: documentId } })
+  const document = await tx.artifact.findUniqueOrThrow({ where: { id: documentId } })
   if (document.workspaceId !== workspaceId) throw docNotFound()
   return document
 }
@@ -538,6 +541,13 @@ export interface ClientPublicationInput {
   bytes: Uint8Array
   /** The Markdown it was drawn from (Дер26). */
   markdown?: Uint8Array | null
+  /**
+   * A document target that serves HTML of its own (a mockup, docs/plan/88-artifacts.md, §7.10): the
+   * page is of kind `html`, its scripts run under the policy of a published page.
+   */
+  html?: boolean
+  /** Shared files of its site the version loads (`/_files/…`, Дер34): written with it, checked. */
+  files?: readonly { path: string; bytes: Uint8Array }[]
 }
 
 /**
@@ -611,6 +621,10 @@ export async function publishClientPage(
     // A .md and a .html serve under different policies: the page takes the kind of its new file,
     // and the name of the file it now shows (the hint of the next publication, Дер9).
     const fileKind = kindOf(null, fileName)
+    if (page !== null && documentId !== null && page.kind !== (input.html ? 'html' : 'doc')) {
+      await tx.page.update({ where: { id: page.id }, data: { kind: input.html ? 'html' : 'doc' } })
+      page = { ...page, kind: input.html ? 'html' : 'doc' }
+    }
     if (
       page !== null &&
       documentId === null &&
@@ -628,7 +642,7 @@ export async function publishClientPage(
         workspaceId: input.workspaceId,
         taskId: input.taskId,
         turnNo: null,
-        kind: kindOf(documentId, fileName),
+        kind: documentId !== null && input.html ? 'html' : kindOf(documentId, fileName),
         title: input.title,
         documentId,
         fileName,
@@ -645,6 +659,32 @@ export async function publishClientPage(
       taskId: input.taskId,
       turnNo: null,
     })
+    for (const file of input.files ?? []) {
+      const verdict = checkPageFile(file.path, file.bytes)
+      if (!verdict.ok)
+        throw new DomainError(
+          'PAGE_FILE_REFUSED',
+          `The file cannot be served: ${verdict.reason}`,
+          422,
+        )
+      if (
+        (await treeBytesOf(tx, page.treeId, file.path)) + file.bytes.byteLength >
+        pageLimits.treeBytes
+      )
+        throw pageLimitReached('treeBytes')
+      const bytes = new Uint8Array(file.bytes)
+      await tx.pageFile.upsert({
+        where: { treeId_path: { treeId: page.treeId, path: file.path } },
+        create: {
+          treeId: page.treeId,
+          path: file.path,
+          contentType: verdict.type,
+          bytes,
+          sha256: sha256(bytes),
+        },
+        update: { contentType: verdict.type, bytes, sha256: sha256(bytes), taskId: null },
+      })
+    }
     return { ...publicationOf(page), version }
   })
 }
@@ -2228,38 +2268,120 @@ export async function createChatDocument(db: Db, input: ChatDocumentSkeleton) {
   if (input.sections.length > pageLimits.docSections) throw docLimitReached('docSections')
   return db.$transaction(async (tx) => {
     await lockWorkspaceOfChat(tx, input.workspaceId, input.taskId, docNotFound)
-    const documents = await tx.chatDocument.count({ where: { workspaceId: input.workspaceId } })
+    const documents = await tx.artifact.count({ where: { workspaceId: input.workspaceId } })
     if (documents >= pageLimits.docsPerWorkspace) throw docLimitReached('docsPerWorkspace')
-    return tx.chatDocument.create({
+    const created = await tx.artifact.create({
       data: {
         workspaceId: input.workspaceId,
         taskId: input.taskId,
         title: input.title,
         view: input.view,
+        ownerUserId: await workspaceOwnerOf(tx, input.workspaceId),
         sections: {
           create: input.sections.map((section, position) => ({
             sectionKey: section.key,
             intent: section.intent,
             position,
+            rank: rankForIndex(position),
           })),
         },
+        chats: { create: { taskId: input.taskId, how: 'created' } },
       },
       select: { id: true, revision: true },
     })
+    return created
   })
 }
 
-/** Positions 0, 1, … in this order: the reader orders by position, then by id. */
+/**
+ * Positions 0, 1, … in this order, and the ranks of plan 88 with them (Ар11: release 1 writes
+ * both, the reader orders by rank).
+ */
 async function renumber(tx: Tx, order: readonly string[]): Promise<void> {
   for (const [position, id] of order.entries())
-    await tx.chatDocumentSection.update({ where: { id }, data: { position } })
+    await tx.artifactBlock.update({
+      where: { id },
+      data: { position, rank: rankForIndex(position) },
+    })
 }
 
+/** The live blocks of a document in order: by rank, a row of the code before by its position. */
+export const artifactBlockOrder = [
+  { rank: { sort: 'asc', nulls: 'last' } },
+  { position: 'asc' },
+  { id: 'asc' },
+] as const satisfies Prisma.ArtifactBlockOrderByWithRelationInput[]
+
 async function orderedSections(tx: Tx, documentId: string) {
-  return tx.chatDocumentSection.findMany({
-    where: { documentId },
-    orderBy: [{ position: 'asc' }, { id: 'asc' }],
+  return tx.artifactBlock.findMany({
+    where: { documentId, deletedRev: null },
+    orderBy: [...artifactBlockOrder],
   })
+}
+
+/** The checked text of a document's live blocks, counted again after a change of the code before. */
+async function recountArtifactBytes(tx: Tx, documentIds: readonly string[]): Promise<void> {
+  if (documentIds.length === 0) return
+  await tx.$executeRaw`
+    UPDATE chat_documents d
+    SET bytes = COALESCE((SELECT SUM(octet_length(s.content)) FROM chat_document_sections s
+                          WHERE s.document_id = d.id AND s.deleted_rev IS NULL), 0)
+    WHERE d.id = ANY(${[...documentIds]}::uuid[])`
+}
+
+/**
+ * The checked text of a block, the one rule of both readers (plan 88, Ар11, Ар19): a block in
+ * `pending` shows none; a section the code of plan 69 checked shows its Markdown (that code does not
+ * know `content`); otherwise `content`, and a person's section of the code before its Markdown.
+ */
+export function blockCheckedText(block: {
+  state: string
+  checkedTurn: number | null
+  writtenByUserId: string | null
+  markdown: string | null
+  content: string | null
+}): string | null {
+  if (block.state !== 'written') return null
+  if (block.writtenByUserId === null && block.checkedTurn !== null && block.markdown !== null)
+    return block.markdown
+  return block.content ?? (block.writtenByUserId !== null ? block.markdown : null)
+}
+
+/**
+ * The tools `doc_*` of plan 69 keep off a block the operations of plan 88 hold (Ар16, Ар17): a
+ * person typing in it, another chat's claim or its write waiting for the check.
+ */
+function heldForDocTools(
+  section: {
+    sectionKey: string
+    pendingTaskId: string | null
+    leaseHolder: string | null
+    leaseTaskId: string | null
+    leaseUntil: Date | null
+  },
+  taskId: string | null,
+): void {
+  if (section.pendingTaskId !== null && section.pendingTaskId !== taskId)
+    throw artifactBlockHeld(section.sectionKey, 'checking')
+  const leased = section.leaseUntil !== null && section.leaseUntil.getTime() > Date.now()
+  if (leased && section.leaseHolder === 'human')
+    throw artifactBlockHeld(section.sectionKey, 'human')
+  if (leased && section.leaseHolder === 'agent' && section.leaseTaskId !== taskId)
+    throw artifactBlockHeld(section.sectionKey, 'claim')
+}
+
+/** The owner of a workspace — the owner of what is created in it (plan 88, Ар11). */
+export async function workspaceOwnerOf(
+  tx: Pick<Tx, '$queryRaw'>,
+  workspaceId: string,
+): Promise<string | null> {
+  const rows = await tx.$queryRaw<{ id: string | null }[]>`
+    SELECT COALESCE(
+      (SELECT m.user_id FROM members m WHERE m.workspace_id = w.id AND m.role = 'owner'
+       ORDER BY m.created_at, m.id LIMIT 1),
+      w.created_by_id) AS id
+    FROM workspaces w WHERE w.id = ${workspaceId}::uuid`
+  return rows[0]?.id ?? null
 }
 
 /** The ids in order with `id` put after the section `after` (`null` — first). */
@@ -2313,28 +2435,64 @@ export async function writeDocSection(
       state: 'written' satisfies DocSectionState,
       writtenTaskId: input.taskId,
       writtenTurn: input.turnNo,
+      writtenByUserId: null,
       checkedTurn: null,
       refusal: null,
+      // This chat's own write of plan 88 waiting for the check is replaced by this one.
+      pendingContent: null,
+      pendingProps: Prisma.DbNull,
+      pendingTaskId: null,
+      pendingTurn: null,
+      pendingAt: null,
     }
     let section = sections.find((each) => each.sectionKey === input.key)
+    // A block deleted by the operations of plan 88 is a tombstone: writing its key revives it.
+    const tombstone = section
+      ? null
+      : await tx.artifactBlock.findFirst({
+          where: { documentId: document.id, sectionKey: input.key, deletedRev: { not: null } },
+        })
+    if (section) heldForDocTools(section, input.taskId)
     if (section) {
-      await tx.chatDocumentSection.update({ where: { id: section.id }, data: written })
+      await tx.artifactBlock.update({
+        where: { id: section.id },
+        data: { ...written, rev: { increment: 1 } },
+      })
+    } else if (tombstone && input.after !== undefined) {
+      if (sections.length >= pageLimits.docSections) throw docLimitReached('docSections')
+      section = await tx.artifactBlock.update({
+        where: { id: tombstone.id },
+        data: {
+          ...written,
+          blockKind: 'section',
+          parentKey: null,
+          props: {},
+          content: null,
+          intent: INSERTED_SECTION_INTENT,
+          position: sections.length,
+          rank: rankForIndex(sections.length),
+          deletedRev: null,
+          rev: { increment: 1 },
+        },
+      })
     } else {
       if (input.after === undefined) throw docSectionUnknown(input.key)
       if (sections.length >= pageLimits.docSections) throw docLimitReached('docSections')
-      section = await tx.chatDocumentSection.create({
+      section = await tx.artifactBlock.create({
         data: {
           documentId: document.id,
           sectionKey: input.key,
           intent: INSERTED_SECTION_INTENT,
           position: sections.length,
+          rank: rankForIndex(sections.length),
+          rev: 1,
           ...written,
         },
       })
     }
     if (input.after !== undefined)
       await renumber(tx, placed(await orderedSections(tx, document.id), section.id, input.after))
-    const updated = await tx.chatDocument.update({
+    const updated = await tx.artifact.update({
       where: { id: document.id },
       data: { revision: { increment: 1 } },
     })
@@ -2345,19 +2503,21 @@ export async function writeDocSection(
 /** `doc_section_remove`. */
 export async function removeDocSection(
   db: Db,
-  input: { workspaceId: string; documentId: string; key: string },
+  input: { workspaceId: string; documentId: string; key: string; taskId?: string },
 ): Promise<{ revision: number }> {
   return db.$transaction(async (tx) => {
     const document = await lockDocument(tx, input.documentId, input.workspaceId)
     const sections = await orderedSections(tx, document.id)
     const section = sections.find((each) => each.sectionKey === input.key)
     if (!section) throw docSectionUnknown(input.key)
-    await tx.chatDocumentSection.delete({ where: { id: section.id } })
+    heldForDocTools(section, input.taskId ?? null)
+    await tx.artifactBlock.delete({ where: { id: section.id } })
     await renumber(
       tx,
       sections.filter((each) => each.id !== section.id).map((each) => each.id),
     )
-    const updated = await tx.chatDocument.update({
+    await recountArtifactBytes(tx, [document.id])
+    const updated = await tx.artifact.update({
       where: { id: document.id },
       data: { revision: { increment: 1 } },
     })
@@ -2368,15 +2528,22 @@ export async function removeDocSection(
 /** `doc_section_move`: after `after`, `null` — first. */
 export async function moveDocSection(
   db: Db,
-  input: { workspaceId: string; documentId: string; key: string; after: string | null },
+  input: {
+    workspaceId: string
+    documentId: string
+    key: string
+    after: string | null
+    taskId?: string
+  },
 ): Promise<{ revision: number }> {
   return db.$transaction(async (tx) => {
     const document = await lockDocument(tx, input.documentId, input.workspaceId)
     const sections = await orderedSections(tx, document.id)
     const section = sections.find((each) => each.sectionKey === input.key)
     if (!section) throw docSectionUnknown(input.key)
+    heldForDocTools(section, input.taskId ?? null)
     await renumber(tx, placed(sections, section.id, input.after))
-    const updated = await tx.chatDocument.update({
+    const updated = await tx.artifact.update({
       where: { id: document.id },
       data: { revision: { increment: 1 } },
     })
@@ -2401,15 +2568,15 @@ export interface ReadDocSection {
  * client gets no heading and no text of a section core has not checked yet.
  */
 export async function readChatDocument(
-  db: Pick<PrismaClient, 'chatDocument'>,
+  db: Pick<PrismaClient, 'artifact'>,
   input:
     | { workspaceId: string; documentId: string; reader: 'client' }
     | { workspaceId: string; documentId: string; reader: 'agent'; taskId: string },
 ) {
-  const document = await db.chatDocument.findUnique({
+  const document = await db.artifact.findUnique({
     where: { id: input.documentId },
     include: {
-      sections: { orderBy: [{ position: 'asc' }, { id: 'asc' }] },
+      sections: { where: { deletedRev: null }, orderBy: [...artifactBlockOrder] },
       page: {
         select: { id: true, state: true, currentVersion: true, tree: { select: { slug: true } } },
       },
@@ -2432,9 +2599,12 @@ export async function readChatDocument(
     sections: document.sections.map((section): ReadDocSection => {
       // The agent reads what its own chat wrote before the check; what another chat wrote — only
       // once core checked it: it may hold a value of another site (Ст19, Ст20).
-      const shown =
-        section.checkedTurn !== null ||
-        (input.reader === 'agent' && section.writtenTaskId === input.taskId)
+      // A person's write is shown as it is: the cabinet refused a secret form before (Ар19).
+      const own =
+        input.reader === 'agent' &&
+        section.writtenTaskId === input.taskId &&
+        section.checkedTurn === null
+      const shown = own || section.checkedTurn !== null || section.writtenByUserId !== null
       return {
         key: section.sectionKey,
         heading: shown ? section.heading : null,
@@ -2442,7 +2612,7 @@ export async function readChatDocument(
         state: section.state as DocSectionState,
         checked: section.checkedTurn !== null,
         refusal: section.refusal as PageRefusalReason | null,
-        markdown: shown ? section.markdown : null,
+        markdown: own ? section.markdown : shown ? blockCheckedText(section) : null,
       }
     }),
   }
@@ -2462,11 +2632,11 @@ export async function requestDocFinish(
 ): Promise<void> {
   await db.$transaction(async (tx) => {
     const document = await lockDocument(tx, input.documentId, input.workspaceId)
-    const pending = await tx.chatDocumentSection.count({
-      where: { documentId: document.id, state: 'pending' },
+    const pending = await tx.artifactBlock.count({
+      where: { documentId: document.id, state: 'pending', deletedRev: null },
     })
     if (pending > 0) throw docPendingSections(pending)
-    await tx.chatDocument.update({
+    await tx.artifact.update({
       where: { id: document.id },
       data: {
         finishTaskId: input.taskId,
@@ -2483,16 +2653,17 @@ export async function requestDocFinish(
  * the verdict hands back.
  */
 export async function uncheckedSectionsOfTurn(
-  db: Pick<PrismaClient, 'chatDocumentSection'>,
+  db: Pick<PrismaClient, 'artifactBlock'>,
   taskId: string,
   turnNo: number,
 ) {
-  const sections = await db.chatDocumentSection.findMany({
+  const sections = await db.artifactBlock.findMany({
     where: {
       writtenTaskId: taskId,
       writtenTurn: { lte: turnNo },
       checkedTurn: null,
       state: 'written',
+      deletedRev: null,
     },
     select: { id: true, documentId: true, sectionKey: true, heading: true, markdown: true },
   })
@@ -2543,13 +2714,13 @@ export async function settleTurnSections(
   verdict: TurnSectionsVerdict,
 ): Promise<SettledDocument[]> {
   return db.$transaction(async (tx) => {
-    const scanned = await tx.chatDocumentSection.findMany({
+    const scanned = await tx.artifactBlock.findMany({
       where: { id: { in: verdict.sections.map((each) => each.sectionId) } },
       select: { documentId: true },
     })
     const final = verdict.final !== false
     const finishing = final
-      ? await tx.chatDocument.findMany({
+      ? await tx.artifact.findMany({
           where: {
             finishTaskId: { not: null },
             workspaceId: { in: await workspacesOf(tx, verdict.taskId) },
@@ -2567,7 +2738,7 @@ export async function settleTurnSections(
     const verdictOf = new Map(verdict.sections.map((each) => [each.sectionId, each]))
     const out: SettledDocument[] = []
     for (const documentId of documentIds) {
-      const head = await tx.chatDocument.findUniqueOrThrow({ where: { id: documentId } })
+      const head = await tx.artifact.findUniqueOrThrow({ where: { id: documentId } })
       const document = await lockDocument(tx, documentId, head.workspaceId)
       let refused = 0
       let changed = false
@@ -2584,7 +2755,7 @@ export async function settleTurnSections(
         changed = true
         if (said.refusal !== null) {
           refused += 1
-          await tx.chatDocumentSection.update({
+          await tx.artifactBlock.update({
             where: { id: section.id },
             data: {
               state: 'pending',
@@ -2594,12 +2765,19 @@ export async function settleTurnSections(
               writtenTurn: null,
               checkedTurn: null,
               refusal: said.refusal,
+              content: null,
+              rev: { increment: 1 },
             },
           })
         } else {
-          await tx.chatDocumentSection.update({
+          // The checked text is the block's content from now on (plan 88, Ар11).
+          await tx.artifactBlock.update({
             where: { id: section.id },
-            data: { checkedTurn: section.writtenTurn },
+            data: {
+              checkedTurn: section.writtenTurn,
+              content: section.markdown,
+              rev: { increment: 1 },
+            },
           })
         }
       }
@@ -2610,13 +2788,13 @@ export async function settleTurnSections(
       if (labels?.title) {
         refused += 1
         changed = true
-        await tx.chatDocument.update({ where: { id: documentId }, data: { title: NEUTRAL_TITLE } })
+        await tx.artifact.update({ where: { id: documentId }, data: { title: NEUTRAL_TITLE } })
         document.title = NEUTRAL_TITLE
       }
       for (const sectionId of labels?.intents ?? []) {
         refused += 1
         changed = true
-        await tx.chatDocumentSection.updateMany({
+        await tx.artifactBlock.updateMany({
           where: { id: sectionId, documentId },
           data: { intent: NEUTRAL_INTENT },
         })
@@ -2631,19 +2809,27 @@ export async function settleTurnSections(
           : await turnEnded(tx, document.finishTaskId, document.finishTurnNo ?? 0))
       if (finishReady) {
         const all = await orderedSections(tx, documentId)
-        if (all.every((each) => each.state === 'written' && each.checkedTurn !== null)) {
+        // A person's section is checked as it is written (plan 88, Ар19).
+        if (
+          all.every(
+            (each) =>
+              each.state === 'written' &&
+              each.pendingTaskId === null &&
+              (each.checkedTurn !== null || each.writtenByUserId !== null),
+          )
+        ) {
           const markdown = assembleDocMarkdown({
             title: document.title,
             sections: all.map((each) => ({
               key: each.sectionKey,
               heading: each.heading,
-              markdown: each.markdown,
+              markdown: blockCheckedText(each),
               intent: each.intent,
               state: each.state as DocSectionState,
             })),
           })
           version = document.currentVersion + 1
-          await tx.chatDocumentVersion.create({
+          await tx.artifactVersion.create({
             data: {
               documentId,
               no: version,
@@ -2654,7 +2840,7 @@ export async function settleTurnSections(
               markdown,
             },
           })
-          await tx.chatDocumentContent.upsert({
+          await tx.artifactContent.upsert({
             where: { documentId },
             create: { documentId, versionNo: version, markdown },
             update: { versionNo: version, markdown },
@@ -2668,7 +2854,8 @@ export async function settleTurnSections(
         }
       }
       if (!changed && version === null && !dropFinish) continue
-      const updated = await tx.chatDocument.update({
+      if (changed) await recountArtifactBytes(tx, [documentId])
+      const updated = await tx.artifact.update({
         where: { id: documentId },
         data: {
           revision: { increment: 1 },
@@ -2684,10 +2871,10 @@ export async function settleTurnSections(
 
 /** «Скачать .md» and the page of a document: the Markdown of its current version. */
 export async function currentDocMarkdown(
-  db: Pick<PrismaClient, 'chatDocument'>,
+  db: Pick<PrismaClient, 'artifact'>,
   input: { workspaceId: string; documentId: string },
 ): Promise<{ version: number; markdown: string } | null> {
-  const document = await db.chatDocument.findUnique({
+  const document = await db.artifact.findUnique({
     where: { id: input.documentId },
     select: { workspaceId: true, content: { select: { versionNo: true, markdown: true } } },
   })
@@ -2702,15 +2889,15 @@ export async function currentDocMarkdown(
  * 14.11.2026): `markdown` is null for a version finished before its text was kept.
  */
 export async function docVersions(
-  db: Pick<PrismaClient, 'chatDocument' | 'chatDocumentVersion'>,
+  db: Pick<PrismaClient, 'artifact' | 'artifactVersion'>,
   input: { workspaceId: string; documentId: string },
 ): Promise<{ no: number; createdAt: Date; kept: boolean }[]> {
-  const document = await db.chatDocument.findUnique({
+  const document = await db.artifact.findUnique({
     where: { id: input.documentId },
     select: { workspaceId: true },
   })
   if (!document || document.workspaceId !== input.workspaceId) throw docNotFound()
-  const versions = await db.chatDocumentVersion.findMany({
+  const versions = await db.artifactVersion.findMany({
     where: { documentId: input.documentId },
     orderBy: { no: 'asc' },
     select: { no: true, createdAt: true, markdown: true },
@@ -2724,15 +2911,15 @@ export async function docVersions(
 
 /** The text of one version of a document; null — no such version, or its text was not kept. */
 export async function docVersionMarkdown(
-  db: Pick<PrismaClient, 'chatDocument' | 'chatDocumentVersion'>,
+  db: Pick<PrismaClient, 'artifact' | 'artifactVersion'>,
   input: { workspaceId: string; documentId: string; version: number },
 ): Promise<string | null> {
-  const document = await db.chatDocument.findUnique({
+  const document = await db.artifact.findUnique({
     where: { id: input.documentId },
     select: { workspaceId: true },
   })
   if (!document || document.workspaceId !== input.workspaceId) throw docNotFound()
-  const version = await db.chatDocumentVersion.findUnique({
+  const version = await db.artifactVersion.findUnique({
     where: { documentId_no: { documentId: input.documentId, no: input.version } },
     select: { markdown: true },
   })
@@ -2844,19 +3031,35 @@ export async function dropAbandonedPages(
  * it, so it goes; the sections are placeholders again with their intents (owner's answer of
  * 13.11.2026, Ст19: unchecked text waits for the end of a turn, not for ever). Returns how many.
  */
-export async function clearStaleUncheckedSections(
-  db: Pick<PrismaClient, 'chatDocumentSection'>,
-  before: Date,
-): Promise<number> {
-  const cleared = await db.chatDocumentSection.updateMany({
-    where: { state: 'written', checkedTurn: null, document: { updatedAt: { lt: before } } },
-    data: {
-      state: 'pending',
-      heading: null,
-      markdown: null,
-      writtenTaskId: null,
-      writtenTurn: null,
-    },
+export async function clearStaleUncheckedSections(db: Db, before: Date): Promise<number> {
+  return db.$transaction(async (tx) => {
+    // A person's write is checked as it is written; only the agent's text waits for a check.
+    const where = {
+      state: 'written',
+      checkedTurn: null,
+      writtenTaskId: { not: null },
+      document: { updatedAt: { lt: before } },
+    } satisfies Prisma.ArtifactBlockWhereInput
+    const documents = await tx.artifactBlock.findMany({
+      where,
+      select: { documentId: true },
+      distinct: ['documentId'],
+    })
+    const cleared = await tx.artifactBlock.updateMany({
+      where,
+      data: {
+        state: 'pending',
+        heading: null,
+        markdown: null,
+        content: null,
+        writtenTaskId: null,
+        writtenTurn: null,
+      },
+    })
+    await recountArtifactBytes(
+      tx,
+      documents.map((each) => each.documentId),
+    )
+    return cleared.count
   })
-  return cleared.count
 }

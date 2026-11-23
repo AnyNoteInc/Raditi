@@ -227,6 +227,11 @@ describe('the notices', () => {
       'not_started',
       'paused',
       'missed',
+      // The notices of artifacts (plan 88, Ар54).
+      'artifact_shared',
+      'artifact_comment',
+      'artifact_agent_reply',
+      'artifact_changed',
     ])
     expect(
       chatNotifyJobSchema.safeParse({ taskId: runId, kind: 'paused', attempt: 1, turnNo: 0 })
@@ -259,6 +264,10 @@ describe('the notices', () => {
       'Запланированная задача не запустилась',
       'Запланированная задача приостановлена',
       'Запланированная задача пропустила запуск',
+      'С вами поделились артефактом',
+      'Новый комментарий в артефакте',
+      'Агент ответил на заметку',
+      'Ваш артефакт изменили',
     ])
     expect(scheduledNoticeTitle('limit', 'credits')).toBe(
       'Запланированная задача остановилась: закончились кредиты',

@@ -16,10 +16,38 @@ function processor() {
   const passes = { run: vi.fn(async () => {}), cancel: vi.fn(async () => {}) }
   const queue = { run: vi.fn(async () => 'moved' as const) }
   const notify = { run: vi.fn(async () => 'sent' as const) }
-  return { passes, queue, notify, processor: new TurnsProcessor(passes, queue, notify) }
+  const artifactNotify = { run: vi.fn(async () => {}) }
+  const artifactDiagram = { run: vi.fn(async () => {}) }
+  return {
+    passes,
+    queue,
+    notify,
+    artifactNotify,
+    artifactDiagram,
+    processor: new TurnsProcessor(passes, queue, notify, artifactNotify, artifactDiagram),
+  }
 }
 
 describe('TurnsProcessor', () => {
+  it('draws a picture of «Схема» the cabinet asked for (docs/plan/88, 88.24б)', async () => {
+    const { artifactDiagram, processor: worker } = processor()
+    const data = { artifactId: TASK, block: 'd1' }
+    await worker.process(job('artifact.diagram', data))
+    expect(artifactDiagram.run).toHaveBeenCalledWith(data)
+  })
+
+  it('tells a reader of an artifact by its job (docs/plan/88, Ар54)', async () => {
+    const { artifactNotify, processor: worker } = processor()
+    const data = {
+      artifactId: TASK,
+      userId: '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61',
+      kind: 'artifact_comment' as const,
+      actorUserId: null,
+    }
+    await worker.process(job('artifact.notify', data))
+    expect(artifactNotify.run).toHaveBeenCalledWith(data)
+  })
+
   it('tells the client of a chat that waits by its job (docs/plan/75, ВВ6)', async () => {
     const { notify, processor: worker } = processor()
     const job_ = { taskId: TASK, kind: 'answered' as const, attempt: 1, turnNo: 1 }

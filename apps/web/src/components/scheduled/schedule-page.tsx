@@ -22,6 +22,7 @@ import { BrowserPushControl } from '@/components/notifications/browser-push-cont
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
+import { ScheduleArtifacts, scheduleArtifactTexts } from './schedule-artifacts'
 import {
   ScheduleMoreMenu,
   ScheduleNoticeBar,
@@ -413,6 +414,12 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
                 {data.project.name}
               </Link>
             )}
+          </Fact>
+          <Fact term={scheduleArtifactTexts.title}>
+            <ScheduleArtifacts
+              scheduleId={scheduleId}
+              projectId={data.project === null || data.project.gone ? null : data.project.id}
+            />
           </Fact>
           <Fact term={schedulePageTexts.effort}>{effortText[data.effort]}</Fact>
           <Fact term={schedulePageTexts.notify}>

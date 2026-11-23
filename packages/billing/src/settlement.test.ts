@@ -277,6 +277,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL settlement', () => {
 
       expect(shop.reads).toHaveLength(reads)
       expect(await written(userId)).toEqual(before)
+      // One fact of the paid service in the journal of the ORI (Decree № 1526, p. 3 «д»).
+      const facts = await db.$queryRaw<{ detail: Record<string, string> }[]>`
+        SELECT detail FROM ori_facts WHERE kind = 'payment' AND user_id = ${userId}::uuid`
+      expect(facts).toHaveLength(1)
+      expect(facts[0]?.detail).toMatchObject({
+        organisation: 'ЮKassa',
+        transaction: paymentId,
+        currency: 'RUB',
+        order: orderId,
+      })
     })
 
     it('without consent keeps no payment method and ends with the period', async () => {

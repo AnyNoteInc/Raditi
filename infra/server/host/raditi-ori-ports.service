@@ -1,0 +1,13 @@
+# /etc/systemd/system/raditi-ori-ports.service (infra/server/README.md, «ОРИ»): one run of the
+# collector of the ports of the facts of the ORI (plan 88, 88.16а-2); raditi-ori-ports.timer runs it.
+[Unit]
+Description=Raditi: ports of the facts of the ORI from the edge's access log
+After=raditi-app.service docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/raditi/ori-ports.sh
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes

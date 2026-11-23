@@ -26,7 +26,6 @@ import {
   turnPlanLimits,
   turnPlanSchema,
   requestedFileFormats,
-  withTurnCredentials,
   type AgentDriver,
   type FeedFailureCode,
   type FeedQuestionPayload,
@@ -42,6 +41,14 @@ import {
   type TurnSkill,
   type UnkeyedTurnRequest,
 } from '@repo/domain'
+
+import {
+  artifactCommentsSection,
+  artifactsSection,
+  type ArtifactCommentSection,
+  type ArtifactSectionBrand,
+  type ChatArtifactLine,
+} from '@repo/domain/artifacts'
 
 import { llmGatewayBaseUrl } from '../llm/backends.ts'
 import { ceilingQuestionOf } from './turn-outcome.ts'
@@ -114,8 +121,18 @@ export interface FinishedTurn {
   undone: boolean
   startedAt: Date | null
   nativeSessionId: string | null
-  /** `turn_assignments.plan`; null — it no longer passes its schema (a removed driver). */
-  plan: TurnPlan | null
+  /** Only the checkpoint metadata of `turn_assignments.plan`, never its instructions or input. */
+  plan: CheckpointPlan | null
+}
+
+type CheckpointPlan = Pick<TurnPlan, 'driverId' | 'driverVersion'> & {
+  sandbox: Pick<TurnPlan['sandbox'], 'image'>
+  context: Pick<
+    TurnPlan['context'],
+    'taskId' | 'sessionId' | 'turn' | 'llm' | 'mcp' | 'nativeSessionId'
+  >
+  previous?: TurnPlan['previous'] | null
+  repository?: Pick<TurnRepository, 'projectRepositoryId'> | null
 }
 
 /** A file the client sent with the task, as the agent is told of it: never its key or address. */
@@ -205,6 +222,24 @@ export interface PassFacts {
    */
   memory?: readonly MemorySectionEntry[] | null
   /**
+   * The artifacts the chat made or edited, newest first (docs/plan/88-artifacts.md, Ар26): the
+   * section `## Artifacts` lists them as data. Absent or empty — none yet.
+   */
+  chatArtifacts?: readonly ChatArtifactLine[]
+  /**
+   * The artifacts of the chat's project (Ар26, slice 88.20): `<project-artifacts>` lists those not
+   * in `chatArtifacts`, up to 30, without content. Absent — no project, or none.
+   */
+  projectArtifacts?: readonly ChatArtifactLine[]
+  /**
+   * The brand of the chat's project (docs/plan/88-artifacts.md, Ар42, slice 88.15а): its tokens go
+   * into the section `## Artifacts` as data. Absent — the project has none, or no project.
+   */
+  projectBrand?: ArtifactSectionBrand
+  /** Private data selected for this exact request, never the history of notes. */
+  artifactComments?: ArtifactCommentSection
+  artifactCommentSourceId?: bigint
+  /**
    * The pass of a run of a scheduled task before the first words of its client (`passUnattended`,
    * docs/plan/82-scheduled-tasks.md, Зп27, Зп29), with the name of its task; absent — an ordinary
    * pass.
@@ -261,7 +296,11 @@ export type PassPlan =
       unattended: boolean
     }
   /** The key cannot cover a first call: the platform asks «Продолжить?» (Р8). */
-  | { kind: 'ceiling'; question: Extract<FeedQuestionPayload, { kind: 'ceiling' }> }
+  | {
+      kind: 'ceiling'
+      question: Extract<FeedQuestionPayload, { kind: 'ceiling' }>
+      artifactCommentSourceId?: bigint
+    }
   /** The pass cannot be planned; the task fails with this code, no turn is opened. */
   | { kind: 'refused'; code: FeedFailureCode }
 
@@ -275,6 +314,7 @@ export function promptOf(
   requests: readonly ClientRequest[],
   since: Date | null,
   limit: number = turnPlanLimits.prompt,
+  fallback = CONTINUE_PROMPT,
 ): string {
   const told = requests.filter((request) => request.text !== null)
   const newest = told.at(-1)
@@ -292,7 +332,7 @@ export function promptOf(
     kept.unshift(text)
     length += added
   }
-  return kept.length > 0 ? kept.join('\n\n') : CONTINUE_PROMPT
+  return kept.length > 0 ? kept.join('\n\n') : fallback
 }
 
 /** A turn with an action reads no words, and a plan has them: no model is told this. */
@@ -313,10 +353,12 @@ function snapshotOf(
 ): SnapshotReference | null {
   const plan = turn.plan
   if (!plan || plan.driverId !== driver.id) return null
-  const { context } = withTurnCredentials(plan, { llmApiKey: '', mcpToken: '' })
   const prepared = {
     context: {
-      ...context,
+      ...plan.context,
+      llm: { ...plan.context.llm, apiKey: '' },
+      mcp: { ...plan.context.mcp, token: '' },
+      instructions: '',
       ...(turn.nativeSessionId ? { nativeSessionId: turn.nativeSessionId } : {}),
     },
     files: [],
@@ -369,10 +411,18 @@ function browserFilesContext(
 }
 
 /** A prompt: the client's words, then what the platform adds, which is always kept whole. */
-function promptWith(facts: PassFacts, context: string, since: Date | null): string {
+function promptWith(
+  facts: PassFacts,
+  context: string,
+  since: Date | null,
+  hasNotes: boolean,
+): string {
   const requests = requestsNotUndone(facts)
-  if (context === '') return promptOf(requests, since)
-  const words = promptOf(requests, since, turnPlanLimits.prompt - context.length - 2)
+  const fallback = hasNotes
+    ? 'Рассмотрите выбранные клиентом заметки к артефакту. Если следующая задача неясна, попросите уточнить её.'
+    : CONTINUE_PROMPT
+  if (context === '') return promptOf(requests, since, turnPlanLimits.prompt, fallback)
+  const words = promptOf(requests, since, turnPlanLimits.prompt - context.length - 2, fallback)
   return `${words}\n\n${context}`
 }
 
@@ -527,6 +577,11 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     if (key.isZero() || key.lt(budget.finishRub))
       return {
         kind: 'ceiling',
+        ...(!facts.unattended &&
+        facts.artifactComments &&
+        facts.artifactCommentSourceId !== undefined
+          ? { artifactCommentSourceId: facts.artifactCommentSourceId }
+          : {}),
         question: ceilingQuestionOf(
           {
             chainAttempts: budget.chainAttempts,
@@ -555,7 +610,8 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
 
   const start = startOf(facts, env.driver)
   if (!start) return { kind: 'refused', code: 'technical' }
-  const action = actionOf(facts, start)
+  const comments = facts.unattended ? undefined : facts.artifactComments
+  const action = comments ? undefined : actionOf(facts, start)
   // Whether the repository of the chat came, went or changed since the turn whose session this
   // pass restores (ПР32): only the session of that checkpoint is taken then.
   const before = start.previous
@@ -643,7 +699,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         inbox: inboxFacts,
         variables: facts.variables ?? [],
         repository: repository !== null,
-      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${memorySection(facts.memory)}`,
+      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${action ? '' : artifactsSection(facts.chatArtifacts ?? [], undefined, { brand: facts.projectBrand ?? null, project: facts.projectArtifacts ?? [] })}${memorySection(facts.memory)}${comments ? artifactCommentsSection(comments) : ''}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),
@@ -660,6 +716,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
                 )
               : '',
             start.since,
+            comments !== undefined,
           ),
           // Their paths only: core puts the files there when the sandbox is prepared.
           attachments: inbox?.paths ?? [],

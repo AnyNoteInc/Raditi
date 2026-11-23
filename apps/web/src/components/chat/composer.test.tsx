@@ -871,3 +871,31 @@ describe('a file named by «@» (docs/plan/78-file-mentions.md)', () => {
     expect(within(list).getByRole('status')).toHaveTextContent('В контексте проекта нет файлов.')
   })
 })
+
+describe('an artifact named by «@» (docs/plan/88-artifacts.md, Ар47)', () => {
+  const ID = '019f1a21-1800-7f00-8abc-000000000001'
+  it('lists the artifacts by title and puts `@artifact:<id>` in the words', () => {
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={vi.fn(async () => true)}
+        mentions={{
+          paths: null,
+          state: 'none',
+          onOpen: vi.fn(),
+          texts: { label: 'Файлы и артефакты', none: 'Нет' },
+          artifacts: [
+            { id: ID, title: 'Тексты для сайта' },
+            { id: '019f1a21-1800-7f00-8abc-000000000002', title: 'Прайс' },
+          ],
+        }}
+      />,
+    )
+    fireEvent.change(field(), { target: { value: 'Допиши @текс', selectionStart: 12 } })
+    const list = screen.getByRole('listbox', { name: 'Файлы и артефакты' })
+    expect(within(list).getAllByRole('option')).toHaveLength(1)
+    expect(within(list).getByRole('option')).toHaveAccessibleName('Артефакт «Тексты для сайта»')
+    press('Enter')
+    expect(field().value).toBe(`Допиши @artifact:${ID} `)
+  })
+})

@@ -5,6 +5,7 @@ import { billingFixtures } from '@repo/billing/testing'
 import {
   bindAttachments,
   createAttachment,
+  createArtifact,
   createPrismaClient,
   insertFeedEvent,
   markAttachmentReady,
@@ -75,19 +76,213 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
         },
       },
     })
-    const facts = () =>
+    const facts = (through = requestEventId) =>
       readPassFacts(
         { db, backends: llmBackends },
         {
           taskId,
           attempt: 1,
           turnNo: 0,
-          requestEventId: String(requestEventId),
+          requestEventId: String(through),
           now: new Date(),
         },
       )
-    return { task, workspaceId: workspace.id, userId, facts }
+    return { task, workspaceId: workspace.id, userId, facts, requestEventId }
   }
+
+  it.skipIf(process.env.RADITI_GATEWAY_DB_TESTS !== '1')(
+    'reads only the snapshot of the request being answered and checks access again',
+    async () => {
+      const { userId } = await fixtures.user()
+      const { id: workspaceId } = await db.$transaction((tx) =>
+        ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: 'test' }),
+      )
+      const { taskId } = await fixtures.task(workspaceId, {
+        createdById: userId,
+        status: 'queued',
+        billable: true,
+      })
+      const pool = await fixtures.modelPool()
+      await db.llmModel.update({ where: { id: pool.modelId }, data: { enabled: true } })
+      const effectiveFrom = new Date('2026-01-02T00:00:00Z')
+      await fixtures.modelPrice(pool, { effectiveFrom })
+      await fixtures.creditRate({ effectiveFrom })
+      const { id: artifactId } = await createArtifact(db, {
+        workspaceId,
+        kind: 'document',
+        title: 'Доставка',
+        actor: { kind: 'user', userId },
+      })
+      const anchor = { kind: 'quote', block: 'delivery', rev: 1, quote: 'Доставляем утром.' }
+      const makeNote = (body: string) =>
+        db.artifactComment.create({
+          data: {
+            artifactId,
+            authorUserId: userId,
+            blockKey: anchor.block,
+            anchor,
+            body,
+          },
+        })
+      const caption = 'Заметки к артефакту'
+      const post = (kind: 'first' | 'answer', text: string, requestId = randomUUID()) =>
+        insertFeedEvent(db, {
+          taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              authorId: userId,
+              requestId,
+              text,
+              ...(kind === 'first' ? { kind } : { kind, answersEventId: '1' }),
+            },
+          },
+        })
+      const snapshot = async (kind: 'first' | 'answer', body: string, hasWords: boolean) => {
+        const note = await makeNote(body)
+        const requestId = randomUUID()
+        const requestEventId = await post(kind, caption, requestId)
+        const notes = [{ id: note.id, anchor, body, replies: [] }]
+        await db.artifactCommentDispatchKey.create({
+          data: {
+            userId,
+            requestId,
+            snapshot: {
+              create: { artifactId, requestEventId, sha256: 'a'.repeat(64), notes },
+            },
+          },
+        })
+        await db.taskEvent.update({
+          where: { id: requestEventId },
+          data: {
+            artifactCommentHasWords: hasWords,
+          },
+        })
+        return { note, requestEventId, notes }
+      }
+      const read = (requestEventId: bigint) =>
+        readPassFacts(
+          { db, backends: [] },
+          {
+            taskId,
+            attempt: 1,
+            turnNo: 0,
+            requestEventId: String(requestEventId),
+            now: new Date(),
+          },
+        )
+      try {
+        const first = await snapshot('first', 'Проверить часы.', false)
+        const ordinary = await post('answer', 'Обычная просьба')
+        const second = await snapshot('answer', 'Проверить цены.', true)
+        const compact = await insertFeedEvent(db, {
+          taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'agent_command',
+              authorId: userId,
+              requestId: randomUUID(),
+              command: 'compact',
+            },
+          },
+        })
+        await db.artifactCommentReply.create({
+          data: {
+            threadId: first.note.id,
+            authorUserId: userId,
+            requestId: randomUUID(),
+            body: 'Поздний ответ.',
+          },
+        })
+        const readFirst = await read(first.requestEventId)
+        expect(readFirst?.artifactComments).toEqual({ artifactId, notes: first.notes })
+        expect(readFirst?.requests.find(({ id }) => id === first.requestEventId)?.text).toBeNull()
+        expect(readFirst?.requests.some(({ id }) => id > first.requestEventId)).toBe(false)
+        const readSecond = await read(second.requestEventId)
+        expect(readSecond?.requests.at(-1)?.text).toBe(caption)
+        expect(readSecond?.artifactComments).toEqual({ artifactId, notes: second.notes })
+        for (const id of [ordinary, compact])
+          expect((await read(id))?.artifactComments).toBeUndefined()
+
+        const continueAfter = async (source: bigint | null) => {
+          const questionEventId = await insertFeedEvent(db, {
+            taskId,
+            row: {
+              type: 'feed.question',
+              payload: {
+                v: 1,
+                kind: 'ceiling',
+                turn: 1,
+                reason: 'step',
+                spent: 45,
+                held: 45,
+                left: 0,
+              },
+            },
+          })
+          if (source !== null)
+            await db.taskEvent.update({
+              where: { id: questionEventId },
+              data: { artifactCommentSourceId: source },
+            })
+          return insertFeedEvent(db, {
+            taskId,
+            row: {
+              type: 'feed.request',
+              payload: {
+                v: 1,
+                kind: 'continue',
+                authorId: userId,
+                requestId: randomUUID(),
+                questionEventId: String(questionEventId),
+              },
+            },
+          })
+        }
+        const resumed = await continueAfter(second.requestEventId)
+        expect(await read(resumed)).toMatchObject({
+          artifactCommentSourceId: second.requestEventId,
+          artifactComments: { artifactId, notes: second.notes },
+        })
+        const resumedAgain = await continueAfter(second.requestEventId)
+        expect((await read(resumedAgain))?.artifactComments?.notes).toEqual(second.notes)
+        expect((await read(await continueAfter(null)))?.artifactComments).toBeUndefined()
+
+        // Only the client's own words: the turn is not marked as one that read others (Ар25).
+        const readOther = { key: `artifact-read-other:${taskId}:0` }
+        expect(await db.rateLimit.findUnique({ where: readOther })).toBeNull()
+        // A reply of another person in the snapshot marks it (88.17в).
+        const othersNotes = [
+          { ...second.notes[0]!, replies: [{ body: 'Цены старые.', by: 'other' as const }] },
+        ]
+        await db.artifactCommentDispatch.update({
+          where: { requestEventId: second.requestEventId },
+          data: { notes: othersNotes },
+        })
+        expect((await read(second.requestEventId))?.artifactComments?.notes).toEqual(othersNotes)
+        expect(await db.rateLimit.findUnique({ where: readOther })).not.toBeNull()
+
+        await db.member.delete({ where: { workspaceId_userId: { workspaceId, userId } } })
+        // The pass fails in the client's words, not as a technical failure.
+        await expect(read(first.requestEventId)).rejects.toMatchObject({
+          code: 'ARTIFACT_COMMENTS_WITHDRAWN',
+        })
+        await db.member.create({ data: { workspaceId, userId, role: 'owner' } })
+        await db.artifact.delete({ where: { id: artifactId } })
+        for (const id of [first.requestEventId, resumedAgain])
+          await expect(read(id)).rejects.toMatchObject({ code: 'ARTIFACT_COMMENTS_WITHDRAWN' })
+        expect(
+          (await read(ordinary))?.requests.find(({ id }) => id === first.requestEventId)?.text,
+        ).toBeNull()
+      } finally {
+        await db.artifact.deleteMany({ where: { id: artifactId } })
+        await db.rateLimit.deleteMany({ where: { key: `artifact-read-other:${taskId}:0` } })
+      }
+    },
+  )
 
   it('reads the names of the variables of the workspace, for client data too (БП4, БП14)', async () => {
     const { workspaceId, facts } = await dialog()
@@ -104,31 +299,33 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
   })
 
   it('reads `/init` as the words of the platform, `/compact` as an action, a press as no words (§5.2)', async () => {
-    const { task, userId, facts } = await dialog()
+    const { task, userId, facts, requestEventId } = await dialog()
     const base = { v: 1 as const, authorId: userId }
+    let through = requestEventId
     for (const payload of [
       { ...base, kind: 'agent_command' as const, command: 'init' as const },
       { ...base, kind: 'agent_command' as const, command: 'compact' as const },
       { ...base, kind: 'command' as const, command: 'cancel' as const },
-    ])
-      await insertFeedEvent(db, {
+    ]) {
+      const id = await insertFeedEvent(db, {
         taskId: task.id,
         row: { type: 'feed.request', payload: { ...payload, requestId: randomUUID() } },
       })
+      if (payload.kind === 'agent_command') through = id
+    }
 
-    const read = await facts()
+    const read = await facts(through)
     expect(
       read?.requests.map(({ kind, text, action, command }) => ({ kind, text, action, command })),
     ).toEqual([
       { kind: 'first', text: 'Подключите оплату', action: undefined, command: null },
       { kind: 'agent_command', text: INIT_PROMPT, action: undefined, command: null },
       { kind: 'agent_command', text: null, action: 'compact', command: null },
-      { kind: 'command', text: null, action: undefined, command: 'cancel' },
     ])
   })
 
-  it('reads which turns the platform refused and which the client took back by `/undo`', async () => {
-    const { task, facts } = await dialog()
+  it('reads only checkpoint metadata, with rejected and undone markers', async () => {
+    const { task, requestEventId } = await dialog()
     const turn = (turnNo: number, patch: { rejectedAt?: Date; undoneAt?: Date }) => ({
       taskId: task.id,
       turnNo,
@@ -140,8 +337,72 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
     await db.taskTurn.createMany({
       data: [turn(1, {}), turn(2, { rejectedAt: new Date() }), turn(3, { undoneAt: new Date() })],
     })
-    const read = await facts()
-    expect(read?.turns.get(1)).toMatchObject({ undone: false, rejected: false })
+    const privateText = 'Синтетическая заметка прошлого прохода'
+    await db.turnAssignment.create({
+      data: {
+        taskId: task.id,
+        siteId: task.id,
+        sessionId: task.id,
+        turnNo: 1,
+        executor: 'local',
+        plan: {
+          driverId: sampleDriverId,
+          driverVersion: '1.18.34',
+          sandbox: { image: turn(1, {}).image },
+          context: {
+            taskId: task.id,
+            sessionId: task.id,
+            turn: 1,
+            llm: { baseUrl: 'http://sandbox-gw:8080', model: 'example', reasoningEffort: null },
+            mcp: { url: 'http://sandbox-gw:8080/mcp' },
+            instructions: privateText,
+          },
+          input: { prompt: privateText },
+        },
+        firstEpoch: 1,
+        leaseEpoch: 1,
+        deadlineAt: new Date(),
+        finishedAt: new Date(),
+        outcome: 'completed',
+      },
+    })
+    let projected = false
+    const reader = db.$extends({
+      query: {
+        turnAssignment: {
+          findMany: () => {
+            throw new Error('Read only the checkpoint projection')
+          },
+        },
+        async $queryRaw({ args, query }) {
+          const rows = await query(args)
+          if (Array.isArray(rows) && rows.some((row) => row && 'checkpoint' in row)) {
+            projected = true
+            expect(JSON.stringify(rows)).not.toContain(privateText)
+          }
+          return rows
+        },
+      },
+    })
+    const read = await readPassFacts(
+      { db: reader as unknown as PrismaClient, backends: llmBackends },
+      {
+        taskId: task.id,
+        attempt: 1,
+        turnNo: 3,
+        requestEventId: String(requestEventId),
+        now: new Date(),
+      },
+    )
+    expect(projected).toBe(true)
+    expect(read?.turns.get(1)).toMatchObject({
+      undone: false,
+      rejected: false,
+      plan: {
+        driverId: sampleDriverId,
+        context: { sessionId: task.id, llm: { reasoningEffort: null } },
+      },
+    })
     expect(read?.turns.get(2)).toMatchObject({ undone: false, rejected: true })
     expect(read?.turns.get(3)).toMatchObject({ undone: true, rejected: false })
   })
@@ -149,7 +410,7 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
   it('reads which files came with which words: an undone request takes its files along', async () => {
     const { task, userId, facts } = await dialog()
     const file = randomUUID()
-    await insertFeedEvent(db, {
+    const answer = await insertFeedEvent(db, {
       taskId: task.id,
       row: {
         type: 'feed.request',
@@ -164,7 +425,7 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
         },
       },
     })
-    const read = await facts()
+    const read = await facts(answer)
     expect(read?.requests.map((request) => request.attachments)).toEqual([[], [file]])
   })
 

@@ -26,6 +26,8 @@ export async function classProfile<Backend extends string>(
     where: {
       enabled: true,
       modelClass,
+      // The profile that sees images is the helper's, never the main model (plan 88, Ар32).
+      vision: false,
       providerModelId: { not: null },
       provider: { enabled: true, kind: 'subscription', slug: { in: [...backends] } },
     },

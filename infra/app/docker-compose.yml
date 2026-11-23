@@ -120,6 +120,10 @@ services:
       - --accesslog.fields.defaultmode=keep
       - --accesslog.fields.names.ClientUsername=drop
       - --accesslog.fields.headers.defaultmode=drop
+      # One header of the answer, web's random key of a fact of the ORI (plan 88, 88.16а-2): the
+      # collector moves it with ClientPort into ori_fact_ports. Never another name, never a request
+      # header — `request_X-Raditi-Fact` a client may send is ignored by the collector.
+      - --accesslog.fields.headers.names.X-Raditi-Fact=keep
       - --accesslog.fields.queryparameters.defaultmode=drop
       - --entrypoints.web.address=:8000
       # ':443', not 'websecure': the entry point's own port (8443) would land in Location

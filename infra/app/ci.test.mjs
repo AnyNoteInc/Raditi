@@ -534,6 +534,7 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     'pnpm verify:llm-gateway --rehearsal --measure --no-build',
     'pnpm verify:llm-gateway --rehearsal --results --no-build',
     'pnpm verify:llm-gateway --rehearsal --compact --no-build',
+    'pnpm verify:llm-gateway --rehearsal --vision --no-build',
     'pnpm verify:llm-gateway --rehearsal --api --no-build',
   ])
   // The options exist and mean what the steps take them for.
@@ -543,6 +544,7 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     '--measure',
     '--results',
     '--compact',
+    '--vision',
     '--api',
     '--no-build',
   ])
@@ -1235,7 +1237,9 @@ const stackPlanFiles = [
   ...filesUnder(stackReports),
 ]
 
-test('the plan of the site stacks is in the repository and CLAUDE.md names all of it', () => {
+// CLAUDE.md is short and names only the plans of now (plan 83 removed the site stacks): the plan
+// of the stacks stays as history in the repository, whole, without a row of its own there.
+test('the plan of the site stacks is in the repository, whole', () => {
   for (const path of [stackPlan, stackScreens, `${stackReports}/README.md`]) {
     assert.ok(existsSync(join(root, path)), `${path} is not in the repository`)
   }
@@ -1249,14 +1253,6 @@ test('the plan of the site stacks is in the repository and CLAUDE.md names all o
       expected,
       `${build}: files of the platform`,
     )
-  }
-  const rows = read('CLAUDE.md').split('\n')
-  const row = (path) => rows.find((line) => line.startsWith(`| \`${path}`)) ?? ''
-  for (const path of [stackPlan, stackScreens, `${stackReports}/`]) {
-    assert.ok(row(path), `the table of CLAUDE.md does not name ${path}`)
-  }
-  for (const file of stackSliceFiles) {
-    assert.ok(row(`${stackSlices}/`).includes(`\`${file}\``), `CLAUDE.md does not name ${file}`)
   }
 })
 

@@ -42,6 +42,15 @@ vi.mock('./attachment-upload', async (original) => ({
 
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
+    // `@` names the artifacts of the client too (docs/plan/88-artifacts.md, Ар47).
+    artifact: {
+      list: {
+        queryOptions: (input: unknown) => ({
+          queryKey: ['artifact.list', input],
+          queryFn: async () => [],
+        }),
+      },
+    },
     task: {
       create: {
         mutationOptions: (options: UseMutationOptions<Created, Error, CreateInput>) => ({

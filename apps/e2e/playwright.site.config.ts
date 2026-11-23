@@ -15,6 +15,12 @@ export default defineConfig({
   ...billing,
   testDir: './tests/site',
   outputDir: './test-results/site',
+  // The edit frame of a mockup runs in WebKit too (docs/plan/88-artifacts.md, §7.9): WebKit calls no
+  // handler on the nodes of a frame without scripts, the cabinet's own layer must do.
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium' } },
+    { name: 'webkit', use: { browserName: 'webkit' }, testMatch: /(edit-frame|canvas)\.spec\.ts$/ },
+  ],
   // No cloud browser in this run: no worker streams it, so the browser of a chat says it cannot
   // be shown. Next loads the repository .env for every variable that is not exported: blank
   // counts as unset here.
@@ -27,6 +33,8 @@ export default defineConfig({
             BROWSER_STREAM_PUBLIC_URL: '',
             // «Страницы» (docs/plan/73-pages-sites.md): pages are set up, nothing serves them.
             PAGES_BASE_DOMAIN: 'pages.localhost',
+            // The frame of a mockup is signed by it (docs/plan/88-artifacts.md, Ар28).
+            PAGES_SIGNING_SECRET: 'synthetic-pages-secret-of-the-site-run-0001',
           },
         }
       : server,

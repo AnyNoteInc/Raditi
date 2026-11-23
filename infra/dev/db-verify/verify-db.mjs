@@ -447,6 +447,9 @@ async function main() {
     '--env-file',
     envFile,
     image,
+    // Migration suites create and drop full schemas in parallel on this disposable server.
+    '-c',
+    'max_locks_per_transaction=256',
   ])
   let ready = false
   for (let attempt = 0; attempt < 60; attempt += 1) {

@@ -135,6 +135,8 @@ describe('NotificationDelivery', () => {
           turnNo: 2,
           scheduledTaskId: null,
           scheduledRunId: null,
+          artifactId: null,
+          actorUserId: null,
         },
       ],
       skipDuplicates: true,

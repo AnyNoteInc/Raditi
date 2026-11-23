@@ -60,7 +60,11 @@ vi.mock('@/trpc/client', () => ({
       delete: mutation(remove),
       create: mutation(async () => null),
       update: mutation(async () => null),
+      // «Артефакты задачи» (plan 88, 88.20б): none named.
+      artifacts: query('schedule.artifacts', async () => []),
+      setArtifacts: mutation(async () => ({ artifactIds: [] })),
     },
+    artifact: { list: query('artifact.list', async () => []) },
   }),
 }))
 
@@ -130,6 +134,7 @@ describe('the page of a scheduled task (plan 82, Зп6)', () => {
       'Инструкция',
       'Когда запускается',
       'Проект',
+      'Артефакты задачи',
       'Размышление',
       'Уведомления',
       'Стоимость',

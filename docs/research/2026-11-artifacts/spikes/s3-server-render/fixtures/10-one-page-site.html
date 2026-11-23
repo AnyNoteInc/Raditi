@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>«Фикс» — ремонт телефонов и ноутбуков в Перми</title>
+<style>
+  :root { --blue: #0f62fe; --navy: #0b1e3f; --ink: #16223a; --muted: #56627a; --bg: #f4f6fb; }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; font-family: "Golos Text", sans-serif; color: var(--ink); background: #fff; line-height: 1.55; }
+  .container { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+  header { position: sticky; top: 0; z-index: 20; background: #fff; box-shadow: 0 1px 0 #e6eaf2; }
+  .bar { height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .logo { font-weight: 800; font-size: 24px; color: var(--blue); text-decoration: none; }
+  nav { display: flex; gap: 24px; }
+  nav a { color: var(--ink); text-decoration: none; font-weight: 500; }
+  .phone { font-weight: 700; color: var(--ink); text-decoration: none; }
+  .hero { position: relative; background-image: linear-gradient(90deg, rgba(11, 30, 63, 0.92) 0%, rgba(11, 30, 63, 0.55) 100%), url("artifact-file:hero-workshop"); background-size: cover; background-position: center; color: #fff; padding: 120px 0 112px; }
+  .hero h1 { font-size: 60px; line-height: 1.05; margin: 0 0 20px; max-width: 760px; }
+  .hero p { font-size: 21px; color: #dbe4f5; max-width: 620px; margin: 0 0 36px; }
+  .btn { display: inline-block; background: var(--blue); color: #fff; text-decoration: none; padding: 16px 30px; border-radius: 12px; font-weight: 700; font-size: 17px; border: 0; }
+  .btn.light { background: #fff; color: var(--navy); margin-left: 12px; }
+  section { padding: 96px 0; }
+  .section-title { font-size: 42px; margin: 0 0 12px; }
+  .section-lead { font-size: 18px; color: var(--muted); margin: 0 0 44px; max-width: 680px; }
+  .reveal { opacity: 0; transform: translateY(28px); transition: opacity 0.6s ease, transform 0.6s ease; }
+  .reveal.visible { opacity: 1; transform: none; }
+  .services { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+  .service { position: relative; background: var(--bg); border-radius: 20px; padding: 56px 28px 28px; }
+  .service h3 { font-size: 21px; margin: 0 0 8px; }
+  .service p { color: var(--muted); margin: 0 0 14px; font-size: 16px; }
+  .service .from { font-weight: 800; color: var(--blue); font-size: 18px; }
+  .hit-badge { position: absolute; top: 18px; right: 18px; background: #ffb020; color: #3b2600; font-weight: 800; font-size: 14px; padding: 6px 12px; border-radius: 999px; }
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; counter-reset: step; }
+  .step { border-top: 3px solid var(--blue); padding-top: 20px; }
+  .step::before { counter-increment: step; content: "0" counter(step); display: block; font-size: 34px; font-weight: 800; color: #c6d4f2; margin-bottom: 8px; }
+  .step h3 { margin: 0 0 6px; font-size: 19px; }
+  .step p { margin: 0; color: var(--muted); font-size: 15px; }
+  .prices { background: var(--bg); }
+  .scroll { overflow-x: auto; background: #fff; border-radius: 20px; }
+  .prices table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 16px; }
+  .prices th, .prices td { padding: 16px 20px; border-bottom: 1px solid #e6eaf2; text-align: left; }
+  .prices th { color: var(--muted); font-size: 14px; font-weight: 600; }
+  .gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .gallery img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 16px; display: block; }
+  .video-placeholder { height: 900px; background: #eef1f7; border-radius: 24px; margin-top: 8px; }
+  .reviews { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
+  .review { background: var(--bg); border-radius: 20px; padding: 28px; }
+  .review p { margin: 0 0 14px; font-size: 17px; }
+  .review b { color: var(--navy); }
+  .stars { color: #ffb020; letter-spacing: 2px; }
+  details { border-bottom: 1px solid #e6eaf2; padding: 18px 0; }
+  summary { font-size: 18px; font-weight: 600; cursor: pointer; }
+  details p { color: var(--muted); margin: 12px 0 0; }
+  .contacts { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center; }
+  .contacts img { width: 100%; border-radius: 20px; display: block; }
+  .contacts ul { list-style: none; padding: 0; margin: 0 0 28px; font-size: 18px; display: grid; gap: 12px; }
+  footer { background: #333333; color: #e0e0e0; padding: 48px 0 32px; }
+  .footer-cols { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 32px; }
+  .footer-cols h4 { margin: 0 0 12px; font-size: 16px; color: #fff; }
+  .footer-links a { display: block; color: #555555; text-decoration: none; padding: 4px 0; font-size: 15px; }
+  .legal { margin-top: 32px; font-size: 11px; color: #bdbdbd; }
+  @media (max-width: 860px) {
+    nav { display: none; }
+    .hero { padding: 72px 0; }
+    .hero h1 { font-size: 38px; }
+    .services, .steps, .gallery, .reviews, .contacts, .footer-cols { grid-template-columns: 1fr; }
+    .service { padding: 20px 24px 24px; }
+    .section-title { font-size: 32px; }
+    section { padding: 64px 0; }
+    .video-placeholder { height: 520px; }
+    .btn.light { margin: 12px 0 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="container bar">
+    <a class="logo" href="#top">Фикс</a>
+    <nav><a href="#services">Услуги</a><a href="#prices">Цены</a><a href="#reviews">Отзывы</a><a href="#contacts">Контакты</a></nav>
+    <a class="phone" href="tel:+73420000000">+7 342 000-00-00</a>
+  </div>
+</header>
+
+<div class="hero" id="top">
+  <div class="container">
+    <h1>Ремонт телефонов и ноутбуков за один день</h1>
+    <p>Бесплатная диагностика за 15 минут, оригинальные запчасти и гарантия до года. Работаем в центре Перми с 2015 года.</p>
+    <a class="btn" href="#contacts">Записаться на ремонт</a><a class="btn light" href="#prices">Узнать цены</a>
+  </div>
+</div>
+
+<section id="services" class="reveal">
+  <div class="container">
+    <h2 class="section-title">Что мы ремонтируем</h2>
+    <p class="section-lead">Смартфоны, планшеты, ноутбуки и умные часы любых марок.</p>
+    <div class="services">
+      <div class="service"><span class="hit-badge" data-bug="B16">Хит продаж</span><h3>Замена экрана смартфона за 30 минут</h3><p>Оригинальные и совместимые дисплеи на выбор.</p><span class="from">от 2 900 ₽</span></div>
+      <div class="service"><h3>Замена аккумулятора</h3><p>Ёмкость как у нового, тест после установки.</p><span class="from">от 1 500 ₽</span></div>
+      <div class="service"><h3>Чистка ноутбука</h3><p>Разборка, чистка от пыли и замена термопасты.</p><span class="from">от 1 800 ₽</span></div>
+      <div class="service"><h3>Ремонт после воды</h3><p>Ультразвуковая ванна и диагностика платы.</p><span class="from">от 2 400 ₽</span></div>
+      <div class="service"><h3>Замена разъёма зарядки</h3><p>Если телефон перестал заряжаться.</p><span class="from">от 1 200 ₽</span></div>
+      <div class="service"><h3>Восстановление данных</h3><p>Фото и контакты с неисправных устройств.</p><span class="from">от 3 500 ₽</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="reveal" data-bug="B19">
+  <div class="container">
+    <h2 class="section-title">Как мы работаем</h2>
+    <p class="section-lead">Четыре шага от звонка до готового устройства.</p>
+    <div class="steps">
+      <div class="step"><h3>Диагностика</h3><p>Бесплатно, 15 минут, при вас.</p></div>
+      <div class="step"><h3>Согласование</h3><p>Называем цену и срок до начала работ.</p></div>
+      <div class="step"><h3>Ремонт</h3><p>В большинстве случаев — в тот же день.</p></div>
+      <div class="step"><h3>Гарантия</h3><p>До 12 месяцев на работу и запчасти.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="prices" class="prices reveal">
+  <div class="container">
+    <h2 class="section-title">Цены</h2>
+    <p class="section-lead">Окончательную стоимость называем после бесплатной диагностики.</p>
+    <div class="scroll">
+      <table>
+        <tr><th>Работа</th><th>iPhone</th><th>Samsung</th><th>Xiaomi</th></tr>
+        <tr><td>Замена экрана</td><td>от 4 900 ₽</td><td>от 3 900 ₽</td><td>от 2 900 ₽</td></tr>
+        <tr><td>Замена аккумулятора</td><td>от 2 500 ₽</td><td>от 1 900 ₽</td><td>от 1 500 ₽</td></tr>
+        <tr><td>Замена камеры</td><td>от 3 200 ₽</td><td>от 2 700 ₽</td><td>от 2 100 ₽</td></tr>
+        <tr><td>Замена корпуса</td><td>от 6 500 ₽</td><td>от 4 800 ₽</td><td>от 3 600 ₽</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="reveal">
+  <div class="container">
+    <h2 class="section-title">Наша мастерская</h2>
+    <p class="section-lead">Каждое рабочее место — с антистатическим покрытием и микроскопом.</p>
+    <div class="gallery">
+      <img src="artifact-file:gallery-1" alt="Рабочее место мастера" width="800" height="600">
+      <img src="artifact-file:gallery-2" alt="Микроскоп для пайки" width="800" height="600">
+      <img src="artifact-file:gallery-3" alt="Склад запчастей" width="800" height="600">
+      <img src="artifact-file:gallery-4" alt="Зона приёма клиентов" width="800" height="600">
+      <img src="artifact-file:gallery-5" alt="Ультразвуковая ванна" width="800" height="600">
+      <img src="artifact-file:gallery-6" alt="Готовые устройства" width="800" height="600">
+    </div>
+  </div>
+</section>
+
+<section class="reveal">
+  <div class="container">
+    <h2 class="section-title">Видео о нас</h2>
+    <div class="video-placeholder" data-bug="B13"></div>
+  </div>
+</section>
+
+<section id="reviews" class="reveal">
+  <div class="container">
+    <h2 class="section-title">Отзывы</h2>
+    <div class="reviews">
+      <div class="review"><div class="stars">★★★★★</div><p>Поменяли экран на iPhone за 40 минут, пока я пил кофе напротив. Цена совпала с названной по телефону.</p><b>Дмитрий</b></div>
+      <div class="review"><div class="stars">★★★★★</div><p>Ноутбук перестал греться и шуметь после чистки. Показали, сколько пыли достали, — впечатлило.</p><b>Екатерина</b></div>
+    </div>
+  </div>
+</section>
+
+<section class="reveal">
+  <div class="container">
+    <h2 class="section-title">Вопросы</h2>
+    <details open><summary>Сколько длится диагностика?</summary><p>15 минут при вас. Если нужна разборка — до часа, мы позвоним.</p></details>
+    <details><summary>Даёте ли вы гарантию?</summary><p>Да, до 12 месяцев в зависимости от запчасти.</p></details>
+    <details><summary>Можно ли оплатить картой?</summary><p>Да, картой, по QR-коду или наличными.</p></details>
+  </div>
+</section>
+
+<section id="contacts" class="reveal">
+  <div class="container contacts">
+    <div>
+      <h2 class="section-title">Приходите</h2>
+      <ul>
+        <li>📍 Пермь, ул. Ленина, 58, вход со двора</li>
+        <li>🕘 Пн–Сб 10:00–20:00, Вс 11:00–18:00</li>
+        <li>📞 +7 342 000-00-00</li>
+      </ul>
+      <a class="btn" href="tel:+73420000000">Позвонить мастеру</a>
+    </div>
+    <img src="artifact-file:storefront" alt="Вход в мастерскую" width="800" height="600">
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div class="footer-cols">
+      <div><h4>Сервисный центр «Фикс»</h4><p>Ремонт телефонов, планшетов и ноутбуков с гарантией.</p></div>
+      <div class="footer-links"><h4>Услуги</h4><a href="#services" data-bug="B14">Замена экрана</a><a href="#services">Аккумуляторы</a><a href="#services">Ноутбуки</a></div>
+      <div class="footer-links"><h4>Клиентам</h4><a href="#prices">Цены</a><a href="#reviews">Отзывы</a><a href="#contacts">Контакты</a></div>
+    </div>
+    <p class="legal" data-bug="B15">ИП Смирнов А. В., ОГРНИП 300000000000000. Информация на сайте не является публичной офертой. Сроки ремонта зависят от наличия запчастей.</p>
+  </div>
+</footer>
+<script>
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => { if (entry.isIntersecting) { entry.target.classList.add('visible'); observer.unobserve(entry.target) } })
+  }, { threshold: 0.15 })
+  document.querySelectorAll('.reveal').forEach((el) => observer.observe(el))
+</script>
+</body>
+</html>

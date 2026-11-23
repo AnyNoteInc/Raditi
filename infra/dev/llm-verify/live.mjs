@@ -32,6 +32,10 @@ export const LIVE_LIMITS = Object.freeze({
   // The import and the probes of the account take four; a turn, the summary of `/compact` and a
   // turn on it three; one is kept for the last reading of the quota, the rest for repeats.
   compaction: Object.freeze({ requests: 10, minutes: 5 }),
+  // The helper look (docs/plan/88-artifacts.md, Ар32): the import and the probes of the account
+  // four; a turn of the main model with its task call, two requests of the helper and the answer;
+  // the rest for repeats.
+  vision: Object.freeze({ requests: 12, minutes: 6 }),
 })
 /** Above these a run does not start: the checks must not take the plan's last capacity. */
 const WINDOW_START_LIMITS = Object.freeze({ '5h': 50, week: 80 })
@@ -47,6 +51,7 @@ export class LiveRefusal extends Error {
  * The options of a stand. `--live` is the real provider, `--rehearsal` the same flow on the
  * synthetic one; with either, `--measure` is the measurement of the gateway stand and
  * `--results` its narrow one, of the turn result alone, `--compact` one session through `/compact`,
+ * `--vision` one turn whose helper look sees a picture of `artifact_render` (plan 88, Ар32),
  * and `--api` the acceptance of the gateway stand on the pay-per-token API instead of the plan
  * (П15); `--keep=<directory>` writes
  * the exchanges the stand observed, for sanitize-samples.mjs.
@@ -57,6 +62,7 @@ export function standMode(argv, { stand }) {
     measure: false,
     results: false,
     compact: false,
+    vision: false,
     api: false,
     rehearsal: false,
     noBuild: false,
@@ -87,6 +93,7 @@ const SWITCHES_OF_THE_GATEWAY = new Map([
   ['--measure', 'measure'],
   ['--results', 'results'],
   ['--compact', 'compact'],
+  ['--vision', 'vision'],
   ['--api', 'api'],
 ])
 
@@ -109,6 +116,11 @@ function refusedCombination(mode) {
     [mode.measure && mode.results, '--measure with --results'],
     [mode.compact && !run, '--compact without --live'],
     [mode.compact && (mode.measure || mode.results || mode.api), '--compact with another run'],
+    [mode.vision && !run, '--vision without --live'],
+    [
+      mode.vision && (mode.measure || mode.results || mode.api || mode.compact),
+      '--vision with another run',
+    ],
     [mode.api && !run, '--api without --live'],
     // The measurements count the credits of the plan's windows: the API has none.
     [mode.api && (mode.measure || mode.results), '--api with a measurement'],
@@ -796,6 +808,15 @@ export async function keepExchanges(holder, directory, exchanges) {
   if (files.length) await mkdir(directory, { recursive: true, mode: 0o700 })
   for (const file of files) await writeFile(join(directory, file.name), file.text, { mode: 0o600 })
   return { written: files.length, held: false }
+}
+
+/** Require valid JSON without letting the parser quote the observer's request body. */
+export function parseVisionRequestBody(requestBody) {
+  try {
+    return JSON.parse(requestBody)
+  } catch {
+    throw new Error('Vision acceptance: the observer request body is not valid JSON')
+  }
 }
 
 /** What a chat completions request of the CLI says, by names and counts; null when unreadable. */

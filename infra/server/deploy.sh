@@ -91,6 +91,24 @@ for helper in platform-secrets.mjs telegram-proxy.mjs; do
     [ "$helper" != telegram-proxy.mjs ] || systemctl restart raditi-telegram-proxy.service
   fi
 done
+# The collector of the ports of the facts of the ORI (plan 88, 88.16а-2): its helper, unit and
+# timer come with the release that brought them, and the timer runs from then on
+ori_units=0
+for unit in raditi-ori-ports.service raditi-ori-ports.timer; do
+  if ! cmp -s "$app/server/host/$unit" "/etc/systemd/system/$unit"; then
+    install -m 0644 "$app/server/host/$unit" /etc/systemd/system/
+    ori_units=1
+  fi
+done
+if ! cmp -s "$app/server/host/ori-ports.sh" /usr/local/lib/raditi/ori-ports.sh; then
+  install -m 0755 "$app/server/host/ori-ports.sh" /usr/local/lib/raditi/ori-ports.sh
+  say "host helper ori-ports.sh updated"
+fi
+if [ "$ori_units" = 1 ]; then
+  systemctl daemon-reload
+  systemctl enable -q --now raditi-ori-ports.timer
+  say "the collector of the ports of the ORI is on"
+fi
 
 # A variable the release added to env.example joins .env with its default (step 1 of «Обычная
 # выкладка»); a value already there is never changed

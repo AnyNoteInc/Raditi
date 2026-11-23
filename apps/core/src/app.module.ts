@@ -3,6 +3,7 @@ import { DatabaseModule } from '@repo/service-runtime'
 
 import { BillingModule } from './billing/billing.module.ts'
 import { GitModule } from './git/git.module.ts'
+import { ArtifactExportsModule } from './artifact-exports/artifact-exports.module.ts'
 import { LeadsModule } from './leads/leads.module.ts'
 import { TelegramModule } from './telegram/telegram.module.ts'
 import { SchedulesModule } from './schedules/schedules.module.ts'
@@ -64,6 +65,8 @@ export class AppModule {
         TasksModule.forRoot(turns),
         // The git connections and repositories of projects (docs/plan/84-projects.md, 84.17).
         GitModule,
+        // The workbooks of tables of artifacts (docs/plan/88-artifacts.md, question 26).
+        ArtifactExportsModule,
         // The signals of chats to the pages and the wake of the outbox, from the process that
         // runs the workers (spec §7; docs/plan/86-speedups.md).
         ...(background ? [TaskSignalsModule] : []),

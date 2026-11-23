@@ -13,6 +13,7 @@
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import process from 'node:process'
 
@@ -31,6 +32,7 @@ import {
   LIVE_LIMITS,
   LiveRefusal,
   longestReasoningRow,
+  parseVisionRequestBody,
   STREAM_FORMS,
   streamContent,
   streamSummary,
@@ -67,6 +69,8 @@ import {
 
 /** Calls one turn key of the acceptance may start: the role's own ceiling, LLM_MAX_CALLS_PER_KEY. */
 const TURN_CALLS = 5
+// Deliberately different from the text profile; both rates live only in the stand's database.
+const VISION_STAND_RATES = { inputPer1m: '3', cacheReadPer1m: '2', outputPer1m: '7' }
 /** Attempts an outcome that depends on the model gets. */
 const ATTEMPTS = 3
 /**
@@ -235,6 +239,16 @@ export async function runLiveGateway(mode) {
     await switchOnZai(db, { accountId, ratesUrl, backend: offer.backend })
     // Both measurements ask the three classes: the same model at the three levels; the API run
     // asks two of them. The profiles of the run's own provider: both offers name theirs alike.
+    // The profile that sees images (docs/plan/88-artifacts.md, Ар32): with the stand's rate on its
+    // disposable database, as the owner's rate would switch it on.
+    const flash = mode.vision
+      ? await switchOnProfile(db, {
+          backend: offer.backend,
+          slug: 'glm-5.3-flash-low',
+          ratesUrl,
+          rates: VISION_STAND_RATES,
+        })
+      : null
     if (mode.measure || mode.results || mode.api)
       await Promise.all(
         [CLASSES.light, CLASSES.heavy].map(({ slug }) =>
@@ -444,15 +458,22 @@ export async function runLiveGateway(mode) {
       printsReasoning = true,
       action,
       instructions = syntheticInstructions,
+      visionModel,
+      extraTools = [],
     }) {
       const { files: prepared, argv } = await prepareOpencodeTurn(
-        { cli, control, driver, tools, instructions },
+        { cli, control, driver, tools: [...tools, ...extraTools], instructions },
         {
           turn,
           prompt,
           nativeSessionId,
           action,
-          llm: { baseUrl: offer.gatewayBaseUrl, model: ZAI_MODEL, reasoningEffort: effort },
+          llm: {
+            baseUrl: offer.gatewayBaseUrl,
+            model: ZAI_MODEL,
+            reasoningEffort: effort,
+            ...(visionModel ? { visionModel } : {}),
+          },
         },
       )
       const files = printsReasoning ? prepared : withoutReasoningRows(prepared)
@@ -622,7 +643,7 @@ export async function runLiveGateway(mode) {
     // «The result is valid» is what the product would do with it (spec §20, П38).
     const valid = (outcome) => outcome.reading.taken
 
-    await { measure, results, compaction, gateway: acceptance }[kind]()
+    await { measure, results, compaction, vision, gateway: acceptance }[kind]()
 
     /**
      * The acceptance: a turn of each kind — tool, MCP, text and the continuation of the text
@@ -943,6 +964,184 @@ export async function runLiveGateway(mode) {
       )
       passed(
         'compaction: one request without tools through the role llm, its usage equals the rows of the wrapper, and the session went on from the summary in the next turn',
+      )
+    }
+
+    /**
+     * The helper look (--vision, docs/plan/88-artifacts.md, Ар32, slice 88.15в): one turn whose key
+     * has the profile that sees images. The main model is asked to give the helper `look` a frame;
+     * the helper calls `artifact_render` of the synthetic MCP, which answers a synthetic picture of
+     * a phone screen, and looks at it. What the platform owes is held: no picture in a request of
+     * the main model, the picture of the helper through the role at its model, counted as it.
+     * Acceptance also requires a detail only visible in the picture, not in the prompt.
+     */
+    async function vision() {
+      assert.equal(live.kind, 'vision')
+      assert.ok(flash)
+      stage = 'the helper look'
+      budget.afford(4, 'the turn of the helper look')
+      await revoke(first)
+      const turn = await issued()
+      assert.equal(
+        turn.values.visionModel,
+        'glm-5.3-flash',
+        'The key has no profile that sees images',
+      )
+      const artifactId = randomUUID()
+      const subtitle = 'Свежий хлеб каждое утро'
+      const frame = await readFile(
+        new URL('../../../infra/dev/llm-verify/vision-frame.jpg', import.meta.url),
+        'base64',
+      )
+      const renderTool = {
+        name: 'artifact_render',
+        description:
+          'The picture of a mockup or of a frame of a canvas as the client sees it, in strips of 2000 px, for looking at it.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            artifactId: { type: 'string' },
+            frame: { type: 'string' },
+            view: { type: 'string', enum: ['desktop', 'phone'] },
+          },
+          required: ['artifactId'],
+          additionalProperties: false,
+        },
+      }
+      await script({
+        scenario: 'tools',
+        rounds: [
+          [
+            {
+              name: 'task',
+              arguments: {
+                description: 'Look at the frame',
+                prompt: `Look at artifact ${artifactId}, frame home, view phone.`,
+                subagent_type: 'look',
+              },
+            },
+          ],
+        ],
+        text: JSON.stringify(resultFor(`Synthetic look: «${subtitle}» is hard to read`)),
+        models: {
+          'glm-5.3-flash': {
+            scenario: 'tools',
+            roundsOverall: true,
+            rounds: [
+              [
+                {
+                  name: 'raditi_artifact_render',
+                  arguments: { artifactId, frame: 'home', view: 'phone' },
+                },
+              ],
+            ],
+            text: `Low contrast of the grey subtitle «${subtitle}»; the row is clipped on the right.`,
+          },
+        },
+      })
+      const outcome = await runTurn({
+        label: 'the helper look',
+        turn,
+        prompt: `Synthetic check. Use the task tool with the subagent look once: ask it to look at artifact ${artifactId}, frame home, view phone, quote the subtitle exactly in its original language, and say what looks wrong. Then reply with the final result; include the exact quotation and the helper's finding in the summary.`,
+        visionModel: 'glm-5.3-flash',
+        extraTools: [renderTool],
+      })
+      const rows = await settled(turn)
+      await revoke(turn)
+      const posted = outcome.exchanges
+        .filter((item) => item.method === 'POST')
+        .map((exchange) => ({ exchange, body: parseVisionRequestBody(exchange.requestBody) }))
+      const pictures = (body) =>
+        (body.messages ?? []).flatMap((message) =>
+          Array.isArray(message.content)
+            ? message.content
+                .filter((part) => part?.type === 'image_url')
+                .map((part) => part.image_url?.url)
+            : [],
+        )
+      const main = posted.filter(({ body }) => body.model === ZAI_MODEL)
+      const helper = posted.filter(({ body }) => body.model === flash.providerModelId)
+      assert.ok(main.length > 0, 'The stand did not observe the main model')
+      assert.ok(
+        main.every(({ body }) => pictures(body).length === 0),
+        'A request of the main model held a picture',
+      )
+      assert.ok(
+        main.every(
+          ({ body }) =>
+            !(body.tools ?? []).some((tool) => tool.function?.name === 'raditi_artifact_render'),
+        ),
+        'The main model was offered the picture tool',
+      )
+      const price = await db.llmModelPrice.findFirstOrThrow({
+        where: { modelId: flash.id },
+        orderBy: { effectiveFrom: 'desc' },
+      })
+      const helperCalls = rows.filter((row) => row.modelId === flash.id)
+      const counted = `${rows.map((row) => `${row.modelId === flash.id ? 'helper' : 'main'}/${row.state}`).join(' ')} for the requests ${posted.map(({ body }) => body.model).join(' ')}`
+      assert.equal(
+        helperCalls.length,
+        helper.length,
+        `A call of the helper is not counted as its model — calls ${counted}`,
+      )
+      const fromProvider = helper.map(({ exchange }) => {
+        const usage = streamSummary(exchange.responseText).usage
+        assert.ok(exchange.status === 200 && usage, 'A helper reply has no provider usage')
+        return usage
+      })
+      const fromLedger = helperCalls.map((row) => {
+        const usage = row.tokenUsage
+        assert.ok(
+          row.state === 'completed' && usage && !usage.estimated,
+          'A helper call has no measured usage in the ledger',
+        )
+        assert.equal(usage.priceId, price.id, 'A helper call did not use the Flash price')
+        const {
+          inputUncachedTokens: inputUncached,
+          cacheReadTokens: cacheRead,
+          cacheWriteTokens: cacheWrite,
+          outputTokens: output,
+          reasoningTokens: reasoning,
+        } = usage
+        // Integer rates in ₽ per million, with VAT. Reasoning is already included in output.
+        const expectedMillionths = price.inputPer1m
+          .mul(inputUncached + cacheWrite)
+          .plus(price.cacheReadPer1m.mul(cacheRead))
+          .plus(price.outputPer1m.mul(output))
+        assert.ok(
+          usage.costRub.mul(1_000_000).eq(expectedMillionths),
+          'A helper call was not charged at the stand’s Flash rate',
+        )
+        return { inputUncached, cacheRead, cacheWrite, output, reasoning }
+      })
+      assert.deepEqual(sumUsage(fromLedger), sumUsage(fromProvider))
+      const rendered = outcome.mcp.some(
+        (request) =>
+          request.authorized && request.rpc === 'tools/call' && request.tool === 'artifact_render',
+      )
+      const withFrame = helper.filter(({ body }) =>
+        pictures(body).includes(`data:image/jpeg;base64,${frame}`),
+      )
+      const readSubtitle = (text) =>
+        text.toLowerCase().replaceAll(/\s+/g, ' ').includes(subtitle.toLowerCase())
+      const quoted = withFrame.some(({ exchange }) =>
+        readSubtitle(streamContent(exchange.responseText)),
+      )
+      const inSummary = readSubtitle(outcome.result?.summary ?? '')
+      report(
+        `helper look: ${helper.length} request(s) of the helper, ${main.length} of the main model; artifact_render called: ${rendered ? 'yes' : 'no'}; exact picture delivered: ${withFrame.length > 0 ? 'yes' : 'no'}; subtitle quoted by the helper: ${quoted ? 'yes' : 'no'}, quoted in the final summary: ${inSummary ? 'yes' : 'no'}`,
+      )
+      const recognized = rendered && withFrame.length > 0 && quoted && inSummary
+      report(`vision recognition and handoff: ${recognized ? 'confirmed' : 'not confirmed'}`)
+      if (rehearsal)
+        assert.ok(recognized, 'Vision rehearsal: the scripted model did not complete the scenario')
+      if (rendered)
+        assert.ok(
+          withFrame.length > 0,
+          'Vision acceptance: the exact picture did not reach the helper',
+        )
+      passed(
+        'the helper look: the main model had neither the picture nor its tool; observed Flash calls match the measured usage and separate rate',
       )
     }
 
@@ -1762,6 +1961,7 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
 function runKind(mode) {
   if (mode.measure) return 'measure'
   if (mode.compact) return 'compaction'
+  if (mode.vision) return 'vision'
   return mode.results ? 'results' : 'gateway'
 }
 
@@ -1769,13 +1969,14 @@ const RUN_WORDS = {
   measure: 'measurement',
   results: 'measurement of results',
   compaction: 'verification of a compaction',
+  vision: 'verification of the helper look',
   gateway: 'verification',
 }
 
 /** The last line of a run that passed, after the count of its provider requests is settled. */
 function announcePassed({ live, mode, rehearsal }) {
   const what = RUN_WORDS[runKind(mode)]
-  if (rehearsal && !mode.measure && !mode.compact) {
+  if (rehearsal && !mode.measure && !mode.compact && !mode.vision) {
     // The cap was reached on purpose: the count of the run says so itself.
     assert.throws(() => live.settle(), /reached its cap of \d+ provider requests/)
     assert.equal(live.tripped(), true)
@@ -1787,10 +1988,10 @@ function announcePassed({ live, mode, rehearsal }) {
   const state = live.settle()
   const run = rehearsal ? 'Rehearsal of the live' : 'Live'
   const provider = rehearsal ? 'synthetic' : 'real'
-  const shares = mode.measure
-    ? ''
-    : " The checks are of what the platform owes; the model's outcomes are shares in the REPORT lines."
-  // The exit code is of what the platform owes: the last line says where the model's part is.
+  const shares =
+    mode.measure || mode.vision
+      ? ''
+      : " The checks are of what the platform owes; the model's outcomes are shares in the REPORT lines."
   console.log(
     `${run} gateway ${what} passed: ${live.checks()} checks; ${state.used} of ${state.cap} provider requests; OpenCode 1.18.34 on the ${provider} provider.${shares}`,
   )

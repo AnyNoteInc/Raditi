@@ -249,7 +249,7 @@ export async function prepareOpencodeTurn(
  * asks besides the standard one. Found by the provider as well as the slug, since both offers
  * name their profiles alike.
  */
-export async function switchOnProfile(db, { backend = ZAI_BACKEND, slug, ratesUrl }) {
+export async function switchOnProfile(db, { backend = ZAI_BACKEND, slug, ratesUrl, rates }) {
   const profile = await db.llmModel.findFirstOrThrow({
     where: { slug, provider: { slug: backend } },
   })
@@ -258,6 +258,7 @@ export async function switchOnProfile(db, { backend = ZAI_BACKEND, slug, ratesUr
       modelId: profile.id,
       effectiveFrom: new Date(Date.now() - 60_000),
       ...ZAI_STAND_RATES,
+      ...rates,
       sourceUrl: ratesUrl,
     },
   })

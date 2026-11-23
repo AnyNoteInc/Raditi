@@ -1,0 +1,11 @@
+{
+  "name": "spike88-s8-next-headers",
+  "private": true,
+  "description": "Spike s8 of plan 88: which Referrer-Policy wins in Next.js 16.3.6: next.config headers(), proxy or a route",
+  "scripts": { "build": "next build" },
+  "dependencies": {
+    "next": "16.3.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

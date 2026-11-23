@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Контакты — автосервис «Мотор»</title>
+<script src="https://maps.cdn-widgets.test/v3/widget.js" data-bug="B18"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Golos Text", "Helvetica Neue", sans-serif; background: #f5f7fa; color: #1c2430; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 56px 24px; }
+  h1 { font-size: 46px; margin: 0 0 12px; }
+  .intro { font-size: 19px; color: #4a5668; margin: 0 0 40px; max-width: 640px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 32px; }
+  .box { background: #fff; border-radius: 18px; padding: 28px; box-shadow: 0 2px 12px rgba(28, 36, 48, 0.06); }
+  .box h2 { margin: 0 0 16px; font-size: 22px; }
+  .row { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 16px; }
+  .row svg { flex: none; width: 24px; height: 24px; color: #e65100; }
+  .row b { display: block; font-size: 17px; }
+  .row span { color: #4a5668; font-size: 15px; }
+  .hours { width: 100%; border-collapse: collapse; font-size: 16px; }
+  .hours td { padding: 8px 0; border-bottom: 1px dashed #d6dde6; }
+  .hours td:last-child { text-align: right; font-weight: 600; }
+  .today td { color: #e65100; }
+  .buttons { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 14px 22px; border-radius: 12px; background: #e65100; color: #fff; text-decoration: none; font-weight: 600; font-size: 16px; }
+  .btn.tg { background: #229ed9; }
+  .map-box { background: #fff; border-radius: 18px; padding: 16px; }
+  .map-box h2 { margin: 8px 12px 16px; font-size: 22px; }
+  .map { display: block; border-radius: 12px; }
+  #map-widget { min-height: 260px; border-radius: 12px; background: #e9eef4; margin-top: 16px; display: grid; place-items: center; color: #4a5668; font-size: 15px; }
+  .how { margin-top: 32px; }
+  .how ol { padding-left: 20px; font-size: 16px; line-height: 1.6; color: #2f3b4c; }
+  @media (max-width: 700px) {
+    .grid { grid-template-columns: 1fr; }
+    h1 { font-size: 34px; }
+    .wrap { padding: 32px 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Контакты</h1>
+  <p class="intro">Автосервис «Мотор» в Новосибирске: ремонт двигателя, ходовой и шиномонтаж без записи по будням.</p>
+
+  <div class="grid">
+    <div class="box">
+      <h2>Как связаться</h2>
+      <div class="row">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
+        <div><b>ул. Станционная, 38, корп. 2</b><span>Въезд со стороны АЗС, бокс № 4</span></div>
+      </div>
+      <div class="row">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
+        <div><b>+7 383 000-00-00</b><span>Звонки с 8:00 до 20:00</span></div>
+      </div>
+      <div class="row">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+        <div><b>Онлайн-запись на сайте</b><span>Ответим в течение часа</span></div>
+      </div>
+      <div class="buttons">
+        <a class="btn" href="tel:+73830000000">Позвонить</a>
+        <a class="btn tg" href="https://t.me/motor_example">Написать в Telegram</a>
+      </div>
+    </div>
+    <div class="box">
+      <h2>Часы работы</h2>
+      <table class="hours">
+        <tr><td>Понедельник — пятница</td><td>8:00–20:00</td></tr>
+        <tr class="today"><td>Суббота</td><td>9:00–18:00</td></tr>
+        <tr><td>Воскресенье</td><td>10:00–16:00</td></tr>
+        <tr><td>Праздничные дни</td><td>по записи</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="map-box">
+    <h2>Мы на карте</h2>
+    <img class="map" src="artifact-file:map" alt="Схема проезда к автосервису" width="800" height="450" style="width: 800px; height: auto;" data-bug="B5">
+    <div id="map-widget">Загружаем интерактивную карту…</div>
+  </div>
+
+  <div class="how box">
+    <h2>Как добраться</h2>
+    <ol>
+      <li>От метро «Площадь Маркса» — автобус № 35 до остановки «Станционная».</li>
+      <li>На машине — съезд с Северного обхода, затем 400 м прямо до АЗС.</li>
+      <li>Парковка для клиентов — у бокса № 4, бесплатно на время ремонта.</li>
+    </ol>
+  </div>
+</div>
+<script>
+  // The map widget of a provider fills #map-widget when it loads.
+  window.addEventListener('load', () => {
+    if (window.MapWidget) window.MapWidget.render('#map-widget', { lat: 55.0, lng: 82.9 })
+  })
+</script>
+</body>
+</html>

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { agentDriverIds, agentOutputLimits } from '../ports/agent-driver.ts'
 import {
+  feedPassRequestKinds,
+  feedPresslessRequestKinds,
   feedCancelledBys,
   feedCeilingReasons,
   feedCreditsStates,
@@ -49,6 +51,7 @@ import {
   feedFailureTextOf,
 } from './client-feed-failures.ts'
 import { feedFixtures } from './client-feed-fixtures.ts'
+import { feedArtifactTelegramText } from './client-feed-labels.ts'
 import { feedText } from './client-feed-text.ts'
 import { taskStatuses } from './task-status.ts'
 
@@ -305,6 +308,12 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
   'feed.doc_left': [
     { v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', sections: 2, reason: 'refused' },
   ],
+  'feed.artifact': [
+    { v: 1, artifactId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', kind: 'document', created: true },
+  ],
+  'feed.artifact_left': [
+    { v: 1, artifactId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', blocks: 1, reason: 'refused' },
+  ],
   'feed.memory_change': [
     {
       v: 1,
@@ -424,6 +433,8 @@ describe('feed vocabulary', () => {
       'feed.doc',
       'feed.doc_touch',
       'feed.doc_left',
+      'feed.artifact',
+      'feed.artifact_left',
       'feed.memory_change',
       'feed.memory_left',
       'feed.repo_changes',
@@ -784,6 +795,12 @@ describe('nothing raw reaches the customer', () => {
 })
 
 describe('feed.request', () => {
+  it('names every kind once: either a pass answers it or nothing is enqueued', () => {
+    const named = [...feedPassRequestKinds, ...feedPresslessRequestKinds].sort()
+    const kinds = feedRequestPayloadSchema.options.map((option) => option.shape.kind.value).sort()
+    expect(named).toEqual(kinds)
+  })
+
   const text = (value: string) => accepts('feed.request', { ...first, text: value })
 
   it('bounds the text at 4000 characters after trimming', () => {
@@ -1394,6 +1411,8 @@ describe('reading stored rows', () => {
       'feed.doc': [{ v: 1, docId: 'документ' }],
       'feed.doc_touch': [{ v: 1, docId: 'документ', revision: 1 }],
       'feed.doc_left': [{ v: 1, docId: 'документ', sections: 1, reason: 'refused' }],
+      'feed.artifact': [{ v: 1, artifactId: 'артефакт', kind: 'document', created: true }],
+      'feed.artifact_left': [{ v: 1, artifactId: 'артефакт', blocks: 0, reason: 'refused' }],
       'feed.memory_change': [
         { v: 1, action: 'saved', entryId: 'запись', kind: 'fact', text: 'а' },
         {
@@ -1782,6 +1801,7 @@ describe('failure catalogue', () => {
       'repo_unsupported',
       'repo_unreachable',
       'repo_reauth',
+      'notes_unavailable',
     ])
   })
 
@@ -1810,6 +1830,7 @@ describe('failure catalogue', () => {
       'repo_too_large',
       'repo_unsupported',
       'repo_reauth',
+      'notes_unavailable',
     ])
   })
 
@@ -2152,5 +2173,22 @@ describe('the requirements of a task in its head', () => {
     expect(parse({ repository: false, browser: false }).success).toBe(true)
     expect(parse({ repository: true }).success).toBe(false)
     expect(parse({ repository: true, browser: false, preview: true }).success).toBe(false)
+  })
+})
+
+describe('an artifact in Telegram (docs/plan/88-artifacts.md, Ар55)', () => {
+  it('names the client’s own by its kind and title, and nothing of another’s', () => {
+    expect(feedArtifactTelegramText({ kind: 'document', created: true, title: 'План' })).toBe(
+      'Создан документ «План»',
+    )
+    expect(feedArtifactTelegramText({ kind: 'table', created: false, title: 'Прайс' })).toBe(
+      'Обновлена таблица «Прайс»',
+    )
+    expect(feedArtifactTelegramText({ kind: 'diagram', created: false, title: 'Схема' })).toBe(
+      'Обновлён артефакт «Схема»',
+    )
+    expect(feedArtifactTelegramText({ kind: 'document', created: true, title: null })).toBe(
+      'Артефакт обновлён',
+    )
   })
 })

@@ -10,6 +10,7 @@ import {
   type ProjectListView,
 } from '@repo/domain'
 
+import { restoreProjectArtifacts, trashProjectArtifacts } from './artifacts.ts'
 import type { Prisma, PrismaClient, TaskStatus } from './generated/prisma/client.ts'
 import { lockProjectChats, stopProjectChats } from './project-trash.ts'
 import { chatHasRepoBranch } from './repo-work.ts'
@@ -370,25 +371,39 @@ export async function trashProject(
     if (count !== 1) return false
     await stopProjectChats(tx, { chats, statuses: projectBusyStatuses, authorId: input.userId })
     await pauseProjectSchedules(tx, project.id)
+    // Its artifacts go with it, marked as the project's (docs/plan/88-artifacts.md, Ар42).
+    await trashProjectArtifacts(tx, {
+      projectId: project.id,
+      userId: input.userId,
+      now: input.now,
+      purgeAfter,
+    })
     return true
   })
   if (trashed) return { purgeAfter }
   return trashProject(db, input)
 }
 
-/** «Вернуть» (ПР20): back from the trash, until the day it is purged. */
+/**
+ * «Вернуть» (ПР20): back from the trash, until the day it is purged — with the artifacts its
+ * «Удалить» put there, not those the owner trashed before (Ар42).
+ */
 export async function restoreProject(
-  db: Pick<Tx, 'project'>,
+  db: Pick<PrismaClient, 'project' | '$transaction'>,
   input: { projectId: string; userId: string; now: Date },
 ): Promise<void> {
   const project = await projectOwnedBy(db, input.projectId, input.userId, { deleted: true })
   if (project === null) throw projectNotFound()
   if (project.deletedAt === null) return
-  const { count } = await db.project.updateMany({
-    where: { id: project.id, deletedAt: { not: null }, purgeAfter: { gt: input.now } },
-    data: { deletedAt: null, purgeAfter: null, activityAt: input.now },
+  await db.$transaction(async (tx) => {
+    await lockProjectRow(tx, project.id)
+    const { count } = await tx.project.updateMany({
+      where: { id: project.id, deletedAt: { not: null }, purgeAfter: { gt: input.now } },
+      data: { deletedAt: null, purgeAfter: null, activityAt: input.now },
+    })
+    if (count !== 1) throw projectNotFound()
+    await restoreProjectArtifacts(tx, { projectId: project.id, userId: input.userId })
   })
-  if (count !== 1) throw projectNotFound()
 }
 
 /**

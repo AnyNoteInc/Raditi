@@ -1,0 +1,10 @@
+{
+  "name": "spike88-s8v-independent",
+  "private": true,
+  "type": "module",
+  "description": "Independent checks of spike s8 (plan 88): the edge log, the fragment, Next.js",
+  "dependencies": {
+    "playwright-core": "1.63.0",
+    "yaml": "2.8.1"
+  }
+}

@@ -157,6 +157,9 @@ export const STAND_FILE =
 export const OPERATOR_SCRIPTS = {
   // Run in its image on the app VM (`docker compose run --entrypoint node core scripts/… …`).
   core: [
+    // The support's take-down and return of an artifact (docs/plan/88-artifacts.md, Ар57).
+    'artifacts-return.mjs',
+    'artifacts-take-down.mjs',
     'billing-rates.mjs',
     'billing-refund.mjs',
     'billing-refunds-needed.mjs',
@@ -165,6 +168,10 @@ export const OPERATOR_SCRIPTS = {
     // The pool and the windows of the workspaces (docs/plan/71-usage-limits.md, §4.4).
     'llm-plan-rates.mjs',
     'llm-usage.mjs',
+    // The export for a request of an authorised body and the collector of the edge's ports of the
+    // facts (docs/plan/88-artifacts.md, Ар56, 88.16а-2).
+    'ori-export.mjs',
+    'ori-ports.mjs',
     // The support's take-down and return of a site of pages (docs/plan/73-pages-sites.md, Дер18).
     'pages-return.mjs',
     'pages-take-down.mjs',

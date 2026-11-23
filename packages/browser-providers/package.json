@@ -5,7 +5,8 @@
   "license": "UNLICENSED",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./render": "./src/render/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -13,13 +14,18 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource-variable/golos-text": "catalog:",
     "@repo/domain": "workspace:*",
+    "dompurify": "catalog:",
+    "jsdom": "catalog:",
+    "mermaid": "catalog:",
     "playwright-core": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
+    "@types/jsdom": "catalog:",
     "@types/node": "catalog:",
     "@typescript/native": "catalog:",
     "eslint": "catalog:",

@@ -31,16 +31,18 @@ import { plural } from '@/lib/plural'
 
 import { AttachmentChips } from './attachment-chips'
 import { dictationText, useDictation } from './dictation'
+import { withDictatedWords } from './dictation-button'
 import {
   MentionList,
   mentionAt,
   mentionKey,
   mentionMatches,
+  artifactMatches,
   mentionOptionId,
   withMention,
   type MentionOption,
 } from './file-mentions'
-import { attachmentText, composerText, paletteText } from './chat-texts'
+import { attachmentText, composerText, mentionText, paletteText } from './chat-texts'
 import type { CommandVerdict } from './chat-types'
 import {
   CommandList,
@@ -181,6 +183,11 @@ export interface ComposerMentions {
   root?: string
   /** The name of the list and its words when there is nothing in it, if not the working copy's. */
   texts?: { label: string; none: string }
+  /**
+   * The artifacts `@` names too (docs/plan/88-artifacts.md, Ар47): shown by title, put in as
+   * `@artifact:<id>`; null — not read yet; absent — `@` names files alone.
+   */
+  artifacts?: readonly { id: string; title: string }[] | null
 }
 
 export interface ComposerCommands {
@@ -331,8 +338,7 @@ export function Composer({
   // The words of a dictation go after what is written, a space between (ВВ16).
   const dictation = useDictation()
   const recording = dictation.state === 'recording'
-  const withWords = (written: string, words: string) =>
-    written.trim() === '' ? words : `${written.trimEnd()} ${words}`
+  const withWords = withDictatedWords
   /** «Стоп»: the words go into the field, for the client to read and send (docs/plan/77, Р4). */
   async function stopDictation() {
     const words = await dictation.finish()
@@ -387,8 +393,12 @@ export function Composer({
     mention !== null && mentionRoot !== '' && mention.query.startsWith(mentionRoot)
       ? mention.query.slice(mentionRoot.length)
       : (mention?.query ?? '')
-  const mentionOptions =
-    mentionOpen && mentions?.paths ? mentionMatches(mentions.paths, mentionQuery) : []
+  const mentionOptions = mentionOpen
+    ? [
+        ...(mentions?.artifacts ? artifactMatches(mentions.artifacts, mention.query) : []),
+        ...(mentions?.paths ? mentionMatches(mentions.paths, mentionQuery) : []),
+      ]
+    : []
   const mentionIndex = Math.min(mentionActive, Math.max(0, mentionOptions.length - 1))
   const mentionStarted = mentionOpen ? mention.start : null
   const askFiles = mentions?.onOpen
@@ -413,7 +423,11 @@ export function Composer({
 
   function chooseMention(option: MentionOption) {
     if (mention === null) return
-    const next = withMention(text, mention, `${mentionRoot}${option.path}`)
+    const next = withMention(
+      text,
+      mention,
+      option.artifact ? option.path : `${mentionRoot}${option.path}`,
+    )
     setText(next.text)
     setCaret(next.caret)
     setMentionActive(0)
@@ -638,7 +652,11 @@ export function Composer({
             listId={mentionListId}
             options={mentionOptions}
             active={mentionIndex}
-            state={mentions?.paths ? 'ready' : (mentions?.state ?? 'preparing')}
+            state={
+              mentionOptions.length > 0 || mentions?.paths || mentions?.artifacts
+                ? 'ready'
+                : (mentions?.state ?? 'preparing')
+            }
             {...(mentions?.texts ? { texts: mentions.texts } : {})}
             onChoose={chooseMention}
             onHover={setMentionActive}
@@ -902,6 +920,35 @@ export function Composer({
                       }}
                     />
                   </MenuItem>
+                  {mentions?.artifacts !== undefined ? (
+                    <MenuItem
+                      onClick={() => {
+                        setAddAnchor(null)
+                        // `@` at the caret opens the list of `@`, artifacts among it (Ар47).
+                        const at = caret
+                        const before = text.slice(0, at)
+                        const glue = before === '' || /\s$/u.test(before) ? '@' : ' @'
+                        changeText(`${before}${glue}${text.slice(at)}`, at + glue.length)
+                        window.setTimeout(() => {
+                          field.current?.focus()
+                          field.current?.setSelectionRange(at + glue.length, at + glue.length)
+                        }, 0)
+                      }}
+                      sx={{ gap: 1.5, py: 1, alignItems: 'flex-start' }}
+                    >
+                      <Box component="span" sx={{ display: 'flex', mt: 0.25 }}>
+                        <AppIcon name="artifacts" size={18} />
+                      </Box>
+                      <ListItemText
+                        primary={mentionText.addArtifact}
+                        secondary={mentionText.addArtifactHint}
+                        slotProps={{
+                          primary: { sx: { fontSize: 14, fontWeight: 500 } },
+                          secondary: { sx: { fontSize: 13 } },
+                        }}
+                      />
+                    </MenuItem>
+                  ) : null}
                 </Menu>
                 {/* The dialog of the system opens from the menu above: the input itself is hidden. */}
                 <input

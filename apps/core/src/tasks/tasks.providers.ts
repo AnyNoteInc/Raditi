@@ -1,6 +1,7 @@
 import { Counter, type Registry } from '@prometheus-io/client'
 import { Logger, type Provider } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
+import { createBrowserWorkerClient } from '@repo/browser-link'
 import type { PrismaClient } from '@repo/db'
 import type {
   JobQueue,
@@ -12,6 +13,8 @@ import type {
 import { llmBackends } from '@repo/llm-backends'
 import { PRISMA } from '@repo/service-runtime'
 
+import { ArtifactChecks } from '../artifacts/artifact-checks.ts'
+import { ArtifactOutbox } from '../artifacts/artifact-outbox.ts'
 import { BrowserSessions } from '../browser/browser-sessions.ts'
 import type { CoreConfig } from '../config/config.ts'
 import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
@@ -26,7 +29,6 @@ import { turnRuntimeOf } from '../turns/turn-runtime.ts'
 import { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import { TURN_EXECUTOR } from '../turns/turns.tokens.ts'
 import { ChatFiles } from './chat-files.ts'
-import { DocSections } from './doc-sections.ts'
 import { MemoryChanges } from './memory-changes.ts'
 import { RepoChanges, RepoTurnPreparer } from './repo-turns.ts'
 import type { GitJobs } from '../git/git-jobs.ts'
@@ -41,6 +43,8 @@ import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { QueueDrain } from './queue-drain.ts'
+import { ArtifactDiagram } from './artifact-diagram.ts'
+import { ArtifactNotify } from './artifact-notify.ts'
 import { ChatNotify } from './chat-notify.ts'
 import { NotificationDelivery, notificationDeliveryOf } from './notification-delivery.ts'
 import { ScheduleChanges } from './schedule-changes.ts'
@@ -118,9 +122,17 @@ export const taskProviders: Provider[] = [
           logger: new Logger('ChatFiles'),
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
-        docs: new DocSections({
+        // The files and imports a turn put from its outbox into artifacts (88-artifacts, §7.5).
+        artifactOutbox: new ArtifactOutbox({
           db: prisma,
-          logger: new Logger('DocSections'),
+          storage,
+          logger: new Logger('ArtifactOutbox'),
+        }),
+        // The agent's writes in artifacts (docs/plan/88-artifacts.md, Ар16, Ар19), the versions of
+        // the turn and the publications of documents after them (Ар3).
+        artifacts: new ArtifactChecks({
+          db: prisma,
+          logger: new Logger('ArtifactChecks'),
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
         // What a turn asked of its pages besides versions (docs/plan/73-pages-sites.md, Дер23).
@@ -183,6 +195,27 @@ export const taskProviders: Provider[] = [
     inject: [PRISMA, NotificationDelivery],
   },
   {
+    // A notice of an artifact (docs/plan/88-artifacts.md, Ар54).
+    provide: ArtifactNotify,
+    useFactory: (prisma: PrismaClient, delivery: NotificationDelivery) =>
+      new ArtifactNotify({ db: prisma, delivery }),
+    inject: [PRISMA, NotificationDelivery],
+  },
+  {
+    // A picture of «Схема» the cabinet asked for (docs/plan/88-artifacts.md, §7.13, 88.24б).
+    provide: ArtifactDiagram,
+    useFactory: (prisma: PrismaClient, config: CoreConfig) => {
+      const client = config.browser
+        ? createBrowserWorkerClient({ baseUrl: config.browser.url, token: config.browser.token })
+        : null
+      return new ArtifactDiagram({
+        db: prisma,
+        draw: client ? (request) => client.diagram(request) : null,
+      })
+    },
+    inject: [PRISMA, CORE_CONFIG],
+  },
+  {
     // The queue of a chat after its pass ended (docs/plan/75-chat-input-output.md, ВВ2).
     provide: QueueDrain,
     useFactory: (prisma: PrismaClient) => new QueueDrain({ db: prisma }),
@@ -222,6 +255,14 @@ export const taskProviders: Provider[] = [
         schedules: new ScheduleChanges({ db: prisma, logger: new Logger('ScheduleChanges') }),
         // The changes of a turn whose end recovery reached (docs/plan/84-projects.md, §10).
         pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
+        // The writes in artifacts of turns the sweep ends, and their collector (Ар16, Ар50) with
+        // the objects of the files and workbooks it removes.
+        artifacts: new ArtifactChecks({
+          db: prisma,
+          storage: inbox,
+          logger: new Logger('ArtifactChecks'),
+          pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
+        }),
         values: credentials,
         // The card of a commit recovery published (docs/plan/84-projects.md, ПР12).
         repositories: workspace

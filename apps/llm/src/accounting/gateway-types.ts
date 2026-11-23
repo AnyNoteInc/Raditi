@@ -40,6 +40,18 @@ export interface GatewayKey extends GatewayProfile {
    * (docs/plan/70-turn-without-time-limit.md, ВР25); null — none.
    */
   fallback: { accountId: string; backendId: LlmBackendId } | null
+  /**
+   * The key's profile that sees images (docs/plan/88-artifacts.md, Ар32): a call that names its
+   * model is normalized with pictures allowed and admitted, priced and counted as it. null — none.
+   */
+  vision: {
+    modelId: string
+    model: string
+    modelSlug: string
+    reasoningEffort: string | null
+  } | null
+  /** This call is of the profile that sees images: the body may carry pictures. */
+  images?: boolean
 }
 
 export interface GatewayCall extends GatewayKey {

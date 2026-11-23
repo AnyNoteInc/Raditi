@@ -3,6 +3,7 @@
 import Button from '@mui/material/Button'
 import { useTransition } from 'react'
 
+import { announceCabinetSignOut } from '@/lib/cabinet-session-signal'
 import { hardNavigate } from '@/lib/hard-navigate'
 
 import { signOut } from './actions'
@@ -14,7 +15,7 @@ export function SignOutButton() {
   const leave = () =>
     startTransition(async () => {
       // Leave even if the call failed: /sign-in sends a still signed-in user back to the cabinet.
-      await signOut().catch(() => undefined)
+      await signOut().then(announceCabinetSignOut, () => undefined)
       hardNavigate('/sign-in')
     })
 

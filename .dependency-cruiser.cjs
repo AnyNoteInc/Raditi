@@ -11,7 +11,8 @@ const ADAPTERS =
 // A leaf: imports nothing of the repository. The apps import it; no tier rule of a package
 // allows it.
 const LEAVES = 'ip-address'
-const SERVICES = 'auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render'
+const SERVICES =
+  'auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render|doc-bridge'
 // The frame and runtime of the apps (process start and stop, Nest wiring, health):
 // app-side code that lives in a package, so it may use observability, which no library package may.
 const RUNTIME = 'app-bootstrap|service-runtime'
@@ -210,7 +211,7 @@ module.exports = {
     {
       name: 'doc-render-npm',
       comment:
-        'doc-render is React, its server renderer, react-markdown and remark-gfm (Ст11): no MUI, no input or output, no unified pipeline of its own.',
+        'doc-render is React, its server renderer, react-markdown and remark-gfm (Ст11), and ECharts for the charts of a report drawn on the server (plan 88, §7.13, 88.28): no MUI, no input or output, no unified pipeline of its own.',
       severity: 'error',
       from: { path: '^packages/doc-render/src/', pathNot: '\\.test\\.ts$' },
       to: {
@@ -218,10 +219,39 @@ module.exports = {
         pathNot: [
           '^packages/(domain|doc-render)/',
           ...npm(
-            'react|react-dom|react-markdown|remark-gfm|@types/hast|@types/react|@types/react-dom',
+            'react|react-dom|react-markdown|remark-gfm|echarts|@types/hast|@types/react|@types/react-dom',
           ),
           // The types of the hast tree: a module of @types/hast alone, which the cruiser leaves unresolved.
           '^hast$',
+        ],
+      },
+    },
+    {
+      name: 'doc-bridge-tier',
+      comment:
+        'doc-bridge turns the Markdown of a section into the document of its editor and back (docs/plan/88-artifacts.md, §7.7): one module of the cabinet and the server, on nothing of the repository (the network guard of its tests is test support).',
+      severity: 'error',
+      from: { path: '^packages/doc-bridge/' },
+      to: {
+        path: '^packages/',
+        pathNot: ['^packages/doc-bridge/', '^packages/app-bootstrap/src/testing/', TOOLING],
+      },
+    },
+    {
+      name: 'doc-bridge-npm',
+      comment:
+        'doc-bridge is the unified pipeline of remark with GFM and the serializer pinned exactly (§7.7): the canonical form depends on their versions.',
+      severity: 'error',
+      from: { path: '^packages/doc-bridge/src/', pathNot: '\\.test\\.ts$' },
+      to: {
+        dependencyTypesNot: ['local', 'core'],
+        pathNot: [
+          '^packages/doc-bridge/',
+          ...npm(
+            'unified|remark-parse|remark-gfm|remark-stringify|mdast-util-to-markdown|mdast-util-from-markdown|@types/mdast|parse5',
+          ),
+          // The types of the mdast tree: a module of @types/mdast alone, which the cruiser leaves unresolved.
+          '^mdast$',
         ],
       },
     },
@@ -271,6 +301,7 @@ module.exports = {
           '^packages/(turn-keys|snapshots|local-turns)/src/testing\\.ts$',
           '^packages/(app-bootstrap|service-runtime)/src/testing/',
           '^packages/git-providers/src/testing/',
+          '^packages/doc-bridge/src/testing/',
         ],
       },
     },
@@ -334,7 +365,7 @@ module.exports = {
         'The runner app holds no platform credentials: it composes its engine, the sandbox settings and the frame of a process (app-bootstrap), never the runtime of the apps with a database nor the Markdown renderer with React (doc-render), not even transitively — its tests neither (rule 5, spec §19).',
       severity: 'error',
       from: { path: '^(apps/runner|packages/(snapshots|local-turns))/' },
-      to: { path: '^packages/(service-runtime|db|doc-render)/', reachable: true },
+      to: { path: '^packages/(service-runtime|db|doc-render|doc-bridge)/', reachable: true },
     },
     {
       name: 'runner-engine-speaks-the-protocol-only',
@@ -425,7 +456,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/mcp/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(git-providers|sandbox-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|local-turns|doc-render|trpc|ui)/',
+        path: '^packages/(git-providers|sandbox-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|local-turns|doc-render|doc-bridge|trpc|ui)/',
         reachable: true,
       },
     },
@@ -479,7 +510,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/llm/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|git-providers|sandbox-providers|browser-providers|browser-link|agent-drivers|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|doc-render)/',
+        path: '^packages/(storage|git-providers|sandbox-providers|browser-providers|browser-link|agent-drivers|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|doc-render|doc-bridge)/',
         reachable: true,
       },
     },
@@ -501,7 +532,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/preview/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|doc-render|trpc|ui)/',
+        path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|doc-render|doc-bridge|trpc|ui)/',
         reachable: true,
       },
     },
@@ -528,7 +559,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/browser/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(vault|git-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render|trpc|ui)/',
+        path: '^packages/(vault|git-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render|doc-bridge|trpc|ui)/',
         reachable: true,
       },
     },

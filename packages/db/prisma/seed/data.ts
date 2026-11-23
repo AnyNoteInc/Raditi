@@ -226,6 +226,8 @@ export interface LlmModelSeed {
   reserveOutputTokens: number
   /** Tokens one request holds (`/context`); the catalogue of the pinned OpenCode CLI. */
   contextTokens: number
+  /** The profile that sees images (plan 88, Ар32): never the main model of its class. */
+  vision: boolean
   enabled: false
 }
 
@@ -234,9 +236,14 @@ export interface LlmModelSeed {
 // share slugs: a profile is named by its provider and its slug. The reserve is the output
 // ceiling of the adapter's request policy, one for both offers. Switched off: the operator
 // enables one provider, its profiles and an approved rate.
+//
+// The fourth profile of each provider is the one that sees images (docs/plan/88-artifacts.md, Ар32,
+// slice 88.15в): GLM-5.3-Flash at the level `low` for the helper `look` of the driver, never the main
+// model of a turn. Switched off too, and no rate: the owner approves its numbers by `billing:rates`
+// (16,306 / 3,261 / 54,352 ₽ for 1M input / cached input / output, П3 — waiting for him).
 export const llmModelSeeds: readonly LlmModelSeed[] = (['zai-coding', 'zai-api'] as const).flatMap(
-  (providerSlug) =>
-    (['light', 'standard', 'heavy'] as const).map((modelClass): LlmModelSeed => ({
+  (providerSlug) => [
+    ...(['light', 'standard', 'heavy'] as const).map((modelClass): LlmModelSeed => ({
       providerSlug,
       slug: `glm-5.3-${modelClass}`,
       name: `GLM-5.3 · ${modelClass}`,
@@ -244,8 +251,21 @@ export const llmModelSeeds: readonly LlmModelSeed[] = (['zai-coding', 'zai-api']
       modelClass,
       reserveOutputTokens: 32_000,
       contextTokens: 1_000_000,
+      vision: false,
       enabled: false,
     })),
+    {
+      providerSlug,
+      slug: 'glm-5.3-flash-low',
+      name: 'GLM-5.3-Flash · зрение',
+      providerModelId: 'glm-5.3-flash',
+      modelClass: 'light',
+      reserveOutputTokens: 32_000,
+      contextTokens: 200_000,
+      vision: true,
+      enabled: false,
+    },
+  ],
 )
 
 // Accounting rates need owner approval and are never seeded (not even placeholder zeros).

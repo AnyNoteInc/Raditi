@@ -8,13 +8,14 @@ import {
   agentTurnRetryJobId,
   browserEnsureDedupeKey,
   browserEnsureJobSchema,
+  feedPassRequestKinds,
   type AgentTurnJob,
   type BrowserEnsureJob,
   tierQueuePriority,
 } from '@repo/domain'
 import { z } from 'zod'
 
-import type { Prisma } from './generated/prisma/client.ts'
+import { Prisma } from './generated/prisma/client.ts'
 import { enqueueOutbox, type OutboxWriter } from './outbox.ts'
 import { workspaceUsageTerms } from './usage-windows.ts'
 
@@ -26,6 +27,23 @@ import { workspaceUsageTerms } from './usage-windows.ts'
 
 /** Ids are written as PostgreSQL prints them, so one row is one key whatever case it came in. */
 const lower = (id: string): string => id.toLowerCase()
+
+/** A command press or «Отправить сейчас» does not enqueue `turn.run`. */
+function passRequestIdSql(taskId: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`(SELECT id FROM task_events
+    WHERE task_id = ${taskId} AND client_visible AND type = 'feed.request'
+      AND payload->>'kind' IN (${Prisma.join(feedPassRequestKinds)})
+    ORDER BY id DESC LIMIT 1)`
+}
+
+export async function latestPassRequestId(
+  tx: Pick<Prisma.TransactionClient, '$queryRaw'>,
+  taskId: string,
+): Promise<bigint | null> {
+  const [row] = await tx.$queryRaw<Array<{ id: bigint | null }>>`
+    SELECT ${passRequestIdSql(Prisma.sql`${taskId}::uuid`)} AS id`
+  return row?.id ?? null
+}
 
 /**
  * The place of a pass of the task in the queue: the tier of the live paid tariff of its
@@ -87,10 +105,7 @@ export async function enqueueAgentWaitingPasses(
   const rows = await tx.$queryRaw<
     Array<{ id: string; attempt: number; request_id: bigint | null }>
   >`
-    SELECT t.id, t.attempt,
-      (SELECT max(e.id) FROM task_events e
-        WHERE e.task_id = t.id AND e.type = 'feed.request'
-          AND e.payload->>'kind' IS DISTINCT FROM 'command') AS request_id
+    SELECT t.id, t.attempt, ${passRequestIdSql(Prisma.sql`t.id`)} AS request_id
     FROM tasks t
     WHERE t.status = 'queued' AND t.waiting = 'agents'
       AND (${workspaceId}::uuid IS NULL OR t.workspace_id = ${workspaceId}::uuid)

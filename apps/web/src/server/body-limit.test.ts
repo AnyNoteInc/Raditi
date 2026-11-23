@@ -159,6 +159,9 @@ describe('API routes', () => {
   const limited: Record<string, RegExp> = {
     'auth/[...all]': /withBodyLimit\(MAX_AUTH_BODY_BYTES,/,
     'trpc/[trpc]': /withBodyLimit\(MAX_TRPC_BODY_BYTES,/,
+    // The token of a link to an artifact: 1 KiB (docs/plan/88-artifacts.md, Ар33).
+    'artifact-share/hold': /withBodyLimit\(MAX_SHARE_BODY_BYTES,/,
+    'artifact-share/open': /withBodyLimit\(MAX_SHARE_BODY_BYTES,/,
     // A lead of the landing: a few hundred bytes (docs/plan/65-landing-platforms-leads.md).
     leads: /withBodyLimit\(MAX_LEAD_BODY_BYTES,/,
     // avatar.ts reads the file after the session, the origin and the upload limit: 5 MiB.
@@ -183,6 +186,9 @@ describe('API routes', () => {
     // project-file.ts does the same for a file of a project (docs/plan/84-projects.md, ПР8),
     // reading a text whole only within its announced size: 20 MiB at most.
     'project-files/[id]': /uploadProjectFile\(request, await params, projectFileDependencies\)/,
+    // artifact-file.ts reads at most the announced size of a file of an artifact, 5 MiB
+    // (docs/plan/88-artifacts.md, Ар12).
+    'artifact-files/[id]': /uploadArtifactFile\(request, await params, artifactFileDependencies\)/,
     // speech.ts reads the sound after the session, the origin, the consents and a declared length
     // of at most 30 seconds of PCM (docs/plan/75-chat-input-output.md, ВВ17).
     speech: /recognizeSpeech\(request, speechDependencies\)/,

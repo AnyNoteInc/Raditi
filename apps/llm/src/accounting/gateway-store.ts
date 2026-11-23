@@ -108,6 +108,13 @@ interface KeyRow {
   limitsSeenAt: Date | null
   policyFlagged: boolean
   serverNow: Date
+  /** The key's profile that sees images (docs/plan/88-artifacts.md, Ар32); null — none. */
+  visionModelId: string | null
+  visionModel: string | null
+  visionModelSlug: string | null
+  visionReasoningEffort: string | null
+  visionModelEnabled: boolean | null
+  visionReserveOutputTokens: number | null
 }
 
 const keyColumns = Prisma.sql`
@@ -130,6 +137,9 @@ const keyColumns = Prisma.sql`
   a.max_concurrent_requests AS "maxConcurrentRequests", ref.vault_path AS "credentialRef",
   EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = k.task_id
     AND e.type = ${policyFlaggedLiteral}) AS "policyFlagged",
+  k.vision_model_id AS "visionModelId", vm.provider_model_id AS "visionModel",
+  vm.slug AS "visionModelSlug", k.vision_reasoning_effort AS "visionReasoningEffort",
+  vm.enabled AS "visionModelEnabled", vm.reserve_output_tokens AS "visionReserveOutputTokens",
   clock_timestamp() AS "serverNow"`
 
 /**
@@ -239,6 +249,26 @@ export class PostgresGatewayStore implements GatewayStore {
       if ((fallback ? row.accountBackendId : current.backendId) !== value.backendId) {
         await this.#refused(tx, row.keyId, 'profile')
         return { kind: 'refused', keyId: row.keyId, reason: 'backend' }
+      }
+      // A call of the key's profile that sees images is admitted, priced and counted as that model
+      // (Ар32): its rate, its reserve of output, its row of llm_calls.
+      const vision = visionOf(row)
+      if (vision !== null && vision.modelId === value.profile.modelId) {
+        Object.assign(row, {
+          modelId: vision.modelId,
+          model: vision.model,
+          modelSlug: vision.modelSlug,
+          reasoningEffort: vision.reasoningEffort,
+          modelEnabled: row.visionModelEnabled === true,
+          reserveOutputTokens: row.visionReserveOutputTokens ?? row.reserveOutputTokens,
+        })
+        Object.assign(current, {
+          modelId: vision.modelId,
+          model: vision.model,
+          modelSlug: vision.modelSlug,
+          reasoningEffort: vision.reasoningEffort,
+          reserveOutputTokens: row.reserveOutputTokens,
+        })
       }
       if (!sameProfile(current, value.profile)) return this.#refused(tx, row.keyId, 'profile')
       if (!row.providerEnabled || row.providerKind !== 'subscription')
@@ -427,6 +457,7 @@ export class PostgresGatewayStore implements GatewayStore {
     // All locks have already returned. clock_timestamp() and flags belong to this fresh statement.
     const rows = await db.$queryRaw<KeyRow[]>(Prisma.sql`SELECT ${keyColumns} FROM llm_keys k
       JOIN llm_models m ON m.id = k.model_id JOIN llm_providers p ON p.id = m.provider_id
+      LEFT JOIN llm_models vm ON vm.id = k.vision_model_id AND vm.provider_id = m.provider_id
       JOIN subscription_accounts a ON a.id = ${fallback ? Prisma.sql`k.fallback_account_id` : Prisma.sql`k.subscription_account_id`}
       JOIN llm_providers ap ON ap.id = a.provider_id
       JOIN credential_refs ref ON ref.id = a.credential_ref_id
@@ -513,6 +544,7 @@ function toKey(row: KeyRow): GatewayKey | null {
     credentialVersion: row.credentialVersion,
     maxConcurrentRequests: row.maxConcurrentRequests,
     fallback: fallbackOf(row),
+    vision: visionOf(row),
     // Windows nobody has dated are unknown ones: admission asks for their probe itself. A key
     // that admission is going to refuse for a stop flag asks for nothing: a provider, a model
     // or an account that is switched off gets no request on its behalf, a quota request neither.
@@ -525,6 +557,18 @@ function toKey(row: KeyRow): GatewayKey | null {
       row.modelEnabled &&
       !accountOff(row),
   }
+}
+
+/** The key's profile that sees images: of its provider, with a model id the provider knows. */
+function visionOf(row: KeyRow): GatewayKey['vision'] {
+  return row.visionModelId !== null && row.visionModel !== null && row.visionModelSlug !== null
+    ? {
+        modelId: row.visionModelId,
+        model: row.visionModel,
+        modelSlug: row.visionModelSlug,
+        reasoningEffort: row.visionReasoningEffort,
+      }
+    : null
 }
 
 function fallbackOf(row: KeyRow): GatewayKey['fallback'] {

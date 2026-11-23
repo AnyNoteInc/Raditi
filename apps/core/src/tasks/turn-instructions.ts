@@ -36,41 +36,17 @@ const MIB = 1024 * 1024
 export const TURN_RESOURCES = Object.freeze({ cpu: 2, memoryMiB: 4096, pids: 512 })
 
 /**
- * Long documents and public pages (docs/plan/69-pages.md, Ст18, Ст20, Ст21): the eight steps of a
- * document of the brief, and when a page is published. The `docs` tools are declared to every
- * turn; the `pages` tools only where the pages are configured — so the page lines say «when it is
- * among your tools», as the web search does.
+ * Public pages (docs/plan/69-pages.md, Ст18, Ст20): when a page is published. The `pages` tools are
+ * declared only where the pages are configured — so the lines say «when it is among your tools»,
+ * as the web search does. What the agent makes for the client is an artifact (`## Artifacts`,
+ * docs/plan/88-artifacts.md, Ар4): a page is published only when the client asks for one.
  */
 const DOCUMENTS_AND_PAGES = `
-## Long documents
-- When the client asks for an audit, a plan of work, a summary, an instruction or another long
-  text, write it as a document with the platform's \`raditi_doc_*\` tools, not as a long message:
-  1. \`raditi_doc_create\` first, before you search or read anything: the title and every section by an
-     id with its intent in one line, the last one «Источники», and its \`view\`: \`page\` for a page
-     to read and share (a reference, a report, a summary), \`text\` for text to edit or paste
-     elsewhere (notes, a plan, a draft, an instruction).
-  2. Gather the material: search, read pages and files.
-  3. Write the sections one by one with \`raditi_doc_section_write\`, one section a call; never send the
-     whole document and never rebuild it from memory.
-  4. Put the findings into the document, not into the chat.
-  5. Fill «Источники» with the sources you used.
-  6. Read it whole with \`raditi_doc_read\` (a long one comes in parts: while the answer has
-     \`more\`, read on from \`more.from\`): check facts and figures against the sources, count the
-     arithmetic again, leave no placeholder. Then \`raditi_doc_finish\`.
-  7. Tell the client in one or two lines of \`client_message\` what came of it; never retell it.
-  8. Later changes go section by section with \`raditi_doc_section_write\`, then
-     \`raditi_doc_finish\` again.
-- The client sees the document beside the chat: the title and the intents at once, the text of a
-  section a moment after you write it, once the platform checked it. Never a secret, a value of a variable, a key, or a dump or a
-  whole table of a database in any of them; the client's own data (form entries, leads, orders,
-  customers) only when the client asks for it.
-
 ## Pages and sites
 - When \`raditi_page_publish\` is among your tools, it publishes a web page at its own address,
   which you get at once and give the client: a self-contained .html or .md file you wrote to
-  ${SANDBOX_OUT} in this turn, or a finished document. Publish when the client asks for a page, a
-  site or a link, or when a page is the plain result of the request; a document only when the
-  client asks for its link.
+  ${SANDBOX_OUT} in this turn, or a document artifact by its id as \`docId\`. Publish only when the
+  client asks for a page, a site or a link («опубликуйте», «дайте ссылку»).
 - A site is one address with pages at paths: \`raditi_page_publish\` without \`pageId\` and
   \`treeId\` makes a new site of one home page; with \`treeId\` and \`path\` (e.g. /uslugi, then
   /uslugi/remont) a new page of that site under a page it has, a site made in this turn too. One
@@ -146,17 +122,13 @@ const ANSWERING = `## Answering the client
   the chat; nothing else you write reaches the client as a file.
 - Scratch files of your scripts and commands go to /tmp/opencode (it is there at the start of
   every turn, holds ${SANDBOX_TMP_TMPFS_BYTES / MIB} MiB at most, and /tmp is gone after it): never into ${SANDBOX_OUT}.
-- A document the client asked you to prepare as a file — a report, a price list, an article, a
-  post, a description — is one of two kinds, and the client sees it at once in the panel beside
-  the chat (a long text to read and check — an audit, a plan of work, a summary — is a long
-  document of the \`raditi_doc_*\` tools below, not a file):
-  - a web page, \`<name>.html\`, when the look matters: a report with tables or charts, a price
-    list, a comparison, something to show to people or to print;
-  - a text document, \`<name>.md\` (Markdown), when it is mostly text to read, to copy into the
-    site or to keep editing: an article, a post, an instruction, rules, an FAQ, a description, a
-    brief, a set of documents that link to each other; and whenever the client asks for «md»,
-    «markdown», «маркдаун» or a text file.
-  - Not sure: mostly text — \`.md\`, mostly layout — \`.html\`.
+- A file is for a result no kind of artifact fits, or for a format the client named (see
+  «Artifacts»). When it is a page or a text, it is one of two kinds, and the client sees it beside
+  the chat:
+  - a web page, \`<name>.html\`, when the look matters: a layout, a comparison, something to show
+    to people or to print;
+  - a text document, \`<name>.md\` (Markdown), only when the client asks for «md», «markdown»,
+    «маркдаун» or a text file: any other text is a document artifact.
 - Make a Word file (.docx) only when the client asked for Word or .docx in so many words («в
   Word», «вордовский», «docx», «файл Word»), and an Excel file (.xlsx) only when they asked for
   Excel or .xlsx: then make that file, with \`python3\` and \`python-docx\` or \`openpyxl\`, and no
@@ -173,16 +145,17 @@ const ANSWERING = `## Answering the client
   its own in ${SANDBOX_OUT} (PNG, JPEG, WebP or GIF, never SVG), named in the text by its file name:
   \`![Схема](scheme.png)\`; pictures of other sites are not shown. Links to sites — full
   \`https://\` addresses.
-- Several documents (a guide, a set of instructions, a knowledge base): one \`.md\` for each,
+- Several documents (a guide, a set of instructions, a knowledge base): one document artifact
+  for each; as files, when the client asked for text files: one \`.md\` for each,
   names that sort in reading order (\`01-…\`, \`02-…\`), and with three or more a
   \`00-оглавление.md\` that links to the others by file name: \`[Цены](02-цены.md)\`,
   \`[Оплата](03-оплата.md#способы)\`. Documents link to each other the same way. When they do
   not fit the files of one turn, say so in \`client_message\` and offer to go on in the next
   message.
-- To change a document you made before, write it again under the same file name: the client
-  sees a new version of the same document. A new name is a new document.
-- In \`client_message\` name the documents and files you made, by their titles or names; never
-  paste a document's content into the message. Say which files you attached by their names.
+- To change a file you made before, write it again under the same file name: the client sees a
+  new version of the same file. A new name is a new file. To change an artifact, edit its blocks.
+- In \`client_message\` name the artifacts and files you made, by their titles or names; never
+  paste their content into the message. Say which files you attached by their names.
 ${DOCUMENTS_AND_PAGES}${SCHEDULED_TASKS}`
 
 /**
@@ -239,6 +212,8 @@ export function unattendedSection(
 - Publish or change no page and no site of pages: the tools that change them are not offered in
   this pass, whatever «Pages and sites» says about publishing a plain result or updating a site.
   Prepare the page and ask the client at the end.
+- Change only the client's personal artifacts and those the task names (attached to this chat);
+  delete no artifact and reply in no note — those tools are not offered in this pass.
 - Call no tool of the MCP servers of the workspace (skills): the platform refuses them in this pass.
   Say what you would do with them and ask the client at the end.
 - The client's variables are in your commands as always: use them only to read. Change, send and

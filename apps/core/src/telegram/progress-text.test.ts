@@ -17,6 +17,13 @@ describe('the message of the work of the agent', () => {
   it('says how long the agent works and what it does now, in the words of the client', () => {
     expect(elapsedText(5_400)).toBe('5 с')
     expect(elapsedText(65_000)).toBe('1 мин 05 с')
+    // The tools of artifacts and their synonyms of plan 69 (docs/plan/88-artifacts.md, 88.8).
+    expect(activityLine({ type: 'tool_call', tool: 'raditi_artifact_edit', ok: true })).toBe(
+      'Правит артефакт',
+    )
+    expect(activityLine({ type: 'tool_call', tool: 'raditi_doc_section_write', ok: true })).toBe(
+      'Правит артефакт',
+    )
     expect(activityLine({ type: 'tool_call', tool: 'raditi_web_open', ok: true })).toBe(
       'Открывает страницу',
     )

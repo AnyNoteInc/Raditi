@@ -10,6 +10,8 @@ import {
   type NoticeLimitCause,
   type NotificationKind,
   type ScheduledRunReason,
+  artifactNoticeTitles,
+  isArtifactNoticeKind,
 } from '@repo/domain'
 
 // «Уведомления» of the settings and the browsers that take Web Push (docs/plan/74-chat-input-
@@ -273,9 +275,18 @@ export async function readChatNotification(
         },
       },
       scheduledRun: { select: { reason: true, name: true } },
+      artifactId: true,
     },
   })
   if (row === null) throw new DomainError('NOT_FOUND', 'No such notification', 404)
+  // A notice of an artifact (docs/plan/88-artifacts.md, Ар54): a push shows it on a locked screen —
+  // neither the title nor anyone's name or words, only what happened.
+  if (row.artifactId !== null && isArtifactNoticeKind(row.kind))
+    return {
+      title: artifactNoticeTitles[row.kind],
+      body: 'Откройте в Радити',
+      url: `/artifacts/${row.artifactId}`,
+    }
   const kind: NotificationKind = isNotificationKind(row.kind) ? row.kind : 'answered'
   const schedule = row.scheduledTask
   if (schedule === null) {

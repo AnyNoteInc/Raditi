@@ -22,6 +22,7 @@ import type {
   FeedStep,
   TaskWaitingReason,
 } from './client-feed.ts'
+import type { FeedFailureCode } from './client-feed-failures.ts'
 import type { TaskStatus } from './task-status.ts'
 import {
   repoActionText,
@@ -435,6 +436,44 @@ export function feedDocLeftText(row: { sections: number }): string {
     : `${count} документа не прошли проверку и снова пусты. Попросите агента написать их ещё раз.`
 }
 
+/**
+ * Writes of a turn in an artifact the check sent back (`feed.artifact_left`, docs/plan/88-
+ * artifacts.md, Ар19): the text before them stays. Never why: a refusal may be a secret.
+ */
+export function feedArtifactLeftText(row: { blocks: number }): string {
+  const one = pluralRu(row.blocks, 'one', 'few', 'many') === 'one'
+  const count = `${row.blocks} ${pluralRu(row.blocks, 'правка', 'правки', 'правок')}`
+  return one
+    ? `${count} агента в артефакте не прошла проверку: там остался прежний текст. Попросите агента сделать её ещё раз.`
+    : `${count} агента в артефакте не прошли проверку: там остался прежний текст. Попросите агента сделать их ещё раз.`
+}
+
+/** The names of the kinds in a line of Telegram, by the registry of `@repo/domain/artifacts`. */
+const artifactKindWords: Readonly<Record<string, string>> = Object.freeze({
+  document: 'документ',
+  mockup: 'макет',
+  table: 'таблица',
+  canvas: 'холст',
+  brand: 'фирменный стиль',
+})
+
+/**
+ * An artifact the turn created or changed (`feed.artifact`) as Telegram tells it (docs/plan/88-
+ * artifacts.md, Ар55): by its title only when it is the client's own — `title` null — of another,
+ * or gone: «Артефакт обновлён», no title, no file.
+ */
+export function feedArtifactTelegramText(row: {
+  kind: string
+  created: boolean
+  title: string | null
+}): string {
+  if (row.title === null) return 'Артефакт обновлён'
+  const word = artifactKindWords[row.kind] ?? 'артефакт'
+  const feminine = word === 'таблица'
+  const done = row.created ? (feminine ? 'Создана' : 'Создан') : feminine ? 'Обновлена' : 'Обновлён'
+  return `${done} ${word} «${row.title}»`
+}
+
 /** A page the agent published (`feed.page`): its title and version. */
 export const feedPageText = (row: { title: string; version: number }): string =>
   `Страница «${row.title}», версия v${row.version}`
@@ -673,6 +712,13 @@ export const feedFailureKeptText = 'Изменения, готовые до эт
  */
 export const feedFailureOpenText =
   'Чат не закрыт: напишите «продолжи», и агент продолжит с того места, где остановился.'
+
+/**
+ * That sentence for a failure of this code, or null: notes that could no longer be read (88.18в)
+ * stopped a pass that never started, and «продолжи» would not bring them back.
+ */
+export const feedFailureOpenTextOf = (code: FeedFailureCode): string | null =>
+  code === 'notes_unavailable' ? null : feedFailureOpenText
 
 /**
  * The last sentence of a result that left the dialog open (`feed.result` with `next:

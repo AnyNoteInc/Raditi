@@ -125,6 +125,28 @@ const paths = {
   /** «Подключить GitLab» (lucide `gitlab`). */
   gitlab:
     'm22 13.29-3.33-10a.42.42 0 0 0-.14-.18.38.38 0 0 0-.22-.11.39.39 0 0 0-.23.07.42.42 0 0 0-.14.18l-2.26 6.67H8.32L6.1 3.26a.42.42 0 0 0-.1-.18.38.38 0 0 0-.26-.08.39.39 0 0 0-.23.07.42.42 0 0 0-.14.18L2 13.29a.74.74 0 0 0 .27.83L12 21l9.69-6.88a.71.71 0 0 0 .31-.83Z',
+  // «Артефакты» (docs/plan/88-artifacts.md, Ар43) and their kinds (Ар6).
+  /** «Артефакты» in the rail: two sheets, one over the other. */
+  artifacts:
+    'M9 3h9a2 2 0 0 1 2 2v11M6 7h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2ZM8 12h5M8 16h5',
+  /** «Макет»: a window of a page with its blocks. */
+  mockup:
+    'M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1ZM3 8h18M7 12h10M7 16h5',
+  /** «Таблица»: a grid. */
+  table:
+    'M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1ZM3 10h18M3 15h18M9 10v10',
+  /** «Холст»: two screens side by side. */
+  canvas: 'M3 5h10v10H3V5ZM16 9h5v10h-5V9ZM6 18h4',
+  /** «Фирменный стиль»: a drop of colour. */
+  brand: 'M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11Z',
+  /** «Схема»: boxes and an arrow. */
+  diagram: 'M3 4h7v6H3V4ZM14 14h7v6h-7v-6ZM6.5 10v4a3 3 0 0 0 3 3H14',
+  /** «Презентация»: a board on its stand. */
+  slides: 'M3 4h18v11H3V4ZM12 15v5M8 20h8',
+  /** «Структура сайта»: a home page and its pages. */
+  sitemap: 'M9 3h6v5H9V3ZM3 16h6v5H3v-5ZM15 16h6v5h-6v-5ZM12 8v4M6 16v-4h12v4',
+  /** «История версий». */
+  history: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 8v4l3 2',
 } as const
 
 export type AppIconName = keyof typeof paths

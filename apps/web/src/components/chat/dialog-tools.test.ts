@@ -2,21 +2,22 @@ import { taskStatuses, terminalTaskStatuses } from '@repo/domain/tasks/task-stat
 import { describe, expect, it } from 'vitest'
 
 import {
+  artifactTool,
+  browserMark,
+  chatHasBrowser,
   closedTools,
   dialogEnded,
-  dialogTools,
-  dialogToolsOf,
+  fileTool,
+  MAX_ITEM_TABS,
   movesFocus,
-  toolIcons,
-  toolMark,
-  toolMenuNames,
+  tabsLayout,
+  toolKindOf,
   toolOpeners,
   toolPanelId,
   toolsDot,
   toolsReducer,
   toolsShown,
   toolTabId,
-  toolTabNames,
   toolTilesOf,
   type DialogTool,
   type ToolsAction,
@@ -25,6 +26,10 @@ import {
 import { browserAnswer, feedAnswer } from './testing'
 
 const closed = { open: false }
+const A = '019f1a21-1800-7f00-8abc-000000000001'
+const DOC = artifactTool('doc-1')
+const FILE = fileTool('audit.md')
+const all: DialogTool[] = ['browser', DOC, FILE]
 
 /** The state after the actions, from a closed panel. */
 const after = (...actions: ToolsAction[]): ToolsState => actions.reduce(toolsReducer, closedTools)
@@ -37,98 +42,98 @@ const launch: ToolsAction = { type: 'launch' }
 
 describe('the tools a dialog has (И6)', () => {
   it('offers a chat with a browser the browser, ended or not', () => {
-    expect(dialogToolsOf(browserAnswer())).toEqual(['browser'])
-    expect(dialogToolsOf(browserAnswer({ status: 'done' }))).toEqual(['browser'])
+    expect(chatHasBrowser(browserAnswer())).toBe(true)
+    expect(chatHasBrowser(browserAnswer({ status: 'done' }))).toBe(true)
+    expect(toolTilesOf(browserAnswer(), closedTools).map((tile) => tile.tool)).toEqual(['browser'])
   })
 
   it('offers a chat with neither nothing at all', () => {
     const neither = { requirements: { repository: false, browser: false } }
-    expect(dialogToolsOf(feedAnswer({ task: neither }))).toEqual([])
-    expect(dialogToolsOf(feedAnswer({ task: neither, status: 'done' }))).toEqual([])
+    expect(toolTilesOf(feedAnswer({ task: neither }), closedTools)).toEqual([])
+    expect(toolTilesOf(feedAnswer({ task: neither, status: 'done' }), closedTools)).toEqual([])
   })
 })
 
 describe('the marks of the tiles (И5)', () => {
   it('says «пока нет» of a browser the agent has not needed yet (plan 61, К11)', () => {
     const none = browserAnswer({ browser: null })
-    expect(dialogToolsOf(none)).toEqual(['browser'])
-    expect(toolMark('browser', none, closed)).toBe('пока нет')
-    expect(
-      toolMark('browser', browserAnswer({ status: 'awaiting_user', browser: null }), closed),
-    ).toBe('пока нет')
-    // The dialog ended without one: there will be none.
-    expect(toolMark('browser', browserAnswer({ status: 'done', browser: null }), closed)).toBe(
-      'нет',
+    expect(browserMark(none, closed)).toBe('пока нет')
+    expect(browserMark(browserAnswer({ status: 'awaiting_user', browser: null }), closed)).toBe(
+      'пока нет',
     )
+    // The dialog ended without one: there will be none.
+    expect(browserMark(browserAnswer({ status: 'done', browser: null }), closed)).toBe('нет')
   })
 
   it('says who drives the browser while its session holds one', () => {
-    expect(toolMark('browser', browserAnswer(), closed)).toBe('Работает агент')
-    expect(toolMark('browser', browserAnswer({ browser: { status: 'starting' } }), closed)).toBe(
+    expect(browserMark(browserAnswer(), closed)).toBe('Работает агент')
+    expect(browserMark(browserAnswer({ browser: { status: 'starting' } }), closed)).toBe(
       'Работает агент',
     )
     const help = { reason: 'login' as const, message: null }
-    expect(toolMark('browser', browserAnswer({ browser: { help } }), closed)).toBe('Ждём вас')
-    expect(
-      toolMark('browser', browserAnswer({ status: 'awaiting_user', browser: { help } }), closed),
-    ).toBe('Ждём вас')
-    expect(toolMark('browser', browserAnswer({ browser: { controller: 'user' } }), closed)).toBe(
+    expect(browserMark(browserAnswer({ browser: { help } }), closed)).toBe('Ждём вас')
+    expect(browserMark(browserAnswer({ status: 'awaiting_user', browser: { help } }), closed)).toBe(
+      'Ждём вас',
+    )
+    expect(browserMark(browserAnswer({ browser: { controller: 'user' } }), closed)).toBe(
       'Управляете вы',
     )
     // The client took the control the agent asked for: the client drives.
-    expect(
-      toolMark('browser', browserAnswer({ browser: { controller: 'user', help } }), closed),
-    ).toBe('Управляете вы')
+    expect(browserMark(browserAnswer({ browser: { controller: 'user', help } }), closed)).toBe(
+      'Управляете вы',
+    )
   })
 
   it('never says the agent works in a browser while the chat waits for its release (К10)', () => {
     const both = { requirements: { repository: true, browser: true } }
     for (const status of ['awaiting_approval', 'deploying', 'verifying'] as const) {
       const head = browserAnswer({ task: both, status })
-      expect(toolMark('browser', head, closed)).toBe('Агент ответил')
+      expect(browserMark(head, closed)).toBe('Агент ответил')
       // The client still drives it, and a request for help still waits.
-      expect(
-        toolMark('browser', browserAnswer({ status, browser: { controller: 'user' } }), closed),
-      ).toBe('Управляете вы')
-      const help = { reason: 'login' as const, message: null }
-      expect(toolMark('browser', browserAnswer({ status, browser: { help } }), closed)).toBe(
-        'Ждём вас',
+      expect(browserMark(browserAnswer({ status, browser: { controller: 'user' } }), closed)).toBe(
+        'Управляете вы',
       )
+      const help = { reason: 'login' as const, message: null }
+      expect(browserMark(browserAnswer({ status, browser: { help } }), closed)).toBe('Ждём вас')
     }
   })
 
   it('says of a chat that waits what its panel says, never that the agent works (К10)', () => {
     const waits = browserAnswer({ status: 'awaiting_user' })
-    expect(toolMark('browser', waits, { ...closed, answered: true })).toBe('Агент ответил')
-    expect(toolMark('browser', waits, closed)).toBe('Ждём вас')
+    expect(browserMark(waits, { ...closed, answered: true })).toBe('Агент ответил')
+    expect(browserMark(waits, closed)).toBe('Ждём вас')
     expect(toolTilesOf(waits, closedTools, { answered: true })).toEqual([
-      { tool: 'browser', open: false, mark: 'Агент ответил' },
+      {
+        tool: 'browser',
+        group: 'tools',
+        label: 'Браузер',
+        icon: 'globe',
+        open: false,
+        mark: 'Агент ответил',
+      },
     ])
-    expect(toolMark('browser', waits, { ...closed, answered: true, rewound: true })).toBe(
-      'Запрос отменён',
-    )
-    expect(toolTilesOf(waits, closedTools, { answered: true, rewound: true })).toEqual([
-      { tool: 'browser', open: false, mark: 'Запрос отменён' },
-    ])
+    expect(browserMark(waits, { ...closed, answered: true, rewound: true })).toBe('Запрос отменён')
+    expect(
+      toolTilesOf(waits, closedTools, { answered: true, rewound: true }).map((tile) => tile.mark),
+    ).toEqual(['Запрос отменён'])
     // A request for help outweighs an answer: the panel asks for the same.
     const help = { reason: 'login' as const, message: null }
     const asks = browserAnswer({ status: 'awaiting_user', browser: { help } })
-    expect(toolMark('browser', asks, { ...closed, answered: true })).toBe('Ждём вас')
+    expect(browserMark(asks, { ...closed, answered: true })).toBe('Ждём вас')
   })
 
   it('says «пока нет» while a dialog at work has no session yet', () => {
-    expect(toolMark('browser', browserAnswer({ browser: null }), closed)).toBe('пока нет')
-    expect(
-      toolMark('browser', browserAnswer({ status: 'awaiting_user', browser: null }), closed),
-    ).toBe('пока нет')
+    expect(browserMark(browserAnswer({ browser: null }), closed)).toBe('пока нет')
+    expect(browserMark(browserAnswer({ status: 'awaiting_user', browser: null }), closed)).toBe(
+      'пока нет',
+    )
   })
 
   it('says «Закрыт» when the session holds no browser any more', () => {
     for (const status of ['closed', 'failed', 'lost'] as const)
-      expect(toolMark('browser', browserAnswer({ browser: { status } }), closed)).toBe('Закрыт')
+      expect(browserMark(browserAnswer({ browser: { status } }), closed)).toBe('Закрыт')
     expect(
-      toolMark(
-        'browser',
+      browserMark(
         browserAnswer({
           status: 'done',
           browser: { status: 'closed', controller: 'user', closeReason: 'task_done' },
@@ -147,13 +152,14 @@ describe('the end of a dialog', () => {
 })
 
 describe('the names, icons and ids of the tools', () => {
-  it('names the two tools of a chat on their tabs and in the menu, with ids the stands find', () => {
-    expect(dialogTools).toEqual(['browser', 'documents'])
-    expect(toolTabNames).toMatchObject({ browser: 'Браузер', documents: 'Документы' })
-    expect(toolMenuNames).toMatchObject({ browser: 'Браузер', documents: 'Документы' })
-    expect(toolIcons).toEqual({ browser: 'globe', documents: 'document' })
+  it('keys the browser, an artifact and a file, with ids the stands find (И20, Ар44)', () => {
+    expect(toolKindOf('browser')).toEqual({ kind: 'browser' })
+    expect(toolKindOf(artifactTool(A))).toEqual({ kind: 'artifact', id: A })
+    expect(toolKindOf(fileTool('цены 2026.html'))).toEqual({ kind: 'file', name: 'цены 2026.html' })
     expect(toolTabId('browser')).toBe('dialog-pane-tab-browser')
-    expect(toolPanelId('documents')).toBe('dialog-pane-panel-documents')
+    expect(toolTabId(artifactTool(A))).toBe(`dialog-pane-tab-artifact-${A}`)
+    expect(toolPanelId(artifactTool(A))).toBe(`dialog-pane-panel-artifact-${A}`)
+    expect(toolTabId(fileTool('audit.md'))).toBe('dialog-pane-tab-file-audit_md')
   })
 
   it('puts the focus on the tab of a tool opened by «+», never by «Взять управление» beside the dialog', () => {
@@ -168,19 +174,39 @@ describe('the names, icons and ids of the tools', () => {
 
 describe('the tabs of the open tools', () => {
   it('opens a tool once, as the last tab, and closes to the tab beside it', () => {
-    const both = after(open('browser'), open('documents'), open('browser'))
-    expect(both).toMatchObject({ open: ['browser', 'documents'], active: 'browser' })
-    expect(toolsReducer(both, close('browser'))).toMatchObject({
-      open: ['documents'],
-      active: 'documents',
+    const both = after(open('browser'), open(DOC), open('browser'))
+    expect(both).toMatchObject({ open: ['browser', DOC], active: 'browser' })
+    expect(toolsReducer(both, close('browser'))).toMatchObject({ open: [DOC], active: DOC })
+    expect(toolsShown(after(open(DOC), closeAll))).toBe(false)
+  })
+
+  it('keeps at most eight artifacts and files: the ninth closes the one shown longest ago (Ар44)', () => {
+    const items = Array.from({ length: MAX_ITEM_TABS }, (_, index) => artifactTool(`a${index}`))
+    // The first one shown again: the second is now the one shown longest ago.
+    const full = after(open('browser'), ...items.map(open), { type: 'show', tool: items[0]! })
+    expect(full.open).toHaveLength(MAX_ITEM_TABS + 1)
+    const ninth = toolsReducer(full, open(fileTool('ninth.md')))
+    expect(ninth.open).toHaveLength(MAX_ITEM_TABS + 1)
+    expect(ninth.open).not.toContain(items[1])
+    expect(ninth.open).toContain('browser')
+    expect(ninth.active).toBe(fileTool('ninth.md'))
+  })
+
+  it('stands the active tab and the lately shown on the strip, the rest in «Ещё» (Ар44)', () => {
+    const tabs = ['browser', artifactTool('a'), artifactTool('b'), fileTool('c.md')] as const
+    const state = after(...tabs.map(open), { type: 'show', tool: tabs[1] })
+    expect(tabsLayout(state, 10)).toEqual({ inline: [...tabs], more: [] })
+    expect(tabsLayout(state, 2)).toEqual({
+      inline: [tabs[1], tabs[3]],
+      more: [tabs[0], tabs[2]],
     })
-    expect(toolsShown(after(open('documents'), closeAll))).toBe(false)
+    expect(tabsLayout(state, 0).inline).toEqual([tabs[1]])
   })
 })
 
 describe("«К чату» below `lg` (И14, owner's answer of 30.10.2026)", () => {
   it('closes the tab on the screen and keeps the others behind the dialog', () => {
-    const state = after(open('browser'), open('documents'), back)
+    const state = after(open('browser'), open(DOC), back)
     expect(state).toMatchObject({ open: ['browser'], active: 'browser', away: true })
     expect(toolsShown(state)).toBe(false)
   })
@@ -234,9 +260,10 @@ function generator(seed: number): () => number {
 
 describe('toolsReducer, whatever the client does', () => {
   const actions: ToolsAction[] = [
-    ...dialogTools.map((tool) => open(tool)),
-    ...dialogTools.map((tool): ToolsAction => ({ type: 'show', tool })),
-    ...dialogTools.map((tool) => close(tool)),
+    ...all.map((tool) => open(tool)),
+    ...all.map((tool): ToolsAction => ({ type: 'show', tool })),
+    ...all.map((tool) => close(tool)),
+    ...all.slice(1).map((tool): ToolsAction => ({ type: 'arrived', tool, opens: true })),
     closeAll,
     back,
     launch,
@@ -283,21 +310,51 @@ describe('toolsReducer, whatever the client does', () => {
   })
 })
 
-describe('the documents of the agent (docs/plan/67-agent-documents.md, Д4)', () => {
-  const arrived = (opens = true): ToolsAction => ({ type: 'documentArrived', opens })
-
-  it('are a tool of any chat once there is a document, with their number on the tile', () => {
-    expect(dialogToolsOf(browserAnswer())).not.toContain('documents')
-    expect(dialogToolsOf(browserAnswer(), 3)).toEqual(['browser', 'documents'])
-    expect(toolMark('documents', browserAnswer(), { open: false, documents: 3 })).toBe('3')
-    expect(toolIcons.documents).toBe('document')
+describe('an artifact or a file that comes (Ар45)', () => {
+  const arrived = (tool: DialogTool, opens = true): ToolsAction => ({
+    type: 'arrived',
+    tool,
+    opens,
   })
 
-  it('join a panel on the screen beside the tool the client reads, without the focus', () => {
-    const reading = after(launch)
-    expect(toolsReducer(reading, arrived())).toMatchObject({
-      open: ['browser', 'documents'],
+  it('opens its tab by itself once in the showing, from `lg`', () => {
+    const opened = after(arrived(DOC))
+    expect(opened).toMatchObject({ open: [DOC], active: DOC })
+    const closedAgain = toolsReducer(opened, close(DOC))
+    expect(toolsReducer(closedAgain, arrived(DOC))).toMatchObject({ open: [], unseen: true })
+    // Another one still opens by itself.
+    expect(toolsReducer(after(arrived(DOC)), arrived(FILE))).toMatchObject({ open: [DOC, FILE] })
+  })
+
+  it('joins a panel on the screen beside the tool the client reads, without the focus', () => {
+    expect(toolsReducer(after(launch), arrived(DOC))).toMatchObject({
+      open: ['browser', DOC],
       active: 'browser',
     })
+  })
+
+  it('below `lg`, and after the client closed the panel, only puts the dot on «+»', () => {
+    expect(after(arrived(DOC, false))).toMatchObject({ open: [], unseen: true })
+    expect(toolsDot(browserAnswer(), after(arrived(DOC, false)))).toBe('results')
+    const quiet = after(open(DOC), closeAll, arrived(FILE))
+    expect(quiet).toMatchObject({ open: [], unseen: true })
+  })
+
+  it('names the artifacts of the chat by group and the files, marked when open (B-chat-list)', () => {
+    const state = after(open(DOC))
+    const tiles = toolTilesOf(browserAnswer(), state, {
+      artifacts: [
+        { id: 'doc-1', title: 'Тексты для сайта', icon: 'document', group: 'made' },
+        { id: 'doc-2', title: 'Прайс', icon: 'document', group: 'project' },
+      ],
+      files: [{ name: 'audit.md', title: 'Аудит', icon: 'document' }],
+      hidden: [DOC],
+    })
+    expect(tiles.map((tile) => [tile.group, tile.label, tile.mark])).toEqual([
+      ['tools', 'Браузер', 'Работает агент'],
+      ['made', 'Тексты для сайта', 'В «Ещё»'],
+      ['project', 'Прайс', null],
+      ['files', 'Аудит', null],
+    ])
   })
 })

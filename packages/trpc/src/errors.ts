@@ -39,6 +39,7 @@ import {
   type RepoProviderKind,
   type TaskRefusalDetails,
 } from '@repo/domain'
+import { artifactHoldTexts, artifactRefusalTexts } from '@repo/domain/artifacts'
 import { TRPCError, type TRPC_ERROR_CODE_KEY } from '@trpc/server'
 
 /** Shown instead of the real message of an unexpected failure: it may name tables or hosts. */
@@ -85,6 +86,8 @@ const SAVE_FAILED = 'Не удалось сохранить работу аге�
  * other shows the text of its tRPC code.
  */
 const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
+  // The refusals of artifacts (docs/plan/88-artifacts.md, §7.2), as the client reads them.
+  ...artifactRefusalTexts,
   BAD_REQUEST: INVALID_INPUT_MESSAGE,
   FORBIDDEN: 'Недостаточно прав',
   NOT_FOUND: 'Не нашли то, что вы ищете',
@@ -420,6 +423,13 @@ const SKILL_CHECK_TEXT: Readonly<Record<string, string>> = {
 }
 
 const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string>> = {
+  // Who holds a block of an artifact (docs/plan/88-artifacts.md, Ар17): a person or an agent.
+  ARTIFACT_BLOCK_HELD: (details) => {
+    const reason = detail(details, 'reason')
+    return reason === 'human' || reason === 'checking' || reason === 'claim'
+      ? artifactHoldTexts[reason]
+      : artifactRefusalTexts.ARTIFACT_BLOCK_HELD
+  },
   // A sign-in to renew names the provider of its connection when the thrower knew it (rule 8:
   // the brand is data); without it — neutral words (docs/plan/84-projects.md, §10).
   GIT_CONNECTION_REAUTH: (details) => {
@@ -632,8 +642,20 @@ export interface ErrorDetails {
  * screen can offer the way out without parsing words. Nothing else of the details leaves the server. The original message, zod issues and the stack
  * trace are added only in development.
  */
+/**
+ * What a refusal of an artifact tells the page that made the write (§7.2): the block as it is now
+ * (`ARTIFACT_STALE` — the three-way merge needs it), who holds it (`ARTIFACT_BLOCK_HELD`). The
+ * writer may read it anyway: it is the checked text of a block it may edit.
+ */
+function artifactDetailsOf(error: DomainError): unknown {
+  if (error.code !== 'ARTIFACT_STALE' && error.code !== 'ARTIFACT_BLOCK_HELD') return undefined
+  const details = error.details
+  return details !== null && typeof details === 'object' ? details : undefined
+}
+
 export function formatError<S extends ErrorShape>(shape: S, error: TRPCError, isDev: boolean) {
   const domainCode = isDomainError(error.cause) ? error.cause.code : null
+  const artifact = isDomainError(error.cause) ? artifactDetailsOf(error.cause) : undefined
   const refusal = !isDomainError(error.cause)
     ? null
     : error.cause.code === 'CHAT_COMMAND_UNAVAILABLE'
@@ -653,6 +675,7 @@ export function formatError<S extends ErrorShape>(shape: S, error: TRPCError, is
       ...data,
       domainCode,
       ...(refusal === null ? {} : { refusal }),
+      ...(artifact === undefined ? {} : { artifact }),
       ...(details ? { details } : {}),
       ...(isDev && stack ? { stack } : {}),
     },

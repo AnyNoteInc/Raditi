@@ -63,6 +63,7 @@ const child = '01960000-0000-7000-8000-0000000000bb'
 function fakeStore() {
   return {
     reserve: vi.fn(async () => ({ pageId, slug, path: '/', treeId: pageId, version: 2 })),
+    documentOwned: vi.fn(async () => true),
     documentTitle: vi.fn(async () => 'Аудит скорости'),
     list: vi.fn(async () => [
       listed({}),
@@ -182,6 +183,27 @@ describe('the pages of a workspace through the gateway (plan 69, Ст20)', () =>
     expect(store.reserve).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Аудит скорости', target: { documentId: docId } }),
     )
+  })
+
+  it('names the document by artifactId as by docId (plan 88, 88.20)', async () => {
+    const { server, store } = await start({ ...testMcpConfig(), pages: address })
+    const artifactId = '01960000-0000-7000-8000-0000000000bb'
+    await post(server, call('page_publish', { artifactId, title: 'Аудит' }))
+    expect(store.documentOwned).toHaveBeenCalledWith(scope.taskId, artifactId)
+    expect(store.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Аудит', target: { documentId: artifactId } }),
+    )
+  })
+
+  it('publishes a document only of the owner, from a chat that opens it (plan 88, Ар23)', async () => {
+    const store = fakeStore()
+    store.documentOwned.mockResolvedValue(false)
+    const { server } = await start({ ...testMcpConfig(), pages: address }, store)
+    const docId = '01960000-0000-7000-8000-0000000000bb'
+    const answer = await post(server, call('page_publish', { docId }))
+    expect(JSON.stringify(answer.body)).toContain('ARTIFACT_NOT_FOUND')
+    expect(store.documentOwned).toHaveBeenCalledWith(scope.taskId, docId)
+    expect(store.reserve).not.toHaveBeenCalled()
   })
 
   it('refuses both a file and a document, a path, and an unknown key before the tool', async () => {

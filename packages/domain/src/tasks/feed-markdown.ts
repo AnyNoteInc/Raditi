@@ -18,8 +18,9 @@ import {
   feedDoneSiteText,
   feedEndedSiteText,
   feedFailureKeptText,
-  feedFailureOpenText,
+  feedFailureOpenTextOf,
   feedFileLeftText,
+  feedArtifactLeftText,
   feedDocLeftText,
   feedDocText,
   feedPageChangeText,
@@ -198,7 +199,7 @@ function rowBlock(row: FeedItem, withSite: boolean, h: Heading = heading): strin
           feedEndedSiteText[row.site],
           feedCreditsSentence(row.credits),
           row.next === 'awaiting_approval' ? feedFailureKeptText : null,
-          row.next === 'awaiting_user' ? feedFailureOpenText : null,
+          row.next === 'awaiting_user' ? feedFailureOpenTextOf(row.code) : null,
         ]),
         objectList(row.objects, feedObjectText.ended),
       ])
@@ -273,6 +274,11 @@ function rowBlock(row: FeedItem, withSite: boolean, h: Heading = heading): strin
       return null
     case 'feed.doc_left':
       return block([h(feedExportText.agent, row.at), feedDocLeftText(row)])
+    // An artifact is read by its own tab, not by the export of the chat (Ар46).
+    case 'feed.artifact':
+      return null
+    case 'feed.artifact_left':
+      return block([h(feedExportText.agent, row.at), feedArtifactLeftText(row)])
     case 'feed.page_left':
       return block([h(feedExportText.agent, row.at), feedPageLeftText(row)])
     case 'feed.page_change':

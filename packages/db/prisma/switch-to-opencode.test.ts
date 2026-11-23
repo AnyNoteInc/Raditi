@@ -664,9 +664,11 @@ describe.skipIf(!databaseUrl)('switch to OpenCode: a database of the earlier she
         /^llm_(providers|models)\/zai-(coding|api)(\/|$)/.test(row),
       ),
     ).toEqual([
+      ['llm_models/zai-api/glm-5.3-flash-low', false],
       ['llm_models/zai-api/glm-5.3-heavy', false],
       ['llm_models/zai-api/glm-5.3-light', false],
       ['llm_models/zai-api/glm-5.3-standard', false],
+      ['llm_models/zai-coding/glm-5.3-flash-low', false],
       ['llm_models/zai-coding/glm-5.3-heavy', false],
       ['llm_models/zai-coding/glm-5.3-light', false],
       ['llm_models/zai-coding/glm-5.3-standard', false],
@@ -764,7 +766,7 @@ describe.skipIf(!databaseUrl)(
       const zero = Object.fromEntries(seededTables.map((table) => [table, 0]))
       const report = await seedReferenceData(db)
       expect(report.updated).toEqual(zero)
-      expect(report.created).toMatchObject({ agent_drivers: 1, llm_providers: 2, llm_models: 6 })
+      expect(report.created).toMatchObject({ agent_drivers: 1, llm_providers: 2, llm_models: 8 })
       // The rows of a new database and the three history rows, which no seed run recreates,
       // completes or switches back on.
       const seeded = await flags(schema.db)
@@ -775,9 +777,11 @@ describe.skipIf(!databaseUrl)(
         'llm_providers/zai-api': false,
         'llm_providers/zai-coding': false,
         'llm_models/openai-chatgpt/gpt-6-sol-standard': false,
+        'llm_models/zai-api/glm-5.3-flash-low': false,
         'llm_models/zai-api/glm-5.3-heavy': false,
         'llm_models/zai-api/glm-5.3-light': false,
         'llm_models/zai-api/glm-5.3-standard': false,
+        'llm_models/zai-coding/glm-5.3-flash-low': false,
         'llm_models/zai-coding/glm-5.3-heavy': false,
         'llm_models/zai-coding/glm-5.3-light': false,
         'llm_models/zai-coding/glm-5.3-standard': false,
@@ -813,9 +817,11 @@ describe.skipIf(!databaseUrl)('switch to OpenCode: a new database', () => {
       'agent_drivers/opencode': true,
       'llm_providers/zai-api': false,
       'llm_providers/zai-coding': false,
+      'llm_models/zai-api/glm-5.3-flash-low': false,
       'llm_models/zai-api/glm-5.3-heavy': false,
       'llm_models/zai-api/glm-5.3-light': false,
       'llm_models/zai-api/glm-5.3-standard': false,
+      'llm_models/zai-coding/glm-5.3-flash-low': false,
       'llm_models/zai-coding/glm-5.3-heavy': false,
       'llm_models/zai-coding/glm-5.3-light': false,
       'llm_models/zai-coding/glm-5.3-standard': false,

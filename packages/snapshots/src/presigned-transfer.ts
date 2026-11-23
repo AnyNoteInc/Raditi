@@ -31,7 +31,8 @@ export function fetchPresignedTransfer(options: { timeoutMs?: number } = {}): Pr
       return await fetch(request.url, {
         method: request.method,
         headers: request.headers,
-        body,
+        // The type only: fetch of Node takes any view of bytes, and a snapshot is not copied.
+        body: body as Uint8Array<ArrayBuffer> | undefined,
         redirect: 'error',
         signal: AbortSignal.timeout(timeoutMs),
       })

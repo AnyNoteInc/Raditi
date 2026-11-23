@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><title>vh</title><style>body{margin:0} iframe{border:0;display:block}</style></head><body>
+<script>
+// A cabinet that sizes the frame to the height its bridge reports (what «высоту сообщает мост» implies).
+// It stops after 30 changes so the page itself cannot run away.
+const q = new URLSearchParams(location.search)
+const f = document.createElement('iframe'); f.width = q.get('w') ?? 1440; f.height = q.get('h0') ?? 900; f.setAttribute('sandbox', 'allow-scripts'); f.setAttribute('scrolling', 'no')
+f.src = `${q.get('fo')}/vh.html`; document.body.appendChild(f)
+window.__steps = []
+addEventListener('message', (e) => { if (e.data?.raditi !== 'frame' || e.source !== f.contentWindow) return; window.__steps.push(e.data.h); if (window.__steps.length < 30) f.height = e.data.h })
+</script></body></html>

@@ -1,3 +1,4 @@
+import { artifactToolLine } from '@repo/domain/artifacts'
 import {
   todoListReadsRussian,
   todoProgressOf,
@@ -45,7 +46,8 @@ function toolText(tool: string): string {
   if (name.startsWith('web_')) return 'Работает в браузере'
   if (name.startsWith('browser_')) return 'Проверяет предпросмотр в браузере'
   if (name.startsWith('page_')) return 'Работает со страницами'
-  if (name.startsWith('doc_')) return 'Пишет документ'
+  const artifact = artifactToolLine(name)
+  if (artifact) return artifact
   if (name === 'wp_rest' || name === 'restore') return 'Работает с содержимым сайта'
   if (name === 'site_info') return 'Смотрит сведения о сайте'
   return 'Работает с инструментами'

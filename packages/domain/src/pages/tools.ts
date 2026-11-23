@@ -48,6 +48,9 @@ export const pagePublishArgumentsSchema = z.union([
       'treeId and path go together',
     ),
   z.strictObject({ docId: id, title: pageTitleSchema.optional() }),
+  // A document of the artifacts by its own name (docs/plan/88-artifacts.md, Ар22, slice 88.20):
+  // the same as `docId`, which stays its synonym.
+  z.strictObject({ artifactId: id, title: pageTitleSchema.optional() }),
 ])
 export type PagePublishArguments = z.infer<typeof pagePublishArgumentsSchema>
 

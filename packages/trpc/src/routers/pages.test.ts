@@ -423,7 +423,7 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
 
   it('deletes the page of a document that waits for its version, and tells the chat (review)', async () => {
     const { owner, workspace, task } = await workspaceWithPage()
-    const document = await db.chatDocument.create({
+    const document = await db.artifact.create({
       data: { workspaceId: workspace.id, taskId: task.id, title: 'Аудит' },
     })
     const waiting = await reservePagePublication(db, {
@@ -481,7 +481,7 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
 
   it('reads a document for its card: checked text only, nothing for a stranger', async () => {
     const { owner, workspace, task } = await workspaceWithPage()
-    const document = await db.chatDocument.create({
+    const document = await db.artifact.create({
       data: {
         workspaceId: workspace.id,
         taskId: task.id,
@@ -527,12 +527,12 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
     await expect(callerOf(await person()).pages.doc({ docId: document.id })).rejects.toMatchObject({
       code: 'NOT_FOUND',
     })
-    await db.chatDocument.delete({ where: { id: document.id } })
+    await db.artifact.delete({ where: { id: document.id } })
   })
 
   it('names the downloaded Markdown by the title, without direction marks or leading dots', async () => {
     const { owner, workspace, task } = await workspaceWithPage()
-    const document = await db.chatDocument.create({
+    const document = await db.artifact.create({
       data: {
         workspaceId: workspace.id,
         taskId: task.id,
@@ -540,10 +540,10 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
         currentVersion: 1,
       },
     })
-    await db.chatDocumentVersion.create({
+    await db.artifactVersion.create({
       data: { documentId: document.id, no: 1, sizeBytes: 9, sha256: 'a'.repeat(64) },
     })
-    await db.chatDocumentContent.create({
+    await db.artifactContent.create({
       data: { documentId: document.id, versionNo: 1, markdown: '# Отчёт\n' },
     })
     const markdown = await cabinetDocMarkdown(db, { documentId: document.id, userId: owner.id })
@@ -552,13 +552,13 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
     expect(
       await cabinetDocMarkdown(db, { documentId: document.id, userId: (await person()).id }),
     ).toBeNull()
-    await db.chatDocument.delete({ where: { id: document.id } })
+    await db.artifact.delete({ where: { id: document.id } })
   })
 
   it('shows a page document as its page to read, downloads it as .html, and tells a draft (plan 74)', async () => {
     const { owner, workspace, task } = await workspaceWithPage()
     const markdown = '# Аудит\n\n## Итог\n\nТри причины.\n'
-    const document = await db.chatDocument.create({
+    const document = await db.artifact.create({
       data: {
         workspaceId: workspace.id,
         taskId: task.id,
@@ -582,10 +582,10 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
         },
       },
     })
-    await db.chatDocumentVersion.create({
+    await db.artifactVersion.create({
       data: { documentId: document.id, no: 1, sizeBytes: 9, sha256: 'a'.repeat(64) },
     })
-    await db.chatDocumentContent.create({
+    await db.artifactContent.create({
       data: { documentId: document.id, versionNo: 1, markdown },
     })
     const caller = callerOf(owner)
@@ -602,25 +602,25 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
     expect(download).toMatchObject({ name: 'Аудит.html', view: 'page' })
     expect(download?.html).toContain('Три причины.')
     // The agent changes the section again: the tab shows the sections until the next version.
-    await db.chatDocumentSection.updateMany({
+    await db.artifactBlock.updateMany({
       where: { documentId: document.id },
       data: { markdown: 'Четыре причины.', checkedTurn: 2, writtenTurn: 2 },
     })
     expect((await caller.pages.doc({ docId: document.id })).draft).toBe(true)
-    await db.chatDocument.update({ where: { id: document.id }, data: { view: 'text' } })
+    await db.artifact.update({ where: { id: document.id }, data: { view: 'text' } })
     expect(await caller.pages.docPage({ docId: document.id, version: 1 })).toBeNull()
-    await db.chatDocument.delete({ where: { id: document.id } })
+    await db.artifact.delete({ where: { id: document.id } })
   })
 
   /** A document of the chat with one version of `markdown`. */
   async function documentWithVersion(workspaceId: string, taskId: string, markdown: string) {
-    const document = await db.chatDocument.create({
+    const document = await db.artifact.create({
       data: { workspaceId, taskId, title: 'Аудит', currentVersion: 1 },
     })
-    await db.chatDocumentVersion.create({
+    await db.artifactVersion.create({
       data: { documentId: document.id, no: 1, sizeBytes: 9, sha256: 'a'.repeat(64) },
     })
-    await db.chatDocumentContent.create({
+    await db.artifactContent.create({
       data: { documentId: document.id, versionNo: 1, markdown },
     })
     return document
@@ -659,7 +659,7 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
 
   it('publishes no document still written, nor one with a key in it', async () => {
     const { owner, workspace, task } = await workspaceWithPage()
-    const written = await db.chatDocument.create({
+    const written = await db.artifact.create({
       data: { workspaceId: workspace.id, taskId: task.id, title: 'Пишется' },
     })
     await expect(callerOf(owner).pages.publishDoc({ docId: written.id })).rejects.toMatchObject({

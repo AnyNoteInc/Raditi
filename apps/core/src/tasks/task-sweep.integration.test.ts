@@ -407,6 +407,13 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     const { taskId, userId } = await dialog('queued', 0)
     const words = await firstWords(taskId, userId)
     await press(taskId, userId, 'update')
+    await insertFeedEvent(db, {
+      taskId,
+      row: {
+        type: 'feed.request',
+        payload: { v: 1, kind: 'interrupt', authorId: userId, requestId: randomUUID() },
+      },
+    })
     await db.$executeRaw`UPDATE tasks SET updated_at = now() - interval '6 minutes'
       WHERE id = ${taskId}::uuid`
     const fresh = await dialog('queued', 0)
@@ -603,8 +610,10 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     const browserSweep = (
       browser: { verify: ReturnType<typeof vi.fn>; sweep?: ReturnType<typeof vi.fn> },
       live = new LivePasses(),
+      extra: Partial<ConstructorParameters<typeof TaskSweep>[0]> = {},
     ) =>
       new TaskSweep({
+        ...extra,
         db,
         settlement: new PassSettlement({ db, logger: quiet }),
         live,
@@ -1077,6 +1086,53 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
         by: 'no_answer',
         objects: [{ kind: 'post', status: 'unconfirmed', title: null }],
       })
+    })
+
+    it('checks the writes in artifacts of a turn it ends before the answer, or drops them (plan 88, Ар16)', async () => {
+      const outcome = { checked: 0, refused: 0, dropped: 0 }
+      type Call = (taskId: string, turn: number | null, refuses: unknown) => Promise<typeof outcome>
+      const artifacts = {
+        settle: vi.fn<Call>(async () => outcome),
+        fail: vi.fn<Call>(async () => outcome),
+        sweep: vi.fn(async () => 0),
+      }
+      const values = { siteValues: vi.fn(async () => ['synthetic-value-0003']) }
+      const done = await closedTurn([['running'], ['completed', { result: turnResult }]])
+      const statuses: string[] = []
+      artifacts.settle.mockImplementation(async (taskId: string) => {
+        statuses.push((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status)
+        return outcome
+      })
+      const sweep = browserSweep({ verify: vi.fn(async () => true) }, new LivePasses(), {
+        artifacts,
+        values: values as never,
+      })
+      await sweep.settleOrphans()
+      expect(artifacts.settle).toHaveBeenCalledOnce()
+      expect(artifacts.settle.mock.calls[0]?.[0]).toBe(done.taskId)
+      const refuses = artifacts.settle.mock.calls[0]?.[2] as unknown as (text: string) => unknown
+      expect(refuses('синтетика synthetic-value-0003')).toBe('client_value')
+      // Before the answer: the client reads the answer after the writes are settled.
+      expect(statuses).toEqual(['running'])
+
+      const lost = await closedTurn([['running']])
+      await sweep.settleOrphans()
+      expect(artifacts.fail.mock.calls.map((call) => call[0])).toContain(lost.taskId)
+    })
+
+    it('runs the collector of artifacts every tick, never taking a live pass for lost', async () => {
+      const live = new LivePasses()
+      live.enter('0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a60')
+      const artifacts = {
+        settle: vi.fn(),
+        fail: vi.fn(),
+        sweep: vi.fn(async (_options: { busy: (id: string) => boolean }) => 0),
+      }
+      await browserSweep({ verify: vi.fn(), sweep: vi.fn() }, live, { artifacts }).tick()
+      expect(artifacts.sweep).toHaveBeenCalledOnce()
+      const { busy } = artifacts.sweep.mock.calls[0]![0]
+      expect(busy('0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a60')).toBe(true)
+      expect(busy('0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61')).toBe(false)
     })
 
     it('compares the browsers with the worker every tick, never taking a live pass for lost', async () => {

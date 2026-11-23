@@ -1,0 +1,7 @@
+<!doctype html><html><head><meta charset="utf-8"><title>busy</title><style>body{margin:0;font:40px system-ui;height:3000px;background:repeating-linear-gradient(#fff 0 300px,#eef 300px 600px)}</style></head>
+<body><h1>Тяжёлый кадр</h1><script>
+// split: 150 ms of every 300 ms busy (as in the spike); loop: busy forever after load (a hung script)
+const m = new URLSearchParams(location.search).get('mode')
+if (m === 'split') setInterval(() => { const t = performance.now(); while (performance.now() - t < 150) {} }, 300)
+if (m === 'loop') addEventListener('load', () => setTimeout(() => { for (;;) {} }, 200))
+</script></body></html>

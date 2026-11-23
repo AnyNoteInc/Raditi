@@ -83,8 +83,8 @@ export function turnOf(body) {
 
 const sameArgs = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 /** A tool of the platform goes by `raditi_<tool>`, one of the CLI (`read`, `bash`) by its own. */
-// Exact names only: a suffix would take `raditi_doc_read` for the CLI's `read` and
-// `raditi_doc_section_write` for its `write` (the `docs` family is declared to every turn, plan 69).
+// Exact names only: a suffix would take `raditi_artifact_read` for the CLI's `read` and
+// `raditi_page_read` too (the `artifacts` family is declared to every turn, plan 88).
 const sameTool = (name, tool) => name === tool || name === `raditi_${tool}`
 
 /**
@@ -127,7 +127,7 @@ function declaredName(body, tool) {
     .map((item) => item?.function?.name)
     .filter((name) => typeof name === 'string' && sameTool(name, tool))
   // The CLI's own `read` or `write` by its exact name, a platform tool by `raditi_<tool>`: with
-  // the pages declared, `read` also ends `raditi_doc_read` and `write` `raditi_doc_section_write`.
+  // the pages and artifacts declared, `read` also ends `raditi_page_read` and `raditi_artifact_read`.
   for (const exact of [tool, `raditi_${tool}`]) if (names.includes(exact)) return exact
   return names.length === 1 ? names[0] : null
 }

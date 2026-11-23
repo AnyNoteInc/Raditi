@@ -3,8 +3,12 @@ import {
   TASK_SIGNAL_PG_CHANNEL,
   TASK_SIGNALS_RESYNC_CHANNEL,
   taskSignalChannel,
-  type TaskSignalKind,
 } from '@repo/domain'
+import {
+  ARTIFACT_SIGNAL_PG_CHANNEL,
+  artifactSignalChannel,
+  parseArtifactSignal,
+} from '@repo/domain/artifacts'
 import { throttledLogger } from '@repo/observability'
 
 /** Only the name of an error: messages of Redis and the database stay out of the log. */
@@ -33,7 +37,7 @@ export interface TaskSignalRelayDependencies {
   /** Rows of the outbox committed (NOTIFY raditi_outbox): its relay runs a pass at once. */
   outbox?: () => void
   logger: { log(line: string): void; warn(line: string): void }
-  /** Signals of one task and kind within this long go out as one. */
+  /** Signals of one task and kind, or of one artifact, within this long go out as one. */
   coalesceMs?: number
   /** The first wait after a lost connection; it doubles up to `maxRetryMs`. */
   retryMs?: number
@@ -47,9 +51,14 @@ export interface TaskSignalRelayDependencies {
  * out once. After every connection — the first one and every one after a loss — it says `resync`
  * on Redis: what was notified while nobody listened is lost, and the open pages read again by their
  * cursors. Nothing here is durable: a signal only says «read now».
+ *
+ * The second channel is of artifacts (docs/plan/88-artifacts.md, Ар20, §7.4): a committed batch of
+ * operations notifies `raditi_artifact` with the artifact's id, relayed as `changes` on the Redis
+ * channel of the artifact; `resync` covers its pages too.
  */
 export class TaskSignalRelay {
   readonly #deps: TaskSignalRelayDependencies
+  /** `<Redis channel> <message>` of what goes out at the next flush, each once. */
   readonly #pending = new Set<string>()
   #client: SignalListener | null = null
   #flush: NodeJS.Timeout | undefined
@@ -84,16 +93,18 @@ export class TaskSignalRelay {
     if (this.#stopped) return
     const client = this.#deps.listener()
     this.#client = client
-    client.on('notification', (message) =>
-      message.channel === OUTBOX_PG_CHANNEL
-        ? this.#deps.outbox?.()
-        : this.#heard(message.payload ?? ''),
-    )
+    client.on('notification', (message) => {
+      if (message.channel === OUTBOX_PG_CHANNEL) return this.#deps.outbox?.()
+      if (message.channel === ARTIFACT_SIGNAL_PG_CHANNEL)
+        return this.#heardArtifact(message.payload ?? '')
+      this.#heard(message.payload ?? '')
+    })
     client.on('error', (error) => this.#lost(client, error))
     client.on('end', () => this.#lost(client))
     try {
       await client.connect()
       await client.query(`LISTEN ${TASK_SIGNAL_PG_CHANNEL}`)
+      await client.query(`LISTEN ${ARTIFACT_SIGNAL_PG_CHANNEL}`)
       if (this.#deps.outbox) await client.query(`LISTEN ${OUTBOX_PG_CHANNEL}`)
     } catch (error) {
       this.#lost(client, error)
@@ -127,7 +138,17 @@ export class TaskSignalRelay {
   #heard(payload: string): void {
     const signal = parseTaskSignal(payload)
     if (signal === null) return
-    this.#pending.add(`${signal.taskId}:${signal.kind}`)
+    this.#add(taskSignalChannel(signal.taskId), signal.kind)
+  }
+
+  #heardArtifact(payload: string): void {
+    const artifactId = parseArtifactSignal(payload)
+    if (artifactId === null) return
+    this.#add(artifactSignalChannel(artifactId), 'changes')
+  }
+
+  #add(channel: string, message: string): void {
+    this.#pending.add(`${channel} ${message}`)
     this.#flush ??= setTimeout(() => this.#send(), this.#deps.coalesceMs ?? 50)
   }
 
@@ -136,10 +157,9 @@ export class TaskSignalRelay {
     const signals = [...this.#pending]
     this.#pending.clear()
     for (const key of signals) {
-      const at = key.lastIndexOf(':')
-      const kind = key.slice(at + 1) as TaskSignalKind
+      const at = key.indexOf(' ')
       this.#deps
-        .publish(taskSignalChannel(key.slice(0, at)), kind)
+        .publish(key.slice(0, at), key.slice(at + 1))
         .catch((error: unknown) => this.#unpublished('task_signal_not_published', nameOf(error)))
     }
   }

@@ -40,10 +40,12 @@ const sessionIdSchema = z.uuid()
  * `WORKER_BODY_MAX_BYTES`, JSON only. A bad one is 400 and a large one 413, without a word
  * of what it held.
  */
-export async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+export async function readJsonBody(
+  request: IncomingMessage,
+  max: number = WORKER_BODY_MAX_BYTES,
+): Promise<unknown> {
   const declared = Number(request.headers['content-length'] ?? 0)
-  if (declared > WORKER_BODY_MAX_BYTES)
-    throw new HttpException('Payload too large', HttpStatus.PAYLOAD_TOO_LARGE)
+  if (declared > max) throw new HttpException('Payload too large', HttpStatus.PAYLOAD_TOO_LARGE)
   const type = request.headers['content-type'] ?? ''
   if (!/^application\/json(?:\s*;|$)/i.test(type))
     throw new HttpException('Unsupported media type', HttpStatus.UNSUPPORTED_MEDIA_TYPE)
@@ -51,8 +53,7 @@ export async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   let bytes = 0
   for await (const chunk of request as AsyncIterable<Buffer>) {
     bytes += chunk.byteLength
-    if (bytes > WORKER_BODY_MAX_BYTES)
-      throw new HttpException('Payload too large', HttpStatus.PAYLOAD_TOO_LARGE)
+    if (bytes > max) throw new HttpException('Payload too large', HttpStatus.PAYLOAD_TOO_LARGE)
     chunks.push(chunk)
   }
   try {

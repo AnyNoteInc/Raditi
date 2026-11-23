@@ -14,8 +14,22 @@ import { ToolsMenu } from './tools-menu'
 // a given width (`declared`) —, and the sheet of a phone named as the menu is.
 
 const tiles: ToolTile[] = [
-  { tool: 'browser', open: false, mark: 'пока нет' },
-  { tool: 'documents', open: false, mark: '1' },
+  {
+    tool: 'browser',
+    group: 'tools',
+    label: 'Браузер',
+    icon: 'globe',
+    open: false,
+    mark: 'пока нет',
+  },
+  {
+    tool: 'artifact:doc-1',
+    group: 'made',
+    label: 'Тексты для сайта',
+    icon: 'document',
+    open: true,
+    mark: 'Открыто',
+  },
 ]
 
 /** «+» pressed: the tiles of its menu, a card from `lg` or a sheet below. */
@@ -74,5 +88,23 @@ describe('the sheet of «+»', () => {
     const sheet = screen.getByRole('dialog', { name: 'Инструменты' })
     expect(sheet.getAttribute('aria-modal')).toBe('true')
     expect(within(sheet).getByRole('menu', { name: 'Инструменты' })).toBeTruthy()
+  })
+})
+
+describe('the groups of «+» (docs/plan/88-artifacts.md, Ар44)', () => {
+  it('names the tools and the artifacts of the chat, and opens the one chosen', async () => {
+    const onOpen = vi.fn()
+    render(<ToolsMenu tiles={tiles} onOpen={onOpen} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Инструменты' }))
+    const menu = await screen.findByRole('menu', { name: 'Инструменты' })
+    expect(
+      within(menu)
+        .getAllByRole('separator')
+        .map((each) => each.textContent),
+    ).toEqual(['Инструменты', 'Артефакты чата · Сделаны здесь'])
+    const item = within(menu).getByRole('menuitem', { name: /Тексты для сайта/ })
+    expect(item.textContent).toContain('Открыто')
+    fireEvent.click(item)
+    expect(onOpen).toHaveBeenCalledWith('artifact:doc-1')
   })
 })

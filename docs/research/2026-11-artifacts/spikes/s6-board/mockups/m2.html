@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Стоматология «Улыбка»</title>
+<style>
+  :root { --bg:#ffffff; --soft:#eef6fb; --ink:#0f2a3d; --accent:#1479c9; --accent2:#18b394; --muted:#5b7183; }
+  body.variant-b { --soft:#f6f0fb; --ink:#25163a; --accent:#7b3fc4; --accent2:#e0559a; --muted:#6c5f7e; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; }
+  body { font-family:-apple-system, "Segoe UI", Roboto, Arial, sans-serif; background:var(--bg); color:var(--ink); line-height:1.55; }
+  .wrap { max-width:1180px; margin:0 auto; padding:0 32px; }
+  .top { background:var(--ink); color:#fffd; font-size:14px; }
+  .top .wrap { display:flex; justify-content:space-between; height:40px; align-items:center; }
+  header .wrap { display:flex; align-items:center; height:84px; gap:28px; }
+  .logo { font-weight:800; font-size:24px; display:flex; gap:10px; align-items:center; }
+  .logo i { width:36px; height:36px; border-radius:12px; background:linear-gradient(135deg, var(--accent), var(--accent2)); display:inline-block; }
+  nav { display:flex; gap:22px; margin-left:auto; color:var(--muted); }
+  .btn { padding:14px 26px; border-radius:14px; background:var(--accent); color:#fff; font-weight:700; border:0; font-size:16px; cursor:pointer; }
+  .btn.light { background:#fff; color:var(--accent); }
+  .hero { background:var(--soft); }
+  .hero .wrap { display:grid; grid-template-columns:1.1fr .9fr; gap:48px; align-items:center; padding-top:56px; padding-bottom:56px; }
+  body.variant-b .hero .wrap { grid-template-columns:.9fr 1.1fr; }
+  body.variant-b .hero .pic { order:-1; }
+  .hero h1 { font-size:56px; line-height:1.08; margin:0 0 18px; }
+  .hero p { font-size:19px; color:var(--muted); margin:0 0 28px; }
+  .badges { display:flex; gap:16px; margin-top:32px; }
+  .badge { background:#fff; border-radius:16px; padding:14px 18px; box-shadow:0 10px 30px #0f2a3d14; }
+  .badge b { display:block; font-size:26px; color:var(--accent); }
+  .pic img { width:100%; aspect-ratio:6/7; object-fit:cover; border-radius:32px; display:block; }
+  section { padding:88px 0; }
+  h2 { font-size:38px; margin:0 0 10px; }
+  .lead { color:var(--muted); font-size:18px; margin:0 0 40px; }
+  .services { display:grid; grid-template-columns:repeat(3, 1fr); gap:22px; }
+  .svc { border:1px solid #0f2a3d1a; border-radius:22px; padding:26px; transition:transform .3s; }
+  .svc:hover { transform:translateY(-4px); }
+  .svc .ic { width:54px; height:54px; border-radius:16px; background:var(--soft); display:grid; place-items:center; font-size:26px; }
+  .svc h3 { margin:16px 0 6px; }
+  .svc .from { font-weight:800; color:var(--accent); }
+  table.prices { width:100%; border-collapse:collapse; font-size:17px; }
+  table.prices td { padding:16px 8px; border-bottom:1px solid #0f2a3d14; }
+  table.prices td:last-child { text-align:right; font-weight:700; white-space:nowrap; }
+  .doctors { display:grid; grid-template-columns:repeat(4, 1fr); gap:22px; }
+  .doc img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:24px; display:block; }
+  .doc b { display:block; margin-top:14px; font-size:18px; }
+  .doc span { color:var(--muted); font-size:15px; }
+  .book { background:linear-gradient(135deg, var(--accent), var(--accent2)); color:#fff; border-radius:32px; padding:48px; display:grid; grid-template-columns:1fr 1fr; gap:40px; }
+  .book form { display:grid; gap:14px; }
+  .book input, .book select { padding:14px 16px; border-radius:12px; border:0; font-size:16px; font-family:inherit; }
+  details { border-bottom:1px solid #0f2a3d1a; padding:18px 0; }
+  summary { font-size:19px; font-weight:700; cursor:pointer; }
+  details p { color:var(--muted); margin:12px 0 0; }
+  .reveal { opacity:0; transform:translateY(24px); transition:opacity .7s, transform .7s; }
+  .reveal.visible { opacity:1; transform:none; }
+  footer { background:var(--ink); color:#fffc; padding:44px 0; }
+  footer .wrap { display:grid; grid-template-columns:repeat(3, 1fr); gap:24px; font-size:14px; }
+  @media (max-width:700px) {
+    .wrap { padding:0 18px; }
+    .top, nav { display:none; }
+    header .btn { margin-left:auto; padding:10px 16px; font-size:14px; }
+    .hero .wrap, body.variant-b .hero .wrap { grid-template-columns:1fr; padding-top:28px; }
+    .hero h1 { font-size:34px; }
+    .badges { flex-wrap:wrap; }
+    section { padding:56px 0; }
+    h2 { font-size:28px; }
+    .services, .doctors, .book, footer .wrap { grid-template-columns:1fr; }
+    .book { padding:28px; }
+    table.prices { font-size:15px; }
+  }
+</style>
+</head>
+<body>
+<div class="top"><div class="wrap"><span>Пн–Сб 9:00–21:00, Вс 10:00–18:00</span><span>м. Пушкинская · +7 900 111-22-33</span></div></div>
+<header><div class="wrap">
+  <div class="logo"><i></i>Улыбка</div>
+  <nav><a>Услуги</a><a>Цены</a><a>Врачи</a><a>Отзывы</a><a>Контакты</a></nav>
+  <button class="btn">Записаться</button>
+</div></header>
+<div class="hero"><div class="wrap">
+  <div>
+    <h1>Лечим зубы без боли и страха</h1>
+    <p>Семейная клиника в центре города. Бесплатная консультация и план лечения с ценой до начала работы.</p>
+    <button class="btn">Записаться на консультацию</button>
+    <div class="badges"><div class="badge"><b>15 лет</b>работаем для вас</div><div class="badge"><b>4,9 ★</b>на картах</div><div class="badge"><b>0 ₽</b>консультация</div></div>
+  </div>
+  <div class="pic"><img src="/_files/dental-hero.jpg" alt="Врач клиники"></div>
+</div></div>
+<section><div class="wrap">
+  <h2 class="reveal">Услуги</h2>
+  <p class="lead reveal">Всё, что нужно для здоровых зубов, — в одной клинике.</p>
+  <div class="services">
+    <div class="svc reveal"><div class="ic">🦷</div><h3>Лечение кариеса</h3><p>Современные пломбы, работа под микроскопом.</p><div class="from">от 3 500 ₽</div></div>
+    <div class="svc reveal"><div class="ic">✨</div><h3>Чистка и отбеливание</h3><p>Ультразвук, Air Flow, домашнее отбеливание.</p><div class="from">от 4 900 ₽</div></div>
+    <div class="svc reveal"><div class="ic">🔩</div><h3>Имплантация</h3><p>Импланты с гарантией 10 лет.</p><div class="from">от 39 000 ₽</div></div>
+    <div class="svc reveal"><div class="ic">😁</div><h3>Брекеты и элайнеры</h3><p>Исправим прикус взрослым и детям.</p><div class="from">от 85 000 ₽</div></div>
+    <div class="svc reveal"><div class="ic">👶</div><h3>Детская стоматология</h3><p>Лечение во сне, игровая зона.</p><div class="from">от 2 500 ₽</div></div>
+    <div class="svc reveal"><div class="ic">🛡️</div><h3>Протезирование</h3><p>Коронки, виниры, мосты.</p><div class="from">от 18 000 ₽</div></div>
+  </div>
+</div></section>
+<section style="background:var(--soft)"><div class="wrap">
+  <h2 class="reveal">Цены</h2>
+  <p class="lead reveal">Окончательную стоимость врач называет после осмотра.</p>
+  <table class="prices">
+    <tr><td>Консультация и план лечения</td><td>0 ₽</td></tr>
+    <tr><td>Прицельный снимок</td><td>500 ₽</td></tr>
+    <tr><td>Компьютерная томография</td><td>3 200 ₽</td></tr>
+    <tr><td>Пломба из светоотверждаемого материала</td><td>3 500 ₽</td></tr>
+    <tr><td>Лечение канала (один канал)</td><td>6 800 ₽</td></tr>
+    <tr><td>Профессиональная гигиена</td><td>4 900 ₽</td></tr>
+    <tr><td>Отбеливание ZOOM 4</td><td>24 000 ₽</td></tr>
+    <tr><td>Удаление зуба простое</td><td>3 000 ₽</td></tr>
+    <tr><td>Удаление зуба мудрости</td><td>7 500 ₽</td></tr>
+    <tr><td>Имплант с установкой</td><td>39 000 ₽</td></tr>
+    <tr><td>Коронка из диоксида циркония</td><td>28 000 ₽</td></tr>
+    <tr><td>Винир керамический</td><td>32 000 ₽</td></tr>
+  </table>
+</div></section>
+<section><div class="wrap">
+  <h2 class="reveal">Наши врачи</h2>
+  <p class="lead reveal">Опыт от 8 лет, регулярное обучение в России и за рубежом.</p>
+  <div class="doctors">
+    <div class="doc reveal"><img src="/_files/dental-d1.jpg" alt=""><b>Анна Смирнова</b><span>Главный врач, терапевт</span></div>
+    <div class="doc reveal"><img src="/_files/dental-d2.jpg" alt=""><b>Павел Орлов</b><span>Хирург-имплантолог</span></div>
+    <div class="doc reveal"><img src="/_files/dental-d3.jpg" alt=""><b>Елена Ким</b><span>Ортодонт</span></div>
+    <div class="doc reveal"><img src="/_files/dental-d4.jpg" alt=""><b>Сергей Волков</b><span>Ортопед</span></div>
+  </div>
+</div></section>
+<section><div class="wrap">
+  <div class="book reveal">
+    <div><h2>Запишитесь онлайн</h2><p>Перезвоним в течение 15 минут и подберём удобное время.</p></div>
+    <form id="f"><input placeholder="Ваше имя"><input placeholder="Телефон" inputmode="tel"><select><option>Консультация</option><option>Гигиена</option><option>Лечение</option><option>Имплантация</option></select><input type="date"><button class="btn light">Отправить заявку</button><small id="msg"></small></form>
+  </div>
+</div></section>
+<section><div class="wrap">
+  <h2 class="reveal">Частые вопросы</h2>
+  <details><summary>Больно ли лечить зубы?</summary><p>Мы используем современную анестезию. Большинство пациентов ничего не чувствуют.</p></details>
+  <details><summary>Можно ли в рассрочку?</summary><p>Да, рассрочка без процентов до 12 месяцев на лечение от 30 000 ₽.</p></details>
+  <details><summary>Есть ли гарантия?</summary><p>На пломбы — 2 года, на импланты — 10 лет, на коронки — 5 лет.</p></details>
+  <details><summary>Принимаете ли детей?</summary><p>Да, с 3 лет. Есть детский врач и игровая комната.</p></details>
+  <details><summary>Где припарковаться?</summary><p>Во дворе клиники есть бесплатная парковка для пациентов.</p></details>
+  <details><summary>Как подготовиться к приёму?</summary><p>Ничего особенного: возьмите паспорт и прошлые снимки, если есть.</p></details>
+</div></section>
+<footer><div class="wrap"><div><b>Улыбка</b><br>Лицензия № Л041-00000-00/00000000</div><div>ул. Пушкина, 10<br>+7 900 111-22-33</div><div>Политика конфиденциальности<br>Договор оферты</div></div></footer>
+<script>
+  const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) e.target.classList.add('visible') }), { threshold: 0.1 })
+  document.querySelectorAll('.reveal').forEach((el) => io.observe(el))
+  document.getElementById('f').addEventListener('submit', (e) => { e.preventDefault(); document.getElementById('msg').textContent = 'Спасибо! Мы перезвоним.' })
+</script>
+</body>
+</html>

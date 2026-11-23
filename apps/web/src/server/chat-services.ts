@@ -8,6 +8,7 @@ import { createVaultSecretStore } from '@repo/vault'
 
 import { env } from '@/env'
 
+import { artifactSignals } from './artifact-signals'
 import { taskSignals } from './task-signals'
 
 /**
@@ -55,6 +56,7 @@ export function chatServices(): ChatContext | null {
     const web = env.web()
     built = {
       appEnv: web.appEnv,
+      appUrl: web.appUrl,
       browser: web.browserStreamUrl === null ? null : { streamUrl: web.browserStreamUrl },
       webPushPublicKey: web.webPushPublicKey,
       telegramBot: telegramBot(),
@@ -72,6 +74,8 @@ export function chatServices(): ChatContext | null {
       secrets: () => (secrets ??= writerOf(createVaultSecretStore(env.vault()))),
       // The signals of changed chats (spec §7): one subscriber of Redis for the process.
       signals: taskSignals(),
+      // The signals and presence of artifacts (docs/plan/88-artifacts.md, Ар20).
+      artifacts: artifactSignals(),
     }
     return built
   } catch (error) {

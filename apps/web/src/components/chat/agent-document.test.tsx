@@ -123,6 +123,17 @@ describe('the documents of the agent in the rows of the chat', () => {
         { type: 'feed.doc', docId: 'a' },
       ]),
     ).toEqual(['a', 'b'])
+    // The artifacts of plan 88 (Ар46): a document by its row after the answer or the signal of a
+    // turn under way; an artifact not shown as Markdown is not a document of the tab.
+    expect(
+      agentDocumentIdsOf([
+        { type: 'feed.doc', docId: 'a' },
+        { type: 'feed.doc_touch', docId: 'c' },
+        { type: 'feed.artifact', artifactId: 'd', kind: 'document' },
+        { type: 'feed.artifact', artifactId: 'e', kind: 'table' },
+        { type: 'feed.artifact', artifactId: 'c', kind: 'document' },
+      ]),
+    ).toEqual(['a', 'c', 'd'])
     expect(agentDocOfEntry(agentDocEntry('a'))).toBe('a')
     expect(agentDocOfEntry('report.md')).toBeNull()
   })

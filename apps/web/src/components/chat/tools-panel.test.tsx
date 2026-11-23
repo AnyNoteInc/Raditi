@@ -3,14 +3,22 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { createRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { closedTools, toolsReducer, type ToolsAction, type ToolsState } from './dialog-tools'
+import {
+  closedTools,
+  toolsReducer,
+  type DialogTool,
+  type ToolsAction,
+  type ToolsState,
+} from './dialog-tools'
 import { ToolsPanel } from './tools-panel'
 
 // The panel of the tools (docs/plan/59-dialog-tools-panel.md, И7, И8, И14): its tabs — a sign and a
 // name each, as on the mockups, the sign 8px before the name — and its ways back to the dialog.
 
 const after = (...actions: ToolsAction[]): ToolsState => actions.reduce(toolsReducer, closedTools)
-const open = (tool: 'documents' | 'browser'): ToolsAction => ({ type: 'open', tool, by: 'menu' })
+const DOC = 'artifact:doc-1' as const
+const open = (tool: DialogTool): ToolsAction => ({ type: 'open', tool, by: 'menu' })
+const names: Record<string, string> = { browser: 'Браузер', [DOC]: 'Тексты для сайта' }
 
 function showPanel(tools: ToolsState, { wide }: { wide: boolean }) {
   const handlers = { onShow: vi.fn(), onClose: vi.fn(), onCloseAll: vi.fn(), onBack: vi.fn() }
@@ -23,6 +31,8 @@ function showPanel(tools: ToolsState, { wide }: { wide: boolean }) {
       menu={null}
       {...handlers}
       content={(tool) => <p>{`Содержимое ${tool}`}</p>}
+      labelOf={(tool) => names[tool] ?? tool}
+      iconOf={(tool) => (tool === 'browser' ? 'globe' : 'document')}
     />,
   )
   return { handlers, container }
@@ -30,35 +40,35 @@ function showPanel(tools: ToolsState, { wide }: { wide: boolean }) {
 
 describe('a tab of the panel of the tools', () => {
   it('puts the sign of its tool 8px before the name', () => {
-    showPanel(after(open('documents')), { wide: false })
-    const tab = screen.getByRole('tab', { name: 'Документы' })
+    showPanel(after(open(DOC)), { wide: false })
+    const tab = screen.getByRole('tab', { name: 'Тексты для сайта' })
     const sign = tab.querySelector(':scope > svg')
     expect(sign).not.toBeNull()
     expect(getComputedStyle(sign!).marginRight).toBe('8px')
   })
 })
 
-describe('a chat with documents and the browser', () => {
-  it('stands the browser that started beside the documents as one more tab, by the ids the stands find', () => {
-    const tools = toolsReducer(after(open('documents')), { type: 'launch' })
+describe('a chat with an artifact and the browser', () => {
+  it('stands the browser that started beside the artifact as one more tab, by the ids the stands find', () => {
+    const tools = toolsReducer(after(open(DOC)), { type: 'launch' })
     showPanel(tools, { wide: true })
     expect(screen.getAllByRole('tab').map((tab) => tab.id)).toEqual([
-      'dialog-pane-tab-documents',
+      'dialog-pane-tab-artifact-doc-1',
       'dialog-pane-tab-browser',
     ])
     // What the client reads stays on the screen; the browser is a press away, and mounted.
-    expect(screen.getByRole('tab', { name: 'Документы' }).getAttribute('aria-selected')).toBe(
-      'true',
-    )
+    expect(
+      screen.getByRole('tab', { name: 'Тексты для сайта' }).getAttribute('aria-selected'),
+    ).toBe('true')
     expect(screen.getByRole('tab', { name: 'Браузер' }).getAttribute('aria-selected')).toBe('false')
-    expect(document.getElementById('dialog-pane-panel-documents')?.hidden).toBe(false)
+    expect(document.getElementById('dialog-pane-panel-artifact-doc-1')?.hidden).toBe(false)
     expect(document.getElementById('dialog-pane-panel-browser')?.hidden).toBe(true)
   })
 })
 
 describe('the ways back to the dialog (И8, И14)', () => {
   it('goes back by «К чату» below `lg`: the dialog is told to put the tab away, not every tab', () => {
-    const { handlers } = showPanel(after(open('browser'), open('documents')), { wide: false })
+    const { handlers } = showPanel(after(open('browser'), open(DOC)), { wide: false })
     expect(screen.queryByRole('button', { name: 'Скрыть панель' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'К чату' }))
     expect(handlers.onBack).toHaveBeenCalledTimes(1)
@@ -67,7 +77,7 @@ describe('the ways back to the dialog (И8, И14)', () => {
   })
 
   it('hides every tab by «Скрыть панель» from `lg`, where there is no «К чату»', () => {
-    const { handlers } = showPanel(after(open('browser'), open('documents')), { wide: true })
+    const { handlers } = showPanel(after(open('browser'), open(DOC)), { wide: true })
     expect(screen.queryByRole('button', { name: 'К чату' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Скрыть панель' }))
     expect(handlers.onCloseAll).toHaveBeenCalledTimes(1)
@@ -75,7 +85,7 @@ describe('the ways back to the dialog (И8, И14)', () => {
   })
 
   it('draws nothing while its tabs wait behind the dialog, nor while none is open', () => {
-    const behind = after(open('browser'), open('documents'), { type: 'back' })
+    const behind = after(open('browser'), open(DOC), { type: 'back' })
     expect(behind.open).toEqual(['browser'])
     expect(showPanel(behind, { wide: false }).container.innerHTML).toBe('')
     expect(screen.queryByRole('complementary')).toBeNull()

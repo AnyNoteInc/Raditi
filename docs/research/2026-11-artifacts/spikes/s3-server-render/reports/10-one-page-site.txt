@@ -1,0 +1,9 @@
+Layout of «Одностраничный сайт сервиса» as the client sees it (390×11131, 1440×7332).
+4 problems, most serious first:
+- 390: e23 <span.hit-badge> «Хит продаж» covers text of e24 <h3> «Замена экрана смартфона…» (76×17 px).
+- both: low contrast 1.7:1 (needs 4.5) — e152 <a> «Замена экрана» #555555 on #333333; same in e153, e154, e157 and 2 more.
+- both: small text 11 px — e160 <p.legal> «ИП Смирнов А. В., ОГРНИП 300000…».
+- both: empty area 672 px tall at y 7770 in e109 <div.video-placeholder> (an empty box).
+OK: scripts, loads, fonts, width, cut text, pictures.
+
+«Ход работы»: Проверка вёрстки «Одностраничный сайт сервиса» на компьютере и телефоне: 4 замечания — блоки наезжают друг на друга, низкий контраст текста, мелкий текст и другое

@@ -228,6 +228,12 @@ export interface BrowserSessionRuntimeSpec {
   allowedHosts: readonly string[]
   /** A chat without a site (docs/plan/61-chats-first.md, К12): a session with no host of its own. */
   openWeb: boolean
+  /**
+   * A render container of frames of artifacts (docs/plan/88-artifacts.md, §7.12): its proxy lets
+   * nothing through — no host, no open web, no page of the agent. Only with no hosts and no open
+   * web. Absent — false.
+   */
+  closed?: boolean
   /** Reached without DNS; never in production. */
   localSites: readonly BrowserLocalSite[]
   /** Milliseconds since the epoch: past it the host's watchdog removes what is left. */

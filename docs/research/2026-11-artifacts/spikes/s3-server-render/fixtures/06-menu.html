@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Меню — кофейня «Зёрна»</title>
+<style>
+  :root { --coffee: #4e342e; --latte: #efe3d3; --ink: #2d2420; --muted: #6d5d55; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Golos Text", sans-serif; background: #faf6f1; color: var(--ink); }
+  .head { text-align: center; padding: 56px 24px 24px; }
+  .head img { width: 56px; height: 56px; }
+  h1 { font-size: 48px; margin: 12px 0 8px; color: var(--coffee); }
+  .head p { margin: 0; color: var(--muted); font-size: 18px; }
+  .filters { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 16px 24px 32px; }
+  .filter { border: 0; background: var(--latte); color: var(--coffee); padding: 10px 18px; border-radius: 999px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .filter.on { background: var(--coffee); color: #fff; }
+  .grid { max-width: 1120px; margin: 0 auto; padding: 0 24px 72px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 24px; }
+  .item { background: #fff; border-radius: 20px; overflow: hidden; box-shadow: 0 4px 18px rgba(78, 52, 46, 0.08); display: flex; flex-direction: column; }
+  .item img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; background: var(--latte); }
+  .item .body { padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .item h3 { margin: 0; font-size: 20px; }
+  .item p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; }
+  .meta { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 8px; }
+  .price { font-size: 21px; font-weight: 800; color: var(--coffee); }
+  .volume { font-size: 14px; color: var(--muted); }
+  .item .allergens { font-size: 9px; color: #5d4037; letter-spacing: 0.02em; }
+  .tag { position: absolute; }
+  .note { max-width: 1120px; margin: 0 auto 64px; padding: 0 24px; font-size: 15px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="head">
+  <img alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='30' fill='%234e342e'/><path d='M22 40c0-10 8-18 20-18-2 10-8 18-20 18z' fill='%23efe3d3'/></svg>">
+  <h1>Меню</h1>
+  <p>Кофейня «Зёрна» · обжариваем зерно сами каждую пятницу</p>
+</div>
+<div class="filters">
+  <button class="filter on" data-filter="all">Всё</button>
+  <button class="filter" data-filter="coffee">Кофе</button>
+  <button class="filter" data-filter="tea">Чай</button>
+  <button class="filter" data-filter="food">Десерты</button>
+</div>
+<div class="grid" id="grid">
+  <article class="item" data-kind="coffee">
+    <img src="{{DATA_JPEG:menu-1}}" alt="Капучино" width="320" height="240">
+    <div class="body"><h3>Капучино</h3><p>Двойной эспрессо и молоко, взбитое до бархатной пены.</p><p class="allergens" data-bug="B9">Содержит: молоко. Можно на овсяном молоке +40 ₽.</p><div class="meta"><span class="price">220 ₽</span><span class="volume">300 мл</span></div></div>
+  </article>
+  <article class="item" data-kind="coffee">
+    <img src="{{DATA_JPEG:menu-2}}" alt="Флэт уайт" width="320" height="240">
+    <div class="body"><h3>Флэт уайт</h3><p>Крепкий и сливочный: двойной ристретто и тонкий слой молока.</p><p class="allergens">Содержит: молоко.</p><div class="meta"><span class="price">240 ₽</span><span class="volume">200 мл</span></div></div>
+  </article>
+  <article class="item" data-kind="coffee">
+    <img src="{{DATA_JPEG:menu-3}}" alt="Раф лавандовый" width="320" height="240">
+    <div class="body"><h3>Раф лавандовый</h3><p>Эспрессо, сливки и сироп из лаванды нашего приготовления.</p><p class="allergens">Содержит: молоко, сливки.</p><div class="meta"><span class="price">290 ₽</span><span class="volume">350 мл</span></div></div>
+  </article>
+  <article class="item" data-kind="tea">
+    <img src="{{DATA_JPEG:menu-4}}" alt="Чай облепиховый" width="320" height="240">
+    <div class="body"><h3>Облепиховый чай</h3><p>Облепиха, апельсин, мёд и свежий имбирь. Согревает за минуту.</p><p class="allergens">Содержит: мёд.</p><div class="meta"><span class="price">260 ₽</span><span class="volume">400 мл</span></div></div>
+  </article>
+  <article class="item" data-kind="food">
+    <img src="{{BROKEN_JPEG}}" alt="Чизкейк Сан-Себастьян" width="320" height="240" data-bug="B10">
+    <div class="body"><h3>Чизкейк «Сан-Себастьян»</h3><p>Карамельная корочка снаружи, нежный сливочный внутри.</p><p class="allergens">Содержит: молоко, яйца, глютен.</p><div class="meta"><span class="price">320 ₽</span><span class="volume">140 г</span></div></div>
+  </article>
+  <article class="item" data-kind="food">
+    <img src="{{DATA_JPEG:menu-6}}" alt="Круассан с лососем" width="320" height="240">
+    <div class="body"><h3>Круассан с лососем</h3><p>Слабосолёный лосось, сливочный сыр и свежий шпинат.</p><p class="allergens">Содержит: рыба, молоко, глютен.</p><div class="meta"><span class="price">390 ₽</span><span class="volume">180 г</span></div></div>
+  </article>
+</div>
+<p class="note">Цены указаны в рублях. Сезонные напитки и десерты дня — у бариста на кассе.</p>
+<script>
+  const buttons = document.querySelectorAll('.filter')
+  buttons.forEach((button) => button.addEventListener('click', () => {
+    buttons.forEach((b) => b.classList.toggle('on', b === button))
+    document.querySelectorAll('.item').forEach((item) => {
+      item.style.display = button.dataset.filter === 'all' || item.dataset.kind === button.dataset.filter ? '' : 'none'
+    })
+  }))
+</script>
+</body>
+</html>

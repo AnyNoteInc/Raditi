@@ -21,6 +21,31 @@ export const MENTION_ROWS = 8
 export interface MentionOption {
   path: string
   folder: boolean
+  /**
+   * An artifact (docs/plan/88-artifacts.md, Ар47): shown by its title, put into the words as
+   * `@artifact:<id>` — core reads that.
+   */
+  artifact?: { id: string; title: string }
+}
+
+/** The artifacts whose title holds the letters typed after `@`, the start of a word first. */
+export function artifactMatches(
+  artifacts: readonly { id: string; title: string }[],
+  query: string,
+  limit = MENTION_ROWS,
+): MentionOption[] {
+  const wanted = query.toLocaleLowerCase('ru')
+  return artifacts
+    .flatMap((artifact) => {
+      const title = artifact.title.toLocaleLowerCase('ru')
+      const at = wanted === '' ? 0 : title.indexOf(wanted)
+      if (at < 0) return []
+      const place = at === 0 ? 0 : /\s/u.test(title[at - 1] ?? '') ? 1 : 2
+      return [{ artifact, place }]
+    })
+    .sort((a, b) => a.place - b.place || a.artifact.title.localeCompare(b.artifact.title, 'ru'))
+    .slice(0, limit)
+    .map(({ artifact }) => ({ path: `artifact:${artifact.id}`, folder: false, artifact }))
 }
 
 /** The `@` the caret stands in: where it begins and the letters after it, or null. */
@@ -192,6 +217,54 @@ export function MentionList({
       ) : (
         options.map((option, index) => {
           const selected = index === active
+          if (option.artifact)
+            return (
+              <Box
+                key={option.path}
+                ref={selected ? activeRow : undefined}
+                id={mentionOptionId(listId, index)}
+                role="option"
+                aria-selected={selected}
+                aria-label={mentionText.artifact(option.artifact.title)}
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => onHover(index)}
+                onClick={() => onChoose(option)}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  minHeight: 40,
+                  px: 1.25,
+                  py: 0.5,
+                  borderRadius: '10px',
+                  cursor: 'pointer',
+                  bgcolor: selected ? 'action.selected' : 'transparent',
+                }}
+              >
+                <Box component="span" sx={{ display: 'flex', color: 'primary.main' }}>
+                  <AppIcon name="artifacts" size={16} />
+                </Box>
+                <Typography
+                  component="span"
+                  sx={{
+                    minWidth: 0,
+                    fontSize: 14,
+                    fontWeight: 500,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {option.artifact.title}
+                </Typography>
+                <Typography
+                  component="span"
+                  sx={{ fontSize: 12.5, color: 'text.secondary', ml: 'auto' }}
+                >
+                  {mentionText.artifactMark}
+                </Typography>
+              </Box>
+            )
           const trimmed = option.path.replace(/\/$/u, '')
           const cut = trimmed.lastIndexOf('/')
           const name = trimmed.slice(cut + 1)

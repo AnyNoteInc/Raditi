@@ -3,6 +3,7 @@ import { createHmac, randomInt, randomUUID } from 'node:crypto'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { placeReserve, settleTaskCharge, underPrivateCreditRate } from '@repo/billing/testing'
 import {
+  artifactNamedByRun,
   createPrismaClient,
   insertFeedEvent,
   type Prisma,
@@ -74,7 +75,7 @@ async function underPricedModel<T>(
   work: () => Promise<T>,
 ) {
   const model = await tx.llmModel.findFirst({
-    where: { modelClass, providerModelId: { not: null } },
+    where: { modelClass, providerModelId: { not: null }, vision: false },
     orderBy: [{ slug: 'asc' }, { provider: { slug: 'asc' } }],
     select: { id: true, enabled: true, provider: { select: { id: true, enabled: true } } },
   })
@@ -165,6 +166,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     await db.chatNotification.deleteMany({ where: { userId: { in: users } } })
     await db.pushSubscription.deleteMany({ where: { userId: { in: users } } })
     await db.scheduledTask.deleteMany({ where: owned })
+    await db.artifact.deleteMany({ where: owned })
     await db.creditLedger.deleteMany({ where: { account: owned } })
     await db.creditHold.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
@@ -293,6 +295,46 @@ describe.skipIf(!databaseUrl)('PostgreSQL: scheduled tasks of the cabinet and th
     startScheduledRun(underRate(db), chat, { runId, now })
 
   describe('the start of a run (§4.3)', () => {
+    it('gives the chat of a run the artifacts its task names, which it may change (plan 88, 88.20б)', async () => {
+      const { owner } = await newClient()
+      const { task, run } = await runOf(owner)
+      const caller = callerOf(owner)
+      const create = (title: string) =>
+        caller.artifact.create({ kind: 'document', title, projectId: null, templateId: null })
+      const { id: named } = await create('Отчёт по сайту')
+      const { id: other } = await create('Другое')
+      expect(await caller.schedule.artifacts({ scheduleId: task.id })).toEqual([])
+      await expect(
+        caller.schedule.setArtifacts({ scheduleId: task.id, artifactIds: [named] }),
+      ).resolves.toEqual({ artifactIds: [named] })
+      expect(await caller.schedule.artifacts({ scheduleId: task.id })).toMatchObject([
+        { id: named, title: 'Отчёт по сайту' },
+      ])
+      // Another person's artifact is not found; another person never names one in this task.
+      const stranger = await newClient()
+      const { id: foreign } = await callerOf(stranger.owner).artifact.create({
+        kind: 'document',
+        title: 'Чужое',
+        projectId: null,
+        templateId: null,
+      })
+      await expect(
+        caller.schedule.setArtifacts({ scheduleId: task.id, artifactIds: [foreign] }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      await expect(
+        callerOf(stranger.owner).schedule.setArtifacts({ scheduleId: task.id, artifactIds: [] }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+
+      const answer = await start(run.id)
+      const taskId = scheduledChatId(run)
+      expect(answer).toEqual({ outcome: 'started', taskId })
+      expect(
+        await db.artifactChat.findMany({ where: { taskId }, select: { artifactId: true } }),
+      ).toEqual([{ artifactId: named }])
+      expect(await artifactNamedByRun(db, { taskId, artifactId: named })).toBe(true)
+      expect(await artifactNamedByRun(db, { taskId, artifactId: other })).toBe(false)
+    })
+
     it('starts its chat from the snapshot, named by the task, in the creator’s workspace (Зп45)', async () => {
       const { owner, workspaceId } = await newClient()
       const { task, run } = await runOf(owner)

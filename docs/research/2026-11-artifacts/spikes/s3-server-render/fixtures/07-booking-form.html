@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Запись — барбершоп «Борода»</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Golos Text", sans-serif; background: #111418; color: #eef1f5; }
+  .layout { max-width: 1160px; margin: 0 auto; padding: 56px 24px; display: grid; grid-template-columns: 1fr 440px; gap: 48px; align-items: start; }
+  .intro h1 { font-size: 52px; line-height: 1.05; margin: 0 0 16px; }
+  .intro p { font-size: 18px; color: #b5bdc8; margin: 0 0 28px; max-width: 520px; }
+  .perks { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+  .perks li { display: flex; gap: 12px; align-items: center; font-size: 17px; }
+  .perks li::before { content: "✓"; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #f2b134; color: #111418; font-weight: 800; flex: none; }
+  .card { background: #1b2027; border: 1px solid #2a313b; border-radius: 22px; padding: 28px; }
+  .card h2 { margin: 0 0 20px; font-size: 24px; }
+  .field { margin-bottom: 18px; }
+  .field label { display: block; font-size: 15px; color: #c8cfd9; margin-bottom: 8px; }
+  .field input, .field select, .field textarea { width: 100%; padding: 14px 16px; border-radius: 12px; border: 1px solid #333c48; background: #11151a; color: #eef1f5; font-size: 16px; font-family: inherit; }
+  .field textarea { min-height: 88px; resize: vertical; }
+  .slots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .slot { padding: 12px 0; border-radius: 10px; border: 1px solid #333c48; background: transparent; color: #eef1f5; font-size: 15px; cursor: pointer; font-family: inherit; }
+  .slot.busy { opacity: 0.35; cursor: not-allowed; text-decoration: line-through; }
+  .slot.picked { background: #f2b134; color: #111418; border-color: #f2b134; font-weight: 700; }
+  .consent { display: flex; gap: 12px; align-items: flex-start; font-size: 14px; color: #b5bdc8; margin: 8px 0 20px; }
+  .consent input { width: 22px; height: 22px; margin: 0; accent-color: #f2b134; flex: none; }
+  .actions { display: flex; gap: 12px; align-items: center; }
+  .submit { flex: 1; padding: 16px; border-radius: 14px; border: 0; background: #f2b134; color: #111418; font-size: 17px; font-weight: 800; cursor: pointer; font-family: inherit; }
+  .callback { flex: none; padding: 16px 14px; border-radius: 14px; border: 1px solid #f2b134; background: transparent; color: #f2b134; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: inherit; }
+  .error { color: #ff8a80; font-size: 14px; margin-top: 6px; display: none; }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; padding: 32px 16px; gap: 28px; }
+    .intro h1 { font-size: 36px; }
+  }
+  @media (max-width: 480px) {
+    .callback { width: 120px; }
+    .slots { grid-template-columns: repeat(3, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="intro">
+    <h1>Запишитесь на стрижку за минуту</h1>
+    <p>Барбершоп «Борода» в Самаре. Мастера с опытом от 5 лет, кофе и спортивные трансляции, пока вы ждёте.</p>
+    <ul class="perks">
+      <li>Мужская стрижка — от 1 400 ₽</li>
+      <li>Моделирование бороды — от 900 ₽</li>
+      <li>Отец и сын — скидка 20% на вторую стрижку</li>
+      <li>Напомним о записи за 2 часа в Telegram</li>
+    </ul>
+  </div>
+
+  <form class="card" id="booking" novalidate>
+    <h2>Запись на приём</h2>
+    <div class="field"><label for="name">Ваше имя</label><input id="name" name="name" placeholder="Например, Алексей" autocomplete="name"></div>
+    <div class="field"><label for="phone">Телефон</label><input id="phone" name="phone" type="tel" placeholder="+7 900 000-00-00"><div class="error" id="phone-error">Проверьте номер телефона</div></div>
+    <div class="field"><label for="service">Услуга</label>
+      <select id="service" name="service"><option>Мужская стрижка — 1 400 ₽</option><option>Стрижка машинкой — 900 ₽</option><option>Борода — 900 ₽</option><option>Стрижка и борода — 2 100 ₽</option></select>
+    </div>
+    <div class="field"><label for="master">Мастер</label>
+      <select id="master" name="master"><option>Любой свободный</option><option>Артём</option><option>Денис</option><option>Руслан</option></select>
+    </div>
+    <div class="field"><label>Время на 21 ноября</label>
+      <div class="slots" id="slots">
+        <button type="button" class="slot">10:00</button><button type="button" class="slot busy" disabled>11:00</button><button type="button" class="slot">12:00</button><button type="button" class="slot picked">13:00</button>
+        <button type="button" class="slot">14:00</button><button type="button" class="slot busy" disabled>15:00</button><button type="button" class="slot">16:00</button><button type="button" class="slot">17:00</button>
+      </div>
+    </div>
+    <div class="field"><label for="comment">Комментарий</label><textarea id="comment" name="comment" placeholder="Пожелания мастеру"></textarea></div>
+    <label class="consent"><input type="checkbox" checked> Согласен на обработку персональных данных и получение напоминаний</label>
+    <div class="actions">
+      <button class="submit" type="submit">Записаться</button>
+      <button class="callback" type="button" data-bug="B11">Перезвоните мне за 5 минут</button>
+    </div>
+  </form>
+</div>
+<script>
+  document.querySelectorAll('.slot').forEach((slot) => slot.addEventListener('click', () => {
+    if (slot.classList.contains('busy')) return
+    document.querySelectorAll('.slot').forEach((s) => s.classList.toggle('picked', s === slot))
+  }))
+  document.getElementById('booking').addEventListener('submit', (event) => {
+    event.preventDefault()
+    const phone = document.getElementById('phone').value.replace(/\D/g, '')
+    document.getElementById('phone-error').style.display = phone.length === 11 ? 'none' : 'block'
+  })
+</script>
+</body>
+</html>

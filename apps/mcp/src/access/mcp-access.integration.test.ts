@@ -218,6 +218,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
           requirements: { repository: false, browser },
           memory: null,
           repository: null,
+          vision: false,
           // No scheduled run started this chat (docs/plan/82-scheduled-tasks.md, Зп27).
           unattended: false,
         })

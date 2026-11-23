@@ -56,6 +56,11 @@ export const mcpTurnAccessSchema = z
      * Absent — false: a scope made before the field.
      */
     unattended: z.boolean().optional(),
+    /**
+     * The key of the turn has the profile that sees images (`llm_keys.vision_model_id`,
+     * docs/plan/88-artifacts.md, Ар32): the helper `look` and its `artifact_render`. Absent — false.
+     */
+    vision: z.boolean().optional(),
   })
   .refine((access) => access.requirements.repository === Boolean(access.repository))
 export type McpTurnAccess = z.infer<typeof mcpTurnAccessSchema>
@@ -86,7 +91,8 @@ export class PostgresMcpAccess implements McpAccessStore {
         u.id AS "authorId", u.agent_memory AS "agentMemory", t.project_id AS "projectId",
         (p.deleted_at IS NOT NULL) AS "projectGone",
         a.plan->'repository' AS "repository",
-        a.plan->>'committedAt' AS "answeredAt"
+        a.plan->>'committedAt' AS "answeredAt",
+        (k.vision_model_id IS NOT NULL) AS vision
       FROM llm_keys k JOIN tasks t ON t.id = k.task_id
       LEFT JOIN users u ON u.id = t.created_by_id
       LEFT JOIN projects p ON p.id = t.project_id

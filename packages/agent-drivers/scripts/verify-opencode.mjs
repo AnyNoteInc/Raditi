@@ -31,6 +31,8 @@ const { values: options } = parseArgs({
     image: { type: 'string', default: 'raditi-g3verify-sandbox:local' },
     // The runtime of the turn's containers: the daemon's default, or `runsc` where it has gVisor.
     runtime: { type: 'string' },
+    // `look` — only the scenario of the helper look (plan 88, slice 88.15в).
+    only: { type: 'string' },
     help: { type: 'boolean', default: false },
   },
 })
@@ -553,7 +555,30 @@ async function inside() {
                 description: 'Returns the public address and the stack of the synthetic site.',
                 inputSchema: { type: 'object', properties: {}, additionalProperties: false },
               },
+              // The picture of a frame for the helper look (docs/plan/88-artifacts.md, Ар32).
+              ...(settings.mcp.picture
+                ? [
+                    {
+                      name: 'artifact_render',
+                      description: 'The picture of a frame.',
+                      inputSchema: {
+                        type: 'object',
+                        properties: { artifactId: { type: 'string' }, frame: { type: 'string' } },
+                        required: ['artifactId'],
+                        additionalProperties: false,
+                      },
+                    },
+                  ]
+                : []),
             ],
+          }
+        else if (rpc.method === 'tools/call' && rpc.params?.name === 'artifact_render')
+          value = {
+            content: [
+              { type: 'text', text: settings.mcp.answer },
+              { type: 'image', data: settings.mcp.picture, mimeType: 'image/jpeg' },
+            ],
+            isError: false,
           }
         else if (rpc.method === 'tools/call')
           value = { content: [{ type: 'text', text: settings.mcp.answer }], isError: false }
@@ -600,6 +625,17 @@ async function inside() {
         toolOutputs: (chat.messages ?? [])
           .filter((message) => message.role === 'tool')
           .map((message) => text(message.content).slice(0, 400)),
+        // Where a picture stands in the request, as `<role>:<type of the part>` (Ар32).
+        pictures: (chat.messages ?? []).flatMap((message) =>
+          Array.isArray(message.content)
+            ? message.content
+                .filter((part) => part?.type !== 'text')
+                .map((part) => {
+                  const url = part?.image_url?.url ?? ''
+                  return `${message.role}:${part?.type}:${url.slice(0, url.indexOf(',') + 1)}${url.includes(settings.mcp.picture ?? '-') ? 'same' : 'other'}`
+                })
+            : [],
+        ),
         leaks: find(raw),
       }
       out.llm.push(record)
@@ -951,6 +987,7 @@ async function turn({
   egressProxy,
   skills,
   action,
+  visionModel,
 }) {
   const keys = newKeys()
   const context = {
@@ -962,6 +999,7 @@ async function turn({
       apiKey: keys.llmKey,
       model: MODEL,
       reasoningEffort: effort,
+      ...(visionModel ? { visionModel } : {}),
     },
     mcp: { url: 'http://sandbox-gw:8080/mcp', token: keys.mcpKey },
     // Different in every turn: the resumed session has to receive the current ones. The CLI
@@ -1257,10 +1295,93 @@ const seconds = (ms) => `${(ms / 1000).toFixed(1)} s`
 const bash = (command) => ({ name: 'bash', arguments: { command, description: 'Synthetic step' } })
 const pass = (line) => process.stdout.write(`PASS: ${line}\n`)
 
+async function lookScenario() {
+  // The helper look (docs/plan/88-artifacts.md, Ар32, slice 88.15в): the main agent calls it by the
+  // task tool; it runs on the model of the key that sees images, calls artifact_render, and the
+  // picture reaches the provider in its requests alone — never in a request of the main model.
+  const picture = Buffer.from(
+    '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAA//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AN//Z',
+    'base64',
+  ).toString('base64')
+  const VISION = 'glm-5.3-flash'
+  const looked = await turn({
+    label: 'the helper look',
+    visionModel: VISION,
+    mcp: { picture },
+    steps: [
+      {
+        calls: [
+          {
+            name: 'task',
+            arguments: {
+              description: 'Look at the frame',
+              prompt: 'Look at artifact 01960000-0000-7000-8000-0000000000aa, frame home.',
+              subagent_type: 'look',
+            },
+          },
+        ],
+      },
+      {
+        calls: [
+          {
+            name: 'raditi_artifact_render',
+            arguments: { artifactId: '01960000-0000-7000-8000-0000000000aa', frame: 'home' },
+          },
+        ],
+      },
+      { text: 'Looks fine.' },
+      { text: JSON.stringify(result(PRIOR)) },
+    ],
+  })
+  const { output, describe } = looked
+  assert.equal(output.code, 0, describe())
+  const models = output.llm.map((record) => record.model)
+  assert.ok(models.includes(VISION) && models.includes(MODEL), `${describe()} models ${models}`)
+  const main = output.llm.filter((record) => record.model === MODEL)
+  const helper = output.llm.filter((record) => record.model === VISION)
+  // The main model is offered the task tool and never the picture tool, nor gets a picture.
+  assert.ok(
+    main.every((record) => record.tools.includes('task')),
+    describe(),
+  )
+  assert.ok(
+    main.every((record) => !record.tools.includes('raditi_artifact_render')),
+    describe(),
+  )
+  assert.ok(
+    main.every((record) => record.pictures.length === 0),
+    JSON.stringify(main.map((r) => r.pictures)),
+  )
+  // The helper is offered the picture tool, and the picture reaches its next request.
+  assert.ok(
+    helper.some((record) => record.tools.includes('raditi_artifact_render')),
+    describe(),
+  )
+  const carried = helper.flatMap((record) => record.pictures)
+  process.stdout.write(`[opencode] pictures in the helper's requests: ${JSON.stringify(carried)}\n`)
+  assert.ok(
+    carried.some((where) => where.endsWith('data:image/jpeg;base64,same')),
+    `${describe()} pictures ${JSON.stringify(carried)}`,
+  )
+  assert.equal(
+    output.mcp.filter((record) => record.tool === 'artifact_render').length,
+    1,
+    describe(),
+  )
+  pass(
+    'the helper look — the main model calls it by the task tool and never sees a picture; the helper runs on the model that sees images, calls artifact_render, and its next request carries the JPEG as an image part',
+  )
+}
+
 try {
   imageId.value = (await docker(['image', 'inspect', options.image, '--format', '{{.Id}}'])).trim()
   assert.match(imageId.value, /^sha256:[a-f0-9]{64}$/)
   driver = createOpencodeDriver({ image: `raditi/verification@${imageId.value}` })
+  if (options.only === 'look') {
+    // The helper look alone (docs/plan/88-artifacts.md, Ар32): `--only look`.
+    await lookScenario()
+    process.exit(0)
+  }
 
   // 1. A fresh turn: shell, MCP tool, a written file, the result.
   const toolCheck = `node -e 'const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(TOOL_DUMP)},JSON.stringify({env:process.env,secretFiles:fs.readdirSync("/run/raditi/secrets"),uid:process.getuid(),cwd:process.cwd(),kernel:require("node:os").release()}));console.log(${JSON.stringify(SHELL_OK)})'`
@@ -2567,6 +2688,7 @@ try {
       "a relayed MCP server — the CLI calls /mcp/skill/<name> with the turn's MCP token from a pipe of its own, lists and calls its tool, and the platform's server keeps its token",
     )
   }
+  await lookScenario()
   process.stdout.write(
     `G3 local OpenCode driver verification passed (CLI ${CLI_VERSION}; no account, no plan key, no external network).\n`,
   )

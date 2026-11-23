@@ -91,16 +91,16 @@ COMMIT;
 `
 
 /**
- * What the seeds give a new database: one shell switched on, the catalogue of its two backends
- * (the Z.ai plan and the pay-per-token API, three profiles each) for the operator. In the order
- * `catalogue` reads it: by slug.
+ * Only the shell is enabled. Each backend gets three chat profiles and one vision profile,
+ * listed in the order `catalogue` reads them: by slug.
  */
 const newBackends = ['zai-api', 'zai-coding']
 export const newDatabaseCatalogue = {
   drivers: [{ id: 'opencode', enabled: true }],
   providers: newBackends.map((slug) => ({ slug, enabled: false })),
   models: newBackends.flatMap((provider) =>
-    ['glm-5.3-heavy', 'glm-5.3-light', 'glm-5.3-standard'].map((slug) => ({
+    // By slug: the profile that sees images of plan 88 (Ар32) sorts first.
+    ['glm-5.3-flash-low', 'glm-5.3-heavy', 'glm-5.3-light', 'glm-5.3-standard'].map((slug) => ({
       provider,
       slug,
       enabled: false,
@@ -336,7 +336,7 @@ export async function verifySwitchToOpencode({ client, psql, deploy, resolve, se
   // The one driver row: the capabilities follow the seed, which names one the migration did not.
   assert.deepEqual(
     { drivers: report.agent_drivers, providers: report.llm_providers, models: report.llm_models },
-    { drivers: [0, 1], providers: [2, 0], models: [6, 0] },
+    { drivers: [0, 1], providers: [2, 0], models: [8, 0] },
   )
   const seeded = await catalogue(client)
   assert.deepEqual(seeded, {

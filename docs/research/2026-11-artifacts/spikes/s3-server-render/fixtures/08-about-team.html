@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>О компании — клининг «Чистый дом»</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;800&display=swap" data-bug="B17">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Golos Text", sans-serif; color: #10302a; background: #ffffff; }
+  h1, h2, h3 { font-family: "Montserrat", sans-serif; }
+  .hero { background: #e8f5f1; padding: 88px 24px 72px; text-align: center; }
+  .hero h1 { font-size: 52px; margin: 0 0 16px; }
+  .hero p { font-size: 20px; color: #3d5a53; max-width: 680px; margin: 0 auto; }
+  .stats { display: flex; justify-content: center; gap: 56px; margin-top: 48px; flex-wrap: wrap; }
+  .stat b { display: block; font-size: 44px; color: #0b7a5c; font-family: "Montserrat", sans-serif; }
+  .stat span { color: #3d5a53; font-size: 16px; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 80px 24px; }
+  .wrap h2 { font-size: 38px; margin: 0 0 12px; }
+  .wrap > p { font-size: 18px; color: #3d5a53; margin: 0 0 40px; }
+  .team { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
+  .person { text-align: center; }
+  .person img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 24px; display: block; margin-bottom: 14px; }
+  .person h3 { margin: 0 0 4px; font-size: 19px; }
+  .person p { margin: 0; color: #3d5a53; font-size: 15px; }
+  .values { background: #f3faf8; min-height: 1100px; padding: 80px 24px; }
+  .values h2 { font-size: 38px; margin: 0 auto 12px; max-width: 1120px; }
+  .values p { font-size: 18px; color: #3d5a53; margin: 0 auto; max-width: 1120px; }
+  .contact { background: #0b7a5c; color: #fff; text-align: center; padding: 64px 24px; }
+  .contact h2 { margin: 0 0 12px; font-size: 34px; }
+  .contact p { margin: 0 0 24px; color: #d9f3eb; font-size: 18px; }
+  .contact a { display: inline-block; background: #fff; color: #0b7a5c; padding: 15px 30px; border-radius: 999px; font-weight: 700; text-decoration: none; }
+  @media (max-width: 800px) {
+    .team { grid-template-columns: repeat(2, 1fr); }
+    .hero h1 { font-size: 36px; }
+    .stats { gap: 28px; }
+  }
+</style>
+</head>
+<body>
+<section class="hero">
+  <h1>Убираем как для себя</h1>
+  <p>«Чистый дом» — команда из 18 человек в Краснодаре. С 2019 года убрали больше 7 000 квартир и офисов.</p>
+  <div class="stats">
+    <div class="stat"><b data-count="7200">0</b><span>уборок</span></div>
+    <div class="stat"><b data-count="18">0</b><span>сотрудников</span></div>
+    <div class="stat"><b data-count="98">0</b><span>% повторных заказов</span></div>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>Наша команда</h2>
+  <p>Каждый сотрудник проходит проверку и двухнедельное обучение.</p>
+  <div class="team">
+    <div class="person"><img src="artifact-file:team-1" alt="Марина, основатель" width="480" height="480"><h3>Марина Кузнецова</h3><p>Основатель и бригадир</p></div>
+    <div class="person"><img src="artifact-file:team-2" alt="Игорь, мастер химчистки" width="480" height="480"><h3>Игорь Литвинов</h3><p>Химчистка мебели</p></div>
+    <div class="person"><img src="artifact-file:team-3" alt="Светлана, старший клинер" width="480" height="480"><h3>Светлана Орлова</h3><p>Старший клинер</p></div>
+    <div class="person"><img src="artifact-file:team-4" alt="Алексей, менеджер" width="480" height="480"><h3>Алексей Мельников</h3><p>Принимает заказы</p></div>
+  </div>
+</section>
+
+<section class="values" data-bug="B12">
+  <h2>Наши ценности</h2>
+  <p>Честная цена до начала уборки, своя бытовая химия без резкого запаха и страховка имущества клиента на 500 000 ₽.</p>
+</section>
+
+<section class="contact">
+  <h2>Закажите первую уборку</h2>
+  <p>Скидка 15% новым клиентам по промокоду ДОМ15.</p>
+  <a href="#order">Рассчитать стоимость</a>
+</section>
+<script>
+  const counters = document.querySelectorAll('[data-count]')
+  const started = performance.now()
+  function step(now) {
+    const k = Math.min(1, (now - started) / 2500)
+    counters.forEach((el) => { el.textContent = Math.round(Number(el.dataset.count) * k).toLocaleString('ru-RU') })
+    if (k < 1) requestAnimationFrame(step)
+  }
+  requestAnimationFrame(step)
+</script>
+</body>
+</html>

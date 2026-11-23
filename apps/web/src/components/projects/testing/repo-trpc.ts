@@ -14,6 +14,7 @@ export interface RepoAnswers {
   retry?: (input: unknown) => unknown
   refresh?: (input: unknown) => unknown
   runs?: (input: { projectId: string }) => unknown
+  artifacts?: (input: { projectId: string }) => unknown
 }
 
 const query = (key: string, fn: (input: never) => unknown) => ({
@@ -28,6 +29,8 @@ const mutation = (fn: (input: never) => unknown) => ({
 
 export function repoTrpc(answers: RepoAnswers = {}) {
   return {
+    // «Артефакты проекта» of «Контекст» (docs/plan/88-artifacts.md, Ар42): none here.
+    artifact: { list: query('artifact.list', answers.artifacts ?? (() => [])) },
     projectRepo: {
       pathKey: () => ['projectRepo'],
       get: query('projectRepo.get', answers.get ?? (() => null)),

@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>heights</title>
+<style>body{margin:0} iframe{border:0;display:block;margin:0 0 8px}</style></head><body><script>
+// Every screen in both views, the iframe NOT sized to the content (900 / 844 px tall), so the bridge's
+// documentElement.scrollHeight is the content height and not the iframe's own height.
+const q = new URLSearchParams(location.search)
+window.__h = {}; window.__max = {}; window.__n = {}; window.__seq = {}
+// the last height each bridge reported (what the cabinet would use), the largest one and how many reports
+addEventListener('message', (e) => { if (e.data?.raditi !== 'frame') return; for (const f of document.querySelectorAll('iframe')) if (f.contentWindow === e.source) { const id = f.dataset.id; window.__h[id] = e.data.h; window.__max[id] = Math.max(window.__max[id] ?? 0, e.data.h); window.__n[id] = (window.__n[id] ?? 0) + 1; (window.__seq[id] ??= []).push(`${e.data.t}:${e.data.h}@${Math.round(performance.now())}`) } })
+for (const t of q.get('tokens').split(',')) for (const [w, h] of [[1440, 900], [390, 844]]) {
+  const f = document.createElement('iframe'); f.dataset.id = `${t}@${w}`; f.width = w; f.height = h; f.setAttribute('sandbox', 'allow-scripts'); f.setAttribute('scrolling', 'no')
+  f.src = `${q.get('fo')}/v/${t}`; document.body.appendChild(f)
+}
+</script></body></html>

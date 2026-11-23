@@ -7,6 +7,7 @@ import {
 } from '@repo/domain'
 
 import type { PageKeys } from './page-tokens.ts'
+import type { ArtifactSignals } from '../artifacts/signals.ts'
 import type { TaskSignals } from './signals.ts'
 
 /**
@@ -17,6 +18,8 @@ import type { TaskSignals } from './signals.ts'
 export interface ChatContext {
   /** APP_ENV: outside production a dialog is taken only in a synthetic workspace (rule 1). */
   appEnv: AppEnv
+  /** APP_URL, no trailing slash: the letters of invitations lead back to it (plan 88, Ар35). */
+  appUrl?: string
   /**
    * The cloud browser of tasks (docs/plan/57-browser-tasks.md, Б9, Б12): `streamUrl` is where the
    * cabinet opens the stream of a session (BROWSER_STREAM_PUBLIC_URL, `ws(s)://…`). Absent or
@@ -61,6 +64,12 @@ export interface ChatContext {
    * here: the stream ends at once, and the page reads by its polls alone.
    */
   signals?: TaskSignals | null
+  /**
+   * The signals and presence of artifacts (`artifact.signals`, `artifact.here`;
+   * docs/plan/88-artifacts.md, Ар20). Absent or null — Redis is not set up here: nobody is shown
+   * present, and the pages read by their polls alone.
+   */
+  artifacts?: ArtifactSignals | null
 }
 
 /**

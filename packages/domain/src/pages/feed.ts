@@ -135,3 +135,30 @@ export const feedDocLeftPayloadSchema = z.strictObject({
   reason: z.literal('refused'),
 })
 export type FeedDocLeftPayload = z.infer<typeof feedDocLeftPayloadSchema>
+
+/**
+ * `feed.artifact` v1 — an artifact the turn created or changed (docs/plan/88-artifacts.md, Ар46;
+ * slice 88.8): written by core after the answer of the turn, one a turn and artifact; the card
+ * reads its title by tRPC. Carries no title: a row of the feed is never rewritten. The rows
+ * `feed.doc` of plan 69 before it are read as history.
+ */
+export const feedArtifactPayloadSchema = z.strictObject({
+  v: version,
+  artifactId: id,
+  /** `artifactKinds` of `@repo/domain/artifacts`; a kind that left the list reads as history. */
+  kind: z.string().regex(/^[a-z]{1,24}$/),
+  created: z.boolean(),
+})
+export type FeedArtifactPayload = z.infer<typeof feedArtifactPayloadSchema>
+
+/**
+ * `feed.artifact_left` v1 — writes of the turn the check of core sent back (Ар19, §7.3): the text
+ * before them stays. Never why: a refusal may be a secret.
+ */
+export const feedArtifactLeftPayloadSchema = z.strictObject({
+  v: version,
+  artifactId: id,
+  blocks: z.number().int().min(1).max(1000),
+  reason: z.literal('refused'),
+})
+export type FeedArtifactLeftPayload = z.infer<typeof feedArtifactLeftPayloadSchema>

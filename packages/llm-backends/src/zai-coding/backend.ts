@@ -55,7 +55,15 @@ export interface ZaiOffer {
   readonly overrideEnv: string
   /** Whether a role with no egress node may connect to the origin itself. */
   readonly direct: boolean
+  /**
+   * The models of the offer that take images (docs/plan/88-artifacts.md, Ар32): the profile of a
+   * key that sees them may send `image_url` parts, and no other model ever.
+   */
+  readonly imageModels: readonly string[]
 }
+
+/** GLM-5.3-Flash sees images; it is on the plan and on the API (owner's answer, 19.11.2026). */
+const zaiImageModels = Object.freeze(['glm-5.3-flash'])
 
 /**
  * GLM Coding Plan: a subscription with credit windows. The unit codes are read off the reset
@@ -79,6 +87,7 @@ export const zaiCodingPlan: ZaiOffer = Object.freeze({
   overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
   // The owner's decision of 05.10.2026: Z.ai is reached without the egress node.
   direct: true,
+  imageModels: zaiImageModels,
 } as const)
 
 /**
@@ -101,6 +110,7 @@ export const zaiApiOffer: ZaiOffer = Object.freeze({
   }),
   overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
   direct: true,
+  imageModels: zaiImageModels,
 } as const)
 
 export const zaiCredentialSchema = z
@@ -320,7 +330,8 @@ export function createZaiBackend(offer: ZaiOffer): LlmBackend {
       keyOf(credential)
       return { externalAccountId: null, plan: null, accessExpiresAt: null, accessIssuedAt: null }
     },
-    normalizeBody: createZaiBodyPolicy(offer.route),
+    imageModels: offer.imageModels,
+    normalizeBody: createZaiBodyPolicy(offer.route, offer.imageModels),
     upstream(route, _body, clientHeaders, credential) {
       assertRoute(route)
       assertClient(clientHeaders)

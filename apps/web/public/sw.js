@@ -31,6 +31,11 @@ const SCHEDULED_TITLES = Object.freeze({
   not_started: 'Запланированная задача не запустилась',
   paused: 'Запланированная задача приостановлена',
   missed: 'Запланированная задача пропустила запуск',
+  // The notices of artifacts (docs/plan/88-artifacts.md, Ар54): no title, no words of anyone.
+  artifact_shared: 'С вами поделились артефактом',
+  artifact_comment: 'Новый комментарий в артефакте',
+  artifact_agent_reply: 'Агент ответил на заметку',
+  artifact_changed: 'Ваш артефакт изменили',
 })
 
 const ICON = '/brand-icon.png'
@@ -44,6 +49,7 @@ const GENERAL = Object.freeze({
 /** The sections of the cabinet: a window on one of them listens for `raditi:navigate`. */
 const CABINET_SECTIONS = Object.freeze([
   '/app',
+  '/artifacts',
   '/chats',
   '/pages',
   '/profile',
@@ -53,7 +59,7 @@ const CABINET_SECTIONS = Object.freeze([
 ])
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const TAG = /^(?:schedule|chat):[0-9a-f-]{36}$/
+const TAG = /^(?:schedule|chat|artifact):[0-9a-f-]{36}$/
 // The path of notificationPushPayloadSchema: of this origin, never `//host`.
 const PATH = /^\/(?!\/)[A-Za-z0-9/_-]*$/
 

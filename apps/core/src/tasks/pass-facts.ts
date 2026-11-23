@@ -1,20 +1,29 @@
 import { attemptCreditBudget } from '@repo/billing'
 import {
+  projectBrandOf,
   chatMemory,
   classProfile,
+  attachMentionedArtifacts,
+  listChatArtifacts,
   memoryEntriesOfPass,
+  artifactCommentSourceOf,
   passUnattended,
+  readArtifactCommentDispatch,
+  markArtifactReadOther,
   readyProjectFiles,
   taskAttachments,
   type PrismaClient,
 } from '@repo/db'
 import {
+  DomainError,
+  isDomainError,
   modelClassSchema,
   readFeedRow,
   repoMirrorStates,
   repoModes,
   repoProviderKinds,
   repoSecretsFoundPaths,
+  turnPlanSchema,
   turnSkillsOf,
   type LlmBackend,
   type LlmBackendId,
@@ -22,18 +31,19 @@ import {
   type ProjectSectionFacts,
   type UnavailableRepositoryFacts,
 } from '@repo/domain'
+import { artifactCommentsByOthers, artifactMentionsOf } from '@repo/domain/artifacts'
+import { z } from 'zod'
 
 import type { PoolProbeClient } from '../llm/pool-probe-client.ts'
 import { poolHasRoom } from '../llm/pool-room.ts'
 import { AGENT_COMMANDS } from './turn-instructions.ts'
-import {
-  savedPlanOf,
-  type ClientRequest,
-  type FinishedTurn,
-  type PassBudget,
-  type PassFacts,
-  type PassRepositoryRow,
-  type TaskAttachmentFacts,
+import type {
+  ClientRequest,
+  FinishedTurn,
+  PassBudget,
+  PassFacts,
+  PassRepositoryRow,
+  TaskAttachmentFacts,
 } from './turn-planner.ts'
 
 export interface PassFactsInput {
@@ -54,6 +64,49 @@ export interface PassFactsDependencies {
    * is probed before a pass leaves it for the next backend (`poolHasRoom`); absent — not probed.
    */
   poolProbe?: PoolProbeClient
+}
+
+const planShape = turnPlanSchema.shape
+const contextShape = planShape.context.shape
+const checkpointPlanSchema = z.object({
+  driverId: planShape.driverId,
+  driverVersion: planShape.driverVersion,
+  sandbox: z.object({ image: planShape.sandbox.shape.image }),
+  context: z.object({
+    taskId: contextShape.taskId,
+    sessionId: contextShape.sessionId,
+    turn: contextShape.turn,
+    llm: contextShape.llm,
+    mcp: contextShape.mcp,
+    nativeSessionId: contextShape.nativeSessionId
+      .nullable()
+      .transform((value) => value ?? undefined),
+  }),
+  previous: planShape.previous.nullable(),
+  repository: z.object({ projectRepositoryId: z.uuid() }).nullish(),
+})
+
+/** PostgreSQL projects the checkpoint fields: old instructions and prompts never leave the table. */
+async function checkpointPlans(db: PrismaClient, taskId: string) {
+  const rows = await db.$queryRaw<Array<{ turnNo: number; checkpoint: unknown }>>`
+    SELECT DISTINCT ON (turn_no) turn_no AS "turnNo", jsonb_build_object(
+      'driverId', plan->'driverId', 'driverVersion', plan->'driverVersion',
+      'sandbox', jsonb_build_object('image', plan#>'{sandbox,image}'),
+      'context', jsonb_build_object(
+        'taskId', plan#>'{context,taskId}', 'sessionId', plan#>'{context,sessionId}',
+        'turn', plan#>'{context,turn}', 'llm', plan#>'{context,llm}',
+        'mcp', plan#>'{context,mcp}', 'nativeSessionId', plan#>'{context,nativeSessionId}'
+      ),
+      'previous', plan->'previous',
+      'repository', CASE WHEN plan ? 'repository' THEN jsonb_build_object(
+        'projectRepositoryId', plan#>'{repository,projectRepositoryId}'
+      ) END
+    ) AS checkpoint
+    FROM turn_assignments WHERE task_id = ${taskId}::uuid AND finished_at IS NOT NULL
+    ORDER BY turn_no, created_at DESC, id DESC`
+  return new Map(
+    rows.map(({ turnNo, checkpoint }) => [turnNo, checkpointPlanSchema.safeParse(checkpoint).data]),
+  )
 }
 
 const turnStatus = (status: string): FinishedTurn['status'] =>
@@ -120,17 +173,38 @@ export async function readPassFacts(
   // The repository comes with the pass once it is prepared (PassRunner, docs/plan/84-projects.md,
   // §4.3, step 3); the facts read here never name one.
   const requirements = { repository: false, browser: task.needsBrowser }
+  const requestId = BigInt(input.requestEventId)
   const rows = await db.taskEvent.findMany({
-    where: { taskId: task.id, type: 'feed.request' },
+    where: { taskId: task.id, type: 'feed.request', id: { lte: requestId } },
     orderBy: { id: 'asc' },
-    select: { id: true, payload: true, createdAt: true },
+    select: { id: true, payload: true, createdAt: true, artifactCommentHasWords: true },
   })
-  const answered = rows.find((row) => row.id === BigInt(input.requestEventId))
-  if (!answered) return null
+  const answered = rows.at(-1)
+  if (answered?.id !== requestId) return null
+  const unattended =
+    task.scheduledRun &&
+    (await passUnattended(db, task.id, { requestEventId: input.requestEventId }))
+      ? { name: task.scheduledRun.name }
+      : null
+  const carried: PassDispatch = unattended
+    ? { kind: 'none' }
+    : await dispatchOfPass(db, task.id, answered, rows)
+  if (carried.kind === 'invalid') return null
+  const dispatch = carried.kind === 'notes' ? carried.facts : null
+  // Threads with words of other people mark the turn as one that read others (Ар25, 88.17в).
+  if (dispatch && artifactCommentsByOthers(dispatch.artifactComments.notes))
+    await markArtifactReadOther(db, {
+      taskId: task.id,
+      turnNo: input.turnNo,
+      now: input.now.getTime(),
+    })
   const requests: ClientRequest[] = rows.map((row) => {
     const event = readFeedRow('feed.request', row.payload)
     const text =
-      event.type === 'feed.request' && 'text' in event && typeof event.text === 'string'
+      row.artifactCommentHasWords !== false &&
+      event.type === 'feed.request' &&
+      'text' in event &&
+      typeof event.text === 'string'
         ? event.text
         : null
     const kind = event.type === 'feed.request' ? event.kind : 'unreadable'
@@ -154,7 +228,7 @@ export async function readPassFacts(
     }
   })
 
-  const [turnRows, assignments, variables] = await Promise.all([
+  const [turnRows, plans, variables] = await Promise.all([
     db.taskTurn.findMany({
       where: { taskId: task.id },
       select: {
@@ -166,11 +240,7 @@ export async function readPassFacts(
         undoneAt: true,
       },
     }),
-    db.turnAssignment.findMany({
-      where: { taskId: task.id, finishedAt: { not: null } },
-      orderBy: { createdAt: 'asc' },
-      select: { turnNo: true, plan: true },
-    }),
+    checkpointPlans(db, task.id),
     // The variables of the workspace (docs/plan/83-remove-projects.md, БП4): every chat gets them,
     // whatever the data class of the workspace (the owner's decision of 17.11.2026, БП14).
     db.workspaceEnvVar.findMany({
@@ -179,7 +249,6 @@ export async function readPassFacts(
       select: { name: true },
     }),
   ])
-  const plans = new Map(assignments.map((row) => [row.turnNo, savedPlanOf(row.plan)]))
   const turns = new Map<number, FinishedTurn>(
     turnRows.map((row) => [
       row.turnNo,
@@ -230,13 +299,43 @@ export async function readPassFacts(
   // The memory of the chat (docs/plan/84-projects.md, ПР18): null — off for its author.
   const memory = await chatMemory(deps.db, task.id)
   const memoryEntries = memory ? await memoryEntriesOfPass(deps.db, memory) : null
-  // A pass of a run before the first words of its client goes without them (Зп27, Зп29), decided
-  // by the request it answers: a cancel or an interrupt written since is for the passes after it.
-  const unattended =
-    task.scheduledRun &&
-    (await passUnattended(db, task.id, { requestEventId: input.requestEventId }))
-      ? { name: task.scheduledRun.name }
+  // The artifacts the client named in their own words (`@artifact:<id>`, docs/plan/88-artifacts.md,
+  // Ар23, Ар47) join the chat — by the client's role, never from a text an agent wrote: the first
+  // request of a run of a scheduled task is its instruction, which an agent may have written
+  // (`raditi_schedule_create`), so its mentions are not read.
+  const ownWords = task.scheduledRun ? requests.slice(1) : requests
+  const mentioned = [
+    ...new Set(
+      ownWords.flatMap((request) =>
+        // A command and the words of a command the agent carries out are the platform's.
+        request.kind !== 'command' && request.kind !== 'agent_command' && request.text
+          ? artifactMentionsOf(request.text)
+          : [],
+      ),
+    ),
+  ]
+  if (mentioned.length > 0)
+    await attachMentionedArtifacts(deps.db, { taskId: task.id, artifactIds: mentioned })
+  // The brand of the chat's project (docs/plan/88-artifacts.md, Ар42, slice 88.15а): in every turn
+  // of the project, its tokens as data.
+  const brand =
+    task.project && task.project.deletedAt === null
+      ? await projectBrandOf(deps.db, task.project.id)
       : null
+  // The artifacts the chat made, edited or was given (Ар26): their lines, no content.
+  const chatArtifacts = (await listChatArtifacts(deps.db, { taskId: task.id, scope: 'chat' })).rows
+  // The artifacts of its project (Ар26, slice 88.20): every turn of the project knows them by line.
+  const projectArtifacts =
+    task.project && task.project.deletedAt === null
+      ? (await listChatArtifacts(deps.db, { taskId: task.id, scope: 'project' })).rows
+      : []
+  const lineOf = ({ id, kind, title, version, updatedAt }: (typeof chatArtifacts)[number]) => ({
+    id,
+    kind,
+    title,
+    version,
+    updatedAt,
+  })
   return {
     task: {
       id: task.id,
@@ -252,6 +351,10 @@ export async function readPassFacts(
     repositoryUnavailable: repositoryUnavailableOf(task.project),
     ...(projectFiles.length ? { projectFiles } : {}),
     memory: memoryEntries,
+    ...(chatArtifacts.length ? { chatArtifacts: chatArtifacts.map(lineOf) } : {}),
+    ...(projectArtifacts.length ? { projectArtifacts: projectArtifacts.map(lineOf) } : {}),
+    ...(brand ? { projectBrand: brand } : {}),
+    ...(dispatch ?? {}),
     ...(unattended ? { unattended } : {}),
     ...(attachments.length ? { attachments } : {}),
     requests,
@@ -263,6 +366,67 @@ export async function readPassFacts(
     budget,
     now: input.now,
   }
+}
+
+type PassRequestRow = { id: bigint; payload: unknown; artifactCommentHasWords: boolean | null }
+
+/** What a pass carries of a dispatch of notes: none, notes, or links that do not hold. */
+type PassDispatch =
+  | { kind: 'none' }
+  | { kind: 'invalid' }
+  | {
+      kind: 'notes'
+      facts: Required<Pick<PassFacts, 'artifactCommentSourceId' | 'artifactComments'>>
+    }
+
+/**
+ * The notes of the dispatch this pass carries: of the request it answers, or of the dispatch the
+ * ceiling question it continues names (`artifactCommentSourceOf`). `invalid` — the link does not
+ * hold, and the pass is not planned.
+ */
+async function dispatchOfPass(
+  db: PrismaClient,
+  taskId: string,
+  answered: PassRequestRow,
+  history: readonly PassRequestRow[],
+): Promise<PassDispatch> {
+  const none = { kind: 'none' } as const
+  const invalid = { kind: 'invalid' } as const
+  const event = readFeedRow('feed.request', answered.payload)
+  if (event.type !== 'feed.request')
+    return answered.artifactCommentHasWords === null ? none : invalid
+  const sourceId = await artifactCommentSourceOf(db, { taskId, requestEventId: answered.id })
+  if (sourceId === null) return none
+  const original = history.find(({ id }) => id === sourceId)
+  if (!original || original.artifactCommentHasWords === null) return invalid
+  const request = readFeedRow('feed.request', original.payload)
+  if (
+    request.type !== 'feed.request' ||
+    (request.kind !== 'first' && request.kind !== 'answer') ||
+    request.authorId !== event.authorId
+  )
+    return invalid
+  const artifactComments = await readArtifactCommentDispatch(db, {
+    taskId,
+    requestEventId: original.id,
+    authorId: request.authorId,
+  }).catch((error: unknown) => {
+    throw notesWithdrawn(error)
+  })
+  return { kind: 'notes', facts: { artifactCommentSourceId: original.id, artifactComments } }
+}
+
+/**
+ * The artifact was deleted or its access lost since the dispatch: the client is told so. A snapshot
+ * that no longer passes its schema stays a technical failure.
+ */
+function notesWithdrawn(error: unknown): unknown {
+  if (!isDomainError(error) || error.code !== 'ARTIFACT_NOT_FOUND') return error
+  return new DomainError(
+    'ARTIFACT_COMMENTS_WITHDRAWN',
+    'The notes sent with the request are no longer available',
+    409,
+  )
 }
 
 /**

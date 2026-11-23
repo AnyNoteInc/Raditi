@@ -400,7 +400,7 @@ export const STAND_PAGE = Object.freeze({
   html: '<!doctype html><html lang="ru"><meta charset="utf-8"><title>Прайс</title><style>h1{color:#a63d12}</style><h1>Прайс</h1><p>Букет — 1 500 ₽</p><script>document.body.dataset.ready = "1"</script></html>',
 })
 
-/** The document scenario Q writes by sections (Ст7, Ст21), and its second words of a section. */
+/** The document scenario Q writes by blocks (plan 88, §7.5), and its second words of a section. */
 export const STAND_DOC = Object.freeze({
   title: 'Аудит скорости сайта',
   sections: [
@@ -410,7 +410,7 @@ export const STAND_DOC = Object.freeze({
   summary: 'Три причины медленной загрузки: большие картинки, лишние скрипты, нет кеша.',
   steps: '### По порядку\n\n1. Сжать картинки.\n2. Убрать лишние скрипты.',
   edited: 'Две причины медленной загрузки: большие картинки и нет кеша.',
-  // The form of a JWT: the role refuses a section that carries one before anyone sees it.
+  // The form of a JWT: the check of core sends back a write that carries one before anyone sees it.
   token:
     'Ключ доступа: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzdGFuZCIsImlhdCI6MTc5MDAwMDAwMH0.c3RhbmQtc2lnbmF0dXJlLW9mLXRoZS1ydW4',
 })
@@ -435,37 +435,56 @@ export function* publishPage(ctx, facts) {
 }
 
 /**
- * Scenario Q: the skeleton of a document, a section written, a section the role refuses (a JWT),
- * and `doc_finish` while a placeholder stands — refused.
+ * Scenario Q: a document artifact with its skeleton (docs/plan/88-artifacts.md, Ар3, Ар4, §7.5), a
+ * section written, a section with a JWT — taken by the role and sent back by the check of core,
+ * the text before it stays — and a read that names the chat's own writes before the check.
  */
 export function* writeDocument(ctx, facts) {
   // The view the client reads it in is the agent's choice since plan 74 (Д1): text, which
   // «Скачать .md» gives as Markdown; its link is the page to read all the same.
-  const created = yield call('doc_create', {
+  const created = yield call('artifact_create', {
+    kind: 'document',
     title: STAND_DOC.title,
     view: 'text',
-    sections: STAND_DOC.sections,
+    skeleton: STAND_DOC.sections,
   })
-  facts.docId = typeof created?.docId === 'string' ? created.docId : null
-  if (!facts.docId) throw new ScriptBroken(`doc_create made no document: ${codeOf(created)}`)
-  const docId = facts.docId
+  facts.docId = typeof created?.artifactId === 'string' ? created.artifactId : null
+  if (!facts.docId) throw new ScriptBroken(`artifact_create made nothing: ${codeOf(created)}`)
+  const artifactId = facts.docId
   facts.written = codeOf(
-    yield call('doc_section_write', {
-      docId,
-      id: 'summary',
-      heading: 'Итог',
-      markdown: STAND_DOC.summary,
+    yield call('artifact_edit', {
+      artifactId,
+      opId: 'q-summary',
+      ops: [
+        {
+          op: 'replace',
+          block: 'summary',
+          ifRev: 1,
+          content: STAND_DOC.summary,
+          props: { heading: 'Итог' },
+        },
+      ],
     }),
   )
   facts.token = codeOf(
-    yield call('doc_section_write', {
-      docId,
-      id: 'steps',
-      heading: 'Что сделать',
-      markdown: STAND_DOC.token,
+    yield call('artifact_edit', {
+      artifactId,
+      opId: 'q-token',
+      ops: [
+        {
+          op: 'replace',
+          block: 'steps',
+          ifRev: 1,
+          content: STAND_DOC.token,
+          props: { heading: 'Что сделать' },
+        },
+      ],
     }),
   )
-  facts.early = codeOf(yield call('doc_finish', { docId }))
+  const read = yield call('artifact_read', { artifactId })
+  facts.readOwn = Array.isArray(read?.blocks)
+    ? read.blocks.map((block) => block.content ?? '').join('|')
+    : null
   return final({
     summary: 'Started a document',
     changeType: 'none',
@@ -473,20 +492,35 @@ export function* writeDocument(ctx, facts) {
   })
 }
 
-/** Scenario Q: the last section, `doc_finish`, and the link of the document (`page_publish`). */
+/**
+ * Scenario Q: the next turn reads which of its writes the check sent back, writes the last
+ * section again under the revision it read, and asks for the link of the document (`page_publish`).
+ */
 export function* finishDocument(ctx, facts) {
-  const docId = ctx.docId
-  if (!docId) throw new ScriptBroken('the turn names no document')
+  const artifactId = ctx.docId
+  if (!artifactId) throw new ScriptBroken('the turn names no document')
+  const read = yield call('artifact_read', { artifactId, part: 'outline' })
+  facts.refused = Array.isArray(read?.refusedSinceYourRead) ? read.refusedSinceYourRead : null
+  const steps = Array.isArray(read?.outline)
+    ? read.outline.find((block) => block.id === 'steps')
+    : null
+  if (!steps) throw new ScriptBroken('the outline has no block steps')
   facts.written = codeOf(
-    yield call('doc_section_write', {
-      docId,
-      id: 'steps',
-      heading: 'Что сделать',
-      markdown: STAND_DOC.steps,
+    yield call('artifact_edit', {
+      artifactId,
+      opId: 'q-steps',
+      ops: [
+        {
+          op: 'replace',
+          block: 'steps',
+          ifRev: steps.rev,
+          content: STAND_DOC.steps,
+          props: { heading: 'Что сделать' },
+        },
+      ],
     }),
   )
-  facts.finish = codeOf(yield call('doc_finish', { docId }))
-  const published = yield call('page_publish', { docId })
+  const published = yield call('page_publish', { docId: artifactId })
   facts.code = codeOf(published)
   facts.url = typeof published?.url === 'string' ? published.url : null
   return final({
@@ -496,19 +530,17 @@ export function* finishDocument(ctx, facts) {
   })
 }
 
-/** Scenario Q: a section written again and the next version of the document. */
+/** Scenario Q: a section changed by a quote, and the next version of the document at the end. */
 export function* editDocument(ctx, facts) {
-  const docId = ctx.docId
-  if (!docId) throw new ScriptBroken('the turn names no document')
+  const artifactId = ctx.docId
+  if (!artifactId) throw new ScriptBroken('the turn names no document')
   facts.written = codeOf(
-    yield call('doc_section_write', {
-      docId,
-      id: 'summary',
-      heading: 'Итог',
-      markdown: STAND_DOC.edited,
+    yield call('artifact_edit', {
+      artifactId,
+      opId: 'q-edit',
+      ops: [{ op: 'edit', block: 'summary', find: STAND_DOC.summary, replace: STAND_DOC.edited }],
     }),
   )
-  facts.finish = codeOf(yield call('doc_finish', { docId }))
   return final({
     summary: 'Edited the document',
     changeType: 'none',

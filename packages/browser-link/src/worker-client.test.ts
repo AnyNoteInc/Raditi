@@ -441,3 +441,70 @@ describe('the HTTP client of the browser worker', () => {
 function clientOf(response: Response) {
   return workerWith(() => response).client
 }
+
+describe('the renderer of frames (docs/plan/88-artifacts.md, Ар32, §7.12)', () => {
+  const request = {
+    artifactId: '0196abcd-0000-7000-8000-0000000000aa',
+    frame: 'home',
+    viewer: { kind: 'agent' as const, taskId, turnNo: 2 },
+    output: 'layout' as const,
+  }
+  const drawn = {
+    title: 'Сайт',
+    report: 'No problems found.',
+    ru: 'Проверка вёрстки на компьютере и телефоне: замечаний нет',
+    problems: 0,
+    heights: [{ width: 1440, height: 900 }],
+    pictures: [],
+  }
+
+  it('posts the request to /v1/render and reads the answer by its schema', async () => {
+    const { client, calls } = workerWith(() => json(drawn))
+    await expect(client.render(request)).resolves.toEqual(drawn)
+    expect(calls[0]!.url).toBe(`${BASE_URL}/v1/render`)
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual(request)
+  })
+
+  it('keeps the codes of its refusals, at 503 too, and refuses a request out of the contract', async () => {
+    const busy = workerWith(() => json({ code: 'RENDER_BUSY' }, 503)).client
+    await expect(busy.render(request)).rejects.toMatchObject({ code: 'RENDER_BUSY' })
+    const gone = workerWith(() => json({ code: 'RENDER_NOT_FOUND' }, 404)).client
+    await expect(gone.render(request)).rejects.toMatchObject({ code: 'RENDER_NOT_FOUND' })
+    const { client, calls } = workerWith(() => json(drawn))
+    await expect(client.render({ ...request, widths: [800] } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+    expect(calls).toHaveLength(0)
+  })
+})
+
+describe('the diagrams of «Схема» (docs/plan/88-artifacts.md, §7.13, 88.24)', () => {
+  const request = {
+    workspaceId: '0196abcd-0000-7000-8000-0000000000bb',
+    source: 'flowchart LR\n  A[Заказ] --> B[Оплата]',
+  }
+
+  it('posts the text to /v1/diagram and reads a picture or an error with its line', async () => {
+    const picture = {
+      ok: true,
+      svg: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="5"/>',
+      width: 10,
+      height: 5,
+      type: 'flowchart-v2',
+    }
+    const { client, calls } = workerWith(() => json(picture))
+    await expect(client.diagram(request)).resolves.toEqual(picture)
+    expect(calls[0]!.url).toBe(`${BASE_URL}/v1/diagram`)
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual(request)
+    const broken = { ok: false, reason: 'parse', line: 2, message: 'Parse error on line 2' }
+    await expect(clientOf(json(broken)).diagram(request)).resolves.toEqual(broken)
+  })
+
+  it('refuses a text over the limit before any call', async () => {
+    const { client, calls } = workerWith(() => json({}))
+    await expect(client.diagram({ ...request, source: 'я'.repeat(50_001) })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+    expect(calls).toHaveLength(0)
+  })
+})

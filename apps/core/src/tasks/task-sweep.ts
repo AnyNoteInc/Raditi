@@ -7,6 +7,7 @@ import {
   closeStaleRepoProposals,
   dropAbandonedPages,
   insertFeedEvent,
+  latestPassRequestId,
   purgeExpiredPages,
   recordRunOutcome,
   stalePageReservations,
@@ -32,6 +33,7 @@ import {
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
 
+import type { ArtifactChecks } from '../artifacts/artifact-checks.ts'
 import { readBrowserTaskFacts } from '../browser/browser-facts.ts'
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import { recoveredTextRefusal } from '../turns/text-refusal.ts'
@@ -139,6 +141,14 @@ export interface TaskSweepDependencies {
    */
   pageChanges?: Pick<PageChanges, 'apply'> | null
   /**
+   * The agent's writes in artifacts (docs/plan/88-artifacts.md, Ар16): a turn the sweep ends checks
+   * them with the values Vault holds now, or drops them; writes of chats whose pass is over are
+   * dropped by the time they were written; the collector of artifacts runs. Absent — not swept.
+   */
+  artifacts?:
+    | (Pick<ArtifactChecks, 'settle' | 'fail' | 'sweep'> & Partial<Pick<ArtifactChecks, 'tell'>>)
+    | null
+  /**
    * The current values of the variables of a chat's workspace (БП4): what the changes of a turn
    * the sweep ends are refused for. Absent or unanswered — the memory of that turn is closed
    * failed, and its pages and scheduled tasks wait for their sweeps, as after a live end without
@@ -187,6 +197,7 @@ export class TaskSweep {
       ['browsers', () => this.sweepBrowsers()],
       ['attachments', () => this.collectAttachments()],
       ['pages', () => this.sweepPages()],
+      ['artifacts', () => this.deps.artifacts?.sweep({ busy: (id) => this.deps.live.has(id) })],
       ['projects', () => this.deps.projects?.sweep()],
       ['memory', () => this.sweepMemory()],
       ['schedules', () => this.sweepSchedules()],
@@ -299,9 +310,18 @@ export class TaskSweep {
     const { ending, published, swept } = await this.#endingOf(assignment)
     // As the live handler: what a task in the browser saved is read first (Б23).
     if (task.needs_browser) await this.deps.browser?.verify(task.id)
+    // The keys of the turn are gone with its attempt; the values are read again (Ар16).
+    const refusesText = await this.#recoveredRefusal(assignment)
+    // The writes in artifacts before the answer, as the live end checks them.
+    if (ending.kind === 'completed' && refusesText)
+      await this.deps.artifacts?.settle(task.id, ending.turn, refusesText)
+    else await this.deps.artifacts?.fail(task.id, assignment.turnNo, refusesText)
     const answer = await this.deps.settlement.settle(ref, ending)
+    // The artifacts the turn made or changed below its answer (Ар46).
+    if (answer === 'moved' && ending.kind === 'completed')
+      await this.deps.artifacts?.tell?.(task.id, ending.turn)
     if (answer === 'moved' && ending.kind === 'completed' && swept)
-      await this.#applyChanges(assignment, ending.turn, swept)
+      await this.#applyChanges(assignment, ending.turn, swept, refusesText)
     if (answer === 'moved' && ending.kind === 'completed' && published)
       await this.#tellPublished(task.id, ending.turn, published)
     return answer
@@ -320,22 +340,9 @@ export class TaskSweep {
     assignment: { taskId: string; sessionId: string; turnNo: number; firstEpoch: number },
     turn: number,
     swept: SweptTurn,
+    refusesText: ReturnType<typeof recoveredTextRefusal> | null,
   ): Promise<void> {
     const { taskId } = assignment
-    let refusesText: ReturnType<typeof recoveredTextRefusal> | null = null
-    try {
-      const values = this.deps.values?.siteValues
-        ? await this.deps.values.siteValues({
-            taskId,
-            sessionId: assignment.sessionId,
-            turn: assignment.turnNo,
-            epoch: assignment.firstEpoch,
-          })
-        : null
-      if (values) refusesText = recoveredTextRefusal(values)
-    } catch (error) {
-      this.#warn(`task sweep values task=${taskId}`, logged(error))
-    }
     if (refusesText) {
       await this.deps.pageChanges?.apply(taskId, turn, refusesText)
       await this.deps.schedules?.apply(taskId, turn, refusesText)
@@ -346,6 +353,32 @@ export class TaskSweep {
       evidence: swept.evidence,
       repository: swept.repository,
     })
+  }
+
+  /**
+   * The check of a turn whose end only the sweep reached: any text in the form of a turn key, and
+   * the values the workspace holds now. null — Vault did not answer.
+   */
+  async #recoveredRefusal(assignment: {
+    taskId: string
+    sessionId: string
+    turnNo: number
+    firstEpoch: number
+  }): Promise<ReturnType<typeof recoveredTextRefusal> | null> {
+    try {
+      const values = this.deps.values?.siteValues
+        ? await this.deps.values.siteValues({
+            taskId: assignment.taskId,
+            sessionId: assignment.sessionId,
+            turn: assignment.turnNo,
+            epoch: assignment.firstEpoch,
+          })
+        : null
+      return values ? recoveredTextRefusal(values) : null
+    } catch (error) {
+      this.#warn(`task sweep values task=${assignment.taskId}`, logged(error))
+      return null
+    }
   }
 
   /**
@@ -731,12 +764,9 @@ export class TaskSweep {
    * of a command moves nothing; `agent_command` — `/init` — is a pass, and it is put again.
    */
   async #put(taskId: string, attempt: number, tag: string): Promise<boolean> {
-    const [request] = await this.deps.db.$queryRaw<Array<{ id: bigint | null }>>`
-      SELECT max(id) AS id FROM task_events
-      WHERE task_id = ${taskId}::uuid AND type = 'feed.request'
-        AND payload->>'kind' IS DISTINCT FROM 'command'`
-    if (!request?.id) return false
-    const job = { taskId, attempt, requestEventId: request.id.toString() }
+    const request = await latestPassRequestId(this.deps.db, taskId)
+    if (request === null) return false
+    const job = { taskId, attempt, requestEventId: request.toString() }
     await this.deps.queue.enqueue(AGENT_TURN_QUEUE, AGENT_TURN_JOB, job, {
       jobId: agentTurnRetryJobId(job, tag),
     })

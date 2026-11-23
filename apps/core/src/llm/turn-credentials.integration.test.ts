@@ -820,7 +820,11 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
   it('issues no key for the product profile until the operator switches on the provider, the profile, a rate and the account', async () => {
     const f = await fixture()
     const grant = { ...f.grant, modelSlug: sampleModelSlug }
-    const profiles = { provider: { slug: sampleProviderSlug }, slug: { startsWith: 'glm-5.3-' } }
+    const profiles = {
+      provider: { slug: sampleProviderSlug },
+      slug: { startsWith: 'glm-5.3-' },
+      vision: false,
+    }
     const issue = () => f.credentials.issue(f.ref, grant)
     // The catalogue as the migrations and the seeds leave it: the driver of the product on,
     // its provider and profiles off, no rate.

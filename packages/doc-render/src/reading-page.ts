@@ -83,3 +83,149 @@ export async function readingPage({ title, markdown }: ReadingPageInput): Promis
   )
   return `<!doctype html>${renderToStaticMarkup(html)}`
 }
+
+export interface DiagramPageInput {
+  title: string
+  /** The pictures of «Схема», files of the site (`/_files/a/…`), in the order of their blocks. */
+  pictures: readonly { src: string; width: number; height: number }[]
+}
+
+/**
+ * A published «Схема» (docs/plan/88-artifacts.md, §7.10, 88.24в): the reading page with its title
+ * and the SVG the server drew and cleaned, as `<img>` — no script, nothing of Mermaid on the page.
+ */
+export async function diagramPage({ title, pictures }: DiagramPageInput): Promise<string> {
+  const { renderToStaticMarkup } = await import('react-dom/server')
+  const html = createElement(
+    'html',
+    { lang: 'ru' },
+    createElement(
+      'head',
+      null,
+      createElement('meta', { charSet: 'utf-8' }),
+      createElement('meta', { name: 'viewport', content: 'width=device-width, initial-scale=1' }),
+      createElement('meta', { name: 'robots', content: 'noindex, nofollow' }),
+      createElement('title', null, title),
+      createElement('style', { dangerouslySetInnerHTML: { __html: READING_PAGE_CSS } }),
+    ),
+    createElement(
+      'body',
+      null,
+      createElement(
+        'main',
+        null,
+        createElement(
+          'article',
+          null,
+          createElement('h1', null, title),
+          ...pictures.map((picture, index) =>
+            createElement(
+              'figure',
+              { key: index, style: { margin: '24px 0' } },
+              createElement('img', {
+                src: picture.src,
+                width: picture.width,
+                height: picture.height,
+                alt: title,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+  return `<!doctype html>${renderToStaticMarkup(html)}`
+}
+
+export type ReportPagePart =
+  | { kind: 'section'; heading: string | null; markdown: string }
+  | { kind: 'picture'; src: string; width: number; height: number }
+  | { kind: 'table'; head: readonly string[]; rows: readonly (readonly string[])[] }
+
+/**
+ * A published «Отчёт» (docs/plan/88-artifacts.md, §7.10, 88.28): the reading page with its title, its
+ * sections, its charts — the SVG the server drew, files of the site — and its table. No script.
+ */
+export async function reportPage(input: {
+  title: string
+  parts: readonly ReportPagePart[]
+}): Promise<string> {
+  const { renderToStaticMarkup } = await import('react-dom/server')
+  const part = (each: ReportPagePart, index: number) =>
+    each.kind === 'section'
+      ? createElement(
+          'section',
+          { key: index },
+          each.heading ? createElement('h2', null, each.heading) : null,
+          createElement(DocumentMarkdown, {
+            text: each.markdown,
+            documents: new Set<string>(),
+            imageSrc: () => null,
+            documentLinks: false,
+            treeLinks: true,
+          }),
+        )
+      : each.kind === 'picture'
+        ? createElement(
+            'figure',
+            { key: index, style: { margin: '24px 0' } },
+            createElement('img', {
+              src: each.src,
+              width: each.width,
+              height: each.height,
+              alt: '',
+            }),
+          )
+        : createElement(
+            'table',
+            { key: index },
+            createElement(
+              'thead',
+              null,
+              createElement(
+                'tr',
+                null,
+                each.head.map((cell, at) => createElement('th', { key: at, scope: 'col' }, cell)),
+              ),
+            ),
+            createElement(
+              'tbody',
+              null,
+              each.rows.map((row, at) =>
+                createElement(
+                  'tr',
+                  { key: at },
+                  row.map((cell, column) => createElement('td', { key: column }, cell)),
+                ),
+              ),
+            ),
+          )
+  const html = createElement(
+    'html',
+    { lang: 'ru' },
+    createElement(
+      'head',
+      null,
+      createElement('meta', { charSet: 'utf-8' }),
+      createElement('meta', { name: 'viewport', content: 'width=device-width, initial-scale=1' }),
+      createElement('meta', { name: 'robots', content: 'noindex, nofollow' }),
+      createElement('title', null, input.title),
+      createElement('style', { dangerouslySetInnerHTML: { __html: READING_PAGE_CSS } }),
+    ),
+    createElement(
+      'body',
+      null,
+      createElement(
+        'main',
+        null,
+        createElement(
+          'article',
+          null,
+          createElement('h1', null, input.title),
+          ...input.parts.map(part),
+        ),
+      ),
+    ),
+  )
+  return `<!doctype html>${renderToStaticMarkup(html)}`
+}

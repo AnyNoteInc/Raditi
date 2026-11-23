@@ -257,6 +257,8 @@ services:
       APP_ENV: production
       NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
       S3_BUCKET_INBOX: raditi-inbox
+      # The files of the frames of artifacts it renders, read only (docs/plan/88-artifacts.md, §7.12).
+      S3_BUCKET_ARTIFACTS: raditi-artifacts
       BROWSER_WORKER_HOST: 10.10.0.10
       BROWSER_WORKER_PORT: '8086'
       BROWSER_RUNTIME: runsc

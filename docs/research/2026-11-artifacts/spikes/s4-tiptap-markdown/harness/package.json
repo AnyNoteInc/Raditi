@@ -1,0 +1,31 @@
+{
+  "name": "spike88-s4-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run": "node run.mjs"
+  },
+  "dependencies": {
+    "@tiptap/core": "3.34.0",
+    "@tiptap/extension-image": "3.34.0",
+    "@tiptap/extension-list": "3.34.0",
+    "@tiptap/extension-table": "3.34.0",
+    "@tiptap/extension-unique-id": "3.34.0",
+    "@tiptap/markdown": "3.34.0",
+    "@tiptap/pm": "3.34.0",
+    "@tiptap/starter-kit": "3.34.0",
+    "diff": "9.0.0",
+    "hast-util-to-html": "9.0.6",
+    "hast-util-to-text": "4.0.3",
+    "jsdom": "31.0.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "remark-rehype": "11.1.2",
+    "remark-stringify": "11.0.0",
+    "unified": "11.0.5",
+    "unist-util-visit": "5.2.0"
+  }
+}

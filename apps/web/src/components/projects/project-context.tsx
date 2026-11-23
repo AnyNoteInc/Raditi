@@ -28,6 +28,7 @@ import {
   contextShownName,
 } from './context-parts'
 import { ContextTextDialog } from './context-text-dialog'
+import { ProjectArtifacts } from './project-artifacts'
 import { contextText } from './project-texts'
 import { ProjectRepositoryRow, useRepositoryWindows, type SignInWay } from './project-repository'
 import type { ProjectDetails } from './project-types'
@@ -166,6 +167,8 @@ export function ProjectContext({ project }: { project: ProjectDetails }) {
           onRetry={uploads.retry}
           onRemove={uploads.remove}
         />
+        {/* Its artifacts are a group of «Контекст» (docs/plan/88-artifacts.md, Ар42). */}
+        <ProjectArtifacts projectId={project.id} />
         {files.count > 0 ? (
           <ContextUsage
             bytes={files.bytes}

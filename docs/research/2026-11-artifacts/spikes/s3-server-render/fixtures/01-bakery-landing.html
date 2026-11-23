@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Пекарня «Колос» — свежий хлеб каждое утро</title>
+<style>
+  :root { --brand: #8a4b2a; --brand-dark: #5e2f16; --cream: #fff7ec; --text: #2b1d14; --muted: #6b5546; --radius: 16px; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Golos Text", system-ui, sans-serif; color: var(--text); background: #fff; line-height: 1.55; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+  header { position: sticky; top: 0; z-index: 10; background: rgba(255, 255, 255, 0.96); border-bottom: 1px solid #f0e4d7; }
+  .nav { display: flex; align-items: center; justify-content: space-between; height: 72px; }
+  .logo { font-size: 24px; font-weight: 800; color: var(--brand); text-decoration: none; }
+  .menu { display: flex; gap: 28px; list-style: none; }
+  .menu a { color: var(--text); text-decoration: none; font-weight: 500; }
+  .btn { display: inline-block; background: var(--brand); color: #fff; padding: 14px 28px; border-radius: 999px; font-weight: 600; text-decoration: none; border: 0; font-size: 16px; cursor: pointer; }
+  .btn.ghost { background: transparent; color: var(--brand); border: 2px solid var(--brand); }
+  .burger { display: none; width: 44px; height: 44px; border: 0; background: var(--cream); border-radius: 12px; font-size: 22px; }
+  .hero { background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%); padding: 96px 0; }
+  .hero .container { display: grid; grid-template-columns: 1.1fr 1fr; gap: 48px; align-items: center; }
+  .hero h1 { font-size: 56px; line-height: 1.1; margin-bottom: 20px; }
+  .hero p { font-size: 20px; color: var(--muted); margin-bottom: 32px; max-width: 520px; }
+  .hero .actions { display: flex; gap: 16px; flex-wrap: wrap; }
+  .hero img { width: 100%; border-radius: 24px; display: block; box-shadow: 0 24px 48px rgba(94, 47, 22, 0.18); }
+  section { padding: 88px 0; }
+  h2 { font-size: 40px; margin-bottom: 12px; }
+  .lead { color: var(--muted); font-size: 18px; margin-bottom: 40px; }
+  .products { display: grid; grid-template-columns: repeat(3, 280px); gap: 24px; justify-content: space-between; }
+  .card { background: var(--cream); border-radius: var(--radius); overflow: hidden; }
+  .card img { width: 100%; height: 200px; object-fit: cover; display: block; }
+  .card .body { padding: 20px; }
+  .card h3 { font-size: 20px; margin-bottom: 6px; }
+  .card .price { font-size: 22px; font-weight: 700; color: var(--brand); margin: 12px 0 16px; }
+  .why { background: var(--cream); }
+  .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
+  .feature { background: #fff; padding: 28px; border-radius: var(--radius); }
+  .feature .icon { font-size: 32px; margin-bottom: 12px; }
+  .feature h3 { font-size: 18px; margin-bottom: 8px; }
+  .feature p { color: var(--muted); font-size: 15px; }
+  .reviews { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+  .review { border: 1px solid #f0e4d7; border-radius: var(--radius); padding: 28px; }
+  .review blockquote { font-size: 17px; margin-bottom: 16px; }
+  .review-author { color: #c4c4c4; font-size: 15px; }
+  .cta { background: var(--brand-dark); color: #fff; text-align: center; border-radius: 28px; padding: 64px 32px; }
+  .cta h2 { color: #fff; }
+  .cta p { color: #f3dccb; margin-bottom: 28px; font-size: 18px; }
+  .cta .btn { background: #fff; color: var(--brand-dark); }
+  footer { background: var(--text); color: #f5e6d8; padding: 48px 0; font-size: 15px; }
+  footer .cols { display: flex; justify-content: space-between; gap: 32px; flex-wrap: wrap; }
+  footer a { color: #f5e6d8; }
+  @media (max-width: 768px) {
+    .menu, .nav .btn { display: none; }
+    .burger { display: block; }
+    .hero { padding: 56px 0; }
+    .hero .container { grid-template-columns: 1fr; }
+    .hero h1 { font-size: 36px; }
+    .hero p { font-size: 17px; }
+    section { padding: 56px 0; }
+    h2 { font-size: 30px; }
+    .features, .reviews { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="container nav">
+    <a class="logo" href="#top">Колос</a>
+    <ul class="menu">
+      <li><a href="#products">Выпечка</a></li>
+      <li><a href="#why">О нас</a></li>
+      <li><a href="#reviews">Отзывы</a></li>
+      <li><a href="#contacts">Контакты</a></li>
+    </ul>
+    <a class="btn" href="#order">Заказать</a>
+    <button class="burger" aria-label="Меню">☰</button>
+  </div>
+</header>
+
+<main id="top">
+  <div class="hero">
+    <div class="container">
+      <div>
+        <h1>Свежий хлеб каждое утро</h1>
+        <p>Печём на закваске с 6 утра. Доставим к завтраку по Казани — тёплым, с хрустящей корочкой.</p>
+        <div class="actions">
+          <a class="btn" href="#order">Заказать к утру</a>
+          <a class="btn ghost" href="#products">Смотреть выпечку</a>
+        </div>
+      </div>
+      <img src="artifact-file:hero-bread" alt="Хлеб на закваске на деревянной доске" width="1200" height="800">
+    </div>
+  </div>
+
+  <section id="products">
+    <div class="container">
+      <h2>Наша выпечка</h2>
+      <p class="lead">Каждый день — 12 видов хлеба и сладкой выпечки.</p>
+      <div class="products" data-bug="B1">
+        <article class="card">
+          <img src="artifact-file:bun-1" alt="Батон «Нарезной»" width="640" height="480">
+          <div class="body">
+            <h3>Батон «Нарезной»</h3>
+            <p>Пшеничная мука высшего сорта, молоко, сливочное масло.</p>
+            <div class="price">95 ₽</div>
+            <button class="btn">В корзину</button>
+          </div>
+        </article>
+        <article class="card">
+          <img src="artifact-file:bun-2" alt="Бородинский хлеб" width="640" height="480">
+          <div class="body">
+            <h3>Бородинский</h3>
+            <p>Ржаная закваска, кориандр и солод. Хранится до пяти дней.</p>
+            <div class="price">140 ₽</div>
+            <button class="btn">В корзину</button>
+          </div>
+        </article>
+        <article class="card">
+          <img src="artifact-file:bun-3" alt="Круассан с миндалём" width="640" height="480">
+          <div class="body">
+            <h3>Круассан с миндалём</h3>
+            <p>Слоёное тесто на французском масле, миндальный крем.</p>
+            <div class="price">160 ₽</div>
+            <button class="btn">В корзину</button>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="why" class="why">
+    <div class="container">
+      <h2>Почему нас выбирают</h2>
+      <p class="lead">Мы небольшая семейная пекарня и знаем каждого постоянного гостя по имени.</p>
+      <div class="features">
+        <div class="feature"><div class="icon">🌾</div><h3>Своя закваска</h3><p>Выращиваем её с 2014 года, без дрожжей и улучшителей.</p></div>
+        <div class="feature"><div class="icon">⏰</div><h3>С 6 утра</h3><p>Первая выпечка готова к открытию в 7:00.</p></div>
+        <div class="feature"><div class="icon">🚚</div><h3>Доставка</h3><p>Бесплатно от 1 000 ₽ в пределах города.</p></div>
+        <div class="feature"><div class="icon">🎂</div><h3>На заказ</h3><p>Торты и караваи к празднику за 2 дня.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="reviews">
+    <div class="container">
+      <h2>Отзывы</h2>
+      <p class="lead">Нам пишут после каждой субботней ярмарки.</p>
+      <div class="reviews">
+        <div class="review"><blockquote>«Бородинский как в детстве. Берём каждую неделю, дети просят ещё».</blockquote><p class="review-author" data-bug="B2">— Анна, постоянный гость</p></div>
+        <div class="review"><blockquote>«Круассаны лучше, чем в Париже, а стоят в три раза дешевле».</blockquote><p class="review-author">— Тимур, сосед по улице</p></div>
+        <div class="review"><blockquote>«Заказали каравай на свадьбу — все гости спрашивали, где брали».</blockquote><p class="review-author">— Ольга и Марат</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="order">
+    <div class="container">
+      <div class="cta">
+        <h2>Закажите хлеб к завтраку</h2>
+        <p>Оформите заказ до 22:00 — привезём завтра с 7 до 9 утра.</p>
+        <a class="btn" href="#contacts">Оформить заказ</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer id="contacts">
+  <div class="container cols">
+    <div><strong>Пекарня «Колос»</strong><br>Казань, ул. Баумана, 12</div>
+    <div>Ежедневно 7:00–21:00<br><a href="tel:+78430000000">+7 843 000-00-00</a></div>
+    <div>© <span id="year">2026</span> Пекарня «Колос»</div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('year').textContent = String(new Date().getFullYear())
+  document.querySelector('.burger').addEventListener('click', () => {
+    document.querySelector('.menu').classList.toggle('open')
+  })
+  document.querySelectorAll('a[href^="#"]').forEach((a) => {
+    a.addEventListener('click', (event) => {
+      const target = document.querySelector(a.getAttribute('href'))
+      if (target) { event.preventDefault(); target.scrollIntoView({ behavior: 'smooth' }) }
+    })
+  })
+</script>
+</body>
+</html>

@@ -316,6 +316,11 @@ export interface TurnCredentialValues {
    * Absent — none.
    */
   envValues?: Readonly<Record<string, string>>
+  /**
+   * The model of the key's profile that sees images (`llm_keys.vision_model_id`, docs/plan/88-
+   * artifacts.md, Ар32); absent — the key has none.
+   */
+  visionModel?: string
 }
 
 /**
@@ -387,7 +392,8 @@ export function withoutTurnCredentials(request: TurnRequest): UnkeyedTurnRequest
 
 export const turnPlanLimits = Object.freeze({
   prompt: 100_000,
-  instructions: 256 * 1024,
+  // An explicit note dispatch can add about 150 KiB of escaped JSON to the usual instructions.
+  instructions: 512 * 1024,
   attachments: 100,
   url: 2048,
 })
@@ -675,7 +681,11 @@ export function withTurnCredentials(
     ...request,
     context: {
       ...plan.context,
-      llm: { ...plan.context.llm, apiKey: credentials.llmApiKey },
+      llm: {
+        ...plan.context.llm,
+        apiKey: credentials.llmApiKey,
+        ...(credentials.visionModel === undefined ? {} : { visionModel: credentials.visionModel }),
+      },
       mcp: { ...plan.context.mcp, token: credentials.mcpToken },
       ...(Object.keys(envValues).length ? { envValues: { ...envValues } } : {}),
     },
