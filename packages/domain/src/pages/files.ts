@@ -92,7 +92,10 @@ export const pageFileIsText = (path: string): boolean =>
  * The headers of a shared file (Дер34): its own type and no other reading of it (`nosniff`); any
  * page may load it — a sandboxed page asks from an opaque origin, which `same-origin` would refuse,
  * and the bytes of a public picture are no secret —; opened alone it runs nothing (`sandbox`), an
- * SVG with its styles only; a PDF downloads.
+ * SVG with its styles only; a PDF downloads. A published page is a sandbox with the origin `null`,
+ * and Chromium and Firefox ask for its fonts, and every engine for its `.mjs` modules, by a CORS
+ * request: without `Access-Control-Allow-Origin: *` they refuse them. `*` lets no request with a
+ * cookie read the answer, so a file of a site with a password stays where it was.
  */
 export function pageFileHeaders(type: string): Record<string, string> {
   return {
@@ -106,6 +109,7 @@ export function pageFileHeaders(type: string): Record<string, string> {
     'Referrer-Policy': 'no-referrer',
     'X-Robots-Tag': 'noindex, nofollow, noarchive',
     'Cross-Origin-Resource-Policy': 'cross-origin',
+    'Access-Control-Allow-Origin': '*',
     ...(type === 'application/pdf' ? { 'Content-Disposition': 'attachment' } : {}),
   }
 }

@@ -32,6 +32,12 @@ export interface DocumentRules {
    * The cabinet's tab has no site, and the link stays its words there.
    */
   treeLinks?: boolean
+  /**
+   * What a link to a heading of the document leads to before its `#doc-…`: none — the document's
+   * own address. A page shown in a frame `srcdoc` of the cabinet reads its links from the
+   * cabinet's address, and `#doc-…` would take the frame there: `about:srcdoc` keeps it in place.
+   */
+  anchorBase?: string
 }
 
 /** The elements GitHub-flavoured Markdown makes; any other one is left as its children. */
@@ -135,7 +141,11 @@ function link(node: Element, rules: DocumentRules): Element {
       )
     }
     case 'anchor':
-      return element('a', { href: `#${DOCUMENT_ANCHOR_PREFIX}${target.anchor}` }, node.children)
+      return element(
+        'a',
+        { href: `${rules.anchorBase ?? ''}#${DOCUMENT_ANCHOR_PREFIX}${target.anchor}` },
+        node.children,
+      )
     case 'document':
       return rules.documentLinks
         ? element(

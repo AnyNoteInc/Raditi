@@ -2,6 +2,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
+import { sectionMarkdownProblem } from '@repo/domain/pages'
+
 import { DocumentMarkdown } from './document-markdown.ts'
 
 const rules = {
@@ -73,5 +75,59 @@ describe('the rules of a text document (docs/plan/67-agent-documents.md, Д6)', 
     expect(drawn('[Нет](нет.md)')).toContain(
       '<span data-missing-document="" title="Такого документа в чате нет.">Нет</span>',
     )
+  })
+
+  it('breaks the line at a <br> of the text instead of gluing the words', () => {
+    expect(drawn('окно.<br>Вторая')).toContain('<p>окно.<br/>\nВторая</p>')
+    expect(drawn('| Часы |\n| --- |\n| 10:00–18:00<br/>(обед) |')).toContain(
+      '<td>10:00–18:00<br/>\n(обед)</td>',
+    )
+    expect(drawn('**жирно<BR />дальше**')).toContain('<strong>жирно<br/>\nдальше</strong>')
+    // Raw HTML is still skipped: a <br> on a line of its own, and any other tag.
+    expect(drawn('<br>\n\nТекст <b>тег</b>').trim()).toBe('<p>Текст тег</p>')
+  })
+
+  it('heads the footnotes in Russian (rule 10)', () => {
+    const html = drawn('НДС[^1]\n\n[^1]: Не облагается.')
+    expect(html).not.toMatch(/Footnotes|Back to/i)
+    expect(html).toContain('<h2 id="doc-примечания">Примечания</h2>')
+    expect(html).toContain('<a href="#doc-user-content-fn-1">1</a>')
+  })
+
+  // The rule of the levels of a section (@repo/domain) against the tree that draws it.
+  it('refuses a section exactly where it would draw a heading of the first or second level', () => {
+    const sections = [
+      'Итоги месяца\n---',
+      'Итоги месяца\n===',
+      '  Итоги\n   ---',
+      'Две строки\nтекста\n---',
+      '> Цитата\n> ---',
+      '> Цитата\n---',
+      '> Цитата\n===',
+      '> Цитата\nещё\n---',
+      '> - a\n>   ---',
+      '- Пункт\n  ---',
+      '- Пункт\n  ещё\n  ===',
+      '1. Пункт\n   ---',
+      '| только строка |\n---',
+      'Текст\n\n---',
+      'Текст\n***',
+      'Текст\n- - -',
+      '- Пункт\n---',
+      '- Пункт\n===',
+      '    код\n---',
+      '### Заголовок\n---',
+      '| а | б |\n| --- | --- |\n| 1 | 2 |\n---',
+      '```\nтекст\n---\n```',
+      '---\n---',
+      'Текст\n    ---',
+    ]
+    for (const section of sections) {
+      const heading = /<h[12][ >]/.test(drawn(section))
+      expect({ section, refused: sectionMarkdownProblem(section) === 'heading_level' }).toEqual({
+        section,
+        refused: heading,
+      })
+    }
   })
 })
