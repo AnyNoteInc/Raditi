@@ -283,11 +283,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL: access of other users to an artifact'
     expect(owner.id).not.toBe(editor.id)
   })
 
-  it('opens to nobody in production until the flag is on', async () => {
+  it('opens in production once the flag is on (after v1.77.0)', async () => {
     const { owner, artifactId } = await shared()
     await expect(
       callerOf(owner, 'production').artifact.shareLink({ artifactId, role: 'view', term: null }),
-    ).rejects.toMatchObject({ cause: { code: 'ARTIFACT_SHARING_CLOSED' } })
+    ).resolves.toMatchObject({ token: expect.any(String) })
   })
 
   it('invites by an address, sends our words only, and opens to that confirmed address alone (88.16-2)', async () => {
