@@ -212,6 +212,35 @@ describe('creditRing', () => {
     expect(creditRows(carried)).toContainEqual({ label: 'По тарифу', value: 'осталось 700 из 720' })
   })
 
+  it('is full of the week limit of a tariff that has one', () => {
+    const weekly = onBusiness(512)
+    weekly.windows = [
+      { kind: '5h', limit: 40, used: 10, left: 30, resetsAt: null },
+      { kind: 'week', limit: 200, used: 50, left: 150, resetsAt: null },
+    ]
+    expect(creditRing(weekly)).toEqual({
+      label: 'Недельный лимит: осталось 150 из 200',
+      share: 150 / 200,
+      closed: false,
+    })
+    expect(creditRows(weekly).map((row) => row.label)).toEqual(['Неделя', 'По тарифу', 'Пакет'])
+    expect(creditRows(weekly)[0]).toEqual({ label: 'Неделя', value: 'осталось 150 из 200' })
+  })
+
+  it('is full of the period while the week has no limit', () => {
+    const unlimited = onBusiness(512)
+    unlimited.windows = [{ kind: 'week', limit: null, used: 50, left: null, resetsAt: null }]
+    expect(creditRing(unlimited).label).toBe('Кредиты по тарифу: осталось 512 из 600')
+    expect(creditRows(unlimited).map((row) => row.label)).toEqual(['По тарифу', 'Пакет'])
+  })
+
+  it('shows no week of a tariff that waits for its payment', () => {
+    const late = unpaid()
+    late.windows = [{ kind: 'week', limit: 200, used: 50, left: 150, resetsAt: null }]
+    expect(creditRing(late)).toMatchObject({ share: 0, closed: true })
+    expect(creditRows(late).map((row) => row.label)).not.toContain('Неделя')
+  })
+
   it('is full of the gift without a tariff, and closed when a task would not be taken', () => {
     expect(creditRing(giftOnly(0))).toEqual({
       label: `Подарочные кредиты: осталось 0 из ${signupGiftCredits}. Сейчас новую задачу начать нельзя`,
