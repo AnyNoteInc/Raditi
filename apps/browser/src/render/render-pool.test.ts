@@ -12,6 +12,7 @@ const renderer = () => {
   return {
     render: vi.fn(),
     diagram: vi.fn(),
+    print: vi.fn(),
     connected: () => connected,
     close: vi.fn(async () => {
       connected = false

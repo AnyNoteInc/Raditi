@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer'
+
 import { isDomainError, type BrowserSessionState, type DomainError } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -506,5 +508,28 @@ describe('the diagrams of «Схема» (docs/plan/88-artifacts.md, §7.13, 88.
       code: 'BAD_REQUEST',
     })
     expect(calls).toHaveLength(0)
+  })
+})
+
+describe('the print of «Отчёт» (docs/plan/88-artifacts.md, §7.13, 88.32)', () => {
+  const request = { html: '<!doctype html><html><head></head><body><h1>Отчёт</h1></body></html>' }
+
+  it('posts the page to /v1/print and reads the PDF; a refusal of the printer keeps its code', async () => {
+    const answer = { pdf: Buffer.from('%PDF-1.7').toString('base64') }
+    const { client, calls } = workerWith(() => json(answer))
+    await expect(client.print(request)).resolves.toEqual(answer)
+    expect(calls[0]!.url).toBe(`${BASE_URL}/v1/print`)
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual(request)
+    await expect(clientOf(json({ code: 'RENDER_BUSY' }, 503)).print(request)).rejects.toMatchObject(
+      { code: 'RENDER_BUSY' },
+    )
+  })
+})
+
+describe('the answer of a print (88.32)', () => {
+  it('reads a PDF of 8 MiB in base64, over the limit of a render', async () => {
+    const pdf = Buffer.alloc(8 * 1024 * 1024 - 16, 0x25).toString('base64')
+    const answer = await clientOf(json({ pdf })).print({ html: '<!doctype html><html></html>' })
+    expect(answer.pdf.length).toBe(pdf.length)
   })
 })

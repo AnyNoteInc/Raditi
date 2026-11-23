@@ -10,8 +10,8 @@ import {
   type PrismaClient,
   artifactDiagramOf,
 } from '@repo/db'
-import { diagramPage, readingPage, reportPage, type ReportPagePart } from '@repo/doc-render'
-import { chartSvg } from '@repo/doc-render/chart'
+import { diagramPage, readingPage, reportPage } from '@repo/doc-render'
+import { reportPartsOf } from '@repo/doc-render/report'
 import {
   checkPageContent,
   DomainError,
@@ -36,8 +36,6 @@ import {
   tableOfBlocks,
   withArtifactFileAddresses,
   artifactSlidesOf,
-  artifactChartOf,
-  tableCellText,
 } from '@repo/domain/artifacts'
 
 // The bridge from an artifact to pages (docs/plan/88-artifacts.md, Ар2, Ар23, §7.10; slice 88.11б):
@@ -230,41 +228,21 @@ async function reportPublication(input: { title: string; blocks: readonly Versio
     )
   if (ordered.length === 0)
     throw new DomainError('DOC_NOT_READY', 'The version has no text to publish', 409)
-  const table = tableOfBlocks(
-    ordered.flatMap((block) =>
-      block.kind === 'columns' || block.kind === 'row'
-        ? [{ key: block.key, kind: block.kind, rev: 0, content: block.content }]
-        : [],
-    ),
-  )
   const files: { path: string; bytes: Uint8Array }[] = []
-  const parts: ReportPagePart[] = []
-  for (const block of ordered) {
-    if (block.kind === 'section') {
-      const heading = (block as { props?: Record<string, unknown> }).props?.heading
-      parts.push({
-        kind: 'section',
-        heading: typeof heading === 'string' && heading.trim() !== '' ? heading : null,
-        markdown: block.content ?? '',
-      })
-    } else if (block.kind === 'chart') {
-      const chart = artifactChartOf(block.content)
-      if (!chart.ok) continue
-      const picture = chartSvg(chart.spec)
+  const parts = reportPartsOf(
+    ordered.map((block) => ({
+      key: block.key,
+      kind: block.kind!,
+      content: block.content,
+      props: (block as { props?: Record<string, unknown> }).props ?? null,
+    })),
+    (picture) => {
       const path = `/_files/a/c-${createHash('sha256').update(picture.svg).digest('hex').slice(0, 32)}.svg`
       if (!files.some((file) => file.path === path))
         files.push({ path, bytes: encode(picture.svg) })
-      parts.push({ kind: 'picture', src: path, width: picture.width, height: picture.height })
-    } else if (block.kind === 'columns' && table.columns.length > 0) {
-      parts.push({
-        kind: 'table',
-        head: table.columns.map((column) => column.name),
-        rows: table.rows.map((row) =>
-          table.columns.map((column) => tableCellText(column, row.cells[column.key])),
-        ),
-      })
-    }
-  }
+      return path
+    },
+  )
   return { bytes: encode(await reportPage({ title: input.title, parts })), files }
 }
 

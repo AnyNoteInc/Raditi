@@ -1,4 +1,6 @@
 import { readArtifact, type PrismaClient } from '@repo/db'
+import { reportPage } from '@repo/doc-render'
+import { chartDataUrl, reportPartsOf } from '@repo/doc-render/report'
 import { isDomainError, type ObjectStorage } from '@repo/domain'
 import {
   artifactExportContentTypes,
@@ -9,6 +11,8 @@ import {
   artifactSlidesOf,
   tableOfBlocks,
   type ArtifactExportFormat,
+  type ArtifactPrintRequest,
+  type ArtifactPrintResponse,
   type ArtifactRenderRequest,
   type ArtifactRenderResponse,
 } from '@repo/domain/artifacts'
@@ -27,6 +31,8 @@ export interface ArtifactExportsDependencies {
   storage: Pick<ObjectStorage, 'put' | 'delete'>
   /** The renderer of the browser worker: the pictures of slides (88.25в); null — none. */
   render?: ((request: ArtifactRenderRequest) => Promise<ArtifactRenderResponse>) | null
+  /** The printer of the browser worker: the PDF of «Отчёт» (88.32); null — none. */
+  print?: ((request: ArtifactPrintRequest) => Promise<ArtifactPrintResponse>) | null
   logger?: { log(line: string): void; warn(line: string): void }
   now?: () => Date
 }
@@ -94,6 +100,15 @@ export class ArtifactExports {
       }
       bytes = picture
       count = 1
+    } else if (format === 'pdf' && artifact.kind === 'report') {
+      const printed = await this.#report(artifact)
+      if (printed === null) {
+        await this.#fail(exportId)
+        logger?.warn(`artifact_export_refused export=${exportId} reason=render`)
+        return 'failed'
+      }
+      bytes = printed.bytes
+      count = printed.parts
     } else {
       const deck = await this.#deck(row.userId, artifact)
       if (deck === null) {
@@ -122,6 +137,32 @@ export class ArtifactExports {
     logger?.log(`artifact_export_ready export=${exportId} format=${format} parts=${count}`)
     await this.#forgetOld(row.artifactId, now)
     return 'ready'
+  }
+
+  /**
+   * «Отчёт» as a PDF (88.32): the page its publication serves — as the person who asked reads it,
+   * the blocks that wait for the check left out —, its charts inline, printed by the browser
+   * worker. Null — no printer, nothing to print, or a refusal of the printer.
+   */
+  async #report(
+    artifact: Awaited<ReturnType<typeof readArtifact>>,
+  ): Promise<{ bytes: Uint8Array; parts: number } | null> {
+    const print = this.#deps.print ?? null
+    if (print === null) return null
+    const parts = reportPartsOf(
+      artifact.blocks.filter((block) => block.parent === null && block.content !== null),
+      chartDataUrl,
+    )
+    if (parts.length === 0) return null
+    const html = await reportPage({ title: artifact.title, parts, print: true })
+    try {
+      const { pdf } = await print({ html })
+      return { bytes: new Uint8Array(Buffer.from(pdf, 'base64')), parts: parts.length }
+    } catch (error) {
+      // A page over the limits fails the export; an unreachable or busy worker is tried again.
+      if (isDomainError(error) && error.httpStatus < 500) return null
+      throw error
+    }
   }
 
   /** One picture of «Изображение» in its own size, as the person who asked reads it (88.26). */

@@ -137,6 +137,23 @@ export async function diagramPage({ title, pictures }: DiagramPageInput): Promis
   return `<!doctype html>${renderToStaticMarkup(html)}`
 }
 
+/**
+ * The print of a report (88.32): the light paper whatever the scheme, Golos Text — which the printer
+ * serves —, no column padding (the PDF has its margins), the table whole and nothing cut in two.
+ */
+export const REPORT_PRINT_CSS = `
+:root{color-scheme:light;--paper:#fff;--card:#f7f3ec;--ink:#241710;--muted:#695547;--rule:#d9c7b0;--accent:#A63D12;--code:#f3ede4}
+body{background:#fff;font:11pt/1.55 'Golos Text',system-ui,sans-serif}
+main{max-width:none;padding:0}
+h1{font-size:20pt}
+h2{font-size:14pt;break-after:avoid}
+table{display:table;width:100%;font-size:9.5pt}
+tr,figure,img,pre,blockquote{break-inside:avoid}
+thead{display:table-header-group}
+`
+  .trim()
+  .replace(/\n/g, '')
+
 export type ReportPagePart =
   | { kind: 'section'; heading: string | null; markdown: string }
   | { kind: 'picture'; src: string; width: number; height: number }
@@ -149,6 +166,8 @@ export type ReportPagePart =
 export async function reportPage(input: {
   title: string
   parts: readonly ReportPagePart[]
+  /** For «Скачать PDF» (88.32): white paper, the fonts of the platform, the table whole. */
+  print?: boolean
 }): Promise<string> {
   const { renderToStaticMarkup } = await import('react-dom/server')
   const part = (each: ReportPagePart, index: number) =>
@@ -211,6 +230,9 @@ export async function reportPage(input: {
       createElement('meta', { name: 'robots', content: 'noindex, nofollow' }),
       createElement('title', null, input.title),
       createElement('style', { dangerouslySetInnerHTML: { __html: READING_PAGE_CSS } }),
+      input.print
+        ? createElement('style', { dangerouslySetInnerHTML: { __html: REPORT_PRINT_CSS } })
+        : null,
     ),
     createElement(
       'body',

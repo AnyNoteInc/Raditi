@@ -44,7 +44,7 @@ const { values } = parseArgs({
     seconds: { type: 'string', default: '20' },
     // `canvas` — only the canvas, the brand and the renderer (88.15–88.15в), after the migrations;
     // `diagrams` — only «Схема» (88.24г); `slides` — only «Презентация» (88.25г); `images` — only
-    // «Изображение» (88.26в).
+    // «Изображение» (88.26в); `reports` — only «Отчёт» as a PDF (88.32).
     only: { type: 'string' },
   },
 })
@@ -176,6 +176,11 @@ try {
     if (only('images')) {
       const { imagesOnChromium } = await import('./images.mjs')
       await imagesOnChromium({ root, databaseUrl, check })
+    }
+    // 88.32: «Отчёт» — printed into a PDF by core and the printer of the browser worker.
+    if (only('reports')) {
+      const { reportsOnChromium } = await import('./reports.mjs')
+      await reportsOnChromium({ root, databaseUrl, check })
     }
   }
   if (all && !values['no-browsers']) {
