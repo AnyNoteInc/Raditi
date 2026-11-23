@@ -99,6 +99,8 @@ export type DialogFolderKey = string
 /** One folder of «По проектам»: a project with chats, or (`project` null) the chats without one. */
 export interface DialogFolder {
   project: ChatProject | null
+  /** The project is in «Архив»: no new chat can start in it. */
+  archived: boolean
   /** Its chats in the list, the pinned among them; not those in «Архив». */
   count: number
   /** A chat of it waits for the client: the folder says so while it is closed. */
@@ -419,22 +421,25 @@ export async function listDialogFolders(
     Array<{
       project_id: string | null
       project_name: string | null
+      archived: boolean
       count: number
       attention: boolean
     }>
   >`
-    SELECT p.id AS project_id, p.name AS project_name, count(*)::int AS count,
+    SELECT p.id AS project_id, p.name AS project_name, (p.archived_at IS NOT NULL) AS archived,
+      count(*)::int AS count,
       bool_or(CASE WHEN t.status IN ('awaiting_user', 'awaiting_approval')
         THEN ${WAITS_FOR_CLIENT} ELSE false END) AS attention
     FROM tasks t LEFT JOIN projects p ON p.id = t.project_id
     WHERE ${OF_USER(input.userId)} AND ${SHOWN} AND t.archived_at IS NULL
-    GROUP BY p.id, p.name
+    GROUP BY p.id, p.name, p.archived_at
     ORDER BY p.id IS NULL, max(t.updated_at) DESC, p.id`
   return rows.map((row) => ({
     project:
       row.project_id === null || row.project_name === null
         ? null
         : { id: row.project_id, name: row.project_name },
+    archived: row.project_id !== null && row.archived,
     count: row.count,
     attention: row.attention,
   }))

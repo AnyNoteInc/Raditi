@@ -572,7 +572,7 @@ describe('a dialog', () => {
       expect(screen.queryByRole('menu')).toBeNull()
     })
 
-    it('`/details` opens «Ход работы» of finished turns, for the next visit too', async () => {
+    it('`/details` opens «Ход работы» of finished turns; a chat opened anew folds them again', async () => {
       const worked = waiting({
         events: [
           requestRow('1', 'Поменяйте цену'),
@@ -589,9 +589,15 @@ describe('a dialog', () => {
       await waitFor(() => expect(line().open).toBe(true))
       await screen.findByText('Подробности работы показаны')
       cleanup()
+      // The choice is kept for the chats to come, but a chat that has just been opened folds
+      // every line whatever this browser chose before (owner's request of 21.11.2026).
       showDialog(worked)
       await screen.findByText('Поменяйте цену')
-      await waitFor(() => expect(line().open).toBe(true))
+      expect(line().open).toBe(false)
+      await run(/Подробности работы/)
+      await screen.findByText('Подробности работы скрыты')
+      await waitFor(() => expect(line().open).toBe(false))
+      window.localStorage.clear()
     })
 
     it('`/thinking` shows what the model thought, in a finished turn too, and hides it again', async () => {

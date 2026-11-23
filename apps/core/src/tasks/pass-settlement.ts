@@ -4,6 +4,7 @@ import {
   chargeTask,
   extendTaskHolds,
   releaseTask,
+  type ChargedTask,
   type ReturnedTaskHolds,
 } from '@repo/billing'
 import {
@@ -170,6 +171,13 @@ const endedSiteOf = (context: SettleContext) => feedEndedSiteOf(context.producti
 
 const creditsOf = (returned: ReturnedTaskHolds): FeedCreditsState | null =>
   returned.applied ? (returned.expiries.length > 0 ? 'expired' : 'returned') : null
+
+/**
+ * What a failure row says of the credits of a pass it charged: nothing was charged — the pass did
+ * no work and its reserve went back; null — its work was charged, or will be by the sweep.
+ */
+const creditsOfCharge = (charged: ChargedTask | null): FeedCreditsState | null =>
+  charged !== null && charged.applied && charged.credits === 0 ? 'returned' : null
 
 /** What a task in the browser had saved on the site, for a row that ends it (Б23, Б24). */
 const objectsOf = (context: SettleContext) =>
@@ -527,10 +535,13 @@ export class PassSettlement {
 
   /**
    * A pass failed. Its turn, when it opened one, is marked refused (`rejectTurn`): the planner
-   * starts a new session after it, and its model calls are not charged. The dialog stays open
-   * (owner's decision of 28.10.2026: «никогда не завершай диалог, если произошла ошибка…
-   * пользователь может ввести „продолжи“»): it waits in `awaiting_user` with the failure row, and
-   * its reserve goes back — the client's next words open a new chain with a reserve of its own
+   * starts a new session after it. What its model did is charged all the same (owner's answer of
+   * 22.11.2026: «первый ход несмотря на то что упал, все равно должен быть списан, потому что
+   * второй ход по сути его продолжение»): the calls the platform cut off are recorded
+   * `billable = false` and cost nothing, and a pass that did no work gives its reserve back. The
+   * dialog stays open (owner's decision of 28.10.2026: «никогда не завершай диалог, если
+   * произошла ошибка… пользователь может ввести „продолжи“»): it waits in `awaiting_user` with
+   * the failure row — the client's next words open a new chain with a reserve of its own
    * (`postDialogMessage`). Its browser stays for that pass; it ends by its own idle limit.
    */
   async #failure(
@@ -552,7 +563,9 @@ export class PassSettlement {
       if (!moved.moved) throw new NotMoved()
       await this.#assertNotCancelled(tx, pass.taskId)
       if (turn !== null) await rejectTurn(tx, { taskId: pass.taskId, turnNo: turn })
-      const returned = await releaseTask(tx, { taskId: pass.taskId, now })
+      const credits = context.task.billable
+        ? creditsOfCharge(await this.#chargePass(tx, pass, now))
+        : creditsOf(await releaseTask(tx, { taskId: pass.taskId, now }))
       await insertFeedEvent(tx, {
         taskId: pass.taskId,
         turnId: moved.turnId,
@@ -563,7 +576,7 @@ export class PassSettlement {
             turn,
             code,
             site: endedSiteOf(context),
-            credits: creditsOf(returned),
+            credits,
             next: 'awaiting_user',
             ...objectsOf(context),
           },
@@ -798,9 +811,13 @@ export class PassSettlement {
    * which charges it (`TaskSweep.chargeLater`); words that come first go on with the chain, and
    * the end of their pass charges it all.
    */
-  async #chargePass(tx: Prisma.TransactionClient, pass: PassRef, now: Date): Promise<void> {
+  async #chargePass(
+    tx: Prisma.TransactionClient,
+    pass: PassRef,
+    now: Date,
+  ): Promise<ChargedTask | null> {
     try {
-      await chargeTask(tx, { taskId: pass.taskId, now })
+      return await chargeTask(tx, { taskId: pass.taskId, now })
     } catch (error) {
       const refusal = chargeRefusal(error)
       if (refusal === null) throw error
@@ -818,6 +835,7 @@ export class PassSettlement {
         taskId: pass.taskId,
         expiresAt: taskHoldExpiry(now, 'waiting'),
       })
+      return null
     }
   }
 

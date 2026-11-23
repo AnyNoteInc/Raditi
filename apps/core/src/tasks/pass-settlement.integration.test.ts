@@ -539,6 +539,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect((await ceilingQuestion(task.taskId)).artifactCommentSourceId).toBeNull()
     })
 
+    // The work up to the failure is charged (owner's answer of 22.11.2026): the row says nothing
+    // of credits returned.
     it('fails the pass when the key still had money: the gateway stopped its pace', async () => {
       const task = await refused('750.0000000000')
 
@@ -551,7 +553,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           turn: 1,
           code: 'technical',
           site: 'none',
-          credits: 'returned',
+          credits: null,
           next: 'awaiting_user',
         },
       ])
@@ -591,7 +593,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     const code = async (taskId: string) =>
       (await feed(taskId)).map(([type, payload]) => [type, (payload as { code?: string }).code])
 
-    it('tells the client the limits are out, keeps the dialog open and gives the reserve back', async () => {
+    it('tells the client the limits are out, keeps the dialog open and charges the work done', async () => {
       const task = await refusedWith('subscription_limit')
 
       expect(await settlement().settle(ref(task), execFailed(1))).toBe('moved')
@@ -605,12 +607,12 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
             turn: 1,
             code: 'agent_limits',
             site: 'none',
-            credits: 'returned',
+            credits: null,
             next: 'awaiting_user',
           },
         ],
       ])
-      expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
     })
 
     it('keeps a failure that names its own cause: the limits did not end this turn', async () => {

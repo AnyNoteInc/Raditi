@@ -746,7 +746,8 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         ).toBe(1)
       })
 
-      it('ends a longer answer as a failure of the platform, and it is not paid for', async () => {
+      // The work the turn did is charged even so (owner's answer of 22.11.2026).
+      it('ends a longer answer as a failure of the platform, and charges the work done', async () => {
         await rate()
         const dialog = await queued({ reserve: true })
         const job = await init(dialog)
@@ -760,7 +761,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           await db.taskEvent.count({ where: { taskId: dialog.taskId, type: 'feed.result' } }),
         ).toBe(0)
         const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
-        expect(holds.some((hold) => hold.status === 'captured')).toBe(false)
+        expect(holds.every((hold) => hold.status === 'captured')).toBe(true)
       })
     })
 

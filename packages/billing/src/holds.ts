@@ -399,10 +399,9 @@ const chainOf = (rows: readonly { hold: { attempt: number } }[]): number[] =>
  * task that went on (docs/plan/53, «Попробовать ещё (18.10)»). A retry returns the reserve of
  * the attempt whose pass failed, but the candidate the dialog kept was built by that attempt and
  * the earlier ones, and it is released with the dialog: that work is charged then, from the
- * reserves that stand, and the keys of the retry are bounded by it. The calls of the pass that
- * failed stay out by their turn (`task_turns.rejected_at`, `taskRawCredits`), which is what keeps
- * the failure free. A task whose rows were given back by its end — failed, cancelled, expired,
- * rolled back — is neither charged nor asked about a key again.
+ * reserves that stand, and the keys of the retry are bounded by it. The calls of a pass that
+ * failed are counted as well (owner's answer of 22.11.2026). A task whose rows were given back by
+ * its end — cancelled, expired, rolled back — is neither charged nor asked about a key again.
  */
 const workAttemptsOf = (rows: readonly { hold: Pick<CreditHold, 'attempt' | 'status'> }[]) => {
   // A charge took the work of every attempt before it (26.10.2026: a task is charged pass by
@@ -580,6 +579,11 @@ async function tariffRoomNow(
     workspaceId: string
     subscription: Pick<LiveSubscription, 'planId' | 'status'> | null
     now: Date
+    /**
+     * The task the room is asked for: its own live work is left out of the windows — what the
+     * others left it, not what its own pass took (owner's answer of 22.11.2026).
+     */
+    taskId?: string
   },
 ): Promise<Credits | null> {
   // The windows bound the free tariff credits a charge may move to as well (owner's answer of
@@ -590,6 +594,7 @@ async function tariffRoomNow(
       workspaceId: input.workspaceId,
       now: input.now,
       limits: terms.limits,
+      ...(input.taskId === undefined ? {} : { excludeTaskId: input.taskId }),
     }),
   )
   const limit = dailyTariffCredits(await tariffTerms(tx, input.subscription))
@@ -1175,6 +1180,7 @@ export async function settleTaskCharge(
     workspaceId,
     subscription: locked.subscription,
     now,
+    taskId,
   })
   const distribution = distributeCharge(
     distributionInput(locked, active, toCredits(credits), tariffRoom),
@@ -1280,9 +1286,9 @@ async function convertibleWork(tx: BillingTx, taskId: string, attempts: readonly
 }
 
 /**
- * How many turn keys of the named attempts of a task still have their accounting open, among
- * those whose calls a charge counts: a key of a turn that was lost or whose pass failed records
- * nothing `taskRawCredits` reads, so it holds nothing up. A key without a turn row counts.
+ * How many turn keys of the named attempts of a task still have their accounting open. A key of
+ * a turn that was lost or whose pass failed counts like any other: its calls are charged
+ * (22.11.2026), and its accounting closes with its revocation, within the pass's ending.
  */
 async function openCountedKeys(
   tx: BillingTx,
@@ -1296,8 +1302,6 @@ async function openCountedKeys(
     WHERE k.task_id = ${taskId}::uuid
       AND k.task_attempt = ANY(${[...attempts]}::int[])
       AND k.usage_closed_at IS NULL
-      AND t.status IS DISTINCT FROM 'lost'::"TurnStatus"
-      AND t.rejected_at IS NULL
   `
   return row?.open ?? 0
 }
@@ -1309,8 +1313,8 @@ async function openCountedKeys(
  * pays for — those of its chain, which hold an active reserve, and those of the chains given
  * back since the last charge, by «Попробовать ещё» or as too small to charge (`workAttemptsOf`)
  * —, so a caller cannot pass a wrong sum. The billable calls are turned into credits at the rate
- * of their own start (`taskRawCredits`, which leaves out a lost turn and the turn of a pass that
- * failed), rounded up once (`taskCharge`): no minimum and no cap of the reserve (КР5–КР8). A
+ * of their own start (`taskRawCredits`, a lost turn and the turn of a pass that failed among
+ * them), rounded up once (`taskCharge`): no minimum and no cap of the reserve (КР5–КР8). A
  * charge of nothing — no work at all — gives the chain back. The charge is then posted by `settleTaskCharge` — which accounts pay is
  * decided at this moment —, with one audit row `billing.task.charge` that keeps how the number
  * came about.
@@ -1388,6 +1392,7 @@ export async function chargeTask(tx: BillingTx, input: TaskHoldsEnding): Promise
     workspaceId: task.workspaceId,
     subscription: locked.subscription,
     now,
+    taskId,
   })
   const settled = await settleTaskCharge(tx, { taskId, credits: charge.credits, now })
   await writeBillingAudit(tx, {
@@ -1582,6 +1587,7 @@ async function spendableNow(
   tx: BillingTx,
   workspaceId: string,
   now: Date,
+  taskId: string,
 ): Promise<{ spendable: Credits; debt: Credits }> {
   const subscription = await tx.subscription.findFirst({
     where: { workspaceId, status: { in: [...liveSubscriptionStatuses] } },
@@ -1591,6 +1597,7 @@ async function spendableNow(
     workspaceId,
     subscription,
     now: placementMoment(now, subscription),
+    taskId,
   })
   const { accounts, debt } = await accountsNow(tx, workspaceId)
   const spendable = spendableCredits(
@@ -1661,7 +1668,7 @@ export async function attemptCreditBudget(
     chain.length === 0
       ? new Money(0)
       : (await convertibleWork(tx, taskId, workAttemptsOf(rows.map((hold) => ({ hold }))))).credits
-  const { spendable: spendableAtNow, debt } = await spendableNow(tx, task.workspaceId, now)
+  const { spendable: spendableAtNow, debt } = await spendableNow(tx, task.workspaceId, now, taskId)
   // A task that holds no reserve — not billable, charged or given back — has nothing to spend:
   // the reserve is what says that it is in work.
   const customerLeftRub = customerBudgetLeftRub({

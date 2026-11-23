@@ -349,8 +349,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: projects and the chats in them', () =
     // A project without chats has no folder; «Без проекта» comes last; «Архив» is not counted.
     // A chat that waits for the client marks its folder; one whose pass is queued does not.
     expect((await caller.task.folders({})).folders).toEqual([
-      { project: { id: first, name: 'Первый' }, count: 2, attention: true },
-      { project: null, count: 1, attention: false },
+      { project: { id: first, name: 'Первый' }, archived: false, count: 2, attention: true },
+      { project: null, archived: false, count: 1, attention: false },
     ])
     expect(empty).not.toBe(first)
     const none = await caller.task.list({ projectId: 'none' })
@@ -360,11 +360,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL: projects and the chats in them', () =
     expect(ofFirst.pinned.map((item) => item.id)).toEqual([newer])
     expect(ofFirst.items.map((item) => item.id)).toEqual([older])
 
-    // A project in «Архив» keeps its folder while it has chats, and the folder opens.
+    // A project in «Архив» keeps its folder while it has chats, marked archived, and the folder opens.
     await caller.project.archive({ projectId: first, archived: true })
-    expect((await caller.task.folders({})).folders.map((folder) => folder.project?.id)).toEqual([
-      first,
-      undefined,
+    expect((await caller.task.folders({})).folders).toEqual([
+      { project: { id: first, name: 'Первый' }, archived: true, count: 2, attention: true },
+      { project: null, archived: false, count: 1, attention: false },
     ])
     expect((await caller.task.list({ projectId: first })).items.map((item) => item.id)).toEqual([
       older,
@@ -373,7 +373,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: projects and the chats in them', () =
     // A project in the trash takes its folder with it.
     await caller.project.remove({ projectId: first })
     expect((await caller.task.folders({})).folders).toEqual([
-      { project: null, count: 1, attention: false },
+      { project: null, archived: false, count: 1, attention: false },
     ])
     // Somebody else counts only their own chats.
     const stranger = await owner()

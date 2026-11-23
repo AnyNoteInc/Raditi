@@ -55,7 +55,7 @@ import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
 import { callErrorCode, callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
-import { useChatDetails, useChatThinking } from './chat-details'
+import { useChatChoiceMadeHere, useChatDetails, useChatThinking } from './chat-details'
 import { rememberEffort } from './chat-effort'
 import type { ChatScheduleLabel, ScheduledTaskItem } from './chat-types'
 import {
@@ -434,6 +434,11 @@ export function DialogView({
   const effortMenu = useRef<EffortMenuHandle>(null)
   const { details } = useChatDetails()
   const { thinking } = useChatThinking()
+  // A chat that has just been opened folds the lines «Агент работал …» of finished turns
+  // whatever this browser chose before (owner's request of 21.11.2026): the lines follow the
+  // choices only from the moment one of them is made on this dialog (ПИ7 keeps holding them
+  // from then on).
+  const choiceMadeHere = useChatChoiceMadeHere()
   // The level chosen here, shown while the head still says the level it was chosen over.
   const [effortChosen, setEffortChosen] = useState<{
     effort: ReasoningEffort
@@ -1585,7 +1590,7 @@ export function DialogView({
               openQuestionId={question?.id ?? null}
               actions={actions}
               filesOf={sentFilesOf}
-              details={details || thinking}
+              details={choiceMadeHere && (details || thinking)}
               activityOf={(turn) => <TurnActivity taskId={taskId} turn={turn} live={false} />}
             />
           )}

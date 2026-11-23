@@ -75,18 +75,29 @@ export async function chatBranch(
 
 /**
  * The branch row of a chat, made with its first card (ПР13): `raditi/<word>-<last 8 of the chat
- * id>`, and the next free suffix when another chat of the repository holds that name. A row of
- * another repository (the chat moved, or the repository was attached again) is made anew.
+ * id>`, and the next free suffix when another chat of the repository holds that name. `branch` —
+ * the name the turn worked under, which its checkpoint keeps: it is taken first, so a chat the
+ * agent renamed at the end of that turn keeps the branch of its checkpoint. A row of another
+ * repository (the chat moved, or the repository was attached again) is made anew.
  */
 export async function ensureChatBranch(
   db: Pick<Tx, '$queryRaw' | 'projectRepoBranch'>,
-  input: { taskId: string; projectRepositoryId: string; title: string | null; baseSha: string },
+  input: {
+    taskId: string
+    projectRepositoryId: string
+    title: string | null
+    baseSha: string
+    branch?: string
+  },
 ): Promise<ChatBranchRow> {
   const existing = await chatBranch(db, input.taskId)
   if (existing?.projectRepositoryId === input.projectRepositoryId) return existing
   if (existing) await db.projectRepoBranch.delete({ where: { taskId: input.taskId } })
   for (let attempt = 1; attempt <= BRANCH_NAME_TRIES; attempt++) {
-    const branch = repoChatBranch(input.taskId, input.title, attempt)
+    const branch =
+      attempt === 1 && input.branch !== undefined
+        ? input.branch
+        : repoChatBranch(input.taskId, input.title, attempt)
     const made = await db.$queryRaw<{ task_id: string }[]>`
       INSERT INTO project_repo_branches
         (task_id, project_repository_id, branch, base_sha, state, updated_at)
