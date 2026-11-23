@@ -227,6 +227,17 @@ describe('creditRing', () => {
     expect(creditRows(weekly)[0]).toEqual({ label: 'Неделя', value: 'осталось 150 из 200' })
   })
 
+  it('is full of the period when fewer of its credits are left than of the week', () => {
+    const short = onBusiness(20)
+    short.windows = [{ kind: 'week', limit: 200, used: 50, left: 150, resetsAt: null }]
+    expect(creditRing(short)).toEqual({
+      label: 'Кредиты по тарифу: осталось 20 из 600',
+      share: 20 / 600,
+      closed: false,
+    })
+    expect(creditRows(short)[0]).toEqual({ label: 'Неделя', value: 'осталось 150 из 200' })
+  })
+
   it('is full of the period while the week has no limit', () => {
     const unlimited = onBusiness(512)
     unlimited.windows = [{ kind: 'week', limit: null, used: 50, left: null, resetsAt: null }]
