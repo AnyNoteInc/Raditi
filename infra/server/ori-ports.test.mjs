@@ -85,3 +85,11 @@ test('does not move the cursor when core failed, and calls no core without a fac
     await quiet.done()
   }
 })
+
+test('a release puts the collector on the host by itself: its helper, unit and timer', async () => {
+  const deploy = await readFile(fileURLToPath(new URL('./deploy.sh', import.meta.url)), 'utf8')
+  for (const file of ['raditi-ori-ports.service', 'raditi-ori-ports.timer', 'ori-ports.sh'])
+    assert.match(deploy, new RegExp(`\\$app/server/host/(?:\\$unit|${file.replace('.', '\\.')})`))
+  assert.match(deploy, /for unit in raditi-ori-ports\.service raditi-ori-ports\.timer/)
+  assert.match(deploy, /systemctl enable -q --now raditi-ori-ports\.timer/)
+})
