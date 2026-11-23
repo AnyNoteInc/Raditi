@@ -44,6 +44,8 @@ export const creditRingText = Object.freeze({
   /** The ring as it is read aloud: the account it is full of, and what is left of it. */
   onTariff: (count: number, of: number) =>
     `Кредиты по тарифу: ${left(count)} ${formatCount(count)} из ${formatCount(of)}`,
+  onWeek: (count: number, of: number) =>
+    `Недельный лимит: ${left(count)} ${formatCount(count)} из ${formatCount(of)}`,
   onGift: (count: number, of: number) =>
     `Подарочные кредиты: ${left(count)} ${formatCount(count)} из ${formatCount(of)}`,
   periodOver: 'Кредиты по тарифу: период закончился',
@@ -51,6 +53,7 @@ export const creditRingText = Object.freeze({
   unpaid: (name: string) => `Тариф «${name}» не оплачен`,
   noTariff: 'Без тарифа',
   today: 'Сегодня',
+  week: 'Неделя',
   onTariffRow: 'По тарифу',
   pack: 'Пакет',
   gift: 'Подарок',
@@ -120,10 +123,18 @@ export function creditWords(
   return pastDue(usage) ? { text: unpaidWhileTasksTaken(), action: 'pay' } : null
 }
 
+/** The week window of the workspace when it has a limit (plan 71); null without one. */
+function weekWindow(usage: BillingUsage): { left: number; limit: number } | null {
+  const week = usage.windows.find((window) => window.kind === 'week')
+  if (week === undefined || week.limit === null || week.left === null) return null
+  return { left: week.left, limit: week.limit }
+}
+
 /**
- * What the ring is full of: the credits of the tariff's period, or, without a tariff, the gift
- * of the registration. A tariff that is not paid for has its period over: nothing of it is left
- * to spend. `closed` — a new task would not be taken now (the server's `newTask`), or the tariff
+ * What the ring is full of: the week limit of the tariff credits (owner's request of 23.11.2026,
+ * in place of the period), the credits of the tariff's period while the week has no limit, or,
+ * without a tariff, the gift of the registration. A tariff that is not paid for has its period
+ * over: nothing of it is left to spend. `closed` — a new task would not be taken now (the server's `newTask`), or the tariff
  * waits for its payment.
  */
 export function creditRing(usage: BillingUsage): {
@@ -133,6 +144,14 @@ export function creditRing(usage: BillingUsage): {
 } {
   const closed = !usage.newTask.allowed || pastDue(usage)
   const said = (label: string) => (usage.newTask.allowed ? label : `${label}. ${NEW_TASK_CLOSED}`)
+  const week = weekWindow(usage)
+  if (usage.tariff !== null && !pastDue(usage) && week !== null) {
+    return {
+      label: said(creditRingText.onWeek(week.left, week.limit)),
+      share: week.left / week.limit,
+      closed,
+    }
+  }
   if (usage.tariff !== null && !pastDue(usage)) {
     const count = usage.tariff.credits.left
     // Of everything the period has: carried into it and granted for it.
@@ -152,7 +171,7 @@ export function creditRing(usage: BillingUsage): {
   }
 }
 
-/** The lines of the window: the day of the tariff, its period, the pack and the gift. */
+/** The lines of the window: the day of the tariff, its week, its period, the pack and the gift. */
 export function creditRows(usage: BillingUsage): { label: string; value: string }[] {
   const rows: { label: string; value: string }[] = []
   const today = usage.today
@@ -161,6 +180,11 @@ export function creditRows(usage: BillingUsage): { label: string; value: string 
       label: creditRingText.today,
       value: creditRingText.leftOf(today.left, today.limit),
     })
+  }
+  const week = weekWindow(usage)
+  // The week limits tariff credits only: a tariff that is not paid for has none to spend.
+  if (usage.tariff !== null && !pastDue(usage) && week !== null) {
+    rows.push({ label: creditRingText.week, value: creditRingText.leftOf(week.left, week.limit) })
   }
   if (usage.tariff !== null) {
     const count = usage.tariff.credits.left
@@ -244,9 +268,9 @@ function Ring({ share, closed }: { share: number; closed: boolean }) {
 
 /**
  * The credits over the account menu (owner's request of 29.10.2026, in place of the block under
- * the list of dialogs): a ring of what is left, and by a press a window with the day, the period,
- * the pack and the gift — the server's numbers, never ones counted here — with what stands in the
- * way of a new task in the words of the billing pages. A failure to read them hides the ring.
+ * the list of dialogs): a ring of what is left of the week, and by a press a window with the day,
+ * the week, the period, the pack and the gift — the server's numbers, never ones counted here —
+ * with what stands in the way of a new task in the words of the billing pages. A failure to read them hides the ring.
  */
 export function CreditRing({ placement }: { placement: 'sidebar' | 'toolbar' }) {
   const trpc = useTRPC()
