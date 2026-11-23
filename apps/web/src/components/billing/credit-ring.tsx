@@ -131,11 +131,12 @@ function weekWindow(usage: BillingUsage): { left: number; limit: number } | null
 }
 
 /**
- * What the ring is full of: the week limit of the tariff credits (owner's request of 23.11.2026,
- * in place of the period), the credits of the tariff's period while the week has no limit, or,
- * without a tariff, the gift of the registration. A tariff that is not paid for has its period
- * over: nothing of it is left to spend. `closed` — a new task would not be taken now (the server's `newTask`), or the tariff
- * waits for its payment.
+ * What the ring is full of: of the week limit of the tariff credits (owner's request of
+ * 23.11.2026) and the credits of the tariff's period, the one with fewer credits left — what a
+ * task can still spend on the tariff (owner's answer of 23.11.2026); the period alone while the
+ * week has no limit, or, without a tariff, the gift of the registration. A tariff that is not
+ * paid for has its period over: nothing of it is left to spend. `closed` — a new task would not
+ * be taken now (the server's `newTask`), or the tariff waits for its payment.
  */
 export function creditRing(usage: BillingUsage): {
   label: string
@@ -145,7 +146,12 @@ export function creditRing(usage: BillingUsage): {
   const closed = !usage.newTask.allowed || pastDue(usage)
   const said = (label: string) => (usage.newTask.allowed ? label : `${label}. ${NEW_TASK_CLOSED}`)
   const week = weekWindow(usage)
-  if (usage.tariff !== null && !pastDue(usage) && week !== null) {
+  if (
+    usage.tariff !== null &&
+    !pastDue(usage) &&
+    week !== null &&
+    week.left <= usage.tariff.credits.left
+  ) {
     return {
       label: said(creditRingText.onWeek(week.left, week.limit)),
       share: week.left / week.limit,
