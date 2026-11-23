@@ -102,6 +102,8 @@ export const artifactRenderCodes = [
   'RENDER_NOT_A_FRAME',
   'RENDER_UNAVAILABLE',
   'RENDER_BUSY',
+  'RENDER_TOO_LARGE',
+  'RENDER_TIMEOUT',
 ] as const
 export type ArtifactRenderCode = (typeof artifactRenderCodes)[number]
 

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { applyArtifactOps, createArtifact, createPrismaClient, type PrismaClient } from '@repo/db'
+import { DomainError } from '@repo/domain'
 import { artifactExportKey } from '@repo/domain/artifacts'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -226,6 +227,65 @@ describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
     // A PNG of no frame is no file.
     const none = await db.artifactExport.create({ data: { artifactId, userId, format: 'png' } })
     expect(await exports.build(none.id)).toBe('failed')
+  })
+
+  it('prints the PDF of «Отчёт» with its charts inline (88.32)', async () => {
+    const actor = { kind: 'user' as const, userId }
+    const { id: artifactId } = await createArtifact(db, {
+      workspaceId,
+      kind: 'report',
+      title: 'Продажи за ноябрь',
+      actor,
+    })
+    await applyArtifactOps(db, {
+      batch: {
+        artifactId,
+        opId: randomUUID(),
+        ops: [
+          {
+            op: 'insert',
+            block: 's',
+            after: null,
+            kind: 'section',
+            content: 'Выручка выросла на **12 %**.',
+            props: { heading: 'Итоги' },
+          },
+          {
+            op: 'insert',
+            block: 'c',
+            after: 's',
+            kind: 'chart',
+            content: JSON.stringify({
+              type: 'bar',
+              categories: ['Октябрь', 'Ноябрь'],
+              series: [{ name: 'Выручка', values: [100, 112] }],
+            }),
+          },
+        ],
+      },
+      actor,
+    })
+    const pdf = Buffer.from('%PDF-1.7\n').toString('base64')
+    const print = vi.fn(async (_request: { html: string }) => ({ pdf }))
+    const exports = new ArtifactExports({ db, storage, logger: quiet, print })
+    const row = await db.artifactExport.create({ data: { artifactId, userId, format: 'pdf' } })
+    expect(await exports.build(row.id)).toBe('ready')
+    const html = print.mock.calls[0]![0].html
+    expect(html).toContain('<h1>Продажи за ноябрь</h1>')
+    expect(html).toContain('<h2>Итоги</h2>')
+    expect(html).toContain('<strong>12 %</strong>')
+    // The chart goes inline: the printer loads nothing; and no script is on the page.
+    expect(html).toMatch(/<img src="data:image\/svg\+xml;base64,/)
+    expect(html).not.toMatch(/<script/i)
+    const key = artifactExportKey({ workspaceId, artifactId, exportId: row.id, format: 'pdf' })
+    expect(Buffer.from(objects.get(key)!).toString('latin1')).toBe('%PDF-1.7\n')
+
+    // A refusal of the printer (a page over its limits) fails the export; no printer — too.
+    print.mockRejectedValueOnce(new DomainError('RENDER_TOO_LARGE', 'too large', 413))
+    const large = await db.artifactExport.create({ data: { artifactId, userId, format: 'pdf' } })
+    expect(await exports.build(large.id)).toBe('failed')
+    const none = await db.artifactExport.create({ data: { artifactId, userId, format: 'pdf' } })
+    expect(await new ArtifactExports({ db, storage, logger: quiet }).build(none.id)).toBe('failed')
   })
 
   it('forgets the workbooks of a day ago', async () => {

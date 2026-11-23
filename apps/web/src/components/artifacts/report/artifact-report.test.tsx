@@ -11,8 +11,12 @@ import { ArtifactReport, reportTexts } from './artifact-report'
 
 const ARTIFACT = '019f1a21-1800-7f00-8abc-0000000000c9'
 
-const { write, chart } = vi.hoisted(() => ({
+const { write, chart, exportStart, exportStatus } = vi.hoisted(() => ({
   write: vi.fn(async (_input: unknown) => ({ seq: 2 })),
+  exportStart: vi.fn(async (_input: unknown) => ({
+    exportId: '019f1a21-1800-7f00-8abc-0000000000e1',
+  })),
+  exportStatus: vi.fn(async (_input: unknown) => ({ state: 'failed' })),
   chart: vi.fn(async (_input: unknown): Promise<unknown> => ({
     state: 'drawn',
     svg: '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360"/>',
@@ -25,6 +29,7 @@ vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
     artifact: {
       write: { mutationOptions: () => ({ mutationFn: write }) },
+      exportStart: { mutationOptions: () => ({ mutationFn: exportStart }) },
       chart: {
         queryOptions: (input: unknown) => ({
           queryKey: ['chart', input],
@@ -33,6 +38,7 @@ vi.mock('@/trpc/client', () => ({
       },
     },
   }),
+  useTRPCClient: () => ({ artifact: { exportStatus: { query: exportStatus } } }),
 }))
 
 const block = (
@@ -135,5 +141,24 @@ describe('«Отчёт» in the cabinet', () => {
   it('lets a reader only read', () => {
     show(report('view'))
     expect(screen.queryByRole('button', { name: reportTexts.edit })).not.toBeInTheDocument()
+    // A reader downloads the PDF as well (88.32).
+    expect(screen.getByRole('button', { name: reportTexts.pdf })).toBeInTheDocument()
+  })
+
+  it('asks core for the PDF and says when it was not made (88.32)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      show(report('view'))
+      fireEvent.click(screen.getByRole('button', { name: reportTexts.pdf }))
+      await waitFor(() => expect(exportStart).toHaveBeenCalled())
+      expect(exportStart.mock.calls[0]![0]).toEqual({ artifactId: ARTIFACT, format: 'pdf' })
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(await screen.findByText(reportTexts.exportFailed)).toBeInTheDocument()
+      expect(exportStatus).toHaveBeenCalledWith({
+        exportId: '019f1a21-1800-7f00-8abc-0000000000e1',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

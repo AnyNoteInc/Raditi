@@ -30,6 +30,8 @@ import { ARTIFACT_EXPORTS, ARTIFACT_THUMBS } from './artifact-exports.tokens.ts'
           db: prisma,
           storage,
           render: client ? (request) => client.render(request) : null,
+          // The PDF of «Отчёт» is printed by it too (88.32).
+          print: client ? (request) => client.print(request) : null,
           logger: { log: (line) => logger.log(line), warn: (line) => logger.warn(line) },
         })
       },

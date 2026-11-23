@@ -12,7 +12,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { uuidv7 } from '@/components/chat/uuid'
-import { useTRPC } from '@/trpc/client'
+import { useTRPC, useTRPCClient } from '@/trpc/client'
 
 import type { ArtifactBodyProps } from '../artifact-body-props'
 import type { CabinetArtifact } from '../use-artifact'
@@ -20,6 +20,7 @@ import type { CabinetArtifact } from '../use-artifact'
 // «Отчёт» in the cabinet (docs/plan/88-artifacts.md, §7.7, §7.13; slice 88.28): its sections of
 // Markdown, its charts — the pictures the server drew of their specs —, and its table, in the order
 // of the blocks. A person changes the text of a section; the charts and the table are the agent's.
+// «Скачать PDF» (88.32): core prints the page of the report — as its publication — into an A4 PDF.
 
 export const reportTexts = Object.freeze({
   empty: 'Отчёт пока пуст. Попросите агента собрать отчёт с графиками и таблицей.',
@@ -33,7 +34,57 @@ export const reportTexts = Object.freeze({
   checking: 'Агент дописывает этот блок: покажем после проверки.',
   failed: 'Не получилось сохранить. Попробуйте ещё раз.',
   stale: 'Раздел только что изменили. Откройте правку заново.',
+  pdf: 'Скачать PDF',
+  preparing: 'Готовим файл…',
+  exportFailed: 'Не получилось подготовить файл. Попробуйте ещё раз.',
 })
+
+const EXPORT_POLL_MS = 1500
+const EXPORT_POLLS = 40
+
+/** «Скачать PDF»: core prints the report (88.32); the button waits for the file. */
+function ReportDownload({ artifactId }: { artifactId: string }) {
+  const trpc = useTRPC()
+  const client = useTRPCClient()
+  const exportStart = useMutation(trpc.artifact.exportStart.mutationOptions())
+  const [preparing, setPreparing] = useState(false)
+  const [problem, setProblem] = useState(false)
+
+  async function download() {
+    setPreparing(true)
+    setProblem(false)
+    try {
+      const { exportId } = await exportStart.mutateAsync({ artifactId, format: 'pdf' })
+      for (let poll = 0; poll < EXPORT_POLLS; poll += 1) {
+        await new Promise((resolve) => setTimeout(resolve, EXPORT_POLL_MS))
+        const { state } = await client.artifact.exportStatus.query({ exportId })
+        if (state === 'ready') {
+          const link = document.createElement('a')
+          link.href = `/api/artifact-exports/${exportId}`
+          document.body.append(link)
+          link.click()
+          link.remove()
+          return
+        }
+        if (state === 'failed') break
+      }
+      setProblem(true)
+    } catch {
+      setProblem(true)
+    } finally {
+      setPreparing(false)
+    }
+  }
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'flex-start' }}>
+      <Button variant="outlined" onClick={() => void download()} disabled={preparing}>
+        {preparing ? reportTexts.preparing : reportTexts.pdf}
+      </Button>
+      {problem && <Alert severity="error">{reportTexts.exportFailed}</Alert>}
+    </Box>
+  )
+}
 
 type Block = CabinetArtifact['blocks'][number]
 
@@ -209,6 +260,7 @@ export function ArtifactReport(props: ArtifactBodyProps & { onAccessLost: () => 
   const tableAt = top.findIndex((block) => block.kind === 'columns')
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, maxWidth: 820 }}>
+      <ReportDownload artifactId={artifact.id} />
       {top.map((block, index) => {
         if (block.checking && block.content === null)
           return (
