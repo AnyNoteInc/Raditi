@@ -8,11 +8,12 @@ import type { ArtifactGrantRole } from './roles.ts'
 // «Комментирует» with the comments between people (Э10а).
 
 /**
- * Whether other users may be given access in production. Off until the new edition of the four
- * documents is published and the storage of an organiser of distribution of information stands
- * (Э9, slice 88.16а, Ар56). Outside production it works, for the stands and the tests.
+ * Whether other users may be given access in production. On since the edition of the four documents
+ * of 2026-11-23 and the storage of an organiser of distribution of information — the facts with the
+ * port of the edge — stand in production (Э9, slice 88.16а, Ар56; release v1.77.0 and the check of
+ * `ori_fact_ports` on the server). Turning it off closes every new link and invitation again.
  */
-export const artifactSharingInProduction = false
+export const artifactSharingInProduction = true
 
 export function artifactSharingOpen(appEnv: AppEnv): boolean {
   return !isProduction(appEnv) || artifactSharingInProduction
