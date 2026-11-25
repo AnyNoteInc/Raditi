@@ -7,6 +7,8 @@ import { LostCallCollector } from '../accounting/lost-call-collector.ts'
 import type { LlmRoleConfig } from '../config/config.ts'
 import { LLM_CONFIG } from '../config/config.module.ts'
 import { EgressHealth } from '../egress/egress-probe.ts'
+import type { PooledEgress } from '../egress/egress.ts'
+import { EGRESS_TRANSPORT } from '../egress/egress.tokens.ts'
 import type { DatabaseShutdown } from '../infra/database-shutdown.ts'
 import { DATABASE_SHUTDOWN, LLM_LOGGER } from '../infra/infra.tokens.ts'
 import { ChannelMonitor } from '../maintenance/channel-monitor.ts'
@@ -37,6 +39,8 @@ export class LlmRuntime implements OnApplicationShutdown {
   readonly #readiness: GatewayReadiness
   readonly #gateway: Pick<LlmGateway, 'listen' | 'close'>
   readonly #closeDatabase: DatabaseShutdown
+  /** The free provider connections of the egress pool (docs/plan/94). */
+  readonly #egress: Pick<PooledEgress, 'close'>
 
   constructor(
     @Inject(LLM_CONFIG) config: LlmRoleConfig,
@@ -50,6 +54,7 @@ export class LlmRuntime implements OnApplicationShutdown {
     @Inject(GatewayReadiness) readiness: GatewayReadiness,
     @Inject(LLM_GATEWAY) gateway: Pick<LlmGateway, 'listen' | 'close'>,
     @Inject(DATABASE_SHUTDOWN) closeDatabase: DatabaseShutdown,
+    @Inject(EGRESS_TRANSPORT) egress: Pick<PooledEgress, 'close'>,
   ) {
     this.#egressPath = config.egress.proxyUrl === null ? 'direct' : 'proxy'
     this.#logger = logger
@@ -62,6 +67,7 @@ export class LlmRuntime implements OnApplicationShutdown {
     this.#readiness = readiness
     this.#gateway = gateway
     this.#closeDatabase = closeDatabase
+    this.#egress = egress
   }
 
   async listen(): Promise<AddressInfo> {
@@ -87,6 +93,8 @@ export class LlmRuntime implements OnApplicationShutdown {
     try {
       // The HTTP drain (≤30 s) fits the 40 s stop grace period of the llm service.
       await this.#gateway.close()
+      // No call is left: the free provider connections go, and none is kept after this.
+      this.#egress.close()
       await withTimeout(
         Promise.allSettled([this.#pool.close(), this.#channel.close()]),
         3000,

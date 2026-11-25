@@ -963,6 +963,9 @@ export class LlmGateway {
       // failure, while that refusal is still being journaled here: the call keeps the outcome
       // the provider gave it, whichever of the two comes first.
       ended = true
+      // A complete answer: its connection serves the next call of the account (docs/plan/94).
+      // One the provider ended with a failure, or cut short, is closed as before.
+      if (!failed && terminalSeen) upstream.release()
       if (signal) await this.#recordRefusal(key.keyId, refusalForSignal(signal))
       response.end()
     } catch (error) {

@@ -289,7 +289,7 @@ export function createEgressProxy({
       if (head.length > 0) upstream.write(head)
       socket.pipe(upstream)
       upstream.pipe(socket)
-      // The provider closed first, as it does for every request sent with `connection: close`.
+      // The provider closed first: a connection it ended (the role keeps one at most 20 s after an answer, docs/plan/94).
       // The pipe to it is gone and has paused the client socket, while the client still writes
       // the close of its own TLS session with the provider: unread, those bytes would hide the
       // client's close and keep the tunnel counted until the idle time. They have nowhere to go,

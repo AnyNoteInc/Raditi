@@ -43,13 +43,24 @@ async function fixture({
   redirect = false,
   bytes = 0,
   proxyHost = '127.0.0.1',
+  /** The provider drops a kept connection as the next request arrives on it (docs/plan/94). */
+  dropKept = false,
 } = {}) {
   const cert = readFileSync(certFile)
   const key = readFileSync(keyFile)
   const sockets = new Set<Duplex>()
   const requests: { path: string; body: string; host: string | undefined }[] = []
   const tunnels: string[] = []
+  /** Provider TLS sessions, and the requests each connection carried. */
+  const sessions = { opened: 0 }
+  const served = new WeakMap<object, number>()
   const provider = createHttpsServer({ cert, key }, (req, res) => {
+    const count = (served.get(req.socket) ?? 0) + 1
+    served.set(req.socket, count)
+    if (dropKept && count > 1) {
+      req.socket.destroy()
+      return
+    }
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => chunks.push(chunk))
     req.on('end', () => {
@@ -72,6 +83,7 @@ async function fixture({
       res.end(bytes ? undefined : 'data: second\n\n')
     })
   })
+  provider.on('secureConnection', () => void (sessions.opened += 1))
   const providerPort = await listen(provider)
   const proxy = createHttpsServer({
     cert,
@@ -120,6 +132,7 @@ async function fixture({
   return {
     config,
     tunnels,
+    sessions,
     requests,
     providerPort,
     async close() {
@@ -221,6 +234,7 @@ describe('mTLS subscription egress', () => {
         expect(response.headers.get('x-synthetic-state')).toBe('state')
         expect(response.rawHeaders).toContain('x-synthetic-state')
       }
+      // No account is named: each call has a connection of its own (docs/plan/94).
       expect(f.tunnels).toEqual([`localhost:${f.providerPort}`, `localhost:${f.providerPort}`])
       expect(f.requests).toEqual(
         [new URL(chatUrl).pathname, new URL(quotaUrl).pathname].map((path) => ({
@@ -540,6 +554,162 @@ describe('mTLS subscription egress', () => {
   })
 })
 
+describe('kept provider connections (docs/plan/94)', () => {
+  const account = (token: string) =>
+    input({ headers: new Headers({ authorization: `Bearer ${token}` }) })
+  const read = async (
+    response: Awaited<ReturnType<ReturnType<typeof createEgressTransport>['request']>>,
+  ) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of response.body) chunks.push(Buffer.from(chunk))
+    return Buffer.concat(chunks).toString()
+  }
+  const call = () => ({ signal: AbortSignal.timeout(2000) })
+
+  it('gives the next call of the same account the same tunnel and provider TLS, another account its own', async () => {
+    const f = await fixture()
+    const transport = createEgressTransport(f.config)
+    try {
+      for (const token of ['one', 'one', 'two', 'one']) {
+        const response = await transport.request(account(token), call())
+        expect(await read(response)).toBe('data: first\n\ndata: second\n\n')
+        response.release()
+        response.close()
+      }
+      expect(f.tunnels).toHaveLength(2)
+      expect(f.sessions.opened).toBe(2)
+      expect(f.requests).toHaveLength(4)
+    } finally {
+      transport.close()
+      await f.close()
+    }
+  })
+
+  it('keeps an answer the caller released after its last event; one it only closed goes', async () => {
+    const f = await fixture()
+    const transport = createEgressTransport(f.config)
+    try {
+      const early = async (release: boolean) => {
+        const response = await transport.request(account('one'), call())
+        for await (const chunk of response.body) {
+          expect(Buffer.from(chunk).toString()).toContain('data: first')
+          break
+        }
+        if (release) response.release()
+        response.close()
+        // The pool takes a released connection back once the rest of its body is read.
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      await early(false)
+      await early(true)
+      await early(false)
+      // The first was closed, the second released and kept for the third, which closed it.
+      expect(f.sessions.opened).toBe(2)
+      const response = await transport.request(account('one'), call())
+      await read(response)
+      expect(f.sessions.opened).toBe(3)
+    } finally {
+      transport.close()
+      await f.close()
+    }
+  })
+
+  it('never keeps a connection whose answer the caller gave up or did not finish', async () => {
+    const f = await fixture({ stallBody: true })
+    const transport = createEgressTransport(f.config, undefined, { releaseDrainMs: 50 })
+    try {
+      const controller = new AbortController()
+      const first = await transport.request(account('one'), { signal: controller.signal })
+      controller.abort()
+      await expect(read(first)).rejects.toThrow('Subscription egress unavailable')
+      // Released, but its body never ends: given up after the drain time.
+      const second = await transport.request(account('one'), call())
+      second.release()
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      second.close()
+      await expect(
+        transport.request(account('one'), call()).then((response) => response.close()),
+      ).resolves.toBeUndefined()
+      expect(f.sessions.opened).toBe(3)
+    } finally {
+      transport.close()
+      await f.close()
+    }
+  })
+
+  it('keeps few free connections in all: each holds a tunnel of egress-1', async () => {
+    const f = await fixture()
+    const transport = createEgressTransport(f.config, undefined, { freeConnectionsTotal: 1 })
+    try {
+      for (const token of ['one', 'two', 'one', 'two'])
+        await read(await transport.request(account(token), call()))
+      // `one` stayed free; `two` found no room and was closed, so it opened again.
+      expect(f.sessions.opened).toBe(3)
+    } finally {
+      transport.close()
+      await f.close()
+    }
+  })
+
+  it('closes a free connection after its time, and the next call opens a new one', async () => {
+    const f = await fixture()
+    const transport = createEgressTransport(f.config, undefined, { freeConnectionMs: 50 })
+    try {
+      await read(await transport.request(account('one'), call()))
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      await read(await transport.request(account('one'), call()))
+      expect(f.tunnels).toHaveLength(2)
+      expect(f.sessions.opened).toBe(2)
+    } finally {
+      transport.close()
+      await f.close()
+    }
+  })
+
+  it('takes a kept connection the provider drops under the request for one that may have been delivered', async () => {
+    const f = await fixture({ dropKept: true })
+    const transport = createEgressTransport(f.config)
+    try {
+      await read(await transport.request(account('one'), call()))
+      const lost = transport.request(account('one'), call())
+      await expect(lost).rejects.toThrow('Subscription egress unavailable')
+      await expect(lost).rejects.not.toBeInstanceOf(EgressNotSentError)
+      expect(f.sessions.opened).toBe(1)
+    } finally {
+      transport.close()
+      await f.close()
+    }
+  })
+
+  it('closes its free connections when the role stops, and keeps none after', async () => {
+    const f = await fixture()
+    const transport = createEgressTransport(f.config)
+    try {
+      await read(await transport.request(account('one'), call()))
+      transport.close()
+      await read(await transport.request(account('one'), call()))
+      await read(await transport.request(account('one'), call()))
+      expect(f.sessions.opened).toBe(3)
+    } finally {
+      await f.close()
+    }
+  })
+
+  it('keeps no connection of a call that names no account', async () => {
+    const f = await fixture()
+    const transport = createEgressTransport(f.config)
+    try {
+      const nameless = () => input({ headers: new Headers({ 'content-type': 'application/json' }) })
+      for (let index = 0; index < 2; index++)
+        await read(await transport.request(nameless(), call()))
+      expect(f.sessions.opened).toBe(2)
+    } finally {
+      transport.close()
+      await f.close()
+    }
+  })
+})
+
 describe('subscription egress without a proxy', () => {
   const chat = chatUrl
   const quota = quotaUrl
@@ -613,6 +783,33 @@ describe('subscription egress without a proxy', () => {
     expect((error as Error).message).toBe('Subscription egress unavailable')
     return error instanceof EgressNotSentError
   }
+
+  it('keeps its own connection for the next call of the account and tells of a new one only (docs/plan/94)', async () => {
+    const f = await direct()
+    const told: boolean[] = []
+    const transport = createEgressTransport(f.config, undefined, {
+      onDirectConnection: (established) => void told.push(established),
+    })
+    try {
+      for (let index = 0; index < 3; index++) {
+        const response = await transport.request(
+          input({
+            url: chat,
+            headers: new Headers({ authorization: 'Bearer synthetic-plan-key' }),
+          }),
+          { signal: signal() },
+        )
+        for await (const _ of response.body);
+        response.close()
+      }
+      expect(f.requests).toHaveLength(3)
+      expect(f.connections()).toBe(1)
+      expect(told).toEqual([true])
+    } finally {
+      transport.close()
+      await f.close()
+    }
+  })
 
   it('connects itself to an origin whose adapter allows it, with provider TLS and trusted framing', async () => {
     const f = await direct()
