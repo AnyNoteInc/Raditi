@@ -1,7 +1,6 @@
 import { Counter, type Registry } from '@prometheus-io/client'
 import { Logger, type Provider } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
-import { createBrowserWorkerClient } from '@repo/browser-link'
 import type { PrismaClient } from '@repo/db'
 import type {
   JobQueue,
@@ -43,7 +42,6 @@ import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { QueueDrain } from './queue-drain.ts'
-import { ArtifactDiagram } from './artifact-diagram.ts'
 import { ArtifactNotify } from './artifact-notify.ts'
 import { ChatNotify } from './chat-notify.ts'
 import { NotificationDelivery, notificationDeliveryOf } from './notification-delivery.ts'
@@ -202,20 +200,6 @@ export const taskProviders: Provider[] = [
     inject: [PRISMA, NotificationDelivery],
   },
   {
-    // A picture of «Схема» the cabinet asked for (docs/plan/88-artifacts.md, §7.13, 88.24б).
-    provide: ArtifactDiagram,
-    useFactory: (prisma: PrismaClient, config: CoreConfig) => {
-      const client = config.browser
-        ? createBrowserWorkerClient({ baseUrl: config.browser.url, token: config.browser.token })
-        : null
-      return new ArtifactDiagram({
-        db: prisma,
-        draw: client ? (request) => client.diagram(request) : null,
-      })
-    },
-    inject: [PRISMA, CORE_CONFIG],
-  },
-  {
     // The queue of a chat after its pass ended (docs/plan/75-chat-input-output.md, ВВ2).
     provide: QueueDrain,
     useFactory: (prisma: PrismaClient) => new QueueDrain({ db: prisma }),
@@ -256,7 +240,7 @@ export const taskProviders: Provider[] = [
         // The changes of a turn whose end recovery reached (docs/plan/84-projects.md, §10).
         pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
         // The writes in artifacts of turns the sweep ends, and their collector (Ар16, Ар50) with
-        // the objects of the files and workbooks it removes.
+        // the objects of the files and exports it removes.
         artifacts: new ArtifactChecks({
           db: prisma,
           storage: inbox,

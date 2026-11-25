@@ -11,7 +11,7 @@ import { useTRPC } from '@/trpc/client'
 import { historyTexts } from './artifact-history'
 
 // `/undo` of a turn that changed artifacts (docs/plan/88-artifacts.md, Ар13): the conversation goes
-// back, the edits in the artifacts stay — the row says so and offers «Отменить правки этого хода»
+// back, the edits in the artifacts stay — the row says so and offers «Отменить правки агента»
 // for each; what changed since is left as it is.
 
 export const turnUndoTexts = Object.freeze({

@@ -1,18 +1,17 @@
 import { randomUUID } from 'node:crypto'
 
 import { applyArtifactOps, createArtifact, createPrismaClient, type PrismaClient } from '@repo/db'
-import { DomainError } from '@repo/domain'
 import { artifactExportKey } from '@repo/domain/artifacts'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { ArtifactExports } from './artifact-exports.ts'
 
-// The workbooks of tables on PostgreSQL (docs/plan/88-artifacts.md, question 26; slice 88.14):
-// rows of its own, removed at the end; the bucket is a map in memory.
+// The exports of artifacts on PostgreSQL (docs/plan/88-artifacts.md, §7.13; slices 88.14, 88.25в,
+// 88.26): rows of its own, removed at the end; the bucket is a map in memory.
 
 const databaseUrl = process.env.DATABASE_URL
 
-describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
+describe.skipIf(!databaseUrl)('the exports of artifacts with PostgreSQL', () => {
   let db: PrismaClient
   let userId: string
   let strangerId: string
@@ -40,7 +39,7 @@ describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
     ).id
     workspaceId = (
       await db.workspace.create({
-        data: { name: 'Synthetic tables', dataClass: 'synthetic', createdById: userId },
+        data: { name: 'Synthetic exports', dataClass: 'synthetic', createdById: userId },
       })
     ).id
     await db.member.create({ data: { workspaceId, userId, role: 'owner' } })
@@ -54,9 +53,21 @@ describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
     await db.$disconnect()
   })
 
-  async function table() {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64')
+  const renderPng = () =>
+    vi.fn(async () => ({
+      title: 'Пост',
+      report: '',
+      ru: '',
+      problems: 0,
+      heights: [{ width: 1080, height: 1920 }],
+      pictures: [{ width: 1080, part: 0, type: 'image/png' as const, data: png }],
+    }))
+
+  /** «Изображение» with one picture `p`. */
+  async function picture() {
     const actor = { kind: 'user' as const, userId }
-    const { id } = await createArtifact(db, { workspaceId, kind: 'table', title: 'Прайс', actor })
+    const { id } = await createArtifact(db, { workspaceId, kind: 'image', title: 'Пост', actor })
     await applyArtifactOps(db, {
       batch: {
         artifactId: id,
@@ -64,20 +75,19 @@ describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
         ops: [
           {
             op: 'insert',
-            block: 'cols',
+            block: 'p',
             after: null,
-            kind: 'columns',
-            content: JSON.stringify([
-              { key: 'name', name: 'Название', type: 'text' },
-              { key: 'price', name: 'Цена', type: 'money' },
-            ]),
+            kind: 'frame',
+            content: '',
+            props: { size: 'story' },
           },
           {
             op: 'insert',
-            block: 'r1',
-            after: 'cols',
-            kind: 'row',
-            content: JSON.stringify({ name: 'Батон', price: '45.00' }),
+            block: 'p-html',
+            after: null,
+            parent: 'p',
+            kind: 'html',
+            content: '<section>Пост</section>',
           },
         ],
       },
@@ -86,21 +96,21 @@ describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
     return id
   }
 
-  it('builds the workbook of the person who asked, once, and refuses one who lost the table', async () => {
-    const artifactId = await table()
-    const exports = new ArtifactExports({ db, storage, logger: quiet })
+  it('builds the export of the person who asked, once, and refuses one who lost the artifact', async () => {
+    const artifactId = await picture()
+    const exports = new ArtifactExports({ db, storage, logger: quiet, render: renderPng() })
     const own = await db.artifactExport.create({
-      data: { artifactId, userId, format: 'xlsx' },
+      data: { artifactId, userId, format: 'png', blockKey: 'p' },
     })
     expect(await exports.build(own.id)).toBe('ready')
-    const key = artifactExportKey({ workspaceId, artifactId, exportId: own.id })
+    const key = artifactExportKey({ workspaceId, artifactId, exportId: own.id, format: 'png' })
     expect(objects.get(key)?.byteLength).toBeGreaterThan(0)
     const row = await db.artifactExport.findUniqueOrThrow({ where: { id: own.id } })
     expect(row).toMatchObject({ state: 'ready', objectKey: key })
     expect(await exports.build(own.id)).toBe('skipped')
 
     const theirs = await db.artifactExport.create({
-      data: { artifactId, userId: strangerId, format: 'xlsx' },
+      data: { artifactId, userId: strangerId, format: 'png', blockKey: 'p' },
     })
     expect(await exports.build(theirs.id)).toBe('failed')
     expect((await db.artifactExport.findUniqueOrThrow({ where: { id: theirs.id } })).state).toBe(
@@ -164,9 +174,9 @@ describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
     expect(render).toHaveBeenCalledWith(
       expect.objectContaining({ artifactId, frame: 'a', output: 'slide', viewer: actor }),
     )
-    // A workbook is not of a presentation; without a renderer there is no file.
-    const xlsx = await db.artifactExport.create({ data: { artifactId, userId, format: 'xlsx' } })
-    expect(await exports.build(xlsx.id)).toBe('failed')
+    // A PNG is not of a presentation; without a renderer there is no file.
+    const other = await db.artifactExport.create({ data: { artifactId, userId, format: 'png' } })
+    expect(await exports.build(other.id)).toBe('failed')
     const blind = new ArtifactExports({ db, storage, logger: quiet })
     const pdf = await db.artifactExport.create({ data: { artifactId, userId, format: 'pdf' } })
     expect(await blind.build(pdf.id)).toBe('failed')
@@ -174,46 +184,8 @@ describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
 
   it('builds the PNG of one picture of «Изображение» in its size (88.26)', async () => {
     const actor = { kind: 'user' as const, userId }
-    const { id: artifactId } = await createArtifact(db, {
-      workspaceId,
-      kind: 'image',
-      title: 'Пост',
-      actor,
-    })
-    await applyArtifactOps(db, {
-      batch: {
-        artifactId,
-        opId: randomUUID(),
-        ops: [
-          {
-            op: 'insert',
-            block: 'p',
-            after: null,
-            kind: 'frame',
-            content: '',
-            props: { size: 'story' },
-          },
-          {
-            op: 'insert',
-            block: 'p-html',
-            after: null,
-            parent: 'p',
-            kind: 'html',
-            content: '<section>Пост</section>',
-          },
-        ],
-      },
-      actor,
-    })
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64')
-    const render = vi.fn(async () => ({
-      title: 'Пост',
-      report: '',
-      ru: '',
-      problems: 0,
-      heights: [{ width: 1080, height: 1920 }],
-      pictures: [{ width: 1080, part: 0, type: 'image/png' as const, data: png }],
-    }))
+    const artifactId = await picture()
+    const render = renderPng()
     const exports = new ArtifactExports({ db, storage, logger: quiet, render })
     const row = await db.artifactExport.create({
       data: { artifactId, userId, format: 'png', blockKey: 'p' },
@@ -229,83 +201,27 @@ describe.skipIf(!databaseUrl)('the workbooks of tables with PostgreSQL', () => {
     expect(await exports.build(none.id)).toBe('failed')
   })
 
-  it('prints the PDF of «Отчёт» with its charts inline (88.32)', async () => {
-    const actor = { kind: 'user' as const, userId }
-    const { id: artifactId } = await createArtifact(db, {
-      workspaceId,
-      kind: 'report',
-      title: 'Продажи за ноябрь',
-      actor,
-    })
-    await applyArtifactOps(db, {
-      batch: {
-        artifactId,
-        opId: randomUUID(),
-        ops: [
-          {
-            op: 'insert',
-            block: 's',
-            after: null,
-            kind: 'section',
-            content: 'Выручка выросла на **12 %**.',
-            props: { heading: 'Итоги' },
-          },
-          {
-            op: 'insert',
-            block: 'c',
-            after: 's',
-            kind: 'chart',
-            content: JSON.stringify({
-              type: 'bar',
-              categories: ['Октябрь', 'Ноябрь'],
-              series: [{ name: 'Выручка', values: [100, 112] }],
-            }),
-          },
-        ],
-      },
-      actor,
-    })
-    const pdf = Buffer.from('%PDF-1.7\n').toString('base64')
-    const print = vi.fn(async (_request: { html: string }) => ({ pdf }))
-    const exports = new ArtifactExports({ db, storage, logger: quiet, print })
-    const row = await db.artifactExport.create({ data: { artifactId, userId, format: 'pdf' } })
-    expect(await exports.build(row.id)).toBe('ready')
-    const html = print.mock.calls[0]![0].html
-    expect(html).toContain('<h1>Продажи за ноябрь</h1>')
-    expect(html).toContain('<h2>Итоги</h2>')
-    expect(html).toContain('<strong>12 %</strong>')
-    // The chart goes inline: the printer loads nothing; and no script is on the page.
-    expect(html).toMatch(/<img src="data:image\/svg\+xml;base64,/)
-    expect(html).not.toMatch(/<script/i)
-    const key = artifactExportKey({ workspaceId, artifactId, exportId: row.id, format: 'pdf' })
-    expect(Buffer.from(objects.get(key)!).toString('latin1')).toBe('%PDF-1.7\n')
-
-    // A refusal of the printer (a page over its limits) fails the export; no printer — too.
-    print.mockRejectedValueOnce(new DomainError('RENDER_TOO_LARGE', 'too large', 413))
-    const large = await db.artifactExport.create({ data: { artifactId, userId, format: 'pdf' } })
-    expect(await exports.build(large.id)).toBe('failed')
-    const none = await db.artifactExport.create({ data: { artifactId, userId, format: 'pdf' } })
-    expect(await new ArtifactExports({ db, storage, logger: quiet }).build(none.id)).toBe('failed')
-  })
-
-  it('forgets the workbooks of a day ago', async () => {
-    const artifactId = await table()
+  it('forgets the exports of a day ago', async () => {
+    const artifactId = await picture()
     const old = await db.artifactExport.create({
       data: {
         artifactId,
         userId,
-        format: 'xlsx',
+        format: 'png',
+        blockKey: 'p',
         state: 'ready',
-        objectKey: 'artifacts/old.xlsx',
+        objectKey: 'artifacts/old.png',
         bytes: 1n,
         readyAt: new Date(Date.now() - 2 * 86_400_000),
         createdAt: new Date(Date.now() - 2 * 86_400_000),
       },
     })
-    objects.set('artifacts/old.xlsx', new Uint8Array([1]))
-    const fresh = await db.artifactExport.create({ data: { artifactId, userId, format: 'xlsx' } })
-    await new ArtifactExports({ db, storage, logger: quiet }).build(fresh.id)
+    objects.set('artifacts/old.png', new Uint8Array([1]))
+    const fresh = await db.artifactExport.create({
+      data: { artifactId, userId, format: 'png', blockKey: 'p' },
+    })
+    await new ArtifactExports({ db, storage, logger: quiet, render: renderPng() }).build(fresh.id)
     expect(await db.artifactExport.findUnique({ where: { id: old.id } })).toBeNull()
-    expect(objects.has('artifacts/old.xlsx')).toBe(false)
+    expect(objects.has('artifacts/old.png')).toBe(false)
   })
 })

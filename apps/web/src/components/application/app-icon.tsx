@@ -4,6 +4,9 @@ const paths = {
   projects:
     'M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Zm0 0V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2',
   profile: 'M20 21v-2a6 6 0 0 0-6-6h-4a6 6 0 0 0-6 6v2M16 5a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',
+  /** «Поделиться» of an artifact: two people (docs/plan/93-artifacts-trim.md, АТ9). */
+  people:
+    'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8',
   /** «Страницы»: a sheet with its lines (docs/plan/69-pages.md, Ст30). */
   pages: 'M6 3h8l4 4v14H6V3ZM14 3v4h4M9 12h6M9 16h6',
   settings: 'M4 7h16M4 17h16M8 4v6M16 14v6',
@@ -129,22 +132,10 @@ const paths = {
   /** «Артефакты» in the rail: two sheets, one over the other. */
   artifacts:
     'M9 3h9a2 2 0 0 1 2 2v11M6 7h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2ZM8 12h5M8 16h5',
-  /** «Макет»: a window of a page with its blocks. */
-  mockup:
-    'M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1ZM3 8h18M7 12h10M7 16h5',
-  /** «Таблица»: a grid. */
-  table:
-    'M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1ZM3 10h18M3 15h18M9 10v10',
   /** «Холст»: two screens side by side. */
   canvas: 'M3 5h10v10H3V5ZM16 9h5v10h-5V9ZM6 18h4',
-  /** «Фирменный стиль»: a drop of colour. */
-  brand: 'M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11Z',
-  /** «Схема»: boxes and an arrow. */
-  diagram: 'M3 4h7v6H3V4ZM14 14h7v6h-7v-6ZM6.5 10v4a3 3 0 0 0 3 3H14',
   /** «Презентация»: a board on its stand. */
   slides: 'M3 4h18v11H3V4ZM12 15v5M8 20h8',
-  /** «Структура сайта»: a home page and its pages. */
-  sitemap: 'M9 3h6v5H9V3ZM3 16h6v5H3v-5ZM15 16h6v5h-6v-5ZM12 8v4M6 16v-4h12v4',
   /** «История версий». */
   history: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 8v4l3 2',
 } as const

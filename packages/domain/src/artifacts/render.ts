@@ -48,8 +48,8 @@ export type ArtifactRenderViewer = z.infer<typeof artifactRenderViewerSchema>
 
 export const artifactRenderRequestSchema = z.strictObject({
   artifactId: z.uuid(),
-  /** The frame of a canvas; null — the mockup itself (its blocks at the top). */
-  frame: artifactBlockKeySchema.nullable(),
+  /** The frame: a screen of a canvas, a slide or a picture. */
+  frame: artifactBlockKeySchema,
   viewer: artifactRenderViewerSchema,
   output: z.enum(artifactRenderOutputs),
   /** The widths to draw; absent — both. */

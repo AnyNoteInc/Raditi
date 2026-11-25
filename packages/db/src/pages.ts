@@ -542,7 +542,7 @@ export interface ClientPublicationInput {
   /** The Markdown it was drawn from (Дер26). */
   markdown?: Uint8Array | null
   /**
-   * A document target that serves HTML of its own (a mockup, docs/plan/88-artifacts.md, §7.10): the
+   * A document target that serves HTML of its own (a screen of a canvas or a slide, §7.10): the
    * page is of kind `html`, its scripts run under the policy of a published page.
    */
   html?: boolean

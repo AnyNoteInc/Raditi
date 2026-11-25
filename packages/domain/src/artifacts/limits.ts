@@ -13,14 +13,14 @@ export const artifactLimits = Object.freeze({
   workspaceBytesWithoutTariff: 200 * MiB,
   /** Artifacts of a workspace, the trash not counted. */
   workspaceArtifacts: 1000,
-  /** Blocks of one artifact; a table counts its rows against `tableRows` instead. */
+  /** Blocks of one artifact. */
   blocks: 200,
   /** One block: its content in bytes of UTF-8 (a frame's part — with the ids the server adds). */
   blockBytes: 32 * KiB,
   /** One batch of operations: its JSON in bytes, and its JSON values (keys not counted). */
   batchJsonBytes: 90 * KiB,
   batchJsonNodes: 4000,
-  /** Operations of one batch; the `cells` of a table in the cabinet do not count (§7.2). */
+  /** Operations of one batch (§7.2). */
   batchOps: 50,
   /** The checked text of one artifact. */
   artifactBytes: 2 * MiB,
@@ -80,8 +80,6 @@ export const artifactLimits = Object.freeze({
   commentChars: 2000,
   /** The agent's answers in threads, an hour, of one artifact. */
   agentRepliesPerHour: 60,
-  /** Rows of a table, under `artifactBytes` too (a row longer than ~420 bytes hits the bytes first). */
-  tableRows: 5000,
   /** Live frames on a canvas: only in view and at a scale of 30 % and more (spike 6). */
   liveFrames: 4,
   liveFrameMinScale: 0.3,
@@ -113,7 +111,6 @@ export const artifactRenderLimits = Object.freeze({
   scrollPassPx: 16_000,
   probeMs: 5000,
   pngMaxCssPx: 16_000,
-  pdfMaxPages: 30,
   thumbnailWidths: [480, 195] as readonly number[],
   /** One width with every output, and one call of `artifact_layout`. */
   widthMs: 30_000,
@@ -138,7 +135,10 @@ export const artifactRenderLimits = Object.freeze({
   looksPerTurn: 3,
   picturesPerLook: 4,
   stripPx: 2000,
-  /** A diagram: text and edges counted by the platform before the render, the render, the SVG. */
+  /**
+   * A diagram of Mermaid or PlantUML in an answer of the chat (docs/plan/91-chat-diagrams.md): text
+   * and edges counted by the platform before the render, the render, the SVG.
+   */
   diagramChars: 50_000,
   diagramEdges: 200,
   diagramRenderMs: 10_000,

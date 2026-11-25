@@ -150,7 +150,7 @@ export class McpPagesService {
           ok: false,
           code: 'ARTIFACT_NOT_FOUND',
           message:
-            'No such document of the client for this chat: page_publish takes an artifact of the kind document; the client publishes a mockup or a canvas from the cabinet',
+            'No such document of the client for this chat: page_publish takes an artifact of the kind document; the client publishes a canvas or slides from the cabinet',
         }
       const target = 'file' in input ? { fileName: input.file } : { documentId: input.docId }
       const title =

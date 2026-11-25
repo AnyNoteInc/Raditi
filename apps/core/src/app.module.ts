@@ -65,7 +65,7 @@ export class AppModule {
         TasksModule.forRoot(turns),
         // The git connections and repositories of projects (docs/plan/84-projects.md, 84.17).
         GitModule,
-        // The workbooks of tables of artifacts (docs/plan/88-artifacts.md, question 26).
+        // The exports and thumbnails of artifacts (docs/plan/88-artifacts.md, §7.13).
         ArtifactExportsModule,
         // The signals of chats to the pages and the wake of the outbox, from the process that
         // runs the workers (spec §7; docs/plan/86-speedups.md).

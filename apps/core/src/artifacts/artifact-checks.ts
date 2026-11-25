@@ -34,7 +34,7 @@ import {
 // writing chat: nobody else reads it until core found in it no key of the turn and no value of the
 // variables of the chat's workspace — what only the turn holds — and nothing the role refuses for
 // pages (embedded tokens, a password form sent elsewhere). Every text of the
-// agent goes so: the content of a block and the strings in it (the cells of a row, the settings),
+// agent goes so: the content of a block and the strings in it (the settings),
 // its text properties (a heading, the name of a frame), the intent of an insert or a claim, the
 // title of the artifact. A passed write becomes the block's checked content; a refused one leaves
 // the text before it (`settleArtifactWrites`). Nothing found is logged — only counts.
@@ -83,7 +83,7 @@ export interface ArtifactChecksDependencies {
       refused: ReadonlySet<string>,
     ): Promise<void>
   }
-  /** The artifacts bucket: the collector deletes the files and workbooks whose rows went. */
+  /** The artifacts bucket: the collector deletes the files and exports whose rows went. */
   storage?: Pick<ObjectStorage, 'delete'>
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date

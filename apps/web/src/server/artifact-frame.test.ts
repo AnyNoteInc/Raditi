@@ -37,7 +37,7 @@ describe('/v/<segment> on the root of the pages', () => {
     expect(await artifactOnPages(request, 'abc.def', deps())).toBeNull()
   })
 
-  it('answers the frame of a mockup only on the host of the pages', async () => {
+  it('answers the frame of a screen only on the host of the pages', async () => {
     const request = new Request('https://raditi.test/v/x', { headers: { host: 'raditi.test' } })
     expect((await artifactOnPages(request, token('artifact'), deps()))?.status).toBe(404)
   })

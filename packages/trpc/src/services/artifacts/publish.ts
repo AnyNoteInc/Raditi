@@ -1,17 +1,12 @@
-import { createHash } from 'node:crypto'
-
 import {
   artifactFilesByIds,
   artifactRole,
-  projectBrandOf,
   publishClientPage,
   readArtifactVersion,
   saveArtifactVersion,
   type PrismaClient,
-  artifactDiagramOf,
 } from '@repo/db'
-import { diagramPage, readingPage, reportPage } from '@repo/doc-render'
-import { reportPartsOf } from '@repo/doc-render/report'
+import { readingPage } from '@repo/doc-render'
 import {
   checkPageContent,
   DomainError,
@@ -25,15 +20,11 @@ import {
   artifactForbidden,
   artifactFrameBlocksOf,
   artifactFrameDocument,
-  brandCss,
-  brandTokensOf,
   canvasLegacyHome,
   canvasPublishedScreens,
   canvasSegmentOf,
   artifactKindSpecOf,
   artifactNotFound,
-  tableMarkdown,
-  tableOfBlocks,
   withArtifactFileAddresses,
   artifactSlidesOf,
 } from '@repo/domain/artifacts'
@@ -46,26 +37,6 @@ import {
 // version of the artifact the page shows.
 
 const encode = (text: string) => new TextEncoder().encode(text)
-
-/**
- * A version of a table drawn as Markdown for a page to read (slice 88.14): its columns and rows as
- * a table of Markdown; null — the version holds no table.
- */
-function markdownOfTable(
-  blocks: readonly { key: string; kind: string | null; rev: number; content: string | null }[],
-): string | null {
-  const table = tableOfBlocks(
-    blocks.flatMap((block) => (block.kind === null ? [] : [{ ...block, kind: block.kind }])),
-  )
-  return table.columnsKey === null ? null : `${tableMarkdown(table.columns, table.rows)}\n`
-}
-
-async function projectOf(db: PrismaClient, artifactId: string): Promise<string | null> {
-  return (
-    (await db.artifact.findUnique({ where: { id: artifactId }, select: { projectId: true } }))
-      ?.projectId ?? null
-  )
-}
 
 async function ownedDocument(db: PrismaClient, artifactId: string, userId: string) {
   const role = await artifactRole(db, { artifactId, userId })
@@ -84,14 +55,9 @@ async function ownedDocument(db: PrismaClient, artifactId: string, userId: strin
   })
   const spec = artifactKindSpecOf(artifact.kind)
   const publish = spec?.publish
-  if (publish !== 'reading-page' && publish !== 'html' && publish !== 'site')
+  if (publish !== 'reading-page' && publish !== 'site')
     throw new DomainError('ARTIFACT_KIND_REFUSED', 'This kind is not published as a page yet', 409)
-  return {
-    ...artifact,
-    publish,
-    framed: spec?.framed === true,
-    projectId: await projectOf(db, artifactId),
-  }
+  return { ...artifact, publish }
 }
 
 const extensionOf = (type: string) =>
@@ -108,12 +74,6 @@ const extensionOf = (type: string) =>
     }) as Record<string, string>
   )[type] ?? 'bin'
 
-/**
- * A version of a mockup as the HTML of a published page (§7.10): its parts assembled as the frame
- * does — without the bridge — and the files it names copied into the shared files of the site
- * (`/_files/a/<id>.<ext>`, Дер34), the references rewritten to them: the preview and the page load
- * the same bytes.
- */
 interface VersionBlock {
   key: string
   kind: string | null
@@ -122,18 +82,21 @@ interface VersionBlock {
   content: string | null
 }
 
-async function mockupPage(
+/**
+ * A frame of a version (a screen of a canvas, a slide) as the HTML of a published page (§7.10): its
+ * parts assembled as the frame does — without the bridge — and the files it names copied into the
+ * shared files of the site (`/_files/a/<id>.<ext>`, Дер34), the references rewritten to them: the
+ * preview and the page load the same bytes.
+ */
+async function framePage(
   db: PrismaClient,
   storage: () => Pick<ObjectStorage, 'get'>,
   input: {
     artifactId: string
     title: string
     blocks: readonly VersionBlock[]
-    /** A framed kind (a canvas): the screen it publishes; null — a mockup. */
-    framed: boolean
-    frame: string | null
-    /** The CSS variables of the project's brand (slice 88.15а). */
-    brandCss: string
+    /** The frame block it publishes. */
+    frame: string
   },
 ) {
   const sorted = input.blocks
@@ -142,7 +105,7 @@ async function mockupPage(
       (a.rank ?? '') < (b.rank ?? '') ? -1 : (a.rank ?? '') > (b.rank ?? '') ? 1 : 0,
     )
   // The one assembly of a frame, as `/v/` and the renderer have it (§7.2).
-  const parts = artifactFrameBlocksOf({ framed: input.framed, blocks: sorted, frame: input.frame })
+  const parts = artifactFrameBlocksOf({ blocks: sorted, frame: input.frame })
   if (parts === null) throw artifactNotFound()
   const used = [
     ...parts.html,
@@ -167,7 +130,7 @@ async function mockupPage(
   const addressed = (text: string) => withArtifactFileAddresses(text, (id) => paths.get(id) ?? null)
   const html = artifactFrameDocument({
     title: input.title,
-    platformCss: input.brandCss,
+    platformCss: '',
     bridge: false,
     parts: {
       html: of(parts.html).map(addressed),
@@ -179,84 +142,11 @@ async function mockupPage(
   return { bytes: encode(html), files: copied }
 }
 
-/**
- * A version of «Схема» as a page (§7.10, 88.24в): each diagram block by the picture kept of its text
- * — the SVG the server drew and cleaned — copied into the files of the site. A text without a drawn
- * picture is not published: the client sees why.
- */
-async function diagramPublication(
-  db: PrismaClient,
-  input: { artifactId: string; title: string; blocks: readonly VersionBlock[] },
-) {
-  const diagrams = input.blocks
-    .filter((block) => block.kind === 'diagram' && block.content && block.content.trim() !== '')
-    .toSorted((a, b) =>
-      (a.rank ?? '') < (b.rank ?? '') ? -1 : (a.rank ?? '') > (b.rank ?? '') ? 1 : 0,
-    )
-  if (diagrams.length === 0)
-    throw new DomainError('DOC_NOT_READY', 'The version has no diagram to publish', 409)
-  const files: { path: string; bytes: Uint8Array }[] = []
-  const pictures: { src: string; width: number; height: number }[] = []
-  for (const block of diagrams) {
-    const kept = await artifactDiagramOf(db, {
-      artifactId: input.artifactId,
-      source: block.content!,
-    })
-    if (!kept?.ok || !kept.svg || !kept.width || !kept.height)
-      throw new DomainError(
-        'ARTIFACT_DIAGRAM_NOT_DRAWN',
-        'A diagram of the version is not drawn',
-        409,
-      )
-    const path = `/_files/a/d-${kept.sourceSha256.slice(0, 32)}.svg`
-    if (!files.some((file) => file.path === path)) files.push({ path, bytes: encode(kept.svg) })
-    pictures.push({ src: path, width: kept.width, height: kept.height })
-  }
-  return { bytes: encode(await diagramPage({ title: input.title, pictures })), files }
-}
-
-/**
- * A version of «Отчёт» as a page (§7.10, 88.28): its sections, its charts drawn on the server — files
- * of the site —, its table, in the order of the blocks. A chart whose spec does not parse is left
- * out of the page rather than shown broken.
- */
-async function reportPublication(input: { title: string; blocks: readonly VersionBlock[] }) {
-  const ordered = input.blocks
-    .filter((block) => block.parent === null && block.kind !== null)
-    .toSorted((a, b) =>
-      (a.rank ?? '') < (b.rank ?? '') ? -1 : (a.rank ?? '') > (b.rank ?? '') ? 1 : 0,
-    )
-  if (ordered.length === 0)
-    throw new DomainError('DOC_NOT_READY', 'The version has no text to publish', 409)
-  const files: { path: string; bytes: Uint8Array }[] = []
-  const parts = reportPartsOf(
-    ordered.map((block) => ({
-      key: block.key,
-      kind: block.kind!,
-      content: block.content,
-      props: (block as { props?: Record<string, unknown> }).props ?? null,
-    })),
-    (picture) => {
-      const path = `/_files/a/c-${createHash('sha256').update(picture.svg).digest('hex').slice(0, 32)}.svg`
-      if (!files.some((file) => file.path === path))
-        files.push({ path, bytes: encode(picture.svg) })
-      return path
-    },
-  )
-  return { bytes: encode(await reportPage({ title: input.title, parts })), files }
-}
-
-/** The CSS variables of the brand of the artifact's project; '' — none (slice 88.15а). */
-async function brandCssOf(db: PrismaClient, projectId: string | null): Promise<string> {
-  const brand = await projectBrandOf(db, projectId)
-  return brand ? brandCss(brandTokensOf(brand.settings)) : ''
-}
-
 export async function publishArtifactPage(
   db: PrismaClient,
   address: PagesAddress,
   input: { artifactId: string; userId: string; versionNo: number | null },
-  /** The artifacts bucket, made only when a mockup names files: a document needs none. */
+  /** The artifacts bucket, made only for a site: a document needs none. */
   storage?: () => Pick<ObjectStorage, 'get'>,
 ): Promise<{ pageId: string; url: string; version: number; versionNo: number }> {
   const artifact = await ownedDocument(db, input.artifactId, input.userId)
@@ -282,33 +172,10 @@ export async function publishArtifactPage(
       blocks: version.blocks,
     })
   }
-  let bytes: Uint8Array
-  let markdown: string | null = null
-  let files: { path: string; bytes: Uint8Array }[] = []
-  if (artifact.publish === 'html') {
-    if (storage === undefined) throw new DomainError('PAGES_UNAVAILABLE', 'No storage here', 503)
-    ;({ bytes, files } = await mockupPage(db, storage, {
-      artifactId: artifact.id,
-      title: artifact.title,
-      blocks: version.blocks,
-      framed: false,
-      frame: null,
-      brandCss: await brandCssOf(db, artifact.projectId),
-    }))
-  } else if (artifact.kind === 'report') {
-    ;({ bytes, files } = await reportPublication({ title: artifact.title, blocks: version.blocks }))
-  } else if (artifact.kind === 'diagram') {
-    ;({ bytes, files } = await diagramPublication(db, {
-      artifactId: artifact.id,
-      title: artifact.title,
-      blocks: version.blocks,
-    }))
-  } else {
-    markdown = version.markdown ?? markdownOfTable(version.blocks)
-    if (markdown === null)
-      throw new DomainError('DOC_NOT_READY', 'The version has no text to publish', 409)
-    bytes = encode(await readingPage({ title: artifact.title, markdown }))
-  }
+  const markdown = version.markdown
+  if (markdown === null)
+    throw new DomainError('DOC_NOT_READY', 'The version has no text to publish', 409)
+  const bytes = encode(await readingPage({ title: artifact.title, markdown }))
   const verdict = checkPageContent(bytes)
   if (!verdict.ok) throw pageContentRefused(verdict.reason)
   const page = await publishClientPage(db, {
@@ -317,9 +184,9 @@ export async function publishArtifactPage(
     title: artifact.title,
     target: { documentId: artifact.id },
     bytes,
-    markdown: markdown === null ? null : encode(markdown),
-    html: artifact.publish === 'html',
-    files,
+    markdown: encode(markdown),
+    html: false,
+    files: [],
   })
   await db.artifactPublication.upsert({
     where: { pageId: page.pageId },
@@ -365,7 +232,6 @@ async function publishCanvasSite(
   )
   if (screens.length === 0)
     throw new DomainError('DOC_NOT_READY', 'The canvas has no screen to publish', 409)
-  const css = await brandCssOf(db, artifact.projectId)
   const previous = await db.artifactPublication.findMany({
     where: { artifactId: artifact.id, page: { deletedAt: null } },
     select: {
@@ -425,13 +291,11 @@ async function publishCanvasSite(
   const usedPaths = new Set(['/', ...children.map((child) => child.page.path)])
   let first: Awaited<ReturnType<typeof publishClientPage>> | null = null
   for (const screen of [home, ...screens.filter((screen) => screen !== home)]) {
-    const page = await mockupPage(db, storage, {
+    const page = await framePage(db, storage, {
       artifactId: artifact.id,
       title: `${artifact.title} — ${screen.name}`,
       blocks: input.blocks,
-      framed: true,
       frame: screen.key,
-      brandCss: css,
     })
     const verdict = checkPageContent(page.bytes)
     if (!verdict.ok) throw pageContentRefused(verdict.reason)
@@ -522,7 +386,6 @@ async function publishSlidesSite(
   const slides = artifactSlidesOf(orderedLiveBlocks(input.blocks))
   if (slides.length === 0)
     throw new DomainError('DOC_NOT_READY', 'The presentation has no slide to publish', 409)
-  const css = await brandCssOf(db, artifact.projectId)
   const previous = await db.artifactPublication.findMany({
     where: { artifactId: artifact.id, page: { deletedAt: null } },
     select: {
@@ -551,13 +414,11 @@ async function publishSlidesSite(
   })
   let first: Awaited<ReturnType<typeof publishClientPage>> | null = null
   for (const [index, { slide, known, path }] of plan.entries()) {
-    const page = await mockupPage(db, storage, {
+    const page = await framePage(db, storage, {
       artifactId: artifact.id,
       title: `${artifact.title} — ${slide.name}`,
       blocks: input.blocks,
-      framed: true,
       frame: slide.key,
-      brandCss: css,
     })
     const html = new TextDecoder().decode(page.bytes)
     const end = html.lastIndexOf('</body>')

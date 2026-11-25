@@ -8,7 +8,7 @@ import { pluralRu } from '../plural.ts'
 export const artifactTexts = Object.freeze({
   section: 'Артефакты',
   linkAudience: 'Пользователи Радити, у которых есть ссылка',
-  frameEditNote: 'В режиме правки скрипты макета выключены',
+  frameEditNote: 'В режиме правки скрипты экрана выключены',
   createdByUser: 'Содержимое создал пользователь Радити',
   sharedWithYou: 'С вами поделились',
   newComment: 'Новый комментарий',

@@ -325,6 +325,37 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
     expect(await db.artifact.count({ where: { id: artifactId } })).toBe(0)
   })
 
+  it('«Вернуть» of a project leaves an artifact whose day has come (plan 93, АТ2)', async () => {
+    const now = new Date()
+    const { userId, projectId } = await projectWith([], now)
+    const project = await db.project.findUniqueOrThrow({ where: { id: projectId } })
+    const made = (title: string) =>
+      createArtifact(db, {
+        workspaceId: project.workspaceId,
+        kind: 'document',
+        title,
+        projectId,
+        actor: { kind: 'user', userId },
+      })
+    const { id: kept } = await made('Бриф')
+    const { id: due } = await made('Старый отчёт')
+    await trashProject(db, { projectId, userId, now })
+    // As the migration of plan 93 leaves an artifact of a removed kind: its term is over.
+    await db.artifact.update({
+      where: { id: due },
+      data: { purgeAfter: new Date(now.getTime() - 1) },
+    })
+    await restoreProject(db, { projectId, userId, now: new Date(now.getTime() + 1000) })
+    expect(await db.artifact.findUniqueOrThrow({ where: { id: kept } })).toMatchObject({
+      deletedAt: null,
+      purgeAfter: null,
+    })
+    expect(await db.artifact.findUniqueOrThrow({ where: { id: due } })).toMatchObject({
+      deletedBy: 'project',
+      deletedAt: now,
+    })
+  })
+
   it('a project restored before the purge took it is kept', async () => {
     const now = new Date(Date.now() - 31 * DAY)
     const { userId, projectId } = await projectWith(['done'], now)

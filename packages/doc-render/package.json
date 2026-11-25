@@ -6,9 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./markdown": "./src/markdown.ts",
-    "./chart": "./src/chart.ts",
-    "./report": "./src/report.ts"
+    "./markdown": "./src/markdown.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -17,7 +15,6 @@
   },
   "dependencies": {
     "@repo/domain": "workspace:*",
-    "echarts": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-markdown": "catalog:",

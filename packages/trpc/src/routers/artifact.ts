@@ -23,7 +23,6 @@ import {
   artifactGallerySorts,
   moveArtifact,
   resolveArtifactComment,
-  readArtifactDiagram,
 } from '@repo/db'
 import { feedEventIdSchema } from '@repo/domain'
 import {
@@ -43,7 +42,6 @@ import {
   artifactRoles,
   artifactSignalLimits,
   artifactTitleSchema,
-  artifactRenderLimits,
   artifactExportFormats,
 } from '@repo/domain/artifacts'
 import { enqueueNotification } from '@repo/notifications'
@@ -51,7 +49,6 @@ import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 
 import { canvasThumbs } from '../services/artifacts/canvas.ts'
-import { reportChart } from '../services/artifacts/chart.ts'
 import { chatArtifactsOf } from '../services/artifacts/chat-artifacts.ts'
 import {
   commentDispatchChats,
@@ -92,11 +89,7 @@ import {
   issueArtifactFrame,
   startCabinetArtifactFile,
 } from '../services/artifacts/frame.ts'
-import {
-  artifactExportStatus,
-  cabinetTableTotals,
-  startArtifactExport,
-} from '../services/artifacts/table.ts'
+import { artifactExportStatus, startArtifactExport } from '../services/artifacts/exports.ts'
 
 import {
   artifactPresence,
@@ -854,99 +847,14 @@ export const artifactRouter = router({
     }),
 
   /**
-   * The totals of a table (§7.7, slice 88.14): the sums of its number and money columns, counted on
-   * the server with decimal.js — over all its rows, or the rows of the screen (`rows`, a filter).
-   */
-  tableTotals: consentedProcedure
-    .input(
-      z.strictObject({
-        artifactId,
-        rows: z.array(artifactBlockKeySchema).max(5000).nullable(),
-      }),
-    )
-    .output(
-      z.strictObject({
-        totals: z.record(z.string(), z.string()),
-        rows: z.number().int().min(0),
-      }),
-    )
-    .query(({ ctx, input }) => cabinetTableTotals(ctx.prisma, { userId: ctx.user.id, ...input })),
-
-  /**
-   * The picture of a block of «Схема» (§7.13, 88.24): the checked text drawn — kept by the hash of
-   * the text, or asked of core when missing (`drawing`: the cabinet asks again). An error is its line.
-   */
-  diagram: consentedProcedure
-    .input(
-      z.strictObject({
-        artifactId,
-        block: artifactBlockKeySchema,
-        /** The revision the cabinet holds: a key of its cache only — the server reads the block. */
-        rev: z.number().int().min(0).optional(),
-      }),
-    )
-    .output(
-      z.discriminatedUnion('state', [
-        z.strictObject({ state: z.literal('empty') }),
-        z.strictObject({ state: z.literal('drawing') }),
-        z.strictObject({
-          state: z.literal('drawn'),
-          svg: z.string().max(artifactRenderLimits.diagramSvgBytes),
-          width: z.number().int().positive(),
-          height: z.number().int().positive(),
-        }),
-        z.strictObject({
-          state: z.literal('failed'),
-          line: z.number().int().positive().nullable(),
-        }),
-      ]),
-    )
-    .query(({ ctx, input }) =>
-      readArtifactDiagram(ctx.prisma, {
-        userId: ctx.user.id,
-        artifactId: input.artifactId,
-        block: input.block,
-      }),
-    ),
-
-  /** The picture of a chart of «Отчёт» (§7.13, 88.28): the checked spec drawn on the server. */
-  chart: consentedProcedure
-    .input(
-      z.strictObject({
-        artifactId,
-        block: artifactBlockKeySchema,
-        /** The revision the cabinet holds: a key of its cache only. */
-        rev: z.number().int().min(0).optional(),
-      }),
-    )
-    .output(
-      z.discriminatedUnion('state', [
-        z.strictObject({
-          state: z.literal('drawn'),
-          svg: z.string().max(512 * 1024),
-          width: z.number().int().positive(),
-          height: z.number().int().positive(),
-        }),
-        z.strictObject({ state: z.literal('failed') }),
-      ]),
-    )
-    .query(({ ctx, input }) =>
-      reportChart(ctx.prisma, {
-        userId: ctx.user.id,
-        artifactId: input.artifactId,
-        block: input.block,
-      }),
-    ),
-
-  /**
-   * «Скачать» built by core (§7.13, question 26): the workbook of a table, the PDF and the PPTX of
-   * «Презентация» (88.25в). Absent — the workbook.
+   * «Скачать» built by core (§7.13, question 26): the PDF and the PPTX of «Презентация» (88.25в),
+   * the PNG of a picture of «Изображение» (88.26).
    */
   exportStart: consentedProcedure
     .input(
       z.strictObject({
         artifactId,
-        format: z.enum(artifactExportFormats).optional(),
+        format: z.enum(artifactExportFormats),
         /** The picture of «Изображение» a PNG draws (88.26). */
         frame: artifactBlockKeySchema.optional(),
       }),
@@ -963,8 +871,9 @@ export const artifactRouter = router({
     .query(({ ctx, input }) => artifactExportStatus(ctx.prisma, { userId: ctx.user.id, ...input })),
 
   /**
-   * The address of the frame of a mockup for this viewer, five minutes (Ар28, Ар9): `view` — on
-   * the root of the domain of pages, with its scripts; `edit` — the edit frame of the cabinet, none.
+   * The address of a frame (a screen of a canvas, a slide, a picture) for this viewer, five minutes
+   * (Ар28, Ар9): `view` — on the root of the domain of pages, with its scripts; `edit` — the edit
+   * frame of the cabinet, none.
    */
   frame: consentedProcedure
     .input(
@@ -973,8 +882,8 @@ export const artifactRouter = router({
         mode: z.enum(['view', 'edit']),
         // The `seq` the cabinet read: a new one is a new document of the frame, a new address.
         seq: z.number().int().min(0).optional(),
-        /** The screen of a canvas (slice 88.15); absent — a mockup. */
-        frame: artifactBlockKeySchema.optional(),
+        /** The frame block: a screen of a canvas (slice 88.15), a slide, a picture. */
+        frame: artifactBlockKeySchema,
       }),
     )
     .output(z.strictObject({ url: z.string(), expiresAt: z.iso.datetime() }))
@@ -983,7 +892,7 @@ export const artifactRouter = router({
         userId: ctx.user.id,
         artifactId: input.artifactId,
         mode: input.mode,
-        ...(input.frame === undefined ? {} : { frame: input.frame }),
+        frame: input.frame,
       }),
     ),
 
@@ -1071,7 +980,7 @@ export const artifactRouter = router({
       startCabinetArtifactFile(ctx.prisma, { userId: ctx.user.id, ...input }),
     ),
 
-  /** «Открыть как артефакт» of a `.md`, `.html`, `.svg` or `.csv` file of a chat (Ар3). */
+  /** «Открыть как артефакт» of a `.md` (a document) or `.html`, `.htm`, `.svg` (a canvas) file (Ар3). */
   importFile: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid(), fileId: z.uuid() }))
     .output(z.strictObject({ id: z.uuid() }))

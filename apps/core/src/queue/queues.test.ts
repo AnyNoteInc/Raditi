@@ -41,7 +41,7 @@ describe('queueJobDefaults', () => {
     })
   })
 
-  it('builds a workbook of a table three times, from 5 s doubling (docs/plan/88, question 26)', () => {
+  it('builds an export of an artifact three times, from 5 s doubling (docs/plan/88, §7.13)', () => {
     expect(queueJobDefaults.artifacts).toEqual({
       attempts: 3,
       backoff: { type: 'exponential', delay: 5_000 },

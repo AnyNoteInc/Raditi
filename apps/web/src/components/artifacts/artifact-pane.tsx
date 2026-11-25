@@ -5,24 +5,24 @@ import Box from '@mui/material/Box'
 import IconButton from '@mui/material/IconButton'
 import Skeleton from '@mui/material/Skeleton'
 import Tooltip from '@mui/material/Tooltip'
-import Typography from '@mui/material/Typography'
-import { artifactSavedLine } from '@repo/domain/artifacts'
 import NextLink from 'next/link'
 import { useCallback, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 
 import { ArtifactBody } from './artifact-body'
+import { artifactHeadSx } from './artifact-head'
 import { ArtifactHistoryButton } from './artifact-history'
 import { ArtifactPublishButton } from './artifact-publish'
 import { ArtifactPresenceBar, ArtifactTitle } from './artifact-page'
 import { documentTexts } from './artifact-texts'
 import { useArtifact, type CabinetArtifact } from './use-artifact'
 
-// The tab of one artifact beside the chat (docs/plan/88-artifacts.md, Ар44; board B-chat-doc): its
-// head — «Сохранено · версия N», who is here, «История версий», «Во весь экран» — and the artifact
-// itself, edited in place as on its page. Nothing loads while the tab is closed (И11): the pane is
-// mounted only for an open tab.
+// The tab of one artifact beside the chat (docs/plan/88-artifacts.md, Ар44; board B-chat-doc;
+// docs/plan/93-artifacts-trim.md, АТ9): its head — the title, who is here, «История версий»,
+// «Опубликовать» and «Во весь экран», icons with tooltips in one row — and the artifact itself,
+// edited in place as on its page. Nothing loads while the tab is closed (И11): the pane is mounted
+// only for an open tab.
 
 export const paneTexts = Object.freeze({
   fullscreen: 'Во весь экран',
@@ -59,27 +59,22 @@ export function ArtifactPane({
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <Box
         sx={{
+          ...artifactHeadSx,
           display: 'flex',
           alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 1,
+          gap: 0.5,
           px: 2,
           py: 1,
           borderBottom: 1,
           borderColor: 'divider',
         }}
       >
-        <Box sx={{ minWidth: 0, flex: '1 1 200px' }}>
+        <Box sx={{ minWidth: 0, flex: '1 1 auto', mr: 0.5 }}>
           <ArtifactTitle artifact={artifact} onChanged={reread} size="small" />
-          {artifact.version > 0 && (
-            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-              {artifactSavedLine(artifact.version)}
-            </Typography>
-          )}
         </Box>
         <ArtifactPresenceBar presence={presence} />
         <ArtifactHistoryButton artifact={artifact} onChanged={reread} />
-        <ArtifactPublishButton artifact={artifact} />
+        <ArtifactPublishButton artifact={artifact} compact />
         {actions?.(artifact, reread)}
         <Tooltip title={paneTexts.fullscreen}>
           <IconButton

@@ -1,6 +1,3 @@
-import type { ArtifactKind } from './kinds.ts'
-import { artifactKindSpecs } from './kinds.ts'
-
 /**
  * Who may do what with an artifact (docs/plan/88-artifacts.md, Ар23, Ар34, Ар36–Ар38, §7.8).
  * `artifactRole` of `@repo/db` gives one of these on every path; these pure rules say what it
@@ -80,14 +77,6 @@ export const artifactCabinetOnlyActions: readonly ArtifactAction[] = Object.free
   'restore_version',
   'purge_trash',
 ])
-
-/**
- * Whether a grant of this role may be given on an artifact of this kind: a kind that goes into
- * every turn of a project («Фирменный стиль») never opens with «Правит» (Ар25).
- */
-export function artifactGrantAllowed(kind: ArtifactKind, role: ArtifactGrantRole): boolean {
-  return role !== 'edit' || artifactKindSpecs[kind].sharableEdit
-}
 
 export type ArtifactDataClass = 'synthetic' | 'client'
 

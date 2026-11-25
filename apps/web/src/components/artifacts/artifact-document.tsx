@@ -11,6 +11,7 @@ import DialogTitle from '@mui/material/DialogTitle'
 import IconButton from '@mui/material/IconButton'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { canonicalSection } from '@repo/doc-bridge'
 import { ArtifactSectionMarkdown } from '@repo/doc-render/markdown'
@@ -20,7 +21,15 @@ import {
   type ArtifactQuoteAnchor,
 } from '@repo/domain/artifacts'
 import { useMutation } from '@tanstack/react-query'
-import { useContext, useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react'
+import {
+  Fragment,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
@@ -66,6 +75,105 @@ export const documentSx = {
 
 export function SectionText({ text }: { text: string }) {
   return <ArtifactSectionMarkdown text={text} />
+}
+
+/**
+ * The Markdown of a document as it reads now (docs/plan/93-artifacts-trim.md, АТ9: «Скачать →
+ * Markdown»): `# title`, each written section as `## heading` and its text — the form of the
+ * Markdown kept with a version; a section an agent still writes is left out.
+ */
+export function documentMarkdown(artifact: Pick<CabinetArtifact, 'title' | 'blocks'>): string {
+  const parts = [`# ${artifact.title}`]
+  for (const block of artifact.blocks) {
+    if (block.kind !== 'section' || block.content === null) continue
+    const heading = block.heading ?? documentTexts.untitled
+    const body = block.content.replace(/\r\n?/g, '\n').trim()
+    parts.push(body === '' ? `## ${heading}` : `## ${heading}\n\n${body}`)
+  }
+  return `${parts.join('\n\n')}\n`
+}
+
+/** A name of a file from the title of an artifact: what a file system takes, never empty. */
+export function documentFileName(title: string): string {
+  const name = Array.from(title, (char) => (char < ' ' ? ' ' : char))
+    .join('')
+    .replace(/[\\/:*?"<>|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100)
+  return `${name || documentTexts.untitled}.md`
+}
+
+/** «Скачать → Markdown»: the file is made in the browser, nothing goes to the server. */
+export function downloadDocumentMarkdown(artifact: Pick<CabinetArtifact, 'title' | 'blocks'>) {
+  const blob = new Blob([documentMarkdown(artifact)], { type: 'text/markdown;charset=utf-8' })
+  const href = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = href
+  link.download = documentFileName(artifact.title)
+  document.body.append(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(href), 0)
+}
+
+/** The tools of a section, seen on hover and on focus; always on a screen without hover. */
+const sectionToolsSx = {
+  '& .section-tools': { opacity: 0, transition: 'opacity 120ms' },
+  '&:hover .section-tools, &:focus-within .section-tools': { opacity: 1 },
+  '@media (hover: none)': { '& .section-tools': { opacity: 1 } },
+} as const
+
+/** «Добавить раздел» between two sections: a thin line that shows its button on hover or focus. */
+function InsertSection({
+  label,
+  disabled,
+  onInsert,
+}: {
+  label: string
+  disabled: boolean
+  onInsert: () => void
+}) {
+  return (
+    <Box
+      sx={{
+        position: 'relative',
+        height: 20,
+        my: 0.5,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: '50%',
+          borderTop: 1,
+          borderColor: 'divider',
+          opacity: 0,
+          transition: 'opacity 120ms',
+        },
+        '& .insert-section': { opacity: 0, transition: 'opacity 120ms' },
+        '&:hover::before, &:focus-within::before, &:hover .insert-section, &:focus-within .insert-section':
+          { opacity: 1 },
+        '@media (hover: none)': { display: 'none' },
+      }}
+    >
+      <Button
+        className="insert-section"
+        size="small"
+        variant="outlined"
+        disabled={disabled}
+        aria-label={label}
+        startIcon={<AppIcon name="plus" size={14} />}
+        onClick={onInsert}
+        sx={{ position: 'relative', bgcolor: 'background.paper', minHeight: 0, py: 0, px: 1.25 }}
+      >
+        {documentTexts.section}
+      </Button>
+    </Box>
+  )
 }
 
 /** An id of a new section by the rule of `section_key` (§7.2). */
@@ -496,14 +604,14 @@ export function ArtifactDocument({
     }
   }
 
-  async function addSection() {
+  /** A new section after `after` (null — first), or at the end; it opens in its editor. */
+  async function addSection(after: string | null = sections.at(-1)?.key ?? null) {
     const key = newKey()
-    const last = sections.at(-1)?.key ?? null
     const answer = await batch([
       {
         op: 'insert',
         block: key,
-        after: last,
+        after,
         kind: 'section',
         content: '',
         props: { heading: documentTexts.newHeading },
@@ -533,125 +641,149 @@ export function ArtifactDocument({
       {sections.length === 0 && (
         <Typography sx={{ color: 'text.secondary', py: 3 }}>{documentTexts.empty}</Typography>
       )}
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-        {sections.map((block) => {
+      <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+        {sections.map((block, index) => {
           const agent = agentOf(presence, block.key)
           const person = presence?.people.find((each) => !each.self && each.block === block.key)
           const agentHolds = block.hold === 'checking' || block.hold === 'claim'
           const canAnchor = writable && !block.checking
+          // Between two sections, «Добавить раздел» on hover (АТ9).
+          const between =
+            canEdit && index > 0 ? (
+              <InsertSection
+                label={documentTexts.insertAfter(
+                  sections[index - 1]!.heading ?? documentTexts.untitled,
+                )}
+                disabled={write.isPending}
+                onInsert={() => void addSection(sections[index - 1]!.key)}
+              />
+            ) : index > 0 ? (
+              <Box sx={{ height: 20, my: 0.5 }} />
+            ) : null
           if (editingBlock?.key === block.key)
             return (
-              <SectionEditing
-                key={block.key}
-                artifactId={artifact.id}
-                block={block}
-                agent={agent}
-                onClose={() => setEditing(null)}
-                onSaved={onChanged}
-              />
+              <Fragment key={block.key}>
+                {between}
+                <SectionEditing
+                  artifactId={artifact.id}
+                  block={block}
+                  agent={agent}
+                  onClose={() => setEditing(null)}
+                  onSaved={onChanged}
+                />
+              </Fragment>
             )
           return (
-            <Box
-              component="section"
-              key={block.key}
-              id={`section-${block.key}`}
-              aria-labelledby={`section-${block.key}-title`}
-              sx={{
-                position: 'relative',
-                px: { xs: 1.5, sm: 2 },
-                py: 1.5,
-                borderRadius: '14px',
-                border: 1,
-                borderColor: agentHolds ? 'warning.main' : person ? 'info.main' : 'transparent',
-                '&:hover': { borderColor: agentHolds ? 'warning.main' : 'divider' },
-              }}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                <Typography
-                  id={`section-${block.key}-title`}
-                  component="h2"
-                  sx={{ fontSize: 21, fontWeight: 650, lineHeight: 1.3, flex: '1 1 auto' }}
-                >
-                  {block.heading ?? documentTexts.untitled}
-                </Typography>
-                {agentHolds && (
-                  <Chip
-                    size="small"
-                    color="warning"
-                    variant="outlined"
-                    label={
-                      agent
-                        ? documentTexts.agentWritingNamed(agent.label)
-                        : documentTexts.agentWriting
-                    }
-                  />
-                )}
-                {person && (
-                  <Chip
-                    size="small"
-                    color="info"
-                    variant="outlined"
-                    label={documentTexts.humanEditing(person.name)}
-                  />
-                )}
-                {canEdit && (
-                  <>
-                    <Button
+            <Fragment key={block.key}>
+              {between}
+              <Box
+                component="section"
+                id={`section-${block.key}`}
+                aria-labelledby={`section-${block.key}-title`}
+                sx={{
+                  position: 'relative',
+                  // A section reads as the text of the document: no box; a line on the left only
+                  // while an agent writes it or someone else edits it.
+                  pl: { xs: 1.5, sm: 2 },
+                  pr: { xs: 0.5, sm: 1 },
+                  py: 0.5,
+                  borderLeft: 2,
+                  borderColor: agentHolds ? 'warning.main' : person ? 'info.main' : 'transparent',
+                  ...sectionToolsSx,
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                  <Typography
+                    id={`section-${block.key}-title`}
+                    component="h2"
+                    sx={{ fontSize: 20, fontWeight: 600, lineHeight: 1.35, flex: '1 1 auto' }}
+                  >
+                    {block.heading ?? documentTexts.untitled}
+                  </Typography>
+                  {agentHolds && (
+                    <Chip
                       size="small"
-                      onClick={() => setEditing(block.key)}
-                      aria-label={documentTexts.editLabel(block.heading ?? documentTexts.untitled)}
-                      startIcon={<AppIcon name="pencil" size={14} />}
-                    >
-                      {documentTexts.edit}
-                    </Button>
-                    <IconButton
+                      color="warning"
+                      variant="outlined"
+                      label={
+                        agent
+                          ? documentTexts.agentWritingNamed(agent.label)
+                          : documentTexts.agentWriting
+                      }
+                    />
+                  )}
+                  {person && (
+                    <Chip
                       size="small"
-                      aria-haspopup="menu"
-                      aria-label={documentTexts.sectionActions(
-                        block.heading ?? documentTexts.untitled,
-                      )}
-                      onClick={(event) => setMenu({ anchor: event.currentTarget, block })}
-                    >
-                      <AppIcon name="more" size={18} />
-                    </IconButton>
-                  </>
+                      color="info"
+                      variant="outlined"
+                      label={documentTexts.humanEditing(person.name)}
+                    />
+                  )}
+                  {canEdit && (
+                    <Box className="section-tools" sx={{ display: 'flex', gap: 0.5 }}>
+                      <Button
+                        size="small"
+                        onClick={() => setEditing(block.key)}
+                        aria-label={documentTexts.editLabel(
+                          block.heading ?? documentTexts.untitled,
+                        )}
+                        startIcon={<AppIcon name="pencil" size={14} />}
+                      >
+                        {documentTexts.edit}
+                      </Button>
+                      <Tooltip title={documentTexts.more}>
+                        <IconButton
+                          size="small"
+                          aria-haspopup="menu"
+                          aria-label={documentTexts.sectionActions(
+                            block.heading ?? documentTexts.untitled,
+                          )}
+                          onClick={(event) => setMenu({ anchor: event.currentTarget, block })}
+                        >
+                          <AppIcon name="more" size={18} />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  )}
+                </Box>
+                {block.content === null ? (
+                  <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1 }}>
+                    {documentTexts.checking}
+                  </Typography>
+                ) : (
+                  <Box
+                    sx={documentSx}
+                    data-quote-block={canAnchor ? block.key : undefined}
+                    data-quote-rev={canAnchor ? block.rev : undefined}
+                  >
+                    <SectionText text={block.content} />
+                  </Box>
+                )}
+                {canAnchor && quote && quote.block === block.key && quote.rev === block.rev && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => setCommentDraft(quote)}
+                  >
+                    {documentTexts.addNote}
+                  </Button>
+                )}
+                {agent?.intent && (
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    {agent.intent}
+                  </Typography>
                 )}
               </Box>
-              {block.content === null ? (
-                <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1 }}>
-                  {documentTexts.checking}
-                </Typography>
-              ) : (
-                <Box
-                  sx={documentSx}
-                  data-quote-block={canAnchor ? block.key : undefined}
-                  data-quote-rev={canAnchor ? block.rev : undefined}
-                >
-                  <SectionText text={block.content} />
-                </Box>
-              )}
-              {canAnchor && quote && quote.block === block.key && quote.rev === block.rev && (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => setCommentDraft(quote)}
-                >
-                  Добавить заметку к цитате
-                </Button>
-              )}
-              {agent?.intent && (
-                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                  {agent.intent}
-                </Typography>
-              )}
-            </Box>
+            </Fragment>
           )
         })}
       </Box>
       {canEdit && (
         <Button
-          sx={{ mt: 2.5 }}
+          sx={{ mt: 2, color: 'text.secondary' }}
+          color="inherit"
           startIcon={<AppIcon name="plus" size={16} />}
           onClick={() => void addSection()}
           disabled={write.isPending}

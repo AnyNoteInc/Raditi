@@ -1,8 +1,10 @@
+import { artifactSharingOpen } from '@repo/domain/artifacts'
 import type { Metadata } from 'next'
 
 import { ApplicationShell } from '@/components/application/application-shell'
 import { ArtifactsView } from '@/components/artifacts/artifacts-view'
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
+import { env } from '@/env'
 import { requireSession, UNAVAILABLE } from '@/lib/access'
 
 export const metadata: Metadata = { title: 'Артефакты' }
@@ -25,7 +27,11 @@ export default async function ArtifactsPage({
   const projectId = typeof project === 'string' && UUID.test(project) ? project.toLowerCase() : ''
   return (
     <ApplicationShell user={session.user} toolbar={false}>
-      <ArtifactsView userId={session.user.id} initialProjectId={projectId} />
+      <ArtifactsView
+        userId={session.user.id}
+        initialProjectId={projectId}
+        sharing={artifactSharingOpen(env.web().appEnv)}
+      />
     </ApplicationShell>
   )
 }

@@ -1,7 +1,8 @@
-// The frame of a mockup in real browsers (docs/plan/88-artifacts.md, Ар9, Ар12, Ар28–Ар30, §7.13;
-// slices 88.12 and 88.13; spikes 1 and 2), part of `pnpm verify:artifacts`. Two https servers on
-// loopback with a certificate made for the run: the root of the pages answers `/v/<segment>` as web
-// does — the frame of a mockup assembled by @repo/trpc from PostgreSQL with its headers, its file by
+// The frame of a screen of a canvas in real browsers (docs/plan/88-artifacts.md, Ар9, Ар12,
+// Ар28–Ар30, §7.13; slices 88.12 and 88.13; spikes 1 and 2; the mockup became a canvas with one
+// screen, plan 93, АТ6), part of `pnpm verify:artifacts`. Two https servers on loopback with a
+// certificate made for the run: the root of the pages answers `/v/<segment>` as web does — the
+// frame of a screen assembled by @repo/trpc from PostgreSQL with its headers, its file by
 // a signed address, the font of the platform by `/v/lib-….<hash>` — and the cabinet answers a page
 // that frames it and the edit frame `/api/artifact-frame/<token>`, plus a collector of hits for what
 // would leak. Chromium (the full build) and WebKit run here; Firefox runs in the Playwright image of
@@ -22,13 +23,14 @@ const PNG = Buffer.from(
 )
 const PLAYWRIGHT_IMAGE = 'mcr.microsoft.com/playwright:v1.63.0-noble'
 
-/** What the frame's own script reports: everything a mockup may and may not do in its frame. */
+/** What the frame's own script reports: everything a screen may and may not do in its frame. */
 const PROBE = `
 const say = (m) => parent.postMessage({ probe: m }, '*')
 const result = { classic: true }
 try { localStorage.setItem('x', '1'); result.storage = 'open' } catch { result.storage = 'closed' }
 try { result.popup = window.open('https://example.com/') === null ? 'closed' : 'open' } catch { result.popup = 'closed' }
 result.style = getComputedStyle(document.getElementById('styled')).color
+try { result.settings = JSON.parse(document.getElementById('raditi-settings').textContent).price } catch { result.settings = null }
 const image = document.getElementById('picture')
 const font = async () => {
   await document.fonts.load('16px "Golos Text"', 'Привет')
@@ -220,7 +222,7 @@ export async function framesInBrowsers({ root, databaseUrl, check }) {
   const person = { kind: 'user', userId: user.id }
   const { id: artifactId } = await dbModule.createArtifact(db, {
     workspaceId: workspace.id,
-    kind: 'mockup',
+    kind: 'canvas',
     title: 'Проверка рамки',
     actor: person,
   })
@@ -259,11 +261,29 @@ export async function framesInBrowsers({ root, databaseUrl, check }) {
       batch: {
         artifactId,
         opId: randomUUID(),
+        // As the calculator of the templates: the settings at the top, then the one screen at
+        // the path "/" with its style, page and scripts inside it.
         ops: [
+          {
+            op: 'insert',
+            block: 'conf',
+            after: null,
+            kind: 'settings',
+            content: '{"price":1200}',
+          },
+          {
+            op: 'insert',
+            block: 'screen',
+            after: 'conf',
+            kind: 'frame',
+            content: '',
+            props: { name: 'Проверка', path: '/', x: 0, y: 0 },
+          },
           {
             op: 'insert',
             block: 'look',
             after: null,
+            parent: 'screen',
             kind: 'style',
             content: '#styled{color:rgb(1, 2, 3)}',
           },
@@ -271,21 +291,23 @@ export async function framesInBrowsers({ root, databaseUrl, check }) {
             op: 'insert',
             block: 'page',
             after: 'look',
+            parent: 'screen',
             kind: 'html',
             content: `<main><h1 id="styled">Кофейня «Колос»</h1><p>Свежий <b>хлеб</b> каждый день</p><img id="picture" alt="Пиксель" src="${ref}"><a id="away" href="https://example.com/zakaz">Заказать</a>${vectors}<script>${vector('inline-script')}</script></main>`,
           },
           {
             op: 'insert',
-            block: 'conf',
+            block: 'run',
             after: 'page',
-            kind: 'settings',
-            content: '{"price":1200}',
+            parent: 'screen',
+            kind: 'script',
+            content: PROBE,
           },
-          { op: 'insert', block: 'run', after: 'conf', kind: 'script', content: PROBE },
           {
             op: 'insert',
             block: 'mod',
             after: 'run',
+            parent: 'screen',
             kind: 'script',
             content: 'window.__module = true',
           },
@@ -371,6 +393,7 @@ export async function framesInBrowsers({ root, databaseUrl, check }) {
         artifactId,
         userId: user.id,
         expiresAt: expires,
+        frame: 'screen',
       })
       await page.evaluate(
         ({ src, sandbox }) => {
@@ -395,8 +418,8 @@ export async function framesInBrowsers({ root, databaseUrl, check }) {
         window.__messages.filter((m) => m.data && m.data.bridge),
       )
       check(
-        `${engine.name}: the frame runs the mockup’s classic and module scripts and its style`,
-        probe.classic && probe.module && probe.style === 'rgb(1, 2, 3)',
+        `${engine.name}: the frame runs the screen’s classic and module scripts, its style and settings`,
+        probe.classic && probe.module && probe.style === 'rgb(1, 2, 3)' && probe.settings === 1200,
         JSON.stringify(probe),
       )
       check(
@@ -435,7 +458,7 @@ export async function framesInBrowsers({ root, databaseUrl, check }) {
         link === 'https://example.com/zakaz' && page.frames().length >= 2,
         String(link),
       )
-      // The script of the mockup sends its own frame elsewhere: frame-src of the cabinet keeps it.
+      // The script of the screen sends its own frame elsewhere: frame-src of the cabinet keeps it.
       const viewFrame = page.frames().find((frame) => frame.url().includes('/v/'))
       await viewFrame
         ?.evaluate(() => {
@@ -454,11 +477,12 @@ export async function framesInBrowsers({ root, databaseUrl, check }) {
         artifactId,
         userId: user.id,
         expiresAt: expires,
+        frame: 'screen',
       })
       await page.evaluate(
         ({ src, sandbox }) =>
           new Promise((done) => {
-            // The frame of the view runs the mockup's scripts by design: it goes before the check.
+            // The frame of the view runs the screen's scripts by design: it goes before the check.
             document.getElementById('view')?.remove()
             window.__ran.length = 0
             const frame = document.createElement('iframe')
@@ -491,14 +515,14 @@ export async function framesInBrowsers({ root, databaseUrl, check }) {
             ? Element.prototype.closest.call(found, '[data-rid]')?.getAttribute('data-rid')
             : null,
           href: Document.prototype.querySelector.call(doc, '#away')?.getAttribute('href'),
-          // The `script` blocks of the mockup and the bridge are not in the edit frame at all.
+          // The `script` blocks of the screen and the bridge are not in the edit frame at all.
           blocks:
             doc.documentElement.innerHTML.includes('__module') ||
             doc.documentElement.innerHTML.includes('raditi-artifact'),
         }
       }, paragraph)
       check(
-        `${engine.name}: the edit frame runs no script of the mockup — ${7 + 1} vectors`,
+        `${engine.name}: the edit frame runs no script of the screen — ${7 + 1} vectors`,
         edit.ran.length === 0 && hits.length === 0 && edit.blocks === false,
         `${JSON.stringify(edit.ran)} ${JSON.stringify(hits)}`,
       )

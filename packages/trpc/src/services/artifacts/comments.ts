@@ -11,7 +11,6 @@ import {
   artifactCommentAnchorSchema,
   hasUniqueCommentQuote,
   normalizeCommentQuote,
-  type ArtifactColumn,
   type ArtifactCommentAnchor,
   type ArtifactCommentAnchorInput,
 } from '@repo/domain/artifacts'
@@ -37,17 +36,14 @@ const anchorReaders: ArtifactAnchorReaders = {
 }
 
 /**
- * «Место изменилось»: a quote no longer found once in its section; a cell whose row or column is
- * gone (a new value keeps its place); an element no longer found once by its id.
+ * «Место изменилось»: a quote no longer found once in its section; an element no longer found once
+ * by its id.
  */
 function anchorMoved(
   anchor: ArtifactCommentAnchor,
   blocks: ReadonlyMap<string, string | null>,
-  columns: readonly ArtifactColumn[],
 ): boolean {
   const text = blocks.get(anchor.block)
-  if (anchor.kind === 'cell')
-    return text == null || !columns.some((column) => column.key === anchor.column)
   if (anchor.kind === 'element')
     return (
       text == null ||
@@ -57,7 +53,7 @@ function anchorMoved(
 }
 
 export async function cabinetComments(db: PrismaClient, input: Owner) {
-  const { comments, blocks, columns } = await readArtifactComments(db, input)
+  const { comments, blocks } = await readArtifactComments(db, input)
   return comments.flatMap((comment) => {
     const anchor = artifactCommentAnchorSchema.safeParse(comment.anchor)
     if (!anchor.success || anchor.data.block !== comment.blockKey) return []
@@ -73,7 +69,7 @@ export async function cabinetComments(db: PrismaClient, input: Owner) {
           own: comment.authorUserId === input.userId,
         },
         resolved: comment.resolvedAt !== null,
-        moved: anchorMoved(anchor.data, blocks, columns),
+        moved: anchorMoved(anchor.data, blocks),
         replies: comment.replies.map(({ id, body, createdAt, byAgent, author, authorUserId }) => ({
           id,
           body,

@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic'
 /**
  * The root of the domain of pages, `/v/<segment>`: a page the agent made, in the frame of a member
  * of its chat (docs/plan/67-agent-documents.md, Д3), by a token of five minutes; the frame of a
- * mockup, a file of an artifact and the fonts of the platform (docs/plan/88-artifacts.md, Ар28).
+ * screen of a canvas, a slide or a picture, a file of an artifact and the fonts of the platform (docs/plan/88-artifacts.md, Ар28).
  */
 export async function GET(
   request: Request,

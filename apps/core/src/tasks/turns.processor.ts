@@ -6,9 +6,7 @@ import {
   AGENT_TURN_QUEUE,
   agentTurnCancelJobSchema,
   agentTurnJobSchema,
-  ARTIFACT_DIAGRAM_JOB,
   ARTIFACT_NOTIFY_JOB,
-  artifactDiagramJobSchema,
   artifactNotifyJobSchema,
   CHAT_NOTIFY_JOB,
   chatNotifyJobSchema,
@@ -21,7 +19,6 @@ import { UnrecoverableError, type Job } from 'bullmq'
 import type { z } from 'zod'
 
 import { PassRunner } from './pass-runner.ts'
-import { ArtifactDiagram } from './artifact-diagram.ts'
 import { ArtifactNotify } from './artifact-notify.ts'
 import { ChatNotify } from './chat-notify.ts'
 import { QueueDrain } from './queue-drain.ts'
@@ -68,7 +65,6 @@ export class TurnsProcessor extends WorkerHost {
     @Inject(QueueDrain) private readonly queue: Pick<QueueDrain, 'run'>,
     @Inject(ChatNotify) private readonly notify: Pick<ChatNotify, 'run'>,
     @Inject(ArtifactNotify) private readonly artifactNotify: Pick<ArtifactNotify, 'run'>,
-    @Inject(ArtifactDiagram) private readonly artifactDiagram: Pick<ArtifactDiagram, 'run'>,
   ) {
     super()
   }
@@ -87,9 +83,6 @@ export class TurnsProcessor extends WorkerHost {
         return
       case ARTIFACT_NOTIFY_JOB:
         await this.artifactNotify.run(parsed(artifactNotifyJobSchema, job))
-        return
-      case ARTIFACT_DIAGRAM_JOB:
-        await this.artifactDiagram.run(parsed(artifactDiagramJobSchema, job))
         return
       default:
         // A job this build does not know (left by another version) cannot succeed later.

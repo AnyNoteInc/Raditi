@@ -15,9 +15,9 @@ import { ARTIFACT_EXPORTS, ARTIFACT_THUMBS } from './artifact-exports.tokens.ts'
 import type { ArtifactThumbs } from './artifact-thumbs.ts'
 
 /**
- * Works the queue `artifacts`: `artifact.export` builds one workbook of a table (retried by the
- * queue's backoff; after the last try the row is `failed`). Two at a time in this process. Logs
- * carry the job name and id, never a cell.
+ * Works the queue `artifacts`: `artifact.export` builds one export — the PDF or PPTX of slides, the
+ * PNG of a picture — (retried by the queue's backoff; after the last try the row is `failed`). Two
+ * at a time in this process. Logs carry the job name and id, never the content.
  */
 @Processor(ARTIFACT_QUEUE, { concurrency: 2 })
 export class ArtifactExportsProcessor extends WorkerHost {

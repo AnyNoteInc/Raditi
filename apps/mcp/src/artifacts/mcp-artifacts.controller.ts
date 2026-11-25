@@ -185,7 +185,7 @@ export class McpArtifactsController {
   @Tool({
     name: 'artifact_import',
     description:
-      'Turn a long .md, .html, .svg or .csv you wrote to the outbox into an artifact (document, mockup, table), or into the whole content of artifactId. Done at the end of the turn.',
+      'Turn a long .md (a document) or a .html, .htm or .svg (a canvas with one screen) you wrote to the outbox into an artifact, or into the whole content of artifactId. Done at the end of the turn.',
     parameters: artifactImportArgumentsSchema,
     annotations: writes,
   })
@@ -240,7 +240,7 @@ export class McpArtifactsController {
 }
 
 /**
- * The frames of mockups and canvases drawn by the browser worker (docs/plan/88-artifacts.md, Ар32):
+ * The frames of canvases, slides and pictures drawn by the browser worker (docs/plan/88-artifacts.md, Ар32):
  * `artifact_layout` where the renderer is configured (`artifact_layout`), `artifact_render` — its
  * pictures as image results — only to a turn whose key has the profile that sees images
  * (`artifact_vision`): the helper `look`, which alone is allowed to call it.
@@ -253,7 +253,7 @@ export class McpArtifactFramesController {
   @Tool({
     name: 'artifact_layout',
     description:
-      'Check the layout of a mockup or of one frame of a canvas as the client sees it at 1440 and 390 px: overflow, overlaps, cut text, contrast, small text, empty areas, broken pictures, script errors, outside loads. Short text report.',
+      'Check the layout of one screen of a canvas, a slide or a picture as the client sees it at 1440 and 390 px (a slide or a picture at its own size); no frame — the only or the first one: overflow, overlaps, cut text, contrast, small text, empty areas, broken pictures, script errors, outside loads. Short text report.',
     parameters: artifactLayoutArgumentsSchema,
     annotations: reads,
   })
@@ -266,7 +266,7 @@ export class McpArtifactFramesController {
   @Tool({
     name: 'artifact_render',
     description:
-      'The picture of a mockup or of a frame of a canvas as the client sees it, in strips of 2000 px, for looking at it.',
+      'The picture of a screen of a canvas, a slide or a picture as the client sees it, in strips of 2000 px, for looking at it; no frame — the only or the first one.',
     parameters: artifactRenderArgumentsSchema,
     annotations: reads,
   })

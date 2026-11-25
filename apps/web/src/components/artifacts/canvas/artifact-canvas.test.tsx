@@ -12,7 +12,7 @@ import { ArtifactCanvas } from './artifact-canvas'
 
 const { frame, write, width } = vi.hoisted(() => ({
   frame: vi.fn(async (input: { mode: string; frame?: string }) => ({
-    url: `https://pages.example/v/${input.mode}.${input.frame ?? 'mockup'}`,
+    url: `https://pages.example/v/${input.mode}.${input.frame ?? 'screen'}`,
     expiresAt: '2026-11-20T10:05:00.000Z',
   })),
   write: vi.fn(async (_input: unknown) => ({
@@ -122,11 +122,22 @@ const canvas = (): CabinetArtifact => ({
   ],
 })
 
-function show() {
+/** A calculator: one screen and the settings its script reads (АТ6). */
+const calculator = (): CabinetArtifact => ({
+  ...canvas(),
+  title: 'Калькулятор',
+  blocks: [
+    block('prices', 'settings', null, {}, '{"pricePerSquareMeter":6500}'),
+    block('home', 'frame', null, { name: 'Калькулятор', path: '/', x: 0, y: 0 }),
+    block('home-html', 'html', 'home', {}, '<h1>Цена</h1>'),
+  ],
+})
+
+function show(value: CabinetArtifact = canvas()) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={queryClient}>
-      <ArtifactCanvas artifact={canvas()} presence={null} onChanged={vi.fn()} place="page" />
+      <ArtifactCanvas artifact={value} presence={null} onChanged={vi.fn()} place="page" />
     </QueryClientProvider>,
   )
 }
@@ -173,7 +184,15 @@ describe('«Холст» (slice 88.15)', () => {
     fireEvent.keyDown(board, { key: 'ArrowRight' })
     const bar = await screen.findByRole('toolbar', { name: 'Выбранный экран' })
     expect(within(bar).getByText('Главная')).toBeTruthy()
-    fireEvent.click(within(bar).getByRole('button', { name: 'Сделать вариант' }))
+    // «Открыть» is the one action in sight; the rest is in «⋯».
+    expect(
+      within(bar)
+        .getAllByRole('button')
+        .map((each) => each.textContent),
+    ).toEqual(['Открыть', ''])
+    fireEvent.click(within(bar).getByRole('button', { name: 'Ещё: Главная' }))
+    expect(screen.getByRole('menuitem', { name: 'Изменить в чате' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Сделать вариант' }))
     await waitFor(() => expect(write).toHaveBeenCalled())
     const { batch } = write.mock.calls[0]![0] as {
       batch: {
@@ -195,7 +214,7 @@ describe('«Холст» (slice 88.15)', () => {
 
   it('adds a new screen with a part of HTML', async () => {
     show()
-    fireEvent.click(screen.getByRole('button', { name: 'Новый экран' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить экран' }))
     await waitFor(() => expect(write).toHaveBeenCalled())
     const { batch } = write.mock.calls[0]![0] as { batch: { ops: { kind: string }[] } }
     expect(batch.ops.map((op) => op.kind)).toEqual(['frame', 'html'])
@@ -208,12 +227,96 @@ describe('«Холст» (slice 88.15)', () => {
     expect(within(list).getAllByRole('listitem')).toHaveLength(2)
     expect(screen.queryByRole('application')).toBeNull()
     fireEvent.click(within(list).getByRole('button', { name: 'Открыть: Услуги' }))
-    const dialog = await screen.findByRole('dialog')
+    // The screen stands in place of the list, no window over the page; «Все экраны» goes back.
+    expect(screen.queryByRole('dialog')).toBeNull()
     await waitFor(() =>
       expect(frame).toHaveBeenCalledWith(
         expect.objectContaining({ mode: 'view', frame: 'uslugi' }),
       ),
     )
-    expect(within(dialog).getByText('Услуги')).toBeTruthy()
+    const bar = screen.getByRole('toolbar', { name: 'Действия с экраном' })
+    expect(within(bar).getByText('Услуги')).toBeTruthy()
+    // A phone: the phone view first.
+    expect(screen.getByRole('button', { name: 'Телефон, 390' })).toHaveProperty(
+      'ariaPressed',
+      'true',
+    )
+    fireEvent.click(within(bar).getByRole('button', { name: 'Все экраны' }))
+    expect(await screen.findByRole('list', { name: 'Экраны холста' })).toBeTruthy()
+  })
+
+  it('keeps a light board header: tools, «Добавить экран», the zoom, and «⋯»', async () => {
+    width.value = 1200
+    show()
+    const header = screen.getByRole('toolbar', { name: 'Холст: действия' })
+    const tools = within(header).getByRole('group', { name: 'Инструменты холста' })
+    expect(
+      within(tools)
+        .getAllByRole('button')
+        .map((each) => each.getAttribute('aria-label')),
+    ).toEqual(['Выбор', 'Стикер', 'Стикер на экране'])
+    expect(within(header).queryByRole('button', { name: 'Весь холст' })).toBeNull()
+    const surface = screen.getByTestId('canvas-surface')
+    fireEvent.click(within(header).getByRole('button', { name: 'Крупнее' }))
+    const before = surface.style.transform
+    fireEvent.click(within(header).getByRole('button', { name: /^Масштаб:/ }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Весь холст' }))
+    await waitFor(() => expect(surface.style.transform).not.toBe(before))
+    fireEvent.click(within(header).getByRole('button', { name: 'Ещё' }))
+    expect(await screen.findByRole('menuitem', { name: 'Файлы' })).toBeTruthy()
+    // No settings block: no «Настройки».
+    expect(screen.queryByRole('menuitem', { name: 'Настройки' })).toBeNull()
+  })
+
+  it('opens a screen in place of the board, and «Все экраны» brings the board back', async () => {
+    width.value = 1200
+    show()
+    const board = screen.getByRole('application', { name: /Холст/ })
+    fireEvent.keyDown(board, { key: 'ArrowRight' })
+    fireEvent.keyDown(board, { key: 'Enter' })
+    expect(await screen.findByTitle('Экран «Сайт пекарни»')).toBeTruthy()
+    expect(screen.queryByRole('application')).toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Все экраны' }))
+    expect(screen.getByRole('application', { name: /Холст/ })).toBeTruthy()
+  })
+})
+
+describe('«Холст» of one screen (АТ6)', () => {
+  it('opens straight on the live screen with «Настройки» beside it', async () => {
+    width.value = 1200
+    show(calculator())
+    expect(screen.queryByRole('application')).toBeNull()
+    const iframe = await screen.findByTitle('Экран «Калькулятор»')
+    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts')
+    expect(frame).toHaveBeenCalledWith(expect.objectContaining({ mode: 'view', frame: 'home' }))
+    expect(screen.getByRole('button', { name: 'Компьютер, 1440' })).toHaveProperty(
+      'ariaPressed',
+      'true',
+    )
+    expect(screen.getByRole('complementary', { name: 'Настройки' })).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: 'pricePerSquareMeter' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Добавить экран' })).toBeTruthy()
+  })
+
+  it('shows the board on «Экраны», with «Настройки» in its «⋯»', async () => {
+    width.value = 1200
+    show(calculator())
+    fireEvent.click(screen.getByRole('button', { name: 'Экраны' }))
+    const board = screen.getByRole('application', { name: /Холст/ })
+    expect(within(board).getAllByTestId('canvas-screen')).toHaveLength(1)
+    const header = screen.getByRole('toolbar', { name: 'Холст: действия' })
+    fireEvent.click(within(header).getByRole('button', { name: 'Ещё' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Настройки' }))
+    expect(await screen.findByRole('textbox', { name: 'pricePerSquareMeter' })).toBeTruthy()
+  })
+
+  it('grows into a board when a screen is added', async () => {
+    width.value = 1200
+    show(calculator())
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить экран' }))
+    await waitFor(() => expect(write).toHaveBeenCalled())
+    const { batch } = write.mock.calls[0]![0] as { batch: { ops: { kind: string }[] } }
+    expect(batch.ops.map((op) => op.kind)).toEqual(['frame', 'html'])
   })
 })

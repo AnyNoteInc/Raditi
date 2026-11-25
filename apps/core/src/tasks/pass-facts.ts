@@ -1,6 +1,5 @@
 import { attemptCreditBudget } from '@repo/billing'
 import {
-  projectBrandOf,
   chatMemory,
   classProfile,
   attachMentionedArtifacts,
@@ -316,12 +315,6 @@ export async function readPassFacts(
   ]
   if (mentioned.length > 0)
     await attachMentionedArtifacts(deps.db, { taskId: task.id, artifactIds: mentioned })
-  // The brand of the chat's project (docs/plan/88-artifacts.md, Ар42, slice 88.15а): in every turn
-  // of the project, its tokens as data.
-  const brand =
-    task.project && task.project.deletedAt === null
-      ? await projectBrandOf(deps.db, task.project.id)
-      : null
   // The artifacts the chat made, edited or was given (Ар26): their lines, no content.
   const chatArtifacts = (await listChatArtifacts(deps.db, { taskId: task.id, scope: 'chat' })).rows
   // The artifacts of its project (Ар26, slice 88.20): every turn of the project knows them by line.
@@ -353,7 +346,6 @@ export async function readPassFacts(
     memory: memoryEntries,
     ...(chatArtifacts.length ? { chatArtifacts: chatArtifacts.map(lineOf) } : {}),
     ...(projectArtifacts.length ? { projectArtifacts: projectArtifacts.map(lineOf) } : {}),
-    ...(brand ? { projectBrand: brand } : {}),
     ...(dispatch ?? {}),
     ...(unattended ? { unattended } : {}),
     ...(attachments.length ? { attachments } : {}),

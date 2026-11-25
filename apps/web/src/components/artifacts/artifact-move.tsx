@@ -14,17 +14,16 @@ import { artifactRefusalTexts, artifactRoleAtLeast } from '@repo/domain/artifact
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 
-import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
 import { artifactErrorData } from './artifact-access-error'
 import type { CabinetArtifact } from './use-artifact'
 
 export const moveTexts = Object.freeze({
-  open: 'Перенести в проект…',
+  open: 'Перенести в проект',
   title: 'Перенести в проект',
-  personal: 'Личный — без проекта',
-  hint: 'Артефакт проекта видят чаты проекта. Личный — только чаты, где он создан или прикреплён.',
+  personal: 'Без проекта',
+  hint: 'Артефакт проекта видят чаты проекта. Без проекта — только чаты, где он создан или прикреплён.',
   noProjects: 'Проектов пока нет.',
   save: 'Перенести',
   cancel: 'Отмена',
@@ -34,18 +33,22 @@ export const moveTexts = Object.freeze({
 const PERSONAL = 'personal'
 
 /**
- * «Перенести в проект…» and «Сделать личным» (docs/plan/88-artifacts.md, Ар42): only the owner;
- * the projects are the owner's live ones out of «Архив» — the server checks them again.
+ * «Перенести в проект» and «Без проекта» (docs/plan/88-artifacts.md, Ар42; docs/plan/92, АТ9: an
+ * item of «⋯» of the head opens it): only the owner; the projects are the owner's live ones out of
+ * «Архив» — the server checks them again. Mounted as it opens: the choice starts from where it is.
  */
-export function ArtifactMoveButton({
+export function ArtifactMoveDialog({
   artifact,
+  open,
+  onClose,
   onChanged,
 }: {
   artifact: CabinetArtifact
+  open: boolean
+  onClose: () => void
   onChanged: () => void
 }) {
   const trpc = useTRPC()
-  const [open, setOpen] = useState(false)
   const [choice, setChoice] = useState<string>(artifact.project?.id ?? PERSONAL)
   const [error, setError] = useState<string | null>(null)
   const labelId = useId()
@@ -56,8 +59,8 @@ export function ArtifactMoveButton({
 
   const close = () => {
     if (move.isPending) return
-    setOpen(false)
     setError(null)
+    onClose()
   }
   async function save() {
     setError(null)
@@ -66,7 +69,7 @@ export function ArtifactMoveButton({
         artifactId: artifact.id,
         projectId: choice === PERSONAL ? null : choice,
       })
-      setOpen(false)
+      onClose()
       onChanged()
     } catch (failure) {
       const code = artifactErrorData(failure)?.domainCode
@@ -77,64 +80,50 @@ export function ArtifactMoveButton({
   }
 
   return (
-    <>
-      <Button
-        variant="text"
-        color="inherit"
-        startIcon={<AppIcon name="layers" size={16} />}
-        aria-haspopup="dialog"
-        onClick={() => {
-          setChoice(artifact.project?.id ?? PERSONAL)
-          setOpen(true)
-        }}
-      >
-        {moveTexts.open}
-      </Button>
-      <Dialog open={open} onClose={close} fullWidth maxWidth="xs" aria-labelledby={labelId}>
-        <DialogTitle id={labelId}>{moveTexts.title}</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            {moveTexts.hint}
+    <Dialog open={open} onClose={close} fullWidth maxWidth="xs" aria-labelledby={labelId}>
+      <DialogTitle id={labelId}>{moveTexts.title}</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          {moveTexts.hint}
+        </Typography>
+        <RadioGroup
+          aria-labelledby={labelId}
+          value={choice}
+          onChange={(event) => setChoice(event.target.value)}
+        >
+          <FormControlLabel value={PERSONAL} control={<Radio />} label={moveTexts.personal} />
+          {shown.map((project) => (
+            <FormControlLabel
+              key={project.id}
+              value={project.id}
+              control={<Radio />}
+              label={project.name}
+            />
+          ))}
+        </RadioGroup>
+        {projects.isSuccess && shown.length === 0 && (
+          <Typography variant="body2" color="text.secondary">
+            {moveTexts.noProjects}
           </Typography>
-          <RadioGroup
-            aria-labelledby={labelId}
-            value={choice}
-            onChange={(event) => setChoice(event.target.value)}
-          >
-            <FormControlLabel value={PERSONAL} control={<Radio />} label={moveTexts.personal} />
-            {shown.map((project) => (
-              <FormControlLabel
-                key={project.id}
-                value={project.id}
-                control={<Radio />}
-                label={project.name}
-              />
-            ))}
-          </RadioGroup>
-          {projects.isSuccess && shown.length === 0 && (
-            <Typography variant="body2" color="text.secondary">
-              {moveTexts.noProjects}
-            </Typography>
-          )}
-          {error && (
-            <Alert severity="error" sx={{ mt: 1 }}>
-              {error}
-            </Alert>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={close} disabled={move.isPending}>
-            {moveTexts.cancel}
-          </Button>
-          <Button
-            variant="contained"
-            onClick={() => void save()}
-            disabled={move.isPending || choice === (artifact.project?.id ?? PERSONAL)}
-          >
-            {moveTexts.save}
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </>
+        )}
+        {error && (
+          <Alert severity="error" sx={{ mt: 1 }}>
+            {error}
+          </Alert>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={close} disabled={move.isPending}>
+          {moveTexts.cancel}
+        </Button>
+        <Button
+          variant="contained"
+          onClick={() => void save()}
+          disabled={move.isPending || choice === (artifact.project?.id ?? PERSONAL)}
+        >
+          {moveTexts.save}
+        </Button>
+      </DialogActions>
+    </Dialog>
   )
 }

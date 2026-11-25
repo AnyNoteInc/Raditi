@@ -21,38 +21,43 @@ const dateTime = new Intl.DateTimeFormat('ru-RU', {
   minute: '2-digit',
 })
 
+/** «изменено 2 ч назад», «изменено вчера», «изменено 20 ноября»: when an artifact last changed. */
+function updatedText(at: string, now: Date): string {
+  const then = new Date(at)
+  const minutes = Math.floor((now.getTime() - then.getTime()) / 60_000)
+  if (minutes < 1) return 'изменено только что'
+  if (minutes < 60) return `изменено ${minutes} мин назад`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `изменено ${hours} ч назад`
+  const days = Math.floor(hours / 24)
+  if (days === 1) return 'изменено вчера'
+  if (days < 7) return `изменено ${days} ${pluralRu(days, 'день', 'дня', 'дней')} назад`
+  return `изменено ${dateFormat.format(then)}`
+}
+
 export const galleryTexts = Object.freeze({
   title: 'Артефакты',
   about:
-    'Документы, холсты, макеты и таблицы, над которыми вы работаете вместе с агентом. Страницы для посетителей — в разделе «Страницы».',
+    'Документы, холсты, презентации и изображения, которые вы делаете вместе с агентом. Страницы для посетителей — в разделе «Страницы».',
   create: 'Создать',
-  askAgent: 'Попросить агента в чате',
   search: 'Поиск по артефактам',
   filters: {
     all: 'Все',
     mine: 'Мои',
-    projects: 'В проектах',
     shared: 'Доступные мне',
     trash: 'Корзина',
   },
   filtersLabel: 'Показать',
   kindLabel: 'Вид',
-  projectLabel: 'Проект',
-  sortLabel: 'Порядок',
-  anyKind: 'Все',
-  anyProject: 'Все',
-  sorts: { newest: 'Сначала новые', oldest: 'Сначала старые', title: 'По названию' },
-  layoutLabel: 'Вид списка',
-  cards: 'Карточки',
-  list: 'Список',
+  anyKind: 'Все виды',
+  project: (name: string) => `Проект «${name}»`,
+  projectReset: 'Показать артефакты всех проектов',
   nothingFound: 'Ничего не нашлось.',
   resetFilters: 'Сбросить фильтры',
   sharedEmpty: 'Пока никто не поделился с вами артефактом.',
   trashEmpty: 'В корзине пусто.',
   failed: 'Не получилось загрузить артефакты. Обновите страницу.',
-  version: (no: number) => (no > 0 ? `версия ${no}` : 'без версий'),
-  sections: (count: number) => `${count} ${pluralRu(count, 'раздел', 'раздела', 'разделов')}`,
-  updated: (at: string) => `изменён ${dateFormat.format(new Date(at))}`,
+  updated: (at: string, now: Date = new Date()) => updatedText(at, now),
   purgeOn: (at: string) => `Удалится ${dateFormat.format(new Date(at))}`,
   personal: 'Без проекта',
   open: (title: string) => `Открыть «${title}»`,
@@ -63,44 +68,44 @@ export const galleryTexts = Object.freeze({
   restored: (title: string) => `«${title}» снова в списке.`,
   undo: 'Вернуть',
   emptyText: 'Пока пусто',
+  more: 'Ещё',
+  createFailed: 'Не получилось создать артефакт. Попробуйте ещё раз.',
 })
 
 export const emptyTexts = Object.freeze({
   title: 'Здесь будут ваши артефакты',
-  lead: 'Попросите агента сделать документ, макет сайта или таблицу — они появятся здесь, и вы будете менять их вместе. Страницы для посетителей — в разделе «Страницы».',
-  templates: 'С чего начать',
+  lead: 'Документы, сайты и прототипы на холсте, презентации и картинки, которые вы делаете вместе с агентом.',
+  templates: 'Или начните с шаблона',
 })
 
 export const createTexts = Object.freeze({
   title: 'Новый артефакт',
+  close: 'Закрыть',
   kind: 'Вид',
-  soon: 'Скоро',
   kindHints: {
     document: 'Текст по разделам',
-    canvas: 'Несколько макетов рядом',
-    mockup: 'Одна страница: прототип, калькулятор',
-    table: 'Строки и столбцы',
-    diagram: 'Блоки и стрелки',
-    slides: 'Слайды',
-    image: 'Баннер, пост, логотип',
-    brand: 'Цвета, шрифты, тон',
-    sitemap: 'Страницы сайта и связи между ними',
-    report: 'Текст с графиками и таблицами',
-  } as Record<string, string>,
+    canvas: 'Сайт, прототип, калькулятор',
+    slides: 'Слайды для показа',
+    image: 'Пост, баннер, обложка',
+  } as Readonly<Record<string, string>>,
   name: 'Название',
   namePlaceholder: 'Например, «Тексты для сайта»',
   nameRequired: 'Назовите артефакт',
   place: 'Где хранить',
-  personal: 'Без проекта — только в «Моих»',
-  start: 'С чего начать',
-  empty: 'Пусто',
-  fromTemplate: 'Из шаблона',
+  personal: 'Без проекта',
+  empty: 'Создать пустой',
+  backToAgent: 'Попросить агента',
   askAgent: 'Попросить агента',
   whatToDo: 'Что сделать?',
-  askPlaceholder: 'Например: подготовьте правила возврата для интернет-магазина одежды',
-  askNote: 'Агент начнёт в новом чате; артефакт откроется рядом с чатом.',
-  template: 'Шаблон',
-  cancel: 'Отмена',
+  askPlaceholder: {
+    document: 'Например: подготовьте правила возврата для интернет-магазина одежды',
+    canvas: 'Например: сделайте главную страницу сайта пекарни с меню и контактами',
+    slides: 'Например: презентация компании на пять слайдов для новых клиентов',
+    image: 'Например: пост для соцсетей о скидке 20% на выходных',
+  } as Readonly<Record<string, string>>,
+  askNote: 'Просьба откроется в новом чате — проверьте её и отправьте агенту.',
+  /** The draft of the new chat: the kind first, so the agent makes the right one. */
+  draft: (kind: string, request: string) => `${kind}: ${request}`,
   submit: 'Создать',
   failed: 'Не получилось создать артефакт. Попробуйте ещё раз.',
 })
@@ -115,7 +120,6 @@ export const editorTexts = Object.freeze({
   bold: 'Жирный',
   italic: 'Курсив',
   strike: 'Зачёркнутый',
-  code: 'Код',
   bullets: 'Маркированный список',
   numbers: 'Нумерованный список',
   tasks: 'Список задач',
@@ -130,6 +134,10 @@ export const documentTexts = Object.freeze({
   sections: 'Разделы',
   edit: 'Править',
   editLabel: (heading: string) => `Править раздел «${heading}»`,
+  more: 'Ещё',
+  section: 'Раздел',
+  insertAfter: (heading: string) => `Добавить раздел после «${heading}»`,
+  addNote: 'Добавить заметку к цитате',
   done: 'Готово',
   saving: 'Сохраняем…',
   saved: 'Сохранено',

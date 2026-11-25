@@ -248,7 +248,7 @@ async function revisionText(
 type Op = Record<string, unknown> & { op: string }
 
 /** The lines of the journal that wrote a block; a check, a take and a claim did not. */
-const writingKinds = ['insert', 'replace', 'edit', 'move', 'delete', 'props', 'cells'] as const
+const writingKinds = ['insert', 'replace', 'edit', 'move', 'delete', 'props'] as const
 
 /** The ops of a person in batches the pipeline takes (§7.2: up to 50 a batch), one after another. */
 async function applyInBatches(

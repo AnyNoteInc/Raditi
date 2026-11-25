@@ -1,13 +1,12 @@
-import type { ArtifactCells, ArtifactColumn } from './blocks.ts'
-import { brandStartTokens } from './brand.ts'
 import { artifactReleasedKinds, type ArtifactBlockKind, type ArtifactKind } from './kinds.ts'
+import { slidesThemeBlock } from './slides.ts'
 
 /**
  * The templates «С чего начать» of the gallery and of «Создать» (docs/plan/88-artifacts.md, Ар50,
  * boards A-empty and A-create). A template is the skeleton of a new artifact: its sections with a
  * heading and a short start the client replaces; the words in square brackets are what to put in.
- * Only kinds whose view shipped have templates (`artifactReleasedKinds`): the document for now, the
- * table, the mockup and the canvas bring theirs with Э5 and Э6.
+ * Only kinds whose view shipped have templates (`artifactReleasedKinds`). A template brings its own
+ * colours in its own common style, as CSS variables on `:root` (docs/plan/93-artifacts-trim.md, АТ5).
  */
 export interface ArtifactTemplate {
   id: string
@@ -18,8 +17,9 @@ export interface ArtifactTemplate {
   description: string
   /**
    * The blocks it starts with, in order: a section of a document (`heading` — its text property),
-   * the `columns` and `row` blocks of a table, the `html`, `style`, `script` and `settings` parts
-   * of a mockup. They are the person's writes: checked as they are written, shown at once.
+   * the frames of a canvas, a presentation or an image with their `html`, `style` and `script`
+   * parts, the `settings` of a canvas. They are the person's writes: checked as they are written,
+   * shown at once.
    */
   blocks: readonly ArtifactTemplateBlock[]
 }
@@ -49,21 +49,6 @@ const screen = (
   { kind: 'html', key: `${key}-html`, parent: key, content: html },
 ]
 
-/** A page of a structure of a site of a template (slice 88.27): its node with its brief. */
-const sitePage = (
-  key: string,
-  title: string,
-  goal: string,
-  action: string,
-  brief: string,
-  place: { up?: string; path?: string },
-): ArtifactTemplateBlock => ({
-  kind: 'node',
-  key,
-  content: brief,
-  props: { title, goal, action, ...place },
-})
-
 /** A slide of a presentation of a template (slice 88.25): its frame, its HTML and its notes. */
 const slide = (key: string, name: string, html: string, notes: string): ArtifactTemplateBlock[] => [
   { kind: 'frame', key, content: '', props: { name } },
@@ -71,17 +56,11 @@ const slide = (key: string, name: string, html: string, notes: string): Artifact
   { kind: 'note', key: `${key}-note`, parent: key, content: notes },
 ]
 
-/** The common style of the slides: 1280×720, the brand's variables or plain (slice 88.25). */
-const SLIDE_STYLE = [
-  "html,body{margin:0;width:1280px;height:720px;overflow:hidden;font-family:var(--brand-font-body,'Golos Text',Arial,sans-serif);color:var(--brand-text,#1f2421);background:var(--brand-background,#fff)}",
-  '.slide{box-sizing:border-box;width:1280px;height:720px;padding:72px 96px;display:flex;flex-direction:column;justify-content:center;gap:24px}',
-  'h1,h2{margin:0;font-family:var(--brand-font-heading,inherit);color:var(--brand-primary,#2f5d50);line-height:1.15}',
-  'h1{font-size:64px}h2{font-size:48px}p,li{font-size:28px;line-height:1.45;margin:0}ul{margin:0;padding-left:1.2em;display:grid;gap:12px}',
-  '.accent{color:var(--brand-accent,#e07a3f);font-weight:700}.muted{color:var(--brand-muted,#6b706c)}',
-  '.cover{background:var(--brand-surface,#f6f3ee)}',
-].join('\n')
+/** The colours of a template, its own: CSS variables on `:root` of its common style (АТ5). */
+const TEMPLATE_COLORS =
+  ':root{--primary:#2f5d50;--accent:#e07a3f;--text:#1f2421;--muted:#6b706c;--surface:#f6f3ee;--background:#fff;--radius:12px}'
 
-/** The page of a screen of the template «Холст для нового сайта»: the brand's variables or plain. */
+/** The page of a screen of the template «Холст для нового сайта». */
 const page = (title: string, body: string) =>
   [
     '<header class="top"><a class="logo" href="/">[Название]</a><nav><a href="/">Главная</a><a href="/uslugi">Услуги</a><a href="/kontakty">Контакты</a></nav></header>',
@@ -90,15 +69,16 @@ const page = (title: string, body: string) =>
   ].join('\n')
 
 const SITE_STYLE = [
-  "body{margin:0;font-family:var(--brand-font-body,'Golos Text',Arial,sans-serif);color:var(--brand-text,#1f2421);background:var(--brand-background,#fff)}",
-  'h1,h2{font-family:var(--brand-font-heading,inherit);color:var(--brand-primary,#2f5d50);line-height:1.2}',
-  '.top{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center;padding:16px 24px;background:var(--brand-surface,#f6f3ee)}',
+  TEMPLATE_COLORS,
+  "body{margin:0;font-family:'Golos Text',Arial,sans-serif;color:var(--text);background:var(--background)}",
+  'h1,h2{color:var(--primary);line-height:1.2}',
+  '.top{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center;padding:16px 24px;background:var(--surface)}',
   '.top nav{display:flex;flex-wrap:wrap;gap:16px}.top a{color:inherit;text-decoration:none}.logo{font-weight:700}',
   '.page{max-width:1040px;margin:0 auto;padding:48px 24px}.page p{font-size:18px;line-height:1.6;max-width:680px}',
   '.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin:24px 0}',
-  '.card{padding:20px;border-radius:var(--brand-radius,12px);background:var(--brand-surface,#f6f3ee)}',
-  '.button{display:inline-block;padding:14px 24px;border-radius:var(--brand-radius,12px);background:var(--brand-accent,#e07a3f);color:#fff;text-decoration:none;font-weight:600}',
-  '.bottom{padding:24px;text-align:center;color:var(--brand-muted,#6b706c)}',
+  '.card{padding:20px;border-radius:var(--radius);background:var(--surface)}',
+  '.button{display:inline-block;padding:14px 24px;border-radius:var(--radius);background:var(--accent);color:#fff;text-decoration:none;font-weight:600}',
+  '.bottom{padding:24px;text-align:center;color:var(--muted)}',
 ].join('\n')
 
 /** A section of a document of a template. */
@@ -106,18 +86,6 @@ const section = (heading: string, content: string): ArtifactTemplateBlock => ({
   kind: 'section',
   heading,
   content,
-})
-
-/** The columns of a table of a template (`columns`, §7.7). */
-const columns = (list: readonly ArtifactColumn[]): ArtifactTemplateBlock => ({
-  kind: 'columns',
-  content: JSON.stringify(list),
-})
-
-/** A row of a table of a template: its cells by the keys of the columns. */
-const row = (cells: ArtifactCells): ArtifactTemplateBlock => ({
-  kind: 'row',
-  content: JSON.stringify(cells),
 })
 
 export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
@@ -179,76 +147,35 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
     ],
   },
   {
-    id: 'price-list',
-    kind: 'table',
-    title: 'Прайс-лист',
-    description: 'Товары и услуги с ценами — для сайта, переписки и Excel',
-    blocks: [
-      columns([
-        { key: 'name', name: 'Название', type: 'text' },
-        {
-          key: 'category',
-          name: 'Категория',
-          type: 'select',
-          options: ['Товары', 'Услуги', 'Доставка'],
-        },
-        { key: 'unit', name: 'Ед.', type: 'text' },
-        { key: 'price', name: 'Цена, ₽', type: 'money' },
-        { key: 'in-stock', name: 'В наличии', type: 'checkbox' },
-        { key: 'note', name: 'Примечание', type: 'text' },
-      ]),
-      row({ name: '[Товар]', category: 'Товары', unit: 'шт', price: '990.00', 'in-stock': true }),
-      row({
-        name: '[Услуга]',
-        category: 'Услуги',
-        unit: 'час',
-        price: '1500.00',
-        'in-stock': true,
-      }),
-      row({ name: '[Доставка по городу]', category: 'Доставка', unit: 'заказ', price: '300.00' }),
-    ],
-  },
-  {
-    id: 'content-plan',
-    kind: 'table',
-    title: 'Контент-план',
-    description: 'Что, где и когда публиковать: посты, статьи, рассылки',
-    blocks: [
-      columns([
-        { key: 'date', name: 'Дата', type: 'date' },
-        { key: 'topic', name: 'Тема', type: 'text' },
-        {
-          key: 'channel',
-          name: 'Где',
-          type: 'select',
-          options: ['Сайт', 'ВКонтакте', 'Telegram', 'Рассылка'],
-        },
-        {
-          key: 'status',
-          name: 'Статус',
-          type: 'select',
-          options: ['Идея', 'Пишется', 'Готово', 'Опубликовано'],
-        },
-        { key: 'link', name: 'Ссылка', type: 'link' },
-      ]),
-      row({ date: '2026-12-01', topic: '[Тема первого поста]', channel: 'Сайт', status: 'Идея' }),
-      row({
-        date: '2026-12-08',
-        topic: '[Тема второго поста]',
-        channel: 'Telegram',
-        status: 'Идея',
-      }),
-      row({ date: '2026-12-15', topic: '[Тема рассылки]', channel: 'Рассылка', status: 'Идея' }),
-    ],
-  },
-  {
     id: 'cost-calculator',
-    kind: 'mockup',
+    kind: 'canvas',
     title: 'Калькулятор стоимости',
     description: 'Посетитель вводит размеры — видит цену. Цены меняются в «Настройках»',
     blocks: [
       {
+        kind: 'settings',
+        content: JSON.stringify(
+          {
+            pricePerSquareMeter: 6500,
+            premiumFactor: 1.35,
+            minimumOrder: 9000,
+            accentColor: '#b5542d',
+            note: 'Точную цену назовём после замера — это бесплатно.',
+          },
+          null,
+          2,
+        ),
+      },
+      {
+        kind: 'frame',
+        key: 'calc',
+        content: '',
+        props: { name: 'Калькулятор', path: '/', x: 0, y: 0 },
+      },
+      {
         kind: 'style',
+        key: 'calc-style',
+        parent: 'calc',
         content: [
           "body{margin:0;font-family:'Golos Text',Arial,sans-serif;background:#f7f4ef;color:#2b2118}",
           '.calc{max-width:520px;margin:40px auto;padding:28px;background:#fff;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.06)}',
@@ -261,6 +188,8 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
       },
       {
         kind: 'html',
+        key: 'calc-html',
+        parent: 'calc',
         content: [
           '<main class="calc">',
           '  <h1>Рассчитайте стоимость</h1>',
@@ -280,21 +209,9 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
         ].join('\n'),
       },
       {
-        kind: 'settings',
-        content: JSON.stringify(
-          {
-            pricePerSquareMeter: 6500,
-            premiumFactor: 1.35,
-            minimumOrder: 9000,
-            accentColor: '#b5542d',
-            note: 'Точную цену назовём после замера — это бесплатно.',
-          },
-          null,
-          2,
-        ),
-      },
-      {
         kind: 'script',
+        key: 'calc-script',
+        parent: 'calc',
         content: [
           "const settings = JSON.parse(document.getElementById('raditi-settings')?.textContent || '{}')",
           "document.documentElement.style.setProperty('--accent', settings.accentColor || '#b5542d')",
@@ -350,53 +267,52 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
     ],
   },
   {
-    id: 'brand',
-    kind: 'brand',
-    title: 'Фирменный стиль',
-    description: 'Цвета, шрифты и тон текстов — для всех макетов и холстов проекта',
-    blocks: [
-      { kind: 'settings', content: JSON.stringify(brandStartTokens, null, 2) },
-      section(
-        'Тон текстов',
-        'Пишем [дружелюбно и по делу], обращаемся на «вы». Избегаем [канцелярита и обещаний, которые не выполним].',
-      ),
-    ],
-  },
-  {
     id: 'company-deck',
     kind: 'slides',
-    title: 'Презентация компании',
-    description: 'Пять слайдов: кто вы, что предлагаете, почему вы, цены и как связаться',
+    title: 'Новая презентация',
+    description: 'Семь слайдов о компании: титул, о вас, услуги, фото, цифра, отзыв и контакты',
     blocks: [
-      { kind: 'style', key: 'deck-style', content: SLIDE_STYLE },
+      slidesThemeBlock,
       ...slide(
         'slide1',
-        'Обложка',
-        '<section class="slide cover"><h1>[Название компании]</h1><p class="muted">[Чем вы полезны клиенту — одной строкой]</p></section>',
+        'Титул',
+        '<section class="slide s-title"><h1>[Название компании]</h1><p>[Чем вы полезны клиенту — одной строкой]</p></section>',
         'Поздоровайтесь и назовите себя. Скажите, о чём будет разговор, за 10 секунд.',
       ),
       ...slide(
         'slide2',
-        'Что мы делаем',
-        '<section class="slide"><h2>Что мы делаем</h2><ul><li>[Услуга или товар 1]</li><li>[Услуга или товар 2]</li><li>[Услуга или товар 3]</li></ul></section>',
-        'Коротко о главном: что покупают у вас чаще всего.',
+        'О нас',
+        '<section class="slide s-section"><p class="label">О нас</p><h2>[Главное о компании в одной фразе]</h2></section>',
+        'Расскажите, с чего вы начали и для кого работаете.',
       ),
       ...slide(
         'slide3',
-        'Почему мы',
-        '<section class="slide"><h2>Почему выбирают нас</h2><ul><li><span class="accent">[Цифра]</span> [довольных клиентов]</li><li>[Ваше отличие от конкурентов]</li><li>[Гарантия или срок]</li></ul></section>',
-        'Приведите один пример клиента, которому вы помогли.',
+        'Что мы делаем',
+        '<section class="slide s-points"><h2>Что мы делаем</h2><ul><li>[Услуга или товар 1]</li><li>[Услуга или товар 2]</li><li>[Услуга или товар 3]</li></ul></section>',
+        'Коротко о главном: что покупают у вас чаще всего.',
       ),
       ...slide(
         'slide4',
-        'Цены',
-        '<section class="slide"><h2>Сколько стоит</h2><p>[Услуга] — <span class="accent">от [цена] ₽</span></p><p class="muted">[Что входит в цену]</p></section>',
-        'Назовите цену уверенно и сразу скажите, что в неё входит.',
+        'Как это выглядит',
+        '<section class="slide s-split"><div><h2>Как это выглядит</h2><p>[Одна-две строки о работе на фото]</p></div><figure>[Фото работы]</figure></section>',
+        'Покажите лучшую работу и скажите, чем она помогла клиенту.',
       ),
       ...slide(
         'slide5',
+        'Результат',
+        '<section class="slide s-number"><p class="value">[120+]</p><p>[довольных клиентов за прошлый год]</p></section>',
+        'Назовите цифру и объясните, откуда она.',
+      ),
+      ...slide(
+        'slide6',
+        'Отзыв',
+        '<section class="slide s-quote"><blockquote>[Короткий отзыв клиента своими словами]</blockquote><cite>[Имя, компания]</cite></section>',
+        'Прочитайте отзыв вслух и скажите, что было до вас.',
+      ),
+      ...slide(
+        'slide7',
         'Контакты',
-        '<section class="slide cover"><h2>Давайте работать вместе</h2><p>[Телефон] · [Сайт] · [Адрес]</p></section>',
+        '<section class="slide s-end"><h2>Давайте работать вместе</h2><div class="contacts"><span>[Телефон]</span><span>[Сайт]</span><span>[Адрес]</span></div></section>',
         'Спросите, остались ли вопросы, и договоритесь о следующем шаге.',
       ),
     ],
@@ -405,16 +321,17 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
     id: 'social-post',
     kind: 'image',
     title: 'Пост для соцсетей',
-    description: 'Квадратный пост и история с предложением, в цветах вашего бренда',
+    description: 'Квадратный пост и история с предложением',
     blocks: [
       {
         kind: 'style',
         key: 'picture-style',
         content: [
-          "html,body{margin:0;overflow:hidden;font-family:var(--brand-font-body,'Golos Text',Arial,sans-serif);color:var(--brand-text,#1f2421)}",
-          '.picture{box-sizing:border-box;width:100%;height:100vh;padding:96px;display:flex;flex-direction:column;justify-content:center;gap:32px;background:var(--brand-surface,#f6f3ee)}',
-          'h1{margin:0;font-family:var(--brand-font-heading,inherit);color:var(--brand-primary,#2f5d50);font-size:96px;line-height:1.05}',
-          'p{margin:0;font-size:44px;line-height:1.3}.price{color:var(--brand-accent,#e07a3f);font-weight:700}',
+          TEMPLATE_COLORS,
+          "html,body{margin:0;overflow:hidden;font-family:'Golos Text',Arial,sans-serif;color:var(--text)}",
+          '.picture{box-sizing:border-box;width:100%;height:100vh;padding:96px;display:flex;flex-direction:column;justify-content:center;gap:32px;background:var(--surface)}',
+          'h1{margin:0;color:var(--primary);font-size:96px;line-height:1.05}',
+          'p{margin:0;font-size:44px;line-height:1.3}.price{color:var(--accent);font-weight:700}',
         ].join('\n'),
       },
       { kind: 'frame', key: 'post', content: '', props: { name: 'Пост', size: 'post' } },
@@ -432,116 +349,6 @@ export const artifactTemplates: readonly ArtifactTemplate[] = Object.freeze([
         parent: 'story',
         content:
           '<section class="picture"><h1>[Ваше предложение]</h1><p>[Чем оно полезно]</p><p class="price">от [цена] ₽</p><p>[Как записаться]</p></section>',
-      },
-    ],
-  },
-  {
-    id: 'service-site',
-    kind: 'sitemap',
-    title: 'Структура сайта услуг',
-    description: 'Главная, услуги, цены, отзывы и контакты — с целью и действием каждой страницы',
-    blocks: [
-      sitePage(
-        'home',
-        'Главная',
-        'Понять, что вы делаете',
-        'Записаться',
-        'Кто вы и чем полезны, три главные услуги, кнопка записи.',
-        { path: '/' },
-      ),
-      sitePage(
-        'services',
-        'Услуги',
-        'Выбрать услугу',
-        'Узнать цену',
-        'Каждая услуга: что входит, сколько длится, для кого.',
-        { up: 'home' },
-      ),
-      sitePage(
-        'prices',
-        'Цены',
-        'Узнать стоимость',
-        'Записаться',
-        'Таблица цен от и до, что входит в цену.',
-        { up: 'home' },
-      ),
-      sitePage(
-        'reviews',
-        'Отзывы',
-        'Поверить вам',
-        'Записаться',
-        'Пять-шесть отзывов с именами и фото, если клиенты согласны.',
-        { up: 'home' },
-      ),
-      sitePage(
-        'contacts',
-        'Контакты',
-        'Найти вас',
-        'Позвонить',
-        'Адрес, карта, телефон, часы работы, как добраться.',
-        { up: 'home' },
-      ),
-    ],
-  },
-  {
-    id: 'sales-report',
-    kind: 'report',
-    title: 'Отчёт о продажах за месяц',
-    description: 'Итоги месяца, график выручки, доля каналов и таблица по товарам',
-    blocks: [
-      section(
-        'Итоги месяца',
-        'За [месяц] выручка составила **[сумма] ₽** — на [N] % больше, чем месяцем раньше.',
-      ),
-      {
-        kind: 'chart',
-        key: 'revenue',
-        content: JSON.stringify({
-          type: 'bar',
-          title: 'Выручка по неделям',
-          categories: ['1 неделя', '2 неделя', '3 неделя', '4 неделя'],
-          series: [{ name: 'Выручка', values: [0, 0, 0, 0] }],
-          unit: '₽',
-        }),
-      },
-      {
-        kind: 'chart',
-        key: 'channels',
-        content: JSON.stringify({
-          type: 'pie',
-          title: 'Откуда клиенты',
-          categories: ['Сайт', 'Соцсети', 'Рекомендации'],
-          series: [{ name: 'Клиенты', values: [1, 1, 1] }],
-        }),
-      },
-      columns([
-        { key: 'item', name: 'Товар', type: 'text' },
-        { key: 'sold', name: 'Продано', type: 'number' },
-        { key: 'sum', name: 'Сумма', type: 'money' },
-      ]),
-      row({ item: '[Товар 1]', sold: 0, sum: '0.00' }),
-      row({ item: '[Товар 2]', sold: 0, sum: '0.00' }),
-      section('Что дальше', '- [Что сделать в следующем месяце]'),
-    ],
-  },
-  {
-    id: 'customer-journey',
-    kind: 'diagram',
-    title: 'Путь клиента',
-    description: 'Как клиент находит вас, выбирает и покупает — по шагам',
-    blocks: [
-      {
-        kind: 'diagram',
-        content: [
-          'flowchart LR',
-          '  A[Узнал о вас] --> B[Зашёл на сайт]',
-          '  B --> C{Нашёл, что искал?}',
-          '  C -->|да| D[Оставил заявку]',
-          '  C -->|нет| E[Ушёл к конкурентам]',
-          '  D --> F[Получил ответ]',
-          '  F --> G[Купил]',
-          '  G --> H[Пришёл снова]',
-        ].join('\n'),
       },
     ],
   },

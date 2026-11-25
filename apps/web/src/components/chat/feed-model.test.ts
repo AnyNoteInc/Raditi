@@ -119,6 +119,49 @@ describe('feedEntries', () => {
     expect(entries[5]).toMatchObject({ kind: 'agentDocs', docIds: [other] })
   })
 
+  it('gives the canvases, slides and images of an answer one card after it (plan 93, АТ9)', () => {
+    const canvas = '0199a3f2-0000-7000-8000-0000000000c1'
+    const slides = '0199a3f2-0000-7000-8000-0000000000c2'
+    const at = '2026-10-17T09:00:00.000Z'
+    const artifact = (id: string, artifactId: string, kind: string): FeedRow => ({
+      id,
+      at,
+      type: 'feed.artifact',
+      artifactId,
+      kind,
+      created: false,
+    })
+    const rows: FeedRow[] = [
+      requestRow('1'),
+      resultRow('2', 1),
+      artifact('3', canvas, 'canvas'),
+      artifact('4', slides, 'slides'),
+      // The same one told twice after one answer: one line.
+      artifact('5', canvas, 'canvas'),
+      requestRow('6'),
+      resultRow('7', 2),
+      artifact('8', canvas, 'canvas'),
+    ]
+    const entries = feedEntries(rows, null)
+    expect(entries.map((entry) => entry.key)).toEqual([
+      '1',
+      '2',
+      'artifacts-3',
+      '6',
+      '7',
+      'artifacts-8',
+    ])
+    expect(entries[2]).toEqual({
+      kind: 'agentArtifacts',
+      key: 'artifacts-3',
+      artifacts: [
+        { id: canvas, kind: 'canvas' },
+        { id: slides, kind: 'slides' },
+      ],
+    })
+    expect(entries[5]).toMatchObject({ artifacts: [{ id: canvas, kind: 'canvas' }] })
+  })
+
   it('never shows a stage the page does not know', () => {
     const rows: FeedRow[] = [
       requestRow('1'),

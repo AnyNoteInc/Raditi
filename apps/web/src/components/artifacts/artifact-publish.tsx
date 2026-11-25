@@ -15,11 +15,13 @@ import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { artifactKindSpecOf, artifactRoleAtLeast } from '@repo/domain/artifacts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
+import { ArtifactHeadButton } from './artifact-head'
+import { formatDateTime } from './artifact-texts'
 import type { CabinetArtifact } from './use-artifact'
 
 interface PublicationRow {
@@ -29,50 +31,63 @@ interface PublicationRow {
   current: boolean
 }
 
-// «Опубликовать как страницу» of a document (docs/plan/88-artifacts.md, Ар2, Ар23, §7.10; board
-// F-publish; slice 88.11б): only its owner; a version of it becomes a page for everyone with the
-// link — a snapshot: later edits reach the page by «Обновить страницу» only.
+// «Опубликовать» of an artifact (docs/plan/88-artifacts.md, Ар2, Ар23, §7.10; board F-publish;
+// docs/plan/93-artifacts-trim.md, АТ9): only its owner; the current version becomes a page (or a
+// site of a canvas) for everyone with the link — a snapshot: later edits reach it by «Обновить»
+// only. An older version is behind «Другая версия».
 
 export const publishTexts = Object.freeze({
-  publish: 'Опубликовать как страницу',
-  update: 'Обновить страницу',
-  title: 'Опубликовать как страницу',
+  open: 'Опубликовать',
+  title: 'Опубликовать страницу',
   updateTitle: 'Обновить страницу',
-  lead: 'Страница — снимок артефакта для всех, у кого есть ссылка. Ваши дальнейшие правки на неё не попадут, пока вы не обновите страницу.',
-  version: 'Какую версию показать',
-  current: (no: number) => `Текущая — версия ${no}`,
-  versionOf: (no: number, label: string | null) =>
-    label ? `Версия ${no} · «${label}»` : `Версия ${no}`,
-  latest: 'Текущий текст',
-  shows: (no: number) => `Страница показывает версию ${no}.`,
-  stale: 'С тех пор артефакт изменился.',
-  open: 'Открыть страницу',
+  lead: 'Страница — снимок артефакта для всех, у кого есть ссылка: новые правки появятся на ней, когда вы её обновите.',
+  liveCurrent: 'Страница показывает текущую версию.',
+  liveStale: 'Страница показывает более раннюю версию: с тех пор артефакт изменился.',
+  openPage: 'Открыть страницу',
   done: 'Готово: страница опубликована.',
-  updated: (version: number) => `Готово: на странице версия ${version}.`,
+  updated: 'Готово: страница обновлена.',
+  // A canvas becomes a site: one page a screen (Ар8, §7.10; slice 88.15).
+  siteTitle: 'Опубликовать сайт',
+  siteUpdateTitle: 'Обновить сайт',
+  siteLead:
+    'Сайт — снимок холста для всех, у кого есть ссылка, по странице на каждый экран: новые правки появятся на нём, когда вы его обновите.',
+  siteLiveCurrent: 'Сайт показывает текущую версию.',
+  siteLiveStale: 'Сайт показывает более раннюю версию: с тех пор холст изменился.',
+  openSite: 'Открыть сайт',
+  siteDone: 'Готово: сайт опубликован.',
+  siteUpdated: 'Готово: сайт обновлён.',
+  otherVersion: 'Другая версия',
+  version: 'Версия',
+  current: 'Текущая',
+  versionOf: (no: number, at: string, label: string | null) =>
+    `Версия ${no} · ${formatDateTime(at)}${label ? ` · «${label}»` : ''}`,
   failed: 'Не получилось опубликовать. Попробуйте ещё раз.',
-  /** «Схема» whose text has no drawn picture yet, or did not parse (88.24в). */
-  notDrawn: 'Схема ещё не нарисована или в её тексте ошибка: исправьте текст и опубликуйте снова.',
   off: 'Страницы здесь не настроены.',
   cancel: 'Отмена',
   confirm: 'Опубликовать',
+  update: 'Обновить',
   close: 'Закрыть',
-  // A canvas becomes a site: one page a screen (Ар8, §7.10; slice 88.15).
-  publishSite: 'Опубликовать как сайт',
-  updateSite: 'Обновить сайт',
-  siteLead:
-    'Сайт — снимок холста для всех, у кого есть ссылка: каждый экран — своя страница, из вариантов — выбранный. Ваши дальнейшие правки на него не попадут, пока вы не обновите сайт.',
-  siteDone: 'Готово: сайт опубликован.',
-  siteUpdated: (version: number) => `Готово: на сайте версия ${version} холста.`,
-  openSite: 'Открыть сайт',
 })
 
-export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact }) {
+/**
+ * «Опубликовать» in the head of an artifact: a button with a globe on its page, a globe alone in
+ * its tab beside a chat (`compact`).
+ */
+export function ArtifactPublishButton({
+  artifact,
+  compact = false,
+}: {
+  artifact: CabinetArtifact
+  compact?: boolean
+}) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
   // The dialog keeps what it opened on: a page that appears by this very publication changes nothing.
   const [open, setOpen] = useState<{ live: PublicationRow | null } | null>(null)
+  const [other, setOther] = useState(false)
   const [versionNo, setVersionNo] = useState<number | ''>('')
   const [result, setResult] = useState<{ ok: boolean; text: string; url?: string } | null>(null)
+  const titleId = useId()
   const owner = artifactRoleAtLeast(artifact.role, 'owner')
   const kind = artifactKindSpecOf(artifact.kind)?.publish ?? null
   const publishable = kind !== null
@@ -83,89 +98,118 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
   })
   const versions = useQuery({
     ...trpc.artifact.versions.queryOptions({ artifactId: artifact.id }),
-    enabled: open !== null,
+    enabled: open !== null && other,
   })
   const publish = useMutation(trpc.pages.publishArtifact.mutationOptions())
   if (!owner || !publishable) return null
-  const current = publication.data ?? null
-  const label = site
-    ? current
-      ? publishTexts.updateSite
-      : publishTexts.publishSite
-    : current
-      ? publishTexts.update
-      : publishTexts.publish
   const live = open?.live ?? null
+  const start = () => {
+    setResult(null)
+    setOther(false)
+    setVersionNo('')
+    setOpen({ live: publication.data ?? null })
+  }
+  const older = (versions.data ?? []).filter((each) => !each.current)
 
   return (
     <>
-      <Tooltip title={label}>
-        <IconButton
-          aria-label={label}
-          onClick={() => {
-            setResult(null)
-            setOpen({ live: current })
-          }}
-          sx={{ width: 40, height: 40 }}
-        >
-          <AppIcon name="share" size={18} />
-        </IconButton>
-      </Tooltip>
+      {compact ? (
+        <Tooltip title={publishTexts.open}>
+          <IconButton
+            aria-label={publishTexts.open}
+            aria-haspopup="dialog"
+            onClick={start}
+            sx={{ width: 40, height: 40 }}
+          >
+            <AppIcon name="globe" size={18} />
+          </IconButton>
+        </Tooltip>
+      ) : (
+        <ArtifactHeadButton
+          variant="outlined"
+          color="inherit"
+          icon={<AppIcon name="globe" size={16} />}
+          label={publishTexts.open}
+          aria-haspopup="dialog"
+          onClick={start}
+          sx={{ borderColor: 'divider' }}
+        />
+      )}
       {open !== null && (
         <Dialog
           open
           onClose={() => setOpen(null)}
           maxWidth="sm"
           fullWidth
-          aria-labelledby="publish-artifact-title"
+          aria-labelledby={titleId}
         >
-          <DialogTitle id="publish-artifact-title">
-            {site ? label : live ? publishTexts.updateTitle : publishTexts.title}
+          <DialogTitle id={titleId}>
+            {site
+              ? live
+                ? publishTexts.siteUpdateTitle
+                : publishTexts.siteTitle
+              : live
+                ? publishTexts.updateTitle
+                : publishTexts.title}
           </DialogTitle>
-          <DialogContent>
-            <Typography sx={{ mb: 2 }}>
-              {site ? publishTexts.siteLead : publishTexts.lead}
-            </Typography>
+          <DialogContent sx={{ display: 'grid', gap: 2 }}>
+            <Typography>{site ? publishTexts.siteLead : publishTexts.lead}</Typography>
             {live && (
-              <Alert severity="info" sx={{ mb: 2 }}>
-                {publishTexts.shows(live.versionNo)} {live.current ? '' : publishTexts.stale}
+              <Typography variant="body2" color="text.secondary">
+                {site
+                  ? live.current
+                    ? publishTexts.siteLiveCurrent
+                    : publishTexts.siteLiveStale
+                  : live.current
+                    ? publishTexts.liveCurrent
+                    : publishTexts.liveStale}
                 {live.url && (
-                  <Box sx={{ mt: 0.5 }}>
+                  <>
+                    {' '}
                     <Link href={live.url} target="_blank" rel="noopener noreferrer">
-                      {site ? publishTexts.openSite : publishTexts.open}
+                      {site ? publishTexts.openSite : publishTexts.openPage}
                     </Link>
-                  </Box>
+                  </>
                 )}
-              </Alert>
+              </Typography>
             )}
-            <TextField
-              select
-              fullWidth
-              label={publishTexts.version}
-              value={versionNo}
-              onChange={(event) =>
-                setVersionNo(event.target.value === '' ? '' : Number(event.target.value))
-              }
-              slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
-            >
-              <MenuItem value="">
-                {artifact.version > 0
-                  ? publishTexts.current(artifact.version)
-                  : publishTexts.latest}
-              </MenuItem>
-              {(versions.data ?? [])
-                .filter((each) => !each.current)
-                .map((each) => (
-                  <MenuItem key={each.no} value={each.no}>
-                    {publishTexts.versionOf(each.no, each.label)}
-                  </MenuItem>
-                ))}
-            </TextField>
+            {!result?.ok &&
+              (other ? (
+                <TextField
+                  select
+                  fullWidth
+                  size="small"
+                  label={publishTexts.version}
+                  value={versionNo}
+                  onChange={(event) =>
+                    setVersionNo(event.target.value === '' ? '' : Number(event.target.value))
+                  }
+                  slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
+                >
+                  <MenuItem value="">{publishTexts.current}</MenuItem>
+                  {older.map((each) => (
+                    <MenuItem key={each.no} value={each.no}>
+                      {publishTexts.versionOf(each.no, each.createdAt, each.label)}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              ) : (
+                <Box>
+                  <Button
+                    size="small"
+                    color="inherit"
+                    onClick={() => setOther(true)}
+                    sx={{ ml: -1, color: 'text.secondary' }}
+                  >
+                    {publishTexts.otherVersion}
+                  </Button>
+                </Box>
+              ))}
             {result && (
-              <Alert severity={result.ok ? 'success' : 'error'} sx={{ mt: 2 }}>
+              <Alert severity={result.ok ? 'success' : 'error'}>
                 {result.text}
                 {result.url && (
-                  <Box sx={{ mt: 0.5 }}>
+                  <Box sx={{ mt: 0.5, overflowWrap: 'anywhere' }}>
                     <Link href={result.url} target="_blank" rel="noopener noreferrer">
                       {result.url}
                     </Link>
@@ -181,6 +225,7 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
             {!result?.ok && (
               <Button
                 variant="contained"
+                disableElevation
                 disabled={publish.isPending}
                 onClick={() =>
                   void publish
@@ -193,10 +238,10 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
                         ok: true,
                         text: site
                           ? live
-                            ? publishTexts.siteUpdated(answer.versionNo)
+                            ? publishTexts.siteUpdated
                             : publishTexts.siteDone
                           : live
-                            ? publishTexts.updated(answer.versionNo)
+                            ? publishTexts.updated
                             : publishTexts.done,
                         url: answer.url,
                       })
@@ -209,14 +254,11 @@ export function ArtifactPublishButton({ artifact }: { artifact: CabinetArtifact 
                     .catch((error: unknown) =>
                       setResult({
                         ok: false,
-                        text: ((code) =>
-                          code === 'PAGES_OFF'
+                        text:
+                          (error as { data?: { domainCode?: string } }).data?.domainCode ===
+                          'PAGES_OFF'
                             ? publishTexts.off
-                            : code === 'ARTIFACT_DIAGRAM_NOT_DRAWN'
-                              ? publishTexts.notDrawn
-                              : publishTexts.failed)(
-                          (error as { data?: { domainCode?: string } }).data?.domainCode,
-                        ),
+                            : publishTexts.failed,
                       }),
                     )
                 }

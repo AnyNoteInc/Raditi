@@ -4,6 +4,7 @@ import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import ButtonBase from '@mui/material/ButtonBase'
+import Chip from '@mui/material/Chip'
 import IconButton from '@mui/material/IconButton'
 import InputAdornment from '@mui/material/InputAdornment'
 import Menu from '@mui/material/Menu'
@@ -11,8 +12,7 @@ import MenuItem from '@mui/material/MenuItem'
 import Skeleton from '@mui/material/Skeleton'
 import Snackbar from '@mui/material/Snackbar'
 import TextField from '@mui/material/TextField'
-import ToggleButton from '@mui/material/ToggleButton'
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import {
   artifactKindSpecOf,
@@ -25,7 +25,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AppRouter } from '@repo/trpc'
 import type { inferRouterOutputs } from '@trpc/server'
 import Link from 'next/link'
-import { useDeferredValue, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { useDeferredValue, useEffect, useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { SectionHeading } from '@/components/application/section-heading'
@@ -34,58 +35,49 @@ import { useTRPC } from '@/trpc/client'
 import { ArtifactCreateDialog } from './artifact-create-dialog'
 import { ArtifactInvites } from './artifact-invites'
 import { ArtifactKindIcon } from './artifact-kind-icon'
+import { ArtifactTrashNotice } from './artifact-trash-notice'
 import { emptyTexts, galleryTexts } from './artifact-texts'
 
 type Row = inferRouterOutputs<AppRouter>['artifact']['list'][number]
 
-const filters = ['all', 'mine', 'projects', 'shared', 'trash'] as const
+const filters = ['all', 'mine', 'shared', 'trash'] as const
 type Filter = (typeof filters)[number]
-const sorts = ['newest', 'oldest', 'title'] as const
-type Sort = (typeof sorts)[number]
-type Layout = 'cards' | 'list'
 
-const LAYOUT_KEY = 'raditi-artifacts-layout'
+/** The height of the picture or the text at the top of a card. */
+const COVER_HEIGHT = { xs: 120, sm: 140 } as const
 
-/** Cards or a list: kept for this browser, a convenience that may be closed. */
-function useLayout() {
-  const [layout, setLayout] = useState<Layout>(() => {
-    try {
-      return localStorage.getItem(LAYOUT_KEY) === 'list' ? 'list' : 'cards'
-    } catch {
-      return 'cards'
-    }
+/**
+ * The templates of the empty screen (docs/plan/93-artifacts-trim.md, АТ9): the first of each kind
+ * that ships, at most four.
+ */
+export function starterTemplates(): ArtifactTemplate[] {
+  return artifactReleasedKinds.flatMap((kind) => {
+    const first = artifactTemplates.find((each) => each.kind === kind)
+    return first ? [first] : []
   })
-  function choose(next: Layout) {
-    setLayout(next)
-    try {
-      localStorage.setItem(LAYOUT_KEY, next)
-    } catch {
-      // Storage may be closed to the page: cards next time.
-    }
-  }
-  return [layout, choose] as const
 }
 
 /**
- * «Артефакты» before the first one (Ар50, board A-empty): what will be here, «Создать», «Попросить
- * агента в чате» and the templates of the kinds that ship.
+ * «Артефакты» before the first one (АТ9): what will be here, «Создать» and one template of each
+ * kind — a template makes the artifact at once and opens it.
  */
 function ArtifactsEmpty({
   onCreate,
   onTemplate,
+  busy,
 }: {
   onCreate: () => void
   onTemplate: (template: ArtifactTemplate) => void
+  busy: boolean
 }) {
-  const templates = artifactTemplates.filter((each) => artifactReleasedKinds.includes(each.kind))
   return (
     <Box
       component="section"
       aria-labelledby="artifacts-empty-title"
       sx={{
-        maxWidth: 640,
+        maxWidth: 720,
         mx: 'auto',
-        mt: { xs: 5, md: 8 },
+        mt: { xs: 4, md: 7 },
         mb: 6,
         display: 'flex',
         flexDirection: 'column',
@@ -96,43 +88,38 @@ function ArtifactsEmpty({
       <Box
         aria-hidden
         sx={{
-          width: 72,
-          height: 72,
-          borderRadius: '20px',
+          width: 64,
+          height: 64,
+          borderRadius: '18px',
           display: 'grid',
           placeItems: 'center',
-          bgcolor: 'background.paper',
-          border: 1,
-          borderColor: 'divider',
+          bgcolor: 'action.hover',
           color: 'primary.main',
         }}
       >
-        <AppIcon name="artifacts" size={34} />
+        <AppIcon name="artifacts" size={30} />
       </Box>
       <Typography
         id="artifacts-empty-title"
         component="h2"
-        sx={{ mt: 3, fontSize: { xs: 22, md: 26 }, fontWeight: 600, lineHeight: 1.3 }}
+        sx={{ mt: 2.5, fontSize: { xs: 22, md: 26 }, fontWeight: 600, lineHeight: 1.3 }}
       >
         {emptyTexts.title}
       </Typography>
-      <Typography sx={{ mt: 1.25, color: 'text.secondary', fontSize: { xs: 15, md: 16 } }}>
+      <Typography
+        sx={{ mt: 1, maxWidth: 520, color: 'text.secondary', fontSize: { xs: 15, md: 16 } }}
+      >
         {emptyTexts.lead}
       </Typography>
-      <Box sx={{ mt: 3, display: 'flex', gap: 1.5, flexWrap: 'wrap', justifyContent: 'center' }}>
-        <Button
-          variant="contained"
-          onClick={onCreate}
-          startIcon={<AppIcon name="plus" size={16} />}
-          sx={{ minHeight: 44, px: 3 }}
-        >
-          {galleryTexts.create}
-        </Button>
-        <Button variant="outlined" href="/chats/new" sx={{ minHeight: 44, px: 3 }}>
-          {galleryTexts.askAgent}
-        </Button>
-      </Box>
-      <Typography variant="caption" sx={{ mt: 4, mb: 1.25, color: 'text.secondary' }}>
+      <Button
+        variant="contained"
+        onClick={onCreate}
+        startIcon={<AppIcon name="plus" size={16} />}
+        sx={{ mt: 3, minHeight: 44, px: 3 }}
+      >
+        {galleryTexts.create}
+      </Button>
+      <Typography variant="body2" sx={{ mt: 5, mb: 1.5, color: 'text.secondary' }}>
         {emptyTexts.templates}
       </Typography>
       <Box
@@ -147,10 +134,11 @@ function ArtifactsEmpty({
           gap: 1.25,
         }}
       >
-        {templates.map((template) => (
+        {starterTemplates().map((template) => (
           <Box component="li" key={template.id}>
             <ButtonBase
               onClick={() => onTemplate(template)}
+              disabled={busy}
               sx={{
                 width: '100%',
                 height: '100%',
@@ -160,11 +148,12 @@ function ArtifactsEmpty({
                 gap: 1.5,
                 p: 2,
                 textAlign: 'left',
-                borderRadius: '12px',
+                borderRadius: '14px',
                 border: 1,
                 borderColor: 'divider',
                 bgcolor: 'background.paper',
-                '&:hover, &.Mui-focusVisible': { bgcolor: 'action.hover' },
+                '&:hover': { borderColor: 'text.secondary' },
+                '&.Mui-focusVisible': { outline: '2px solid', outlineColor: 'primary.main' },
               }}
             >
               <Box sx={{ display: 'flex', color: 'primary.main', pt: '2px' }} aria-hidden>
@@ -182,6 +171,63 @@ function ArtifactsEmpty({
           </Box>
         ))}
       </Box>
+    </Box>
+  )
+}
+
+/** «Все · Мои · Доступные мне · Корзина»: one segmented control, a pressed button for each. */
+function FilterTabs({
+  value,
+  onChange,
+  sharing,
+}: {
+  value: Filter
+  onChange: (next: Filter) => void
+  sharing: boolean
+}) {
+  const shown = filters.filter((each) => each !== 'shared' || sharing)
+  return (
+    <Box
+      role="group"
+      aria-label={galleryTexts.filtersLabel}
+      sx={{
+        display: 'inline-flex',
+        flex: '0 1 auto',
+        minWidth: 0,
+        overflowX: 'auto',
+        scrollbarWidth: 'none',
+        p: 0.5,
+        gap: 0.25,
+        borderRadius: 999,
+        bgcolor: 'action.hover',
+      }}
+    >
+      {shown.map((each) => {
+        const on = value === each
+        return (
+          <ButtonBase
+            key={each}
+            aria-pressed={on}
+            onClick={() => onChange(each)}
+            sx={{
+              flex: 'none',
+              minHeight: 32,
+              px: 1.5,
+              borderRadius: 999,
+              fontSize: 14,
+              fontWeight: on ? 600 : 500,
+              whiteSpace: 'nowrap',
+              color: on ? 'text.primary' : 'text.secondary',
+              bgcolor: on ? 'background.paper' : 'transparent',
+              boxShadow: on ? 1 : 0,
+              '&:hover': { color: 'text.primary' },
+              '&.Mui-focusVisible': { outline: '2px solid', outlineColor: 'primary.main' },
+            }}
+          >
+            {galleryTexts.filters[each]}
+          </ButtonBase>
+        )
+      })}
     </Box>
   )
 }
@@ -206,14 +252,16 @@ function RowActions({
     )
   return (
     <>
-      <IconButton
-        size="small"
-        aria-label={galleryTexts.actions(row.title)}
-        aria-haspopup="menu"
-        onClick={(event) => setAnchor(event.currentTarget)}
-      >
-        <AppIcon name="more" size={18} />
-      </IconButton>
+      <Tooltip title={galleryTexts.more}>
+        <IconButton
+          size="small"
+          aria-label={galleryTexts.actions(row.title)}
+          aria-haspopup="menu"
+          onClick={(event) => setAnchor(event.currentTarget)}
+        >
+          <AppIcon name="more" size={18} />
+        </IconButton>
+      </Tooltip>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)}>
         <MenuItem
           onClick={() => {
@@ -229,29 +277,32 @@ function RowActions({
 }
 
 /**
- * «Артефакты» (docs/plan/88-artifacts.md, Ар43, Ар50; boards Main, A-empty, A-create): the user's
- * artifacts by the filters «Все», «Мои» (without a project), «В проектах», «Доступные мне» and
- * «Корзина», a kind, a project, an order and a word of the title or text; cards or a list. Before
- * the first one: the empty screen with templates.
+ * «Артефакты» (docs/plan/88-artifacts.md, Ар50; docs/plan/93-artifacts-trim.md, АТ9): one row of
+ * controls — «Все · Мои · Доступные мне · Корзина», a word to find, a kind and «Создать» — then
+ * cards, newest first: a picture of the first screen for a canvas, the first slide or the first
+ * image; the beginning of the text for a document. «Все артефакты проекта» of a project opens it
+ * filtered by the project, which a chip shows and takes off. Before the first one: the empty screen.
  */
 export function ArtifactsView({
   userId,
   initialProjectId = '',
+  sharing = false,
 }: {
   userId: string
   /** «Все артефакты проекта» of «Контекст» opens the gallery filtered by it (Ар42). */
   initialProjectId?: string
+  /** «Доступные мне» only where artifacts may be shared (88.16). */
+  sharing?: boolean
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
+  const router = useRouter()
   const [filter, setFilter] = useState<Filter>('all')
   const [search, setSearch] = useState('')
   const query = useDeferredValue(search.trim())
   const [kind, setKind] = useState<string>('')
   const [projectId, setProjectId] = useState<string>(initialProjectId)
-  const [sort, setSort] = useState<Sort>('newest')
-  const [layout, setLayout] = useLayout()
-  const [creating, setCreating] = useState<{ template: ArtifactTemplate | null } | null>(null)
+  const [creating, setCreating] = useState(false)
   const [notice, setNotice] = useState<{ text: string; undo?: () => void } | null>(null)
   const list = useQuery(
     trpc.artifact.list.queryOptions({
@@ -259,21 +310,23 @@ export function ArtifactsView({
       ...(query ? { query } : {}),
       kind: kind === '' ? null : (kind as ArtifactKind),
       projectId: projectId || null,
-      sort,
+      sort: 'newest',
     }),
   )
   // Whether there is anything at all: the empty screen stands in place of the filters.
   const any = useQuery(trpc.artifact.list.queryOptions({ filter: 'all' }))
   const trashed = useQuery(trpc.artifact.list.queryOptions({ filter: 'trash' }))
-  const projects = useQuery(trpc.project.list.queryOptions())
+  const projects = useQuery({ ...trpc.project.list.queryOptions(), enabled: projectId !== '' })
   const reread = () =>
     void queryClient.invalidateQueries({ queryKey: trpc.artifact.list.pathKey() })
   const trash = useMutation(trpc.artifact.trash.mutationOptions({ onSuccess: reread }))
   const restore = useMutation(trpc.artifact.restore.mutationOptions({ onSuccess: reread }))
+  const create = useMutation(trpc.artifact.create.mutationOptions())
   const rows = list.data ?? []
   const empty =
     any.isSuccess && any.data.length === 0 && trashed.isSuccess && trashed.data.length === 0
   const filtered = filter !== 'all' || query !== '' || kind !== '' || projectId !== ''
+  const projectName = projects.data?.items.find((each) => each.id === projectId)?.name ?? null
 
   function toTrash(row: Row) {
     void trash.mutateAsync({ artifactId: row.id }).then(() =>
@@ -284,29 +337,29 @@ export function ArtifactsView({
     )
   }
 
+  /** A template of the empty screen: the artifact is made at once and opens. */
+  function fromTemplate(template: ArtifactTemplate) {
+    create.mutate(
+      {
+        kind: template.kind,
+        title: template.title,
+        projectId: projectId || null,
+        templateId: template.id,
+      },
+      {
+        onSuccess: (created) => {
+          reread()
+          router.push(`/artifacts/${created.id}`)
+        },
+        onError: () => setNotice({ text: galleryTexts.createFailed }),
+      },
+    )
+  }
+
   return (
     <Box sx={{ width: '100%', maxWidth: 1200, mx: 'auto' }}>
-      <Box
-        sx={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          gap: 1,
-          minHeight: 48,
-          mb: 2.5,
-        }}
-      >
+      <Box sx={{ display: 'flex', alignItems: 'center', minHeight: 48, mb: 2 }}>
         <SectionHeading title={galleryTexts.title} about={galleryTexts.about} />
-        {!empty && (
-          <Button
-            variant="contained"
-            onClick={() => setCreating({ template: null })}
-            sx={{ flexShrink: 0, minHeight: 40 }}
-            startIcon={<AppIcon name="plus" size={16} />}
-          >
-            {galleryTexts.create}
-          </Button>
-        )}
       </Box>
 
       {/* Invitations to the user's confirmed address (plan 88, Ар35): above everything. */}
@@ -317,119 +370,90 @@ export function ArtifactsView({
       )}
       {empty && (
         <ArtifactsEmpty
-          onCreate={() => setCreating({ template: null })}
-          onTemplate={(template) => setCreating({ template })}
+          onCreate={() => setCreating(true)}
+          onTemplate={fromTemplate}
+          busy={create.isPending}
         />
       )}
 
       {!empty && any.isSuccess && (
         <>
+          {/* One row on a computer; two on a phone: the tabs and «Создать», then the search and the kind. */}
           <Box
             sx={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 1.5,
+              display: 'grid',
+              gridTemplateAreas: { xs: '"tabs create" "find find"', md: '"tabs find create"' },
+              gridTemplateColumns: { xs: 'minmax(0, 1fr) auto', md: 'auto minmax(0, 1fr) auto' },
               alignItems: 'center',
-              justifyContent: 'space-between',
-              mb: 1.5,
+              columnGap: 1.5,
+              rowGap: 1.25,
+              mb: projectId ? 1.5 : 2.5,
             }}
           >
-            <Box
-              role="group"
-              aria-label={galleryTexts.filtersLabel}
-              sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}
-            >
-              {filters.map((each) => (
-                <Button
-                  key={each}
-                  aria-pressed={filter === each}
-                  onClick={() => setFilter(each)}
-                  variant={filter === each ? 'contained' : 'outlined'}
-                  size="small"
-                  startIcon={each === 'trash' ? <AppIcon name="trash" size={14} /> : undefined}
-                  sx={{ borderRadius: 999, minHeight: 36, px: 1.75 }}
-                >
-                  {galleryTexts.filters[each]}
-                </Button>
-              ))}
+            <Box sx={{ gridArea: 'tabs', minWidth: 0, display: 'flex' }}>
+              <FilterTabs value={filter} onChange={setFilter} sharing={sharing} />
             </Box>
-            <TextField
-              size="small"
-              placeholder={galleryTexts.search}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              slotProps={{
-                htmlInput: { 'aria-label': galleryTexts.search, maxLength: 200 },
-                input: {
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <AppIcon name="search" size={16} />
-                    </InputAdornment>
-                  ),
-                },
-              }}
-              sx={{ minWidth: { xs: '100%', sm: 260 } }}
-            />
+            <Box sx={{ gridArea: 'find', display: 'flex', gap: 1, minWidth: 0 }}>
+              <TextField
+                size="small"
+                placeholder={galleryTexts.search}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                slotProps={{
+                  htmlInput: { 'aria-label': galleryTexts.search, maxLength: 200 },
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <AppIcon name="search" size={16} />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+                sx={{ flex: '1 1 auto', minWidth: 0, maxWidth: { md: 320 } }}
+              />
+              <TextField
+                select
+                size="small"
+                value={kind}
+                onChange={(event) => setKind(event.target.value)}
+                slotProps={{
+                  select: {
+                    displayEmpty: true,
+                    inputProps: { 'aria-label': galleryTexts.kindLabel },
+                  },
+                }}
+                sx={{ flex: 'none', width: { xs: 136, sm: 160 } }}
+              >
+                <MenuItem value="">{galleryTexts.anyKind}</MenuItem>
+                {artifactReleasedKinds.map((each) => (
+                  <MenuItem key={each} value={each}>
+                    {artifactKindSpecOf(each)?.label}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Box>
+            <Button
+              variant="contained"
+              onClick={() => setCreating(true)}
+              startIcon={<AppIcon name="plus" size={16} />}
+              sx={{ gridArea: 'create', justifySelf: 'end', minHeight: 40 }}
+            >
+              {galleryTexts.create}
+            </Button>
           </Box>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center', mb: 2 }}>
-            <TextField
-              select
-              size="small"
-              label={galleryTexts.kindLabel}
-              value={kind}
-              onChange={(event) => setKind(event.target.value)}
-              sx={{ minWidth: 150 }}
-            >
-              <MenuItem value="">{galleryTexts.anyKind}</MenuItem>
-              {artifactReleasedKinds.map((each) => (
-                <MenuItem key={each} value={each}>
-                  {artifactKindSpecOf(each)?.label}
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              select
-              size="small"
-              label={galleryTexts.projectLabel}
-              value={projectId}
-              onChange={(event) => setProjectId(event.target.value)}
-              sx={{ minWidth: 180 }}
-            >
-              <MenuItem value="">{galleryTexts.anyProject}</MenuItem>
-              {(projects.data?.items ?? []).map((project) => (
-                <MenuItem key={project.id} value={project.id}>
-                  {project.name}
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              select
-              size="small"
-              label={galleryTexts.sortLabel}
-              value={sort}
-              onChange={(event) => setSort(event.target.value as Sort)}
-              sx={{ minWidth: 170 }}
-            >
-              {sorts.map((each) => (
-                <MenuItem key={each} value={each}>
-                  {galleryTexts.sorts[each]}
-                </MenuItem>
-              ))}
-            </TextField>
-            <ToggleButtonGroup
-              exclusive
-              size="small"
-              value={layout}
-              aria-label={galleryTexts.layoutLabel}
-              onChange={(_, value: Layout | null) => {
-                if (value) setLayout(value)
-              }}
-              sx={{ ml: { sm: 'auto' } }}
-            >
-              <ToggleButton value="cards">{galleryTexts.cards}</ToggleButton>
-              <ToggleButton value="list">{galleryTexts.list}</ToggleButton>
-            </ToggleButtonGroup>
-          </Box>
+
+          {projectId !== '' && (
+            <Box sx={{ mb: 2.5 }}>
+              <Tooltip title={galleryTexts.projectReset} describeChild>
+                <Chip
+                  icon={<AppIcon name="folder" size={14} />}
+                  label={galleryTexts.project(projectName ?? '…')}
+                  onClick={() => setProjectId('')}
+                  onDelete={() => setProjectId('')}
+                />
+              </Tooltip>
+            </Box>
+          )}
 
           {list.isSuccess && rows.length === 0 && (
             <Box sx={{ py: 4, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
@@ -463,20 +487,15 @@ export function ArtifactsView({
               listStyle: 'none',
               m: 0,
               p: 0,
-              ...(layout === 'cards'
-                ? {
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-                    gap: 2,
-                  }
-                : {}),
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
+              gap: 2,
             }}
           >
             {rows.map((row) => (
               <GalleryItem
                 key={row.id}
                 row={row}
-                layout={layout}
                 trash={filter === 'trash'}
                 onTrash={() => toTrash(row)}
                 onRestore={() =>
@@ -490,12 +509,12 @@ export function ArtifactsView({
         </>
       )}
 
-      {creating !== null && (
+      {creating && (
         <ArtifactCreateDialog
           open
           userId={userId}
-          template={creating.template}
-          onClose={() => setCreating(null)}
+          projectId={projectId}
+          onClose={() => setCreating(false)}
         />
       )}
       <Snackbar
@@ -518,80 +537,128 @@ export function ArtifactsView({
           ) : undefined
         }
       />
+      {/* «В корзину» from the page of an artifact: «Вернуть» here (plan 93, АТ9). */}
+      <ArtifactTrashNotice />
+    </Box>
+  )
+}
+
+/** Whether an element has come near the screen; without IntersectionObserver — at once. */
+function useNearScreen<T extends Element>() {
+  const ref = useRef<T | null>(null)
+  const [near, setNear] = useState(() => typeof IntersectionObserver === 'undefined')
+  useEffect(() => {
+    const element = ref.current
+    if (near || element === null) return
+    const observer = new IntersectionObserver(
+      (seen) => {
+        if (seen.some((each) => each.isIntersecting)) setNear(true)
+      },
+      { rootMargin: '200px' },
+    )
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [near])
+  return [ref, near] as const
+}
+
+/**
+ * The picture of a card of a canvas, slides or images: the thumbnail of the first screen, slide or
+ * image core draws (§7.7). Asked once the card comes near the screen, again while it is being
+ * drawn; until then — the icon of the kind. Never the source of a screen.
+ */
+function FrameCover({ row }: { row: Row }) {
+  const trpc = useTRPC()
+  const [ref, near] = useNearScreen<HTMLDivElement>()
+  const thumbs = useQuery({
+    ...trpc.artifact.canvasThumbs.queryOptions({ artifactId: row.id }),
+    enabled: near,
+    retry: false,
+    refetchInterval: (query) =>
+      query.state.data?.pending && query.state.data.thumbs[0]?.url == null ? 4000 : false,
+  })
+  const url = thumbs.data?.thumbs[0]?.url ?? null
+  return (
+    <Box
+      ref={ref}
+      aria-hidden
+      data-cover="picture"
+      sx={{
+        height: COVER_HEIGHT,
+        bgcolor: 'action.hover',
+        display: 'grid',
+        placeItems: 'center',
+        overflow: 'hidden',
+        color: 'text.disabled',
+      }}
+    >
+      {url ? (
+        <Box
+          component="img"
+          src={url}
+          alt=""
+          loading="lazy"
+          sx={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top center' }}
+        />
+      ) : (
+        <ArtifactKindIcon kind={row.kind} size={32} />
+      )}
+    </Box>
+  )
+}
+
+/** The top of a card: a picture for the kinds of screens, the beginning of the text for a document. */
+function Cover({ row, trash }: { row: Row; trash: boolean }) {
+  const view = artifactKindSpecOf(row.kind)?.view
+  // A trashed artifact is not drawn again: the icon of its kind stands there.
+  if (view === 'canvas' && !trash) return <FrameCover row={row} />
+  const text = view === 'markdown' ? row.excerpt : ''
+  return (
+    <Box
+      aria-hidden
+      data-cover="text"
+      sx={{
+        height: COVER_HEIGHT,
+        px: 2,
+        pt: 1.75,
+        bgcolor: 'action.hover',
+        color: 'text.secondary',
+        fontSize: 12.5,
+        lineHeight: 1.55,
+        overflow: 'hidden',
+        overflowWrap: 'anywhere',
+        maskImage: 'linear-gradient(to bottom, #000 60%, transparent)',
+      }}
+    >
+      {view === 'canvas' ? (
+        <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', color: 'text.disabled' }}>
+          <ArtifactKindIcon kind={row.kind} size={32} />
+        </Box>
+      ) : (
+        text || galleryTexts.emptyText
+      )}
     </Box>
   )
 }
 
 function GalleryItem({
   row,
-  layout,
   trash,
   onTrash,
   onRestore,
 }: {
   row: Row
-  layout: Layout
   trash: boolean
   onTrash: () => void
   onRestore: () => void
 }) {
-  const label = artifactKindSpecOf(row.kind)?.label ?? ''
+  // The icon says the kind: the line says when, and the project if there is one.
   const meta = [
-    label,
-    row.project?.name ?? galleryTexts.personal,
     trash && row.purgeAfter
       ? galleryTexts.purgeOn(row.purgeAfter)
       : galleryTexts.updated(row.updatedAt),
+    ...(row.project ? [row.project.name] : []),
   ].join(' · ')
-  const title = (
-    <Typography sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
-      {trash ? (
-        row.title
-      ) : (
-        <Box
-          component={Link}
-          href={`/artifacts/${row.id}`}
-          aria-label={galleryTexts.open(row.title)}
-          sx={{
-            color: 'inherit',
-            textDecoration: 'none',
-            '&:hover': { textDecoration: 'underline' },
-            // The whole card answers the link.
-            ...(layout === 'cards'
-              ? { '&::after': { content: '""', position: 'absolute', inset: 0 } }
-              : {}),
-          }}
-        >
-          {row.title}
-        </Box>
-      )}
-    </Typography>
-  )
-  if (layout === 'list')
-    return (
-      <Box
-        component="li"
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1.5,
-          py: 1.5,
-          borderBottom: 1,
-          borderColor: 'divider',
-        }}
-      >
-        <Box sx={{ display: 'flex', color: 'text.secondary' }} aria-hidden>
-          <ArtifactKindIcon kind={row.kind} />
-        </Box>
-        <Box sx={{ minWidth: 0, flex: 1 }}>
-          {title}
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-            {meta}
-          </Typography>
-        </Box>
-        <RowActions row={row} trash={trash} onTrash={onTrash} onRestore={onRestore} />
-      </Box>
-    )
   return (
     <Box
       component="li"
@@ -604,37 +671,43 @@ function GalleryItem({
         borderColor: 'divider',
         bgcolor: 'background.paper',
         overflow: 'hidden',
+        transition: 'border-color 120ms ease',
         '&:hover': { borderColor: 'text.secondary' },
         '&:focus-within': { outline: '2px solid', outlineColor: 'primary.main' },
+        '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
       }}
     >
-      <Box
-        aria-hidden
-        sx={{
-          height: 120,
-          px: 2,
-          pt: 1.75,
-          bgcolor: 'action.hover',
-          color: 'text.secondary',
-          fontSize: 12.5,
-          lineHeight: 1.5,
-          overflow: 'hidden',
-          maskImage: 'linear-gradient(to bottom, #000 60%, transparent)',
-        }}
-      >
-        {row.excerpt || galleryTexts.emptyText}
-      </Box>
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, p: 1.75 }}>
-        <Box sx={{ display: 'flex', color: 'primary.main', pt: '2px' }} aria-hidden>
-          <ArtifactKindIcon kind={row.kind} />
+      <Cover row={row} trash={trash} />
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, p: 1.5, pl: 1.75 }}>
+        <Box sx={{ display: 'flex', color: 'text.secondary', pt: '3px' }} aria-hidden>
+          <ArtifactKindIcon kind={row.kind} size={16} />
         </Box>
         <Box sx={{ minWidth: 0, flex: 1 }}>
-          {title}
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+          <Typography sx={{ fontWeight: 600, overflowWrap: 'anywhere', lineHeight: 1.4 }}>
+            {trash ? (
+              row.title
+            ) : (
+              <Box
+                component={Link}
+                href={`/artifacts/${row.id}`}
+                aria-label={galleryTexts.open(row.title)}
+                sx={{
+                  color: 'inherit',
+                  textDecoration: 'none',
+                  '&:focus-visible': { outline: 'none' },
+                  // The whole card answers the link.
+                  '&::after': { content: '""', position: 'absolute', inset: 0 },
+                }}
+              >
+                {row.title}
+              </Box>
+            )}
+          </Typography>
+          <Typography variant="body2" sx={{ color: 'text.secondary', mt: 0.25 }}>
             {meta}
           </Typography>
         </Box>
-        <Box sx={{ position: 'relative', zIndex: 1 }}>
+        <Box sx={{ position: 'relative', zIndex: 1, mt: -0.5, mr: -0.5 }}>
           <RowActions row={row} trash={trash} onTrash={onTrash} onRestore={onRestore} />
         </Box>
       </Box>

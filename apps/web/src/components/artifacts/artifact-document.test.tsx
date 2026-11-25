@@ -3,7 +3,8 @@ import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ArtifactDocument } from './artifact-document'
+import { ArtifactNotesPanel } from './artifact-comments'
+import { ArtifactDocument, documentFileName, documentMarkdown } from './artifact-document'
 import type { ArtifactPresence, CabinetArtifact } from './use-artifact'
 
 // The document of an artifact in the cabinet (docs/plan/88-artifacts.md, Ар17, Ар18, 88.10): a
@@ -467,5 +468,92 @@ describe('the document of an artifact (88.10)', () => {
     expect(screen.getByText(/текст появится, как только мы его проверим/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Править/ })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Добавить раздел' })).toBeNull()
+  })
+})
+
+describe('a lighter document (docs/plan/93-artifacts-trim.md, АТ9)', () => {
+  const two = (): CabinetArtifact => {
+    const one = artifact()
+    return {
+      ...one,
+      blocks: [
+        one.blocks[0]!,
+        {
+          ...one.blocks[0]!,
+          key: 'oplata',
+          rank: '00bj',
+          heading: 'Оплата',
+          content: 'Картой или наличными.',
+        },
+      ],
+    }
+  }
+
+  it('has no panel of notes while there are none', async () => {
+    show(artifact())
+    await waitFor(() => expect(listNotes).toHaveBeenCalled())
+    expect(screen.queryByRole('region', { name: 'Заметки к документу' })).toBeNull()
+  })
+
+  it('shows the notes on the page only while «Заметки · N» keeps them open', async () => {
+    listNotes.mockResolvedValue([
+      {
+        id: '019f1a21-1800-7f00-8abc-0000000000c1',
+        anchor: { kind: 'quote', block: 'dostavka', rev: 3, quote: 'с 8 до 21' },
+        body: 'Уточнить время',
+        shared: false,
+        author: { name: 'Вы', own: true },
+        resolved: false,
+        moved: false,
+        replies: [],
+      },
+    ])
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = (open: boolean) => (
+      <QueryClientProvider client={queryClient}>
+        <ArtifactNotesPanel.Provider value={{ open, setOpen: vi.fn() }}>
+          <ArtifactDocument
+            artifact={artifact()}
+            presence={nobody}
+            onChanged={vi.fn()}
+            onAccessLost={vi.fn()}
+          />
+        </ArtifactNotesPanel.Provider>
+      </QueryClientProvider>
+    )
+    const { rerender } = render(view(false))
+    await waitFor(() => expect(listNotes).toHaveBeenCalled())
+    expect(screen.queryByRole('region', { name: 'Заметки к документу' })).toBeNull()
+    rerender(view(true))
+    const notes = await screen.findByRole('region', { name: 'Заметки к документу' })
+    expect(within(notes).getByText('Уточнить время')).toBeTruthy()
+    listNotes.mockResolvedValue([])
+  })
+
+  it('adds a section between two others', async () => {
+    show(two())
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить раздел после «Доставка»' }))
+    await waitFor(() => expect(write).toHaveBeenCalled())
+    const { batch } = write.mock.calls[0]![0] as {
+      batch: { ops: { op: string; after: string | null; kind: string }[] }
+    }
+    expect(batch.ops[0]).toMatchObject({ op: 'insert', after: 'dostavka', kind: 'section' })
+  })
+
+  it('keeps the tools of a section in a box shown on hover and focus', () => {
+    show(artifact())
+    const edit = screen.getByRole('button', { name: 'Править раздел «Доставка»' })
+    expect(edit.closest('.section-tools')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Действия с разделом «Доставка»' })).toBeTruthy()
+  })
+
+  it('is downloaded as Markdown: the title, then each written section', () => {
+    const value = two()
+    value.blocks.push({ ...value.blocks[0]!, key: 'pishet', heading: 'Пишет агент', content: null })
+    expect(documentMarkdown(value)).toBe(
+      '# Тексты для лендинга\n\n## Доставка\n\nПривозим с 8 до 21.\n\nЗвоним за полчаса.\n\n## Оплата\n\nКартой или наличными.\n',
+    )
+    expect(documentFileName('Прайс: весна/лето')).toBe('Прайс весна лето.md')
+    expect(documentFileName('  ')).toBe('Без заголовка.md')
   })
 })

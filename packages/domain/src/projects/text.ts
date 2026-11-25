@@ -23,7 +23,7 @@ export const sectionTagNames = [
   'chat-artifacts',
   'artifact-comment',
   'artifact-view',
-  // The brand of the project (slice 88.15а).
+  // The brand of the project (slice 88.15а; gone with plan 93): still neutralised in old texts.
   'project-brand',
 ] as const
 

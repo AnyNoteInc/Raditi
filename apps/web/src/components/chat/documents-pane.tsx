@@ -11,7 +11,7 @@ import Select from '@mui/material/Select'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { DocumentMarkdown, markdownTitleOf } from '@repo/doc-render/markdown'
-import { artifactImportKindOf, artifactKindCreatable } from '@repo/domain/artifacts'
+import { artifactImportKindOf } from '@repo/domain/artifacts'
 import { PAGE_SANDBOX } from '@repo/domain/pages'
 import {
   chatDocumentsOf,
@@ -375,7 +375,7 @@ export function DocumentsPane({
           href={taskFileHref(taskId, fileId)}
           download={document.name}
         />
-        {artifactKindCreatable(artifactImportKindOf(document.name) ?? '') ? (
+        {artifactImportKindOf(document.name) !== null ? (
           <OpenAsArtifact taskId={taskId} fileId={fileId} />
         ) : null}
         {onPublish ? (
@@ -459,8 +459,9 @@ export function DocumentsPane({
 
 /** The title of the document: its `# …` once its text is read, its name before that. */
 /**
- * «Открыть как артефакт» (docs/plan/88-artifacts.md, Ар3; slice 88.12): a `.md` or `.html` file of
- * the chat becomes a document or a mockup the client edits together with the agent.
+ * «Открыть как артефакт» (docs/plan/88-artifacts.md, Ар3; docs/plan/93-artifacts-trim.md, АТ6): a
+ * `.md` file of the chat becomes a document, an `.html`, `.htm` or `.svg` one a canvas of one screen,
+ * which the client edits together with the agent.
  */
 function OpenAsArtifact({ taskId, fileId }: { taskId: string; fileId: string }) {
   const trpc = useTRPC()

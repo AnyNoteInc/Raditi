@@ -101,6 +101,7 @@ import {
 import { CopyButton } from './copy-button'
 import { FeedDocuments } from './feed-document'
 import { workingPhraseOf } from './working-phrases'
+import { FeedArtifact } from './feed-artifact'
 import { DocRevisions, docRevisionsOf, FeedDoc } from './feed-doc'
 import { FeedFile } from './feed-file'
 import { FeedMemoryChange } from './feed-memory'
@@ -1287,6 +1288,21 @@ export function FeedList({
                     key={docId}
                     docId={docId}
                     open={actions.shownAgentDocument === docId}
+                    {...(actions.onOpenAgentDocument
+                      ? { onOpen: actions.onOpenAgentDocument }
+                      : {})}
+                  />
+                ))}
+              </Box>
+            ) : entry.kind === 'agentArtifacts' ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                {entry.artifacts.map((artifact) => (
+                  <FeedArtifact
+                    key={artifact.id}
+                    artifactId={artifact.id}
+                    kind={artifact.kind}
+                    open={actions.shownAgentDocument === artifact.id}
+                    {...(actions.taskId ? { taskId: actions.taskId } : {})}
                     {...(actions.onOpenAgentDocument
                       ? { onOpen: actions.onOpenAgentDocument }
                       : {})}

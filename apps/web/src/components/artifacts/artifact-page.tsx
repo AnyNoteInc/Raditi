@@ -8,6 +8,7 @@ import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
 import Drawer from '@mui/material/Drawer'
 import IconButton from '@mui/material/IconButton'
+import LinearProgress from '@mui/material/LinearProgress'
 import Link from '@mui/material/Link'
 import MenuItem from '@mui/material/MenuItem'
 import Skeleton from '@mui/material/Skeleton'
@@ -15,39 +16,54 @@ import TextField from '@mui/material/TextField'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import useMediaQuery from '@mui/material/useMediaQuery'
-import { artifactKindSpecOf, artifactRoleAtLeast, artifactSavedLine } from '@repo/domain/artifacts'
+import { artifactRoleAtLeast } from '@repo/domain/artifacts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import NextLink from 'next/link'
-import { useRouter } from 'next/navigation'
-import { useCallback, useState, type ReactNode } from 'react'
+import { useCallback, useContext, useId, useMemo, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { uuidv7 } from '@/components/chat/uuid'
 import { useTRPC } from '@/trpc/client'
 
 import { ArtifactBody, artifactBodyWide } from './artifact-body'
-import { ArtifactKindIcon } from './artifact-kind-icon'
-import { documentTexts, galleryTexts } from './artifact-texts'
+import {
+  ArtifactNotesPanel,
+  ArtifactSharingAvailable,
+  artifactNotesShown,
+  useArtifactNotesCount,
+} from './artifact-comments'
+import { ARTIFACT_HEAD_NARROW, ArtifactHeadButton, artifactHeadSx } from './artifact-head'
+import { documentTexts, formatDateTime } from './artifact-texts'
 import { useArtifact, type ArtifactPresence, type CabinetArtifact } from './use-artifact'
 
-// The page of an artifact (docs/plan/88-artifacts.md, Ар48; boards C-doc, D-together): the
-// artifact large, its sections on the left, and on the right the chat of this artifact of the
-// reader — their own chats with it (the last one by default) and «Новый чат с артефактом». A chat
-// of someone else never opens here. On a phone the chat slides out from the side.
+// The page of an artifact (docs/plan/88-artifacts.md, Ар48; boards C-doc, D-together;
+// docs/plan/93-artifacts-trim.md, АТ9): one calm row of a head — back, the title, who is here,
+// «Заметки · N» when there are notes, «Попросить агента», then what the owner does — and the
+// artifact large. «Попросить агента» opens the reader's own chat of it on the side (a drawer on a
+// narrower screen); a chat of someone else never opens here.
 
 export const pageTexts = Object.freeze({
-  back: 'Артефакты',
-  chat: 'Чат артефакта',
-  openChat: 'Открыть чат',
-  newChat: 'Новый чат с артефактом',
-  noChats: 'Агент ещё не работал с этим артефактом. Напишите, что сделать, — начнётся новый чат.',
+  back: 'Все артефакты',
   ask: 'Попросить агента',
+  hideAsk: 'Свернуть',
+  openChat: 'Открыть чат',
+  newChat: 'Новый чат',
+  noChats: 'Напишите, что сделать, — агент начнёт новый чат с этим артефактом.',
+  request: 'Что сделать?',
   askPlaceholder: 'Например: допишите раздел «Доставка» и проверьте цены',
   send: 'Отправить',
-  sent: 'Отправлено.',
   sendFailed: 'Не получилось отправить. Попробуйте ещё раз.',
   whichChat: 'Чат',
   untitledChat: 'Чат без названия',
+  working: 'Агент работает — правки появятся здесь сами.',
+  waiting: 'Агент ждёт вашего ответа в чате.',
+  answered: 'Агент ответил. Его правки уже здесь.',
+  stopped: 'Агент не закончил работу. Подробности — в чате.',
+  notes: (open: number) => `Заметки · ${open}`,
+  notesLabel: (open: number, shown: boolean) =>
+    `${shown ? 'Скрыть' : 'Показать'} заметки: открытых ${open}`,
+  saved: 'Сохранено',
+  changed: (at: string) => `изменено ${formatDateTime(at)}`,
   present: (names: string) => `Сейчас здесь: ${names}`,
   agentHere: (label: string) => `Агент: ${label}`,
   more: (count: number) => `ещё ${count}`,
@@ -68,7 +84,13 @@ export function ArtifactPresenceBar({ presence }: { presence: ArtifactPresence |
   if (others.length === 0 && presence.agents.length === 0) return null
   return (
     <Box
-      sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        flexShrink: 0,
+        [ARTIFACT_HEAD_NARROW]: { display: 'none' },
+      }}
       aria-label={pageTexts.present(
         [...others.map((person) => person.name), ...presence.agents.map((each) => each.label)].join(
           ', ',
@@ -118,7 +140,7 @@ export function ArtifactTitle({
   const write = useMutation(trpc.artifact.write.mutationOptions())
   const [draft, setDraft] = useState<string | null>(null)
   const canEdit = artifactRoleAtLeast(artifact.role, 'edit')
-  const fontSize = size === 'large' ? { xs: 22, md: 28 } : 17
+  const fontSize = size === 'large' ? { xs: 18, md: 22 } : 16
   if (draft !== null)
     return (
       <TextField
@@ -146,13 +168,21 @@ export function ArtifactTitle({
             .finally(onChanged)
         }}
         slotProps={{ htmlInput: { maxLength: 200 } }}
-        sx={{ minWidth: 260 }}
+        sx={{ width: '100%', maxWidth: 520 }}
       />
     )
   return (
     <Typography
       component="h1"
-      sx={{ fontSize, fontWeight: 650, lineHeight: 1.25, overflowWrap: 'anywhere' }}
+      title={artifact.title}
+      sx={{
+        fontSize,
+        fontWeight: 650,
+        lineHeight: 1.3,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      }}
     >
       {canEdit ? (
         <Box
@@ -162,9 +192,11 @@ export function ArtifactTitle({
           onClick={() => setDraft(artifact.title)}
           sx={{
             all: 'inherit',
+            display: 'inline',
             cursor: 'text',
             borderRadius: '6px',
             '&:hover, &:focus-visible': { bgcolor: 'action.hover' },
+            '&:focus-visible': { outline: 2, outlineColor: 'primary.main', outlineStyle: 'solid' },
           }}
         >
           {artifact.title}
@@ -176,10 +208,26 @@ export function ArtifactTitle({
   )
 }
 
-/** The chat of this artifact of the reader (Ар48): their chats with it, and a word to the agent. */
-function ArtifactChatPanel({ artifact }: { artifact: CabinetArtifact }) {
+/** Where the reader's request to the agent stands, by the status of its chat (spec §7). */
+function stageOf(status: string | undefined): 'working' | 'waiting' | 'answered' | 'stopped' {
+  if (status === 'awaiting_user' || status === 'awaiting_approval') return 'waiting'
+  if (status === 'done') return 'answered'
+  if (status === 'failed' || status === 'cancelled' || status === 'rolled_back') return 'stopped'
+  return 'working'
+}
+
+/**
+ * «Попросить агента» (Ар48; АТ9): the reader's own chats with this artifact (the last one by
+ * default) and a word to the agent; after it, where the work stands and the way to the chat.
+ */
+export function ArtifactAskPanel({
+  artifact,
+  onClose,
+}: {
+  artifact: CabinetArtifact
+  onClose: () => void
+}) {
   const trpc = useTRPC()
-  const router = useRouter()
   const queryClient = useQueryClient()
   const chats = useQuery(trpc.artifact.chats.queryOptions({ artifactId: artifact.id }))
   const create = useMutation(trpc.task.create.mutationOptions())
@@ -188,8 +236,18 @@ function ArtifactChatPanel({ artifact }: { artifact: CabinetArtifact }) {
   const [text, setText] = useState('')
   const [sent, setSent] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
+  const titleId = useId()
   const list = chats.data ?? []
   const taskId = chosen === 'new' ? null : (chosen ?? list[0]?.taskId ?? null)
+  const head = useQuery({
+    ...trpc.task.get.queryOptions({ taskId: sent ?? '' }),
+    enabled: sent !== null,
+    refetchInterval: (query) =>
+      stageOf((query.state.data as { status?: string } | undefined)?.status) === 'working'
+        ? 3000
+        : false,
+  })
+  const stage = sent === null ? null : stageOf(head.data?.status)
 
   async function send() {
     const words = text.trim()
@@ -214,6 +272,10 @@ function ArtifactChatPanel({ artifact }: { artifact: CabinetArtifact }) {
       void queryClient.invalidateQueries({
         queryKey: trpc.artifact.chats.queryKey({ artifactId: artifact.id }),
       })
+      if (taskId !== null)
+        void queryClient.invalidateQueries({
+          queryKey: trpc.task.get.queryKey({ taskId }),
+        })
     } catch {
       setFailed(true)
     }
@@ -222,12 +284,19 @@ function ArtifactChatPanel({ artifact }: { artifact: CabinetArtifact }) {
   return (
     <Box
       component="aside"
-      aria-label={pageTexts.chat}
+      aria-labelledby={titleId}
       sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, p: 2 }}
     >
-      <Typography component="h2" sx={{ fontSize: 16, fontWeight: 650 }}>
-        {pageTexts.chat}
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography id={titleId} component="h2" sx={{ fontSize: 16, fontWeight: 650, flex: 1 }}>
+          {pageTexts.ask}
+        </Typography>
+        <Tooltip title={pageTexts.hideAsk}>
+          <IconButton size="small" aria-label={pageTexts.hideAsk} onClick={onClose}>
+            <AppIcon name="close" size={16} />
+          </IconButton>
+        </Tooltip>
+      </Box>
       {list.length > 0 ? (
         <TextField
           select
@@ -244,19 +313,16 @@ function ArtifactChatPanel({ artifact }: { artifact: CabinetArtifact }) {
           <MenuItem value="new">{pageTexts.newChat}</MenuItem>
         </TextField>
       ) : (
-        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-          {pageTexts.noChats}
-        </Typography>
-      )}
-      {taskId !== null && (
-        <Link component={NextLink} href={`/chats/${taskId}`} variant="body2">
-          {pageTexts.openChat}
-        </Link>
+        chats.isSuccess && (
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            {pageTexts.noChats}
+          </Typography>
+        )
       )}
       <TextField
         multiline
         minRows={3}
-        label={pageTexts.ask}
+        label={pageTexts.request}
         placeholder={pageTexts.askPlaceholder}
         value={text}
         onChange={(event) => setText(event.target.value)}
@@ -264,35 +330,43 @@ function ArtifactChatPanel({ artifact }: { artifact: CabinetArtifact }) {
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void send()
         }}
       />
-      <Button
-        variant="contained"
-        onClick={() => void send()}
-        disabled={text.trim() === '' || create.isPending || message.isPending}
-        endIcon={<AppIcon name="send" size={16} />}
-      >
-        {pageTexts.send}
-      </Button>
-      {sent !== null && (
-        <Alert
-          severity="success"
-          action={
-            <Button color="inherit" size="small" onClick={() => router.push(`/chats/${sent}`)}>
-              {pageTexts.openChat}
-            </Button>
-          }
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        {taskId !== null && (
+          <Link component={NextLink} href={`/chats/${taskId}`} variant="body2" sx={{ mr: 'auto' }}>
+            {pageTexts.openChat}
+          </Link>
+        )}
+        <Button
+          variant="contained"
+          disableElevation
+          onClick={() => void send()}
+          disabled={text.trim() === '' || create.isPending || message.isPending}
+          endIcon={<AppIcon name="send" size={16} />}
+          sx={{ ml: 'auto' }}
         >
-          {pageTexts.sent}
-        </Alert>
+          {pageTexts.send}
+        </Button>
+      </Box>
+      {stage !== null && (
+        <Box role="status" sx={{ display: 'grid', gap: 1 }}>
+          {stage === 'working' && <LinearProgress aria-hidden />}
+          <Typography variant="body2" color={stage === 'stopped' ? 'error' : 'text.secondary'}>
+            {pageTexts[stage]}
+          </Typography>
+          {sent !== taskId && (
+            <Link component={NextLink} href={`/chats/${sent}`} variant="body2">
+              {pageTexts.openChat}
+            </Link>
+          )}
+        </Box>
       )}
       {failed && <Alert severity="error">{pageTexts.sendFailed}</Alert>}
     </Box>
   )
 }
 
-/** The outline of a document: its sections, a click scrolls to one. */
-function Outline({ artifact }: { artifact: CabinetArtifact }) {
-  const sections = artifact.blocks.filter((block) => block.kind === 'section')
-  if (sections.length === 0) return null
+/** The outline of a long document: its sections, a click scrolls to one. */
+function Outline({ sections }: { sections: CabinetArtifact['blocks'] }) {
   return (
     <Box component="nav" aria-label={documentTexts.sections} sx={{ position: 'sticky', top: 16 }}>
       <Typography variant="overline" sx={{ color: 'text.secondary' }}>
@@ -304,7 +378,7 @@ function Outline({ artifact }: { artifact: CabinetArtifact }) {
             <Link
               href={`#section-${block.key}`}
               underline="hover"
-              color="text.primary"
+              color="text.secondary"
               variant="body2"
               sx={{ display: 'block', py: 0.5 }}
             >
@@ -317,7 +391,10 @@ function Outline({ artifact }: { artifact: CabinetArtifact }) {
   )
 }
 
-/** The page `/artifacts/<id>`. `actions` — what the slices of the history and the pages add. */
+/** An outline stands beside a document of this many sections and more. */
+const OUTLINE_SECTIONS = 3
+
+/** The page `/artifacts/<id>`. `actions` — what the owner does from the head (history, share, ⋯). */
 export function ArtifactPage({
   artifactId,
   actions,
@@ -328,9 +405,14 @@ export function ArtifactPage({
   const [block, setBlock] = useState<string | null>(null)
   const { read, accessLost, presence, reread, discardAccess } = useArtifact(artifactId, { block })
   const wide = useMediaQuery('(min-width:1200px)', { noSsr: true })
-  const [chatOpen, setChatOpen] = useState(false)
+  const [askOpen, setAskOpen] = useState(false)
+  const [notesOpen, setNotesOpen] = useState(false)
+  const notesPanel = useMemo(() => ({ open: notesOpen, setOpen: setNotesOpen }), [notesOpen])
   const onEditing = useCallback((key: string | null) => setBlock(key), [])
+  const sharing = useContext(ArtifactSharingAvailable)
   const artifact = read.data
+  const notesOn = artifact != null && !accessLost && artifactNotesShown(artifact, sharing)
+  const notes = useArtifactNotesCount(artifactId, notesOn)
 
   if (read.isPending) return <Skeleton variant="rounded" height={320} />
   if (!artifact || accessLost)
@@ -339,104 +421,113 @@ export function ArtifactPage({
         {accessLost ? documentTexts.notFound : documentTexts.loadFailed}
       </Alert>
     )
-  const spec = artifactKindSpecOf(artifact.kind)
-  const chat = <ArtifactChatPanel artifact={artifact} />
-  // A mockup and a table take the width of the page: no outline, no column of text.
+  // The screens of a canvas, slides and pictures take the width of the page: no outline.
   const full = artifactBodyWide(artifact.kind)
+  const sections = artifact.blocks.filter((each) => each.kind === 'section')
+  const outline = wide && !full && sections.length >= OUTLINE_SECTIONS
+  const ask = <ArtifactAskPanel artifact={artifact} onClose={() => setAskOpen(false)} />
+  const columns = [outline ? '180px' : null, 'minmax(0, 1fr)', wide && askOpen ? '360px' : null]
+    .filter(Boolean)
+    .join(' ')
 
   return (
     <Box sx={{ width: '100%', maxWidth: 1440, mx: 'auto' }}>
-      <Link
-        component={NextLink}
-        href="/artifacts"
-        underline="hover"
-        variant="body2"
-        sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, mb: 1.5 }}
-      >
-        <AppIcon name="back" size={16} />
-        {pageTexts.back}
-      </Link>
       <Box
         component="header"
-        sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 1.5, mb: 3 }}
+        sx={{
+          ...artifactHeadSx,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          minHeight: 48,
+          mb: { xs: 2, md: 3 },
+        }}
       >
-        <Box sx={{ display: 'flex', color: 'primary.main', pt: 0.75 }} aria-hidden>
-          <ArtifactKindIcon kind={artifact.kind} size={24} />
-        </Box>
-        <Box sx={{ minWidth: 0, flex: '1 1 320px' }}>
+        <Tooltip title={pageTexts.back}>
+          <IconButton
+            component={NextLink}
+            href="/artifacts"
+            aria-label={pageTexts.back}
+            sx={{ width: 40, height: 40, ml: -1, flexShrink: 0 }}
+          >
+            <AppIcon name="back" size={18} />
+          </IconButton>
+        </Tooltip>
+        <Box sx={{ minWidth: 0, flex: '1 1 auto' }}>
           <ArtifactTitle artifact={artifact} onChanged={reread} />
-          <Typography variant="body2" sx={{ color: 'text.secondary', mt: 0.5 }}>
-            {[
-              spec?.label,
-              artifact.project?.name ?? galleryTexts.personal,
-              artifact.version > 0 ? artifactSavedLine(artifact.version) : null,
-            ]
+          <Typography
+            variant="caption"
+            sx={{
+              display: 'block',
+              color: 'text.secondary',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {[artifact.project?.name, pageTexts.saved, pageTexts.changed(artifact.updatedAt)]
               .filter(Boolean)
               .join(' · ')}
           </Typography>
         </Box>
         <ArtifactPresenceBar presence={presence} />
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-          {actions?.(artifact, reread)}
-          {!wide && (
-            <Button
-              variant="outlined"
-              startIcon={<AppIcon name="chat" size={16} />}
-              onClick={() => setChatOpen(true)}
+        {notes.total > 0 && (
+          <Chip
+            label={pageTexts.notes(notes.open)}
+            aria-label={pageTexts.notesLabel(notes.open, notesOpen)}
+            aria-pressed={notesOpen}
+            variant={notesOpen ? 'filled' : 'outlined'}
+            color={notesOpen ? 'primary' : 'default'}
+            onClick={() => setNotesOpen((was) => !was)}
+            sx={{ flexShrink: 0 }}
+          />
+        )}
+        <ArtifactHeadButton
+          variant="text"
+          color="inherit"
+          icon={<AppIcon name="chat" size={16} />}
+          label={pageTexts.ask}
+          aria-pressed={askOpen}
+          onClick={() => setAskOpen((was) => !was)}
+          sx={askOpen ? { bgcolor: 'action.selected' } : undefined}
+        />
+        {actions?.(artifact, reread)}
+      </Box>
+      <ArtifactNotesPanel.Provider value={notesPanel}>
+        <Box sx={{ display: 'grid', gap: 4, gridTemplateColumns: columns, alignItems: 'start' }}>
+          {outline && <Outline sections={sections} />}
+          <Box
+            component="main"
+            sx={{ minWidth: 0, width: '100%', maxWidth: full ? 'none' : 760, mx: 'auto' }}
+          >
+            <ArtifactBody
+              artifact={artifact}
+              presence={presence}
+              onChanged={reread}
+              onAccessLost={discardAccess}
+              onEditing={onEditing}
+              place="page"
+            />
+          </Box>
+          {wide && askOpen && (
+            <Box
+              sx={{
+                position: 'sticky',
+                top: 16,
+                borderRadius: '16px',
+                border: 1,
+                borderColor: 'divider',
+                bgcolor: 'background.paper',
+              }}
             >
-              {pageTexts.chat}
-            </Button>
+              {ask}
+            </Box>
           )}
         </Box>
-      </Box>
-      <Box
-        sx={{
-          display: 'grid',
-          gap: 3,
-          gridTemplateColumns: wide
-            ? full
-              ? 'minmax(0, 1fr) 340px'
-              : '200px minmax(0, 1fr) 340px'
-            : 'minmax(0, 1fr)',
-          alignItems: 'start',
-        }}
-      >
-        {wide && !full && <Outline artifact={artifact} />}
-        <Box component="main" sx={{ minWidth: 0, maxWidth: full ? 'none' : 820 }}>
-          <ArtifactBody
-            artifact={artifact}
-            presence={presence}
-            onChanged={reread}
-            onAccessLost={discardAccess}
-            onEditing={onEditing}
-            place="page"
-          />
-        </Box>
-        {wide && (
-          <Box
-            sx={{
-              position: 'sticky',
-              top: 16,
-              borderRadius: '16px',
-              border: 1,
-              borderColor: 'divider',
-              bgcolor: 'background.paper',
-            }}
-          >
-            {chat}
-          </Box>
-        )}
-      </Box>
+      </ArtifactNotesPanel.Provider>
       {!wide && (
-        <Drawer anchor="right" open={chatOpen} onClose={() => setChatOpen(false)}>
-          <Box sx={{ width: 'min(100vw, 380px)' }}>
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end', p: 1 }}>
-              <IconButton aria-label="Закрыть" onClick={() => setChatOpen(false)}>
-                <AppIcon name="close" size={18} />
-              </IconButton>
-            </Box>
-            {chat}
-          </Box>
+        <Drawer anchor="right" open={askOpen} onClose={() => setAskOpen(false)}>
+          <Box sx={{ width: 'min(100vw, 380px)' }}>{ask}</Box>
         </Drawer>
       )}
     </Box>

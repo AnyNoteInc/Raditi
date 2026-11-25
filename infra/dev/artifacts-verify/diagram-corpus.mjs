@@ -1,6 +1,7 @@
 // The corpus of spike 7 (docs/research/2026-11-artifacts/spikes/s7-mermaid/corpus.mjs), copied as
-// the stand's own data for «Схема» (docs/plan/88-artifacts.md, 88.24г): 30 diagrams written the way
-// an agent writes them for a small business, and hostile probes. All text is synthetic.
+// the stand's own data for the renderer of diagrams (docs/plan/88-artifacts.md, 88.24г; the
+// diagrams of chat answers, plan 91): 30 diagrams written the way an agent writes them for a small
+// business, and hostile probes. All text is synthetic.
 
 const NBSP = ' '
 const BT = '`'

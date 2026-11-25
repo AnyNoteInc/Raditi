@@ -27,8 +27,9 @@ import { readOutboxArchive } from '@repo/snapshots'
 // What a turn put from its outbox into artifacts (docs/plan/88-artifacts.md, §7.5; slice 88.12):
 // the files `artifact_file_put` reserved — a picture or a font, checked by its type and first
 // bytes (an SVG as a page is) and put into the artifacts bucket — and the imports of
-// `artifact_import` — a `.md`, `.html`, `.svg` or `.csv` become the blocks of a new artifact, or
-// the new content of one the chat may write. The blocks are the agent's writes: they wait for the
+// `artifact_import` — a `.md` becomes the sections of a document, a `.html`, `.htm` or `.svg` the
+// one screen of a canvas (docs/plan/93-artifacts-trim.md, АТ6) — of a new artifact, or the new
+// content of one the chat may write. The blocks are the agent's writes: they wait for the
 // check of the end of the turn as any other (§7.3), so this runs before it. The outbox was already
 // scanned for the keys of the turn and the values of the client (`readOutboxArchive({ refused })`).
 // A file the artifacts took is no file of the chat. Never throws: what did not come true is a line
@@ -65,24 +66,36 @@ function batchesOf(ops: ArtifactOp[]): ArtifactOp[][] {
   return out
 }
 
-/** Insertions of imported blocks, in order after `after`. */
+/**
+ * Insertions of imported blocks, in order after `after` at the top: a block that names a parent (a
+ * part of the screen of a canvas) goes after the last one of that parent. Every block gets a new
+ * key under `prefix`; a parent is named by its new key.
+ */
 function insertsOf(
   blocks: readonly ImportedBlock[],
   after: string | null,
   prefix: string,
 ): ArtifactOp[] {
-  let last = after
+  const keys = new Map<string, string>()
+  const last = new Map<string | null, string | null>([[null, after]])
   return blocks.map((block, at) => {
     const key = `${prefix}${at + 1}`
+    if (block.key !== undefined) keys.set(block.key, key)
+    const parent = block.parent === undefined ? null : (keys.get(block.parent) ?? null)
+    const props = {
+      ...block.props,
+      ...(block.heading === undefined ? {} : { heading: block.heading }),
+    }
     const op: ArtifactOp = {
       op: 'insert',
       block: key,
-      after: last,
+      after: last.get(parent) ?? null,
+      ...(parent === null ? {} : { parent }),
       kind: block.kind,
       content: block.content,
-      ...(block.heading === undefined ? {} : { props: { heading: block.heading } }),
+      ...(Object.keys(props).length === 0 ? {} : { props }),
     }
-    last = key
+    last.set(parent, key)
     return op
   })
 }
@@ -189,8 +202,6 @@ export class ArtifactOutbox {
     const imported = artifactImportOf(name, text, {
       blockBytes: artifactLimits.blockBytes,
       blocks: artifactLimits.blocks,
-      tableRows: artifactLimits.tableRows,
-      columns: 50,
     })
     if (!imported.ok) return refuse(imported.problem)
     const actor = {

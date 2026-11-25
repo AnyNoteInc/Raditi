@@ -58,22 +58,22 @@ describe.skipIf(!databaseUrl)('the outbox of a turn into artifacts with PostgreS
         select: { id: true },
       })
     ).id
-    const { id: mockupId } = await createArtifact(db, {
+    const { id: canvasId } = await createArtifact(db, {
       workspaceId,
-      kind: 'mockup',
-      title: 'Макет',
+      kind: 'canvas',
+      title: 'Холст',
       actor: { kind: 'user', userId },
     })
     const file = await reserveArtifactFile(db, {
       taskId,
       turnNo: 1,
-      artifactId: mockupId,
+      artifactId: canvasId,
       fileName: 'logo.png',
     })
     const bad = await reserveArtifactFile(db, {
       taskId,
       turnNo: 1,
-      artifactId: mockupId,
+      artifactId: canvasId,
       fileName: 'fake.png',
     })
     const imported = await reserveArtifactImport(db, {
@@ -116,6 +116,48 @@ describe.skipIf(!databaseUrl)('the outbox of a turn into artifacts with PostgreS
     ).toEqual({ state: 'done' })
   })
 
+  it('imports a page as the one screen of a canvas (docs/plan/92, АТ6)', async () => {
+    const taskId = (
+      await db.task.create({
+        data: { workspaceId, createdById: userId, status: 'running' },
+        select: { id: true },
+      })
+    ).id
+    const imported = await reserveArtifactImport(db, {
+      taskId,
+      turnNo: 1,
+      fileName: 'page.html',
+      artifactId: null,
+      title: null,
+      personal: true,
+    })
+    const outbox = await packOutbox([
+      {
+        name: 'page.html',
+        bytes:
+          '<html><head><title>Цены</title><style>h1{color:red}</style></head><body><h1>Цены</h1><script>1</script></body></html>',
+      },
+    ])
+    const taken = await new ArtifactOutbox({ db, storage: { put } }).take({
+      taskId,
+      turn: 1,
+      outbox,
+    })
+    expect([...taken]).toEqual(['page.html'])
+    const canvas = await readArtifact(db, {
+      artifactId: imported.artifactId,
+      actor: { kind: 'agent', taskId, turnNo: 1 },
+    })
+    expect(canvas.kind).toBe('canvas')
+    expect(canvas.title).toBe('Цены')
+    const frame = canvas.blocks.find((block) => block.kind === 'frame')
+    expect(frame?.parent).toBeNull()
+    expect(frame?.props).toMatchObject({ name: 'Главная', path: '/' })
+    const parts = canvas.blocks.filter((block) => block.kind !== 'frame')
+    expect(parts.map((block) => block.kind).toSorted()).toEqual(['html', 'script', 'style'])
+    expect(parts.every((block) => block.parent === frame?.key)).toBe(true)
+  })
+
   it('closes the reservations of a turn that left nothing', async () => {
     const taskId = (
       await db.task.create({
@@ -125,8 +167,8 @@ describe.skipIf(!databaseUrl)('the outbox of a turn into artifacts with PostgreS
     ).id
     const { id } = await createArtifact(db, {
       workspaceId,
-      kind: 'mockup',
-      title: 'Макет 2',
+      kind: 'canvas',
+      title: 'Холст 2',
       actor: { kind: 'user', userId },
     })
     const file = await reserveArtifactFile(db, {
@@ -147,8 +189,8 @@ describe.skipIf(!databaseUrl)('the outbox of a turn into artifacts with PostgreS
   it('the collector gives back the objects of uploads that never came and of purged artifacts', async () => {
     const { id } = await createArtifact(db, {
       workspaceId,
-      kind: 'mockup',
-      title: 'Макет 3',
+      kind: 'canvas',
+      title: 'Холст 3',
       actor: { kind: 'user', userId },
     })
     const upload = await startArtifactFileUpload(db, {

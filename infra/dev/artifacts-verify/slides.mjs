@@ -99,14 +99,19 @@ export async function slidesOnChromium({ root, databaseUrl, check }) {
       userId: user.id,
       appEnv: 'development',
       kind: 'slides',
-      title: 'Презентация компании',
+      title: 'Новая презентация',
       projectId: null,
       templateId: 'company-deck',
     })
     const person = { kind: 'user', userId: user.id }
     const read = await dbModule.readArtifact(db, { artifactId: deck.id, actor: person })
     const frames = read.blocks.filter((block) => block.kind === 'frame')
-    check('the deck of the template is five slides with their notes', frames.length === 5)
+    check(
+      'the deck of the template is seven slides on the theme',
+      frames.length === 7 &&
+        read.blocks[0]?.kind === 'style' &&
+        read.blocks[0]?.key === 'deck-theme',
+    )
 
     // 88.25а — a slide is drawn once, at 1280×720, whatever widths were asked.
     const layout = await renderer.render({

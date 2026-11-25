@@ -211,7 +211,7 @@ module.exports = {
     {
       name: 'doc-render-npm',
       comment:
-        'doc-render is React, its server renderer, react-markdown and remark-gfm (Ст11), and ECharts for the charts of a report drawn on the server (plan 88, §7.13, 88.28): no MUI, no input or output, no unified pipeline of its own.',
+        'doc-render is React, its server renderer, react-markdown and remark-gfm (Ст11): no MUI, no input or output, no unified pipeline of its own.',
       severity: 'error',
       from: { path: '^packages/doc-render/src/', pathNot: '\\.test\\.ts$' },
       to: {
@@ -219,7 +219,7 @@ module.exports = {
         pathNot: [
           '^packages/(domain|doc-render)/',
           ...npm(
-            'react|react-dom|react-markdown|remark-gfm|echarts|@types/hast|@types/react|@types/react-dom',
+            'react|react-dom|react-markdown|remark-gfm|@types/hast|@types/react|@types/react-dom',
           ),
           // The types of the hast tree: a module of @types/hast alone, which the cruiser leaves unresolved.
           '^hast$',

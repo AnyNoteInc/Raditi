@@ -375,7 +375,7 @@ describe('TelegramJobs.deliver', () => {
     const h = harness({
       events: [
         result,
-        row(3n, own, 'table', true),
+        row(3n, own, 'slides', true),
         row(4n, foreign, 'document', false),
         row(5n, gone, 'document', false),
       ],
@@ -393,7 +393,7 @@ describe('TelegramJobs.deliver', () => {
     })
     await h.jobs.deliver({ taskId: TASK, kind: 'answered', attempt: 1, turnNo: 2 })
     const text = h.sent.at(-1)?.text ?? ''
-    expect(text).toContain('Создана таблица «Прайс»')
+    expect(text).toContain('Создана презентация «Прайс»')
     expect(text).not.toContain('Чужой план')
     expect(text).not.toContain('Удалённый')
     expect(text.match(/Артефакт обновлён/g)).toHaveLength(2)

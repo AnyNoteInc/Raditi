@@ -1,4 +1,4 @@
-import { artifactBrandOf, artifactRole, readArtifact, type PrismaClient } from '@repo/db'
+import { artifactRole, readArtifact, type PrismaClient } from '@repo/db'
 import type * as dbModule from '@repo/db'
 import type * as artifactDomain from '@repo/domain/artifacts'
 import { expect, it, vi } from 'vitest'
@@ -15,7 +15,6 @@ vi.mock('@repo/domain/artifacts', async (importOriginal) => ({
 }))
 vi.mock('@repo/db', async (importOriginal) => ({
   ...(await importOriginal<typeof dbModule>()),
-  artifactBrandOf: vi.fn(),
   artifactRole: vi.fn(),
   readArtifact: vi.fn(),
 }))
@@ -29,7 +28,6 @@ it('queues missing thumbnails again for a new renderer or after the retry window
     seq: 5,
     blocks: [{ key: 'home', kind: 'frame', parent: null, rev: 2, content: null, props: {} }],
   } as Awaited<ReturnType<typeof readArtifact>>)
-  vi.mocked(artifactBrandOf).mockResolvedValue(null)
   const dedupeKeys = new Set<string>()
   const db = {
     artifact: { findUniqueOrThrow: async () => ({ workspaceId: 'workspace' }) },

@@ -97,7 +97,7 @@ const nextConfig: NextConfig = {
     // Every path but a page of the agent (`/v/<token>`, docs/plan/67-agent-documents.md, Д3): Next
     // sets these before a route answers and never lets the route replace them, and a page needs
     // its own sandboxed policy. On the cabinet's host /v/ is not found (proxy.ts). The edit frame of
-    // a mockup (`/api/artifact-frame/<token>`, docs/plan/88-artifacts.md, Ар9) sends its own too.
+    // a screen (`/api/artifact-frame/<token>`, docs/plan/88-artifacts.md, Ар9) sends its own too.
     return [
       { source: '/((?!v/|api/artifact-frame/).*)', headers: securityHeaders },
       // The page of a link to an artifact (docs/plan/88-artifacts.md, Ар33; spike 8): a later entry,

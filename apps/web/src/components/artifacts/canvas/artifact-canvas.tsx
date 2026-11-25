@@ -7,9 +7,14 @@ import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
+import Drawer from '@mui/material/Drawer'
+import IconButton from '@mui/material/IconButton'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
 import TextField from '@mui/material/TextField'
 import ToggleButton from '@mui/material/ToggleButton'
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import {
   ARTIFACT_SANDBOX,
@@ -28,11 +33,14 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { keepChatDraft } from '@/components/chat/chat-draft'
 import { useTRPC } from '@/trpc/client'
 
 import type { ArtifactBodyProps } from '../artifact-body-props'
-import { ArtifactMockup } from '../mockup/artifact-mockup'
+import { ArtifactFrame } from '../frame/artifact-frame'
+import { FrameFilesDialog } from '../frame/frame-files'
+import { FrameSettings } from '../frame/frame-settings'
 import { canvasTexts } from './canvas-texts'
 
 // «Холст» (docs/plan/88-artifacts.md, Ар8, Ар49, §7.7; spike 6; board C-canvas; slice 88.15): a
@@ -40,10 +48,21 @@ import { canvasTexts } from './canvas-texts'
 // twice — at the width of a computer and of a phone —; both views are thumbnails the renderer drew,
 // and only frames in view at a scale of 30 % and more become live, four at most, hidden while the
 // board zooms. A frame on the board never takes the pointer: a cover lies over it, and its content
-// is worked with only in «Открыть». Narrower than 600 px the board is a list of thumbnails of the
-// phone view (Ар49).
+// is worked with only in «Открыть», which shows the screen in place of the board with «Все экраны»
+// back. Narrower than 600 px the board is a list of thumbnails of the phone view (Ар49).
+//
+// A canvas of one screen — a page, a prototype, a calculator — opens straight on that screen, live,
+// with «Настройки» beside it; «Экраны» shows the board, «Добавить экран» grows it into a site
+// (docs/plan/93-artifacts-trim.md, АТ6). «Настройки» and «Файлы» are in the header of the board too.
 
-type Tool = 'select' | 'hand' | 'note' | 'pin'
+type Tool = 'select' | 'note' | 'pin'
+
+const TOOLS: readonly { value: Tool; icon: AppIconName; label: string; hint: string }[] = [
+  { value: 'select', icon: 'pointer', label: canvasTexts.select, hint: canvasTexts.selectHint },
+  { value: 'note', icon: 'square', label: canvasTexts.note, hint: canvasTexts.noteHint },
+  { value: 'pin', icon: 'pin', label: canvasTexts.pin, hint: canvasTexts.pinHint },
+]
+const ZOOM_STEPS = [0.25, 0.5, 1] as const
 
 const NARROW_PX = 600
 const MIN_SCALE = 0.05
@@ -74,7 +93,7 @@ interface View {
 const viewHeight = (width: number, natural: number | undefined) =>
   natural ?? canvasViews.find((view) => view.width === width)!.height
 
-/** A live frame on the board: the view of the mockup's frame, never taking the pointer. */
+/** A live frame on the board: the view of the screen's frame, never taking the pointer. */
 function LiveFrame({
   artifactId,
   seq,
@@ -141,14 +160,30 @@ export function ArtifactCanvas({
   const thumbOf = (frame: string, width: number) =>
     thumbs.data?.thumbs.find((each) => each.frame === frame && each.width === width)?.url ?? null
 
-  const area = useRef<HTMLDivElement>(null)
+  // The board is mounted only while no screen is open: its element is state, so that it is measured
+  // again each time it comes back.
+  const area = useRef<HTMLDivElement | null>(null)
+  const [areaElement, setAreaElement] = useState<HTMLDivElement | null>(null)
+  const areaRef = useCallback((element: HTMLDivElement | null) => {
+    area.current = element
+    setAreaElement(element)
+  }, [])
+  const root = useRef<HTMLDivElement>(null)
+  const [rootWidth, setRootWidth] = useState(0)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [view, setView] = useState<View>({ x: 40, y: 40, scale: 0.25 })
   const [zooming, setZooming] = useState(false)
   const zoomTimer = useRef<number | null>(null)
   const [tool, setTool] = useState<Tool>('select')
   const [selected, setSelected] = useState<string | null>(null)
-  const [opened, setOpened] = useState<{ frame: string } | null>(null)
+  const [opened, setOpened] = useState<string | null>(null)
+  // On a canvas of one screen the person asked for the board instead of the screen.
+  const [boardAsked, setBoardAsked] = useState(false)
+  const [headerMenu, setHeaderMenu] = useState<HTMLElement | null>(null)
+  const [zoomMenu, setZoomMenu] = useState<HTMLElement | null>(null)
+  const [screenMenu, setScreenMenu] = useState<HTMLElement | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
   const [noteEdit, setNoteEdit] = useState<CanvasNote | null>(null)
   const [noteText, setNoteText] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
@@ -161,16 +196,22 @@ export function ArtifactCanvas({
   const [moved, setMoved] = useState<Record<string, { x: number; y: number }>>({})
 
   useEffect(() => {
-    const element = area.current
+    const element = root.current
     if (!element) return
-    const observer = new ResizeObserver(([entry]) =>
-      setSize({ width: entry?.contentRect.width ?? 0, height: entry?.contentRect.height ?? 0 }),
-    )
+    const observer = new ResizeObserver(([entry]) => setRootWidth(entry?.contentRect.width ?? 0))
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
+  useEffect(() => {
+    if (!areaElement) return
+    const observer = new ResizeObserver(([entry]) =>
+      setSize({ width: entry?.contentRect.width ?? 0, height: entry?.contentRect.height ?? 0 }),
+    )
+    observer.observe(areaElement)
+    return () => observer.disconnect()
+  }, [areaElement])
 
-  const narrow = size.width > 0 && size.width < NARROW_PX
+  const narrow = rootWidth > 0 && rootWidth < NARROW_PX
   const placeOf = (screen: CanvasScreen) => moved[screen.key] ?? { x: screen.x, y: screen.y }
   const boardHeightOf = (screen: CanvasScreen) =>
     Math.max(
@@ -314,6 +355,8 @@ export function ArtifactCanvas({
       ],
       newKey('new-screen'),
     )
+    // The canvas grows into a site: the board, with the new screen chosen.
+    setOpened(null)
     setSelected(frame)
   }
 
@@ -426,7 +469,7 @@ export function ArtifactCanvas({
     if (tool === 'note' && canEdit) return void addNote(point, null)
     if (tool === 'pin' && canEdit && hit) return void addNote(point, hit)
     event.currentTarget.setPointerCapture(event.pointerId)
-    if (tool === 'hand' || event.button === 1 || !hit) {
+    if (event.button === 1 || !hit) {
       drag.current = { kind: 'pan', startX: event.clientX, startY: event.clientY, from: view }
       if (!hit) setSelected(null)
       return
@@ -484,7 +527,7 @@ export function ArtifactCanvas({
       setSelected(screens[Math.max(0, at - 1)]?.key ?? null)
     } else if (event.key === 'Enter' && selected) {
       event.preventDefault()
-      setOpened({ frame: selected })
+      setOpened(selected)
     } else if (event.key === '+' || event.key === '=') zoomTo(view.scale * 1.25)
     else if (event.key === '-') zoomTo(view.scale / 1.25)
     else if (event.key === '0') fit()
@@ -492,7 +535,12 @@ export function ArtifactCanvas({
   }
 
   const chosen = screens.find((screen) => screen.key === selected) ?? null
-  const openedScreen = screens.find((screen) => screen.key === opened?.frame) ?? null
+  // The screen shown in place of the board: the one opened, or the only one of the canvas.
+  const shown =
+    screens.find((screen) => screen.key === opened) ??
+    (screens.length === 1 && !boardAsked ? screens[0]! : null)
+  const settings =
+    artifact.blocks.find((block) => block.kind === 'settings' && block.parent === null) ?? null
 
   const saveNote = async () => {
     if (!noteEdit) return
@@ -552,9 +600,62 @@ export function ArtifactCanvas({
     )
   }
 
+  const addScreenButton = canEdit && (
+    <Button
+      size="small"
+      variant="outlined"
+      startIcon={<AppIcon name="plus" size={16} />}
+      onClick={() => void newScreen()}
+      disabled={write.isPending}
+    >
+      {canvasTexts.newScreen}
+    </Button>
+  )
+
+  // «⋯» of the board: «Настройки» of the canvas and its «Файлы».
+  const headerMenuButton = (
+    <>
+      <Tooltip title={canvasTexts.more}>
+        <IconButton
+          size="small"
+          aria-label={canvasTexts.more}
+          aria-haspopup="menu"
+          aria-expanded={headerMenu ? 'true' : undefined}
+          onClick={(event) => setHeaderMenu(event.currentTarget)}
+        >
+          <AppIcon name="more" size={18} />
+        </IconButton>
+      </Tooltip>
+      <Menu anchorEl={headerMenu} open={headerMenu !== null} onClose={() => setHeaderMenu(null)}>
+        {settings && (
+          <MenuItem
+            onClick={() => {
+              setHeaderMenu(null)
+              setSettingsOpen(true)
+            }}
+          >
+            {canvasTexts.settings}
+          </MenuItem>
+        )}
+        <MenuItem
+          onClick={() => {
+            setHeaderMenu(null)
+            setFilesOpen(true)
+          }}
+        >
+          {canvasTexts.files}
+        </MenuItem>
+      </Menu>
+    </>
+  )
+
   const header = (
-    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', mb: 1 }}>
-      {!narrow && (
+    <Box
+      role="toolbar"
+      aria-label={canvasTexts.header}
+      sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', mb: 1 }}
+    >
+      {!narrow && canEdit && (
         <ToggleButtonGroup
           size="small"
           exclusive
@@ -562,46 +663,74 @@ export function ArtifactCanvas({
           aria-label={canvasTexts.tools}
           onChange={(_event, value: Tool | null) => value && setTool(value)}
         >
-          <ToggleButton value="select">{canvasTexts.select}</ToggleButton>
-          <ToggleButton value="hand">{canvasTexts.hand}</ToggleButton>
-          {canEdit && <ToggleButton value="note">{canvasTexts.note}</ToggleButton>}
-          {canEdit && <ToggleButton value="pin">{canvasTexts.pin}</ToggleButton>}
+          {TOOLS.map((each) => (
+            <Tooltip key={each.value} describeChild title={each.hint}>
+              <ToggleButton value={each.value} aria-label={each.label} sx={{ px: 1.25 }}>
+                <AppIcon name={each.icon} size={18} />
+              </ToggleButton>
+            </Tooltip>
+          ))}
         </ToggleButtonGroup>
       )}
-      {canEdit && (
-        <Button
-          size="small"
-          variant="outlined"
-          onClick={() => void newScreen()}
-          disabled={write.isPending}
-        >
-          {canvasTexts.newScreen}
-        </Button>
-      )}
+      {addScreenButton}
+      <Box sx={{ flex: 1 }} />
       {!narrow && (
-        <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', ml: 'auto' }}>
+        <Box sx={{ display: 'flex', gap: 0.25, alignItems: 'center' }}>
+          <Tooltip title={canvasTexts.zoomOut}>
+            <IconButton
+              size="small"
+              onClick={() => zoomTo(view.scale / 1.25)}
+              aria-label={canvasTexts.zoomOut}
+            >
+              <Box component="span" aria-hidden sx={{ width: 18, lineHeight: 1 }}>
+                −
+              </Box>
+            </IconButton>
+          </Tooltip>
           <Button
             size="small"
-            onClick={() => zoomTo(view.scale / 1.25)}
-            aria-label={canvasTexts.zoomOut}
+            color="inherit"
+            aria-label={`${canvasTexts.zoom}: ${canvasTexts.scale(Math.round(view.scale * 100))}`}
+            aria-haspopup="menu"
+            aria-expanded={zoomMenu ? 'true' : undefined}
+            onClick={(event) => setZoomMenu(event.currentTarget)}
+            sx={{ minWidth: 64, fontVariantNumeric: 'tabular-nums' }}
           >
-            −
-          </Button>
-          <Typography variant="body2" sx={{ minWidth: 48, textAlign: 'center' }} aria-live="polite">
             {canvasTexts.scale(Math.round(view.scale * 100))}
-          </Typography>
-          <Button
-            size="small"
-            onClick={() => zoomTo(view.scale * 1.25)}
-            aria-label={canvasTexts.zoomIn}
-          >
-            +
           </Button>
-          <Button size="small" onClick={fit}>
-            {canvasTexts.fit}
-          </Button>
+          <Menu anchorEl={zoomMenu} open={zoomMenu !== null} onClose={() => setZoomMenu(null)}>
+            <MenuItem
+              onClick={() => {
+                setZoomMenu(null)
+                fit()
+              }}
+            >
+              {canvasTexts.fit}
+            </MenuItem>
+            {ZOOM_STEPS.map((step) => (
+              <MenuItem
+                key={step}
+                onClick={() => {
+                  setZoomMenu(null)
+                  zoomTo(step)
+                }}
+              >
+                {canvasTexts.scale(step * 100)}
+              </MenuItem>
+            ))}
+          </Menu>
+          <Tooltip title={canvasTexts.zoomIn}>
+            <IconButton
+              size="small"
+              onClick={() => zoomTo(view.scale * 1.25)}
+              aria-label={canvasTexts.zoomIn}
+            >
+              <AppIcon name="plus" size={18} />
+            </IconButton>
+          </Tooltip>
         </Box>
       )}
+      {headerMenuButton}
     </Box>
   )
 
@@ -614,288 +743,368 @@ export function ArtifactCanvas({
       <Typography variant="body2" sx={{ fontWeight: 600 }}>
         {canvasTexts.screenLabel(chosen.name, chosen.variant)}
       </Typography>
-      <Button size="small" onClick={() => editInChat(chosen)}>
-        {canvasTexts.editInChat}
-      </Button>
-      {canEdit && (
-        <Button size="small" onClick={() => void makeVariant(chosen)} disabled={write.isPending}>
-          {canvasTexts.makeVariant}
-        </Button>
-      )}
-      {canEdit && chosen.variant !== null && !chosen.chosen && (
-        <Button size="small" onClick={() => void choose(chosen)}>
-          {canvasTexts.choose}
-        </Button>
-      )}
-      <Button size="small" variant="contained" onClick={() => setOpened({ frame: chosen.key })}>
+      <Button size="small" variant="contained" onClick={() => setOpened(chosen.key)}>
         {canvasTexts.open}
       </Button>
+      <Tooltip title={canvasTexts.more}>
+        <IconButton
+          size="small"
+          aria-label={canvasTexts.screenMenu(canvasTexts.screenLabel(chosen.name, chosen.variant))}
+          aria-haspopup="menu"
+          aria-expanded={screenMenu ? 'true' : undefined}
+          onClick={(event) => setScreenMenu(event.currentTarget)}
+        >
+          <AppIcon name="more" size={18} />
+        </IconButton>
+      </Tooltip>
+      <Menu anchorEl={screenMenu} open={screenMenu !== null} onClose={() => setScreenMenu(null)}>
+        <MenuItem
+          onClick={() => {
+            setScreenMenu(null)
+            editInChat(chosen)
+          }}
+        >
+          {canvasTexts.editInChat}
+        </MenuItem>
+        {canEdit && (
+          <MenuItem
+            disabled={write.isPending}
+            onClick={() => {
+              setScreenMenu(null)
+              void makeVariant(chosen)
+            }}
+          >
+            {canvasTexts.makeVariant}
+          </MenuItem>
+        )}
+        {canEdit && chosen.variant !== null && !chosen.chosen && (
+          <MenuItem
+            onClick={() => {
+              setScreenMenu(null)
+              void choose(chosen)
+            }}
+          >
+            {canvasTexts.choose}
+          </MenuItem>
+        )}
+      </Menu>
     </Box>
   )
 
+  // One screen in place of the board: live, at the width of a computer or a phone.
+  const screenView = shown && (
+    <ArtifactFrame
+      key={shown.key}
+      artifact={artifact}
+      presence={null}
+      onChanged={onChanged}
+      {...(onAccessLost ? { onAccessLost } : {})}
+      place={narrow ? 'pane' : place}
+      frame={shown.key}
+      leading={
+        opened !== null && screens.length > 1 ? (
+          <>
+            <Button
+              size="small"
+              color="inherit"
+              startIcon={<AppIcon name="back" size={16} />}
+              onClick={() => setOpened(null)}
+            >
+              {canvasTexts.allScreens}
+            </Button>
+            <Typography variant="body2" sx={{ fontWeight: 600, mr: 1 }}>
+              {canvasTexts.screenLabel(shown.name, shown.variant)}
+            </Typography>
+          </>
+        ) : (
+          <Tooltip describeChild title={canvasTexts.screensHint}>
+            <Button
+              size="small"
+              color="inherit"
+              startIcon={<AppIcon name="canvas" size={16} />}
+              onClick={() => {
+                setOpened(null)
+                setBoardAsked(true)
+              }}
+            >
+              {canvasTexts.screens}
+            </Button>
+          </Tooltip>
+        )
+      }
+      trailing={addScreenButton}
+    />
+  )
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-      {header}
-      {selectedBar}
+    <Box ref={root} sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      {!screenView && header}
+      {!screenView && selectedBar}
       {notice && (
         <Alert severity="error" onClose={() => setNotice(null)} sx={{ mb: 1 }}>
           {notice}
         </Alert>
       )}
-      <Box
-        ref={area}
-        sx={{
-          position: 'relative',
-          height: narrow ? 'auto' : place === 'pane' ? 560 : 'min(78vh, 900px)',
-          overflow: narrow ? 'visible' : 'hidden',
-          borderRadius: '12px',
-          border: 1,
-          borderColor: 'divider',
-          bgcolor: 'action.hover',
-          touchAction: narrow ? 'auto' : 'none',
-        }}
-      >
-        {screens.length === 0 ? (
-          <Typography sx={{ p: 3, color: 'text.secondary' }}>{canvasTexts.empty}</Typography>
-        ) : narrow ? (
-          <Box
-            component="ul"
-            aria-label={canvasTexts.list}
-            sx={{ listStyle: 'none', m: 0, p: 1.5, display: 'grid', gap: 1.5 }}
-          >
-            {screens.map((screen) => (
-              <Box component="li" key={screen.key}>
-                <Button
-                  onClick={() => setOpened({ frame: screen.key })}
-                  sx={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'stretch',
-                    p: 0,
-                    width: '100%',
-                    textTransform: 'none',
-                  }}
-                  aria-label={`${canvasTexts.open}: ${canvasTexts.screenLabel(screen.name, screen.variant)}`}
-                >
-                  <Box
-                    sx={{
-                      borderRadius: '10px',
-                      overflow: 'hidden',
-                      border: 1,
-                      borderColor: 'divider',
-                      maxHeight: 422,
-                      alignSelf: 'center',
-                    }}
-                  >
-                    {thumbImage(screen, 390, 0.5)}
-                  </Box>
-                  <Typography variant="body2" sx={{ mt: 0.5, color: 'text.primary' }}>
-                    {canvasTexts.screenLabel(screen.name, screen.variant)}
-                  </Typography>
-                </Button>
-              </Box>
-            ))}
-          </Box>
-        ) : (
-          <Box
-            role="application"
-            aria-label={`${canvasTexts.board}. ${canvasTexts.boardHint}`}
-            tabIndex={0}
-            data-testid="canvas-board"
-            onKeyDown={onKeyDown}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerUp}
-            onDoubleClick={(event) => {
-              const hit = screenAt(boardPoint(event.clientX, event.clientY))
-              if (hit) setOpened({ frame: hit.key })
-            }}
-            sx={{
-              position: 'absolute',
-              inset: 0,
-              cursor: tool === 'hand' ? 'grab' : tool === 'select' ? 'default' : 'crosshair',
-              outline: 'none',
-              '&:focus-visible': { boxShadow: 'inset 0 0 0 2px', color: 'primary.main' },
-            }}
-          >
+      {screenView || (
+        <Box
+          ref={areaRef}
+          sx={{
+            position: 'relative',
+            height: narrow ? 'auto' : place === 'pane' ? 560 : 'min(78vh, 900px)',
+            overflow: narrow ? 'visible' : 'hidden',
+            borderRadius: '12px',
+            bgcolor: 'action.hover',
+            touchAction: narrow ? 'auto' : 'none',
+          }}
+        >
+          {screens.length === 0 ? (
+            <Typography sx={{ p: 3, color: 'text.secondary' }}>{canvasTexts.empty}</Typography>
+          ) : narrow ? (
             <Box
-              data-testid="canvas-surface"
-              style={{
-                position: 'absolute',
-                left: 0,
-                top: 0,
-                transformOrigin: '0 0',
-                transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
-              }}
+              component="ul"
+              aria-label={canvasTexts.list}
+              sx={{ listStyle: 'none', m: 0, p: 1.5, display: 'grid', gap: 1.5 }}
             >
-              {screens.map((screen) => {
-                const at = placeOf(screen)
-                return (
-                  <Box
-                    key={screen.key}
-                    data-testid="canvas-screen"
-                    data-screen={screen.key}
-                    aria-selected={screen.key === selected}
-                    sx={{ position: 'absolute', left: at.x, top: at.y }}
+              {screens.map((screen) => (
+                <Box component="li" key={screen.key}>
+                  <Button
+                    onClick={() => setOpened(screen.key)}
+                    sx={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'stretch',
+                      p: 0,
+                      width: '100%',
+                      textTransform: 'none',
+                    }}
+                    aria-label={`${canvasTexts.open}: ${canvasTexts.screenLabel(screen.name, screen.variant)}`}
                   >
-                    <Typography
-                      component="div"
+                    <Box
                       sx={{
-                        position: 'absolute',
-                        top: -56,
-                        left: 0,
-                        fontSize: 32,
-                        fontWeight: 650,
-                        color: 'text.primary',
-                        whiteSpace: 'nowrap',
+                        borderRadius: '10px',
+                        overflow: 'hidden',
+                        border: 1,
+                        borderColor: 'divider',
+                        maxHeight: 422,
+                        alignSelf: 'center',
                       }}
                     >
+                      {thumbImage(screen, 390, 0.5)}
+                    </Box>
+                    <Typography variant="body2" sx={{ mt: 0.5, color: 'text.primary' }}>
                       {canvasTexts.screenLabel(screen.name, screen.variant)}
-                      {screen.chosen ? ` · ${canvasTexts.chosen}` : ''}
                     </Typography>
-                    {canvasViews.map((each) => {
-                      const key = `${screen.key}:${each.width}`
-                      const height = viewHeight(each.width, heights[key])
-                      const isLive = live.has(key)
-                      return (
-                        <Box
-                          key={each.width}
-                          sx={{
-                            position: 'absolute',
-                            left: each.width === 1440 ? 0 : PHONE_X,
-                            top: 0,
-                            width: each.width,
-                            height,
-                            overflow: 'hidden',
-                            bgcolor: '#fff',
-                            borderRadius: '8px',
-                            boxShadow:
-                              screen.key === selected
-                                ? '0 0 0 8px rgba(47, 93, 80, 0.9)'
-                                : '0 4px 24px rgba(0,0,0,0.12)',
-                          }}
-                        >
-                          {thumbImage(screen, each.width, 1)}
-                          {isLive && (
-                            <Box
-                              sx={{
-                                position: 'absolute',
-                                inset: 0,
-                                visibility: zooming ? 'hidden' : 'visible',
-                              }}
-                            >
-                              <LiveFrame
-                                artifactId={artifact.id}
-                                seq={artifact.seq}
-                                frame={screen.key}
-                                width={each.width}
-                                height={height}
-                                title={`${canvasTexts.live}: ${screen.name}, ${each.width === 1440 ? canvasTexts.desktop : canvasTexts.phone}`}
-                              />
-                            </Box>
-                          )}
-                          {/* The cover: WebKit on macOS gives a frame the wheel even with pointer-events: none. */}
-                          <Box data-canvas-cover sx={{ position: 'absolute', inset: 0 }} />
-                        </Box>
-                      )
-                    })}
-                    {notes
-                      .filter((note) => note.frame === screen.key)
-                      .map((note) => (
-                        <Box
-                          key={note.key}
-                          role="button"
-                          tabIndex={-1}
-                          aria-label={note.text}
-                          data-testid="canvas-pin"
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={() => {
-                            setNoteEdit(note)
-                            setNoteText(note.text)
-                          }}
-                          sx={{
-                            position: 'absolute',
-                            left: (note.x / 100) * canvasViews[0].width - 24,
-                            top:
-                              (note.y / 100) * viewHeight(1440, heights[`${screen.key}:1440`]) - 24,
-                            width: 48,
-                            height: 48,
-                            borderRadius: '50% 50% 50% 0',
-                            bgcolor: '#e07a3f',
-                            border: '4px solid #fff',
-                            cursor: 'pointer',
-                          }}
-                        />
-                      ))}
-                  </Box>
-                )
-              })}
-              {notes
-                .filter((note) => note.frame === null)
-                .map((note) => (
-                  <Box
-                    key={note.key}
-                    role="note"
-                    data-testid="canvas-note"
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onDoubleClick={(event) => {
-                      event.stopPropagation()
-                      setNoteEdit(note)
-                      setNoteText(note.text)
-                    }}
-                    sx={{
-                      position: 'absolute',
-                      left: note.x,
-                      top: note.y,
-                      width: 360,
-                      minHeight: 200,
-                      p: 3,
-                      fontSize: 28,
-                      bgcolor: NOTE_COLORS[note.color] ?? NOTE_COLORS.yellow,
-                      boxShadow: '0 6px 20px rgba(0,0,0,0.12)',
-                      whiteSpace: 'pre-wrap',
-                      overflowWrap: 'anywhere',
-                      cursor: 'text',
-                    }}
-                  >
-                    {note.text}
-                  </Box>
-                ))}
+                  </Button>
+                </Box>
+              ))}
             </Box>
-          </Box>
-        )}
-      </Box>
-      <Dialog
-        open={openedScreen !== null}
-        onClose={() => setOpened(null)}
-        fullScreen
-        aria-labelledby="canvas-open-title"
-      >
-        {openedScreen && (
-          <>
-            <DialogTitle
-              id="canvas-open-title"
-              sx={{ display: 'flex', alignItems: 'center', gap: 2 }}
+          ) : (
+            <Box
+              role="application"
+              aria-label={`${canvasTexts.board}. ${canvasTexts.boardHint}`}
+              tabIndex={0}
+              data-testid="canvas-board"
+              onKeyDown={onKeyDown}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerUp}
+              onDoubleClick={(event) => {
+                const hit = screenAt(boardPoint(event.clientX, event.clientY))
+                if (hit) setOpened(hit.key)
+              }}
+              sx={{
+                position: 'absolute',
+                inset: 0,
+                cursor: tool === 'select' ? 'default' : 'crosshair',
+                outline: 'none',
+                '&:focus-visible': { boxShadow: 'inset 0 0 0 2px', color: 'primary.main' },
+              }}
             >
-              <Box sx={{ flex: 1 }}>
-                {canvasTexts.screenLabel(openedScreen.name, openedScreen.variant)}
+              <Box
+                data-testid="canvas-surface"
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: 0,
+                  transformOrigin: '0 0',
+                  transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+                }}
+              >
+                {screens.map((screen) => {
+                  const at = placeOf(screen)
+                  return (
+                    <Box
+                      key={screen.key}
+                      data-testid="canvas-screen"
+                      data-screen={screen.key}
+                      aria-selected={screen.key === selected}
+                      sx={{ position: 'absolute', left: at.x, top: at.y }}
+                    >
+                      <Typography
+                        component="div"
+                        sx={{
+                          position: 'absolute',
+                          top: -56,
+                          left: 0,
+                          fontSize: 32,
+                          fontWeight: 650,
+                          color: 'text.primary',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {canvasTexts.screenLabel(screen.name, screen.variant)}
+                        {screen.chosen ? ` · ${canvasTexts.chosen}` : ''}
+                      </Typography>
+                      {canvasViews.map((each) => {
+                        const key = `${screen.key}:${each.width}`
+                        const height = viewHeight(each.width, heights[key])
+                        const isLive = live.has(key)
+                        return (
+                          <Box
+                            key={each.width}
+                            sx={{
+                              position: 'absolute',
+                              left: each.width === 1440 ? 0 : PHONE_X,
+                              top: 0,
+                              width: each.width,
+                              height,
+                              overflow: 'hidden',
+                              bgcolor: '#fff',
+                              borderRadius: '8px',
+                              boxShadow:
+                                screen.key === selected
+                                  ? '0 0 0 8px rgba(47, 93, 80, 0.9)'
+                                  : '0 4px 24px rgba(0,0,0,0.12)',
+                            }}
+                          >
+                            {thumbImage(screen, each.width, 1)}
+                            {isLive && (
+                              <Box
+                                sx={{
+                                  position: 'absolute',
+                                  inset: 0,
+                                  visibility: zooming ? 'hidden' : 'visible',
+                                }}
+                              >
+                                <LiveFrame
+                                  artifactId={artifact.id}
+                                  seq={artifact.seq}
+                                  frame={screen.key}
+                                  width={each.width}
+                                  height={height}
+                                  title={canvasTexts.screenView(
+                                    screen.name,
+                                    each.width === 1440 ? canvasTexts.desktop : canvasTexts.phone,
+                                  )}
+                                />
+                              </Box>
+                            )}
+                            {/* The cover: WebKit on macOS gives a frame the wheel even with pointer-events: none. */}
+                            <Box data-canvas-cover sx={{ position: 'absolute', inset: 0 }} />
+                          </Box>
+                        )
+                      })}
+                      {notes
+                        .filter((note) => note.frame === screen.key)
+                        .map((note) => (
+                          <Box
+                            key={note.key}
+                            role="button"
+                            tabIndex={-1}
+                            aria-label={note.text}
+                            data-testid="canvas-pin"
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={() => {
+                              setNoteEdit(note)
+                              setNoteText(note.text)
+                            }}
+                            sx={{
+                              position: 'absolute',
+                              left: (note.x / 100) * canvasViews[0].width - 24,
+                              top:
+                                (note.y / 100) * viewHeight(1440, heights[`${screen.key}:1440`]) -
+                                24,
+                              width: 48,
+                              height: 48,
+                              borderRadius: '50% 50% 50% 0',
+                              bgcolor: '#e07a3f',
+                              border: '4px solid #fff',
+                              cursor: 'pointer',
+                            }}
+                          />
+                        ))}
+                    </Box>
+                  )
+                })}
+                {notes
+                  .filter((note) => note.frame === null)
+                  .map((note) => (
+                    <Box
+                      key={note.key}
+                      role="note"
+                      data-testid="canvas-note"
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onDoubleClick={(event) => {
+                        event.stopPropagation()
+                        setNoteEdit(note)
+                        setNoteText(note.text)
+                      }}
+                      sx={{
+                        position: 'absolute',
+                        left: note.x,
+                        top: note.y,
+                        width: 360,
+                        minHeight: 200,
+                        p: 3,
+                        fontSize: 28,
+                        bgcolor: NOTE_COLORS[note.color] ?? NOTE_COLORS.yellow,
+                        boxShadow: '0 6px 20px rgba(0,0,0,0.12)',
+                        whiteSpace: 'pre-wrap',
+                        overflowWrap: 'anywhere',
+                        cursor: 'text',
+                      }}
+                    >
+                      {note.text}
+                    </Box>
+                  ))}
               </Box>
-              <Button onClick={() => setOpened(null)}>{canvasTexts.close}</Button>
-            </DialogTitle>
-            <DialogContent>
-              <ArtifactMockup
-                artifact={artifact}
-                presence={null}
-                onChanged={onChanged}
-                {...(onAccessLost ? { onAccessLost } : {})}
-                place={narrow ? 'pane' : 'page'}
-                frame={openedScreen.key}
-              />
-            </DialogContent>
-          </>
-        )}
-      </Dialog>
+            </Box>
+          )}
+        </Box>
+      )}
+      {settings && (
+        <Drawer
+          anchor="right"
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          slotProps={{ paper: { sx: { width: { xs: '100%', sm: 360 }, p: 2.5 } } }}
+        >
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: -1 }}>
+            <Tooltip title={canvasTexts.close}>
+              <IconButton
+                size="small"
+                aria-label={canvasTexts.close}
+                onClick={() => setSettingsOpen(false)}
+              >
+                <AppIcon name="close" size={18} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+          <FrameSettings
+            artifact={artifact}
+            block={settings}
+            canEdit={canEdit}
+            onChanged={onChanged}
+          />
+        </Drawer>
+      )}
+      <FrameFilesDialog
+        artifact={artifact}
+        canEdit={canEdit}
+        open={filesOpen}
+        onClose={() => setFilesOpen(false)}
+      />
       <Dialog open={noteEdit !== null} onClose={() => setNoteEdit(null)} maxWidth="xs" fullWidth>
         <DialogTitle>{canvasTexts.noteEdit}</DialogTitle>
         <DialogContent>

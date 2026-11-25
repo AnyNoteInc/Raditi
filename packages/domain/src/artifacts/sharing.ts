@@ -46,18 +46,16 @@ export const artifactInviteLimits = { perUserDay: 50, perArtifactDay: 10 } as co
 /** The kind of an artifact as the letter of an invitation says it — no title (Ар35). */
 export function artifactInviteKindWord(
   kind: string,
-): 'документ' | 'макет' | 'таблицу' | 'холст' | 'фирменный стиль' | 'артефакт' {
+): 'документ' | 'холст' | 'презентацию' | 'изображение' | 'артефакт' {
   switch (kind) {
     case 'document':
       return 'документ'
-    case 'mockup':
-      return 'макет'
-    case 'table':
-      return 'таблицу'
     case 'canvas':
       return 'холст'
-    case 'brand':
-      return 'фирменный стиль'
+    case 'slides':
+      return 'презентацию'
+    case 'image':
+      return 'изображение'
     default:
       return 'артефакт'
   }

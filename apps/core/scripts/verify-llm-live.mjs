@@ -996,7 +996,7 @@ export async function runLiveGateway(mode) {
       const renderTool = {
         name: 'artifact_render',
         description:
-          'The picture of a mockup or of a frame of a canvas as the client sees it, in strips of 2000 px, for looking at it.',
+          'The picture of a screen of a canvas, a slide or a picture as the client sees it, in strips of 2000 px, for looking at it; no frame — the only or the first one.',
         inputSchema: {
           type: 'object',
           properties: {
