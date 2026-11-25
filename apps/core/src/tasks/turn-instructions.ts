@@ -1,4 +1,5 @@
 import {
+  agentOutputLimits,
   outboxLimits,
   type RequestedFileFormats,
   SANDBOX_INBOX,
@@ -122,6 +123,11 @@ const ANSWERING = `## Answering the client
     fenced block that names its language (\`\`\`php, \`\`\`bash, \`\`\`yaml…), never inline in a
     sentence; the chat colours it and gives a «copy» button.
   Plain answers stay plain text: no headings, no tables or diagrams for their own sake.
+- Keep \`client_message\` short: the client reads it in a chat, often on a phone, and the platform
+  takes at most ${agentOutputLimits.clientMessage} characters of it — a longer one is rejected, the turn fails
+  and the client gets no answer at all. Say the result first, in a few sentences; at most one
+  diagram and one table, about 15 rows; only the lines of code that matter. What does not fit — a
+  full report, a long table, a whole file of code — goes to a file for the client.
 - Ask a question only when the request cannot be done without the answer.
 - Never put passwords, keys, tokens or other secrets into files, messages or the result.
 - Tell the client only what you did and saw: say in plain words what you checked and how it

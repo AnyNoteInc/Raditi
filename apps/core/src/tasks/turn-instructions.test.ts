@@ -1,4 +1,5 @@
 import {
+  agentOutputLimits,
   SANDBOX_SHELL_TIMEOUT_MAX_MS,
   SANDBOX_TMP_TMPFS_BYTES,
   SANDBOX_TOOLS_HOME,
@@ -220,6 +221,8 @@ describe('the sandbox and the checks of a change (spec §20, «Инструме�
     expect(text).toContain('fenced block that names its language')
     expect(text).toContain('```mermaid')
     expect(text).toContain('```plantuml')
+    expect(text).toContain('Keep `client_message` short')
+    expect(text).toContain(`at most ${agentOutputLimits.clientMessage} characters`)
   })
 
   it('takes every number and place it tells from what the sandbox mounts and gets', () => {
