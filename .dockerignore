@@ -14,8 +14,10 @@
 .github
 docs
 infra
-# except the scripts the sandbox images copy (infra/sandbox/Dockerfile)
+# except the scripts the sandbox images copy (infra/sandbox/Dockerfile) and the manifests of the
+# migrate image (apps/core/Dockerfile; it stays out of /repo of the image)
 !infra/sandbox/*.mjs
+!infra/app/migrate-image.mjs
 
 # verification stands, their tests and fixtures never go into an image: they run from the
 # repository (docs/plan/56-nest-modules.md §6; infra/app/verify-images.mjs checks it); the

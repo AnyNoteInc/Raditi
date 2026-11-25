@@ -1,6 +1,8 @@
 # The image of the core app (its own image for each app: apps/llm, apps/mcp, apps/runner, apps/preview).
 # The uid comes from compose (core: 10002).
 #   docker build -f apps/core/Dockerfile --target runtime .   (and --target migrate)
+# Each image ships its dependencies and its code as two layers (docs/plan/92-docker-layers.md): a
+# release that changes no dependency downloads only the code.
 # No `# syntax=` line: Docker's built-in frontend already has cache mounts, and it pulls nothing
 # from Docker Hub. Mirrors keep upstream digests, so a mirror is just another NODE_IMAGE.
 ARG NODE_IMAGE=node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1
@@ -16,7 +18,8 @@ COPY . .
 # turbo comes from the lockfile (integrity-checked), not from `pnpm dlx`
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --ignore-scripts --store-dir /pnpm/store \
- && pnpm exec turbo prune core --docker
+ && pnpm exec turbo prune core --docker \
+ && pnpm exec turbo prune @repo/db --docker --out-dir out/db
 
 FROM toolchain AS build
 COPY --from=pruned /repo/out/json/ ./
@@ -27,20 +30,48 @@ COPY --from=pruned /repo/out/full/ ./
 RUN DATABASE_URL=postgresql://build@localhost/build pnpm --filter @repo/db db:generate \
  && pnpm --filter core build
 
-# One-shot schema migration and seeds: the Prisma CLI is a dev dependency of @repo/db
-FROM build AS migrate
-WORKDIR /repo/packages/db
-USER 10004:10004
-ENTRYPOINT ["node"]
-
-FROM build AS prod
+# The production dependencies alone: the layer changes only with the lockfile of core.
 # The workspace layout stays: packages ship TypeScript sources that Node type-strips, and it
 # refuses to strip under node_modules — so no `pnpm deploy`
 # Not --offline: a runner restores the install layer of the build stage from the build cache,
 # never the cache mount it filled, so the store may be empty here; the lockfile still decides
+FROM toolchain AS deps
+COPY --from=pruned /repo/out/json/ ./
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    rm -rf node_modules apps/*/node_modules packages/*/node_modules \
- && pnpm install --frozen-lockfile --prod --prefer-offline --store-dir /pnpm/store
+    pnpm install --frozen-lockfile --prod --prefer-offline --store-dir /pnpm/store
+
+# The code alone: the sources of the packages and dist
+FROM build AS code
+RUN rm -rf node_modules apps/*/node_modules packages/*/node_modules
+
+# One-shot schema migration and seeds (MIGRATE_IMAGE): the Prisma CLI, the schema, the migrations
+# and the seed of @repo/db, from its own prune and nothing of core. migrate-image.mjs leaves the
+# manifests only what the image runs: the CLI and the TypeScript config become dependencies of
+# @repo/db, the dev tools go. Not frozen: the edited manifests no longer match the lockfile, which
+# only shrinks — `--check` fails the build on a version the lockfile does not hold.
+FROM toolchain AS migrate-deps
+COPY infra/app/migrate-image.mjs /usr/local/lib/raditi/
+COPY --from=pruned /repo/out/db/json/ ./
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    node /usr/local/lib/raditi/migrate-image.mjs \
+ && cp pnpm-lock.yaml /tmp/pnpm-lock.locked.yaml \
+ && pnpm install --prod --no-frozen-lockfile --prefer-offline --store-dir /pnpm/store \
+ && node /usr/local/lib/raditi/migrate-image.mjs --check /tmp/pnpm-lock.locked.yaml
+
+FROM migrate-deps AS migrate-code
+COPY --from=pruned /repo/out/db/full/ ./
+# prisma.config.ts reads DATABASE_URL; generate never connects
+RUN node /usr/local/lib/raditi/migrate-image.mjs \
+ && DATABASE_URL=postgresql://build@localhost/build pnpm --filter @repo/db db:generate \
+ && rm -rf node_modules packages/*/node_modules
+
+FROM ${NODE_IMAGE} AS migrate
+# Root-owned, the dependencies first: a release with no new dependency downloads only the code
+COPY --from=migrate-deps /repo /repo
+COPY --from=migrate-code /repo /repo
+WORKDIR /repo/packages/db
+USER 10004:10004
+ENTRYPOINT ["node"]
 
 FROM ${GITLEAKS_IMAGE} AS gitleaks
 
@@ -55,8 +86,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && git --version | awk '{ split($3, v, "."); exit !(v[1] > 2 || (v[1] == 2 && (v[2] > 47 || (v[2] == 47 && v[3] >= 3)))) }'
 COPY --from=gitleaks /usr/bin/gitleaks /usr/local/bin/gitleaks
-# Root-owned: the process cannot rewrite its own code
-COPY --from=prod /repo /app
+# Root-owned: the process cannot rewrite its own code. The dependencies first, the code on top
+COPY --from=deps /repo /app
+COPY --from=code /repo /app
 ENV NODE_ENV=production
 WORKDIR /app/apps/core
 USER 10001:10001
