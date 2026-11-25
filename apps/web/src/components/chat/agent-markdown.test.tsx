@@ -108,4 +108,28 @@ describe('code of the answer (docs/plan/76, И5)', () => {
     expect(blocks[1]?.querySelector('[class^="hljs-"]')).toBeNull()
     expect(blocks[1]?.textContent).toBe('просто текст\n')
   })
+
+  // docs/plan/91-chat-diagrams.md, Д6: languages of a repository, a head with the language and copy.
+  it('names the language of a block in its head and copies the code', () => {
+    const { container } = render(
+      <AgentMarkdown
+        text={'```go\nfunc main() { fmt.Println("Привет") }\n```\n\n```\nбез языка\n```'}
+      />,
+    )
+    const blocks = container.querySelectorAll('[data-code-block]')
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0]!.textContent).toContain('Go')
+    expect(blocks[0]!.querySelector('.hljs-keyword')?.textContent).toBe('func')
+    expect(screen.getAllByRole('button', { name: 'Скопировать код' })).toHaveLength(2)
+  })
+})
+
+describe('tables of the answer (docs/plan/91-chat-diagrams.md, Д7)', () => {
+  it('draws a GFM table in a frame that scrolls, its alignment kept', () => {
+    const { container } = render(
+      <AgentMarkdown text={'| Тариф | Цена |\n|---|---:|\n| Старт | 990 ₽ |'} />,
+    )
+    expect(container.querySelector('th')?.textContent).toBe('Тариф')
+    expect(container.querySelector('td[style*="right"]')?.textContent).toBe('990 ₽')
+  })
 })

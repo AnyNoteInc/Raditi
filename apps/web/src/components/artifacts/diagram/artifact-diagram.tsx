@@ -10,6 +10,12 @@ import { artifactRoleAtLeast, diagramErrorRu } from '@repo/domain/artifacts'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { uuidv7 } from '@/components/chat/uuid'
+import {
+  downloadBlob as download,
+  pictureFileName as fileName,
+  svgDataUrl as dataUrl,
+  svgToPng as pngOf,
+} from '@/lib/svg-picture'
 import { useTRPC } from '@/trpc/client'
 
 import type { ArtifactBodyProps } from '../artifact-body-props'
@@ -40,36 +46,6 @@ export const diagramTexts = Object.freeze({
 /** How often the cabinet asks again while core draws: every 1.5 s, for a minute at most. */
 const DRAWING_POLL_MS = 1500
 const DRAWING_POLLS = 40
-
-const dataUrl = (svg: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-
-function download(name: string, blob: Blob) {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = name
-  link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-/** A PNG of the picture at twice its size, drawn in the browser from the same clean SVG. */
-async function pngOf(svg: string, width: number, height: number): Promise<Blob | null> {
-  const image = new Image()
-  image.src = dataUrl(svg)
-  await image.decode()
-  const canvas = document.createElement('canvas')
-  canvas.width = width * 2
-  canvas.height = height * 2
-  const context = canvas.getContext('2d')
-  if (!context) return null
-  context.fillStyle = '#ffffff'
-  context.fillRect(0, 0, canvas.width, canvas.height)
-  context.drawImage(image, 0, 0, canvas.width, canvas.height)
-  return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
-}
-
-const fileName = (title: string, extension: string) =>
-  `${title.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'Схема'}.${extension}`
 
 type DiagramBlock = CabinetArtifact['blocks'][number]
 

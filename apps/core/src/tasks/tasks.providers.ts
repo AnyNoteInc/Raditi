@@ -45,6 +45,7 @@ import { PassSettlement } from './pass-settlement.ts'
 import { QueueDrain } from './queue-drain.ts'
 import { ArtifactDiagram } from './artifact-diagram.ts'
 import { ArtifactNotify } from './artifact-notify.ts'
+import { ChatDiagram } from './chat-diagram.ts'
 import { ChatNotify } from './chat-notify.ts'
 import { NotificationDelivery, notificationDeliveryOf } from './notification-delivery.ts'
 import { ScheduleChanges } from './schedule-changes.ts'
@@ -209,6 +210,20 @@ export const taskProviders: Provider[] = [
         ? createBrowserWorkerClient({ baseUrl: config.browser.url, token: config.browser.token })
         : null
       return new ArtifactDiagram({
+        db: prisma,
+        draw: client ? (request) => client.diagram(request) : null,
+      })
+    },
+    inject: [PRISMA, CORE_CONFIG],
+  },
+  {
+    // A diagram of an answer in the chat (docs/plan/91-chat-diagrams.md, Д5).
+    provide: ChatDiagram,
+    useFactory: (prisma: PrismaClient, config: CoreConfig) => {
+      const client = config.browser
+        ? createBrowserWorkerClient({ baseUrl: config.browser.url, token: config.browser.token })
+        : null
+      return new ChatDiagram({
         db: prisma,
         draw: client ? (request) => client.diagram(request) : null,
       })

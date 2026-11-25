@@ -260,6 +260,9 @@ catalogs:
     '@next/mdx':
       specifier: 16.3.6
       version: 16.3.6
+    '@plantuml/core':
+      specifier: 1.2026.10
+      version: 1.2026.10
     '@playwright/test':
       specifier: ^1.63.0
       version: 1.63.0
@@ -1648,6 +1651,9 @@ importers:
       '@fontsource-variable/golos-text':
         specifier: 'catalog:'
         version: 5.3.0
+      '@plantuml/core':
+        specifier: 'catalog:'
+        version: 1.2026.10
       '@repo/domain':
         specifier: workspace:*
         version: link:../domain
@@ -4122,6 +4128,9 @@ packages:
 
   '@pdf-lib/upng@1.0.1':
     resolution: {integrity: sha512-dQK2FUMQtowVP00mtIksrlZhdFXQZPC+taih1q4CvPZ5vqdxR/LKBaFg0oAfzd1GlHZXXSPdQfzQnt+ViGvEIQ==}
+
+  '@plantuml/core@1.2026.10':
+    resolution: {integrity: sha512-m67zsiUiJGAUfrk7xM2i3b9Y8HPefXder+v7STblGZgW96GUOnJTCBfJAX1d9ElDzV9d7zrEJO9S7/FHfkaGMg==}
 
   '@playwright/test@1.63.0':
     resolution: {integrity: sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ==}
@@ -10986,6 +10995,8 @@ snapshots:
   '@pdf-lib/upng@1.0.1':
     dependencies:
       pako: 1.0.11
+
+  '@plantuml/core@1.2026.10': {}
 
   '@playwright/test@1.63.0':
     dependencies:

@@ -108,7 +108,20 @@ const SCHEDULED_TASKS = `
 /** How the agent talks to the client: the same in every task. */
 const ANSWERING = `## Answering the client
 - Write \`client_message\` and questions in Russian, addressing the client politely as «вы».
-  No jargon, no English terms, no file paths, code or commands in them.
+  No jargon, no English terms, no file paths, code or commands in the sentences.
+- \`client_message\` is Markdown: the chat draws it. Use it where it helps the client read:
+  - a table for a comparison or a list of things with several properties (prices, tariffs, plans);
+  - a diagram when a process, a customer's path, a structure or a sequence is clearer drawn than
+    told: a fenced block \`\`\`mermaid (flowchart, sequenceDiagram, classDiagram, stateDiagram-v2,
+    erDiagram, gantt, journey, timeline, mindmap, pie) or \`\`\`plantuml (sequence, class, activity,
+    component, use case, state, mindmap, gantt). The platform draws it as a picture. Mermaid: no
+    %%{init}%%, no \`click\`, labels with brackets, quotes or commas inside "…", never \`end\` as an
+    id, no HTML but <br>. PlantUML: no \`!include\`, \`!theme\` or links — they do not load. Labels in
+    Russian. One idea a diagram, at most about 30 nodes; say in a sentence what it shows;
+  - code, commands or a config only when the client asks for them or cannot do without them, in a
+    fenced block that names its language (\`\`\`php, \`\`\`bash, \`\`\`yaml…), never inline in a
+    sentence; the chat colours it and gives a «copy» button.
+  Plain answers stay plain text: no headings, no tables or diagrams for their own sake.
 - Ask a question only when the request cannot be done without the answer.
 - Never put passwords, keys, tokens or other secrets into files, messages or the result.
 - Tell the client only what you did and saw: say in plain words what you checked and how it

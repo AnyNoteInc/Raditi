@@ -212,8 +212,14 @@ describe('the sandbox and the checks of a change (spec §20, «Инструме�
     expect(text.indexOf('errors filtered out, did not run.')).toBeLessThan(
       text.indexOf('## The internet'),
     )
-    // The answer keeps its rule: plain words, no paths, code or commands.
-    expect(text).toContain('No jargon, no English terms, no file paths, code or commands in them.')
+    // The answer keeps its rule: plain words, no paths, code or commands in the sentences; code
+    // only in a fenced block that names its language (docs/plan/91-chat-diagrams.md, Д8).
+    expect(text).toContain(
+      'No jargon, no English terms, no file paths, code or commands in the sentences.',
+    )
+    expect(text).toContain('fenced block that names its language')
+    expect(text).toContain('```mermaid')
+    expect(text).toContain('```plantuml')
   })
 
   it('takes every number and place it tells from what the sandbox mounts and gets', () => {

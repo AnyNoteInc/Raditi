@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
-import { artifactRenderLimits } from '@repo/domain/artifacts'
+import { artifactRenderLimits, type DiagramEngine } from '@repo/domain/artifacts'
 import type { Browser, BrowserContext, Page } from 'playwright-core'
 
 // Mermaid in a Chromium of the render pool (docs/plan/88-artifacts.md, §7.13, slice 88.24а; spike
@@ -15,6 +15,19 @@ let engine: string | null = null
 function mermaidBundle(): string {
   engine ??= readFileSync(require.resolve('mermaid/dist/mermaid.min.js'), 'utf8')
   return engine
+}
+
+let plantumlEngine: { viz: string; engine: string } | null = null
+/**
+ * PlantUML of `@plantuml/core` (docs/plan/91-chat-diagrams.md, Д2): the engine compiled by TeaVM
+ * and Graphviz of Viz.js with its WebAssembly inside, read once — no CDN, nothing from the network.
+ */
+function plantumlBundle(): { viz: string; engine: string } {
+  plantumlEngine ??= {
+    viz: readFileSync(require.resolve('@plantuml/core/viz-global.js'), 'utf8'),
+    engine: readFileSync(require.resolve('@plantuml/core/plantuml.js'), 'utf8'),
+  }
+  return plantumlEngine
 }
 
 /** Keys a text may not change: the label mode, the fonts, the CSS, the limits (spike 7). */
@@ -58,6 +71,31 @@ window.__render = async (src, seed, cfg) => {
 }
 `
 
+/**
+ * PlantUML draws an error as a picture: «PlantUML version …», «[From … (line N) ]» and the words.
+ * It goes back as an error of the text with its line; a picture of a text is the SVG as it is.
+ */
+const PLANTUML_HELPER = String.raw`
+window.__loadPlantuml = async (text) => {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }))
+  try { window.__plantuml = await import(url) } finally { URL.revokeObjectURL(url) }
+}
+window.__render = (src, seed, cfg) => new Promise((resolve) => {
+  window.__plantuml.renderToString(src.split('\n'), (svg) => {
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml')
+    const texts = [...doc.querySelectorAll('text')].map((t) => (t.textContent || '').trim())
+    const at = texts.map((t) => /^\[From .* \(line (\d+)\) \]$/.exec(t)).find(Boolean)
+    if (at && (texts[0] || '').startsWith('PlantUML version')) {
+      const words = texts.filter(Boolean).at(-1) || 'Syntax error'
+      resolve({ error: ('Error on line ' + at[1] + ': ' + words).slice(0, 300), stage: 'parse' })
+    } else resolve({ svg, type: 'plantuml' })
+  }, (e) => resolve({ error: String(e).slice(0, 300), stage: 'render' }), { maxSvgSize: cfg.maxSize })
+})
+`
+
+/** The largest side of a PlantUML picture, in pixels: the engine refuses a larger one. */
+const PLANTUML_MAX_SIDE = 8192
+
 export type DiagramRawResult =
   | { ok: true; svg: string; type: string }
   | { ok: false; reason: 'parse' | 'render' | 'timeout'; message: string }
@@ -72,8 +110,15 @@ interface Slot {
 /** Pages kept at once on one Chromium: the least recently used one goes first. */
 const MAX_PAGES = 8
 
+export interface DiagramJob {
+  workspaceId: string
+  source: string
+  /** None — Mermaid. */
+  engine?: DiagramEngine
+}
+
 export interface DiagramRenderer {
-  render(job: { workspaceId: string; source: string }): Promise<DiagramRawResult>
+  render(job: DiagramJob): Promise<DiagramRawResult>
   close(): Promise<void>
 }
 
@@ -90,7 +135,8 @@ export function createDiagramRenderer(browser: Browser): DiagramRenderer {
     ])
   }
 
-  const open = async (key: string): Promise<Slot> => {
+  /** The page of an engine for a workspace: Mermaid and PlantUML never share one. */
+  const open = async (key: string, engine: DiagramEngine): Promise<Slot> => {
     const existing = slots.get(key)
     if (existing) return existing
     if (slots.size >= MAX_PAGES) {
@@ -101,6 +147,25 @@ export function createDiagramRenderer(browser: Browser): DiagramRenderer {
     await context.route('**/*', (route) => route.abort().catch(() => undefined))
     const page = (async () => {
       const created = await context.newPage()
+      if (engine === 'plantuml') {
+        // Viz.js finds itself by the address of the page: `about:blank` has none, so the page gets
+        // one that leads nowhere — every request is aborted anyway.
+        await created.setContent(
+          '<!doctype html><html><head><meta charset="utf-8"><base href="https://render.invalid/"></head><body></body></html>',
+        )
+        const bundle = plantumlBundle()
+        await created.addScriptTag({ content: bundle.viz })
+        // The engine is an ES module: imported from a blob of its own text, never from an address.
+        await created.addScriptTag({ content: PLANTUML_HELPER })
+        await created.evaluate(
+          (text) =>
+            (window as unknown as { __loadPlantuml: (t: string) => Promise<void> }).__loadPlantuml(
+              text,
+            ),
+          bundle.engine,
+        )
+        return created
+      }
       await created.setContent(
         '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>',
       )
@@ -121,6 +186,7 @@ export function createDiagramRenderer(browser: Browser): DiagramRenderer {
       maxText: artifactRenderLimits.diagramChars,
       font: FONT,
       secure: LOCKED,
+      maxSize: PLANTUML_MAX_SIDE,
     }
     let timer: NodeJS.Timeout | undefined
     const timeout = new Promise<'timeout'>((resolve) => {
@@ -155,8 +221,9 @@ export function createDiagramRenderer(browser: Browser): DiagramRenderer {
   }
 
   return {
-    async render({ workspaceId, source }) {
-      const slot = await open(workspaceId)
+    async render({ workspaceId, source, engine = 'mermaid' }) {
+      const key = `${engine}:${workspaceId}`
+      const slot = await open(key, engine)
       slot.usedAt = Date.now()
       // One diagram at a time on a page: `initialize` is global to it.
       const result = slot.queue.then(() => once(slot, source))
@@ -172,7 +239,9 @@ export function createDiagramRenderer(browser: Browser): DiagramRenderer {
         }
       }
       // A page that failed or timed out is not used again: a new one is made for the next diagram.
-      if (!outcome.ok) await drop(workspaceId, slot)
+      // PlantUML answers an error of the text with a picture, its page whole: it stays.
+      if (!outcome.ok && !(engine === 'plantuml' && outcome.reason === 'parse'))
+        await drop(key, slot)
       return outcome
     },
     async close() {

@@ -18,13 +18,22 @@ function processor() {
   const notify = { run: vi.fn(async () => 'sent' as const) }
   const artifactNotify = { run: vi.fn(async () => {}) }
   const artifactDiagram = { run: vi.fn(async () => {}) }
+  const chatDiagram = { run: vi.fn(async () => {}) }
   return {
     passes,
     queue,
     notify,
     artifactNotify,
     artifactDiagram,
-    processor: new TurnsProcessor(passes, queue, notify, artifactNotify, artifactDiagram),
+    chatDiagram,
+    processor: new TurnsProcessor(
+      passes,
+      queue,
+      notify,
+      artifactNotify,
+      artifactDiagram,
+      chatDiagram,
+    ),
   }
 }
 
@@ -34,6 +43,13 @@ describe('TurnsProcessor', () => {
     const data = { artifactId: TASK, block: 'd1' }
     await worker.process(job('artifact.diagram', data))
     expect(artifactDiagram.run).toHaveBeenCalledWith(data)
+  })
+
+  it('draws a diagram of an answer in the chat (docs/plan/91, Д5)', async () => {
+    const { chatDiagram, processor: worker } = processor()
+    const data = { taskId: TASK, row: '42', index: 0 }
+    await worker.process(job('chat.diagram', data))
+    expect(chatDiagram.run).toHaveBeenCalledWith(data)
   })
 
   it('tells a reader of an artifact by its job (docs/plan/88, Ар54)', async () => {

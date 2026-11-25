@@ -59,6 +59,82 @@ export function diagramErrorRu(line: number | null): string {
     : `Схема не нарисована: ошибка в строке ${line}`
 }
 
+/**
+ * The engines of a diagram (docs/plan/91-chat-diagrams.md, Д2): Mermaid 12 and PlantUML of
+ * `@plantuml/core` (TeaVM), both in the Chromium of the render pool, never in the cabinet.
+ */
+export const diagramEngines = ['mermaid', 'plantuml'] as const
+export type DiagramEngine = (typeof diagramEngines)[number]
+export const diagramEngineSchema = z.enum(diagramEngines)
+
+/** The engine the language of a fenced block names; null — the block is code, not a diagram. */
+export function diagramEngineOf(language: string): DiagramEngine | null {
+  const name = language.trim().toLowerCase()
+  if (name === 'mermaid') return 'mermaid'
+  if (name === 'plantuml' || name === 'puml' || name === 'uml') return 'plantuml'
+  return null
+}
+
+const PLANTUML_FENCE =
+  /^\s*(`{3,}|~{3,})[ \t]*(?:plantuml|puml|uml)?[ \t]*\n([\s\S]*?)\n[ \t]*\1[ \t]*$/i
+const PLANTUML_START = /^\s*@start\w+/m
+
+/**
+ * The text PlantUML sees: no fence, no no-break space; a text without `@start…` is wrapped in
+ * `@startuml`/`@enduml`. `!include` and `!theme` stay: the page has no network and no files, so they
+ * fail and the error goes back to the author (Д2).
+ */
+export function normalizePlantUmlSource(source: string): string {
+  let text = source.replace(/\r\n?/g, '\n')
+  const fence = PLANTUML_FENCE.exec(text)
+  if (fence) text = fence[2]!
+  // Leading blank lines stay: PlantUML counts them, and the line of an error is the author's.
+  text = text.replace(NO_BREAK, ' ').replace(/\s+$/, '')
+  return PLANTUML_START.test(text) ? text : `@startuml\n${text}\n@enduml`
+}
+
+/** The text an engine sees. */
+export function normalizeDiagramFor(engine: DiagramEngine, source: string): string {
+  return engine === 'plantuml' ? normalizePlantUmlSource(source) : normalizeDiagramSource(source)
+}
+
+export interface MessageDiagram {
+  engine: DiagramEngine
+  /** The text of the block as Markdown gives it: the lines between the fences, unindented. */
+  source: string
+}
+
+const OPEN_FENCE = /^( {0,3})(`{3,}|~{3,})[ \t]*([^\s`]*)[^`]*$/
+
+/**
+ * The diagrams of an answer of the agent, in their order (docs/plan/91-chat-diagrams.md, Д4): the
+ * fenced blocks of `mermaid`, `plantuml`, `puml` or `uml`, as CommonMark reads a fence — an opening
+ * of three or more backticks or tildes indented by at most three spaces, a closing of the same
+ * character at least as long, the indent of the opening taken off every line. A fence in a list or
+ * a quote is not seen: its text then stays code in the chat.
+ */
+export function messageDiagrams(text: string): MessageDiagram[] {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
+  const found: MessageDiagram[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const open = OPEN_FENCE.exec(lines[i]!)
+    if (!open) continue
+    const [, indent, fence, language] = open
+    const mark = fence![0]!
+    const close = new RegExp(`^ {0,3}\\${mark}{${fence!.length},}[ \\t]*$`)
+    let end = i + 1
+    while (end < lines.length && !close.test(lines[end]!)) end++
+    const engine = diagramEngineOf(language ?? '')
+    if (engine) {
+      const strip = new RegExp(`^ {0,${indent!.length}}`)
+      const body = lines.slice(i + 1, end).map((line) => line.replace(strip, ''))
+      found.push({ engine, source: body.join('\n') })
+    }
+    i = end
+  }
+  return found
+}
+
 export const ARTIFACT_DIAGRAM_PATH = '/v1/diagram'
 
 /** `POST /v1/diagram` of `apps/browser`: one text, drawn on the page of its workspace. */
@@ -66,6 +142,8 @@ export const artifactDiagramRenderRequestSchema = z.strictObject({
   /** The page is one a workspace (§7.13): a script that ever ran draws no other client's diagram. */
   workspaceId: z.uuid(),
   source: z.string().min(1).max(artifactRenderLimits.diagramChars),
+  /** The engine; none — Mermaid, as the artifacts of «Схема» send it (plan 91, Д2). */
+  engine: diagramEngineSchema.optional(),
 })
 export type ArtifactDiagramRenderRequest = z.infer<typeof artifactDiagramRenderRequestSchema>
 
