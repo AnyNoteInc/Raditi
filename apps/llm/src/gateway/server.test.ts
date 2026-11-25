@@ -212,6 +212,8 @@ async function setup(
   }
   const credentials = { get: vi.fn().mockResolvedValue(wire.credential) }
   const logger = { log: vi.fn(), warn: vi.fn() }
+  /** The calls whose answer the gateway gave back to the pool (docs/plan/94). */
+  const released: string[] = []
   const egress: StreamingEgress = {
     request: vi.fn<StreamingEgress['request']>(
       async (target, options) =>
@@ -239,6 +241,9 @@ async function setup(
                 ),
                 rawHeaders: response.rawHeaders,
                 body: response,
+                release: () => {
+                  released.push(target.url)
+                },
                 close: () => {
                   response.destroy()
                   outgoing.destroy()
@@ -280,7 +285,7 @@ async function setup(
       await once(upstream, 'close')
     }
   })
-  return { gateway, store, egress, credentials, logger }
+  return { gateway, store, egress, credentials, logger, released }
 }
 
 function call(
@@ -1394,7 +1399,7 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
   )
 
   it('scrubs a provider failure inside a started stream, keeps its refusal and estimates the call at the cost of the platform', async () => {
-    const { gateway, store } = await setup((req, res) => {
+    const { gateway, store, released } = await setup((req, res) => {
       req.resume()
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       res.end(
@@ -1410,6 +1415,8 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     expect(result.body).toContain('"code":"raditi_policy_flagged"')
     expect(result.body).not.toContain('private account')
     expect(result.body).not.toContain('private-response-id')
+    // A failure inside the stream: its connection is closed, never kept (docs/plan/94).
+    expect(released).toEqual([])
     expect(store.refuse).toHaveBeenCalledWith(key.keyId, 'policy_flagged')
     expect(store.finish).toHaveBeenCalledWith(
       'synthetic-call',
@@ -1425,7 +1432,7 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
 
   it('estimates only delta text for completed streams with missing or invalid usage', async () => {
     let index = 0
-    const { gateway, store } = await setup((req, res) => {
+    const { gateway, store, released } = await setup((req, res) => {
       req.resume()
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       const current = index++
@@ -1447,6 +1454,8 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
         usage: { output: 2 },
       })
     }
+    // Every complete answer gives its connection back to the pool (docs/plan/94).
+    expect(released).toHaveLength(3)
   })
 
   it('splits the input of its own estimates by the cache share admission reserved with', async () => {

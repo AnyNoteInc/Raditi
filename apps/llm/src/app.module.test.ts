@@ -16,6 +16,7 @@ const fakes = vi.hoisted(() => ({
   close: vi.fn(),
   createGateway: vi.fn(),
   createTransport: vi.fn(),
+  transportClose: vi.fn(),
   transportRequest: vi.fn(),
   createControlEgress: vi.fn(),
   createProbe: vi.fn(),
@@ -35,7 +36,7 @@ vi.mock('./egress/egress.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof EgressModule>()),
   createEgressTransport: (...args: unknown[]) => {
     fakes.createTransport(...args)
-    return { request: fakes.transportRequest }
+    return { request: fakes.transportRequest, close: fakes.transportClose }
   },
   createControlEgress: fakes.createControlEgress,
 }))
@@ -323,6 +324,8 @@ describe('llm role lifecycle', () => {
     const closing = app.close()
     await vi.advanceTimersByTimeAsync(0)
     expect(fakes.poolClose).toHaveBeenCalledOnce()
+    // The free provider connections go once the gateway is closed (docs/plan/94).
+    expect(fakes.transportClose).toHaveBeenCalledOnce()
     // The pass of the pool that was running at shutdown is waited for, within its bound.
     expect(disconnect).not.toHaveBeenCalled()
     ticked.resolve()

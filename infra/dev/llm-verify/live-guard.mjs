@@ -10,8 +10,10 @@
 //   - to the provider, exactly `host:port`: written to the ledger first and opened only if its
 //     place among the provider connections of the whole run is not above the cap;
 //   - to anything else: refused before a packet leaves, and named in the ledger.
-// The role llm opens a connection of its own for every request it sends (a generation, a quota
-// probe), so the ledger counts provider requests, and a request that would be one too many never
+// The role keeps the connection of an answer for the next call (docs/plan/94); under the guard no
+// agent of node:http or node:https keeps a connection, so every request it sends (a generation, a
+// quota probe) has a connection of its own, the ledger counts provider requests, and a request
+// that would be one too many never
 // leaves the machine whatever asked for it: a CLI that repeats, a model that loops, a role that
 // lost its own limits. The ledger is one file shared by the processes of a run; a line is
 // appended whole (O_APPEND), and its place in the file is the order every process agrees on. A
@@ -23,6 +25,7 @@
 // Ledger lines: `<kind> <pid> <ms> <seq> [host:port]`; kinds: `a` an attempt (its place is the
 // order), `c` a connection let through, `r` one refused over the cap, `f` one to another host.
 import { closeSync, openSync, readFileSync, writeSync } from 'node:fs'
+import http from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import process from 'node:process'
@@ -131,6 +134,11 @@ function install() {
     }
     process.nextTick(() => this.destroy(error))
     return this
+  }
+  // A connection serves one request: the ledger counts connections as provider requests. The
+  // agents of node:https inherit from this one, and an agent made before the guard does too.
+  http.Agent.prototype.keepSocketAlive = function noKeptConnection() {
+    return false
   }
   // Named imports of node:net see the guarded function as well.
   syncBuiltinESMExports()

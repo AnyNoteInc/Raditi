@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import { turnResultSchema } from '@repo/domain'
 
@@ -210,11 +211,6 @@ export async function verifyZai(ctx) {
   assert.equal(throughProxy.code, 0, `The proxied turn failed with exit ${throughProxy.code}`)
   assert.deepEqual(throughProxy.result, proxiedResult)
   assert.equal(throughProxy.provider.length, 1)
-  // The stand's proxy logs a tunnel when it ends, and a tunnel ends with its exchange: the
-  // probe that wrote the windows and the generation, and no other.
-  await eventually(async () => (await proxyTunnels()) >= 2).catch(() =>
-    assert.fail('The proxy has not ended the tunnels of the probe and of the generation'),
-  )
   await settled(proxied, 1)
   await revoke(proxied)
   passed(
@@ -223,10 +219,19 @@ export async function verifyZai(ctx) {
 
   setStage('driver-prepared OpenCode turns on the direct path')
   await direct()
-  // Both tunnels of the role that had the proxy have ended and are in the log of the proxy:
-  // from here on none opens.
+  // The stand's proxy logs a tunnel when it ends. The role keeps the connection of a complete
+  // answer for the next call of the same account (docs/plan/94), so the tunnels of the role that
+  // had the proxy end with it: the probe that wrote the windows and the generation share one, or
+  // have one each when the probe's expired before the turn — and no other. From here none opens.
+  await eventually(async () => (await proxyTunnels()) >= 1).catch(() =>
+    assert.fail('The proxy has not ended the tunnels of the probe and of the generation'),
+  )
+  await sleep(1_000)
   const tunnels = await proxyTunnels()
-  assert.equal(tunnels, 2, 'The proxied role opened another tunnel than its probe and its turn')
+  assert.ok(
+    tunnels >= 1 && tunnels <= 2,
+    'The proxied role opened another tunnel than its probe and its turn',
+  )
   const first = await issued()
   const firstResult = resultFor('B13 OpenCode exec', ['zai-first.txt', 'zai-second.txt'])
   await zai({

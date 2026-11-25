@@ -51,6 +51,6 @@ import { CONTROL_HTTP, EGRESS_TRANSPORT, GENERATION_EGRESS, REGION_HTTP } from '
       inject: [EGRESS_TRANSPORT, EgressHealth],
     },
   ],
-  exports: [EgressHealth, GENERATION_EGRESS, CONTROL_HTTP, REGION_HTTP],
+  exports: [EgressHealth, EGRESS_TRANSPORT, GENERATION_EGRESS, CONTROL_HTTP, REGION_HTTP],
 })
 export class EgressModule {}
