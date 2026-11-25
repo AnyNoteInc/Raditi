@@ -7,7 +7,6 @@ import {
   MenuButtonBlockquote,
   MenuButtonBold,
   MenuButtonBulletedList,
-  MenuButtonCode,
   MenuButtonAddTable,
   MenuButtonItalic,
   MenuButtonOrderedList,
@@ -123,7 +122,6 @@ export const SectionEditor = forwardRef<
               <MenuButtonBold tooltipLabel={editorTexts.bold} />
               <MenuButtonItalic tooltipLabel={editorTexts.italic} />
               <MenuButtonStrikethrough tooltipLabel={editorTexts.strike} />
-              <MenuButtonCode tooltipLabel={editorTexts.code} />
               <MenuDivider />
               <MenuButtonBulletedList tooltipLabel={editorTexts.bullets} />
               <MenuButtonOrderedList tooltipLabel={editorTexts.numbers} />

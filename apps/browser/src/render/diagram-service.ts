@@ -11,9 +11,9 @@ import {
 
 import type { RenderPool } from './render-pool.ts'
 
-// The diagrams of «Схема» (docs/plan/88-artifacts.md, §7.13, slice 88.24а; spike 7): the text
-// normalised, drawn by Mermaid on the page of its workspace in the render pool, cleaned for `<img>`,
-// at most 512 KiB. Plain class: the stand loads it from its sources.
+// The diagrams of chat answers (docs/plan/91-chat-diagrams.md; spike 7 of plan 88; the «Схема»
+// artifact was removed in plan 93, АТ3): the text normalised, drawn by Mermaid on the page of its
+// workspace in the render pool, cleaned for `<img>`, at most 512 KiB. Plain class: the stand loads it from its sources.
 
 export class DiagramService {
   readonly #pool: Pick<RenderPool, 'run'>

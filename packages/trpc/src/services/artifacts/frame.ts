@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 
 import {
-  artifactBrandOf,
   artifactFileFor,
   artifactFilesByIds,
   artifactRole,
@@ -25,8 +24,6 @@ import {
   artifactFileRefsOf,
   artifactFrameBlocksOf,
   artifactFrameDocument,
-  brandCss,
-  brandTokensOf,
   artifactImportKindOf,
   artifactKindCreatable,
   artifactKindRefused,
@@ -53,7 +50,7 @@ import { applyCabinetOps } from './editor.ts'
 
 // The frame of an artifact (docs/plan/88-artifacts.md, Ар9, Ар12, Ар28, §7.7; slices 88.12 and
 // 88.13). The cabinet gets an address of five minutes for this viewer: `/v/<token>` on the root of
-// the domain of pages for the frame that runs the mockup, `/api/artifact-frame/<token>` on its own
+// the domain of pages for the frame that runs a screen, `/api/artifact-frame/<token>` on its own
 // origin for the edit frame that runs nothing. Each GET reads the role again and assembles the
 // document of the frame from the checked blocks; each file it names gets a signed address of its
 // own, bound to the viewer, and the policy of the frame names exactly those addresses.
@@ -77,11 +74,14 @@ async function frameRole(db: PrismaClient, input: { userId: string; artifactId: 
   return role
 }
 
-/** The address of the frame of a mockup for this viewer (`/v/` on the root of the pages). */
+/**
+ * The address of a frame block for this viewer (`/v/` on the root of the pages): a screen of a
+ * canvas, a slide, a picture.
+ */
 export async function issueArtifactFrame(
   db: PrismaClient,
   chat: ChatContext | null,
-  input: { userId: string; artifactId: string; mode: 'view' | 'edit'; frame?: string },
+  input: { userId: string; artifactId: string; mode: 'view' | 'edit'; frame: string },
   now = Date.now(),
 ): Promise<{ url: string; expiresAt: string }> {
   const pages = pagesOf(chat)
@@ -90,16 +90,15 @@ export async function issueArtifactFrame(
     await db.artifact.findUnique({ where: { id: input.artifactId }, select: { kind: true } })
   )?.kind
   const spec = artifactKindSpecOf(kind ?? '')
-  // A mockup has one frame; a canvas a frame for each screen, named by the token (slice 88.15).
-  if (spec?.view !== 'frame' && spec?.view !== 'canvas') throw artifactNotFound()
-  if (spec.framed !== (input.frame !== undefined)) throw artifactNotFound()
+  // A frame for each screen, slide or picture, named by the token (slice 88.15).
+  if (spec?.view !== 'canvas') throw artifactNotFound()
   const expiresAt = now + PAGE_VIEW_TTL_MS
   const label: ArtifactTokenLabel = input.mode === 'view' ? 'artifact' : 'aedit'
   const token = signArtifactToken(pages.keys.view, label, {
     artifactId: input.artifactId,
     userId: input.userId,
     expiresAt,
-    ...(input.frame === undefined ? {} : { frame: input.frame }),
+    frame: input.frame,
   })
   return {
     url: input.mode === 'view' ? `${pages.origin}/v/${token}` : `/api/artifact-frame/${token}`,
@@ -113,7 +112,7 @@ export type FrameAnswer =
 
 /**
  * The document of a frame for the token's viewer, the role read now: the checked parts of the
- * mockup, its files by addresses of the root of the pages; in the edit frame — the parts stamped
+ * frame, its files by addresses of the root of the pages; in the edit frame — the parts stamped
  * with ids and with links that lead nowhere, without scripts.
  */
 export async function serveArtifactFrame(
@@ -130,20 +129,17 @@ export async function serveArtifactFrame(
     now,
   )
   if (read === 'expired') return { ok: false, status: 410 }
-  if (read === null) return { ok: false, status: 404 }
+  // Every frame is a block of its artifact: a token without one opens nothing.
+  if (read === null || read.frame === undefined) return { ok: false, status: 404 }
   if ((await artifactRole(db, read)) === null) return { ok: false, status: 404 }
   const artifact = await readArtifact(db, {
     artifactId: read.artifactId,
     actor: { kind: 'user', userId: read.userId },
   })
   const spec = artifactKindSpecOf(artifact.kind)
-  if (spec?.view !== 'frame' && spec?.view !== 'canvas') return { ok: false, status: 404 }
+  if (spec?.view !== 'canvas') return { ok: false, status: 404 }
   // The one assembly of a frame, as the renderer and the publication have it (§7.2).
-  const parts = artifactFrameBlocksOf({
-    framed: spec.framed,
-    blocks: artifact.blocks,
-    frame: read.frame ?? null,
-  })
+  const parts = artifactFrameBlocksOf({ blocks: artifact.blocks, frame: read.frame })
   if (parts === null) return { ok: false, status: 404 }
   const used = [
     ...parts.html,
@@ -173,11 +169,9 @@ export async function serveArtifactFrame(
       : addressed(block.content!),
   )
   const settings = parts.settings?.content ?? null
-  // The brand of the artifact's project stands in its frames as CSS variables (slice 88.15а).
-  const brand = await artifactBrandOf(db, artifact.id)
   const document = artifactFrameDocument({
     title: artifact.title,
-    platformCss: input.fonts.css + (brand ? brandCss(brandTokensOf(brand.settings)) : ''),
+    platformCss: input.fonts.css,
     bridge: input.mode === 'view',
     parts: {
       html,
@@ -248,11 +242,11 @@ export function isArtifactFrameToken(chat: ChatContext | null, token: string, no
 // ---- «Править текст» (Ар9) ----
 
 const patchRefusalTexts: Readonly<Record<ArtifactTextPatchRefusal, string>> = Object.freeze({
-  NO_ELEMENT: 'the element is gone: the mockup changed',
+  NO_ELEMENT: 'the element is gone: the frame changed',
   AMBIGUOUS_ID: 'this element is written twice in the HTML: change it in the chat',
   NOT_EDITABLE: 'the text of this element is not edited by hand',
-  SHAPE_CHANGED: 'the element changed: the mockup changed',
-  NO_SLOT: 'the element changed: the mockup changed',
+  SHAPE_CHANGED: 'the element changed: the frame changed',
+  NO_SLOT: 'the element changed: the frame changed',
   TEXT_NOT_IN_PLACE: 'the text of this element stands elsewhere in the HTML: change it in the chat',
   CHECK_FAILED: 'the edit did not fit the HTML: change it in the chat',
 })
@@ -337,17 +331,15 @@ export async function startCabinetArtifactFile(
 // ---- «Открыть как артефакт» (§3, Ар3; slice 88.12) ----
 
 const importBatches = (ops: ArtifactOp[]) => {
-  // The cabinet's rows are not counted against 50 operations; other blocks are, and every batch
-  // keeps within its JSON.
+  // Every batch keeps within 50 operations and within its JSON.
   const out: ArtifactOp[][] = []
   let batch: ArtifactOp[] = []
   let size = 0
   for (const op of ops) {
     const bytes = Buffer.byteLength(JSON.stringify(op))
-    const counted = batch.filter((each) => !(each.op === 'insert' && each.kind === 'row')).length
     if (
       batch.length > 0 &&
-      (counted >= artifactLimits.batchOps - 1 ||
+      (batch.length >= artifactLimits.batchOps - 1 ||
         size + bytes > artifactLimits.batchJsonBytes - 4096)
     ) {
       out.push(batch)
@@ -362,8 +354,9 @@ const importBatches = (ops: ArtifactOp[]) => {
 }
 
 /**
- * A `.md`, `.html`, `.svg` or `.csv` file of a chat the user may open becomes a new artifact of its
- * kind in the workspace and project of that chat: the person's writes, checked as they are written.
+ * A `.md` file of a chat the user may open becomes a document, an `.html`, `.htm` or `.svg` file a
+ * canvas with one screen (plan 93, АТ6), in the workspace and project of that chat: the person's
+ * writes, checked as they are written.
  */
 export async function importChatFileAsArtifact(
   db: PrismaClient,
@@ -391,8 +384,6 @@ export async function importChatFileAsArtifact(
   const imported = artifactImportOf(file.name, new TextDecoder().decode(file.bytes), {
     blockBytes: artifactLimits.blockBytes,
     blocks: artifactLimits.blocks,
-    tableRows: artifactLimits.tableRows,
-    columns: 50,
   })
   if (!imported.ok)
     throw artifactOpInvalid(`the file cannot be read as an artifact: ${imported.problem}`)
@@ -405,18 +396,24 @@ export async function importChatFileAsArtifact(
       task.projectId !== null && task.project?.createdById === input.userId ? task.projectId : null,
     actor,
   })
-  let after: string | null = null
+  // Each block after the one before it among the children of its parent: the screen at the top,
+  // its parts inside it.
+  const last = new Map<string, string>()
   const ops: ArtifactOp[] = imported.blocks.map((block, at) => {
-    const key = `${block.kind === 'section' ? 's' : 'b'}${at + 1}`
+    const key = block.key ?? `${block.kind === 'section' ? 's' : 'b'}${at + 1}`
+    const parent = block.parent ?? ''
+    const props =
+      block.heading === undefined ? block.props : { ...block.props, heading: block.heading }
     const op: ArtifactOp = {
       op: 'insert',
       block: key,
-      after,
+      after: last.get(parent) ?? null,
+      ...(block.parent === undefined ? {} : { parent: block.parent }),
       kind: block.kind,
       content: block.content,
-      ...(block.heading === undefined ? {} : { props: { heading: block.heading } }),
+      ...(props === undefined ? {} : { props }),
     }
-    after = key
+    last.set(parent, key)
     return op
   })
   let at = 0

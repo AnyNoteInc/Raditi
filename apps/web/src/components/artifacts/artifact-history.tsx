@@ -10,8 +10,6 @@ import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import Drawer from '@mui/material/Drawer'
 import IconButton from '@mui/material/IconButton'
-import Tab from '@mui/material/Tab'
-import Tabs from '@mui/material/Tabs'
 import TextField from '@mui/material/TextField'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
@@ -26,24 +24,22 @@ import { documentSx, SectionText } from './artifact-document'
 import { formatDateTime } from './artifact-texts'
 import type { CabinetArtifact } from './use-artifact'
 
-// «История версий» (docs/plan/88-artifacts.md, Ар13; board D-history; slice 88.11а): «Версии» —
-// each with who made it and when, its text to read, «Вернуть эту версию» (the owner, after a word
-// of whose edits it overwrites) and, of a version after a turn, «Отменить правки этого хода»;
-// «Все изменения» — the journal, without text; «Сохранить текущую как версию…» with a label.
+// «История версий» (docs/plan/88-artifacts.md, Ар13; board D-history; slice 88.11а; docs/plan/92,
+// АТ9): one list of versions — each with who made it and when, its text to read, «Вернуть эту
+// версию» (the owner, after a word of whose edits it overwrites) and, of a version after an answer
+// of the agent, «Отменить правки агента»; «Сохранить текущую как версию…» with a label. The inner
+// journal of changes is not shown to the client.
 
 export const historyTexts = Object.freeze({
   open: 'История версий',
   title: 'История версий',
   close: 'Закрыть историю',
-  versions: 'Версии',
-  changes: 'Все изменения',
   version: (no: number) => `Версия ${no}`,
   now: 'сейчас',
-  byYou: 'вы',
-  afterTurn: (turn: number | null) => (turn === null ? 'после хода агента' : `после хода ${turn}`),
-  bySchedule: 'по расписанию',
-  chat: (title: string) => `Чат: ${title}`,
-  agent: 'Агент',
+  byYou: 'Вы',
+  bySchedule: 'По расписанию',
+  byAgent: (chat: string | null) => (chat ? `Ответ агента · чат «${chat}»` : 'Ответ агента'),
+  chat: (title: string) => `агента в чате «${title}»`,
   restore: 'Вернуть эту версию',
   restoreNote: 'Возврат — тоже новая версия: ничего не пропадёт.',
   restoreTitle: (no: number) => `Вернуть версию ${no}?`,
@@ -55,34 +51,19 @@ export const historyTexts = Object.freeze({
   confirm: 'Вернуть',
   cancel: 'Отмена',
   restored: (no: number) => `Готово: сохранено как версия ${no}.`,
-  undoTurn: 'Отменить правки этого хода',
+  undoTurn: 'Отменить правки агента',
   undone: (undone: number, kept: number) =>
     kept === 0
-      ? `Правки хода отменены: разделов — ${undone}.`
-      : `Отменено разделов: ${undone}. ${kept} уже изменили после хода — их мы не трогали.`,
+      ? `Правки агента отменены: разделов — ${undone}.`
+      : `Отменено разделов: ${undone}. ${kept} уже изменили после агента — их мы не трогали.`,
   saveCurrent: 'Сохранить текущую как версию…',
   label: 'Название версии',
   labelHint: 'Например, «Показала маме»',
   save: 'Сохранить',
   saved: (no: number) => `Сохранено как версия ${no}.`,
   failed: 'Не получилось. Попробуйте ещё раз.',
-  noVersions: 'Версий пока нет: они появляются после хода агента и после ваших правок.',
-  noChanges: 'Изменений пока нет.',
+  noVersions: 'Версий пока нет: они появляются после ответов агента и после ваших правок.',
   textGone: 'Текст этой версии не сохранился.',
-  change: {
-    insert: 'добавлен раздел',
-    replace: 'изменён раздел',
-    edit: 'изменён раздел',
-    move: 'раздел перемещён',
-    delete: 'раздел удалён',
-    props: 'изменены свойства',
-    title: 'изменено название',
-    take: 'правка забрана у агента',
-    check: 'текст агента проверен',
-    trash: 'в корзину',
-    restore: 'из корзины',
-  } as Record<string, string>,
-  refused: 'не прошло проверку',
 })
 
 /** «История версий» in the head of an artifact: the button and its panel. */
@@ -99,8 +80,9 @@ export function ArtifactHistoryButton({
       <Tooltip title={historyTexts.open}>
         <IconButton
           aria-label={historyTexts.open}
+          aria-haspopup="dialog"
           onClick={() => setOpen(true)}
-          sx={{ width: 40, height: 40 }}
+          sx={{ width: 40, height: 40, flexShrink: 0 }}
         >
           <AppIcon name="history" size={18} />
         </IconButton>
@@ -123,7 +105,6 @@ function ArtifactHistory({
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
-  const [tab, setTab] = useState<'versions' | 'changes'>('versions')
   const [chosen, setChosen] = useState<number | null>(null)
   const [confirming, setConfirming] = useState<number | null>(null)
   const [labelling, setLabelling] = useState(false)
@@ -134,10 +115,6 @@ function ArtifactHistory({
   const versions = useQuery({
     ...trpc.artifact.versions.queryOptions({ artifactId }),
     refetchOnMount: 'always',
-  })
-  const changes = useQuery({
-    ...trpc.artifact.changes.queryOptions({ artifactId }),
-    enabled: tab === 'changes',
   })
   const version = useQuery({
     ...trpc.artifact.version.queryOptions({ artifactId, no: chosen ?? 1 }),
@@ -151,7 +128,6 @@ function ArtifactHistory({
     void queryClient.invalidateQueries({
       queryKey: trpc.artifact.versions.queryKey({ artifactId }),
     })
-    void queryClient.invalidateQueries({ queryKey: trpc.artifact.changes.queryKey({ artifactId }) })
     onChanged()
   }
   const restore = useMutation(trpc.artifact.restoreVersion.mutationOptions())
@@ -167,10 +143,7 @@ function ArtifactHistory({
       ? historyTexts.byYou
       : row.author === 'schedule'
         ? historyTexts.bySchedule
-        : [
-            historyTexts.afterTurn(row.turnNo),
-            row.chat ? historyTexts.chat(row.chat) : historyTexts.agent,
-          ].join(' · ')
+        : historyTexts.byAgent(row.chat)
 
   return (
     <Drawer anchor="right" open onClose={onClose}>
@@ -192,14 +165,6 @@ function ArtifactHistory({
             <AppIcon name="close" size={18} />
           </IconButton>
         </Box>
-        <Tabs
-          value={tab}
-          onChange={(_, value: 'versions' | 'changes') => setTab(value)}
-          sx={{ px: 1 }}
-        >
-          <Tab value="versions" label={historyTexts.versions} />
-          <Tab value="changes" label={historyTexts.changes} />
-        </Tabs>
         {notice && (
           <Alert
             severity={notice.ok ? 'success' : 'error'}
@@ -210,134 +175,116 @@ function ArtifactHistory({
           </Alert>
         )}
         <Box sx={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto', px: 2, py: 1.5 }}>
-          {tab === 'versions' ? (
-            <>
-              {versions.isSuccess && rows.length === 0 && (
-                <Typography sx={{ color: 'text.secondary' }}>{historyTexts.noVersions}</Typography>
-              )}
-              <Box component="ol" sx={{ listStyle: 'none', m: 0, p: 0 }}>
-                {rows.map((row) => (
-                  <li key={row.no}>
-                    <ButtonBase
-                      onClick={() => setChosen(row.no === chosen ? null : row.no)}
-                      aria-expanded={row.no === chosen}
-                      sx={{
-                        width: '100%',
-                        justifyContent: 'flex-start',
-                        textAlign: 'left',
-                        display: 'block',
-                        px: 1.25,
-                        py: 1,
-                        borderRadius: '10px',
-                        bgcolor: row.no === chosen ? 'action.selected' : 'transparent',
-                        '&:hover': { bgcolor: 'action.hover' },
-                      }}
-                    >
-                      <Typography sx={{ fontWeight: 600, fontSize: 14 }}>
-                        {historyTexts.version(row.no)}
-                        <Box component="span" sx={{ fontWeight: 400, color: 'text.secondary' }}>
-                          {' · '}
-                          {row.current ? historyTexts.now : formatDateTime(row.createdAt)}
-                        </Box>
-                      </Typography>
-                      {row.label && <Typography sx={{ fontSize: 14 }}>«{row.label}»</Typography>}
-                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                        {authorOf(row)}
-                      </Typography>
-                    </ButtonBase>
-                  </li>
-                ))}
-              </Box>
-            </>
-          ) : (
-            <>
-              {changes.isSuccess && (changes.data ?? []).length === 0 && (
-                <Typography sx={{ color: 'text.secondary' }}>{historyTexts.noChanges}</Typography>
-              )}
-              <Box component="ol" sx={{ listStyle: 'none', m: 0, p: 0 }}>
-                {(changes.data ?? []).map((change) => (
-                  <Box
-                    component="li"
-                    key={change.seq}
-                    sx={{ py: 0.75, borderBottom: 1, borderColor: 'divider' }}
-                  >
-                    <Typography sx={{ fontSize: 14 }}>
-                      {change.author.kind === 'person'
-                        ? change.author.self
-                          ? historyTexts.byYou
-                          : change.author.name
-                        : change.author.chat
-                          ? historyTexts.chat(change.author.chat)
-                          : historyTexts.agent}
+          {versions.isSuccess && rows.length === 0 && (
+            <Typography sx={{ color: 'text.secondary' }}>{historyTexts.noVersions}</Typography>
+          )}
+          <Box component="ol" sx={{ listStyle: 'none', m: 0, p: 0 }}>
+            {rows.map((row) => (
+              <li key={row.no}>
+                <ButtonBase
+                  onClick={() => setChosen(row.no === chosen ? null : row.no)}
+                  aria-expanded={row.no === chosen}
+                  sx={{
+                    width: '100%',
+                    justifyContent: 'flex-start',
+                    textAlign: 'left',
+                    display: 'block',
+                    px: 1.25,
+                    py: 1,
+                    borderRadius: '10px',
+                    bgcolor: row.no === chosen ? 'action.selected' : 'transparent',
+                    '&:hover': { bgcolor: 'action.hover' },
+                  }}
+                >
+                  <Typography sx={{ fontWeight: 600, fontSize: 14 }}>
+                    {historyTexts.version(row.no)}
+                    <Box component="span" sx={{ fontWeight: 400, color: 'text.secondary' }}>
                       {' · '}
-                      {historyTexts.change[change.kind] ?? change.kind}
-                      {change.result === 'refused' || change.result === 'dropped'
-                        ? ` · ${historyTexts.refused}`
-                        : ''}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                      {formatDateTime(change.createdAt)}
+                      {row.current ? historyTexts.now : formatDateTime(row.createdAt)}
+                    </Box>
+                  </Typography>
+                  {row.label && <Typography sx={{ fontSize: 14 }}>«{row.label}»</Typography>}
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    {authorOf(row)}
+                  </Typography>
+                </ButtonBase>
+                {row.no === chosen && shown !== null && (
+                  <Box
+                    sx={{
+                      mt: 0.5,
+                      mb: 1.5,
+                      mx: 1.25,
+                      pl: 1.5,
+                      borderLeft: 2,
+                      borderColor: 'divider',
+                    }}
+                  >
+                    {version.data ? (
+                      version.data.blocks.length === 0 ? (
+                        <Typography sx={{ color: 'text.secondary' }}>
+                          {historyTexts.textGone}
+                        </Typography>
+                      ) : (
+                        version.data.blocks.map((block) => (
+                          <Box key={block.key} sx={{ mb: 1.5 }}>
+                            {block.heading && (
+                              <Typography sx={{ fontWeight: 650 }}>{block.heading}</Typography>
+                            )}
+                            <Box sx={{ ...documentSx, fontSize: 14 }}>
+                              <SectionText text={block.content ?? ''} />
+                            </Box>
+                          </Box>
+                        ))
+                      )
+                    ) : null}
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1 }}>
+                      {owner && !shown.current && (
+                        <Button
+                          variant="contained"
+                          size="small"
+                          onClick={() => setConfirming(shown.no)}
+                        >
+                          {historyTexts.restore}
+                        </Button>
+                      )}
+                      {editor &&
+                        shown.author === 'turn' &&
+                        shown.taskId !== null &&
+                        shown.turnNo !== null && (
+                          <Button
+                            size="small"
+                            onClick={() =>
+                              void undoTurn
+                                .mutateAsync({
+                                  artifactId,
+                                  taskId: shown.taskId!,
+                                  turnNo: shown.turnNo!,
+                                })
+                                .then((answer) => {
+                                  setNotice({
+                                    ok: true,
+                                    text: historyTexts.undone(answer.undone, answer.kept),
+                                  })
+                                  reread()
+                                })
+                                .catch(() => setNotice({ ok: false, text: historyTexts.failed }))
+                            }
+                          >
+                            {historyTexts.undoTurn}
+                          </Button>
+                        )}
+                    </Box>
+                    <Typography
+                      variant="caption"
+                      sx={{ display: 'block', mt: 1, color: 'text.secondary' }}
+                    >
+                      {historyTexts.restoreNote}
                     </Typography>
                   </Box>
-                ))}
-              </Box>
-            </>
-          )}
-          {tab === 'versions' && shown !== null && (
-            <Box sx={{ mt: 2, p: 1.5, borderRadius: '12px', border: 1, borderColor: 'divider' }}>
-              {version.data ? (
-                version.data.blocks.length === 0 ? (
-                  <Typography sx={{ color: 'text.secondary' }}>{historyTexts.textGone}</Typography>
-                ) : (
-                  version.data.blocks.map((block) => (
-                    <Box key={block.key} sx={{ mb: 1.5 }}>
-                      {block.heading && (
-                        <Typography sx={{ fontWeight: 650 }}>{block.heading}</Typography>
-                      )}
-                      <Box sx={{ ...documentSx, fontSize: 14 }}>
-                        <SectionText text={block.content ?? ''} />
-                      </Box>
-                    </Box>
-                  ))
-                )
-              ) : null}
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1 }}>
-                {owner && !shown.current && (
-                  <Button variant="contained" size="small" onClick={() => setConfirming(shown.no)}>
-                    {historyTexts.restore}
-                  </Button>
                 )}
-                {editor &&
-                  shown.author === 'turn' &&
-                  shown.taskId !== null &&
-                  shown.turnNo !== null && (
-                    <Button
-                      size="small"
-                      onClick={() =>
-                        void undoTurn
-                          .mutateAsync({ artifactId, taskId: shown.taskId!, turnNo: shown.turnNo! })
-                          .then((answer) => {
-                            setNotice({
-                              ok: true,
-                              text: historyTexts.undone(answer.undone, answer.kept),
-                            })
-                            reread()
-                          })
-                          .catch(() => setNotice({ ok: false, text: historyTexts.failed }))
-                      }
-                    >
-                      {historyTexts.undoTurn}
-                    </Button>
-                  )}
-              </Box>
-              <Typography
-                variant="caption"
-                sx={{ display: 'block', mt: 1, color: 'text.secondary' }}
-              >
-                {historyTexts.restoreNote}
-              </Typography>
-            </Box>
-          )}
+              </li>
+            ))}
+          </Box>
         </Box>
         {editor && (
           <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider' }}>

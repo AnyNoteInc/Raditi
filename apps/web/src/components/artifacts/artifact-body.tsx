@@ -4,21 +4,16 @@ import Typography from '@mui/material/Typography'
 import { artifactKindSpecOf } from '@repo/domain/artifacts'
 
 import { ArtifactDocument } from './artifact-document'
-import { ArtifactBrand } from './brand/artifact-brand'
 import { ArtifactCanvas } from './canvas/artifact-canvas'
-import { ArtifactDiagram } from './diagram/artifact-diagram'
 import { ArtifactImages } from './images/artifact-images'
-import { ArtifactReport } from './report/artifact-report'
-import { ArtifactSitemap } from './sitemap/artifact-sitemap'
-import { ArtifactMockup } from './mockup/artifact-mockup'
 import { ArtifactSlides } from './slides/artifact-slides'
-import { ArtifactTable } from './table/artifact-table'
 import type { ArtifactBodyProps } from './artifact-body-props'
 
 export type { ArtifactBodyProps } from './artifact-body-props'
 
-// The body of an artifact on its page and in its tab (docs/plan/88-artifacts.md, §7.7, §7.14):
-// chosen by the view of its kind in the registry (rule 8) — Markdown sections, a frame, a sheet.
+// The body of an artifact on its page and in its tab (docs/plan/88-artifacts.md, §7.7, §7.14;
+// docs/plan/93-artifacts-trim.md, АТ1): chosen by the view of its kind in the registry (rule 8) —
+// Markdown sections or the screens of a canvas.
 
 export const bodyTexts = Object.freeze({
   notShown: 'Этот вид пока не открывается.',
@@ -29,10 +24,6 @@ export function ArtifactBody(props: ArtifactBodyProps & { onAccessLost: () => vo
   if (props.artifact.kind === 'slides') return <ArtifactSlides {...props} />
   // «Изображение» too: pictures in the sizes of their places (88.26).
   if (props.artifact.kind === 'image') return <ArtifactImages {...props} />
-  // «Структура сайта»: an outline of the pages of a future site (88.27).
-  if (props.artifact.kind === 'sitemap') return <ArtifactSitemap {...props} />
-  // «Отчёт»: sections, charts drawn on the server and a table (88.28).
-  if (props.artifact.kind === 'report') return <ArtifactReport {...props} />
   switch (artifactKindSpecOf(props.artifact.kind)?.view) {
     case 'markdown':
       return (
@@ -45,29 +36,13 @@ export function ArtifactBody(props: ArtifactBodyProps & { onAccessLost: () => vo
           onEditing={props.onEditing}
         />
       )
-    case 'frame':
-      return <ArtifactMockup {...props} />
-    case 'sheet':
-      return <ArtifactTable {...props} />
     case 'canvas':
       return <ArtifactCanvas {...props} />
-    case 'brand':
-      return <ArtifactBrand {...props} />
-    case 'diagram':
-      return <ArtifactDiagram {...props} />
     default:
       return <Typography sx={{ color: 'text.secondary' }}>{bodyTexts.notShown}</Typography>
   }
 }
 
 /** Whether the view of a kind wants the whole width of the page (no outline, no 820 px column). */
-export const artifactBodyWide = (kind: string): boolean => {
-  const view = artifactKindSpecOf(kind)?.view
-  return (
-    view === 'frame' ||
-    view === 'sheet' ||
-    view === 'canvas' ||
-    view === 'brand' ||
-    view === 'diagram'
-  )
-}
+export const artifactBodyWide = (kind: string): boolean =>
+  artifactKindSpecOf(kind)?.view === 'canvas'

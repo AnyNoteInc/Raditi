@@ -6,8 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ArtifactHistoryButton } from './artifact-history'
 import type { CabinetArtifact } from './use-artifact'
 
-// «История версий» (docs/plan/88-artifacts.md, Ар13, 88.11а): the versions, what «Вернуть» overwrites
-// before it is pressed, and «Отменить правки этого хода» of a version after a turn.
+// «История версий» (docs/plan/88-artifacts.md, Ар13, 88.11а; plan 93, АТ9): one list of versions,
+// what «Вернуть» overwrites before it is pressed, and «Отменить правки агента» of a version after an
+// answer of the agent — no inner journal, no «ход».
 
 const ID = '019f1a21-1800-7f00-8abc-000000000001'
 const TASK = '019f1a21-1800-7f00-8abc-0000000000aa'
@@ -59,7 +60,6 @@ vi.mock('@/trpc/client', () => ({
         createdAt: '2026-11-19T10:00:00.000Z',
         blocks: [{ key: 'a', kind: 'section', heading: 'Цены', content: 'Старая цена' }],
       })),
-      changes: query('changes', () => []),
       restorePreview: query('preview', () => ({
         blocks: 2,
         people: ['Анна'],
@@ -93,13 +93,16 @@ beforeEach(() => vi.clearAllMocks())
 describe('«История версий» (88.11а)', () => {
   it('names who made each version, and returns one after saying whose edits it overwrites', async () => {
     const { changed } = show()
-    expect(await screen.findByText('после хода 4 · Чат: Тексты')).toBeTruthy()
+    expect(await screen.findByText('Ответ агента · чат «Тексты»')).toBeTruthy()
+    expect(screen.getByText('Вы')).toBeTruthy()
+    expect(screen.queryByRole('tab')).toBeNull()
+    expect(screen.queryByText(/ход/)).toBeNull()
     fireEvent.click(screen.getByText('«Показала маме»'))
     expect(await screen.findByText('Старая цена')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Вернуть эту версию' }))
     const dialog = await screen.findByRole('dialog', { name: 'Вернуть версию 5?' })
     expect(
-      await within(dialog).findByText('Будут перезаписаны правки: Анна, Чат: Тексты.'),
+      await within(dialog).findByText('Будут перезаписаны правки: Анна, агента в чате «Тексты».'),
     ).toBeTruthy()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Вернуть' }))
     await waitFor(() =>
@@ -109,17 +112,17 @@ describe('«История версий» (88.11а)', () => {
     expect(changed).toHaveBeenCalled()
   })
 
-  it('takes back the edits of the turn of a version, and saves the current one with a label', async () => {
+  it('takes back the edits of the agent of a version, and saves the current one with a label', async () => {
     show()
     fireEvent.click(await screen.findByText(/Версия 7/))
-    fireEvent.click(await screen.findByRole('button', { name: 'Отменить правки этого хода' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Отменить правки агента' }))
     await waitFor(() =>
       expect(undoTurn).toHaveBeenCalledWith(
         { artifactId: ID, taskId: TASK, turnNo: 4 },
         expect.anything(),
       ),
     )
-    expect(await screen.findByText(/1 уже изменили после хода/)).toBeTruthy()
+    expect(await screen.findByText(/1 уже изменили после агента/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить текущую как версию…' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Название версии' }), {
       target: { value: 'Черновик' },

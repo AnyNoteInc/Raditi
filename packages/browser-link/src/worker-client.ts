@@ -27,21 +27,15 @@ import {
 } from '@repo/domain'
 import {
   ARTIFACT_DIAGRAM_PATH,
-  ARTIFACT_PRINT_PATH,
   ARTIFACT_RENDER_PATH,
   artifactDiagramRenderRequestSchema,
   artifactDiagramRenderResponseSchema,
-  artifactPrintLimits,
-  artifactPrintRequestSchema,
-  artifactPrintResponseSchema,
   artifactRenderCallMs,
   artifactRenderLimits,
   artifactRenderRequestSchema,
   artifactRenderResponseSchema,
   type ArtifactDiagramRenderRequest,
   type ArtifactDiagramRenderResponse,
-  type ArtifactPrintRequest,
-  type ArtifactPrintResponse,
   type ArtifactRenderRequest,
   type ArtifactRenderResponse,
 } from '@repo/domain/artifacts'
@@ -56,7 +50,7 @@ import { browserWorkerOrigin } from './worker-url.ts'
 // nor the worker's address nor anything the worker sent back ever reaches an error.
 
 export type BrowserWorkerOperation =
-  'ensure' | 'close' | 'verify' | 'list' | 'action' | 'render' | 'diagram' | 'print'
+  'ensure' | 'close' | 'verify' | 'list' | 'action' | 'render' | 'diagram'
 
 /** How long each call may take, end to end (the answer read included). */
 export interface BrowserWorkerTimeouts {
@@ -70,10 +64,11 @@ export interface BrowserWorkerTimeouts {
   actionMs: number
   /** A frame of an artifact drawn at two widths (docs/plan/88-artifacts.md, §7.12). */
   renderMs: number
-  /** A diagram of «Схема»: 10 s of the engine and the wait for a free renderer (88.24). */
+  /**
+   * A Mermaid or PlantUML diagram of a chat answer (plan 91): 10 s of the engine and the wait for
+   * a free renderer.
+   */
   diagramMs: number
-  /** A report printed into a PDF (88.32): 30 s of the print and the wait for a free renderer. */
-  printMs: number
 }
 
 const COLD_START_MAX_MS = 90_000
@@ -88,7 +83,6 @@ export const browserWorkerTimeoutDefaults: Readonly<BrowserWorkerTimeouts> = Obj
   // The call of `artifact_layout` (20 s) and the wait for a free renderer.
   renderMs: artifactRenderCallMs + 15_000,
   diagramMs: artifactRenderLimits.diagramRenderMs + 15_000 + 5_000,
-  printMs: artifactPrintLimits.printMs + 15_000 + 5_000,
 })
 
 /** The longest each call may be given: a slower call would outlive its caller. */
@@ -100,7 +94,6 @@ const timeoutMax: Readonly<BrowserWorkerTimeouts> = Object.freeze({
   actionMs: browserSessionTimings.toolCallBudgetMs,
   renderMs: 90_000,
   diagramMs: 60_000,
-  printMs: 90_000,
 })
 
 /**
@@ -110,9 +103,6 @@ const timeoutMax: Readonly<BrowserWorkerTimeouts> = Object.freeze({
 export const BROWSER_WORKER_RESPONSE_MAX_BYTES = 1024 * 1024
 /** The answer of a render: up to four JPEG strips in base64 (Ар32, up to 1.3 MiB of pictures). */
 export const BROWSER_RENDER_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
-/** The answer of a print: a PDF of up to 8 MiB in base64, and its JSON (88.32). */
-export const BROWSER_PRINT_RESPONSE_MAX_BYTES =
-  Math.ceil((artifactPrintLimits.pdfBytes * 4) / 3) + 4096
 
 /** What went wrong, in `DomainError.details`: no address, no token, nothing the worker sent. */
 export interface BrowserWorkerFailure {
@@ -167,21 +157,13 @@ export interface BrowserWorkerClient {
     options?: BrowserWorkerCallOptions,
   ): Promise<ArtifactRenderResponse>
   /**
-   * `POST /v1/diagram`: the Mermaid text of «Схема» drawn and cleaned (88.24). A text that does not
-   * parse is an answer `{ ok: false, line }`; a refusal `RENDER_*` rejects with that code.
+   * `POST /v1/diagram`: the diagram text of a chat answer drawn and cleaned (plan 91). A text that
+   * does not parse is an answer `{ ok: false, line }`; a refusal `RENDER_*` rejects with that code.
    */
   diagram(
     request: ArtifactDiagramRenderRequest,
     options?: BrowserWorkerCallOptions,
   ): Promise<ArtifactDiagramRenderResponse>
-  /**
-   * `POST /v1/print`: a page without scripts printed into a PDF — «Скачать PDF» of «Отчёт» (88.32).
-   * A refusal `RENDER_*` rejects with that code.
-   */
-  print(
-    request: ArtifactPrintRequest,
-    options?: BrowserWorkerCallOptions,
-  ): Promise<ArtifactPrintResponse>
 }
 
 export type BrowserClosed = z.infer<typeof browserCloseResponseSchema>
@@ -241,11 +223,9 @@ export function createBrowserWorkerClient(
       status = response.status
       answer = await readJson(
         response,
-        operation === 'print'
-          ? BROWSER_PRINT_RESPONSE_MAX_BYTES
-          : operation === 'render'
-            ? BROWSER_RENDER_RESPONSE_MAX_BYTES
-            : BROWSER_WORKER_RESPONSE_MAX_BYTES,
+        operation === 'render'
+          ? BROWSER_RENDER_RESPONSE_MAX_BYTES
+          : BROWSER_WORKER_RESPONSE_MAX_BYTES,
       )
     } catch {
       if (caller?.aborted) throw caller.reason
@@ -341,10 +321,6 @@ export function createBrowserWorkerClient(
         callOptions,
       )
     },
-    async print(request, callOptions) {
-      const body = checked('print', artifactPrintRequestSchema, request)
-      return call('print', artifactPrintResponseSchema, ARTIFACT_PRINT_PATH, body, callOptions)
-    },
   }
 }
 
@@ -407,10 +383,7 @@ function refusal(operation: BrowserWorkerOperation, status: number, answer: unkn
     const { code } = parsed.data
     if (isTaskCode(code)) return codeError(code, { operation, failure: 'refused', status })
     // The renderer's own refusals (busy, not configured) keep their codes at 503 too.
-    if (
-      status < 500 ||
-      ((operation === 'render' || operation === 'print') && code.startsWith('RENDER_'))
-    )
+    if (status < 500 || (operation === 'render' && code.startsWith('RENDER_')))
       return new DomainError(code, 'The browser worker refused the request', status, {
         operation,
         failure: 'refused',

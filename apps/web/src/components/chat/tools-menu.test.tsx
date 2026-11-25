@@ -101,7 +101,7 @@ describe('the groups of «+» (docs/plan/88-artifacts.md, Ар44)', () => {
       within(menu)
         .getAllByRole('separator')
         .map((each) => each.textContent),
-    ).toEqual(['Инструменты', 'Артефакты чата · Сделаны здесь'])
+    ).toEqual(['Инструменты', 'Сделано в чате'])
     const item = within(menu).getByRole('menuitem', { name: /Тексты для сайта/ })
     expect(item.textContent).toContain('Открыто')
     fireEvent.click(item)

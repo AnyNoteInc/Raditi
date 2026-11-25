@@ -137,8 +137,8 @@ export const mailDataSchemas = {
   // safe, the kind as a word, never a title or anything of the artifact.
   'artifact-invite': z.object({
     inviterName: recipientName,
-    /** «документ», «макет», «таблицу»… — the accusative of the kind. */
-    kindWord: z.enum(['документ', 'макет', 'таблицу', 'холст', 'фирменный стиль', 'артефакт']),
+    /** «документ», «холст», «презентацию»… — the accusative of the kind (plan 93: four kinds). */
+    kindWord: z.enum(['документ', 'холст', 'презентацию', 'изображение', 'артефакт']),
     /** «Приглашения» in the cabinet: after sign-in with this address. */
     url: httpUrl,
   }),

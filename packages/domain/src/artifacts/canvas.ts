@@ -221,10 +221,8 @@ export function canvasThumbKey(input: {
   blocks: readonly Pick<CanvasBlock, 'key' | 'kind' | 'parent' | 'rev' | 'content'>[]
   frame: string
   title: string
-  /** The brand of the canvas: its artifact and its `seq`; null — none. */
-  brand: { id: string; seq: number } | null
 }): string {
-  const parts = artifactFrameBlocksOf({ framed: true, blocks: input.blocks, frame: input.frame })
+  const parts = artifactFrameBlocksOf({ blocks: input.blocks, frame: input.frame })
   const entry = (block: (typeof input.blocks)[number]) => [block.key, block.rev, block.content]
   const used = parts && {
     html: parts.html.map(entry),
@@ -245,7 +243,6 @@ export function canvasThumbKey(input: {
       ...(typeof size === 'string' ? { size } : {}),
       title: input.title,
       used,
-      brand: input.brand,
     }),
   )
 }
@@ -270,8 +267,11 @@ export function stringHash(text: string): string {
   return one(1) + one(2)
 }
 
-/** The version of the renderer of frames: a change of how a frame is drawn draws them again. */
-export const CANVAS_RENDER_VERSION = 2
+/**
+ * The version of the renderer of frames: a change of how a frame is drawn draws them again (3 —
+ * no variables of a brand, docs/plan/93-artifacts-trim.md, АТ5).
+ */
+export const CANVAS_RENDER_VERSION = 3
 
 /** Where a thumbnail lies in the artifacts bucket (spec §14). */
 export const canvasThumbObjectKey = (input: {

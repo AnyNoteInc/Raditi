@@ -132,7 +132,7 @@ describe('the document of a frame', () => {
   })
 })
 
-describe('the settings of a mockup (Ар9)', () => {
+describe('the settings of a canvas (Ар9)', () => {
   it('give the form their scalars at the top level', () => {
     expect(artifactSettingsFields('{"price":1200,"title":"Окна","dark":false,"list":[1]}')).toEqual(
       [
@@ -148,8 +148,9 @@ describe('the settings of a mockup (Ар9)', () => {
 describe('import kinds', () => {
   it('follow the extension', () => {
     expect(artifactImportKindOf('a.MD')).toBe('document')
-    expect(artifactImportKindOf('a.svg')).toBe('mockup')
-    expect(artifactImportKindOf('a.csv')).toBe('table')
+    expect(artifactImportKindOf('a.svg')).toBe('canvas')
+    expect(artifactImportKindOf('a.HTML')).toBe('canvas')
+    expect(artifactImportKindOf('a.csv')).toBeNull()
     expect(artifactImportKindOf('a.txt')).toBeNull()
   })
 })

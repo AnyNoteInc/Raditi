@@ -402,7 +402,11 @@ export async function restoreProject(
       data: { deletedAt: null, purgeAfter: null, activityAt: input.now },
     })
     if (count !== 1) throw projectNotFound()
-    await restoreProjectArtifacts(tx, { projectId: project.id, userId: input.userId })
+    await restoreProjectArtifacts(tx, {
+      projectId: project.id,
+      userId: input.userId,
+      now: input.now,
+    })
   })
 }
 

@@ -2181,11 +2181,15 @@ describe('an artifact in Telegram (docs/plan/88-artifacts.md, Ар55)', () => {
     expect(feedArtifactTelegramText({ kind: 'document', created: true, title: 'План' })).toBe(
       'Создан документ «План»',
     )
-    expect(feedArtifactTelegramText({ kind: 'table', created: false, title: 'Прайс' })).toBe(
-      'Обновлена таблица «Прайс»',
+    expect(feedArtifactTelegramText({ kind: 'slides', created: false, title: 'Итоги' })).toBe(
+      'Обновлена презентация «Итоги»',
     )
-    expect(feedArtifactTelegramText({ kind: 'diagram', created: false, title: 'Схема' })).toBe(
-      'Обновлён артефакт «Схема»',
+    expect(feedArtifactTelegramText({ kind: 'image', created: true, title: 'Пост' })).toBe(
+      'Создано изображение «Пост»',
+    )
+    // A kind that left the list (docs/plan/93-artifacts-trim.md) is an «артефакт».
+    expect(feedArtifactTelegramText({ kind: 'table', created: false, title: 'Прайс' })).toBe(
+      'Обновлён артефакт «Прайс»',
     )
     expect(feedArtifactTelegramText({ kind: 'document', created: true, title: null })).toBe(
       'Артефакт обновлён',

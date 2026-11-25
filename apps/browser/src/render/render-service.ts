@@ -7,13 +7,7 @@ import {
   type FrameRenderFile,
   type FrameRenderResult,
 } from '@repo/browser-providers/render'
-import {
-  artifactBrandOf,
-  artifactFilesByIds,
-  readArtifact,
-  type ArtifactActor,
-  type PrismaClient,
-} from '@repo/db'
+import { artifactFilesByIds, readArtifact, type ArtifactActor, type PrismaClient } from '@repo/db'
 import { DomainError, isDomainError, type ObjectStorage } from '@repo/domain'
 import {
   artifactFileRefsOf,
@@ -23,8 +17,6 @@ import {
   artifactFramePolicy,
   artifactKindSpecOf,
   artifactRenderLimits,
-  brandCss,
-  brandTokensOf,
   canvasThumbKey,
   canvasThumbMaxCssPx,
   canvasThumbScale,
@@ -118,13 +110,9 @@ export class RenderService {
       throw error
     }
     const spec = artifactKindSpecOf(artifact.kind)
-    if (spec === null || (spec.view !== 'frame' && spec.view !== 'canvas'))
+    if (spec === null || spec.view !== 'canvas')
       throw new DomainError('RENDER_NOT_A_FRAME', 'This artifact has no frame', 409)
-    const parts = artifactFrameBlocksOf({
-      framed: spec.framed,
-      blocks: artifact.blocks,
-      frame: request.frame,
-    })
+    const parts = artifactFrameBlocksOf({ blocks: artifact.blocks, frame: request.frame })
     if (parts === null) throw notFound()
     const used = [
       ...parts.html,
@@ -150,7 +138,6 @@ export class RenderService {
     const addressed = (text: string) =>
       withArtifactFileAddresses(text, (id) => address.get(id) ?? null)
     const fonts = renderFontCss(RENDER_FILES_ORIGIN)
-    const brand = await artifactBrandOf(this.#deps.db as PrismaClient, artifact.id)
     // A slide or a picture has a size of its own; a screen of a canvas is adaptive (88.25, 88.26).
     const frameBlock = artifact.blocks.find((block) => block.key === request.frame)
     const fixed = artifactFrameSizeOf(artifact.kind, frameBlock?.props)
@@ -158,7 +145,6 @@ export class RenderService {
       title: artifact.title,
       platformCss:
         fonts.css +
-        (brand ? brandCss(brandTokensOf(brand.settings)) : '') +
         // A fixed frame clipped by its own style still has its height measured (88.25, 88.26):
         // the renderer takes the clip off the document; its pictures are cut at its size.
         (fixed
@@ -184,15 +170,11 @@ export class RenderService {
         ...fileUrls.filter(([, file]) => file.type.startsWith('font/')).map(([url]) => url),
       ],
     })
-    const thumbKey =
-      spec.view === 'canvas' && request.frame !== null
-        ? canvasThumbKey({
-            blocks: artifact.blocks,
-            frame: request.frame,
-            title: artifact.title,
-            brand: brand && { id: brand.id, seq: brand.seq },
-          })
-        : null
+    const thumbKey = canvasThumbKey({
+      blocks: artifact.blocks,
+      frame: request.frame,
+      title: artifact.title,
+    })
     return {
       title: artifact.title,
       html,
@@ -296,7 +278,7 @@ export class RenderService {
       problems: report?.problems ?? 0,
       heights: asked.map((width) => ({ width, height: byWidth.get(width)?.docHeight ?? null })),
       pictures,
-      ...(request.output !== 'layout' && request.output !== 'image' && source.thumbKey !== null
+      ...(request.output !== 'layout' && request.output !== 'image'
         ? { thumbKey: source.thumbKey }
         : {}),
     }

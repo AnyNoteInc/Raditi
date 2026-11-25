@@ -13,8 +13,9 @@ import { ArtifactExportsProcessor } from './artifact-exports.processor.ts'
 import { ARTIFACT_EXPORTS, ARTIFACT_THUMBS } from './artifact-exports.tokens.ts'
 
 /**
- * The workbooks of tables of artifacts (docs/plan/88-artifacts.md, §7.13, question 26) and the
- * thumbnails of canvases (§7.7, slice 88.15): the worker of the queue `artifacts`.
+ * The exports of artifacts — the PDF and PPTX of slides, the PNG of a picture
+ * (docs/plan/88-artifacts.md, §7.13) — and the thumbnails of canvases (§7.7, slice 88.15): the
+ * worker of the queue `artifacts`.
  */
 @Module({
   providers: [
@@ -30,8 +31,6 @@ import { ARTIFACT_EXPORTS, ARTIFACT_THUMBS } from './artifact-exports.tokens.ts'
           db: prisma,
           storage,
           render: client ? (request) => client.render(request) : null,
-          // The PDF of «Отчёт» is printed by it too (88.32).
-          print: client ? (request) => client.print(request) : null,
           logger: { log: (line) => logger.log(line), warn: (line) => logger.warn(line) },
         })
       },

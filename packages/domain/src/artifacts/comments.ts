@@ -21,28 +21,10 @@ export const artifactQuoteAnchorSchema = z.strictObject({
 
 export type ArtifactQuoteAnchor = z.infer<typeof artifactQuoteAnchorSchema>
 
-/** The text of a cell an anchor keeps, as the client reads it (88.18д). */
+/** The text of an element an anchor keeps, as the client reads it (88.18е). */
 export const commentCellTextChars = 200
 export const commentCellText = (text: string): string =>
   Array.from(normalizeCommentQuote(text)).slice(0, commentCellTextChars).join('')
-
-/** A cell of a table as the cabinet names it: the server fills its column name and text. */
-export const artifactCellAnchorInputSchema = z.strictObject({
-  kind: z.literal('cell'),
-  block: artifactBlockKeySchema,
-  column: artifactBlockKeySchema,
-  rev: z.number().int().nonnegative(),
-})
-export type ArtifactCellAnchorInput = z.infer<typeof artifactCellAnchorInputSchema>
-
-export const artifactCellAnchorSchema = artifactCellAnchorInputSchema.extend({
-  columnName: z.string().max(80).refine(storableText),
-  text: z
-    .string()
-    .max(commentCellTextChars * 2)
-    .refine(storableText),
-})
-export type ArtifactCellAnchor = z.infer<typeof artifactCellAnchorSchema>
 
 /** The id the server stamps into an element of an `html` block: `<block>.<n>` (Ар9). */
 const elementIdSchema = z
@@ -78,18 +60,16 @@ export const artifactElementAnchorSchema = z
   .refine((anchor) => anchor.element.startsWith(`${anchor.block}.`))
 export type ArtifactElementAnchor = z.infer<typeof artifactElementAnchorSchema>
 
-/** What a note is anchored to: a quote, a cell of a table, an element of a frame (Ар53). */
+/** What a note is anchored to: a quote, an element of a frame (Ар53). */
 export const artifactCommentAnchorSchema = z.union([
   artifactQuoteAnchorSchema,
-  artifactCellAnchorSchema,
   artifactElementAnchorSchema,
 ])
 export type ArtifactCommentAnchor = z.infer<typeof artifactCommentAnchorSchema>
 
-/** The anchor the cabinet sends: a cell without what the server reads for it. */
+/** The anchor the cabinet sends: an element without what the server reads for it. */
 export const artifactCommentAnchorInputSchema = z.union([
   artifactQuoteAnchorSchema,
-  artifactCellAnchorInputSchema,
   artifactElementAnchorInputSchema,
 ])
 export type ArtifactCommentAnchorInput = z.infer<typeof artifactCommentAnchorInputSchema>

@@ -616,7 +616,11 @@ export function DialogView({
     ...trpc.artifact.ofChat.queryOptions({ taskId }),
     enabled: head !== null,
   })
-  const agentDocKey = agentDocs.join(',')
+  // A canvas, slides or images of a turn too (АТ9): their cards in the feed read their titles here.
+  const agentDocKey = [
+    ...agentDocs,
+    ...rows.flatMap((row) => (row.type === 'feed.artifact' ? [row.artifactId] : [])),
+  ].join(',')
   useEffect(() => {
     if (agentDocKey === '') return
     void queryClient.invalidateQueries({ queryKey: trpc.artifact.ofChat.queryKey({ taskId }) })

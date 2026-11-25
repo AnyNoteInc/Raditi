@@ -4,7 +4,7 @@ import { artifactExportDependencies } from '@/server/task-file-runtime'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-/** «Скачать → Excel» of a table: the workbook core built for this person. */
+/** «Скачать» of an artifact: the PDF, PPTX or PNG core built for this person. */
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },

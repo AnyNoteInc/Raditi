@@ -8,24 +8,17 @@ import {
   commentCellTextChars,
 } from './comments.ts'
 
-// What a private note anchors to (docs/plan/88-artifacts.md, Ар53, 88.18а, 88.18д).
+// What a private note anchors to (docs/plan/88-artifacts.md, Ар53, 88.18а, 88.18е).
 
-const cell = { kind: 'cell', block: 'r1', column: 'name', rev: 2 } as const
+const element = { kind: 'element', block: 'hero', element: 'hero.2', rev: 1 } as const
 
 describe('the anchors of notes', () => {
-  it('takes a cell from the cabinet without the words the server reads for it', () => {
-    expect(artifactCommentAnchorInputSchema.safeParse(cell).success).toBe(true)
-    expect(
-      artifactCommentAnchorInputSchema.safeParse({ ...cell, columnName: 'Товар', text: 'Хлеб' })
-        .success,
-    ).toBe(false)
+  it('refuses a cell of a table: the kind left with plan 93', () => {
+    const cell = { kind: 'cell', block: 'r1', column: 'name', rev: 2 }
+    expect(artifactCommentAnchorInputSchema.safeParse(cell).success).toBe(false)
   })
 
-  it('stores a cell with its column name and text, and a quote as before', () => {
-    expect(
-      artifactCommentAnchorSchema.parse({ ...cell, columnName: 'Товар', text: 'Хлеб' }),
-    ).toEqual({ ...cell, columnName: 'Товар', text: 'Хлеб' })
-    expect(artifactCommentAnchorSchema.safeParse(cell).success).toBe(false)
+  it('stores a quote', () => {
     expect(
       artifactCommentAnchorSchema.parse({
         kind: 'quote',
@@ -37,7 +30,6 @@ describe('the anchors of notes', () => {
   })
 
   it('takes an element of its own block, and stores it with its tag and text (88.18е)', () => {
-    const element = { kind: 'element', block: 'hero', element: 'hero.2', rev: 1 } as const
     expect(artifactCommentAnchorInputSchema.safeParse(element).success).toBe(true)
     expect(
       artifactCommentAnchorInputSchema.safeParse({ ...element, element: 'other.2' }).success,
@@ -50,7 +42,7 @@ describe('the anchors of notes', () => {
     ).toMatchObject({ kind: 'element', tag: 'h2' })
   })
 
-  it('keeps a cell text on one line, at most 200 characters, never half a pair', () => {
+  it('keeps an element text on one line, at most 200 characters, never half a pair', () => {
     expect(commentCellText(' Хлеб\n\tржаной ')).toBe('Хлеб ржаной')
     const long = commentCellText('😀'.repeat(300))
     expect(Array.from(long)).toHaveLength(commentCellTextChars)
@@ -67,7 +59,7 @@ describe('the anchors of notes', () => {
       },
       {
         id: crypto.randomUUID(),
-        anchor: { ...cell, columnName: 'Товар', text: '' },
+        anchor: { ...element, tag: 'p', text: '' },
         body: 'б',
         replies: ['в'],
       },

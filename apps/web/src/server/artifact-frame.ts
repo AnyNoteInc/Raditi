@@ -23,7 +23,7 @@ import { pageAnswer } from './page-response'
 
 // The answers of artifacts (docs/plan/88-artifacts.md, Ар9, Ар12, Ар28; slices 88.12 and 88.13).
 // On the root of the domain of pages, `/v/<segment>`: a file of the platform (`lib-….<hash>`), a
-// file of an artifact by its signed address, the frame of a mockup — each with the headers of its
+// file of an artifact by its signed address, the frame of a screen — each with the headers of its
 // own sort. On the origin of the cabinet, `/api/artifact-frame/<token>`: the edit frame, which runs
 // no script, answered only to a frame of the cabinet itself.
 
@@ -92,7 +92,7 @@ export async function artifactOnPages(
     if (!served.ok)
       return pageAnswer(
         served.status,
-        served.status === 410 ? 'Адрес устарел. Обновите макет.' : 'Не найдено',
+        served.status === 410 ? 'Адрес устарел. Обновите страницу.' : 'Не найдено',
       )
     const bytes = new TextEncoder().encode(served.html)
     return new Response(bytes, {
@@ -103,7 +103,7 @@ export async function artifactOnPages(
     })
   } catch (error) {
     deps.onFailure?.('artifact on pages failed', error)
-    return pageAnswer(503, 'Не удалось открыть макет.')
+    return pageAnswer(503, 'Не удалось открыть экран.')
   }
 }
 
@@ -140,7 +140,7 @@ export async function artifactEditFrame(
     if (!served.ok)
       return pageAnswer(
         served.status,
-        served.status === 410 ? 'Адрес устарел. Обновите макет.' : 'Не найдено',
+        served.status === 410 ? 'Адрес устарел. Обновите страницу.' : 'Не найдено',
       )
     const bytes = new TextEncoder().encode(served.html)
     return new Response(bytes, {
@@ -151,6 +151,6 @@ export async function artifactEditFrame(
     })
   } catch (error) {
     deps.onFailure?.('artifact edit frame failed', error)
-    return pageAnswer(503, 'Не удалось открыть макет.')
+    return pageAnswer(503, 'Не удалось открыть экран.')
   }
 }

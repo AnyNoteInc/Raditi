@@ -1,6 +1,4 @@
 import { readArtifact, type PrismaClient } from '@repo/db'
-import { reportPage } from '@repo/doc-render'
-import { chartDataUrl, reportPartsOf } from '@repo/doc-render/report'
 import { isDomainError, type ObjectStorage } from '@repo/domain'
 import {
   artifactExportContentTypes,
@@ -9,30 +7,25 @@ import {
   artifactExportLimits,
   artifactKindSpecOf,
   artifactSlidesOf,
-  tableOfBlocks,
   type ArtifactExportFormat,
-  type ArtifactPrintRequest,
-  type ArtifactPrintResponse,
   type ArtifactRenderRequest,
   type ArtifactRenderResponse,
 } from '@repo/domain/artifacts'
 
 import { deckPdf, deckPptx } from './deck.ts'
-import { workbookBytes } from './workbook.ts'
 
-// The workbooks of tables (docs/plan/88-artifacts.md, §7.13, question 26): a person asked for
-// «Скачать → Excel», web wrote the row and the job; this builds the workbook of the checked text
-// of the table — as that person reads it, their role asked again — puts it under the artifact's
-// prefix and marks the row `ready`. A person who lost the artifact, or a table that is gone, gets
-// `failed`. Logs carry ids, never a cell.
+// The exports of artifacts (docs/plan/88-artifacts.md, §7.13; docs/plan/93-artifacts-trim.md): a
+// person asked for «Скачать» — the PDF or PPTX of «Презентация», the PNG of a picture of
+// «Изображение» —, web wrote the row and the job; this builds the file as that person reads the
+// artifact — their role asked again —, puts it under the artifact's prefix and marks the row
+// `ready`. A person who lost the artifact, or an artifact that is gone, gets `failed`. Logs carry
+// ids, never the content.
 
 export interface ArtifactExportsDependencies {
   db: PrismaClient
   storage: Pick<ObjectStorage, 'put' | 'delete'>
   /** The renderer of the browser worker: the pictures of slides (88.25в); null — none. */
   render?: ((request: ArtifactRenderRequest) => Promise<ArtifactRenderResponse>) | null
-  /** The printer of the browser worker: the PDF of «Отчёт» (88.32); null — none. */
-  print?: ((request: ArtifactPrintRequest) => Promise<ArtifactPrintResponse>) | null
   logger?: { log(line: string): void; warn(line: string): void }
   now?: () => Date
 }
@@ -82,15 +75,7 @@ export class ArtifactExports {
     }
     let bytes: Uint8Array
     let count: number
-    if (format === 'xlsx') {
-      const table = tableOfBlocks(artifact.blocks)
-      bytes = await workbookBytes({
-        title: artifact.title,
-        columns: table.columns,
-        rows: table.rows,
-      })
-      count = table.rows.length
-    } else if (format === 'png') {
+    if (format === 'png') {
       const picture =
         row.blockKey === null ? null : await this.#png(row.userId, artifact.id, row.blockKey)
       if (picture === null) {
@@ -100,15 +85,6 @@ export class ArtifactExports {
       }
       bytes = picture
       count = 1
-    } else if (format === 'pdf' && artifact.kind === 'report') {
-      const printed = await this.#report(artifact)
-      if (printed === null) {
-        await this.#fail(exportId)
-        logger?.warn(`artifact_export_refused export=${exportId} reason=render`)
-        return 'failed'
-      }
-      bytes = printed.bytes
-      count = printed.parts
     } else {
       const deck = await this.#deck(row.userId, artifact)
       if (deck === null) {
@@ -137,32 +113,6 @@ export class ArtifactExports {
     logger?.log(`artifact_export_ready export=${exportId} format=${format} parts=${count}`)
     await this.#forgetOld(row.artifactId, now)
     return 'ready'
-  }
-
-  /**
-   * «Отчёт» as a PDF (88.32): the page its publication serves — as the person who asked reads it,
-   * the blocks that wait for the check left out —, its charts inline, printed by the browser
-   * worker. Null — no printer, nothing to print, or a refusal of the printer.
-   */
-  async #report(
-    artifact: Awaited<ReturnType<typeof readArtifact>>,
-  ): Promise<{ bytes: Uint8Array; parts: number } | null> {
-    const print = this.#deps.print ?? null
-    if (print === null) return null
-    const parts = reportPartsOf(
-      artifact.blocks.filter((block) => block.parent === null && block.content !== null),
-      chartDataUrl,
-    )
-    if (parts.length === 0) return null
-    const html = await reportPage({ title: artifact.title, parts, print: true })
-    try {
-      const { pdf } = await print({ html })
-      return { bytes: new Uint8Array(Buffer.from(pdf, 'base64')), parts: parts.length }
-    } catch (error) {
-      // A page over the limits fails the export; an unreachable or busy worker is tried again.
-      if (isDomainError(error) && error.httpStatus < 500) return null
-      throw error
-    }
   }
 
   /** One picture of «Изображение» in its own size, as the person who asked reads it (88.26). */
@@ -216,7 +166,7 @@ export class ArtifactExports {
     return { title: artifact.title, slides: out }
   }
 
-  /** The workbooks of this artifact older than a day: their objects and rows go. Never throws. */
+  /** The exports of this artifact older than a day: their objects and rows go. Never throws. */
   async #forgetOld(artifactId: string, now: Date): Promise<void> {
     const { db, storage, logger } = this.#deps
     try {

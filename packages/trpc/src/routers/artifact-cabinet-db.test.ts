@@ -13,7 +13,6 @@ import {
   operatorArtifactDecision,
   readArtifactComments,
   readChatArtifactComments,
-  saveArtifactDiagram,
   settleAgentCommentReplies,
   settleArtifactWrites,
   type Prisma,
@@ -1053,72 +1052,70 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     expect((await readChatArtifactComments(db, { taskId }))[0]!.yourReplies).toEqual([])
   })
 
-  it('anchors a private note to a cell of a table and sends it with the cell (88.18д)', async () => {
+  it('anchors a private note to an element of a screen of a canvas by the stamped id and sends it (88.18е)', async () => {
     const user = await person()
     const caller = callerOf(user)
     const { id: artifactId } = await caller.artifact.create({
-      kind: 'table',
-      title: 'Прайс',
+      kind: 'canvas',
+      title: 'Лендинг',
       projectId: null,
       templateId: null,
     })
     const write = (ops: unknown[]) =>
       caller.artifact.write({ batch: { artifactId, opId: randomUUID(), ops } })
-    const columns = [
-      { key: 'name', name: 'Товар', type: 'text' },
-      { key: 'note', name: 'Примечание', type: 'text' },
-    ]
     const created = await write([
       {
         op: 'insert',
-        block: 'cols',
+        block: 'home',
         after: null,
-        kind: 'columns',
-        content: JSON.stringify(columns),
+        kind: 'frame',
+        content: '',
+        props: { name: 'Главная', path: '/', x: 0, y: 0 },
       },
       {
         op: 'insert',
-        block: 'r1',
-        after: 'cols',
-        kind: 'row',
-        content: JSON.stringify({ name: 'Хлеб', note: 'утром' }),
+        block: 'hero',
+        after: null,
+        parent: 'home',
+        kind: 'html',
+        content: '<section><h2>Цены</h2><p>Хлеб <b>120 ₽</b></p></section>',
       },
     ])
-    const row = created.blocks.find((block) => block.key === 'r1')!
-    const cell = { kind: 'cell' as const, block: 'r1', column: 'name', rev: row.rev }
-    // A table takes notes to its cells, never to a quote; a stale row or an unknown column is refused.
+    const hero = created.blocks.find((block) => block.key === 'hero')!
+    // section — hero.1, h2 — hero.2, p — hero.3.
+    const element = { kind: 'element' as const, block: 'hero', element: 'hero.2', rev: hero.rev }
+    // A frame takes notes to its elements, never to a quote; an unknown id or a stale revision is refused.
     await expect(
       caller.artifact.addComment({
         artifactId,
-        anchor: { kind: 'quote', block: 'r1', rev: row.rev, quote: 'Хлеб' },
-        body: 'Проверить',
+        anchor: { kind: 'quote', block: 'hero', rev: hero.rev, quote: 'Цены' },
+        body: 'А',
       }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(
-      caller.artifact.addComment({ artifactId, anchor: { ...cell, rev: row.rev + 1 }, body: 'А' }),
+      caller.artifact.addComment({
+        artifactId,
+        anchor: { ...element, element: 'hero.9' },
+        body: 'А',
+      }),
     ).rejects.toMatchObject({ code: 'CONFLICT' })
     await expect(
-      caller.artifact.addComment({ artifactId, anchor: { ...cell, column: 'price' }, body: 'А' }),
+      caller.artifact.addComment({
+        artifactId,
+        anchor: { ...element, rev: hero.rev + 1 },
+        body: 'А',
+      }),
     ).rejects.toMatchObject({ code: 'CONFLICT' })
 
     const { id: threadId } = await caller.artifact.addComment({
       artifactId,
-      anchor: cell,
-      body: 'Добавить ржаной',
+      anchor: element,
+      body: 'Сделать заголовок крупнее',
     })
-    const stored = { ...cell, columnName: 'Товар', text: 'Хлеб' }
+    const stored = { ...element, tag: 'h2', text: 'Цены' }
     expect(await caller.artifact.comments({ artifactId })).toMatchObject([
       { id: threadId, anchor: stored, moved: false, resolved: false },
     ])
-    // A new value keeps the place; a deleted row moves it.
-    await write([{ op: 'cells', block: 'r1', cells: { name: 'Батон' } }])
-    expect((await caller.artifact.comments({ artifactId }))[0]).toMatchObject({ moved: false })
-    const r1 = (await caller.artifact.read({ artifactId })).blocks.find((b) => b.key === 'r1')!
-    await write([{ op: 'delete', block: 'r1', ifRev: r1.rev }])
-    expect((await caller.artifact.comments({ artifactId }))[0]).toMatchObject({
-      anchor: stored,
-      moved: true,
-    })
 
     const { workspaceId } = await db.artifact.findUniqueOrThrow({ where: { id: artifactId } })
     const { taskId } = await commentDestination({
@@ -1143,63 +1140,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       text: '',
     })
     expect(await readChatArtifactComments(db, { taskId })).toMatchObject([
-      { threadId, artifactId, anchor: stored, body: 'Добавить ржаной' },
+      { threadId, artifactId, anchor: stored, body: 'Сделать заголовок крупнее' },
     ])
-  })
 
-  it('anchors a private note to an element of a mockup by the id the server stamps (88.18е)', async () => {
-    const user = await person()
-    const caller = callerOf(user)
-    const { id: artifactId } = await caller.artifact.create({
-      kind: 'mockup',
-      title: 'Лендинг',
-      projectId: null,
-      templateId: null,
-    })
-    const write = (ops: unknown[]) =>
-      caller.artifact.write({ batch: { artifactId, opId: randomUUID(), ops } })
-    const created = await write([
-      {
-        op: 'insert',
-        block: 'hero',
-        after: null,
-        kind: 'html',
-        content: '<section><h2>Цены</h2><p>Хлеб <b>120 ₽</b></p></section>',
-      },
-    ])
-    const hero = created.blocks.find((block) => block.key === 'hero')!
-    // section — hero.1, h2 — hero.2, p — hero.3.
-    const element = { kind: 'element' as const, block: 'hero', element: 'hero.2', rev: hero.rev }
-    await expect(
-      caller.artifact.addComment({
-        artifactId,
-        anchor: { kind: 'quote', block: 'hero', rev: hero.rev, quote: 'Цены' },
-        body: 'А',
-      }),
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await expect(
-      caller.artifact.addComment({
-        artifactId,
-        anchor: { ...element, element: 'hero.9' },
-        body: 'А',
-      }),
-    ).rejects.toMatchObject({ code: 'CONFLICT' })
-    await expect(
-      caller.artifact.addComment({
-        artifactId,
-        anchor: { ...element, rev: hero.rev + 1 },
-        body: 'А',
-      }),
-    ).rejects.toMatchObject({ code: 'CONFLICT' })
-
-    const { id } = await caller.artifact.addComment({
-      artifactId,
-      anchor: element,
-      body: 'Сделать заголовок крупнее',
-    })
-    expect(await caller.artifact.comments({ artifactId })).toMatchObject([
-      { id, anchor: { ...element, tag: 'h2', text: 'Цены' }, moved: false },
-    ])
     // The heading is gone: the id names another element no more, the place moved.
     await write([{ op: 'replace', block: 'hero', ifRev: hero.rev, content: '<p>Хлеб</p>' }])
     expect((await caller.artifact.comments({ artifactId }))[0]).toMatchObject({ moved: true })
@@ -1756,16 +1699,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     const blocks = (await caller.artifact.read({ artifactId: id })).blocks
     const frames = blocks.filter((block) => block.kind === 'frame')
     expect(frames.map((frame) => frame.props.name)).toEqual([
-      'Обложка',
+      'Титул',
+      'О нас',
       'Что мы делаем',
-      'Почему мы',
-      'Цены',
+      'Как это выглядит',
+      'Результат',
+      'Отзыв',
       'Контакты',
     ])
     expect(blocks.filter((block) => block.kind === 'note').map((note) => note.parent)).toEqual(
       frames.map((frame) => frame.key),
     )
-    expect(blocks.find((block) => block.kind === 'style')?.parent).toBeNull()
+    // The deck theme is its one common style, first (plan 93, АТ8).
+    expect(blocks.find((block) => block.kind === 'style')).toMatchObject({
+      key: 'deck-theme',
+      parent: null,
+    })
     // A slide is drawn once, at 1280×720; core is asked for what is missing.
     const thumbs = await canvasThumbs(
       db,
@@ -1773,7 +1722,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       { userId: anna.id, artifactId: id },
     )
     expect(thumbs.pending).toBe(true)
-    expect(thumbs.thumbs.map((thumb) => thumb.width)).toEqual([1280, 1280, 1280, 1280, 1280])
+    expect(thumbs.thumbs.map((thumb) => thumb.width)).toEqual(Array(7).fill(1280))
     await db.outboxEvent.deleteMany({ where: { dedupeKey: { contains: id } } })
 
     // Published as a small site: a page a slide, the first at the root, each linked to its
@@ -1783,7 +1732,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       where: { artifactId: id },
       select: { pageId: true, blockKey: true, page: { select: { path: true } } },
     })
-    expect(pages.map((row) => row.page.path).toSorted()).toEqual(['/', '/2', '/3', '/4', '/5'])
+    expect(pages.map((row) => row.page.path).toSorted()).toEqual([
+      '/',
+      '/2',
+      '/3',
+      '/4',
+      '/5',
+      '/6',
+      '/7',
+    ])
     const htmlOf = async (path: string) => {
       const row = pages.find((each) => each.page.path === path)!
       return Buffer.from(
@@ -1793,9 +1750,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     const cover = await htmlOf('/')
     expect(cover).toContain('[Название компании]')
     expect(cover).toContain('<a href="/2" rel="next"')
-    expect(cover).toContain('1 из 5')
-    const last = await htmlOf('/5')
-    expect(last).toContain('<a href="/4" rel="prev"')
+    expect(cover).toContain('1 из 7')
+    const last = await htmlOf('/7')
+    expect(last).toContain('<a href="/6" rel="prev"')
     expect(last).not.toContain('rel="next"')
     // Again: the same pages, by their slides.
     const again = await caller.pages.publishArtifact({ artifactId: id, versionNo: null })
@@ -1856,142 +1813,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       format: 'png',
       blockKey: 'story',
     })
-    // A workbook is no file of a picture.
+    // A PPTX is no file of a picture.
     await expect(
-      caller.artifact.exportStart({ artifactId: id, format: 'xlsx' }),
+      caller.artifact.exportStart({ artifactId: id, format: 'pptx' }),
     ).rejects.toMatchObject({
       code: 'NOT_FOUND',
     })
     await db.outboxEvent.deleteMany({ where: { dedupeKey: { contains: id } } })
     await db.outboxEvent.deleteMany({ where: { dedupeKey: { contains: exportId } } })
-  })
-
-  it('creates «Структура сайта» from its template and moves a page under another (88.27)', async () => {
-    const anna = await person()
-    const caller = callerOf(anna)
-    const { id } = await caller.artifact.create({
-      kind: 'sitemap',
-      title: 'Структура сайта услуг',
-      projectId: null,
-      templateId: 'service-site',
-    })
-    const nodes = (await caller.artifact.read({ artifactId: id })).blocks
-    expect(nodes.map((node) => node.props.title)).toEqual([
-      'Главная',
-      'Услуги',
-      'Цены',
-      'Отзывы',
-      'Контакты',
-    ])
-    const prices = nodes.find((node) => node.props.title === 'Цены')!
-    await caller.artifact.write({
-      batch: {
-        artifactId: id,
-        opId: randomUUID(),
-        ops: [
-          {
-            op: 'replace',
-            block: prices.key,
-            ifRev: prices.rev,
-            content: prices.content ?? '',
-            props: { title: 'Цены', action: 'Записаться' },
-          },
-          // The parent is a value: «the last one wins» (Ар15).
-          { op: 'props', block: prices.key, props: { up: 'services' } },
-        ],
-      },
-    })
-    const moved = (await caller.artifact.read({ artifactId: id })).blocks.find(
-      (node) => node.key === prices.key,
-    )
-    expect(moved?.props).toMatchObject({ up: 'services', title: 'Цены', action: 'Записаться' })
-    // A structure is no site itself: «Сделать сайт» asks the agent for a canvas.
-    await expect(
-      caller.pages.publishArtifact({ artifactId: id, versionNo: null }),
-    ).rejects.toBeTruthy()
-  })
-
-  it('creates «Отчёт» from its template, draws its charts and publishes it as a page (88.28)', async () => {
-    const anna = await person()
-    const caller = callerOf(anna)
-    const { id } = await caller.artifact.create({
-      kind: 'report',
-      title: 'Отчёт о продажах за месяц',
-      projectId: null,
-      templateId: 'sales-report',
-    })
-    const blocks = (await caller.artifact.read({ artifactId: id })).blocks
-    expect(blocks.map((block) => block.kind)).toEqual([
-      'section',
-      'chart',
-      'chart',
-      'columns',
-      'row',
-      'row',
-      'section',
-    ])
-    const drawn = await caller.artifact.chart({ artifactId: id, block: 'revenue' })
-    expect(drawn).toMatchObject({ state: 'drawn', width: 720, height: 360 })
-    if (drawn.state === 'drawn') expect(drawn.svg).toContain('Выручка по неделям')
-    // A chart that is not the spec is refused at the write.
-    await expect(
-      caller.artifact.write({
-        batch: {
-          artifactId: id,
-          opId: randomUUID(),
-          ops: [{ op: 'insert', after: null, kind: 'chart', content: '{"series": []}' }],
-        },
-      }),
-    ).rejects.toBeTruthy()
-    const published = await caller.pages.publishArtifact({ artifactId: id, versionNo: null })
-    const html = Buffer.from(
-      (await db.pageContent.findUniqueOrThrow({ where: { pageId: published.pageId } })).bytes,
-    ).toString('utf8')
-    expect(html).toContain('<h1>Отчёт о продажах за месяц</h1>')
-    expect(html.match(/<img src="\/_files\/a\/c-[0-9a-f]{32}\.svg"/g)).toHaveLength(2)
-    expect(html).toContain('<th scope="col">Товар</th>')
-    expect(html).not.toMatch(/<script/i)
-  })
-
-  it('creates «Схема» from its template and publishes its drawn picture as a page (88.24в)', async () => {
-    const anna = await person()
-    const caller = callerOf(anna)
-    const { id } = await caller.artifact.create({
-      kind: 'diagram',
-      title: 'Путь клиента',
-      projectId: null,
-      templateId: 'customer-journey',
-    })
-    const [block] = (await caller.artifact.read({ artifactId: id })).blocks
-    expect(block).toMatchObject({ kind: 'diagram' })
-    // Not drawn yet: core is asked, and the page does not go out without the picture.
-    expect(await caller.artifact.diagram({ artifactId: id, block: block!.key })).toEqual({
-      state: 'drawing',
-    })
-    await expect(
-      caller.pages.publishArtifact({ artifactId: id, versionNo: null }),
-    ).rejects.toMatchObject({ cause: { code: 'ARTIFACT_DIAGRAM_NOT_DRAWN' } })
-    const svg =
-      '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="90"><text>Купил</text></svg>'
-    await saveArtifactDiagram(db, {
-      artifactId: id,
-      source: block!.content!,
-      result: { ok: true, svg, width: 400, height: 90, type: 'flowchart-v2' },
-    })
-    expect(await caller.artifact.diagram({ artifactId: id, block: block!.key })).toEqual({
-      state: 'drawn',
-      svg,
-      width: 400,
-      height: 90,
-    })
-    const published = await caller.pages.publishArtifact({ artifactId: id, versionNo: null })
-    const page = await db.pageContent.findUniqueOrThrow({ where: { pageId: published.pageId } })
-    const html = Buffer.from(page.bytes).toString('utf8')
-    expect(html).toContain('<h1>Путь клиента</h1>')
-    expect(html).toMatch(/<img src="\/_files\/a\/d-[0-9a-f]{32}\.svg" width="400" height="90"/)
-    expect(html).not.toMatch(/<script|mermaid/i)
-    const files = await db.pageFile.findMany({ where: { path: { startsWith: '/_files/a/d-' } } })
-    expect(files.map((file) => Buffer.from(file.bytes).toString('utf8'))).toContain(svg)
   })
 
   it('returns a version all at once or not at all: a block an agent writes holds it (Ар13)', async () => {

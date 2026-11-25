@@ -1,7 +1,7 @@
 import { parse, parseFragment } from 'parse5'
 import type { DefaultTreeAdapterMap } from 'parse5'
 
-// «Править текст» of a mockup on the server (docs/plan/88-artifacts.md, Ар9, §7.13; spike 1): the
+// «Править текст» of a screen of a canvas on the server (docs/plan/88-artifacts.md, Ар9, §7.13; spike 1): the
 // platform stamps an id into each element of a part of a frame as it serves the edit frame, and a
 // person's edit of the text of one element comes back as a patch of the stored source by the
 // offsets of parse5 — never as the live DOM of the frame. parse5 reads as a browser without
@@ -316,7 +316,7 @@ export interface ArtifactHtmlParts {
 const bytes = (text: string) => new TextEncoder().encode(text).byteLength
 
 /**
- * A whole HTML document as the parts of a mockup: the inline styles and scripts of its head and
+ * A whole HTML document as the parts of a screen of a canvas: the inline styles and scripts of its head and
  * body, and its body cut by top elements into parts of at most `partBytes`. Scripts with `src` and
  * stylesheets by address are dropped: the frame loads nothing from the web. An element bigger than
  * a part on its own is refused by the caller's bound on the block.
@@ -363,6 +363,6 @@ export function artifactHtmlParts(html: string, partBytes: number): ArtifactHtml
   return out
 }
 
-/** An SVG file as the one part of a mockup: centred on its page. */
+/** An SVG file as the one part of a screen of a canvas: centred on its page. */
 export const artifactSvgPart = (svg: string): string =>
   `<main style="display:flex;justify-content:center;padding:24px">${svg.replace(/^\s*<\?xml[^>]*\?>/, '')}</main>`

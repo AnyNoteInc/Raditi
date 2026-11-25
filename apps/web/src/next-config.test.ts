@@ -100,7 +100,7 @@ describe('packages', () => {
     for (const path of ['/', '/chats/1', '/api/health', '/v', '/vacancies'])
       expect(matches(path), path).toBe(true)
     expect(matches('/v/a.b')).toBe(false)
-    // The edit frame of a mockup sends its own policy too (docs/plan/88-artifacts.md, Ар9, §7.9).
+    // The edit frame of a screen sends its own policy too (docs/plan/88-artifacts.md, Ар9, §7.9).
     expect(matches('/api/artifact-frame/a.b')).toBe(false)
     expect(matches('/api/artifact-files/1')).toBe(true)
   })

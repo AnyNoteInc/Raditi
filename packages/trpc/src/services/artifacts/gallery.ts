@@ -19,6 +19,8 @@ import {
   artifactKindRefused,
   artifactNotFound,
   artifactTemplateOf,
+  slidesThemeBlock,
+  type ArtifactTemplateBlock,
 } from '@repo/domain/artifacts'
 
 import { personalWorkspaceOf } from '../chat/dialog-lock.ts'
@@ -90,10 +92,13 @@ export async function createGalleryArtifact(
     projectId: input.projectId,
     actor,
   })
-  if (template !== null && template.blocks.length > 0) {
+  // An empty deck starts with its theme, as a template's does (docs/plan/93-artifacts-trim.md, АТ8).
+  const start: readonly ArtifactTemplateBlock[] =
+    template?.blocks ?? (input.kind === 'slides' ? [slidesThemeBlock] : [])
+  if (start.length > 0) {
     // The last block written at each level: the next one of that level goes after it.
     const lastOf = new Map<string | null, string>()
-    const ops = template.blocks.map((block, index) => {
+    const ops = start.map((block, index) => {
       // A document's sections keep the keys `s1…` of plan 88.9; the other parts are `b1…`; a
       // canvas names its screens and their parts itself (slice 88.15).
       const key = block.key ?? `${block.kind === 'section' ? 's' : 'b'}${index + 1}`

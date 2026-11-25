@@ -23,12 +23,12 @@ import { uuidv7 } from '@/components/chat/uuid'
 import { useTRPC, useTRPCClient } from '@/trpc/client'
 
 import type { ArtifactBodyProps } from '../artifact-body-props'
-import { ArtifactMockup } from '../mockup/artifact-mockup'
+import { ArtifactFrame } from '../frame/artifact-frame'
 
 // «Изображение» in the cabinet (docs/plan/88-artifacts.md, §7.7, §7.13; slice 88.26б): pictures made
 // of HTML in the sizes of their places — a post, a story, a cover, a banner —, without a model that
 // draws. The pictures by the thumbnails core draws, the chosen one in its own size as the frame of a
-// mockup («Править текст», the photos of «Файлы»), its size, a new picture, and «Скачать PNG».
+// screen («Править текст», the photos of «Файлы»), its size, a new picture, and «Скачать PNG».
 
 export const imagesTexts = Object.freeze({
   empty:
@@ -262,7 +262,7 @@ export function ArtifactImages(props: ArtifactBodyProps & { onAccessLost: () => 
         )}
         {problem && <Alert severity="error">{problem}</Alert>}
         {picture && size && (
-          <ArtifactMockup
+          <ArtifactFrame
             key={`${picture.key}:${size.width}x${size.height}`}
             {...props}
             frame={picture.key}

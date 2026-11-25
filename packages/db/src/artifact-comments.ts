@@ -11,12 +11,7 @@ import {
   artifactOpReused,
   artifactSecretShape,
   artifactStale,
-  artifactCellsSchema,
   commentCellText,
-  tableCellText,
-  tableOfBlocks,
-  type ArtifactCellAnchor,
-  type ArtifactCellAnchorInput,
   type ArtifactCommentAnchor,
   type ArtifactCommentAnchorInput,
   type ArtifactCommentSnapshot,
@@ -73,7 +68,7 @@ async function lockNotedArtifact(tx: Prisma.TransactionClient, input: Owner) {
   return { ...artifact, notes }
 }
 
-/** A live block a note anchors to — a section of a document, a row of a table — never an offset. */
+/** A live block a note anchors to — a section of a document, a part of a frame — never an offset. */
 const liveAnchors = (artifactId: string, keys: string | { in: string[] }, kind: string) => ({
   documentId: artifactId,
   sectionKey: keys,
@@ -81,7 +76,7 @@ const liveAnchors = (artifactId: string, keys: string | { in: string[] }, kind: 
   deletedRev: null,
 })
 
-const anchorBlockKind = { quote: 'section', cell: 'row', element: 'html' } as const
+const anchorBlockKind = { quote: 'section', element: 'html' } as const
 
 /**
  * What the role reads of an anchor in the checked text of its block (the layers keep parsers of
@@ -94,22 +89,6 @@ export interface ArtifactAnchorReaders {
     html: string
     id: string
   }) => { tag: string; text: string } | null
-}
-
-/** The checked columns of a table: its first `columns` block in order that parses. */
-async function checkedColumns(tx: Prisma.TransactionClient, artifactId: string) {
-  const blocks = await tx.artifactBlock.findMany({
-    where: { documentId: artifactId, blockKind: 'columns', deletedRev: null },
-    orderBy: [{ rank: 'asc' }, { sectionKey: 'asc' }],
-  })
-  return tableOfBlocks(
-    blocks.map((block) => ({
-      key: block.sectionKey,
-      kind: 'columns',
-      rev: block.rev,
-      content: blockCheckedText(block),
-    })),
-  ).columns
 }
 
 export async function readArtifactComments(db: Db, input: Owner) {
@@ -167,12 +146,10 @@ export async function readArtifactComments(db: Db, input: Owner) {
           blockKind: { in: Object.values(anchorBlockKind) },
         },
       })
-      const hasCells = blocks.some((block) => block.blockKind === 'row')
       return {
         comments,
-        /** The checked text of each live anchored block (a section, or a row's JSON). */
+        /** The checked text of each live anchored block (a section, or the HTML of a frame). */
         blocks: new Map(blocks.map((block) => [block.sectionKey, blockCheckedText(block)])),
-        columns: hasCells ? await checkedColumns(tx, input.artifactId) : [],
       }
     },
     { isolationLevel: 'RepeatableRead' },
@@ -244,30 +221,7 @@ async function requireCommentRoom(tx: Prisma.TransactionClient, artifactId: stri
   if (roots + replies >= artifactLimits.comments) throw artifactLimit('comments')
 }
 
-/** What the server stores of a cell: its column's name and text, read from checked blocks. */
-async function cellAnchor(
-  tx: Prisma.TransactionClient,
-  artifactId: string,
-  input: ArtifactCellAnchorInput,
-  row: string,
-): Promise<ArtifactCellAnchor> {
-  let value: unknown
-  try {
-    value = JSON.parse(row) as unknown
-  } catch {
-    throw artifactStale()
-  }
-  const cells = artifactCellsSchema.safeParse(value)
-  const column = (await checkedColumns(tx, artifactId)).find((each) => each.key === input.column)
-  if (!cells.success || !column) throw artifactStale()
-  return {
-    ...input,
-    columnName: column.name,
-    text: commentCellText(tableCellText(column, cells.data[column.key])),
-  }
-}
-
-/** The anchor as stored: a quote as it came, a cell and an element with what the server read. */
+/** The anchor as stored: a quote as it came, an element with what the server read. */
 async function storedAnchor(
   tx: Prisma.TransactionClient,
   artifactId: string,
@@ -278,8 +232,6 @@ async function storedAnchor(
   switch (anchor.kind) {
     case 'quote':
       return anchor
-    case 'cell':
-      return cellAnchor(tx, artifactId, anchor, text)
     case 'element': {
       const element = readers.element({ block: anchor.block, html: text, id: anchor.element })
       if (!element) throw artifactStale()

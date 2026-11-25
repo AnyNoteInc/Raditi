@@ -63,7 +63,7 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
     removeOnComplete: { age: DAY, count: 1_000 },
     removeOnFail: { age: 7 * DAY },
   },
-  // A workbook of a table (docs/plan/88-artifacts.md, §7.13, question 26): three tries, from 5 s
+  // An export of an artifact (docs/plan/88-artifacts.md, §7.13): three tries, from 5 s
   // doubling; after them the export is «failed» and the person asks again. Job data holds the id only.
   artifacts: {
     attempts: 3,

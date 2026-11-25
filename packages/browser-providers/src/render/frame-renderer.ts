@@ -5,7 +5,6 @@ import { chromium, type Browser, type CDPSession, type Route } from 'playwright-
 
 import { createDiagramRenderer, type DiagramRawResult } from './diagram-renderer.ts'
 import { renderFontFaces } from './fonts.ts'
-import { printOn, type PrintJob } from './print-renderer.ts'
 import { LAYOUT_PROBE_SOURCE } from './probe-source.ts'
 
 // The server render of a saved frame of an artifact (docs/plan/88-artifacts.md, Ар32, §7.12,
@@ -107,10 +106,8 @@ export interface FrameRenderResult {
 
 export interface FrameRenderer {
   render(job: FrameRenderJob): Promise<FrameRenderResult>
-  /** A diagram of «Схема» on the page of its workspace (88.24а): the SVG Mermaid drew, uncleaned. */
+  /** A diagram of a chat answer (plan 91) on the page of its workspace: the SVG drawn, uncleaned. */
   diagram(job: { workspaceId: string; source: string }): Promise<DiagramRawResult>
-  /** A page without scripts printed into a PDF, A4 (88.32): «Скачать PDF» of «Отчёт». */
-  print(job: PrintJob): Promise<Uint8Array>
   /** False after the browser went away: the pool replaces it. */
   connected(): boolean
   close(): Promise<void>
@@ -480,7 +477,6 @@ export async function createPlaywrightFrameRenderer(
   return {
     render: (job) => renderOn(browser, job),
     diagram: (job) => diagrams.render(job),
-    print: (job) => printOn(browser, job),
     connected: () => browser.isConnected(),
     close: async () => {
       await diagrams.close()

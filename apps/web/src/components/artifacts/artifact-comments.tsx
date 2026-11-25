@@ -6,6 +6,8 @@ import Button from '@mui/material/Button'
 import Checkbox from '@mui/material/Checkbox'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import Dialog from '@mui/material/Dialog'
+import IconButton from '@mui/material/IconButton'
+import Tooltip from '@mui/material/Tooltip'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
@@ -34,6 +36,7 @@ import {
   useState,
 } from 'react'
 
+import { AppIcon } from '@/components/application/app-icon'
 import { DictationButton, withDictatedWords } from '@/components/chat/dictation-button'
 import { useTRPC, useTRPCClient } from '@/trpc/client'
 
@@ -98,6 +101,35 @@ export function artifactNotesWritable(role: CabinetArtifact['role'], sharing: bo
   return role === 'owner' || (sharing && (role === 'comment' || role === 'edit'))
 }
 
+/**
+ * The panel of notes on the page of an artifact (docs/plan/93-artifacts-trim.md, АТ9): hidden
+ * until «Заметки · N» of the head opens it. Without it — a tab beside a chat, a screen opened in
+ * full — the panel shows itself whenever there are notes; with none it is never there.
+ */
+export const ArtifactNotesPanel = createContext<{
+  open: boolean
+  setOpen: (open: boolean) => void
+} | null>(null)
+
+/** Whether a reader has notes of an artifact at all: the owner's, and threads of all where open. */
+export function artifactNotesShown(artifact: CabinetArtifact, sharing: boolean): boolean {
+  return (
+    (artifact.role === 'owner' || sharing) && artifactKindSpecOf(artifact.kind)?.notes !== undefined
+  )
+}
+
+/** The notes of an artifact as its head counts them: all of them, and those still open. */
+export function useArtifactNotesCount(artifactId: string, enabled: boolean) {
+  const trpc = useTRPC()
+  const list = useQuery({
+    ...privateArtifactQuery(trpc.artifact.comments.queryOptions({ artifactId })),
+    enabled,
+    refetchInterval: 20_000,
+  })
+  const rows = (enabled ? list.data : null) ?? []
+  return { total: rows.length, open: rows.filter((row) => !row.resolved).length }
+}
+
 /** The words of the panel by what notes of this kind anchor to (88.18а, 88.18д). */
 const noteTexts = {
   quote: {
@@ -107,25 +139,15 @@ const noteTexts = {
   },
   element: {
     dialog: 'Заметка к элементу',
-    region: 'Заметки к макету',
-    empty: 'Включите «Выбрать элемент», выберите элемент и нажмите «Заметка к элементу».',
-  },
-  cell: {
-    dialog: 'Заметка к ячейке',
-    region: 'Заметки к таблице',
-    empty: 'Выберите ячейку и нажмите «Заметка к ячейке».',
+    region: 'Заметки к экранам',
+    empty:
+      'В меню «⋯» выберите «Выбрать элемент для заметки», нажмите на часть экрана и затем «Заметка к элементу».',
   },
 } as const
 
 /** Where a note stands, as the list shows it. */
 function AnchorText({ anchor }: { anchor: ArtifactCommentAnchor }) {
   const sx = { m: 0, pl: 1, borderLeft: 2, borderColor: 'divider' }
-  if (anchor.kind === 'cell')
-    return (
-      <Typography variant="body2" color="text.secondary" sx={sx}>
-        {anchor.columnName}: {anchor.text || 'пустая ячейка'}
-      </Typography>
-    )
   if (anchor.kind === 'element')
     return (
       <Typography variant="body2" color="text.secondary" sx={sx}>
@@ -155,7 +177,7 @@ export function ArtifactComments({
 }: {
   artifact: CabinetArtifact
   draft: ArtifactCommentAnchorInput | null
-  /** How the cabinet names a cell of the draft: «колонка: текст» (the server reads its own). */
+  /** How the cabinet names the element of the draft: «тег — текст» (the server reads its own). */
   draftLabel?: string
   onClose: () => void
   onChanged: () => void
@@ -167,6 +189,7 @@ export function ArtifactComments({
   const artifactId = artifact.id
   const texts = noteTexts[artifactKindSpecOf(artifact.kind)?.notes ?? 'quote']
   const sharing = useContext(ArtifactSharingAvailable)
+  const panel = useContext(ArtifactNotesPanel)
   const owner = artifact.role === 'owner'
   const writable = artifactNotesWritable(artifact.role, sharing)
   // The owner chooses; another reader writes only into threads of all (88.17а).
@@ -258,6 +281,8 @@ export function ArtifactComments({
       })
       setResolved(false)
       close()
+      // The note just made is shown with the others.
+      panel?.setOpen(true)
       void reread()
     } catch (error) {
       setAddError(artifactCommentRefusalText(artifactErrorData(error)?.domainCode) ?? failed)
@@ -327,162 +352,197 @@ export function ArtifactComments({
     ? []
     : visible.filter(({ id }) => selected.includes(id)).map(({ id }) => id)
   const selectionFull = selectedOpen.length >= artifactCommentDispatchLimits.threads
+  // No notes — no panel (АТ9); on the page, only while «Заметки · N» keeps it open.
+  const shown = (list.data?.length ?? 0) > 0 && (panel === null || panel.open)
   return (
-    <Box
-      component="section"
-      aria-label={texts.region}
-      sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, mb: 1 }}
-    >
-      <Typography component="h2" variant="subtitle1">
-        {sharing ? 'Заметки и комментарии' : 'Личные заметки'}
-      </Typography>
-      <Box role="group" aria-label="Состояние заметок" sx={{ display: 'flex', gap: 1, my: 0.5 }}>
-        <Button
-          size="small"
-          aria-pressed={!resolved}
-          variant={resolved ? 'text' : 'outlined'}
-          onClick={() => setResolved(false)}
+    <>
+      {shown && (
+        <Box
+          component="section"
+          aria-label={texts.region}
+          sx={{
+            px: { xs: 1.5, sm: 2 },
+            py: 1.5,
+            mb: 2,
+            borderRadius: '14px',
+            bgcolor: 'action.hover',
+          }}
         >
-          Нерешённые
-        </Button>
-        <Button
-          size="small"
-          aria-pressed={resolved}
-          variant={resolved ? 'outlined' : 'text'}
-          onClick={() => setResolved(true)}
-        >
-          Решённые
-        </Button>
-        {selectedOpen.length > 0 && (
-          <Button
-            size="small"
-            variant="contained"
-            onClick={() => {
-              setDispatchStale(false)
-              setDispatch(selectedOpen)
-            }}
-          >
-            Отправить агенту ({selectedOpen.length})
-          </Button>
-        )}
-      </Box>
-      {selectionFull && (
-        <Typography variant="caption" color="text.secondary">
-          За раз можно отправить до {artifactCommentDispatchLimits.threads} заметок.
-        </Typography>
-      )}
-      {list.isError && <Alert severity="error">Не удалось загрузить заметки.</Alert>}
-      {resolveError && <Alert severity="error">{failed}</Alert>}
-      {dispatchStale && (
-        <Alert severity="warning" onClose={() => setDispatchStale(false)}>
-          Одна из выбранных заметок решена или больше недоступна. Проверьте выбор и отправьте
-          заметки заново.
-        </Alert>
-      )}
-      {list.isSuccess && visible.length === 0 && (
-        <Typography variant="body2" color="text.secondary">
-          {resolved ? 'Решённых заметок пока нет.' : texts.empty}
-        </Typography>
-      )}
-      {visible.length > 0 && (
-        <Box component="ul" sx={{ display: 'grid', gap: 1, p: 0, my: 1, listStyle: 'none' }}>
-          {visible.map((comment) => (
-            <Box
-              component="li"
-              key={comment.id}
-              sx={{
-                border: 1,
-                borderColor: 'divider',
-                borderRadius: 2,
-                p: 1.25,
-                overflowWrap: 'anywhere',
-              }}
-            >
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                {comment.shared
-                  ? `${comment.author.own ? 'Вы' : comment.author.name || 'Пользователь'} · для всех`
-                  : 'Личная заметка'}
-              </Typography>
-              <AnchorText anchor={comment.anchor} />
-              {comment.moved && (
-                <Typography variant="caption" color="warning.main">
-                  Место изменилось
-                </Typography>
-              )}
-              <Typography variant="body2" sx={{ mt: 0.75, whiteSpace: 'pre-wrap' }}>
-                {comment.body}
-              </Typography>
-              {comment.replies.length > 0 && (
-                <Box
-                  component="ul"
-                  aria-label="Ответы на заметку"
-                  sx={{ listStyle: 'none', pl: 1.5, my: 1, borderLeft: 1, borderColor: 'divider' }}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography component="h2" variant="subtitle1" sx={{ flex: 1 }}>
+              {sharing ? 'Заметки и комментарии' : 'Личные заметки'}
+            </Typography>
+            {panel !== null && (
+              <Tooltip title="Скрыть заметки">
+                <IconButton
+                  size="small"
+                  aria-label="Скрыть заметки"
+                  onClick={() => panel.setOpen(false)}
                 >
-                  {comment.replies.map(({ id, body: text, byAgent, authorName, own }) => (
-                    <Typography
-                      key={id}
-                      component="li"
-                      variant="body2"
-                      sx={{ py: 0.5, whiteSpace: 'pre-wrap' }}
-                    >
-                      {(byAgent || comment.shared) && (
-                        <Typography
-                          component="span"
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: 'block' }}
-                        >
-                          {byAgent ? 'Агент' : own ? 'Вы' : authorName || 'Пользователь'}
-                        </Typography>
-                      )}
-                      {text}
+                  <AppIcon name="close" size={16} />
+                </IconButton>
+              </Tooltip>
+            )}
+          </Box>
+          <Box
+            role="group"
+            aria-label="Состояние заметок"
+            sx={{ display: 'flex', gap: 1, my: 0.5 }}
+          >
+            <Button
+              size="small"
+              aria-pressed={!resolved}
+              variant={resolved ? 'text' : 'outlined'}
+              onClick={() => setResolved(false)}
+            >
+              Нерешённые
+            </Button>
+            <Button
+              size="small"
+              aria-pressed={resolved}
+              variant={resolved ? 'outlined' : 'text'}
+              onClick={() => setResolved(true)}
+            >
+              Решённые
+            </Button>
+            {selectedOpen.length > 0 && (
+              <Button
+                size="small"
+                variant="contained"
+                onClick={() => {
+                  setDispatchStale(false)
+                  setDispatch(selectedOpen)
+                }}
+              >
+                Отправить агенту ({selectedOpen.length})
+              </Button>
+            )}
+          </Box>
+          {selectionFull && (
+            <Typography variant="caption" color="text.secondary">
+              За раз можно отправить до {artifactCommentDispatchLimits.threads} заметок.
+            </Typography>
+          )}
+          {list.isError && <Alert severity="error">Не удалось загрузить заметки.</Alert>}
+          {resolveError && <Alert severity="error">{failed}</Alert>}
+          {dispatchStale && (
+            <Alert severity="warning" onClose={() => setDispatchStale(false)}>
+              Одна из выбранных заметок решена или больше недоступна. Проверьте выбор и отправьте
+              заметки заново.
+            </Alert>
+          )}
+          {list.isSuccess && visible.length === 0 && (
+            <Typography variant="body2" color="text.secondary">
+              {resolved ? 'Решённых заметок пока нет.' : texts.empty}
+            </Typography>
+          )}
+          {visible.length > 0 && (
+            <Box component="ul" sx={{ display: 'grid', gap: 1, p: 0, my: 1, listStyle: 'none' }}>
+              {visible.map((comment) => (
+                <Box
+                  component="li"
+                  key={comment.id}
+                  sx={{
+                    border: 1,
+                    borderColor: 'divider',
+                    borderRadius: 2,
+                    p: 1.25,
+                    overflowWrap: 'anywhere',
+                  }}
+                >
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    {comment.shared
+                      ? `${comment.author.own ? 'Вы' : comment.author.name || 'Пользователь'} · для всех`
+                      : 'Личная заметка'}
+                  </Typography>
+                  <AnchorText anchor={comment.anchor} />
+                  {comment.moved && (
+                    <Typography variant="caption" color="warning.main">
+                      Место изменилось
                     </Typography>
-                  ))}
-                </Box>
-              )}
-              {!comment.resolved && (
-                <>
-                  {/* Own private notes, and threads of all for «Комментирует» (88.17а). */}
-                  {(comment.shared ? writable : owner && comment.author.own) && (
-                    <FormControlLabel
-                      label="Выбрать для отправки"
-                      control={
-                        <Checkbox
-                          size="small"
-                          checked={selectedOpen.includes(comment.id)}
-                          disabled={selectionFull && !selectedOpen.includes(comment.id)}
-                          onChange={(_, checked) =>
-                            setSelected(
-                              checked
-                                ? [...selectedOpen, comment.id]
-                                : selectedOpen.filter((id) => id !== comment.id),
-                            )
+                  )}
+                  <Typography variant="body2" sx={{ mt: 0.75, whiteSpace: 'pre-wrap' }}>
+                    {comment.body}
+                  </Typography>
+                  {comment.replies.length > 0 && (
+                    <Box
+                      component="ul"
+                      aria-label="Ответы на заметку"
+                      sx={{
+                        listStyle: 'none',
+                        pl: 1.5,
+                        my: 1,
+                        borderLeft: 1,
+                        borderColor: 'divider',
+                      }}
+                    >
+                      {comment.replies.map(({ id, body: text, byAgent, authorName, own }) => (
+                        <Typography
+                          key={id}
+                          component="li"
+                          variant="body2"
+                          sx={{ py: 0.5, whiteSpace: 'pre-wrap' }}
+                        >
+                          {(byAgent || comment.shared) && (
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{ display: 'block' }}
+                            >
+                              {byAgent ? 'Агент' : own ? 'Вы' : authorName || 'Пользователь'}
+                            </Typography>
+                          )}
+                          {text}
+                        </Typography>
+                      ))}
+                    </Box>
+                  )}
+                  {!comment.resolved && (
+                    <>
+                      {/* Own private notes, and threads of all for «Комментирует» (88.17а). */}
+                      {(comment.shared ? writable : owner && comment.author.own) && (
+                        <FormControlLabel
+                          label="Выбрать для отправки"
+                          control={
+                            <Checkbox
+                              size="small"
+                              checked={selectedOpen.includes(comment.id)}
+                              disabled={selectionFull && !selectedOpen.includes(comment.id)}
+                              onChange={(_, checked) =>
+                                setSelected(
+                                  checked
+                                    ? [...selectedOpen, comment.id]
+                                    : selectedOpen.filter((id) => id !== comment.id),
+                                )
+                              }
+                            />
                           }
                         />
-                      }
-                    />
+                      )}
+                      {(comment.shared ? writable : owner) && (
+                        <Button
+                          size="small"
+                          onClick={() => setReply({ threadId: comment.id, body: '' })}
+                        >
+                          Ответить
+                        </Button>
+                      )}
+                    </>
                   )}
-                  {(comment.shared ? writable : owner) && (
+                  {(owner || (comment.shared && writable && comment.author.own)) && (
                     <Button
                       size="small"
-                      onClick={() => setReply({ threadId: comment.id, body: '' })}
+                      disabled={resolve.isPending}
+                      onClick={() => void toggle(comment.id, comment.resolved)}
                     >
-                      Ответить
+                      {comment.resolved ? 'Открыть заново' : 'Отметить решённой'}
                     </Button>
                   )}
-                </>
-              )}
-              {(owner || (comment.shared && writable && comment.author.own)) && (
-                <Button
-                  size="small"
-                  disabled={resolve.isPending}
-                  onClick={() => void toggle(comment.id, comment.resolved)}
-                >
-                  {comment.resolved ? 'Открыть заново' : 'Отметить решённой'}
-                </Button>
-              )}
+                </Box>
+              ))}
             </Box>
-          ))}
+          )}
         </Box>
       )}
       {dispatch && (
@@ -617,6 +677,6 @@ export function ArtifactComments({
           </DialogActions>
         </Box>
       </Dialog>
-    </Box>
+    </>
   )
 }

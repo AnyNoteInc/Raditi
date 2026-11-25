@@ -880,9 +880,9 @@ export const toolText = Object.freeze({
   /** The groups of the menu «+» (Ар44, board B-chat-list). */
   groups: Object.freeze({
     tools: 'Инструменты',
-    made: 'Артефакты чата · Сделаны здесь',
-    mentioned: 'Артефакты чата · Упомянуты в чате',
-    project: 'Артефакты чата · В проекте',
+    made: 'Сделано в чате',
+    mentioned: 'Упомянуто в чате',
+    project: 'Из проекта',
     files: 'Файлы чата',
   }),
   /** «Ещё N ▾»: the tabs that do not fit the strip (Ар44). */
@@ -930,7 +930,7 @@ export const documentText = Object.freeze({
   fullscreen: 'На весь экран',
   leaveFullscreen: 'Выйти из полноэкранного режима',
   newTab: 'Открыть в новой вкладке',
-  /** «Открыть как артефакт» of a `.md` or `.html` file (docs/plan/88-artifacts.md, Ар3). */
+  /** «Открыть как артефакт» of a `.md`, `.html` or `.svg` file (docs/plan/88-artifacts.md, Ар3). */
   openAsArtifact: 'Открыть как артефакт',
   openAsArtifactFailed: 'Не удалось открыть файл как артефакт.',
   publish: 'Опубликовать как страницу',

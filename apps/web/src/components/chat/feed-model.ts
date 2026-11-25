@@ -29,6 +29,12 @@ export type FeedEntry =
    * begun earlier has its card too.
    */
   | { kind: 'agentDocs'; key: string; docIds: string[] }
+  /**
+   * The canvases, slides and images a turn made or changed (`feed.artifact`, plan 88, Ар46;
+   * docs/plan/93-artifacts-trim.md, АТ9): one compact card after the answer of the turn, so a
+   * phone that opens no tab by itself shows them too.
+   */
+  | { kind: 'agentArtifacts'; key: string; artifacts: { id: string; kind: string }[] }
   /** The stages of a finished turn, folded into «Агент работал …». */
   | { kind: 'worked'; key: string; turn: number; steps: StepRow[]; seconds: number }
 
@@ -128,6 +134,8 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
   let turnDocsKey = ''
   // The documents of the card placed last: `feed.artifact` after the same answer names them again.
   let lastCard: string[] = []
+  // The canvases, slides and images of the answer placed last: told once after one answer.
+  let lastFrames: string[] = []
   const flushDocs = () => {
     if (turnDocs.length === 0) return
     entries.push({ kind: 'agentDocs', key: `docs-${turnDocsKey}`, docIds: turnDocs })
@@ -141,7 +149,18 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
     // An artifact shown as Markdown (plan 88, Ар46) stands after the answer of its turn: it joins
     // the card that answer already placed, or makes one of its own there — never the next turn's.
     if (row.type === 'feed.artifact') {
-      const docId = artifactKindSpecOf(row.kind)?.view === 'markdown' ? row.artifactId : null
+      const view = artifactKindSpecOf(row.kind)?.view
+      if (view === 'canvas') {
+        if (lastFrames.includes(row.artifactId)) return
+        lastFrames = [...lastFrames, row.artifactId]
+        const previous = entries.at(-1)
+        const shown = { id: row.artifactId, kind: row.kind }
+        if (previous?.kind === 'agentArtifacts') previous.artifacts.push(shown)
+        else
+          entries.push({ kind: 'agentArtifacts', key: `artifacts-${row.id}`, artifacts: [shown] })
+        return
+      }
+      const docId = view === 'markdown' ? row.artifactId : null
       if (docId === null || lastCard.includes(docId) || turnDocs.includes(docId)) return
       if (turnDocs.length > 0) {
         turnDocs.push(docId)
@@ -156,7 +175,10 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
       if (!turnDocs.includes(row.docId)) turnDocs.push(row.docId)
       return
     }
-    if (row.type === 'feed.request') lastCard = []
+    if (row.type === 'feed.request') {
+      lastCard = []
+      lastFrames = []
+    }
     if (!isStep(row)) {
       entries.push({ kind: 'row', key: row.id, row })
       if (TURN_ENDS.has(row.type)) flushDocs()

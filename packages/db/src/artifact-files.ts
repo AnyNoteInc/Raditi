@@ -13,7 +13,7 @@ import { artifactRole } from './artifacts.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
 
 // The files of an artifact (docs/plan/88-artifacts.md, Ар12, §7.1; slice 88.12): a photo, a picture
-// or a font a mockup shows by `artifact-file:<id>`. A person with «Правит» uploads one in the
+// or a font a frame shows by `artifact-file:<id>`. A person with «Правит» uploads one in the
 // cabinet (`uploading` → `ready`); a turn reserves one of its outbox (`artifact_file_put`,
 // `reserved`), and core writes it at the end of the turn. Up to 5 MiB a file and 50 MiB an artifact,
 // counting what is on its way. Only `ready` files are shown.

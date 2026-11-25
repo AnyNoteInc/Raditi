@@ -2,14 +2,14 @@ import 'server-only'
 
 import { attachmentDisposition } from './task-file'
 
-// «Скачать → Excel» of a table (docs/plan/88-artifacts.md, §7.13, question 26): the workbook core
-// built for the person who asked, while they may still open the table. An attachment of its own
-// type, never sniffed or framed.
+// «Скачать» of an artifact (docs/plan/88-artifacts.md, §7.13): the PDF or PPTX of slides, the PNG of
+// a picture core built for the person who asked, while they may still open the artifact. An
+// attachment of its own type, never sniffed or framed.
 
 export interface ArtifactExportDependencies {
   getSession: (headers: Headers) => Promise<{ user: { id: string } } | null>
   hasRequiredConsents: (headers: Headers) => Promise<boolean>
-  /** The workbook, or null: readArtifactExport of @repo/trpc. */
+  /** The file, or null: readArtifactExport of @repo/trpc. */
   read: (input: {
     userId: string
     exportId: string

@@ -1,10 +1,10 @@
-// «Схема» on a Chromium of this machine (docs/plan/88-artifacts.md, §7.13, slice 88.24г; spike 7),
-// part of `pnpm verify:artifacts`. The corpus of spike 7 goes through the renderer of apps/browser
-// (DiagramService on the render pool): every diagram valid by the documentation — Cyrillic ids
-// included — is drawn with its labels, every classic mistake is refused with its error; each picture
-// is clean XML for `<img>` that loads nothing and runs nothing; the hostile probes leave no trace.
-// Then the whole road: the agent's write answered with the line of its error, the cabinet's picture
-// asked of core and drawn, the page published with the picture as a file of the site.
+// The renderer of diagrams on a Chromium of this machine (docs/plan/88-artifacts.md, §7.13, slice
+// 88.24г; spike 7), part of `pnpm verify:artifacts`. The artifact «Схема» is gone (plan 93, АТ3), but
+// its Mermaid renderer stays for the diagrams in chat answers (plan 91): the corpus of spike 7 goes
+// through the renderer of apps/browser (DiagramService on the render pool): every diagram valid by
+// the documentation — Cyrillic ids included — is drawn with its labels, every classic mistake is
+// refused with its error; each picture is clean XML for `<img>` that loads nothing and runs nothing;
+// the hostile probes leave no trace.
 
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -39,28 +39,13 @@ const INSPECT = `async (svg) => {
 
 const squash = (text) => text.normalize('NFC').replace(/[\s ]+/g, '')
 
-export async function diagramsOnChromium({ root, databaseUrl, check }) {
-  const dbModule = await import(resolve(root, 'packages/db/src/index.ts'))
-  const { uuidv7 } = await import(resolve(root, 'packages/db/src/uuidv7.ts'))
+export async function diagramsOnChromium({ root, check }) {
   const { createPlaywrightFrameRenderer } = await import(
     resolve(root, 'packages/browser-providers/src/render/index.ts')
   )
   const { RenderPool } = await import(resolve(root, 'apps/browser/src/render/render-pool.ts'))
   const { DiagramService } = await import(
     resolve(root, 'apps/browser/src/render/diagram-service.ts')
-  )
-  const { McpArtifactsService } = await import(
-    resolve(root, 'apps/mcp/src/artifacts/artifacts-service.ts')
-  )
-  const { postgresArtifactsStore } = await import(
-    resolve(root, 'apps/mcp/src/artifacts/artifacts-store.ts')
-  )
-  const { ArtifactDiagram } = await import(resolve(root, 'apps/core/src/tasks/artifact-diagram.ts'))
-  const { createGalleryArtifact } = await import(
-    resolve(root, 'packages/trpc/src/services/artifacts/gallery.ts')
-  )
-  const { publishArtifactPage } = await import(
-    resolve(root, 'packages/trpc/src/services/artifacts/publish.ts')
   )
   const { chromium } = (
     await import(
@@ -76,7 +61,6 @@ export async function diagramsOnChromium({ root, databaseUrl, check }) {
     chromium.executablePath(),
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   ].find((path) => existsSync(path))
-  const db = dbModule.createPrismaClient({ databaseUrl, log: [] })
   const pool = new RenderPool({
     runtime: null,
     local: true,
@@ -104,7 +88,7 @@ export async function diagramsOnChromium({ root, databaseUrl, check }) {
     const inspect = (svg) => page.evaluate(`(${INSPECT})(${JSON.stringify(svg)})`)
     const workspaceId = randomUUID()
 
-    // 88.24г — the corpus of spike 7 through the renderer of apps/browser.
+    // The corpus of spike 7 through the renderer of apps/browser.
     const drawn = []
     const refused = []
     let labels = 0
@@ -188,101 +172,8 @@ export async function diagramsOnChromium({ root, databaseUrl, check }) {
       )
     }
     check('looking at every picture made no request', requests === 0, String(requests))
-
-    // 88.24б–в — the agent's write, the cabinet's picture by core, the published page.
-    const user = await db.user.create({
-      data: { name: 'Synthetic', email: `${randomUUID()}@example.test` },
-    })
-    const workspace = await db.workspace.create({
-      data: { name: 'Synthetic diagrams', dataClass: 'synthetic', createdById: user.id },
-    })
-    await db.member.create({ data: { workspaceId: workspace.id, userId: user.id, role: 'owner' } })
-    const created = await createGalleryArtifact(db, {
-      userId: user.id,
-      appEnv: 'development',
-      kind: 'diagram',
-      title: 'Путь клиента',
-      projectId: null,
-      templateId: 'customer-journey',
-    })
-    const view = (block) =>
-      dbModule.readArtifactDiagram(db, { artifactId: created.id, block, userId: user.id })
-    const [block] = (
-      await dbModule.readArtifact(db, {
-        artifactId: created.id,
-        actor: { kind: 'user', userId: user.id },
-      })
-    ).blocks
-    check(
-      'the cabinet asks core for a picture it has not got',
-      (await view(block.key)).state === 'drawing',
-    )
-    const job = await db.outboxEvent.findFirst({
-      where: { type: 'artifact.diagram', payload: { path: ['artifactId'], equals: created.id } },
-    })
-    await new ArtifactDiagram({ db, draw: (request) => diagrams.render(request) }).run(job.payload)
-    const shown = await view(block.key)
-    check(
-      'core draws it, and the cabinet shows the picture',
-      shown.state === 'drawn' && shown.width > 0,
-    )
-
-    const taskId = (
-      await db.task.create({
-        data: { id: uuidv7(), workspaceId: workspace.id, createdById: user.id, status: 'running' },
-        select: { id: true },
-      })
-    ).id
-    await dbModule.attachMentionedArtifacts(db, { taskId, artifactIds: [created.id] })
-    const tools = new McpArtifactsService({
-      store: postgresArtifactsStore(db),
-      diagram: (request) => diagrams.render(request),
-    })
-    const scope = {
-      keyId: randomUUID(),
-      taskId,
-      workspaceId: workspace.id,
-      sessionId: 'synthetic',
-      turn: 1,
-      firstEpoch: 1,
-      epoch: 1,
-      requirements: { repository: false, browser: false },
-    }
-    const wrote = await tools.edit(scope, {
-      artifactId: created.id,
-      opId: `diagram-${randomUUID()}`,
-      // A new block: the person who made the artifact still holds the block of the template.
-      ops: [
-        {
-          op: 'insert',
-          block: 'd2',
-          after: block.key,
-          kind: 'diagram',
-          content: 'flowchart LR\n  A[Заявка] --> B[Счёт]\n  B --> (((',
-        },
-      ],
-    })
-    const told = wrote.ok ? wrote.value.diagrams?.find((each) => each.block === 'd2') : null
-    check(
-      'the agent reads in the answer that its diagram did not parse, and the line',
-      told?.drawn === false && told.line === 3,
-      JSON.stringify(wrote),
-    )
-    const published = await publishArtifactPage(
-      db,
-      { baseDomain: 'pages.localhost', scheme: 'http', port: 3110 },
-      { artifactId: created.id, userId: user.id, versionNo: null },
-    )
-    const html = Buffer.from(
-      (await db.pageContent.findUniqueOrThrow({ where: { pageId: published.pageId } })).bytes,
-    ).toString('utf8')
-    check(
-      'the published page shows the checked picture as a file of the site, without Mermaid',
-      /<img src="\/_files\/a\/d-[0-9a-f]{32}\.svg"/.test(html) && !/<script|mermaid/i.test(html),
-    )
   } finally {
     await browser.close()
     await pool.close()
-    await db.$disconnect()
   }
 }

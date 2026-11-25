@@ -1,10 +1,11 @@
-// The canvas, the brand and the renderer of frames (docs/plan/88-artifacts.md, Ар8, Ар32, §7.7,
-// §7.12; slices 88.15, 88.15а, 88.15б, 88.15в), part of `pnpm verify:artifacts`: over the disposable
-// PostgreSQL of the stand, a project with its brand and a canvas from the template, the agent of a
-// chat of the project — `artifact_layout` through mcp onto the renderer of `apps/browser` on a
-// Chromium of this machine without network, the chat's own unchecked block in the report, frames
-// that try the network and hold the main thread; `artifact_render` pictures; the thumbnails of core
-// and the board's ask for them; «Опубликовать как сайт» of the canvas. Synthetic data only.
+// The canvas and the renderer of frames (docs/plan/88-artifacts.md, Ар8, Ар32, §7.7, §7.12; slices
+// 88.15, 88.15б, 88.15в; the brand is gone, plan 93, АТ5), part of `pnpm verify:artifacts`: over the
+// disposable PostgreSQL of the stand, a project and a canvas from the template with its own colours,
+// the agent of a chat of the project — `artifact_layout` through mcp onto the renderer of
+// `apps/browser` on a Chromium of this machine without network, the chat's own unchecked block in
+// the report, frames that try the network and hold the main thread; `artifact_render` pictures; the
+// thumbnails of core and the board's ask for them; «Опубликовать как сайт» of the canvas. Synthetic
+// data only.
 
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
@@ -107,20 +108,6 @@ export async function canvasAndRender({ root, databaseUrl, check }) {
     })
     const person = { kind: 'user', userId: user.id }
 
-    // 88.15а — the brand of the project from its template, its colours in every frame.
-    const brand = await createGalleryArtifact(db, {
-      userId: user.id,
-      appEnv: 'development',
-      kind: 'brand',
-      title: 'Фирменный стиль',
-      projectId: project.id,
-      templateId: 'brand',
-    })
-    const brandRead = await dbModule.readArtifact(db, { artifactId: brand.id, actor: person })
-    check(
-      'the brand of the template is its tokens and the tone of its texts',
-      brandRead.blocks.map((block) => block.kind).join() === 'settings,section',
-    )
     // 88.15 — the canvas of the template: three screens for a computer and a phone.
     const canvas = await createGalleryArtifact(db, {
       userId: user.id,
@@ -142,8 +129,9 @@ export async function canvasAndRender({ root, databaseUrl, check }) {
       viewer: { kind: 'user', userId: user.id },
     })
     check(
-      'a frame of the canvas stands in the brand of its project, its parts marked by block',
-      source.html.includes('--brand-primary:#2f5d50') &&
+      'a frame of the canvas stands in the colours of its own style, its parts marked by block',
+      source.html.includes('--primary:#2f5d50') &&
+        !source.html.includes('--brand-') &&
         source.html.includes('<!--raditi-block:home-html-->') &&
         source.policy.startsWith('sandbox allow-scripts') &&
         source.policy.includes("connect-src 'none'"),
@@ -259,11 +247,18 @@ export async function canvasAndRender({ root, databaseUrl, check }) {
         hung.value.report.includes('did not finish'),
       `${loopMs} ms ${hung.ok ? hung.value.report : JSON.stringify(hung)}`,
     )
-    const refusedMockup = await tools.layout(scope, { artifactId: brand.id })
+    const notes = await dbModule.createArtifact(db, {
+      workspaceId: workspace.id,
+      kind: 'document',
+      title: 'Заметки',
+      projectId: project.id,
+      actor: person,
+    })
+    const refusedDocument = await tools.layout(scope, { artifactId: notes.id })
     check(
-      'a brand has no frame: the tool says so',
-      !refusedMockup.ok && refusedMockup.code === 'ARTIFACT_OP_INVALID',
-      JSON.stringify(refusedMockup),
+      'a document has no frame: the tool says so',
+      !refusedDocument.ok && refusedDocument.code === 'ARTIFACT_OP_INVALID',
+      JSON.stringify(refusedDocument),
     )
 
     // 88.15в — the pictures for the helper look: JPEG strips, at most four, three checks a turn.

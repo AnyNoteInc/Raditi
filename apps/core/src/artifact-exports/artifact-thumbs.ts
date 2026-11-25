@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 
-import { artifactBrandOf, readArtifact, type PrismaClient } from '@repo/db'
+import { readArtifact, type PrismaClient } from '@repo/db'
 import type { ObjectStorage } from '@repo/domain'
 import {
   artifactKindSpecOf,
@@ -58,7 +58,6 @@ export class ArtifactThumbs {
     const viewer = { kind: 'user' as const, userId: row.ownerUserId }
     const snapshot = async () => {
       const artifact = await readArtifact(db as PrismaClient, { artifactId, actor: viewer })
-      const brand = await artifactBrandOf(db as PrismaClient, artifactId)
       return {
         screens: canvasScreensOf(artifact.blocks),
         propsOf: (frame: string) => artifact.blocks.find((block) => block.key === frame)?.props,
@@ -67,7 +66,6 @@ export class ArtifactThumbs {
             blocks: artifact.blocks,
             frame,
             title: artifact.title,
-            brand: brand && { id: brand.id, seq: brand.seq },
           }),
       }
     }

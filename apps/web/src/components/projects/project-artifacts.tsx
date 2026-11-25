@@ -14,7 +14,8 @@ export const PROJECT_ARTIFACT_ROWS = 3
 
 export const projectArtifactsText = Object.freeze({
   title: 'Артефакты проекта',
-  empty: 'Здесь появятся документы, макеты и таблицы, которые агент сделает в чатах проекта.',
+  empty:
+    'Здесь появятся документы, холсты, презентации и изображения, которые агент сделает в чатах проекта.',
   all: (count: number) => `Все артефакты проекта (${count})`,
 })
 

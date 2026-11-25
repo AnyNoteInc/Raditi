@@ -49,7 +49,7 @@ export const canvasThumbDependencies: CanvasThumbDependencies = {
   onFailure: taskFileDependencies.onFailure,
 }
 
-/** «Скачать → Excel» of a table (docs/plan/88-artifacts.md, question 26). */
+/** «Скачать» of an artifact: a PDF, PPTX or PNG (docs/plan/88-artifacts.md, §7.13). */
 export const artifactExportDependencies: ArtifactExportDependencies = {
   getSession: taskFileDependencies.getSession,
   hasRequiredConsents: taskFileDependencies.hasRequiredConsents,

@@ -449,12 +449,13 @@ export function feedArtifactLeftText(row: { blocks: number }): string {
 }
 
 /** The names of the kinds in a line of Telegram, by the registry of `@repo/domain/artifacts`. */
-const artifactKindWords: Readonly<Record<string, string>> = Object.freeze({
-  document: 'документ',
-  mockup: 'макет',
-  table: 'таблица',
-  canvas: 'холст',
-  brand: 'фирменный стиль',
+const artifactKindWords: Readonly<
+  Record<string, { word: string; gender: 'masculine' | 'feminine' | 'neuter' }>
+> = Object.freeze({
+  document: { word: 'документ', gender: 'masculine' },
+  canvas: { word: 'холст', gender: 'masculine' },
+  slides: { word: 'презентация', gender: 'feminine' },
+  image: { word: 'изображение', gender: 'neuter' },
 })
 
 /**
@@ -468,9 +469,11 @@ export function feedArtifactTelegramText(row: {
   title: string | null
 }): string {
   if (row.title === null) return 'Артефакт обновлён'
-  const word = artifactKindWords[row.kind] ?? 'артефакт'
-  const feminine = word === 'таблица'
-  const done = row.created ? (feminine ? 'Создана' : 'Создан') : feminine ? 'Обновлена' : 'Обновлён'
+  // A kind that left the list (docs/plan/93-artifacts-trim.md) is an «артефакт».
+  const { word, gender } = artifactKindWords[row.kind] ?? { word: 'артефакт', gender: 'masculine' }
+  const done = row.created
+    ? { masculine: 'Создан', feminine: 'Создана', neuter: 'Создано' }[gender]
+    : { masculine: 'Обновлён', feminine: 'Обновлена', neuter: 'Обновлено' }[gender]
   return `${done} ${word} «${row.title}»`
 }
 

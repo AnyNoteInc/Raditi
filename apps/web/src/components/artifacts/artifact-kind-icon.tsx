@@ -5,15 +5,9 @@ import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 /** The icon of each kind of artifact: in the gallery, in «Создать», on a tab beside the chat. */
 export const artifactKindIcons: Readonly<Record<ArtifactKind, AppIconName>> = Object.freeze({
   document: 'document',
-  mockup: 'mockup',
-  table: 'table',
   canvas: 'canvas',
-  brand: 'brand',
-  diagram: 'diagram',
   slides: 'slides',
   image: 'image',
-  sitemap: 'sitemap',
-  report: 'usage',
 })
 
 /** The icon of a kind read back from a row: a kind that left the list is a document. */

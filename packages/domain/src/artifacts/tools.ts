@@ -123,8 +123,9 @@ export const artifactFilePutArgumentsSchema = z.strictObject({
 export type ArtifactFilePutArguments = z.infer<typeof artifactFilePutArgumentsSchema>
 
 /**
- * `artifact_import` (§7.5): a `.md`, `.html`, `.svg` or `.csv` of the outbox — a new artifact (its id
- * is in the answer, it exists at the end of the turn) or the whole new content of `artifactId`.
+ * `artifact_import` (§7.5): a `.md` of the outbox as a document, an `.html` or `.svg` as a canvas of
+ * one screen — a new artifact (its id is in the answer, it exists at the end of the turn) or the
+ * whole new content of `artifactId`.
  */
 export const artifactImportArgumentsSchema = z.strictObject({
   file: outboxFileNameSchema,
@@ -136,13 +137,13 @@ export const artifactImportArgumentsSchema = z.strictObject({
 export type ArtifactImportArguments = z.infer<typeof artifactImportArgumentsSchema>
 
 /**
- * `artifact_layout` (§7.5, Ар32, slice 88.15б): the text report of the layout of a mockup or of one
- * frame of a canvas as the client sees it, drawn by `apps/browser` at 1440 and 390 — the chat's own
- * blocks that wait for the check included.
+ * `artifact_layout` (§7.5, Ар32, slice 88.15б): the text report of the layout of one frame of a
+ * canvas, a slide or a picture as the client sees it, drawn by `apps/browser` at 1440 and 390 (a
+ * slide or a picture at its own size) — the chat's own blocks that wait for the check included.
  */
 export const artifactLayoutArgumentsSchema = z.strictObject({
   artifactId: z.uuid(),
-  /** The frame of a canvas; absent — a mockup. */
+  /** The frame: a screen, a slide or a picture; absent — the only frame, or the first one. */
   frame: artifactBlockKeySchema.optional(),
   /** Every finding, past the 1 500 characters of the report. */
   detail: z.boolean().optional(),
@@ -150,11 +151,13 @@ export const artifactLayoutArgumentsSchema = z.strictObject({
 export type ArtifactLayoutArguments = z.infer<typeof artifactLayoutArgumentsSchema>
 
 /**
- * `artifact_render` (§7.5, Ар32, slice 88.15в): the picture of a mockup or of a frame — strips of
- * JPEG as image results of the tool — for the helper `look`, which alone sees images.
+ * `artifact_render` (§7.5, Ар32, slice 88.15в): the picture of a frame of a canvas, a slide or a
+ * picture — strips of JPEG as image results of the tool — for the helper `look`, which alone sees
+ * images.
  */
 export const artifactRenderArgumentsSchema = z.strictObject({
   artifactId: z.uuid(),
+  /** As `artifact_layout`: absent — the only frame, or the first one. */
   frame: artifactBlockKeySchema.optional(),
   /** `desktop` — 1440, `phone` — 390; absent — both. */
   view: z.enum(['desktop', 'phone']).optional(),
@@ -240,7 +243,7 @@ export function artifactToolLine(tool: string): string | null {
     case 'artifact_layout':
       return 'Проверяет вёрстку на компьютере и телефоне'
     case 'artifact_render':
-      return 'Смотрит на макет'
+      return 'Смотрит на экран'
     case 'artifact_comments':
       return 'Читает заметки к артефакту'
     case 'artifact_reply':

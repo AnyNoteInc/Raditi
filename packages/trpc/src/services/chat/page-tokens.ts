@@ -98,8 +98,8 @@ export interface ArtifactViewToken {
   expiresAt: number
 }
 export interface ArtifactFrameToken extends ArtifactViewToken {
-  /** The frame of a canvas the token opens; absent — a mockup (slice 88.15). */
-  frame?: string
+  /** The frame block the token opens: a screen of a canvas, a slide, a picture (slice 88.15). */
+  frame: string
 }
 export interface ArtifactFileToken extends ArtifactViewToken {
   fileId: string

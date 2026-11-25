@@ -70,7 +70,6 @@
     "web-push": "4.0.0",
     "pdf-lib": "catalog:",
     "pptxgenjs": "catalog:",
-    "write-excel-file": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -87,7 +86,6 @@
     "@types/web-push": "3.6.4",
     "@typescript/native": "catalog:",
     "eslint": "catalog:",
-    "read-excel-file": "catalog:",
     "supertest": "catalog:",
     "typescript": "catalog:",
     "unplugin-swc": "catalog:",

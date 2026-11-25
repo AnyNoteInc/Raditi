@@ -1,10 +1,4 @@
-import {
-  artifactBrandOf,
-  artifactRole,
-  enqueueOutbox,
-  readArtifact,
-  type PrismaClient,
-} from '@repo/db'
+import { artifactRole, enqueueOutbox, readArtifact, type PrismaClient } from '@repo/db'
 import type { ObjectStorage } from '@repo/domain'
 import {
   ARTIFACT_QUEUE,
@@ -46,7 +40,6 @@ export async function canvasThumbs(
     where: { id: artifact.id },
     select: { workspaceId: true },
   })
-  const brand = await artifactBrandOf(db, artifact.id)
   const thumbs: CanvasThumb[] = []
   let pending = false
   for (const screen of canvasScreensOf(artifact.blocks)) {
@@ -54,7 +47,6 @@ export async function canvasThumbs(
       blocks: artifact.blocks,
       frame: screen.key,
       title: artifact.title,
-      brand: brand && { id: brand.id, seq: brand.seq },
     })
     const frameProps = artifact.blocks.find((block) => block.key === screen.key)?.props
     for (const view of artifactFrameViewsOf(artifact.kind, frameProps)) {
@@ -81,7 +73,7 @@ export async function canvasThumbs(
       topic: ARTIFACT_QUEUE,
       type: ARTIFACT_THUMBS_JOB,
       payload: { artifactId: artifact.id },
-      dedupeKey: `${ARTIFACT_THUMBS_JOB}:${artifact.id}:${artifact.seq}:${brand?.id ?? '-'}:${brand?.seq ?? 0}:v${CANVAS_RENDER_VERSION}:${window}`,
+      dedupeKey: `${ARTIFACT_THUMBS_JOB}:${artifact.id}:${artifact.seq}:v${CANVAS_RENDER_VERSION}:${window}`,
     })
   }
   return { thumbs, pending }

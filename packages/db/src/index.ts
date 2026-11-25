@@ -104,7 +104,6 @@ export {
   type ArtifactGallerySort,
 } from './artifact-gallery.ts'
 export { isArtifactRank, rankBetween, rankForIndex } from './artifact-rank.ts'
-export { artifactBrandOf, projectBrandOf, type ProjectBrand } from './artifact-brand.ts'
 export {
   artifactFileFor,
   artifactFilesByIds,
@@ -568,12 +567,3 @@ export type {
   Workspace,
   WorkspaceEnvVar,
 } from './generated/prisma/client.ts'
-export {
-  artifactDiagramJobSource,
-  artifactDiagramOf,
-  diagramSourceKey,
-  enqueueArtifactDiagram,
-  readArtifactDiagram,
-  saveArtifactDiagram,
-  type ArtifactDiagramView,
-} from './artifact-diagrams.ts'

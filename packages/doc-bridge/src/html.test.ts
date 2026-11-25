@@ -162,29 +162,40 @@ describe('import of whole files (§7.5)', () => {
 })
 
 describe('artifactImportOf', () => {
-  const bounds = { blockBytes: 32 * 1024, blocks: 200, tableRows: 5000, columns: 50 }
-  it('reads a CSV of Excel: «;», BOM, quotes, the apostrophe of a formula', async () => {
+  const bounds = { blockBytes: 32 * 1024, blocks: 200 }
+  it('reads a page as a canvas of one screen, its parts inside the screen (plan 93, АТ6)', async () => {
     const { artifactImportOf } = await import('./import.ts')
-    const table = artifactImportOf(
-      'price.csv',
-      '﻿Название;Цена\r\n"Хлеб; ржаной";120\r\n\'=1+1;5\r\n',
+    const page = artifactImportOf(
+      'landing.html',
+      '<html><head><title>Кофейня</title><style>h1{color:red}</style></head><body><h1>Кофе</h1><script>var x = 1</script></body></html>',
       bounds,
     )
-    expect(table).toEqual({
-      ok: true,
-      kind: 'table',
-      title: null,
-      blocks: [
-        {
-          kind: 'columns',
-          content: JSON.stringify([
-            { key: 'c1', name: 'Название', type: 'text' },
-            { key: 'c2', name: 'Цена', type: 'text' },
-          ]),
-        },
-        { kind: 'row', content: JSON.stringify({ c1: 'Хлеб; ржаной', c2: '120' }) },
-        { kind: 'row', content: JSON.stringify({ c1: '=1+1', c2: '5' }) },
-      ],
+    expect(page).toMatchObject({ ok: true, kind: 'canvas', title: 'Кофейня' })
+    if (!page.ok) return
+    expect(page.blocks[0]).toEqual({
+      kind: 'frame',
+      key: 'home',
+      content: '',
+      props: { name: 'Главная', path: '/', x: 0, y: 0 },
+    })
+    expect(page.blocks.slice(1).map((block) => [block.kind, block.parent])).toEqual([
+      ['style', 'home'],
+      ['html', 'home'],
+      ['script', 'home'],
+    ])
+    const picture = artifactImportOf(
+      'logo.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      bounds,
+    )
+    expect(picture).toMatchObject({ ok: true, kind: 'canvas' })
+  })
+
+  it('reads no CSV, and no file of another type', async () => {
+    const { artifactImportOf } = await import('./import.ts')
+    expect(artifactImportOf('price.csv', 'a;b\n1;2', bounds)).toEqual({
+      ok: false,
+      problem: 'type',
     })
     expect(artifactImportOf('a.docx', 'x', bounds)).toEqual({ ok: false, problem: 'type' })
     expect(artifactImportOf('a.md', '   ', bounds)).toEqual({ ok: false, problem: 'empty' })

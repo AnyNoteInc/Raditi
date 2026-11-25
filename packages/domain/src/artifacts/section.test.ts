@@ -37,13 +37,16 @@ describe('the notes supplied for a request', () => {
   })
 })
 
-describe('the rules of diagrams in the section of artifacts (88.24)', () => {
-  it('gives the rules of Mermaid only when «Схема» is released', async () => {
+describe('the kinds in the section of artifacts (docs/plan/93-artifacts-trim.md)', () => {
+  it('lists the four kinds, gives the rules of a frame once, and no rule of a removed kind', async () => {
     const { artifactsSection } = await import('./section.ts')
-    expect(artifactsSection([], ['document'])).not.toContain('Mermaid')
-    const text = artifactsSection([], ['document', 'diagram'])
-    expect(text).toContain('- diagram (Схема)')
-    expect(text).toContain('never `end` as an id')
-    expect(text).toContain('`diagrams`')
+    const text = artifactsSection()
+    for (const kind of ['document', 'canvas', 'slides', 'image'])
+      expect(text).toContain(`- ${kind} (`)
+    for (const word of ['mockup', 'Mermaid', 'brand', 'sitemap', '`chart`', '`row`'])
+      expect(text).not.toContain(word)
+    expect(text).toContain('raditi-settings')
+    expect(text).toContain('Golos Text')
+    expect(text.split('The frame is sandboxed')).toHaveLength(2)
   })
 })

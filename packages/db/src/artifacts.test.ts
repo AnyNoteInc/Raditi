@@ -31,11 +31,6 @@ import {
   type ArtifactActor,
 } from './artifacts.ts'
 import {
-  artifactDiagramJobSource,
-  readArtifactDiagram,
-  saveArtifactDiagram,
-} from './artifact-diagrams.ts'
-import {
   artifactChatNews,
   artifactPlaceholders,
   artifactsOfTurn,
@@ -226,7 +221,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
     expect(await codeOf(() => apply(id, [{ ...section('a', 'x'), props: {} }]))).toBe(
       'ARTIFACT_OP_INVALID',
     )
-    expect(await codeOf(() => apply(id, [{ ...section('a', 'x'), kind: 'row' }]))).toBe(
+    expect(await codeOf(() => apply(id, [{ ...section('a', 'x'), kind: 'frame' }]))).toBe(
       'ARTIFACT_OP_INVALID',
     )
     expect(await codeOf(() => apply(id, [section('a', 'x'), section('a', 'y')]))).toBe(
@@ -405,44 +400,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
     expect(own.blocks[0]?.state).toBe('checking')
   })
 
-  it('keeps a table’s cells by its columns', async () => {
-    const { create, apply, person } = await owner()
-    const id = await create('table', 'Прайс')
-    const columns = JSON.stringify([
-      { key: 'name', name: 'Товар', type: 'text' },
-      { key: 'price', name: 'Цена', type: 'money' },
-    ])
-    await apply(id, [
-      { op: 'insert', block: 'cols', after: null, kind: 'columns', content: columns },
-      { op: 'insert', block: 'r1', after: 'cols', kind: 'row', content: '{"name":"Кофе"}' },
-      { op: 'cells', block: 'r1', cells: { price: '250.00' } },
-    ])
-    expect(
-      await codeOf(() => apply(id, [{ op: 'cells', block: 'r1', cells: { price: 250 } }])),
-    ).toBe('ARTIFACT_OP_INVALID')
-    expect(
-      await codeOf(() => apply(id, [{ op: 'cells', block: 'r1', cells: { size: 'L' } }])),
-    ).toBe('ARTIFACT_OP_INVALID')
-    await apply(id, [{ op: 'cells', block: 'r1', cells: { name: null } }])
-    const read = await readArtifact(db, { artifactId: id, actor: person })
-    expect(JSON.parse(read.blocks[1]!.content!)).toEqual({ price: '250.00' })
-    // A paste of rows in the cabinet goes as one batch beyond 50 operations.
-    const rows = Array.from({ length: 120 }, (_, index) => ({
-      op: 'insert',
-      block: `p${index}`,
-      after: index === 0 ? 'r1' : `p${index - 1}`,
-      kind: 'row',
-      content: JSON.stringify({ name: `Товар ${index}`, price: `${index}.00` }),
-    }))
-    await apply(id, rows)
-    const all = await readArtifact(db, { artifactId: id, actor: person })
-    expect(all.blocks.map((block) => block.key)).toEqual([
-      'cols',
-      'r1',
-      ...rows.map((row) => row.block),
-    ])
-  })
-
   it('keeps versions as lists of revisions, the text of each hash once', async () => {
     const { create, apply, person, chat, agent } = await owner()
     const id = await create()
@@ -498,10 +455,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
   it('creates as the agent with the title waiting for the check, and gives the owner alone a role', async () => {
     const { create, chat, agent, workspace, user } = await owner()
     const writer = await chat()
-    const id = await create('mockup', 'Лендинг кофейни', agent(writer))
+    const id = await create('canvas', 'Лендинг кофейни', agent(writer))
     const row = await db.artifact.findUniqueOrThrow({ where: { id } })
     expect(row).toMatchObject({
-      title: 'Макет',
+      title: 'Холст',
       pendingTitle: 'Лендинг кофейни',
       ownerUserId: user.id,
     })
@@ -514,7 +471,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
       await codeOf(() =>
         createArtifact(db, {
           workspaceId: workspace.id,
-          kind: 'mockup',
+          kind: 'canvas',
           title: 'x',
           actor: { kind: 'user', userId: stranger.id },
         }),
@@ -1127,63 +1084,5 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
     expect((await pendingArtifactWrites(db, legacy)).map((each) => each.sectionKey)).toEqual([
       'old',
     ])
-  })
-
-  it('keeps the picture of «Схема» by its text and asks core to draw a missing one (88.24б)', async () => {
-    const { create, apply, user } = await owner()
-    const id = await create('diagram', 'Путь клиента')
-    const text = 'flowchart LR\n  A[Заявка] --> B[Счёт]'
-    await apply(id, [{ op: 'insert', block: 'd1', after: null, kind: 'diagram', content: text }])
-    const view = () => readArtifactDiagram(db, { artifactId: id, block: 'd1', userId: user.id })
-    // No picture yet: core is asked once, however often the cabinet asks.
-    expect(await view()).toEqual({ state: 'drawing' })
-    expect(await view()).toEqual({ state: 'drawing' })
-    const jobs = await db.outboxEvent.findMany({ where: { type: 'artifact.diagram' } })
-    expect(
-      jobs.filter((job) => (job.payload as { artifactId: string }).artifactId === id),
-    ).toHaveLength(1)
-    expect(await artifactDiagramJobSource(db, { artifactId: id, block: 'd1' })).toMatchObject({
-      source: text,
-    })
-    // The same text in another form — a fence, a directive — is the same picture.
-    await saveArtifactDiagram(db, {
-      artifactId: id,
-      source: '```mermaid\n' + text + '\n```',
-      result: {
-        ok: true,
-        svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
-        width: 90,
-        height: 30,
-        type: 'flowchart-v2',
-      },
-    })
-    expect(await view()).toEqual({
-      state: 'drawn',
-      svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
-      width: 90,
-      height: 30,
-    })
-    // An error shows its line to people; the engine's words stay the agent's.
-    const broken = 'flowchart LR\n  A --> ((('
-    const { rev } = await db.artifactBlock.findFirstOrThrow({
-      where: { documentId: id, sectionKey: 'd1' },
-      select: { rev: true },
-    })
-    await apply(id, [{ op: 'replace', block: 'd1', ifRev: rev, content: broken }])
-    await saveArtifactDiagram(db, {
-      artifactId: id,
-      source: broken,
-      result: { ok: false, reason: 'parse', line: 2, message: 'Parse error on line 2' },
-    })
-    expect(await view()).toEqual({ state: 'failed', line: 2 })
-    // A stranger reads nothing.
-    const stranger = await db.user.create({
-      data: { name: 'Чужой', email: `${randomUUID()}@example.test` },
-    })
-    expect(
-      await codeOf(() =>
-        readArtifactDiagram(db, { artifactId: id, block: 'd1', userId: stranger.id }),
-      ),
-    ).toBe('ARTIFACT_NOT_FOUND')
   })
 })

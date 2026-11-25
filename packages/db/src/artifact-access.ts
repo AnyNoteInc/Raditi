@@ -3,7 +3,6 @@ import { createHash, randomBytes } from 'node:crypto'
 import {
   artifactCopyRefused,
   artifactDataClassAllows,
-  artifactGrantAllowed,
   artifactGrantRefused,
   artifactInviteDays,
   artifactInviteGone,
@@ -16,7 +15,6 @@ import {
   artifactRoleCan,
   strongestArtifactRole,
   type ArtifactGrantRole,
-  type ArtifactKind,
   type ArtifactLinkTerm,
   type ArtifactOpenGrantRole,
   type ArtifactRole,
@@ -48,11 +46,7 @@ async function lockShared(tx: Tx, input: { artifactId: string; userId: string })
 
 function requireGrantable(kind: string, role: ArtifactGrantRole) {
   const spec = artifactKindSpecOf(kind)
-  if (
-    !spec ||
-    !(artifactOpenGrantRoles as readonly string[]).includes(role) ||
-    !artifactGrantAllowed(kind as ArtifactKind, role)
-  )
+  if (!spec || !(artifactOpenGrantRoles as readonly string[]).includes(role))
     throw artifactGrantRefused()
 }
 

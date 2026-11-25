@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
 import { artifactsSection } from './section.ts'
-import { artifactFrameViewsOf, artifactSlidesOf, slideSize } from './slides.ts'
+import {
+  artifactFrameViewsOf,
+  artifactSlidesOf,
+  newSlideHtml,
+  slideLayouts,
+  slideSize,
+  slidesThemeCss,
+  slidesThemeKey,
+} from './slides.ts'
 import { artifactTemplateOf, artifactTemplates } from './templates.ts'
 
-// «Презентация» (docs/plan/88-artifacts.md, §7.13, 88.25): slides of 1280×720 on the canvas.
+// «Презентация» (docs/plan/88-artifacts.md, §7.13, 88.25; docs/plan/93-artifacts-trim.md, АТ8):
+// slides of 1280×720 on the canvas, on the deck theme.
 
 const block = (
   key: string,
@@ -36,14 +45,63 @@ describe('the slides of a presentation', () => {
     expect(artifactFrameViewsOf('canvas').map((view) => view.width)).toEqual([1440, 390])
   })
 
-  it('offers its template and gives its rules once the kind is released (88.25б)', () => {
-    expect(artifactTemplates.some((template) => template.id === 'company-deck')).toBe(true)
-    const deck = artifactTemplates.find((template) => template.id === 'company-deck')!
-    expect(deck.blocks.filter((each) => each.kind === 'frame')).toHaveLength(5)
-    expect(deck.blocks.filter((each) => each.kind === 'note')).toHaveLength(5)
-    expect(artifactTemplateOf('company-deck')?.kind).toBe('slides')
+  it('offers «Новая презентация» on the theme and gives its rules once the kind is released', () => {
+    const deck = artifactTemplateOf('company-deck')!
+    expect(deck).toMatchObject({ kind: 'slides', title: 'Новая презентация' })
+    const frames = deck.blocks.filter((each) => each.kind === 'frame')
+    expect(frames.length).toBeGreaterThanOrEqual(5)
+    expect(frames.length).toBeLessThanOrEqual(7)
+    expect(deck.blocks.filter((each) => each.kind === 'note')).toHaveLength(frames.length)
+    // The theme is the one common style, first; every slide takes a layout of it.
+    expect(deck.blocks[0]).toMatchObject({
+      kind: 'style',
+      key: slidesThemeKey,
+      content: slidesThemeCss,
+    })
+    const htmls = deck.blocks.filter((each) => each.kind === 'html').map((each) => each.content)
+    for (const html of htmls) expect(html).toMatch(/^<section class="slide s-[a-z]+">/)
+    const used = new Set(htmls.map((html) => /class="slide (s-[a-z]+)"/.exec(html)![1]))
+    expect([...used].toSorted()).toEqual(Object.keys(slideLayouts).toSorted())
+    expect(artifactTemplates.filter((each) => each.kind === 'slides')).toHaveLength(1)
     expect(artifactsSection([], ['document'])).not.toContain('1280×720')
     expect(artifactsSection([], ['document', 'slides'])).toContain('slides of 1280×720')
+  })
+
+  it('keeps every slide of the template short: one idea, at most 30 words', () => {
+    const deck = artifactTemplateOf('company-deck')!
+    for (const block of deck.blocks.filter((each) => each.kind === 'html')) {
+      const words = block.content
+        .replace(/<[^>]+>/g, ' ')
+        .split(/\s+/)
+        .filter((word) => /[\p{L}\p{N}]/u.test(word))
+      expect(words.length).toBeLessThanOrEqual(30)
+    }
+    expect(newSlideHtml).toContain('class="slide s-points"')
+  })
+
+  it('is a light theme of 1280×720 on Golos Text with a layout class each', () => {
+    expect(slidesThemeCss).toContain('--deck-bg:#fff')
+    expect(slidesThemeCss).toContain("--deck-font:'Golos Text'")
+    expect(slidesThemeCss).toContain('--deck-pad:80px')
+    expect(slidesThemeCss).toContain('width:1280px;height:720px')
+    expect(slidesThemeCss).toMatch(/\.slide h1\{font-size:72px;line-height:1\.05;font-weight:600/)
+    expect(slidesThemeCss).toContain('.slide h2{font-size:48px')
+    expect(slidesThemeCss).toContain('.slide p,.slide li{font-size:28px;line-height:1.4')
+    for (const layout of Object.keys(slideLayouts)) expect(slidesThemeCss).toContain(`.${layout}`)
+    // No text closes its <style> early, and it fits a block.
+    expect(slidesThemeCss).not.toMatch(/<\/style/i)
+    expect(new TextEncoder().encode(slidesThemeCss).byteLength).toBeLessThan(8 * 1024)
+  })
+
+  it('tells the agent to keep the theme and use its layouts, briefly', () => {
+    const section = artifactsSection([], ['slides'])
+    expect(section).toContain(slidesThemeKey)
+    for (const layout of Object.keys(slideLayouts)) expect(section).toContain(layout)
+    expect(section).toContain('at most 30 words')
+    expect(section).toContain('raditi_artifact_file_put')
+    expect(section).toContain('`note`')
+    // No CSS of the theme in the instructions.
+    expect(section).not.toContain('--deck-pad:80px')
   })
 })
 
@@ -79,7 +137,7 @@ describe('the pictures of «Изображение» (88.26)', () => {
       block('p-html', 'html', 'p', '<section></section>'),
     ]
     const key = (size: string) =>
-      canvasThumbKey({ blocks: blocks(size), frame: 'p', title: 'Пост', brand: null })
+      canvasThumbKey({ blocks: blocks(size), frame: 'p', title: 'Пост' })
     expect(key('post')).not.toBe(key('story'))
   })
 })

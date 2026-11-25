@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import { type FeedRow } from '@repo/domain'
-import { artifactStale } from '@repo/domain/artifacts'
+import { artifactStale, slidesThemeBlock } from '@repo/domain/artifacts'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -16,7 +16,6 @@ import {
   McpArtifactsService,
   type McpArtifactsStore,
   type McpChatArtifactAccess,
-  type McpDiagramRenderer,
   type McpFrameRenderer,
 } from './artifacts-service.ts'
 import { MCP_ARTIFACTS } from './artifacts.tokens.ts'
@@ -159,9 +158,6 @@ function fakeStore(
     readOther: vi.fn<S['readOther']>(async () => readOther),
     sharedWithOthers: vi.fn<S['sharedWithOthers']>(async () => false),
     namedThisPass: vi.fn<S['namedThisPass']>(async () => false),
-    // Not «Схема» by default (88.24б).
-    diagramTexts: vi.fn<S['diagramTexts']>(async () => null),
-    saveDiagram: vi.fn<S['saveDiagram']>(async () => undefined),
   } satisfies McpArtifactsStore
   return { store, rows }
 }
@@ -169,7 +165,7 @@ function fakeStore(
 async function start(
   store: McpArtifactsStore,
   scope: McpTurnAccess = base,
-  options: { worker?: boolean; render?: McpFrameRenderer; diagram?: McpDiagramRenderer } = {},
+  options: { worker?: boolean; render?: McpFrameRenderer } = {},
 ) {
   const access: McpAccessStore = {
     authenticate: async (value) => (value === token ? scope : null),
@@ -192,7 +188,6 @@ async function start(
       new McpArtifactsService({
         store,
         ...(options.render ? { render: options.render } : {}),
-        ...(options.diagram ? { diagram: options.diagram } : {}),
       }),
     )
   if (options.worker) builder = builder.overrideProvider(MCP_WEB).useValue({ call: vi.fn() })
@@ -234,9 +229,9 @@ describe('the frames drawn by the browser worker (plan 88, Ар32, 88.15б, 88.1
       { width: 390, part: 0, type: 'image/jpeg', data: '/9j/BBBB' },
     ],
   }
-  const tools = async (scope: McpTurnAccess, worker = true) => {
+  const tools = async (scope: McpTurnAccess, worker = true, store = fakeStore().store) => {
     const render = vi.fn<McpFrameRenderer>(async () => drawn)
-    const server = await start(fakeStore().store, scope, { worker, render })
+    const server = await start(store, scope, { worker, render })
     const list = await post(server, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
     return {
       server,
@@ -276,6 +271,43 @@ describe('the frames drawn by the browser worker (plan 88, Ар32, 88.15б, 88.1
     const blind = await tools(base)
     const refused = await post(blind.server, call('artifact_render', { artifactId }))
     expect(refused.status).toBe(400)
+  })
+  it('draws the only or the first frame when none is named (plan 93, АТ6)', async () => {
+    const { store } = fakeStore()
+    const frame = (key: string, parent: string | null, kind = 'frame') => ({
+      key,
+      kind,
+      parent,
+      rev: 1,
+      content: kind === 'frame' ? '' : '<h1>Цены</h1>',
+      props: {},
+      checking: false,
+      hold: null,
+    })
+    store.read.mockResolvedValue({
+      id: artifactId,
+      kind: 'canvas',
+      title: 'Сайт',
+      seq: 7,
+      version: 1,
+      blocks: [frame('calc', null), frame('calc-html', 'calc', 'html'), frame('about', null)],
+    })
+    const { server, render } = await tools(base, true, store)
+    await post(server, call('artifact_layout', { artifactId }))
+    expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ artifactId, frame: 'calc' }))
+    // An artifact without a frame (a document) is not drawn.
+    store.read.mockResolvedValue({
+      id: artifactId,
+      kind: 'document',
+      title: 'План',
+      seq: 7,
+      version: 1,
+      blocks: [frame('intro', null, 'section')],
+    })
+    render.mockClear()
+    const refused = await post(server, call('artifact_layout', { artifactId }))
+    expect(answer(refused)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
+    expect(render).not.toHaveBeenCalled()
   })
 })
 
@@ -343,22 +375,42 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
     expect(res.body.result?.isError ?? res.body.error !== undefined).toBe(true)
   })
 
-  it('creates a table without a skeleton: its blocks go by artifact_edit (88.14)', async () => {
+  it('creates a canvas without a skeleton: its blocks go by artifact_edit (88.14)', async () => {
     const { store } = fakeStore()
     const server = await start(store)
     const refused = await post(
       server,
       call('artifact_create', {
-        kind: 'table',
+        kind: 'canvas',
         title: 'Цены',
         skeleton: [{ id: 'intro', intent: 'Введение' }],
       }),
     )
     expect(refused.body.result.isError).toBe(true)
     expect(answer(refused)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
-    const made = await post(server, call('artifact_create', { kind: 'table', title: 'Цены' }))
-    expect(answer(made)).toMatchObject({ artifactId, kind: 'table' })
+    const made = await post(server, call('artifact_create', { kind: 'canvas', title: 'Цены' }))
+    expect(answer(made)).toMatchObject({ artifactId, kind: 'canvas' })
     expect(store.apply).not.toHaveBeenCalled()
+  })
+
+  it('starts a presentation with the deck theme, the style the agent keeps (plan 93, АТ8)', async () => {
+    const { store } = fakeStore()
+    const server = await start(store)
+    const made = await post(server, call('artifact_create', { kind: 'slides', title: 'Питч' }))
+    expect(answer(made)).toMatchObject({ artifactId, kind: 'slides' })
+    expect(store.apply).toHaveBeenCalledTimes(1)
+    expect(store.apply.mock.calls[0]![0]).toMatchObject({
+      artifactId,
+      ops: [
+        {
+          op: 'insert',
+          block: slidesThemeBlock.key,
+          after: null,
+          kind: 'style',
+          content: slidesThemeBlock.content,
+        },
+      ],
+    })
   })
 
   it('reads by blocks with the news since the last read, and moves the read (Ар21)', async () => {
@@ -422,46 +474,6 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
     expect(rows).toEqual([
       { type: 'feed.doc_touch', payload: { v: 1, docId: artifactId, revision: 5 } },
     ])
-  })
-
-  it('draws a write to «Схема» at once and tells the agent the line of its error (88.24б)', async () => {
-    const { store } = fakeStore()
-    const broken = 'flowchart LR\n  A --> ((('
-    store.diagramTexts.mockResolvedValue({
-      workspaceId: base.workspaceId,
-      texts: [
-        { block: 'd1', text: broken, kept: null },
-        { block: 'd2', text: 'flowchart LR\n  A --> B', kept: { ok: true, width: 80, height: 40 } },
-      ],
-    })
-    const diagram = vi.fn<McpDiagramRenderer>(async () => ({
-      ok: false,
-      reason: 'parse',
-      line: 2,
-      message: 'Parse error on line 2',
-    }))
-    const server = await start(store, base, { diagram })
-    const batch = {
-      artifactId,
-      opId: 'd-1',
-      ops: [{ op: 'replace', block: 'd1', ifRev: 1, content: broken }],
-    }
-    const res = await post(server, call('artifact_edit', batch))
-    expect(answer(res)).toMatchObject({
-      diagrams: [
-        { block: 'd1', drawn: false, line: 2, error: 'Parse error on line 2' },
-        { block: 'd2', drawn: true, width: 80, height: 40 },
-      ],
-    })
-    // Only the text without a kept picture is drawn, on the page of the artifact's workspace.
-    expect(diagram).toHaveBeenCalledTimes(1)
-    expect(diagram).toHaveBeenCalledWith({ workspaceId: base.workspaceId, source: broken })
-    expect(store.saveDiagram).toHaveBeenCalledWith(artifactId, broken, {
-      ok: false,
-      reason: 'parse',
-      line: 2,
-      message: 'Parse error on line 2',
-    })
   })
 
   it('passes a stale write back with the current block (Ар15)', async () => {
@@ -662,10 +674,15 @@ describe('the synonyms doc_* of plan 69 (Ар3)', () => {
       artifactId: '01960000-0000-7000-8000-0000000000f2',
       kind: 'document',
     })
+    // A page makes a canvas (plan 93, АТ6): not into a document.
     const into = await post(server, call('artifact_import', { file: 'page.html', artifactId }))
     expect(answer(into)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
-    const unknown = await post(server, call('artifact_import', { file: 'notes.txt' }))
-    expect(answer(unknown)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
+    const page = await post(server, call('artifact_import', { file: 'page.htm' }))
+    expect(answer(page)).toMatchObject({ kind: 'canvas' })
+    for (const file of ['notes.txt', 'prices.csv']) {
+      const unknown = await post(server, call('artifact_import', { file }))
+      expect(answer(unknown)).toMatchObject({ code: 'ARTIFACT_OP_INVALID' })
+    }
   })
 
   it('marks a turn that read words of other people in a thread (88.17в, Ар25)', async () => {

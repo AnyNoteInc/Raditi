@@ -8,89 +8,67 @@ import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
+import IconButton from '@mui/material/IconButton'
 import MenuItem from '@mui/material/MenuItem'
 import TextField from '@mui/material/TextField'
-import ToggleButton from '@mui/material/ToggleButton'
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
-import {
-  artifactKindCreatable,
-  artifactKinds,
-  artifactKindSpecs,
-  artifactTemplates,
-  type ArtifactKind,
-  type ArtifactTemplate,
-} from '@repo/domain/artifacts'
+import { artifactKinds, artifactKindSpecs, type ArtifactKind } from '@repo/domain/artifacts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useId, useState } from 'react'
 
+import { AppIcon } from '@/components/application/app-icon'
 import { keepChatDraft } from '@/components/chat/chat-draft'
 import { useTRPC } from '@/trpc/client'
 
 import { ArtifactKindIcon } from './artifact-kind-icon'
 import { createTexts } from './artifact-texts'
 
-/** The kinds of the window in the order of the board A-create: what ships first, then «Скоро». */
-const order: readonly ArtifactKind[] = [
-  'document',
-  'canvas',
-  'mockup',
-  'table',
-  'diagram',
-  'slides',
-  'image',
-  'brand',
-  'sitemap',
-  'report',
-]
-
-type Start = 'empty' | 'template' | 'agent'
+/** How the artifact starts: the agent makes it from a request, or the user opens an empty one. */
+type Start = 'agent' | 'empty'
 
 const NEW_CHAT = '/chats/new'
 
 /**
- * «Новый артефакт» (docs/plan/88-artifacts.md, Ар50, board A-create): the kind — those whose view
- * has not shipped are shown and marked «Скоро» —, the title, where it is kept (a project or none)
- * and how it starts: empty, from a template of the kind, or by the agent in a new chat — then the
- * request goes into the draft of the new chat, not sent by itself.
+ * «Новый артефакт» (docs/plan/93-artifacts-trim.md, АТ9): one of the four kinds, then one request
+ * «Что сделать?» for the agent — it goes into the draft of a new chat, never sent by itself.
+ * «Создать пустой» asks only for a name. «Где хранить» stands only when the user has projects.
+ * Templates live on the empty screen of the gallery, not here.
  */
 export function ArtifactCreateDialog({
   open,
   userId,
-  template: initial = null,
+  projectId: initialProjectId = '',
   onClose,
 }: {
   open: boolean
   userId: string
-  /** A template chosen on the empty screen: the window opens on it. */
-  template?: ArtifactTemplate | null
+  /** The project the gallery shows: the new artifact is kept there unless the user chooses. */
+  projectId?: string
   onClose: () => void
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
   const router = useRouter()
   const formId = useId()
-  const [kind, setKind] = useState<ArtifactKind>(initial?.kind ?? 'document')
-  const [title, setTitle] = useState(initial?.title ?? '')
-  const [projectId, setProjectId] = useState<string>('')
-  const [start, setStart] = useState<Start>(initial ? 'template' : 'empty')
-  const [templateId, setTemplateId] = useState<string>(initial?.id ?? '')
+  const [kind, setKind] = useState<ArtifactKind>('document')
+  const [start, setStart] = useState<Start>('agent')
+  const [title, setTitle] = useState('')
   const [request, setRequest] = useState('')
+  const [projectId, setProjectId] = useState<string>(initialProjectId)
   const [touched, setTouched] = useState(false)
   const projects = useQuery({ ...trpc.project.list.queryOptions(), enabled: open })
   const create = useMutation(trpc.artifact.create.mutationOptions())
-  const templates = artifactTemplates.filter((each) => each.kind === kind)
-  const named = title.trim().length > 0
   const shownProjects = (projects.data?.items ?? []).filter((project) => !project.archived)
+  const named = title.trim().length > 0
+  const asked = request.trim().length > 0
 
   async function submit() {
     setTouched(true)
     if (start === 'agent') {
-      const what = request.trim()
-      if (what === '') return
-      const words = named ? `${artifactKindSpecs[kind].label} «${title.trim()}»: ${what}` : what
-      keepChatDraft(userId, words)
+      if (!asked) return
+      keepChatDraft(userId, createTexts.draft(artifactKindSpecs[kind].label, request.trim()))
       router.push(projectId ? `${NEW_CHAT}?project=${projectId}` : NEW_CHAT)
       onClose()
       return
@@ -100,7 +78,7 @@ export function ArtifactCreateDialog({
       kind,
       title: title.trim(),
       projectId: projectId || null,
-      templateId: start === 'template' && templateId ? templateId : null,
+      templateId: null,
     })
     // The gallery reads itself again: the new one is in it on the way back.
     void queryClient.invalidateQueries({ queryKey: trpc.artifact.list.pathKey() })
@@ -109,8 +87,27 @@ export function ArtifactCreateDialog({
   }
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" aria-labelledby={`${formId}-t`}>
-      <DialogTitle id={`${formId}-t`}>{createTexts.title}</DialogTitle>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullWidth
+      maxWidth="sm"
+      aria-labelledby={`${formId}-t`}
+      slotProps={{ paper: { sx: { borderRadius: { xs: '16px', sm: '20px' } } } }}
+    >
+      <DialogTitle
+        id={`${formId}-t`}
+        sx={{ display: 'flex', alignItems: 'center', gap: 1, pr: 1.5, pb: 1 }}
+      >
+        <Box component="span" sx={{ flex: 1 }}>
+          {createTexts.title}
+        </Box>
+        <Tooltip title={createTexts.close}>
+          <IconButton aria-label={createTexts.close} onClick={onClose} size="small">
+            <AppIcon name="close" size={18} />
+          </IconButton>
+        </Tooltip>
+      </DialogTitle>
       <DialogContent>
         <Box
           component="form"
@@ -122,171 +119,135 @@ export function ArtifactCreateDialog({
           }}
           sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, pt: 0.5 }}
         >
-          <Box component="fieldset" sx={{ border: 0, m: 0, p: 0 }}>
-            <Typography component="legend" variant="subtitle2" sx={{ mb: 1 }}>
-              {createTexts.kind}
-            </Typography>
-            <Box
-              role="radiogroup"
-              aria-label={createTexts.kind}
-              sx={{
-                display: 'grid',
-                gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
-                gap: 1,
-              }}
-            >
-              {order
-                .filter((each) => artifactKinds.includes(each))
-                .map((each) => {
-                  const ready = artifactKindCreatable(each)
-                  const chosen = kind === each
-                  return (
-                    <ButtonBase
-                      key={each}
-                      role="radio"
-                      aria-checked={chosen}
-                      aria-disabled={!ready}
-                      disabled={!ready}
-                      onClick={() => {
-                        setKind(each)
-                        setTemplateId('')
-                      }}
-                      sx={{
-                        justifyContent: 'flex-start',
-                        textAlign: 'left',
-                        gap: 1.25,
-                        px: 1.5,
-                        py: 1.25,
-                        minHeight: 56,
-                        borderRadius: '12px',
-                        border: 1,
-                        borderColor: chosen ? 'primary.main' : 'divider',
-                        bgcolor: chosen ? 'action.selected' : 'background.paper',
-                        opacity: ready ? 1 : 0.6,
-                      }}
-                    >
-                      <Box
-                        sx={{ display: 'flex', color: chosen ? 'primary.main' : 'text.secondary' }}
-                      >
-                        <ArtifactKindIcon kind={each} size={20} />
-                      </Box>
-                      <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Typography sx={{ fontWeight: 600, fontSize: 14 }}>
-                          {artifactKindSpecs[each].label}
-                        </Typography>
-                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                          {createTexts.kindHints[each] ?? ''}
-                        </Typography>
-                      </Box>
-                      {!ready && (
-                        <Typography
-                          variant="caption"
-                          sx={{
-                            px: 1,
-                            borderRadius: 999,
-                            bgcolor: 'action.hover',
-                            color: 'text.secondary',
-                          }}
-                        >
-                          {createTexts.soon}
-                        </Typography>
-                      )}
-                    </ButtonBase>
-                  )
-                })}
-            </Box>
-          </Box>
-
-          <TextField
-            label={createTexts.name}
-            placeholder={createTexts.namePlaceholder}
-            value={title}
-            autoFocus
-            onChange={(event) => setTitle(event.target.value)}
-            error={touched && !named && start !== 'agent'}
-            helperText={touched && !named && start !== 'agent' ? createTexts.nameRequired : ' '}
-            slotProps={{ htmlInput: { maxLength: 200 } }}
-          />
-
-          <TextField
-            select
-            label={createTexts.place}
-            value={projectId}
-            onChange={(event) => setProjectId(event.target.value)}
+          <Box
+            role="radiogroup"
+            aria-label={createTexts.kind}
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(4, 1fr)' },
+              gap: 1,
+            }}
           >
-            <MenuItem value="">{createTexts.personal}</MenuItem>
-            {shownProjects.map((project) => (
-              <MenuItem key={project.id} value={project.id}>
-                {project.name}
-              </MenuItem>
-            ))}
-          </TextField>
-
-          <Box>
-            <Typography variant="subtitle2" sx={{ mb: 1 }} id={`${formId}-start`}>
-              {createTexts.start}
-            </Typography>
-            <ToggleButtonGroup
-              exclusive
-              size="small"
-              value={start}
-              aria-labelledby={`${formId}-start`}
-              onChange={(_, value: Start | null) => {
-                if (value) setStart(value)
-              }}
-              sx={{ flexWrap: 'wrap' }}
-            >
-              <ToggleButton value="empty">{createTexts.empty}</ToggleButton>
-              <ToggleButton value="template" disabled={templates.length === 0}>
-                {createTexts.fromTemplate}
-              </ToggleButton>
-              <ToggleButton value="agent">{createTexts.askAgent}</ToggleButton>
-            </ToggleButtonGroup>
+            {artifactKinds.map((each) => {
+              const chosen = kind === each
+              return (
+                <ButtonBase
+                  key={each}
+                  role="radio"
+                  aria-checked={chosen}
+                  onClick={() => setKind(each)}
+                  sx={{
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    justifyContent: 'flex-start',
+                    textAlign: 'left',
+                    gap: 0.5,
+                    p: 1.25,
+                    borderRadius: '12px',
+                    border: 1,
+                    borderColor: chosen ? 'primary.main' : 'divider',
+                    bgcolor: chosen ? 'action.selected' : 'transparent',
+                    transition: 'border-color 120ms ease, background-color 120ms ease',
+                    '&:hover': { bgcolor: chosen ? 'action.selected' : 'action.hover' },
+                    '&.Mui-focusVisible': { outline: '2px solid', outlineColor: 'primary.main' },
+                    '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+                  }}
+                >
+                  <Box
+                    aria-hidden
+                    sx={{ display: 'flex', color: chosen ? 'primary.main' : 'text.secondary' }}
+                  >
+                    <ArtifactKindIcon kind={each} size={20} />
+                  </Box>
+                  <Typography component="span" sx={{ fontWeight: 600, fontSize: 14 }}>
+                    {artifactKindSpecs[each].label}
+                  </Typography>
+                  <Typography
+                    component="span"
+                    variant="caption"
+                    sx={{ color: 'text.secondary', lineHeight: 1.35 }}
+                  >
+                    {createTexts.kindHints[each]}
+                  </Typography>
+                </ButtonBase>
+              )
+            })}
           </Box>
 
-          {start === 'template' && (
+          {start === 'agent' ? (
+            <TextField
+              label={createTexts.whatToDo}
+              placeholder={createTexts.askPlaceholder[kind]}
+              multiline
+              minRows={3}
+              autoFocus
+              value={request}
+              onChange={(event) => setRequest(event.target.value)}
+              onKeyDown={(event) => {
+                // Ctrl/⌘+Enter asks the agent, as in the chat.
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault()
+                  void submit()
+                }
+              }}
+              helperText={createTexts.askNote}
+              slotProps={{ htmlInput: { maxLength: 4000 } }}
+            />
+          ) : (
+            <TextField
+              label={createTexts.name}
+              placeholder={createTexts.namePlaceholder}
+              value={title}
+              autoFocus
+              onChange={(event) => setTitle(event.target.value)}
+              error={touched && !named}
+              helperText={touched && !named ? createTexts.nameRequired : ' '}
+              slotProps={{ htmlInput: { maxLength: 200 } }}
+            />
+          )}
+
+          {shownProjects.length > 0 && (
             <TextField
               select
-              label={createTexts.template}
-              value={templateId}
-              onChange={(event) => {
-                setTemplateId(event.target.value)
-                const chosen = templates.find((each) => each.id === event.target.value)
-                if (chosen && !named) setTitle(chosen.title)
-              }}
+              size="small"
+              label={createTexts.place}
+              value={projectId}
+              onChange={(event) => setProjectId(event.target.value)}
+              sx={{ maxWidth: { sm: 280 } }}
             >
-              {templates.map((each) => (
-                <MenuItem key={each.id} value={each.id}>
-                  {each.title}
+              <MenuItem value="">{createTexts.personal}</MenuItem>
+              {shownProjects.map((project) => (
+                <MenuItem key={project.id} value={project.id}>
+                  {project.name}
                 </MenuItem>
               ))}
             </TextField>
           )}
 
-          {start === 'agent' && (
-            <TextField
-              label={createTexts.whatToDo}
-              placeholder={createTexts.askPlaceholder}
-              multiline
-              minRows={3}
-              value={request}
-              onChange={(event) => setRequest(event.target.value)}
-              helperText={createTexts.askNote}
-            />
-          )}
-
           {create.isError && <Alert severity="error">{createTexts.failed}</Alert>}
         </Box>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2.5 }}>
-        <Button onClick={onClose}>{createTexts.cancel}</Button>
+      <DialogActions
+        sx={{ px: 3, pb: 2.5, pt: 0, justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}
+      >
+        <Button
+          variant="text"
+          onClick={() => {
+            setTouched(false)
+            setStart(start === 'agent' ? 'empty' : 'agent')
+          }}
+          sx={{ ml: -1 }}
+        >
+          {start === 'agent' ? createTexts.empty : createTexts.backToAgent}
+        </Button>
         <Button
           type="submit"
           form={formId}
           variant="contained"
-          disabled={create.isPending || (start === 'agent' && request.trim() === '')}
+          disabled={create.isPending || (start === 'agent' && !asked)}
+          sx={{ minHeight: 40, px: 2.5 }}
         >
-          {createTexts.submit}
+          {start === 'agent' ? createTexts.askAgent : createTexts.submit}
         </Button>
       </DialogActions>
     </Dialog>

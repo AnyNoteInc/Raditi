@@ -2,8 +2,8 @@ import { z } from 'zod'
 
 import { artifactRenderLimits } from './limits.ts'
 
-// «Схема» (docs/plan/88-artifacts.md, §7.13, Э11, slice 88.24; spike 7): Mermaid text rendered on the
-// server by one engine — Mermaid 12 in a Chromium of `apps/browser` — cleaned by DOMPurify and shown
+// The diagrams of chat answers (docs/plan/91-chat-diagrams.md; first made for the «Схема» artifact of
+// plan 88, §7.13, removed in plan 93, АТ3; spike 7): Mermaid text rendered on the server by one engine — Mermaid 12 in a Chromium of `apps/browser` — cleaned by DOMPurify and shown
 // as `<img>`. Pure: the text before the engine, the error for people, the contract of the route.
 
 /**

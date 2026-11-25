@@ -17,11 +17,11 @@
 // doc_* of plan 69 mapped onto the operations, the news of every answer, the bounds of a chat and
 // of a pass without its client — and the end of a turn of core with its version.
 // 88.12 and 88.13 add the outbox of a turn into artifacts (`artifact_file_put`, `artifact_import`)
-// and the frame of a mockup in real browsers (frames.mjs): its fonts, files, scripts and bridge,
-// and the edit frame that runs nothing — Chromium and WebKit here, Firefox in Docker.
-// 88.15–88.15в add the canvas and the brand of a project (canvas.mjs): its template, the brand in
-// its frames, `artifact_layout` and `artifact_render` of mcp onto the renderer of apps/browser
-// without network, the thumbnails of core and «Опубликовать как сайт».
+// and the frame of a screen of a canvas in real browsers (frames.mjs): its fonts, files, scripts
+// and bridge, and the edit frame that runs nothing — Chromium and WebKit here, Firefox in Docker.
+// 88.15–88.15в add the canvas (canvas.mjs): its template, its frames, `artifact_layout` and
+// `artifact_render` of mcp onto the renderer of apps/browser without network, the thumbnails of
+// core and «Опубликовать как сайт». Plan 93 left four kinds: document, canvas, slides, image.
 
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -39,12 +39,12 @@ const { values } = parseArgs({
   args: process.argv.slice(2).filter((value) => value !== '--'),
   options: {
     keep: { type: 'boolean', default: false },
-    // The frames of mockups in Chromium, WebKit and Firefox (Docker): on by default.
+    // The frames of the screens of a canvas in Chromium, WebKit and Firefox (Docker): on by default.
     'no-browsers': { type: 'boolean', default: false },
     seconds: { type: 'string', default: '20' },
-    // `canvas` — only the canvas, the brand and the renderer (88.15–88.15в), after the migrations;
-    // `diagrams` — only «Схема» (88.24г); `slides` — only «Презентация» (88.25г); `images` — only
-    // «Изображение» (88.26в); `reports` — only «Отчёт» as a PDF (88.32).
+    // `canvas` — only the canvas and the renderer (88.15–88.15в), after the migrations;
+    // `diagrams` — only the renderer of diagrams for chat answers (88.24г, plan 91); `slides` —
+    // only «Презентация» (88.25г); `images` — only «Изображение» (88.26в).
     only: { type: 'string' },
   },
 })
@@ -156,16 +156,16 @@ try {
   if (all) await channelAndMeasure(databaseUrl, `redis://${redisBinding}`)
   if (all) await outboxIntoArtifacts(databaseUrl)
   if (!values['no-browsers']) {
-    // 88.15–88.15в: the canvas, the brand and the renderer of frames on a Chromium of this machine.
+    // 88.15–88.15в: the canvas and the renderer of frames on a Chromium of this machine.
     const only = (part) => values.only === undefined || values.only === part
     if (values.only === undefined || values.only === 'canvas') {
       const { canvasAndRender } = await import('./canvas.mjs')
       await canvasAndRender({ root, databaseUrl, check })
     }
-    // 88.24г: «Схема» — the corpus of spike 7 through the renderer, and the road to the page.
+    // 88.24г: the corpus of spike 7 through the renderer of diagrams (chat answers, plan 91).
     if (only('diagrams')) {
       const { diagramsOnChromium } = await import('./diagrams.mjs')
-      await diagramsOnChromium({ root, databaseUrl, check })
+      await diagramsOnChromium({ root, check })
     }
     // 88.25г: «Презентация» — the slides at 1280×720, their files and their site.
     if (only('slides')) {
@@ -176,11 +176,6 @@ try {
     if (only('images')) {
       const { imagesOnChromium } = await import('./images.mjs')
       await imagesOnChromium({ root, databaseUrl, check })
-    }
-    // 88.32: «Отчёт» — printed into a PDF by core and the printer of the browser worker.
-    if (only('reports')) {
-      const { reportsOnChromium } = await import('./reports.mjs')
-      await reportsOnChromium({ root, databaseUrl, check })
     }
   }
   if (all && !values['no-browsers']) {
@@ -538,9 +533,9 @@ async function agentTools({ dbModule, db, workspace, user, chat }) {
     'the next read names the block a person changed',
     again.changedSinceYourRead.blocks.includes('intro'),
   )
-  // Every kind of the registry has shipped (88.28): the agent creates a diagram too.
-  const diagram = await tools.create(next, { kind: 'diagram', title: 'Схема' })
-  check('a kind of the second wave is created by the agent', diagram.ok, JSON.stringify(diagram))
+  // Every kind of the registry has shipped (88.28): the agent creates slides too.
+  const slides = await tools.create(next, { kind: 'slides', title: 'Презентация' })
+  check('a kind of the second wave is created by the agent', slides.ok, JSON.stringify(slides))
   const listed = valueOf(await tools.list(next, {}))
   check(
     'artifact_list names the chat’s document',
@@ -616,20 +611,23 @@ async function outboxIntoArtifacts(databaseUrl) {
       requirements: { repository: false, browser: false },
     }
     const tools = new McpArtifactsService({ store: postgresArtifactsStore(db) })
-    const created = await tools.create(scope, { kind: 'mockup', title: 'Лендинг' })
-    check('the agent creates a mockup without a skeleton', created.ok, JSON.stringify(created))
-    const mockupId = created.value.artifactId
-    const put = await tools.filePut(scope, { artifactId: mockupId, file: 'logo.png' })
+    const created = await tools.create(scope, { kind: 'canvas', title: 'Лендинг' })
+    check('the agent creates a canvas without a skeleton', created.ok, JSON.stringify(created))
+    const canvasId = created.value.artifactId
+    const put = await tools.filePut(scope, { artifactId: canvasId, file: 'logo.png' })
     check(
       'artifact_file_put gives a reference at once',
       put.ok && /^artifact-file:[0-9a-f-]{36}$/.test(put.value.ref),
       JSON.stringify(put),
     )
-    const imported = await tools.import(scope, { file: 'price.csv', title: 'Прайс' })
+    const imported = await tools.import(scope, { file: 'promo.html', title: 'Акция' })
     check(
       'artifact_import names the new artifact now',
-      imported.ok && imported.value.kind === 'table',
+      imported.ok && imported.value.kind === 'canvas',
+      JSON.stringify(imported),
     )
+    const refused = await tools.import(scope, { file: 'price.csv', title: 'Прайс' })
+    check('a .csv is not imported as an artifact any more', !refused.ok, JSON.stringify(refused))
     const objects = []
     const outbox = await packOutbox([
       {
@@ -638,6 +636,12 @@ async function outboxIntoArtifacts(databaseUrl) {
           'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
           'base64',
         ),
+      },
+      {
+        name: 'promo.html',
+        bytes:
+          '<!doctype html><html><head><style>h1 { color: #2f5d50 }</style></head>' +
+          '<body><h1>Скидка 10%</h1><script>document.title = "Акция"</script></body></html>',
       },
       { name: 'price.csv', bytes: 'Название;Цена\nХлеб;120\nБатон;90\n' },
       { name: 'report.pdf', bytes: '%PDF-1.4' },
@@ -648,21 +652,28 @@ async function outboxIntoArtifacts(databaseUrl) {
     }).take({ taskId, turn: 1, outbox })
     check(
       'core takes the reserved files of the outbox, the rest stays for the chat',
-      [...taken].toSorted().join() === 'logo.png,price.csv' && objects.length === 1,
+      [...taken].toSorted().join() === 'logo.png,promo.html' && objects.length === 1,
+      [...taken].toSorted().join(),
     )
-    const table = await dbModule.readArtifact(db, {
+    const canvas = await dbModule.readArtifact(db, {
       artifactId: imported.value.artifactId,
       actor: { kind: 'agent', taskId, turnNo: 1 },
     })
+    const [screen, ...parts] = canvas.blocks
     check(
-      'the CSV became a table of the agent’s writes waiting for the check',
-      table.kind === 'table' &&
-        table.blocks.map((block) => block.kind).join() === 'columns,row,row' &&
-        table.blocks.every((block) => block.checking),
+      'the HTML became a canvas with one screen of the agent’s writes waiting for the check',
+      canvas.kind === 'canvas' &&
+        screen?.kind === 'frame' &&
+        screen.props?.path === '/' &&
+        parts.length > 0 &&
+        parts.every((block) => block.parent === screen.key) &&
+        ['style', 'html', 'script'].every((kind) => parts.some((block) => block.kind === kind)) &&
+        canvas.blocks.every((block) => block.checking),
+      JSON.stringify(canvas.blocks.map(({ key, kind, parent }) => ({ key, kind, parent }))),
     )
     check(
-      'the picture is a ready file of the mockup',
-      (await db.artifactFile.count({ where: { artifactId: mockupId, state: 'ready' } })) === 1,
+      'the picture is a ready file of the canvas',
+      (await db.artifactFile.count({ where: { artifactId: canvasId, state: 'ready' } })) === 1,
     )
   } finally {
     await db.$disconnect()

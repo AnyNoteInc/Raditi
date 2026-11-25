@@ -130,7 +130,7 @@ describe('the documents of the agent in the rows of the chat', () => {
         { type: 'feed.doc', docId: 'a' },
         { type: 'feed.doc_touch', docId: 'c' },
         { type: 'feed.artifact', artifactId: 'd', kind: 'document' },
-        { type: 'feed.artifact', artifactId: 'e', kind: 'table' },
+        { type: 'feed.artifact', artifactId: 'e', kind: 'canvas' },
         { type: 'feed.artifact', artifactId: 'c', kind: 'document' },
       ]),
     ).toEqual(['a', 'c', 'd'])

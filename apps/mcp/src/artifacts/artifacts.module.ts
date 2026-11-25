@@ -34,8 +34,6 @@ import {
         return new McpArtifactsService({
           store: postgresArtifactsStore(prisma),
           render: client ? (request) => client.render(request) : null,
-          // The diagrams of «Схема» are drawn by the same worker (88.24).
-          diagram: client ? (request) => client.diagram(request) : null,
         })
       },
     },

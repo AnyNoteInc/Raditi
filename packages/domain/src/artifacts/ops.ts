@@ -3,7 +3,6 @@ import { z } from 'zod'
 import { secretInContent } from '../projects/text.ts'
 import {
   artifactBlockKeySchema,
-  artifactCellsSchema,
   artifactIntentSchema,
   artifactPropsSchema,
   artifactTitleSchema,
@@ -68,11 +67,6 @@ export const artifactTitleOpSchema = z.strictObject({
   op: z.literal('title'),
   title: artifactTitleSchema,
 })
-export const artifactCellsOpSchema = z.strictObject({
-  op: z.literal('cells'),
-  block: artifactBlockKeySchema,
-  cells: artifactCellsSchema,
-})
 
 export const artifactOpSchema = z.discriminatedUnion('op', [
   artifactInsertOpSchema,
@@ -82,7 +76,6 @@ export const artifactOpSchema = z.discriminatedUnion('op', [
   artifactDeleteOpSchema,
   artifactPropsOpSchema,
   artifactTitleOpSchema,
-  artifactCellsOpSchema,
 ])
 export type ArtifactOp = z.infer<typeof artifactOpSchema>
 export type ArtifactOpKind = ArtifactOp['op']
@@ -90,18 +83,13 @@ export type ArtifactOpKind = ArtifactOp['op']
 /** The id of a batch: a repeat with the same id and the same hash gets the same answer (Ар14). */
 export const artifactOpIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
 
-/**
- * A batch as it comes. The array bound here is the widest one (a cabinet's paste of rows); the
- * bound by author is `artifactBatchProblem`.
- */
+/** A batch as it comes. The array bound here is the widest one; the real one is `artifactBatchProblem`. */
 export const artifactBatchSchema = z.strictObject({
   artifactId: z.uuid(),
   opId: artifactOpIdSchema,
   ops: z.array(artifactOpSchema).min(1).max(artifactLimits.batchJsonNodes),
 })
 export type ArtifactBatch = z.infer<typeof artifactBatchSchema>
-
-export type ArtifactBatchAuthor = 'agent' | 'cabinet'
 
 /** The values of a JSON value: objects, arrays and every primitive; keys are not counted (§7.2). */
 export function jsonNodeCount(value: unknown): number {
@@ -114,26 +102,20 @@ export function jsonNodeCount(value: unknown): number {
 /**
  * Why a batch is refused before any row is read; null — it may go to the transaction.
  * - The JSON is at most 90 KiB and 4 000 values (`ARTIFACT_TOO_LARGE`).
- * - At most 50 operations; the cabinet's rows — `cells` and `insert` of a `row` — are not counted
- *   (spike 5), the agent's are.
+ * - At most 50 operations, of the agent and of the cabinet alike.
  * - An id an `insert` gives is new within the batch; a parent or an anchor may name it.
  * - `edit` never replaces a quote by itself.
  */
 export function artifactBatchProblem(
   batch: ArtifactBatch,
-  author: ArtifactBatchAuthor,
 ): { code: 'ARTIFACT_TOO_LARGE' | 'ARTIFACT_OP_INVALID'; problem: string } | null {
   const json = JSON.stringify(batch)
   if (new TextEncoder().encode(json).byteLength > artifactLimits.batchJsonBytes)
     return { code: 'ARTIFACT_TOO_LARGE', problem: 'batchJsonBytes' }
   if (jsonNodeCount(batch) > artifactLimits.batchJsonNodes)
     return { code: 'ARTIFACT_TOO_LARGE', problem: 'batchJsonNodes' }
-  // A paste of rows in the cabinet goes as one batch: new rows (`insert` of a `row`) and their
-  // `cells` are bounded by the JSON alone (spike 5); the agent's operations all count.
-  const counted = batch.ops.filter(
-    (op) => author === 'agent' || !(op.op === 'cells' || (op.op === 'insert' && op.kind === 'row')),
-  ).length
-  if (counted > artifactLimits.batchOps) return { code: 'ARTIFACT_TOO_LARGE', problem: 'batchOps' }
+  if (batch.ops.length > artifactLimits.batchOps)
+    return { code: 'ARTIFACT_TOO_LARGE', problem: 'batchOps' }
   const given = new Set<string>()
   for (const op of batch.ops) {
     if (op.op === 'insert' && op.block !== undefined) {
@@ -175,7 +157,7 @@ export function applyQuoteEdit(text: string, find: string, replace: string): Art
 
 /**
  * Every text a batch writes: contents, quotes' replacements, string properties, the title,
- * intents and string cells. The check of core reads them for the agent's writes (Ар19); the
+ * and intents. The check of core reads them for the agent's writes (Ар19); the
  * cabinet refuses a person's batch where one looks like a secret (`artifactBatchHasSecretShape`).
  */
 export function artifactBatchTexts(batch: ArtifactBatch): string[] {
@@ -203,9 +185,6 @@ export function artifactBatchTexts(batch: ArtifactBatch): string[] {
         break
       case 'title':
         texts.push(op.title)
-        break
-      case 'cells':
-        strings(op.cells)
         break
       case 'move':
       case 'delete':

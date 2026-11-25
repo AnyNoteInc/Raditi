@@ -2636,7 +2636,6 @@ model Artifact {
   commentDispatches ArtifactCommentDispatch[]
   exports           ArtifactExport[]
   files             ArtifactFile[]
-  diagramRenders    ArtifactDiagramRender[]
 
   @@index([workspaceId, createdAt])
   @@index([taskId])
@@ -2647,7 +2646,7 @@ model Artifact {
   @@map("chat_documents")
 }
 
-/// A block of an artifact (§7.1): a section of a document, a frame and its parts, a row of a table.
+/// A block of an artifact (§7.1): a section of a document, a frame and its parts.
 /// Its id is the former `section_key`. `content` and `props` are what core checked; the agent's
 /// write waits in `pending_*` and holds the block for its turn until the check (Ар16).
 model ArtifactBlock {
@@ -3279,12 +3278,12 @@ model ArtifactCommentDispatch {
   @@map("artifact_comment_dispatches")
 }
 
-/// «Скачать → Excel» of a table (docs/plan/88-artifacts.md, §7.13, question 26): core builds it.
+/// «Скачать» of an artifact (docs/plan/88-artifacts.md, §7.13): core builds the file.
 model ArtifactExport {
   id         String    @id @default(uuid(7)) @db.Uuid
   artifactId String    @map("artifact_id") @db.Uuid
   userId     String    @map("user_id") @db.Uuid
-  /// xlsx
+  /// pdf | pptx | png
   format     String    @db.VarChar(8)
   /// The frame a PNG draws: a picture of «Изображение» (88.26); null — the whole artifact.
   blockKey   String?   @map("block_key") @db.VarChar(40)
@@ -3408,23 +3407,3 @@ model OriMessage {
   @@map("ori_messages")
 }
 
-/// The picture of a text of «Схема» (plan 88, §7.13, 88.24б), by the SHA-256 of the normalised text
-/// within its artifact: an SVG for `<img>`, or the error — its line for people, its words for the agent.
-model ArtifactDiagramRender {
-  artifactId   String   @map("artifact_id") @db.Uuid
-  sourceSha256 String   @map("source_sha256") @db.Char(64)
-  ok           Boolean
-  svg          String?
-  width        Int?
-  height       Int?
-  diagramType  String?  @map("diagram_type") @db.VarChar(40)
-  reason       String?  @db.VarChar(16)
-  errorLine    Int?     @map("error_line")
-  errorMessage String?  @map("error_message") @db.VarChar(300)
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  artifact     Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
-
-  @@id([artifactId, sourceSha256])
-  @@index([createdAt])
-  @@map("artifact_diagram_renders")
-}

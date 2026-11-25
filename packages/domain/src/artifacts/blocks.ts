@@ -2,8 +2,7 @@ import { z } from 'zod'
 
 import { docSectionKeySchema, sectionMarkdownProblem } from '../pages/doc.ts'
 import type { ArtifactBlockKind } from './kinds.ts'
-import { artifactLimits, artifactRenderLimits } from './limits.ts'
-import { artifactChartSpecSchema } from './report.ts'
+import { artifactLimits } from './limits.ts'
 
 /**
  * The blocks of an artifact (docs/plan/88-artifacts.md, Ар14, Ар15, §7.1, §7.2): what the content
@@ -25,7 +24,7 @@ const oneLine = (max: number) =>
       'one line of text',
     )
 
-/** A title of an artifact, a heading, a name of a frame or a column: one line. */
+/** A title of an artifact, a heading, a name of a frame: one line. */
 export const artifactTitleSchema = oneLine(200)
 export const artifactTextPropSchema = oneLine(200)
 /** What the agent is about to write (`intent`, `lease_intent`): one line. */
@@ -57,19 +56,6 @@ export const artifactBlockValuePropsSchemas = {
   script: none,
   note: place.extend({ color: z.enum(noteColors).optional() }),
   settings: none,
-  columns: none,
-  row: none,
-  diagram: none,
-  // A page of «Структура сайта» (88.27): its parent page (`up`, absent — the top) and its address.
-  node: place.extend({
-    // '' — no parent: a value is changed by `props`, which merges, so the top is said out loud.
-    up: z.union([artifactBlockKeySchema, z.literal('')]).optional(),
-    path: z
-      .string()
-      .regex(/^\/(?:[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)?$/, 'a path "/" or "/<segment>"')
-      .optional(),
-  }),
-  chart: none,
 } satisfies Record<ArtifactBlockKind, z.ZodObject>
 
 /** The text properties of each kind of block: checked like the content, changed under `ifRev`. */
@@ -89,16 +75,6 @@ export const artifactBlockTextPropsSchemas = {
   script: none,
   note: none,
   settings: none,
-  columns: none,
-  row: none,
-  diagram: none,
-  node: z.strictObject({
-    title: artifactTextPropSchema.optional(),
-    goal: artifactTextPropSchema.optional(),
-    /** The one thing a visitor should do on the page: «Записаться», «Позвонить» (88.27). */
-    action: artifactTextPropSchema.optional(),
-  }),
-  chart: none,
 } satisfies Record<ArtifactBlockKind, z.ZodObject>
 
 /** Properties as an operation carries them before its block's kind is known. */
@@ -130,94 +106,6 @@ export function artifactTextPropKeys(kind: ArtifactBlockKind): readonly string[]
   return Object.keys(artifactBlockTextPropsSchemas[kind].shape)
 }
 
-// ---- The table (§4, §7.7; the rules of pasting and CSV come with slice 88.14) ----
-
-export const artifactColumnTypes = [
-  'text',
-  'number',
-  'money',
-  'date',
-  'select',
-  'link',
-  'checkbox',
-  'image',
-] as const
-export type ArtifactColumnType = (typeof artifactColumnTypes)[number]
-
-export const artifactColumnSchema = z
-  .strictObject({
-    key: artifactBlockKeySchema,
-    name: oneLine(80),
-    type: z.enum(artifactColumnTypes),
-    /** The choices of a `select` column. */
-    options: z.array(oneLine(80)).min(1).max(50).optional(),
-  })
-  .refine((column) => (column.type === 'select') === (column.options !== undefined), {
-    message: 'only a select column has options, and it has them',
-  })
-export type ArtifactColumn = z.infer<typeof artifactColumnSchema>
-
-export const artifactColumnsSchema = z
-  .array(artifactColumnSchema)
-  .min(1)
-  .max(50)
-  .refine((columns) => new Set(columns.map((c) => c.key)).size === columns.length, {
-    message: 'the keys of columns are unique',
-  })
-
-/** A cell: text, a number, a sum in roubles as a string (rule 9), a date, a flag, or empty. */
-export const artifactCellSchema = z.union([
-  z.string().max(4000),
-  z.number().finite(),
-  z.boolean(),
-  z.null(),
-])
-export type ArtifactCell = z.infer<typeof artifactCellSchema>
-
-export const artifactCellsSchema = z
-  .record(artifactBlockKeySchema, artifactCellSchema)
-  .refine((cells) => Object.keys(cells).length <= 50, 'at most 50 cells')
-export type ArtifactCells = z.infer<typeof artifactCellsSchema>
-
-const moneyPattern = /^-?\d{1,10}(?:\.\d{1,2})?$/
-const datePattern = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/
-/** A real day of the calendar: «2026-02-31» is not one. */
-const calendarDate = (value: string): boolean =>
-  datePattern.test(value) && new Date(`${value}T00:00:00Z`).toISOString().startsWith(value)
-const fileRefPattern =
-  /^artifact-file:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-
-/** Whether a value fits its column; null — it does (empty fits every column). */
-export function artifactCellProblem(column: ArtifactColumn, value: ArtifactCell): string | null {
-  if (value === null) return null
-  switch (column.type) {
-    case 'text':
-      return typeof value === 'string' ? null : 'text expected'
-    case 'number':
-      return typeof value === 'number' ? null : 'a number expected'
-    case 'money':
-      return typeof value === 'string' && moneyPattern.test(value)
-        ? null
-        : 'a sum in roubles as a string with up to two decimals expected'
-    case 'date':
-      return typeof value === 'string' && calendarDate(value) ? null : 'a date YYYY-MM-DD expected'
-    case 'select':
-      return typeof value === 'string' && (column.options ?? []).includes(value)
-        ? null
-        : 'one of the options expected'
-    case 'link':
-      return typeof value === 'string' && /^https:\/\/[^\s]+$/.test(value) && value.length <= 2000
-        ? null
-        : 'an https address expected'
-    case 'checkbox':
-      return typeof value === 'boolean' ? null : 'true or false expected'
-    case 'image':
-      return typeof value === 'string' && fileRefPattern.test(value)
-        ? null
-        : 'a reference artifact-file:<id> expected'
-  }
-}
-
 /**
  * The blocks that are HTML, CSS or JavaScript of a frame: a person's text of them passes the checks
  * of a page as written (`checkPageContent`, §7.3, Ар31); the agent's — the check of core.
@@ -246,16 +134,13 @@ const jsonObject = z.record(z.string(), z.unknown())
 
 /**
  * Whether this content fits a block of this kind (§7.2): a section is Markdown with its own
- * headings from the third level; a frame holds nothing itself; `settings` and `chart` are a JSON
- * object, `columns` — the list of columns, `row` — its cells; a diagram is Mermaid text up to the
- * diagram's own bound; the rest is text. Every block is at most `blockBytes`, except a diagram.
+ * headings from the third level; a frame holds nothing itself; `settings` is a JSON object; the
+ * rest is text. Every block is at most `blockBytes`.
  */
 export function artifactBlockContentProblem(
   kind: ArtifactBlockKind,
   content: string,
 ): ArtifactContentProblem | null {
-  if (kind === 'diagram')
-    return content.length > artifactRenderLimits.diagramChars ? 'too_large' : null
   if (bytesOf(content) > artifactLimits.blockBytes) return 'too_large'
   switch (kind) {
     case 'section':
@@ -268,22 +153,6 @@ export function artifactBlockContentProblem(
       const value = jsonOf(content)
       if (value === undefined) return 'json'
       return jsonObject.safeParse(value).success ? null : 'shape'
-    }
-    // A chart of «Отчёт» is its narrow spec (88.28): what the server can draw.
-    case 'chart': {
-      const value = jsonOf(content)
-      if (value === undefined) return 'json'
-      return artifactChartSpecSchema.safeParse(value).success ? null : 'shape'
-    }
-    case 'columns': {
-      const value = jsonOf(content)
-      if (value === undefined) return 'json'
-      return artifactColumnsSchema.safeParse(value).success ? null : 'shape'
-    }
-    case 'row': {
-      const value = jsonOf(content)
-      if (value === undefined) return 'json'
-      return artifactCellsSchema.safeParse(value).success ? null : 'shape'
     }
     default:
       return null

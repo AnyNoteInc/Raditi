@@ -192,17 +192,7 @@ export async function listChatArtifacts(
 }
 
 /** The journal's kinds that change a block another reader sees (Ар21). */
-const changingKinds = [
-  'insert',
-  'replace',
-  'edit',
-  'move',
-  'delete',
-  'props',
-  'cells',
-  'check',
-  'take',
-]
+const changingKinds = ['insert', 'replace', 'edit', 'move', 'delete', 'props', 'check', 'take']
 
 export interface ArtifactChatNews {
   /** The `seq` of the artifact now. */

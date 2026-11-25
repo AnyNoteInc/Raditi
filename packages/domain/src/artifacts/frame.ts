@@ -5,7 +5,7 @@ import { PAGE_COMMON_HEADERS } from '../pages/headers.ts'
 
 /**
  * The frame of an artifact (docs/plan/88-artifacts.md, Ар9, Ар12, Ар28–Ар31, §7.7, §7.9; spikes
- * 1 and 2): how a mockup is shown on the root of the domain of pages, how its files, fonts and
+ * 1 and 2): how a screen of a canvas, a slide or a picture is shown on the root of the domain of pages, how its files, fonts and
  * libraries are named and served, what its bridge to the cabinet says, and the edit frame of the
  * cabinet that runs no script at all.
  */
@@ -287,7 +287,7 @@ export function artifactFrameDocument(input: {
   ].join('')
 }
 
-// ---- The settings of a mockup (Ар9) ----
+// ---- The settings of a canvas (Ар9) ----
 
 export type ArtifactSettingValue = string | number | boolean
 
@@ -337,17 +337,19 @@ export function checkArtifactFile(name: string, bytes: Uint8Array): ArtifactFile
 
 // ---- Import of a whole file (§7.5 `artifact_import`, «Открыть как артефакт») ----
 
-/** Which kind a file of the outbox or of a chat becomes, by its extension. */
-const importKinds: Readonly<Record<string, 'document' | 'mockup' | 'table'>> = Object.freeze({
+/**
+ * Which kind a file of the outbox or of a chat becomes, by its extension: a page or a picture is a
+ * canvas of one screen (docs/plan/93-artifacts-trim.md, АТ6).
+ */
+const importKinds: Readonly<Record<string, 'document' | 'canvas'>> = Object.freeze({
   md: 'document',
-  html: 'mockup',
-  htm: 'mockup',
-  svg: 'mockup',
-  csv: 'table',
+  html: 'canvas',
+  htm: 'canvas',
+  svg: 'canvas',
 })
 
 /** The kind a file is imported as; null — it is not imported. */
-export function artifactImportKindOf(name: string): 'document' | 'mockup' | 'table' | null {
+export function artifactImportKindOf(name: string): 'document' | 'canvas' | null {
   return importKinds[name.slice(name.lastIndexOf('.') + 1).toLowerCase()] ?? null
 }
 
@@ -370,29 +372,17 @@ export interface ArtifactFrameBlocks<B extends ArtifactFrameSourceBlock> {
 
 /**
  * The blocks of one frame document, the same in web (`/v/`, the edit frame) and in the renderer of
- * `apps/browser` (Ар32: «одна функция сборки»): of a kind that is not framed (a mockup) — its blocks
- * at the top, `frame` null; of a framed one (a canvas) — the parts of that frame, after the common
- * style of the artifact, with its settings. Null — no such frame, or a frame asked of a mockup.
+ * `apps/browser` (Ар32: «одна функция сборки»): the parts of that frame of a canvas, a slide or a
+ * picture, after the common style of the artifact, with its settings. Null — no such frame.
  * Blocks without checked text (null) are left out.
  */
 export function artifactFrameBlocksOf<B extends ArtifactFrameSourceBlock>(input: {
-  framed: boolean
   blocks: readonly B[]
-  frame: string | null
+  frame: string
 }): ArtifactFrameBlocks<B> | null {
   const has = (block: B) => block.content !== null
   const top = input.blocks.filter((block) => block.parent === null && has(block))
   const of = (list: readonly B[], kind: string) => list.filter((block) => block.kind === kind)
-  if (!input.framed) {
-    if (input.frame !== null) return null
-    return {
-      html: of(top, 'html'),
-      style: of(top, 'style'),
-      script: of(top, 'script'),
-      settings: of(top, 'settings')[0] ?? null,
-    }
-  }
-  if (input.frame === null) return null
   const frame = input.blocks.find(
     (block) => block.key === input.frame && block.kind === 'frame' && block.parent === null,
   )
