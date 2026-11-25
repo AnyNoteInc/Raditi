@@ -18,12 +18,14 @@ import {
   TURN_PUBLICATION_GRACE_MS,
   type RunnerCandidatePart,
   type RunnerCommand,
+  type RunnerOpenTasksRequest,
   type RunnerPollRequest,
   type RunnerReport,
   type SandboxInfo,
   type SandboxLabels,
   type SiteLeaseFence,
   type SiteLeaseStore,
+  type TurnAssignment,
   type TurnAssignmentOutcome,
   type TurnAssignmentStore,
   type TurnBundleSource,
@@ -258,6 +260,12 @@ export interface RunnerHubDependencies {
     abandon(id: string, outcome?: TurnAssignmentOutcome, reason?: AbandonReason): Promise<boolean>
   }
   leases: Pick<SiteLeaseStore, 'assert'>
+  /**
+   * Of these tasks, the ones not ended that a turn of this runner ran (docs/plan/93): what the
+   * runner's warm containers wait for. Absent — the route answers NOT_FOUND, and the runner
+   * removes every waiting container.
+   */
+  openTasks?(runnerId: string, taskIds: readonly string[]): Promise<readonly string[]>
   logger?: { warn(message: string): void }
 }
 
@@ -805,28 +813,59 @@ export class RunnerHub implements OnApplicationShutdown {
       throw RunnerApiError.of('UNAVAILABLE')
     }
     const remove: string[] = []
-    for (const container of request.inventory) {
-      const { labels } = container
-      const owner = owners.find(
-        (row) =>
-          row.fence.siteId === labels.siteId &&
-          row.fence.taskId === labels.taskId &&
-          row.sessionId === labels.sessionId &&
-          row.turn === labels.turn,
-      )
-      const live = owner ? this.#live.get(owner.id) : undefined
-      const epoch = live?.fence.epoch ?? owner?.fence.epoch ?? 0
-      const known = live?.containerId ?? owner?.containerId ?? null
-      const owned =
-        owner !== undefined &&
-        owner.deadlineAt.getTime() > owner.serverNow.getTime() &&
+    for (const container of request.inventory)
+      if (!owners.some((owner) => this.#owns(owner, container))) remove.push(container.containerId)
+    return { remove }
+  }
+
+  /**
+   * Which tasks of the runner's warm containers may still run a turn (docs/plan/93). Only the
+   * current session of the runner asks; an unknown answer fails closed — the runner then removes
+   * every waiting container.
+   */
+  async openTasks(runnerId: string, request: RunnerOpenTasksRequest): Promise<{ open: string[] }> {
+    this.#assertServing()
+    this.#rejectRetired(runnerId, request.runnerSession)
+    const read = this.deps.openTasks
+    if (!read) throw RunnerApiError.of('NOT_FOUND')
+    try {
+      const asked = new Set(request.taskIds)
+      return {
+        open: [...new Set(await read(runnerId, request.taskIds))].filter((id) => asked.has(id)),
+      }
+    } catch (error) {
+      this.#warn('runner open tasks', logged(error))
+      throw RunnerApiError.of('UNAVAILABLE')
+    }
+  }
+
+  /**
+   * Whether an unfinished assignment owns a container of the runner's inventory. Its own container
+   * has its turn and an epoch of its fence. A warm container (spec §8, «Тёплая песочница»;
+   * docs/plan/93) keeps the labels of the earlier turn of the session that created it — an earlier
+   * turn, an earlier epoch — and is the assignment's because the assignment names its exact id:
+   * the rule of `sameContainer` in LocalTurnExecutor, which adopts it on the runner.
+   */
+  #owns(owner: TurnAssignment, container: RunnerReconcileRequest['inventory'][number]): boolean {
+    const { labels } = container
+    if (
+      owner.fence.siteId !== labels.siteId ||
+      owner.fence.taskId !== labels.taskId ||
+      owner.sessionId !== labels.sessionId ||
+      owner.deadlineAt.getTime() <= owner.serverNow.getTime() ||
+      labels.leaseEpoch === undefined
+    )
+      return false
+    const live = this.#live.get(owner.id)
+    const epoch = live?.fence.epoch ?? owner.fence.epoch
+    const known = live?.containerId ?? owner.containerId ?? null
+    if (owner.turn === labels.turn)
+      return (
         (known === null || known === container.containerId) &&
-        labels.leaseEpoch !== undefined &&
         labels.leaseEpoch >= owner.firstEpoch &&
         labels.leaseEpoch <= epoch
-      if (!owned) remove.push(container.containerId)
-    }
-    return { remove }
+      )
+    return known === container.containerId && labels.turn < owner.turn && labels.leaseEpoch < epoch
   }
 
   /** The base bundle of an open prepare, after a strict lease check. */

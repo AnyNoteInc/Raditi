@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common'
+import type { PrismaClient } from '@repo/db'
 import type { SiteLeaseStore, TurnAssignmentStore } from '@repo/domain'
+import { PRISMA } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
 import { CORE_CONFIG } from '../config/config.tokens.ts'
 import { runnerCredentialAddress } from '../config/runner-tokens.ts'
 import { LeasesModule } from '../leases/leases.module.ts'
 import { SITE_LEASES, TURN_ASSIGNMENTS } from '../leases/leases.tokens.ts'
+import { openRunnerTasks } from '../turns/warm-turn-sandboxes.ts'
 import { RemoteTurnExecutor } from './remote-turn-executor.ts'
 import { RunnerApiServer } from './runner-api.server.ts'
 import { RunnerAuthenticator } from './runner-auth.ts'
@@ -21,9 +24,20 @@ import { RunnerHub } from './runner-hub.ts'
   providers: [
     {
       provide: RunnerHub,
-      useFactory: (assignments: TurnAssignmentStore, leases: SiteLeaseStore) =>
-        new RunnerHub({ assignments, leases }),
-      inject: [TURN_ASSIGNMENTS, SITE_LEASES],
+      useFactory: (
+        assignments: TurnAssignmentStore,
+        leases: SiteLeaseStore,
+        prisma: PrismaClient | null,
+      ) =>
+        new RunnerHub({
+          assignments,
+          leases,
+          // The warm containers of the runners (docs/plan/93); without the database none waits.
+          ...(prisma
+            ? { openTasks: (runnerId, taskIds) => openRunnerTasks(prisma, runnerId, taskIds) }
+            : {}),
+        }),
+      inject: [TURN_ASSIGNMENTS, SITE_LEASES, { token: PRISMA, optional: true }],
     },
     {
       provide: RunnerApiServer,

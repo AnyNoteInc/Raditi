@@ -62,6 +62,7 @@ export const runnerApiPaths = Object.freeze({
   poll: `${RUNNER_API_PREFIX}/poll`,
   reports: `${RUNNER_API_PREFIX}/reports`,
   reconcile: `${RUNNER_API_PREFIX}/reconcile`,
+  openTasks: `${RUNNER_API_PREFIX}/open-tasks`,
 })
 const assignmentPath = (assignmentId: string) =>
   `${RUNNER_API_PREFIX}/assignments/${z.uuid().parse(assignmentId)}`
@@ -136,6 +137,8 @@ export const runnerLimits = Object.freeze({
    * request of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР26).
    */
   capacity: 1024,
+  /** The tasks of the warm containers one open-tasks request asks about (docs/plan/93). */
+  warmTasks: 16,
   /** Waiting assignments one claim offers the store, oldest first. */
   claimIds: 256,
   /** A container per turn the runner holds. */
@@ -484,6 +487,24 @@ export const runnerReconcileRequestSchema = z
 /** Containers no assignment at its current epoch owns; the runner removes them. */
 export const runnerReconcileResponseSchema = z
   .object({ remove: z.array(sandboxRef).max(runnerLimits.inventory) })
+  .strict()
+
+/**
+ * The warm containers of a runner (spec §8, «Тёплая песочница»; docs/plan/93): the tasks whose
+ * completed turns left a container waiting for their next turn. The runner has no database, so
+ * core says which of them may still run a turn. Core answers only of tasks this runner held a turn
+ * of; a failure, or an older core without the route, ends every wait.
+ */
+export const runnerOpenTasksRequestSchema = z
+  .object({
+    runnerSession: uuid,
+    taskIds: z.array(uuid).min(1).max(runnerLimits.warmTasks),
+  })
+  .strict()
+export type RunnerOpenTasksRequest = z.infer<typeof runnerOpenTasksRequestSchema>
+
+export const runnerOpenTasksResponseSchema = z
+  .object({ open: z.array(uuid).max(runnerLimits.warmTasks) })
   .strict()
 
 // --- Reports: runner → core --------------------------------------------------------------------

@@ -45,8 +45,24 @@ describe('loadRunnerConfig', () => {
       s3Origin: null,
       s3CaFile: null,
       maxTurns: 1024,
+      warmMs: 10 * 60_000,
+      warmMax: 4,
       sandbox: { runtime: 'runc', socketPath: '/var/run/docker.sock' },
     })
+  })
+
+  it('keeps warm containers up to 10 minutes, few at once, and 0 turns them off (docs/plan/93)', () => {
+    expect(
+      loadRunnerConfig(
+        runnerEnv({ RUNNER_SANDBOX_WARM_MINUTES: '0', RUNNER_SANDBOX_WARM_MAX: '2' }),
+      ),
+    ).toMatchObject({ warmMs: 0, warmMax: 2 })
+    expect(problemsOf(runnerEnv({ RUNNER_SANDBOX_WARM_MINUTES: '11' })).join(' ')).toContain(
+      'RUNNER_SANDBOX_WARM_MINUTES',
+    )
+    expect(problemsOf(runnerEnv({ RUNNER_SANDBOX_WARM_MAX: '0' })).join(' ')).toContain(
+      'RUNNER_SANDBOX_WARM_MAX',
+    )
   })
 
   it('trusts a private CA of S3 only as an absolute file, and only next to its S3 origin', () => {

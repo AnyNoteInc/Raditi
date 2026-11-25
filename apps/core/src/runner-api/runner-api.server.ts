@@ -7,9 +7,11 @@ import { Logger, type OnApplicationShutdown } from '@nestjs/common'
 import {
   isDomainError,
   RUNNER_API_PREFIX,
+  runnerApiPaths,
   runnerHeaders,
   runnerLimits,
   runnerPollRequestSchema,
+  runnerOpenTasksRequestSchema,
   runnerReconcileRequestSchema,
   runnerReportSchema,
   outboxLimits,
@@ -223,6 +225,11 @@ export class RunnerApiServer implements OnApplicationShutdown {
     if (method === 'POST' && path === `${RUNNER_API_PREFIX}/reconcile`) {
       const reconcile = runnerReconcileRequestSchema.parse(await readJson(request))
       sendJson(response, 200, await this.hub.reconcile(runnerId, reconcile))
+      return
+    }
+    if (method === 'POST' && path === runnerApiPaths.openTasks) {
+      const open = runnerOpenTasksRequestSchema.parse(await readJson(request))
+      sendJson(response, 200, await this.hub.openTasks(runnerId, open))
       return
     }
     const match = ASSIGNMENT.exec(path)
