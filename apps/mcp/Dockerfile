@@ -26,21 +26,28 @@ COPY --from=pruned /repo/out/full/ ./
 RUN DATABASE_URL=postgresql://build@localhost/build pnpm --filter @repo/db db:generate \
  && pnpm --filter mcp build
 
-FROM build AS prod
-# The workspace layout stays: packages ship TypeScript sources that Node type-strips, and it
-# refuses to strip under node_modules — so no `pnpm deploy`
+# The production dependencies alone: the layer changes only with the lockfile of mcp
+# (docs/plan/92-docker-layers.md). The workspace layout stays: packages ship TypeScript sources
+# that Node type-strips, and it refuses to strip under node_modules — so no `pnpm deploy`
 # Not --offline: a runner restores the install layer of the build stage from the build cache,
 # never the cache mount it filled, so the store may be empty here; the lockfile still decides
+FROM toolchain AS deps
+COPY --from=pruned /repo/out/json/ ./
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    rm -rf node_modules apps/*/node_modules packages/*/node_modules \
- && pnpm install --frozen-lockfile --prod --prefer-offline --store-dir /pnpm/store
+    pnpm install --frozen-lockfile --prod --prefer-offline --store-dir /pnpm/store
+
+# The code alone: the sources of the packages and dist
+FROM build AS code
+RUN rm -rf node_modules apps/*/node_modules packages/*/node_modules
 
 FROM ${NODE_IMAGE} AS runtime
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-# Root-owned: the process cannot rewrite its own code
-COPY --from=prod /repo /app
+# Root-owned: the process cannot rewrite its own code. The dependencies first, the code on top:
+# a release that changes no dependency downloads only the second layer
+COPY --from=deps /repo /app
+COPY --from=code /repo /app
 ENV NODE_ENV=production
 WORKDIR /app/apps/mcp
 USER 10001:10001

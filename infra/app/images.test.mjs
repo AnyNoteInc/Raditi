@@ -80,6 +80,29 @@ for (const app of ['core', 'llm', 'mcp', 'preview', 'runner', 'browser']) {
   })
 }
 
+for (const app of ['core', 'llm', 'mcp', 'preview', 'runner', 'browser']) {
+  // docs/plan/92-docker-layers.md: a release that changes no dependency downloads only the code.
+  test(`${app}: the runtime ships the dependencies and the code as two layers`, () => {
+    const deps = stage(dockerfiles[app], 'deps')
+    assert.equal(deps[0], 'FROM toolchain AS deps')
+    assert.deepEqual(
+      deps.filter((line) => line.startsWith('COPY ')),
+      ['COPY --from=pruned /repo/out/json/ ./'],
+    )
+    assert.match(deps.join('\n'), /pnpm install --frozen-lockfile --prod /)
+    const code = stage(dockerfiles[app], 'code')
+    assert.equal(code[0], 'FROM build AS code')
+    assert.match(
+      code.join('\n'),
+      /rm -rf node_modules apps\/\*\/node_modules packages\/\*\/node_modules/,
+    )
+    const copies = stage(dockerfiles[app], 'runtime').filter((line) =>
+      /^COPY --from=(deps|code|prod) /.test(line),
+    )
+    assert.deepEqual(copies, ['COPY --from=deps /repo /app', 'COPY --from=code /repo /app'])
+  })
+}
+
 for (const app of ['llm', 'mcp', 'preview', 'runner', 'browser']) {
   test(`${app}: its image carries no git or gitleaks`, () => {
     const code = instructions(dockerfiles[app]).join('\n')
@@ -104,6 +127,25 @@ test('core: migrate runs the Prisma CLI of @repo/db as its own uid', () => {
   const migrate = stage(dockerfiles.core, 'migrate')
   assert.ok(migrate.includes('WORKDIR /repo/packages/db'))
   assert.ok(migrate.includes('USER 10004:10004'))
+})
+
+test('core: migrate comes from the prune of @repo/db, not from the build of core', () => {
+  const code = instructions(dockerfiles.core).join('\n')
+  assert.match(code, /turbo prune @repo\/db --docker --out-dir out\/db/)
+  assert.doesNotMatch(code, /FROM build AS migrate/)
+  const migrate = stage(dockerfiles.core, 'migrate')
+  assert.equal(migrate[0], 'FROM ${NODE_IMAGE} AS migrate')
+  assert.deepEqual(
+    migrate.filter((line) => line.startsWith('COPY ')),
+    ['COPY --from=migrate-deps /repo /repo', 'COPY --from=migrate-code /repo /repo'],
+  )
+  const deps = stage(dockerfiles.core, 'migrate-deps').join(' ')
+  assert.match(deps, /COPY --from=pruned \/repo\/out\/db\/json\/ \.\//)
+  // The lockfile only shrinks: the build fails on a version it does not hold.
+  assert.match(
+    deps,
+    /migrate-image\.mjs +&& cp pnpm-lock\.yaml pnpm-lock\.locked\.yaml +&& pnpm install --prod .*\/migrate-image\.mjs --check$/,
+  )
 })
 
 test('verify:edge runs the Traefik, PostgreSQL and Redis digests that the app VM deploys', () => {

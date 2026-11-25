@@ -165,8 +165,13 @@ jobs:
             org.opencontainers.image.revision=${{ needs.version.outputs.revision }}
             org.opencontainers.image.version=${{ needs.version.outputs.version }}
             org.opencontainers.image.title=raditi-${{ matrix.image }}
-          cache-from: type=gha,scope=publish-${{ matrix.image }}
-          cache-to: type=gha,scope=publish-${{ matrix.image }},mode=max
+          # The build cache lives next to the image, as its `buildcache` tag: a layer the cache
+          # holds is reused as the same blob, so the dependencies of an app keep their digest
+          # until they change and the VMs download only the code (docs/plan/92-docker-layers.md).
+          # The 10 GB cache of Actions held too little for every image; a failed cache write
+          # never fails a release.
+          cache-from: type=registry,ref=${{ needs.version.outputs.registry }}/${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=${{ needs.version.outputs.registry }}/${{ matrix.image }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
 
   digests:
     needs: [version, build]
