@@ -635,6 +635,38 @@ test('the guard of a live run lets a process open only so many provider connecti
   assert.partialDeepStrictEqual(readLedger(ledger), { requests: 3, refused: 4 })
 })
 
+test('under the guard a kept-alive agent still opens a connection a request: the ledger counts requests', async (t) => {
+  const served = []
+  const server = createHttpServer((req, res) => {
+    served.push(req.socket.remotePort)
+    res.end('ok')
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const { port } = server.address()
+  const ledger = join(directory, 'ledger-keep-alive')
+  const url = guardImport({ ledger, cap: 5, provider: { host: 'localhost', port } })
+  const requests = `
+const http = require('node:http')
+const agent = new http.Agent({ keepAlive: true })
+;(async () => {
+  for (let i = 0; i < 3; i++)
+    await new Promise((resolve, reject) => {
+      http.get({ host: 'localhost', port: Number(process.argv[1]), agent }, (res) => {
+        res.resume()
+        res.on('end', resolve)
+      }).on('error', reject)
+    })
+  agent.destroy()
+})()`
+  const child = await guardedChild(url, requests, [String(port)])
+  assert.equal(child.code, 0, child.stderr)
+  assert.equal(served.length, 3)
+  // Three requests, three connections: none was kept for the next one (docs/plan/94).
+  assert.equal(new Set(served).size, 3)
+  assert.partialDeepStrictEqual(readLedger(ledger), { requests: 3, refused: 0 })
+})
+
 test('two processes racing for the last provider connections never pass the cap together', async (t) => {
   let accepted = 0
   const server = createServer((socket) => {
