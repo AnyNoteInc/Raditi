@@ -45,6 +45,8 @@ async function fixture({
   proxyHost = '127.0.0.1',
   /** The provider drops a kept connection as the next request arrives on it (docs/plan/94). */
   dropKept = false,
+  /** The `Keep-Alive` header of the provider's answers: how long it keeps an idle connection. */
+  keepAlive = '',
 } = {}) {
   const cert = readFileSync(certFile)
   const key = readFileSync(keyFile)
@@ -74,6 +76,7 @@ async function fixture({
         'content-type': 'text/event-stream',
         'x-synthetic-state': 'state',
         ...(redirect ? { location: 'https://private.example/secret' } : {}),
+        ...(keepAlive ? { 'keep-alive': keepAlive } : {}),
       })
       if (stallBody) {
         res.write('data: first\n\n')
@@ -645,6 +648,36 @@ describe('kept provider connections (docs/plan/94)', () => {
         await read(await transport.request(account(token), call()))
       // `one` stayed free; `two` found no room and was closed, so it opened again.
       expect(f.sessions.opened).toBe(3)
+    } finally {
+      transport.close()
+      await f.close()
+    }
+  })
+
+  it('keeps a connection no longer than the provider said, less a second', async () => {
+    const f = await fixture({ keepAlive: 'timeout=2' })
+    const transport = createEgressTransport(f.config)
+    try {
+      await read(await transport.request(account('one'), call()))
+      await read(await transport.request(account('one'), call()))
+      expect(f.sessions.opened).toBe(1)
+      // Past one second of the two: closed by the role before the provider closes it.
+      await new Promise((resolve) => setTimeout(resolve, 1_200))
+      await read(await transport.request(account('one'), call()))
+      expect(f.sessions.opened).toBe(2)
+    } finally {
+      transport.close()
+      await f.close()
+    }
+  })
+
+  it('keeps no connection a provider would close within a second', async () => {
+    const f = await fixture({ keepAlive: 'timeout=1' })
+    const transport = createEgressTransport(f.config)
+    try {
+      await read(await transport.request(account('one'), call()))
+      await read(await transport.request(account('one'), call()))
+      expect(f.sessions.opened).toBe(2)
     } finally {
       transport.close()
       await f.close()

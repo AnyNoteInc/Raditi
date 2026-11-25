@@ -120,7 +120,7 @@ function providerPool(
   freeTotal: () => number,
   options: AgentOptions,
 ): Agent {
-  const agent = new Agent(options)
+  const agent = new Agent({ ...options, timeout: freeMs })
   const keepAlive = agent.keepSocketAlive.bind(agent) as unknown as (socket: Socket) => boolean
   const reuse = agent.reuseSocket.bind(agent) as (socket: Socket, request: ClientRequest) => void
   Object.assign(agent, {
@@ -139,11 +139,9 @@ function providerPool(
         if (name.startsWith(UNKEPT) && list?.includes(socket)) return false
       let free = 0
       for (const list of Object.values(agent.freeSockets)) free += list?.length ?? 0
-      if (free >= freeTotal() || !keepAlive(socket)) return false
-      // A shorter `Keep-Alive: timeout` of the provider, which Node sets, wins.
-      const hinted = socket.timeout
-      socket.setTimeout(hinted !== undefined && hinted > 0 ? Math.min(hinted, freeMs) : freeMs)
-      return true
+      // Node sets the free time: `freeMs` (the agent's timeout), or a shorter `Keep-Alive:
+      // timeout` of the provider less a second, and keeps none the provider closes within one.
+      return free < freeTotal() && keepAlive(socket)
     },
     reuseSocket: (socket: Socket, request: ClientRequest) => {
       // A taken connection waits as long as its call: the gateway bounds that itself.
@@ -493,8 +491,10 @@ export function createEgressTransport(
               })
             },
           )
-          inner.once('socket', () => {
+          inner.once('socket', (socket: Socket) => {
             sent = true
+            // A connection in a call waits as long as the call: the gateway bounds that itself.
+            socket.setTimeout(0)
           })
           inner.on('error', fail)
           inner.on('upgrade', fail)
