@@ -352,6 +352,10 @@ async function startRunner() {
       new URL(s3RunnerEndpoint).origin +
       (storageConfig.forcePathStyle ? `/${storageConfig.buckets.sessions}` : ''),
     RUNNER_MAX_TURNS: '1',
+    // Every scenario here counts on a new container per turn and none left after it: the warm
+    // containers of the runner (docs/plan/93) are covered by core's runner-protocol cross test,
+    // their reset under gVisor by a stand of their own — not yet (plan 93, «Проверка»).
+    RUNNER_SANDBOX_WARM_MINUTES: '0',
     SANDBOX_RUNTIME: 'runsc',
     SANDBOX_DOCKER_SOCKET: '/var/run/docker.sock',
     SANDBOX_GATEWAY_IMAGE: gatewayConfig.image,

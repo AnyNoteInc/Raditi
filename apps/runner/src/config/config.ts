@@ -44,6 +44,13 @@ export interface RunnerConfig {
   s3CaFile: string | null
   /** RUNNER_MAX_TURNS: turns at once on this VM (plan 70, ВР18). */
   maxTurns: number
+  /**
+   * RUNNER_SANDBOX_WARM_MINUTES, in ms: how long the container of a completed turn waits for the
+   * next turn of its task (spec §8, «Тёплая песочница»; docs/plan/93); 0 — it is removed at once.
+   */
+  warmMs: number
+  /** RUNNER_SANDBOX_WARM_MAX: containers that wait at once on this VM. */
+  warmMax: number
   sandbox: SandboxConfig
 }
 
@@ -69,6 +76,13 @@ const ownEnvSchema = z.object({
   // (docs/plan/70-turn-without-time-limit.md, ВР18, ВР26). At most what the protocol carries.
   RUNNER_MAX_TURNS: envVar(
     z.coerce.number().int().min(1).max(runnerLimits.capacity).default(runnerLimits.capacity),
+  ),
+  // The warm containers of the VM (owner's decision of 26.10.2026, spec §8; docs/plan/93): as
+  // SANDBOX_WARM_MINUTES of core's own Docker, 10 minutes at most; 0 turns them off.
+  RUNNER_SANDBOX_WARM_MINUTES: envVar(z.coerce.number().int().min(0).max(10).default(10)),
+  // Each waits with its network, gateway and firewall: few at once on one VM.
+  RUNNER_SANDBOX_WARM_MAX: envVar(
+    z.coerce.number().int().min(1).max(runnerLimits.warmTasks).default(4),
   ),
 })
 
@@ -200,6 +214,8 @@ export function loadRunnerConfig(env: Env): RunnerConfig {
     s3Origin,
     s3CaFile: own.RUNNER_S3_CA_FILE ?? null,
     maxTurns: own.RUNNER_MAX_TURNS,
+    warmMs: own.RUNNER_SANDBOX_WARM_MINUTES * 60_000,
+    warmMax: own.RUNNER_SANDBOX_WARM_MAX,
     sandbox,
   }
 }

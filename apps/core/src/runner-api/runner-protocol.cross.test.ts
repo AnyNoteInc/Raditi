@@ -7,6 +7,7 @@ import { createHash, randomBytes } from 'node:crypto'
 
 import {
   MAX_SANDBOX_LEASE_MS,
+  runnerOpenTasksResponseSchema,
   type SiteLeaseFence,
   type TurnOutputBatch,
   type TurnPlan,
@@ -21,6 +22,7 @@ import {
   prepareInput,
   sandboxSide,
 } from '@repo/local-turns/testing'
+import { LocalTurnExecutor, WarmSandboxes } from '@repo/local-turns'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { hashRunnerToken, parseRunnerTokens } from '../config/runner-tokens.ts'
@@ -375,5 +377,124 @@ describe('HttpRunnerTransport', () => {
     // Core zeroed its copy once it was sent; the runner zeroed its own after sealing.
     expect(key.every((byte) => byte === 0)).toBe(true)
     expect(side.sandbox.destroy).toHaveBeenCalledWith('completed')
+  })
+})
+
+describe('Warm containers on the runner (docs/plan/93)', () => {
+  /** The runner's pool and executor as apps/runner wires them, over the fake Docker of the side. */
+  function warmRunner(open: { tasks: string[] }) {
+    const assignments = new MemoryTurnAssignments()
+    const leases = { assert: vi.fn(async () => true) }
+    const hub = new RunnerHub({
+      assignments,
+      leases,
+      openTasks: async (_runnerId, ids) => ids.filter((id) => open.tasks.includes(id)),
+      logger: { warn: vi.fn() },
+    })
+    hubs.push(hub)
+    const core = { hub, executor: new RemoteTurnExecutor(hub, leases, assignments) }
+    const side = sandboxSide()
+    side.sandbox.reset = vi.fn(async () => {})
+    const transport = loopbackTransport(hub)
+    const session = '00000000-0000-4000-8000-0000000000aa'
+    const warm = new WarmSandboxes({
+      sandboxes: side.sandboxes,
+      warmMs: 10 * 60_000,
+      wanted: async (ids) =>
+        new Set(
+          runnerOpenTasksResponseSchema.parse(
+            await transport.openTasks({ runnerSession: session, taskIds: [...ids] }),
+          ).open,
+        ),
+    })
+    closers.push(() => warm.close())
+    const executor = new LocalTurnExecutor({
+      sandboxes: side.sandboxes,
+      parser: () => ({ parseEvent: () => [] }),
+      transport: side.snapshot,
+      transfer: side.transfer,
+      warm,
+    })
+    const { runner } = startRunner(transport, executor, { session, warm })
+    /** Turn `turn` of the session under lease epoch `epoch`. */
+    const turn = async (number: number, epoch: number) => {
+      const assignment = (await assignments.open({
+        fence: { ...fence, epoch },
+        sessionId: labels.sessionId,
+        turn: number,
+        executor: 'runner',
+        plan: {} as TurnPlan,
+        remainingMs: MAX_SANDBOX_LEASE_MS,
+      }))!
+      const input = prepareInput(assignment.id)
+      return {
+        assignment,
+        execution: await core.executor.prepare(
+          {
+            ...input,
+            fence: { ...fence, epoch },
+            sandbox: { ...input.sandbox, labels: { ...labels, turn: number, leaseEpoch: epoch } },
+          },
+          signal,
+        ),
+      }
+    }
+    return { assignments, hub, side, warm, runner, turn }
+  }
+
+  it('the next turn of the task takes the container of the completed one, and no reconcile removes it', async () => {
+    const open = { tasks: [fence.taskId] }
+    const f = warmRunner(open)
+    const first = await f.turn(1, 1)
+    await first.execution.destroy('completed')
+    await f.assignments.finish({ id: first.assignment.id, epoch: 1, outcome: 'completed' })
+    // Reset and waiting, not removed: core asked through the runner API whether the task is open.
+    expect(f.side.sandbox.reset).toHaveBeenCalledOnce()
+    expect(f.side.sandbox.destroy).not.toHaveBeenCalled()
+    expect(f.runner.holds('container1')).toBe(true)
+    const inventory = [
+      { containerId: 'container1', labels: { ...labels, leaseEpoch: 1 }, ageMs: 1_000 },
+    ]
+    // No assignment owns the waiting container: core says remove, the runner keeps what it holds.
+    expect(
+      await f.hub.reconcile('sandbox-1', { runnerSession: f.runner.session, inventory }),
+    ).toEqual({ remove: ['container1'] })
+
+    const second = await f.turn(2, 2)
+    expect(second.execution.containerId).toBe('container1')
+    expect(f.side.sandboxes.create).toHaveBeenCalledOnce()
+    // A restarted runner would ask again: the container turn 2 runs in is its own, labels of turn 1.
+    expect(
+      await f.hub.reconcile('sandbox-1', {
+        runnerSession: '00000000-0000-4000-8000-0000000000bb',
+        inventory,
+      }),
+    ).toEqual({ remove: [] })
+
+    await second.execution.destroy('completed')
+    await f.assignments.finish({ id: second.assignment.id, epoch: 2, outcome: 'completed' })
+    expect(f.side.sandbox.destroy).not.toHaveBeenCalled()
+    // The task ended: the next check of the pool removes the container.
+    open.tasks = []
+    await f.warm.sweep()
+    await vi.waitFor(() => expect(f.side.sandbox.destroy).toHaveBeenCalledWith('completed'))
+    expect(f.runner.holds('container1')).toBe(false)
+  })
+
+  it('a container of a failed turn is removed at once, never kept warm', async () => {
+    const f = warmRunner({ tasks: [fence.taskId] })
+    const first = await f.turn(1, 1)
+    await first.execution.destroy('failed')
+    expect(f.side.sandbox.reset).not.toHaveBeenCalled()
+    expect(f.side.sandbox.destroy).toHaveBeenCalledWith('failed')
+    expect(f.runner.holds('container1')).toBe(false)
+  })
+
+  it('a task core no longer calls open leaves nothing waiting', async () => {
+    const f = warmRunner({ tasks: [] })
+    const first = await f.turn(1, 1)
+    await first.execution.destroy('completed')
+    expect(f.side.sandbox.destroy).toHaveBeenCalledWith('completed')
+    expect(f.runner.holds('container1')).toBe(false)
   })
 })

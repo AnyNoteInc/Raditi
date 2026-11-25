@@ -380,6 +380,10 @@ services:
       # As many turns at once as the protocol carries: the only limit of turns is the eight of a
       # workspace (owner's request of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР26)
       RUNNER_MAX_TURNS: '1024'
+      # The container of a completed turn waits 10 minutes for the next turn of its task, at most
+      # 4 at once (owner's decision of 26.10.2026, spec §8 «Тёплая песочница»; docs/plan/93)
+      RUNNER_SANDBOX_WARM_MINUTES: '10'
+      RUNNER_SANDBOX_WARM_MAX: '4'
       SANDBOX_RUNTIME: runsc
       SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
       SANDBOX_GATEWAY_IMAGE: ${SANDBOX_GATEWAY_IMAGE:?Set the digest-pinned sandbox gateway image}

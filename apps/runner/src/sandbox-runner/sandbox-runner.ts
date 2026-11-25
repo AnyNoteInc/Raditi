@@ -80,6 +80,13 @@ export interface SandboxRunnerDependencies {
   s3Origin?: string
   /** Core retired this session (a newer one of this runner polls): restart under a new one. */
   onRetired?: () => void
+  /** The session for core: a fresh uuid per process start; one of its own when absent. */
+  session?: string
+  /**
+   * The warm containers (docs/plan/93): a container waiting for the next turn of its task is held
+   * by this process as well, and no reconcile removes it.
+   */
+  warm?: { holds(containerId: string): boolean }
   logger?: RunnerLogger
 }
 
@@ -287,7 +294,7 @@ class Reattach extends Error {
  */
 export class SandboxRunner {
   /** A fresh session per process start: a restarted runner is a new session for core. */
-  readonly session = randomUUID()
+  readonly session: string
   readonly #held = new Map<string, Held>()
   readonly #gone = new Map<string, string>()
   readonly #seen = new Set<string>()
@@ -301,6 +308,7 @@ export class SandboxRunner {
   #freed: (() => void) | undefined
 
   constructor(private readonly deps: SandboxRunnerDependencies) {
+    this.session = deps.session ?? randomUUID()
     this.#logger = deps.logger ?? new Logger('Runner')
     this.#warn = throttledLogger((line) => this.#logger.warn(line))
   }
@@ -315,10 +323,13 @@ export class SandboxRunner {
     await this.#loop
   }
 
-  /** A container of a turn this session holds: its own commands remove it, not a reconcile. */
+  /**
+   * A container of a turn this session holds, or a warm one waiting for the next turn of its task:
+   * its own commands or its pool remove it, not a reconcile.
+   */
   holds(containerId: string): boolean {
     for (const held of this.#held.values()) if (held.containerId === containerId) return true
-    return false
+    return this.deps.warm?.holds(containerId) ?? false
   }
 
   // --- Poll loop --------------------------------------------------------------------------------

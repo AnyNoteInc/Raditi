@@ -12,6 +12,9 @@ export function testRunnerConfig(overrides: Partial<RunnerConfig> = {}): RunnerC
     s3Origin: null,
     s3CaFile: null,
     maxTurns: 1,
+    // No warm containers unless a test asks for them (docs/plan/93).
+    warmMs: 0,
+    warmMax: 4,
     sandbox: sandboxConfigFromEnv({ APP_ENV: 'test' }),
     ...overrides,
   }

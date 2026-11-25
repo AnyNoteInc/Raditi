@@ -1,4 +1,5 @@
 import { Module, type DynamicModule } from '@nestjs/common'
+import type { WarmSandboxes } from '@repo/local-turns'
 
 import type { RunnerConfig, RunnerOptions } from './config/config.ts'
 import { RunnerConfigModule } from './config/config.module.ts'
@@ -8,6 +9,7 @@ import { ReconcilerModule } from './reconciler/reconciler.module.ts'
 import { RunnerReconciler } from './reconciler/runner-reconciler.ts'
 import { RunnerLifecycle } from './runner-lifecycle.ts'
 import { SandboxModule } from './sandbox/sandbox.module.ts'
+import { WARM_SANDBOXES } from './sandbox/sandbox.tokens.ts'
 import { SandboxRunner } from './sandbox-runner/sandbox-runner.ts'
 import { SandboxRunnerModule } from './sandbox-runner/sandbox-runner.module.ts'
 import { VmTokenModule } from './vm-token/vm-token.module.ts'
@@ -37,8 +39,9 @@ export class AppModule {
             runner: SandboxRunner,
             reconciler: RunnerReconciler,
             transport: HttpRunnerTransport,
-          ) => new RunnerLifecycle(runner, reconciler, transport),
-          inject: [SandboxRunner, RunnerReconciler, HttpRunnerTransport],
+            warm: WarmSandboxes | null,
+          ) => new RunnerLifecycle(runner, reconciler, transport, warm),
+          inject: [SandboxRunner, RunnerReconciler, HttpRunnerTransport, WARM_SANDBOXES],
         },
       ],
     }

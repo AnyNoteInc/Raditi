@@ -5,6 +5,7 @@ import { Buffer } from 'node:buffer'
 
 import {
   runnerPollRequestSchema,
+  runnerOpenTasksRequestSchema,
   runnerReconcileRequestSchema,
   runnerReportSchema,
 } from '@repo/domain'
@@ -92,6 +93,16 @@ export function loopbackTransport(hub: RunnerHub, runnerId = 'sandbox-1'): Loopb
           await transport.hub.reconcile(
             runnerId,
             runnerReconcileRequestSchema.parse(wire(request)),
+          ),
+        )
+      }),
+    openTasks: (request) =>
+      answer('openTasks', async () => {
+        transport.intercept?.('openTasks', request)
+        return wire(
+          await transport.hub.openTasks(
+            runnerId,
+            runnerOpenTasksRequestSchema.parse(wire(request)),
           ),
         )
       }),

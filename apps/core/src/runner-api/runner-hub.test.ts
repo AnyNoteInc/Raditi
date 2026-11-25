@@ -555,3 +555,113 @@ describe('RunnerHub: the slots of a poll its runner sent before a prepare reache
     expect(reserved).toBe(true)
   })
 })
+
+describe('RunnerHub: the warm containers of a runner (docs/plan/93)', () => {
+  /** Turn 2 of a session whose turn 1 left the container `warm` and that took it at epoch 3. */
+  const warmTurn = async () => {
+    const f = fixture()
+    const siteId = randomUUID()
+    const taskId = randomUUID()
+    const turn = (await f.assignments.open({
+      fence: { siteId, taskId, operation: 'turn', epoch: 3 },
+      sessionId: 'session-warm',
+      turn: 2,
+      executor: 'runner',
+      plan: {} as TurnPlan,
+      remainingMs: 60_000,
+    }))!
+    await f.assignments.claim({
+      ids: [turn.id],
+      runnerId: 'sandbox-1',
+      runnerSession: randomUUID(),
+      limit: 1,
+    })
+    await f.assignments.recordContainer({ id: turn.id, epoch: 3, containerId: 'warm' })
+    const container = (containerId: string, labels: Record<string, unknown> = {}) => ({
+      containerId,
+      labels: {
+        workspaceId: 'ws1',
+        siteId,
+        taskId,
+        sessionId: 'session-warm',
+        turn: 1,
+        leaseEpoch: 2,
+        ...labels,
+      },
+      ageMs: 1_000,
+    })
+    return { ...f, turn, container, taskId }
+  }
+
+  it('keeps the container of an earlier turn that the assignment names by its id', async () => {
+    const f = await warmTurn()
+    const inventory = [
+      f.container('warm'),
+      // Not the container the assignment names, though its labels are the same.
+      f.container('other'),
+      // The assignment's own turn, an epoch of its fence: the usual rule.
+      f.container('own', { turn: 2, leaseEpoch: 3 }),
+      // Labels a turn or an epoch later than the assignment's cannot be its warm container.
+      f.container('later', { turn: 3 }),
+      f.container('epoch', { leaseEpoch: 3 }),
+      f.container('session', { sessionId: 'session-other' }),
+    ]
+    const { remove } = await f.hub.reconcile('sandbox-1', {
+      runnerSession: randomUUID(),
+      inventory,
+    })
+    expect(remove).toEqual(['other', 'own', 'later', 'epoch', 'session'])
+  })
+
+  it('lets a warm container go once its assignment ends', async () => {
+    const f = await warmTurn()
+    await f.assignments.finish({ id: f.turn.id, epoch: 3, outcome: 'completed' })
+    const inventory = [f.container('warm')]
+    expect(await f.hub.reconcile('sandbox-1', { runnerSession: randomUUID(), inventory })).toEqual({
+      remove: ['warm'],
+    })
+  })
+})
+
+describe('RunnerHub: the open tasks of warm containers (docs/plan/93)', () => {
+  const withOpenTasks = (
+    openTasks?: (runnerId: string, ids: readonly string[]) => Promise<string[]>,
+  ) => {
+    const hub = new RunnerHub({
+      assignments: new MemoryTurnAssignments(),
+      leases: { assert: vi.fn(async () => true) },
+      ...(openTasks ? { openTasks } : {}),
+      logger: { warn: vi.fn() },
+    })
+    hubs.push(hub)
+    return hub
+  }
+  const refusal = (promise: Promise<unknown>) =>
+    promise.then(
+      () => undefined,
+      (error: { body?: unknown }) => error.body,
+    )
+
+  it('answers only of the tasks the runner asked about, for that runner', async () => {
+    const [a, b, c] = [randomUUID(), randomUUID(), randomUUID()]
+    const read = vi.fn(async () => [a, c, a])
+    const hub = withOpenTasks(read)
+    expect(
+      await hub.openTasks('sandbox-1', { runnerSession: randomUUID(), taskIds: [a, b] }),
+    ).toEqual({
+      open: [a],
+    })
+    expect(read).toHaveBeenCalledWith('sandbox-1', [a, b])
+  })
+
+  it('fails closed: no reader, or a failed read, opens no task', async () => {
+    const request = { runnerSession: randomUUID(), taskIds: [randomUUID()] }
+    expect(await refusal(withOpenTasks().openTasks('sandbox-1', request))).toEqual({
+      error: 'NOT_FOUND',
+    })
+    const failing = withOpenTasks(async () => {
+      throw new Error('database unavailable')
+    })
+    expect(await refusal(failing.openTasks('sandbox-1', request))).toEqual({ error: 'UNAVAILABLE' })
+  })
+})

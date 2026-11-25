@@ -16,6 +16,7 @@ import {
   type RunnerApiErrorCode,
   type RunnerCandidatePart,
   type RunnerConflict,
+  type RunnerOpenTasksRequest,
   type RunnerPollRequest,
   type RunnerReport,
   type runnerReconcileRequestSchema,
@@ -42,6 +43,8 @@ export interface RunnerTransport {
   poll(request: RunnerPollRequest, signal: AbortSignal): Promise<unknown>
   report(report: RunnerReport): Promise<void>
   reconcile(request: RunnerReconcileRequest): Promise<unknown>
+  /** Which tasks of the warm containers may still run a turn (docs/plan/93). */
+  openTasks(request: RunnerOpenTasksRequest): Promise<unknown>
   /** The base bundle of an open prepare; never more than `sizeBytes`. */
   bundle(
     assignmentId: string,
@@ -179,6 +182,10 @@ export class HttpRunnerTransport implements RunnerTransport {
 
   reconcile(request: RunnerReconcileRequest): Promise<unknown> {
     return this.#json('reconcile', runnerApiPaths.reconcile, request)
+  }
+
+  openTasks(request: RunnerOpenTasksRequest): Promise<unknown> {
+    return this.#json('openTasks', runnerApiPaths.openTasks, request)
   }
 
   async *bundle(

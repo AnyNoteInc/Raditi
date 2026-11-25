@@ -51,6 +51,7 @@ export function scriptedCore(
       reports.push(structuredClone(report))
     }),
     reconcile: vi.fn(async () => ({ remove: [] })),
+    openTasks: vi.fn(async (): Promise<unknown> => ({ open: [] })),
     inbox: async function* (
       _assignmentId: string,
       index: number,

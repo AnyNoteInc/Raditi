@@ -49,6 +49,9 @@ services:
       RUNNER_CORE_CA_FILE: ${RUNNER_CORE_CA_FILE:-}
       RUNNER_S3_ORIGIN: ${RUNNER_S3_ORIGIN:-}
       RUNNER_MAX_TURNS: '1'
+      # Warm containers of completed turns (spec §8 «Тёплая песочница»; docs/plan/93)
+      RUNNER_SANDBOX_WARM_MINUTES: '10'
+      RUNNER_SANDBOX_WARM_MAX: '4'
       SANDBOX_RUNTIME: runsc
       SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
       SANDBOX_GATEWAY_IMAGE: ${SANDBOX_GATEWAY_IMAGE:-}
