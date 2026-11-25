@@ -7,10 +7,11 @@
 // - no package keeps devDependencies;
 // - the workspace packages @repo/db no longer reaches (@repo/eslint-config) leave the workspace.
 // `pnpm install --prod` then installs the versions of the lockfile: the lockfile only shrinks, and
-// `--check` fails the build if the install took a version the lockfile of the repository lacks.
+// `--check` fails the build if the install took a version or an integrity the lockfile of the
+// repository lacks.
 //
-//   node migrate-image.mjs                    (in the root of the pruned workspace)
-//   node migrate-image.mjs --check <lockfile> (after the install: <lockfile> is the one before it)
+//   node migrate-image.mjs           (in the root of the pruned workspace)
+//   cp pnpm-lock.yaml pnpm-lock.locked.yaml && pnpm install … && node migrate-image.mjs --check
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -21,49 +22,79 @@ export const RUN_FROM_DEV = ['prisma', '@repo/typescript-config']
 
 const ROOT_PACKAGE = '@repo/db'
 
+/** The copy of the lockfile of the pruned workspace before the install, for `--check`. */
+export const LOCKED = 'pnpm-lock.locked.yaml'
+
+/** The directory of each workspace package by its name. */
+function directoriesByName(manifests) {
+  const byName = new Map()
+  for (const [dir, manifest] of manifests) if (dir) byName.set(manifest.name, dir)
+  return byName
+}
+
+/** A manifest without devDependencies; @repo/db keeps those of RUN_FROM_DEV as dependencies. */
+function withoutDevTools(manifest, isDb) {
+  const next = structuredClone(manifest)
+  for (const name of isDb ? RUN_FROM_DEV : []) {
+    const spec = next.devDependencies?.[name]
+    if (spec === undefined) throw new Error(`${ROOT_PACKAGE} has no dev dependency ${name}`)
+    next.dependencies = { ...next.dependencies, [name]: spec }
+  }
+  delete next.devDependencies
+  return next
+}
+
+/** The workspace directories `from` reaches through the `workspace:` dependencies of `manifests`. */
+function reachedFrom(from, manifests, byName) {
+  const reached = new Set([from])
+  const queue = [from]
+  while (queue.length > 0) {
+    const dependencies = manifests.get(queue.shift()).dependencies ?? {}
+    const linked = Object.keys(dependencies).filter((name) =>
+      String(dependencies[name]).startsWith('workspace:'),
+    )
+    for (const name of linked) {
+      const dir = byName.get(name)
+      if (dir === undefined) throw new Error(`${name} is not in the pruned workspace`)
+      if (!reached.has(dir)) queue.push(dir)
+      reached.add(dir)
+    }
+  }
+  return reached
+}
+
 /**
  * The manifests of the image from those of the pruned workspace: `manifests` maps a directory
  * ('' for the root) to its package.json. Returns the new manifests of the directories that stay
  * and the directories that leave.
  */
 export function migrateManifests(manifests) {
-  const byName = new Map()
-  for (const [dir, manifest] of manifests) if (dir) byName.set(manifest.name, dir)
+  const byName = directoriesByName(manifests)
   const dbDir = byName.get(ROOT_PACKAGE)
   if (dbDir === undefined) throw new Error(`${ROOT_PACKAGE} is not in the pruned workspace`)
-
   const result = new Map()
-  for (const [dir, manifest] of manifests) {
-    const next = structuredClone(manifest)
-    if (dir === dbDir) {
-      for (const name of RUN_FROM_DEV) {
-        const spec = next.devDependencies?.[name]
-        if (spec === undefined) throw new Error(`${ROOT_PACKAGE} has no dev dependency ${name}`)
-        next.dependencies = { ...next.dependencies, [name]: spec }
-      }
-    }
-    delete next.devDependencies
-    result.set(dir, next)
-  }
-
-  // The workspace packages @repo/db reaches through its dependencies (now with RUN_FROM_DEV).
-  const reached = new Set([dbDir])
-  const queue = [dbDir]
-  while (queue.length > 0) {
-    const manifest = result.get(queue.shift())
-    for (const [name, spec] of Object.entries(manifest.dependencies ?? {})) {
-      if (!String(spec).startsWith('workspace:')) continue
-      const dir = byName.get(name)
-      if (dir === undefined) throw new Error(`${name} is not in the pruned workspace`)
-      if (!reached.has(dir)) {
-        reached.add(dir)
-        queue.push(dir)
-      }
-    }
-  }
+  for (const [dir, manifest] of manifests) result.set(dir, withoutDevTools(manifest, dir === dbDir))
+  const reached = reachedFrom(dbDir, result, byName)
   const removed = [...result.keys()].filter((dir) => dir !== '' && !reached.has(dir))
   for (const dir of removed) result.delete(dir)
   return { manifests: result, removed }
+}
+
+/** `name@version` of a package or snapshot key of a lockfile (two spaces in), without peers. */
+function packageKey(line) {
+  if (!line.startsWith('  ') || line[2] === ' ' || !line.endsWith(':')) return null
+  const key = line.slice(2, -1).replaceAll("'", '').split('(')[0]
+  return key.lastIndexOf('@') > 0 ? key : null
+}
+
+/** The integrity of a resolution line: inline (pnpm) or in its own line below (turbo prune). */
+function integrityOf(line) {
+  const inline = line.startsWith('    resolution: {')
+  const block = line.startsWith('      integrity: ')
+  if (!inline && !block) return null
+  const at = line.indexOf('integrity: ')
+  if (at === -1) return null
+  return line.slice(at + 'integrity: '.length).split(/[,}\s]/)[0] || null
 }
 
 /**
@@ -73,10 +104,17 @@ export function migrateManifests(manifests) {
  */
 export function versionsOf(lockfile) {
   const versions = new Map()
-  const entry =
-    /^ {2}'?(@?[^@\s'(]+@[^\s'(:]+)[^\n]*\n(?: {4}resolution:(?: \{| *\n {6})integrity: ([^,}\s]+))?/gm
-  for (const [, key, integrity] of lockfile.matchAll(entry))
-    if (!versions.has(key) || integrity) versions.set(key, integrity ?? null)
+  let current = null
+  for (const line of lockfile.split('\n')) {
+    const key = packageKey(line)
+    if (key !== null) {
+      current = key
+      if (!versions.has(key)) versions.set(key, null)
+      continue
+    }
+    const integrity = current === null ? null : integrityOf(line)
+    if (integrity !== null) versions.set(current, integrity)
+  }
   return versions
 }
 
@@ -89,7 +127,7 @@ export function newVersions(original, installed) {
   return [...versionsOf(installed)]
     .filter(
       ([version, integrity]) =>
-        !known.has(version) || (integrity && known.get(version) !== integrity),
+        !known.has(version) || (integrity !== null && known.get(version) !== integrity),
     )
     .map(([version]) => version)
 }
@@ -109,11 +147,14 @@ function readWorkspace(root) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--check') {
-  // After the install: every version comes from the lockfile of the repository.
+  // After the install: every version comes from the lockfile of the repository, kept before it
+  // as LOCKED next to pnpm-lock.yaml; the copy leaves with the check.
+  const locked = join(process.cwd(), LOCKED)
   const added = newVersions(
-    readFileSync(process.argv[3], 'utf8'),
+    readFileSync(locked, 'utf8'),
     readFileSync(join(process.cwd(), 'pnpm-lock.yaml'), 'utf8'),
   )
+  rmSync(locked)
   if (added.length > 0) {
     process.stderr.write(`[migrate-image] versions outside the lockfile: ${added.join(' ')}\n`)
     process.exit(1)

@@ -54,9 +54,9 @@ COPY infra/app/migrate-image.mjs /usr/local/lib/raditi/
 COPY --from=pruned /repo/out/db/json/ ./
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     node /usr/local/lib/raditi/migrate-image.mjs \
- && cp pnpm-lock.yaml /tmp/pnpm-lock.locked.yaml \
+ && cp pnpm-lock.yaml pnpm-lock.locked.yaml \
  && pnpm install --prod --no-frozen-lockfile --prefer-offline --store-dir /pnpm/store \
- && node /usr/local/lib/raditi/migrate-image.mjs --check /tmp/pnpm-lock.locked.yaml
+ && node /usr/local/lib/raditi/migrate-image.mjs --check
 
 FROM migrate-deps AS migrate-code
 COPY --from=pruned /repo/out/db/full/ ./

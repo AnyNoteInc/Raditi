@@ -144,7 +144,7 @@ test('core: migrate comes from the prune of @repo/db, not from the build of core
   // The lockfile only shrinks: the build fails on a version it does not hold.
   assert.match(
     deps,
-    /migrate-image\.mjs +&& cp pnpm-lock\.yaml (\S+) +&& pnpm install --prod .*\/migrate-image\.mjs --check \1/,
+    /migrate-image\.mjs +&& cp pnpm-lock\.yaml pnpm-lock\.locked\.yaml +&& pnpm install --prod .*\/migrate-image\.mjs --check$/,
   )
 })
 
