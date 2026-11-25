@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { CHAT_DIAGRAM_RETRY_MS, readChatDiagram } from './chat-diagrams.ts'
+import { DIAGRAM_RETRY_MS } from './artifact-diagrams.ts'
+import { readChatDiagram } from './chat-diagrams.ts'
 
 // A diagram of the chat asked again after its window (docs/plan/91-chat-diagrams.md, Д5): a job
 // that drew nothing must not leave the diagram undrawn for good.
@@ -35,7 +36,7 @@ describe('a diagram of the chat not drawn yet', () => {
     for (const now of [
       at,
       new Date(at.getTime() + 30_000),
-      new Date(at.getTime() + CHAT_DIAGRAM_RETRY_MS),
+      new Date(at.getTime() + DIAGRAM_RETRY_MS),
     ])
       expect(await readChatDiagram(db as never, { ...input, now })).toEqual({ state: 'drawing' })
     // The reader's access is part of the one query of the row.

@@ -67,17 +67,29 @@ export async function artifactDiagramOf(db: Db, input: { artifactId: string; sou
   })
 }
 
+/**
+ * How long one job of a diagram stands for its text — of «Схема» and of the chat (docs/plan/
+ * 91-chat-diagrams.md, Д5). A job that drew nothing — no browser worker, or its attempts spent while
+ * the worker was down — must not leave the diagram undrawn for good: once the window passes, the
+ * next ask of the cabinet puts the job again.
+ */
+export const DIAGRAM_RETRY_MS = 2 * 60_000
+
+/** The window of `now`: a part of the dedupe key of a diagram job. */
+export const diagramRetryWindow = (now: Date) => Math.floor(now.getTime() / DIAGRAM_RETRY_MS)
+
+/** One job per text of an artifact and window: asked again after it when still not drawn. */
 export async function enqueueArtifactDiagram(
   tx: OutboxWriter,
   job: ArtifactDiagramJob,
-  sourceKey: string,
+  key: { sourceKey: string; now: Date },
 ): Promise<boolean> {
   const payload = artifactDiagramJobSchema.parse(job)
   return enqueueOutbox(tx, {
     topic: AGENT_TURN_QUEUE,
     type: ARTIFACT_DIAGRAM_JOB,
     payload,
-    dedupeKey: `${ARTIFACT_DIAGRAM_JOB}:${payload.artifactId}:${sourceKey}`,
+    dedupeKey: `${ARTIFACT_DIAGRAM_JOB}:${payload.artifactId}:${key.sourceKey}:${diagramRetryWindow(key.now)}`,
   })
 }
 
@@ -109,7 +121,7 @@ export async function readArtifactDiagram(
   db: Pick<PrismaClient, '$transaction' | 'artifactDiagramRender' | 'artifactBlock' | '$queryRaw'> &
     Parameters<typeof artifactRole>[0] &
     OutboxWriter,
-  input: { artifactId: string; block: string; userId: string },
+  input: { artifactId: string; block: string; userId: string; now?: Date },
 ): Promise<ArtifactDiagramView> {
   if ((await artifactRole(db, { artifactId: input.artifactId, userId: input.userId })) === null)
     throw artifactNotFound()
@@ -131,7 +143,7 @@ export async function readArtifactDiagram(
   await enqueueArtifactDiagram(
     db,
     { artifactId: input.artifactId, block: input.block },
-    diagramSourceKey(block.content),
+    { sourceKey: diagramSourceKey(block.content), now: input.now ?? new Date() },
   )
   return { state: 'drawing' }
 }

@@ -14,6 +14,7 @@ import {
   DiagramImage,
   DiagramText,
   diagramPictureText,
+  diagramPollDelay,
 } from '@/components/diagram/diagram-picture'
 import { useTRPC } from '@/trpc/client'
 
@@ -42,10 +43,6 @@ export const diagramTexts = Object.freeze({
   secret: 'В тексте похоже на пароль или ключ: такое не сохраняется.',
 })
 
-/** How often the cabinet asks again while core draws: every 1.5 s, for a minute at most. */
-const DRAWING_POLL_MS = 1500
-const DRAWING_POLLS = 40
-
 type DiagramBlock = CabinetArtifact['blocks'][number]
 
 function DiagramPicture({ artifact, block }: { artifact: CabinetArtifact; block: DiagramBlock }) {
@@ -57,10 +54,9 @@ function DiagramPicture({ artifact, block }: { artifact: CabinetArtifact; block:
       block: block.key,
       rev: block.rev,
     }),
+    // The server puts a job that drew nothing again after its window (plan 91, Д5).
     refetchInterval: (query) =>
-      query.state.data?.state === 'drawing' && query.state.dataUpdateCount < DRAWING_POLLS
-        ? DRAWING_POLL_MS
-        : false,
+      query.state.data?.state === 'drawing' ? diagramPollDelay(query.state.dataUpdateCount) : false,
   })
   const data = picture.data
   if (!data || data.state === 'drawing') return <DiagramDrawing />

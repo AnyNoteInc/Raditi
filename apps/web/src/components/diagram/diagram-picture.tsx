@@ -12,6 +12,24 @@ import { downloadBlob, pictureFileName, svgDataUrl, svgToPng } from '@/lib/svg-p
 // and of an answer in the chat (docs/plan/91-chat-diagrams.md, Д1): the clean SVG as `<img>` sized
 // by its viewBox on white, «Скачать SVG», «Скачать PNG» and its text; no engine runs here.
 
+/**
+ * How often the cabinet asks again while core draws a diagram: every 1.5 s for the first minute,
+ * then every 30 s for half an hour — the server puts the job again after its window, so a diagram
+ * the worker could not draw then is drawn when it is back. Then it stops until the page is opened
+ * again (docs/plan/91-chat-diagrams.md, Д5).
+ */
+export const DIAGRAM_FAST_POLLS = 40
+const FAST_POLL_MS = 1500
+const SLOW_POLLS = 60
+const SLOW_POLL_MS = 30_000
+
+/** The wait before the next ask after `polls` answers of «drawing»; false — no more asks. */
+export function diagramPollDelay(polls: number): number | false {
+  if (polls < DIAGRAM_FAST_POLLS) return FAST_POLL_MS
+  if (polls < DIAGRAM_FAST_POLLS + SLOW_POLLS) return SLOW_POLL_MS
+  return false
+}
+
 export const diagramPictureText = Object.freeze({
   drawing: 'Рисуем схему…',
   showText: 'Показать текст',

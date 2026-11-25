@@ -33,6 +33,7 @@ import {
 import {
   artifactDiagramJobSource,
   readArtifactDiagram,
+  DIAGRAM_RETRY_MS,
   saveArtifactDiagram,
 } from './artifact-diagrams.ts'
 import {
@@ -1134,14 +1135,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts (plan 88, 88.3)', () => {
     const id = await create('diagram', 'Путь клиента')
     const text = 'flowchart LR\n  A[Заявка] --> B[Счёт]'
     await apply(id, [{ op: 'insert', block: 'd1', after: null, kind: 'diagram', content: text }])
-    const view = () => readArtifactDiagram(db, { artifactId: id, block: 'd1', userId: user.id })
-    // No picture yet: core is asked once, however often the cabinet asks.
+    const at = new Date('2026-11-25T12:00:10.000Z')
+    const view = (now = at) =>
+      readArtifactDiagram(db, { artifactId: id, block: 'd1', userId: user.id, now })
+    const jobsOf = async () =>
+      (await db.outboxEvent.findMany({ where: { type: 'artifact.diagram' } })).filter(
+        (job) => (job.payload as { artifactId: string }).artifactId === id,
+      )
+    // No picture yet: core is asked once a window, however often the cabinet asks in it.
     expect(await view()).toEqual({ state: 'drawing' })
-    expect(await view()).toEqual({ state: 'drawing' })
-    const jobs = await db.outboxEvent.findMany({ where: { type: 'artifact.diagram' } })
-    expect(
-      jobs.filter((job) => (job.payload as { artifactId: string }).artifactId === id),
-    ).toHaveLength(1)
+    expect(await view(new Date(at.getTime() + 30_000))).toEqual({ state: 'drawing' })
+    expect(await jobsOf()).toHaveLength(1)
+    // A job that drew nothing does not leave the picture undrawn: the next window asks again
+    // (docs/plan/91-chat-diagrams.md, Д5).
+    expect(await view(new Date(at.getTime() + DIAGRAM_RETRY_MS))).toEqual({ state: 'drawing' })
+    expect(await jobsOf()).toHaveLength(2)
     expect(await artifactDiagramJobSource(db, { artifactId: id, block: 'd1' })).toMatchObject({
       source: text,
     })

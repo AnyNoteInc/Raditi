@@ -15,7 +15,7 @@ import {
   type DiagramView,
 } from '@repo/domain/artifacts'
 
-import { keptDiagramView } from './artifact-diagrams.ts'
+import { diagramRetryWindow, keptDiagramView } from './artifact-diagrams.ts'
 import { accessibleTasks } from './chat-access.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
 import { enqueueOutbox, type OutboxWriter } from './outbox.ts'
@@ -110,15 +110,8 @@ export async function chatDiagramOf(db: Db, input: Pick<ChatDiagramSource, 'work
 }
 
 /**
- * How long one job of a text stands for it. A job that drew nothing — no browser worker, or its
- * attempts spent while the worker was down — must not leave the diagram undrawn for good: once the
- * window passes, the next ask of the chat puts the job again.
- */
-export const CHAT_DIAGRAM_RETRY_MS = 2 * 60_000
-
-/**
  * One job per text of a workspace and window: the same diagram in many answers is drawn once, and
- * asked again after `CHAT_DIAGRAM_RETRY_MS` when it is still not drawn.
+ * asked again after `DIAGRAM_RETRY_MS` when it is still not drawn.
  */
 async function enqueueChatDiagram(
   tx: OutboxWriter,
@@ -126,12 +119,11 @@ async function enqueueChatDiagram(
   key: Pick<ChatDiagramSource, 'workspaceId' | 'key'> & { now: Date },
 ): Promise<boolean> {
   const payload = chatDiagramJobSchema.parse(job)
-  const window = Math.floor(key.now.getTime() / CHAT_DIAGRAM_RETRY_MS)
   return enqueueOutbox(tx, {
     topic: AGENT_TURN_QUEUE,
     type: CHAT_DIAGRAM_JOB,
     payload,
-    dedupeKey: `${CHAT_DIAGRAM_JOB}:${key.workspaceId}:${key.key}:${window}`,
+    dedupeKey: `${CHAT_DIAGRAM_JOB}:${key.workspaceId}:${key.key}:${diagramRetryWindow(key.now)}`,
   })
 }
 
