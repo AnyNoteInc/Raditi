@@ -10,6 +10,7 @@ import {
   artifactNotFound,
   normalizeDiagramSource,
   type ArtifactDiagramRenderResponse,
+  type DiagramView,
 } from '@repo/domain/artifacts'
 
 import { artifactRole } from './artifacts.ts'
@@ -81,11 +82,23 @@ export async function enqueueArtifactDiagram(
 }
 
 /** What the cabinet shows of a block of «Схема»: for people only the line of an error. */
-export type ArtifactDiagramView =
-  | { state: 'empty' }
-  | { state: 'drawing' }
-  | { state: 'drawn'; svg: string; width: number; height: number }
-  | { state: 'failed'; line: number | null }
+export type ArtifactDiagramView = { state: 'empty' } | DiagramView
+
+/** What a person is shown of a kept picture or error; null — none kept yet. */
+export function keptDiagramView(
+  kept: {
+    ok: boolean
+    svg: string | null
+    width: number | null
+    height: number | null
+    errorLine: number | null
+  } | null,
+): Exclude<DiagramView, { state: 'drawing' }> | null {
+  if (kept?.ok && kept.svg && kept.width && kept.height)
+    return { state: 'drawn', svg: kept.svg, width: kept.width, height: kept.height }
+  if (kept && !kept.ok) return { state: 'failed', line: kept.errorLine }
+  return null
+}
 
 /**
  * The picture of the checked text of a block for a reader of the artifact: kept — shown; none yet —
@@ -111,10 +124,10 @@ export async function readArtifactDiagram(
   })
   if (!block) throw artifactNotFound()
   if (!block.content || block.content.trim() === '') return { state: 'empty' }
-  const kept = await artifactDiagramOf(db, { artifactId: input.artifactId, source: block.content })
-  if (kept?.ok && kept.svg && kept.width && kept.height)
-    return { state: 'drawn', svg: kept.svg, width: kept.width, height: kept.height }
-  if (kept && !kept.ok) return { state: 'failed', line: kept.errorLine }
+  const kept = keptDiagramView(
+    await artifactDiagramOf(db, { artifactId: input.artifactId, source: block.content }),
+  )
+  if (kept) return kept
   await enqueueArtifactDiagram(
     db,
     { artifactId: input.artifactId, block: input.block },

@@ -578,11 +578,8 @@ export {
   type ArtifactDiagramView,
 } from './artifact-diagrams.ts'
 export {
-  CHAT_DIAGRAM_RETRY_MS,
-  chatDiagramKey,
   chatDiagramOf,
   chatDiagramSource,
-  enqueueChatDiagram,
   readChatDiagram,
   saveChatDiagram,
   type ChatDiagramView,

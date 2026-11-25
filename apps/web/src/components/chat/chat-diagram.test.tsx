@@ -5,6 +5,8 @@ import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AgentMarkdown } from './agent-markdown'
+import { diagramPictureText } from '@/components/diagram/diagram-picture'
+
 import { chatDiagramText } from './chat-texts'
 
 // Diagrams in an answer of the agent (docs/plan/91-chat-diagrams.md, Д1, Д4): the server's picture
@@ -71,16 +73,19 @@ describe('a diagram in an answer of the chat', () => {
     expect(img.getAttribute('alt')).toBe(chatDiagramText.alt)
     // The text of the diagram is not drawn as code while its picture is shown.
     expect(container.querySelector('pre')).toBeNull()
-    expect(screen.getAllByRole('button', { name: chatDiagramText.png })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: diagramPictureText.png })).toHaveLength(2)
   })
 
   it('says it draws, and shows the line of an error with the text', async () => {
     diagram.mockImplementationOnce(async () => ({ state: 'drawing' }))
-    diagram.mockImplementationOnce(async () => ({ state: 'failed', line: 2 }))
+    diagram.mockImplementationOnce(async () => ({ state: 'failed', line: 1 }))
     shown(<AgentMarkdown text={answer} place={{ taskId: TASK, row: '42' }} />)
-    expect(await screen.findByText(chatDiagramText.drawing)).toBeTruthy()
-    expect(await screen.findByText('Схема не нарисована: ошибка в строке 2')).toBeTruthy()
-    expect(screen.getByText('PlantUML')).toBeTruthy()
+    expect(await screen.findByText(diagramPictureText.drawing)).toBeTruthy()
+    expect(await screen.findByText('Схема не нарисована: ошибка в строке 1')).toBeTruthy()
+    // The text of the diagram is shown with the line of the error marked.
+    expect(document.querySelector('[data-error="true"]')?.textContent).toBe(
+      'Клиент -> Магазин : Заказ',
+    )
   })
 
   it('stays code when the server finds no such diagram, and without a place', async () => {

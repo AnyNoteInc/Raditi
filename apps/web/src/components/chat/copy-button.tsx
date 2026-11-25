@@ -12,7 +12,16 @@ import { copyText } from './chat-texts'
  * «Скопировать текст» of a message of the chat — the client's words or the agent's answer (owner's
  * request of 14.11.2026). For a moment after the press it says «Скопировано» with a tick.
  */
-export function CopyButton({ text, label = copyText.copy }: { text: string; label?: string }) {
+export function CopyButton({
+  text,
+  label = copyText.copy,
+  size = 44,
+}: {
+  text: string
+  label?: string
+  /** The side of the button; 44 — a finger's target. */
+  size?: number
+}) {
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!copied) return
@@ -33,8 +42,8 @@ export function CopyButton({ text, label = copyText.copy }: { text: string; labe
         }}
         sx={{
           // A finger's target (DESIGN.md): the rows it stands in draw it in by their margins.
-          width: 44,
-          height: 44,
+          width: size,
+          height: size,
           color: 'text.secondary',
           '&:hover': { color: 'text.primary' },
         }}

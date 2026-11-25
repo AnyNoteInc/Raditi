@@ -5,70 +5,31 @@ import type { ReactNode } from 'react'
 
 import { copyText } from './chat-texts'
 import { CopyButton } from './copy-button'
+import { languageName } from './code-languages'
 
 // A block of code in an answer of the agent (docs/plan/91-chat-diagrams.md, Д6): a head with the
 // name of its language and «Скопировать код», the code below, coloured by the page's palette.
 
-/** The names people know a language by; another language is shown as its block names it. */
-const LANGUAGE_NAMES: Readonly<Record<string, string>> = {
-  bash: 'Bash',
-  sh: 'Shell',
-  shell: 'Shell',
-  zsh: 'Shell',
-  powershell: 'PowerShell',
-  ps1: 'PowerShell',
-  js: 'JavaScript',
-  javascript: 'JavaScript',
-  jsx: 'JSX',
-  ts: 'TypeScript',
-  typescript: 'TypeScript',
-  tsx: 'TSX',
-  json: 'JSON',
-  html: 'HTML',
-  xml: 'XML',
-  svg: 'SVG',
-  css: 'CSS',
-  scss: 'SCSS',
-  less: 'Less',
-  php: 'PHP',
-  python: 'Python',
-  py: 'Python',
-  sql: 'SQL',
-  yaml: 'YAML',
-  yml: 'YAML',
-  toml: 'TOML',
-  ini: 'INI',
-  go: 'Go',
-  java: 'Java',
-  kotlin: 'Kotlin',
-  kt: 'Kotlin',
-  c: 'C',
-  cpp: 'C++',
-  'c++': 'C++',
-  csharp: 'C#',
-  cs: 'C#',
-  rust: 'Rust',
-  rs: 'Rust',
-  ruby: 'Ruby',
-  rb: 'Ruby',
-  swift: 'Swift',
-  diff: 'Diff',
-  patch: 'Diff',
-  dockerfile: 'Dockerfile',
-  docker: 'Dockerfile',
-  nginx: 'nginx',
-  markdown: 'Markdown',
-  md: 'Markdown',
-  graphql: 'GraphQL',
-  mermaid: 'Mermaid',
-  plantuml: 'PlantUML',
-  puml: 'PlantUML',
-  uml: 'PlantUML',
-}
-
-export function languageName(language: string): string {
-  return LANGUAGE_NAMES[language.toLowerCase()] ?? language
-}
+/** The colours of the tokens: of the palette of the scheme, so both schemes keep their contrast. */
+const TOKENS = {
+  '& .hljs-keyword, & .hljs-selector-tag, & .hljs-built_in, & .hljs-meta': {
+    color: 'var(--mui-palette-primary-main)',
+  },
+  '& .hljs-string, & .hljs-attr, & .hljs-template-variable': {
+    color: 'var(--mui-palette-success-main)',
+  },
+  '& .hljs-number, & .hljs-literal, & .hljs-variable, & .hljs-symbol': {
+    color: 'var(--mui-palette-warning-main)',
+  },
+  '& .hljs-title, & .hljs-name, & .hljs-selector-class, & .hljs-selector-id': {
+    color: 'var(--mui-palette-secondary-main)',
+  },
+  '& .hljs-comment, & .hljs-quote': {
+    color: 'var(--mui-palette-text-secondary)',
+    fontStyle: 'italic',
+  },
+  '& .hljs-deletion': { color: 'var(--mui-palette-error-main)' },
+} as const
 
 export function CodeBlock({
   language,
@@ -108,11 +69,22 @@ export function CodeBlock({
         }}
       >
         <span>{language ? languageName(language) : ''}</span>
-        <Box sx={{ '& .MuiIconButton-root': { width: 36, height: 36 } }}>
-          <CopyButton text={text.replace(/\n$/, '')} label={copyText.code} />
-        </Box>
+        <CopyButton text={text.replace(/\n$/, '')} label={copyText.code} size={36} />
       </Box>
-      <pre>{children ?? <code>{text}</code>}</pre>
+      <Box
+        component="pre"
+        sx={{
+          m: 0,
+          p: 1.5,
+          overflowX: 'auto',
+          fontSize: 14,
+          lineHeight: 1.55,
+          '& code': { fontFamily: 'var(--raditi-font-mono, ui-monospace, monospace)' },
+          ...TOKENS,
+        }}
+      >
+        {children ?? <code>{text}</code>}
+      </Box>
     </Box>
   )
 }

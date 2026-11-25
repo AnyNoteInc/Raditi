@@ -4,7 +4,7 @@ import { cleanDiagramSvg } from '@repo/browser-providers/render'
 import {
   artifactRenderLimits,
   diagramErrorLine,
-  normalizeDiagramFor,
+  diagramSourceFor,
   type ArtifactDiagramRenderRequest,
   type ArtifactDiagramRenderResponse,
 } from '@repo/domain/artifacts'
@@ -16,10 +16,9 @@ import type { RenderPool } from './render-pool.ts'
 // PlantUML on the page of its workspace and engine in the render pool, cleaned for `<img>`, at most
 // 512 KiB. Plain class: the stand loads it from its sources.
 
-/** PlantUML counts the `@startuml` the platform added: the author's line is one less. */
+/** The author's line of an error: the engine counts the lines the platform added. */
 function authorLine(line: number | null, added: number): number | null {
-  if (line === null) return null
-  return line - added > 0 ? line - added : null
+  return line !== null && line - added > 0 ? line - added : null
 }
 
 export class DiagramService {
@@ -31,11 +30,8 @@ export class DiagramService {
 
   async render(request: ArtifactDiagramRenderRequest): Promise<ArtifactDiagramRenderResponse> {
     const engine = request.engine ?? 'mermaid'
-    const source = normalizeDiagramFor(engine, request.source)
-    const body = engine === 'plantuml' ? source.replace(/^\s*@(?:start|end)\w+.*$/gm, '') : source
-    if (body.trim() === '')
-      return { ok: false, reason: 'parse', line: null, message: 'The diagram is empty' }
-    const added = engine === 'plantuml' && !/^\s*@start\w+/m.test(request.source) ? 1 : 0
+    const { text: source, addedLines, empty } = diagramSourceFor(engine, request.source)
+    if (empty) return { ok: false, reason: 'parse', line: null, message: 'The diagram is empty' }
     const raw = await this.#pool.run((renderer) =>
       renderer.diagram({ workspaceId: request.workspaceId, source, engine }),
     )
@@ -43,7 +39,7 @@ export class DiagramService {
       return {
         ok: false,
         reason: raw.reason,
-        line: raw.reason === 'parse' ? authorLine(diagramErrorLine(raw.message), added) : null,
+        line: raw.reason === 'parse' ? authorLine(diagramErrorLine(raw.message), addedLines) : null,
         message: raw.message.slice(0, 300),
       }
     const clean = cleanDiagramSvg(raw.svg)

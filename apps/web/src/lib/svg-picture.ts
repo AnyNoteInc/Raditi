@@ -30,5 +30,5 @@ export async function svgToPng(svg: string, width: number, height: number): Prom
 }
 
 /** A file name of a title: no characters a file system refuses. */
-export const pictureFileName = (title: string, extension: string, fallback = 'Схема') =>
-  `${title.replace(/[\\/:*?"<>|]+/g, ' ').trim() || fallback}.${extension}`
+export const pictureFileName = (title: string, extension: string) =>
+  `${title.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'Схема'}.${extension}`

@@ -2,42 +2,16 @@
 
 import Box from '@mui/material/Box'
 import MuiLink from '@mui/material/Link'
+import type { ChatDiagramJob } from '@repo/domain'
 import { diagramEngineOf, messageDiagrams, type MessageDiagram } from '@repo/domain/artifacts'
 import { createContext, isValidElement, useContext, useMemo, type ReactNode } from 'react'
-import bash from 'highlight.js/lib/languages/bash'
-import c from 'highlight.js/lib/languages/c'
-import cpp from 'highlight.js/lib/languages/cpp'
-import csharp from 'highlight.js/lib/languages/csharp'
-import css from 'highlight.js/lib/languages/css'
-import diff from 'highlight.js/lib/languages/diff'
-import dockerfile from 'highlight.js/lib/languages/dockerfile'
-import go from 'highlight.js/lib/languages/go'
-import graphql from 'highlight.js/lib/languages/graphql'
-import ini from 'highlight.js/lib/languages/ini'
-import java from 'highlight.js/lib/languages/java'
-import javascript from 'highlight.js/lib/languages/javascript'
-import json from 'highlight.js/lib/languages/json'
-import kotlin from 'highlight.js/lib/languages/kotlin'
-import less from 'highlight.js/lib/languages/less'
-import markdown from 'highlight.js/lib/languages/markdown'
-import nginx from 'highlight.js/lib/languages/nginx'
-import php from 'highlight.js/lib/languages/php'
-import powershell from 'highlight.js/lib/languages/powershell'
-import python from 'highlight.js/lib/languages/python'
-import ruby from 'highlight.js/lib/languages/ruby'
-import rust from 'highlight.js/lib/languages/rust'
-import scss from 'highlight.js/lib/languages/scss'
-import sql from 'highlight.js/lib/languages/sql'
-import swift from 'highlight.js/lib/languages/swift'
-import typescript from 'highlight.js/lib/languages/typescript'
-import xml from 'highlight.js/lib/languages/xml'
-import yaml from 'highlight.js/lib/languages/yaml'
 import Markdown, { type Components } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 
 import { ChatDiagram } from './chat-diagram'
 import { CodeBlock } from './code-block'
+import { highlightLanguages } from './code-languages'
 
 // The agent's words as the chat of ChatGPT or Claude draws them (owner's request of 26.10.2026):
 // its Markdown — paragraphs, emphasis, lists, code, tables, links — as React elements. Raw HTML of
@@ -80,11 +54,7 @@ const Heading = ({ children }: { children?: ReactNode }) => (
 )
 
 /** Where the answer stands in the chat: its diagrams are drawn by the server (plan 91, Д4). */
-export interface AnswerPlace {
-  taskId: string
-  /** `task_events.id` of the answer. */
-  row: string
-}
+export type AnswerPlace = Omit<ChatDiagramJob, 'index'>
 
 const DiagramsContext = createContext<{ place: AnswerPlace; diagrams: MessageDiagram[] } | null>(
   null,
@@ -110,7 +80,7 @@ function Pre({ children }: { children?: ReactNode }) {
   const text = wordsOf(children)
   const engine = diagramEngineOf(language)
   if (engine && answer) {
-    const body = text.replace(/\n$/, '').trimEnd()
+    const body = text.trimEnd()
     const index = answer.diagrams.findIndex(
       (diagram) => diagram.engine === engine && diagram.source.trimEnd() === body,
     )
@@ -228,87 +198,10 @@ export function fenceTextTrees(text: string): string {
   return out.join('\n')
 }
 
-/**
- * The languages a block of code is coloured in (docs/plan/76-agent-instructions.md, И5; plan 91,
- * Д6): what a site of a small business is made of, the shell, and the languages of a repository of
- * a developer. A block names its language (```php); a block of no name or of another language stays
- * plain — nothing is guessed.
- */
-const LANGUAGES = {
-  bash,
-  shell: bash,
-  sh: bash,
-  zsh: bash,
-  powershell,
-  ps1: powershell,
-  css,
-  scss,
-  less,
-  javascript,
-  js: javascript,
-  jsx: javascript,
-  json,
-  php,
-  python,
-  py: python,
-  sql,
-  typescript,
-  ts: typescript,
-  tsx: typescript,
-  html: xml,
-  xml,
-  svg: xml,
-  yaml,
-  yml: yaml,
-  ini,
-  toml: ini,
-  go,
-  java,
-  kotlin,
-  kt: kotlin,
-  c,
-  cpp,
-  csharp,
-  cs: csharp,
-  rust,
-  rs: rust,
-  ruby,
-  rb: ruby,
-  swift,
-  diff,
-  patch: diff,
-  dockerfile,
-  docker: dockerfile,
-  nginx,
-  markdown,
-  md: markdown,
-  graphql,
-}
 const highlight: [typeof rehypeHighlight, Parameters<typeof rehypeHighlight>[0]] = [
   rehypeHighlight,
-  { languages: LANGUAGES, detect: false, plainText: ['text', 'txt', 'plain'] },
+  { languages: highlightLanguages, detect: false, plainText: ['text', 'txt', 'plain'] },
 ]
-
-/** The colours of the tokens: of the palette of the scheme, so both schemes keep their contrast. */
-const TOKENS = {
-  '& .hljs-keyword, & .hljs-selector-tag, & .hljs-built_in, & .hljs-meta': {
-    color: 'var(--mui-palette-primary-main)',
-  },
-  '& .hljs-string, & .hljs-attr, & .hljs-template-variable': {
-    color: 'var(--mui-palette-success-main)',
-  },
-  '& .hljs-number, & .hljs-literal, & .hljs-variable, & .hljs-symbol': {
-    color: 'var(--mui-palette-warning-main)',
-  },
-  '& .hljs-title, & .hljs-name, & .hljs-selector-class, & .hljs-selector-id': {
-    color: 'var(--mui-palette-secondary-main)',
-  },
-  '& .hljs-comment, & .hljs-quote': {
-    color: 'var(--mui-palette-text-secondary)',
-    fontStyle: 'italic',
-  },
-  '& .hljs-deletion': { color: 'var(--mui-palette-error-main)' },
-} as const
 
 export function AgentMarkdown({ text, place }: { text: string; place?: AnswerPlace }) {
   const taskId = place?.taskId
@@ -327,12 +220,13 @@ export function AgentMarkdown({ text, place }: { text: string; place?: AnswerPla
           minWidth: 0,
           '& > :first-of-type': { mt: 0 },
           '& > :last-child': { mb: 0 },
-          '& p, & ul, & ol, & pre, & blockquote, & table': { my: 1.5 },
+          '& p, & ul, & ol, & blockquote, & table': { my: 1.5 },
           '& ul, & ol': { pl: 3 },
           '& li + li': { mt: 0.5 },
           '& li > p': { my: 0.5 },
           '& strong': { fontWeight: 600 },
-          '& code': {
+          // Code inside a sentence; a block of code is `CodeBlock`'s.
+          '& :not(pre) > code': {
             px: 0.5,
             py: '1px',
             borderRadius: '6px',
@@ -340,18 +234,7 @@ export function AgentMarkdown({ text, place }: { text: string; place?: AnswerPla
             fontFamily: 'var(--raditi-font-mono, ui-monospace, monospace)',
             fontSize: '0.9em',
           },
-          '& pre': {
-            p: 1.5,
-            borderRadius: '12px',
-            overflowX: 'auto',
-            bgcolor: 'var(--mui-palette-action-hover)',
-            fontSize: 14,
-            lineHeight: 1.55,
-            ...TOKENS,
-          },
-          // The head of a block (plan 91, Д6) carries its frame: the code under it has none.
-          '& [data-code-block] > pre': { m: 0, borderRadius: 0, bgcolor: 'transparent' },
-          '& pre code': { p: 0, bgcolor: 'transparent', fontSize: 'inherit' },
+
           '& blockquote': {
             mx: 0,
             pl: 2,

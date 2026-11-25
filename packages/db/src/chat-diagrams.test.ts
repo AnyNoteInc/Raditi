@@ -11,7 +11,6 @@ const userId = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a62'
 
 function fakeDb() {
   return {
-    task: { findFirst: vi.fn(async () => ({ id: taskId })) },
     taskEvent: {
       findFirst: vi.fn(async () => ({
         payload: { message: '```mermaid\nflowchart LR\n  A --> B\n```' },
@@ -39,6 +38,14 @@ describe('a diagram of the chat not drawn yet', () => {
       new Date(at.getTime() + CHAT_DIAGRAM_RETRY_MS),
     ])
       expect(await readChatDiagram(db as never, { ...input, now })).toEqual({ state: 'drawing' })
+    // The reader's access is part of the one query of the row.
+    expect(db.taskEvent.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          task: expect.objectContaining({ workspace: { members: { some: { userId } } } }),
+        }),
+      }),
+    )
     const [first, second, third] = keysOf(db)
     expect(first).toBe(second)
     expect(third).not.toBe(first)
@@ -47,7 +54,7 @@ describe('a diagram of the chat not drawn yet', () => {
 
   it('is NOT_FOUND for a chat the reader may not open, and asks nothing', async () => {
     const db = fakeDb()
-    db.task.findFirst.mockResolvedValueOnce(null as never)
+    db.taskEvent.findFirst.mockResolvedValueOnce(null as never)
     await expect(
       readChatDiagram(db as never, { taskId, row: '42', index: 0, userId }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' })

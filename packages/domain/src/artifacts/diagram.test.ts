@@ -6,9 +6,9 @@ import {
   diagramErrorLine,
   diagramErrorRu,
   messageDiagrams,
+  diagramSourceFor,
   normalizeDiagramFor,
   normalizeDiagramSource,
-  normalizePlantUmlSource,
 } from './diagram.ts'
 
 // The text of a diagram before the engine, and its error (docs/plan/88-artifacts.md, §7.13, 88.24).
@@ -123,9 +123,13 @@ describe('the diagrams of an answer', () => {
   })
 
   it('wraps a PlantUML text without @start, and keeps one that has it', () => {
-    expect(normalizePlantUmlSource('Alice -> Bob\u00a0: Привет\r\n')).toBe(
-      '@startuml\nAlice -> Bob : Привет\n@enduml',
-    )
+    expect(diagramSourceFor('plantuml', 'Alice -> Bob\u00a0: Привет\r\n')).toEqual({
+      text: '@startuml\nAlice -> Bob : Привет\n@enduml',
+      addedLines: 1,
+      empty: false,
+    })
+    expect(diagramSourceFor('plantuml', '@startuml\n\n@enduml')).toMatchObject({ empty: true })
+    expect(diagramSourceFor('mermaid', '```mermaid\n\n```')).toMatchObject({ empty: true })
     expect(normalizeDiagramFor('plantuml', '@startmindmap\n* Корень\n@endmindmap')).toBe(
       '@startmindmap\n* Корень\n@endmindmap',
     )

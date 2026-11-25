@@ -33,11 +33,8 @@ export class ChatDiagram {
     const diagram = await chatDiagramSource(db, job)
     if (diagram === null) return
     if (await chatDiagramOf(db, diagram)) return
-    const result = await draw({
-      workspaceId: diagram.workspaceId,
-      source: diagram.source,
-      engine: diagram.engine,
-    })
+    const { workspaceId, source, engine } = diagram
+    const result = await draw({ workspaceId, source, engine })
     await saveChatDiagram(db, { ...diagram, result })
   }
 }

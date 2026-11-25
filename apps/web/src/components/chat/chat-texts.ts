@@ -367,12 +367,7 @@ export const copyText = Object.freeze({
 
 /** A diagram in an answer of the agent (docs/plan/91-chat-diagrams.md, Д1). */
 export const chatDiagramText = Object.freeze({
-  drawing: 'Рисуем схему…',
   slow: 'Схема рисуется дольше обычного. Пока — её текст, картинка появится сама.',
-  showText: 'Показать текст',
-  hideText: 'Скрыть текст',
-  svg: 'Скачать SVG',
-  png: 'Скачать PNG',
   alt: 'Схема из ответа агента',
   fileName: 'Схема',
 })

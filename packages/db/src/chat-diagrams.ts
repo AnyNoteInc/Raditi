@@ -12,8 +12,10 @@ import {
   normalizeDiagramFor,
   type ArtifactDiagramRenderResponse,
   type DiagramEngine,
+  type DiagramView,
 } from '@repo/domain/artifacts'
 
+import { keptDiagramView } from './artifact-diagrams.ts'
 import { accessibleTasks } from './chat-access.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
 import { enqueueOutbox, type OutboxWriter } from './outbox.ts'
@@ -27,24 +29,37 @@ import { enqueueOutbox, type OutboxWriter } from './outbox.ts'
 const ANSWER_ROWS = ['feed.result', 'feed.question']
 
 /** The key of a text: the engine and what it would see, hashed. */
-export function chatDiagramKey(engine: DiagramEngine, source: string): string {
+function chatDiagramKey(engine: DiagramEngine, source: string): string {
   return createHash('sha256')
     .update(`${engine}\n${normalizeDiagramFor(engine, source)}`)
     .digest('hex')
 }
 
-/** The diagram at `index` of a row of the chat, with the workspace of its page; null — none. */
+/** A diagram of an answer: its text, its engine, the workspace of its page and its key. */
+export interface ChatDiagramSource {
+  workspaceId: string
+  engine: DiagramEngine
+  source: string
+  /** `chatDiagramKey` of the text, computed once. */
+  key: string
+}
+
+/**
+ * The diagram at `index` of a row of the chat; null — none. With `userId`, only of a chat that
+ * reader may open, in the same query.
+ */
 export async function chatDiagramSource(
   db: Pick<PrismaClient, 'taskEvent'>,
   job: ChatDiagramJob,
-): Promise<{ workspaceId: string; engine: DiagramEngine; source: string } | null> {
+  userId?: string,
+): Promise<ChatDiagramSource | null> {
   const row = await db.taskEvent.findFirst({
     where: {
       id: BigInt(job.row),
       taskId: job.taskId,
       clientVisible: true,
       type: { in: ANSWER_ROWS },
-      task: { deletedAt: null },
+      task: userId === undefined ? { deletedAt: null } : accessibleTasks(userId),
     },
     select: { payload: true, task: { select: { workspaceId: true } } },
   })
@@ -52,7 +67,11 @@ export async function chatDiagramSource(
   if (!row || typeof message !== 'string') return null
   const diagram = messageDiagrams(message)[job.index]
   if (!diagram || diagram.source.trim() === '') return null
-  return { workspaceId: row.task.workspaceId, ...diagram }
+  return {
+    workspaceId: row.task.workspaceId,
+    ...diagram,
+    key: chatDiagramKey(diagram.engine, diagram.source),
+  }
 }
 
 type Db = Pick<PrismaClient, 'chatDiagramRender'>
@@ -60,10 +79,7 @@ type Db = Pick<PrismaClient, 'chatDiagramRender'>
 /** Keeps a picture or an error of a text, once: a second one of the same text is the same. */
 export async function saveChatDiagram(
   db: Db,
-  input: {
-    workspaceId: string
-    engine: DiagramEngine
-    source: string
+  input: Pick<ChatDiagramSource, 'workspaceId' | 'engine' | 'key'> & {
     result: ArtifactDiagramRenderResponse
   },
 ): Promise<void> {
@@ -72,7 +88,7 @@ export async function saveChatDiagram(
     data: [
       {
         workspaceId: input.workspaceId,
-        sourceSha256: chatDiagramKey(input.engine, input.source),
+        sourceSha256: input.key,
         engine: input.engine,
         ok: result.ok,
         ...(result.ok
@@ -85,16 +101,10 @@ export async function saveChatDiagram(
 }
 
 /** The kept picture or error of a text; null — none yet. */
-export async function chatDiagramOf(
-  db: Db,
-  input: { workspaceId: string; engine: DiagramEngine; source: string },
-) {
+export async function chatDiagramOf(db: Db, input: Pick<ChatDiagramSource, 'workspaceId' | 'key'>) {
   return db.chatDiagramRender.findUnique({
     where: {
-      workspaceId_sourceSha256: {
-        workspaceId: input.workspaceId,
-        sourceSha256: chatDiagramKey(input.engine, input.source),
-      },
+      workspaceId_sourceSha256: { workspaceId: input.workspaceId, sourceSha256: input.key },
     },
   })
 }
@@ -110,10 +120,10 @@ export const CHAT_DIAGRAM_RETRY_MS = 2 * 60_000
  * One job per text of a workspace and window: the same diagram in many answers is drawn once, and
  * asked again after `CHAT_DIAGRAM_RETRY_MS` when it is still not drawn.
  */
-export async function enqueueChatDiagram(
+async function enqueueChatDiagram(
   tx: OutboxWriter,
   job: ChatDiagramJob,
-  key: { workspaceId: string; sourceKey: string; now: Date },
+  key: Pick<ChatDiagramSource, 'workspaceId' | 'key'> & { now: Date },
 ): Promise<boolean> {
   const payload = chatDiagramJobSchema.parse(job)
   const window = Math.floor(key.now.getTime() / CHAT_DIAGRAM_RETRY_MS)
@@ -121,15 +131,12 @@ export async function enqueueChatDiagram(
     topic: AGENT_TURN_QUEUE,
     type: CHAT_DIAGRAM_JOB,
     payload,
-    dedupeKey: `${CHAT_DIAGRAM_JOB}:${key.workspaceId}:${key.sourceKey}:${window}`,
+    dedupeKey: `${CHAT_DIAGRAM_JOB}:${key.workspaceId}:${key.key}:${window}`,
   })
 }
 
 /** What the chat shows of a diagram: for people only the line of an error. */
-export type ChatDiagramView =
-  | { state: 'drawing' }
-  | { state: 'drawn'; svg: string; width: number; height: number }
-  | { state: 'failed'; line: number | null }
+export type ChatDiagramView = DiagramView
 
 /**
  * The picture of a diagram of an answer for a reader of the chat: kept — shown; none yet — core is
@@ -137,24 +144,14 @@ export type ChatDiagramView =
  * or a place with no diagram is NOT_FOUND alike.
  */
 export async function readChatDiagram(
-  db: Pick<PrismaClient, 'task' | 'taskEvent' | 'chatDiagramRender'> & OutboxWriter,
+  db: Pick<PrismaClient, 'taskEvent' | 'chatDiagramRender'> & OutboxWriter,
   input: ChatDiagramJob & { userId: string; now?: Date },
 ): Promise<ChatDiagramView> {
   const { userId, now = new Date(), ...job } = input
-  const task = await db.task.findFirst({
-    where: { ...accessibleTasks(userId), id: job.taskId },
-    select: { id: true },
-  })
-  const diagram = task ? await chatDiagramSource(db, job) : null
+  const diagram = await chatDiagramSource(db, job, userId)
   if (!diagram) throw new DomainError('NOT_FOUND', 'No such diagram in this chat', 404)
-  const kept = await chatDiagramOf(db, diagram)
-  if (kept?.ok && kept.svg && kept.width && kept.height)
-    return { state: 'drawn', svg: kept.svg, width: kept.width, height: kept.height }
-  if (kept && !kept.ok) return { state: 'failed', line: kept.errorLine }
-  await enqueueChatDiagram(db, job, {
-    workspaceId: diagram.workspaceId,
-    sourceKey: chatDiagramKey(diagram.engine, diagram.source),
-    now,
-  })
+  const kept = keptDiagramView(await chatDiagramOf(db, diagram))
+  if (kept) return kept
+  await enqueueChatDiagram(db, job, { ...diagram, now })
   return { state: 'drawing' }
 }
