@@ -985,7 +985,10 @@ function RowView({
             approval ? feedCardTitle.approval : open ? feedCardTitle.answer : feedCardTitle.result
           }
         >
-          <AgentMarkdown text={row.message} />
+          <AgentMarkdown
+            text={row.message}
+            place={actions.taskId ? { taskId: actions.taskId, row: row.id } : undefined}
+          />
           <Sentences
             parts={[
               site,

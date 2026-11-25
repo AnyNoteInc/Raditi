@@ -19,6 +19,7 @@
     "dompurify": "catalog:",
     "jsdom": "catalog:",
     "mermaid": "catalog:",
+    "@plantuml/core": "catalog:",
     "playwright-core": "catalog:",
     "zod": "catalog:"
   },

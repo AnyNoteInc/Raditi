@@ -43,7 +43,7 @@ import {
   artifactRoles,
   artifactSignalLimits,
   artifactTitleSchema,
-  artifactRenderLimits,
+  diagramViewSchema,
   artifactExportFormats,
 } from '@repo/domain/artifacts'
 import { enqueueNotification } from '@repo/notifications'
@@ -888,17 +888,7 @@ export const artifactRouter = router({
     .output(
       z.discriminatedUnion('state', [
         z.strictObject({ state: z.literal('empty') }),
-        z.strictObject({ state: z.literal('drawing') }),
-        z.strictObject({
-          state: z.literal('drawn'),
-          svg: z.string().max(artifactRenderLimits.diagramSvgBytes),
-          width: z.number().int().positive(),
-          height: z.number().int().positive(),
-        }),
-        z.strictObject({
-          state: z.literal('failed'),
-          line: z.number().int().positive().nullable(),
-        }),
+        ...diagramViewSchema.options,
       ]),
     )
     .query(({ ctx, input }) =>

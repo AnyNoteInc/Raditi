@@ -43,8 +43,9 @@ import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { QueueDrain } from './queue-drain.ts'
-import { ArtifactDiagram } from './artifact-diagram.ts'
+import { ArtifactDiagram, type DiagramDraw } from './artifact-diagram.ts'
 import { ArtifactNotify } from './artifact-notify.ts'
+import { ChatDiagram } from './chat-diagram.ts'
 import { ChatNotify } from './chat-notify.ts'
 import { NotificationDelivery, notificationDeliveryOf } from './notification-delivery.ts'
 import { ScheduleChanges } from './schedule-changes.ts'
@@ -58,6 +59,16 @@ import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
  * The passes of chats, the worker of `agent-turns` and the sweep of chats, over the turn engine
  * (TurnsModule).
  */
+/** The browser worker drawing diagrams (88.24б; plan 91, Д5); null — it is not configured. */
+function diagramDrawOf(config: CoreConfig): DiagramDraw | null {
+  if (!config.browser) return null
+  const client = createBrowserWorkerClient({
+    baseUrl: config.browser.url,
+    token: config.browser.token,
+  })
+  return (request) => client.diagram(request)
+}
+
 export const taskProviders: Provider[] = [
   LivePasses,
   {
@@ -204,15 +215,15 @@ export const taskProviders: Provider[] = [
   {
     // A picture of «Схема» the cabinet asked for (docs/plan/88-artifacts.md, §7.13, 88.24б).
     provide: ArtifactDiagram,
-    useFactory: (prisma: PrismaClient, config: CoreConfig) => {
-      const client = config.browser
-        ? createBrowserWorkerClient({ baseUrl: config.browser.url, token: config.browser.token })
-        : null
-      return new ArtifactDiagram({
-        db: prisma,
-        draw: client ? (request) => client.diagram(request) : null,
-      })
-    },
+    useFactory: (prisma: PrismaClient, config: CoreConfig) =>
+      new ArtifactDiagram({ db: prisma, draw: diagramDrawOf(config) }),
+    inject: [PRISMA, CORE_CONFIG],
+  },
+  {
+    // A diagram of an answer in the chat (docs/plan/91-chat-diagrams.md, Д5).
+    provide: ChatDiagram,
+    useFactory: (prisma: PrismaClient, config: CoreConfig) =>
+      new ChatDiagram({ db: prisma, draw: diagramDrawOf(config) }),
     inject: [PRISMA, CORE_CONFIG],
   },
   {

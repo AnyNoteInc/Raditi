@@ -3,13 +3,19 @@
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import CircularProgress from '@mui/material/CircularProgress'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { artifactRoleAtLeast, diagramErrorRu } from '@repo/domain/artifacts'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { uuidv7 } from '@/components/chat/uuid'
+import {
+  DiagramDrawing,
+  DiagramImage,
+  DiagramText,
+  diagramPictureText,
+  diagramPollDelay,
+} from '@/components/diagram/diagram-picture'
 import { useTRPC } from '@/trpc/client'
 
 import type { ArtifactBodyProps } from '../artifact-body-props'
@@ -23,53 +29,19 @@ import type { CabinetArtifact } from '../use-artifact'
 export const diagramTexts = Object.freeze({
   empty: 'Схемы пока нет. Попросите агента нарисовать её: путь клиента, процесс, структуру.',
   write: 'Написать текст',
-  drawing: 'Рисуем схему…',
+  drawing: diagramPictureText.drawing,
   checking: 'Агент дописывает схему: покажем, как только платформа её проверит.',
   edit: 'Править текст',
   save: 'Сохранить',
   cancel: 'Отмена',
   text: 'Текст схемы (Mermaid)',
-  showText: 'Показать текст',
-  svg: 'Скачать SVG',
-  png: 'Скачать PNG',
+  showText: diagramPictureText.showText,
+  svg: diagramPictureText.svg,
+  png: diagramPictureText.png,
   failed: 'Не удалось сохранить. Попробуйте ещё раз.',
   stale: 'Схему только что изменили. Откройте правку заново.',
   secret: 'В тексте похоже на пароль или ключ: такое не сохраняется.',
 })
-
-/** How often the cabinet asks again while core draws: every 1.5 s, for a minute at most. */
-const DRAWING_POLL_MS = 1500
-const DRAWING_POLLS = 40
-
-const dataUrl = (svg: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-
-function download(name: string, blob: Blob) {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = name
-  link.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-/** A PNG of the picture at twice its size, drawn in the browser from the same clean SVG. */
-async function pngOf(svg: string, width: number, height: number): Promise<Blob | null> {
-  const image = new Image()
-  image.src = dataUrl(svg)
-  await image.decode()
-  const canvas = document.createElement('canvas')
-  canvas.width = width * 2
-  canvas.height = height * 2
-  const context = canvas.getContext('2d')
-  if (!context) return null
-  context.fillStyle = '#ffffff'
-  context.fillRect(0, 0, canvas.width, canvas.height)
-  context.drawImage(image, 0, 0, canvas.width, canvas.height)
-  return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
-}
-
-const fileName = (title: string, extension: string) =>
-  `${title.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'Схема'}.${extension}`
 
 type DiagramBlock = CabinetArtifact['blocks'][number]
 
@@ -82,109 +54,31 @@ function DiagramPicture({ artifact, block }: { artifact: CabinetArtifact; block:
       block: block.key,
       rev: block.rev,
     }),
+    // The server puts a job that drew nothing again after its window (plan 91, Д5).
     refetchInterval: (query) =>
-      query.state.data?.state === 'drawing' && query.state.dataUpdateCount < DRAWING_POLLS
-        ? DRAWING_POLL_MS
-        : false,
+      query.state.data?.state === 'drawing' ? diagramPollDelay(query.state.dataUpdateCount) : false,
   })
-  const [showText, setShowText] = useState(false)
   const data = picture.data
-  if (!data || data.state === 'drawing')
-    return (
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, color: 'text.secondary' }}>
-        <CircularProgress size={18} />
-        <Typography variant="body2">{diagramTexts.drawing}</Typography>
-      </Box>
-    )
+  if (!data || data.state === 'drawing') return <DiagramDrawing />
   if (data.state === 'empty')
     return <Typography sx={{ color: 'text.secondary' }}>{diagramTexts.empty}</Typography>
   if (data.state === 'failed')
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
         <Alert severity="warning">{diagramErrorRu(data.line)}</Alert>
-        <DiagramText text={block.content ?? ''} line={data.line} />
+        <DiagramText text={block.content ?? ''} line={data.line} label={diagramTexts.text} />
       </Box>
     )
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      <Box sx={{ overflowX: 'auto', bgcolor: '#ffffff', borderRadius: '12px', p: 2 }}>
-        <Box
-          component="img"
-          src={dataUrl(data.svg)}
-          width={data.width}
-          height={data.height}
-          alt={artifact.title}
-          sx={{ display: 'block', maxWidth: '100%', height: 'auto', mx: 'auto' }}
-        />
-      </Box>
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-        <Button
-          size="small"
-          variant="outlined"
-          onClick={() =>
-            download(
-              fileName(artifact.title, 'svg'),
-              new Blob([data.svg], { type: 'image/svg+xml' }),
-            )
-          }
-        >
-          {diagramTexts.svg}
-        </Button>
-        <Button
-          size="small"
-          variant="outlined"
-          onClick={async () => {
-            const png = await pngOf(data.svg, data.width, data.height)
-            if (png) download(fileName(artifact.title, 'png'), png)
-          }}
-        >
-          {diagramTexts.png}
-        </Button>
-        <Button size="small" onClick={() => setShowText((shown) => !shown)}>
-          {diagramTexts.showText}
-        </Button>
-      </Box>
-      {showText && <DiagramText text={block.content ?? ''} line={null} />}
-    </Box>
-  )
-}
-
-/** The text of a diagram to read, its line of an error marked. */
-function DiagramText({ text, line }: { text: string; line: number | null }) {
-  return (
-    <Box
-      component="pre"
-      tabIndex={0}
-      aria-label={diagramTexts.text}
-      sx={{
-        m: 0,
-        p: 1.5,
-        maxHeight: 420,
-        overflow: 'auto',
-        borderRadius: '8px',
-        bgcolor: 'background.paper',
-        fontFamily: '"JetBrains Mono Variable", monospace',
-        fontSize: 12,
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-      }}
-    >
-      {text.split('\n').map((each, index) => (
-        <Box
-          key={index}
-          component="span"
-          data-error={index + 1 === line ? 'true' : undefined}
-          sx={{
-            display: 'block',
-            ...(index + 1 === line
-              ? { bgcolor: 'warning.light', color: 'warning.contrastText' }
-              : {}),
-          }}
-        >
-          {each || ' '}
-        </Box>
-      ))}
-    </Box>
+    <DiagramImage
+      svg={data.svg}
+      width={data.width}
+      height={data.height}
+      alt={artifact.title}
+      fileTitle={artifact.title}
+      text={block.content ?? ''}
+      textLabel={diagramTexts.text}
+    />
   )
 }
 

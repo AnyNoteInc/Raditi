@@ -1,6 +1,7 @@
 import {
   appEnvSchema,
   chatCommandRefusals,
+  chatDiagramJobSchema,
   chatProjectSchema,
   chatTodoSchema,
   FEED_REQUEST_TEXT_LIMIT,
@@ -15,6 +16,8 @@ import {
   taskStatuses,
   type FeedItem,
 } from '@repo/domain'
+import { readChatDiagram } from '@repo/db'
+import { diagramViewSchema } from '@repo/domain/artifacts'
 import { z } from 'zod'
 
 import { activityEventSchema, readTurnActivity } from '../services/chat/activity.ts'
@@ -475,6 +478,16 @@ export const taskRouter = router({
     .input(z.strictObject({ taskId: z.uuid() }))
     .output(chatTodoSchema.nullable())
     .query(({ ctx, input }) => chatTodo(ctx.prisma, { userId: ctx.user.id, taskId: input.taskId })),
+
+  /**
+   * The picture of a diagram in an answer of the chat (docs/plan/91-chat-diagrams.md, Д1–Д5): the
+   * row of the feed and the place of the diagram in its text — the server reads the text itself.
+   * Kept — shown; none yet — core is asked to draw it (`drawing`: the chat asks again).
+   */
+  diagram: consentedProcedure
+    .input(chatDiagramJobSchema)
+    .output(diagramViewSchema)
+    .query(({ ctx, input }) => readChatDiagram(ctx.prisma, { ...input, userId: ctx.user.id })),
 
   /**
    * The chats of the user, the latest changed first; `cursor` is `nextCursor` of the page before.

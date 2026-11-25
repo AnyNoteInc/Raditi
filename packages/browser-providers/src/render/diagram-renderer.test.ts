@@ -73,4 +73,48 @@ describe.skipIf(!executable)('diagrams drawn by Mermaid in a Chromium', () => {
     const out = await renderer.render({ workspaceId: workspace, source: `flowchart LR\n${edges}` })
     expect(out.ok).toBe(false)
   }, 30_000)
+
+  // PlantUML of `@plantuml/core` on a page of its own (docs/plan/91-chat-diagrams.md, Д2).
+  it('draws a PlantUML sequence and a class diagram with Cyrillic into a clean SVG', async () => {
+    const sequence = await renderer.render({
+      workspaceId: workspace,
+      engine: 'plantuml',
+      source: '@startuml\nКлиент -> Магазин : Заказ\nМагазин --> Клиент : Счёт\n@enduml',
+    })
+    expect(sequence).toMatchObject({ ok: true, type: 'plantuml' })
+    if (!sequence.ok) return
+    const clean = cleanDiagramSvg(sequence.svg)
+    expect(clean!.width).toBeGreaterThan(50)
+    for (const word of ['Клиент', 'Магазин', 'Счёт']) expect(clean!.svg).toContain(word)
+    const classes = await renderer.render({
+      workspaceId: workspace,
+      engine: 'plantuml',
+      source: '@startuml\nclass Заказ {\n +сумма\n}\nЗаказ --> Клиент\n@enduml',
+    })
+    expect(classes).toMatchObject({ ok: true })
+  }, 60_000)
+
+  it('answers a broken PlantUML text and an include with the line, and loads nothing', async () => {
+    const broken = await renderer.render({
+      workspaceId: workspace,
+      engine: 'plantuml',
+      source: '@startuml\nAlice -> : \n foo bar baz (\n@enduml',
+    })
+    expect(broken).toMatchObject({ ok: false, reason: 'parse' })
+    if (!broken.ok) expect(broken.message).toMatch(/line 3/)
+    const include = await renderer.render({
+      workspaceId: workspace,
+      engine: 'plantuml',
+      source: '@startuml\n!include https://example.com/x.puml\nA -> B\n@enduml',
+    })
+    expect(include).toMatchObject({ ok: false, reason: 'parse' })
+    if (!include.ok) expect(include.message).toMatch(/line 2.*cannot include/)
+    // The page stays whole after an error of the text.
+    const again = await renderer.render({
+      workspaceId: workspace,
+      engine: 'plantuml',
+      source: '@startmindmap\n* Корень\n** Ветка\n@endmindmap',
+    })
+    expect(again).toMatchObject({ ok: true })
+  }, 60_000)
 })

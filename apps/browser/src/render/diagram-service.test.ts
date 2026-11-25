@@ -29,6 +29,7 @@ describe('the route of diagrams', () => {
     expect(diagram).toHaveBeenCalledWith({
       workspaceId,
       source: '\nflowchart LR\n  A[Заказ] --> B',
+      engine: 'mermaid',
     })
     expect(out).toMatchObject({ ok: true, width: 200, height: 80, type: 'flowchart-v2' })
   })
@@ -63,5 +64,46 @@ describe('the route of diagrams', () => {
       ok: false,
       reason: 'too_large',
     })
+  })
+
+  // PlantUML in the answers of the chat (docs/plan/91-chat-diagrams.md, Д2).
+  it('wraps a PlantUML text in @startuml and names the author’s line of its error', async () => {
+    const { service, diagram } = serviceWith({
+      ok: false,
+      reason: 'parse',
+      message: 'Error on line 3: Syntax Error? (Assumed diagram type: sequence)',
+    })
+    const out = await service.render({
+      workspaceId,
+      source: 'Alice -> Bob\nfoo (',
+      engine: 'plantuml',
+    })
+    expect(diagram).toHaveBeenCalledWith({
+      workspaceId,
+      source: '@startuml\nAlice -> Bob\nfoo (\n@enduml',
+      engine: 'plantuml',
+    })
+    expect(out).toMatchObject({ ok: false, reason: 'parse', line: 2 })
+    const own = serviceWith({ ok: false, reason: 'parse', message: 'Error on line 3: x' })
+    expect(
+      await own.service.render({
+        workspaceId,
+        source: '@startuml\nA -> B\nfoo (\n@enduml',
+        engine: 'plantuml',
+      }),
+    ).toMatchObject({ line: 3 })
+    // Blank lines at the top of a block are the author's lines too.
+    const blank = serviceWith({ ok: false, reason: 'parse', message: 'Error on line 4: x' })
+    expect(
+      await blank.service.render({ workspaceId, source: '\n\nfoo (', engine: 'plantuml' }),
+    ).toMatchObject({ line: 3 })
+  })
+
+  it('refuses an empty PlantUML text without the engine', async () => {
+    const { service, diagram } = serviceWith({ ok: true, svg, type: 'plantuml' })
+    expect(
+      await service.render({ workspaceId, source: '@startuml\n\n@enduml', engine: 'plantuml' }),
+    ).toMatchObject({ ok: false, reason: 'parse' })
+    expect(diagram).not.toHaveBeenCalled()
   })
 })

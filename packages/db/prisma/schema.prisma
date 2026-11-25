@@ -218,6 +218,7 @@ model Workspace {
   repoReservations   RepoReservation[]
   scheduledTasks     ScheduledTask[]
   scheduleChanges    ScheduleReservation[]
+  chatDiagrams       ChatDiagramRender[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -3427,4 +3428,25 @@ model ArtifactDiagramRender {
   @@id([artifactId, sourceSha256])
   @@index([createdAt])
   @@map("artifact_diagram_renders")
+}
+
+/// The picture of a diagram in an answer of the chat (plan 91, Д3), by the SHA-256 of its engine and
+/// normalised text within its workspace: one text is drawn once. An SVG for `<img>`, or the error.
+model ChatDiagramRender {
+  workspaceId  String    @map("workspace_id") @db.Uuid
+  sourceSha256 String    @map("source_sha256") @db.Char(64)
+  engine       String    @db.VarChar(16)
+  ok           Boolean
+  svg          String?
+  width        Int?
+  height       Int?
+  reason       String?   @db.VarChar(16)
+  errorLine    Int?      @map("error_line")
+  errorMessage String?   @map("error_message") @db.VarChar(300)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, sourceSha256])
+  @@index([createdAt])
+  @@map("chat_diagram_renders")
 }

@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import {
   artifactDiagramRenderResponseSchema,
+  diagramEngineOf,
   diagramErrorLine,
   diagramErrorRu,
+  messageDiagrams,
+  diagramSourceFor,
+  normalizeDiagramFor,
   normalizeDiagramSource,
 } from './diagram.ts'
 
@@ -72,5 +76,63 @@ describe('the error of a diagram', () => {
         type: 'x',
       }).success,
     ).toBe(false)
+  })
+})
+
+// The diagrams of an answer in the chat (docs/plan/91-chat-diagrams.md, Д2, Д4).
+describe('the diagrams of an answer', () => {
+  it('finds the fenced blocks of Mermaid and PlantUML in their order, and no other code', () => {
+    const text = [
+      'Вот путь клиента:',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  A --> B',
+      '```',
+      '',
+      '```php',
+      '<?php echo 1;',
+      '```',
+      '',
+      '~~~~puml',
+      'Alice -> Bob',
+      '~~~~',
+      '',
+      '  ```UML',
+      '  class A',
+      '  ```',
+    ].join('\n')
+    expect(messageDiagrams(text)).toEqual([
+      { engine: 'mermaid', source: 'flowchart LR\n  A --> B' },
+      { engine: 'plantuml', source: 'Alice -> Bob' },
+      { engine: 'plantuml', source: 'class A' },
+    ])
+  })
+
+  it('reads an unclosed fence to the end, and a longer fence past a shorter one', () => {
+    expect(messageDiagrams('````mermaid\na\n```\nb')).toEqual([
+      { engine: 'mermaid', source: 'a\n```\nb' },
+    ])
+    expect(messageDiagrams('```\n```mermaid\n```')).toEqual([])
+  })
+
+  it('names the engine of a language', () => {
+    expect(diagramEngineOf('Mermaid')).toBe('mermaid')
+    expect(diagramEngineOf('plantuml')).toBe('plantuml')
+    expect(diagramEngineOf('ts')).toBeNull()
+  })
+
+  it('wraps a PlantUML text without @start, and keeps one that has it', () => {
+    expect(diagramSourceFor('plantuml', 'Alice -> Bob\u00a0: Привет\r\n')).toEqual({
+      text: '@startuml\nAlice -> Bob : Привет\n@enduml',
+      addedLines: 1,
+      empty: false,
+    })
+    expect(diagramSourceFor('plantuml', '@startuml\n\n@enduml')).toMatchObject({ empty: true })
+    expect(diagramSourceFor('mermaid', '```mermaid\n\n```')).toMatchObject({ empty: true })
+    expect(normalizeDiagramFor('plantuml', '@startmindmap\n* Корень\n@endmindmap')).toBe(
+      '@startmindmap\n* Корень\n@endmindmap',
+    )
+    expect(normalizeDiagramFor('mermaid', '```mermaid\nflowchart LR\n```')).toBe('flowchart LR')
   })
 })

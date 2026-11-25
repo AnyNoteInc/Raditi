@@ -9,6 +9,8 @@ import {
   ARTIFACT_DIAGRAM_JOB,
   ARTIFACT_NOTIFY_JOB,
   artifactDiagramJobSchema,
+  CHAT_DIAGRAM_JOB,
+  chatDiagramJobSchema,
   artifactNotifyJobSchema,
   CHAT_NOTIFY_JOB,
   chatNotifyJobSchema,
@@ -22,6 +24,7 @@ import type { z } from 'zod'
 
 import { PassRunner } from './pass-runner.ts'
 import { ArtifactDiagram } from './artifact-diagram.ts'
+import { ChatDiagram } from './chat-diagram.ts'
 import { ArtifactNotify } from './artifact-notify.ts'
 import { ChatNotify } from './chat-notify.ts'
 import { QueueDrain } from './queue-drain.ts'
@@ -69,6 +72,7 @@ export class TurnsProcessor extends WorkerHost {
     @Inject(ChatNotify) private readonly notify: Pick<ChatNotify, 'run'>,
     @Inject(ArtifactNotify) private readonly artifactNotify: Pick<ArtifactNotify, 'run'>,
     @Inject(ArtifactDiagram) private readonly artifactDiagram: Pick<ArtifactDiagram, 'run'>,
+    @Inject(ChatDiagram) private readonly chatDiagram: Pick<ChatDiagram, 'run'>,
   ) {
     super()
   }
@@ -90,6 +94,9 @@ export class TurnsProcessor extends WorkerHost {
         return
       case ARTIFACT_DIAGRAM_JOB:
         await this.artifactDiagram.run(parsed(artifactDiagramJobSchema, job))
+        return
+      case CHAT_DIAGRAM_JOB:
+        await this.chatDiagram.run(parsed(chatDiagramJobSchema, job))
         return
       default:
         // A job this build does not know (left by another version) cannot succeed later.

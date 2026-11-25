@@ -577,3 +577,10 @@ export {
   saveArtifactDiagram,
   type ArtifactDiagramView,
 } from './artifact-diagrams.ts'
+export {
+  chatDiagramOf,
+  chatDiagramSource,
+  readChatDiagram,
+  saveChatDiagram,
+  type ChatDiagramView,
+} from './chat-diagrams.ts'

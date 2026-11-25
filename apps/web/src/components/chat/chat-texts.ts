@@ -362,6 +362,14 @@ export const messageClampText = Object.freeze({
 export const copyText = Object.freeze({
   copy: 'Скопировать текст',
   copied: 'Скопировано',
+  code: 'Скопировать код',
+})
+
+/** A diagram in an answer of the agent (docs/plan/91-chat-diagrams.md, Д1). */
+export const chatDiagramText = Object.freeze({
+  slow: 'Схема рисуется дольше обычного. Пока — её текст, картинка появится сама.',
+  alt: 'Схема из ответа агента',
+  fileName: 'Схема',
 })
 
 /** «Результаты» beside the chat: what the agent made in it (owner's request of 14.11.2026). */

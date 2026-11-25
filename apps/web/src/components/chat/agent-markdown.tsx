@@ -2,20 +2,16 @@
 
 import Box from '@mui/material/Box'
 import MuiLink from '@mui/material/Link'
-import { isValidElement, type ReactNode } from 'react'
-import bash from 'highlight.js/lib/languages/bash'
-import css from 'highlight.js/lib/languages/css'
-import javascript from 'highlight.js/lib/languages/javascript'
-import json from 'highlight.js/lib/languages/json'
-import php from 'highlight.js/lib/languages/php'
-import python from 'highlight.js/lib/languages/python'
-import sql from 'highlight.js/lib/languages/sql'
-import typescript from 'highlight.js/lib/languages/typescript'
-import xml from 'highlight.js/lib/languages/xml'
-import yaml from 'highlight.js/lib/languages/yaml'
+import type { ChatDiagramJob } from '@repo/domain'
+import { diagramEngineOf, messageDiagrams, type MessageDiagram } from '@repo/domain/artifacts'
+import { createContext, isValidElement, useContext, useMemo, type ReactNode } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
+
+import { ChatDiagram } from './chat-diagram'
+import { CodeBlock } from './code-block'
+import { highlightLanguages } from './code-languages'
 
 // The agent's words as the chat of ChatGPT or Claude draws them (owner's request of 26.10.2026):
 // its Markdown — paragraphs, emphasis, lists, code, tables, links — as React elements. Raw HTML of
@@ -57,7 +53,49 @@ const Heading = ({ children }: { children?: ReactNode }) => (
   </Box>
 )
 
+/** Where the answer stands in the chat: its diagrams are drawn by the server (plan 91, Д4). */
+export type AnswerPlace = Omit<ChatDiagramJob, 'index'>
+
+const DiagramsContext = createContext<{ place: AnswerPlace; diagrams: MessageDiagram[] } | null>(
+  null,
+)
+
+/** The props of the `<code>` inside a `<pre>`, as Markdown made it. */
+function codeOf(children: ReactNode): { language: string; content: ReactNode } {
+  const code = Array.isArray(children) ? children[0] : children
+  if (!isValidElement<{ className?: string; children?: ReactNode }>(code))
+    return { language: '', content: children }
+  const language = /(?:^|\s)language-(\S+)/.exec(code.props.className ?? '')?.[1] ?? ''
+  return { language, content: code }
+}
+
+/**
+ * A block of code (plan 91, Д1, Д6): a diagram of Mermaid or PlantUML is a picture the server draws
+ * when the answer has its place in the chat; other code has a head with its language and «Скопировать
+ * код».
+ */
+function Pre({ children }: { children?: ReactNode }) {
+  const answer = useContext(DiagramsContext)
+  const { language, content } = codeOf(children)
+  const text = wordsOf(children)
+  const engine = diagramEngineOf(language)
+  if (engine && answer) {
+    const body = text.trimEnd()
+    const index = answer.diagrams.findIndex(
+      (diagram) => diagram.engine === engine && diagram.source.trimEnd() === body,
+    )
+    if (index >= 0)
+      return <ChatDiagram place={{ ...answer.place, index }} language={language} text={text} />
+  }
+  return (
+    <CodeBlock language={language} text={text}>
+      {content}
+    </CodeBlock>
+  )
+}
+
 const components: Components = {
+  pre: Pre,
   a: ({ href, children }) => {
     if (!href) return <span>{children}</span>
     const host = hiddenHost(href, wordsOf(children))
@@ -160,109 +198,78 @@ export function fenceTextTrees(text: string): string {
   return out.join('\n')
 }
 
-/**
- * The languages a block of code is coloured in (docs/plan/76-agent-instructions.md, И5): what a site
- * of a small business is made of, and the shell. A block names its language (```php); a block of
- * no name or of another language stays plain — nothing is guessed.
- */
-const LANGUAGES = {
-  bash,
-  shell: bash,
-  sh: bash,
-  css,
-  javascript,
-  js: javascript,
-  json,
-  php,
-  python,
-  sql,
-  typescript,
-  ts: typescript,
-  html: xml,
-  xml,
-  yaml,
-  yml: yaml,
-}
 const highlight: [typeof rehypeHighlight, Parameters<typeof rehypeHighlight>[0]] = [
   rehypeHighlight,
-  { languages: LANGUAGES, detect: false, plainText: ['text', 'txt', 'plain'] },
+  { languages: highlightLanguages, detect: false, plainText: ['text', 'txt', 'plain'] },
 ]
 
-/** The colours of the tokens: of the palette of the scheme, so both schemes keep their contrast. */
-const TOKENS = {
-  '& .hljs-keyword, & .hljs-selector-tag, & .hljs-built_in, & .hljs-meta': {
-    color: 'var(--mui-palette-primary-main)',
-  },
-  '& .hljs-string, & .hljs-attr, & .hljs-template-variable': {
-    color: 'var(--mui-palette-success-main)',
-  },
-  '& .hljs-number, & .hljs-literal, & .hljs-variable, & .hljs-symbol': {
-    color: 'var(--mui-palette-warning-main)',
-  },
-  '& .hljs-title, & .hljs-name, & .hljs-selector-class, & .hljs-selector-id': {
-    color: 'var(--mui-palette-secondary-main)',
-  },
-  '& .hljs-comment, & .hljs-quote': {
-    color: 'var(--mui-palette-text-secondary)',
-    fontStyle: 'italic',
-  },
-  '& .hljs-deletion': { color: 'var(--mui-palette-error-main)' },
-} as const
-
-export function AgentMarkdown({ text }: { text: string }) {
+export function AgentMarkdown({ text, place }: { text: string; place?: AnswerPlace }) {
+  const taskId = place?.taskId
+  const row = place?.row
+  const answer = useMemo(
+    () => (taskId && row ? { place: { taskId, row }, diagrams: messageDiagrams(text) } : null),
+    [taskId, row, text],
+  )
   return (
-    <Box
-      sx={{
-        fontSize: 16,
-        lineHeight: 1.65,
-        overflowWrap: 'anywhere',
-        minWidth: 0,
-        '& > :first-of-type': { mt: 0 },
-        '& > :last-child': { mb: 0 },
-        '& p, & ul, & ol, & pre, & blockquote, & table': { my: 1.5 },
-        '& ul, & ol': { pl: 3 },
-        '& li + li': { mt: 0.5 },
-        '& li > p': { my: 0.5 },
-        '& strong': { fontWeight: 600 },
-        '& code': {
-          px: 0.5,
-          py: '1px',
-          borderRadius: '6px',
-          bgcolor: 'var(--mui-palette-action-hover)',
-          fontFamily: 'var(--raditi-font-mono, ui-monospace, monospace)',
-          fontSize: '0.9em',
-        },
-        '& pre': {
-          p: 1.5,
-          borderRadius: '12px',
-          overflowX: 'auto',
-          bgcolor: 'var(--mui-palette-action-hover)',
-          fontSize: 14,
-          lineHeight: 1.55,
-          ...TOKENS,
-        },
-        '& pre code': { p: 0, bgcolor: 'transparent', fontSize: 'inherit' },
-        '& blockquote': {
-          mx: 0,
-          pl: 2,
-          borderLeft: 3,
-          borderColor: 'divider',
-          color: 'text.secondary',
-        },
-        '& table': { borderCollapse: 'collapse', fontSize: 14 },
-        '& th, & td': { border: 1, borderColor: 'divider', px: 1.25, py: 0.75, textAlign: 'left' },
-        '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: 2 },
-      }}
-    >
-      <Markdown
-        remarkPlugins={[remarkGfm, remarkSoftBreaks]}
-        rehypePlugins={[highlight]}
-        components={components}
-        urlTransform={linkUrl}
-        skipHtml
+    <DiagramsContext.Provider value={answer}>
+      <Box
+        sx={{
+          fontSize: 16,
+          lineHeight: 1.65,
+          overflowWrap: 'anywhere',
+          minWidth: 0,
+          '& > :first-of-type': { mt: 0 },
+          '& > :last-child': { mb: 0 },
+          '& p, & ul, & ol, & blockquote, & table': { my: 1.5 },
+          '& ul, & ol': { pl: 3 },
+          '& li + li': { mt: 0.5 },
+          '& li > p': { my: 0.5 },
+          '& strong': { fontWeight: 600 },
+          // Code inside a sentence; a block of code is `CodeBlock`'s.
+          '& :not(pre) > code': {
+            px: 0.5,
+            py: '1px',
+            borderRadius: '6px',
+            bgcolor: 'var(--mui-palette-action-hover)',
+            fontFamily: 'var(--raditi-font-mono, ui-monospace, monospace)',
+            fontSize: '0.9em',
+          },
+
+          '& blockquote': {
+            mx: 0,
+            pl: 2,
+            borderLeft: 3,
+            borderColor: 'divider',
+            color: 'text.secondary',
+          },
+          '& table': { borderCollapse: 'collapse', fontSize: 14 },
+          '& th, & td': {
+            border: 1,
+            borderColor: 'divider',
+            px: 1.25,
+            py: 0.75,
+            textAlign: 'left',
+            verticalAlign: 'top',
+          },
+          '& th': { bgcolor: 'var(--mui-palette-action-hover)', fontWeight: 600 },
+          // GFM alignment comes as an inline `text-align`: a right column is numbers.
+          '& td[style*="right"], & th[style*="right"]': {
+            whiteSpace: 'nowrap',
+            fontVariantNumeric: 'tabular-nums',
+          },
+          '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: 2 },
+        }}
       >
-        {fenceTextTrees(text)}
-      </Markdown>
-    </Box>
+        <Markdown
+          remarkPlugins={[remarkGfm, remarkSoftBreaks]}
+          rehypePlugins={[highlight]}
+          components={components}
+          urlTransform={linkUrl}
+          skipHtml
+        >
+          {fenceTextTrees(text)}
+        </Markdown>
+      </Box>
+    </DiagramsContext.Provider>
   )
 }

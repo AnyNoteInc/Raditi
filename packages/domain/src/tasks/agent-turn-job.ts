@@ -108,6 +108,19 @@ export const artifactDiagramJobSchema = z.strictObject({
 })
 export type ArtifactDiagramJob = z.infer<typeof artifactDiagramJobSchema>
 
+/**
+ * A diagram of an answer in the chat to draw (docs/plan/91-chat-diagrams.md, Д4, Д5): the row of
+ * the feed and the place of the diagram in its text. core reads the text itself. Ids only.
+ */
+export const CHAT_DIAGRAM_JOB = 'chat.diagram'
+export const chatDiagramJobSchema = z.strictObject({
+  taskId: z.uuid(),
+  /** `task_events.id` of the row: a `feed.result` or a `feed.question`. */
+  row: feedEventIdSchema,
+  index: z.number().int().min(0).max(49),
+})
+export type ChatDiagramJob = z.infer<typeof chatDiagramJobSchema>
+
 export const CHAT_NOTIFY_JOB = 'chat.notify'
 export const CHAT_NOTIFY_DELAY_MS = 45_000
 export const chatNotifyKinds = ['answered', 'question', 'ready', 'failed', 'limit'] as const
