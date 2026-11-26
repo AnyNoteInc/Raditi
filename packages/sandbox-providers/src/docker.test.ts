@@ -20,6 +20,7 @@ import type Docker from 'dockerode'
 import { describe, expect, it, vi } from 'vitest'
 
 import { DockerFrames, HELPER, HELPER_ENV, NODE, startDetachedExec } from './docker-api.ts'
+import { FollowFrames } from './docker-sandbox.ts'
 import { createDockerSandboxProvider, safeRunscArgs, safeRunscRuntime } from './docker.ts'
 
 // Route the provider's sleeps through the global timer, so fake timers drive them too.
@@ -46,6 +47,14 @@ const frame = (value: Uint8Array, stream = 1) => {
   header.writeUInt32BE(value.length, 4)
   return Buffer.concat([header, value])
 }
+/** One frame of `follow-exec` (docs/plan/95): type, offset, length, bytes. */
+const followFrame = (type: number, offset: number, data: Uint8Array) => {
+  const header = Buffer.alloc(9)
+  header.writeUInt8(type, 0)
+  header.writeUInt32BE(offset, 1)
+  header.writeUInt32BE(data.length, 5)
+  return Buffer.concat([header, data])
+}
 
 function daemon() {
   const id = 'c'.repeat(64)
@@ -61,6 +70,8 @@ function daemon() {
     { id: string; inspect: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn> }
   >()
   const files = new Map<string, Buffer>()
+  /** Whether the image's helper knows follow-exec; one of an older image answers it as unknown. */
+  const helper = { follow: true, shift: 0, again: 0, hang: false }
   const remove = vi.fn(async () => {})
   const container = {
     id,
@@ -88,6 +99,37 @@ function daemon() {
               exit: { code: 0, reason: 'exited' },
             })
             return undefined
+          }
+          if (args[0] === 'follow-exec') {
+            // Like the helper: the output from the cursor, then the end with the exit. One whose
+            // exec has not ended yet stops here without the end, as a killed helper would.
+            const socket = new Duplex({ read() {}, write: (_chunk, _encoding, done) => done() })
+            const record = records.get(args[1]!)
+            if (helper.again > 0) {
+              // Its time is up before anything: the host follows again.
+              helper.again -= 1
+              socket.push(frame(followFrame(4, 0, Buffer.alloc(0))))
+              socket.push(null)
+              return socket
+            }
+            if (helper.hang && !record?.exit) return socket // waits for an exit that never comes
+            if (!helper.follow || !record) {
+              socket.push(frame(Buffer.from('Sandbox helper failed\n'), 2))
+              status.ExitCode = 125
+            } else {
+              for (const [type, stream, index] of [
+                [1, 'stdout', 2],
+                [2, 'stderr', 3],
+              ] as const) {
+                const offset = Number(args[index])
+                const data = record[stream].subarray(offset)
+                if (data.length) socket.push(frame(followFrame(type, offset + helper.shift, data)))
+              }
+              if (record.exit)
+                socket.push(frame(followFrame(3, 0, Buffer.from(JSON.stringify(record.exit)))))
+            }
+            socket.push(null)
+            return socket
           }
           const chunks: Buffer[] = []
           const socket = new Duplex({
@@ -162,6 +204,7 @@ function daemon() {
     commands,
     records,
     files,
+    helper,
     info: () => info,
   }
 }
@@ -1168,5 +1211,166 @@ describe('Docker stream framing', () => {
       const p = new DockerFrames(1)
       p.push(frame(Buffer.from('x'), 3))
     }).toThrow(/limits/)
+  })
+})
+
+describe('streamed output of a command (docs/plan/95)', () => {
+  const helperCommands = (fake: ReturnType<typeof daemon>) =>
+    fake.commands.map((options) => options.Cmd![2])
+
+  it('reads the output and the exit of a command in one follow-exec, without a page', async () => {
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const before = fake.commands.length
+    const run = await sandbox.exec({ argv: ['command'], timeoutMs: 5000 })
+    expect(await collect(run.output())).toEqual([
+      { stream: 'stdout', offset: 0, data: Buffer.from([0, 255, 65, 66]) },
+      { stream: 'stderr', offset: 0, data: Buffer.from('warn') },
+    ])
+    expect(await run.wait()).toEqual({ code: 0, reason: 'exited' })
+    expect(helperCommands(fake).slice(before)).toEqual(['stage', 'run', 'follow-exec'])
+    await sandbox.destroy('completed')
+  })
+
+  it('reads page by page a command of an image whose helper has no follow-exec', async () => {
+    const fake = daemon()
+    fake.helper.follow = false
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const before = fake.commands.length
+    const run = await sandbox.exec({ argv: ['command'], timeoutMs: 5000 })
+    expect(await collect(run.output())).toEqual([
+      { stream: 'stdout', offset: 0, data: Buffer.from([0, 255, 65, 66]) },
+      { stream: 'stderr', offset: 0, data: Buffer.from('warn') },
+    ])
+    expect(await run.wait()).toEqual({ code: 0, reason: 'exited' })
+    expect(helperCommands(fake).slice(before)).toContain('read-exec')
+    await sandbox.destroy('completed')
+  })
+
+  it('takes the exit of the stream only as Docker confirms it', async () => {
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const run = await sandbox.exec({ argv: ['command'], timeoutMs: 5000 })
+    const [, execId] = run.id.split('.') as [string, string]
+    const exec = fake.raw.getExec(execId)!
+    const status = (await (exec.inspect as () => Promise<object>)()) as object
+    exec.inspect.mockImplementation(async () => ({ ...status, ExitCode: 3 }))
+    await collect(run.output())
+    expect(await run.wait()).toEqual({ code: null, reason: 'lost' })
+    await sandbox.destroy('completed')
+  })
+
+  it('fails a command whose stream does not continue its cursor', async () => {
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const run = await sandbox.exec({ argv: ['command'], timeoutMs: 5000 })
+    fake.helper.shift = 1
+    await expect(collect(run.output())).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+    await sandbox.destroy('completed')
+  })
+
+  it('resumes a stream at the cursor of an attach', async () => {
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const run = await sandbox.exec({ argv: ['command'], timeoutMs: 5000 })
+    await collect(run.output())
+    const before = fake.commands.length
+    const attached = await sandbox.attach(run.id, { stdout: 1, stderr: 2 })
+    expect(await collect(attached.output())).toEqual([
+      { stream: 'stdout', offset: 1, data: Buffer.from([255, 65, 66]) },
+      { stream: 'stderr', offset: 2, data: Buffer.from('rn') },
+    ])
+    const follow = fake.commands.slice(before).find((options) => options.Cmd![2] === 'follow-exec')
+    expect(follow?.Cmd!.slice(4)).toEqual(['1', '2'])
+    await sandbox.destroy('completed')
+  })
+})
+
+describe('a follow that cannot end by itself (docs/plan/95)', () => {
+  it('follows again from its cursor when the helper says its time is up', async () => {
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const run = await sandbox.exec({ argv: ['command'], timeoutMs: 5000 })
+    fake.helper.again = 2
+    const before = fake.commands.length
+    expect(await collect(run.output())).toEqual([
+      { stream: 'stdout', offset: 0, data: Buffer.from([0, 255, 65, 66]) },
+      { stream: 'stderr', offset: 0, data: Buffer.from('warn') },
+    ])
+    const follows = fake.commands
+      .slice(before)
+      .filter((options) => options.Cmd![2] === 'follow-exec')
+    expect(follows).toHaveLength(3)
+    expect(fake.commands.slice(before).some((options) => options.Cmd![2] === 'read-exec')).toBe(
+      false,
+    )
+    await sandbox.destroy('completed')
+  })
+
+  it('gives up the stream of a command whose process died without its exit, and ends it lost', async () => {
+    const fake = daemon()
+    const sandbox = await createDockerSandboxProvider(config, { client: fake.client }).create(
+      spec(),
+    )
+    const run = await sandbox.exec({ argv: ['command'], timeoutMs: 30_000 })
+    const [logical] = run.id.split('.') as [string, string]
+    fake.records.set(logical, { stdout: Buffer.from('x'), stderr: Buffer.alloc(0), exit: null })
+    fake.helper.hang = true
+    const started = Date.now()
+    expect(await collect(run.output())).toEqual([
+      { stream: 'stdout', offset: 0, data: Buffer.from('x') },
+    ])
+    expect(await run.wait()).toEqual({ code: null, reason: 'lost' })
+    // Two checks a second apart, not the ten minutes of the helper.
+    expect(Date.now() - started).toBeLessThan(5_000)
+    await sandbox.destroy('completed')
+  }, 10_000)
+})
+
+describe('frames of follow-exec (docs/plan/95)', () => {
+  it('joins frames cut anywhere and drops the helper stderr', () => {
+    const frames = new FollowFrames()
+    const stream = Buffer.concat([
+      frame(Buffer.from('noise'), 2),
+      frame(
+        Buffer.concat([
+          followFrame(1, 0, Buffer.from('abc')),
+          followFrame(2, 0, Buffer.from('e')),
+          followFrame(3, 0, Buffer.from('{"code":0,"reason":"exited"}')),
+        ]),
+      ),
+    ])
+    const out = []
+    for (let index = 0; index < stream.length; index += 3)
+      out.push(...frames.push(stream.subarray(index, index + 3)))
+    expect(out.map(({ type, offset, data }) => [type, offset, data.toString()])).toEqual([
+      [1, 0, 'abc'],
+      [2, 0, 'e'],
+      [3, 0, '{"code":0,"reason":"exited"}'],
+    ])
+  })
+
+  it('refuses anything but its own frames within their limits', () => {
+    const refuses = (bytes: Buffer) => expect(() => new FollowFrames().push(bytes)).toThrow()
+    refuses(frame(followFrame(4, 0, Buffer.from('x'))))
+    refuses(frame(followFrame(1, 0, Buffer.alloc(0))))
+    const oversized = Buffer.alloc(9)
+    oversized.writeUInt8(1, 0)
+    oversized.writeUInt32BE(64 * 1024 + 1, 5)
+    refuses(frame(oversized))
+    refuses(frame(Buffer.alloc(65 * 1024), 2))
+    refuses(Buffer.from([3, 0, 0, 0, 0, 0, 0, 1, 0]))
   })
 })

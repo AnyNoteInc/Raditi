@@ -1,8 +1,11 @@
+import { Buffer } from 'node:buffer'
+
 import { describe, expect, it } from 'vitest'
 
 // The helper runs its command on import unless a unit test imports it for its pure checks.
 Object.assign(globalThis, { raditiRuntimeUnderTest: true })
-const { isKeepaliveRecord, isProcessStart, statIdentity } = await import('../runtime/runtime.mjs')
+const { followFrame, FOLLOW_FRAME, isKeepaliveRecord, isProcessStart, statIdentity } =
+  await import('../runtime/runtime.mjs')
 
 describe('sandbox helper process identity', () => {
   it('keeps the negative start time gVisor gives a keepalive when the clock stepped back at boot', () => {
@@ -43,5 +46,16 @@ describe('sandbox helper process identity', () => {
       '2',
     ])
       expect(isKeepaliveRecord(record)).toBe(false)
+  })
+})
+
+describe('frames of follow-exec (docs/plan/95)', () => {
+  it('are a type, an offset and a length, big-endian, then the bytes', () => {
+    const frame = followFrame(FOLLOW_FRAME.stderr, 70_000, Buffer.from('ab'))
+    expect(frame.readUInt8(0)).toBe(2)
+    expect(frame.readUInt32BE(1)).toBe(70_000)
+    expect(frame.readUInt32BE(5)).toBe(2)
+    expect(frame.subarray(9).toString()).toBe('ab')
+    expect(FOLLOW_FRAME).toEqual({ stdout: 1, stderr: 2, end: 3, again: 4 })
   })
 })

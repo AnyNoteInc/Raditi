@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
+import type { Duplex } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import {
@@ -431,6 +432,77 @@ export class DockerSandbox implements Sandbox {
   }
 }
 
+/** Frame types of `runtime.mjs follow-exec` (docs/plan/95). */
+const FOLLOW = { stdout: 1, stderr: 2, end: 3, again: 4 } as const
+/** How often a follow that waits checks that the command's process still runs. */
+const FOLLOW_CHECK_MS = 1000
+const FOLLOW_HEADER = 9
+const FOLLOW_CHUNK = 64 * 1024
+
+export interface FollowFrame {
+  type: (typeof FOLLOW)[keyof typeof FOLLOW]
+  offset: number
+  data: Buffer
+}
+
+/**
+ * The stream of `follow-exec` as Docker sends it (its non-TTY framing; stderr of the helper is
+ * counted and dropped), cut into the helper's own frames. Anything else than its frames, a frame
+ * larger than a page of read-exec or helper stderr past 64 KiB is a failed command.
+ */
+export class FollowFrames {
+  #docker = Buffer.alloc(0)
+  #frames = Buffer.alloc(0)
+  #stderr = 0
+
+  push(chunk: Uint8Array): FollowFrame[] {
+    this.#docker = this.#docker.length ? Buffer.concat([this.#docker, chunk]) : Buffer.from(chunk)
+    const out: FollowFrame[] = []
+    while (this.#docker.length >= 8) {
+      const type = this.#docker[0]
+      const length = this.#docker.readUInt32BE(4)
+      if (
+        (type !== 1 && type !== 2) ||
+        this.#docker[1] !== 0 ||
+        this.#docker[2] !== 0 ||
+        this.#docker[3] !== 0 ||
+        // Docker cuts the helper's writes as it likes: room for many frames, never unbounded.
+        length > 1024 * 1024
+      )
+        throw commandError()
+      if (this.#docker.length < 8 + length) break
+      const body = this.#docker.subarray(8, 8 + length)
+      this.#docker = this.#docker.subarray(8 + length)
+      if (type === 2) {
+        this.#stderr += length
+        if (this.#stderr > 64 * 1024) throw commandError()
+        continue
+      }
+      this.#frames = this.#frames.length ? Buffer.concat([this.#frames, body]) : Buffer.from(body)
+      while (this.#frames.length >= FOLLOW_HEADER) {
+        const kind = this.#frames[0]
+        const size = this.#frames.readUInt32BE(5)
+        const data = kind === FOLLOW.stdout || kind === FOLLOW.stderr
+        if (
+          (!data && kind !== FOLLOW.end && kind !== FOLLOW.again) ||
+          size > FOLLOW_CHUNK ||
+          (data && size === 0) ||
+          (kind === FOLLOW.again && size !== 0)
+        )
+          throw commandError()
+        if (this.#frames.length < FOLLOW_HEADER + size) break
+        out.push({
+          type: kind as FollowFrame['type'],
+          offset: this.#frames.readUInt32BE(1),
+          data: Buffer.from(this.#frames.subarray(FOLLOW_HEADER, FOLLOW_HEADER + size)),
+        })
+        this.#frames = this.#frames.subarray(FOLLOW_HEADER + size)
+      }
+    }
+    return out
+  }
+}
+
 class DockerExecHandle implements ExecHandle {
   readonly id: string
   #timer: ReturnType<typeof setTimeout> | undefined
@@ -439,6 +511,10 @@ class DockerExecHandle implements ExecHandle {
   #reason: ExecExit['reason'] | undefined
   #killPromise: Promise<void> | undefined
   #closed = false
+  /** The connection of the running follow-exec, if any: closing the handle ends it. */
+  #follower: Duplex | undefined
+  /** The exit the end frame of follow-exec gave; wait() checks it against Docker. */
+  #streamExit: ExecExit | undefined
   private readonly sandbox: DockerSandbox
   private readonly exec: Docker.Exec
   private readonly logicalId: string
@@ -478,6 +554,7 @@ class DockerExecHandle implements ExecHandle {
   /** Replaced by a newer handle of the same exec: its output fails at its next read. */
   close(): void {
     this.#closed = true
+    this.#follower?.destroy()
     this.release()
   }
   async #page(cursor: ExecCursor) {
@@ -492,8 +569,101 @@ class DockerExecHandle implements ExecHandle {
       throw commandError()
     }
   }
+  /**
+   * The output from `cursor` as one stream of follow-exec (docs/plan/95). Its end frame gives the
+   * exit; a stream that ends without one — an image without the command, a helper quiesce
+   * killed, a lost connection — answers null, and the caller reads on page by page from the same
+   * cursor. A frame that does not continue the cursor is a failed command, as a page would be.
+   */
+  async *#follow(cursor: ExecCursor): AsyncGenerator<ExecChunk, ExecExit | 'again' | null> {
+    let socket: Duplex
+    try {
+      const exec = await bounded(
+        this.sandbox.container.exec({
+          Cmd: [
+            NODE,
+            HELPER,
+            'follow-exec',
+            this.logicalId,
+            String(cursor.stdout),
+            String(cursor.stderr),
+          ],
+          Env: HELPER_ENV,
+          User: SANDBOX_USER,
+          Privileged: false,
+          Tty: false,
+          AttachStdin: false,
+          AttachStdout: true,
+          AttachStderr: true,
+        }),
+      )
+      socket = (await bounded(
+        exec.start({ hijack: true, stdin: false, Tty: false } as Docker.ExecStartOptions),
+      )) as Duplex
+    } catch {
+      return null
+    }
+    this.#follower = socket
+    const frames = new FollowFrames()
+    // A process run killed without exit.json (OOM, the agent) leaves the helper waiting: twice
+    // seen not running, the stream is closed and the pages end the command as before.
+    let stopped = 0
+    const check = setInterval(() => {
+      void bounded(this.exec.inspect())
+        .then((info) => {
+          stopped = info.Running ? 0 : stopped + 1
+          if (stopped >= 2) socket.destroy()
+        })
+        .catch(() => {})
+    }, FOLLOW_CHECK_MS)
+    check.unref()
+    try {
+      const chunks = socket[Symbol.asyncIterator]()
+      while (true) {
+        let next: IteratorResult<unknown>
+        try {
+          next = await chunks.next()
+        } catch {
+          // The connection broke: read on page by page.
+          return null
+        }
+        if (this.#closed) throw commandError()
+        if (next.done) return null
+        for (const frame of frames.push(Buffer.from(next.value as Uint8Array))) {
+          // Planned after its time: follow again from this cursor.
+          if (frame.type === FOLLOW.again) return 'again'
+          if (frame.type === FOLLOW.end) {
+            try {
+              return exitSchema.parse(JSON.parse(frame.data.toString('utf8')))
+            } catch {
+              throw commandError()
+            }
+          }
+          const stream = frame.type === FOLLOW.stdout ? 'stdout' : 'stderr'
+          if (frame.offset !== cursor[stream]) throw commandError()
+          cursor[stream] += frame.data.length
+          if (cursor[stream] > COMMAND_BYTES) throw commandError()
+          yield { stream, offset: frame.offset, data: frame.data }
+        }
+      }
+    } finally {
+      clearInterval(check)
+      socket.destroy()
+      if (this.#follower === socket) this.#follower = undefined
+    }
+  }
   async *output(): AsyncIterable<ExecChunk> {
     const cursor = { ...this.initial }
+    let exit: ExecExit | 'again' | null = 'again'
+    while (exit === 'again') {
+      if (this.#closed) throw commandError()
+      exit = yield* this.#follow(cursor)
+    }
+    if (exit) {
+      this.#streamExit = exit
+      await this.wait()
+      return
+    }
     let stopped = false
     // Every poll is a docker exec plus a node start inside the sandbox: back off while idle.
     let idle = IDLE_POLL_MS
@@ -547,7 +717,10 @@ class DockerExecHandle implements ExecHandle {
         })
       }
       if (!info.Running) {
-        const page = await this.#page({ stdout: 0, stderr: 0 }).catch(() => null)
+        // The end frame of follow-exec read exit.json already: no page for it (docs/plan/95).
+        const page = this.#streamExit
+          ? { exit: this.#streamExit }
+          : await this.#page({ stdout: 0, stderr: 0 }).catch(() => null)
         if (this.#killPromise) await this.#killPromise
         const status = page?.exit
         if (!status || (status.code !== null && status.code !== info.ExitCode))
@@ -558,11 +731,13 @@ class DockerExecHandle implements ExecHandle {
         await this.#stop('timeout', 'SIGKILL')
         return this.#finish({ code: null, reason: 'timeout' })
       }
-      await delay(100)
+      // After the end frame only the helper run itself is left to end: it ends at once.
+      await delay(this.#streamExit ? 10 : 100)
     }
   }
   #finish(exit: ExecExit): ExecExit {
     this.#done = exit
+    this.#follower?.destroy()
     this.release()
     return exit
   }

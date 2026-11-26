@@ -424,6 +424,85 @@ async function readExec(id, stdoutOffset, stderrOffset) {
   process.stdout.write(JSON.stringify(result))
 }
 
+/** How long one follow-exec reads before the host follows again from its cursor. */
+const FOLLOW_MS = 10 * 60 * 1000
+/** Frame types of follow-exec: output of the command, then the end with its exit. */
+export const FOLLOW_FRAME = Object.freeze({ stdout: 1, stderr: 2, end: 3, again: 4 })
+
+/** One frame of follow-exec: type, offset and length (each u32, big-endian), then the bytes. */
+export function followFrame(type, offset, data) {
+  const header = Buffer.alloc(9)
+  header.writeUInt8(type, 0)
+  header.writeUInt32BE(offset, 1)
+  header.writeUInt32BE(data.length, 5)
+  return Buffer.concat([header, data])
+}
+
+/**
+ * The output of an exec from the cursor as one stream (docs/plan/95): what read-exec gives a page
+ * at a time, without a process a page. New output is waited for inside this process. Once
+ * exit.json is there and both files are read to their end, the end frame carries the exit and the
+ * process ends; it also ends after FOLLOW_MS, and the host follows again from its cursor.
+ */
+async function followExec(id, stdoutOffset, stderrOffset) {
+  const path = idPath(id)
+  const cursor = {
+    stdout: number(stdoutOffset, MAX_BYTES),
+    stderr: number(stderrOffset, MAX_BYTES),
+  }
+  const files = {}
+  for (const stream of ['stdout', 'stderr']) {
+    files[stream] = await fs.open(`${path}/${stream}`, constants.O_RDONLY | noFollow)
+    const stat = await files[stream].stat()
+    // As read-exec: a cursor past the output, or output past the limit, is no exec to follow.
+    if (!stat.isFile() || stat.size > MAX_BYTES || cursor[stream] > stat.size) fail()
+  }
+  // Nobody reads any more (the host closed its connection) or the time is up: the process ends,
+  // whatever it waits for. It never outlives FOLLOW_MS by more than the write it is in.
+  process.stdout.on('error', () => process.exit(0))
+  setTimeout(() => process.exit(0), FOLLOW_MS + 5_000).unref()
+  const send = (frame) =>
+    new Promise((resolve, reject) =>
+      process.stdout.write(frame, (error) => (error ? reject(error) : resolve())),
+    )
+  const started = Date.now()
+  let idle = 10
+  try {
+    while (true) {
+      if (Date.now() - started >= FOLLOW_MS) {
+        // Planned: the host follows again from its cursor.
+        await send(followFrame(FOLLOW_FRAME.again, 0, Buffer.alloc(0)))
+        return
+      }
+      // The exit first: what follows was written before it, so an empty read after it is the end.
+      const exit = await maybeJson(`${path}/exit.json`)
+      let read = false
+      for (const stream of ['stdout', 'stderr']) {
+        const buffer = Buffer.alloc(CHUNK)
+        const { bytesRead } = await files[stream].read(buffer, 0, CHUNK, cursor[stream])
+        if (!bytesRead) continue
+        if (cursor[stream] + bytesRead > MAX_BYTES) fail()
+        await send(followFrame(FOLLOW_FRAME[stream], cursor[stream], buffer.subarray(0, bytesRead)))
+        cursor[stream] += bytesRead
+        read = true
+      }
+      if (read) {
+        idle = 10
+        continue
+      }
+      if (exit) {
+        await send(followFrame(FOLLOW_FRAME.end, 0, Buffer.from(JSON.stringify(exit))))
+        return
+      }
+      await delay(idle)
+      idle = Math.min(idle * 2, 100)
+    }
+  } finally {
+    await files.stdout.close()
+    await files.stderr.close()
+  }
+}
+
 async function bootstrap() {
   // This command runs once as root, before any task data or process enters the sandbox.
   // The separate root-owned mount makes the identity durable and immutable to uid 10001.
@@ -496,6 +575,7 @@ async function main() {
   } else if (command === 'stage') await stage(args[0])
   else if (command === 'run') await run(...args)
   else if (command === 'read-exec') await readExec(...args)
+  else if (command === 'follow-exec') await followExec(...args)
   else if (command === 'signal') {
     if (!['cancelled', 'timeout', 'lost'].includes(args[2])) fail()
     await signalGroup(idPath(args[0]), args[1], args[2])
