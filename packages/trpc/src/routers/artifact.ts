@@ -456,7 +456,10 @@ export const artifactRouter = router({
     )
     .query(({ ctx, input }) => cabinetArtifactChats(ctx.prisma, { userId: ctx.user.id, ...input })),
 
-  /** The gallery (Ар50): the user's artifacts by a filter, a kind, a project and a word. */
+  /**
+   * The gallery (Ар50): the user's artifacts by a filter, a kind, a project and a word, a page at
+   * a time — `cursor` is the last card of the page before (its id, `updatedAt` and title).
+   */
   list: consentedProcedure
     .input(
       z.strictObject({
@@ -465,6 +468,10 @@ export const artifactRouter = router({
         kind: z.enum(artifactKinds).nullable().optional(),
         projectId: z.uuid().nullable().optional(),
         sort: z.enum(artifactGallerySorts).optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+        cursor: z
+          .strictObject({ id: z.uuid(), updatedAt: z.iso.datetime(), title: z.string().max(1000) })
+          .nullish(),
       }),
     )
     .output(z.array(galleryRow))

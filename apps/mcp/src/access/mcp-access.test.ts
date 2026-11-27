@@ -200,6 +200,7 @@ describe('MCP token access', () => {
       expect.objectContaining({
         where: {
           taskId: base.taskId,
+          clientVisible: true,
           type: 'feed.request',
           createdAt: { lt: new Date('2026-11-16T06:00:00.124Z') },
         },
@@ -218,7 +219,9 @@ describe('MCP token access', () => {
       const feed = dbOf(old, { run: true, requests: 2 })
       expect((await new PostgresMcpAccess(feed).authenticate(token))?.unattended).toBe(false)
       expect(feed.taskEvent.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { taskId: base.taskId, type: 'feed.request' } }),
+        expect.objectContaining({
+          where: { taskId: base.taskId, clientVisible: true, type: 'feed.request' },
+        }),
       )
     }
     // The instant is the plan's own, read by the admission query from the assignment.

@@ -223,7 +223,7 @@ async function limitCause(
   turnNo: number | null,
 ): Promise<NoticeLimitCause | undefined> {
   const rows = await db.taskEvent.findMany({
-    where: { taskId, type: { in: ['feed.question', 'feed.failure'] } },
+    where: { taskId, clientVisible: true, type: { in: ['feed.question', 'feed.failure'] } },
     orderBy: { id: 'desc' },
     take: 20,
     select: { type: true, payload: true },

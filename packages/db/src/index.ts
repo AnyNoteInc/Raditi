@@ -99,6 +99,7 @@ export {
   artifactGalleryFilters,
   artifactGallerySorts,
   listArtifacts,
+  type ArtifactGalleryCursor,
   type ArtifactGalleryFilter,
   type ArtifactGalleryRow,
   type ArtifactGallerySort,

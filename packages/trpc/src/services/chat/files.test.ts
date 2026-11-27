@@ -56,7 +56,12 @@ describe('readTaskFile', () => {
     ])
     expect(db.taskEvent.findFirst.mock.calls[0]).toEqual([
       expect.objectContaining({
-        where: { taskId, type: 'feed.file', payload: { path: ['fileId'], equals: fileId } },
+        where: {
+          taskId,
+          clientVisible: true,
+          type: 'feed.file',
+          payload: { path: ['fileId'], equals: fileId },
+        },
       }),
     ])
     expect(storage.get).toHaveBeenCalledWith('artifacts', `chat-files/${taskId}/${fileId}`)

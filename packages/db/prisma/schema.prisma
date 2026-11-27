@@ -742,6 +742,8 @@ model ProjectMergeRequest {
 
   @@unique([projectRepositoryId, number])
   @@index([taskId])
+  // The newest request of a branch.
+  @@index([projectRepositoryId, sourceBranch, number(sort: Desc)], map: "project_merge_requests_branch_idx")
   @@map("project_merge_requests")
 }
 
@@ -1153,7 +1155,12 @@ model TaskEvent {
   artifactCommentDispatch ArtifactCommentDispatch?
 
   @@index([taskId, id])
-  @@index([turnId])
+  // The rows of a turn after a cursor (`task.activity`), and the foreign key.
+  @@index([turnId, id])
+  // The journal rows written while their turn had no row: read by the number in the payload.
+  @@index([taskId, id], map: "task_events_turnless_output_idx", where: raw("turn_id IS NULL AND type::text = 'turn.output'::text"))
+  // The requests of the chats of a workspace by day (the chart of «Использование»).
+  @@index([taskId, createdAt], map: "task_events_request_created_idx", where: raw("type::text = 'feed.request'::text"))
   // The gateway and the key issuer check this flag on every lookup, admission and key issue.
   // The casts are what PostgreSQL stores for a varchar column: without them migrate diff reports
   // the index as changed.
@@ -1975,6 +1982,8 @@ model CreditHold {
   @@index([accountId, status])
   @@index([accountId, placedAt])
   @@index([accountId, settledAt])
+  // The reserves of a period of the history of «Использование».
+  @@index([accountId, createdAt])
   @@index([status, expiresAt])
   @@map("credit_holds")
 }
@@ -2705,6 +2714,9 @@ model ArtifactBlock {
   @@index([documentId, parentKey, rank])
   @@index([pendingTaskId, pendingTurn])
   @@index([leaseTaskId])
+  // The first written blocks of a card of the gallery, in the order of `artifactBlockOrder`
+  // (`rank` NULLS LAST, `position`, `id`): `listArtifacts` reads three of each in one query.
+  @@index([documentId, rank, position, id], map: "chat_document_sections_excerpt_idx", where: raw("deleted_rev IS NULL AND state::text = 'written'::text"))
   @@map("chat_document_sections")
 }
 
@@ -3406,4 +3418,3 @@ model OriMessage {
   @@index([keepUntil])
   @@map("ori_messages")
 }
-

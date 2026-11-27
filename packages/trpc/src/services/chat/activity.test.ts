@@ -8,15 +8,23 @@ const taskId = '0199a3f2-0000-7000-8000-0000000000b1'
 
 type Row = { id: bigint; payload: unknown }
 
-function setup(rows: Row[], options: { task?: boolean } = {}) {
+const turnId = '0199a3f2-0000-7000-8000-0000000000c1'
+
+/** `rows` are the rows of the turn; `turnless` — rows of the journal written without its id. */
+function setup(rows: Row[], options: { task?: boolean; turn?: boolean; turnless?: Row[] } = {}) {
   const db = {
     task: { findFirst: vi.fn(async () => (options.task === false ? null : { id: taskId })) },
+    taskTurn: {
+      findUnique: vi.fn(async () => (options.turn === false ? null : { id: turnId })),
+    },
     taskEvent: {
-      findMany: vi.fn(async ({ take }: { take: number }) => rows.slice(0, take)),
+      findMany: vi.fn(async ({ take, where }: { take: number; where: { turnId: unknown } }) =>
+        (where.turnId === null ? (options.turnless ?? []) : rows).slice(0, take),
+      ),
     },
   }
   const read = (after = '0') =>
-    readTurnActivity(db as unknown as Pick<PrismaClient, 'task' | 'taskEvent'>, {
+    readTurnActivity(db as unknown as Pick<PrismaClient, 'task' | 'taskEvent' | 'taskTurn'>, {
       userId,
       taskId,
       turn: 2,
@@ -42,17 +50,51 @@ describe('readTurnActivity', () => {
         }),
       }),
     ])
-    expect(db.taskEvent.findMany.mock.calls[0]).toEqual([
-      expect.objectContaining({
-        where: {
-          taskId,
-          type: 'turn.output',
-          id: { gt: 41n },
-          payload: { path: ['turn'], equals: 2 },
-        },
-        orderBy: { id: 'asc' },
-      }),
+    expect(db.taskTurn.findUnique.mock.calls[0]).toEqual([
+      expect.objectContaining({ where: { taskId_turnNo: { taskId, turnNo: 2 } } }),
     ])
+    expect(db.taskEvent.findMany.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          where: { turnId, type: 'turn.output', id: { gt: 41n } },
+          orderBy: { id: 'asc' },
+        }),
+      ],
+      [
+        expect.objectContaining({
+          where: {
+            taskId,
+            turnId: null,
+            type: 'turn.output',
+            id: { gt: 41n },
+            payload: { path: ['turn'], equals: 2 },
+          },
+          orderBy: { id: 'asc' },
+        }),
+      ],
+    ])
+  })
+
+  it('reads the rows written without the id of their turn by its number, in the order of ids', async () => {
+    const { db, read } = setup([output(8n, [{ type: 'message', text: 'Второй.' }])], {
+      turnless: [output(3n, [{ type: 'message', text: 'Первый.' }])],
+    })
+    expect(await read()).toEqual({
+      events: [
+        { id: '3:0', type: 'message', text: 'Первый.' },
+        { id: '8:0', type: 'message', text: 'Второй.' },
+      ],
+      cursor: '8',
+      more: false,
+    })
+    // A turn without its row in `task_turns`: only by the number.
+    const without = setup([], {
+      turn: false,
+      turnless: [output(4n, [{ type: 'message', text: 'Старый.' }])],
+    })
+    expect((await without.read()).events).toEqual([{ id: '4:0', type: 'message', text: 'Старый.' }])
+    expect(without.db.taskEvent.findMany).toHaveBeenCalledOnce()
+    expect(db.taskEvent.findMany).toHaveBeenCalledTimes(2)
   })
 
   it('answers someone else’s task as one that does not exist', async () => {

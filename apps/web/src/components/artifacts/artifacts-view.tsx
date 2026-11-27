@@ -21,7 +21,7 @@ import {
   type ArtifactKind,
   type ArtifactTemplate,
 } from '@repo/domain/artifacts'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AppRouter } from '@repo/trpc'
 import type { inferRouterOutputs } from '@trpc/server'
 import Link from 'next/link'
@@ -44,6 +44,9 @@ const filters = ['all', 'mine', 'shared', 'trash'] as const
 type Filter = (typeof filters)[number]
 
 /** The height of the picture or the text at the top of a card. */
+/** Cards per page of the gallery. */
+const GALLERY_PAGE = 60
+
 const COVER_HEIGHT = { xs: 120, sm: 140 } as const
 
 /**
@@ -304,25 +307,38 @@ export function ArtifactsView({
   const [projectId, setProjectId] = useState<string>(initialProjectId)
   const [creating, setCreating] = useState(false)
   const [notice, setNotice] = useState<{ text: string; undo?: () => void } | null>(null)
-  const list = useQuery(
-    trpc.artifact.list.queryOptions({
-      filter,
-      ...(query ? { query } : {}),
-      kind: kind === '' ? null : (kind as ArtifactKind),
-      projectId: projectId || null,
-      sort: 'newest',
-    }),
+  // A page at a time: the next one starts after the last card of the one before.
+  const list = useInfiniteQuery(
+    trpc.artifact.list.infiniteQueryOptions(
+      {
+        filter,
+        ...(query ? { query } : {}),
+        kind: kind === '' ? null : (kind as ArtifactKind),
+        projectId: projectId || null,
+        sort: 'newest',
+        limit: GALLERY_PAGE,
+      },
+      {
+        initialCursor: null,
+        getNextPageParam: (page) => {
+          const last = page.at(-1)
+          return page.length < GALLERY_PAGE || last === undefined
+            ? null
+            : { id: last.id, updatedAt: last.updatedAt, title: last.title }
+        },
+      },
+    ),
   )
   // Whether there is anything at all: the empty screen stands in place of the filters.
-  const any = useQuery(trpc.artifact.list.queryOptions({ filter: 'all' }))
-  const trashed = useQuery(trpc.artifact.list.queryOptions({ filter: 'trash' }))
+  const any = useQuery(trpc.artifact.list.queryOptions({ filter: 'all', limit: 1 }))
+  const trashed = useQuery(trpc.artifact.list.queryOptions({ filter: 'trash', limit: 1 }))
   const projects = useQuery({ ...trpc.project.list.queryOptions(), enabled: projectId !== '' })
   const reread = () =>
     void queryClient.invalidateQueries({ queryKey: trpc.artifact.list.pathKey() })
   const trash = useMutation(trpc.artifact.trash.mutationOptions({ onSuccess: reread }))
   const restore = useMutation(trpc.artifact.restore.mutationOptions({ onSuccess: reread }))
   const create = useMutation(trpc.artifact.create.mutationOptions())
-  const rows = list.data ?? []
+  const rows = list.data?.pages.flat() ?? []
   const empty =
     any.isSuccess && any.data.length === 0 && trashed.isSuccess && trashed.data.length === 0
   const filtered = filter !== 'all' || query !== '' || kind !== '' || projectId !== ''
@@ -506,6 +522,17 @@ export function ArtifactsView({
               />
             ))}
           </Box>
+          {list.hasNextPage && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2.5 }}>
+              <Button
+                variant="outlined"
+                disabled={list.isFetchingNextPage}
+                onClick={() => void list.fetchNextPage()}
+              >
+                {galleryTexts.showMore}
+              </Button>
+            </Box>
+          )}
         </>
       )}
 

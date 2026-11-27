@@ -239,7 +239,6 @@ export async function listProjects(
       id: true,
       name: true,
       goal: true,
-      instructions: true,
       starredAt: true,
       archivedAt: true,
       purgeAfter: true,
@@ -248,6 +247,18 @@ export async function listProjects(
       _count: { select: { tasks: { where: { deletedAt: null } } } },
     },
   })
+  // Whether a project has instructions, without reading them: a list needs only the sign.
+  const instructed =
+    rows.length === 0
+      ? new Set<string>()
+      : new Set(
+          (
+            await db.project.findMany({
+              where: { id: { in: rows.map((row) => row.id) }, instructions: { not: null } },
+              select: { id: true },
+            })
+          ).map((row) => row.id),
+        )
   const order = compareProjects(input.sort ?? 'recent')
   rows.sort((a, b) =>
     view === 'trash' && a.purgeAfter !== null && b.purgeAfter !== null
@@ -261,7 +272,7 @@ export async function listProjects(
     starred: row.starredAt !== null,
     archived: row.archivedAt !== null,
     chats: row._count.tasks,
-    hasInstructions: row.instructions !== null,
+    hasInstructions: instructed.has(row.id),
     activityAt: row.activityAt,
     createdAt: row.createdAt,
     purgeAfter: row.purgeAfter,

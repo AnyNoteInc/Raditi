@@ -623,9 +623,23 @@ const projectOfList = {
   select: { id: true, name: true, archivedAt: true, deletedAt: true },
 } as const
 
+/**
+ * A run as the list and the page show it: what its state is told by, not the copy of the
+ * instructions it started with.
+ */
 const runOfList = {
   orderBy: [{ createdAt: 'desc' }, { dueAt: 'desc' }],
-  include: {
+  select: {
+    id: true,
+    dueAt: true,
+    trigger: true,
+    status: true,
+    reason: true,
+    missedCount: true,
+    missedUntil: true,
+    taskId: true,
+    createdAt: true,
+    startedAt: true,
     task: {
       select: {
         id: true,
@@ -1262,7 +1276,7 @@ async function onlyFirstRequest(
         ? { id: { lte: BigInt(answers.requestEventId) } }
         : { createdAt: { lt: new Date(answers.answeredAt.getTime() + 1) } }
   const requests = await db.taskEvent.findMany({
-    where: { taskId, type: 'feed.request', ...bound },
+    where: { taskId, clientVisible: true, type: 'feed.request', ...bound },
     select: { id: true },
     orderBy: { id: 'asc' },
     take: 2,

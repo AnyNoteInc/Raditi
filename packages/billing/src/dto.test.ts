@@ -18,6 +18,7 @@ import {
   planSchema,
   renewalChargeStates,
   subscriptionOverviewSchema,
+  usageWindowsDto,
   subscriptionWaitsSchema,
 } from './dto.ts'
 
@@ -412,5 +413,22 @@ describe('payment method DTOs', () => {
         subscriptionWaitsSchema.safeParse({ bindingPending, renewalCharge: 'none' }).success,
       ).toBe(false)
     }
+  })
+})
+
+describe('usage windows DTO', () => {
+  it('rounds what a window took up to whole credits as Money, without a float', () => {
+    const resetsAt = new Date('2026-11-27T12:00:00.000Z')
+    expect(
+      usageWindowsDto([
+        { kind: '5h', limit: 100, used: '12.0001', resetsAt },
+        { kind: 'week', limit: null, used: '0.0000', resetsAt: null },
+        { kind: '5h', limit: 10, used: '999999.9999', resetsAt },
+      ]),
+    ).toEqual([
+      { kind: '5h', limit: 100, used: 13, left: 87, resetsAt },
+      { kind: 'week', limit: null, used: 0, left: null, resetsAt: null },
+      { kind: '5h', limit: 10, used: 1_000_000, left: 0, resetsAt },
+    ])
   })
 })

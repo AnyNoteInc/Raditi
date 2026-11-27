@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@repo/db'
+import type { Prisma, PrismaClient } from '@repo/db'
 import {
   agentEventSchema,
   agentOutputLimits,
@@ -228,9 +228,13 @@ const textOf = (event: z.output<typeof shownEvent>): number => {
  * `task.activity`: the agent's events of one turn after the cursor, for a member of the task's
  * workspace. A row or an event that no longer reads is passed over; the cursor still moves past
  * it.
+ *
+ * The rows of the turn are found by `turn_id` (`task_events_turn_id_id_idx`); a journal row
+ * written while its turn had no row of `task_turns` has none, and is found by the number in its
+ * payload among the few such rows of the chat (`task_events_turnless_output_idx`).
  */
 export async function readTurnActivity(
-  db: Pick<PrismaClient, 'task' | 'taskEvent'>,
+  db: Pick<PrismaClient, 'task' | 'taskEvent' | 'taskTurn'>,
   input: { userId: string; taskId: string; turn: number; after: string },
 ): Promise<TurnActivity> {
   const task = await db.task.findFirst({
@@ -238,17 +242,26 @@ export async function readTurnActivity(
     select: { id: true },
   })
   if (task === null) throw taskNotFound()
-  const rows = await db.taskEvent.findMany({
-    where: {
-      taskId: task.id,
-      type: 'turn.output',
-      id: { gt: BigInt(input.after) },
-      payload: { path: ['turn'], equals: input.turn },
-    },
-    orderBy: { id: 'asc' },
-    take: activityLimits.rows + 1,
-    select: { id: true, payload: true },
+  const after = BigInt(input.after)
+  const take = activityLimits.rows + 1
+  const turn = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: task.id, turnNo: input.turn } },
+    select: { id: true },
   })
+  const page = (where: Prisma.TaskEventWhereInput) =>
+    db.taskEvent.findMany({
+      where: { ...where, type: 'turn.output', id: { gt: after } },
+      orderBy: { id: 'asc' },
+      take,
+      select: { id: true, payload: true },
+    })
+  const [ofTurn, turnless] = await Promise.all([
+    turn === null ? [] : page({ turnId: turn.id }),
+    page({ taskId: task.id, turnId: null, payload: { path: ['turn'], equals: input.turn } }),
+  ])
+  const rows = [...ofTurn, ...turnless]
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .slice(0, take)
   let more = rows.length > activityLimits.rows
   const events: ActivityEvent[] = []
   let cursor = input.after

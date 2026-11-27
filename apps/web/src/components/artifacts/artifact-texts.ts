@@ -69,6 +69,7 @@ export const galleryTexts = Object.freeze({
   undo: 'Вернуть',
   emptyText: 'Пока пусто',
   more: 'Ещё',
+  showMore: 'Показать ещё',
   createFailed: 'Не получилось создать артефакт. Попробуйте ещё раз.',
 })
 
