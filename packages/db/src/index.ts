@@ -591,3 +591,16 @@ export {
   type AccountSkillVersionInput,
   type TurnAccountSkillRow,
 } from './account-skills.ts'
+export {
+  closeStaleVkProposals,
+  closeVkProposal,
+  enabledBuiltinMcp,
+  failVkTurn,
+  pendingVkProposals,
+  reserveVkProposal,
+  setBuiltinMcp,
+  workingVkCommunities,
+  workingVkCommunity,
+  type PendingVkProposal,
+  type VkCommunityRow,
+} from './vk.ts'
