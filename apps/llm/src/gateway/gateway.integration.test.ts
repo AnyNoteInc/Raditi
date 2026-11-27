@@ -359,7 +359,7 @@ describe.skipIf(!enabled)(
       text
         .split('\n\n')
         .filter(Boolean)
-        .map((block) => block.replace(/^event: message\ndata: /, ''))
+        .map((block) => block.replace(/^(?:event: message\n)?data: /, ''))
     const providerHeaderNames = ['set-cookie', 'x-log-id', 'x-request-id', 'ga-traceid', 'alt-svc']
 
     it('streams GLM through CONNECT, stores the provider usage and shows the provider only the plan key', async () => {
