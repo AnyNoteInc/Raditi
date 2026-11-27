@@ -206,6 +206,11 @@ export interface InputTokenEstimateOptions {
   /** Exact paths discovered by the adapter after its request policy has accepted the body. */
   encryptedContentPaths?: readonly JsonPath[]
   imagePaths?: readonly JsonPath[]
+  /**
+   * The value as the adapter already encoded it: UTF-8 of `JSON.stringify(value)`. Its length
+   * is the estimate's, so the value is not written out once more.
+   */
+  encoded?: Uint8Array
 }
 
 /**
@@ -218,7 +223,10 @@ export function estimateLlmInputTokens(
   options: InputTokenEstimateOptions = {},
 ): number {
   assertJsonObject(value)
-  const paths = new Map<string, 'encrypted' | 'image'>()
+  const seen = new Set<string>()
+  // What the exempt strings take of the encoded value, their quotes left in place.
+  let exempt = 0
+  let images = 0
   for (const [kind, group] of [
     ['encrypted', options.encryptedContentPaths ?? []],
     ['image', options.imagePaths ?? []],
@@ -231,35 +239,32 @@ export function estimateLlmInputTokens(
         rejected('estimate_path')
       if (kind === 'encrypted' && path.at(-1) !== 'encrypted_content') rejected('estimate_path')
       const key = JSON.stringify(path)
-      if (paths.has(key)) rejected('estimate_path')
-      paths.set(key, kind)
-    }
-  }
-  let matched = 0
-  let images = 0
-  const visit = (item: JsonValue, path: JsonPath): JsonValue => {
-    const kind = paths.get(JSON.stringify(path))
-    if (kind) {
+      if (seen.has(key)) rejected('estimate_path')
+      seen.add(key)
+      const item = valueAt(value, path)
       if (typeof item !== 'string') rejected('estimate_path')
       if (kind === 'image') {
         if (!/^data:image\/(png|jpeg|webp|gif);base64,/.test(item)) rejected('image')
         images += 1
       }
-      matched += 1
-      return ''
+      exempt += encoder.encode(JSON.stringify(item)).byteLength - 2
     }
-    if (Array.isArray(item)) return item.map((child, index) => visit(child, [...path, index]))
-    if (item !== null && typeof item === 'object') {
-      return Object.fromEntries(
-        Object.entries(item).map(([key, child]) => [key, visit(child, [...path, key])]),
-      )
-    }
-    return item
   }
-  const counted = visit(value, [])
-  if (matched !== paths.size) rejected('estimate_path')
-  return (
-    Math.ceil(encoder.encode(JSON.stringify(counted)).byteLength / 3) +
-    images * llmJsonLimits.imageTokens
-  )
+  const bytes = options.encoded?.byteLength ?? encoder.encode(JSON.stringify(value)).byteLength
+  return Math.ceil((bytes - exempt) / 3) + images * llmJsonLimits.imageTokens
+}
+
+/** The value a path names: an index only in an array, a key only of an object; else undefined. */
+function valueAt(value: JsonValue, path: JsonPath): JsonValue | undefined {
+  let item: JsonValue | undefined = value
+  for (const part of path) {
+    if (Array.isArray(item)) {
+      if (typeof part !== 'number' || part >= item.length) return undefined
+      item = item[part]
+    } else if (item !== null && typeof item === 'object') {
+      if (typeof part !== 'string' || !Object.hasOwn(item, part)) return undefined
+      item = item[part]
+    } else return undefined
+  }
+  return item
 }

@@ -1,6 +1,5 @@
-import type { LlmBackend } from '@repo/domain'
+import type { LlmStreamEvent, LlmStreamInspection } from '@repo/domain'
 
-import { createSseDecoder } from './sse.ts'
 import {
   addDelta,
   copyResult,
@@ -15,14 +14,13 @@ import {
 /**
  * The meter of an OpenAI-style chat completions stream: deltas of content, reasoning and tool
  * arguments, usage from the chunk that carries it, `completed` only after a `finish_reason`.
- * What ends a stream as a failure is the adapter's own rule, so its inspector is injected.
+ * What ends a stream as a failure is the adapter's own rule: the meter reads the inspection of
+ * each event by the adapter's inspector, and the JSON that inspector already parsed.
  */
-export function createChatCompletionsUsageMeter(
-  createInspector: LlmBackend['streamInspector'],
-): UsageMeter {
+export function createChatCompletionsUsageMeter(): UsageMeter {
   const result = emptyMeterResult()
-  const inspector = createInspector()
   let finished = false
+  let stopped = false
   const readUsage = (
     event: Record<string, unknown>,
     choice: Record<string, unknown> | undefined,
@@ -52,26 +50,33 @@ export function createChatCompletionsUsageMeter(
           },
     )
   }
-  const decoder = createSseDecoder(({ event: eventName, data }) => {
-    const inspected = inspector.inspect({ event: eventName, data })
-    if (inspected.kind === 'invalid') return false
+  const payload = (event: LlmStreamEvent, parsed: Record<string, unknown> | null | undefined) =>
+    event.data === '[DONE]' ? null : parsed !== undefined ? parsed : parseEvent(event.data)
+  const observe = (source: LlmStreamEvent, inspected: LlmStreamInspection) => {
+    if (stopped) return
+    if (inspected.kind === 'invalid') {
+      stopped = true
+      return
+    }
     if (inspected.kind === 'skip') return
     if (inspected.kind === 'failure') {
+      stopped = true
       result.outcome = 'failed'
       result.signal = inspected.signal.kind === 'transient' ? null : inspected.signal
       // A completion chunk the adapter refuses (its finish_reason) is still the provider's
       // word on what the call consumed; an error event carries no usage to read.
-      const refused = data === '[DONE]' ? null : parseEvent(data)
-      if (refused !== null && refused.error == null && eventName !== 'error')
+      const refused = payload(source, undefined)
+      if (refused !== null && refused.error == null && source.event !== 'error')
         readUsage(refused, object(Array.isArray(refused.choices) ? refused.choices[0] : undefined))
-      return false
+      return
     }
-    if (data === '[DONE]') {
+    if (source.data === '[DONE]') {
+      stopped = true
       // A finish_reason is required: DONE alone does not invent a successful model response.
       if (finished) result.outcome = 'completed'
-      return false
+      return
     }
-    const event = parseEvent(data)
+    const event = payload(source, inspected.parsed)
     if (event === null) return
     const choice = object(Array.isArray(event.choices) ? event.choices[0] : undefined)
     const delta = object(choice?.delta)
@@ -88,12 +93,9 @@ export function createChatCompletionsUsageMeter(
       finished = true
       result.outcome = 'completed'
     }
-  })
+  }
   return {
-    push: (chunk) => decoder.push(chunk),
-    end() {
-      decoder.end()
-      return copyResult(result)
-    },
+    observe,
+    end: () => copyResult(result),
   }
 }

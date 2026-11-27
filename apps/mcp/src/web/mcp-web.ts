@@ -27,24 +27,16 @@ import type { McpWebAdmission, McpWebStore } from './mcp-web-store.ts'
  * Every call is admitted again for its turn; the first one opens the task's browser session and
  * waits for it (docs/plan/61-chats-first.md, К11), or answers `BROWSER_STARTING` when the start takes
  * longer than the call may wait. One call per turn runs at a time. The agent never gets Playwright, CDP, cookies or pixels — the worker's
- * answer is text, its addresses without their secret parameters and fragments, its contacts hidden
- * by the task's contact map, at most 64 KiB; a refusal is a fixed code with a fixed text that names
- * no address and no value of a field.
+ * answer is text, its addresses without their secret parameters and fragments, at most 64 KiB; a
+ * refusal is a fixed code with a fixed text that names no address and no value of a field.
  */
 
-/** Codes a `web` call answers with: those of §3.7, and the full contact map of the task. */
-export const webAgentCodes = [...browserTaskCodeNames, 'CONTENT_PRIVACY_LIMIT'] as const
+/** Codes a `web` call answers with: those of §3.7. */
+export const webAgentCodes = browserTaskCodeNames
 export type WebAgentCode = (typeof webAgentCodes)[number]
 
 const webAgentTexts: Readonly<Record<WebAgentCode, Readonly<{ status: number; message: string }>>> =
-  Object.freeze({
-    ...browserTaskCodes,
-    CONTENT_PRIVACY_LIMIT: {
-      status: 413,
-      message:
-        'This page shows more contacts than the task can hide. Do not read it again; end the turn and tell the client.',
-    },
-  })
+  browserTaskCodes
 
 const webCodes: ReadonlySet<string> = new Set(webAgentCodes)
 export const isWebAgentCode = (code: string): code is WebAgentCode => webCodes.has(code)

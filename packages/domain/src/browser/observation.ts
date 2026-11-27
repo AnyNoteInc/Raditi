@@ -71,7 +71,7 @@ export const browserObservedCheckpointSchema = z.strictObject({
   state: z.enum(browserCheckpointStates),
 })
 
-/** An observation as the worker answers `web_observe` (before the role masks contacts in it). */
+/** An observation as the worker answers `web_observe`; the role passes it on without masking. */
 export const browserObservationSchema = z.strictObject({
   observation: browserObservationIdSchema,
   page: browserTabSchema,

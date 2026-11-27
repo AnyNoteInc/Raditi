@@ -24,14 +24,24 @@ export interface LlmStreamEvent {
   data: string
 }
 
+/**
+ * The JSON object of a forwarded event's data, as its inspector read it: the usage meter takes
+ * it from there instead of parsing the event again. Null — the data is not a JSON object; left
+ * out — the inspector did not read it, and the meter reads it itself. A failure never carries
+ * it: nothing of the provider's failed event stays in the inspection (its meter, once per
+ * stream, reads that event itself).
+ */
+export type LlmStreamPayload = Record<string, unknown> | null
+
 export interface LlmStreamFailure {
   kind: 'failure'
+  /** What goes to the CLI in place of the provider's event. */
   event: LlmStreamEvent
   signal: CallSignal
 }
 
 export type LlmStreamInspection =
-  | { kind: 'forward'; event: LlmStreamEvent; terminal?: true }
+  | { kind: 'forward'; event: LlmStreamEvent; terminal?: true; parsed?: LlmStreamPayload }
   | LlmStreamFailure
   | { kind: 'skip' }
   | { kind: 'invalid' }
@@ -372,7 +382,15 @@ export interface LlmBackend {
     clientHeaders: Headers,
     credential: SubscriptionCredential,
   ): { url: string; method: string; headers: Headers }
-  usageMeter(): { push(chunk: Uint8Array): void; end(): MeterResult }
+  /**
+   * The meter of one stream. It reads each event the gateway decoded, in order, with what the
+   * inspector of the same stream made of it; it is not told of an event after the inspector has
+   * found the stream invalid, failed or ended.
+   */
+  usageMeter(): {
+    observe(event: LlmStreamEvent, inspection: LlmStreamInspection): void
+    end(): MeterResult
+  }
   classify(status: number, headers: Headers, errorJson: unknown | null): CallSignal
   /** CLI-shaped refusal, assembled locally; provider bodies never go back to the sandbox. */
   refusal(
