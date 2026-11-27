@@ -1,13 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { mirrorLimits } from '@repo/domain'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { sweepOperations } from './stale-operations.ts'
 import {
   assertSharedDirectory,
+  BUNDLE_IN_USE_MS,
   BundleCache,
   KeyedLock,
   mirrorPath,
@@ -92,6 +94,50 @@ describe('the volume of the mirrors', () => {
     await writeFile(join(dir, 'next'), 'new bundle')
     await rename(join(dir, 'next'), join(dir, `${sha(3)}.bundle`))
     expect((await cache.get(id, sha(3)))?.sha256).toBe(sha256('new bundle'))
+  })
+
+  it('never replaces a bundle in place: a second put of the commit serves the first file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'raditi-volume-'))
+    roots.push(root)
+    const cache = new BundleCache(root)
+    const id = randomUUID()
+    const first = join(root, 'first.bundle')
+    const second = join(root, 'second.bundle')
+    await writeFile(first, 'first bytes')
+    await writeFile(second, 'other bytes')
+    const stored = await cache.put(id, sha(4), first)
+    const inode = (await stat(stored!.path)).ino
+    const again = await cache.put(id, sha(4), second)
+    expect(again).toMatchObject({ sha256: sha256('first bytes'), path: stored!.path })
+    expect((await stat(stored!.path)).ino).toBe(inode)
+    expect(await readFile(stored!.path, 'utf8')).toBe('first bytes')
+  })
+
+  it('evicts the oldest bundles beyond the limit, never one served in the last minutes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'raditi-volume-'))
+    roots.push(root)
+    const cache = new BundleCache(root)
+    const id = randomUUID()
+    const source = join(root, 'built.bundle')
+    await writeFile(source, 'bundle')
+    const kept = mirrorLimits.bundlesKept
+    const old = new Date(Date.now() - BUNDLE_IN_USE_MS - 60_000)
+    // Beyond the limit, all old but the last two: the old surplus goes.
+    for (let n = 0; n < kept + 2; n++) {
+      const put = await cache.put(id, sha(100 + n), source)
+      if (n < kept) await utimes(put!.path, old, old)
+    }
+    const left = async () =>
+      (await readdir(join(root, 'bundles', id))).filter((name) => name.endsWith('.bundle')).length
+    expect(await left()).toBe(kept)
+    // Every file served recently: the surplus waits instead of going under a reader.
+    const fresh = await mkdtemp(join(tmpdir(), 'raditi-volume-'))
+    roots.push(fresh)
+    const recent = new BundleCache(fresh)
+    for (let n = 0; n < kept + 2; n++) await recent.put(id, sha(200 + n), source)
+    expect(
+      (await readdir(join(fresh, 'bundles', id))).filter((name) => name.endsWith('.bundle')),
+    ).toHaveLength(kept + 2)
   })
 
   it('removes the operations a killed core left behind', async () => {

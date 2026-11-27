@@ -99,6 +99,9 @@ const SHA = /^[a-f0-9]{40}$/
 /** The first bytes of a bundle a reader needs for its header (bundleHead reads 4 KiB at most). */
 export const BUNDLE_HEADER_BYTES = 4096
 
+/** A bundle read (or written) this recently may be streaming to a runner: eviction keeps it. */
+export const BUNDLE_IN_USE_MS = 10 * 60_000
+
 /** A bundle of the cache: its file, read as a stream, and what core knows of its bytes. */
 export interface CachedBundle {
   path: string
@@ -185,6 +188,10 @@ export class BundleCache {
   ): Promise<CachedBundle | null> {
     const path = this.#path(projectRepositoryId, sha)
     if (!path) return null
+    // A bundle of this commit is already in place: a reader may be streaming it, so it is never
+    // replaced by a new file (`git bundle create` does not promise the same bytes).
+    const present = await this.get(projectRepositoryId, sha)
+    if (present) return present
     const dir = join(this.#dir, projectRepositoryId)
     const temporary = join(dir, `.${sha}.${randomBytes(6).toString('hex')}.tmp`)
     try {
@@ -236,9 +243,12 @@ export class BundleCache {
     }
     if (files.length <= mirrorLimits.bundlesKept) return
     files.sort((a, b) => a.at - b.at)
+    // A bundle served in the last minutes may still be streamed to a runner: it stays.
+    const recent = Date.now() - BUNDLE_IN_USE_MS
     await Promise.all(
       files
         .slice(0, files.length - mirrorLimits.bundlesKept)
+        .filter(({ at }) => at < recent)
         .flatMap(({ path }) => [rm(path, { force: true }), rm(metaPath(path), { force: true })]),
     )
   }
