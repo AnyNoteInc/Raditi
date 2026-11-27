@@ -4,6 +4,7 @@ import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
 
 import { env } from '@/env'
 import { MAX_TRPC_BODY_BYTES, withBodyLimit } from '@/server/body-limit'
+import { builtinMcpServices } from '@/server/builtin-mcp-services'
 import { chatServices } from '@/server/chat-services'
 import { mcpServerServices } from '@/server/mcp-servers'
 import { withOriFactHeader } from '@/server/ori-fact-header'
@@ -56,6 +57,7 @@ const serve = withOriFactHeader(async (req) => {
         mcpServers: mcpServerServices(),
         git: gitServices(),
         skills: skillServices(),
+        builtinMcp: builtinMcpServices(),
       }),
     onError: ({ path, error, type }) => {
       const failure = failureToLog(error)

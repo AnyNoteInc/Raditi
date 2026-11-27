@@ -12,7 +12,7 @@ const active = (pathname: string, entries: readonly SettingsNavEntry[] = everySe
   activeSettingsEntry(pathname, entries)?.href
 
 describe('settings navigation', () => {
-  it('declares the seven sections in sidebar order', () => {
+  it('declares the eight sections in sidebar order', () => {
     expect(settingsNav.map(({ href, label, icon }) => [href, label, icon])).toEqual([
       ['/settings', 'Общее', 'settings'],
       ['/settings/plans', 'Тарифы', 'plans'],
@@ -21,6 +21,7 @@ describe('settings navigation', () => {
       ['/settings/variables', 'Переменные', 'lock'],
       ['/settings/skills', 'Навыки', 'bulb'],
       ['/settings/connections', 'Подключения', 'globe'],
+      ['/settings/builtin-mcp', 'Встроенные MCP', 'layers'],
     ])
   })
 
@@ -33,6 +34,7 @@ describe('settings navigation', () => {
       'Переменные',
       'Навыки',
       'Подключения',
+      'Встроенные MCP',
     ])
   })
 })

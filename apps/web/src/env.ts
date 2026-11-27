@@ -4,6 +4,7 @@ import { authConfigFromEnv, type AuthConfig } from '@repo/auth'
 import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { telegramConfigFromEnv, type TelegramConfig } from '@repo/telegram'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
+import { vkConfigFromEnv, type VkConfig } from '@repo/vk'
 import { yookassaConfigFromEnv, type YookassaConfig } from '@repo/yookassa'
 
 import { webGitEnvFromEnv, type WebGitEnv } from '@/server/git-env'
@@ -36,4 +37,6 @@ export const env = {
   telegram: lazy((): TelegramConfig | null => telegramConfigFromEnv(process.env)),
   /** The apps of the repositories of projects (docs/plan/84-projects.md, §4.5); each part may be off. */
   git: lazy((): WebGitEnv => webGitEnvFromEnv(process.env)),
+  // The secret of the cards of VK (docs/plan/99-vk-community.md, §3.3).
+  vk: lazy((): VkConfig => vkConfigFromEnv(process.env)),
 }

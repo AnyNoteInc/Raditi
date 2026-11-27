@@ -19,6 +19,8 @@ const sections: Sections = {
   // A git app set in part, a short secret of the cards or a fake of a stand in production
   // (docs/plan/84-projects.md, §4.5).
   git: env.git,
+  // A short secret of the cards of VK (docs/plan/99-vk-community.md, §3.3).
+  vk: env.vk,
   db: () => dbConfigFromEnv(process.env),
 }
 
