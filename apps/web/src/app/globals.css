@@ -6,18 +6,24 @@
 }
 
 /* What MUI's CssBaseline sets on the root, for the pages without MUI too — the landing, the
-   cookie notice (docs/plan/96-review-fixes.md, P33.2). The same values, so the cabinet is as it was. */
-html {
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  box-sizing: border-box;
-  -webkit-text-size-adjust: 100%;
-}
-*,
-*::before,
-*::after {
-  box-sizing: inherit;
-}
-body {
-  margin: 0;
+   cookie notice (docs/plan/96-review-fixes.md, P33.2). The same values, so the cabinet is as it was.
+   In a layer below MUI's (`@layer mui`): a rule outside any layer beats every layered one whatever
+   its specificity, and `* { box-sizing: inherit }` unlayered turned the inputs of MUI border-box —
+   a small text field of the cabinet collapsed to 23 px (found 27.11.2026, plan 97). */
+@layer reset, mui;
+@layer reset {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    box-sizing: border-box;
+    -webkit-text-size-adjust: 100%;
+  }
+  *,
+  *::before,
+  *::after {
+    box-sizing: inherit;
+  }
+  body {
+    margin: 0;
+  }
 }
