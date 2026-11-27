@@ -4,7 +4,6 @@
 #    и pnpm vault:bootstrap — mounts turns/, subs/, kv/ и transit/ и политики в OpenBao,
 #    infra/vault/README.md)
 # Профили (--profile <имя> или COMPOSE_PROFILES в .env):
-#   site — тестовый WordPress, ci — раннер Gitea Actions,
 #   monitoring — Prometheus и Grafana, monitoring-host — cAdvisor (только Linux).
 # Теги закреплены; порты публикуются только на 127.0.0.1.
 # No llm profile: the synthetic Z.ai and the local egress proxy are started by `pnpm verify:llm-gateway`.
@@ -104,122 +103,6 @@ services:
     ports:
       - '127.0.0.1:8200:8200'
 
-  # Gitea — только репозитории сайтов клиентов (код платформы живёт на GitHub).
-  gitea:
-    image: gitea/gitea:1.27.3-rootless
-    environment:
-      GITEA__database__DB_TYPE: sqlite3
-      GITEA__server__ROOT_URL: http://localhost:3300/
-      GITEA__server__HTTP_PORT: '3000'
-      GITEA__security__INSTALL_LOCK: 'true'
-      GITEA__actions__ENABLED: 'true'
-      GITEA__actions__DEFAULT_ACTIONS_URL: self
-      # Файлы workflow из репозиториев сайтов не запускаются: путь внутри .git git не хранит,
-      # обязательные workflow из platform/ci остаются (план 53, Р28; spec §10).
-      GITEA__actions__WORKFLOW_DIRS: .git/raditi-no-repository-workflows
-      # Вебхуки — только на локальные и частные адреса (apps/web в dev).
-      GITEA__webhook__ALLOWED_HOST_LIST: 'loopback,private'
-      GITEA__metrics__ENABLED: 'true'
-    ports:
-      - '127.0.0.1:3300:3000'
-      - '127.0.0.1:2222:2222'
-    volumes:
-      - giteadata:/var/lib/gitea
-      - giteaconf:/etc/gitea
-
-  # Раннер Gitea Actions (бывший act_runner, теперь gitea/runner).
-  # Токен регистрации — в Gitea: «Администрирование → Actions → Раннеры».
-  # Node в заданиях — LTS для сборки сайтов клиентов, не версия платформы; тег точный.
-  # Сокет Docker нужен самому раннеру; в задания он не попадает (runner.yaml: docker_host '-').
-  runner:
-    image: gitea/runner:4.0.0
-    profiles: ['ci']
-    depends_on:
-      - gitea
-    environment:
-      GITEA_INSTANCE_URL: http://gitea:3000
-      GITEA_RUNNER_REGISTRATION_TOKEN: ${GITEA_RUNNER_TOKEN:-}
-      GITEA_RUNNER_NAME: raditi-dev-runner
-      GITEA_RUNNER_LABELS: check:docker://node:24.21.0-bookworm,deploy:docker://node:24.21.0-bookworm
-      CONFIG_FILE: /config/runner.yaml
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - runnerdata:/data
-      - ./runner.yaml:/config/runner.yaml:ro
-
-  # Тестовый сайт клиента: WordPress + MariaDB + WP-CLI.
-  # Сайт готов к контентному пути: тип окружения local (пароли приложений по HTTP), плагин
-  # «Радити» в mu-plugins только на чтение. Пока плагин не привязан к сайту платформы, он
-  # отклоняет всё; привязку, доступ в OpenBao и репозиторий делает доверенная команда
-  # infra/dev/site-verify/connect-local.mjs (README того же каталога).
-  site-db:
-    image: mariadb:11.4.13
-    profiles: ['site']
-    environment:
-      MARIADB_DATABASE: wp
-      MARIADB_USER: wp
-      MARIADB_PASSWORD: wp
-      MARIADB_ROOT_PASSWORD: wp-root
-    volumes:
-      - sitedb:/var/lib/mysql
-    healthcheck:
-      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
-      interval: 2s
-      timeout: 5s
-      retries: 45
-
-  site:
-    image: wordpress:7.1.2-php8.3-apache
-    profiles: ['site']
-    depends_on:
-      site-db:
-        condition: service_healthy
-    environment: &site_environment
-      WORDPRESS_DB_HOST: site-db
-      WORDPRESS_DB_USER: wp
-      WORDPRESS_DB_PASSWORD: wp
-      WORDPRESS_DB_NAME: wp
-      # Как у одноразового стенда (site-verify/compose.yml): без cron, обновлений и внешних
-      # HTTP-вызовов; файлы сайта из админки не меняются.
-      WORDPRESS_CONFIG_EXTRA: |
-        define('WP_ENVIRONMENT_TYPE', 'local');
-        define('DISABLE_WP_CRON', true);
-        define('WP_HTTP_BLOCK_EXTERNAL', true);
-        define('WP_AUTO_UPDATE_CORE', false);
-        define('AUTOMATIC_UPDATER_DISABLED', true);
-        define('DISALLOW_FILE_MODS', true);
-    ports:
-      - '127.0.0.1:${SITE_PORT:-8080}:80'
-    volumes:
-      - sitefiles:/var/www/html
-      - ../wordpress/raditi-content.php:/var/www/html/wp-content/mu-plugins/raditi-content.php:ro
-    healthcheck:
-      test:
-        - CMD
-        - php
-        - -r
-        - "exit(is_file('/var/www/html/wp-config.php') ? 0 : 1);"
-      interval: 2s
-      timeout: 5s
-      retries: 30
-
-  # Разовый запуск: docker compose -f infra/dev/docker-compose.yml --profile site run --rm wpcli core version
-  # WP-CLI читает ту же конфигурацию и тот же плагин, что и веб-сервер. SITE_WPCLI_IMAGE нужен
-  # только стендам: закреплённый образ по digest, когда точного тега локально нет.
-  wpcli:
-    image: ${SITE_WPCLI_IMAGE:-wordpress:cli-2.12.0-php8.3}
-    profiles: ['site']
-    user: '33:33'
-    depends_on:
-      site:
-        condition: service_healthy
-    environment: *site_environment
-    entrypoint: ['wp']
-    command: ['--info']
-    volumes:
-      - sitefiles:/var/www/html
-      - ../wordpress/raditi-content.php:/var/www/html/wp-content/mu-plugins/raditi-content.php:ro
-
   # --- Мониторинг (профиль monitoring) ---
   # Grafana — http://localhost:3030 (admin / GRAFANA_ADMIN_PASSWORD), Prometheus — http://localhost:9090.
   # Приложения (pnpm dev) опрашиваются на хосте через host.docker.internal.
@@ -314,10 +197,5 @@ volumes:
   pgdata:
   redisdata:
   s3data:
-  giteadata:
-  giteaconf:
-  runnerdata:
-  sitedb:
-  sitefiles:
   promdata:
   grafanadata:

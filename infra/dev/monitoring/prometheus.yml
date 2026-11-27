@@ -46,14 +46,8 @@ scrape_configs:
     params: { format: ['prometheus'] }
     static_configs: [{ targets: ['vault:8200'] }]
 
-  - job_name: gitea
-    static_configs: [{ targets: ['gitea:3000'] }]
-
   # Дополнительные профили: без них цели будут down — это нормально. Метка отделяет их
   # от обязательных целей в Grafana и алертах. Проверка включённых профилей — в README.md.
-  - job_name: gitea-runner
-    static_configs: [{ targets: ['runner:9101'], labels: { compose_profile: ci } }]
-
   - job_name: cadvisor
     static_configs:
       - targets: ['cadvisor:8080']
@@ -68,11 +62,8 @@ scrape_configs:
           - http://host.docker.internal:3000/api/health
           - http://host.docker.internal:8081/health
           - http://host.docker.internal:8082/health
-          - http://gitea:3000/api/healthz
           - http://vault:8200/v1/sys/health
           - http://s3:8333/healthz
-      - targets: ['http://site:80/']
-        labels: { compose_profile: site }
       # Приложение `llm` в dev может быть не запущено, а его health отвечает 503
       # (degraded), когда задан прокси выхода без рабочего канала, когда провайдер недостижим
       # на прямом пути или недоступны база и Vault. Без прокси шлюз с G4 отвечает 200. Поэтому
