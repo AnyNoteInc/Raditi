@@ -22,6 +22,8 @@ export interface SkillSecretRead {
  */
 export class SkillSecrets {
   readonly #cache = new Map<string, { read: SkillSecretRead | null; until: number }>()
+  /** One read of Vault per path at a time: the calls that miss together wait for it. */
+  readonly #pending = new Map<string, PendingRead>()
 
   constructor(
     private readonly secrets: Pick<SecretStore, 'kvRead'>,
@@ -33,16 +35,42 @@ export class SkillSecrets {
     const now = (this.options.now ?? Date.now)()
     const cached = this.#cache.get(path)
     if (cached !== undefined && cached.until > now) return cached.read
-    const stored = await this.secrets.kvRead(path)
-    const parsed = stored === null ? null : agentSkillSecretSchema.safeParse(stored.data)
-    const read =
-      stored !== null && parsed?.success ? { secret: parsed.data, version: stored.version } : null
-    this.#cache.set(path, { read, until: now + (this.options.ttlMs ?? SKILL_SECRET_TTL_MS) })
-    return read
+    const pending = this.#pending.get(path)
+    if (pending !== undefined) return pending.read
+    const entry: PendingRead = { forgotten: false, read: Promise.resolve(null) }
+    entry.read = (async () => {
+      try {
+        const stored = await this.secrets.kvRead(path)
+        const parsed = stored === null ? null : agentSkillSecretSchema.safeParse(stored.data)
+        const read =
+          stored !== null && parsed?.success
+            ? { secret: parsed.data, version: stored.version }
+            : null
+        // A key forgotten while it was read is not kept: the next read asks Vault again.
+        if (!entry.forgotten)
+          this.#cache.set(path, { read, until: now + (this.options.ttlMs ?? SKILL_SECRET_TTL_MS) })
+        return read
+      } finally {
+        if (this.#pending.get(path) === entry) this.#pending.delete(path)
+      }
+    })()
+    this.#pending.set(path, entry)
+    return entry.read
   }
 
   /** Forgets a server's secret: the next read goes to Vault (a refused key, a renewed token). */
   forget(workspaceId: string, name: string): void {
-    this.#cache.delete(agentSkillSecretPath(workspaceId, name))
+    const path = agentSkillSecretPath(workspaceId, name)
+    this.#cache.delete(path)
+    const pending = this.#pending.get(path)
+    if (pending !== undefined) {
+      pending.forgotten = true
+      this.#pending.delete(path)
+    }
   }
+}
+
+interface PendingRead {
+  forgotten: boolean
+  read: Promise<SkillSecretRead | null>
 }
