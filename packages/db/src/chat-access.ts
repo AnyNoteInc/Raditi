@@ -12,5 +12,10 @@ export const accessibleTasks = (userId: string) =>
     workspace: { members: { some: { userId } } },
     // A project is its author's alone (ПР1): another member never drives its chats, nor reads
     // the private code and the memory they carry (ревью, безопасность 9).
-    OR: [{ projectId: null }, { project: { deletedAt: null, createdById: userId } }],
+    AND: [
+      { OR: [{ projectId: null }, { project: { deletedAt: null, createdById: userId } }] },
+      // The journal of quick edits carries the notes and quotes of artifacts its author edits,
+      // private notes included: it is its author's alone (docs/plan/98-quick-edits.md, БПр2).
+      { OR: [{ kind: 'chat' }, { createdById: userId }] },
+    ],
   }) satisfies Prisma.TaskWhereInput
