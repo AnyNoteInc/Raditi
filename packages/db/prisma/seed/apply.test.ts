@@ -276,6 +276,7 @@ describe.skipIf(!databaseUrl)('subscription catalogue seeds on PostgreSQL', () =
       plans: [],
       pricingRules: [],
       agentDrivers: [],
+      platformDrivers: [],
       llmProviders: providers,
       llmModels: llmModelSeeds.map((model) => ({
         ...model,
@@ -428,6 +429,7 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
     plans,
     pricingRules: [],
     agentDrivers: [],
+    platformDrivers: [],
     llmProviders: [],
     llmModels: [],
   })

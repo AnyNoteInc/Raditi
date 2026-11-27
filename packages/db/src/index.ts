@@ -593,3 +593,17 @@ export {
   type AccountSkillVersionInput,
   type TurnAccountSkillRow,
 } from './account-skills.ts'
+export {
+  QUICK_TASK_TITLE,
+  claimQuickEdit,
+  finishQuickEdit,
+  insertQuickEdit,
+  queueQuickAttempt,
+  quickEditBlocks,
+  quickEditsOfArtifact,
+  staleQuickEdits,
+  type ClaimedQuickEdit,
+  type QuickEditBlock,
+  type QuickEditRow,
+  type QuickTaskAttempt,
+} from './quick-edits.ts'
