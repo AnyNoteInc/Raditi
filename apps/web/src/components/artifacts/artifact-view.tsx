@@ -18,7 +18,7 @@ import { DictationAvailable } from '@/components/chat/dictation-button'
 import { useTRPC } from '@/trpc/client'
 
 import { ArtifactSharingAvailable } from './artifact-comments'
-import { downloadDocumentMarkdown } from './artifact-document'
+import { downloadDocumentMarkdown } from './artifact-document-text'
 import { ArtifactHistoryButton } from './artifact-history'
 import { ArtifactMoveDialog, moveTexts } from './artifact-move'
 import { ArtifactPage } from './artifact-page'

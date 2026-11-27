@@ -20,7 +20,7 @@ import { useState } from 'react'
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
-import { documentSx, SectionText } from './artifact-document'
+import { documentSx, SectionText } from './artifact-document-text'
 import { formatDateTime } from './artifact-texts'
 import type { CabinetArtifact } from './use-artifact'
 

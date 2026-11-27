@@ -938,7 +938,8 @@ describe('a chat of a run of a scheduled task (docs/plan/82-scheduled-tasks.md)'
       </QueryClientProvider>,
     )
     fireEvent.click(await screen.findByRole('button', { name: 'Изменить задачу из ленты' }))
-    const window = screen.getByRole('dialog', { name: 'Окно задачи' })
+    // The window comes in a chunk of its own, loaded at its first opening (P33.1).
+    const window = await screen.findByRole('dialog', { name: 'Окно задачи' })
     expect(window.textContent).toContain('Изменить task-of-the-card')
     fireEvent.click(within(window).getByRole('button', { name: 'Закрыть окно задачи' }))
     expect(screen.queryByRole('dialog', { name: 'Окно задачи' })).toBeNull()
@@ -1348,7 +1349,10 @@ describe('a task in the browser', () => {
     expect(toolsPanel()).toBeNull()
     expect(await menuTiles()).toEqual(['Браузер, нет'])
     await choose(/^Браузер/)
-    expect(plain(pane().textContent)).toContain('Браузер в этом чате не запускался.')
+    // The pane of the browser comes in a chunk of its own, loaded as its tab first opens (P33.1).
+    await waitFor(() =>
+      expect(plain(pane().textContent)).toContain('Браузер в этом чате не запускался.'),
+    )
   })
 
   it.each([

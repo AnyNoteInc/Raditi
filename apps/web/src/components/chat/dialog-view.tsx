@@ -41,17 +41,16 @@ import {
 import { AppIcon } from '@/components/application/app-icon'
 import { PanelToggle } from '@/components/application/cabinet-panel'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
-import { MoveToProjectDialog, useMoveToProject } from '@/components/projects/move-to-project'
+import { useMoveToProject } from '@/components/projects/use-move-to-project'
 import { moveText, projectHref } from '@/components/projects/project-texts'
 import { useArtifactMentions } from '@/components/artifacts/use-artifact-mentions'
 import { useContextMentions } from '@/components/projects/use-context-mentions'
-import { ScheduleDialog, type ScheduleDialogOpening } from '@/components/scheduled/schedule-dialog'
+import type { ScheduleDialogOpening } from '@/components/scheduled/schedule-dialog'
 import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
 import type { SentFile } from './attachment-chips'
-import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
 import { callErrorCode, callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
@@ -121,11 +120,19 @@ import { useBrowserLaunch } from './use-browser-launch'
 import { useChatTodo } from './use-chat-todo'
 import { useDocumentArrivals } from './use-document-arrivals'
 import { agentDocumentIdsOf, useAgentDocumentArrivals } from './agent-document'
-import { DocumentsPane, type DocumentTarget } from './documents-pane'
-import { ArtifactPane } from '@/components/artifacts/artifact-pane'
+import type { DocumentTarget } from './document-target'
 import { DictationAvailable } from '@/components/chat/dictation-button'
 import { artifactKindIcon } from '@/components/artifacts/artifact-kind-icon'
-import { PublishTargetDialog, usePagePublish, type PublishTarget } from './page-publish'
+import { usePagePublish } from './page-publish'
+import type { PublishTarget } from './publish-target-dialog'
+import {
+  ArtifactPane,
+  BrowserPane,
+  DocumentsPane,
+  MoveToProjectDialog,
+  PublishTargetDialog,
+  ScheduleDialog,
+} from './lazy-tools'
 import { useBrowserStream } from './use-browser-stream'
 import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
@@ -431,6 +438,9 @@ export function DialogView({
   const [note, setNote] = useState('')
   /** The window of a scheduled task the cards of the feed open (Зп35); null — closed. */
   const [scheduleOpening, setScheduleOpening] = useState<ScheduleDialogOpening | null>(null)
+  // Its code is loaded at the first opening, and the window stays mounted after it to close softly.
+  const [scheduleOpened, setScheduleOpened] = useState(false)
+  if (scheduleOpening !== null && !scheduleOpened) setScheduleOpened(true)
   const effortMenu = useRef<EffortMenuHandle>(null)
   const { details } = useChatDetails()
   const { thinking } = useChatThinking()
@@ -1710,7 +1720,7 @@ export function DialogView({
         iconOf={iconOf}
       />
 
-      {userId !== null ? (
+      {userId !== null && scheduleOpened ? (
         <ScheduleDialog
           opening={scheduleOpening}
           userId={userId}

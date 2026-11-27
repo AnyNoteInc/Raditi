@@ -18,7 +18,7 @@ import { useSearchParams, useSelectedLayoutSegment } from 'next/navigation'
 import { useId, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
-import { MoveToProjectDialog, useMoveToProject } from '@/components/projects/move-to-project'
+import { useMoveToProject } from '@/components/projects/use-move-to-project'
 import { useTRPCClient } from '@/trpc/client'
 
 import { chatHref, NEW_CHAT_SEGMENT, newChatHref, projectOfSearch } from './chat-address'
@@ -27,6 +27,7 @@ import { chatsText, listRepoHint, listText } from './chat-texts'
 import type { DialogListItem } from './chat-types'
 import { offScreen } from './composer'
 import { ArchiveDialog, archiveText } from './archive-dialog'
+import { MoveToProjectDialog } from './lazy-tools'
 import {
   DialogMenuButton,
   dialogListKey,
