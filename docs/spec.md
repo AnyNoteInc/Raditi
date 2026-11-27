@@ -311,7 +311,7 @@ flowchart TB
 | Каркас приложений | app-bootstrap (только domain: запуск процесса без базы и Redis) и service-runtime (Prisma и health приложений с базой); service-runtime, в отличие от прочих пакетов, может использовать observability (runner-engine — до 21.10.2026) |
 | Лист | ip-address: ничего не импортирует из репозитория; его импортируют приложения, а правила уровней domain, адаптеров и остальных пакетов его не допускают |
 
-Новые переменные окружения попадают и в `.env.example`, и в `globalEnv` в `turbo.json`. Код платформы живёт на GitHub: CI (typecheck, lint, test, check-architecture, build) и релизы через semantic-release с `@semantic-release/github` идут в GitHub Actions: тег на влитом коммите и GitHub Release с заметками, без коммита CHANGELOG в `main`; выкладка платформы на ВМ через GitHub Actions — позже (M10). Gitea — только для репозиториев сайтов клиентов и реестра образов.
+Новые переменные окружения попадают и в `.env.example`, и в `turbo.json`: в `globalEnv` — только общее (`APP_ENV`, `CI`, `NODE_ENV`), остальные — в `env` задачи `test`; `pnpm check-env` проверяет объединение ([план 96](plan/96-review-fixes.md), P35). Код платформы живёт на GitHub: CI (typecheck, lint, test, check-architecture, build) и релизы через semantic-release с `@semantic-release/github` идут в GitHub Actions: тег на влитом коммите и GitHub Release с заметками, без коммита CHANGELOG в `main`; выкладка платформы на ВМ через GitHub Actions — позже (M10). Gitea — только для репозиториев сайтов клиентов и реестра образов.
 
 ## 7. Жизненный цикл задачи
 
