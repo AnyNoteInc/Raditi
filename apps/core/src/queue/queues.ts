@@ -64,6 +64,10 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
     removeOnComplete: { age: DAY, count: 1_000 },
     removeOnFail: { age: 7 * DAY },
   },
+  // A publication in a VK community the client pressed (docs/plan/99-vk-community.md, ВК9): one
+  // attempt — a call that went out and did not answer is `lost`, never sent twice. Job data holds
+  // the id of the row only.
+  vk: lifecycleJobs,
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

@@ -30,6 +30,8 @@ import {
   feedRepoLeftText,
   feedRepoActionText,
   feedRepoProposalText,
+  feedVkActionText,
+  feedVkProposalText,
   feedPageLeftText,
   feedPageText,
   feedFilesChangedText,
@@ -317,6 +319,11 @@ function rowBlock(row: FeedItem, withSite: boolean, h: Heading = heading): strin
     }
     case 'feed.schedule_left':
       return block([h(feedExportText.agent, row.at), feedScheduleLeftText(row)])
+    // A post or a reply the agent proposed for VK, and what the button did (plan 99, §3.3).
+    case 'feed.vk_proposal':
+      return block([h(feedExportText.agent, row.at), feedVkProposalText(row), row.text])
+    case 'feed.vk_action':
+      return block([h(feedExportText.agent, row.at), feedVkActionText(row), row.url ?? null])
     case 'feed.rewind':
       return feedRewindText(row)
     case 'feed.redo':

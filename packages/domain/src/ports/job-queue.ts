@@ -22,6 +22,8 @@ export const queueNames = [
   'schedules',
   // The files «Скачать» and the thumbnails of artifacts that core builds (docs/plan/88-artifacts.md).
   'artifacts',
+  // The publications in VK communities the client pressed (docs/plan/99-vk-community.md, §3.3).
+  'vk',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

@@ -397,6 +397,62 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { v: 1, action: 'update', name: 'Цены конкурентов', reason: 'placeholder' },
     { v: 1, action: 'delete', name: null, reason: 'not_found' },
   ],
+  'feed.vk_proposal': [
+    {
+      v: 1,
+      kind: 'post',
+      reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d01',
+      communityId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d02',
+      community: 'Кофейня у дома',
+      text: 'Мы открылись!\n\nЖдём вас с 9:00.',
+      publishAt: null,
+    },
+    {
+      v: 1,
+      kind: 'post',
+      reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d03',
+      communityId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d02',
+      community: 'Кофейня у дома',
+      text: 'Скидки в субботу',
+      publishAt: '2026-11-28T06:00:00.000Z',
+    },
+    {
+      v: 1,
+      kind: 'reply',
+      reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d04',
+      communityId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d02',
+      community: 'Кофейня у дома',
+      text: 'С 9:00, ждём!',
+      postId: 10,
+      commentId: 3,
+      commentUrl: 'https://vk.com/wall-1001_10?reply=3',
+    },
+  ],
+  'feed.vk_action': [
+    {
+      v: 1,
+      actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d05',
+      reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d01',
+      kind: 'post',
+      state: 'done',
+      url: 'https://vk.com/wall-1001_11',
+    },
+    {
+      v: 1,
+      actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d06',
+      reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d04',
+      kind: 'reply',
+      state: 'failed',
+      error: 'VK_POST_REFUSED',
+    },
+    {
+      v: 1,
+      actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d07',
+      reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d03',
+      kind: 'post',
+      state: 'lost',
+    },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -443,6 +499,8 @@ describe('feed vocabulary', () => {
       'feed.repo_action',
       'feed.schedule_change',
       'feed.schedule_left',
+      'feed.vk_proposal',
+      'feed.vk_action',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -563,6 +621,10 @@ describe('free text is allowed in four fields, the agent words of a browser ques
       'feed.schedule_change.instructions',
       'feed.schedule_change.name',
       'feed.schedule_left.name',
+      // The name of a VK community and the text the agent proposed (docs/plan/99, §3.3): shown as
+      // text on the card, published only by the client's button.
+      'feed.vk_proposal.community',
+      'feed.vk_proposal.text',
     ])
   })
 
@@ -1440,6 +1502,20 @@ describe('reading stored rows', () => {
       'feed.schedule_left': [
         { v: 1, action: 'create', name: '', reason: 'limit' },
         { v: 1, action: 'create', reason: 'limit' },
+      ],
+      'feed.vk_proposal': [
+        { v: 1, kind: 'post', reservedId: 'нет', communityId: 'нет', community: 'а', text: 'а' },
+        {
+          v: 1,
+          kind: 'post',
+          reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d01',
+          communityId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d02',
+          community: 'а',
+          text: '',
+        },
+      ],
+      'feed.vk_action': [
+        { v: 1, actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7d05', kind: 'post', state: 'done' },
       ],
     }
     for (const type of feedEventTypes)
