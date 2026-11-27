@@ -4,6 +4,7 @@ import type { JobQueue } from '@repo/domain'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import {
+  OUTBOX_BATCH_SIZE,
   OUTBOX_ENQUEUE_TIMEOUT_MS,
   OUTBOX_LEASE_MARGIN_MS,
   OUTBOX_LEASE_MS,
@@ -394,6 +395,29 @@ describe('OutboxRelayService.wake', () => {
     await vi.waitFor(() => expect(queryRaw).toHaveBeenCalledTimes(2))
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(queryRaw).toHaveBeenCalledTimes(2)
+  })
+
+  it('goes on at once after a full batch, and waits for the next wake or poll after a partial one', async () => {
+    const { relay, queryRaw, queue } = background(rows(OUTBOX_BATCH_SIZE))
+    queryRaw
+      .mockResolvedValueOnce(rows(OUTBOX_BATCH_SIZE))
+      .mockResolvedValueOnce(rows(OUTBOX_BATCH_SIZE))
+      .mockResolvedValueOnce(rows(3))
+    relay.wake()
+    await vi.waitFor(() => expect(queryRaw).toHaveBeenCalledTimes(3))
+    await vi.waitFor(() => expect(queue.enqueue).toHaveBeenCalledTimes(2 * OUTBOX_BATCH_SIZE + 3))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(queryRaw).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not go on after a full batch it could not publish to the end', async () => {
+    const { relay, queryRaw, queue } = background(rows(OUTBOX_BATCH_SIZE), async () => {
+      throw new Error('redis is down')
+    })
+    relay.wake()
+    await vi.waitFor(() => expect(queue.enqueue).toHaveBeenCalledOnce())
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(queryRaw).toHaveBeenCalledOnce()
   })
 
   it('does nothing in a process that runs no workers, or once it stops', async () => {
