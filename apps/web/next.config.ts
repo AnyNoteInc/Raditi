@@ -63,6 +63,9 @@ const nextConfig: NextConfig = {
   // Keep the development indicator clear of the account menu at the sidebar's foot.
   devIndicators: { position: 'bottom-right' },
   poweredByHeader: false,
+  // Types are checked once, by `turbo typecheck` (tsgo, TS 7); `next build` would check them
+  // again with its own TypeScript 6 and add 15-60 s to every build of the image.
+  typescript: { ignoreBuildErrors: true },
   // Workspace packages ship TypeScript sources (NodeNext imports with .ts extensions).
   transpilePackages: [
     '@repo/auth',
@@ -79,9 +82,7 @@ const nextConfig: NextConfig = {
     '@repo/vault',
     '@repo/yookassa',
   ],
-  // Loaded by Node at runtime instead of being bundled: the pg driver and Prisma's runtime, and
-  // the drivers the site connection wizard reaches a client's server with — ssh2 loads native
-  // optional bindings, basic-ftp and mysql2 open their own sockets.
+  // Loaded by Node at runtime instead of being bundled: the pg driver and Prisma's runtime.
   serverExternalPackages: ['pg', '@prisma/client', '@prisma/adapter-pg'],
   ...(workspaceRoot ? { outputFileTracingRoot: workspaceRoot } : {}),
   experimental: {

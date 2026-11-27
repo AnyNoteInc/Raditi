@@ -356,7 +356,7 @@ export const BUILD_STEPS = Object.freeze([
     // prisma.config.ts reads DATABASE_URL; generate never connects.
     env: { DATABASE_URL: 'postgresql://build@localhost/build' },
   },
-  { title: 'build the orchestrator', args: ['--filter', 'core', 'build'], env: {} },
+  { title: 'build the orchestrator', args: ['--filter', 'core...', 'build'], env: {} },
   { title: 'build web', args: ['--filter', 'web', 'build'], env: {} },
 ])
 

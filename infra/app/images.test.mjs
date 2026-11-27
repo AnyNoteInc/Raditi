@@ -75,7 +75,8 @@ for (const app of ['core', 'llm', 'mcp', 'preview', 'runner', 'browser']) {
   test(`${app}: its own image prunes and builds its own app`, () => {
     const code = instructions(dockerfiles[app]).join('\n')
     assert.match(code, new RegExp(`turbo prune ${app} --docker`))
-    assert.match(code, new RegExp(`pnpm --filter ${app} build`))
+    // `<app>...` also builds the packages it needs first (@repo/service-runtime)
+    assert.match(code, new RegExp(`pnpm --filter ${app}(\\.\\.\\.)? build`))
     assert.match(code, new RegExp(`WORKDIR /app/apps/${app}$`, 'm'))
   })
 }

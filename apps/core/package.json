@@ -6,15 +6,15 @@
   "type": "module",
   "scripts": {
     "dev": "nest start --watch",
-    "build": "pnpm --filter @repo/service-runtime build && nest build",
+    "build": "nest build",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "test": "node --test scripts/*.test.mjs && vitest run",
     "test:db": "vitest run .integration.test.",
-    "verify:snapshots": "pnpm build && exec node scripts/verify-snapshots-stand.mjs",
-    "verify:transport": "pnpm build && node scripts/verify-snapshot-transport.mjs",
-    "verify:runner": "pnpm build && pnpm --filter runner build && exec node scripts/verify-runner-stand.mjs",
+    "verify:snapshots": "pnpm --filter core... build && exec node scripts/verify-snapshots-stand.mjs",
+    "verify:transport": "pnpm --filter core... build && node scripts/verify-snapshot-transport.mjs",
+    "verify:runner": "pnpm --filter core... build && pnpm --filter runner build && exec node scripts/verify-runner-stand.mjs",
     "billing:refund": "node scripts/billing-refund.mjs",
     "billing:stop-renewal": "node scripts/billing-stop-renewal.mjs",
     "billing:refunds-needed": "node scripts/billing-refunds-needed.mjs",
@@ -29,7 +29,7 @@
     "llm:usage": "node scripts/llm-usage.mjs",
     "llm:plan-rates": "node scripts/llm-plan-rates.mjs",
     "verify:llm-gateway": "exec node scripts/verify-llm-gateway.mjs",
-    "verify:opencode-supervisor": "pnpm build && pnpm --filter runner build && exec node scripts/verify-opencode-supervisor.mjs"
+    "verify:opencode-supervisor": "pnpm --filter core... build && pnpm --filter runner build && exec node scripts/verify-opencode-supervisor.mjs"
   },
   "dependencies": {
     "@nestjs/bullmq": "catalog:",

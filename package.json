@@ -37,7 +37,7 @@
     "verify:llm-app": "node infra/app/verify-llm-app.mjs",
     "verify:llm-firewall": "node infra/app/verify-llm-firewall.mjs",
     "verify:opencode": "exec node packages/agent-drivers/scripts/verify-opencode.mjs",
-    "verify:opencode-supervisor": "pnpm --filter core --filter runner build && exec node apps/core/scripts/verify-opencode-supervisor.mjs",
+    "verify:opencode-supervisor": "pnpm --filter core... --filter runner build && exec node apps/core/scripts/verify-opencode-supervisor.mjs",
     "verify:edge": "node infra/app/verify-edge.mjs",
     "verify:images": "node infra/app/verify-images.mjs"
   },
