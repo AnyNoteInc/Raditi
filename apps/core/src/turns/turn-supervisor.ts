@@ -42,6 +42,7 @@ import { LeaseGuard, TURN_LEASE_MS, turnRenewal } from './lease-guard.ts'
 import type { LiveTurns } from './live-turns.ts'
 import type { TurnInbox } from './turn-inbox.ts'
 import type { TurnProjectFiles } from './turn-project-files.ts'
+import type { TurnSkillFiles } from './turn-skill-files.ts'
 import { bundleOfPlan, gitNotConfigured, plannedSnapshotGit } from './turn-repository.ts'
 import {
   TurnAttempt,
@@ -62,6 +63,8 @@ export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
   inbox?: TurnInbox
   /** Required for a plan that names files of the chat's project (`input.projectFiles`). */
   projectFiles?: TurnProjectFiles
+  /** Required for a plan that names files of the skills of the account (`input.skillFiles`). */
+  skillFiles?: TurnSkillFiles
 }
 
 /**
@@ -257,12 +260,19 @@ export class TurnSupervisor {
       const readingProject = projectPaths.length
         ? guard.interruptible(this.deps.projectFiles!.files(labels.taskId, projectPaths))
         : Promise.resolve([])
-      const [keyed, restore, bundle, inbox, projectFiles] = await allSettledOrThrow([
+      // The files of the skills of the account (docs/plan/97-skills.md, Нв13): checked the same
+      // way, against the skills of the author of the chat now.
+      const skillPaths = request.input.skillFiles ?? []
+      const readingSkills = skillPaths.length
+        ? guard.interruptible(this.deps.skillFiles!.files(labels.taskId, skillPaths))
+        : Promise.resolve([])
+      const [keyed, restore, bundle, inbox, projectFiles, skillFiles] = await allSettledOrThrow([
         keying,
         restoring,
         bundling,
         reading,
         readingProject,
+        readingSkills,
       ] as const)
       const context = {
         ...keyed.context,
@@ -295,6 +305,7 @@ export class TurnSupervisor {
             ...(bundle ? { bundle } : {}),
             ...(inbox.length ? { inbox } : {}),
             ...(projectFiles.length ? { projectFiles } : {}),
+            ...(skillFiles.length ? { skillFiles } : {}),
             driverId: this.deps.driver.id,
             prepared: files,
             argv,
@@ -373,6 +384,11 @@ export class TurnSupervisor {
       throw badRequest('Files of a project go only to the turn of its chat')
     if (request.input.projectFiles?.length && !this.deps.projectFiles)
       throw badRequest('Files of a project need the inbox of core')
+    // The skills of the account go to the turn of a chat only (docs/plan/97-skills.md, Нв13).
+    if (request.input.skillFiles?.length && !turnMayHoldInbox(labels))
+      throw badRequest('Files of skills go only to the turn of a chat')
+    if (request.input.skillFiles?.length && !this.deps.skillFiles)
+      throw badRequest('Files of skills need the inbox of core')
     // A compaction shortens a session: only a checkpoint brings one (docs/plan/61, §5.14).
     if (request.input.action !== undefined && !request.previous)
       throw badRequest('An action of a turn needs the checkpoint of an earlier turn')

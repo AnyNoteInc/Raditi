@@ -9,7 +9,7 @@ import {
   type MigratedSchema,
 } from '../prisma/migrated-schema.ts'
 import {
-  chatAccountSkillFile,
+  chatAccountSkillVersions,
   listAccountSkills,
   newAccountSkillVersionId,
   removeAccountSkill,
@@ -106,12 +106,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the skills of an account (plan 97)', 
       data: { workspaceId: workspace.id, createdById: userId },
       select: { id: true },
     })
-    expect(
-      await chatAccountSkillFile(db, { taskId: task.id, name: 'demo', path: 'scripts/0.py' }),
-    ).toMatchObject({ userId, index: 1, executable: true })
-    expect(
-      await chatAccountSkillFile(db, { taskId: task.id, name: 'demo', path: 'missing' }),
-    ).toBeNull()
+    const versions = await chatAccountSkillVersions(db, task.id)
+    expect(versions?.userId).toBe(userId)
+    expect(versions?.skills.get('demo')?.files).toEqual(files(2))
 
     await setAccountSkillEnabled(db, { userId, skillId, enabled: false })
     expect((await turnAccountSkills(db, userId)).map((skill) => skill.name)).toEqual([

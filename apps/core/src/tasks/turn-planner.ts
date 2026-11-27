@@ -1,6 +1,10 @@
 import type { AttemptCreditBudget } from '@repo/billing'
+import type { TurnAccountSkillRow } from '@repo/db'
 import {
+  accountSkillsSection,
   askedToRemember,
+  skillCallOf,
+  turnSkillPath,
   clientInstructionsSection,
   memorySection,
   projectContextSection,
@@ -214,6 +218,11 @@ export interface PassFacts {
    * list them. Absent or empty — none.
    */
   projectFiles?: readonly ProjectContextFile[]
+  /**
+   * The skills of the author of the chat (docs/plan/97-skills.md, Нв13): built-in ones, and own
+   * ones with the files of their current versions. Absent or empty — none: skills stay off.
+   */
+  accountSkills?: readonly TurnAccountSkillRow[]
   /**
    * The active notes of the chat's memory (docs/plan/84-projects.md, ПР18): of its project, with
    * the account's when the project reads them, or the account's. Absent or null — the memory is
@@ -485,6 +494,37 @@ function filesNotUndone<File extends { id: string }>(
  * The client's own words of the pass, as the prompt carries them and nothing the platform adds:
  * the format the client asks for is read from them (docs/plan/67-agent-documents.md, Д1).
  */
+/**
+ * The skill the client called with `/<name>` in the words this pass answers
+ * (docs/plan/97-skills.md, Нв18): the first request of theirs that starts with the name of a skill
+ * of the turn. null — none.
+ */
+function calledSkillOf(facts: PassFacts): string | null {
+  const names = new Set((facts.accountSkills ?? []).map((skill) => skill.name))
+  if (names.size === 0) return null
+  const since = facts.turns.get(facts.task.turnNo)?.startedAt ?? null
+  for (const request of requestsNotUndone(facts)) {
+    if (request.kind === 'agent_command' || request.kind === 'command' || request.text === null)
+      continue
+    if (since !== null && request.createdAt.getTime() <= since.getTime()) continue
+    const name = skillCallOf(request.text)
+    if (name !== null && names.has(name)) return name
+  }
+  return null
+}
+
+/** The paths of the files of the own skills of a turn under SANDBOX_SKILLS (Нв13). */
+function skillFilesOf(skills: readonly TurnAccountSkillRow[]): string[] {
+  return skills.flatMap((skill) =>
+    skill.builtin
+      ? []
+      : (skill.files ?? []).flatMap((file) => {
+          const path = turnSkillPath(skill.name, file.path)
+          return path === null ? [] : [path]
+        }),
+  )
+}
+
 function clientWordsOf(facts: PassFacts, since: Date | null): string {
   return promptOf(requestsNotUndone(facts), since)
 }
@@ -656,6 +696,10 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     : null
   // The files of the project, with the project: an action (a compaction) reads no file.
   const projectFiles = action || !facts.project ? [] : projectFilesOf(facts.projectFiles ?? [])
+  // The skills of the author of the chat (docs/plan/97-skills.md, Нв13–Нв18): an action loads none.
+  const accountSkills = action ? [] : (facts.accountSkills ?? [])
+  const calledSkill = action ? null : calledSkillOf(facts)
+  const skillFiles = skillFilesOf(accountSkills)
   const request: UnkeyedTurnRequest = {
     sandbox: {
       image: env.driver.image,
@@ -693,10 +737,20 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         inbox: inboxFacts,
         variables: facts.variables ?? [],
         repository: repository !== null,
-      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${action ? '' : artifactsSection(facts.chatArtifacts ?? [], undefined, { project: facts.projectArtifacts ?? [] })}${memorySection(facts.memory)}${comments ? artifactCommentsSection(comments) : ''}`,
+      })}${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${repoSection}${facts.unattended ? unattendedSection(facts.unattended.name, { project: Boolean(facts.project), repository: repository !== null }) : ''}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}${action ? '' : artifactsSection(facts.chatArtifacts ?? [], undefined, { project: facts.projectArtifacts ?? [] })}${memorySection(facts.memory)}${accountSkillsSection(accountSkills, calledSkill)}${comments ? artifactCommentsSection(comments) : ''}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),
+      ...(accountSkills.length
+        ? {
+            accountSkills: accountSkills.map(({ name, builtin, userOnly }) => ({
+              name,
+              builtin,
+              userOnly,
+            })),
+          }
+        : {}),
+      ...(calledSkill ? { calledSkill } : {}),
     },
     input: action
       ? { prompt: ACTION_PROMPT, attachments: [], action }
@@ -715,6 +769,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
           // Their paths only: core puts the files there when the sandbox is prepared.
           attachments: inbox?.paths ?? [],
           ...(projectFiles.length ? { projectFiles: projectFiles.map((file) => file.path) } : {}),
+          ...(skillFiles.length ? { skillFiles } : {}),
         },
     driverVersion: env.driver.cliVersion,
     requirements: { ...requirements },

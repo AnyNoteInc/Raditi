@@ -8,10 +8,13 @@ import {
   SANDBOX_AGENT_HOME,
   SANDBOX_INBOX,
   SANDBOX_OUT,
+  SANDBOX_BUILTIN_SKILLS,
   SANDBOX_PROJECT,
+  SANDBOX_SKILLS,
   SANDBOX_SECRETS_DIR,
   SANDBOX_TOOLS_HOME,
   SANDBOX_WORKDIR,
+  skillLoadable,
   skillRelayPath,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -212,7 +215,15 @@ const playwrightBrowsers = '/opt/ms-playwright'
  * are the open internet's (owner's decision of 26.10.2026); web search stays off — it sends the
  * query to a search service of the CLI's vendor, which the platform did not choose.
  */
-function permissionOf(context: Pick<RunContext, 'internet' | 'skills'> & { vision?: boolean }) {
+function permissionOf(
+  context: Pick<RunContext, 'internet' | 'skills' | 'accountSkills' | 'calledSkill'> & {
+    vision?: boolean
+  },
+) {
+  const accountSkills = context.accountSkills ?? []
+  const loadable = accountSkills.filter((skill) =>
+    skillLoadable(skill, context.calledSkill ?? null),
+  )
   return {
     read: 'allow',
     edit: 'allow',
@@ -225,7 +236,13 @@ function permissionOf(context: Pick<RunContext, 'internet' | 'skills'> & { visio
     websearch: 'deny',
     // The helper `look` alone, when the turn's key sees images (docs/plan/88-artifacts.md, Ар32).
     task: context.vision ? { '*': 'deny', [lookAgent]: 'allow' } : 'deny',
-    skill: 'deny',
+    // The skills of the account the model may load (docs/plan/97-skills.md, Нв14, Нв17): by name,
+    // the rest denied — `deny` hides a skill from the list of the system prompt too. So the CLI's
+    // own `customize-opencode`, a built-in skill the account turned off and any SKILL.md that
+    // reached a path of the skills some other way stay unseen.
+    skill: loadable.length
+      ? { '*': 'deny', ...Object.fromEntries(loadable.map((skill) => [skill.name, 'allow'])) }
+      : 'deny',
     question: 'deny',
     lsp: 'deny',
     doom_loop: 'deny',
@@ -244,6 +261,13 @@ function permissionOf(context: Pick<RunContext, 'internet' | 'skills'> & { visio
       // The caches, temporary files and global packages of its commands (SANDBOX_TOOLS_HOME).
       [SANDBOX_TOOLS_HOME]: 'allow',
       [`${SANDBOX_TOOLS_HOME}/*`]: 'allow',
+      // The folders of the skills of the account, read-only (docs/plan/97-skills.md, Нв14).
+      ...(accountSkills.some((skill) => !skill.builtin)
+        ? { [SANDBOX_SKILLS]: 'allow', [`${SANDBOX_SKILLS}/*`]: 'allow' }
+        : {}),
+      ...(accountSkills.some((skill) => skill.builtin)
+        ? { [SANDBOX_BUILTIN_SKILLS]: 'allow', [`${SANDBOX_BUILTIN_SKILLS}/*`]: 'allow' }
+        : {}),
       // The output of a tool too long for the model, which the CLI tells it to read there
       // (toolOutput). OpenCode 1.18.34 appends the same rule after the configuration's own unless
       // one of those denies exactly it; named here, it does not depend on the CLI's version.
@@ -451,12 +475,26 @@ function modelSettings(llm: Pick<RunContext['llm'], 'baseUrl' | 'model' | 'visio
  * The reasoning level is not here: the gateway sets it from the profile of the turn key.
  */
 function configuration(context: RunContext): string {
-  const { llm, mcp, egressProxy, internet, skills } = validated(context)
+  const { llm, mcp, egressProxy, internet, skills, accountSkills, calledSkill } = validated(context)
   const direct = directHosts(context)
   const keys = relayedKeys(skills)
+  // Where the CLI looks for the skills of the account (docs/plan/97-skills.md, Нв14): only these
+  // folders — OPENCODE_DISABLE_EXTERNAL_SKILLS and OPENCODE_DISABLE_PROJECT_CONFIG keep the ones
+  // of the repository of the client and of the home out.
+  const skillPaths = [
+    ...(accountSkills?.some((skill) => !skill.builtin) ? [SANDBOX_SKILLS] : []),
+    ...(accountSkills?.some((skill) => skill.builtin) ? [SANDBOX_BUILTIN_SKILLS] : []),
+  ]
   return JSON.stringify({
     ...modelSettings({ ...llm, baseUrl: relayedBaseUrl(llm.baseUrl) }),
-    permission: permissionOf({ internet, skills, vision: visionOf(llm) }),
+    permission: permissionOf({
+      internet,
+      skills,
+      accountSkills,
+      ...(calledSkill ? { calledSkill } : {}),
+      vision: visionOf(llm),
+    }),
+    ...(skillPaths.length ? { skills: { paths: skillPaths } } : {}),
     mcp: {
       [mcpServer]: {
         type: 'remote',

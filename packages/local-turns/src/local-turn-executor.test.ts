@@ -497,6 +497,69 @@ describe('files of the project on the local executor (docs/plan/84-projects.md, 
   })
 })
 
+describe('skills of the account on the local executor (docs/plan/97-skills.md, Нв13)', () => {
+  const file = (path: string, text: string, executable = false) => ({
+    path,
+    sizeBytes: Buffer.byteLength(text),
+    executable,
+    read: async function* () {
+      yield Buffer.from(text)
+    },
+  })
+  const inChat = (input: TurnPrepareInput): TurnPrepareInput => ({
+    ...input,
+    fence: { ...input.fence, siteId: labels.taskId },
+    sandbox: { ...input.sandbox, labels: { ...labels, siteId: labels.taskId } },
+  })
+
+  it('writes them under /workspace/skills after the project, programs executable, all read-only', async () => {
+    const f = await fixture()
+    await f.executor.prepare(
+      inChat(
+        f.input({
+          projectFiles: [
+            { path: '/workspace/project/a.txt', sizeBytes: 1, read: file('/x', 'a').read },
+          ],
+          skillFiles: [
+            file('/workspace/skills/demo/SKILL.md', '---\nname: demo\n---'),
+            file('/workspace/skills/demo/scripts/run.py', 'print(1)', true),
+            file('/workspace/skills/demo/scripts/__init__.py', ''),
+          ],
+        }),
+      ),
+      signal,
+    )
+    expect(f.writes.slice(0, 4)).toEqual([
+      '/workspace/project/a.txt',
+      '/workspace/skills/demo/SKILL.md',
+      '/workspace/skills/demo/scripts/run.py',
+      '/workspace/skills/demo/scripts/__init__.py',
+    ])
+    const modes = vi
+      .mocked(f.sandbox.fs.write)
+      .mock.calls.slice(1, 4)
+      .map((call) => call[2])
+    expect(modes).toEqual([{ mode: 0o444 }, { mode: 0o555 }, { mode: 0o444 }])
+  })
+
+  it('refuses them for a turn under another lease, and a path out of the skills', async () => {
+    const f = await fixture()
+    await expect(
+      f.executor.prepare(
+        f.input({ skillFiles: [file('/workspace/skills/demo/SKILL.md', 'x')] }),
+        signal,
+      ),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(
+      f.executor.prepare(
+        inChat(f.input({ skillFiles: [file('/workspace/repo/SKILL.md', 'x')] })),
+        signal,
+      ),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+  })
+})
+
 describe('files of the agent for the client on the local executor (docs/plan/66, В8)', () => {
   it('hands the outbox over with the capture, never sealed with the home part', async () => {
     const archive = await packOutbox([{ name: 'estimate.txt', bytes: 'total 100' }])

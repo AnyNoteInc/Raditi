@@ -578,7 +578,7 @@ export {
   accountSkillFileSchema,
   accountSkillFilesOf,
   accountSkillOf,
-  chatAccountSkillFile,
+  chatAccountSkillVersions,
   listAccountSkills,
   newAccountSkillVersionId,
   removeAccountSkill,

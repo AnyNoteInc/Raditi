@@ -1,5 +1,6 @@
 import type { PreparedRun, RunContext, SandboxFile } from '@repo/domain'
 import {
+  accountSkillLimits,
   badRequest,
   envVarNameProblem,
   envVarValueSchema,
@@ -9,6 +10,7 @@ import {
   SANDBOX_SECRETS_DIR,
   turnInputSchema,
   turnPlanLimits,
+  skillNameSchema,
   turnSkillsSchema,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -72,6 +74,14 @@ export const runContextSchema = <Effort extends z.ZodType>(effort: Effort) =>
     egressProxy: endpoint.optional(),
     internet: z.literal(true).optional(),
     skills: turnSkillsSchema.optional(),
+    // The skills of the account (docs/plan/97-skills.md, Нв13, Нв17): names by the standard only.
+    accountSkills: z
+      .array(
+        z.object({ name: skillNameSchema, builtin: z.boolean(), userOnly: z.boolean() }).strict(),
+      )
+      .max(accountSkillLimits.enabled)
+      .optional(),
+    calledSkill: skillNameSchema.optional(),
   })
 
 /** Secret files the variables may take: the LLM key and the MCP token have one each. */

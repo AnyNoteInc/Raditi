@@ -271,6 +271,54 @@ describe('OpenCode driver: prepared files and argv', () => {
     expect(text).not.toMatch(/reasoning_effort|variant|thinking|"high"/)
   })
 
+  it('gives the CLI the skills of the account by name, their folders and nothing else (plan 97)', async () => {
+    const value = config(
+      await driver.prepare({
+        ...context,
+        accountSkills: [
+          { name: 'skill-creator', builtin: true, userOnly: false },
+          { name: 'price-offer', builtin: false, userOnly: false },
+          { name: 'deploy-notes', builtin: false, userOnly: true },
+        ],
+      }),
+    ) as CliConfig & { skills?: { paths: string[] } }
+    expect(value.skills).toEqual({ paths: ['/workspace/skills', '/usr/local/lib/raditi/skills'] })
+    // A skill only the client starts is denied until called; the rest of SKILL.md files too.
+    expect(value.permission.skill).toEqual({
+      '*': 'deny',
+      'skill-creator': 'allow',
+      'price-offer': 'allow',
+    })
+    expect(value.permission.external_directory).toMatchObject({
+      '/workspace/skills': 'allow',
+      '/workspace/skills/*': 'allow',
+      '/usr/local/lib/raditi/skills': 'allow',
+      '/usr/local/lib/raditi/skills/*': 'allow',
+    })
+    // The skills of the repository and of the home stay off: OPENCODE_DISABLE_EXTERNAL_SKILLS and
+    // OPENCODE_DISABLE_PROJECT_CONFIG of the CLI's environment (checked below with the others).
+
+    const called = config(
+      await driver.prepare({
+        ...context,
+        accountSkills: [{ name: 'deploy-notes', builtin: false, userOnly: true }],
+        calledSkill: 'deploy-notes',
+      }),
+    ) as CliConfig & { skills?: { paths: string[] } }
+    expect(called.permission.skill).toEqual({ '*': 'deny', 'deploy-notes': 'allow' })
+    expect(called.skills).toEqual({ paths: ['/workspace/skills'] })
+    expect(called.permission.external_directory).not.toHaveProperty('/usr/local/lib/raditi/skills')
+  })
+
+  it('refuses a skill whose name is not one of the standard', async () => {
+    await expect(
+      driver.prepare({
+        ...context,
+        accountSkills: [{ name: '../x', builtin: false, userOnly: false }],
+      }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
   it('opens the fetch tool and the skills in the open internet, through the egress proxy', async () => {
     const egressProxy = 'http://sandbox-gw:3128'
     const skills: TurnSkill[] = [

@@ -108,40 +108,35 @@ export async function turnAccountSkills(
 }
 
 /**
- * A file of an enabled skill of the author of a chat, as the executor of a turn reads it: the
- * current version of the skill of that name now, the file at that path. null — none (the client
- * turned it off or changed it since the plan was made).
+ * The enabled skills of the author of a chat with their current versions, as the executor of a
+ * turn reads their files (docs/plan/97-skills.md, Нв13): by name, now — a skill the client turned
+ * off or changed since the plan was made is absent or has its new files. null — the chat has no
+ * author.
  */
-export async function chatAccountSkillFile(
+export async function chatAccountSkillVersions(
   db: Pick<Tx, 'task' | 'accountSkill'>,
-  input: { taskId: string; name: string; path: string },
+  taskId: string,
 ): Promise<{
   userId: string
-  versionId: string
-  index: number
-  sizeBytes: number
-  executable: boolean
+  skills: Map<string, { versionId: string; files: AccountSkillFile[] }>
 } | null> {
   const task = await db.task.findUnique({
-    where: { id: id.parse(input.taskId) },
+    where: { id: id.parse(taskId) },
     select: { createdById: true },
   })
   if (!task?.createdById) return null
-  const skill = await db.accountSkill.findUnique({
-    where: { userId_name: { userId: task.createdById, name: input.name } },
-    select: { source: true, enabled: true, version: { select: { id: true, files: true } } },
+  const rows = await db.accountSkill.findMany({
+    where: { userId: task.createdById, enabled: true, source: { not: 'builtin' } },
+    select: { name: true, version: { select: { id: true, files: true } } },
   })
-  if (!skill || skill.source === 'builtin' || !skill.enabled || !skill.version) return null
-  const files = accountSkillFilesOf(skill.version.files)
-  const index = files.findIndex((file) => file.path === input.path)
-  if (index < 0) return null
-  return {
-    userId: task.createdById,
-    versionId: skill.version.id,
-    index,
-    sizeBytes: files[index]!.sizeBytes,
-    executable: files[index]!.executable,
-  }
+  const skills = new Map<string, { versionId: string; files: AccountSkillFile[] }>()
+  for (const row of rows)
+    if (row.version)
+      skills.set(row.name, {
+        versionId: row.version.id,
+        files: accountSkillFilesOf(row.version.files),
+      })
+  return { userId: task.createdById, skills }
 }
 
 /** A row of the cabinet: a skill of the user's own, with its current version. */

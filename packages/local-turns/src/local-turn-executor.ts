@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer'
 import {
   assertTurnInbox,
   assertTurnProjectFiles,
+  assertTurnSkillFiles,
   badRequest,
   conflict,
   createLeftNothing,
@@ -43,7 +44,7 @@ import { openSnapshotParts, packOutbox, sealSnapshotPart } from '@repo/snapshots
 
 import { makeEmptyWorkdir } from './empty-workdir.ts'
 import { importBaseBundle } from './base-bundle.ts'
-import { placeInbox, placeProjectFiles } from './inbox.ts'
+import { placeInbox, placeProjectFiles, placeSkillFiles } from './inbox.ts'
 import { readTurnOutput, type TurnOutputStart } from './turn-output.ts'
 import type { WarmSandboxes } from './warm-sandboxes.ts'
 
@@ -99,6 +100,7 @@ export class LocalTurnExecutor implements TurnExecutor {
     // The client's files go only to a turn that may hold them, within one turn's limits.
     assertTurnInbox(input.inbox ?? [], turnMayHoldInbox(input.sandbox.labels))
     assertTurnProjectFiles(input.projectFiles ?? [], turnMayHoldInbox(input.sandbox.labels))
+    assertTurnSkillFiles(input.skillFiles ?? [], turnMayHoldInbox(input.sandbox.labels))
     const { files, env, secrets } = parsed.data
     const parser = this.deps.parser(input.driverId)
     input.dispatched()
@@ -172,6 +174,8 @@ export class LocalTurnExecutor implements TurnExecutor {
     if (input.inbox?.length) await placeInbox(sandbox, input.inbox, signal)
     // The files of the chat's project, after them (docs/plan/84-projects.md, ПР8).
     if (input.projectFiles?.length) await placeProjectFiles(sandbox, input.projectFiles, signal)
+    // The skills of the account, after them (docs/plan/97-skills.md, Нв13).
+    if (input.skillFiles?.length) await placeSkillFiles(sandbox, input.skillFiles, signal)
     // Secrets only after restore: an archive of an earlier turn never lands next to them. A
     // secret is read-only unless its driver rewrites it, and never open beyond its owner. The
     // agent's commands run under that same uid: what keeps a secret from them is the driver's

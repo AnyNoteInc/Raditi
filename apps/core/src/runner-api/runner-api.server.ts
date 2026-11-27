@@ -27,7 +27,7 @@ import type { RunnerAuthenticator } from './runner-auth.ts'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const ASSIGNMENT = new RegExp(
-  `^${RUNNER_API_PREFIX}/assignments/(${UUID})/(bundle|keys/(restore|seal)|candidate/(patch|untracked|outbox)|(inbox|project)/(0|[1-9][0-9]?))$`,
+  `^${RUNNER_API_PREFIX}/assignments/(${UUID})/(bundle|keys/(restore|seal)|candidate/(patch|untracked|outbox)|(inbox|project|skills)/(0|[1-9][0-9]{0,2}))$`,
 )
 const candidateLimits: Record<CandidatePart, number> = {
   patch: snapshotLimits.patchBytes,
@@ -252,7 +252,8 @@ export class RunnerApiServer implements OnApplicationShutdown {
       return
     }
     if (method === 'GET' && place !== undefined && root !== undefined) {
-      // A file of the client (`inbox`) or of the chat's project (`project`, docs/plan/84, ПР8).
+      // A file of the client (`inbox`), of the chat's project (`project`, docs/plan/84, ПР8) or of
+      // a skill of the account (`skills`, docs/plan/97-skills.md, Нв13).
       const file = await this.hub.inboxFile(
         runnerId,
         assignmentId,
