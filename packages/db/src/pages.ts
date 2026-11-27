@@ -856,8 +856,9 @@ export async function servedContent(
   db: Pick<PrismaClient, 'pageContent'>,
   pageId: string,
 ): Promise<{ version: number; bytes: Uint8Array } | null> {
-  const content = await db.pageContent.findUnique({
-    where: { pageId },
+  // The same page `servedSite` let through: not taken to the trash or back to pending since.
+  const content = await db.pageContent.findFirst({
+    where: { pageId, page: { deletedAt: null, state: { not: 'pending' } } },
     select: { versionNo: true, bytes: true },
   })
   return content && { version: content.versionNo, bytes: content.bytes }
