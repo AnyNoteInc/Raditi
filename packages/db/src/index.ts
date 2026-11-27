@@ -574,3 +574,20 @@ export type {
   Workspace,
   WorkspaceEnvVar,
 } from './generated/prisma/client.ts'
+export {
+  accountSkillFileSchema,
+  accountSkillFilesOf,
+  accountSkillOf,
+  chatAccountSkillFile,
+  listAccountSkills,
+  newAccountSkillVersionId,
+  removeAccountSkill,
+  restoreAccountSkillVersion,
+  setAccountSkillEnabled,
+  turnAccountSkills,
+  writeAccountSkillVersion,
+  type AccountSkillFile,
+  type AccountSkillRow,
+  type AccountSkillVersionInput,
+  type TurnAccountSkillRow,
+} from './account-skills.ts'
