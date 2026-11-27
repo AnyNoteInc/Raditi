@@ -58,3 +58,10 @@ export {
 } from './services/telegram/intake.ts'
 export { startAttachmentForTelegram } from './services/chat/attachments.ts'
 export { toTRPCError } from './errors.ts'
+// The skills of an account (docs/plan/97-skills.md): web composes their services and takes an
+// uploaded archive outside tRPC (POST /api/skills/upload).
+export {
+  installSkillFromArchive,
+  type AccountSkillServices,
+  type InstallAnswer,
+} from './services/account-skills.ts'
