@@ -34,7 +34,6 @@ const schema = z
 export function vkConfigFromEnv(env: Env): VkConfig {
   const e = parseEnv('vk', schema, env)
   return {
-    confirmSecret:
-      e.VK_CONFIRM_SECRET ?? (isProduction(e.APP_ENV) ? null : DEV_VK_CONFIRM_SECRET),
+    confirmSecret: e.VK_CONFIRM_SECRET ?? (isProduction(e.APP_ENV) ? null : DEV_VK_CONFIRM_SECRET),
   }
 }
