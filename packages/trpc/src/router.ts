@@ -50,7 +50,7 @@ export const appRouter = router({
   projectRepo: projectRepoRouter,
   // «Настройки → Переменные»: the variables every chat of a workspace gets (plan 83, БП4).
   workspaceEnv: workspaceEnvRouter,
-  // «Настройки → Навыки агента»: the MCP servers of the workspace's agent (plan 81; plan 83, БП11).
+  // «Настройки → Подключения»: the MCP servers of the workspace's agent (plan 81; plan 83, БП11).
   agentSkills: agentSkillsRouter,
   // «Настройки → Навыки»: the skills of the user's account, folders with SKILL.md (plan 97).
   accountSkills: accountSkillsRouter,

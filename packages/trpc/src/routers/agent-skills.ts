@@ -11,7 +11,7 @@ import { changeAgentSkills, checkSkillSignIn, readAgentSkills } from '../service
 import { chatContextOf } from '../services/chat/context.ts'
 import { consentedProcedure, router, type Context } from '../trpc.ts'
 
-// «Настройки → Навыки агента» of a workspace (services/agent-skills.ts; plan 83, БП11): every
+// «Настройки → Подключения» (formerly «Навыки агента», docs/plan/97-skills.md) of a workspace (services/agent-skills.ts; plan 83, БП11): every
 // member reads them, an owner or an admin changes them, and every chat of the workspace gets them.
 // `workspaceId` absent — the user's personal workspace. Names and addresses are checked by the
 // domain in the service.

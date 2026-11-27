@@ -23,7 +23,7 @@ import { personalWorkspaceOf } from './chat/dialog-lock.ts'
 import { workspaceNotFound } from './chat/refusals.ts'
 import type { McpServerCheck, McpServerServices } from './mcp-server-auth.ts'
 
-// «Настройки → Навыки агента» of a workspace (owner's request of 26.10.2026; per workspace since
+// «Настройки → Подключения» (formerly «Навыки агента», docs/plan/97-skills.md) of a workspace (owner's request of 26.10.2026; per workspace since
 // docs/plan/83-remove-projects.md, БП11): the MCP servers the agent of every chat of the
 // workspace connects to besides the platform's own, over the open internet of a turn. The platform's two are on
 // until an owner or an admin turns one off; they add remote servers by an https address. Core
