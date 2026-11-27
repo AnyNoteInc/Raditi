@@ -25,6 +25,7 @@ import {
   resolveArtifactComment,
 } from '@repo/db'
 import { feedEventIdSchema } from '@repo/domain'
+import { quickEditStates } from '@repo/domain/artifacts'
 import {
   artifactBlockKeySchema,
   artifactCommentBodySchema,
@@ -55,6 +56,7 @@ import {
   commentDispatchInput,
   dispatchArtifactComments,
 } from '../services/artifacts/comment-dispatch.ts'
+import { quickEditInput, quickEditsOf, requestQuickEdit } from '../services/artifacts/quick-edit.ts'
 import { cabinetComments, createCabinetComment } from '../services/artifacts/comments.ts'
 import {
   cabinetChanges,
@@ -279,6 +281,35 @@ export const artifactRouter = router({
     .mutation(({ ctx, input }) =>
       dispatchArtifactComments(ctx.prisma, chatContextOf(ctx), ctx.user.id, input, new Date()),
     ),
+
+  /**
+   * «Исправить» on notes of a «Документ» (docs/plan/98-quick-edits.md): one model call of core
+   * applies the edit; the page learns how it ended by `artifact.signals` and `quickEdits`.
+   * QUICK_EDIT_CONFIRM — notes of other people need `confirmOthers`; QUICK_EDIT_BUSY — the previous
+   * quick edit of the person is not finished.
+   */
+  quickEdit: consentedProcedure
+    .input(quickEditInput)
+    .output(z.strictObject({ quickEditId: z.uuid() }))
+    .mutation(({ ctx, input }) => requestQuickEdit(ctx.prisma, ctx.user.id, input, new Date())),
+
+  /** The person's own quick edits of an artifact in the last 15 minutes. */
+  quickEdits: consentedProcedure
+    .input(z.strictObject({ artifactId }))
+    .output(
+      z.array(
+        z.strictObject({
+          id: z.uuid(),
+          taskId: z.uuid(),
+          attempt: z.number().int().min(1),
+          state: z.enum(quickEditStates),
+          reason: z.string().nullable(),
+          createdAt: z.iso.datetime(),
+          finishedAt: z.iso.datetime().nullable(),
+        }),
+      ),
+    )
+    .query(({ ctx, input }) => quickEditsOf(ctx.prisma, ctx.user.id, input.artifactId, new Date())),
 
   resolveComment: consentedProcedure
     .input(z.strictObject({ artifactId, commentId: z.uuid(), resolved: z.boolean() }))

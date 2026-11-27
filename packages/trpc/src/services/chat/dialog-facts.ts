@@ -12,6 +12,7 @@ import {
   type TaskStatus,
   type TurnRedoRefusal,
   type TurnUndoRefusal,
+  platformDriverIds,
 } from '@repo/domain'
 import { z } from 'zod'
 
@@ -144,7 +145,8 @@ export async function dialogFacts(
  */
 async function driverCompacts(db: Reader): Promise<boolean> {
   const driver = await db.agentDriver.findFirst({
-    where: { enabled: true },
+    // The shell: a driver of the platform's own calls (quick edits, plan 98) is none.
+    where: { enabled: true, id: { notIn: [...platformDriverIds] } },
     select: { capabilities: true },
   })
   return z.object({ compaction: z.literal(true) }).safeParse(driver?.capabilities).success

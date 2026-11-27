@@ -190,7 +190,11 @@ export function createZaiBodyPolicy(
     // Written in one fixed order, so that a second normalization changes nothing.
     const normalized: JsonObject = {
       model: request.model,
-      max_tokens: Math.min(request.max_tokens ?? zaiMaxOutputTokens, zaiMaxOutputTokens),
+      max_tokens: Math.min(
+        request.max_tokens ?? zaiMaxOutputTokens,
+        zaiMaxOutputTokens,
+        ctx.maxOutputTokens ?? zaiMaxOutputTokens,
+      ),
       // With its own provider id the CLI sends neither field, and without them the provider
       // reasons at its highest level. `clear_thinking: false` keeps the reasoning the CLI
       // sends back with the history, as the CLI's built-in Z.ai provider asks. A profile

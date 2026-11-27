@@ -7,6 +7,7 @@ import {
   type LimitWindow,
   type LlmBackend,
   type LlmBackendId,
+  type LlmClientKind,
   type LlmRoute,
   type ProbeResult,
   type SubscriptionCredential,
@@ -60,6 +61,11 @@ export interface ZaiOffer {
    * key that sees them may send `image_url` parts, and no other model ever.
    */
   readonly imageModels: readonly string[]
+  /**
+   * The identity of the platform's own calls (docs/plan/98-quick-edits.md, БПр1): only an offer
+   * whose terms allow embedding has one. The personal plan has none, so core can never call it.
+   */
+  readonly platformUserAgent?: string
 }
 
 /** GLM-5.3-Flash sees images; it is on the plan and on the API (owner's answer, 19.11.2026). */
@@ -111,6 +117,7 @@ export const zaiApiOffer: ZaiOffer = Object.freeze({
   overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
   direct: true,
   imageModels: zaiImageModels,
+  platformUserAgent: 'raditi-platform/1',
 } as const)
 
 export const zaiCredentialSchema = z
@@ -138,9 +145,16 @@ function keyOf(credential: SubscriptionCredential): string {
   return parsed.data.apiKey
 }
 
-function assertClient(headers: Headers): void {
-  if (headers.get('user-agent') !== opencodeUserAgent)
-    throw badRequest('Invalid OpenCode client identity')
+/** The user agent a client must send, and the one the provider is told; null — refused. */
+function agentOf(offer: ZaiOffer, client: LlmClientKind): string | null {
+  return client === 'cli' ? opencodeUserAgent : (offer.platformUserAgent ?? null)
+}
+
+function assertClient(offer: ZaiOffer, headers: Headers, client: LlmClientKind): string {
+  const agent = agentOf(offer, client)
+  if (agent === null) throw badRequest('The platform may not call this offer')
+  if (headers.get('user-agent') !== agent) throw badRequest('Invalid client identity')
+  return agent
 }
 
 const emptyProbe = (status: ProbeResult['status']): ProbeResult => ({
@@ -324,22 +338,25 @@ export function createZaiBackend(offer: ZaiOffer): LlmBackend {
         ...(offer.direct ? { direct: true } : {}),
       },
     ],
-    validateClientHeaders: assertClient,
+    validateClientHeaders: (headers, client = 'cli') => {
+      assertClient(offer, headers, client)
+    },
     streamInspector: inspector,
     credentialMetadata(credential) {
       keyOf(credential)
       return { externalAccountId: null, plan: null, accessExpiresAt: null, accessIssuedAt: null }
     },
     imageModels: offer.imageModels,
+    ...(offer.platformUserAgent ? { platformUserAgent: offer.platformUserAgent } : {}),
     normalizeBody: createZaiBodyPolicy(offer.route, offer.imageModels),
-    upstream(route, _body, clientHeaders, credential) {
+    upstream(route, _body, clientHeaders, credential, client = 'cli') {
       assertRoute(route)
-      assertClient(clientHeaders)
-      // The plan key instead of the turn key, the CLI's own identity, an uncompressed stream:
-      // the egress passes bytes on without decoding them. No session header, no cookie.
+      const agent = assertClient(offer, clientHeaders, client)
+      // The plan key instead of the turn key, the client's own honest identity, an uncompressed
+      // stream: the egress passes bytes on without decoding them. No session header, no cookie.
       const headers = new Headers({
         authorization: `Bearer ${keyOf(credential)}`,
-        'user-agent': opencodeUserAgent,
+        'user-agent': agent,
         accept: 'text/event-stream',
         'accept-encoding': 'identity',
         'content-type': 'application/json',

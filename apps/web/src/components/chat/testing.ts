@@ -44,6 +44,7 @@ export function taskHead(patch: Partial<FeedHead> = {}): FeedHead {
     requirements: { repository: false, browser: false },
     effort: 'high',
     project: null,
+    quick: false,
     ...patch,
   }
 }

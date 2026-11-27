@@ -1,5 +1,5 @@
 import { accessibleTasks, type MemberRole, type Prisma } from '@repo/db'
-import { DomainError, type TaskRequirements, type TaskStatus } from '@repo/domain'
+import { DomainError, type TaskKind, type TaskRequirements, type TaskStatus } from '@repo/domain'
 
 /** A chat the user may open (`@repo/db`): one rule for the cabinet and the stores of roles. */
 export { accessibleTasks }
@@ -35,6 +35,8 @@ export interface LockedTask {
   turnNo: number
   /** What the task works with (docs/plan/57, Б2): fixed when it was created. */
   requirements: TaskRequirements
+  /** `quick_edits` — the service task «Быстрые правки» (docs/plan/98-quick-edits.md, БПр2). */
+  kind: TaskKind
 }
 
 /**
@@ -57,10 +59,11 @@ export async function lockTask(
       attempt: number
       turn_no: number
       needs_browser: boolean
+      kind: TaskKind
     }>
   >`
     SELECT id, workspace_id, status::text AS status, attempt, turn_no,
-           needs_browser
+           needs_browser, kind::text AS kind
     FROM tasks WHERE id = ${taskId}::uuid AND deleted_at IS NULL FOR UPDATE`
   const row = rows[0]
   if (row === undefined) return null
@@ -71,5 +74,6 @@ export async function lockTask(
     attempt: row.attempt,
     turnNo: row.turn_no,
     requirements: { repository: false, browser: row.needs_browser },
+    kind: row.kind,
   }
 }

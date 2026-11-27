@@ -95,9 +95,11 @@ export async function claimQueuedPass(
   if (!parsed.success) throw badRequest('Invalid task claim')
   const { taskId, attempt, requestEventId, workspaceLimit } = parsed.data
   return db.$transaction(async (tx) => {
+    // A pass of OpenCode never runs in the quick task: its attempts are model calls from core
+    // (docs/plan/98-quick-edits.md, БПр3).
     const [task] = await tx.$queryRaw<Array<{ workspace_id: string }>>`
       SELECT workspace_id FROM tasks
-      WHERE id = ${taskId}::uuid AND status = 'queued' AND attempt = ${attempt}`
+      WHERE id = ${taskId}::uuid AND status = 'queued' AND attempt = ${attempt} AND kind = 'chat'`
     if (!task) return null
     // Held to the commit: a claim after this one counts it, never both the other's old state.
     await tx.$queryRaw`
@@ -115,7 +117,7 @@ export async function claimQueuedPass(
     const [busy] = await tx.$queryRaw<Array<{ n: number }>>`
       SELECT count(*)::int AS n FROM tasks
       WHERE workspace_id = ${task.workspace_id}::uuid AND id <> ${taskId}::uuid
-        AND status IN ('preparing', 'running')`
+        AND status IN ('preparing', 'running') AND kind = 'chat'`
     if ((busy?.n ?? 0) >= workspaceLimit) return 'full' as const
     return claimQueuedTask(tx, { taskId, attempt })
   })

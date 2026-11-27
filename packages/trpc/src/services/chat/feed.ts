@@ -75,6 +75,7 @@ export async function readDialogFeed(
           needsBrowser: true,
           modelClass: true,
           projectId: true,
+          kind: true,
           workspace: {
             select: { members: { where: { userId: input.userId }, select: { role: true } } },
           },
@@ -116,6 +117,8 @@ export async function feedHead(
     modelClass: string | null
     /** The project of the chat (docs/plan/84-projects.md, ПР2). */
     projectId: string | null
+    /** `quick_edits` — the journal «Быстрые правки» (plan 98). */
+    kind?: 'chat' | 'quick_edits'
   },
 ): Promise<FeedTaskHead> {
   const project =
@@ -169,6 +172,7 @@ export async function feedHead(
     // A task older than the classes thinks at the level of `standard` (`createDialog`'s default).
     effort: effortOfModelClass(modelClassSchema.catch('standard').parse(task.modelClass)),
     project,
+    quick: task.kind === 'quick_edits',
   })
 }
 
@@ -324,6 +328,7 @@ export async function readDialogHead(
           needsBrowser: true,
           modelClass: true,
           projectId: true,
+          kind: true,
           createdAt: true,
           updatedAt: true,
         },

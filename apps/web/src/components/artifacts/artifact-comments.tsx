@@ -20,6 +20,7 @@ import {
   artifactKindSpecOf,
   artifactLimits,
   artifactQuoteAnchorSchema,
+  artifactRoleAtLeast,
   type ArtifactCommentAnchor,
   type ArtifactCommentAnchorInput,
   type ArtifactQuoteAnchor,
@@ -46,6 +47,7 @@ import {
   privateArtifactQuery,
 } from './artifact-access-error'
 import { ArtifactCommentDispatch } from './artifact-comment-dispatch'
+import { ArtifactQuickEdit, useQuickEdits } from './artifact-quick-edit'
 import type { CabinetArtifact } from './use-artifact'
 
 function selectionQuote(root: HTMLElement, selected: Selection | null): ArtifactQuoteAnchor | null {
@@ -192,6 +194,18 @@ export function ArtifactComments({
   const panel = useContext(ArtifactNotesPanel)
   const owner = artifact.role === 'owner'
   const writable = artifactNotesWritable(artifact.role, sharing)
+  // «Исправить» (docs/plan/98-quick-edits.md): quotes of a «Документ», elements of a «Холст».
+  const quickAnchor =
+    artifact.kind === 'document' ? 'quote' : artifact.kind === 'canvas' ? 'element' : null
+  const quickEdits = quickAnchor !== null && artifactRoleAtLeast(artifact.role, 'edit')
+  // The edits live with the panel: a note an edit closed leaves the list, «Отменить» stays.
+  const quick = useQuickEdits({
+    artifactId,
+    onDone: () => {
+      void client.invalidateQueries({ queryKey: trpc.artifact.comments.queryKey({ artifactId }) })
+      onChanged()
+    },
+  })
   // The owner chooses; another reader writes only into threads of all (88.17а).
   const [forAll, setForAll] = useState(!owner)
   const query = trpc.artifact.comments.queryOptions({ artifactId })
@@ -423,6 +437,7 @@ export function ArtifactComments({
               За раз можно отправить до {artifactCommentDispatchLimits.threads} заметок.
             </Typography>
           )}
+          {quick.notices}
           {list.isError && <Alert severity="error">Не удалось загрузить заметки.</Alert>}
           {resolveError && <Alert severity="error">{failed}</Alert>}
           {dispatchStale && (
@@ -528,6 +543,18 @@ export function ArtifactComments({
                           Ответить
                         </Button>
                       )}
+                      {/* A quick edit of the agent (docs/plan/98-quick-edits.md): «Правит» and up. */}
+                      {quickEdits &&
+                        comment.anchor.kind === quickAnchor &&
+                        (comment.author.own || comment.shared) && (
+                          <ArtifactQuickEdit
+                            quick={quick}
+                            threadId={comment.id}
+                            own={comment.author.own}
+                            authorName={comment.author.name}
+                            moved={comment.moved}
+                          />
+                        )}
                     </>
                   )}
                   {(owner || (comment.shared && writable && comment.author.own)) && (

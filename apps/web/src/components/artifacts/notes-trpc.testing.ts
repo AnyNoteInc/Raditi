@@ -16,6 +16,15 @@ export function notesTrpcMock(addComment: (input: unknown) => Promise<{ id: stri
       },
       addComment: { mutationOptions: () => ({ mutationFn: addComment }) },
       resolveComment: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+      // «Исправить» (docs/plan/98-quick-edits.md): the panel keeps its edits; none here.
+      quickEdit: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+      undoTurn: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+      quickEdits: {
+        queryOptions: (input: unknown) => ({
+          queryKey: ['quickEdits', input],
+          queryFn: async () => [],
+        }),
+      },
     },
     client: { addCommentReply: { mutate: vi.fn() } },
   }

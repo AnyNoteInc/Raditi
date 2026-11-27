@@ -103,6 +103,15 @@ export async function seedReferenceData(
       count('agent_drivers', diff ? 'updated' : 'unchanged')
     }
 
+    for (const { id, image, enabled } of data.platformDrivers) {
+      if (await tx.agentDriver.findUnique({ where: { id } })) {
+        count('agent_drivers', 'unchanged')
+        continue
+      }
+      await tx.agentDriver.create({ data: { id, image, capabilities: {}, enabled } })
+      count('agent_drivers', 'created')
+    }
+
     for (const provider of data.llmProviders) {
       const stored = await tx.llmProvider.findUnique({ where: { slug: provider.slug } })
       if (stored) {

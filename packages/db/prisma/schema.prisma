@@ -79,6 +79,7 @@ model User {
   chatNotificationsActed      ChatNotification[]           @relation("ChatNotificationActor")
   accountSkills               AccountSkill[]
   skillMarketplaces           SkillMarketplace[]
+  artifactQuickEdits          ArtifactQuickEdit[]
 
   @@map("users")
 }
@@ -886,6 +887,9 @@ model Task {
   /// «Отменить» of a done task: this task reverts that one and is never billed.
   revertsTaskId String?         @map("reverts_task_id") @db.Uuid
   status        TaskStatus      @default(queued)
+  /// `quick_edits` — the service task «Быстрые правки» of a person: one model call per attempt from
+  /// core, never a turn of OpenCode (docs/plan/98-quick-edits.md, БПр2; CHECK tasks_kind_check).
+  kind          TaskKind        @default(chat)
   /// From the turn result (turnResultSchema.change_type); NULL until the first turn ends.
   changeType    ChangeType?     @map("change_type")
   /// Class profile selected before queueing; selects the pricing rule.
@@ -981,6 +985,7 @@ model Task {
   /// Scheduled tasks its agent set up (Зп33), and the changes of them its turns reserved.
   setUpSchedules         ScheduledTask[]        @relation("ScheduledTaskSource")
   scheduleChanges        ScheduleReservation[]
+  quickEdits             ArtifactQuickEdit[]
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([workspaceId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_workspace_updated_idx")
@@ -991,7 +996,15 @@ model Task {
   @@index([revertsTaskId])
   @@index([pricingRuleId])
   @@index([projectId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_project_updated_idx", where: raw("project_id IS NOT NULL AND deleted_at IS NULL"))
+  /// One live quick task per person and workspace (docs/plan/98-quick-edits.md, БПр2).
+  @@unique([workspaceId, createdById], map: "tasks_quick_edits_owner_key", where: raw("kind = 'quick_edits' AND deleted_at IS NULL"))
   @@map("tasks")
+}
+
+/// Must equal taskKinds in @repo/domain.
+enum TaskKind {
+  chat
+  quick_edits
 }
 
 /// Must equal taskStatuses in @repo/domain (checked by a test).
@@ -1428,6 +1441,9 @@ model LlmModel {
   /// The profile that sees images for the helper `look` (docs/plan/88-artifacts.md, Ар32): never the
   /// main model of its class.
   vision              Boolean    @default(false)
+  /// A profile only a quick edit takes (docs/plan/98-quick-edits.md, БПр3): classProfile and the
+  /// choice of a turn never return it.
+  quick               Boolean    @default(false)
   enabled             Boolean    @default(true)
   createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -2645,6 +2661,7 @@ model Artifact {
   publications      ArtifactPublication[]
   comments          ArtifactComment[]
   commentDispatches ArtifactCommentDispatch[]
+  quickEdits        ArtifactQuickEdit[]
   exports           ArtifactExport[]
   files             ArtifactFile[]
 
@@ -3290,6 +3307,45 @@ model ArtifactCommentDispatch {
   @@id([userId, requestId])
   @@index([artifactId])
   @@map("artifact_comment_dispatches")
+}
+
+enum ArtifactQuickEditState {
+  queued
+  running
+  applied
+  unchanged
+  refused
+  failed
+}
+
+/// One click of «Исправить» (docs/plan/98-quick-edits.md): an attempt of the person's quick task.
+/// No text here — the notes are in artifact_comment_dispatches (same user and request), the result
+/// is in the artifact and the reply.
+model ArtifactQuickEdit {
+  id         String                 @id @default(uuid(7)) @db.Uuid
+  artifactId String                 @map("artifact_id") @db.Uuid
+  taskId     String                 @map("task_id") @db.Uuid
+  /// The attempt of the quick task: the turn_no of its writes, what «Отменить» undoes.
+  attempt    Int
+  userId     String                 @map("user_id") @db.Uuid
+  requestId  String                 @map("request_id") @db.Uuid
+  state      ArtifactQuickEditState @default(queued)
+  /// Why it ended without a change (quickEditReasons in @repo/domain).
+  reason     String?                @db.VarChar(32)
+  calls      Int                    @default(0) @db.SmallInt
+  createdAt  DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt  DateTime?              @map("started_at") @db.Timestamptz(6)
+  finishedAt DateTime?              @map("finished_at") @db.Timestamptz(6)
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  task     Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, requestId])
+  @@unique([taskId, attempt])
+  @@index([artifactId, createdAt(sort: Desc)], map: "artifact_quick_edits_artifact_idx")
+  @@index([createdAt], map: "artifact_quick_edits_open_idx", where: raw("finished_at IS NULL"))
+  @@map("artifact_quick_edits")
 }
 
 /// «Скачать» of an artifact (docs/plan/88-artifacts.md, §7.13): core builds the file.
