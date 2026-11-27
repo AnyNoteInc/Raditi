@@ -37,6 +37,8 @@ export const builtinMcpText = Object.freeze({
   groupsTitle: 'Подключённые группы',
   closed: 'закрытая — агент не читает её стену',
   refused: 'ВКонтакте не принимает ключ — подключите группу заново',
+  noNotices:
+    'О новых комментариях не сообщаем: у ключа нет права «Управление сообществом». Чтобы получать уведомления, подключите группу ключом с этим правом',
   keyEmpty: 'Вставьте ключ доступа сообщества.',
   full: 'Подключено максимальное число групп.',
   loadFailed: 'Не удалось загрузить встроенные MCP. Обновите страницу.',
@@ -50,7 +52,14 @@ export interface BuiltinMcpView {
     summary: string
     needsKey: boolean
     enabled: boolean
-    communities: { id: string; name: string; url: string; closed: boolean; refused: boolean }[]
+    communities: {
+      id: string
+      name: string
+      url: string
+      closed: boolean
+      refused: boolean
+      notices: boolean
+    }[]
   }[]
   canManage: boolean
   workspaceId: string | null
@@ -213,6 +222,15 @@ export function BuiltinMcp({ initial }: { initial: BuiltinMcpView }) {
                               sx={{ display: 'block' }}
                             >
                               {group.refused ? builtinMcpText.refused : builtinMcpText.closed}
+                            </Typography>
+                          )}
+                          {!group.refused && !group.notices && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{ display: 'block' }}
+                            >
+                              {builtinMcpText.noNotices}
                             </Typography>
                           )}
                         </Box>

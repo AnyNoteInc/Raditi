@@ -30,6 +30,7 @@ const builtinMcpOutput = z.strictObject({
           url: z.string(),
           closed: z.boolean(),
           refused: z.boolean(),
+          notices: z.boolean(),
         }),
       ),
     }),

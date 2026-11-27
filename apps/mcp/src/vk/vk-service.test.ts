@@ -78,6 +78,12 @@ function service(options: { key?: string | null; api?: Partial<VkApi> } = {}) {
     replyToComment: async () => {
       throw new Error('mcp never publishes')
     },
+    addCallbackServer: async () => {
+      throw new Error('mcp never registers a server')
+    },
+    deleteCallbackServer: async () => {
+      throw new Error('mcp never removes a server')
+    },
     ...options.api,
   }
   const vk = new McpVkService({

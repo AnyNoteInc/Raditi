@@ -1284,8 +1284,11 @@ model ChatNotification {
   /// A notice of an artifact (docs/plan/88-artifacts.md, Ар54) and who did what it tells of.
   artifactId      String?  @map("artifact_id") @db.Uuid
   actorUserId     String?  @map("actor_user_id") @db.Uuid
+  /// A notice of a new comment in a VK community (docs/plan/99-vk-community.md, slice 99.6).
+  vkCommunityId   String?  @map("vk_community_id") @db.Uuid
 
   task          Task?          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  vkCommunity   VkCommunity?   @relation(fields: [vkCommunityId], references: [id], onDelete: Cascade)
   artifact      Artifact?      @relation(fields: [artifactId], references: [id], onDelete: Cascade)
   actor         User?          @relation("ChatNotificationActor", fields: [actorUserId], references: [id], onDelete: SetNull)
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1297,6 +1300,7 @@ model ChatNotification {
   @@index([taskId, userId, createdAt])
   @@index([scheduledTaskId, createdAt])
   @@index([artifactId, userId, createdAt], where: raw("artifact_id IS NOT NULL"))
+  @@index([vkCommunityId, userId, createdAt], where: raw("vk_community_id IS NOT NULL"))
   @@map("chat_notifications")
 }
 
@@ -3534,29 +3538,34 @@ model WorkspaceBuiltinMcp {
 /// A VK community a workspace connected by its key (docs/plan/99-vk-community.md, §3.1, §4). The key
 /// lives in Vault (`vkCommunitySecretPath`), written by web and read only by core.
 model VkCommunity {
-  id              String   @id @db.Uuid
-  workspaceId     String   @map("workspace_id") @db.Uuid
-  createdById     String   @map("created_by_id") @db.Uuid
+  id               String   @id @db.Uuid
+  workspaceId      String   @map("workspace_id") @db.Uuid
+  createdById      String   @map("created_by_id") @db.Uuid
   /// The id of the community in VK, positive.
-  groupId         BigInt   @map("group_id")
-  name            String   @db.VarChar(200)
-  screenName      String   @map("screen_name") @db.VarChar(100)
-  isClosed        Boolean  @map("is_closed")
+  groupId          BigInt   @map("group_id")
+  name             String   @db.VarChar(200)
+  screenName       String   @map("screen_name") @db.VarChar(100)
+  isClosed         Boolean  @map("is_closed")
   /// The rights of the key as groups.getTokenPermissions named them at the check.
-  permissions     String[] @db.VarChar(32)
-  credentialRefId String?  @unique @map("credential_ref_id") @db.Uuid
+  permissions      String[] @db.VarChar(32)
+  credentialRefId  String?  @unique @map("credential_ref_id") @db.Uuid
   /// ok or refused (CHECK).
-  state           String   @default("ok") @db.VarChar(8)
-  stateReason     String?  @map("state_reason") @db.VarChar(40)
-  checkedAt       DateTime @default(now()) @map("checked_at") @db.Timestamptz(6)
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  state            String   @default("ok") @db.VarChar(8)
+  stateReason      String?  @map("state_reason") @db.VarChar(40)
+  /// The Callback API server of Raditi in the community (slice 99.6); null — no notices of comments.
+  callbackServerId Int?     @map("callback_server_id")
+  /// What the webhook answers to the confirmation of VK: not a secret.
+  callbackCode     String?  @map("callback_code") @db.VarChar(64)
+  checkedAt        DateTime @default(now()) @map("checked_at") @db.Timestamptz(6)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy     User            @relation("VkCommunityCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  credentialRef CredentialRef?  @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
+  workspace     Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy     User               @relation("VkCommunityCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  credentialRef CredentialRef?     @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
   reservations  VkReservation[]
   actions       VkAction[]
+  notices       ChatNotification[]
 
   @@unique([workspaceId, groupId])
   @@map("vk_communities")
@@ -3613,10 +3622,10 @@ model VkAction {
   startedAt     DateTime? @map("started_at") @db.Timestamptz(6)
   finishedAt    DateTime? @map("finished_at") @db.Timestamptz(6)
 
-  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  task      Task?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
   community VkCommunity? @relation(fields: [communityId], references: [id], onDelete: SetNull)
-  createdBy User        @relation("VkActionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdBy User         @relation("VkActionCreator", fields: [createdById], references: [id], onDelete: Restrict)
 
   @@index([workspaceId, createdAt])
   @@index([taskId])

@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@repo/db'
 import {
+  VK_COMMENT_NOTICE,
   DomainError,
   isNotificationKind,
   notificationTitle,
@@ -276,9 +277,18 @@ export async function readChatNotification(
       },
       scheduledRun: { select: { reason: true, name: true } },
       artifactId: true,
+      vkCommunityId: true,
     },
   })
   if (row === null) throw new DomainError('NOT_FOUND', 'No such notification', 404)
+  // A new comment in a VK community (docs/plan/99-vk-community.md, 99.6): neither its words nor
+  // its author, nor the name of the community on a locked screen.
+  if (row.vkCommunityId !== null && row.kind === VK_COMMENT_NOTICE)
+    return {
+      title: notificationTitle(VK_COMMENT_NOTICE),
+      body: 'Откройте в Радити',
+      url: '/settings/builtin-mcp',
+    }
   // A notice of an artifact (docs/plan/88-artifacts.md, Ар54): a push shows it on a locked screen —
   // neither the title nor anyone's name or words, only what happened.
   if (row.artifactId !== null && isArtifactNoticeKind(row.kind))

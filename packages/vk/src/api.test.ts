@@ -207,3 +207,35 @@ describe('VkHttpApi', () => {
     expect(slept).toEqual([350])
   })
 })
+
+describe('VkHttpApi, the Callback API', () => {
+  it('registers the server: the code, the server with its secret, the event of new comments', async () => {
+    const answers = [
+      { response: { code: 'a1b2c3d4' } },
+      { response: { server_id: 7 } },
+      { response: 1 },
+    ]
+    const { api, seen } = fake(() => new Response(JSON.stringify(answers.shift())))
+    await expect(
+      api.addCallbackServer('k', 5, {
+        url: 'https://raditi.ru/api/webhooks/vk/x',
+        title: 'Raditi',
+        secretKey: 's3cr3t',
+      }),
+    ).resolves.toEqual({ serverId: 7, confirmationCode: 'a1b2c3d4' })
+    expect(seen.map((call) => call.url.split('/').pop())).toEqual([
+      'groups.getCallbackConfirmationCode',
+      'groups.addCallbackServer',
+      'groups.setCallbackSettings',
+    ])
+    expect(seen[1]!.body.get('secret_key')).toBe('s3cr3t')
+    expect(seen[2]!.body.get('wall_reply_new')).toBe('1')
+    expect(seen[2]!.body.get('server_id')).toBe('7')
+  })
+
+  it('removes a server', async () => {
+    const { api, seen } = fake({ response: 1 })
+    await api.deleteCallbackServer('k', 5, 7)
+    expect(seen[0]!.body.get('server_id')).toBe('7')
+  })
+})

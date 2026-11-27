@@ -1,5 +1,7 @@
 import {
   builtinMcpServers,
+  VK_COMMENT_NOTICE_PAUSE_MS,
+  vkJobNames,
   vkLimits,
   vkProposalLimit,
   vkProposalPayloadSchema,
@@ -8,6 +10,7 @@ import {
 } from '@repo/domain'
 
 import type { Prisma, PrismaClient } from './generated/prisma/client.ts'
+import { enqueueOutbox } from './outbox.ts'
 import { uuidv7 } from './uuidv7.ts'
 
 // The built-in MCP servers of a workspace and its VK communities (docs/plan/99-vk-community.md,
@@ -202,4 +205,57 @@ export async function closeStaleVkProposals(
     data: { outcome: 'failed', reason: 'failed', closedAt: new Date() },
   })
   return closed.count
+}
+
+// --- the notices of new comments (slice 99.6) ---------------------------------------------------
+
+/** A community as the webhook of its Callback API needs it. */
+export interface VkCallbackCommunity {
+  id: string
+  workspaceId: string
+  groupId: number
+  callbackCode: string | null
+}
+
+/** A connected community whose key VK accepted, by its id in Raditi; null for any other. */
+export async function vkCallbackCommunity(
+  db: Pick<Tx, 'vkCommunity'>,
+  communityId: string,
+): Promise<VkCallbackCommunity | null> {
+  const row = await db.vkCommunity.findFirst({
+    where: { id: communityId, state: 'ok' },
+    select: { id: true, workspaceId: true, groupId: true, callbackCode: true },
+  })
+  return row === null ? null : { ...row, groupId: Number(row.groupId) }
+}
+
+/**
+ * A new comment came: one job `vk.notify` per owner and admin of the workspace, at most one per
+ * person in each window of VK_COMMENT_NOTICE_PAUSE_MS — the key of the outbox keeps a burst of
+ * comments one notice. Nothing of the comment goes into the job. The count of jobs written.
+ */
+export async function enqueueVkCommentNotices(
+  db: Pick<PrismaClient, '$transaction'>,
+  community: { id: string; workspaceId: string },
+  now: Date,
+): Promise<number> {
+  const window = Math.floor(now.getTime() / VK_COMMENT_NOTICE_PAUSE_MS)
+  return db.$transaction(async (tx) => {
+    const managers = await tx.member.findMany({
+      where: { workspaceId: community.workspaceId, role: { in: ['owner', 'admin'] } },
+      select: { userId: true },
+    })
+    let written = 0
+    for (const { userId } of managers)
+      if (
+        await enqueueOutbox(tx, {
+          topic: 'vk',
+          type: vkJobNames.notify,
+          payload: { communityId: community.id, userId },
+          dedupeKey: `vk.notify:${community.id}:${userId}:${window}`,
+        })
+      )
+        written += 1
+    return written
+  })
 }

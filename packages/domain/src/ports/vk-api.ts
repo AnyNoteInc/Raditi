@@ -80,6 +80,19 @@ export interface VkApi {
     groupId: number,
     reply: { postId: number; commentId: number; text: string },
   ): Promise<{ commentId: number }>
+  /**
+   * Registers the Callback API server of Raditi for the community and turns on the events of new
+   * comments (`groups.getCallbackConfirmationCode`, `addCallbackServer`, `setCallbackSettings`):
+   * community key with the right «Управление». The code is what the webhook answers to the
+   * confirmation of VK.
+   */
+  addCallbackServer(
+    token: string,
+    groupId: number,
+    server: { url: string; title: string; secretKey: string },
+  ): Promise<{ serverId: number; confirmationCode: string }>
+  /** Removes a Callback API server registered before (`groups.deleteCallbackServer`). */
+  deleteCallbackServer(token: string, groupId: number, serverId: number): Promise<void>
 }
 
 /** The address of a post for the client and the agent. */

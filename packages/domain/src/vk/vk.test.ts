@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { builtinMcpServerInfo, builtinMcpServers } from '../builtin-mcp/index.ts'
 import { vkCommentUrl, vkPostUrl } from '../ports/vk-api.ts'
+import { vkCallbackPath, vkCallbackSecret } from './callback.ts'
 import {
   vkCommentsArgumentsSchema,
   vkPostProposeArgumentsSchema,
@@ -129,5 +130,16 @@ describe('the built-in MCP servers', () => {
       expect(builtinMcpServerInfo[server].summary).toMatch(/[а-я]/)
     }
     expect(builtinMcpServerInfo.vk.needsKey).toBe(true)
+  })
+})
+
+describe('the Callback API of a community', () => {
+  it('derives the secret of the server from the community: letters and digits, 32 of them', () => {
+    const mac = (material: string) => `${material}-+/=`.repeat(3)
+    const secret = vkCallbackSecret('c1', mac)
+    expect(secret).toMatch(/^[A-Za-z0-9]{32}$/)
+    expect(vkCallbackSecret('c1', mac)).toBe(secret)
+    expect(vkCallbackSecret('c2', mac)).not.toBe(secret)
+    expect(vkCallbackPath('c1')).toBe('/api/webhooks/vk/c1')
   })
 })

@@ -30,6 +30,8 @@ CREATE TABLE "vk_communities" (
     "credential_ref_id" UUID,
     "state" VARCHAR(8) NOT NULL DEFAULT 'ok',
     "state_reason" VARCHAR(40),
+    "callback_server_id" INTEGER,
+    "callback_code" VARCHAR(64),
     "checked_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(6) NOT NULL,
@@ -126,7 +128,10 @@ ALTER TABLE "vk_communities"
   ADD CONSTRAINT "vk_communities_group_id_check" CHECK ("group_id" > 0),
   ADD CONSTRAINT "vk_communities_state_check" CHECK ("state" IN ('ok', 'refused')),
   ADD CONSTRAINT "vk_communities_reason_check"
-    CHECK ("state_reason" IS NULL OR "state_reason" ~ '^[A-Z][A-Z0-9_]{0,39}$');
+    CHECK ("state_reason" IS NULL OR "state_reason" ~ '^[A-Z][A-Z0-9_]{0,39}$'),
+  ADD CONSTRAINT "vk_communities_callback_check"
+    CHECK (("callback_server_id" IS NULL) = ("callback_code" IS NULL)
+      AND ("callback_server_id" IS NULL OR "callback_server_id" > 0));
 
 ALTER TABLE "vk_reservations"
   ADD CONSTRAINT "vk_reservations_kind_check" CHECK ("kind" IN ('post', 'reply')),

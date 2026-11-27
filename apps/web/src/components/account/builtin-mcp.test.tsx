@@ -46,6 +46,7 @@ const group = {
   url: 'https://vk.com/coffee',
   closed: false,
   refused: false,
+  notices: true,
 }
 const view = (patch: Partial<BuiltinMcpView> = {}): BuiltinMcpView => ({
   workspaceId: WORKSPACE_ID,
@@ -119,6 +120,11 @@ describe('«Встроенные MCP»', () => {
       ),
     )
     await waitFor(() => expect(toggle()).not.toBeChecked())
+  })
+
+  it('says a group tells of no comments when its key had no right «Управление»', () => {
+    show(view({ servers: [vk({ enabled: true, communities: [{ ...group, notices: false }] })] }))
+    expect(screen.getByText(builtinMcpText.noNotices)).toBeInTheDocument()
   })
 
   it('shows a member the switches without changing them', () => {

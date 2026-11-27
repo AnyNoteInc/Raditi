@@ -5,6 +5,8 @@ import {
   builtinMcpServerInfo,
   builtinMcpServers,
   DomainError,
+  VK_CALLBACK_TITLE,
+  vkCallbackSecret,
   vkCommunityLimit,
   vkCommunityNotFound,
   vkCommunitySecretPath,
@@ -39,7 +41,12 @@ export interface BuiltinMcpServices {
   /** Two methods of Vault: nothing that holds this object can read a key back (`sites-writer`). */
   secrets: Pick<SecretStore, 'kvWrite' | 'kvMetadata'>
   /** The check of a community key against VK. */
-  vk: Pick<VkApi, 'community' | 'tokenPermissions'>
+  vk: Pick<VkApi, 'community' | 'tokenPermissions' | 'addCallbackServer' | 'deleteCallbackServer'>
+  /**
+   * The address of the webhook of a community (slice 99.6) — the cabinet's `https` address and
+   * `vkCallbackPath`; null or absent — the cabinet is not on https (development): no notices.
+   */
+  callbackUrl?: ((communityId: string) => string | null) | null
   /**
    * HMAC-SHA256 by VK_CONFIRM_SECRET, base64url: the press of «Опубликовать» on a card of VK.
    * null or absent — no card publishes; core checks every press again.
@@ -70,6 +77,8 @@ export interface VkCommunityView {
   closed: boolean
   /** The key VK refused at the last check: connect a new one. */
   refused: boolean
+  /** VK tells of new comments (slice 99.6): the key had the right «Управление» at its connection. */
+  notices: boolean
 }
 
 export interface BuiltinMcpServerView {
@@ -134,7 +143,14 @@ async function viewOf(
           db.vkCommunity.findMany({
             where: { workspaceId: workspace.id },
             orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-            select: { id: true, name: true, screenName: true, isClosed: true, state: true },
+            select: {
+              id: true,
+              name: true,
+              screenName: true,
+              isClosed: true,
+              state: true,
+              callbackServerId: true,
+            },
           }),
         ])
   const on = new Set(switches.filter((row) => row.enabled).map((row) => row.server))
@@ -144,6 +160,7 @@ async function viewOf(
     url: `https://vk.com/${row.screenName}`,
     closed: row.isClosed,
     refused: row.state !== 'ok',
+    notices: row.callbackServerId !== null,
   }))
   return {
     servers: builtinMcpServers.map((server) => ({
@@ -209,7 +226,7 @@ export async function connectVkCommunity(
     where: {
       workspaceId_groupId: { workspaceId: workspace.id, groupId: BigInt(community.groupId) },
     },
-    select: { id: true, credentialRefId: true },
+    select: { id: true, credentialRefId: true, callbackServerId: true },
   })
   if (existing === null) {
     const count = await db.vkCommunity.count({ where: { workspaceId: workspace.id } })
@@ -225,8 +242,17 @@ export async function connectVkCommunity(
     { [VK_TOKEN_FIELD]: token.data },
     { cas: metadata?.currentVersion ?? 0, maxVersions: 1 },
   )
+  const callback = await registerCallback(services, {
+    communityId: id,
+    groupId: community.groupId,
+    token: token.data,
+    manages: permissions.includes('manage'),
+    previous: existing?.callbackServerId ?? null,
+  })
   const now = input.now ?? new Date()
   const fields = {
+    callbackServerId: callback?.serverId ?? null,
+    callbackCode: callback?.confirmationCode ?? null,
     name: community.name.slice(0, 200),
     screenName: community.screenName.slice(0, 100),
     isClosed: community.isClosed,
@@ -276,6 +302,40 @@ export async function connectVkCommunity(
     })
   })
   return viewOf(db, { id: workspace.id, canManage: true })
+}
+
+/**
+ * The Callback API server of Raditi for the community (slice 99.6), registered with the key in hand
+ * — web never reads it back later. Only with the right «Управление», the cabinet on https and the
+ * secret of the cards; a server of an earlier key of the same community is removed first. Any
+ * failure leaves the community connected without notices: the key itself was accepted.
+ */
+async function registerCallback(
+  services: BuiltinMcpServices,
+  input: {
+    communityId: string
+    groupId: number
+    token: string
+    manages: boolean
+    previous: number | null
+  },
+): Promise<{ serverId: number; confirmationCode: string } | null> {
+  const url = services.callbackUrl?.(input.communityId) ?? null
+  const mac = services.confirmMac ?? null
+  if (!input.manages || url === null || mac === null) return null
+  try {
+    if (input.previous !== null)
+      await services.vk
+        .deleteCallbackServer(input.token, input.groupId, input.previous)
+        .catch(() => undefined)
+    return await services.vk.addCallbackServer(input.token, input.groupId, {
+      url,
+      title: VK_CALLBACK_TITLE,
+      secretKey: vkCallbackSecret(input.communityId, mac),
+    })
+  } catch {
+    return null
+  }
 }
 
 /**

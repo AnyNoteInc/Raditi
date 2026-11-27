@@ -8,7 +8,16 @@ import { vkLimits } from './limits.ts'
 export const vkJobNames = Object.freeze({
   /** One row of `vk_actions`: check its token, read the key, call VK, write the feed. */
   action: 'vk.action',
+  /** A new comment in a community: tell one owner or admin of its workspace (slice 99.6). */
+  notify: 'vk.notify',
 })
+
+/** `vk.notify`: whom to tell of which community — nothing of the comment itself (spec §11). */
+export const vkNotifyPayloadSchema = z.strictObject({
+  communityId: z.uuid(),
+  userId: z.uuid(),
+})
+export type VkNotifyPayload = z.infer<typeof vkNotifyPayloadSchema>
 
 export const vkActionPayloadSchema = z.strictObject({ actionId: z.uuid() })
 export type VkActionPayload = z.infer<typeof vkActionPayloadSchema>

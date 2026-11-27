@@ -1,5 +1,6 @@
 // The community of a client in VK (docs/plan/99-vk-community.md).
 export * from './arguments.ts'
+export * from './callback.ts'
 export * from './confirm-token.ts'
 export * from './errors.ts'
 export * from './feed.ts'

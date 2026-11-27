@@ -88,6 +88,9 @@ const commentsSchema = z.object({
 })
 
 const publishedSchema = z.object({ post_id: z.number().int().positive() })
+const confirmationSchema = z.object({ code: z.string().min(1).max(64) })
+const serverSchema = z.object({ server_id: z.number().int().positive() })
+const doneSchema = z.literal(1)
 const repliedSchema = z.object({ comment_id: z.number().int().positive() })
 
 const dateOf = (seconds: number) => new Date(seconds * 1000)
@@ -239,6 +242,42 @@ export class VkHttpApi implements VkApi {
       repliedSchema,
     )
     return { commentId: answer.comment_id }
+  }
+
+  async addCallbackServer(
+    token: string,
+    groupId: number,
+    server: { url: string; title: string; secretKey: string },
+  ): Promise<{ serverId: number; confirmationCode: string }> {
+    const group = { group_id: String(groupId) }
+    const { code } = await this.#call(
+      'groups.getCallbackConfirmationCode',
+      token,
+      group,
+      confirmationSchema,
+    )
+    const { server_id: serverId } = await this.#call(
+      'groups.addCallbackServer',
+      token,
+      { ...group, url: server.url, title: server.title, secret_key: server.secretKey },
+      serverSchema,
+    )
+    await this.#call(
+      'groups.setCallbackSettings',
+      token,
+      { ...group, server_id: String(serverId), api_version: VK_API_VERSION, wall_reply_new: '1' },
+      doneSchema,
+    )
+    return { serverId, confirmationCode: code }
+  }
+
+  async deleteCallbackServer(token: string, groupId: number, serverId: number): Promise<void> {
+    await this.#call(
+      'groups.deleteCallbackServer',
+      token,
+      { group_id: String(groupId), server_id: String(serverId) },
+      doneSchema,
+    )
   }
 
   async #call<T>(

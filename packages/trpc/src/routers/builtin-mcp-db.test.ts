@@ -146,6 +146,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the built-in MCP servers', () => {
       data: requiredConsents.map((consent) => ({ ...consent, userId: user.id, source: 'sign_up' })),
     })
     const vault = writerVault()
+    let vkServers = 0
     const vk = {
       community: vi.fn(async (token: string) => {
         const group = groups[token]
@@ -153,6 +154,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the built-in MCP servers', () => {
         return group.community
       }),
       tokenPermissions: vi.fn(async (token: string) => groups[token]?.rights ?? []),
+      addCallbackServer: vi.fn(
+        async (_token: string, _groupId: number, _server: { url: string; secretKey: string }) => ({
+          serverId: 70 + vkServers++,
+          confirmationCode: 'c0nf1rm',
+        }),
+      ),
+      deleteCallbackServer: vi.fn(async () => undefined),
     }
     const caller = createCaller({
       prisma: db,
@@ -170,7 +178,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the built-in MCP servers', () => {
       },
       billing: null,
       chat,
-      builtinMcp: { secrets: vault.secrets, vk, confirmMac: mac },
+      builtinMcp: {
+        secrets: vault.secrets,
+        vk,
+        confirmMac: mac,
+        callbackUrl: (id: string) => `https://raditi.test/api/webhooks/vk/${id}`,
+      },
     })
     return { user, caller, vault, vk }
   }
@@ -204,6 +217,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the built-in MCP servers', () => {
         url: 'https://vk.com/coffee',
         closed: false,
         refused: false,
+        notices: true,
       },
     ])
     const workspaceId = view.workspaceId!
@@ -218,7 +232,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the built-in MCP servers', () => {
       where: { id },
       include: { credentialRef: true },
     })
-    expect(row).toMatchObject({ groupId: 1001n, permissions: ['manage', 'wall'], state: 'ok' })
+    expect(row).toMatchObject({
+      groupId: 1001n,
+      permissions: ['manage', 'wall'],
+      state: 'ok',
+      // The Callback API (slice 99.6): the server of Raditi with the derived secret, and its code.
+      callbackServerId: 70,
+      callbackCode: 'c0nf1rm',
+    })
     expect(row.credentialRef).toMatchObject({ kind: 'vk_community', keyVersion: 1, workspaceId })
     expect(
       JSON.stringify(row, (_key, value: unknown) =>
@@ -229,9 +250,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the built-in MCP servers', () => {
   })
 
   it('replaces the key of a community connected already, and adds another', async () => {
-    const { caller, vault } = await owner()
+    const { caller, vault, vk } = await owner()
     const first = await caller.builtinMcp.vkConnect({ token: 'vk1.a.coffee-key-000001' })
     const again = await caller.builtinMcp.vkConnect({ token: 'vk1.a.coffee-key-000002' })
+    // The new key has no right «Управление»: no notices, and nothing is asked of the old server.
+    expect(again.servers[0]!.communities[0]!.notices).toBe(false)
+    expect(vk.addCallbackServer).toHaveBeenCalledTimes(1)
+    expect(vk.addCallbackServer.mock.calls[0]![2]).toMatchObject({
+      url: `https://raditi.test/api/webhooks/vk/${first.servers[0]!.communities[0]!.id}`,
+      secretKey: expect.stringMatching(/^[A-Za-z0-9]{32}$/),
+    })
     expect(again.servers[0]!.communities.map((group) => group.id)).toEqual(
       first.servers[0]!.communities.map((group) => group.id),
     )
