@@ -578,6 +578,10 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
   }),
   // «Отправить сейчас» (ВВ4): a press, the words follow as `queued` once the pass has stopped.
   z.strictObject({ ...requestBase, kind: z.literal('interrupt') }),
+  // «Исправить» on a note of an artifact (docs/plan/98-quick-edits.md): an attempt of the quick
+  // task, answered by core with one model call, never by a pass of the agent. The text is what
+  // the feed of «Быстрые правки» shows: «Исправить по заметке: «…»».
+  z.strictObject({ ...requestBase, kind: z.literal('quick_edit'), text: requestText }),
 ])
 export type FeedRequestPayload = z.infer<typeof feedRequestPayloadSchema>
 
@@ -598,6 +602,8 @@ export const feedPassRequestKinds = [
 export const feedPresslessRequestKinds = [
   'command',
   'interrupt',
+  // A quick edit is answered by core, not by `turn.run` (plan 98).
+  'quick_edit',
 ] as const satisfies readonly FeedRequestPayload['kind'][]
 
 /** `feed.step` v1 — the work reached a stage. No text, no path, no counter. */
