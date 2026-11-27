@@ -227,7 +227,37 @@ export async function readPassFacts(
     }
   })
 
-  const [turnRows, plans, variables] = await Promise.all([
+  const modelClass = modelClassSchema.safeParse(task.modelClass ?? 'standard')
+  if (!modelClass.success) return null
+  const openProject = task.project && task.project.deletedAt === null ? task.project : null
+  // The artifacts the client named in their own words (`@artifact:<id>`, docs/plan/88-artifacts.md,
+  // Ар23, Ар47) join the chat — by the client's role, never from a text an agent wrote: the first
+  // request of a run of a scheduled task is its instruction, which an agent may have written
+  // (`raditi_schedule_create`), so its mentions are not read.
+  const ownWords = task.scheduledRun ? requests.slice(1) : requests
+  const mentioned = [
+    ...new Set(
+      ownWords.flatMap((request) =>
+        // A command and the words of a command the agent carries out are the platform's.
+        request.kind !== 'command' && request.kind !== 'agent_command' && request.text
+          ? artifactMentionsOf(request.text)
+          : [],
+      ),
+    ),
+  ]
+  // The reads below do not depend on each other; only the steps inside one entry are ordered.
+  const [
+    turnRows,
+    plans,
+    variables,
+    chosen,
+    creditBudget,
+    attachmentRows,
+    projectFiles,
+    memoryEntries,
+    chatArtifacts,
+    projectArtifacts,
+  ] = await Promise.all([
     db.taskTurn.findMany({
       where: { taskId: task.id },
       select: {
@@ -247,6 +277,33 @@ export async function readPassFacts(
       orderBy: { name: 'asc' },
       select: { name: true },
     }),
+    // The same query «Попробовать ещё» asks before it moves a dialog into a class, backend by
+    // backend in the order of the registry: the plan first, the API when the plan has its limits
+    // out (owner's answer of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР24). With every
+    // pool out the first stays, and the issue of its key tells the client so (plan 68).
+    profileWithRoom(deps, modelClass.data),
+    task.billable
+      ? attemptCreditBudget(db, { taskId: task.id, attempt: input.attempt, now: input.now })
+      : null,
+    taskAttachments(deps.db, task.id),
+    // The files of the context of the project (docs/plan/84-projects.md, ПР8): what is ready now.
+    openProject ? readyProjectFiles(deps.db, openProject.id) : [],
+    // The memory of the chat (docs/plan/84-projects.md, ПР18): null — off for its author.
+    chatMemory(deps.db, task.id).then((memory) =>
+      memory ? memoryEntriesOfPass(deps.db, memory) : null,
+    ),
+    // The artifacts the chat made, edited or was given (Ар26): their lines, no content — read
+    // once the ones the client named joined it.
+    (async () => {
+      if (mentioned.length > 0)
+        await attachMentionedArtifacts(deps.db, { taskId: task.id, artifactIds: mentioned })
+      return (await listChatArtifacts(deps.db, { taskId: task.id, scope: 'chat' })).rows
+    })(),
+    // The artifacts of its project (Ар26, slice 88.20): every turn of the project knows them by
+    // line. A mention never moves an artifact into a project: this list does not wait for it.
+    openProject
+      ? listChatArtifacts(deps.db, { taskId: task.id, scope: 'project' }).then(({ rows }) => rows)
+      : [],
   ])
   const turns = new Map<number, FinishedTurn>(
     turnRows.map((row) => [
@@ -262,14 +319,6 @@ export async function readPassFacts(
       },
     ]),
   )
-
-  const modelClass = modelClassSchema.safeParse(task.modelClass ?? 'standard')
-  if (!modelClass.success) return null
-  // The same query «Попробовать ещё» asks before it moves a dialog into a class, backend by
-  // backend in the order of the registry: the plan first, the API when the plan has its limits
-  // out (owner's answer of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР24). With every
-  // pool out the first stays, and the issue of its key tells the client so (plan 68).
-  const chosen = await profileWithRoom(deps, modelClass.data)
   const profile = chosen
     ? {
         backend: chosen.backend,
@@ -277,51 +326,9 @@ export async function readPassFacts(
         providerModelId: chosen.providerModelId,
       }
     : undefined
-
-  const budget: PassBudget = task.billable
-    ? {
-        kind: 'credits',
-        budget: await attemptCreditBudget(db, {
-          taskId: task.id,
-          attempt: input.attempt,
-          now: input.now,
-        }),
-      }
-    : { kind: 'quota' }
-
-  const attachments = attachmentFactsOf(await taskAttachments(deps.db, task.id))
-  // The files of the context of the project (docs/plan/84-projects.md, ПР8): what is ready now.
-  const projectFiles =
-    task.project && task.project.deletedAt === null
-      ? await readyProjectFiles(deps.db, task.project.id)
-      : []
-  // The memory of the chat (docs/plan/84-projects.md, ПР18): null — off for its author.
-  const memory = await chatMemory(deps.db, task.id)
-  const memoryEntries = memory ? await memoryEntriesOfPass(deps.db, memory) : null
-  // The artifacts the client named in their own words (`@artifact:<id>`, docs/plan/88-artifacts.md,
-  // Ар23, Ар47) join the chat — by the client's role, never from a text an agent wrote: the first
-  // request of a run of a scheduled task is its instruction, which an agent may have written
-  // (`raditi_schedule_create`), so its mentions are not read.
-  const ownWords = task.scheduledRun ? requests.slice(1) : requests
-  const mentioned = [
-    ...new Set(
-      ownWords.flatMap((request) =>
-        // A command and the words of a command the agent carries out are the platform's.
-        request.kind !== 'command' && request.kind !== 'agent_command' && request.text
-          ? artifactMentionsOf(request.text)
-          : [],
-      ),
-    ),
-  ]
-  if (mentioned.length > 0)
-    await attachMentionedArtifacts(deps.db, { taskId: task.id, artifactIds: mentioned })
-  // The artifacts the chat made, edited or was given (Ар26): their lines, no content.
-  const chatArtifacts = (await listChatArtifacts(deps.db, { taskId: task.id, scope: 'chat' })).rows
-  // The artifacts of its project (Ар26, slice 88.20): every turn of the project knows them by line.
-  const projectArtifacts =
-    task.project && task.project.deletedAt === null
-      ? (await listChatArtifacts(deps.db, { taskId: task.id, scope: 'project' })).rows
-      : []
+  const budget: PassBudget =
+    creditBudget === null ? { kind: 'quota' } : { kind: 'credits', budget: creditBudget }
+  const attachments = attachmentFactsOf(attachmentRows)
   const lineOf = ({ id, kind, title, version, updatedAt }: (typeof chatArtifacts)[number]) => ({
     id,
     kind,
