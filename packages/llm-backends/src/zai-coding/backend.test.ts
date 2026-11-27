@@ -558,6 +558,7 @@ describe('the pay-per-token API of Z.ai', () => {
       overrideEnv: 'LLM_BACKEND_URL_ZAI_CODING',
       direct: true,
       imageModels: ['glm-5.3-flash'],
+      platformUserAgent: 'raditi-platform/1',
     })
     expect(Object.isFrozen(zaiApiOffer)).toBe(true)
   })
@@ -595,6 +596,34 @@ describe('the pay-per-token API of Z.ai', () => {
     const profile = { model: 'glm-5.3', reasoningEffort: 'max' }
     expect(() => api.normalizeBody(apiRoute, request, profile)).not.toThrow()
     expect(() => api.normalizeBody(route, request, profile)).toThrow(DomainError)
+  })
+
+  it("admits core's own call to the API only, with its honest identity (plan 98, БПр1)", () => {
+    const platform = new Headers({ 'user-agent': 'raditi-platform/1' })
+    expect(() => api.validateClientHeaders(platform, 'platform')).not.toThrow()
+    expect(() => api.validateClientHeaders(cliHeaders(), 'platform')).toThrow(DomainError)
+    expect(() => api.validateClientHeaders(platform)).toThrow(DomainError)
+    // The personal plan forbids calls of the platform's own: no identity admits one.
+    expect(() => backend.validateClientHeaders(platform, 'platform')).toThrow(DomainError)
+    expect(() => backend.validateClientHeaders(cliHeaders(), 'platform')).toThrow(DomainError)
+    const target = api.upstream(apiRoute, body, platform, credential, 'platform')
+    expect(target.headers.get('user-agent')).toBe('raditi-platform/1')
+    expect(api.upstream(apiRoute, body, cliHeaders(), credential).headers.get('user-agent')).toBe(
+      cliHeaders().get('user-agent'),
+    )
+  })
+
+  it('caps the output at the reserve a quick edit names, and only then (БПр6)', () => {
+    const request = encodeJson({
+      model: 'glm-5.3',
+      max_tokens: 30_000,
+      messages: [{ role: 'user', content: 'x' }],
+    })
+    const sent = (ctx: Parameters<typeof api.normalizeBody>[2]) =>
+      JSON.parse(new TextDecoder().decode(api.normalizeBody(apiRoute, request, ctx).body))
+        .max_tokens
+    expect(sent({ model: 'glm-5.3', reasoningEffort: 'low' })).toBe(30_000)
+    expect(sent({ model: 'glm-5.3', reasoningEffort: 'low', maxOutputTokens: 2000 })).toBe(2000)
   })
 
   it('reads the recorded 1113 of the API path as an empty balance, the plan as a missing plan', () => {
