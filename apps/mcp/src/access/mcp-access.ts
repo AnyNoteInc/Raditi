@@ -1,5 +1,10 @@
 import { passUnattended, type PrismaClient } from '@repo/db'
-import { DomainError, taskRequirementsSchema, terminalTaskStatuses } from '@repo/domain'
+import {
+  builtinMcpServerSchema,
+  DomainError,
+  taskRequirementsSchema,
+  terminalTaskStatuses,
+} from '@repo/domain'
 import { z } from 'zod'
 
 import { MCP_TOKEN_PATTERN, turnKeyHash } from '@repo/turn-keys'
@@ -61,6 +66,12 @@ export const mcpTurnAccessSchema = z
      * docs/plan/88-artifacts.md, Ар32): the helper `look` and its `artifact_render`. Absent — false.
      */
     vision: z.boolean().optional(),
+    /**
+     * The built-in MCP servers its workspace has on (docs/plan/99-vk-community.md, ВК15): a family of
+     * one that is off is not offered — not listed, not called. Read with the admission, so a switch
+     * turned off holds for the next call. Absent — none: a scope made before the field.
+     */
+    builtinMcp: z.array(builtinMcpServerSchema).optional(),
   })
   .refine((access) => access.requirements.repository === Boolean(access.repository))
 export type McpTurnAccess = z.infer<typeof mcpTurnAccessSchema>
@@ -100,7 +111,9 @@ export class PostgresMcpAccess implements McpAccessStore {
         (p.deleted_at IS NOT NULL) AS "projectGone",
         a.plan->'repository' AS "repository",
         a.plan->>'committedAt' AS "answeredAt", a.deadline_at AS "deadlineAt",
-        (k.vision_model_id IS NOT NULL) AS vision
+        (k.vision_model_id IS NOT NULL) AS vision,
+        ARRAY(SELECT b.server::text FROM workspace_builtin_mcp b
+          WHERE b.workspace_id = t.workspace_id AND b.enabled ORDER BY b.server) AS "builtinMcp"
       FROM llm_keys k JOIN tasks t ON t.id = k.task_id
       LEFT JOIN users u ON u.id = t.created_by_id
       LEFT JOIN projects p ON p.id = t.project_id
