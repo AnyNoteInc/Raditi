@@ -7,7 +7,7 @@
 
 const TOOLING = '^packages/(eslint-config|typescript-config)/'
 const ADAPTERS =
-  'db|storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram'
+  'db|storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram|skill-sources'
 // A leaf: imports nothing of the repository. The apps import it; no tier rule of a package
 // allows it.
 const LEAVES = 'ip-address'

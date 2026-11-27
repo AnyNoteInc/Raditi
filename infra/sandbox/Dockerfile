@@ -34,7 +34,7 @@ COPY packages/agent-drivers/cli/package.json packages/agent-drivers/cli/package-
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       git zstd ca-certificates curl jq ripgrep fd-find php-cli composer \
-      python3 python3-docx python3-openpyxl poppler-utils \
+      python3 python3-docx python3-openpyxl python3-yaml poppler-utils \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/* \
     && cd /usr/local/lib/raditi/agent-clis \
@@ -67,6 +67,13 @@ RUN apt-get update \
     && mkdir -p /workspace /agent-home /run/raditi/exec /run/raditi/secrets \
     && chown -R 10001:10001 /workspace /agent-home /run/raditi
 COPY packages/sandbox-providers/runtime/runtime.mjs /usr/local/lib/raditi/runtime.mjs
+# The built-in skills of the platform (docs/plan/97-skills.md, Нв5): read and run by the agent,
+# never changed — the root filesystem of a turn is read-only besides. The last layer: they change
+# more often than the rest.
+COPY infra/sandbox/skills /usr/local/lib/raditi/skills
+RUN find /usr/local/lib/raditi/skills -type d -exec chmod 0555 {} + \
+    && find /usr/local/lib/raditi/skills -type f -exec chmod 0444 {} + \
+    && find /usr/local/lib/raditi/skills -path '*/scripts/*' -type f -exec chmod 0555 {} +
 ENV HOME=/agent-home LANG=C.UTF-8
 USER 10001:10001
 ENTRYPOINT ["/usr/bin/tini", "--"]

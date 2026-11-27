@@ -66,6 +66,9 @@ catalog:
   dockerode: ^5.0.1
   '@types/dockerode': ^4.0.1
   tar-stream: ^3.2.1
+  # The frontmatter of SKILL.md and the archives of skills (docs/plan/97-skills.md).
+  yaml: 2.9.1
+  fflate: 0.8.3
   zod: ^4.6.5
   decimal.js: ^10.6.0
   superjson: ^2.2.6

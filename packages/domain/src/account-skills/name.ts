@@ -27,7 +27,7 @@ const telegramCommands = ['start', 'stop', 'help', 'new', 'delete', 'chats', 'us
 const historicCommands = ['release', 'preview', 'update', 'reset', 'rollback', 'init', 'retry']
 const cliSkills = ['customize-opencode']
 
-const reservedSkillNames: ReadonlySet<string> = new Set([
+export const reservedSkillNames: ReadonlySet<string> = new Set([
   ...chatCommandIds.flatMap((id) =>
     [chatCommands[id].slash, ...(chatCommands[id].aliases ?? [])].map((slash) => slash.slice(1)),
   ),

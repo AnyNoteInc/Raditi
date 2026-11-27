@@ -14,9 +14,11 @@
 .github
 docs
 infra
-# except the scripts the sandbox images copy (infra/sandbox/Dockerfile) and the manifests of the
+# except the scripts and built-in skills the sandbox images copy (infra/sandbox/Dockerfile) and the manifests of the
 # migrate image (apps/core/Dockerfile; it stays out of /repo of the image)
 !infra/sandbox/*.mjs
+!infra/sandbox/skills
+!infra/sandbox/skills/**
 !infra/app/migrate-image.mjs
 
 # verification stands, their tests and fixtures never go into an image: they run from the
