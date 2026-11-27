@@ -198,7 +198,15 @@ export async function runLiveGateway(mode) {
   let code = 0
   try {
     if (!mode.noBuild)
-      await run('pnpm', ['--filter', 'core...', '--filter', 'llm...', '--filter', 'mcp...', 'build'])
+      await run('pnpm', [
+        '--filter',
+        'core...',
+        '--filter',
+        'llm...',
+        '--filter',
+        'mcp...',
+        'build',
+      ])
     await assertImages()
     stage = 'disposable stack'
     stack = await startVerificationStack({
