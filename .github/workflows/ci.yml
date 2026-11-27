@@ -63,11 +63,10 @@ jobs:
       - name: Env vars are declared for turbo
         run: pnpm check-env
 
-      - name: Type check
-        run: pnpm typecheck
-
-      - name: Lint
-        run: pnpm lint
+      # One turbo run: the three tasks share one graph and run in parallel, each package's tasks
+      # as soon as their dependencies are ready, instead of three runs one after another.
+      - name: Type check, lint and build
+        run: pnpm exec turbo run typecheck lint build
 
       - name: Architecture
         run: pnpm check-architecture
@@ -80,9 +79,6 @@ jobs:
 
       - name: Format
         run: pnpm format:check
-
-      - name: Build
-        run: pnpm build
 
       - name: Save the turbo cache
         if: ${{ !cancelled() }}
