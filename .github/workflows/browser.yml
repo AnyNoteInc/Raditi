@@ -99,17 +99,6 @@ jobs:
           # The egress proxy of a chat's browser session.
           docker build -q -f infra/sandbox/Dockerfile --target client-egress \
             -t raditi-client-egress:local .
-      # The files of the platform on a real file system, as the helper runs them: root with CHOWN
-      # only (packages/sandbox-providers/src/preview/containers.ts). `pnpm test:infra` skips these
-      # tests without root and off Linux, so this step fails when one of them is skipped here.
-      - name: Files of the platform as the helper runs them
-        run: |
-          set -o pipefail
-          docker run --rm --network none --user 0:0 --cap-drop ALL --cap-add CHOWN \
-            --read-only --tmpfs /tmp -v "$PWD/infra:/w/infra:ro" -w /w \
-            --entrypoint node raditi-preview-tools:local \
-            --test --test-reporter=tap infra/preview/files.test.mjs | tee "$RUNNER_TEMP/files.tap"
-          if grep -E '# SKIP needs' "$RUNNER_TEMP/files.tap"; then exit 1; fi
       # The containers of a task's browser session (docs/plan/57-browser-tasks.md, Б10, Б11):
       # Chromium behind its egress proxy, a local site of the host and the refusals around it.
       - name: Browser session runtime against the real daemon

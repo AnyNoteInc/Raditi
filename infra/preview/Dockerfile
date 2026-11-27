@@ -3,13 +3,13 @@
 #   docker build -f infra/preview/Dockerfile --target <tools|browser> infra/preview
 # The runtime pins each by digest (BROWSER_FORWARDER_IMAGE, BROWSER_IMAGE); README.md.
 
-# Trusted tools of a preview: the entry forwarder, the browser relay and the files helper. The
-# runtime sets the entrypoint and the user of each container; a bare run is not root either.
+# Trusted tools of a browser session: the forwarder of its control port. The runtime sets the
+# entrypoint and the user of each container; a bare run is not root either.
 FROM node:26.10.0-bookworm-slim@sha256:662933cf47f013bc8e4beb31a6116448427a82057ba7c42c97e4c5ba766504c2 AS tools
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tini \
     && rm -rf /var/lib/apt/lists/*
-COPY forward.mjs files.mjs /usr/local/lib/raditi/
+COPY forward.mjs /usr/local/lib/raditi/
 USER 10001:10001
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["sleep", "infinity"]

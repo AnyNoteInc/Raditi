@@ -74,7 +74,7 @@ export interface BrowserWorkerConfig {
    */
   runtime: DockerBrowserSessionConfig | null
   /**
-   * BROWSER_PLATFORM_HOSTS: names of the platform (the cabinet, previews, Gitea), each with
+   * BROWSER_PLATFORM_HOSTS: names of the platform (the cabinet and its services), each with
    * everything under it, which no page of any session reaches (docs/plan/61-chats-first.md, К37).
    */
   platformHosts: readonly string[]

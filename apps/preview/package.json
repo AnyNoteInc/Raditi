@@ -29,7 +29,6 @@
   },
   "devDependencies": {
     "@nestjs/cli": "catalog:",
-    "@nestjs/testing": "catalog:",
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@swc/core": "catalog:",

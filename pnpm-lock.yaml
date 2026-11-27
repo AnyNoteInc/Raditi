@@ -746,9 +746,6 @@ importers:
       bullmq:
         specifier: 'catalog:'
         version: 6.3.8(ioredis@6.0.0(supports-color@7.2.0))(pg@8.23.0)
-      express:
-        specifier: 'catalog:'
-        version: 5.2.1(supports-color@7.2.0)
       ioredis:
         specifier: 'catalog:'
         version: 6.0.0(supports-color@7.2.0)
@@ -1110,9 +1107,6 @@ importers:
       '@nestjs/cli':
         specifier: 'catalog:'
         version: 12.0.7(@swc/core@1.16.2(@swc/helpers@0.5.23))(@types/node@26.6.2)(prettier@3.9.9)(tsconfig-paths-webpack-plugin@4.2.0)
-      '@nestjs/testing':
-        specifier: 'catalog:'
-        version: 12.1.0(@nestjs/common@12.1.0(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.1.0)(@nestjs/microservices@12.1.0)(@nestjs/platform-express@12.1.0)
       '@repo/eslint-config':
         specifier: workspace:*
         version: link:../../packages/eslint-config
@@ -1642,9 +1636,6 @@ importers:
       playwright-core:
         specifier: 'catalog:'
         version: 1.63.0
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.5
     devDependencies:
       '@repo/eslint-config':
         specifier: workspace:*
@@ -1980,9 +1971,6 @@ importers:
       '@repo/snapshots':
         specifier: workspace:*
         version: link:../snapshots
-      tar-stream:
-        specifier: 'catalog:'
-        version: 3.2.1
     devDependencies:
       '@repo/app-bootstrap':
         specifier: workspace:*

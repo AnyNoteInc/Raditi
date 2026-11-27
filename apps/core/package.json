@@ -61,7 +61,6 @@
     "@repo/vault": "workspace:*",
     "@repo/yookassa": "workspace:*",
     "bullmq": "catalog:",
-    "express": "catalog:",
     "ioredis": "catalog:",
     "pg": "catalog:",
     "reflect-metadata": "catalog:",
