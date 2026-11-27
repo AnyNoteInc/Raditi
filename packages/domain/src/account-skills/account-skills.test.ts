@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { isDomainError } from '../errors.ts'
+import { assertTurnSkillFiles, turnInputSchema } from '../ports/turn-executor.ts'
 import {
   accountSkillsSection,
   builtinSkills,
@@ -282,5 +283,44 @@ describe('a turn with skills', () => {
       expect(skill.description.length).toBeLessThanOrEqual(1024)
       expect(skill.description).not.toMatch(/[<>]/u)
     }
+  })
+})
+
+describe('the files of skills of a turn', () => {
+  const at = (path: string, sizeBytes = 10, executable = false) => ({ path, sizeBytes, executable })
+
+  it('takes clean paths of skills for the turn of a chat', () => {
+    expect(() =>
+      assertTurnSkillFiles(
+        [at('/workspace/skills/demo/SKILL.md'), at('/workspace/skills/demo/scripts/a.py', 5, true)],
+        true,
+      ),
+    ).not.toThrow()
+    expect(() => assertTurnSkillFiles([], false)).not.toThrow()
+  })
+
+  it.each([
+    ['for a turn that is not a chat', [at('/workspace/skills/demo/SKILL.md')], false],
+    ['outside the folder of skills', [at('/workspace/project/SKILL.md')], true],
+    ['without a skill folder', [at('/workspace/skills/SKILL.md')], true],
+    ['twice', [at('/workspace/skills/d/a'), at('/workspace/skills/d/a')], true],
+    ['a file that is a folder', [at('/workspace/skills/d/a'), at('/workspace/skills/d/a/b')], true],
+    ['too large', [at('/workspace/skills/d/a', 6 * 1024 * 1024)], true],
+  ])('refuses files %s', (_label, files, mayHold) => {
+    expect(() => assertTurnSkillFiles(files, mayHold)).toThrow()
+  })
+
+  it('names the skills of a plan and its called skill in the plan schema', () => {
+    expect(
+      turnInputSchema.safeParse({
+        prompt: 'x',
+        attachments: [],
+        skillFiles: ['/workspace/skills/demo/SKILL.md'],
+      }).success,
+    ).toBe(true)
+    expect(
+      turnInputSchema.safeParse({ prompt: 'x', attachments: [], skillFiles: ['/etc/passwd'] })
+        .success,
+    ).toBe(false)
   })
 })

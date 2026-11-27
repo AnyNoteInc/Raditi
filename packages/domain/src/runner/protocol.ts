@@ -46,7 +46,9 @@ import {
   turnMayHoldInbox,
   turnProjectFilesLimits,
   turnProjectPathSchema,
+  turnSkillPathSchema,
 } from '../ports/turn-executor.ts'
+import { accountSkillLimits, turnSkillFilesLimits } from '../account-skills/limits.ts'
 import { projectLimits } from '../projects/limits.ts'
 import { execLost, siteLeaseFenceSchema, snapshotHasCredential } from '../ports/turn-runner.ts'
 import { envVarValueSchema } from '../workspace-env/env-vars.ts'
@@ -77,9 +79,10 @@ export const runnerInboxPath = (assignmentId: string, index: number) =>
 
 /**
  * Where a runner fetches the files a prepare puts into the sandbox: `inbox` — of the chat,
- * `project` — of the chat's project (docs/plan/84-projects.md, ПР8), by their place in the command.
+ * `project` — of the chat's project (docs/plan/84-projects.md, ПР8), `skills` — of the skills of
+ * the account (docs/plan/97-skills.md, Нв13), by their place in the command.
  */
-export const turnFileRoots = ['inbox', 'project'] as const
+export const turnFileRoots = ['inbox', 'project', 'skills'] as const
 export type TurnFileRoot = (typeof turnFileRoots)[number]
 
 /** GET: the file of an open prepare at this place of its `inbox` or `projectFiles`. */
@@ -88,7 +91,13 @@ export const runnerFilePath = (assignmentId: string, root: TurnFileRoot, index: 
     .number()
     .int()
     .nonnegative()
-    .lt(root === 'inbox' ? turnInboxLimits.files : turnProjectFilesLimits.files)
+    .lt(
+      root === 'inbox'
+        ? turnInboxLimits.files
+        : root === 'project'
+          ? turnProjectFilesLimits.files
+          : turnSkillFilesLimits.files,
+    )
     .parse(index)}`
 /** GET: 32 bytes of the data key, `no-store`; only for an open restore or seal command. */
 export const runnerKeyPath = (assignmentId: string, purpose: 'restore' | 'seal') =>
@@ -304,6 +313,23 @@ const prepareCommand = command('prepare', {
     )
     .min(1)
     .max(turnProjectFilesLimits.files)
+    .optional(),
+  /**
+   * The files of the skills of the account the runner fetches from runnerFilePath(…, 'skills', n)
+   * and writes at their paths after the files of the project (TurnPrepareInput.skillFiles).
+   */
+  skillFiles: z
+    .array(
+      z
+        .object({
+          path: turnSkillPathSchema,
+          sizeBytes: z.number().int().nonnegative().max(accountSkillLimits.fileBytes),
+          executable: z.boolean(),
+        })
+        .strict(),
+    )
+    .min(1)
+    .max(turnSkillFilesLimits.files)
     .optional(),
   driverId: z.enum(agentDriverIds),
   /** Checked by core (preparedRunSchema, preparedRunExposesSecret) and again by the runner. */

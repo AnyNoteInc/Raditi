@@ -291,6 +291,11 @@ export interface TurnInput {
    */
   projectFiles?: string[]
   /**
+   * The files of the skills of the account already placed under SANDBOX_SKILLS
+   * (docs/plan/97-skills.md, Нв13). Absent — none.
+   */
+  skillFiles?: string[]
+  /**
    * What the turn does instead of answering `prompt`: `compact` replaces the history of the
    * session it resumes with a summary. No tool runs and no result of the model is read.
    */
