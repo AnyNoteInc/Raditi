@@ -1,0 +1,98 @@
+/* The notice about cookies on every page: plain CSS, so the landing carries no MUI for it
+   (docs/plan/96-review-fixes.md, P33.2). It takes the colours of the cabinet's theme where the
+   theme is on the page, and the light brand colours elsewhere. */
+.banner {
+  position: fixed;
+  z-index: 1400;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  box-sizing: border-box;
+  max-width: 760px;
+  margin-inline: auto;
+  padding: 16px;
+  border: 1px solid var(--mui-palette-divider, var(--raditi-rule));
+  border-radius: 8px;
+  background: var(--mui-palette-background-paper, var(--raditi-card));
+  color: var(--mui-palette-text-primary, var(--raditi-ink));
+  box-shadow: 0 10px 30px -12px var(--raditi-shadow-strong);
+  font-family: var(--font-golos, 'Golos Text'), 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.text {
+  flex: 1;
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.link {
+  color: var(--mui-palette-primary-main, var(--raditi-accent-text));
+  text-decoration: underline;
+}
+
+.actions {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.button {
+  min-height: 44px;
+  padding-inline: 18px;
+  border-radius: var(--raditi-radius-pill);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--raditi-motion-fast) var(--raditi-ease-out);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--mui-palette-primary-main, var(--raditi-accent-text));
+  outline-offset: 2px;
+}
+
+.outlined {
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+}
+
+.contained {
+  border: 1px solid var(--raditi-accent-text);
+  background: var(--raditi-accent);
+  color: var(--raditi-on-accent);
+}
+
+@media (hover: hover) {
+  .outlined:hover {
+    background: var(--mui-palette-action-hover, var(--raditi-border-soft));
+  }
+  .contained:hover {
+    background: var(--raditi-accent-hover);
+  }
+}
+
+@media (min-width: 600px) {
+  .banner {
+    left: 24px;
+    right: 24px;
+    bottom: 24px;
+    padding: 20px;
+  }
+  .actions {
+    flex-direction: row;
+  }
+}
+
+@media (min-width: 900px) {
+  .banner {
+    flex-direction: row;
+    align-items: center;
+  }
+}

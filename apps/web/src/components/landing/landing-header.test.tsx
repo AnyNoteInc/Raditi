@@ -59,10 +59,15 @@ describe('landing account navigation', () => {
     expect(SITE_PHONE.text.replace(/[^+\d]/g, '')).toBe(SITE_PHONE.tel)
   })
 
-  it('keeps only the account avatar in the authenticated header and puts the chats in its menu', () => {
+  it('keeps only the account avatar in the authenticated header and puts the chats in its menu', async () => {
     render(<LandingHeader viewer={member} />)
 
-    const account = screen.getByRole('button', { name: 'Меню пользователя' })
+    // The menu comes in a chunk of its own, with MUI (P33.2).
+    const account = await screen.findByRole(
+      'button',
+      { name: 'Меню пользователя' },
+      { timeout: 5_000 },
+    )
     expect(within(account).getByText('АИ')).toBeVisible()
     expect(account.querySelector('svg')).toBeNull()
     expect(screen.queryByText('Анна')).not.toBeInTheDocument()

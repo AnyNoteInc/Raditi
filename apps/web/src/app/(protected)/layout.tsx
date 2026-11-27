@@ -10,13 +10,23 @@ import { hasRequiredConsents, requireSession, UNAVAILABLE } from '@/lib/access'
 import { SHARE_COOKIE } from '@/server/artifact-share'
 import { TRPCReactProvider } from '@/trpc/client'
 
+import { UiProviders } from '../ui-providers'
+
 export const metadata: Metadata = { robots: { index: false } }
 
 /**
  * The cabinet: a session and the current editions of the required documents. The bridge listens
  * for the service worker and remembers the zone of the browser (docs/plan/82, Зп12, Зп41).
  */
-export default async function ProtectedLayout({ children }: { children: ReactNode }) {
+export default function ProtectedLayout({ children }: { children: ReactNode }) {
+  return (
+    <UiProviders>
+      <Cabinet>{children}</Cabinet>
+    </UiProviders>
+  )
+}
+
+async function Cabinet({ children }: { children: ReactNode }) {
   const session = await requireSession()
   if (session === UNAVAILABLE) return <ServiceUnavailable />
   const consents = await hasRequiredConsents()

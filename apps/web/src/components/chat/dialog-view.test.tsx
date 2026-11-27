@@ -939,7 +939,7 @@ describe('a chat of a run of a scheduled task (docs/plan/82-scheduled-tasks.md)'
     )
     fireEvent.click(await screen.findByRole('button', { name: 'Изменить задачу из ленты' }))
     // The window comes in a chunk of its own, loaded at its first opening (P33.1).
-    const window = await screen.findByRole('dialog', { name: 'Окно задачи' })
+    const window = await screen.findByRole('dialog', { name: 'Окно задачи' }, { timeout: 5_000 })
     expect(window.textContent).toContain('Изменить task-of-the-card')
     fireEvent.click(within(window).getByRole('button', { name: 'Закрыть окно задачи' }))
     expect(screen.queryByRole('dialog', { name: 'Окно задачи' })).toBeNull()
@@ -1350,8 +1350,9 @@ describe('a task in the browser', () => {
     expect(await menuTiles()).toEqual(['Браузер, нет'])
     await choose(/^Браузер/)
     // The pane of the browser comes in a chunk of its own, loaded as its tab first opens (P33.1).
-    await waitFor(() =>
-      expect(plain(pane().textContent)).toContain('Браузер в этом чате не запускался.'),
+    await waitFor(
+      () => expect(plain(pane().textContent)).toContain('Браузер в этом чате не запускался.'),
+      { timeout: 5_000 },
     )
   })
 
