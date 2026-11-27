@@ -162,7 +162,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
       const paged: typeof whole = []
       let cursor: { id: string; updatedAt: string; title: string } | null = null
       for (;;) {
-        const page = await caller.artifact.list({ filter: 'all', sort, limit: 2, cursor })
+        // As `infiniteQueryOptions` of the gallery sends it: with the direction of the page.
+        const page = await caller.artifact.list({
+          filter: 'all',
+          sort,
+          limit: 2,
+          cursor,
+          direction: 'forward',
+        })
         paged.push(...page)
         const last = page.at(-1)
         if (page.length < 2 || last === undefined) break

@@ -472,10 +472,15 @@ export const artifactRouter = router({
         cursor: z
           .strictObject({ id: z.uuid(), updatedAt: z.iso.datetime(), title: z.string().max(1000) })
           .nullish(),
+        // `infiniteQueryOptions` of tRPC adds the direction of the page to the input; the gallery
+        // only pages forward, so it is accepted and dropped.
+        direction: z.enum(['forward', 'backward']).optional(),
       }),
     )
     .output(z.array(galleryRow))
-    .query(({ ctx, input }) => galleryOf(ctx.prisma, { userId: ctx.user.id, ...input })),
+    .query(({ ctx, input: { direction: _direction, ...input } }) =>
+      galleryOf(ctx.prisma, { userId: ctx.user.id, ...input }),
+    ),
 
   /** «Создать» (A-create): an empty artifact, or one of a template; in a project or personal. */
   create: consentedProcedure
