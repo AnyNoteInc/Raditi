@@ -50,7 +50,10 @@ import {
   PALETTE_ROOM,
   paletteKey,
   paletteOptions,
+  skillOptions,
+  skillSlash,
   type PaletteOption,
+  type SlashSkill,
 } from './command-palette'
 import type { AttachmentsControl } from './use-attachments'
 
@@ -203,6 +206,11 @@ export interface ComposerCommands {
   closedReason?: string
   /** A chat without the repository, or the start of one: the list goes by what it will have. */
   plain?: boolean
+  /**
+   * The enabled skills of the account (docs/plan/97-skills.md, Нв18): listed under «Навыки» below
+   * the commands; choosing one puts `/<name> ` into the field, nothing is run.
+   */
+  skills?: readonly SlashSkill[]
 }
 
 /**
@@ -381,7 +389,10 @@ export function Composer({
   const optionsFor = (words: string | null): PaletteOption[] =>
     commands === undefined
       ? []
-      : paletteOptions(words, commands.verdicts, commands.closedReason, commands.plain)
+      : [
+          ...paletteOptions(words, commands.verdicts, commands.closedReason, commands.plain),
+          ...skillOptions(words, commands.skills ?? []),
+        ]
   const options = forced ? optionsFor(null) : typed && !disabled ? optionsFor(text) : []
   const open = options.length > 0
   const activeIndex = Math.min(active, Math.max(0, options.length - 1))
@@ -462,7 +473,26 @@ export function Composer({
     if (returnFocus) (wasForced ? buttonRef.current : field.current)?.focus()
   }
 
+  /** A skill: its command goes into the field, before what the client has written there. */
+  function chooseSkill(skill: SlashSkill) {
+    const words = !forced || text.startsWith('/') ? '' : text
+    const next = `${skillSlash(skill)}${words}`
+    setText(next)
+    setCaret(next.length)
+    setNotice(null)
+    setForced(false)
+    setDismissed(false)
+    setActive(0)
+    setHistoryIndex(-1)
+    field.current?.focus()
+    window.setTimeout(() => field.current?.setSelectionRange(next.length, next.length), 0)
+  }
+
   function choose(option: PaletteOption) {
+    if (option.skill) {
+      chooseSkill(option.skill)
+      return
+    }
     if (!option.available) {
       setAnnouncement(option.reason ?? paletteText.unavailable)
       return
@@ -534,7 +564,7 @@ export function Composer({
         return
       }
       const option = optionsFor(null).find((item) => item.id === command)
-      if (option?.available) choose(option)
+      if (option !== undefined && option.available) choose(option)
       else setNotice(option?.reason ?? composerText.commandUnavailable)
       return
     }

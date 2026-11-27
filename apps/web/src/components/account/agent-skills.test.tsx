@@ -74,7 +74,7 @@ function show(initial: SkillsView) {
 
 beforeEach(() => Object.values(calls).forEach((call) => call.mockReset()))
 
-describe('«Навыки агента» of a site', () => {
+describe('«Подключения» of a site', () => {
   it('shows the platform skills on and switches one off', async () => {
     calls.switch.mockResolvedValue(
       view({ skills: [{ ...platform[0]!, enabled: false }, platform[1]!] }),

@@ -196,6 +196,12 @@ vi.mock('@/components/scheduled/schedule-dialog', () => ({
 
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
+    // The skills of the window of commands (docs/plan/97-skills.md, Нв18): none here.
+    accountSkills: {
+      slashNames: {
+        queryOptions: () => ({ queryKey: ['accountSkills.slashNames'], queryFn: async () => [] }),
+      },
+    },
     task: {
       message: mutation(calls.message),
       queueAdd: mutation(calls.queueAdd),

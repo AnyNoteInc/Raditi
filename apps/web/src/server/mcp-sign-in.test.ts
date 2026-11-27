@@ -147,7 +147,9 @@ describe('finishSignIn', () => {
     const { value, connect, finish } = deps()
     const response = await finishSignIn(callback(`code=code-1&state=${pending.state}`), value)
     expect(response.status).toBe(303)
-    expect(response.headers.get('location')).toBe(`${APP}/settings/skills?mcp=signed-in&skill=menu`)
+    expect(response.headers.get('location')).toBe(
+      `${APP}/settings/connections?mcp=signed-in&skill=menu`,
+    )
     expect(response.headers.get('set-cookie')).toMatch(/raditi_mcp_sign_in=; .*Max-Age=0/)
     expect(finish).toHaveBeenCalledWith(pending, 'code-1')
     expect(connect).toHaveBeenCalledWith({
@@ -181,7 +183,7 @@ describe('finishSignIn', () => {
       callback(`code=code-1&state=${pending.state}`, sealed({ expiresAt: NOW - 1 })),
       deps().value,
     )
-    expect(late.headers.get('location')).toBe(`${APP}/settings/skills?mcp=expired`)
+    expect(late.headers.get('location')).toBe(`${APP}/settings/connections?mcp=expired`)
   })
 
   it('says a check that failed after the sign-in, and a Vault that is off', async () => {

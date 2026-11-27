@@ -49,6 +49,6 @@ export const config = {
   // left out: any other path, `/api/attachments/x/y` included, still gets the proxy's 404 on the
   // domain of pages. Next takes only a literal here; proxy.test.ts compiles it as Next does.
   matcher: [
-    '/((?!api/(?:(?:attachments|project-files|artifact-files)/[^/]+$|profile/avatar$|speech$)).*)',
+    '/((?!api/(?:(?:attachments|project-files|artifact-files)/[^/]+$|profile/avatar$|speech$|skills/upload$)).*)',
   ],
 }

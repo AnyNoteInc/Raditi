@@ -156,9 +156,9 @@ export async function finishSignIn(
       headers: { location: `${app}${path}`, 'set-cookie': cleared, 'cache-control': 'no-store' },
     })
   const sealed = openSignIn(cookieOf(request.headers), deps.secret(), deps.now())
-  if (sealed === null) return back('/settings/skills?mcp=expired')
+  if (sealed === null) return back('/settings/connections?mcp=expired')
   const settings = (outcome: SignInOutcome) =>
-    back(`/settings/skills?mcp=${outcome}&skill=${encodeURIComponent(sealed.name)}`)
+    back(`/settings/connections?mcp=${outcome}&skill=${encodeURIComponent(sealed.name)}`)
   const params = new URL(request.url).searchParams
   const code = params.get('code')
   // The state ties the return to this browser's own start: another one is refused.

@@ -129,6 +129,7 @@ describe('proxy', () => {
         '/api/artifact-files/0196a3b2-7c4d-7e8f-9a0b-1c2d3e4f5a6b',
         '/api/profile/avatar',
         '/api/speech',
+        '/api/skills/upload',
       ])
         expect(passes(path), path).toBe(false)
     })
@@ -154,6 +155,8 @@ describe('proxy', () => {
         '/api/profile/avatars',
         '/api/profile/avatar/x',
         '/api/speech/x',
+        '/api/skills/upload/x',
+        '/api/skills',
       ])
         expect(passes(path), path).toBe(true)
     })

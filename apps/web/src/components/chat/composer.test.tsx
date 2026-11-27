@@ -899,3 +899,80 @@ describe('an artifact named by «@» (docs/plan/88-artifacts.md, Ар47)', () =>
     expect(field().value).toBe(`Допиши @artifact:${ID} `)
   })
 })
+
+describe('the skills of the account in the window of commands (docs/plan/97-skills.md, Нв18)', () => {
+  const skills = [
+    { name: 'brand-voice', title: 'Голос бренда', description: 'Пишет в тоне компании' },
+    { name: 'reports', title: 'Отчёты', description: 'Собирает недельный отчёт' },
+  ]
+  function showWithSkills() {
+    const onRun = vi.fn()
+    const onSend = vi.fn(async () => true)
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={onSend}
+        commands={{ verdicts: verdicts(), onRun, skills }}
+      />,
+    )
+    return { onRun, onSend }
+  }
+  const group = (name: string) => within(list()).getByRole('group', { name })
+
+  it('lists them under «Навыки», below the commands of the platform', () => {
+    showWithSkills()
+    type('/')
+    const groups = within(list()).getAllByRole('group')
+    expect(groups.at(-1)?.getAttribute('aria-labelledby')).toBe(
+      group('Навыки').getAttribute('aria-labelledby'),
+    )
+    const options = within(group('Навыки')).getAllByRole('option')
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining('Голос бренда'),
+      expect.stringContaining('Отчёты'),
+    ])
+    expect(options[0]!.textContent).toContain('/brand-voice')
+    expect(options[0]!.textContent).toContain('Пишет в тоне компании')
+  })
+
+  it('narrows them by the letters of their names, the commands first', () => {
+    showWithSkills()
+    type('/re')
+    const ids = within(list())
+      .getAllByRole('option')
+      .map((option) => option.textContent)
+    expect(ids.at(-1)).toContain('/reports')
+    expect(ids[0]).toContain('Вернуть отменённый запрос')
+    type('/bra')
+    expect(within(list()).getAllByRole('option')).toHaveLength(1)
+    expect(within(group('Навыки')).getByRole('option').textContent).toContain('/brand-voice')
+  })
+
+  it('puts «/<name> » into the field when one is chosen and runs nothing', () => {
+    const { onRun, onSend } = showWithSkills()
+    type('/bra')
+    press('Enter')
+    expect(field().value).toBe('/brand-voice ')
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(onRun).not.toHaveBeenCalled()
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('sends «/<name> request» to the agent as written', async () => {
+    const { onRun, onSend } = showWithSkills()
+    type('/brand-voice напишите пост о скидках')
+    expect(screen.queryByRole('listbox')).toBeNull()
+    await act(async () => press('Enter'))
+    expect(onSend).toHaveBeenCalledWith('/brand-voice напишите пост о скидках', [])
+    expect(onRun).not.toHaveBeenCalled()
+  })
+
+  it('chosen from the list opened by its button, keeps the draft after the command', () => {
+    showWithSkills()
+    type('пост о скидках')
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    const option = within(group('Навыки')).getAllByRole('option')[1]!
+    fireEvent.click(option)
+    expect(field().value).toBe('/reports пост о скидках')
+  })
+})

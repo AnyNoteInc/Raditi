@@ -14,6 +14,8 @@ vi.mock('@/server/avatar', () => ({ uploadAvatar: reached, deleteAvatar: reached
 vi.mock('@/server/avatar-runtime', () => ({ avatarDependencies: {} }))
 vi.mock('@/server/speech', () => ({ recognizeSpeech: reached }))
 vi.mock('@/server/speech-runtime', () => ({ speechDependencies: {} }))
+vi.mock('@/server/skill-upload', () => ({ uploadSkill: reached }))
+vi.mock('@/server/skill-upload-runtime', () => ({ skillUploadDependencies: {} }))
 
 const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const
 type Handler = (request: Request, context: { params: Promise<{ id: string }> }) => Promise<Response>
@@ -23,6 +25,7 @@ const routes: [string, () => Promise<Record<string, unknown>>, string[]][] = [
   ['/api/project-files/1', () => import('@/app/api/project-files/[id]/route'), ['PUT', 'GET']],
   ['/api/profile/avatar', () => import('@/app/api/profile/avatar/route'), ['POST', 'DELETE']],
   ['/api/speech', () => import('@/app/api/speech/route'), ['POST']],
+  ['/api/skills/upload', () => import('@/app/api/skills/upload/route'), ['POST']],
 ]
 
 beforeEach(() => {

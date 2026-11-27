@@ -42,6 +42,12 @@ vi.mock('./attachment-upload', async (original) => ({
 
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
+    // The skills of the window of commands (docs/plan/97-skills.md, Нв18): none here.
+    accountSkills: {
+      slashNames: {
+        queryOptions: () => ({ queryKey: ['accountSkills.slashNames'], queryFn: async () => [] }),
+      },
+    },
     // `@` names the artifacts of the client too (docs/plan/88-artifacts.md, Ар47).
     artifact: {
       list: {
