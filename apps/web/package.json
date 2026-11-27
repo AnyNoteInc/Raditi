@@ -33,6 +33,7 @@
     "@repo/git-providers": "workspace:*",
     "@repo/ip-address": "workspace:*",
     "@repo/observability": "workspace:*",
+    "@repo/skill-sources": "workspace:*",
     "@repo/storage": "workspace:*",
     "@repo/telegram": "workspace:*",
     "@repo/trpc": "workspace:*",
