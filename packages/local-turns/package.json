@@ -15,8 +15,7 @@
   },
   "dependencies": {
     "@repo/domain": "workspace:*",
-    "@repo/snapshots": "workspace:*",
-    "tar-stream": "catalog:"
+    "@repo/snapshots": "workspace:*"
   },
   "devDependencies": {
     "@repo/app-bootstrap": "workspace:*",

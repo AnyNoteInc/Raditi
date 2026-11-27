@@ -3,13 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { isDomainError } from '../errors.ts'
 import {
   containsEnvValue,
-  egressHostsOf,
   ENV_VALUE_MASK,
   envValueBytes,
   envValueForms,
   envValueInChange,
   envValueInContent,
-  isEnvValueRefusal,
   maskEnvValues,
   maskEnvValuesDeep,
 } from './env-masking.ts'
@@ -109,20 +107,5 @@ describe('the values of client variables in kept text', () => {
     const content = envValueInContent()
     expect(content.code).toBe('CONTENT_CREDENTIAL_REFUSED')
     expect(content.httpStatus).toBe(400)
-    expect(isEnvValueRefusal(change) && isEnvValueRefusal(content)).toBe(true)
-    expect(isEnvValueRefusal(new Error('x'))).toBe(false)
-  })
-})
-
-describe('the egress of a set of variables', () => {
-  it('is every host once, sorted', () => {
-    expect(
-      egressHostsOf([
-        { hosts: ['b.example.ru:443', 'a.example.ru:443'] },
-        { hosts: ['a.example.ru:443', 'a.example.ru:8443'] },
-        { hosts: [] },
-      ]),
-    ).toEqual(['a.example.ru:443', 'a.example.ru:8443', 'b.example.ru:443'])
-    expect(egressHostsOf([])).toEqual([])
   })
 })

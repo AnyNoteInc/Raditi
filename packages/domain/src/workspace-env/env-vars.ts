@@ -1,7 +1,95 @@
 import { z } from 'zod'
 
 import { badRequest } from '../errors.ts'
-import { envVarNameProblem, envVarNameSchema, envVarValueSchema } from '../release/env-vars.ts'
+
+/**
+ * Names and values of a client's variables (first those of a site, docs/plan/53, Р13; since
+ * plan 83 those of a workspace, below). Names follow an allow pattern and never shadow what the
+ * shell, the runtime or the platform reads.
+ */
+export const ENV_VAR_NAME_PATTERN_SOURCE = '^[A-Z][A-Z0-9_]{1,63}$'
+const NAME = new RegExp(ENV_VAR_NAME_PATTERN_SOURCE)
+
+/** Prefixes no client variable may start with. */
+export const refusedEnvVarPrefixes = Object.freeze([
+  'LD_',
+  'DYLD_',
+  'NODE_',
+  'BUN_',
+  'OPENCODE_',
+  'RADITI_',
+  'GIT_',
+  'SSL_',
+  'PHP_',
+  'WP_',
+  'DB_',
+  'HTTP_',
+  'HTTPS_',
+  'XDG_',
+  'AUTH_',
+  'SECURE_',
+  'LOGGED_IN_',
+  'NONCE_',
+] as const)
+
+/** Whole names no client variable may have; any name ending in `_PROXY` is refused too. */
+export const refusedEnvVarNames = Object.freeze([
+  'NO_PROXY',
+  'PATH',
+  'HOME',
+  'SHELL',
+  'TMPDIR',
+  'BASH_ENV',
+  'ENV',
+] as const)
+const REFUSED_SUFFIX = '_PROXY'
+
+export const envVarLimits = Object.freeze({
+  /** Any value that is not empty (owner's decision of 25.10.2026). */
+  valueMinBytes: 1,
+  /**
+   * The shortest value that is masked and refused in kept and published text
+   * (`envValueForms`): a shorter one is too easy to find anywhere — masking it would garble the
+   * feed and refuse nearly every change — and it is no secret either.
+   */
+  maskMinBytes: 8,
+  valueMaxBytes: 8 * 1024,
+  perSite: 64,
+})
+
+export type EnvVarNameProblem = 'format' | 'reserved'
+
+/** Why a name is refused, or null when it may be used. */
+export function envVarNameProblem(name: string): EnvVarNameProblem | null {
+  if (!NAME.test(name)) return 'format'
+  if (
+    refusedEnvVarPrefixes.some((prefix) => name.startsWith(prefix)) ||
+    (refusedEnvVarNames as readonly string[]).includes(name) ||
+    name.endsWith(REFUSED_SUFFIX)
+  )
+    return 'reserved'
+  return null
+}
+
+export const envVarNameSchema = z.string().superRefine((name, ctx) => {
+  const problem = envVarNameProblem(name)
+  if (problem === 'format')
+    ctx.addIssue({ code: 'custom', message: 'expected capital letters, digits and _' })
+  else if (problem === 'reserved')
+    ctx.addIssue({ code: 'custom', message: 'the name is reserved by the platform' })
+})
+
+const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
+
+/** A value: 1 byte to 8 KiB of well-formed text without NUL. Never logged or returned. */
+export const envVarValueSchema = z
+  .string()
+  .refine((value) => value.isWellFormed() && !value.includes('\0'), 'expected text')
+  .refine(
+    (value) => utf8Bytes(value) >= envVarLimits.valueMinBytes,
+    `must be at least ${envVarLimits.valueMinBytes} bytes`,
+  )
+  .refine((value) => utf8Bytes(value) <= envVarLimits.valueMaxBytes, 'is too long')
 
 /**
  * Variables of a workspace (docs/plan/83-remove-projects.md, БП4): «Настройки → Переменные».

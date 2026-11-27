@@ -14,7 +14,7 @@ groups:
         expr: sum(increase(raditi_deploys_total{result="rolled_back"}[15m])) > 0
         annotations: { summary: 'Выкладка откатилась' }
       - alert: ServiceDown
-        expr: up{job=~"postgres|redis|seaweedfs|openbao|gitea"} == 0
+        expr: up{job=~"postgres|redis|seaweedfs|openbao"} == 0
         for: 2m
         annotations: { summary: 'Сервис инфраструктуры недоступен' }
       - alert: EndpointDown

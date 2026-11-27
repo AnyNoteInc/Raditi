@@ -1,4 +1,4 @@
-import { chatCommandRefusals, type ChatCommandRefusal } from '@repo/domain/release/chat-commands'
+import { chatCommandRefusals, type ChatCommandRefusal } from '@repo/domain/chat/chat-commands'
 
 // A failed call of the dialog procedures as the tRPC client reports it. The server writes the
 // message for the client (packages/trpc/src/errors.ts): Russian, on «вы», the refusal's own

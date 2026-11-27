@@ -189,7 +189,7 @@ export const BUILD_STEPS = Object.freeze([
     // One at a time: each build script builds @repo/service-runtime first.
     args: [
       ...['--workspace-concurrency=1', '--filter', 'core', '--filter', 'llm', '--filter', 'mcp'],
-      ...['--filter', 'preview', '--filter', 'browser', 'build'],
+      ...['--filter', 'preview...', '--filter', 'browser...', 'build'],
     ],
   },
 ])

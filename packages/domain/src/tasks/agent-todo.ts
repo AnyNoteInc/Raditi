@@ -90,7 +90,7 @@ const cyrillic = /\p{Script=Cyrillic}/u
 
 /**
  * Russian words the platform itself puts into the agent's text: the mask of a variable's value
- * (ENV_VALUE_MASK of release/env-masking.ts, kept here as a literal so the browser module stays
+ * (ENV_VALUE_MASK of workspace-env/env-masking.ts, kept here as a literal so the browser module stays
  * small — a test holds the two equal) and the words in place of a hidden contact.
  */
 export const todoPlatformWords: readonly string[] = Object.freeze([

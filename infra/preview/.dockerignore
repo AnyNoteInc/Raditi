@@ -1,13 +1,6 @@
 # The build context of infra/preview/Dockerfile: the scripts it copies, nothing else.
 *
 !forward.mjs
-!files.mjs
 !browser-server.mjs
 !browser/package.json
 !browser/package-lock.json
-!init.sh
-!dns.mjs
-!run-as.sh
-!mariadb-release-signing-key.asc
-!preview-php.ini
-!no-sendmail

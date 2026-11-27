@@ -1,4 +1,4 @@
-import { DomainError, isDomainError } from '../errors.ts'
+import { DomainError } from '../errors.ts'
 import { envVarLimits } from './env-vars.ts'
 
 /**
@@ -98,19 +98,3 @@ export const envValueInContent = (): DomainError =>
     400,
     { reason: CLIENT_VARIABLE },
   )
-
-/** Whether an error is one of the two refusals of a value above. */
-export function isEnvValueRefusal(error: unknown): error is DomainError {
-  return (
-    isDomainError(error) &&
-    (error.details as { reason?: unknown } | undefined)?.reason === CLIENT_VARIABLE
-  )
-}
-
-/**
- * The `host:port` a set of variables leads to — each once, sorted: the egress of a sandbox or a
- * preview is a label, and the same variables give the same one.
- */
-export function egressHostsOf(variables: readonly { hosts: readonly string[] }[]): string[] {
-  return [...new Set(variables.flatMap((variable) => variable.hosts))].sort()
-}

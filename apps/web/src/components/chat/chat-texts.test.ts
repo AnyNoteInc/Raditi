@@ -53,7 +53,7 @@ describe('the word of a chat (docs/plan/61-chats-first.md, К25, К26)', () => {
   it.each([
     '../../../../../packages/domain/src/tasks/client-feed-labels.ts',
     '../../../../../packages/domain/src/tasks/client-feed-failures.ts',
-    '../../../../../packages/domain/src/release/chat-commands.ts',
+    '../../../../../packages/domain/src/chat/chat-commands.ts',
   ])('leaves no «диалог» in %s', (path) => {
     expect(readFileSync(new URL(path, import.meta.url), 'utf8')).not.toMatch(/диалог/i)
   })

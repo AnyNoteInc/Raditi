@@ -8,7 +8,7 @@ import {
   matchChatCommands,
   type ChatCommandGroup,
   type ChatCommandId,
-} from '@repo/domain/release/chat-commands'
+} from '@repo/domain/chat/chat-commands'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import { useEffect, useId, useRef, type KeyboardEvent } from 'react'

@@ -145,18 +145,16 @@ pnpm verify:site-connect
 
 ## Инфраструктура и мониторинг
 
-`pnpm infra:up`, `infra:down`, `infra:logs` управляют PostgreSQL, Redis, SeaweedFS, OpenBao и Gitea.
-Дополнительные профили: `site` — WordPress на 8080 (тип окружения `local`, плагин «Радити» в `mu-plugins`
-только на чтение; подключение сайта к платформе — `infra/dev/site-verify/README.md`, «Локальное подключение сайта»),
-`monitoring` — Prometheus на 9090 и Grafana на 3030, `ci` — раннер Gitea, `monitoring-host` — cAdvisor на Linux.
+`pnpm infra:up`, `infra:down`, `infra:logs` управляют PostgreSQL, Redis, SeaweedFS и OpenBao.
+Дополнительные профили: `monitoring` — Prometheus на 9090 и Grafana на 3030, `monitoring-host` — cAdvisor на Linux.
 
 ```sh
-docker compose --env-file .env -f infra/dev/docker-compose.yml --profile monitoring --profile site up -d
+docker compose --env-file .env -f infra/dev/docker-compose.yml --profile monitoring up -d
 ```
 
 Проверяются обязательные цели и цели включённых профилей. Выключенные дополнительные цели
 ожидаемо отображаются как DOWN; подробности — в [инструкции мониторинга](infra/dev/monitoring/README.md).
-Для профиля `ci` нужна регистрация раннера. Шлюз подписок на синтетическом Z.ai проверяет `pnpm verify:llm-gateway`:
+Шлюз подписок на синтетическом Z.ai проверяет `pnpm verify:llm-gateway`:
 настоящий OpenCode CLI в контейнерах, одноразовые PostgreSQL и OpenBao; `llm` идёт к синтетическому Z.ai
 напрямую, один ход — через прокси стенда — [инструкция](infra/dev/llm-verify/README.md).
 Production-профиль `llm` (отдельный образ `LLM_IMAGE`) находится в `infra/app`; облачная выкладка остаётся за гейтом WordPress e2e.

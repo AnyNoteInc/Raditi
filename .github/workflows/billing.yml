@@ -2,8 +2,7 @@ name: Billing
 
 # The whole money path (docs/plan/37-billing-plan.md, «Проверочный стенд») on built web and
 # core: tariffs, packs, renewals, payment methods, refunds and the operator's commands against
-# the fake ЮKassa of infra/dev/billing-verify, on disposable PostgreSQL, Redis and OpenBao, with
-# a synthetic WordPress on an SFTP server of the stand for the first site of a customer.
+# the fake ЮKassa of infra/dev/billing-verify, on disposable PostgreSQL, Redis and OpenBao.
 # Synthetic data only: no repository secrets, no real shop, no customer data.
 on:
   pull_request:

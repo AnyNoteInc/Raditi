@@ -1,6 +1,6 @@
 'use client'
 
-import type { ChatCommandId } from '@repo/domain/release/chat-commands'
+import type { ChatCommandId } from '@repo/domain/chat/chat-commands'
 import { feedFailureText } from '@repo/domain/tasks/client-feed-failures'
 import type { ReasoningEffort } from '@repo/domain/llm/model-class'
 import {

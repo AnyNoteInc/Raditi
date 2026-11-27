@@ -79,7 +79,7 @@ pnpm dev                      # web :3000, core :8081, mcp :8082, llm :8084, pre
 ## Как писать код
 
 - zod на всех границах: вебхуки, tRPC, итог хода, события драйверов.
-- Новая переменная окружения — сразу в `.env.example` и в `globalEnv` в `turbo.json`; читает её только приложение, чей `config.ts` её называет.
+- Новая переменная окружения — сразу в `.env.example` и в `env` задачи `test` в `turbo.json` (в `globalEnv` — только общее: `APP_ENV`, `CI`, `NODE_ENV`; `pnpm check-env` проверяет объединение); читает её только приложение, чей `config.ts` её называет.
 - Статусы задачи — только из spec §7: `queued`, `preparing`, `running`, `awaiting_user`, `awaiting_approval`, `deploying`, `verifying`, `done`, `failed`, `rolled_back`, `cancelled`.
 - Бакеты — `raditi-inbox`, `raditi-sessions`, `raditi-logs`, `raditi-artifacts`, `raditi-backups`, `raditi-platform`.
 - В биллинге `credit` — только существительное «кредит» (единица клиента); платёж не «credited», а «applied». Личное пространство создаёт `ensurePersonalWorkspaceWithGift` из `@repo/billing` (с подарком), не `ensurePersonalWorkspace` из `@repo/db`.

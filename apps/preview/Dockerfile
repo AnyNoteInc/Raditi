@@ -27,7 +27,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 COPY --from=pruned /repo/out/full/ ./
 # prisma.config.ts reads DATABASE_URL; generate never connects
 RUN DATABASE_URL=postgresql://build@localhost/build pnpm --filter @repo/db db:generate \
- && pnpm --filter preview build
+ && pnpm --filter preview... build
 
 # The production dependencies alone: the layer changes only with the lockfile of preview
 # (docs/plan/92-docker-layers.md). The workspace layout stays: packages ship TypeScript sources

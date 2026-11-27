@@ -19,8 +19,7 @@
     "dompurify": "catalog:",
     "jsdom": "catalog:",
     "mermaid": "catalog:",
-    "playwright-core": "catalog:",
-    "zod": "catalog:"
+    "playwright-core": "catalog:"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",

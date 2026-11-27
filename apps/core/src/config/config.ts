@@ -57,9 +57,10 @@ export const DEFAULT_CORE_PORT = 8081
 /** Runner VMs reach only this port of core, on the private network (spec §19). */
 export const DEFAULT_RUNNER_API_PORT = 8083
 /**
- * SANDBOX_IMAGE of .env.example: no registry serves it, and agent drivers refuse it in
- * production. Core reads no stack image before the supervisor plans turns (P12), so outside
- * production a missing SANDBOX_IMAGE stands for it, as in a fresh copy of .env.example.
+ * SANDBOX_IMAGE of .env.example (the name is history: one sandbox image serves every chat since
+ * plan 83): an all-zero digest no registry serves, which the agent drivers refuse in production
+ * (packages/agent-drivers/src/config.ts). Outside production a missing SANDBOX_IMAGE stands for
+ * it, as in a fresh copy of .env.example: core starts, and no turn can run on it.
  */
 const SANDBOX_IMAGE_PLACEHOLDER = `raditi/sbx-wordpress@sha256:${'0'.repeat(64)}`
 

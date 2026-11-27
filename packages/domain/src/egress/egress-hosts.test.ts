@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  egressHostListSchema,
-  egressHostSchema,
   formatEgressHost,
   isEgressAddressAllowed,
   parseEgressHost,
   parseIpSubnet,
 } from './egress-hosts.ts'
 
-describe('hosts of a variable', () => {
+describe('egress hosts', () => {
   it('takes a public name with an optional port, 443 by default', () => {
     expect(parseEgressHost('api.example.ru')).toEqual({ host: 'api.example.ru', port: 443 })
     expect(parseEgressHost('API.Example.ru:8443')).toEqual({ host: 'api.example.ru', port: 8443 })
@@ -18,7 +16,6 @@ describe('hosts of a variable', () => {
       port: 443,
     })
     expect(formatEgressHost({ host: 'api.example.ru', port: 443 })).toBe('api.example.ru:443')
-    expect(egressHostSchema.parse('Api.Example.ru')).toBe('api.example.ru:443')
   })
 
   it('takes an internationalized name as its punycode', () => {
@@ -27,7 +24,6 @@ describe('hosts of a variable', () => {
       host: 'xn----ltbkac3ct.xn--p1ai',
       port: 8443,
     })
-    expect(egressHostSchema.parse('укк-жкх.рф')).toBe('xn----ltbkac3ct.xn--p1ai:443')
     for (const text of [
       'сайт',
       'сайт.local',
@@ -78,13 +74,6 @@ describe('hosts of a variable', () => {
       '',
     ])
       expect(parseEgressHost(text), text).toBeNull()
-  })
-
-  it('takes up to sixteen different hosts of a variable', () => {
-    const hosts = Array.from({ length: 16 }, (_, i) => `h${i}.example.ru`)
-    expect(egressHostListSchema.parse(hosts)).toHaveLength(16)
-    expect(egressHostListSchema.safeParse([...hosts, 'h16.example.ru']).success).toBe(false)
-    expect(egressHostListSchema.safeParse(['a.example.ru', 'A.example.ru:443']).success).toBe(false)
   })
 })
 

@@ -10,7 +10,7 @@ import {
   isEgressAddressAllowed,
   parseEgressHost,
   parseIpSubnet,
-} from '../../packages/domain/src/preview/egress-hosts.ts'
+} from '../../packages/domain/src/egress/egress-hosts.ts'
 import {
   addressCheck,
   clientEgressConfig,

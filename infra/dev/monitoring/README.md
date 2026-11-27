@@ -23,8 +23,8 @@ web — 3000, `core` — 8081, `mcp` — 8082, шлюз подписок `llm` �
 
 Для базовой проверки B5 нужны инфраструктура, профиль `monitoring` и `pnpm dev`.
 Обязательные цели не имеют метки `compose_profile`: Prometheus, web, core, шлюз подписок
-(`llm`), PostgreSQL, Redis, SeaweedFS, OpenBao, Gitea и blackbox-exporter. Blackbox проверяет
-health web, core, MCP, Gitea, OpenBao и SeaweedFS. У MCP нет `/metrics`: порт доступен
+(`llm`), PostgreSQL, Redis, SeaweedFS, OpenBao и blackbox-exporter. Blackbox проверяет
+health web, core, MCP, OpenBao и SeaweedFS. У MCP нет `/metrics`: порт доступен
 песочницам, поэтому проверяется только его `/health`.
 
 Приложение `llm` отдаёт метрики `raditi_llm_*` из собственного реестра только на своём порту
@@ -43,12 +43,10 @@ health web, core, MCP, Gitea, OpenBao и SeaweedFS. У MCP нет `/metrics`: п
 
 | Профиль | Цель | Условия проверки |
 | --- | --- | --- |
-| `site` | WordPress через blackbox | WordPress доступен, MariaDB запущена |
 | `llm` | Health шлюза подписок через blackbox | `apps/llm` запущено; прокси выхода не задан либо его проба канала прошла |
-| `ci` | Метрики Gitea runner | Раннер зарегистрирован с `GITEA_RUNNER_TOKEN` |
 | `monitoring-host` | cAdvisor | Только Linux; также включён `monitoring` |
 
-Чтобы включить профиль, добавьте `--profile site`, `--profile ci` или другое имя
+Чтобы включить профиль, добавьте `--profile monitoring-host` или другое имя
 в команду запуска. Профиль `monitoring` сам их не включает. Пока профиль выключен,
 его `up` или `probe_success` равен `0`; это ожидаемо. Такие цели находятся в отдельных
 панелях Grafana и не вызывают алерты доступности. После включения профиля проверяйте
@@ -67,17 +65,15 @@ health web, core, MCP, Gitea, OpenBao и SeaweedFS. У MCP нет `/metrics`: п
 2. В Prometheus запрос `up{compose_profile=""} == 0` не возвращает рядов, а запрос
    `up{compose_profile=""}` показывает все обязательные цели из списка выше, в том числе
    `llm`; запрос `raditi_llm_requests_total` возвращает ряд.
-3. Запрос `probe_success{compose_profile=""} == 0` не возвращает рядов; все шесть
+3. Запрос `probe_success{compose_profile=""} == 0` не возвращает рядов; все пять
    обязательных health-проверок имеют `probe_success = 1`. Сам `up` для blackbox
    показывает доступность экспортёра, а результат проверки сайта — `probe_success`.
 4. Для каждого включённого дополнительного профиля его `up` и, где есть, `probe_success`
-   равны `1`. Выключенные профили не входят в критерий. Для `site` нужен именно
-   `probe_success{compose_profile="site"} = 1`.
+   равны `1`. Выключенные профили не входят в критерий.
 
 В отчёте проверки указывайте включённые профили. Успешный запуск контейнеров или
 `up = 1` экспортёра не доказывает здоровье зависимостей: проверяйте также
-`pg_up = 1`, `redis_up = 1` и health приложений. Проверка WordPress из B5 требует
-отдельного запуска профиля `site`; выключенный профиль не считается проверенным.
+`pg_up = 1`, `redis_up = 1` и health приложений; выключенный профиль не считается проверенным.
 
 PostgreSQL-exporter использует ту же учётную запись `raditi` и тот же пароль, что
 локальные приложения. На старом томе выполните команду из комментария в
