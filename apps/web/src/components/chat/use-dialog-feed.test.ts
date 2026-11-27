@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { DialogFeed } from './chat-types'
 import type { FeedAction } from './feed-state'
-import { feedAnswer } from './testing'
-import { createFeedReader } from './use-dialog-feed'
+import { feedAnswer, requestRow } from './testing'
+import { initialFeedState } from './feed-state'
+import { createFeedReader, seededFeedState } from './use-dialog-feed'
 
 /** A query whose answers the test gives one by one. */
 function controlledQuery() {
@@ -60,5 +61,19 @@ describe('the reader of a dialog', () => {
     reader.stop()
     await reader.read()
     expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the state a dialog starts from (P33.4)', () => {
+  it('starts from the page the server read, its next read planned and not due at once', () => {
+    const state = seededFeedState(feedAnswer({ events: [requestRow('3')], cursor: '3' }))
+    expect(state.rows.map((row) => row.id)).toEqual(['3'])
+    expect(state.cursor).toBe('3')
+    expect(state.now).toBe(false)
+    expect(state.head).not.toBeNull()
+  })
+
+  it('starts from nothing without a page', () => {
+    expect(seededFeedState(null)).toBe(initialFeedState)
   })
 })

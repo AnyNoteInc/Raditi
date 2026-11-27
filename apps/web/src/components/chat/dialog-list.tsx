@@ -30,6 +30,7 @@ import { ArchiveDialog, archiveText } from './archive-dialog'
 import { MoveToProjectDialog } from './lazy-tools'
 import {
   DialogMenuButton,
+  dialogChatKey,
   dialogListKey,
   RemoveDialogConfirm,
   RenameField,
@@ -641,7 +642,7 @@ function Folders({ currentId }: { currentId: string | null }) {
   // A segment of the section that is no chat names no folder.
   const openChat = currentId === null || currentId === NEW_CHAT_SEGMENT ? null : currentId
   const shown = useQuery({
-    queryKey: [...dialogListKey, 'chat', openChat],
+    queryKey: dialogChatKey(openChat),
     queryFn: () => client.task.get.query({ taskId: openChat ?? '' }),
     enabled: openChat !== null,
     retry: false,

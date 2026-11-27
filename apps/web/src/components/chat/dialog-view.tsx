@@ -57,7 +57,7 @@ import { callErrorCode, callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
 import { useChatChoiceMadeHere, useChatDetails, useChatThinking } from './chat-details'
 import { rememberEffort } from './chat-effort'
-import type { ChatScheduleLabel, ScheduledTaskItem } from './chat-types'
+import type { ChatInfo, ChatScheduleLabel, DialogFeed, ScheduledTaskItem } from './chat-types'
 import {
   cancelText,
   clientCommandText,
@@ -71,7 +71,13 @@ import {
 } from './chat-texts'
 import { useClientCommands } from './client-commands'
 import { Composer, offScreen } from './composer'
-import { DialogMenuButton, dialogListKey, RemoveDialogConfirm, RenameField } from './dialog-actions'
+import {
+  DialogMenuButton,
+  dialogChatKey,
+  dialogListKey,
+  RemoveDialogConfirm,
+  RenameField,
+} from './dialog-actions'
 import { DialogNotFound } from './dialog-not-found'
 import {
   artifactTool,
@@ -399,6 +405,8 @@ export function DialogView({
   title,
   browserStreamUrl = null,
   speech = false,
+  initialChat = null,
+  initialFeed = null,
 }: {
   /**
    * The scheduled task the chat is a run of, from `task.get` (docs/plan/82-scheduled-tasks.md,
@@ -419,10 +427,24 @@ export function DialogView({
   browserStreamUrl?: string | null
   /** Dictation is set up here (docs/plan/75-chat-input-output.md, ВВ16). */
   speech?: boolean
+  /**
+   * The chat as the page read it (`task.get`): the folders of the list take its project from it
+   * and do not ask again (docs/plan/96-review-fixes.md, P33.4).
+   */
+  initialChat?: ChatInfo | null
+  /** The first page of the feed the page read with the chat (P33.4); null — read here. */
+  initialFeed?: DialogFeed | null
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
-  const { state, refresh } = useDialogFeed(taskId)
+  // Put into the cache before anything here mounts, as a HydrationBoundary does: the list's
+  // folders find the chat there and do not read it again.
+  useState(() => {
+    if (initialChat === null) return
+    const key = dialogChatKey(taskId)
+    if (queryClient.getQueryData(key) === undefined) queryClient.setQueryData(key, initialChat)
+  })
+  const { state, refresh } = useDialogFeed(taskId, initialFeed)
   const head = state.head
   const rows = state.rows
   // The client's earlier requests of this chat: the arrows of the field bring them back (ВВ23).

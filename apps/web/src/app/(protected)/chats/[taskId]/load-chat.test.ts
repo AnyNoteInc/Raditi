@@ -5,6 +5,7 @@ const id = '0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
+  feed: vi.fn(),
   session: vi.fn(),
 }))
 
@@ -23,16 +24,17 @@ vi.mock('react', async (original) => ({
   cache: <T>(fn: T) => fn,
 }))
 vi.mock('@/trpc/server', () => ({
-  getServerCaller: async () => ({ task: { get: mocks.get } }),
+  getServerCaller: async () => ({ task: { get: mocks.get, feed: mocks.feed } }),
 }))
 vi.mock('@/lib/access', () => ({ UNAVAILABLE: 'unavailable', requireSession: mocks.session }))
 
-const { loadChat } = await import('./load-chat')
+const { loadChat, loadFeed } = await import('./load-chat')
 
 const failure = (code: string) => Object.assign(new Error('refused'), { code })
 
 beforeEach(() => {
   mocks.get.mockReset()
+  mocks.feed.mockReset()
   mocks.session.mockReset().mockResolvedValue({ user: { id: 'user' } })
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -66,5 +68,27 @@ describe('the chat of a page', () => {
   it('answers «not found» for an address that is no id, without a request', async () => {
     await expect(loadChat('not-an-id')).rejects.toThrow('NOT_FOUND')
     expect(mocks.get).not.toHaveBeenCalled()
+  })
+})
+
+describe('the first page of the feed (P33.4)', () => {
+  it('reads the rows from the first one', async () => {
+    mocks.feed.mockResolvedValue({ events: [] })
+    await expect(loadFeed(id)).resolves.toEqual({ events: [] })
+    expect(mocks.feed).toHaveBeenCalledWith({ taskId: id, after: '0' })
+  })
+
+  it('leaves the reading to the dialog when the server refuses, saying only real failures', async () => {
+    mocks.feed.mockRejectedValue(failure('NOT_FOUND'))
+    await expect(loadFeed(id)).resolves.toBeNull()
+    expect(console.error).not.toHaveBeenCalled()
+    mocks.feed.mockRejectedValue(failure('INTERNAL_SERVER_ERROR'))
+    await expect(loadFeed(id)).resolves.toBeNull()
+    expect(console.error).toHaveBeenCalledOnce()
+  })
+
+  it('asks nothing for an address that is no id', async () => {
+    await expect(loadFeed('not-an-id')).resolves.toBeNull()
+    expect(mocks.feed).not.toHaveBeenCalled()
   })
 })

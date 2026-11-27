@@ -23,6 +23,8 @@ export type DialogListItem = DialogListPage['items'][number]
  * The task a chat is a run of (docs/plan/82-scheduled-tasks.md, Зп43): `id` null — the task was
  * deleted, its name stays without a link.
  */
+/** A chat as `task.get` reads it. */
+export type ChatInfo = Outputs['task']['get']
 export type ChatScheduleLabel = NonNullable<Outputs['task']['get']['schedule']>
 /** A scheduled task of the client as `schedule.list` gives it: the cards of the feed read it. */
 export type ScheduledTaskItem = Outputs['schedule']['list']['schedules'][number]

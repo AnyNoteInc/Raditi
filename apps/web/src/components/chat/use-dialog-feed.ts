@@ -63,14 +63,25 @@ export function createFeedReader(options: {
   }
 }
 
+/** The state of a dialog that starts from a page the server has read already, or from nothing. */
+export function seededFeedState(initialFeed: DialogFeed | null): FeedState {
+  return initialFeed === null
+    ? initialFeedState
+    : feedReducer(initialFeedState, { type: 'answer', answer: initialFeed, after: '0' })
+}
+
 /**
  * Reads a dialog: the head and the rows after the last one seen, again and again while the page
  * is shown (`pollDelay`). `refresh` reads at once — after the client has written something, or
  * pressed «Обновить».
  */
-export function useDialogFeed(taskId: string): { state: FeedState; refresh: () => void } {
+export function useDialogFeed(
+  taskId: string,
+  /** The first page the server read with the page (P33.4); null — the hook reads it itself. */
+  initialFeed: DialogFeed | null = null,
+): { state: FeedState; refresh: () => void } {
   const client = useTRPCClient()
-  const [state, dispatch] = useReducer(feedReducer, initialFeedState)
+  const [state, dispatch] = useReducer(feedReducer, initialFeed, seededFeedState)
   const latest = useRef(state)
   const [reader] = useState(() =>
     createFeedReader({ query: (after) => client.task.feed.query({ taskId, after }), dispatch }),
