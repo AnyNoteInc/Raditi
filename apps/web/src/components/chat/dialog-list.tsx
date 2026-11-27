@@ -12,7 +12,12 @@ import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+} from '@tanstack/react-query'
 import Link from 'next/link'
 import { useSearchParams, useSelectedLayoutSegment } from 'next/navigation'
 import { useId, useState, type ReactNode } from 'react'
@@ -24,7 +29,7 @@ import { useTRPCClient } from '@/trpc/client'
 import { chatHref, NEW_CHAT_SEGMENT, newChatHref, projectOfSearch } from './chat-address'
 import { dialogGroups, listTime } from './chat-format'
 import { chatsText, listRepoHint, listText } from './chat-texts'
-import type { DialogListItem } from './chat-types'
+import type { DialogListItem, DialogListPage } from './chat-types'
 import { offScreen } from './composer'
 import { ArchiveDialog, archiveText } from './archive-dialog'
 import { MoveToProjectDialog } from './lazy-tools'
@@ -48,34 +53,80 @@ const LIST_REFRESH_MS = 15_000
 const NO_PROJECT = NO_PROJECT_FOLDER
 
 /**
+ * The pages of a list with a first page read anew (docs/plan/96-review-fixes.md, P33.5): it takes
+ * the place of the first one while the same chats stand there — only their statuses, titles and
+ * order changed —; a list of several pages whose first page has other chats now is read again
+ * whole, so that no chat falls between two pages. undefined — read the list again whole.
+ */
+export function withFirstPage(
+  data: InfiniteData<DialogListPage, string | null>,
+  first: DialogListPage,
+): InfiniteData<DialogListPage, string | null> | undefined {
+  const [shown, ...rest] = data.pages
+  if (shown === undefined || rest.length === 0) return { ...data, pages: [first] }
+  const ids = (page: DialogListPage) =>
+    [...page.pinned, ...page.items]
+      .map((item) => item.id)
+      .sort()
+      .join()
+  return ids(shown) === ids(first) ? { ...data, pages: [first, ...rest] } : undefined
+}
+
+/**
  * The pages of one list: every chat of the user, of one project, or of none (`projectId` `none`,
  * a folder of «По проектам»); `archive` — «Архив» (docs/plan/75-chat-input-output.md, ВВ21). The
- * first page of the list carries its pinned chats.
+ * first page of the list carries its pinned chats. Only the first page is read again every 15 s
+ * (P33.5): the pages after it follow the changes the cabinet makes (their invalidations).
  */
-function useChatPages(view: 'active' | 'archive' = 'active', projectId: string | null = null) {
+function useDialogListPages(
+  view: 'active' | 'archive' = 'active',
+  projectId: string | null = null,
+) {
   const client = useTRPCClient()
-  return useInfiniteQuery({
-    queryKey:
-      projectId !== null
-        ? [...dialogListKey, 'project', projectId]
-        : view === 'archive'
-          ? [...dialogListKey, 'archive']
-          : [...dialogListKey, 'all'],
-    queryFn: ({ pageParam }) =>
-      client.task.list.query({
-        ...(pageParam === null ? {} : { cursor: pageParam }),
-        ...(view === 'archive' ? { view } : {}),
-        ...(projectId === null ? {} : { projectId }),
-      }),
+  const queryClient = useQueryClient()
+  const queryKey =
+    projectId !== null
+      ? [...dialogListKey, 'project', projectId]
+      : view === 'archive'
+        ? [...dialogListKey, 'archive']
+        : [...dialogListKey, 'all']
+  const read = (cursor: string | null) =>
+    client.task.list.query({
+      ...(cursor === null ? {} : { cursor }),
+      ...(view === 'archive' ? { view } : {}),
+      ...(projectId === null ? {} : { projectId }),
+    })
+  const list = useInfiniteQuery({
+    queryKey,
+    queryFn: ({ pageParam }) => read(pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor,
+  })
+  useQuery({
+    // Outside `dialogListKey`: an invalidation of the list reads every page anyway.
+    queryKey: ['chat', 'dialogs-first', ...queryKey.slice(dialogListKey.length)],
+    queryFn: async () => {
+      const first = await read(null)
+      const data = queryClient.getQueryData<InfiniteData<DialogListPage, string | null>>(queryKey)
+      const merged = data === undefined ? undefined : withFirstPage(data, first)
+      if (merged === undefined) void queryClient.invalidateQueries({ queryKey, exact: true })
+      else queryClient.setQueryData(queryKey, merged)
+      return first.nextCursor
+    },
+    enabled: list.isSuccess,
+    // The list has just been read: the first page is read again after 15 s, not at once.
+    initialData: null,
+    // Before the list has come, as it comes: no read of its own then.
+    initialDataUpdatedAt: () => (list.isSuccess ? list.dataUpdatedAt : Date.now()),
+    staleTime: LIST_REFRESH_MS,
     refetchInterval: LIST_REFRESH_MS,
   })
+  return list
 }
 
 /** The user has no chat at all, as the server said: nothing to group yet. */
 export function useChatsKnownEmpty(): boolean {
-  const list = useChatPages()
+  const list = useDialogListPages()
   const first = list.data?.pages[0]
   return first !== undefined && first.items.length === 0 && first.pinned.length === 0
 }
@@ -428,7 +479,7 @@ function DialogGroup({
 
 /** «Одним списком»: those that wait for the client first, then today and earlier. */
 function OneList({ currentId }: { currentId: string | null }) {
-  const list = useChatPages()
+  const list = useDialogListPages()
   if (list.isPending) return <ListLoading />
   if (list.isError)
     return <ListFailed retrying={list.isFetching} onRetry={() => void list.refetch()} />
@@ -471,7 +522,7 @@ function FolderChats({
   labelledBy: string
   currentId: string | null
 }) {
-  const list = useChatPages('active', folder)
+  const list = useDialogListPages('active', folder)
   if (list.isPending) return <ListLoading />
   if (list.isError)
     return <ListFailed retrying={list.isFetching} onRetry={() => void list.refetch()} />
@@ -752,7 +803,7 @@ export function ProjectChats({
   labelledBy: string
   empty: ReactNode
 }) {
-  const list = useChatPages('active', projectId)
+  const list = useDialogListPages('active', projectId)
   if (list.isPending) return <ListLoading />
   if (list.isError)
     return <ListFailed retrying={list.isFetching} onRetry={() => void list.refetch()} />

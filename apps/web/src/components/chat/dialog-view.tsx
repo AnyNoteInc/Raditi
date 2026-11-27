@@ -528,7 +528,7 @@ export function DialogView({
     head?.task.status === 'queued' ||
     head?.task.status === 'preparing' ||
     head?.task.status === 'running'
-  const chatQueue = useChatQueue(taskId, agentWorks)
+  const chatQueue = useChatQueue(taskId, agentWorks, rows.at(-1)?.id)
   // The tab says the chat waits while it is hidden (docs/plan/75, ВВ11).
   useWaitingTitle(head?.task.status ?? null)
   const queued = chatQueue.data?.items ?? []

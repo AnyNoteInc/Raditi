@@ -4,12 +4,13 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Typography from '@mui/material/Typography'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { useTRPC } from '@/trpc/client'
 
 import { callErrorText } from './call-error'
 import { queueText } from './chat-texts'
+import { taskSignalBus } from './task-signal-bus'
 import { uuidv7 } from './uuid'
 
 // The queue of a chat under its feed (docs/plan/75-chat-input-output.md, ВВ1–ВВ4): the words the
@@ -18,8 +19,13 @@ import { uuidv7 } from './uuid'
 // are still there — the pass failed, or the credits ran out — «Отправить» sends them by hand
 // (ВВ3), as one message.
 
-/** How often the queue is read while it has words or the agent works. */
-const QUEUE_REFRESH_MS = 2_000
+/**
+ * How often the queue is read while it has words or the agent works: every 2 s without the stream
+ * of the chat's signals; with it every 15 s — a fallback, as the plan of the work reads
+ * (docs/plan/96-review-fixes.md, P33.5): the words leave the queue as a row of the feed, and a new
+ * row reads the queue at once.
+ */
+export const queuePolling = Object.freeze({ unsignalled: 2_000, signalled: 15_000 })
 
 export interface QueueItem {
   id: string
@@ -28,14 +34,30 @@ export interface QueueItem {
   attachments: string[]
 }
 
-/** The queue of the chat, read while it matters; empty while the server has not answered. */
-export function useChatQueue(taskId: string, active: boolean) {
+/**
+ * The queue of the chat, read while it matters; empty while the server has not answered.
+ * `lastRowId` — the newest row of the feed: a new one, while words wait, reads the queue again.
+ */
+export function useChatQueue(taskId: string, active: boolean, lastRowId?: string) {
   const trpc = useTRPC()
-  return useQuery({
+  const query = useQuery({
     ...trpc.task.queueList.queryOptions({ taskId }),
-    refetchInterval: (query) =>
-      active || (query.state.data?.items.length ?? 0) > 0 ? QUEUE_REFRESH_MS : false,
+    refetchInterval: (read) =>
+      active || (read.state.data?.items.length ?? 0) > 0
+        ? taskSignalBus.connected(taskId)
+          ? queuePolling.signalled
+          : queuePolling.unsignalled
+        : false,
   })
+  const waiting = query.data?.items.length ?? 0
+  const { refetch } = query
+  const seen = useRef(lastRowId)
+  useEffect(() => {
+    if (seen.current === lastRowId) return
+    seen.current = lastRowId
+    if (waiting > 0) void refetch()
+  }, [lastRowId, waiting, refetch])
+  return query
 }
 
 export function QueueCards({
