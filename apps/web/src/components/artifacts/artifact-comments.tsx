@@ -20,6 +20,7 @@ import {
   artifactKindSpecOf,
   artifactLimits,
   artifactQuoteAnchorSchema,
+  artifactRoleAtLeast,
   type ArtifactCommentAnchor,
   type ArtifactCommentAnchorInput,
   type ArtifactQuoteAnchor,
@@ -46,6 +47,7 @@ import {
   privateArtifactQuery,
 } from './artifact-access-error'
 import { ArtifactCommentDispatch } from './artifact-comment-dispatch'
+import { ArtifactQuickEdit } from './artifact-quick-edit'
 import type { CabinetArtifact } from './use-artifact'
 
 function selectionQuote(root: HTMLElement, selected: Selection | null): ArtifactQuoteAnchor | null {
@@ -192,6 +194,7 @@ export function ArtifactComments({
   const panel = useContext(ArtifactNotesPanel)
   const owner = artifact.role === 'owner'
   const writable = artifactNotesWritable(artifact.role, sharing)
+  const quickEdits = artifact.kind === 'document' && artifactRoleAtLeast(artifact.role, 'edit')
   // The owner chooses; another reader writes only into threads of all (88.17а).
   const [forAll, setForAll] = useState(!owner)
   const query = trpc.artifact.comments.queryOptions({ artifactId })
@@ -528,6 +531,22 @@ export function ArtifactComments({
                           Ответить
                         </Button>
                       )}
+                      {/* A quick edit of the agent (docs/plan/98-quick-edits.md): «Правит» and up. */}
+                      {quickEdits &&
+                        comment.anchor.kind === 'quote' &&
+                        (comment.author.own || comment.shared) && (
+                          <ArtifactQuickEdit
+                            artifactId={artifactId}
+                            threadId={comment.id}
+                            own={comment.author.own}
+                            authorName={comment.author.name}
+                            moved={comment.moved}
+                            onDone={() => {
+                              void reread()
+                              onChanged()
+                            }}
+                          />
+                        )}
                     </>
                   )}
                   {(owner || (comment.shared && writable && comment.author.own)) && (
