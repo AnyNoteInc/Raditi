@@ -41,8 +41,22 @@ export function parseSkillMd(text: string, folder?: string): SkillFrontmatter {
 /** A version of a skill, read and checked: what is kept of it. */
 export interface SkillVersion {
   frontmatter: SkillFrontmatter
+  /** Every field of the header as plain JSON, for keeping (Нв23: kept, never interpreted). */
+  header: Record<string, unknown>
   files: SkillFileEntry[]
   bytes: number
+}
+
+/** The header of a SKILL.md as plain JSON: what JSON cannot hold (dates, Infinity) is dropped. */
+function headerOf(skillMd: string): Record<string, unknown> {
+  const block = skillFrontmatterBlock(skillMd)
+  const value = block === null ? null : parseYaml(block)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  try {
+    return JSON.parse(JSON.stringify(value)) as Record<string, unknown>
+  } catch {
+    return {}
+  }
 }
 
 /**
@@ -70,6 +84,7 @@ export function readSkillVersion(
     frontmatter.userOnly || (codexText !== null && codexUserOnly(parseYaml(codexText)))
   return {
     frontmatter: { ...frontmatter, userOnly },
+    header: headerOf(skillMd),
     files,
     bytes: files.reduce((sum, file) => sum + file.bytes.byteLength, 0),
   }
