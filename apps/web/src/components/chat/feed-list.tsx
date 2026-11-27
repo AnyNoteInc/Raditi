@@ -64,6 +64,7 @@ import Typography from '@mui/material/Typography'
 import { BrandProgress } from '@repo/ui/brand-progress'
 import Link from 'next/link'
 import {
+  memo,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -110,6 +111,7 @@ import { FeedPage, FeedPageChange, FeedPageWarnings } from './feed-page'
 import { FeedScheduleChange, FeedScheduleLeft } from './feed-schedule'
 import { FeedScreenshot } from './feed-screenshot'
 import type { FeedHeadState } from './feed-state'
+import { useMinuteNow } from './use-minute-now'
 
 // The rows of a dialog and its live block (feed design, «Экраны, которых нет на макетах»; plan
 // 53, R9). The client's words stand on the right, everything else on the left. Every text is
@@ -907,7 +909,11 @@ const updateIcon: Readonly<Record<FeedUpdateOutcome, AppIconName>> = {
   redo_failed: 'warning',
 }
 
-function RowView({
+/**
+ * One row of the feed. Drawn again only when what it shows changed: the dialog reads its feed
+ * every few seconds, and a long chat would draw every row each time (P33.3).
+ */
+const RowView = memo(function RowView({
   row,
   now,
   openQuestionId,
@@ -1201,10 +1207,10 @@ function RowView({
     case 'skipped':
       return null
   }
-}
+})
 
-/** The rows of a dialog, top to bottom. */
-export function FeedList({
+/** The rows of a dialog, top to bottom: drawn again only when they or the head changed (P33.3). */
+export const FeedList = memo(function FeedList({
   head,
   rows,
   openQuestionId,
@@ -1229,8 +1235,9 @@ export function FeedList({
   /** «Ход работы» of a finished turn (owner's decision of 26.10.2026). */
   activityOf?: (turn: number) => ReactNode
 }) {
-  const now = new Date()
-  const entries: FeedEntry[] = feedEntries(rows, head)
+  // One time for every row, which turns with the minute (P33.3).
+  const now = useMinuteNow()
+  const entries: FeedEntry[] = useMemo(() => feedEntries(rows, head), [rows, head])
   const documents = useMemo(() => chatDocumentsOf(rows), [rows])
   const commands = head?.commands ?? []
   // «Изменить» stands under the client's last message while `/undo` can take its turn back.
@@ -1242,11 +1249,12 @@ export function FeedList({
   // animation plays once, when its element mounts: later renders do not start it again.
   const [initial] = useState(() => new Set(entries.map((entry) => entry.key)))
   // The documents of the chat read themselves again when a change of them comes (Ст22).
-  const revisions = docRevisionsOf(
-    rows as readonly { type: string; docId?: string; revision?: number }[],
+  const revisions = useMemo(
+    () => docRevisionsOf(rows as readonly { type: string; docId?: string; revision?: number }[]),
+    [rows],
   )
   // «Включить в этом браузере» once in the chat, on its newest card of a task that stays (Зп36).
-  const pushRowId = schedulePushRowId(rows)
+  const pushRowId = useMemo(() => schedulePushRowId(rows), [rows])
   return (
     <DocRevisions.Provider value={revisions}>
       <Box
@@ -1331,7 +1339,7 @@ export function FeedList({
       </Box>
     </DocRevisions.Provider>
   )
-}
+})
 
 /**
  * The newest card of a scheduled task the agent created or changed — not deleted — in the feed:

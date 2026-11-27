@@ -7,6 +7,7 @@ import {
   initialFeedState,
   mergeRows,
   pollDelay,
+  sameJson,
   showsRefresh,
   type FeedState,
 } from './feed-state'
@@ -32,6 +33,23 @@ describe('the rows of a dialog', () => {
 })
 
 describe('feedReducer', () => {
+  it('keeps the very head and rows when a read brings nothing new (P33.3)', () => {
+    const first = answered(
+      initialFeedState,
+      feedAnswer({ events: [requestRow('5')], cursor: '5' }),
+      '0',
+    )
+    const again = answered(first, feedAnswer({ cursor: '5' }))
+    expect(again.head).toBe(first.head)
+    expect(again.rows).toBe(first.rows)
+    // A new state all the same: the next read is planned from it.
+    expect(again).not.toBe(first)
+
+    const changed = answered(again, feedAnswer({ cursor: '5', status: 'running' }))
+    expect(changed.head).not.toBe(first.head)
+    expect(changed.head?.task.status).toBe('running')
+  })
+
   it('keeps the head and the rows of an answer and moves the cursor', () => {
     const state = answered(
       initialFeedState,
@@ -201,5 +219,16 @@ describe('pollDelay', () => {
       notFound: false,
     })
     expect(pollDelay(waiting)).toBe(30_000)
+  })
+})
+
+describe('sameJson', () => {
+  it('compares values read from JSON by their contents', () => {
+    expect(sameJson({ a: [1, { b: 'x' }], c: null }, { c: null, a: [1, { b: 'x' }] })).toBe(true)
+    expect(sameJson({ a: [1, 2] }, { a: [1, 2, 3] })).toBe(false)
+    expect(sameJson({ a: 1 }, { a: 1, b: undefined })).toBe(false)
+    expect(sameJson({ a: null }, { a: {} })).toBe(false)
+    expect(sameJson([], {})).toBe(false)
+    expect(sameJson('1', 1)).toBe(false)
   })
 })

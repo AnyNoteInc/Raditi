@@ -31,6 +31,7 @@ import Link from 'next/link'
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -1168,46 +1169,89 @@ export function DialogView({
     }
   }
 
-  const actions: FeedActions = {
-    taskId,
-    onStop: () => runCommand('cancel'),
-    onOpenDocument: (fileId) => {
-      const document = documentOfFile(chatDocuments, fileId)
-      if (document === null) return
-      openDocument(document.name, fileId)
-      openTool(fileTool(document.name), { by: 'menu' })
-    },
-    onOpenAgentDocument: (docId) => openTool(artifactTool(docId), { by: 'menu' }),
-    shownAgentDocument: activeKind?.kind === 'artifact' ? activeKind.id : null,
-    onContinue: () => void press('continue', proceed.mutateAsync),
-    onTakeControl: takeControl,
-    onResumeAgent: resumeWork,
-    // «Изменить»: the words are changed in place, and only «Отправить» takes the turn back (ВВ25).
-    onEditLast: sendEdited,
-    // The client holds the control of a browser that is there: a closed session holds nothing.
-    controlling: head?.browser?.controller === 'user' && browserLive,
-    browserLive,
-    busy,
-    stopping,
-    // The window of a scheduled task over the chat (docs/plan/82-scheduled-tasks.md, Зп35).
-    ...(userId !== null
-      ? {
-          onEditSchedule: (task: ScheduledTaskItem) =>
-            setScheduleOpening({ kind: 'edit', schedule: task }),
-          onNewSchedule: () => setScheduleOpening({ kind: 'new' }),
+  // What the rows may ask for, as one object that stays the same while nothing it says changed:
+  // the rows are drawn again only when they or it change (docs/plan/96, P33.3). The presses call
+  // the dialog's newest handlers through `handlers`, which every render brings up to date.
+  const handlers = useRef({
+    runCommand,
+    openDocument,
+    openTool,
+    press,
+    sendEdited,
+    takeControl,
+    resumeWork,
+    chatDocuments,
+    proceed: proceed.mutateAsync,
+  })
+  useLayoutEffect(() => {
+    handlers.current = {
+      runCommand,
+      openDocument,
+      openTool,
+      press,
+      sendEdited,
+      takeControl,
+      resumeWork,
+      chatDocuments,
+      proceed: proceed.mutateAsync,
+    }
+  })
+  const controlling = head?.browser?.controller === 'user' && browserLive
+  const shownAgentDocument = activeKind?.kind === 'artifact' ? activeKind.id : null
+  const schedulable = userId !== null
+  const actions = useMemo<FeedActions>(
+    () => ({
+      taskId,
+      onStop: () => handlers.current.runCommand('cancel'),
+      onOpenDocument: (fileId) => {
+        const { chatDocuments: documents, openDocument: open, openTool: show } = handlers.current
+        const document = documentOfFile(documents, fileId)
+        if (document === null) return
+        open(document.name, fileId)
+        show(fileTool(document.name), { by: 'menu' })
+      },
+      onOpenAgentDocument: (docId) =>
+        handlers.current.openTool(artifactTool(docId), { by: 'menu' }),
+      shownAgentDocument,
+      onContinue: () => void handlers.current.press('continue', handlers.current.proceed),
+      onTakeControl: () => handlers.current.takeControl(),
+      onResumeAgent: () => handlers.current.resumeWork(),
+      // «Изменить»: the words are changed in place, and only «Отправить» takes the turn back (ВВ25).
+      onEditLast: (text) => handlers.current.sendEdited(text),
+      // The client holds the control of a browser that is there: a closed session holds nothing.
+      controlling,
+      browserLive,
+      busy,
+      stopping,
+      // The window of a scheduled task over the chat (docs/plan/82-scheduled-tasks.md, Зп35).
+      ...(schedulable
+        ? {
+            onEditSchedule: (task: ScheduledTaskItem) =>
+              setScheduleOpening({ kind: 'edit', schedule: task }),
+            onNewSchedule: () => setScheduleOpening({ kind: 'new' }),
+          }
+        : {}),
+    }),
+    [taskId, shownAgentDocument, controlling, browserLive, busy, stopping, schedulable],
+  )
+  const sentFilesData = sentFiles.data
+  const sentFilesOf = useCallback(
+    (ids: readonly string[]): SentFile[] =>
+      ids.map((id) => {
+        const known = sentFilesData?.find((file) => file.id === id)
+        return {
+          id,
+          name: known?.name ?? null,
+          size: known?.size ?? null,
+          kind: known?.kind ?? 'document',
         }
-      : {}),
-  }
-  const sentFilesOf = (ids: readonly string[]): SentFile[] =>
-    ids.map((id) => {
-      const known = sentFiles.data?.find((file) => file.id === id)
-      return {
-        id,
-        name: known?.name ?? null,
-        size: known?.size ?? null,
-        kind: known?.kind ?? 'document',
-      }
-    })
+      }),
+    [sentFilesData],
+  )
+  const activityOf = useCallback(
+    (turn: number) => <TurnActivity taskId={taskId} turn={turn} live={false} />,
+    [taskId],
+  )
 
   if (state.missing) return <DialogNotFound />
 
@@ -1605,7 +1649,7 @@ export function DialogView({
               actions={actions}
               filesOf={sentFilesOf}
               details={choiceMadeHere && (details || thinking)}
-              activityOf={(turn) => <TurnActivity taskId={taskId} turn={turn} live={false} />}
+              activityOf={activityOf}
             />
           )}
           {head ? (
