@@ -707,7 +707,7 @@ export async function settlePageReservation(
  * stand over every path, so a site with a password tells nothing of its paths without the cookie.
  * Then the page at the path, live or in the trash, and the redirect of a former path.
  */
-export interface ServedSite {
+export interface ServedTree {
   treeId: string
   /**
    * The label to send the viewer on to (308): the site's own name when it was asked by its slug
@@ -718,6 +718,9 @@ export interface ServedSite {
   gone: 'taken_down' | 'deleted' | null
   passwordHash: string | null
   passwordEpoch: number
+}
+
+export interface ServedSite extends ServedTree {
   /** The page at the path; null — none there. */
   page: ServedNode | null
   /** The path a former one sends on to (Дер19); null — none, or the page there is in the trash. */
@@ -734,14 +737,51 @@ export interface ServedNode {
   content: { version: number; bytes: Uint8Array } | null
 }
 
-export async function servedPage(
+/** A page at its path without its bytes (plan 96, P34): the version and its size only. */
+export interface ServedNodeMeta extends Omit<ServedNode, 'content'> {
+  content: { version: number; sizeBytes: number } | null
+}
+
+/** What the page server reads first: everything of `ServedSite` but the bytes of the page. */
+export interface ServedSiteMeta extends ServedTree {
+  page: ServedNodeMeta | null
+  redirect: string | null
+}
+
+const treeOfLabel = (label: string) =>
+  // A random slug is 26 letters, a name 3 to 25: one lookup each way (Дер33).
+  label.length === 26 ? { slug: label } : { names: { some: { name: label } } }
+
+const treeOf = (
+  tree: {
+    id: string
+    name: string | null
+    passwordHash: string | null
+    passwordEpoch: number
+    takenDownBy: string | null
+  },
+  label: string,
+  homeLive: boolean,
+): ServedTree => ({
+  treeId: tree.id,
+  host: tree.name !== null && tree.name !== label ? tree.name : null,
+  gone: tree.takenDownBy !== null ? 'taken_down' : homeLive ? null : 'deleted',
+  passwordHash: tree.passwordHash,
+  passwordEpoch: tree.passwordEpoch,
+})
+
+/**
+ * The site of a label and the page at a path, without the bytes of either (plan 96, P34): the
+ * server answers 304, a stub or a form from this alone and reads the bytes of the version it
+ * sends with `servedContent`. The home page is read for its trash alone.
+ */
+export async function servedSite(
   db: Pick<PrismaClient, 'pageTree'>,
   label: string,
   path = '/',
-): Promise<ServedSite | null> {
-  // A random slug is 26 letters, a name 3 to 25: one lookup each way (Дер33).
+): Promise<ServedSiteMeta | null> {
   const tree = await db.pageTree.findFirst({
-    where: label.length === 26 ? { slug: label } : { names: { some: { name: label } } },
+    where: treeOfLabel(label),
     select: {
       id: true,
       name: true,
@@ -759,7 +799,7 @@ export async function servedPage(
           state: true,
           deletedAt: true,
           kind: true,
-          content: { select: { versionNo: true, bytes: true } },
+          content: { select: { versionNo: true, version: { select: { sizeBytes: true } } } },
         },
       },
       redirects: {
@@ -769,15 +809,11 @@ export async function servedPage(
     },
   })
   if (!tree) return null
-  const home = tree.pages.find((page) => page.parentId === null && page.deletedAt === null)
+  const homeLive = tree.pages.some((page) => page.parentId === null && page.deletedAt === null)
   const atPath = tree.pages.find((page) => page.path === path) ?? null
   const redirect = tree.redirects[0]?.page ?? null
   return {
-    treeId: tree.id,
-    host: tree.name !== null && tree.name !== label ? tree.name : null,
-    gone: tree.takenDownBy !== null ? 'taken_down' : home === undefined ? 'deleted' : null,
-    passwordHash: tree.passwordHash,
-    passwordEpoch: tree.passwordEpoch,
+    ...treeOf(tree, label, homeLive),
     page: atPath && {
       id: atPath.id,
       state: atPath.state as ServedNode['state'],
@@ -786,11 +822,59 @@ export async function servedPage(
       content:
         atPath.state === 'pending' || atPath.deletedAt !== null || !atPath.content
           ? null
-          : { version: atPath.content.versionNo, bytes: atPath.content.bytes },
+          : { version: atPath.content.versionNo, sizeBytes: atPath.content.version.sizeBytes },
     },
     redirect:
       redirect && redirect.deletedAt === null && redirect.path !== path ? redirect.path : null,
   }
+}
+
+/** The site of a label alone, for its shared files (Дер34): no page, no redirect, no bytes. */
+export async function servedTree(
+  db: Pick<PrismaClient, 'pageTree'>,
+  label: string,
+): Promise<ServedTree | null> {
+  const tree = await db.pageTree.findFirst({
+    where: treeOfLabel(label),
+    select: {
+      id: true,
+      name: true,
+      passwordHash: true,
+      passwordEpoch: true,
+      takenDownBy: true,
+      pages: { where: { parentId: null, deletedAt: null }, select: { id: true }, take: 1 },
+    },
+  })
+  return tree && treeOf(tree, label, tree.pages.length > 0)
+}
+
+/**
+ * The bytes of the current version of a page, with the number they are of: a version published
+ * after `servedSite` read the page is sent under its own number, never under the former one.
+ */
+export async function servedContent(
+  db: Pick<PrismaClient, 'pageContent'>,
+  pageId: string,
+): Promise<{ version: number; bytes: Uint8Array } | null> {
+  const content = await db.pageContent.findUnique({
+    where: { pageId },
+    select: { versionNo: true, bytes: true },
+  })
+  return content && { version: content.versionNo, bytes: content.bytes }
+}
+
+/** `servedSite` with the bytes of the page at the path (none of the home page's). */
+export async function servedPage(
+  db: Pick<PrismaClient, 'pageTree' | 'pageContent'>,
+  label: string,
+  path = '/',
+): Promise<ServedSite | null> {
+  const site = await servedSite(db, label, path)
+  if (!site) return null
+  const page = site.page
+  if (!page) return { ...site, page: null }
+  const content = page.content && (await servedContent(db, page.id))
+  return { ...site, page: { ...page, content } }
 }
 
 /** The client sets or clears the password of the site of a page (Ст13, Дер17); the cookies of the former one stop. */
@@ -2209,16 +2293,39 @@ export async function applyPageFile(
 }
 
 /** What the page server answers a shared file with: its type and bytes; null — none there. */
+/**
+ * A shared file of a site (Дер34). With `known` the sha256 is compared first (plan 96, P34): a
+ * file whose sha256 is one of them comes without its bytes — the viewer has it, or the server
+ * keeps it —, so a 304 or a cached answer reads no bytes from the database.
+ */
 export async function servedFile(
-  db: Pick<PrismaClient, 'pageFile'>,
+  db: Pick<PrismaClient, '$queryRaw'>,
   treeId: string,
   path: string,
-): Promise<{ type: string; bytes: Uint8Array; sha256: string } | null> {
-  const file = await db.pageFile.findUnique({
-    where: { treeId_path: { treeId, path } },
-    select: { contentType: true, bytes: true, sha256: true },
-  })
-  return file && { type: file.contentType, bytes: file.bytes, sha256: file.sha256 }
+): Promise<{ type: string; bytes: Uint8Array; sha256: string; sizeBytes: number } | null>
+export async function servedFile(
+  db: Pick<PrismaClient, '$queryRaw'>,
+  treeId: string,
+  path: string,
+  known: readonly string[],
+): Promise<{ type: string; bytes: Uint8Array | null; sha256: string; sizeBytes: number } | null>
+export async function servedFile(
+  db: Pick<PrismaClient, '$queryRaw'>,
+  treeId: string,
+  path: string,
+  known: readonly string[] = [],
+): Promise<{ type: string; bytes: Uint8Array | null; sha256: string; sizeBytes: number } | null> {
+  // `octet_length` of a stored value reads its header alone, and the bytes of a known file are
+  // never taken out of TOAST.
+  const rows = await db.$queryRaw<
+    { content_type: string; sha256: string; size: number; bytes: Uint8Array | null }[]
+  >`
+    SELECT content_type, sha256, octet_length(bytes)::int AS size,
+      CASE WHEN sha256 = ANY(${[...known]}::text[]) THEN NULL ELSE bytes END AS bytes
+    FROM page_files WHERE tree_id = ${treeId}::uuid AND path = ${path}`
+  const file = rows[0]
+  if (!file) return null
+  return { type: file.content_type, sha256: file.sha256, sizeBytes: file.size, bytes: file.bytes }
 }
 
 /** The shared files of a site of the workspace, for the cabinet and for `page_tree`. */

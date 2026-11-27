@@ -92,7 +92,10 @@ export const pageFileIsText = (path: string): boolean =>
  * The headers of a shared file (Дер34): its own type and no other reading of it (`nosniff`); any
  * page may load it — a sandboxed page asks from an opaque origin, which `same-origin` would refuse,
  * and the bytes of a public picture are no secret —; opened alone it runs nothing (`sandbox`), an
- * SVG with its styles only; a PDF downloads.
+ * SVG with its styles only; a PDF downloads. A minute in the viewer's own cache, never a shared one
+ * (plan 96, P34): a page loads its styles and pictures again without asking, and a file of a site
+ * with a password stays with the viewer who opened it. A file replaced, taken down or put behind a
+ * password shows the former bytes to that viewer for the rest of the minute at most.
  */
 export function pageFileHeaders(type: string): Record<string, string> {
   return {
@@ -101,7 +104,7 @@ export function pageFileHeaders(type: string): Record<string, string> {
       type === 'image/svg+xml'
         ? "default-src 'none'; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'"
         : "default-src 'none'; sandbox; frame-ancestors 'none'",
-    'Cache-Control': 'private, no-cache',
+    'Cache-Control': 'private, max-age=60',
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
     'X-Robots-Tag': 'noindex, nofollow, noarchive',

@@ -3,7 +3,7 @@ import { once } from 'node:events'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
-import type { ServedSite } from '@repo/db'
+import type { ServedSiteMeta, ServedTree } from '@repo/db'
 import { isLoopbackAddress, isPrivateAddress } from '@repo/ip-address'
 import {
   PAGE_METHODS,
@@ -21,6 +21,16 @@ import {
 } from '@repo/domain'
 
 import type { PagesServerConfig } from '../config/config.tokens.ts'
+import {
+  compressible,
+  negotiateEncoding,
+  noneMatchHits,
+  PageBodies,
+  taggedBases,
+  variantTag,
+  type BodyEncoding,
+  type BodyEntry,
+} from './page-bodies.ts'
 import { pageCookieOpens, pageSetCookie } from './page-cookie.ts'
 import {
   deletedPage,
@@ -48,13 +58,24 @@ export type { PagesServerConfig }
 export const PAGES_HEALTH_PATH = '/__raditi/health'
 
 export interface PagesStore {
-  /** The site of a host and what it holds at a canonical path (docs/plan/73-pages-sites.md, Дер16). */
-  served(slug: string, path: string): Promise<ServedSite | null>
-  /** A shared file of a site (docs/plan/73-pages-sites.md, Дер34); null — none at that path. */
+  /**
+   * The site of a host and what it holds at a canonical path (docs/plan/73-pages-sites.md, Дер16),
+   * without the bytes of the page (plan 96, P34).
+   */
+  served(slug: string, path: string): Promise<ServedSiteMeta | null>
+  /** The site of a host alone, for its shared files. */
+  site(slug: string): Promise<ServedTree | null>
+  /** The bytes of the current version of a page and its number; null — none. */
+  content(pageId: string): Promise<{ version: number; bytes: Uint8Array } | null>
+  /**
+   * A shared file of a site (docs/plan/73-pages-sites.md, Дер34); null — none at that path. Its
+   * bytes are null when its sha256 is one of `known`.
+   */
   file(
     treeId: string,
     path: string,
-  ): Promise<{ type: string; bytes: Uint8Array; sha256: string } | null>
+    known: readonly string[],
+  ): Promise<{ type: string; bytes: Uint8Array | null; sha256: string; sizeBytes: number } | null>
   /** One attempt under `key` within its window; false — over the limit. */
   admit(key: string, limit: number, windowMs: number, now: number): Promise<boolean>
   verify(password: string, hash: string): Promise<boolean>
@@ -65,6 +86,38 @@ export interface PagesServerDependencies {
   store: PagesStore
   clock?: () => number
   logger?: { warn(message: string): void }
+  /** The bodies kept between requests; a new cache of `BODY_CACHE_BYTES` by default. */
+  bodies?: PageBodies
+}
+
+/** The coding, the ETag and the headers of one representation (plan 96, P34). */
+interface Representation {
+  encoding: BodyEncoding
+  etag: string
+  headers: Record<string, string>
+}
+
+/**
+ * How a body of this type and size goes to this viewer: compressed by `Accept-Encoding` when it
+ * compresses — then `Vary`, whichever coding this viewer took —, under the ETag of that coding.
+ */
+function representationOf(
+  request: IncomingMessage,
+  type: string,
+  size: number,
+  base: string,
+): Representation {
+  if (!compressible(type, size))
+    return { encoding: 'identity', etag: variantTag(base, 'identity'), headers: {} }
+  const encoding = negotiateEncoding(request.headers['accept-encoding'])
+  return {
+    encoding,
+    etag: variantTag(base, encoding),
+    headers: {
+      Vary: 'Accept-Encoding',
+      ...(encoding === 'identity' ? {} : { 'Content-Encoding': encoding }),
+    },
+  }
 }
 
 type Kind = 'html' | 'reading' | 'platform'
@@ -77,7 +130,7 @@ function send(
   body: string | Uint8Array,
   extra: Record<string, string> = {},
 ): void {
-  const bytes = typeof body === 'string' ? Buffer.from(body, 'utf8') : Buffer.from(body)
+  const bytes = typeof body === 'string' ? Buffer.from(body, 'utf8') : body
   response.writeHead(status, {
     ...pageResponseHeaders(kind),
     'Content-Length': String(bytes.byteLength),
@@ -137,10 +190,12 @@ export class PagesServer {
   readonly #deps: PagesServerDependencies
   readonly #server: Server
   readonly #clock: () => number
+  readonly #bodies: PageBodies
 
   constructor(deps: PagesServerDependencies) {
     this.#deps = deps
     this.#clock = deps.clock ?? Date.now
+    this.#bodies = deps.bodies ?? new PageBodies()
     this.#server = createServer(
       { requestTimeout: 15_000, headersTimeout: 10_000 },
       (request, response) => {
@@ -268,26 +323,42 @@ export class PagesServer {
     // A document published before its first version is done (Ст25).
     if (page.content === null)
       return send(response, head, 200, 'platform', writingPage(config.abuseEmail))
-    // The version is the page's identity at its path: the same one is not sent twice (Дер22).
-    const etag = `"${page.id}.${page.content.version}"`
-    if (String(request.headers['if-none-match'] ?? '') === etag) {
-      response.writeHead(304, {
-        ...pageResponseHeaders(page.kind === 'html' ? 'html' : 'reading'),
-        ETag: etag,
-      })
+    // The version is the page's identity at its path: the same one is not sent twice (Дер22) —
+    // and its bytes are not read for a 304 (plan 96, P34).
+    const kind = page.kind === 'html' ? 'html' : 'reading'
+    const type = pageResponseHeaders(kind)['Content-Type']!
+    const known = representationOf(
+      request,
+      type,
+      page.content.sizeBytes,
+      `${page.id}.${page.content.version}`,
+    )
+    if (noneMatchHits(request.headers['if-none-match'], known.etag)) {
+      response.writeHead(304, { ...pageResponseHeaders(kind), ...known.headers, ETag: known.etag })
       response.end()
       return
     }
-    return send(
-      response,
-      head,
-      200,
-      page.kind === 'html' ? 'html' : 'reading',
-      page.content.bytes,
-      {
-        ETag: etag,
-      },
-    )
+    const key = `page:${page.id}`
+    let entry = this.#bodies.get(key, String(page.content.version))
+    let current = known
+    if (!entry) {
+      const read = await store.content(page.id)
+      if (read === null)
+        return send(response, head, 404, 'platform', notFoundPage(config.abuseEmail))
+      entry = this.#bodies.put(key, String(read.version), read.bytes)
+      // A version published since the page was read goes under its own number.
+      if (read.version !== page.content.version)
+        current = representationOf(
+          request,
+          type,
+          read.bytes.byteLength,
+          `${page.id}.${read.version}`,
+        )
+    }
+    return send(response, head, 200, kind, await this.#bodies.body(entry, current.encoding), {
+      ...current.headers,
+      ETag: current.etag,
+    })
   }
 
   /**
@@ -308,7 +379,7 @@ export class PagesServer {
       return sendText(response, false, 405, 'Method not allowed', { Allow: 'GET, HEAD' })
     if (!pageFilePathSchema.safeParse(raw).success)
       return sendText(response, head, 404, 'Not found')
-    const site = await store.served(slug, '/')
+    const site = await store.site(slug)
     if (site === null) return sendText(response, head, 404, 'Not found')
     if (site.gone !== null) return sendText(response, head, 410, 'Gone')
     if (site.host !== null) {
@@ -330,18 +401,40 @@ export class PagesServer {
       )
     )
       return sendText(response, head, 404, 'Not found')
-    const file = await store.file(site.treeId, raw)
+    // The sha256 first (plan 96, P34): the bytes of a version the viewer has, or the cache
+    // keeps, are not read.
+    const key = `file:${site.treeId}${raw}`
+    const ifNoneMatch = request.headers['if-none-match']
+    const cached = this.#bodies.tagOf(key)
+    const known = [...taggedBases(ifNoneMatch), ...(cached === undefined ? [] : [cached])]
+    let file = await store.file(site.treeId, raw, known)
     if (file === null) return sendText(response, head, 404, 'Not found')
-    const etag = `"${file.sha256}"`
-    const headers = { ...pageFileHeaders(file.type), ETag: etag }
-    if (String(request.headers['if-none-match'] ?? '') === etag) {
-      response.writeHead(304, headers)
+    let shown = representationOf(request, file.type, file.sizeBytes, file.sha256)
+    if (noneMatchHits(ifNoneMatch, shown.etag)) {
+      response.writeHead(304, { ...pageFileHeaders(file.type), ...shown.headers, ETag: shown.etag })
       response.end()
       return
     }
-    const bytes = Buffer.from(file.bytes)
-    response.writeHead(200, { ...headers, 'Content-Length': String(bytes.byteLength) })
-    response.end(head ? undefined : bytes)
+    let entry: BodyEntry | undefined =
+      file.bytes === null
+        ? this.#bodies.get(key, file.sha256)
+        : this.#bodies.put(key, file.sha256, file.bytes)
+    if (!entry) {
+      // Left without its bytes and not in the cache (another coding was asked, or the cache let
+      // it go meanwhile): once more, with the bytes.
+      file = await store.file(site.treeId, raw, [])
+      if (file?.bytes == null) return sendText(response, head, 404, 'Not found')
+      entry = this.#bodies.put(key, file.sha256, file.bytes)
+      shown = representationOf(request, file.type, file.sizeBytes, file.sha256)
+    }
+    const body = await this.#bodies.body(entry, shown.encoding)
+    response.writeHead(200, {
+      ...pageFileHeaders(file.type),
+      ...shown.headers,
+      ETag: shown.etag,
+      'Content-Length': String(body.byteLength),
+    })
+    response.end(head ? undefined : body)
   }
 
   /**
@@ -380,7 +473,7 @@ export class PagesServer {
   async #password(
     request: IncomingMessage,
     response: ServerResponse,
-    site: ServedSite & { passwordHash: string },
+    site: ServedTree & { passwordHash: string },
     path: string,
     now: number,
   ): Promise<void> {

@@ -1,7 +1,8 @@
 import { request as httpRequest } from 'node:http'
+import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 import type { AddressInfo } from 'node:net'
 
-import type { ServedNode, ServedSite } from '@repo/db'
+import type { ServedNode, ServedNodeMeta, ServedSiteMeta, ServedTree } from '@repo/db'
 import {
   newPageSlug,
   PAGE_CSP,
@@ -44,34 +45,72 @@ interface FlatSite {
   host?: string | null
 }
 
+const withoutBytes = (node: ServedNode): ServedNodeMeta => ({
+  ...node,
+  content: node.content && {
+    version: node.content.version,
+    sizeBytes: node.content.bytes.byteLength,
+  },
+})
+
 class MemoryStore implements PagesStore {
   pages = new Map<string, FlatSite>()
   files = new Map<string, { type: string; bytes: Uint8Array; sha256: string }>()
-  file(treeId: string, path: string) {
-    return Promise.resolve(this.files.get(`${treeId}${path}`) ?? null)
+  /** How many times the bytes of a page or of a file were read. */
+  pageBytesRead = 0
+  fileBytesRead = 0
+  file(treeId: string, path: string, known: readonly string[]) {
+    const file = this.files.get(`${treeId}${path}`)
+    if (!file) return Promise.resolve(null)
+    const skip = known.includes(file.sha256)
+    if (!skip) this.fileBytesRead += 1
+    return Promise.resolve({
+      ...file,
+      sizeBytes: file.bytes.byteLength,
+      bytes: skip ? null : file.bytes,
+    })
   }
   counts = new Map<string, number>()
   asked: string[] = []
-  served(slug: string, path: string): Promise<ServedSite | null> {
-    this.asked.push(path)
-    const site = this.pages.get(slug)
-    if (!site) return Promise.resolve(null)
-    const home: ServedNode = {
+  #home(site: FlatSite): ServedNode {
+    return {
       id: site.id,
       state: site.state === 'taken_down' ? 'live' : site.state,
       deleted: false,
       kind: site.kind,
       content: site.content,
     }
-    return Promise.resolve({
+  }
+  #tree(site: FlatSite): ServedTree {
+    return {
       treeId: site.id,
       host: site.host ?? null,
       gone: site.state === 'taken_down' ? 'taken_down' : site.deleted ? 'deleted' : null,
       passwordHash: site.passwordHash,
       passwordEpoch: site.passwordEpoch,
-      page: path === '/' ? home : (site.nodes?.[path] ?? null),
+    }
+  }
+  served(slug: string, path: string): Promise<ServedSiteMeta | null> {
+    this.asked.push(path)
+    const site = this.pages.get(slug)
+    if (!site) return Promise.resolve(null)
+    const node = path === '/' ? this.#home(site) : site.nodes?.[path]
+    return Promise.resolve({
+      ...this.#tree(site),
+      page: node ? withoutBytes(node) : null,
       redirect: site.redirects?.[path] ?? null,
     })
+  }
+  site(slug: string): Promise<ServedTree | null> {
+    const site = this.pages.get(slug)
+    return Promise.resolve(site ? this.#tree(site) : null)
+  }
+  content(pageId: string) {
+    this.pageBytesRead += 1
+    for (const site of this.pages.values())
+      for (const node of [this.#home(site), ...Object.values(site.nodes ?? {})])
+        if (node.id === pageId) return Promise.resolve(node.content)
+    return Promise.resolve(null)
   }
   admit(key: string, limit: number) {
     const count = (this.counts.get(key) ?? 0) + 1
@@ -98,6 +137,7 @@ interface Answer {
   status: number
   headers: Record<string, string | string[] | undefined>
   body: string
+  raw: Buffer
 }
 
 describe('the server of published pages', () => {
@@ -131,6 +171,7 @@ describe('the server of published pages', () => {
               status: response.statusCode ?? 0,
               headers: response.headers,
               body: Buffer.concat(chunks).toString('utf8'),
+              raw: Buffer.concat(chunks),
             }),
           )
         },
@@ -542,6 +583,106 @@ describe('the server of published pages', () => {
       expect(again.headers['content-security-policy']).toBe(PAGE_CSP)
     })
 
+    it('answers 304 without reading the bytes of the page (P34)', async () => {
+      const first = await call(hostOf(site), { path: '/uslugi/remont' })
+      expect(store.pageBytesRead).toBe(1)
+      store.pageBytesRead = 0
+      const server2 = new PagesServer({
+        config: {
+          baseDomain: BASE,
+          publicPort: PORT_IN_HOST,
+          cookieSecret: SECRET,
+          abuseEmail: null,
+        },
+        store,
+      })
+      const port2 = (await server2.listen(0, '127.0.0.1')).port
+      try {
+        // A fresh server keeps nothing: the 304 is answered from the version alone.
+        const seen = await new Promise<number>((resolve, reject) => {
+          httpRequest(
+            {
+              host: '127.0.0.1',
+              port: port2,
+              path: '/uslugi/remont',
+              headers: { host: hostOf(site), 'if-none-match': String(first.headers.etag) },
+            },
+            (response) => {
+              response.resume()
+              resolve(response.statusCode ?? 0)
+            },
+          )
+            .on('error', reject)
+            .end()
+        })
+        expect(seen).toBe(304)
+        expect(store.pageBytesRead).toBe(0)
+      } finally {
+        await server2.close()
+      }
+    })
+
+    it('compresses a page by Accept-Encoding, each coding under its own ETag (P34)', async () => {
+      const html = `<!doctype html><p>${'Ремонт квартир. '.repeat(200)}</p>`
+      store.pages.get(site)!.nodes!['/bolshaya'] = node(6, {
+        content: { version: 2, bytes: new TextEncoder().encode(html) },
+      })
+      const base = '00000000-0000-7000-8000-000000000206.2'
+      const br = await call(hostOf(site), {
+        path: '/bolshaya',
+        headers: { 'accept-encoding': 'gzip, deflate, br' },
+      })
+      expect(br.status).toBe(200)
+      expect(br.headers['content-encoding']).toBe('br')
+      expect(br.headers.vary).toBe('Accept-Encoding')
+      expect(br.headers.etag).toBe(`"${base}.br"`)
+      expect(br.headers['content-security-policy']).toBe(PAGE_CSP)
+      expect(Number(br.headers['content-length'])).toBe(br.raw.byteLength)
+      expect(brotliDecompressSync(br.raw).toString()).toBe(html)
+      const gz = await call(hostOf(site), {
+        path: '/bolshaya',
+        headers: { 'accept-encoding': 'gzip;q=1, br;q=0' },
+      })
+      expect(gz.headers['content-encoding']).toBe('gzip')
+      expect(gz.headers.etag).toBe(`"${base}.gz"`)
+      expect(gunzipSync(gz.raw).toString()).toBe(html)
+      const plain = await call(hostOf(site), { path: '/bolshaya' })
+      expect(plain.headers['content-encoding']).toBeUndefined()
+      expect(plain.headers.vary).toBe('Accept-Encoding')
+      expect(plain.headers.etag).toBe(`"${base}"`)
+      expect(plain.body).toBe(html)
+      // One read of the bytes for every coding: the rest is kept by the version.
+      expect(store.pageBytesRead).toBe(1)
+      // The ETag of one coding is no 304 for another: those are other bytes.
+      const crossed = await call(hostOf(site), {
+        path: '/bolshaya',
+        headers: { 'accept-encoding': 'gzip', 'if-none-match': `"${base}.br"` },
+      })
+      expect(crossed.status).toBe(200)
+      expect(crossed.headers.etag).toBe(`"${base}.gz"`)
+      const same = await call(hostOf(site), {
+        path: '/bolshaya',
+        headers: { 'accept-encoding': 'br', 'if-none-match': `"x", "${base}.br"` },
+      })
+      expect(same.status).toBe(304)
+      expect(same.headers.etag).toBe(`"${base}.br"`)
+      expect(same.headers.vary).toBe('Accept-Encoding')
+    })
+
+    it('sends a version published after the page was read under its own number (P34)', async () => {
+      const remont = store.pages.get(site)!.nodes!['/uslugi/remont']!
+      const served = store.served.bind(store)
+      // The page is read at version 4; by the time its bytes are read, version 5 is current.
+      store.served = async (slug, path) => {
+        const read = await served(slug, path)
+        remont.content = { version: 5, bytes: new TextEncoder().encode('<p>remont 5</p>') }
+        return read
+      }
+      const answer = await call(hostOf(site), { path: '/uslugi/remont' })
+      expect(answer.body).toBe('<p>remont 5</p>')
+      expect(answer.headers.etag).toBe('"00000000-0000-7000-8000-000000000202.5"')
+    })
+
     it('takes no form at a page without a password, and tells nothing at a path that is not there', async () => {
       expect((await call(hostOf(site), { ...form('x'), path: '/uslugi' })).status).toBe(405)
       expect((await call(hostOf(site), { ...form('x'), path: '/net-takoy' })).status).toBe(404)
@@ -614,6 +755,73 @@ describe('the server of published pages', () => {
       const downId = '00000000-0000-7000-8000-000000000003'
       store.files.set(`${downId}/_files/style.css`, css)
       expect((await call(hostOf(down), { path: '/_files/style.css' })).status).toBe(410)
+    })
+
+    it('reads no bytes of a file for a site with a password without its cookie, gone or in the trash (P34)', async () => {
+      const lockedId = '00000000-0000-7000-8000-000000000002'
+      store.files.set(`${lockedId}/_files/style.css`, css)
+      store.pages.set(down, { ...store.pages.get(down)!, state: 'live', deleted: true })
+      store.files.set(`00000000-0000-7000-8000-000000000003/_files/style.css`, css)
+      expect((await call(hostOf(locked), { path: '/_files/style.css' })).status).toBe(404)
+      expect((await call(hostOf(down), { path: '/_files/style.css' })).status).toBe(410)
+      expect(store.fileBytesRead).toBe(0)
+      // A file of the home page's site is no reason to read the home page.
+      expect(store.pageBytesRead).toBe(0)
+      expect(store.asked).toEqual([])
+    })
+
+    it('keeps a file a minute in the viewer’s own cache, never a shared one (P34)', async () => {
+      const answer = await call(hostOf(open), { path: '/_files/style.css' })
+      expect(answer.headers['cache-control']).toBe('private, max-age=60')
+      // Too small to compress: no coding, nothing to vary by.
+      expect(answer.headers['content-encoding']).toBeUndefined()
+      expect(answer.headers.vary).toBeUndefined()
+    })
+
+    it('compares the sha256 first: 304 and a kept body read no bytes (P34)', async () => {
+      const big = { ...css, bytes: new TextEncoder().encode('a{color:red}\n'.repeat(200)) }
+      store.files.set(`${id}/_files/big.css`, big)
+      const first = await call(hostOf(open), {
+        path: '/_files/big.css',
+        headers: { 'accept-encoding': 'gzip, br' },
+      })
+      expect(first.status).toBe(200)
+      expect(first.headers['content-encoding']).toBe('br')
+      expect(first.headers.vary).toBe('Accept-Encoding')
+      expect(first.headers.etag).toBe(`"${'c'.repeat(64)}.br"`)
+      expect(brotliDecompressSync(first.raw).toString()).toBe('a{color:red}\n'.repeat(200))
+      expect(store.fileBytesRead).toBe(1)
+      const seen = await call(hostOf(open), {
+        path: '/_files/big.css',
+        headers: { 'accept-encoding': 'gzip, br', 'if-none-match': String(first.headers.etag) },
+      })
+      expect(seen.status).toBe(304)
+      expect(seen.headers.vary).toBe('Accept-Encoding')
+      // Another viewer, another coding: the bytes the server keeps, gzip this time.
+      const other = await call(hostOf(open), {
+        path: '/_files/big.css',
+        headers: { 'accept-encoding': 'gzip' },
+      })
+      expect(other.headers.etag).toBe(`"${'c'.repeat(64)}.gz"`)
+      expect(gunzipSync(other.raw).toString()).toBe('a{color:red}\n'.repeat(200))
+      expect(store.fileBytesRead).toBe(1)
+    })
+
+    it('does not compress a picture', async () => {
+      const png = {
+        type: 'image/png',
+        bytes: new Uint8Array(4096).fill(7),
+        sha256: 'd'.repeat(64),
+      }
+      store.files.set(`${id}/_files/logo.png`, png)
+      const answer = await call(hostOf(open), {
+        path: '/_files/logo.png',
+        headers: { 'accept-encoding': 'br, gzip' },
+      })
+      expect(answer.headers['content-encoding']).toBeUndefined()
+      expect(answer.headers.vary).toBeUndefined()
+      expect(answer.headers.etag).toBe(`"${'d'.repeat(64)}"`)
+      expect(answer.raw.byteLength).toBe(4096)
     })
   })
 })
