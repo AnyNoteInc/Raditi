@@ -379,7 +379,7 @@ export function applyQuickEdits(
     const source = splitParagraphs(part.markdown)
     const result = applyToPart(source, partEdits)
     if (!result.ok) return { ok: false, problem: `part ${key}: ${result.problem}` }
-    if (Buffer.byteLength(result.text, 'utf8') > artifactLimits.blockBytes)
+    if (new TextEncoder().encode(result.text).byteLength > artifactLimits.blockBytes)
       return { ok: false, problem: `part ${key} grows over ${artifactLimits.blockBytes} bytes` }
     if (result.text !== part.markdown) blocks.set(key, result.text)
   }
