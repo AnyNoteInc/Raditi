@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { DomainError } from '../errors.ts'
 import { EMBEDDED_TOKEN_PATTERNS, TURN_KEY_PATTERNS } from '../pages/content-check.ts'
 import { ciRefusals, ciStatuses, type CiRefusal, type CiStatus } from '../ports/git-provider.ts'
-import { ENV_VALUE_MASK, maskEnvValues } from '../release/env-masking.ts'
+import { ENV_VALUE_MASK, maskEnvValues } from '../workspace-env/env-masking.ts'
 
 // The builds of a project repository and the logs of their jobs (docs/plan/84-projects.md, ПР17,
 // §4.1, §4.3, §4.4; slice 84.21). Core polls the provider and keeps what it read in

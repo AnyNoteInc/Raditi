@@ -1,6 +1,6 @@
 import { badRequest } from '../errors.ts'
-import { ipLiteralBytes } from '../policies/site-address.ts'
-import { egressHostLimits, formatEgressHost, parseEgressHost } from '../preview/egress-hosts.ts'
+import { ipLiteralBytes } from '../egress/ip-address.ts'
+import { egressHostLimits, formatEgressHost, parseEgressHost } from '../egress/egress-hosts.ts'
 import { browserSessionLimits } from './session.ts'
 
 /**

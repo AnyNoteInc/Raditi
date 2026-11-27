@@ -49,7 +49,7 @@ import {
 } from '../ports/turn-executor.ts'
 import { projectLimits } from '../projects/limits.ts'
 import { execLost, siteLeaseFenceSchema, snapshotHasCredential } from '../ports/turn-runner.ts'
-import { envVarValueSchema } from '../release/env-vars.ts'
+import { envVarValueSchema } from '../workspace-env/env-vars.ts'
 
 /**
  * Pull protocol between core and a runner VM — spec §8 «Раннер на песочной ВМ». The runner

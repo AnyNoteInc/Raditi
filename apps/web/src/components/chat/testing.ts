@@ -1,4 +1,4 @@
-import { serverCommandIds } from '@repo/domain/release/chat-commands'
+import { serverCommandIds } from '@repo/domain/chat/chat-commands'
 import type { FeedAgentCommandId, FeedCommandId, TaskStatus } from '@repo/domain'
 
 import type { CommandVerdict, DialogFeed, FeedHead, FeedRow } from './chat-types'

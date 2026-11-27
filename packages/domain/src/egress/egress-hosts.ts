@@ -1,10 +1,4 @@
-import { z } from 'zod'
-
-import {
-  classifySiteAddress,
-  classifySiteHostName,
-  ipLiteralBytes,
-} from '../policies/site-address.ts'
+import { classifyHostName, classifyIpAddress, ipLiteralBytes } from './ip-address.ts'
 
 /**
  * Where a client's variable may lead (docs/plan/53-chat-preview-release.md, Р13): the hosts the
@@ -14,16 +8,12 @@ import {
  */
 export const EGRESS_DEFAULT_PORT = 443
 export const egressHostLimits = Object.freeze({
-  /** Hosts of one variable (`site_env_vars.hosts`). */
-  perVariable: 16,
   /**
    * Different hosts of all the variables of one site: the egress of a sandbox travels in one
    * environment variable of its proxy (below the 128 KiB of one on Linux), so the form takes no
    * more (`MAX_SANDBOX_EGRESS_HOSTS`).
    */
   perSite: 256,
-  /** `host:port` as stored. */
-  chars: 253 + 6,
 })
 
 export interface EgressHost {
@@ -75,33 +65,11 @@ export function parseEgressHost(text: string): EgressHost | null {
   if (port > 65_535) return null
   if (ipLiteralBytes(host) !== null) return null
   if (host.split('.').every((label) => NUMERIC_LABEL.test(label))) return null
-  return classifySiteHostName(host) === 'public' ? { host, port } : null
+  return classifyHostName(host) === 'public' ? { host, port } : null
 }
 
 /** The stored spelling: always `host:port`. */
 export const formatEgressHost = ({ host, port }: EgressHost): string => `${host}:${port}`
-
-/** One host of a variable; stored as `host:port`. */
-export const egressHostSchema = z
-  .string()
-  .max(egressHostLimits.chars)
-  .transform((text, ctx) => {
-    const parsed = parseEgressHost(text)
-    if (parsed === null) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'expected a public domain name with an optional port, not an address',
-      })
-      return z.NEVER
-    }
-    return formatEgressHost(parsed)
-  })
-
-/** The hosts of one variable: up to sixteen, each once. */
-export const egressHostListSchema = z
-  .array(egressHostSchema)
-  .max(egressHostLimits.perVariable)
-  .refine((hosts) => new Set(hosts).size === hosts.length, 'each host once')
 
 // ---------------------------------------------------------------------------------------------
 // Addresses the proxy connects to
@@ -138,13 +106,13 @@ function inSubnet(bytes: readonly number[], subnet: IpSubnet): boolean {
  * the platform's own subnets: never RFC 1918, loopback, link-local (and so the metadata
  * service 169.254.169.254), shared CGNAT space, `0.0.0.0/8`, multicast and reserved, IPv6
  * unique local, link-local, multicast, IPv4-mapped or NAT64 — the rule of site addresses
- * (policies/site-address.ts) with nothing local allowed.
+ * (ip-address.ts) with nothing local allowed.
  */
 export function isEgressAddressAllowed(
   address: string,
   platformSubnets: readonly IpSubnet[] = [],
 ): boolean {
-  if (classifySiteAddress(address) !== 'public') return false
+  if (classifyIpAddress(address) !== 'public') return false
   const bytes = ipLiteralBytes(address)
   return bytes !== null && !platformSubnets.some((subnet) => inSubnet(bytes, subnet))
 }

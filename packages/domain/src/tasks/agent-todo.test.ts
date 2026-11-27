@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { agentEventSchema } from '../ports/agent-driver.ts'
-import { ENV_VALUE_MASK } from '../release/env-masking.ts'
+import { ENV_VALUE_MASK } from '../workspace-env/env-masking.ts'
 
 import { hiddenContactText } from './client-feed-text.ts'
 

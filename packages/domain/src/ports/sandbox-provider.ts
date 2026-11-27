@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { badRequest, DomainError, isDomainError } from '../errors.ts'
-import { egressHostLimits, formatEgressHost, parseEgressHost } from '../preview/egress-hosts.ts'
+import { egressHostLimits, formatEgressHost, parseEgressHost } from '../egress/egress-hosts.ts'
 
 /**
  * Sandbox port — spec §8. One task is a logical session; a container lives for one turn.

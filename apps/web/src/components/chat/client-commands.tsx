@@ -1,6 +1,6 @@
 'use client'
 
-import type { ChatCommandId } from '@repo/domain/release/chat-commands'
+import type { ChatCommandId } from '@repo/domain/chat/chat-commands'
 import Box from '@mui/material/Box'
 import ListItemText from '@mui/material/ListItemText'
 import Menu from '@mui/material/Menu'

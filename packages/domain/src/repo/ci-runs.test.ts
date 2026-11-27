@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { ENV_VALUE_MASK } from '../release/env-masking.ts'
+import { ENV_VALUE_MASK } from '../workspace-env/env-masking.ts'
 import {
   ciStagesOf,
   ciStateWord,
