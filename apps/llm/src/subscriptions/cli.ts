@@ -9,6 +9,9 @@ import {
   type Env,
   type LlmBackend,
   type TurnCredentialRef,
+  VK_SERVICE_KEY_PATH,
+  VK_TOKEN_FIELD,
+  vkTokenSchema,
   WEB_SEARCH_FOLDER_FIELD,
   WEB_SEARCH_KEY_FIELD,
   WEB_SEARCH_KEY_PATH,
@@ -34,7 +37,7 @@ import {
 } from './retire.ts'
 import { readSecretFile, readSecretInput, writeSecretFile } from './secret-input.ts'
 
-export type SubscriptionCommand = 'login' | 'retire' | 'token' | 'search-key'
+export type SubscriptionCommand = 'login' | 'retire' | 'token' | 'search-key' | 'vk-key'
 const invalid = () => new Error('Неверные параметры команды подписок. Используйте --help.')
 class OperatorCommandError extends Error {}
 const path = z.string().refine(isAbsolute)
@@ -86,12 +89,14 @@ const retireSchema = z
   )
 const tokenSchema = z.strictObject({ policy: z.enum(['writer', 'admin']), out: path })
 const searchKeySchema = z.strictObject({ vaultTokenFile: path, folderId: webSearchFolderSchema })
+const vkKeySchema = z.strictObject({ vaultTokenFile: path })
 export type SubscriptionOptions =
   | { command: SubscriptionCommand; help: true }
   | { command: 'login'; help: false; value: z.output<typeof loginSchema> }
   | { command: 'retire'; help: false; value: z.output<typeof retireSchema> }
   | { command: 'token'; help: false; value: z.output<typeof tokenSchema> }
   | { command: 'search-key'; help: false; value: z.output<typeof searchKeySchema> }
+  | { command: 'vk-key'; help: false; value: z.output<typeof vkKeySchema> }
 
 /** Strict argument parsing completes before reading environment, files or any secret. */
 export function parseSubscriptionArguments(
@@ -141,6 +146,11 @@ export function parseSubscriptionArguments(
   }
   if (command === 'search-key') {
     const parsed = searchKeySchema.safeParse(value)
+    if (!parsed.success) throw invalid()
+    return { command, help: false, value: parsed.data }
+  }
+  if (command === 'vk-key') {
+    const parsed = vkKeySchema.safeParse(value)
     if (!parsed.success) throw invalid()
     return { command, help: false, value: parsed.data }
   }
@@ -212,10 +222,12 @@ export function subscriptionHelp(command: SubscriptionCommand): string {
       'subscriptions:retire -- --account <UUID> --label <метка> [--compromised --turns-token-file <путь>]\nОкончательное удаление: --account <UUID> --label <метка> --finalize --vault-token-file <путь> [--console-revoked].\n--console-revoked подтверждает ручной отзыв ключа в консоли провайдера.\nОтмена запроса, пока ключ не отозван: --account <UUID> --cancel.',
     'search-key':
       'subscriptions:search-key -- --vault-token-file <абсолютный путь> --folder-id <id каталога Yandex Cloud>\nКлюч API веб-поиска агента (Yandex Search API, сервисный аккаунт с ролью search-api.webSearch.user) поступает через stdin или скрытый ввод и вместе с id каталога записывается в Vault subs/search/yandex токеном writer, с CAS; обратно команда его не читает. Читает его только роль mcp — инструмент появится у агента в течение 30 секунд. Ключ проверяйте в консоли Yandex Cloud: команда к сервису не обращается.',
+    'vk-key':
+      'subscriptions:vk-key -- --vault-token-file <абсолютный путь>\nСервисный ключ приложения Радити во ВКонтакте (настройки приложения VK ID, «Сервисный ключ доступа») поступает через stdin или скрытый ввод и записывается в Vault subs/vk/service токеном writer, с CAS; обратно команда его не читает. Читает его только роль mcp: агент читает открытые стены групп клиентов в течение 30 секунд. Ключ проверяйте в настройках приложения: команда к ВКонтакте не обращается.',
     token:
       'subscriptions:token -- --policy writer|admin --out <абсолютный путь>\nТокен dev-root поступает через stdin или скрытый ввод. Новый файл создаётся с правами 0400.\nТолько development/test и числовой loopback VAULT_ADDR; срок — 15 минут.',
   }
-  return `${usage[command]}\nОкружение задаётся явно; команда не загружает .env автоматически. APP_ENV и VAULT_ADDR обязательны (search-key других не требует); login/retire также требуют DATABASE_URL, login — ещё LLM_EGRESS_PROXY_URL, LLM_EGRESS_CA_FILE, LLM_EGRESS_CLIENT_CERT_FILE и LLM_EGRESS_CLIENT_KEY_FILE, если провайдеру нужен узел выхода${egressNote}.\n`
+  return `${usage[command]}\nОкружение задаётся явно; команда не загружает .env автоматически. APP_ENV и VAULT_ADDR обязательны (search-key и vk-key других не требуют); login/retire также требуют DATABASE_URL, login — ещё LLM_EGRESS_PROXY_URL, LLM_EGRESS_CA_FILE, LLM_EGRESS_CLIENT_CERT_FILE и LLM_EGRESS_CLIENT_KEY_FILE, если провайдеру нужен узел выхода${egressNote}.\n`
 }
 
 const stages: Record<SubscriptionRetirementStage, string> = {
@@ -348,6 +360,30 @@ export async function runSubscriptionCommand(
       )
       process.stdout.write(
         `Ключ веб-поиска записан в Vault, версия ${version}. Роль mcp покажет инструмент агенту в течение 30 секунд.\n`,
+      )
+      return
+    }
+    if (options.command === 'vk-key') {
+      // The writer of subs/ may write and read metadata, never the value: CAS from the metadata.
+      const writer = createVaultSecretStore({
+        addr: address,
+        token: await readSecretFile(options.value.vaultTokenFile),
+      })
+      const metadata = await writer.kvMetadata(VK_SERVICE_KEY_PATH)
+      const key = vkTokenSchema.safeParse(
+        (await readSecretInput('Сервисный ключ VK: ', controller.signal)).trim(),
+      )
+      if (!key.success)
+        throw new OperatorCommandError(
+          'Сервисный ключ VK должен состоять из 16–512 видимых знаков ASCII без пробелов.',
+        )
+      const { version } = await writer.kvWrite(
+        VK_SERVICE_KEY_PATH,
+        { [VK_TOKEN_FIELD]: key.data },
+        { cas: metadata?.currentVersion ?? 0 },
+      )
+      process.stdout.write(
+        `Сервисный ключ VK записан в Vault, версия ${version}. Роль mcp начнёт читать стены групп в течение 30 секунд.\n`,
       )
       return
     }

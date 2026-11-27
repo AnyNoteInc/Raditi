@@ -8,3 +8,8 @@ path "subs/data/*" {
 path "subs/data/search/*" {
   capabilities = ["deny"]
 }
+
+# The service key of VK lives in subs/ too, and it is the mcp role's (docs/plan/99-vk-community.md).
+path "subs/data/vk/*" {
+  capabilities = ["deny"]
+}

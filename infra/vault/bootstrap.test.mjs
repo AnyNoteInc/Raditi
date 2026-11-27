@@ -77,7 +77,11 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'turns/destroy/*': ['deny'],
     },
     // The account keys, never the key of the web search beside them.
-    'llm-subscriptions': { 'subs/data/*': ['read'], 'subs/data/search/*': ['deny'] },
+    'llm-subscriptions': {
+      'subs/data/*': ['read'],
+      'subs/data/search/*': ['deny'],
+      'subs/data/vk/*': ['deny'],
+    },
     'subscriptions-writer': {
       'subs/data/*': ['create', 'update'],
       'subs/metadata/*': ['read'],
@@ -92,6 +96,8 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'kv/metadata/content-masks/*': ['delete'],
       // The key of the agent's web search, beside the keys of the model (spec §20).
       'subs/data/search/yandex': ['read'],
+      // The service key of Raditi's VK app (docs/plan/99-vk-community.md, ВК4).
+      'subs/data/vk/service': ['read'],
     },
     'core-transit': {
       'transit/datakey/plaintext/ws-*': ['update'],
@@ -107,6 +113,9 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       // The tokens of git connections (docs/plan/84-projects.md, ПР10): written, never read back.
       'kv/data/workspaces/+/git/*': ['create', 'update'],
       'kv/metadata/workspaces/+/git/*': ['create', 'update', 'read'],
+      // The keys of VK communities (docs/plan/99-vk-community.md, §3.1): written, never read back.
+      'kv/data/workspaces/+/vk/*': ['create', 'update'],
+      'kv/metadata/workspaces/+/vk/*': ['create', 'update', 'read'],
     },
     // The key itself, never a path under it (rotate, config, trim, soft-delete-restore).
     'workspace-provisioner': { 'transit/keys/+': ['update'] },
@@ -115,6 +124,8 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     // The tokens of git connections: read, and a renewed token written by CAS; never created,
     // never metadata (docs/plan/84-projects.md, §4.2).
     'core-git': { 'kv/data/workspaces/+/git/*': ['read', 'update'] },
+    // The keys of VK communities: read for a publication the client pressed (plan 99, §3.3).
+    'core-vk': { 'kv/data/workspaces/+/vk/*': ['read'] },
   }
   // A policy that names a mount outside its list fails here, whatever the path under it.
   const allowedMounts = {
@@ -128,6 +139,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     'workspace-provisioner': ['transit'],
     'core-workspace-env': ['kv'],
     'core-git': ['kv'],
+    'core-vk': ['kv'],
   }
   // The only system and auth endpoints a policy may name.
   const systemPaths = {}
@@ -171,7 +183,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
   // web may set one thing of the metadata of a key of a workspace: that it keeps one version.
   // Any other value or parameter — a longer history, cas_required, a deletion delay — is refused.
   const writer = await readFile(new URL('./policies/sites-writer.hcl', import.meta.url), 'utf8')
-  for (const kind of ['env', 'mcp', 'git'])
+  for (const kind of ['env', 'mcp', 'git', 'vk'])
     assert.match(
       writer,
       new RegExp(
@@ -179,7 +191,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       ),
       kind,
     )
-  assert.equal([...writer.matchAll(/allowed_parameters/g)].length, 3)
+  assert.equal([...writer.matchAll(/allowed_parameters/g)].length, 4)
 })
 
 test('a new local bootstrap creates the four mounts and all the policies', async () => {
@@ -206,7 +218,7 @@ test('a new local bootstrap creates the four mounts and all the policies', async
     configWrites.map(({ path, body }) => [path, body]),
     Object.entries(mounts).map(([name, config]) => [`${name}/config`, config]),
   )
-  assert.equal(policyNames.length, 10)
+  assert.equal(policyNames.length, 11)
   assert.deepEqual(
     mock.calls.filter(({ path }) => path.startsWith('sys/policies/acl/')).map(({ path }) => path),
     policyNames.map((name) => `sys/policies/acl/${name}`),
@@ -376,7 +388,7 @@ test('a mount that failed to enable stops the run and is enabled by the next one
 test('the summary names the mounts, counts the policies and says what a new mount has lost', () => {
   const all = ['turns', 'subs', 'kv', 'transit']
   assert.deepEqual(bootstrapSummary({ mounts: all, policies: [...policyNames], created: [] }), [
-    'Local OpenBao ready: turns/, subs/, kv/, transit/; 10 policies',
+    'Local OpenBao ready: turns/, subs/, kv/, transit/; 11 policies',
   ])
   const [, fresh] = bootstrapSummary({ mounts: all, policies: [...policyNames], created: all })
   assert.match(fresh, /^Created now: turns\/, subs\/, kv\/, transit\/\. /)

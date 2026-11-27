@@ -136,6 +136,7 @@
         "RADITI_PERF_OUT",
         "REDIS_URL",
         "REPO_CONFIRM_SECRET",
+        "VK_CONFIRM_SECRET",
         "RUNNER_API_PORT",
         "RUNNER_CORE_CA_FILE",
         "RUNNER_S3_CA_FILE",

@@ -28,6 +28,7 @@ export const policyNames = Object.freeze([
   'workspace-provisioner',
   'core-workspace-env',
   'core-git',
+  'core-vk',
 ])
 
 export function localVaultAddress(address) {
