@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   applyQuickEdits,
+  QUICK_EDIT_SYSTEM,
+  quickEditSystem,
   introducedContacts,
   joinParagraphs,
   paragraphOfQuote,
@@ -255,5 +257,12 @@ describe('links, addresses and phones', () => {
         'добавьте телефон +79001234567',
       ),
     ).toEqual([])
+  })
+})
+
+describe('the system text of a canvas (stage 4)', () => {
+  it('tells the model of a canvas about elements, not Markdown', () => {
+    expect(quickEditSystem('canvas')).toContain('HTML source of one element')
+    expect(quickEditSystem('document')).toBe(QUICK_EDIT_SYSTEM)
   })
 })

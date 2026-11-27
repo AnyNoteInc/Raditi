@@ -24,7 +24,7 @@ import { artifactErrorData } from './artifact-access-error'
 export const quickEditTexts = Object.freeze({
   button: 'Исправить',
   label: 'Исправить по заметке',
-  hint: 'Агент сразу поправит раздел по этой заметке.',
+  hint: 'Агент сразу поправит это место по заметке.',
   moved: 'Место заметки изменилось — отправьте её агенту.',
   pending: 'Готовим правку…',
   busy: 'Подождите — готовим предыдущую правку.',

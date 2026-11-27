@@ -59,17 +59,25 @@ export const quickEditNeedsConfirmation = () =>
 export const quickEditUnavailable = () =>
   quickEditError('QUICK_EDIT_UNAVAILABLE', 'A quick edit is not available here', 403)
 
-const quoteOf = (note: ArtifactCommentSnapshot[number]): string => {
-  const anchor = note.anchor as { kind?: string; quote?: string }
-  return anchor.kind === 'quote' && typeof anchor.quote === 'string' ? anchor.quote : ''
+/** The kind of anchor each kind of artifact quick-edits: a quote of a document, an element of a canvas. */
+const quickAnchors = { document: 'quote', canvas: 'element' } as const
+
+/** What the note points at, as the feed names it: the quote, or the text of the element. */
+const placeOf = (note: ArtifactCommentSnapshot[number]): string => {
+  const anchor = note.anchor as { kind?: string; quote?: string; text?: string; tag?: string }
+  if (anchor.kind === 'quote') return anchor.quote ?? ''
+  if (anchor.kind === 'element') return anchor.text || anchor.tag || ''
+  return ''
 }
 
 /** What the feed of «Быстрые правки» shows of the request: the notes, shortly. */
 function requestText(notes: ArtifactCommentSnapshot): string {
   const cut = (text: string, size: number) =>
     Array.from(text).length > size ? `${Array.from(text).slice(0, size).join('')}…` : text
-  const lines = notes.map(
-    (note) => `«${cut(note.body, 200)}» — к словам «${cut(quoteOf(note), 80)}»`,
+  const lines = notes.map((note) =>
+    (note.anchor as { kind?: string }).kind === 'element'
+      ? `«${cut(note.body, 200)}» — к элементу «${cut(placeOf(note), 80)}»`
+      : `«${cut(note.body, 200)}» — к словам «${cut(placeOf(note), 80)}»`,
   )
   return cut(`Исправить по заметке: ${lines.join('; ')}`, 1500)
 }
@@ -126,7 +134,9 @@ export async function requestQuickEdit(
       where: { id: input.artifactId },
       select: { kind: true, workspaceId: true },
     })
-    if (artifact.kind !== 'document') throw quickEditUnavailable()
+    // A «Документ» and a «Холст» (docs/plan/98-quick-edits.md, stage 4); the others have no notes.
+    if (artifact.kind !== 'document' && artifact.kind !== 'canvas') throw quickEditUnavailable()
+    const anchorKind = quickAnchors[artifact.kind]
     // Stage 1: the quick task lives in the artifact's workspace, so its credits pay (plan 98, §6).
     const member = await tx.member.findFirst({
       where: { workspaceId: artifact.workspaceId, userId },
@@ -139,7 +149,8 @@ export async function requestQuickEdit(
       workspaceId: artifact.workspaceId,
       threadIds: input.threadIds,
     })
-    if (notes.some((note) => quoteOf(note) === '')) throw quickEditUnavailable()
+    if (notes.some((note) => (note.anchor as { kind?: string }).kind !== anchorKind))
+      throw quickEditUnavailable()
     if (!input.confirmOthers && notes.some((note) => note.by === 'other'))
       throw quickEditNeedsConfirmation()
     await chargePutOff(tx, { workspaceId: artifact.workspaceId, userId, now })

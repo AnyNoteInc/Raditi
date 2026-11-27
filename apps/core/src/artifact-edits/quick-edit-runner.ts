@@ -12,7 +12,6 @@ import {
   type PrismaClient,
   type QuickEditBlock,
 } from '@repo/db'
-import { artifactSectionText } from '@repo/doc-render/markdown'
 import {
   feedLimits,
   hasOutwardPasswordForm,
@@ -24,22 +23,15 @@ import {
   type SecretStore,
 } from '@repo/domain'
 import {
-  applyQuickEdits,
   artifactCommentSnapshotSchema,
-  hasUniqueCommentQuote,
   introducedContacts,
-  normalizeCommentQuote,
-  paragraphOfQuote,
   parseQuickEditAnswer,
-  QUICK_EDIT_SYSTEM,
+  quickEditSystem,
   quickEditLimits,
   quickEditRetryMessage,
   quickEditTool,
   quickEditUserMessage,
-  splitParagraphs,
   type QuickEditArgs,
-  type QuickEditNote,
-  type QuickEditPart,
   type QuickEditReason,
   type QuickEditState,
 } from '@repo/domain/artifacts'
@@ -50,6 +42,7 @@ import { CHARGE_LATER_EVENT } from '../tasks/pass-settlement.ts'
 import { agentWords } from '../tasks/turn-outcome.ts'
 import { textRefusal } from '../turns/text-refusal.ts'
 import { readWorkspaceEnvValuesToRefuse } from '../workspace-env/workspace-env-values.ts'
+import { canvasParts, documentParts } from './quick-edit-parts.ts'
 import { issueQuickKey, QUICK_DRIVER, type QuickKey } from './quick-key-issuer.ts'
 import { callQuickModel, QuickCallError, type QuickCallAnswer } from './quick-llm-client.ts'
 
@@ -195,15 +188,13 @@ export class QuickEditRunner {
     const { db } = this.#deps
     const dispatch = await db.artifactCommentDispatch.findUnique({
       where: { userId_requestId: { userId: edit.userId, requestId: edit.requestId } },
-      select: { notes: true, artifact: { select: { title: true } } },
+      select: { notes: true, artifact: { select: { title: true, kind: true } } },
     })
     const parsedNotes = artifactCommentSnapshotSchema.safeParse(dispatch?.notes)
     if (!dispatch || !parsedNotes.success) return ended('failed', 'platform')
     const notes = parsedNotes.data
-    const anchors = notes.map(
-      (note) => note.anchor as { kind: string; block: string; quote?: string },
-    )
-    const keys = [...new Set(anchors.map((anchor) => anchor.block))]
+    const kind = dispatch.artifact.kind === 'canvas' ? 'canvas' : 'document'
+    const keys = [...new Set(notes.map((note) => (note.anchor as { block: string }).block))]
     if (keys.length > quickEditLimits.parts) return ended('refused', 'limit')
     const blocks = await db.$transaction((tx) =>
       quickEditBlocks(tx, {
@@ -215,45 +206,16 @@ export class QuickEditRunner {
     )
     if (blocks.length !== keys.length) return ended('refused', 'moved')
     if (blocks.some((block) => block.hold !== null)) return ended('refused', 'held')
-    if (
-      blocks.reduce((sum, block) => sum + Buffer.byteLength(block.markdown), 0) >
-      quickEditLimits.sourceBytes
-    )
-      return ended('refused', 'limit')
     const byKey = new Map(blocks.map((block) => [block.key, block]))
-    const parts: QuickEditPart[] = blocks.map((block) => ({
-      key: block.key,
-      heading: block.heading,
-      markdown: block.markdown,
-    }))
-    const promptNotes: QuickEditNote[] = []
-    for (const [index, note] of notes.entries()) {
-      const anchor = anchors[index]!
-      const block = byKey.get(anchor.block)!
-      const quote = normalizeCommentQuote(anchor.quote ?? '')
-      // «Место изменилось»: the quote is no longer once in its section (as the cabinet shows it).
-      if (!hasUniqueCommentQuote(normalizeCommentQuote(artifactSectionText(block.markdown)), quote))
-        return ended('refused', 'moved')
-      promptNotes.push({
-        id: note.id,
-        // Every note is the clicker's request: notes of others only after their confirmation (БПр9).
-        by: 'client',
-        part: anchor.block,
-        p: paragraphOfQuote(splitParagraphs(block.markdown).paragraphs, quote, artifactSectionText),
-        quote,
-        body: note.body,
-        replies: note.replies.map((reply) =>
-          typeof reply === 'string'
-            ? { by: 'client' as const, body: reply }
-            : { by: 'other' as const, body: reply.body },
-        ),
-      })
-    }
+    // A «Документ» shows sections, a «Холст» the elements its notes anchor to (stage 4).
+    const prepared = kind === 'canvas' ? canvasParts(notes, byKey) : documentParts(notes, byKey)
+    if (typeof prepared === 'string') return ended('refused', prepared)
+    const { parts, notes: promptNotes } = prepared
     if (Buffer.byteLength(JSON.stringify(promptNotes)) > quickEditLimits.noteBytes)
       return ended('refused', 'limit')
     const user = quickEditUserMessage({ title: dispatch.artifact.title, parts, notes: promptNotes })
     const messages: Record<string, unknown>[] = [
-      { role: 'system', content: QUICK_EDIT_SYSTEM },
+      { role: 'system', content: quickEditSystem(kind) },
       { role: 'user', content: user },
     ]
     const estimate = Math.ceil(
@@ -286,8 +248,9 @@ export class QuickEditRunner {
       // An edit that does not fit the paragraphs (a «find» missing or not unique, a wrong number)
       // is a wrong answer too: the one retry names the problem.
       if (parsed.ok && parsed.args.outcome === 'edited') {
-        const applied = applyQuickEdits(parts, parsed.args.edits)
+        const applied = prepared.apply(parsed.args.edits)
         if (applied.ok) changed = applied.blocks
+        else if (applied.reason !== undefined) return ended('refused', applied.reason, calls)
         else parsed = { ok: false, problem: applied.problem }
       }
       if (parsed.ok) {
