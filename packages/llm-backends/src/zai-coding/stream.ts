@@ -73,10 +73,10 @@ export function createZaiStreamInspector(
       if (!Array.isArray(value.choices)) return { kind: 'skip' }
       const reason = object(value.choices[0])?.finish_reason
       if (reason === undefined || reason === null || reason === '')
-        return { kind: 'forward', event }
+        return { kind: 'forward', event, parsed: value }
       if (typeof reason === 'string' && finishing.has(reason)) {
         finished = true
-        return { kind: 'forward', event }
+        return { kind: 'forward', event, parsed: value }
       }
       // The answer is already complete: a later value that contradicts it changes nothing.
       if (finished) return { kind: 'skip' }

@@ -203,7 +203,9 @@ export class PostgresGatewayStore implements GatewayStore {
   async lookup(keyHash: string, source: string): Promise<GatewayKey | null> {
     hashSchema.parse(keyHash)
     sourceSchema.parse(source)
-    const row = await gatewayTransaction(this.db, (tx) => this.#readKey(tx, keyHash, source))
+    // One statement, outside a transaction: the read takes no row lock, and the request's own
+    // deadline bounds its wait. Every write and every lock stays in a bounded transaction.
+    const row = await this.#readKey(this.db, keyHash, source)
     return row === null ? null : toKey(row)
   }
 
@@ -362,8 +364,15 @@ export class PostgresGatewayStore implements GatewayStore {
         where: { subscriptionAccountId: row.accountId, state: 'open' },
       })
       if (accountOpen >= row.maxConcurrentRequests) {
-        const refused = await this.#refused(tx, row.keyId, 'transient', 1_000)
-        return { ...refused, waitForSlot: true }
+        // Not journaled: the gateway tries again in a moment, and journals the refusal it
+        // answers with only once the call stops waiting for a slot.
+        return {
+          kind: 'refused',
+          keyId: row.keyId,
+          reason: 'transient',
+          retryAfterMs: 1_000,
+          waitForSlot: true,
+        }
       }
       const [finalClock] = await tx.$queryRaw<
         { instant: Date }[]

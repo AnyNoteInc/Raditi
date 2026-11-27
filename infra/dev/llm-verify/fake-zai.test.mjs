@@ -137,11 +137,13 @@ const chunks = (text) =>
 function inspect(text, backend = zaiCodingBackend) {
   const inspector = backend.streamInspector()
   const meter = backend.usageMeter()
-  meter.push(Buffer.from(text))
   const seen = []
   let stopped = false
   for (const data of frames(text)) {
-    const item = inspector.inspect({ event: 'message', data })
+    const event = { event: 'message', data }
+    const item = inspector.inspect(event)
+    // The meter reads the inspector's reading of each event, as the role feeds it.
+    meter.observe(event, item)
     seen.push(item)
     if (item.kind === 'failure' || item.terminal) {
       stopped = true

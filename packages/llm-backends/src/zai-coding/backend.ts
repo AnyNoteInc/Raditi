@@ -346,7 +346,7 @@ export function createZaiBackend(offer: ZaiOffer): LlmBackend {
       })
       return { url: chatUrl, method: 'POST', headers }
     },
-    usageMeter: () => createChatCompletionsUsageMeter(inspector),
+    usageMeter: createChatCompletionsUsageMeter,
     classify: classifier.classify,
     refusal: zaiRefusal,
     probe: (credential, http) =>

@@ -208,6 +208,49 @@ describe('input token estimate', () => {
     expect((value.input as JsonObject[])[0]!.encrypted_content).toHaveLength(12_000)
   })
 
+  it('counts the encoded body the adapter hands it as it would count the value', () => {
+    const value: JsonObject = {
+      model: 'm',
+      messages: [{ role: 'user', content: 'Текст 😀 "quoted" \\ \u0001' }],
+      input: [
+        { encrypted_content: 'e'.repeat(3_000) },
+        { image: `data:image/png;base64,${'a'.repeat(900)}` },
+      ],
+    }
+    const encoded = object(value)
+    expect(estimateLlmInputTokens(value, { encoded })).toBe(estimateLlmInputTokens(value))
+    expect(estimateLlmInputTokens(value)).toBe(Math.ceil(encoded.byteLength / 3))
+    const exempt = {
+      encryptedContentPaths: [['input', 0, 'encrypted_content']],
+      imagePaths: [['input', 1, 'image']],
+    }
+    const counted: JsonObject = {
+      ...value,
+      input: [{ encrypted_content: '' }, { image: '' }],
+    }
+    expect(estimateLlmInputTokens(value, exempt)).toBe(
+      Math.ceil(object(counted).byteLength / 3) + 2000,
+    )
+    expect(estimateLlmInputTokens(value, { ...exempt, encoded })).toBe(
+      estimateLlmInputTokens(value, exempt),
+    )
+  })
+
+  it('reads an index only of an array and a key only of an object', () => {
+    expect(() =>
+      estimateLlmInputTokens(
+        { input: [{ image: 'x' }] },
+        { imagePaths: [['input', '0', 'image']] },
+      ),
+    ).toThrow(DomainError)
+    expect(() =>
+      estimateLlmInputTokens(
+        { input: { 0: { encrypted_content: 'x' } } },
+        { encryptedContentPaths: [['input', 0, 'encrypted_content']] },
+      ),
+    ).toThrow(DomainError)
+  })
+
   it('does not exempt arbitrary prompt text by its prefix or key name', () => {
     const value = {
       encrypted_content: 'z'.repeat(900),

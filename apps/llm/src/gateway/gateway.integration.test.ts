@@ -6,6 +6,7 @@ import { request, type IncomingHttpHeaders } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { connect, type AddressInfo } from 'node:net'
 import type { Duplex } from 'node:stream'
+import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
 import { createPrismaClient, type PrismaClient } from '@repo/db'
@@ -637,12 +638,12 @@ describe.skipIf(!enabled)(
         const first = call(f.port, keyA.token)
         await expect.poll(async () => (await provider()).requests.length).toBe(1)
         const second = call(f.directPort, keyB.token)
-        await expect
-          .poll(() =>
-            db.llmKey.findUnique({ where: { id: keyB.id } }).then((row) => row?.lastRefusal),
-          )
-          .toBe('transient')
-        // The second key waits for the slot: nothing of it is open or sent while the first runs.
+        await delay(1_000)
+        // The second key waits for the slot: nothing of it is open or sent while the first runs,
+        // and a wait it outlives is no refusal of the key.
+        expect(
+          (await db.llmKey.findUniqueOrThrow({ where: { id: keyB.id } })).lastRefusal,
+        ).toBeNull()
         expect(await open()).toBe(1)
         expect((await provider()).requests).toHaveLength(1)
         expect((await first).status).toBe(200)

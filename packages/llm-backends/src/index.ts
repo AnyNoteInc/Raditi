@@ -10,3 +10,4 @@ export { zaiApiBackend, zaiCodingBackend }
 export const llmBackends: readonly LlmBackend[] = [zaiCodingBackend, zaiApiBackend]
 export { createSseDecoder, type SseEvent } from './sse.ts'
 export { emptyMeterResult } from './usage.ts'
+export { createStreamMeter } from './stream-meter.ts'
