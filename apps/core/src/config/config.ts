@@ -34,6 +34,7 @@ import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
 import { sandboxConfigFromEnv, type SandboxConfig } from '@repo/sandbox-providers'
 import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
+import { vkConfigFromEnv, type VkConfig } from '@repo/vk'
 import { yookassaConfigFromEnv, type YookassaConfig } from '@repo/yookassa'
 import { z } from 'zod'
 import {
@@ -146,6 +147,8 @@ export interface CoreConfig {
    * worker refuses it (docs/plan/84-projects.md, §4.6); blank — only the public check.
    */
   gitRefusedSubnets: RefusedSubnet[]
+  /** The secret of the cards of VK core checks every press by (docs/plan/99-vk-community.md). */
+  vk: VkConfig
 }
 
 /** Where core reaches the browser worker's internal API. Holds its token: never log it. */
@@ -439,6 +442,7 @@ export function loadConfig(env: Env): CoreConfig {
   if (gitRefusedSubnets === null)
     problems.push('SANDBOX_EGRESS_REFUSED_SUBNETS: expected subnets such as 10.10.0.0/16')
   const gitApps = section(() => coreGitAppsFromEnv(env))
+  const vk = section(() => vkConfigFromEnv(env))
 
   if (problems.length > 0) throw new ConfigError(problems, 'core')
 
@@ -478,6 +482,7 @@ export function loadConfig(env: Env): CoreConfig {
     git: git.config,
     gitApps: present(gitApps),
     gitRefusedSubnets: gitRefusedSubnets ?? [],
+    vk: present(vk),
   }
 }
 

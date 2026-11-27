@@ -3,6 +3,7 @@ import { DatabaseModule } from '@repo/service-runtime'
 
 import { BillingModule } from './billing/billing.module.ts'
 import { GitModule } from './git/git.module.ts'
+import { VkModule } from './vk/vk.module.ts'
 import { ArtifactExportsModule } from './artifact-exports/artifact-exports.module.ts'
 import { LeadsModule } from './leads/leads.module.ts'
 import { TelegramModule } from './telegram/telegram.module.ts'
@@ -67,6 +68,8 @@ export class AppModule {
         GitModule,
         // The exports and thumbnails of artifacts (docs/plan/88-artifacts.md, §7.13).
         ArtifactExportsModule,
+        // The publications in VK communities the client pressed (docs/plan/99-vk-community.md).
+        VkModule,
         // The signals of chats to the pages and the wake of the outbox, from the process that
         // runs the workers (spec §7; docs/plan/86-speedups.md).
         ...(background ? [TaskSignalsModule] : []),

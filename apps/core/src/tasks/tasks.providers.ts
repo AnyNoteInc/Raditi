@@ -30,6 +30,7 @@ import { TURN_EXECUTOR } from '../turns/turns.tokens.ts'
 import { ChatFiles } from './chat-files.ts'
 import { MemoryChanges } from './memory-changes.ts'
 import { RepoChanges, RepoTurnPreparer } from './repo-turns.ts'
+import { VkChanges } from './vk-turns.ts'
 import type { GitJobs } from '../git/git-jobs.ts'
 import { GIT_JOBS } from '../git/git.tokens.ts'
 import type { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
@@ -150,6 +151,8 @@ export const taskProviders: Provider[] = [
           : {}),
         // What a turn asked of the scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп33).
         scheduleChanges: new ScheduleChanges({ db: prisma, logger: new Logger('ScheduleChanges') }),
+        // The posts and replies a turn proposed for VK (docs/plan/99-vk-community.md, §3.3).
+        vkChanges: new VkChanges({ db: prisma, logger: new Logger('VkChanges') }),
         // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
         workspaceTurnLimit: config.workspaceTurnLimit,
         capacity: new TurnCapacity(executor),

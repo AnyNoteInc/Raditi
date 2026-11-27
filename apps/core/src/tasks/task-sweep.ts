@@ -5,6 +5,7 @@ import {
   cancelWaitingTask,
   clearStaleUncheckedSections,
   closeStaleRepoProposals,
+  closeStaleVkProposals,
   dropAbandonedPages,
   insertFeedEvent,
   latestPassRequestId,
@@ -38,6 +39,7 @@ import { readBrowserTaskFacts } from '../browser/browser-facts.ts'
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import { recoveredTextRefusal } from '../turns/text-refusal.ts'
 import { readTurnResult } from '../turns/turn-result.ts'
+import { sweepLostVkActions } from '../vk/vk-actions.ts'
 import {
   replayedTurn,
   type JournaledEvidence,
@@ -686,6 +688,12 @@ export class TaskSweep {
     // And the proposals of a merge request of such turns (ревью C11).
     const proposals = await closeStaleRepoProposals(this.deps.db, before)
     if (proposals > 0) this.#logger.log(`task_sweep_repo_proposals failed=${proposals}`)
+    // And their proposals for VK (docs/plan/99-vk-community.md, §3.3): never shown.
+    const vk = await closeStaleVkProposals(this.deps.db, before)
+    if (vk > 0) this.#logger.log(`task_sweep_vk_proposals failed=${vk}`)
+    // And the presses of VK cards whose process died in the call (ВК9): `lost`, told in the chat.
+    const lost = await sweepLostVkActions(this.deps.db, { now: this.#now })
+    if (lost > 0) this.#logger.log(`task_sweep_vk_actions lost=${lost}`)
     if (!memory) return 0
     const closed = await memory.sweep(before)
     if (closed > 0) this.#logger.log(`task_sweep_memory failed=${closed}`)
