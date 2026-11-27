@@ -182,6 +182,7 @@ test('an image carries no stand, stand test or fixture, and keeps the operator c
     'subscription-retire.mjs',
     'subscription-search-key.mjs',
     'subscription-token.mjs',
+    'subscription-vk-key.mjs',
   ])
   assert.deepEqual(missingOperatorScriptsOf('mcp', []), [])
   assert.deepEqual(missingOperatorScriptsOf('browser', []), [])
