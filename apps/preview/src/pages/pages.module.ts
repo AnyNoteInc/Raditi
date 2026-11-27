@@ -1,8 +1,10 @@
 import { Logger, Module } from '@nestjs/common'
 import {
   admitInWindow,
+  servedContent,
   servedFile,
-  servedPage,
+  servedSite,
+  servedTree,
   verifyPagePassword,
   type PrismaClient,
 } from '@repo/db'
@@ -11,7 +13,10 @@ import { PRISMA } from '@repo/service-runtime/tokens'
 import { PREVIEW_CONFIG, type PreviewConfig } from '../config/config.tokens.ts'
 import { PagesServer, type PagesStore } from './pages-server.ts'
 
-/** The store of the page server: one read of the page, the counters of the password form. */
+/**
+ * The store of the page server: the page without its bytes, then the bytes of the version it
+ * sends (plan 96, P34); the counters of the password form.
+ */
 export class PostgresPagesStore implements PagesStore {
   readonly #db: PrismaClient
 
@@ -20,11 +25,19 @@ export class PostgresPagesStore implements PagesStore {
   }
 
   served(slug: string, path: string) {
-    return servedPage(this.#db, slug, path)
+    return servedSite(this.#db, slug, path)
   }
 
-  file(treeId: string, path: string) {
-    return servedFile(this.#db, treeId, path)
+  site(slug: string) {
+    return servedTree(this.#db, slug)
+  }
+
+  content(pageId: string) {
+    return servedContent(this.#db, pageId)
+  }
+
+  file(treeId: string, path: string, known: readonly string[]) {
+    return servedFile(this.#db, treeId, path, known)
   }
 
   admit(key: string, limit: number, windowMs: number, now: number) {
