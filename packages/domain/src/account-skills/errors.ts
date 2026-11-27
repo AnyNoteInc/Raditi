@@ -67,12 +67,6 @@ export const marketplaceNotFound = (): DomainError =>
 export const marketplacesTooMany = (): DomainError =>
   new DomainError('MARKETPLACES_TOO_MANY', 'The account has as many marketplaces as it may', 409)
 
-export const skillProposalNotFound = (): DomainError =>
-  new DomainError('SKILL_PROPOSAL_NOT_FOUND', 'No such proposal waits for the client', 404)
-
-export const skillProposalsTooMany = (): DomainError =>
-  new DomainError('SKILL_PROPOSALS_TOO_MANY', 'Too many proposals wait for the client', 409)
-
 /** Its source has no newer commit, or it is not a skill of a repository. */
 export const skillNoUpdate = (): DomainError =>
   new DomainError('SKILL_NO_UPDATE', 'The skill has no update', 409)
@@ -118,7 +112,5 @@ export const accountSkillRefusalTexts: Readonly<Record<string, string>> = Object
   MARKETPLACE_INVALID: 'В репозитории нет каталога навыков (.claude-plugin/marketplace.json)',
   MARKETPLACE_NOT_FOUND: 'Каталога нет или он удалён',
   MARKETPLACES_TOO_MANY: 'Можно добавить до 10 каталогов',
-  SKILL_PROPOSAL_NOT_FOUND: 'Предложение уже принято, отклонено или устарело',
-  SKILL_PROPOSALS_TOO_MANY: 'Агент предложил слишком много навыков — разберите предложенные',
   SKILL_NO_UPDATE: 'Обновлений нет',
 })

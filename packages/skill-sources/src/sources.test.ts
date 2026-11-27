@@ -33,7 +33,7 @@ function github(files: Record<string, { text: string; mode?: string }>) {
     }
     return new Response('', { status: 404 })
   }
-  return { sources: new SkillSources(repoReaders(fetchFn)), calls }
+  return { sources: new SkillSources(repoReaders(fetchFn)), calls, fetchFn }
 }
 
 const repo = (path = '', ref?: string): SkillRepoRef => ({
@@ -100,6 +100,30 @@ describe('skills of a repository', () => {
     })
     expect(await codeOf(() => sources.read(repo(), COMMIT, 'x'))).toBe('link')
     expect(await codeOf(() => sources.find(repo('nothing')))).toBe('SKILL_SOURCE_NOT_FOUND')
+  })
+
+  it('keeps the bound of a whole skill while reading, when the tree has no sizes', async () => {
+    const big = 'x'.repeat(4 * 1024 * 1024)
+    const files = {
+      'big/SKILL.md': { text: skillMd('big') },
+      'big/a.bin': { text: big },
+      'big/b.bin': { text: big },
+      'big/c.bin': { text: big },
+    }
+    const { fetchFn } = github(files)
+    // As GitLab answers: no `size` in the tree.
+    const sizeless = new SkillSources(
+      repoReaders(async (url, init) => {
+        const response = await fetchFn(url, init)
+        if (!url.includes('/git/trees/')) return response
+        const tree = (await response.json()) as { tree: Record<string, unknown>[] }
+        return Response.json({
+          truncated: false,
+          tree: tree.tree.map(({ size: _size, ...rest }) => rest),
+        })
+      }),
+    )
+    expect(await codeOf(() => sizeless.read(repo(), COMMIT, 'big'))).toBe('too_large')
   })
 
   it('tells a missing repository from a provider that does not answer', async () => {

@@ -6,8 +6,8 @@ import { isSkillName } from './name.ts'
 
 // The files of a skill (docs/plan/97-skills.md, Нв4, Нв10, Нв13): how a path inside a skill is
 // cleaned, which files are dropped on the way in, how a whole skill is checked, where its objects
-// lie in raditi-inbox and where a turn finds them. Pure rules: web, mcp, core and the runner read
-// the same ones.
+// lie in raditi-inbox and where a turn finds them. Pure rules: web, core and the runner read the
+// same ones.
 
 export const SKILL_MD = 'SKILL.md'
 

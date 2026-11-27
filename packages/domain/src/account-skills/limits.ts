@@ -41,10 +41,6 @@ export const accountSkillLimits = Object.freeze({
   uploadBytes: 10 * 1024 * 1024,
   /** Versions of one skill kept for «Вернуть прошлую». */
   versionsKept: 5,
-  /** What `skill_save` takes in one call: the text of the files, base64 of a binary one included. */
-  proposalBytes: 2 * 1024 * 1024,
-  /** Proposals of the agent waiting for the client at once, per account. */
-  proposalsPending: 10,
 })
 
 /**

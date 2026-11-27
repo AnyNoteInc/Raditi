@@ -65,13 +65,15 @@ describe('the files of the skills of a turn (docs/plan/97-skills.md, Нв13)', (
     expect(vi.mocked(f.db.accountSkill.findMany)).toHaveBeenCalledTimes(1)
   })
 
-  it('leaves out what the client turned off or changed since the plan', async () => {
+  it('leaves out what the client turned off or changed since the plan, a skill whole', async () => {
     const f = fixture([demo])
     const files = await f.skillFiles.files(TASK, [
       '/workspace/skills/demo/old.md',
       '/workspace/skills/gone/SKILL.md',
     ])
     expect(files).toEqual([])
+    // The plan named one file of a version of two: no file of two versions reaches the turn.
+    expect(await f.skillFiles.files(TASK, ['/workspace/skills/demo/SKILL.md'])).toEqual([])
     expect(
       await fixture([demo], null).skillFiles.files(TASK, ['/workspace/skills/demo/SKILL.md']),
     ).toEqual([])
@@ -94,7 +96,12 @@ describe('the files of the skills of a turn (docs/plan/97-skills.md, Нв13)', (
         },
       },
     ])
-    const [file] = await f.skillFiles.files(TASK, ['/workspace/skills/demo/x'])
+    const files = await f.skillFiles.files(TASK, [
+      '/workspace/skills/demo/SKILL.md',
+      '/workspace/skills/demo/scripts/run.py',
+      '/workspace/skills/demo/x',
+    ])
+    const file = files.at(-1)
     await expect(read(file!.read())).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 })

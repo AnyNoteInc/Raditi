@@ -17,9 +17,10 @@ export interface TurnSkillFiles {
  * The files of the skills of the author of a chat (docs/plan/97-skills.md, Нв13), from
  * raditi-inbox — TaskProjectFiles of a third root. The paths are checked against the database
  * again, once for the turn, before any byte is read: an enabled skill of the author of the chat
- * now, its current version, the file at that path, within the bound of a file. A skill the client
- * turned off or changed since the plan was made is left out, file by file: the turn goes on
- * without it.
+ * now, its current version, the file at that path, within the bound of a file. A skill is taken
+ * whole or not at all: one the client turned off, or whose current version has other files than
+ * the plan names (updated or restored since), is left out — the turn goes on without it rather
+ * than with files of two versions. A version with the same paths is the current one entire.
  */
 export class TaskSkillFiles implements TurnSkillFiles {
   readonly #db: Pick<PrismaClient, 'task' | 'accountSkill'>
@@ -42,11 +43,23 @@ export class TaskSkillFiles implements TurnSkillFiles {
     if (places.length === 0) return []
     const owned = await chatAccountSkillVersions(this.#db, taskId)
     if (owned === null) return []
+    const planned = new Map<string, Set<string>>()
+    for (const place of places)
+      planned.set(place.name, (planned.get(place.name) ?? new Set()).add(place.inner))
+    const whole = (name: string) => {
+      const skill = owned.skills.get(name)
+      const paths = planned.get(name)!
+      return (
+        skill !== undefined &&
+        skill.files.length === paths.size &&
+        skill.files.every((file) => paths.has(file.path))
+      )
+    }
     const files: TurnSkillFile[] = []
     for (const place of places) {
-      const skill = owned.skills.get(place.name)
-      const index = skill?.files.findIndex((file) => file.path === place.inner) ?? -1
-      if (!skill || index < 0) continue
+      if (!whole(place.name)) continue
+      const skill = owned.skills.get(place.name)!
+      const index = skill.files.findIndex((file) => file.path === place.inner)
       const file = skill.files[index]!
       if (file.sizeBytes < 0 || file.sizeBytes > accountSkillLimits.fileBytes)
         throw conflict('A file of a skill is out of its bounds')

@@ -119,10 +119,27 @@ export class SkillSources {
       declared += file.size ?? 0
       if (declared > accountSkillLimits.skillBytes) throw skillInvalid('too_large')
     }
+    // GitLab's tree has no sizes: the bound of the whole skill is kept as the bytes come too, and
+    // no file is read past what is left of it.
+    let read = 0
     for (const file of kept) {
       if (file.mode === '160000') continue
       const path = file.path.slice(prefix.length)
-      const bytes = await reader.file(ref, commit, file.path, accountSkillLimits.fileBytes)
+      const left = accountSkillLimits.skillBytes - read
+      if (left <= 0) throw skillInvalid('too_large')
+      const bytes = await reader
+        .file(ref, commit, file.path, Math.min(accountSkillLimits.fileBytes, left))
+        .catch((error: unknown) => {
+          // Past what is left: the skill, not the source, is too large.
+          if (
+            isDomainError(error) &&
+            error.code === 'SKILL_SOURCE_UNAVAILABLE' &&
+            left < accountSkillLimits.fileBytes
+          )
+            throw skillInvalid('too_large')
+          throw error
+        })
+      read += bytes.byteLength
       files.push({ path, bytes, executable: skillFileExecutable(path, file.mode === '100755') })
     }
     const name = folder ? folderName(folder) : undefined
