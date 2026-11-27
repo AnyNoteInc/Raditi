@@ -251,6 +251,8 @@ export const taskProviders: Provider[] = [
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
         values: credentials,
+        // The cards of what a recovered turn proposed for VK (docs/plan/99-vk-community.md).
+        vk: new VkChanges({ db: prisma, logger: new Logger('VkChanges') }),
         // The card of a commit recovery published (docs/plan/84-projects.md, ПР12).
         repositories: workspace
           ? {

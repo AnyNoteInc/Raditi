@@ -33,7 +33,7 @@
     "verify:browser-task": "exec node infra/dev/browser-task-verify/verify-browser-task.mjs",
     "verify:pages": "exec node apps/preview/scripts/verify-pages.mjs",
     "verify:projects": "exec node infra/dev/projects-verify/verify-projects.mjs",
-    "verify:vk": "pnpm --filter core --filter mcp build && exec node infra/dev/vk-verify/verify-vk.mjs",
+    "verify:vk": "pnpm db:generate && pnpm --filter core --filter mcp build && exec node infra/dev/vk-verify/verify-vk.mjs",
     "verify:llm-gateway": "pnpm --filter core verify:llm-gateway",
     "verify:llm-app": "node infra/app/verify-llm-app.mjs",
     "verify:llm-firewall": "node infra/app/verify-llm-firewall.mjs",

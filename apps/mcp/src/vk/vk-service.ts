@@ -164,7 +164,14 @@ export class McpVkService {
       const since = this.#now().getTime() - days * DAY_MS
       const posts: VkPost[] = []
       // Newest first: read until a post older than the period, past the pinned one at the top.
-      for (let offset = 0; offset < vkLimits.statsPosts; offset += STATS_PAGE) {
+      // Partial: the scan stopped at its cap while the wall still had posts of the period to read —
+      // never inferred from how many of them were kept.
+      let partial = false
+      for (let offset = 0; ; offset += STATS_PAGE) {
+        if (offset >= vkLimits.statsPosts) {
+          partial = true
+          break
+        }
         const page = await this.#api.posts(key, community.groupId, { count: STATS_PAGE, offset })
         let older = false
         for (const post of page.items) {
@@ -187,7 +194,7 @@ export class McpVkService {
         ok: true,
         days,
         posts: posts.length,
-        ...(posts.length >= vkLimits.statsPosts ? { partial: true } : {}),
+        ...(partial ? { partial: true } : {}),
         totals,
         averages: {
           views: average(totals.views),

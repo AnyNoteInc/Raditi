@@ -35,7 +35,7 @@ import { MEMORY_OUTSIDE_EVENT, MemoryChanges } from './memory-changes.ts'
 import { PageChanges } from './page-changes.ts'
 import { CHARGE_LATER_EVENT, PassSettlement } from './pass-settlement.ts'
 import { ScheduleChanges } from './schedule-changes.ts'
-import { ORPHAN_PREPARING_MS, TaskSweep } from './task-sweep.ts'
+import { ORPHAN_PREPARING_MS, TaskSweep, type TaskSweepDependencies } from './task-sweep.ts'
 
 // The sweep reads every task of the database: only on a disposable one (RADITI_GATEWAY_DB_TESTS).
 const databaseUrl = process.env.DATABASE_URL
@@ -60,7 +60,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     await db.$disconnect()
   })
 
-  const sweep = (now = new Date()) =>
+  const sweep = (now = new Date(), extra: Partial<TaskSweepDependencies> = {}) =>
     new TaskSweep({
       db,
       settlement: new PassSettlement({ db, logger: quiet, now: () => now }),
@@ -70,6 +70,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       queue,
       logger: quiet,
       now: () => now,
+      ...extra,
     })
 
   async function dialog(
@@ -349,7 +350,11 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     ])
       await db.taskEvent.create({ data: { taskId, type: 'turn.lifecycle', payload } })
 
-    expect(await sweep().settleOrphans()).toBe(1)
+    // The cards of what it proposed for VK, as the live end shows them (plan 99, §3.3).
+    const vk = { apply: vi.fn(async () => {}), fail: vi.fn(async () => {}) }
+    expect(await sweep(new Date(), { vk }).settleOrphans()).toBe(1)
+    expect(vk.apply).toHaveBeenCalledWith(taskId, 1)
+    expect(vk.fail).not.toHaveBeenCalled()
     // A pass that changed nothing leaves the dialog open (owner's decision of 26.10.2026).
     expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
       'awaiting_user',

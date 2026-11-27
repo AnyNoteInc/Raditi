@@ -206,6 +206,30 @@ describe('McpVkService', () => {
     })
   })
 
+  it('says the stats are partial only when the scan stopped at its cap with more of the period', async () => {
+    const page = (offset: number, total: number, daysAgo: number) => ({
+      total,
+      items: Array.from({ length: 100 }, (_, index) =>
+        post(offset + index + 1, daysAgo, 1, index === 0 && offset === 0 ? { isPinned: true } : {}),
+      ),
+    })
+    // An old pinned post and 500 posts of the period: four pages read, the fifth left.
+    const many = service({
+      api: { posts: async (_token, _group, { offset }) => page(offset, 501, 1) },
+    })
+    await expect(many.vk.stats(scope, { communityId: open.id, days: 30 })).resolves.toMatchObject({
+      ok: true,
+      partial: true,
+    })
+    // Exactly 400 posts of the period and no more on the wall: complete.
+    const exact = service({
+      api: { posts: async (_token, _group, { offset }) => page(offset, 400, 1) },
+    })
+    const answer = await exact.vk.stats(scope, { communityId: open.id, days: 30 })
+    expect(answer).toMatchObject({ ok: true, posts: 400 })
+    expect(answer).not.toHaveProperty('partial')
+  })
+
   it('reserves a post and a reply for the card, and publishes nothing', async () => {
     const { vk, reserved } = service()
     await expect(
