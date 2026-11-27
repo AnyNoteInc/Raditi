@@ -1,0 +1,118 @@
+/* The pages of the root's errors — «Страница не найдена», «Что-то пошло не так» — on plain CSS:
+   the root's boundaries ship with every page, the landing too, and so must not bring MUI
+   (docs/plan/96-review-fixes.md, P33.2). The colours of the brand, in the light and the dark. */
+.page {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 64px 16px;
+  background: var(--raditi-paper);
+  color: var(--raditi-ink);
+  font-family: var(--font-golos, 'Golos Text'), 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+}
+
+.main {
+  max-width: 600px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.overline {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--raditi-graphite);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-unbounded, 'Unbounded'), Verdana, sans-serif;
+  font-size: clamp(1.75rem, 5vw, 2.5rem);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.text {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--raditi-graphite);
+}
+
+.small {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--raditi-graphite);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding-inline: 18px;
+  border-radius: var(--raditi-radius-pill);
+  font: inherit;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--raditi-accent-text);
+  outline-offset: 2px;
+}
+
+.contained {
+  border: 1px solid var(--raditi-accent-text);
+  background: var(--raditi-accent);
+  color: var(--raditi-on-accent);
+}
+
+.outlined {
+  border: 1px solid currentColor;
+  background: transparent;
+  color: var(--raditi-accent-text);
+}
+
+@media (hover: hover) {
+  .contained:hover {
+    background: var(--raditi-accent-hover);
+  }
+  .outlined:hover {
+    text-decoration: underline;
+  }
+}
+
+@media (min-width: 900px) {
+  .page {
+    padding-block: 112px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .page {
+    color-scheme: dark;
+    background: var(--raditi-ink);
+    color: var(--raditi-snow);
+  }
+  .overline,
+  .text,
+  .small {
+    color: var(--raditi-on-ink);
+  }
+  .outlined {
+    color: var(--raditi-accent-light);
+  }
+  .button:focus-visible {
+    outline-color: var(--raditi-accent-light);
+  }
+}

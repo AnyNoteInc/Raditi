@@ -4,14 +4,18 @@ import type { ReactNode } from 'react'
 import { PublicFooter } from '@/components/public/public-footer'
 import { PublicHeader } from '@/components/public/public-header'
 
+import { UiProviders } from '../../ui-providers'
+
 export default function TermsLayout({ children }: { children: ReactNode }) {
   return (
-    <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <PublicHeader />
-      <Box component="main" sx={{ flex: 1 }}>
-        {children}
+    <UiProviders>
+      <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <PublicHeader />
+        <Box component="main" sx={{ flex: 1 }}>
+          {children}
+        </Box>
+        <PublicFooter />
       </Box>
-      <PublicFooter />
-    </Box>
+    </UiProviders>
   )
 }

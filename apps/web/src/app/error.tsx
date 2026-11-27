@@ -1,11 +1,12 @@
 'use client'
 
-import Button from '@mui/material/Button'
-import Container from '@mui/material/Container'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
+import Link from 'next/link'
 import { useEffect } from 'react'
 
+import styles from './status-page.module.css'
+
+// On plain CSS: the root's boundary ships with every page, the landing too
+// (docs/plan/96-review-fixes.md, P33.2).
 export default function RootError({
   error,
   reset,
@@ -18,31 +19,25 @@ export default function RootError({
   }, [error])
 
   return (
-    <Container component="main" maxWidth="sm" sx={{ py: { xs: 8, md: 14 } }}>
-      <Stack spacing={2.5} sx={{ alignItems: 'flex-start' }}>
-        <Typography variant="overline" color="text.secondary">
-          Ошибка
-        </Typography>
-        <Typography component="h1" variant="h3">
-          Что-то пошло не так
-        </Typography>
-        <Typography color="text.secondary">
+    <div className={styles.page}>
+      <main className={styles.main}>
+        <p className={styles.overline}>Ошибка</p>
+        <h1 className={styles.title}>Что-то пошло не так</h1>
+        <p className={styles.text}>
           Мы уже разбираемся. Попробуйте обновить страницу немного позже.
-        </Typography>
+        </p>
         {error.digest ? (
-          <Typography variant="body2" color="text.secondary">
-            Код ошибки для поддержки: {error.digest}
-          </Typography>
+          <p className={styles.small}>Код ошибки для поддержки: {error.digest}</p>
         ) : null}
-        <Stack direction="row" spacing={1.5}>
-          <Button onClick={reset} variant="contained">
+        <div className={styles.actions}>
+          <button type="button" onClick={reset} className={`${styles.button} ${styles.contained}`}>
             Попробовать ещё раз
-          </Button>
-          <Button href="/" variant="outlined">
+          </button>
+          <Link href="/" className={`${styles.button} ${styles.outlined}`}>
             На главную
-          </Button>
-        </Stack>
-      </Stack>
-    </Container>
+          </Link>
+        </div>
+      </main>
+    </div>
   )
 }

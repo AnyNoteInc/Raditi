@@ -7,9 +7,19 @@ import { ServiceUnavailable } from '@/components/layout/service-unavailable'
 import { requireSession, UNAVAILABLE } from '@/lib/access'
 import { TRPCReactProvider } from '@/trpc/client'
 
+import { UiProviders } from '../ui-providers'
+
 export const metadata: Metadata = { robots: { index: false } }
 
-export default async function OnboardingLayout({ children }: { children: ReactNode }) {
+export default function OnboardingLayout({ children }: { children: ReactNode }) {
+  return (
+    <UiProviders>
+      <Onboarding>{children}</Onboarding>
+    </UiProviders>
+  )
+}
+
+async function Onboarding({ children }: { children: ReactNode }) {
   const session = await requireSession()
   if (session === UNAVAILABLE) return <ServiceUnavailable />
 

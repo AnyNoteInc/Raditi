@@ -31,6 +31,7 @@ import Link from 'next/link'
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -41,23 +42,22 @@ import {
 import { AppIcon } from '@/components/application/app-icon'
 import { PanelToggle } from '@/components/application/cabinet-panel'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
-import { MoveToProjectDialog, useMoveToProject } from '@/components/projects/move-to-project'
+import { useMoveToProject } from '@/components/projects/use-move-to-project'
 import { moveText, projectHref } from '@/components/projects/project-texts'
 import { useArtifactMentions } from '@/components/artifacts/use-artifact-mentions'
 import { useContextMentions } from '@/components/projects/use-context-mentions'
-import { ScheduleDialog, type ScheduleDialogOpening } from '@/components/scheduled/schedule-dialog'
+import type { ScheduleDialogOpening } from '@/components/scheduled/schedule-dialog'
 import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
 import type { SentFile } from './attachment-chips'
-import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
 import { callErrorCode, callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
 import { useChatChoiceMadeHere, useChatDetails, useChatThinking } from './chat-details'
 import { rememberEffort } from './chat-effort'
-import type { ChatScheduleLabel, ScheduledTaskItem } from './chat-types'
+import type { ChatInfo, ChatScheduleLabel, DialogFeed, ScheduledTaskItem } from './chat-types'
 import {
   cancelText,
   clientCommandText,
@@ -71,7 +71,13 @@ import {
 } from './chat-texts'
 import { useClientCommands } from './client-commands'
 import { Composer, offScreen } from './composer'
-import { DialogMenuButton, dialogListKey, RemoveDialogConfirm, RenameField } from './dialog-actions'
+import {
+  DialogMenuButton,
+  dialogChatKey,
+  dialogListKey,
+  RemoveDialogConfirm,
+  RenameField,
+} from './dialog-actions'
 import { DialogNotFound } from './dialog-not-found'
 import {
   artifactTool,
@@ -121,11 +127,19 @@ import { useBrowserLaunch } from './use-browser-launch'
 import { useChatTodo } from './use-chat-todo'
 import { useDocumentArrivals } from './use-document-arrivals'
 import { agentDocumentIdsOf, useAgentDocumentArrivals } from './agent-document'
-import { DocumentsPane, type DocumentTarget } from './documents-pane'
-import { ArtifactPane } from '@/components/artifacts/artifact-pane'
+import type { DocumentTarget } from './document-target'
 import { DictationAvailable } from '@/components/chat/dictation-button'
 import { artifactKindIcon } from '@/components/artifacts/artifact-kind-icon'
-import { PublishTargetDialog, usePagePublish, type PublishTarget } from './page-publish'
+import { usePagePublish } from './page-publish'
+import type { PublishTarget } from './publish-target-dialog'
+import {
+  ArtifactPane,
+  BrowserPane,
+  DocumentsPane,
+  MoveToProjectDialog,
+  PublishTargetDialog,
+  ScheduleDialog,
+} from './lazy-tools'
 import { useBrowserStream } from './use-browser-stream'
 import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
@@ -391,6 +405,8 @@ export function DialogView({
   title,
   browserStreamUrl = null,
   speech = false,
+  initialChat = null,
+  initialFeed = null,
 }: {
   /**
    * The scheduled task the chat is a run of, from `task.get` (docs/plan/82-scheduled-tasks.md,
@@ -411,10 +427,24 @@ export function DialogView({
   browserStreamUrl?: string | null
   /** Dictation is set up here (docs/plan/75-chat-input-output.md, ВВ16). */
   speech?: boolean
+  /**
+   * The chat as the page read it (`task.get`): the folders of the list take its project from it
+   * and do not ask again (docs/plan/96-review-fixes.md, P33.4).
+   */
+  initialChat?: ChatInfo | null
+  /** The first page of the feed the page read with the chat (P33.4); null — read here. */
+  initialFeed?: DialogFeed | null
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
-  const { state, refresh } = useDialogFeed(taskId)
+  // Put into the cache before anything here mounts, as a HydrationBoundary does: the list's
+  // folders find the chat there and do not read it again.
+  useState(() => {
+    if (initialChat === null) return
+    const key = dialogChatKey(taskId)
+    if (queryClient.getQueryData(key) === undefined) queryClient.setQueryData(key, initialChat)
+  })
+  const { state, refresh } = useDialogFeed(taskId, initialFeed)
   const head = state.head
   const rows = state.rows
   // The client's earlier requests of this chat: the arrows of the field bring them back (ВВ23).
@@ -431,6 +461,9 @@ export function DialogView({
   const [note, setNote] = useState('')
   /** The window of a scheduled task the cards of the feed open (Зп35); null — closed. */
   const [scheduleOpening, setScheduleOpening] = useState<ScheduleDialogOpening | null>(null)
+  // Its code is loaded at the first opening, and the window stays mounted after it to close softly.
+  const [scheduleOpened, setScheduleOpened] = useState(false)
+  if (scheduleOpening !== null && !scheduleOpened) setScheduleOpened(true)
   const effortMenu = useRef<EffortMenuHandle>(null)
   const { details } = useChatDetails()
   const { thinking } = useChatThinking()
@@ -495,7 +528,7 @@ export function DialogView({
     head?.task.status === 'queued' ||
     head?.task.status === 'preparing' ||
     head?.task.status === 'running'
-  const chatQueue = useChatQueue(taskId, agentWorks)
+  const chatQueue = useChatQueue(taskId, agentWorks, rows.at(-1)?.id)
   // The tab says the chat waits while it is hidden (docs/plan/75, ВВ11).
   useWaitingTitle(head?.task.status ?? null)
   const queued = chatQueue.data?.items ?? []
@@ -1158,46 +1191,89 @@ export function DialogView({
     }
   }
 
-  const actions: FeedActions = {
-    taskId,
-    onStop: () => runCommand('cancel'),
-    onOpenDocument: (fileId) => {
-      const document = documentOfFile(chatDocuments, fileId)
-      if (document === null) return
-      openDocument(document.name, fileId)
-      openTool(fileTool(document.name), { by: 'menu' })
-    },
-    onOpenAgentDocument: (docId) => openTool(artifactTool(docId), { by: 'menu' }),
-    shownAgentDocument: activeKind?.kind === 'artifact' ? activeKind.id : null,
-    onContinue: () => void press('continue', proceed.mutateAsync),
-    onTakeControl: takeControl,
-    onResumeAgent: resumeWork,
-    // «Изменить»: the words are changed in place, and only «Отправить» takes the turn back (ВВ25).
-    onEditLast: sendEdited,
-    // The client holds the control of a browser that is there: a closed session holds nothing.
-    controlling: head?.browser?.controller === 'user' && browserLive,
-    browserLive,
-    busy,
-    stopping,
-    // The window of a scheduled task over the chat (docs/plan/82-scheduled-tasks.md, Зп35).
-    ...(userId !== null
-      ? {
-          onEditSchedule: (task: ScheduledTaskItem) =>
-            setScheduleOpening({ kind: 'edit', schedule: task }),
-          onNewSchedule: () => setScheduleOpening({ kind: 'new' }),
+  // What the rows may ask for, as one object that stays the same while nothing it says changed:
+  // the rows are drawn again only when they or it change (docs/plan/96, P33.3). The presses call
+  // the dialog's newest handlers through `handlers`, which every render brings up to date.
+  const handlers = useRef({
+    runCommand,
+    openDocument,
+    openTool,
+    press,
+    sendEdited,
+    takeControl,
+    resumeWork,
+    chatDocuments,
+    proceed: proceed.mutateAsync,
+  })
+  useLayoutEffect(() => {
+    handlers.current = {
+      runCommand,
+      openDocument,
+      openTool,
+      press,
+      sendEdited,
+      takeControl,
+      resumeWork,
+      chatDocuments,
+      proceed: proceed.mutateAsync,
+    }
+  })
+  const controlling = head?.browser?.controller === 'user' && browserLive
+  const shownAgentDocument = activeKind?.kind === 'artifact' ? activeKind.id : null
+  const schedulable = userId !== null
+  const actions = useMemo<FeedActions>(
+    () => ({
+      taskId,
+      onStop: () => handlers.current.runCommand('cancel'),
+      onOpenDocument: (fileId) => {
+        const { chatDocuments: documents, openDocument: open, openTool: show } = handlers.current
+        const document = documentOfFile(documents, fileId)
+        if (document === null) return
+        open(document.name, fileId)
+        show(fileTool(document.name), { by: 'menu' })
+      },
+      onOpenAgentDocument: (docId) =>
+        handlers.current.openTool(artifactTool(docId), { by: 'menu' }),
+      shownAgentDocument,
+      onContinue: () => void handlers.current.press('continue', handlers.current.proceed),
+      onTakeControl: () => handlers.current.takeControl(),
+      onResumeAgent: () => handlers.current.resumeWork(),
+      // «Изменить»: the words are changed in place, and only «Отправить» takes the turn back (ВВ25).
+      onEditLast: (text) => handlers.current.sendEdited(text),
+      // The client holds the control of a browser that is there: a closed session holds nothing.
+      controlling,
+      browserLive,
+      busy,
+      stopping,
+      // The window of a scheduled task over the chat (docs/plan/82-scheduled-tasks.md, Зп35).
+      ...(schedulable
+        ? {
+            onEditSchedule: (task: ScheduledTaskItem) =>
+              setScheduleOpening({ kind: 'edit', schedule: task }),
+            onNewSchedule: () => setScheduleOpening({ kind: 'new' }),
+          }
+        : {}),
+    }),
+    [taskId, shownAgentDocument, controlling, browserLive, busy, stopping, schedulable],
+  )
+  const sentFilesData = sentFiles.data
+  const sentFilesOf = useCallback(
+    (ids: readonly string[]): SentFile[] =>
+      ids.map((id) => {
+        const known = sentFilesData?.find((file) => file.id === id)
+        return {
+          id,
+          name: known?.name ?? null,
+          size: known?.size ?? null,
+          kind: known?.kind ?? 'document',
         }
-      : {}),
-  }
-  const sentFilesOf = (ids: readonly string[]): SentFile[] =>
-    ids.map((id) => {
-      const known = sentFiles.data?.find((file) => file.id === id)
-      return {
-        id,
-        name: known?.name ?? null,
-        size: known?.size ?? null,
-        kind: known?.kind ?? 'document',
-      }
-    })
+      }),
+    [sentFilesData],
+  )
+  const activityOf = useCallback(
+    (turn: number) => <TurnActivity taskId={taskId} turn={turn} live={false} />,
+    [taskId],
+  )
 
   if (state.missing) return <DialogNotFound />
 
@@ -1595,7 +1671,7 @@ export function DialogView({
               actions={actions}
               filesOf={sentFilesOf}
               details={choiceMadeHere && (details || thinking)}
-              activityOf={(turn) => <TurnActivity taskId={taskId} turn={turn} live={false} />}
+              activityOf={activityOf}
             />
           )}
           {head ? (
@@ -1710,7 +1786,7 @@ export function DialogView({
         iconOf={iconOf}
       />
 
-      {userId !== null ? (
+      {userId !== null && scheduleOpened ? (
         <ScheduleDialog
           opening={scheduleOpening}
           userId={userId}

@@ -1,12 +1,11 @@
 'use client'
 
+import Box from '@mui/material/Box'
+import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
 import { artifactKindSpecOf } from '@repo/domain/artifacts'
+import dynamic from 'next/dynamic'
 
-import { ArtifactDocument } from './artifact-document'
-import { ArtifactCanvas } from './canvas/artifact-canvas'
-import { ArtifactImages } from './images/artifact-images'
-import { ArtifactSlides } from './slides/artifact-slides'
 import type { ArtifactBodyProps } from './artifact-body-props'
 
 export type { ArtifactBodyProps } from './artifact-body-props'
@@ -17,7 +16,37 @@ export type { ArtifactBodyProps } from './artifact-body-props'
 
 export const bodyTexts = Object.freeze({
   notShown: 'Этот вид пока не открывается.',
+  loading: 'Загружаем…',
 })
+
+/** The shape of a body while the code of its kind loads. */
+function BodyLoading() {
+  return (
+    <Box role="status" aria-label={bodyTexts.loading} sx={{ display: 'grid', gap: 1.5 }}>
+      <Skeleton variant="rounded" height={32} sx={{ borderRadius: '10px', width: '60%' }} />
+      <Skeleton variant="rounded" height={280} sx={{ borderRadius: '14px' }} />
+    </Box>
+  )
+}
+
+// Each kind in its own chunk (docs/plan/96-review-fixes.md, P33.1): a document brings its editor,
+// a canvas its frames, and an artifact opens with the code of its kind alone. Of the client only.
+const ArtifactDocument = dynamic(
+  () => import('./artifact-document').then((module) => module.ArtifactDocument),
+  { ssr: false, loading: BodyLoading },
+)
+const ArtifactCanvas = dynamic(
+  () => import('./canvas/artifact-canvas').then((module) => module.ArtifactCanvas),
+  { ssr: false, loading: BodyLoading },
+)
+const ArtifactImages = dynamic(
+  () => import('./images/artifact-images').then((module) => module.ArtifactImages),
+  { ssr: false, loading: BodyLoading },
+)
+const ArtifactSlides = dynamic(
+  () => import('./slides/artifact-slides').then((module) => module.ArtifactSlides),
+  { ssr: false, loading: BodyLoading },
+)
 
 export function ArtifactBody(props: ArtifactBodyProps & { onAccessLost: () => void }) {
   // «Презентация» is framed as the canvas is (its frames, thumbnails, `/v/`), shown as slides (88.25).

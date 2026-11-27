@@ -3,7 +3,11 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { PublishTargetDialog, publishablePages, type PublishablePage } from './page-publish'
+import {
+  PublishTargetDialog,
+  publishablePages,
+  type PublishablePage,
+} from './publish-target-dialog'
 
 // Where a file of the chat goes (docs/plan/73-pages-sites.md, Дер9): a new page or the next
 // version of a live page of the chat's workspace (the server's `pages.targets`), whatever chat

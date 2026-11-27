@@ -7,7 +7,7 @@ import { plain } from '@/components/billing/testing'
 
 import type { DialogListItem, DialogListPage } from './chat-types'
 import { listRepoHint } from './chat-texts'
-import { ArchiveButton, DialogList, ProjectChats } from './dialog-list'
+import { ArchiveButton, DialogList, ProjectChats, withFirstPage } from './dialog-list'
 import { SearchDialog } from './search-dialog'
 import { declared } from './testing'
 
@@ -753,5 +753,41 @@ describe('«По проектам» (owner’s request of 19.11.2026)', () => {
     expect(
       await screen.findByText('Чатов пока нет. Напишите, что нужно сделать — чат появится здесь.'),
     ).toBeTruthy()
+  })
+})
+
+describe('the first page read anew (P33.5)', () => {
+  const page = (ids: string[], nextCursor: string | null = null): DialogListPage => ({
+    pinned: [],
+    items: ids.map((id) => dialog(id)),
+    nextCursor,
+  })
+
+  it('takes the place of the first page of a list of one page', () => {
+    const first = page(['1', '2'])
+    expect(withFirstPage({ pages: [page(['1'])], pageParams: [null] }, first)).toEqual({
+      pages: [first],
+      pageParams: [null],
+    })
+  })
+
+  it('keeps the pages after it while the same chats stand on the first one', () => {
+    const second = page(['3'])
+    const first = page(['2', '1'], 'c1')
+    const merged = withFirstPage(
+      { pages: [page(['1', '2'], 'c1'), second], pageParams: [null, 'c1'] },
+      first,
+    )
+    expect(merged?.pages[0]).toBe(first)
+    expect(merged?.pages[1]).toBe(second)
+  })
+
+  it('asks for the whole list again when other chats stand on the first page now', () => {
+    expect(
+      withFirstPage(
+        { pages: [page(['1', '2'], 'c1'), page(['3'])], pageParams: [null, 'c1'] },
+        page(['4', '1'], 'c1'),
+      ),
+    ).toBeUndefined()
   })
 })

@@ -1,6 +1,5 @@
 'use client'
 
-import type { FeedReleaseOutcome, FeedUpdateOutcome } from '@repo/domain'
 import { chatDocumentsOf } from '@repo/domain/tasks/chat-documents'
 import { feedFailureTextOf, usageLimitText } from '@repo/domain/tasks/client-feed-failures'
 import {
@@ -9,8 +8,6 @@ import {
   feedBrowserQuestionTextOf,
   feedBrowserQuestionTitle,
   feedCancelledSentence,
-  feedCandidateText,
-  feedCandidateVersionText,
   feedCardTitle,
   feedCeilingButtons,
   feedCeilingText,
@@ -19,7 +16,6 @@ import {
   feedRedoText,
   feedRewindText,
   feedCreditsSentence,
-  feedDecisionText,
   feedDoneSiteText,
   feedEndedSiteText,
   feedFailureKeptText,
@@ -33,26 +29,12 @@ import {
   feedPageLeftText,
   feedFilesChangedText,
   feedLiveText,
-  feedMediaAddedText,
   feedObjectKindLabel,
   feedObjectStatusLabel,
   feedObjectText,
   FEED_QUEUE_TIMEOUT_CLOSING,
   feedQueuedText,
-  feedRecordsChangedText,
-  feedReleaseKeptText,
-  feedReleaseReasonText,
-  feedReleaseText,
-  feedReleaseTitle,
   feedRowText,
-  feedUndoConfirmedText,
-  feedUndoKeptText,
-  feedUndoReasonText,
-  feedUndoText,
-  feedUndoTitle,
-  feedUpdateText,
-  feedUpdateTitle,
-  feedVersionBumpLabel,
   feedWorkedText,
   feedDurationText,
   taskStatusLabel,
@@ -64,6 +46,7 @@ import Typography from '@mui/material/Typography'
 import { BrandProgress } from '@repo/ui/brand-progress'
 import Link from 'next/link'
 import {
+  memo,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -91,25 +74,21 @@ import {
 } from './chat-texts'
 import type { FeedRow, ScheduledTaskItem } from './chat-types'
 import { offScreen } from './composer'
-import {
-  feedEntries,
-  type CandidateRow,
-  type FeedEntry,
-  type QuestionRow,
-  type StepRow,
-} from './feed-model'
+import { feedEntries, type FeedEntry, type QuestionRow, type StepRow } from './feed-model'
 import { CopyButton } from './copy-button'
 import { FeedDocuments } from './feed-document'
 import { workingPhraseOf } from './working-phrases'
 import { FeedArtifact } from './feed-artifact'
 import { DocRevisions, docRevisionsOf, FeedDoc } from './feed-doc'
 import { FeedFile } from './feed-file'
+import { legacyRowText, type LegacyRow } from './feed-legacy'
 import { FeedMemoryChange } from './feed-memory'
 import { FeedRepoAction, FeedRepoChanges, FeedRepoProposal } from './feed-repo'
 import { FeedPage, FeedPageChange, FeedPageWarnings } from './feed-page'
 import { FeedScheduleChange, FeedScheduleLeft } from './feed-schedule'
 import { FeedScreenshot } from './feed-screenshot'
 import type { FeedHeadState } from './feed-state'
+import { useMinuteNow } from './use-minute-now'
 
 // The rows of a dialog and its live block (feed design, «Экраны, которых нет на макетах»; plan
 // 53, R9). The client's words stand on the right, everything else on the left. Every text is
@@ -864,50 +843,37 @@ function SiteObjects({ objects, heading }: { objects: readonly ShownObject[]; he
 }
 
 /**
- * The changes of a chat of a project that is no more (docs/plan/83-remove-projects.md): a row of
- * its history, nothing to do with it.
+ * A row of the sites of before (docs/plan/83-remove-projects.md): a compact title and its words —
+ * history that still reads, with nothing to press (P33.7).
  */
-function CandidateCard({ row }: { row: CandidateRow }) {
-  const changed = row.files.added + row.files.modified + row.files.deleted
+function LegacyRowView({ row }: { row: LegacyRow }) {
+  const { title, text, failed } = legacyRowText(row)
+  if (title === null) return <Press text={text} icon="back" />
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-      <Card icon="eye" title={feedCandidateText.title} tone="text.primary">
-        <Paragraph>
-          {nbsp(feedCandidateVersionText(row.version))}
-          {row.bump ? ` (${feedVersionBumpLabel[row.bump].toLocaleLowerCase('ru')})` : ''}.
-        </Paragraph>
-        <Box
-          component="ul"
-          sx={{ m: 0, pl: 2.5, color: 'text.secondary', display: 'grid', gap: 0.25 }}
-        >
-          {changed > 0 ? <li>{nbsp(feedFilesChangedText(changed))}</li> : null}
-          {row.media > 0 ? <li>{nbsp(feedMediaAddedText(row.media))}</li> : null}
-          {row.records > 0 ? <li>{nbsp(feedRecordsChangedText(row.records))}</li> : null}
-        </Box>
-      </Card>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
+      <Typography
+        component="h2"
+        sx={{
+          fontSize: 14,
+          fontWeight: 600,
+          lineHeight: 1.5,
+          color: failed ? 'error.main' : 'text.secondary',
+        }}
+      >
+        {title}
+      </Typography>
+      <Typography variant="body2" color="text.secondary">
+        {nbsp(text)}
+      </Typography>
     </Box>
   )
 }
 
-const releaseIcon: Readonly<Record<FeedReleaseOutcome, AppIconName>> = {
-  installed: 'check',
-  rolled_back: 'changes',
-  failed: 'warning',
-  unknown: 'clock',
-  refused: 'warning',
-}
-
-const updateIcon: Readonly<Record<FeedUpdateOutcome, AppIconName>> = {
-  emptied: 'check',
-  conflict: 'warning',
-  current: 'check',
-  withdrawn: 'clock',
-  failed: 'warning',
-  rewind_failed: 'warning',
-  redo_failed: 'warning',
-}
-
-function RowView({
+/**
+ * One row of the feed. Drawn again only when what it shows changed: the dialog reads its feed
+ * every few seconds, and a long chat would draw every row each time (P33.3).
+ */
+const RowView = memo(function RowView({
   row,
   now,
   openQuestionId,
@@ -1032,78 +998,13 @@ function RowView({
           <SiteObjects objects={row.objects ?? []} heading={feedObjectText.ended} />
         </Card>
       )
+    // The rows of the sites of before (docs/plan/83): history, one compact row each (P33.7).
     case 'feed.candidate':
-      return <CandidateCard row={row} />
     case 'feed.decision':
-      return <Press text={feedDecisionText(row.version)} icon="check" />
     case 'feed.release':
-      return (
-        <Card
-          icon={releaseIcon[row.outcome]}
-          title={feedReleaseTitle[row.outcome]}
-          tone={
-            row.outcome === 'installed'
-              ? 'text.primary'
-              : row.outcome === 'unknown'
-                ? 'primary.main'
-                : 'error.main'
-          }
-        >
-          <Sentences
-            parts={[
-              feedReleaseText(row.outcome, row.version),
-              row.reason === null ? null : feedReleaseReasonText[row.reason],
-              ...feedReleaseKeptText(row.kept),
-              feedCreditsSentence(row.credits),
-            ]}
-          />
-        </Card>
-      )
     case 'feed.undo':
-      if (row.stage === 'confirmed')
-        return <Press text={feedUndoConfirmedText(row.undoneVersion)} icon="back" />
-      return (
-        <Card
-          icon={releaseIcon[row.stage]}
-          title={feedUndoTitle[row.stage]}
-          tone={
-            row.stage === 'installed'
-              ? 'text.primary'
-              : row.stage === 'unknown'
-                ? 'primary.main'
-                : 'error.main'
-          }
-        >
-          <Sentences
-            parts={[
-              feedUndoText(row.stage, {
-                undone: row.undoneVersion,
-                version: row.version,
-                returnsTo: row.returnsTo,
-              }),
-              row.reason === null ? null : feedUndoReasonText(row.reason),
-              row.stage === 'installed' ? feedUndoKeptText(row.records.kept) : null,
-            ]}
-          />
-        </Card>
-      )
     case 'feed.update':
-      return (
-        <Card
-          icon={updateIcon[row.outcome]}
-          title={feedUpdateTitle[row.outcome]}
-          tone={
-            row.outcome === 'conflict' ||
-            row.outcome === 'failed' ||
-            row.outcome === 'rewind_failed' ||
-            row.outcome === 'redo_failed'
-              ? 'error.main'
-              : 'text.primary'
-          }
-        >
-          <Sentences parts={[feedUpdateText(row.outcome, row.conflicts)]} />
-        </Card>
-      )
+      return <LegacyRowView row={row} />
     case 'feed.screenshot':
       return (
         <FeedScreenshot
@@ -1201,10 +1102,10 @@ function RowView({
     case 'skipped':
       return null
   }
-}
+})
 
-/** The rows of a dialog, top to bottom. */
-export function FeedList({
+/** The rows of a dialog, top to bottom: drawn again only when they or the head changed (P33.3). */
+export const FeedList = memo(function FeedList({
   head,
   rows,
   openQuestionId,
@@ -1229,8 +1130,9 @@ export function FeedList({
   /** «Ход работы» of a finished turn (owner's decision of 26.10.2026). */
   activityOf?: (turn: number) => ReactNode
 }) {
-  const now = new Date()
-  const entries: FeedEntry[] = feedEntries(rows, head)
+  // One time for every row, which turns with the minute (P33.3).
+  const now = useMinuteNow()
+  const entries: FeedEntry[] = useMemo(() => feedEntries(rows, head), [rows, head])
   const documents = useMemo(() => chatDocumentsOf(rows), [rows])
   const commands = head?.commands ?? []
   // «Изменить» stands under the client's last message while `/undo` can take its turn back.
@@ -1242,11 +1144,12 @@ export function FeedList({
   // animation plays once, when its element mounts: later renders do not start it again.
   const [initial] = useState(() => new Set(entries.map((entry) => entry.key)))
   // The documents of the chat read themselves again when a change of them comes (Ст22).
-  const revisions = docRevisionsOf(
-    rows as readonly { type: string; docId?: string; revision?: number }[],
+  const revisions = useMemo(
+    () => docRevisionsOf(rows as readonly { type: string; docId?: string; revision?: number }[]),
+    [rows],
   )
   // «Включить в этом браузере» once in the chat, on its newest card of a task that stays (Зп36).
-  const pushRowId = schedulePushRowId(rows)
+  const pushRowId = useMemo(() => schedulePushRowId(rows), [rows])
   return (
     <DocRevisions.Provider value={revisions}>
       <Box
@@ -1331,7 +1234,7 @@ export function FeedList({
       </Box>
     </DocRevisions.Provider>
   )
-}
+})
 
 /**
  * The newest card of a scheduled task the agent created or changed — not deleted — in the feed:

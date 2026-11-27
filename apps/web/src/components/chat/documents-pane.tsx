@@ -38,6 +38,7 @@ import {
   AgentDocumentView,
 } from './agent-document'
 import { documentText } from './chat-texts'
+import { documentWindowHref, type DocumentTarget } from './document-target'
 import { taskFileHref } from './feed-file'
 
 // «Документы» beside the chat (docs/plan/67-agent-documents.md, Д4–Д7): the pages and the text
@@ -47,24 +48,11 @@ import { taskFileHref } from './feed-file'
 // page is framed from the domain of pages, in an opaque origin; a text document is drawn here by
 // `DocumentMarkdown`.
 
-/** A document asked for from outside the tab: an arrival, «Открыть» of a card, a new tab. */
-export interface DocumentTarget {
-  name: string
-  /** A version; null — the latest. */
-  fileId: string | null
-  /** A new value opens it again, the same document too. */
-  seq: number
-}
-
 interface Entry {
   name: string
   fileId: string | null
   anchor: string | null
 }
-
-/** Where a document opens in a tab of its own: the window of the cabinet (Д4). */
-export const documentWindowHref = (taskId: string, fileId: string): string =>
-  `/chats/${encodeURIComponent(taskId)}/documents/${encodeURIComponent(fileId)}`
 
 const imageHref = (taskId: string, fileId: string) => `${taskFileHref(taskId, fileId)}/image`
 

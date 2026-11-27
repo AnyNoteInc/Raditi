@@ -34,10 +34,11 @@ export function useArtifact(artifactId: string, { block = null }: { block?: stri
     refetchIntervalInBackground: false,
   })
   const readable = read.isSuccess && read.data !== null
+  // Read once and on the signals; the mark of presence below answers with who is here every 15 s
+  // and puts it in this query — a poll of its own would only read the same twice (P33.5).
   const presence = useQuery({
     ...trpc.artifact.presence.queryOptions({ artifactId }),
     enabled: readable,
-    refetchInterval: artifactSignalLimits.presenceMarkMs,
   })
   const here = useMutation(trpc.artifact.here.mutationOptions())
   const leave = useMutation(trpc.artifact.leave.mutationOptions())

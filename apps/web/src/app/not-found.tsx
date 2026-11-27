@@ -1,28 +1,24 @@
-import Button from '@mui/material/Button'
-import Container from '@mui/material/Container'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
 import type { Metadata } from 'next'
+import Link from 'next/link'
+
+import styles from './status-page.module.css'
 
 export const metadata: Metadata = { title: 'Страница не найдена' }
 
+// On plain CSS: the root's boundary ships with every page (docs/plan/96-review-fixes.md, P33.2).
 export default function NotFound() {
   return (
-    <Container component="main" maxWidth="sm" sx={{ py: { xs: 8, md: 14 } }}>
-      <Stack spacing={2.5} sx={{ alignItems: 'flex-start' }}>
-        <Typography variant="overline" color="text.secondary">
-          Ошибка 404
-        </Typography>
-        <Typography component="h1" variant="h3">
-          Страница не найдена
-        </Typography>
-        <Typography color="text.secondary">
+    <div className={styles.page}>
+      <main className={styles.main}>
+        <p className={styles.overline}>Ошибка 404</p>
+        <h1 className={styles.title}>Страница не найдена</h1>
+        <p className={styles.text}>
           Возможно, в адресе опечатка или страницу перенесли. Начните с главной.
-        </Typography>
-        <Button href="/" variant="contained">
+        </p>
+        <Link href="/" className={`${styles.button} ${styles.contained}`}>
           На главную
-        </Button>
-      </Stack>
-    </Container>
+        </Link>
+      </main>
+    </div>
   )
 }
