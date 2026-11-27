@@ -2,19 +2,8 @@
 
 import Box from '@mui/material/Box'
 import MuiLink from '@mui/material/Link'
-import { isValidElement, type ReactNode } from 'react'
-import bash from 'highlight.js/lib/languages/bash'
-import css from 'highlight.js/lib/languages/css'
-import javascript from 'highlight.js/lib/languages/javascript'
-import json from 'highlight.js/lib/languages/json'
-import php from 'highlight.js/lib/languages/php'
-import python from 'highlight.js/lib/languages/python'
-import sql from 'highlight.js/lib/languages/sql'
-import typescript from 'highlight.js/lib/languages/typescript'
-import xml from 'highlight.js/lib/languages/xml'
-import yaml from 'highlight.js/lib/languages/yaml'
-import Markdown, { type Components } from 'react-markdown'
-import rehypeHighlight from 'rehype-highlight'
+import { isValidElement, memo, useEffect, useMemo, useState, type ReactNode } from 'react'
+import Markdown, { type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 // The agent's words as the chat of ChatGPT or Claude draws them (owner's request of 26.10.2026):
@@ -160,33 +149,45 @@ export function fenceTextTrees(text: string): string {
   return out.join('\n')
 }
 
-/**
- * The languages a block of code is coloured in (docs/plan/76-agent-instructions.md, И5): what a site
- * of a small business is made of, and the shell. A block names its language (```php); a block of
- * no name or of another language stays plain — nothing is guessed.
- */
-const LANGUAGES = {
-  bash,
-  shell: bash,
-  sh: bash,
-  css,
-  javascript,
-  js: javascript,
-  json,
-  php,
-  python,
-  sql,
-  typescript,
-  ts: typescript,
-  html: xml,
-  xml,
-  yaml,
-  yml: yaml,
+type RehypePlugins = NonNullable<Options['rehypePlugins']>
+
+/** A block of code that names its language (```php): only such a block is coloured (И5). */
+const NAMED_FENCE = /^\s*(?:`{3,}|~{3,})[ \t]*[\w+#.-]+/m
+
+/** The text holds a block of code that may be coloured: the colours are worth loading. */
+export const hasNamedCode = (text: string): boolean => NAMED_FENCE.test(text)
+
+// The colours of code — highlight.js and its languages — come in a chunk of their own, loaded
+// only once an answer has a block of code (docs/plan/96-review-fixes.md, P33.6); until then the
+// block is drawn plain. One load for the page, shared by every answer.
+let highlightPlugins: RehypePlugins | null = null
+let highlightLoading: Promise<RehypePlugins> | null = null
+
+function loadHighlight(): Promise<RehypePlugins> {
+  highlightLoading ??= import('./agent-markdown-highlight').then((module) => {
+    highlightPlugins = [module.highlight]
+    return highlightPlugins
+  })
+  return highlightLoading
 }
-const highlight: [typeof rehypeHighlight, Parameters<typeof rehypeHighlight>[0]] = [
-  rehypeHighlight,
-  { languages: LANGUAGES, detect: false, plainText: ['text', 'txt', 'plain'] },
-]
+
+const NO_PLUGINS: RehypePlugins = []
+
+/** The rehype plugins of a text: the colours once loaded, and nothing for a text without code. */
+function useHighlight(needed: boolean): RehypePlugins {
+  const [plugins, setPlugins] = useState(highlightPlugins)
+  useEffect(() => {
+    if (!needed || plugins !== null) return
+    let live = true
+    void loadHighlight().then((loaded) => {
+      if (live) setPlugins(loaded)
+    })
+    return () => {
+      live = false
+    }
+  }, [needed, plugins])
+  return needed && plugins !== null ? plugins : NO_PLUGINS
+}
 
 /** The colours of the tokens: of the palette of the scheme, so both schemes keep their contrast. */
 const TOKENS = {
@@ -209,7 +210,13 @@ const TOKENS = {
   '& .hljs-deletion': { color: 'var(--mui-palette-error-main)' },
 } as const
 
-export function AgentMarkdown({ text }: { text: string }) {
+/**
+ * The agent's answer. Drawn again only when its words change (P33.3): the dialog is drawn again on
+ * every read of its feed, and parsing a long answer each time costs.
+ */
+export const AgentMarkdown = memo(function AgentMarkdown({ text }: { text: string }) {
+  const fenced = useMemo(() => fenceTextTrees(text), [text])
+  const rehypePlugins = useHighlight(hasNamedCode(fenced))
   return (
     <Box
       sx={{
@@ -256,13 +263,13 @@ export function AgentMarkdown({ text }: { text: string }) {
     >
       <Markdown
         remarkPlugins={[remarkGfm, remarkSoftBreaks]}
-        rehypePlugins={[highlight]}
+        rehypePlugins={rehypePlugins}
         components={components}
         urlTransform={linkUrl}
         skipHtml
       >
-        {fenceTextTrees(text)}
+        {fenced}
       </Markdown>
     </Box>
   )
-}
+})

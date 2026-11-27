@@ -25,6 +25,7 @@ import {
   LLM_KEY_PATTERN,
   turnKeyHash,
   GatewayRecordRejected,
+  lockNotAvailable,
   type GatewayFinish,
 } from '@repo/turn-keys'
 
@@ -50,6 +51,9 @@ const limits = Object.freeze({
   // never cut.
   upstreamIdleMs: 300_000,
   accountWaitMs: 20_000,
+  // The first and the longest pause between two admissions of a call waiting for a slot.
+  slotWaitMs: 250,
+  slotWaitMaxMs: 2_000,
   persistenceMs: 600_000,
   shutdownMs: 30_000,
   responseBytes: 64 * 1024 * 1024,
@@ -677,8 +681,10 @@ export class LlmGateway {
       requestBytes = body.byteLength
       // A call of the helper `look` names the model of the key's profile that sees images
       // (docs/plan/88-artifacts.md, Ар32): it goes on as that profile, pictures allowed.
+      // Only a body that names that model anywhere is parsed for it: an encoder writes a model
+      // id as it is, and every other call goes on without a second parse of its body.
       const vision = key.vision
-      if (vision !== null && requestedModel(body) === vision.model)
+      if (vision !== null && body.includes(vision.model) && requestedModel(body) === vision.model)
         key = {
           ...key,
           modelId: vision.modelId,
@@ -717,6 +723,15 @@ export class LlmGateway {
         return
       }
       const waitUntil = Date.now() + limits.accountWaitMs
+      // Each try of a busy account runs the whole locked admission again: the pause between
+      // them grows, so a long wait does not keep the account's lock busy for every waiter.
+      let waitMs: number = limits.slotWaitMs
+      const waitAgain = async () => {
+        await delay(Math.max(0, Math.min(waitMs, waitUntil - Date.now())), undefined, {
+          signal: controller.signal,
+        })
+        waitMs = Math.min(waitMs * 2, limits.slotWaitMaxMs)
+      }
       let probed = false
       // A backend without windows has no snapshot to refresh: only its account's pauses hold.
       let refreshed = !key.staleWindows || selected.backend.capacity === 'none'
@@ -775,17 +790,32 @@ export class LlmGateway {
           }
         }
         // Admission commits a reservation. Always observe its result before reacting to cancellation.
-        const admission = await this.options.store.admit({
-          keyHash,
-          source,
-          backendId: selected.backend.id,
-          capacity: selected.backend.capacity,
-          route: selected.route,
-          profile: key,
-          requestBytes: body.byteLength,
-          estimatedInputTokens: normalized.estInputTokens,
-          ...(fellBack ? { fallback: true } : {}),
-        })
+        let admission
+        try {
+          admission = await this.options.store.admit({
+            keyHash,
+            source,
+            backendId: selected.backend.id,
+            capacity: selected.backend.capacity,
+            route: selected.route,
+            profile: key,
+            requestBytes: body.byteLength,
+            estimatedInputTokens: normalized.estInputTokens,
+            ...(fellBack ? { fallback: true } : {}),
+          })
+        } catch (error) {
+          // Another admission or close held the key or the account past the lock timeout: the
+          // transaction rolled back whole and reserved nothing. The call waits for its turn as
+          // for a slot, not as for a broken platform.
+          if (!lockNotAvailable(error)) throw error
+          controller.signal.throwIfAborted()
+          if (Date.now() < waitUntil) {
+            await waitAgain()
+            continue
+          }
+          await this.#refuse(key, selected.backend, response, 'transient', 1_000)
+          return
+        }
         if (admission.kind === 'admitted') {
           call = admission.call
           controller.signal.throwIfAborted()
@@ -796,9 +826,7 @@ export class LlmGateway {
         if (admission.reason === 'unauthorized') throw new Rejected(401, 'raditi_key')
         if (admission.reason === 'backend') throw new Rejected(403, 'raditi_backend')
         if (admission.waitForSlot && Date.now() < waitUntil) {
-          await delay(Math.min(250, waitUntil - Date.now()), undefined, {
-            signal: controller.signal,
-          })
+          await waitAgain()
           continue
         }
         const probeAccounts = this.options.lifecycle?.probeAccounts
@@ -908,13 +936,22 @@ export class LlmGateway {
       }
       response.writeHead(upstream.status, output)
       const inspector = selected.backend.streamInspector()
-      const pending: Buffer[] = []
+      const streamMeter = meter
+      const pending: Uint8Array[] = []
       let terminalSeen = false
-      const decoder = createSseDecoder((event) => {
+      // One decoder and one reading of each event: the meter takes the inspector's.
+      const decoder = createSseDecoder((event, raw) => {
         const inspected = inspector.inspect(event)
         if (inspected.kind === 'invalid') throw new Error('Invalid upstream event')
+        streamMeter.observe(event, inspected)
         if (inspected.kind !== 'forward' && inspected.kind !== 'failure') return
-        pending.push(eventBytes(inspected.event))
+        // An event the inspector let through as it is goes on as the provider's own bytes when
+        // they say nothing but its event and data; any other is written anew.
+        pending.push(
+          inspected.kind === 'forward' && inspected.event === event && raw !== undefined
+            ? raw
+            : eventBytes(inspected.event),
+        )
         if (inspected.kind === 'failure') {
           failed = true
           signal = inspected.signal
@@ -930,7 +967,6 @@ export class LlmGateway {
         upstreamProgress()
         responseBytes += chunk.byteLength
         if (responseBytes > limits.responseBytes) throw new Error('Upstream response limit')
-        meter.push(chunk)
         decoder.push(chunk)
         for (const event of pending.splice(0)) {
           if (!response.write(event)) {

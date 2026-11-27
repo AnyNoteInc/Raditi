@@ -55,7 +55,7 @@ import {
 } from '../browser/session.ts'
 import { reasoningEffortSchema, reasoningEfforts } from '../llm/model-class.ts'
 import { agentOutputLimits } from '../ports/agent-driver.ts'
-import { historicFeedCommandIds } from '../release/chat-commands.ts'
+import { historicFeedCommandIds } from '../chat/chat-commands.ts'
 import { releaseOutcomes, versionBumps, versionTagSchema } from './feed-history.ts'
 import { outboxFileNameSchema, outboxLimits } from './chat-files.ts'
 import { FEED_FAILURE_FALLBACK, feedFailureCodes } from './client-feed-failures.ts'

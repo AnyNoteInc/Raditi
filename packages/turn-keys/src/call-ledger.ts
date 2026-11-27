@@ -354,6 +354,29 @@ export async function recordRefusal(
 }
 
 /**
+ * A row or table lock that `lock_timeout` of a gateway transaction gave up on (SQLSTATE 55P03):
+ * the transaction rolled back whole, and the same work may be tried again once the holder is
+ * done. Read from the driver's cause, as PostgreSQL reported it.
+ */
+export function lockNotAvailable(error: unknown): boolean {
+  const meta =
+    error !== null && typeof error === 'object' && 'meta' in error ? error.meta : undefined
+  const adapter =
+    meta !== null && typeof meta === 'object' && 'driverAdapterError' in meta
+      ? meta.driverAdapterError
+      : undefined
+  const cause =
+    adapter !== null && typeof adapter === 'object' && 'cause' in adapter
+      ? adapter.cause
+      : undefined
+  if (cause === null || typeof cause !== 'object') return false
+  return (
+    ('originalCode' in cause && cause.originalCode === '55P03') ||
+    ('code' in cause && cause.code === '55P03')
+  )
+}
+
+/**
  * Data and integrity errors (SQLSTATE classes 22 and 23), a vanished row and an invalid query
  * repeat for the same write. Connection, lock, timeout and serialization failures may pass.
  */

@@ -636,7 +636,7 @@ test('the builds are the steps of the two Dockerfiles, in their order', () => {
     [
       'pnpm install --frozen-lockfile --prefer-offline',
       'pnpm --filter @repo/db db:generate',
-      'pnpm --filter core build',
+      'pnpm --filter core... build',
       'pnpm --filter web build',
     ],
   )
@@ -645,7 +645,7 @@ test('the builds are the steps of the two Dockerfiles, in their order', () => {
   const generate =
     'DATABASE_URL=postgresql://build@localhost/build pnpm --filter @repo/db db:generate'
   assert.ok(web.includes(`RUN ${generate} \\\n && pnpm --filter web build`))
-  assert.ok(orchestrator.includes(`RUN ${generate} \\\n && pnpm --filter core build`))
+  assert.ok(orchestrator.includes(`RUN ${generate} \\\n && pnpm --filter core... build`))
   assert.deepEqual(BUILD_STEPS[1].env, { DATABASE_URL: 'postgresql://build@localhost/build' })
   for (const index of [0, 2, 3]) assert.deepEqual(BUILD_STEPS[index].env, {})
   // What runs afterwards is what the images run.

@@ -14,7 +14,7 @@ import { useParams } from 'next/navigation'
 import { AppIcon } from '@/components/application/app-icon'
 
 import { documentText } from './chat-texts'
-import { documentWindowHref } from './documents-pane'
+import { documentWindowHref } from './document-target'
 import { taskFileHref } from './feed-file'
 
 // A page or a text document the agent made, in the feed (docs/plan/67-agent-documents.md, Д4): a

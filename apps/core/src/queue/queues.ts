@@ -7,7 +7,7 @@ export function isQueueName(name: string): name is QueueName {
 
 const DAY = 24 * 60 * 60
 
-/** Turns, deploys and timers are retried by the task lifecycle (spec §7), not by BullMQ. */
+/** Turns are retried by the task lifecycle (spec §7), not by BullMQ. */
 const lifecycleJobs: DefaultJobOptions = {
   attempts: 1,
   removeOnComplete: { age: DAY, count: 1_000 },
@@ -17,16 +17,9 @@ const lifecycleJobs: DefaultJobOptions = {
 /** Default job options per queue; `age` is in seconds. */
 export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   'agent-turns': lifecycleJobs,
-  deploys: lifecycleJobs,
-  timers: lifecycleJobs,
-  'site-provisioning': lifecycleJobs,
-  'site-import': lifecycleJobs,
   // The passes of the renewal schedulers (apps/core/src/billing). A failed pass is
   // not retried: the next tick does the same work from the rows of the database.
   billing: lifecycleJobs,
-  // Builds, syncs and browsers of previews (docs/plan/53-chat-preview-release.md): a failed job
-  // is put again by the rows of its preview, never by BullMQ.
-  previews: lifecycleJobs,
   // The start of a task's browser: a failed job is put again by the call that waits for it.
   'browser-sessions': lifecycleJobs,
   // A lead on its way to Telegram (docs/plan/65-landing-platforms-leads.md): its sending is retried

@@ -44,16 +44,16 @@ describe('BullMqJobQueue', () => {
     const jobQueue = new BullMqJobQueue(queues)
 
     await jobQueue.enqueue(
-      'timers',
-      'task.awaiting_user_timeout',
+      'agent-turns',
+      'turn.run',
       { taskId: 't1' },
-      { jobId: 'timer:t1:awaiting_user', delayMs: 60_000, priority: 2 },
+      { jobId: 'turn:t1:2', delayMs: 60_000, priority: 2 },
     )
 
     expect(add).toHaveBeenCalledWith(
-      'task.awaiting_user_timeout',
+      'turn.run',
       { taskId: 't1' },
-      { jobId: 'timer%3At1%3Aawaiting_user', delay: 60_000, priority: 2 },
+      { jobId: 'turn%3At1%3A2', delay: 60_000, priority: 2 },
     )
   })
 
@@ -62,7 +62,7 @@ describe('BullMqJobQueue', () => {
     const jobQueue = new BullMqJobQueue(queues, { notifications: 60_000 })
 
     await jobQueue.enqueue('notifications', 'auth.verify_email', { a: 1 }, { jobId: 'verify:u1' })
-    await jobQueue.enqueue('timers', 'task.awaiting_user_timeout', {}, { jobId: 'timer:t1' })
+    await jobQueue.enqueue('agent-turns', 'turn.run', {}, { jobId: 'turn:t1' })
     await jobQueue.enqueue('notifications', 'auth.welcome', {})
 
     expect(add.mock.calls).toEqual([
@@ -71,7 +71,7 @@ describe('BullMqJobQueue', () => {
         { a: 1 },
         { jobId: 'verify%3Au1', deduplication: { id: 'verify%3Au1', ttl: 60_000 } },
       ],
-      ['task.awaiting_user_timeout', {}, { jobId: 'timer%3At1' }],
+      ['turn.run', {}, { jobId: 'turn%3At1' }],
       ['auth.welcome', {}, {}],
     ])
   })
@@ -86,7 +86,7 @@ describe('BullMqJobQueue', () => {
 
   it('rejects a queue that is not registered', async () => {
     await expect(
-      new BullMqJobQueue(new Map()).enqueue('deploys', 'deploy.start', {}),
+      new BullMqJobQueue(new Map()).enqueue('agent-turns', 'turn.run', {}),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
   })
 })

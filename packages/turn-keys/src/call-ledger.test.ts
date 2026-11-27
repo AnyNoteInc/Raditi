@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { Prisma, type PrismaClient } from '@repo/db'
 import { describe, expect, it, vi } from 'vitest'
 
-import { LlmCallLedger, recordRefusal } from './call-ledger.ts'
+import { LlmCallLedger, lockNotAvailable, recordRefusal } from './call-ledger.ts'
 import { GatewayRecordRejected, type GatewayFinish } from './gateway-types.ts'
 
 const finish = (): GatewayFinish => ({
@@ -195,5 +195,26 @@ describe('gateway persistence boundaries', () => {
       expect(sql).toHaveBeenCalledTimes(1)
     }
     expect($queryRaw).not.toHaveBeenCalled()
+  })
+
+  it('tells a lock the lock timeout gave up on from every other failure', () => {
+    const failure = (cause: unknown) =>
+      new Prisma.PrismaClientKnownRequestError('synthetic', {
+        code: 'P2010',
+        clientVersion: 'synthetic',
+        meta: { driverAdapterError: { name: 'DriverAdapterError', cause } },
+      })
+    expect(lockNotAvailable(failure({ kind: 'postgres', originalCode: '55P03' }))).toBe(true)
+    expect(lockNotAvailable(failure({ kind: 'postgres', code: '55P03' }))).toBe(true)
+    for (const other of [
+      failure({ kind: 'postgres', originalCode: '57014' }),
+      failure({ kind: 'TransactionWriteConflict', originalCode: '40001' }),
+      failure(null),
+      new Error('55P03'),
+      null,
+      undefined,
+      { meta: null },
+    ])
+      expect(lockNotAvailable(other)).toBe(false)
   })
 })

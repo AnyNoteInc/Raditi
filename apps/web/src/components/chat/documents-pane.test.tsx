@@ -67,7 +67,8 @@ vi.mock('@/trpc/client', () => ({
   }),
 }))
 
-import { DocumentsPane, documentWindowHref } from './documents-pane'
+import { documentWindowHref } from './document-target'
+import { DocumentsPane } from './documents-pane'
 import { FeedDocuments } from './feed-document'
 import { chatDocumentsOf } from '@repo/domain/tasks/chat-documents'
 

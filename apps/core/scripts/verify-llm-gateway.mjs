@@ -126,7 +126,7 @@ try {
       { timeoutMs: 600_000 },
     )
     // The stand lists the tools of the mcp app's production profile (verify-llm-mcp-tools.mjs).
-    await run('pnpm', ['--filter', 'core', '--filter', 'llm', '--filter', 'mcp', 'build'])
+    await run('pnpm', ['--filter', 'core...', '--filter', 'llm...', '--filter', 'mcp...', 'build'])
     await run(
       'docker',
       [

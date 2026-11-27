@@ -1,10 +1,10 @@
 'use client'
 
 import { AnimatedBrandSymbol } from '@repo/ui/animated-brand-symbol'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 
-import { UserMenu } from '@/components/application/user-menu'
 import { SITE_PHONE } from '@/lib/contacts'
 import type { LandingViewer } from '@/server/landing-viewer'
 
@@ -12,6 +12,12 @@ import { LandingIcon } from './landing-icons'
 import { landingNavigation as navigation } from './landing-navigation'
 import styles from './landing.module.css'
 import { MAIN_ACTION_SHORT, mainAction } from './main-action'
+
+// The account menu is drawn with MUI: it comes in a chunk of its own, which a guest never loads
+// (docs/plan/96-review-fixes.md, P33.2). Rendered on the server for a signed-in visitor as before.
+const LandingUserMenu = dynamic(() =>
+  import('./landing-user-menu').then((module) => module.LandingUserMenu),
+)
 
 export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
   const [open, setOpen] = useState(false)
@@ -95,7 +101,7 @@ export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
           </a>
           {viewer.status === 'authenticated' ? (
             <div className={styles.headerIdentity}>
-              <UserMenu user={viewer.user} landing />
+              <LandingUserMenu user={viewer.user} />
             </div>
           ) : (
             <Link

@@ -1,6 +1,6 @@
 'use client'
 
-import { reasoningEffortSchema, type ReasoningEffort } from '@repo/domain'
+import { reasoningEffortSchema, type ReasoningEffort } from '@repo/domain/llm/model-class'
 import { useCallback, useSyncExternalStore } from 'react'
 
 // The level of thinking this viewer chose last, kept in `localStorage` (owner's request of

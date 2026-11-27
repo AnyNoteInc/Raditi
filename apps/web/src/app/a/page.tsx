@@ -7,6 +7,8 @@ import { env } from '@/env'
 import { getSession } from '@/lib/session'
 import { SHARE_COOKIE } from '@/server/artifact-share'
 
+import { UiProviders } from '../ui-providers'
+
 export const dynamic = 'force-dynamic'
 export const metadata: Metadata = {
   title: 'Вам открыли доступ',
@@ -25,5 +27,9 @@ export default async function ShareLinkPage() {
     () => false,
   )
   const held = (await cookies()).has(SHARE_COOKIE)
-  return <ShareLanding open={open} signedIn={signedIn} held={held} />
+  return (
+    <UiProviders>
+      <ShareLanding open={open} signedIn={signedIn} held={held} />
+    </UiProviders>
+  )
 }

@@ -4,3 +4,20 @@
   --font-unbounded: 'Unbounded Variable';
   --font-jetbrains: 'JetBrains Mono Variable';
 }
+
+/* What MUI's CssBaseline sets on the root, for the pages without MUI too — the landing, the
+   cookie notice (docs/plan/96-review-fixes.md, P33.2). The same values, so the cabinet is as it was. */
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  box-sizing: border-box;
+  -webkit-text-size-adjust: 100%;
+}
+*,
+*::before,
+*::after {
+  box-sizing: inherit;
+}
+body {
+  margin: 0;
+}

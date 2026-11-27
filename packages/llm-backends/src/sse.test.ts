@@ -107,6 +107,39 @@ describe('bounded incremental SSE decoder', () => {
     expect(() => decoder.push(bytes('x'))).toThrow('event_limit')
   })
 
+  it('hands out the bytes of an event that says nothing but its event and data, at any chunking', () => {
+    const plain = 'data: {"a":1}\n\nevent: named\ndata:x\ndata: y\n\n'
+    const source = bytes(
+      plain + ': ping\n\nid: 7\ndata: z\n\ndata: crlf\r\n\r\nretry: 5\ndata: w\n\n',
+    )
+    for (const size of [1, 3, 64, source.length]) {
+      const seen: Array<[SseEvent, string | undefined]> = []
+      const decoder = createSseDecoder((event, raw) => {
+        seen.push([event, raw === undefined ? undefined : new TextDecoder().decode(raw)])
+      })
+      for (let at = 0; at < source.length; at += size) decoder.push(source.subarray(at, at + size))
+      expect(seen, String(size)).toEqual([
+        [{ event: 'message', data: '{"a":1}' }, 'data: {"a":1}\n\n'],
+        [{ event: 'named', data: 'x\ny' }, 'event: named\ndata:x\ndata: y\n\n'],
+        [{ event: 'message', data: 'z' }, undefined],
+        [{ event: 'message', data: 'crlf' }, undefined],
+        [{ event: 'message', data: 'w' }, undefined],
+      ])
+    }
+  })
+
+  it('never hands out the bytes of a first event that starts with a BOM', () => {
+    const raws: Array<Uint8Array | undefined> = []
+    const decoder = createSseDecoder((_event, raw) => {
+      raws.push(raw)
+    })
+    decoder.push(bytes('\uFEFFdata: a\n\ndata: b\n\n'))
+    expect(raws.map((raw) => raw && new TextDecoder().decode(raw))).toEqual([
+      undefined,
+      'data: b\n\n',
+    ])
+  })
+
   it.each([0, -1, 0.1, Infinity, maxSseEventBytes + 1])(
     'rejects an invalid frame limit %s',
     (limit) => {

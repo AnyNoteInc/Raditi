@@ -1096,6 +1096,89 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     expect(store.admit.mock.calls[0]).toEqual(store.admit.mock.calls[1])
   })
 
+  // What the pg adapter throws when `lock_timeout` gives up on a row: the transaction rolled back.
+  const lockTimeout = () =>
+    Object.assign(new Error('synthetic lock timeout'), {
+      code: 'P2010',
+      meta: {
+        driverAdapterError: {
+          name: 'DriverAdapterError',
+          cause: { kind: 'postgres', code: '55P03', originalCode: '55P03' },
+        },
+      },
+    })
+
+  it('waits on a key or account lock held past the lock timeout as for a slot, not as for a broken platform', async () => {
+    const { gateway, store } = await setup(success)
+    store.admit.mockRejectedValueOnce(lockTimeout()).mockRejectedValueOnce(lockTimeout())
+    expect((await call(gateway)).status).toBe(200)
+    expect(store.admit).toHaveBeenCalledTimes(3)
+    expect(store.admit.mock.calls[0]).toEqual(store.admit.mock.calls[2])
+    expect(store.refuse).not.toHaveBeenCalled()
+  })
+
+  it('answers a lock still held when the wait is over with a short pause, and any other failure as before', async () => {
+    const { gateway, store } = await setup(success)
+    const now = Date.now.bind(Date)
+    let offset = 0
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now() + offset)
+    cleanups.push(async () => clock.mockRestore())
+    store.admit.mockImplementationOnce(async () => {
+      // The wait of the call is over by the time its admission gives up on the lock.
+      offset = 21_000
+      throw lockTimeout()
+    })
+    const held = await call(gateway)
+    expect(held.status).toBe(503)
+    expect(held.headers['retry-after']).toBe('1')
+    expect(store.admit).toHaveBeenCalledTimes(1)
+    expect(store.refuse).toHaveBeenCalledExactlyOnceWith(key.keyId, 'transient')
+    store.admit.mockRejectedValueOnce(new Error('synthetic connection reset'))
+    const broken = await call(gateway)
+    expect(broken.status).toBe(503)
+    expect(broken.headers['retry-after']).toBe('30')
+    expect(store.admit).toHaveBeenCalledTimes(2)
+  })
+
+  it('forwards a plain provider event as its own bytes and writes any other one anew', async () => {
+    const data = delta.slice('data: '.length, -2)
+    const { gateway } = await setup((req, res) => {
+      req.resume()
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      // A comment, an id and a pause of the provider, CRLF line ends: none of them goes on.
+      res.end(`: keep-alive\n\nid: 7\nretry: 1\r\ndata: ${data}\r\n\r\n` + delta + completed())
+    })
+    const result = await call(gateway)
+    expect(result.status).toBe(200)
+    expect(result.body).toBe(`event: message\ndata: ${data}\n\n` + delta + completed())
+  })
+
+  it('waits for a slot with a growing pause between admissions', async () => {
+    const { gateway, store } = await setup(success)
+    const at: number[] = []
+    const busy = {
+      kind: 'refused' as const,
+      reason: 'transient' as const,
+      waitForSlot: true,
+      retryAfterMs: 1000,
+    }
+    store.admit.mockImplementation(async (input) => {
+      at.push(performance.now())
+      return at.length <= 3
+        ? busy
+        : { kind: 'admitted', call: { ...makeCall(input.estimatedInputTokens), ...key } }
+    })
+    expect((await call(gateway)).status).toBe(200)
+    expect(store.admit).toHaveBeenCalledTimes(4)
+    const pauses = at.slice(1).map((time, index) => time - at[index]!)
+    // 250, 500 and 1000 ms: each pause is about twice the one before it.
+    expect(pauses[0]).toBeGreaterThanOrEqual(240)
+    expect(pauses[1]).toBeGreaterThanOrEqual(490)
+    expect(pauses[2]).toBeGreaterThanOrEqual(990)
+    // Nothing of the wait goes to the journal: only a refusal the call ends with is recorded.
+    expect(store.refuse).not.toHaveBeenCalled()
+  })
+
   it('refreshes an old window snapshot once before the first call of a key, whatever comes of it', async () => {
     const lifecycle = controlLifecycle()
     const { gateway, store, egress } = await setup(success, {}, { lifecycle })
@@ -2038,7 +2121,8 @@ describe('Z.ai streams the CLI cannot stop on', () => {
     text
       .split('\n\n')
       .filter(Boolean)
-      .map((block) => block.replace(/^event: message\ndata: /, ''))
+      // A plain provider event goes on as its own bytes, one written anew names its event.
+      .map((block) => block.replace(/^(?:event: message\n)?data: /, ''))
 
   it('streams a finished answer, with the plan key and nothing of the client but its body', async () => {
     const { send, provider, persisted, store, logger } = await zai(

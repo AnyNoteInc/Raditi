@@ -14,7 +14,7 @@
 
 ## Команды
 
-- `pnpm --filter @repo/service-runtime build`, `typecheck`, `lint`, `test`. Пакет собирает `build` каждого приложения с базой (`pnpm --filter @repo/service-runtime build && nest build`).
+- `pnpm --filter @repo/service-runtime build`, `typecheck`, `lint`, `test`. Пакет собирается раньше приложения с базой: `turbo build` (`dependsOn: ^build`), а вне turbo — `pnpm --filter <приложение>... build`.
 
 ## Чего не должно достигать
 

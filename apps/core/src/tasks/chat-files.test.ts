@@ -4,7 +4,7 @@ import { chatFileKey, feedRowSchema } from '@repo/domain'
 import { packOutbox } from '@repo/snapshots'
 import { describe, expect, it, vi } from 'vitest'
 
-import { ChatFiles, chatFileId } from './chat-files.ts'
+import { CHAT_FILE_UPLOADS, ChatFiles, chatFileId } from './chat-files.ts'
 
 const taskId = '0199a3f2-0000-7000-8000-000000000001'
 const turnId = '0199a3f2-0000-7000-8000-0000000000aa'
@@ -15,6 +15,7 @@ function side(existing: string[] = []) {
   const db = {
     taskTurn: { findFirst: vi.fn(async () => ({ id: turnId })) },
     taskEvent: {
+      findMany: vi.fn(async () => [...known].map((fileId) => ({ payload: { fileId } }))),
       findFirst: vi.fn(
         async ({ where }: { where: { type: string; payload?: { equals: string } } }) =>
           where.type === 'feed.file_left'
@@ -131,6 +132,49 @@ describe('ChatFiles', () => {
       'uslugi.html',
     ])
     expect(pages.left).not.toHaveBeenCalled()
+  })
+
+  it('uploads a few files at once and writes their rows in the order of the archive', async () => {
+    const s = side()
+    let inFlight = 0
+    let most = 0
+    s.storage.put.mockImplementation(async (_bucket, key, body) => {
+      inFlight += 1
+      most = Math.max(most, inFlight)
+      // The first file is the slowest: its row still comes first.
+      await new Promise((resolve) =>
+        setTimeout(resolve, key.endsWith(chatFileId(taskId, 2, 'f0.txt')) ? 30 : 5),
+      )
+      s.objects.set(key, Buffer.from(body as Uint8Array))
+      inFlight -= 1
+    })
+    const names = Array.from({ length: 9 }, (_, i) => `f${i}.txt`)
+    const outbox = await packOutbox(names.map((name) => ({ name, bytes: name })))
+    expect(await s.files.deliver({ taskId, turn: 2, outbox })).toBe(9)
+    expect(most).toBeGreaterThan(1)
+    expect(most).toBeLessThanOrEqual(CHAT_FILE_UPLOADS)
+    expect(s.rows.map((row) => (row.payload as { name: string }).name)).toEqual(names)
+    expect(s.objects.get(chatFileKey(taskId, chatFileId(taskId, 2, 'f5.txt')))?.toString()).toBe(
+      'f5.txt',
+    )
+    // One query for the files a delivery before this one wrote, not one per file.
+    expect(s.db.taskEvent.findMany).toHaveBeenCalledOnce()
+  })
+
+  it('writes no row after a file whose upload failed, and tells the client the rest was left', async () => {
+    const s = side()
+    s.storage.put.mockImplementation(async (_bucket, key) => {
+      if (key.endsWith(chatFileId(taskId, 2, 'f2.txt'))) throw new Error('s3 down')
+    })
+    const outbox = await packOutbox(
+      Array.from({ length: 6 }, (_, i) => ({ name: `f${i}.txt`, bytes: 'x' })),
+    )
+    expect(await s.files.deliver({ taskId, turn: 2, outbox })).toBe(2)
+    expect(s.rows.map((row) => (row.payload as { name?: string }).name ?? row.type)).toEqual([
+      'f0.txt',
+      'f1.txt',
+      'feed.file_left',
+    ])
   })
 
   it('writes no second row when the delivery is repeated', async () => {

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { lstat, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative } from 'node:path'
 
@@ -627,26 +628,50 @@ export class GitWorkspaceService {
         const cached = await this.#bundles.get(input.projectRepositoryId, head)
         if (
           cached &&
-          cached.byteLength <= publicationLimits.bundleBytes &&
-          bundleHead(cached) === head
+          cached.sizeBytes <= publicationLimits.bundleBytes &&
+          bundleHead(cached.header) === head
         )
-          return { head, bytes: cached }
+          return { head, cached }
         await this.git(op, ['update-ref', `refs/heads/${BASE_BUNDLE_REF}`, head])
         const path = join(op.root, 'base.bundle')
         await this.git(op, ['bundle', 'create', '--quiet', path, `refs/heads/${BASE_BUNDLE_REF}`])
         if ((await stat(path)).size > publicationLimits.bundleBytes)
           throw repositoryTooLarge('Repository bundle is too large')
+        const stored = await this.#bundles.put(input.projectRepositoryId, head, path)
+        if (stored) {
+          if (
+            stored.sizeBytes > publicationLimits.bundleBytes ||
+            bundleHead(stored.header) !== head
+          )
+            throw failed()
+          return { head, cached: stored }
+        }
+        // The cache could not keep it: the bundle is held in memory, as it was read.
         const bytes = await readFile(path)
         if (bundleHead(bytes) !== head) throw failed()
-        await this.#bundles.put(input.projectRepositoryId, head, bytes)
         return { head, bytes }
       }),
     )
-    const { head, bytes } = bundle
-    return {
+    const common = {
       baseSha: input.baseSha,
-      sandboxBaseSha: head,
+      sandboxBaseSha: bundle.head,
       branch: input.branch,
+    }
+    if (bundle.cached) {
+      const { path, sha256, sizeBytes } = bundle.cached
+      return {
+        ...common,
+        sha256,
+        sizeBytes,
+        // Each reader streams the file of the cache; the importer checks the hash of what it read.
+        read: async function* () {
+          for await (const chunk of createReadStream(path)) yield chunk as Buffer
+        },
+      }
+    }
+    const bytes = bundle.bytes!
+    return {
+      ...common,
       sha256: createHash('sha256').update(bytes).digest('hex'),
       sizeBytes: bytes.byteLength,
       // Each reader gets its own copy; the importer checks the hash of what it read.
@@ -1188,6 +1213,15 @@ export class GitWorkspaceService {
     })
   }
 
+  /** What the mirrors and the bundles take of the volume, both walked at once. */
+  private async volumeBytes(): Promise<number> {
+    const [repos, bundles] = await Promise.all([
+      directoryBytes(join(this.#root, 'repos')),
+      directoryBytes(join(this.#root, 'bundles')),
+    ])
+    return repos + bundles
+  }
+
   private async fetchInto(
     op: Operation,
     mirror: string,
@@ -1197,9 +1231,7 @@ export class GitWorkspaceService {
     quotaBytes: number | undefined,
   ): Promise<void> {
     if (!missing.length) return
-    const used =
-      (await directoryBytes(join(this.#root, 'repos'))) +
-      (await directoryBytes(join(this.#root, 'bundles')))
+    const used = await this.volumeBytes()
     const quota = Math.min(
       this.options.fetchBytes ?? mirrorLimits.fetchBytes,
       quotaBytes ?? Number.MAX_SAFE_INTEGER,
@@ -1255,9 +1287,7 @@ export class GitWorkspaceService {
   ): Promise<string> {
     if (!publicationShaSchema.safeParse(sha).success || !Number.isInteger(depth) || depth < 2)
       throw failed()
-    const used =
-      (await directoryBytes(join(this.#root, 'repos'))) +
-      (await directoryBytes(join(this.#root, 'bundles')))
+    const used = await this.volumeBytes()
     const quota = Math.min(
       this.options.fetchBytes ?? mirrorLimits.fetchBytes,
       (this.options.volumeBytes ?? mirrorLimits.volumeBytes) - used,

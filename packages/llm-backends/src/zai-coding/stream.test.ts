@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import { createChatCompletionsUsageMeter } from '../chat-completions-usage.ts'
 import { createSseDecoder, type SseEvent } from '../sse.ts'
+import { createStreamMeter } from '../stream-meter.ts'
 import { cliReadsOverflow, cliRetriesStreamError } from './fixtures/opencode-cli.ts'
 import { chatSamples, liveSamples, sample } from './fixtures/samples.ts'
 import { zaiCodingPlan } from './backend.ts'
@@ -83,7 +84,10 @@ describe('recorded Z.ai streams', () => {
   ])('meters %s by the numbers of the provider, in any chunking', (name, expected) => {
     const stream = bytes(sample(name).response.sse!)
     for (const size of [1, 7, 1024, stream.length]) {
-      const meter = createChatCompletionsUsageMeter(createZaiStreamInspector)
+      const meter = createStreamMeter({
+        streamInspector: createZaiStreamInspector,
+        usageMeter: createChatCompletionsUsageMeter,
+      })
       for (let at = 0; at < stream.length; at += size) meter.push(stream.subarray(at, at + size))
       const result = meter.end()
       expect(result).toMatchObject({
@@ -181,7 +185,10 @@ describe('an answer of the real model with text beside a tool call', () => {
     for (const framed of [recorded, payloads.map((data) => `data: ${data}\n\n`).join('')]) {
       const stream = bytes(framed)
       for (const size of [1, 7, 1024, stream.length]) {
-        const meter = createChatCompletionsUsageMeter(createZaiStreamInspector)
+        const meter = createStreamMeter({
+          streamInspector: createZaiStreamInspector,
+          usageMeter: createChatCompletionsUsageMeter,
+        })
         for (let at = 0; at < stream.length; at += size) meter.push(stream.subarray(at, at + size))
         const result = meter.end()
         expect(result).toEqual({
@@ -315,7 +322,10 @@ describe('the forms the CLI answers with a request storm', () => {
   })
 
   it.each(forms)('meters %s as a failed call, never as a completed one', (_name, stream) => {
-    const meter = createChatCompletionsUsageMeter(createZaiStreamInspector)
+    const meter = createStreamMeter({
+      streamInspector: createZaiStreamInspector,
+      usageMeter: createChatCompletionsUsageMeter,
+    })
     meter.push(bytes(stream))
     const result = meter.end()
     expect(result.outcome).not.toBe('completed')
@@ -333,7 +343,10 @@ describe('the forms the CLI answers with a request storm', () => {
   })
 
   it('keeps the usage of a chunk it refuses: the provider has counted the call', () => {
-    const meter = createChatCompletionsUsageMeter(createZaiStreamInspector)
+    const meter = createStreamMeter({
+      streamInspector: createZaiStreamInspector,
+      usageMeter: createChatCompletionsUsageMeter,
+    })
     meter.push(bytes(frame(text) + frame(last('sensitive')) + frame('[DONE]')))
     expect(meter.end()).toMatchObject({
       outcome: 'failed',

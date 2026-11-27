@@ -18,7 +18,13 @@ import { BACKGROUND_JOBS } from '../config/config.tokens.ts'
 import { JOB_QUEUE } from '../queue/queue.tokens.ts'
 import { isQueueName } from '../queue/queues.ts'
 
-export const OUTBOX_POLL_INTERVAL_MS = 1_000
+/**
+ * The safety net of the wake (NOTIFY raditi_outbox): a pass every 10 s picks up what came
+ * without one — a retry whose backoff ran out, a row added while the listener reconnected.
+ */
+export const OUTBOX_POLL_INTERVAL_MS = 10_000
+/** The first pause after a failed pass; it doubles with each next one. */
+export const OUTBOX_FAILURE_PAUSE_MS = 1_000
 export const OUTBOX_BATCH_SIZE = 50
 export const OUTBOX_MAX_ATTEMPTS = 10
 export const OUTBOX_ENQUEUE_TIMEOUT_MS = 5_000
@@ -92,7 +98,7 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
   #stopping = false
   #failedPasses = 0
   #pausedUntil = 0
-  /** A wake came while a pass ran: one more pass follows it at once. */
+  /** A wake came while a pass ran, or it published a full batch: one more pass follows at once. */
   #again = false
   readonly #warn = throttledLogger((line) => this.#logger.warn(line))
   readonly #logPassFailure = (err: unknown) => this.#warn('Outbox relay pass failed', err)
@@ -152,7 +158,7 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
       .catch((err: unknown) => {
         this.#failedPasses += 1
         const pause = Math.min(
-          OUTBOX_POLL_INTERVAL_MS * 2 ** this.#failedPasses,
+          OUTBOX_FAILURE_PAUSE_MS * 2 ** this.#failedPasses,
           OUTBOX_MAX_PAUSE_MS,
         )
         this.#pausedUntil = Date.now() + pause
@@ -218,6 +224,9 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
       const rest = rows.slice(settled)
       if (rest.length > 0) await this.#release(rest).catch(this.#logPassFailure)
     }
+    // A full batch published to its end: more rows may be due, the next pass goes at once.
+    if (this.#background && rows.length === OUTBOX_BATCH_SIZE && settled === rows.length)
+      this.#again = true
     return rows.length
   }
 

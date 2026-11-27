@@ -38,6 +38,7 @@ import {
   reservePagePublication,
   restorePage,
   servedFile,
+  servedContent,
   servedPage,
   setPagePassword,
   settlePageReservation,
@@ -673,6 +674,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         actor,
       })
       expect(branch.pages).toBe(2)
+      // Bytes read after the check that let the page through: a page in the trash gives none.
+      expect(await servedContent(db, uslugi.pageId)).toBeNull()
+      expect((await servedContent(db, home.pageId))?.bytes.byteLength).toBeGreaterThan(0)
       expect((await servedPage(db, home.slug, '/uslugi/remont'))?.page?.deleted).toBe(true)
       expect((await servedPage(db, home.slug, '/kontakty'))?.page?.deleted).toBe(false)
       expect((await servedPage(db, home.slug))?.gone).toBeNull()

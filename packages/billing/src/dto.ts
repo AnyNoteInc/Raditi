@@ -6,6 +6,7 @@ import {
   taskRefusalReasons,
   taskStatuses,
   type CreditAccountKind,
+  Money,
   usageWindowRoom,
   workspaceTiers,
   type UsageWindowState,
@@ -212,12 +213,15 @@ export const usageWindowDtoSchema = z
   .refine(({ limit, left }) => (limit === null) === (left === null))
 export type UsageWindowDto = z.infer<typeof usageWindowDtoSchema>
 
-/** The windows of a verdict as the pages read them. */
+/**
+ * The windows of a verdict as the pages read them: what a window took is a decimal string, shown
+ * as whole credits rounded up — counted as Money, never through a float.
+ */
 export function usageWindowsDto(windows: readonly UsageWindowState[]): UsageWindowDto[] {
   return windows.map((window) => ({
     kind: window.kind,
     limit: window.limit,
-    used: Math.ceil(Number(window.used)),
+    used: new Money(window.used).ceil().toNumber(),
     left: usageWindowRoom(window),
     resetsAt: window.resetsAt,
   }))

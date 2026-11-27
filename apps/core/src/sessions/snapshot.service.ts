@@ -298,16 +298,23 @@ export class SnapshotService {
     }
     try {
       const { manifest, encoded } = encodeManifest(sealed)
-      // Only wrapped keys and authenticated ciphertext reach S3.
-      for (const part of manifest.parts) {
-        const body = sealed.bodies[part.name]
-        if (!body) continue
-        assertActive()
-        await this.storage.put('sessions', part.key, body, {
-          contentType: 'application/octet-stream',
-          sizeBytes: part.sizeBytes,
-        })
-      }
+      // Only wrapped keys and authenticated ciphertext reach S3. The parts go up side by side;
+      // the commit answers once none of them is still being written.
+      assertActive()
+      const puts = await Promise.allSettled(
+        manifest.parts.flatMap((part) => {
+          const body = sealed.bodies[part.name]
+          return body
+            ? [
+                this.storage.put('sessions', part.key, body, {
+                  contentType: 'application/octet-stream',
+                  sizeBytes: part.sizeBytes,
+                }),
+              ]
+            : []
+        }),
+      )
+      for (const put of puts) if (put.status === 'rejected') throw put.reason
       assertActive()
       // Readers never treat a reservation or individual parts as a snapshot.
       await this.storage.put('sessions', `${sealed.prefix}manifest.json`, encoded, {

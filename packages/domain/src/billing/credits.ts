@@ -2,7 +2,6 @@ import type { Decimal } from 'decimal.js'
 import { z } from 'zod'
 import { badRequest } from '../errors.ts'
 import { decimalStringSchema, Money } from '../money.ts'
-import { normalizeSiteHost } from '../policies/site-address.ts'
 import type { TaskStatus } from '../tasks/task-status.ts'
 import { minStartCredits, packWithoutTariffPriceFactor } from './credit-numbers.ts'
 import { rubPerCreditSchema } from './credit-rate.ts'
@@ -1071,44 +1070,6 @@ function tariffDay(
     room,
     left: toCredits(room === null ? freeTariff : Math.min(room, freeTariff)),
   }
-}
-
-/**
- * The key a site is known by when its gift is claimed (`gift_site_claims.host_key`): one site
- * spends gift credits in one workspace only. Built from the address a site is stored with, an
- * http or https origin: the host as the platform normalises it (`normalizeSiteHost` — lower
- * case, punycode, no trailing dot) without one leading `www.`, and the port when the origin
- * has one — without it every local site would be one key. The scheme is not in the key:
- * `http://`, `https://` and `www.` of one host are one site.
- */
-export function siteHostKey(siteOrigin: string): string {
-  const url = parseOrigin(siteOrigin)
-  const host = url === null ? null : normalizeSiteHost(url.hostname)
-  if (url === null || host === null) throw badRequest('Invalid site address')
-  const name = host.replace(/^www\.(?=.)/, '')
-  if (url.port === '') return name
-  // An IPv6 literal keeps its brackets before a port: `::1:8080` is another address.
-  return `${name.includes(':') ? `[${name}]` : name}:${url.port}`
-}
-
-/** An http(s) origin, with or without the closing slash; null for anything else. */
-function parseOrigin(text: string): URL | null {
-  // Refused before parsing: URL drops tabs and line breaks and reads `\` as `/`.
-  if (typeof text !== 'string' || /[\s\\]/.test(text)) return null
-  let url: URL
-  try {
-    url = new URL(text)
-  } catch {
-    return null
-  }
-  const isOrigin =
-    (url.protocol === 'http:' || url.protocol === 'https:') &&
-    url.username === '' &&
-    url.password === '' &&
-    url.pathname === '/' &&
-    url.search === '' &&
-    url.hash === ''
-  return isOrigin ? url : null
 }
 
 const packPriceSchema = z.strictObject({

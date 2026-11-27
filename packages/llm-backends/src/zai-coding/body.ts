@@ -204,6 +204,7 @@ export function createZaiBodyPolicy(
       stream: true,
       stream_options: { include_usage: true },
     }
-    return { body: encodeJson(normalized), estInputTokens: estimateLlmInputTokens(normalized) }
+    const body = encodeJson(normalized)
+    return { body, estInputTokens: estimateLlmInputTokens(normalized, { encoded: body }) }
   }
 }

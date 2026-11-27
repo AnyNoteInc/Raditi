@@ -79,7 +79,7 @@ export async function getUsageActivity(
       FROM task_events e
       JOIN tasks t ON t.id = e.task_id
       WHERE t.workspace_id = ${workspaceId}::uuid
-        AND e.type = 'feed.request'
+        AND e.client_visible AND e.type = 'feed.request'
         AND e.created_at >= (SELECT at FROM since)
       GROUP BY 1
     ),

@@ -261,6 +261,28 @@ describe('host snapshot lifecycle', () => {
     await expect(f.service.save(metadata, original)).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 
+  it('writes the parts side by side and no manifest when one of them fails, once all settled', async () => {
+    const f = fixture()
+    const original = await parts()
+    const put = vi.mocked(f.storage.put).getMockImplementation()!
+    let started = 0
+    let finishedAfterFailure = false
+    vi.mocked(f.storage.put).mockImplementation(async (...args) => {
+      started += 1
+      if (args[1] === `${prefix}untracked.tar.zst`) throw new Error('s3 down')
+      // The other part is still being written when the failure comes: the commit waits for it.
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      await put(...args)
+      if (args[1] === `${prefix}patch.diff`) finishedAfterFailure = true
+    })
+    await expect(f.service.save(metadata, original)).rejects.toMatchObject({
+      code: 'SNAPSHOT_SAVE_FAILED',
+    })
+    expect(started).toBeGreaterThanOrEqual(2)
+    expect(finishedAfterFailure).toBe(true)
+    expect(f.objects.has(manifestKey)).toBe(false)
+  })
+
   it('preserves a committed snapshot if the manifest response is lost', async () => {
     const f = fixture()
     const original = await parts()

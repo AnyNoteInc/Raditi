@@ -438,13 +438,16 @@ export class PassRunner {
       answer === 'moved' &&
       ending.turn !== null
     ) {
-      await this.deps.chatFiles?.failPages(job.taskId, ending.turn)
-      // What it asked of the memory is never applied (§4.3, step 9), nor its proposal of a merge
-      // request shown.
-      await this.deps.memoryChanges?.fail(job.taskId, ending.turn)
-      await this.deps.repoChanges?.fail(job.taskId, ending.turn)
-      // And the changes of the scheduled tasks it reserved (Зп33): «ответ агента оборвался».
-      await this.deps.scheduleChanges?.failTurn(job.taskId, ending.turn)
+      // Each of these never throws and touches only its own rows: they close side by side.
+      await Promise.all([
+        this.deps.chatFiles?.failPages(job.taskId, ending.turn),
+        // What it asked of the memory is never applied (§4.3, step 9), nor its proposal of a
+        // merge request shown.
+        this.deps.memoryChanges?.fail(job.taskId, ending.turn),
+        this.deps.repoChanges?.fail(job.taskId, ending.turn),
+        // And the changes of the scheduled tasks it reserved (Зп33): «ответ агента оборвался».
+        this.deps.scheduleChanges?.failTurn(job.taskId, ending.turn),
+      ])
     }
     // The artifacts the turn made or changed stand below its answer (Ар46).
     if (ending.kind === 'completed' && answer === 'moved')

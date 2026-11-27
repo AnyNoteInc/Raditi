@@ -32,3 +32,19 @@ export const loadChat = cache(async (taskId: string) => {
     return UNAVAILABLE
   }
 })
+
+/**
+ * The first page of the chat's feed, read with the chat so the page comes with its rows and the
+ * browser asks nothing after the hydration (docs/plan/96-review-fixes.md, P33.4). null — not read:
+ * the dialog reads it itself, as before.
+ */
+export const loadFeed = cache(async (taskId: string) => {
+  if (!UUID.test(taskId)) return null
+  try {
+    return await (await getServerCaller()).task.feed({ taskId, after: '0' })
+  } catch (error) {
+    unstable_rethrow(error)
+    if (!isNotFound(error)) console.error(`[web] chat feed lookup failed: ${errorMessage(error)}`)
+    return null
+  }
+})

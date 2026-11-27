@@ -100,63 +100,42 @@ docker compose -f infra/dev/docker-compose.yml exec -T postgres \
 DATABASE_URL=postgresql://raditi:raditi@localhost:5432/raditi pnpm gates
 pnpm format:check
 pnpm e2e
-pnpm verify:vault
-pnpm verify:site
 pnpm verify:db
-P2_GITLEAKS_BINARY=/абсолютный/путь/gitleaks pnpm verify:gitea
-pnpm verify:pipeline
-pnpm verify:site-connect
 ```
 
 `gates` проверяет формат, окружение, типы, линтер, архитектурные слои, тесты, тесты инфраструктуры и сборку.
-Стенды шлюза, драйвера и контента — `verify:llm-gateway`, `verify:opencode`, `verify:opencode-supervisor`,
-`verify:mcp-content`, `verify:agent-content` — описаны ниже; стенды края app-ВМ и профиля `llm` — `verify:edge`,
-`verify:llm-app`, `verify:llm-firewall` — и образы `llm`, `mcp`, `preview` и раннера (`verify:images`) — в [инструкции app-ВМ](infra/app/README.md), «Проверки».
 Для тестов базы задавайте `DATABASE_URL` явно: без него тесты с базой пропускаются. Обычный путь для них —
-`pnpm verify:db` на одноразовой PostgreSQL; интеграционные наборы `core`, `llm`, `mcp` и `preview`
-(`pnpm --filter <приложение> test:db`, `RADITI_GATEWAY_DB_TESTS=1`) идут только на такой базе:
-наборы `core`, `llm` и `mcp` меняют общие строки справочников.
+`pnpm verify:db` на одноразовой PostgreSQL: миграции, сверка схемы с `schema.prisma`, сиды и наборы тестов
+базы, `core`, `llm`, `mcp`, `preview`, биллинга, tRPC и web. [Подробности](infra/dev/db-verify/README.md).
+Интеграционные наборы `core`, `llm`, `mcp` и `preview` (`pnpm --filter <приложение> test:db`,
+`RADITI_GATEWAY_DB_TESTS=1`) идут только на такой базе: они меняют общие строки справочников.
+
+Стенды на одноразовых сервисах в Docker (рабочий `.env` не читают), у каждого README в `infra/dev/<имя>-verify/`
+или рядом со скриптом:
+
+- `verify:artifacts`, `verify:projects`, `verify:billing`, `verify:browser-task`, `verify:pages` — сценарии продукта;
+- `verify:llm-gateway`, `verify:opencode`, `verify:opencode-supervisor` — шлюз модели и драйвер агента;
+- `verify:vault` — клиент KV v2 и Transit и политики на одноразовом OpenBao;
+- `verify:edge`, `verify:llm-app`, `verify:llm-firewall`, `verify:images` — край app-ВМ, профиль `llm` и образы
+  ([инструкция app-ВМ](infra/app/README.md), «Проверки»).
+
 Перед `pnpm e2e` остановите `pnpm dev`. Smoke-набор сам запускает web на 3100, `core` на 8181 и `mcp` на 8182,
 проверяет главную, юридическую страницу и health всех трёх приложений, затем останавливает процессы.
 Инфраструктура должна оставаться запущенной, миграции и сиды — применены (`pnpm db:deploy && pnpm db:seed`):
 главная показывает тарифы из базы. Экспортированные `DATABASE_URL` и `REDIS_URL` важнее `.env`.
 
-`verify:vault` проверяет клиент KV v2 и Transit и реальные политики, включая приложения `mcp` и `core` под AppRole
-и отказ `llm` в записи секрета подписки, на одноразовом локальном OpenBao.
-`verify:site` проверяет настоящую страницу локального WordPress: снимок → изменение → публичный HTTP → восстановление.
-`verify:db` применяет миграции на отдельной PostgreSQL, сверяет схему с `schema.prisma`, проверяет единого пользователя `raditi`,
-переход со старых ролей, переключение на OpenCode на базе прежних оболочек настоящими командами Prisma,
-сиды на этой базе и на новой — каталог одной оболочки, повторный запуск ничего не меняет, — затем запускает
-восемь наборов тестов: базы, `core`, `llm`, `mcp`, `preview`, биллинга, tRPC и web. [Подробности](infra/dev/db-verify/README.md).
-`verify:gitea` проверяет git хода на одноразовой Gitea 1.27.3 по HTTPS: доступы на чтение и запись со сроком,
-клон, push в `agent/<taskId>`, отказ диффу с `.gitea/`. Нужен `P2_GITLEAKS_BINARY`.
-[Подробности](infra/dev/gitea-verify/README.md), [отчёт](docs/plan/32-gitea-turn-git.md).
-`verify:pipeline` — спайк пайплайна сайта на одноразовых Gitea 1.27.3, раннерах gitea/runner 4.0.0 и OpenBao:
-обязательный workflow из `ci/`, вебхуки, одноразовая обёртка, откат.
-[Подробности](infra/dev/pipeline-verify/README.md), [отчёт](docs/plan/34-gitea-pipeline-spike.md).
-`verify:site-connect` проверяет локальное подключение сайта: команда `infra/dev/site-verify/connect-local.mjs`
-на одноразовых PostgreSQL, OpenBao и Gitea и профиле `site` dev compose под собственным проектом пишет доступ
-в OpenBao, привязывает плагин, создаёт ключ рабочего пространства и репозиторий и переводит сайт в `active`;
-затем штатное приложение `mcp` правит страницу. Сначала собираются `core` и `mcp`.
-[Подробности](infra/dev/site-verify/README.md), [отчёт](docs/plan/36-local-site-connect.md).
-Эти проходы используют отдельные ресурсы и удаляют их после проверки; нужны уже загруженные образы и локальный Docker.
-По указанию владельца от 30.09.2026 облачная выкладка отложена до полного локального e2e через агента,
-«Применить», бэкап, проверку и откат. [Критерии](infra/dev/site-verify/README.md); подготовительная проверка страницы этот гейт не закрывает.
-
 ## Инфраструктура и мониторинг
 
-`pnpm infra:up`, `infra:down`, `infra:logs` управляют PostgreSQL, Redis, SeaweedFS, OpenBao и Gitea.
-Дополнительные профили: `site` — WordPress на 8080 (тип окружения `local`, плагин «Радити» в `mu-plugins`
-только на чтение; подключение сайта к платформе — `infra/dev/site-verify/README.md`, «Локальное подключение сайта»),
-`monitoring` — Prometheus на 9090 и Grafana на 3030, `ci` — раннер Gitea, `monitoring-host` — cAdvisor на Linux.
+`pnpm infra:up`, `infra:down`, `infra:logs` управляют PostgreSQL, Redis, SeaweedFS и OpenBao.
+Дополнительные профили: `monitoring` — Prometheus на 9090 и Grafana на 3030, `monitoring-host` — cAdvisor на Linux.
 
 ```sh
-docker compose --env-file .env -f infra/dev/docker-compose.yml --profile monitoring --profile site up -d
+docker compose --env-file .env -f infra/dev/docker-compose.yml --profile monitoring up -d
 ```
 
 Проверяются обязательные цели и цели включённых профилей. Выключенные дополнительные цели
 ожидаемо отображаются как DOWN; подробности — в [инструкции мониторинга](infra/dev/monitoring/README.md).
-Для профиля `ci` нужна регистрация раннера. Шлюз подписок на синтетическом Z.ai проверяет `pnpm verify:llm-gateway`:
+Шлюз подписок на синтетическом Z.ai проверяет `pnpm verify:llm-gateway`:
 настоящий OpenCode CLI в контейнерах, одноразовые PostgreSQL и OpenBao; `llm` идёт к синтетическому Z.ai
 напрямую, один ход — через прокси стенда — [инструкция](infra/dev/llm-verify/README.md).
 Production-профиль `llm` (отдельный образ `LLM_IMAGE`) находится в `infra/app`; облачная выкладка остаётся за гейтом WordPress e2e.
@@ -225,16 +204,15 @@ CLI через `sandbox-gw` и приложения `llm` и `mcp`, на син�
 | `apps/web` | Next.js: вход, кабинет — чаты (`/chats`) и проекты, юридические страницы, API |
 | `apps/core` | NestJS: ядро — задачи и диалоги, очередь, outbox, уведомления, песочницы, git, выпуск, биллинг, предпросмотры; операторские команды и стенды, которые ведут несколько приложений |
 | `apps/llm` | NestJS: шлюз подписок (единственный процесс с ключом провайдера), команды `subscriptions:*` и процесс роли стенда шлюза |
-| `apps/mcp` | NestJS: MCP-шлюз к сайтам (контент WordPress, браузер агента) и его стенды контента и отката |
+| `apps/mcp` | NestJS: MCP-шлюз (браузер агента, веб-поиск) и ретранслятор MCP-серверов пространства |
 | `apps/runner` | NestJS: pull-раннер песочной ВМ с движком — контейнеры ходов, без доступа к БД, Redis, Vault и S3 |
-| `apps/preview` | NestJS: шлюз предпросмотров чатов со своим сервером и шлюз трансляции облачного браузера |
+| `apps/preview` | NestJS: отдача опубликованных страниц (`<slug>.pages.raditi.ru`) |
 | `apps/browser` | NestJS: облачный браузер чатов — Chromium каждой сессии в своём контейнере, Playwright, трансляция |
 | `apps/e2e` | Smoke-тесты Playwright |
-| `packages` | Domain, порты и адаптеры, Prisma, auth, tRPC, UI; общее приложений — `app-bootstrap`, `service-runtime`, `turn-keys`, `site-content`, `snapshots`, `local-turns`, `ip-address` |
-| `infra/dev` | Docker Compose, мониторинг и локальные стенды (`db-verify`, `site-verify`, `gitea-verify`, `pipeline-verify`, `llm-verify`) |
-| `ci` | Обязательные workflow сайтов для `platform/ci` в Gitea (пока подменные шаги) |
+| `packages` | Domain, порты и адаптеры, Prisma, auth, tRPC, UI; общее приложений — `app-bootstrap`, `service-runtime`, `turn-keys`, `snapshots`, `local-turns`, `ip-address` |
+| `infra/dev` | Docker Compose, мониторинг и локальные стенды (`*-verify`) |
 | `infra/app`, `infra/sandbox`, `infra/egress` | app-ВМ, песочная ВМ и узел выхода к провайдерам моделей |
-| `infra/vault`, `infra/wordpress` | Политики и bootstrap Vault; плагин контента для WordPress |
+| `infra/vault`, `infra/preview` | Политики и bootstrap Vault; образы инструментов и браузера |
 | `docs/spec.md` | Спецификация и архитектура |
 | `docs/plan/roadmap.md` | Готовность этапов и следующие задачи |
 | `CLAUDE.md`, `.claude/` | Правила и команды для работы с проектом |

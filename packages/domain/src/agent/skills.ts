@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { parseEgressHost } from '../preview/egress-hosts.ts'
+import { parseEgressHost } from '../egress/egress-hosts.ts'
 
 // The skills of a workspace's agent (owner's request of 26.10.2026: «установи для агента по умолчанию
 // следующие скилы и сделай возможность добавлять — context7, playwright»): MCP servers the CLI of

@@ -63,7 +63,13 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
-import { consentedProcedure, protectedProcedure, router, type Context } from '../trpc.ts'
+import {
+  consentedProcedure,
+  protectedProcedure,
+  requestOnce,
+  router,
+  type Context,
+} from '../trpc.ts'
 
 // Billing is kept for the user's personal workspace. A user who has neither added a site nor
 // paid has no workspace yet: no subscription, no sites, and no credits but the gift of the
@@ -181,7 +187,7 @@ function emptyActivity(days: number, now: Date) {
 
 const noPayments: PaymentsPageDto = { items: [], nextCursor: null }
 
-type Viewer = Pick<Context, 'prisma' | 'billing'> & { user: { id: string } }
+type Viewer = Pick<Context, 'prisma' | 'billing' | 'memo'> & { user: { id: string } }
 
 /**
  * The environment decides which workspace is the personal one, as in project.create. With
@@ -190,14 +196,27 @@ type Viewer = Pick<Context, 'prisma' | 'billing'> & { user: { id: string } }
 const appEnvOf = ({ billing }: Pick<Context, 'billing'>): AppEnv =>
   billing?.appEnv ?? appEnvSchema.parse(process.env.APP_ENV)
 
-/** The user's personal workspace; null while they have none. */
-async function personalWorkspaceId(viewer: Viewer): Promise<string | null> {
+/** The user's personal workspace, read from the database; null while they have none. */
+async function readPersonalWorkspaceId(viewer: Viewer): Promise<string | null> {
   const { prisma, user } = viewer
   const workspace = await findPersonalWorkspace(prisma, {
     userId: user.id,
     appEnv: appEnvOf(viewer),
   })
   return workspace?.id ?? null
+}
+
+/**
+ * The user's personal workspace; null while they have none. Read once per HTTP request for the
+ * procedures of a batch (`requestOnce`); «none» is not kept: a checkout may make it.
+ */
+function personalWorkspaceId(viewer: Viewer): Promise<string | null> {
+  return requestOnce(
+    viewer,
+    `personal-workspace:${appEnvOf(viewer)}:${viewer.user.id}`,
+    () => readPersonalWorkspaceId(viewer),
+    (id) => id !== null,
+  )
 }
 
 /**
@@ -223,7 +242,8 @@ async function creditsHome(viewer: Viewer): Promise<CreditsHome> {
   if (!(await isSignupGiftGranted(viewer.prisma, viewer.user.id))) {
     return { workspaceId: null, giftGranted: false }
   }
-  const made = await personalWorkspaceId(viewer)
+  // A second look at the database itself, not the first answer of the request.
+  const made = await readPersonalWorkspaceId(viewer)
   return made === null ? { workspaceId: null, giftGranted: true } : { workspaceId: made }
 }
 

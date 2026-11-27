@@ -32,6 +32,9 @@ const TITLE_LIMIT = 120
  */
 export const dialogListKey = ['chat', 'dialogs'] as const
 
+/** The chat the list's folders read (`task.get`): the page puts it there as it opens (P33.4). */
+export const dialogChatKey = (taskId: string | null) => [...dialogListKey, 'chat', taskId] as const
+
 /**
  * «Закрепить» and «В архив» of a chat (ВВ21): the press, then every read of the list again. A
  * refusal is the list's own: it reads again and shows the chat as the server has it.

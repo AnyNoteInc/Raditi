@@ -37,9 +37,15 @@ export async function galleryOf(
     kind?: string | null | undefined
     projectId?: string | null | undefined
     sort?: ArtifactGallerySort | undefined
+    limit?: number | undefined
+    cursor?: { id: string; updatedAt: string; title: string } | null | undefined
   },
 ) {
-  const rows = await listArtifacts(db, input)
+  const { cursor, ...rest } = input
+  const rows = await listArtifacts(db, {
+    ...rest,
+    after: cursor ? { ...cursor, updatedAt: new Date(cursor.updatedAt) } : null,
+  })
   return rows.map((row) => ({
     ...row,
     createdAt: row.createdAt.toISOString(),

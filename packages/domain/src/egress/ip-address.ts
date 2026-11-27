@@ -1,12 +1,10 @@
-import { isProduction, type AppEnv } from '../app-env.ts'
-
 /**
- * Which addresses may be a client's site or one of its servers — spec §12. Pure: own parsing
- * of IP literals, no resolver. `public` is accepted everywhere; `local` only outside
- * production, where the site is a WordPress on the developer's machine or network; null never.
- * Whoever connects classifies every resolved address as well (site-connection/address.ts).
+ * Which addresses and names are public — spec §12, first the rule of a client's site, now of the
+ * egress of a sandbox and of a browser session (egress-hosts.ts, browser/hosts.ts). Pure: own
+ * parsing of IP literals, no resolver. `public` is a public unicast address or name; `local` is
+ * loopback, a private network or a local zone; null is never reachable.
  */
-export type SiteAddressClass = 'public' | 'local'
+export type AddressClass = 'public' | 'local'
 
 type Octets = [number, number, number, number]
 
@@ -56,8 +54,8 @@ function parseIpv6(text: string): number[] | null {
   return [...left, ...new Array<number>(8 - left.length - right.length).fill(0), ...right]
 }
 
-function classifyIpv4([a, b, c]: Octets): SiteAddressClass | null {
-  // Loopback and RFC 1918: a site on the developer's machine or network.
+function classifyIpv4([a, b, c]: Octets): AddressClass | null {
+  // Loopback and RFC 1918.
   if (a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168))
     return 'local'
   // Never a site: "this network", shared address space, link-local (cloud metadata), IETF
@@ -74,7 +72,7 @@ function classifyIpv4([a, b, c]: Octets): SiteAddressClass | null {
   return 'public'
 }
 
-function classifyIpv6(groups: readonly number[]): SiteAddressClass | null {
+function classifyIpv6(groups: readonly number[]): AddressClass | null {
   const [first = 0, second = 0] = groups
   // `::1` and unique local addresses, fc00::/7.
   if (groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1) return 'local'
@@ -89,7 +87,7 @@ function classifyIpv6(groups: readonly number[]): SiteAddressClass | null {
 }
 
 /** An IPv4 dotted quad or an IPv6 literal without brackets or zone. Anything else is null. */
-export function classifySiteAddress(address: string): SiteAddressClass | null {
+export function classifyIpAddress(address: string): AddressClass | null {
   const octets = parseIpv4(address)
   if (octets) return classifyIpv4(octets)
   const groups = parseIpv6(address)
@@ -101,7 +99,7 @@ const NEVER_ZONES = /(?:^|\.)(?:invalid|onion)$/i
 const LOCAL_ZONES = /(?:^|\.)(?:localhost|local|internal|test|lan|home)$/i
 
 /** A DNS name by the rule of spec §12. Never resolves. */
-export function classifySiteHostName(name: string): SiteAddressClass | null {
+export function classifyHostName(name: string): AddressClass | null {
   const labels = name.split('.')
   if (
     name.length > 253 ||
@@ -115,11 +113,6 @@ export function classifySiteHostName(name: string): SiteAddressClass | null {
   return labels.length === 1 || LOCAL_ZONES.test(name) ? 'local' : 'public'
 }
 
-/** `public` everywhere; `local` only outside production; null never. */
-export function isSiteAddressAllowed(cls: SiteAddressClass | null, appEnv: AppEnv): boolean {
-  return cls === 'public' || (cls === 'local' && !isProduction(appEnv))
-}
-
 /**
  * The bytes of an IPv4 dotted quad (4) or an IPv6 literal without brackets or zone (16); null
  * for anything else. For prefix matching (the egress proxy's platform subnets).
@@ -129,40 +122,4 @@ export function ipLiteralBytes(address: string): number[] | null {
   if (octets) return [...octets]
   const groups = parseIpv6(address)
   return groups ? groups.flatMap((group) => [group >> 8, group & 0xff]) : null
-}
-
-/** 4 or 6 for a canonical IP literal, 0 for anything else. */
-export function siteAddressFamily(host: string): 0 | 4 | 6 {
-  if (parseIpv4(host)) return 4
-  return parseIpv6(host) ? 6 : 0
-}
-
-/** The constructor, not `URL.parse`: the wizard validates in browsers that do not have it yet. */
-function parseUrl(text: string): URL | null {
-  try {
-    return new URL(text)
-  } catch {
-    return null
-  }
-}
-
-/**
- * A bare host as the platform stores it: lower case, punycode, canonical IP literal without
- * brackets, no trailing dot. null when the text is not a bare host (scheme, port, path, userinfo,
- * whitespace). Uses the global URL, so `127.1` becomes `127.0.0.1` here already.
- */
-export function normalizeSiteHost(text: string): string | null {
-  // Refused before parsing: URL drops tabs and line breaks, decodes `%41` and reads `\` as `/`.
-  if (/[\s/\\?#@%]/.test(text)) return null
-  // A colon belongs to an IPv6 literal only: with a name or an IPv4 address it starts a port.
-  if (text.startsWith('[') || text.includes(':')) {
-    const literal = text.startsWith('[') ? text.slice(1, -1) : text
-    if (text.startsWith('[') !== text.endsWith(']') || /[[\]]/.test(literal)) return null
-    return parseUrl(`http://[${literal}]/`)?.hostname.slice(1, -1) ?? null
-  }
-  const url = parseUrl(`http://${text}/`)
-  if (!url || url.port !== '' || url.pathname !== '/') return null
-  // The one dot of a root name is dropped; after a second one an empty label is left.
-  const host = url.hostname.replace(/\.$/, '')
-  return host === '' || host.endsWith('.') ? null : host
 }

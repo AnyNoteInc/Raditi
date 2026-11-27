@@ -92,8 +92,9 @@ describe('gateway persistence boundaries', () => {
   })
 
   it('names the content-refusal event as a literal, so its partial index always applies', async () => {
-    const { store, $transaction } = fixture()
+    const { store, $transaction, $queryRaw } = fixture()
     const sql = vi.fn().mockResolvedValue([])
+    $queryRaw.mockImplementation(sql)
     $transaction.mockImplementation((work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
       work({ $queryRaw: sql } as unknown as Prisma.TransactionClient),
     )
@@ -125,7 +126,6 @@ describe('gateway persistence boundaries', () => {
       work(tx),
     )
     const operations = [
-      () => store.lookup('a'.repeat(64), '127.0.0.1'),
       () => store.admit(input()),
       () => store.finish(randomUUID(), finish()),
       () => store.refuse(randomUUID(), 'budget'),
@@ -146,5 +146,12 @@ describe('gateway persistence boundaries', () => {
       expect(sql).toHaveBeenCalledTimes(1)
     }
     expect($queryRaw).not.toHaveBeenCalled()
+  })
+  it('reads a key in one statement, outside any transaction', async () => {
+    const { store, $transaction, $queryRaw } = fixture()
+    $queryRaw.mockResolvedValue([])
+    expect(await store.lookup('a'.repeat(64), '127.0.0.1')).toBeNull()
+    expect($queryRaw).toHaveBeenCalledTimes(1)
+    expect($transaction).not.toHaveBeenCalled()
   })
 })

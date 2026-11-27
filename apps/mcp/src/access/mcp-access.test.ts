@@ -200,6 +200,7 @@ describe('MCP token access', () => {
       expect.objectContaining({
         where: {
           taskId: base.taskId,
+          clientVisible: true,
           type: 'feed.request',
           createdAt: { lt: new Date('2026-11-16T06:00:00.124Z') },
         },
@@ -218,12 +219,45 @@ describe('MCP token access', () => {
       const feed = dbOf(old, { run: true, requests: 2 })
       expect((await new PostgresMcpAccess(feed).authenticate(token))?.unattended).toBe(false)
       expect(feed.taskEvent.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { taskId: base.taskId, type: 'feed.request' } }),
+        expect.objectContaining({
+          where: { taskId: base.taskId, clientVisible: true, type: 'feed.request' },
+        }),
       )
     }
     // The instant is the plan's own, read by the admission query from the assignment.
     const sql = ($queryRaw.mock.calls[0] as unknown as [string[]])[0].join('$')
     expect(sql).toContain(`a.plan->>'committedAt' AS "answeredAt"`)
+  })
+
+  it('reads whether a pass is unattended once per pass, and the token on every call', async () => {
+    const base = scope()
+    const answeredAt = '2026-11-16T06:00:00.123Z'
+    let deadlineAt: unknown = new Date(Date.now() + 60_000)
+    const $queryRaw = vi.fn(async () => [{ ...row(base), answeredAt, deadlineAt }])
+    const db = dbOf($queryRaw, { run: true, requests: 1 })
+    const store = new PostgresMcpAccess(db)
+    for (let call = 0; call < 3; call += 1)
+      expect((await store.authenticate(token))?.unattended).toBe(true)
+    expect($queryRaw).toHaveBeenCalledTimes(3)
+    expect(db.scheduledRun.findUnique).toHaveBeenCalledTimes(1)
+    expect(db.taskEvent.findMany).toHaveBeenCalledTimes(1)
+    // The next pass answers another request: asked again.
+    $queryRaw.mockResolvedValueOnce([
+      { ...row(base), answeredAt: '2026-11-16T06:00:04.500Z', deadlineAt },
+    ])
+    await store.authenticate(token)
+    expect(db.scheduledRun.findUnique).toHaveBeenCalledTimes(2)
+    // A token the query no longer admits is refused at once, whatever is kept of its pass.
+    $queryRaw.mockResolvedValueOnce([])
+    expect(await store.authenticate(token)).toBeNull()
+    // Nothing is kept past the deadline of the assignment, nor without one.
+    const late = new PostgresMcpAccess(db)
+    for (const passed of [new Date(Date.now() - 1), null]) {
+      deadlineAt = passed
+      await late.authenticate(token)
+      await late.authenticate(token)
+    }
+    expect(db.scheduledRun.findUnique).toHaveBeenCalledTimes(6)
   })
 
   it('looks up the token its issuer generates, by the hash its issuer stores', async () => {

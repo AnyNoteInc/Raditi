@@ -77,6 +77,14 @@ export const MCP_ACCESS_PROBE_TOKEN = `mcp_${'0'.repeat(64)}`
  * admitted by the row of `site_leases` its assignment names: the chat's own (its id).
  */
 export class PostgresMcpAccess implements McpAccessStore {
+  /**
+   * `unattended` of a pass, by its task and the instant of the request it answers: decided for
+   * the pass (Зп27), it does not change while the pass runs, so its two reads are asked once per
+   * pass, not once per call. Kept no longer than the assignment's deadline; the token itself is
+   * checked by every call.
+   */
+  readonly #unattended = new Map<string, { value: boolean; until: number }>()
+
   constructor(
     private readonly prisma: Pick<PrismaClient, '$queryRaw' | 'scheduledRun' | 'taskEvent'>,
   ) {}
@@ -91,7 +99,7 @@ export class PostgresMcpAccess implements McpAccessStore {
         u.id AS "authorId", u.agent_memory AS "agentMemory", t.project_id AS "projectId",
         (p.deleted_at IS NOT NULL) AS "projectGone",
         a.plan->'repository' AS "repository",
-        a.plan->>'committedAt' AS "answeredAt",
+        a.plan->>'committedAt' AS "answeredAt", a.deadline_at AS "deadlineAt",
         (k.vision_model_id IS NOT NULL) AS vision
       FROM llm_keys k JOIN tasks t ON t.id = k.task_id
       LEFT JOIN users u ON u.id = t.created_by_id
@@ -118,13 +126,53 @@ export class PostgresMcpAccess implements McpAccessStore {
     // Whether the client is there is one rule of the platform (Зп27), decided for the pass: by the
     // request it answers, never by what the feed holds when a call comes.
     const answeredAt = answeredAtOf(rows[0])
-    const unattended = await passUnattended(
-      this.prisma,
+    const unattended = await this.#passUnattended(
       parsed.data.taskId,
-      answeredAt === null ? undefined : { answeredAt },
+      answeredAt,
+      deadlineOf(rows[0]),
     )
     return { ...parsed.data, unattended }
   }
+
+  async #passUnattended(
+    taskId: string,
+    answeredAt: Date | null,
+    deadline: Date | null,
+  ): Promise<boolean> {
+    // Without the instant of its request the whole feed is read, which may change: not kept.
+    if (answeredAt === null) return passUnattended(this.prisma, taskId)
+    const key = `${taskId}|${answeredAt.getTime()}`
+    const now = Date.now()
+    const kept = this.#unattended.get(key)
+    if (kept !== undefined && kept.until > now) return kept.value
+    const value = await passUnattended(this.prisma, taskId, { answeredAt })
+    if (deadline !== null && deadline.getTime() > now) {
+      this.#unattended.delete(key)
+      this.#unattended.set(key, { value, until: deadline.getTime() })
+      this.#forgetPassed(now)
+    }
+    return value
+  }
+
+  /** Passes past their deadline go; the oldest go first past the bound of the map. */
+  #forgetPassed(now: number): void {
+    if (this.#unattended.size <= UNATTENDED_KEPT) return
+    for (const [key, kept] of this.#unattended) if (kept.until <= now) this.#unattended.delete(key)
+    for (const key of this.#unattended.keys()) {
+      if (this.#unattended.size <= UNATTENDED_KEPT) break
+      this.#unattended.delete(key)
+    }
+  }
+}
+
+/** How many passes `PostgresMcpAccess` keeps `unattended` of: more than run at once. */
+const UNATTENDED_KEPT = 4096
+
+/** The deadline of the turn's assignment, as the admission query read it; null — unreadable. */
+function deadlineOf(row: unknown): Date | null {
+  const value = (row as { deadlineAt?: unknown } | null)?.deadlineAt
+  const at = value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null
+  return at === null || Number.isNaN(at.getTime()) ? null : at
 }
 
 /**
@@ -144,7 +192,8 @@ function answeredAtOf(row: unknown): Date | null {
 /** The admission row with the task's need of a browser folded into its requirements. */
 function accessOf(row: unknown): unknown {
   if (!row || typeof row !== 'object') return row
-  // `answeredAt` is the pass's, not the scope's: read by `answeredAtOf`.
+  // `answeredAt` and `deadlineAt` are the pass's, not the scope's: read by `answeredAtOf` and
+  // `deadlineOf`.
   const {
     needsBrowser,
     authorId,
@@ -153,6 +202,7 @@ function accessOf(row: unknown): unknown {
     projectGone,
     repository,
     answeredAt: _answeredAt,
+    deadlineAt: _deadlineAt,
     ...access
   } = row as Record<string, unknown>
   const memory =

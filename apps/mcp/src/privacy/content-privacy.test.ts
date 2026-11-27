@@ -1,12 +1,66 @@
 import { randomUUID } from 'node:crypto'
 
-import { conflict, contactMarkerPattern, type KvSecret } from '@repo/domain'
-import { createVaultSecretStore } from '@repo/vault'
+import { conflict, contactMarkerPattern, type KvSecret, type SecretStore } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
+import { findContacts } from './content-contacts.ts'
 import { contentMaskPath, ContentPrivacy } from './content-privacy.ts'
 
+type Scope = { siteId: string; taskId: string }
+type Fields = Readonly<Record<string, string>>
 const scope = { siteId: randomUUID(), taskId: randomUUID() }
+
+/**
+ * What a read of a page left before 09.11.2026, while the role still hid contacts in pages
+ * (spec §20, ДС3): the task's map in Vault and markers in the text. Every contact found and every
+ * repeat of a known one is a marker, one per value. The role writes no such map any more; it only
+ * gives back the contacts of the markers that earlier turns left (`rehydrate`).
+ */
+async function previousRead<Read extends Fields>(
+  secrets: Pick<SecretStore, 'kvRead' | 'kvWrite'>,
+  at: Scope,
+  fields: Read,
+): Promise<Read> {
+  const path = contentMaskPath(at)
+  const stored = await secrets.kvRead(path)
+  const entries = stored
+    ? (JSON.parse(stored.data.entries!) as Array<{ id: string; kind: string; value: string }>)
+    : []
+  const before = entries.length
+  const known = new Map(entries.map((entry) => [`${entry.kind}:${entry.value}`, entry]))
+  for (let pass = 0; pass < 6; pass++) {
+    const searched = [...entries]
+    const view = Object.fromEntries(
+      Object.entries(fields).map(([key, text]) => {
+        let result = ''
+        let copied = 0
+        for (const { kind, start, end } of findContacts(text, searched as never)) {
+          const value = text.slice(start, end)
+          let entry = known.get(`${kind}:${value}`)
+          if (!entry) {
+            entry = { id: randomUUID(), kind, value }
+            entries.push(entry)
+            known.set(`${kind}:${value}`, entry)
+          }
+          result += `${text.slice(copied, start)}[[raditi:${kind}:${entry.id}]]`
+          copied = end
+        }
+        return [key, result + text.slice(copied)]
+      }),
+    ) as Read
+    if (entries.length === searched.length) {
+      if (entries.length > before)
+        await secrets.kvWrite(
+          path,
+          { entries: JSON.stringify(entries) },
+          { cas: stored?.version ?? 0 },
+        )
+      return view
+    }
+  }
+  throw new Error('The page never settled')
+}
+
 function fixture() {
   const records = new Map<string, KvSecret>()
   const secrets = {
@@ -20,39 +74,13 @@ function fixture() {
       },
     ),
   }
-  return { records, secrets, privacy: new ContentPrivacy(secrets) }
-}
-
-/** The real KV adapter over an in-memory KV v2: its own size and CAS rules stay in force. */
-function vaultFixture() {
-  const stored = new Map<string, { data: Record<string, string>; version: number }>()
-  const sent = { largestBytes: 0 }
-  const fetch = vi.fn<typeof globalThis.fetch>(async (url, init) => {
-    const path = new URL(String(url)).pathname
-    const current = stored.get(path)
-    if (init?.method === 'POST') {
-      sent.largestBytes = Math.max(sent.largestBytes, Buffer.byteLength(String(init.body)))
-      const body = JSON.parse(String(init.body)) as {
-        data: Record<string, string>
-        options?: { cas?: number }
-      }
-      if (body.options?.cas !== (current?.version ?? 0)) return new Response(null, { status: 400 })
-      const version = (current?.version ?? 0) + 1
-      stored.set(path, { data: body.data, version })
-      return Response.json({ data: { version } })
-    }
-    if (!current) return new Response(null, { status: 404 })
-    const metadata = { version: current.version, deletion_time: '', destroyed: false }
-    return Response.json({ data: { data: current.data, metadata } })
-  })
-  const secrets = createVaultSecretStore({
-    addr: 'http://vault.test:8200',
-    token: 'synthetic-token',
-    fetch,
-  })
-  const requests = (method: string) =>
-    fetch.mock.calls.filter(([, init]) => init?.method === method).length
-  return { stored, sent, requests, privacy: new ContentPrivacy(secrets) }
+  const role = new ContentPrivacy(secrets)
+  const privacy = {
+    rehydrate: <Patch extends Fields>(at: Scope, patch: Patch) => role.rehydrate(at, patch),
+    /** A read of a page as it was before 09.11.2026: it writes the map. */
+    mask: <Read extends Fields>(at: Scope, fields: Read) => previousRead(secrets, at, fields),
+  }
+  return { records, secrets, privacy }
 }
 
 const fields = (content: string) => ({ title: '', content, excerpt: '' })
@@ -88,15 +116,15 @@ describe('where the map of a task lives', () => {
   ])('is never built from anything but two identifiers: %j', async (foreign) => {
     expect(() => contentMaskPath(foreign)).toThrow('Invalid content privacy scope')
     const { privacy, secrets } = fixture()
-    await expect(privacy.mask(foreign, fields('contact@example.test'))).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-    })
+    await expect(
+      privacy.rehydrate(foreign, { content: `[[raditi:email:${randomUUID()}]]` }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(secrets.kvRead).not.toHaveBeenCalled()
   })
 })
 
-describe('published content privacy', () => {
-  it('masks ordinary and encoded emails and phones, preserving their original bytes on input', async () => {
+describe('the markers that turns before 09.11.2026 were given', () => {
+  it('gives back ordinary and encoded emails and phones in their original bytes', async () => {
     const { privacy, secrets } = fixture()
     const original = {
       title: 'Напишите test@example.test',
@@ -117,43 +145,28 @@ describe('published content privacy', () => {
     expect(secrets.kvWrite).toHaveBeenCalledOnce()
   })
 
-  it('persists a map before returning markers and reuses it after process replacement', async () => {
+  it('reads the map of the task in Vault, in a process that did not write it', async () => {
     const { privacy, secrets } = fixture()
     const original = fields('contact@example.test')
     const masked = await privacy.mask(scope, original)
     expect(await new ContentPrivacy(secrets).rehydrate(scope, masked)).toEqual(original)
+    // Text without a marker is given back as it is, without a read of Vault.
+    secrets.kvRead.mockClear()
+    expect(await new ContentPrivacy(secrets).rehydrate(scope, original)).toEqual(original)
+    expect(secrets.kvRead).not.toHaveBeenCalled()
   })
 
-  it('does not expose an unacknowledged marker or replay a write no other writer explains', async () => {
-    const { privacy, secrets } = fixture()
-    secrets.kvWrite.mockRejectedValue(new Error('private Vault detail'))
-    await expect(privacy.mask(scope, fields('contact@example.test'))).rejects.toMatchObject({
+  it('reads a broken or unreadable map as an outage, never as no contacts', async () => {
+    const { privacy, secrets, records } = fixture()
+    const masked = await privacy.mask(scope, fields('contact@example.test'))
+    records.set(contentMaskPath(scope), { data: { entries: '{' }, version: 2 })
+    await expect(privacy.rehydrate(scope, masked)).rejects.toMatchObject({
       code: 'CONTENT_PRIVACY_UNAVAILABLE',
     })
-    // The map did not move, so this was not a lost CAS race: a second attempt cannot differ.
-    expect(secrets.kvWrite).toHaveBeenCalledOnce()
-  })
-
-  it('adopts its own write after a lost acknowledgement', async () => {
-    const { privacy, secrets } = fixture()
-    const write = secrets.kvWrite.getMockImplementation()!
-    secrets.kvWrite.mockImplementationOnce(async (...args) => {
-      await write(...args)
-      throw new Error('lost acknowledgement')
+    secrets.kvRead.mockRejectedValueOnce(new Error('private Vault detail'))
+    await expect(privacy.rehydrate(scope, masked)).rejects.toMatchObject({
+      code: 'CONTENT_PRIVACY_UNAVAILABLE',
     })
-    const original = fields('contact@example.test +7 (999) 123-45-67')
-    const masked = await privacy.mask(scope, original)
-    expect(secrets.kvWrite).toHaveBeenCalledOnce()
-    expect(await privacy.rehydrate(scope, masked)).toEqual(original)
-  })
-
-  it('reconciles simultaneous masks with CAS instead of losing a contact', async () => {
-    const { privacy } = fixture()
-    const values = await Promise.all(
-      ['a@example.test', 'b@example.test'].map((content) => privacy.mask(scope, fields(content))),
-    )
-    expect((await privacy.rehydrate(scope, values[0]!)).content).toBe('a@example.test')
-    expect((await privacy.rehydrate(scope, values[1]!)).content).toBe('b@example.test')
   })
 
   it('refuses unknown, malformed and foreign-task markers', async () => {
@@ -168,20 +181,6 @@ describe('published content privacy', () => {
     await expect(
       privacy.rehydrate(scope, { content: `[[raditi:email:${randomUUID()}]]` }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-  })
-
-  it('refuses reserved source markers and a page with more contacts than a map holds', async () => {
-    const { privacy, secrets } = fixture()
-    await expect(
-      privacy.mask(scope, { title: '[[raditi:forged]]', content: '', excerpt: '' }),
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-    await expect(
-      privacy.mask(
-        scope,
-        fields(Array.from({ length: 513 }, (_, index) => `c${index}@example.test`).join(' ')),
-      ),
-    ).rejects.toMatchObject({ code: 'CONTENT_PRIVACY_LIMIT', httpStatus: 413 })
-    expect(secrets.kvWrite).not.toHaveBeenCalled()
   })
 })
 
@@ -708,27 +707,6 @@ describe('a marker the agent moves never brings its contact back in plain text',
     }
   })
 
-  it('shows nothing of a page whose repeats never settle', async () => {
-    const { secrets } = fixture()
-    vi.resetModules()
-    // Every pass finds one more value: there is no state in which all of them are hidden.
-    vi.doMock('./content-contacts.ts', () => ({
-      findContacts: (text: string, known: unknown[]) => [
-        { kind: 'phone', start: 0, end: Math.min(text.length, known.length + 1) },
-      ],
-    }))
-    try {
-      const restless = await import('./content-privacy.ts')
-      await expect(
-        new restless.ContentPrivacy(secrets).mask(scope, fields('8'.repeat(64))),
-      ).rejects.toMatchObject({ code: 'CONTENT_PRIVACY_LIMIT' })
-      expect(secrets.kvWrite).not.toHaveBeenCalled()
-    } finally {
-      vi.doUnmock('./content-contacts.ts')
-      vi.resetModules()
-    }
-  })
-
   it('masks a 32 KiB field against a full map in linear time', async () => {
     const { privacy, secrets } = fixture()
     const pair = (value: number) => String(value % 100).padStart(2, '0')
@@ -759,89 +737,4 @@ describe('a marker the agent moves never brings its contact back in plain text',
     expect(await timed(row(1050 * 64))).toBeLessThan(45_000)
     expect(secrets.kvWrite).toHaveBeenCalledOnce()
   }, 60_000)
-})
-
-describe('the map inside the Vault KV limits', () => {
-  const contacts = (from: number, count: number) =>
-    fields(
-      Array.from(
-        { length: count },
-        (_, index) => `user${String(from + index).padStart(4, '0')}@example.com`,
-      ).join(' '),
-    )
-
-  it('reports a full map as a permanent limit instead of retrying a write Vault refuses', async () => {
-    const { privacy, requests } = vaultFixture()
-    const first = await privacy.mask(scope, contacts(0, 300))
-    expect(requests('POST')).toBe(1)
-    const reads = requests('GET')
-    // 365 entries are 33 581 characters: more than one KV value takes.
-    await expect(privacy.mask(scope, contacts(300, 65))).rejects.toMatchObject({
-      code: 'CONTENT_PRIVACY_LIMIT',
-      httpStatus: 413,
-    })
-    expect(requests('POST')).toBe(1)
-    expect(requests('GET')).toBe(reads + 1)
-    // The task keeps the contacts it already knows.
-    expect(await privacy.mask(scope, contacts(0, 300))).toEqual(first)
-    expect(await privacy.rehydrate(scope, first)).toEqual(contacts(0, 300))
-  })
-
-  it('fills one KV value to its limit and never sends a larger one', async () => {
-    const { privacy, requests, stored } = vaultFixture()
-    let known = 0
-    for (;;) {
-      const outcome = await privacy.mask(scope, contacts(known, 10)).then(
-        () => 'stored',
-        (error: { code?: string }) => error.code,
-      )
-      if (outcome !== 'stored') {
-        expect(outcome).toBe('CONTENT_PRIVACY_LIMIT')
-        break
-      }
-      known += 10
-      expect(requests('POST')).toBe(known / 10)
-    }
-    const [map] = [...stored.values()]
-    expect(Object.keys(map!.data)).toEqual(['entries'])
-    expect(map!.data.entries!.length).toBeLessThanOrEqual(32_768)
-    expect(map!.data.entries!.length).toBeGreaterThan(32_768 - 10 * 100)
-    expect(known).toBeGreaterThanOrEqual(350)
-    expect(await privacy.rehydrate(scope, await privacy.mask(scope, contacts(0, known)))).toEqual(
-      contacts(0, known),
-    )
-  })
-
-  it('counts the request in bytes when addresses are not ASCII', async () => {
-    const { privacy, requests, sent, stored } = vaultFixture()
-    // 128 characters and 372 bytes each: the 64 KiB request fills before the 32 768 characters.
-    const wide = (from: number, count: number) =>
-      fields(
-        Array.from(
-          { length: count },
-          (_, index) =>
-            `${'字'.repeat(60)}${String(from + index).padStart(4, '0')}@${'例'.repeat(60)}.网址`,
-        ).join(' '),
-      )
-    let known = 0
-    for (;;) {
-      const outcome = await privacy.mask(scope, wide(known, 5)).then(
-        () => 'stored',
-        (error: { code?: string }) => error.code,
-      )
-      if (outcome !== 'stored') {
-        expect(outcome).toBe('CONTENT_PRIVACY_LIMIT')
-        break
-      }
-      known += 5
-      expect(requests('POST')).toBe(known / 5)
-    }
-    expect(known).toBeGreaterThanOrEqual(140)
-    expect([...stored.values()][0]!.data.entries!.length).toBeLessThan(32_768 - 2000)
-    expect(sent.largestBytes).toBeLessThanOrEqual(64 * 1024)
-    expect(sent.largestBytes).toBeGreaterThan(64 * 1024 - 5 * 500)
-    expect(await privacy.rehydrate(scope, await privacy.mask(scope, wide(0, known)))).toEqual(
-      wide(0, known),
-    )
-  })
 })

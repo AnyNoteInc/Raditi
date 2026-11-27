@@ -6,8 +6,8 @@ import { ContentPrivacy } from './content-privacy.ts'
 import { CONTENT_PRIVACY } from './privacy.tokens.ts'
 
 /**
- * What the agent may not see of a page: contacts become opaque markers, their map stays in
- * Vault (`kv/content-masks/…`). Stateless: content and the browser share the one instance.
+ * The contacts behind the markers pages showed the agent before 09.11.2026: their map stays in
+ * Vault (`kv/content-masks/…`), and the browser gives them back when the agent types a marker.
  */
 @Module({
   providers: [

@@ -252,6 +252,7 @@ export async function readTurnDiff(
   const card = await db.taskEvent.findFirst({
     where: {
       taskId: task.id,
+      clientVisible: true,
       type: 'feed.repo_changes',
       payload: { path: ['headSha'], equals: input.headSha },
     },
@@ -443,7 +444,7 @@ async function proposalOf(
   title: string | null,
 ): Promise<NonNullable<PreparedPush['proposal']>> {
   const row = await db.taskEvent.findFirst({
-    where: { taskId, type: 'feed.repo_proposal' },
+    where: { taskId, clientVisible: true, type: 'feed.repo_proposal' },
     orderBy: { id: 'desc' },
     select: { payload: true },
   })

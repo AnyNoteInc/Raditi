@@ -1,6 +1,6 @@
 'use client'
 
-import { envVarLimits, envVarNameProblem } from '@repo/domain/release/env-vars'
+import { envVarLimits, envVarNameProblem } from '@repo/domain/workspace-env/env-vars'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'

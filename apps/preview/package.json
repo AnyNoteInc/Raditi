@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "nest start --watch",
-    "build": "pnpm --filter @repo/service-runtime build && nest build",
+    "build": "nest build",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
@@ -29,7 +29,6 @@
   },
   "devDependencies": {
     "@nestjs/cli": "catalog:",
-    "@nestjs/testing": "catalog:",
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@swc/core": "catalog:",

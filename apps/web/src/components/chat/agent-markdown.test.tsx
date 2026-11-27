@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import { AgentMarkdown, fenceTextTrees, hiddenHost, linkUrl } from './agent-markdown'
+import { AgentMarkdown, fenceTextTrees, hasNamedCode, hiddenHost, linkUrl } from './agent-markdown'
 
 describe('the agent’s words as Markdown', () => {
   it('draws emphasis, lists and code, and drops raw HTML', () => {
@@ -99,13 +99,25 @@ describe('the agent’s words as Markdown', () => {
 })
 
 describe('code of the answer (docs/plan/76, И5)', () => {
-  it('is coloured when its block names a language, and stays plain otherwise', () => {
+  it('is coloured when its block names a language, and stays plain otherwise', async () => {
     const { container } = render(
       <AgentMarkdown text={'```php\n<?php echo "Привет"; ?>\n```\n\n```\nпросто текст\n```'} />,
     )
-    const blocks = container.querySelectorAll('pre code')
-    expect(blocks[0]?.querySelector('.hljs-string')?.textContent).toContain('Привет')
-    expect(blocks[1]?.querySelector('[class^="hljs-"]')).toBeNull()
-    expect(blocks[1]?.textContent).toBe('просто текст\n')
+    const blocks = () => container.querySelectorAll('pre code')
+    // Plain at first: the colours come in a chunk of their own (P33.6).
+    expect(blocks()[0]?.textContent).toContain('Привет')
+    await waitFor(
+      () => expect(blocks()[0]?.querySelector('.hljs-string')?.textContent).toContain('Привет'),
+      { timeout: 5_000 },
+    )
+    expect(blocks()[1]?.querySelector('[class^="hljs-"]')).toBeNull()
+    expect(blocks()[1]?.textContent).toBe('просто текст\n')
+  })
+
+  it('loads the colours only for a text with a block that names its language', () => {
+    expect(hasNamedCode('```php\necho 1;\n```')).toBe(true)
+    expect(hasNamedCode('Текст\n\n~~~ yaml\na: 1\n~~~')).toBe(true)
+    expect(hasNamedCode('```\nпросто текст\n```')).toBe(false)
+    expect(hasNamedCode('Ответ без кода, но с `строкой кода`.')).toBe(false)
   })
 })

@@ -74,6 +74,31 @@ export function mergeRows(known: readonly FeedRow[], read: readonly FeedRow[]): 
   return merged
 }
 
+/**
+ * Whether two values read from JSON are the same: the head of a dialog comes anew with every read,
+ * and the screen keeps the copy it has while nothing of it changed (docs/plan/96, P33.3).
+ */
+export function sameJson(first: unknown, second: unknown): boolean {
+  if (first === second) return true
+  if (typeof first !== 'object' || typeof second !== 'object' || first === null || second === null)
+    return false
+  if (Array.isArray(first) !== Array.isArray(second)) return false
+  if (Array.isArray(first)) {
+    const other = second as unknown[]
+    return (
+      first.length === other.length && first.every((item, index) => sameJson(item, other[index]))
+    )
+  }
+  const firstKeys = Object.keys(first)
+  const secondRecord = second as Record<string, unknown>
+  if (firstKeys.length !== Object.keys(second).length) return false
+  return firstKeys.every(
+    (key) =>
+      Object.hasOwn(secondRecord, key) &&
+      sameJson((first as Record<string, unknown>)[key], secondRecord[key]),
+  )
+}
+
 export function feedReducer(state: FeedState, action: FeedAction): FeedState {
   if (action.type === 'failed') {
     return {
@@ -92,8 +117,11 @@ export function feedReducer(state: FeedState, action: FeedAction): FeedState {
   // since gives its rows and its head, never its cursor: the reads after the newer cursor are not
   // lost to it.
   const current = after === state.cursor
+  // A read that brought nothing new keeps the head and the rows as they were — the same objects —
+  // so the feed is not drawn again for it (P33.3). The state itself is new: the next read is
+  // planned from it.
   return {
-    head,
+    head: state.head !== null && sameJson(state.head, head) ? state.head : head,
     rows: mergeRows(state.rows, events),
     cursor: current ? cursor : state.cursor,
     failures: 0,

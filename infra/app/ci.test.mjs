@@ -932,7 +932,7 @@ test('a cached test run sees a change of a file its tests read outside their pac
     'packages/domain/src/tasks/client-feed-failures.ts': [
       'apps/web/src/components/chat/chat-texts.test.ts',
     ],
-    'packages/domain/src/release/chat-commands.ts': [
+    'packages/domain/src/chat/chat-commands.ts': [
       'apps/web/src/components/chat/chat-texts.test.ts',
     ],
     // The LLM paths of sandbox-gw against the routes of the registry and the base URL of each.

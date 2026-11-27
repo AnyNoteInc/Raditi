@@ -471,6 +471,30 @@ const NETWORK_TEXT = 'Не удалось связаться с сервером
 describe('a dialog', () => {
   // The page passes null from 61.12 on: nothing fails by itself then (docs/plan/61, К18).
 
+  it('draws the first page the server read with the page and asks nothing after it (P33.4)', async () => {
+    const seeded = waiting({ events: [requestRow('1', 'Сделайте прайс')], cursor: '1' })
+    calls.feed.mockResolvedValue(seeded)
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const chat = { id: TASK_ID, title: 'Прайс', project: null, schedule: null }
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DialogView
+          taskId={TASK_ID}
+          title="Прайс"
+          initialFeed={seeded}
+          initialChat={
+            chat as unknown as NonNullable<Parameters<typeof DialogView>[0]['initialChat']>
+          }
+        />
+      </QueryClientProvider>,
+    )
+    expect(screen.getByText('Сделайте прайс')).toBeTruthy()
+    // The list's folders find the chat in the cache and do not read it again.
+    expect(queryClient.getQueryData(['chat', 'dialogs', 'chat', TASK_ID])).toBe(chat)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(calls.feed).not.toHaveBeenCalled()
+  })
+
   it('reads the chat as soon as a change is signalled, and not for the work of a turn', async () => {
     showDialog(feedAnswer({ status: 'awaiting_user', events: [requestRow('1')], cursor: '1.5' }))
     await waitFor(() => expect(calls.feed).toHaveBeenCalledTimes(1))
@@ -938,7 +962,8 @@ describe('a chat of a run of a scheduled task (docs/plan/82-scheduled-tasks.md)'
       </QueryClientProvider>,
     )
     fireEvent.click(await screen.findByRole('button', { name: 'Изменить задачу из ленты' }))
-    const window = screen.getByRole('dialog', { name: 'Окно задачи' })
+    // The window comes in a chunk of its own, loaded at its first opening (P33.1).
+    const window = await screen.findByRole('dialog', { name: 'Окно задачи' }, { timeout: 5_000 })
     expect(window.textContent).toContain('Изменить task-of-the-card')
     fireEvent.click(within(window).getByRole('button', { name: 'Закрыть окно задачи' }))
     expect(screen.queryByRole('dialog', { name: 'Окно задачи' })).toBeNull()
@@ -1348,7 +1373,11 @@ describe('a task in the browser', () => {
     expect(toolsPanel()).toBeNull()
     expect(await menuTiles()).toEqual(['Браузер, нет'])
     await choose(/^Браузер/)
-    expect(plain(pane().textContent)).toContain('Браузер в этом чате не запускался.')
+    // The pane of the browser comes in a chunk of its own, loaded as its tab first opens (P33.1).
+    await waitFor(
+      () => expect(plain(pane().textContent)).toContain('Браузер в этом чате не запускался.'),
+      { timeout: 5_000 },
+    )
   })
 
   it.each([

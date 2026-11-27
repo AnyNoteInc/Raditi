@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { llmBackends } from '../index.ts'
 import { encodeJson } from '../shared.ts'
+import { createStreamMeter } from '../stream-meter.ts'
 import {
   createZaiBackend,
   opencodeUserAgent,
@@ -626,7 +627,7 @@ describe('the pay-per-token API of Z.ai', () => {
         .streamInspector()
         .inspect({ event: 'message', data: JSON.stringify({ error: { code: '1113' } }) }),
     ).toMatchObject({ kind: 'failure', signal: { kind: 'account_risk', reason: 'zai_1113' } })
-    const meter = api.usageMeter()
+    const meter = createStreamMeter(api)
     meter.push(new TextEncoder().encode(`data: ${JSON.stringify({ error: { code: '1113' } })}\n\n`))
     const result = meter.end()
     expect(result).toMatchObject({ outcome: 'failed', signal: { kind: 'balance_exhausted' } })
@@ -636,7 +637,7 @@ describe('the pay-per-token API of Z.ai', () => {
   it('meters a stream the way the plan does', () => {
     const recorded = sample(chatSamples.plainText).response.sse!
     const read = (target: LlmBackend) => {
-      const meter = target.usageMeter()
+      const meter = createStreamMeter(target)
       meter.push(new TextEncoder().encode(recorded))
       return meter.end()
     }

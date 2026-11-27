@@ -473,7 +473,12 @@ export async function artifactCommentSourceOf(
   input: { taskId: string; requestEventId: bigint },
 ): Promise<bigint | null> {
   const request = await db.taskEvent.findFirst({
-    where: { id: input.requestEventId, taskId: input.taskId, type: 'feed.request' },
+    where: {
+      id: input.requestEventId,
+      taskId: input.taskId,
+      type: 'feed.request',
+      clientVisible: true,
+    },
     select: { id: true, payload: true, artifactCommentHasWords: true },
   })
   if (!request) return null

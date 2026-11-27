@@ -2,7 +2,7 @@
 
 import { attachmentAcceptAttribute } from '@repo/domain/attachments/rules'
 import { attachmentHintText } from '@repo/domain/attachments/labels'
-import { parseChatCommand, type ChatCommandId } from '@repo/domain/release/chat-commands'
+import { parseChatCommand, type ChatCommandId } from '@repo/domain/chat/chat-commands'
 import { feedInputText, feedTooLongText } from '@repo/domain/tasks/client-feed-labels'
 import { FEED_REQUEST_TEXT_LIMIT, hasVisibleText } from '@repo/domain/tasks/client-feed-text'
 import Box from '@mui/material/Box'

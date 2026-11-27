@@ -53,6 +53,7 @@ describe('readTaskScreenshot', () => {
       expect.objectContaining({
         where: {
           taskId,
+          clientVisible: true,
           type: 'feed.screenshot',
           payload: { path: ['screenshotId'], equals: screenshotId },
         },

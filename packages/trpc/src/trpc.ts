@@ -58,6 +58,12 @@ export interface Context {
    * cannot be connected here; the rest works.
    */
   git?: GitServices | null
+  /**
+   * What one HTTP request has read once for all the procedures of its batch (`requestOnce`):
+   * the consents of the user, the personal workspace. Absent — a context made by hand (a test, a
+   * server component): every procedure reads for itself.
+   */
+  memo?: Map<string, Promise<unknown>>
 }
 
 export interface CreateContextOptions {
@@ -96,7 +102,38 @@ export async function createContext({
     chat,
     mcpServers,
     git,
+    memo: new Map(),
   }
+}
+
+/**
+ * A value read once per HTTP request (`Context.memo`): the procedures of a batch share the first
+ * read, and its promise. Only what `keep` says is kept — an answer that may change within the
+ * request (a consent just given, a workspace just made) is read again by the next procedure; a
+ * failed read is not kept either.
+ */
+export function requestOnce<T>(
+  ctx: Pick<Context, 'memo'>,
+  key: string,
+  load: () => Promise<T>,
+  keep: (value: T) => boolean = () => true,
+): Promise<T> {
+  const memo = ctx.memo
+  if (memo === undefined) return load()
+  const known = memo.get(key) as Promise<T> | undefined
+  if (known !== undefined) return known
+  const read = load().then(
+    (value) => {
+      if (!keep(value)) memo.delete(key)
+      return value
+    },
+    (error: unknown) => {
+      memo.delete(key)
+      throw error
+    },
+  )
+  memo.set(key, read)
+  return read
 }
 
 // Stack traces and raw messages reach the browser only in `next dev`.
@@ -154,8 +191,15 @@ export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
  * CONSENT_REQUIRED, and the web sends the user to accept them (consent.acceptRequired).
  */
 export const consentedProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-  const latest = await loadLatestConsents(ctx.prisma, ctx.user.id)
-  if (missingRequiredConsents(latest).length > 0) {
+  // Once per HTTP request, not once per procedure of a batch; a refusal is not kept.
+  const consented = await requestOnce(
+    ctx,
+    `consented:${ctx.user.id}`,
+    async () =>
+      missingRequiredConsents(await loadLatestConsents(ctx.prisma, ctx.user.id)).length === 0,
+    (accepted) => accepted,
+  )
+  if (!consented) {
     throw toTRPCError(new DomainError(CONSENT_REQUIRED, 'Required documents are not accepted', 428))
   }
   return next()
