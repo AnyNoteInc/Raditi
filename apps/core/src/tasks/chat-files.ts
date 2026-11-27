@@ -44,6 +44,9 @@ export function chatFileId(taskId: string, turn: number, name: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
+/** Uploads of one delivery at a time: the feed still gets their rows in the archive's order. */
+export const CHAT_FILE_UPLOADS = 4
+
 export class ChatFiles {
   readonly #deps: ChatFilesDependencies
 
@@ -70,6 +73,7 @@ export class ChatFiles {
     let turnId: string | null = null
     let reserved = new Map<string, FileReservation>()
     const seen = new Set<string>()
+    let settle = async () => {}
     try {
       const turnRow = await db.taskTurn.findFirst({
         where: { taskId, turnNo: turn },
@@ -86,33 +90,71 @@ export class ChatFiles {
       // order the agent asked for them, not the order of the archive — a site's home page before
       // its pages, as the feed tells them (docs/plan/73-pages-sites.md, Дер12).
       const forPages: { name: string; bytes: Uint8Array; sizeBytes: number }[] = []
+      // The files a delivery before this one already wrote (a repeat after a crash): one query.
+      const known = new Set<string>()
+      for (const row of await db.taskEvent.findMany({
+        where: { taskId, clientVisible: true, type: 'feed.file', ...(turnId ? { turnId } : {}) },
+        select: { payload: true },
+      })) {
+        const fileId = (row.payload as { fileId?: unknown } | null)?.fileId
+        if (typeof fileId === 'string') known.add(fileId)
+      }
+      // Up to CHAT_FILE_UPLOADS uploads run at once; each row waits for the rows before it, so
+      // the feed tells the files in the order of the archive. After a failure no row follows.
+      const uploads = new Set<Promise<unknown>>()
+      let rows: Promise<void> = Promise.resolve()
+      let stopped = false
+      const drain = async () => {
+        await rows
+      }
       const putFile = async (file: { name: string; bytes: Uint8Array; sizeBytes: number }) => {
         const fileId = chatFileId(taskId, turn, file.name)
-        const known = await db.taskEvent.findFirst({
-          where: { taskId, type: 'feed.file', payload: { path: ['fileId'], equals: fileId } },
-          select: { id: true },
-        })
-        if (known) return
-        await storage.put('artifacts', chatFileKey(taskId, fileId), file.bytes, {
+        if (known.has(fileId)) return
+        known.add(fileId)
+        while (uploads.size >= CHAT_FILE_UPLOADS) await Promise.race(uploads)
+        if (stopped) return
+        // A copy: the archive reader may reuse the buffer of a file once its callback returns.
+        const bytes = new Uint8Array(file.bytes)
+        const uploaded = storage.put('artifacts', chatFileKey(taskId, fileId), bytes, {
           contentType: 'application/octet-stream',
           sizeBytes: file.sizeBytes,
         })
-        await insertFeedEvent(db, {
-          taskId,
-          turnId,
-          row: {
-            type: 'feed.file',
-            payload: { v: 1, fileId, name: file.name, sizeBytes: file.sizeBytes },
+        const settled = uploaded.then(
+          () => undefined,
+          () => {
+            stopped = true
           },
+        )
+        uploads.add(settled)
+        void settled.finally(() => uploads.delete(settled))
+        rows = rows.then(async () => {
+          await uploaded
+          if (stopped) return
+          await insertFeedEvent(db, {
+            taskId,
+            turnId,
+            row: {
+              type: 'feed.file',
+              payload: { v: 1, fileId, name: file.name, sizeBytes: file.sizeBytes },
+            },
+          })
+          written += 1
         })
-        written += 1
+        // Observed by drain; a rejection here is never left unhandled.
+        rows.catch(() => {
+          stopped = true
+        })
+      }
+      settle = async () => {
+        stopped = true
+        await Promise.allSettled([...uploads, rows])
       }
       const contents = await readOutboxArchive(input.outbox, {
         onFile: async (file) => {
           if (input.taken?.has(file.name)) return
           if (reserved.has(file.name) && pages) {
             seen.add(file.name)
-            // A copy: the archive reader may reuse the buffer of a file once its callback returns.
+            // A copy, as in putFile.
             forPages.push({
               name: file.name,
               bytes: new Uint8Array(file.bytes),
@@ -123,12 +165,17 @@ export class ChatFiles {
           await putFile(file)
         },
       })
+      await drain()
       const order = [...reserved.keys()]
       forPages.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name))
       for (const file of forPages)
         // A file the pages took is the page's; one they cannot draw yet goes on as a file.
-        if (!(await pages!.publish(reserved.get(file.name)!, file.bytes, { taskId, turn, turnId })))
+        if (
+          !(await pages!.publish(reserved.get(file.name)!, file.bytes, { taskId, turn, turnId }))
+        ) {
           await putFile(file)
+          await drain()
+        }
       if (written > 0)
         logger?.log(`chat_files_delivered task=${taskId} turn=${turn} files=${written}`)
       for (const [name, reservation] of reserved)
@@ -140,6 +187,8 @@ export class ChatFiles {
       if (contents.refused) await this.#left(taskId, turnId, 'refused', 0)
       else if (contents.skipped > 0) await this.#left(taskId, turnId, 'skipped', contents.skipped)
     } catch (error) {
+      // Nothing of this delivery is still writing behind the rows below.
+      await settle()
       const reason = isDomainError(error) ? error.code : 'unknown'
       logger?.warn(
         `chat_files_failed task=${taskId} turn=${turn} delivered=${written} reason=${reason}`,
