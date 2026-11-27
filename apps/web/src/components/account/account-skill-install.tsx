@@ -299,7 +299,17 @@ export function InstallSkillDialog({
                   {skill.name}
                 </Typography>
                 {skill.description ? (
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    title={skill.description}
+                    sx={{
+                      display: '-webkit-box',
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden',
+                    }}
+                  >
                     {skill.description}
                   </Typography>
                 ) : null}

@@ -149,6 +149,7 @@ const market: Marketplace = {
       skills: [
         { path: 'skills/xlsx', name: 'xlsx', description: 'Таблицы Excel' },
         { path: 'skills/docx', name: 'docx', description: 'Документы Word' },
+        { path: 'skills/skill-creator', name: 'skill-creator', description: 'Чужой' },
       ],
     },
   ],
@@ -259,6 +260,15 @@ describe('«Навыки»', () => {
     calls.list.mockRejectedValue(new Error('down'))
     show()
     expect((await screen.findByRole('alert')).textContent).toBe(text.loadFailed)
+  })
+})
+
+describe('a skill of a marketplace with a taken name', () => {
+  it('offers no install for a name of a skill of Радити', async () => {
+    show()
+    await screen.findByText('Чужой')
+    expect(screen.queryByRole('button', { name: `${text.install} skill-creator` })).toBeNull()
+    expect(screen.getAllByText(text.nameTaken).length).toBe(1)
   })
 })
 

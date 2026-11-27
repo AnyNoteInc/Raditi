@@ -13,6 +13,7 @@ import Skeleton from '@mui/material/Skeleton'
 import Switch from '@mui/material/Switch'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import { builtinSkillNames, isReservedSkillName } from '@repo/domain/account-skills'
 import type { AppRouter } from '@repo/trpc'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { inferRouterOutputs } from '@trpc/server'
@@ -494,10 +495,12 @@ export function AccountSkills() {
           <TextField
             size="small"
             type="search"
-            label={text.search}
+            placeholder={text.search}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             slotProps={{
+              // As the searches of the other lists: a hint inside, no label over the frame.
+              htmlInput: { 'aria-label': text.search, maxLength: 200 },
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
@@ -707,7 +710,19 @@ function MarketplaceBlock({
                   ) : null}
                 </Box>
                 {item.description ? (
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+                  // Descriptions of skills of others run to ten lines: three, the whole on hover.
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    title={item.description}
+                    sx={{
+                      mt: 0.25,
+                      display: '-webkit-box',
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden',
+                    }}
+                  >
                     {item.description}
                   </Typography>
                 ) : null}
@@ -715,6 +730,11 @@ function MarketplaceBlock({
               {installedNames.has(item.name) ? (
                 <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0, mt: 0.5 }}>
                   {text.installedMark}
+                </Typography>
+              ) : builtinSkillNames.has(item.name) || isReservedSkillName(item.name) ? (
+                // A name of a skill of Радити or of a command of the chat: the install would refuse.
+                <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0, mt: 0.5 }}>
+                  {text.nameTaken}
                 </Typography>
               ) : (
                 <Button

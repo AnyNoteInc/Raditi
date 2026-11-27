@@ -2,7 +2,7 @@
 
 export const accountSkillsText = Object.freeze({
   title: 'Навыки',
-  note: 'Навык — папка с инструкциями и программами для типовой задачи: как писать в стиле вашей компании, как собрать отчёт. Включённые навыки агент получает в каждом новом чате и пользуется ими, когда задача подходит. Вызвать навык самому можно командой /имя в чате.',
+  note: 'Навык — папка с инструкциями и программами для типовой задачи: как писать в стиле вашей компании, как собрать отчёт. Включённые навыки агент получает в каждом новом чате и пользуется ими, когда задача подходит. Вызвать навык самому можно командой\u00a0/\u2060имя в\u00a0чате.',
   counter: (enabled: number, limit: number) => `Включено ${enabled} из ${limit}`,
   enabledFull: (limit: number) =>
     `Включено ${limit} навыков — больше нельзя. Чтобы включить другой, выключите ненужный.`,
@@ -40,6 +40,8 @@ export const accountSkillsText = Object.freeze({
   platformMarketplace: 'каталог платформы',
   install: 'Установить',
   installedMark: 'Установлен',
+  /** A skill of a marketplace whose name a skill of Радити or a command of the chat has. */
+  nameTaken: 'Имя занято',
   removeMarketplace: 'Удалить каталог',
   addMarketplace: 'Добавить каталог',
   marketplaceAddress: 'Адрес репозитория с каталогом',
