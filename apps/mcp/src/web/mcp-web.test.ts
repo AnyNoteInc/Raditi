@@ -134,7 +134,7 @@ function fixture<Scope extends McpTurnAccess = McpTurnAccess>(
 }
 
 /** The refusal of a call: its fixed code and fixed text, nothing else. */
-const refused = (code: keyof typeof browserTaskCodes | 'CONTENT_PRIVACY_LIMIT') =>
+const refused = (code: keyof typeof browserTaskCodes) =>
   expect.objectContaining({ name: 'DomainError', code })
 
 describe('the web tools of a chat without a site (plan 61, §5.3, §5.5)', () => {
@@ -851,10 +851,7 @@ describe('the web tools of a browser task', () => {
       const service = new McpWebService({
         store,
         worker: createBrowserWorkerClient({ baseUrl: `http://127.0.0.1:${port}`, token }),
-        privacy: new ContentPrivacy({
-          kvRead: async () => null,
-          kvWrite: async () => ({ version: 1 }),
-        }),
+        privacy: new ContentPrivacy({ kvRead: async () => null }),
       })
       expect(await service.call(scope, 'web_observe', {})).toMatchObject({
         observation: 'o1',

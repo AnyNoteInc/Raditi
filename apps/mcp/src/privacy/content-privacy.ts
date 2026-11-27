@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto'
-
 import { badRequest, contactMarkerPattern, DomainError, type SecretStore } from '@repo/domain'
 import { z } from 'zod'
 
@@ -13,17 +11,10 @@ const entrySchema = z.strictObject({
 })
 const mapSchema = z.array(entrySchema)
 type Entry = z.infer<typeof entrySchema>
-// The map is one KV value. The store takes 32 768 characters per value and 64 KiB per request,
-// CAS envelope included; a write beyond either would be refused before it reaches Vault.
+// The map is one KV value: the store took no more than 32 768 characters per value.
 const MAP_CHARACTERS = 32_768
-const MAP_REQUEST_BYTES = 64 * 1024 - 64
-// A value this read adds joins the search for its repeats. Two passes settle a page; more
-// are needed only when repeats run into each other and make new values.
-const MASK_PASSES = 6
 const unavailable = () =>
   new DomainError('CONTENT_PRIVACY_UNAVAILABLE', 'Content privacy map is unavailable', 503)
-/** A size limit, not an outage: the task cannot learn more contacts and a retry cannot help. */
-const full = () => new DomainError('CONTENT_PRIVACY_LIMIT', 'Content privacy map is full', 413)
 /** The write would put a hidden contact where the next read shows it. Carries no content. */
 const exposed = () =>
   new DomainError(
@@ -31,14 +22,6 @@ const exposed = () =>
     'A contact marker cannot be restored in this context',
     400,
   )
-const fits = (entries: Entry[]) => {
-  const encoded = JSON.stringify(entries)
-  return (
-    encoded.length <= MAP_CHARACTERS &&
-    Buffer.byteLength(JSON.stringify({ entries: encoded })) <= MAP_REQUEST_BYTES &&
-    mapSchema.safeParse(entries).success
-  )
-}
 
 /**
  * Where the map of one task lives. Third parties' contacts are not access to a site: the
@@ -52,72 +35,13 @@ export function contentMaskPath(scope: { siteId: string; taskId: string }): stri
   return `kv/content-masks/${scope.siteId}/${scope.taskId}`
 }
 
-/** Raw contacts stay in Vault. The agent gets opaque task/site-scoped markers only. */
+/**
+ * The contacts behind the markers that pages showed the agent before 09.11.2026 (spec §20, ДС3):
+ * pages are not masked any more, but a marker an earlier turn of the task read may still come
+ * back in what the agent types. Raw contacts stay in Vault; nothing writes a map now.
+ */
 export class ContentPrivacy {
-  constructor(private readonly secrets: Pick<SecretStore, 'kvRead' | 'kvWrite'>) {}
-
-  /**
-   * Hides what the text shows to be a contact and every repeat of a contact the task already
-   * knows, those of this read included: one value is never a marker in one place and plain
-   * text in another. Any texts of one read go together: the fields of an object, or what the
-   * agent's browser shows of a page (its text, its links, its console).
-   */
-  async mask<Fields extends Readonly<Record<string, string>> = Readonly<Record<string, string>>>(
-    scope: { siteId: string; taskId: string },
-    fields: Fields,
-  ): Promise<Fields> {
-    if (Object.values(fields).some((value) => value.includes('[[raditi:')))
-      throw badRequest('Published content contains a reserved privacy marker')
-    const path = contentMaskPath(scope)
-    const texts = Object.entries(fields)
-    let current = await this.#read(path)
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const entries = [...current.entries]
-      const known = new Map(entries.map((entry) => [`${entry.kind}:${entry.value}`, entry]))
-      let masked: Fields | undefined
-      for (let pass = 0; !masked; pass++) {
-        const searched = [...entries]
-        const view = Object.fromEntries(
-          texts.map(([key, text]) => {
-            let result = ''
-            let copied = 0
-            for (const { kind, start, end } of findContacts(text, searched)) {
-              const value = text.slice(start, end)
-              let entry = known.get(`${kind}:${value}`)
-              if (!entry) {
-                entry = { id: randomUUID(), kind, value }
-                entries.push(entry)
-                known.set(`${kind}:${value}`, entry)
-              }
-              result += `${text.slice(copied, start)}[[raditi:${kind}:${entry.id}]]`
-              copied = end
-            }
-            return [key, result + text.slice(copied)]
-          }),
-        ) as Fields
-        if (entries.length === searched.length) masked = view
-        // Closed by default: a page that keeps yielding new values is not shown in part.
-        else if (!fits(entries) || pass + 1 === MASK_PASSES) throw full()
-      }
-      if (entries.length === current.entries.length) return masked
-      try {
-        await this.secrets.kvWrite(
-          path,
-          { entries: JSON.stringify(entries) },
-          { cas: current.version },
-        )
-        return masked
-      } catch {
-        // Never expose a token whose map was not durably acknowledged. Only another writer is
-        // worth a new attempt: a map that did not move would refuse the same write again, and
-        // after a lost acknowledgement it already holds these entries.
-        const next = await this.#read(path)
-        if (next.version === current.version) throw unavailable()
-        current = next
-      }
-    }
-    throw unavailable()
-  }
+  constructor(private readonly secrets: Pick<SecretStore, 'kvRead'>) {}
 
   /**
    * Puts contacts back in place of their markers. The agent chooses the place, and whether a
