@@ -268,7 +268,7 @@ describe('a skill of a marketplace with a taken name', () => {
     show()
     await screen.findByText('Чужой')
     expect(screen.queryByRole('button', { name: `${text.install} skill-creator` })).toBeNull()
-    expect(screen.getAllByText(text.nameTaken).length).toBe(1)
+    expect(screen.getAllByText(text.nameTaken)).toHaveLength(1)
   })
 })
 

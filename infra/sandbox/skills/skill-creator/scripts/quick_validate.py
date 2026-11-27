@@ -11,6 +11,8 @@ Written for Радити after quick_validate.py of the skill-creator of Anthrop
 (Apache-2.0): see NOTICE.
 """
 
+from __future__ import annotations
+
 import re
 import sys
 from pathlib import Path
@@ -43,50 +45,58 @@ def files_of(root: Path):
         yield path, rel
 
 
-def check(root: Path) -> list[str]:
-    problems: list[str] = []
+def read_header(root: Path) -> tuple[dict | None, list[str]]:
+    """The header of SKILL.md as a dict, or None with what is wrong."""
     skill_md = root / "SKILL.md"
     if not skill_md.is_file():
-        return ["SKILL.md is missing at the root of the folder"]
-
+        return None, ["SKILL.md is missing at the root of the folder"]
+    problems: list[str] = []
     raw = skill_md.read_bytes()
     if len(raw) > MAX_SKILL_MD:
         problems.append(f"SKILL.md is {len(raw)} bytes, at most {MAX_SKILL_MD}")
-    text = raw.decode("utf-8", errors="replace").lstrip("﻿")
+    text = raw.decode("utf-8", errors="replace").lstrip("\ufeff")
     match = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(\r?\n|$)", text, re.DOTALL)
     if not match:
-        return problems + ["SKILL.md does not start with a header between two lines of ---"]
+        return None, problems + ["SKILL.md does not start with a header between two lines of ---"]
     try:
         header = yaml.safe_load(match.group(1))
     except yaml.YAMLError as error:
-        return problems + [f"the header is not valid YAML: {error}"]
+        return None, problems + [f"the header is not valid YAML: {error}"]
     if not isinstance(header, dict):
-        return problems + ["the header is not a set of fields"]
+        return None, problems + ["the header is not a set of fields"]
+    return header, problems
 
-    name = header.get("name")
+
+def check_name(root: Path, name: object) -> list[str]:
     if not isinstance(name, str) or not NAME.match(name.strip()) or len(name.strip()) > 64:
-        problems.append("name: lowercase Latin letters, digits and single hyphens, 1-64 characters")
-    else:
-        name = name.strip()
-        if name != root.name:
-            problems.append(f"name '{name}' differs from the folder '{root.name}'")
-        if name in RESERVED:
-            problems.append(f"name '{name}' is taken by a command of the chat or a skill of the platform")
+        return ["name: lowercase Latin letters, digits and single hyphens, 1-64 characters"]
+    name = name.strip()
+    problems: list[str] = []
+    if name != root.name:
+        problems.append(f"name '{name}' differs from the folder '{root.name}'")
+    if name in RESERVED:
+        problems.append(f"name '{name}' is taken by a command of the chat or a skill of the platform")
+    return problems
 
-    description = header.get("description")
+
+def check_description(description: object) -> list[str]:
     if not isinstance(description, str) or not description.strip():
-        problems.append("description is missing")
-    else:
-        description = description.strip()
-        if len(description) > 1024:
-            problems.append(f"description is {len(description)} characters, at most 1024")
-        if "<" in description or ">" in description:
-            problems.append("description has < or >")
-        if "TODO" in description:
-            problems.append("description still has the TODO of the template")
-        if "use" not in description.lower() and "когда" not in description.lower():
-            problems.append("description should say when to use the skill (warning)")
+        return ["description is missing"]
+    description = description.strip()
+    problems: list[str] = []
+    if len(description) > 1024:
+        problems.append(f"description is {len(description)} characters, at most 1024")
+    if "<" in description or ">" in description:
+        problems.append("description has < or >")
+    if "TODO" in description:
+        problems.append("description still has the TODO of the template")
+    if "use" not in description.lower() and "когда" not in description.lower():
+        problems.append("description should say when to use the skill (warning)")
+    return problems
 
+
+def check_optional(header: dict) -> list[str]:
+    problems: list[str] = []
     compatibility = header.get("compatibility")
     if compatibility is not None and (not isinstance(compatibility, str) or len(compatibility) > 500):
         problems.append("compatibility: one text up to 500 characters")
@@ -95,28 +105,52 @@ def check(root: Path) -> list[str]:
         problems.append("metadata: a set of fields")
     elif isinstance(metadata, dict) and any("TODO" in str(value) for value in metadata.values()):
         problems.append("metadata still has the TODO of the template")
+    return problems
 
+
+def check_file(path: Path, rel: Path) -> tuple[list[str], int]:
+    """What is wrong with one file, and its size."""
+    if path.is_symlink():
+        return [f"{rel}: a link; put the file itself into the skill"], 0
+    size = path.stat().st_size
+    text_rel = rel.as_posix()
+    problems: list[str] = []
+    if len(text_rel) > MAX_PATH or len(rel.parts) > MAX_PARTS or "\\" in text_rel:
+        problems.append(f"{text_rel}: the path is too long or too deep")
+    if size > MAX_FILE:
+        problems.append(f"{text_rel}: {size} bytes, at most {MAX_FILE} per file")
+    return problems, size
+
+
+def check_files(root: Path) -> list[str]:
+    problems: list[str] = []
     count = 0
     total = 0
     for path, rel in files_of(root):
-        if path.is_symlink():
-            problems.append(f"{rel}: a link; put the file itself into the skill")
-            continue
-        if path.is_dir():
+        if path.is_dir() and not path.is_symlink():
             continue
         count += 1
-        size = path.stat().st_size
+        found, size = check_file(path, rel)
+        problems += found
         total += size
-        text_rel = rel.as_posix()
-        if len(text_rel) > MAX_PATH or len(rel.parts) > MAX_PARTS or "\\" in text_rel:
-            problems.append(f"{text_rel}: the path is too long or too deep")
-        if size > MAX_FILE:
-            problems.append(f"{text_rel}: {size} bytes, at most {MAX_FILE} per file")
     if count > MAX_FILES:
         problems.append(f"{count} files, at most {MAX_FILES}")
     if total > MAX_SKILL:
         problems.append(f"{total} bytes together, at most {MAX_SKILL}")
     return problems
+
+
+def check(root: Path) -> list[str]:
+    header, problems = read_header(root)
+    if header is None:
+        return problems
+    return (
+        problems
+        + check_name(root, header.get("name"))
+        + check_description(header.get("description"))
+        + check_optional(header)
+        + check_files(root)
+    )
 
 
 def main() -> int:

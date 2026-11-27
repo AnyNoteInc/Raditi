@@ -897,9 +897,12 @@ export class RunnerHub implements OnApplicationShutdown {
     root: TurnFileRoot = 'inbox',
   ): Promise<TurnInboxFile> {
     const { live, open } = await this.#binary(runnerId, assignmentId, headers, 'prepare')
-    const file = (
-      root === 'project' ? open.projectFiles : root === 'skills' ? open.skillFiles : open.inbox
-    )?.[index]
+    const files: Record<TurnFileRoot, readonly TurnInboxFile[] | undefined> = {
+      inbox: open.inbox,
+      project: open.projectFiles,
+      skills: open.skillFiles,
+    }
+    const file = files[root]?.[index]
     if (!file) throw RunnerApiError.of('COMMAND_CLOSED')
     await this.#assertLease(live)
     return file

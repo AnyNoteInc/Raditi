@@ -13,6 +13,9 @@ from pathlib import Path
 
 NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 RESOURCES = ("scripts", "references", "assets")
+# Where a new skill may be made: the folders of the turn the agent writes to. The path comes from
+# the model, so it is resolved and kept inside them.
+ROOTS = tuple(Path(root).resolve() for root in ("/workspace", "/tmp"))
 
 TEMPLATE = """---
 name: {name}
@@ -57,7 +60,11 @@ def main() -> int:
         print(f"unknown folders: {', '.join(unknown)}; choose from {', '.join(RESOURCES)}")
         return 1
 
-    folder = Path(args.path) / name
+    base = Path(args.path).resolve()
+    if not any(base == root or root in base.parents for root in ROOTS):
+        print(f"--path must be inside {' or '.join(str(root) for root in ROOTS)}")
+        return 1
+    folder = base / name
     if folder.exists():
         print(f"{folder} exists already")
         return 1
