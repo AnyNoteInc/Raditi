@@ -64,6 +64,18 @@ export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
   projectFiles?: TurnProjectFiles
 }
 
+/**
+ * As Promise.all, but answers only once every step settled: the first rejection, in the order
+ * of the steps, once none of them is still running.
+ */
+async function allSettledOrThrow<T extends readonly unknown[]>(steps: {
+  readonly [K in keyof T]: Promise<T[K]>
+}): Promise<T> {
+  const settled = await Promise.allSettled(steps)
+  for (const step of settled) if (step.status === 'rejected') throw step.reason
+  return settled.map((step) => (step as PromiseFulfilledResult<unknown>).value) as unknown as T
+}
+
 /** A presigned URL never outlives the lease that allowed it (spec §14). */
 const presignTtlMs = (guard: LeaseGuard) => Math.min(MAX_PRESIGN_TTL_MS, guard.leaseRemainingMs)
 
@@ -164,34 +176,42 @@ export class TurnSupervisor {
         turn: labels.turn,
         epoch: opened.firstEpoch,
       }
-      let boundSource: string | null = null
-      if (this.deps.executor.kind === 'runner') {
-        if (!this.deps.executor.credentialAddress)
-          throw badRequest('Runner credential source unavailable')
-        // A slot of a runner VM is reserved, and the key below is bound to that VM's address.
-        // Nothing durable binds the turn to the runner until executor.prepare hands the command
-        // out: a turn given up, or left by a core that died, before that was never handed out,
-        // and its site is freed at once (spec §8).
-        boundSource = await guard.interruptible(
-          this.deps.executor.credentialAddress(opened.id, guard.signal),
+      // The steps below depend on each other only through the key's address (issue needs the
+      // runner's address): the rest run alongside that chain. Each stays interruptible, and the
+      // turn goes on only once all of them settled — a step that fails never leaves another one
+      // still issuing or reading behind the cleanup.
+      const credentialRef = attempt.credentialRef
+      const keying = (async () => {
+        let boundSource: string | null = null
+        if (this.deps.executor.kind === 'runner') {
+          if (!this.deps.executor.credentialAddress)
+            throw badRequest('Runner credential source unavailable')
+          // A slot of a runner VM is reserved, and the key below is bound to that VM's address.
+          // Nothing durable binds the turn to the runner until executor.prepare hands the command
+          // out: a turn given up, or left by a core that died, before that was never handed out,
+          // and its site is freed at once (spec §8).
+          boundSource = await guard.interruptible(
+            this.deps.executor.credentialAddress(opened.id, guard.signal),
+          )
+        }
+        await guard.assertFence()
+        const values = await guard.interruptible(
+          this.deps.credentials.issue(credentialRef, {
+            ...parsed.data,
+            ttlMs: Math.min(parsed.data.ttlMs, guard.remainingMs),
+            deadlineAt: opened.deadlineAt,
+            boundSource,
+          }),
         )
-      }
-      await guard.assertFence()
-      const values = await guard.interruptible(
-        this.deps.credentials.issue(attempt.credentialRef, {
-          ...parsed.data,
-          ttlMs: Math.min(parsed.data.ttlMs, guard.remainingMs),
-          deadlineAt: opened.deadlineAt,
-          boundSource,
-        }),
-      )
-      const keyed = withTurnCredentials(plan, values)
-      if (
-        containsCredential(Object.values(request.sandbox.env), turnCredentials(keyed.context, []))
-      )
-        throw badRequest('Sandbox env contains a turn credential')
-      let restore: TurnRestoreSource | undefined
-      if (request.previous) {
+        const keyed = withTurnCredentials(plan, values)
+        if (
+          containsCredential(Object.values(request.sandbox.env), turnCredentials(keyed.context, []))
+        )
+          throw badRequest('Sandbox env contains a turn credential')
+        return keyed
+      })()
+      const restoring = (async (): Promise<TurnRestoreSource | undefined> => {
+        if (!request.previous) return undefined
         await guard.assertFence()
         const source = await guard.interruptible(
           this.deps.snapshots.restoreSource(request.previous, presignTtlMs(guard)),
@@ -211,34 +231,39 @@ export class TurnSupervisor {
             supervisorLogger.warn(`turn_checkpoint_branch_renamed task=${labels.taskId}`)
         }
         // The data key leaves core only while this owner still holds the site.
-        restore = {
+        return {
           ...source,
           dataKey: async () => {
             await guard.assertFence()
             return source.dataKey()
           },
         }
-      }
+      })()
       // Built again by the trusted git from the plan (ПР12): the same bytes the plan names, from
       // the cache of the bundles, or a conflict. The executor gets the objects only.
-      let bundle: TurnBundleSource | undefined
-      if (plan.repository && git) {
+      const bundling = (async (): Promise<TurnBundleSource | undefined> => {
+        if (!plan.repository || !git) return undefined
         await guard.assertFence()
-        bundle = await guard.interruptible(bundleOfPlan(git, plan.repository))
-      }
+        return guard.interruptible(bundleOfPlan(git, plan.repository))
+      })()
       // The files the plan names, checked against the database again under the lease; each is
       // read only when the executor writes it into the sandbox.
-      const inbox = request.input.attachments.length
-        ? await guard.interruptible(
-            this.deps.inbox!.files(labels.taskId, request.input.attachments),
-          )
-        : []
+      const reading = request.input.attachments.length
+        ? guard.interruptible(this.deps.inbox!.files(labels.taskId, request.input.attachments))
+        : Promise.resolve([])
       // The files of the chat's project (docs/plan/84-projects.md, ПР8): checked the same way,
       // against the project the chat is in now.
       const projectPaths = request.input.projectFiles ?? []
-      const projectFiles = projectPaths.length
-        ? await guard.interruptible(this.deps.projectFiles!.files(labels.taskId, projectPaths))
-        : []
+      const readingProject = projectPaths.length
+        ? guard.interruptible(this.deps.projectFiles!.files(labels.taskId, projectPaths))
+        : Promise.resolve([])
+      const [keyed, restore, bundle, inbox, projectFiles] = await allSettledOrThrow([
+        keying,
+        restoring,
+        bundling,
+        reading,
+        readingProject,
+      ] as const)
       const context = {
         ...keyed.context,
         ...(restore?.manifest.driver.nativeSessionId

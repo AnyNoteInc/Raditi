@@ -534,6 +534,41 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect(f.leases.release).toHaveBeenCalledOnce()
   })
 
+  it('reads the checkpoint while the key is issued, and settles both before a failure ends the turn', async () => {
+    const f = fixture()
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    }
+    let issued: (() => void) | undefined
+    let issueSettled = false
+    vi.mocked(f.credentials.issue).mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (issued = resolve))
+      const values = await MemoryTurnCredentials.prototype.issue.apply(f.credentials, args)
+      issueSettled = true
+      return values
+    })
+    let restoreStarted = false
+    f.snapshots.restoreSource.mockImplementationOnce(async () => {
+      restoreStarted = true
+      // The key is still being issued: the turn waits for it before it gives up.
+      setTimeout(() => issued?.(), 10)
+      throw new Error('Synthetic restore failure')
+    })
+    await expect(f.run()).rejects.toThrow('Synthetic restore failure')
+    expect(restoreStarted).toBe(true)
+    expect(issueSettled).toBe(true)
+    expect(f.credentials.revoke).toHaveBeenCalledOnce()
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+    expect(f.leases.release).toHaveBeenCalledOnce()
+  })
+
   it('refuses supplied keys and a mismatched policy before leasing', async () => {
     const f = fixture()
     const supervisor = new TurnSupervisor(f.deps)
