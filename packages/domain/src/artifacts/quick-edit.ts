@@ -82,7 +82,7 @@ export interface Paragraphs {
 }
 
 const blankLine = /^[ \t]*$/u
-const fenceOpen = /^ {0,3}(`{3,}|~{3,})/u
+const fenceOpen = /^\s*(`{3,}|~{3,})/u
 
 function lines(text: string): string[] {
   const out: string[] = []
@@ -446,16 +446,37 @@ function applyToPart(
 // ---------------------------------------------------------------------------------------------
 // Links, addresses and phones (БПр8)
 
-const urlPattern = /\b(?:https?:\/\/|www\.)[^\s<>()"'`]+/giu
+// A link with a scheme or `www.`, or a bare host of a common zone (`t.me/…`, `shop.ru`): one key
+// for all its spellings — no scheme, no `www.`, no trailing slash or punctuation.
+const urlPattern =
+  /\b(?:https?:\/\/[^\s<>()"'`]+|www\.[^\s<>()"'`]+|(?:[\p{L}\p{N}-]+\.)+(?:ru|рф|su|com|net|org|info|io|me|biz|pro|online|site|shop|store|app)(?![\p{L}\p{N}-])(?:\/[^\s<>()"'`]*)?)/giu
 const emailPattern = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.\p{L}{2,}/gu
+// A run of digits with phone separators; it is a phone only with 10–12 digits (a Russian number,
+// with or without its code), so prices, dates and article numbers are not.
 const phonePattern = /\+?\d[\d\s()-]{8,}\d/gu
+
+const linkKey = (link: string) =>
+  link
+    .toLowerCase()
+    .replace(/[.,;:!?]+$/u, '')
+    .replace(/^https?:\/\//u, '')
+    .replace(/^www\./u, '')
+    .replace(/\/+$/u, '')
 
 function contacts(text: string): Set<string> {
   const found = new Set<string>()
-  for (const match of text.matchAll(urlPattern))
-    found.add(match[0].toLowerCase().replace(/[.,;:!?]+$/u, ''))
-  for (const match of text.matchAll(emailPattern)) found.add(match[0].toLowerCase())
-  for (const match of text.matchAll(phonePattern)) found.add(match[0].replace(/\D/gu, ''))
+  const emails = [...text.matchAll(emailPattern)].map((match) => match[0].toLowerCase())
+  for (const email of emails) found.add(email)
+  // The host of an address is its part, not a link of its own.
+  const withoutEmails = emails.reduce(
+    (rest, email) => rest.split(email).join(' '),
+    text.toLowerCase(),
+  )
+  for (const match of withoutEmails.matchAll(urlPattern)) found.add(linkKey(match[0]))
+  for (const match of text.matchAll(phonePattern)) {
+    const digits = match[0].replace(/\D/gu, '')
+    if (digits.length >= 10 && digits.length <= 12) found.add(digits.slice(-10))
+  }
   return found
 }
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { placeCreditHold } from '@repo/billing'
+import { chargeTask, placeCreditHold } from '@repo/billing'
 import {
   artifactRole,
   enqueueOutbox,
@@ -8,9 +8,10 @@ import {
   queueQuickAttempt,
   quickEditsOfArtifact,
   snapshotArtifactComments,
+  type Prisma,
   type PrismaClient,
 } from '@repo/db'
-import { DomainError, FEED_VERSION, taskHoldExpiry } from '@repo/domain'
+import { DomainError, FEED_VERSION, isDomainError, taskHoldExpiry } from '@repo/domain'
 import {
   artifactRoleAtLeast,
   QUICK_EDIT_JOB,
@@ -73,6 +74,35 @@ function requestText(notes: ArtifactCommentSnapshot): string {
   return cut(`Исправить по заметке: ${lines.join('; ')}`, 1500)
 }
 
+/**
+ * The charge of the previous attempt put off (`billing.charge_later`) is made before the next
+ * reserve: a reserve after an uncharged chain is refused otherwise (rule 7). Still not chargeable
+ * (its calls are not settled yet) — the client waits a moment.
+ */
+async function chargePutOff(
+  tx: Prisma.TransactionClient,
+  input: { workspaceId: string; userId: string; now: Date },
+): Promise<void> {
+  const task = await tx.task.findFirst({
+    where: {
+      workspaceId: input.workspaceId,
+      createdById: input.userId,
+      kind: 'quick_edits',
+      deletedAt: null,
+      status: 'awaiting_user',
+      creditHolds: { some: { status: 'active' } },
+    },
+    select: { id: true },
+  })
+  if (task === null) return
+  try {
+    await chargeTask(tx, { taskId: task.id, now: input.now })
+  } catch (error) {
+    if (isDomainError(error) && error.code === 'CONFLICT') throw quickEditBusy()
+    throw error
+  }
+}
+
 export async function requestQuickEdit(
   db: PrismaClient,
   userId: string,
@@ -112,11 +142,8 @@ export async function requestQuickEdit(
     if (notes.some((note) => quoteOf(note) === '')) throw quickEditUnavailable()
     if (!input.confirmOthers && notes.some((note) => note.by === 'other'))
       throw quickEditNeedsConfirmation()
-    const queued = await queueQuickAttempt(tx, {
-      workspaceId: artifact.workspaceId,
-      userId,
-      taskId: randomUUID(),
-    })
+    await chargePutOff(tx, { workspaceId: artifact.workspaceId, userId, now })
+    const queued = await queueQuickAttempt(tx, { workspaceId: artifact.workspaceId, userId })
     if (queued === null) throw quickEditBusy()
     const { taskId, attempt } = queued
     await placeCreditHold(tx, {

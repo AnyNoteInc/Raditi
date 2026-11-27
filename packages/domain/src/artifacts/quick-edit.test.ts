@@ -38,6 +38,16 @@ describe('paragraphs', () => {
     expect(paragraphs).toEqual(['before', '```js\nconst a = 1\n\nconst b = 2\n```', 'after'])
   })
 
+  it('does not cut a fenced block indented in a list item', () => {
+    const text = '- шаг\n\n    ```\n    a\n\n    b\n    ```\n\nконец'
+    expect(splitParagraphs(text).paragraphs).toEqual([
+      '- шаг',
+      '    ```\n    a\n\n    b\n    ```',
+      'конец',
+    ])
+    expect(joinParagraphs(splitParagraphs(text))).toBe(text)
+  })
+
   it('keeps no trailing line break in a paragraph', () => {
     expect(splitParagraphs('a\n\nb\n').paragraphs).toEqual(['a', 'b'])
   })
@@ -204,6 +214,29 @@ describe('applying edits', () => {
 })
 
 describe('links, addresses and phones', () => {
+  it('reads no phone in a price, a date or an article number', () => {
+    expect(
+      introducedContacts(
+        'Цена 1 500 ₽.',
+        'Цена 1 500 ₽, до 2026-12-31, артикул 12345678, тираж 1 000 000.',
+        '',
+      ),
+    ).toEqual([])
+  })
+
+  it('takes a bare domain of a note for the same link in the text, and finds t.me', () => {
+    expect(introducedContacts('Сайт', 'Сайт https://shop.ru/', 'добавьте ссылку shop.ru')).toEqual(
+      [],
+    )
+    expect(introducedContacts('Пишите нам', 'Пишите нам в t.me/shopbot', '')).toEqual([
+      't.me/shopbot',
+    ])
+  })
+
+  it('does not take the host of an address for a link of its own', () => {
+    expect(introducedContacts('Почта', 'Почта: info@shop.ru', 'почта info@shop.ru')).toEqual([])
+  })
+
   it('finds what the edit brings anew', () => {
     expect(
       introducedContacts(
@@ -211,7 +244,7 @@ describe('links, addresses and phones', () => {
         'Пишите на shop@example.ru или на https://evil.example/x. Звоните +7 (900) 123-45-67',
         '',
       ),
-    ).toEqual(['https://evil.example/x', '79001234567'])
+    ).toEqual(['evil.example/x', '9001234567'])
   })
 
   it('allows what the client wrote in the note', () => {

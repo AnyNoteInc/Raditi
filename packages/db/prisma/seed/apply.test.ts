@@ -7,6 +7,7 @@ import { createMigratedSchema, schemaClient, type MigratedSchema } from '../migr
 import { changedFields, seedReferenceData, seededTables } from './apply.ts'
 import {
   agentDriverSeeds,
+  platformDriverSeeds,
   llmModelSeeds,
   llmProviderSeeds,
   planSeeds,
@@ -83,7 +84,7 @@ describe.skipIf(!databaseUrl)('seedReferenceData on PostgreSQL', () => {
       created: {
         plans: planSeeds.length,
         pricing_rules: pricingRuleSeeds.length,
-        agent_drivers: agentDriverSeeds.length,
+        agent_drivers: agentDriverSeeds.length + platformDriverSeeds.length,
         llm_providers: llmProviderSeeds.length,
         llm_models: llmModelSeeds.length,
       },

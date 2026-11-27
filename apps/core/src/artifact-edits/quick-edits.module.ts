@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common'
 import type { SecretStore } from '@repo/domain'
 import type { PrismaClient } from '@repo/db'
+import { llmBackends } from '@repo/llm-backends'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
 import { ArtifactChecks } from '../artifacts/artifact-checks.ts'
@@ -22,6 +23,7 @@ const SWEEP_EVERY_MS = 60_000
 /** The sweep of lost quick edits, once a minute, one pass at a time (БПр15). */
 @Injectable()
 class QuickEditSweepRuntime implements OnApplicationBootstrap, OnModuleDestroy {
+  private readonly logger = new Logger('QuickEditSweep')
   #timer: NodeJS.Timeout | undefined
   #pending: Promise<unknown> | undefined
 
@@ -29,7 +31,15 @@ class QuickEditSweepRuntime implements OnApplicationBootstrap, OnModuleDestroy {
 
   onApplicationBootstrap(): void {
     this.#timer = setInterval(() => {
-      this.#pending ??= this.runner.sweep().finally(() => (this.#pending = undefined))
+      // A failed pass (the database away) waits for the next tick; it never rejects the timer.
+      this.#pending ??= this.runner
+        .sweep()
+        .catch((error: unknown) =>
+          this.logger.warn(
+            `quick_edit_sweep_failed ${error instanceof Error ? error.name : 'unknown'}`,
+          ),
+        )
+        .finally(() => (this.#pending = undefined))
     }, SWEEP_EVERY_MS)
     this.#timer.unref()
   }
@@ -56,6 +66,7 @@ class QuickEditSweepRuntime implements OnApplicationBootstrap, OnModuleDestroy {
           gatewayOrigin: config.llmControlUrl ?? null,
           artifacts: new ArtifactChecks({ db: prisma, logger: new Logger('ArtifactChecks') }),
           logger: { log: (line) => logger.log(line), warn: (line) => logger.warn(line) },
+          backends: llmBackends,
         })
       },
       inject: [PRISMA, SECRET_STORE, CORE_CONFIG],

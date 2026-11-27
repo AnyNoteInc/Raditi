@@ -2,6 +2,7 @@ import { chargeTask, extendTaskHolds } from '@repo/billing'
 import {
   addAgentCommentReply,
   applyArtifactOps,
+  artifactRole,
   claimQuickEdit,
   finishQuickEdit,
   quickEditBlocks,
@@ -14,9 +15,12 @@ import {
 import { artifactSectionText } from '@repo/doc-render/markdown'
 import {
   feedLimits,
+  hasOutwardPasswordForm,
   isDomainError,
+  tokenReasonOf,
   taskHoldExpiry,
   type FeedRow,
+  type LlmBackend,
   type SecretStore,
 } from '@repo/domain'
 import {
@@ -43,9 +47,10 @@ import { quickKeyClosed, quickKeySession, revokeQuickKey } from '@repo/turn-keys
 
 import type { ArtifactChecks } from '../artifacts/artifact-checks.ts'
 import { CHARGE_LATER_EVENT } from '../tasks/pass-settlement.ts'
+import { agentWords } from '../tasks/turn-outcome.ts'
 import { textRefusal } from '../turns/text-refusal.ts'
 import { readWorkspaceEnvValuesToRefuse } from '../workspace-env/workspace-env-values.ts'
-import { issueQuickKey, type QuickKey } from './quick-key-issuer.ts'
+import { issueQuickKey, QUICK_DRIVER, type QuickKey } from './quick-key-issuer.ts'
 import { callQuickModel, QuickCallError, type QuickCallAnswer } from './quick-llm-client.ts'
 
 // A quick edit of artifact notes (docs/plan/98-quick-edits.md, §4 step 3): claim → the blocks of
@@ -61,8 +66,10 @@ export interface QuickEditRunnerDependencies {
   secrets: Pick<SecretStore, 'kvRead'>
   /** The origin of the llm role (LLM_CONTROL_URL); null — quick edits are off. */
   gatewayOrigin: string | null
-  artifacts: Pick<ArtifactChecks, 'settle'>
+  artifacts: Pick<ArtifactChecks, 'settle' | 'fail'>
   logger: { log(message: string): void; warn(message: string): void }
+  /** The backends of the gateway; only those that declare the platform's own calls are used. */
+  backends: readonly LlmBackend[]
   fetch?: typeof fetch
 }
 
@@ -127,12 +134,19 @@ export class QuickEditRunner {
   }
 
   /**
-   * Edits whose core died or whose job was lost (БПр15): their keys are closed, their task goes
-   * back to waiting with what the made calls cost charged, the row is `failed`. A write left in
-   * `pending_*` is dropped by the sweep of artifacts. Returns how many were ended.
+   * Edits whose core died or whose job was lost (БПр15): their keys are closed, what their attempt
+   * left unchecked in `pending_*` (writes, replies) is dropped, their task goes back to waiting with
+   * what the made calls cost charged, the row is `failed`. Keys of quick edits a failed revoke left
+   * open past their validity are closed too. Returns how many edits were ended.
    */
   async sweep(olderThanMs = QUICK_EDIT_STALE_MS): Promise<number> {
     const { db, logger } = this.#deps
+    const forgotten = await db.llmKey.findMany({
+      where: { driverId: QUICK_DRIVER, revokedAt: null, validUntil: { lt: new Date() } },
+      select: { id: true },
+      take: 100,
+    })
+    for (const key of forgotten) await this.#revoke(key.id)
     let count = 0
     for (const stale of await staleQuickEdits(db, olderThanMs)) {
       try {
@@ -155,6 +169,8 @@ export class QuickEditRunner {
             UPDATE tasks SET status = 'preparing', waiting = NULL, turn_no = ${stale.attempt},
               updated_at = now()
             WHERE id = ${stale.taskId}::uuid AND status = 'queued' AND attempt = ${stale.attempt}`
+        // Nothing the lost attempt wrote may pass with the next one's check.
+        await this.#deps.artifacts.fail(stale.taskId, stale.attempt, null)
         await this.#settle(
           {
             id: stale.id,
@@ -248,12 +264,14 @@ export class QuickEditRunner {
       attempt: edit.attempt,
       quickEditId: edit.id,
       estimatedInputTokens: estimate,
+      backends: this.#platformBackends().map((backend) => backend.id),
     })
     issued(key)
     const valuesPromise = this.#values(edit.workspaceId)
     // Swallow a rejection until it is awaited: the call goes on meanwhile.
     valuesPromise.catch(() => undefined)
     let args: QuickEditArgs | null = null
+    let changed: Map<string, string> | null = null
     let calls = 0
     for (let attempt = 0; attempt < quickEditLimits.calls && args === null; attempt++) {
       calls++
@@ -264,7 +282,14 @@ export class QuickEditRunner {
         if (error instanceof QuickCallError) return ended('failed', 'platform', calls)
         throw error
       }
-      const parsed = parseQuickEditAnswer(answer)
+      let parsed = parseQuickEditAnswer(answer)
+      // An edit that does not fit the paragraphs (a «find» missing or not unique, a wrong number)
+      // is a wrong answer too: the one retry names the problem.
+      if (parsed.ok && parsed.args.outcome === 'edited') {
+        const applied = applyQuickEdits(parts, parsed.args.edits)
+        if (applied.ok) changed = applied.blocks
+        else parsed = { ok: false, problem: applied.problem }
+      }
       if (parsed.ok) {
         args = parsed.args
         break
@@ -300,20 +325,6 @@ export class QuickEditRunner {
     }
     if (args === null) return ended('failed', 'format', calls)
     await this.#revoke(key.keyId)
-    if (args.outcome !== 'edited')
-      return ended(
-        'unchanged',
-        args.outcome === 'needs_agent' ? 'needs_agent' : 'no_change',
-        calls,
-        args.reply,
-      )
-    const applied = applyQuickEdits(parts, args.edits)
-    if (!applied.ok) return ended('failed', 'format', calls)
-    if (applied.blocks.size === 0) return ended('unchanged', 'no_change', calls, args.reply)
-    const allowed = notes.map((note) => note.body).join('\n')
-    for (const [blockKey, text] of applied.blocks)
-      if (introducedContacts(byKey.get(blockKey)!.markdown, text, allowed).length > 0)
-        return ended('refused', 'links', calls)
     let values: string[]
     try {
       values = await valuesPromise
@@ -321,26 +332,78 @@ export class QuickEditRunner {
       // No values to check against: nothing is written (as a pass drops its writes then).
       return ended('failed', 'platform', calls)
     }
-    const write = await this.#write(edit, applied.blocks, byKey)
+    const refuses = textRefusal([key.secret], values)
+    if (args.outcome !== 'edited' || changed === null || changed.size === 0) {
+      // The answer goes into the notes as well, open: nothing was changed (БПр11).
+      if (!(await this.#stillOurs(edit))) return ended('failed', 'platform', calls)
+      await this.#reply(edit, notes, args.reply, false)
+      await this.#deps.artifacts.settle(edit.taskId, edit.attempt, refuses)
+      return ended(
+        'unchanged',
+        args.outcome === 'needs_agent' ? 'needs_agent' : 'no_change',
+        calls,
+        args.reply,
+      )
+    }
+    // The notes' words and the client's own replies may bring contacts; nothing else (БПр8).
+    const allowed = notes
+      .flatMap((note) => [note.body, ...note.replies.filter((reply) => typeof reply === 'string')])
+      .join('\n')
+    for (const [blockKey, text] of changed)
+      if (introducedContacts(byKey.get(blockKey)!.markdown, text, allowed).length > 0)
+        return ended('refused', 'links', calls)
+    // The check before anyone sees the text, run first here: a refused text is never written, so
+    // the notes are never answered «исправлено» for it.
+    for (const text of changed.values())
+      if (refuses(text) !== null || tokenReasonOf(text) !== null || hasOutwardPasswordForm(text))
+        return ended('refused', 'check', calls)
+    // A sweep that took this edit for lost settled it: nothing more is written.
+    if (!(await this.#stillOurs(edit))) return ended('failed', 'platform', calls)
+    const write = await this.#write(edit, changed, byKey)
     if (write !== null) return ended('refused', write, calls)
-    await this.#reply(edit, notes, args.reply)
-    await this.#deps.artifacts.settle(edit.taskId, edit.attempt, textRefusal([key.secret], values))
-    // The verdict is read off the blocks: a refused write left the text before it.
+    await this.#reply(edit, notes, args.reply, true)
+    const outcome = await this.#deps.artifacts.settle(edit.taskId, edit.attempt, refuses)
+    // The verdict is read off the blocks: a refused write keeps the text before it and names the
+    // refusal (its revision grows all the same).
     const after = await db.artifactBlock.findMany({
-      where: { documentId: edit.artifactId, sectionKey: { in: [...applied.blocks.keys()] } },
-      select: { sectionKey: true, rev: true, pendingTaskId: true },
+      where: { documentId: edit.artifactId, sectionKey: { in: [...changed.keys()] } },
+      select: { sectionKey: true, rev: true, pendingTaskId: true, refusal: true },
     })
-    const passed = after.every(
-      (block) =>
-        block.pendingTaskId === null && block.rev > (byKey.get(block.sectionKey)?.rev ?? 0),
-    )
+    const passed =
+      outcome.refused === 0 &&
+      after.length === changed.size &&
+      after.every(
+        (block) =>
+          block.pendingTaskId === null &&
+          block.refusal === null &&
+          block.rev > (byKey.get(block.sectionKey)?.rev ?? 0),
+      )
     return passed ? ended('applied', null, calls, args.reply) : ended('refused', 'check', calls)
   }
 
+  /** Whether the edit is still running as this worker's: the sweep has not ended it. */
+  async #stillOurs(edit: ClaimedQuickEdit): Promise<boolean> {
+    const row = await this.#deps.db.artifactQuickEdit.findUnique({
+      where: { id: edit.id },
+      select: { state: true, finishedAt: true },
+    })
+    return row?.state === 'running' && row.finishedAt === null
+  }
+
+  /** The backends whose provider allows the platform's own calls (БПр1). */
+  #platformBackends(): LlmBackend[] {
+    return this.#deps.backends.filter((backend) => backend.platformUserAgent !== undefined)
+  }
+
   #call(key: QuickKey, messages: readonly Record<string, unknown>[]): Promise<QuickCallAnswer> {
-    if (this.#deps.gatewayOrigin === null) throw new QuickCallError({ kind: 'broken' })
+    const backend = this.#platformBackends().find((each) => each.id === key.backendId)
+    const route = backend?.routes.find((each) => each.method === 'POST')
+    if (this.#deps.gatewayOrigin === null || !backend?.platformUserAgent || !route)
+      throw new QuickCallError({ kind: 'broken' })
     return callQuickModel({
       gatewayOrigin: this.#deps.gatewayOrigin,
+      route: route.path,
+      userAgent: backend.platformUserAgent,
       key: key.secret,
       body: {
         model: key.model,
@@ -396,12 +459,20 @@ export class QuickEditRunner {
     }
   }
 
-  /** The reply in each note; the clicker's own notes are closed, those of others stay open (БПр11). */
+  /**
+   * The reply in each note. After an edit a note is closed if the clicker wrote it or owns the
+   * artifact (БПр11); without one it stays open.
+   */
   async #reply(
     edit: ClaimedQuickEdit,
     notes: readonly { id: string; by?: 'other' }[],
     reply: string,
+    edited: boolean,
   ): Promise<void> {
+    const role = await artifactRole(this.#deps.db, {
+      artifactId: edit.artifactId,
+      userId: edit.userId,
+    })
     for (const note of notes) {
       try {
         await addAgentCommentReply(this.#deps.db, {
@@ -410,7 +481,7 @@ export class QuickEditRunner {
           threadId: note.id,
           requestId: edit.requestId,
           body: reply,
-          resolve: note.by !== 'other',
+          resolve: edited && (note.by !== 'other' || role === 'owner'),
           now: new Date(),
         })
       } catch (error) {
@@ -437,7 +508,8 @@ export class QuickEditRunner {
     const { db, logger } = this.#deps
     const message =
       ending.message ?? (ending.reason === null ? null : (fallbackWords[ending.reason] ?? null))
-    const words = message?.slice(0, feedLimits.message) ?? null
+    // The same cleaning as the words of a pass: no markup of the feed, within its limit.
+    const words = message === null ? null : agentWords(message, feedLimits.message)
     const row: FeedRow =
       words !== null && ending.state !== 'failed'
         ? {

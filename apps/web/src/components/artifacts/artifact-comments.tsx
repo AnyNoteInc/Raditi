@@ -47,7 +47,7 @@ import {
   privateArtifactQuery,
 } from './artifact-access-error'
 import { ArtifactCommentDispatch } from './artifact-comment-dispatch'
-import { ArtifactQuickEdit } from './artifact-quick-edit'
+import { ArtifactQuickEdit, useQuickEdits } from './artifact-quick-edit'
 import type { CabinetArtifact } from './use-artifact'
 
 function selectionQuote(root: HTMLElement, selected: Selection | null): ArtifactQuoteAnchor | null {
@@ -195,6 +195,14 @@ export function ArtifactComments({
   const owner = artifact.role === 'owner'
   const writable = artifactNotesWritable(artifact.role, sharing)
   const quickEdits = artifact.kind === 'document' && artifactRoleAtLeast(artifact.role, 'edit')
+  // The edits live with the panel: a note an edit closed leaves the list, «Отменить» stays.
+  const quick = useQuickEdits({
+    artifactId,
+    onDone: () => {
+      void client.invalidateQueries({ queryKey: trpc.artifact.comments.queryKey({ artifactId }) })
+      onChanged()
+    },
+  })
   // The owner chooses; another reader writes only into threads of all (88.17а).
   const [forAll, setForAll] = useState(!owner)
   const query = trpc.artifact.comments.queryOptions({ artifactId })
@@ -426,6 +434,7 @@ export function ArtifactComments({
               За раз можно отправить до {artifactCommentDispatchLimits.threads} заметок.
             </Typography>
           )}
+          {quick.notices}
           {list.isError && <Alert severity="error">Не удалось загрузить заметки.</Alert>}
           {resolveError && <Alert severity="error">{failed}</Alert>}
           {dispatchStale && (
@@ -536,15 +545,11 @@ export function ArtifactComments({
                         comment.anchor.kind === 'quote' &&
                         (comment.author.own || comment.shared) && (
                           <ArtifactQuickEdit
-                            artifactId={artifactId}
+                            quick={quick}
                             threadId={comment.id}
                             own={comment.author.own}
                             authorName={comment.author.name}
                             moved={comment.moved}
-                            onDone={() => {
-                              void reread()
-                              onChanged()
-                            }}
                           />
                         )}
                     </>

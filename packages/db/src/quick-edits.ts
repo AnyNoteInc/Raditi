@@ -2,6 +2,7 @@ import type { QuickEditReason, QuickEditState } from '@repo/domain/artifacts'
 
 import type { Prisma, PrismaClient } from './generated/prisma/client.ts'
 import { blockCheckedText } from './pages.ts'
+import { uuidv7 } from './uuidv7.ts'
 
 // Quick edits of artifact notes (docs/plan/98-quick-edits.md): the service task «Быстрые правки»
 // of a person and the rows of their clicks. Each click is an attempt of that task; its writes
@@ -20,17 +21,18 @@ export interface QuickTaskAttempt {
 
 /**
  * The person's quick task of the workspace, moved to `queued` for one more attempt; null when it
- * is busy with the previous edit. Created on the first click: the partial unique index makes two
- * first clicks at once find one task.
+ * is busy with the previous edit. Created on the first click with a UUID of version 7, as every
+ * new chat (CHECK tasks_chat_id_check): the partial unique index makes two first clicks at once
+ * find one task.
  */
 export async function queueQuickAttempt(
   tx: Tx,
-  input: { workspaceId: string; userId: string; taskId: string },
+  input: { workspaceId: string; userId: string },
 ): Promise<QuickTaskAttempt | null> {
   const inserted = await tx.$queryRaw<{ id: string }[]>`
     INSERT INTO tasks (id, workspace_id, created_by_id, kind, status, model_class, billable,
                        title, title_source, updated_at)
-    VALUES (${input.taskId}::uuid, ${input.workspaceId}::uuid, ${input.userId}::uuid, 'quick_edits',
+    VALUES (${uuidv7()}::uuid, ${input.workspaceId}::uuid, ${input.userId}::uuid, 'quick_edits',
             'queued', 'light', true, ${QUICK_TASK_TITLE}, 'client', now())
     ON CONFLICT (workspace_id, created_by_id) WHERE kind = 'quick_edits' AND deleted_at IS NULL
     DO NOTHING
@@ -41,7 +43,14 @@ export async function queueQuickAttempt(
     WHERE workspace_id = ${input.workspaceId}::uuid AND created_by_id = ${input.userId}::uuid
       AND kind = 'quick_edits' AND deleted_at IS NULL
     FOR UPDATE`
-  if (!task || task.status !== 'awaiting_user') return null
+  if (!task) return null
+  // A task the platform ended (a cancel of an operator, a lost reserve) gives way to a new one: the
+  // ended one leaves the index as deleted, its rows stay (БПр2).
+  if (['done', 'failed', 'cancelled', 'rolled_back'].includes(task.status)) {
+    await tx.$executeRaw`UPDATE tasks SET deleted_at = now() WHERE id = ${task.id}::uuid`
+    return queueQuickAttempt(tx, input)
+  }
+  if (task.status !== 'awaiting_user') return null
   const attempt = task.attempt + 1
   await tx.$executeRaw`
     UPDATE tasks SET status = 'queued', waiting = NULL, attempt = ${attempt}, updated_at = now()
@@ -207,7 +216,11 @@ export async function quickEditsOfArtifact(
   })
 }
 
-/** Edits left unfinished longer than `olderThanMs`: their core died or their job was lost. */
+/**
+ * Edits left unfinished longer than `olderThanMs`: a queued one since its click (its job was lost),
+ * a running one since its claim (its core died) — a job that waited in the queue is not taken for
+ * lost while its calls run.
+ */
 export async function staleQuickEdits(
   db: Pick<PrismaClient, '$queryRaw'>,
   olderThanMs: number,
@@ -215,6 +228,7 @@ export async function staleQuickEdits(
   return db.$queryRaw`
     SELECT id, task_id AS "taskId", attempt, state::text AS state FROM artifact_quick_edits
     WHERE finished_at IS NULL
-      AND created_at < now() - make_interval(secs => ${olderThanMs / 1000})
+      AND CASE WHEN state = 'running' THEN started_at ELSE created_at END
+        < now() - make_interval(secs => ${olderThanMs / 1000})
     ORDER BY created_at LIMIT 100`
 }

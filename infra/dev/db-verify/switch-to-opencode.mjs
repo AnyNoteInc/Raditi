@@ -91,16 +91,24 @@ COMMIT;
 `
 
 /**
- * Only the shell is enabled. Each backend gets three chat profiles and one vision profile,
- * listed in the order `catalogue` reads them: by slug.
+ * Only the shell is enabled. Each backend gets three chat profiles and one vision profile, the API
+ * also the profile of quick edits (plan 98), listed in the order `catalogue` reads them: by slug.
+ * The driver `quick` of quick edits is the seed's, switched off; the migration makes only the shell.
  */
 const newBackends = ['zai-api', 'zai-coding']
+const shellDriver = { id: 'opencode', enabled: true }
 export const newDatabaseCatalogue = {
-  drivers: [{ id: 'opencode', enabled: true }],
+  drivers: [shellDriver, { id: 'quick', enabled: false }],
   providers: newBackends.map((slug) => ({ slug, enabled: false })),
   models: newBackends.flatMap((provider) =>
     // By slug: the profile that sees images of plan 88 (Ар32) sorts first.
-    ['glm-5.3-flash-low', 'glm-5.3-heavy', 'glm-5.3-light', 'glm-5.3-standard'].map((slug) => ({
+    [
+      'glm-5.3-flash-low',
+      'glm-5.3-heavy',
+      'glm-5.3-light',
+      ...(provider === 'zai-api' ? ['glm-5.3-quick'] : []),
+      'glm-5.3-standard',
+    ].map((slug) => ({
       provider,
       slug,
       enabled: false,
@@ -328,15 +336,16 @@ export async function verifySwitchToOpencode({ client, psql, deploy, resolve, se
   const beforeSeeds = await rows()
   assert.equal(beforeSeeds.length, 4)
   assert.deepEqual(await catalogue(client), {
-    drivers: [...earlier.drivers, ...newDatabaseCatalogue.drivers],
+    drivers: [...earlier.drivers, shellDriver],
     providers: earlier.providers,
     models: earlier.models,
   })
   const report = seedReport(await seed())
-  // The one driver row: the capabilities follow the seed, which names one the migration did not.
+  // The shell's row: the capabilities follow the seed, which names one the migration did not; the
+  // driver of quick edits and its profile are new (plan 98).
   assert.deepEqual(
     { drivers: report.agent_drivers, providers: report.llm_providers, models: report.llm_models },
-    { drivers: [0, 1], providers: [2, 0], models: [8, 0] },
+    { drivers: [1, 1], providers: [2, 0], models: [9, 0] },
   )
   const seeded = await catalogue(client)
   assert.deepEqual(seeded, {

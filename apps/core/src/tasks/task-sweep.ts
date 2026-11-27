@@ -554,7 +554,9 @@ export class TaskSweep {
       Array<{ id: string; status: Waiting; attempt: number; needs_browser: boolean }>
     >`
       SELECT t.id, t.status::text AS status, t.attempt, t.needs_browser FROM tasks t
-      WHERE t.status IN ('queued', 'awaiting_user', 'awaiting_approval')
+      -- The quick task is never cancelled: its reserve left by a charge put off is charged by
+      -- chargeLater or at its next click (docs/plan/98-quick-edits.md, БПр2).
+      WHERE t.status IN ('queued', 'awaiting_user', 'awaiting_approval') AND t.kind = 'chat'
         AND EXISTS (SELECT 1 FROM credit_holds h WHERE h.task_id = t.id AND h.status = 'active')
         AND NOT EXISTS (SELECT 1 FROM credit_holds h
           WHERE h.task_id = t.id AND h.status = 'active' AND h.expires_at > now())

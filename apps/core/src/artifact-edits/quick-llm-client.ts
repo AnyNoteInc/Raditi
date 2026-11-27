@@ -1,12 +1,8 @@
 import { createSseDecoder } from '@repo/llm-backends'
 
 // One call of core to the gateway of the llm role for a quick edit (docs/plan/98-quick-edits.md,
-// БПр6): the route of the API offer, the platform's own identity, the key of the edit. The answer
+// БПр6): the route and the platform's identity its backend declares, the key of the edit. The answer
 // streams; only the function call, its text and the usage are kept.
-
-/** The route of the `zai-api` offer at the gateway (zaiApiOffer.route). */
-export const QUICK_ROUTE = '/zai/paas/v4/chat/completions'
-export const PLATFORM_USER_AGENT = 'raditi-platform/1'
 
 export interface QuickCallAnswer {
   toolName: string | null
@@ -32,6 +28,10 @@ interface Delta {
 
 export async function callQuickModel(input: {
   gatewayOrigin: string
+  /** The gateway route of the key's backend (`LlmBackend.routes`). */
+  route: string
+  /** `LlmBackend.platformUserAgent` of that backend. */
+  userAgent: string
   key: string
   body: Record<string, unknown>
   timeoutMs: number
@@ -40,11 +40,11 @@ export async function callQuickModel(input: {
   const signal = AbortSignal.timeout(input.timeoutMs)
   let response: Response
   try {
-    response = await (input.fetch ?? fetch)(new URL(QUICK_ROUTE, input.gatewayOrigin), {
+    response = await (input.fetch ?? fetch)(new URL(input.route, input.gatewayOrigin), {
       method: 'POST',
       headers: {
         authorization: `Bearer ${input.key}`,
-        'user-agent': PLATFORM_USER_AGENT,
+        'user-agent': input.userAgent,
         'content-type': 'application/json',
         accept: 'text/event-stream',
       },

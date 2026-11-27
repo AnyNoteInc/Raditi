@@ -1854,5 +1854,10 @@ export const feedTaskHeadSchema = z.strictObject({
    * or a head built before projects.
    */
   project: chatProjectSchema.nullable().default(null),
+  /**
+   * The service chat «Быстрые правки» (docs/plan/98-quick-edits.md, БПр17): a journal of the quick
+   * edits, which takes no words. A head built without it is a chat.
+   */
+  quick: z.boolean().default(false),
 })
 export type FeedTaskHead = z.infer<typeof feedTaskHeadSchema>

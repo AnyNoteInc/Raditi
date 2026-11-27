@@ -11,15 +11,17 @@ import {
 } from '@repo/turn-keys'
 
 // The key of one quick edit (docs/plan/98-quick-edits.md, БПр4): one transaction, no Vault, no
-// lease. The profile is the enabled `quick` one on `zai-api` (БПр1, БПр3); the account is one of
-// the driver `quick` of that provider, so the gateway admits the key nowhere else.
+// lease. The profile is an enabled `quick` one on a backend that declares the platform's own calls
+// (`LlmBackend.platformUserAgent` — today the API offer of Z.ai only, БПр1, БПр3); the account is
+// one of the driver `quick` of that provider, so the gateway admits the key nowhere else.
 
 export const QUICK_DRIVER = 'quick'
-export const QUICK_BACKEND = 'zai-api'
 export const QUICK_REASONING_EFFORT = 'low'
 
 export interface QuickKey {
   keyId: string
+  /** The backend of the profile: its route and the platform's identity there. */
+  backendId: string
   /** The value, in memory only: never logged, never stored. */
   secret: string
   /** The model id the provider knows. */
@@ -53,27 +55,32 @@ export async function issueQuickKey(
     attempt: number
     quickEditId: string
     estimatedInputTokens: number
+    /** The backends that take the platform's own calls, in the order of preference. */
+    backends: readonly string[]
   },
 ): Promise<QuickKey> {
+  if (input.backends.length === 0) throw quickEditsOff()
   return gatewayTransaction(prisma, async (tx) => {
     const [profile] = await tx.$queryRaw<
       {
         modelId: string
         providerId: string
+        backendId: string
         model: string
         reserveOutputTokens: number
         dataClass: string
       }[]
     >`
-      SELECT m.id AS "modelId", p.id AS "providerId", m.provider_model_id AS model,
+      SELECT m.id AS "modelId", p.id AS "providerId", p.slug AS "backendId",
+        m.provider_model_id AS model,
         m.reserve_output_tokens AS "reserveOutputTokens", w.data_class::text AS "dataClass"
       FROM llm_models m JOIN llm_providers p ON p.id = m.provider_id
       JOIN agent_drivers d ON d.id = ${QUICK_DRIVER} AND d.enabled
       JOIN tasks t ON t.id = ${input.taskId}::uuid AND t.kind = 'quick_edits'
       JOIN workspaces w ON w.id = t.workspace_id
-      WHERE p.slug = ${QUICK_BACKEND} AND p.enabled AND m.enabled AND m.quick
+      WHERE p.slug = ANY(${[...input.backends]}::text[]) AND p.enabled AND m.enabled AND m.quick
         AND m.provider_model_id IS NOT NULL AND m.reserve_output_tokens > 0
-      ORDER BY m.slug LIMIT 1
+      ORDER BY array_position(${[...input.backends]}::text[], p.slug::text), m.slug LIMIT 1
       FOR SHARE OF m, p, d`
     if (!profile) throw quickEditsOff()
     if (profile.dataClass === 'client') {
@@ -90,7 +97,7 @@ export async function issueQuickKey(
       select: { inputPer1m: true, outputPer1m: true },
     })
     if (!price) throw llmPriceMissing()
-    await lockSubscriptionPool(tx, QUICK_BACKEND)
+    await lockSubscriptionPool(tx, profile.backendId)
     // The least used account of the driver with no stop flag: no windows on the API (БПр16).
     const [account] = await tx.$queryRaw<{ id: string }[]>`
       SELECT a.id FROM subscription_accounts a
@@ -132,6 +139,6 @@ export async function issueQuickKey(
     await tx.$executeRaw`
       UPDATE tasks SET status = 'running', updated_at = now()
       WHERE id = ${input.taskId}::uuid AND status = 'preparing' AND attempt = ${input.attempt}`
-    return { keyId: key.id, secret, model: profile.model }
+    return { keyId: key.id, backendId: profile.backendId, secret, model: profile.model }
   })
 }

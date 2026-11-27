@@ -996,6 +996,8 @@ model Task {
   @@index([revertsTaskId])
   @@index([pricingRuleId])
   @@index([projectId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_project_updated_idx", where: raw("project_id IS NOT NULL AND deleted_at IS NULL"))
+  /// One live quick task per person and workspace (docs/plan/98-quick-edits.md, БПр2).
+  @@unique([workspaceId, createdById], map: "tasks_quick_edits_owner_key", where: raw("kind = 'quick_edits' AND deleted_at IS NULL"))
   @@map("tasks")
 }
 

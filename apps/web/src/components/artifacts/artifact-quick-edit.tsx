@@ -66,26 +66,20 @@ const refusalOf = (code: string | null | undefined): string => {
   }
 }
 
-export function ArtifactQuickEdit({
-  artifactId,
-  threadId,
-  own,
-  authorName,
-  moved,
-  onDone,
-}: {
-  artifactId: string
+interface QuickEditRun {
+  id: string
   threadId: string
-  /** The clicker wrote the note: no confirmation. */
-  own: boolean
-  authorName: string
-  moved: boolean
-  onDone: () => void
-}) {
+}
+
+/**
+ * The quick edits of one notes panel: the one under way, what the last one came to, «Отменить».
+ * It lives with the panel, not with a note: a note the edit closed leaves the list, and its
+ * outcome and «Отменить» must not leave with it.
+ */
+export function useQuickEdits({ artifactId, onDone }: { artifactId: string; onDone: () => void }) {
   const trpc = useTRPC()
   const client = useQueryClient()
-  const [quickEditId, setQuickEditId] = useState<string | null>(null)
-  const [confirming, setConfirming] = useState(false)
+  const [run, setRun] = useState<QuickEditRun | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [applied, setApplied] = useState<{ taskId: string; attempt: number } | null>(null)
   const start = useMutation(trpc.artifact.quickEdit.mutationOptions())
@@ -93,17 +87,16 @@ export function ArtifactQuickEdit({
   const editsQuery = trpc.artifact.quickEdits.queryOptions({ artifactId })
   const edits = useQuery({
     ...editsQuery,
-    enabled: quickEditId !== null,
+    enabled: run !== null,
     // Until the edit ends; the signal of the artifact usually comes first.
     refetchInterval: (query) =>
-      query.state.data?.find((edit) => edit.id === quickEditId)?.finishedAt ? false : 2000,
+      query.state.data?.find((edit) => edit.id === run?.id)?.finishedAt ? false : 2000,
   })
-  const current = edits.data?.find((edit) => edit.id === quickEditId) ?? null
-  const running = start.isPending || (quickEditId !== null && current?.finishedAt == null)
+  const current = edits.data?.find((edit) => edit.id === run?.id) ?? null
 
   const finish = useEffectEvent((edit: NonNullable<typeof current>) => {
-    // Seen once: the card says how it ended, the page reads the artifact and the notes again.
-    setQuickEditId(null)
+    // Seen once: the panel says how it ended, the page reads the artifact and the notes again.
+    setRun(null)
     if (edit.state === 'applied') {
       setApplied({ taskId: edit.taskId, attempt: edit.attempt })
       setMessage(null)
@@ -113,27 +106,29 @@ export function ArtifactQuickEdit({
     onDone()
   })
   useEffect(() => {
-    // The end of an edit arrives from the server: the card follows it once.
+    // The end of an edit arrives from the server: the panel follows it once.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (current?.finishedAt) finish(current)
   }, [current])
 
-  async function run(confirmOthers: boolean) {
-    setConfirming(false)
+  /** Starts an edit; `confirm` — the note is someone else's and the clicker has not confirmed. */
+  async function begin(threadId: string, confirmOthers: boolean): Promise<'confirm' | null> {
     setMessage(null)
     try {
-      const { quickEditId: id } = await start.mutateAsync({
+      const { quickEditId } = await start.mutateAsync({
         artifactId,
         threadIds: [threadId],
         requestId: crypto.randomUUID(),
         confirmOthers,
       })
-      setQuickEditId(id)
+      setRun({ id: quickEditId, threadId })
       void client.invalidateQueries({ queryKey: editsQuery.queryKey })
+      return null
     } catch (error) {
       const code = artifactErrorData(error)?.domainCode
-      if (code === 'QUICK_EDIT_CONFIRM') setConfirming(true)
-      else setMessage(refusalOf(code))
+      if (code === 'QUICK_EDIT_CONFIRM') return 'confirm'
+      setMessage(refusalOf(code))
+      return null
     }
   }
 
@@ -153,22 +148,11 @@ export function ArtifactQuickEdit({
     onDone()
   }
 
-  return (
+  const busy = start.isPending || run !== null
+  const notices = (
     <>
-      <Tooltip title={moved ? quickEditTexts.moved : quickEditTexts.hint}>
-        <span>
-          <Button
-            size="small"
-            aria-label={quickEditTexts.label}
-            disabled={moved || running}
-            onClick={() => (own ? void run(false) : setConfirming(true))}
-          >
-            {quickEditTexts.button}
-          </Button>
-        </span>
-      </Tooltip>
-      {running && (
-        <Box sx={{ mt: 0.5 }} role="status">
+      {run !== null && (
+        <Box sx={{ my: 0.5 }} role="status">
           <LinearProgress />
           <Typography variant="caption" color="text.secondary">
             {quickEditTexts.pending}
@@ -176,22 +160,10 @@ export function ArtifactQuickEdit({
         </Box>
       )}
       {message && (
-        <Alert severity="info" sx={{ mt: 0.5 }} onClose={() => setMessage(null)}>
+        <Alert severity="info" sx={{ my: 0.5 }} onClose={() => setMessage(null)}>
           {message}
         </Alert>
       )}
-      <Dialog open={confirming} onClose={() => setConfirming(false)}>
-        <DialogTitle>{quickEditTexts.confirmTitle}</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2">{quickEditTexts.confirm(authorName)}</Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setConfirming(false)}>{quickEditTexts.cancel}</Button>
-          <Button variant="contained" onClick={() => void run(true)}>
-            {quickEditTexts.confirmYes}
-          </Button>
-        </DialogActions>
-      </Dialog>
       <Snackbar
         open={applied !== null}
         autoHideDuration={10_000}
@@ -208,6 +180,65 @@ export function ArtifactQuickEdit({
           </Button>
         }
       />
+    </>
+  )
+  return { begin, busy, runningThread: run?.threadId ?? null, notices }
+}
+
+export type QuickEdits = ReturnType<typeof useQuickEdits>
+
+/** «Исправить» of one note: the edit itself is the panel's (`useQuickEdits`). */
+export function ArtifactQuickEdit({
+  quick,
+  threadId,
+  own,
+  authorName,
+  moved,
+}: {
+  quick: Pick<QuickEdits, 'begin' | 'busy'>
+  threadId: string
+  /** The clicker wrote the note: no confirmation. */
+  own: boolean
+  authorName: string
+  moved: boolean
+}) {
+  const [confirming, setConfirming] = useState(false)
+
+  async function run(confirmOthers: boolean) {
+    setConfirming(false)
+    if ((await quick.begin(threadId, confirmOthers)) === 'confirm') setConfirming(true)
+  }
+
+  return (
+    <>
+      <Tooltip
+        title={
+          moved ? quickEditTexts.moved : quick.busy ? quickEditTexts.busy : quickEditTexts.hint
+        }
+      >
+        <span>
+          <Button
+            size="small"
+            aria-label={quickEditTexts.label}
+            disabled={moved || quick.busy}
+            onClick={() => (own ? void run(false) : setConfirming(true))}
+          >
+            {quickEditTexts.button}
+          </Button>
+        </span>
+      </Tooltip>
+      <Dialog open={confirming} onClose={() => setConfirming(false)}>
+        <DialogTitle>{quickEditTexts.confirmTitle}</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">{quickEditTexts.confirm(authorName)}</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirming(false)}>{quickEditTexts.cancel}</Button>
+          <Button variant="contained" onClick={() => void run(true)}>
+            {quickEditTexts.confirmYes}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   )
 }

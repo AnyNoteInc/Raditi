@@ -365,6 +365,12 @@ export interface LlmBackend {
    * of one of them may send pictures, `normalizeBody` refuses them to every other. Absent — none.
    */
   readonly imageModels?: readonly string[]
+  /**
+   * The identity of the platform's own calls (a quick edit, docs/plan/98-quick-edits.md, БПр1):
+   * only a backend whose provider allows embedding has one. Absent — core never calls it itself,
+   * and no account of a platform driver is imported on it.
+   */
+  readonly platformUserAgent?: string
   /** Extract facts without making the caller interpret provider-specific token fields. */
   credentialMetadata(credential: SubscriptionCredential): CredentialMetadata
   /**

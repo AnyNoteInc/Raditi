@@ -347,6 +347,7 @@ export function createZaiBackend(offer: ZaiOffer): LlmBackend {
       return { externalAccountId: null, plan: null, accessExpiresAt: null, accessIssuedAt: null }
     },
     imageModels: offer.imageModels,
+    ...(offer.platformUserAgent ? { platformUserAgent: offer.platformUserAgent } : {}),
     normalizeBody: createZaiBodyPolicy(offer.route, offer.imageModels),
     upstream(route, _body, clientHeaders, credential, client = 'cli') {
       assertRoute(route)

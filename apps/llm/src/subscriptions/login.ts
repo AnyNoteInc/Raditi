@@ -6,6 +6,7 @@ import {
   type CredentialMetadata,
   type LlmBackend,
   type SecretStore,
+  llmClientOf,
 } from '@repo/domain'
 import { lockSubscriptionPool } from '@repo/turn-keys'
 import { z } from 'zod'
@@ -177,6 +178,9 @@ export class SubscriptionLogin {
         const provider = await tx.llmProvider.findUnique({ where: { slug: backend.id } })
         const driver = await tx.agentDriver.findUnique({ where: { id: value.driverId } })
         if (!provider || provider.kind !== 'subscription' || !driver)
+          throw new SubscriptionLoginError('account_unavailable')
+        // An account of quick edits only where the platform may call the provider (plan 98, БПр1).
+        if (llmClientOf(driver.id) === 'platform' && backend.platformUserAgent === undefined)
           throw new SubscriptionLoginError('account_unavailable')
         // The unique indexes skip retired rows: never findUnique by label or external id.
         const existing = await tx.subscriptionAccount.findFirst({

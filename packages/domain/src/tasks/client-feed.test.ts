@@ -1739,6 +1739,8 @@ describe('task head', () => {
       effort: 'high',
       // A head written before projects is of a chat without one (docs/plan/84-projects.md).
       project: null,
+      // A head written before quick edits is a chat, not the journal «Быстрые правки» (plan 98).
+      quick: false,
     })
     for (const status of taskStatuses)
       expect(feedTaskHeadSchema.safeParse({ ...head, status }).success).toBe(true)
