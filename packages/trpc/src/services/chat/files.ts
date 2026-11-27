@@ -48,7 +48,12 @@ export async function readChatFile(
   const taskId = input.taskId.toLowerCase()
   const fileId = input.fileId.toLowerCase()
   const row = await db.taskEvent.findFirst({
-    where: { taskId, type: 'feed.file', payload: { path: ['fileId'], equals: fileId } },
+    where: {
+      taskId,
+      clientVisible: true,
+      type: 'feed.file',
+      payload: { path: ['fileId'], equals: fileId },
+    },
     select: { payload: true },
   })
   const payload = feedFilePayloadSchema.safeParse(row?.payload)

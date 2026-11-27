@@ -125,26 +125,33 @@ const PROJECT = Prisma.sql`t.project_id,
   (SELECT p.name FROM projects p WHERE p.id = t.project_id) AS project_name`
 
 /**
- * The newest row of `t` that says what its chat waits for. A `feed.rewind` before a `feed.redo` is
- * as if it were not there: `/redo` took it back, and an older one stands before a later turn.
+ * The newest row of `t` that says what its chat waits for, as the column `ending.type`, read once
+ * per chat for `ANSWERED` and `REWOUND` (and only for a chat that waits for the client). A
+ * `feed.rewind` before a `feed.redo` is as if it were not there: `/redo` took it back, and an older
+ * one stands before a later turn. Every query that reads `ANSWERED` or `REWOUND` joins it after `t`.
+ * `client_visible` (= `feed.*`, CHECK task_events_feed_visible_check) lets `task_events_feed_idx`
+ * serve the read.
  */
-const ENDING = Prisma.sql`(SELECT e.type FROM task_events e
-  WHERE e.task_id = t.id
+export const ENDING_JOIN = Prisma.sql`LEFT JOIN LATERAL (SELECT e.type FROM task_events e
+  WHERE t.status = 'awaiting_user' AND e.task_id = t.id AND e.client_visible
     AND e.type IN ('feed.result', 'feed.question', 'feed.failure', 'feed.rewind')
     AND NOT (e.type = 'feed.rewind' AND EXISTS (SELECT 1 FROM task_events r
-      WHERE r.task_id = t.id AND r.type = 'feed.redo' AND r.id > e.id))
-  ORDER BY e.id DESC LIMIT 1)`
+      WHERE r.task_id = t.id AND r.client_visible AND r.type = 'feed.redo' AND r.id > e.id))
+  ORDER BY e.id DESC LIMIT 1) ending ON true`
 
-/** `DialogListItem.answered` of the row `t`. Read by the runs of scheduled tasks too (Зп5). */
+/**
+ * `DialogListItem.answered` of the row `t`. Read by the runs of scheduled tasks too (Зп5); the
+ * query joins `ENDING_JOIN`.
+ */
 export const ANSWERED = Prisma.sql`(t.status = 'awaiting_user'
-  AND COALESCE(${ENDING} IN ('feed.result', 'feed.rewind'), false))`
+  AND COALESCE(ending.type IN ('feed.result', 'feed.rewind'), false))`
 
-/** `DialogListItem.rewound` of the row `t`. */
-const REWOUND = Prisma.sql`(t.status = 'awaiting_user' AND COALESCE(${ENDING} = 'feed.rewind', false))`
+/** `DialogListItem.rewound` of the row `t`; the query joins `ENDING_JOIN`. */
+const REWOUND = Prisma.sql`(t.status = 'awaiting_user' AND COALESCE(ending.type = 'feed.rewind', false))`
 
 /** The newest of the rows of `t` that end a pass — a candidate too, which a pass after a failure may bring. */
 const PASS_ENDING = (column: Prisma.Sql) => Prisma.sql`(SELECT ${column} FROM task_events e
-    WHERE e.task_id = t.id
+    WHERE e.task_id = t.id AND e.client_visible
       AND e.type IN ('feed.result', 'feed.question', 'feed.failure', 'feed.candidate',
         'feed.rewind', 'feed.redo')
     ORDER BY e.id DESC LIMIT 1)`
@@ -234,7 +241,7 @@ export function dialogPageQuery(input: {
   if (input.projectId !== undefined && input.projectId !== NO_PROJECT)
     return Prisma.sql`
       SELECT ${ITEM}
-      FROM tasks t
+      FROM tasks t ${ENDING_JOIN}
       WHERE t.project_id = ${input.projectId}::uuid AND ${SHOWN} ${inView} ${afterCursor}
       ORDER BY t.updated_at DESC, t.id DESC
       LIMIT ${DIALOG_PAGE + 1}`
@@ -259,6 +266,7 @@ export function dialogPageQuery(input: {
       ORDER BY t.updated_at DESC, t.id DESC
       LIMIT ${DIALOG_PAGE + 1}
     ) t
+    ${ENDING_JOIN}
     WHERE m.user_id = ${input.userId}::uuid
     ORDER BY t.updated_at DESC, t.id DESC
     LIMIT ${DIALOG_PAGE + 1}`
@@ -365,7 +373,7 @@ export function pinnedQuery(input: { userId: string; projectId?: DialogFolderKey
         : Prisma.sql`AND t.project_id = ${input.projectId}::uuid`
   return Prisma.sql`
     SELECT ${ITEM}
-    FROM tasks t
+    FROM tasks t ${ENDING_JOIN}
     WHERE ${OF_USER(input.userId)} AND ${SHOWN}
       ${inFolder}
       AND t.pinned_at IS NOT NULL AND t.archived_at IS NULL
@@ -392,7 +400,7 @@ export async function searchDialogs(
   const pattern = likePattern(words)
   const rows = await db.$queryRaw<DialogRow[]>`
     SELECT ${ITEM}
-    FROM tasks t
+    FROM tasks t ${ENDING_JOIN}
     WHERE ${OF_USER(input.userId)} AND ${SHOWN}
       ${input.archiveOnly ? Prisma.sql`AND t.archived_at IS NOT NULL` : Prisma.empty}
       AND (t.title ILIKE ${pattern}
@@ -430,7 +438,7 @@ export async function listDialogFolders(
       count(*)::int AS count,
       bool_or(CASE WHEN t.status IN ('awaiting_user', 'awaiting_approval')
         THEN ${WAITS_FOR_CLIENT} ELSE false END) AS attention
-    FROM tasks t LEFT JOIN projects p ON p.id = t.project_id
+    FROM tasks t LEFT JOIN projects p ON p.id = t.project_id ${ENDING_JOIN}
     WHERE ${OF_USER(input.userId)} AND ${SHOWN} AND t.archived_at IS NULL
     GROUP BY p.id, p.name, p.archived_at
     ORDER BY p.id IS NULL, max(t.updated_at) DESC, p.id`

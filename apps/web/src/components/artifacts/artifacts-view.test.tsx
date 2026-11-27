@@ -20,7 +20,7 @@ type Row = {
 }
 
 const { list, create, trash, restore, push, projects, keep, thumbs } = vi.hoisted(() => ({
-  list: vi.fn<(input: { filter: string; query?: string }) => Promise<Row[]>>(),
+  list: vi.fn<(input: { filter: string; query?: string; cursor?: unknown }) => Promise<Row[]>>(),
   create: vi.fn(async (_input: unknown) => ({ id: '019f1a21-1800-7f00-8abc-0000000000aa' })),
   trash: vi.fn(async (_input: unknown) => ({ purgeAfter: '2026-12-20T10:00:00.000Z' })),
   restore: vi.fn(async (_input: unknown) => true),
@@ -53,6 +53,19 @@ vi.mock('@/trpc/client', () => ({
         queryOptions: (input: { filter: string; query?: string }) => ({
           queryKey: ['artifact', 'list', input],
           queryFn: () => list(input),
+        }),
+        infiniteQueryOptions: (
+          input: { filter: string; query?: string },
+          options: {
+            initialCursor: unknown
+            getNextPageParam: (page: Row[]) => unknown
+          },
+        ) => ({
+          queryKey: ['artifact', 'list', input, 'infinite'],
+          queryFn: ({ pageParam }: { pageParam: unknown }) =>
+            list({ ...input, ...(pageParam ? { cursor: pageParam } : {}) }),
+          initialPageParam: options.initialCursor,
+          getNextPageParam: options.getNextPageParam,
         }),
       },
       canvasThumbs: {
@@ -185,6 +198,30 @@ describe('«Артефакты» (plan 88, Ар50; plan 93, АТ9)', () => {
         expect.objectContaining({ filter: 'all', query: 'пирог', sort: 'newest' }),
       ),
     )
+  })
+
+  it('pages through the gallery after the last card of the page before', async () => {
+    const page = Array.from({ length: 60 }, (_, index) =>
+      row({
+        id: `019f1a21-1800-7f00-8abc-${String(index).padStart(12, '0')}`,
+        title: `Артефакт ${index}`,
+      }),
+    )
+    const after = row({ id: '019f1a21-1800-7f00-8abc-0000000000ff', title: 'Последний' })
+    list.mockImplementation(async (input) =>
+      input.cursor ? [after] : input.filter === 'trash' ? [] : page,
+    )
+    show()
+    expect(await screen.findByText('Артефакт 59')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Показать ещё' }))
+    expect(await screen.findByText('Последний')).toBeTruthy()
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 60,
+        cursor: { id: page[59]!.id, updatedAt: page[59]!.updatedAt, title: 'Артефакт 59' },
+      }),
+    )
+    expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull()
   })
 
   it('shows «Доступные мне» only where sharing is open', async () => {

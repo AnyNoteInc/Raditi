@@ -270,7 +270,12 @@ export async function unsentBranch(
     turns.filter((turn) => turn.turnNo > sentTurn).map((turn) => [turn.id, turn]),
   )
   const events = await db.taskEvent.findMany({
-    where: { taskId, type: 'feed.repo_changes', turnId: { in: [...standing.keys()] } },
+    where: {
+      taskId,
+      clientVisible: true,
+      type: 'feed.repo_changes',
+      turnId: { in: [...standing.keys()] },
+    },
     orderBy: { id: 'asc' },
     select: { turnId: true, payload: true },
   })

@@ -7,7 +7,7 @@ import {
   type TaskStatus,
 } from '@repo/domain'
 
-import { ANSWERED, FAILED, STOPPED } from '../chat/dialog-list.ts'
+import { ANSWERED, ENDING_JOIN, FAILED, STOPPED } from '../chat/dialog-list.ts'
 
 // What came of the runs of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп5, Зп6): a run that
 // started is told by the state of its chat, read by the same conditions as the list of chats
@@ -95,7 +95,7 @@ export async function runChatStates(
   const rows = await db.$queryRaw<Array<RunChatState & { id: string }>>(Prisma.sql`
     SELECT t.id, t.status::text AS status, t.deleted_at IS NOT NULL AS deleted,
       ${ANSWERED} AS answered, ${FAILED} AS failed, ${STOPPED} AS stopped
-    FROM tasks t
+    FROM tasks t ${ENDING_JOIN}
     WHERE t.id = ANY(${ids}::uuid[])`)
   return new Map(rows.map(({ id, ...state }) => [id, state]))
 }

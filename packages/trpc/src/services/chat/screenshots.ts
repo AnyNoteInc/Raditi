@@ -32,6 +32,7 @@ export async function readTaskScreenshot(
   const row = await db.taskEvent.findFirst({
     where: {
       taskId: task.id,
+      clientVisible: true,
       type: 'feed.screenshot',
       payload: { path: ['screenshotId'], equals: screenshotId },
     },

@@ -1,4 +1,4 @@
-import type { Prisma } from '@repo/db'
+import { Prisma } from '@repo/db'
 import {
   carriedTariffCredits,
   creditAccountKinds,
@@ -232,6 +232,12 @@ function entryCredits(row: HistoryRow) {
  * returned or expired with their period is not a line of the history: they were never the
  * customer's loss.
  *
+ * Before the reserves are grouped by task, the tasks are narrowed to those with a reserve row
+ * that could be the first one of a line in the bounds — its `created_at` not before `since`, its
+ * `placed_at` within the dates —: the first reserve of a line meets all of them, so no line is
+ * lost, and the grouping no longer reads the whole history of the workspace
+ * (`credit_holds_account_id_created_at_idx`, `credit_holds_account_id_placed_at_idx`).
+ *
  * The order is `(at, id)`, the id of a line being its task; the cursor is the id of the last
  * line of the previous page, and the database compares the next page with that line itself, so
  * the microseconds a Date would lose do not skip or repeat a line. A cursor that is not a line
@@ -247,8 +253,28 @@ async function historyPage(
   // Dates bound the history instead of the period.
   const periodStart = from === null && to === null ? since : null
   const { tariff, gift, pack } = creditAccountUnits
+  const fromAt =
+    from === null ? null : Prisma.sql`(${from}::date::timestamp AT TIME ZONE ${HISTORY_TIME_ZONE})`
+  const toAt =
+    to === null
+      ? null
+      : Prisma.sql`((${to}::date + 1)::timestamp AT TIME ZONE ${HISTORY_TIME_ZONE})`
+  // Only the bounds that are set: a generic plan of `$1 IS NULL OR …` would not use the index.
+  const bounds = [
+    periodStart === null ? null : Prisma.sql`c.created_at >= ${periodStart}::timestamptz`,
+    fromAt === null ? null : Prisma.sql`c.placed_at >= ${fromAt}`,
+    toAt === null ? null : Prisma.sql`c.placed_at < ${toAt}`,
+  ].flatMap((bound) => (bound === null ? [] : [Prisma.sql`AND ${bound}`]))
   const rows = await db.$queryRaw<HistoryQueryRow[]>`
-    WITH entries AS (
+    WITH candidates AS (
+      SELECT DISTINCT c.task_id
+      FROM credit_holds c
+      JOIN billing_accounts a ON a.id = c.account_id
+      WHERE a.workspace_id = ${workspaceId}::uuid
+        AND a.unit = ANY(${CREDIT_UNITS}::"BillingUnit"[])
+        ${bounds.length === 0 ? Prisma.empty : Prisma.join(bounds, ' ')}
+    ),
+    entries AS (
       SELECT h.task_id AS id, MIN(h.placed_at) AS at, h.task_id,
         CASE
           WHEN bool_or(h.status = 'active') THEN 'held'
@@ -265,6 +291,7 @@ async function historyPage(
       JOIN billing_accounts a ON a.id = h.account_id
       WHERE a.workspace_id = ${workspaceId}::uuid
         AND a.unit = ANY(${CREDIT_UNITS}::"BillingUnit"[])
+        AND h.task_id IN (SELECT task_id FROM candidates)
       GROUP BY h.task_id
       HAVING ${periodStart}::timestamptz IS NULL OR MIN(h.created_at) >= ${periodStart}::timestamptz
       UNION ALL

@@ -45,7 +45,7 @@ export function lockProjectChats(tx: Tx, projectId: string): Promise<ProjectChat
 async function cancelPressedLast(tx: Tx, taskId: string): Promise<boolean> {
   const [newest] = await tx.$queryRaw<Array<{ kind: string | null; command: string | null }>>`
     SELECT payload->>'kind' AS kind, payload->>'command' AS command FROM task_events
-    WHERE task_id = ${taskId}::uuid AND type = 'feed.request'
+    WHERE task_id = ${taskId}::uuid AND client_visible AND type = 'feed.request'
     ORDER BY id DESC LIMIT 1`
   return newest?.kind === 'command' && newest.command === 'cancel'
 }

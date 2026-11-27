@@ -38,7 +38,12 @@ async function chatFileRow(
   if (task === null) return null
   const fileId = input.fileId.toLowerCase()
   const row = await db.taskEvent.findFirst({
-    where: { taskId: task.id, type: 'feed.file', payload: { path: ['fileId'], equals: fileId } },
+    where: {
+      taskId: task.id,
+      clientVisible: true,
+      type: 'feed.file',
+      payload: { path: ['fileId'], equals: fileId },
+    },
     select: { payload: true },
   })
   const payload = feedFilePayloadSchema.safeParse(row?.payload)

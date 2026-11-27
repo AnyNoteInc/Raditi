@@ -134,6 +134,48 @@ describe.skipIf(!databaseUrl)('PostgreSQL: artifacts in the cabinet', () => {
     })
   }
 
+  it('pages the gallery by the last card, newest first and by title, with every excerpt', async () => {
+    const anna = await person()
+    const caller = callerOf(anna)
+    const made: string[] = []
+    for (const title of ['Бета', 'Альфа', 'Гамма', 'Дельта', 'Эпсилон']) {
+      made.push(
+        (
+          await caller.artifact.create({
+            kind: 'document',
+            title,
+            projectId: null,
+            templateId: 'offer',
+          })
+        ).id,
+      )
+    }
+    // Two of them at the same moment: the id tells them apart.
+    const same = new Date('2026-11-20T10:00:00.000Z')
+    await db.artifact.updateMany({
+      where: { id: { in: made.slice(0, 2) } },
+      data: { updatedAt: same },
+    })
+
+    for (const sort of ['newest', 'oldest', 'title'] as const) {
+      const whole = await caller.artifact.list({ filter: 'all', sort })
+      const paged: typeof whole = []
+      let cursor: { id: string; updatedAt: string; title: string } | null = null
+      for (;;) {
+        const page = await caller.artifact.list({ filter: 'all', sort, limit: 2, cursor })
+        paged.push(...page)
+        const last = page.at(-1)
+        if (page.length < 2 || last === undefined) break
+        cursor = { id: last.id, updatedAt: last.updatedAt, title: last.title }
+      }
+      expect(paged.map((row) => row.id)).toEqual(whole.map((row) => row.id))
+      expect(new Set(paged.map((row) => row.id)).size).toBe(made.length)
+    }
+    // The excerpt of each card is of its own first blocks.
+    for (const row of await caller.artifact.list({ filter: 'all' }))
+      expect(row.excerpt).toContain('Коротко о задаче клиента')
+  })
+
   it('creates from a template, lists by filters and words, trashes and restores (88.9)', async () => {
     const anna = await person()
     const caller = callerOf(anna)
