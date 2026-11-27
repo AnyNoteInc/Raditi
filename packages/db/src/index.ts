@@ -596,6 +596,7 @@ export {
 export {
   QUICK_TASK_TITLE,
   claimQuickEdit,
+  claimStaleQuickEdit,
   finishQuickEdit,
   insertQuickEdit,
   queueQuickAttempt,

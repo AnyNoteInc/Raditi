@@ -7,6 +7,7 @@ import {
   finishQuickEdit,
   quickEditBlocks,
   settleTurn,
+  claimStaleQuickEdit,
   staleQuickEdits,
   type ClaimedQuickEdit,
   type PrismaClient,
@@ -141,8 +142,12 @@ export class QuickEditRunner {
     })
     for (const key of forgotten) await this.#revoke(key.id)
     let count = 0
-    for (const stale of await staleQuickEdits(db, olderThanMs)) {
+    for (const listed of await staleQuickEdits(db, olderThanMs)) {
       try {
+        // Claimed first: another sweeper that listed it too leaves it, and so never drops the
+        // writes of a newer attempt of the task (`fail` cleans the whole task).
+        const stale = await claimStaleQuickEdit(db, { id: listed.id, olderThanMs })
+        if (stale === null) continue
         const keys = await db.llmKey.findMany({
           where: { sessionId: quickKeySession(stale.id), revokedAt: null },
           select: { id: true },
@@ -177,7 +182,7 @@ export class QuickEditRunner {
         count++
       } catch (error) {
         logger.warn(
-          `quick_edit_sweep_failed id=${stale.id} code=${isDomainError(error) ? error.code : 'internal'}`,
+          `quick_edit_sweep_failed id=${listed.id} code=${isDomainError(error) ? error.code : 'internal'}`,
         )
       }
     }

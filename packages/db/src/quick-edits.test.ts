@@ -8,10 +8,12 @@ import {
   type MigratedSchema,
 } from '../prisma/migrated-schema.ts'
 import { createArtifact } from './artifacts.ts'
+import { accessibleTasks } from './chat-access.ts'
 import { insertFeedEvent } from './feed-events.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
 import {
   claimQuickEdit,
+  claimStaleQuickEdit,
   finishQuickEdit,
   insertQuickEdit,
   queueQuickAttempt,
@@ -62,6 +64,71 @@ describe.skipIf(!databaseUrl)('PostgreSQL quick edits', () => {
     expect(second).toEqual({ taskId: first!.taskId, attempt: 2, created: false })
     const task = await db.task.findUniqueOrThrow({ where: { id: first!.taskId } })
     expect(task).toMatchObject({ kind: 'quick_edits', status: 'queued', modelClass: 'light' })
+  })
+
+  it('shows the quick task to its author only, a chat of the workspace to every member', async () => {
+    const who = await owner()
+    const other = await db.user.create({
+      data: { name: 'Synthetic', email: `${randomUUID()}@example.test` },
+    })
+    await db.member.create({
+      data: { workspaceId: who.workspaceId, userId: other.id, role: 'member' },
+    })
+    const quick = await queue(who)
+    const chat = await db.task.create({
+      data: { workspaceId: who.workspaceId, createdById: who.userId },
+    })
+    const seen = async (userId: string) =>
+      (
+        await db.task.findMany({
+          where: { ...accessibleTasks(userId), workspaceId: who.workspaceId },
+          select: { id: true },
+        })
+      )
+        .map((task) => task.id)
+        .sort()
+    expect(await seen(who.userId)).toEqual([quick!.taskId, chat.id].sort())
+    expect(await seen(other.id)).toEqual([chat.id])
+  })
+
+  it('lets one sweeper claim a stale edit, and not its lost job after it', async () => {
+    const who = await owner()
+    const queued = await queue(who)
+    const artifact = await createArtifact(db, {
+      workspaceId: who.workspaceId,
+      kind: 'document',
+      title: 'Прайс',
+      view: 'page',
+      actor: { kind: 'user', userId: who.userId },
+    })
+    const id = randomUUID()
+    await insertQuickEdit(db as never, {
+      id,
+      artifactId: artifact.id,
+      taskId: queued!.taskId,
+      attempt: 1,
+      userId: who.userId,
+      requestId: randomUUID(),
+    })
+    const olderThanMs = 60_000
+    // Not stale yet: no sweeper takes it.
+    expect(await claimStaleQuickEdit(db, { id, olderThanMs })).toBeNull()
+    await db.$executeRaw`
+      UPDATE artifact_quick_edits SET created_at = now() - interval '10 minutes'
+      WHERE id = ${id}::uuid`
+    expect(await claimStaleQuickEdit(db, { id, olderThanMs })).toEqual({
+      id,
+      taskId: queued!.taskId,
+      attempt: 1,
+    })
+    // The second sweeper that listed it finds it fresh; its lost job, if it comes, finds it taken.
+    expect(await claimStaleQuickEdit(db, { id, olderThanMs })).toBeNull()
+    expect(await claimQuickEdit(db, id)).toBeNull()
+    await finishQuickEdit(db as never, { id, state: 'failed', reason: 'platform' })
+    await db.$executeRaw`
+      UPDATE artifact_quick_edits SET started_at = now() - interval '10 minutes'
+      WHERE id = ${id}::uuid`
+    expect(await claimStaleQuickEdit(db, { id, olderThanMs })).toBeNull()
   })
 
   it('refuses a quick task with a chat session or a project, or not billed', async () => {

@@ -232,3 +232,24 @@ export async function staleQuickEdits(
         < now() - make_interval(secs => ${olderThanMs / 1000})
     ORDER BY created_at LIMIT 100`
 }
+
+/**
+ * The sweeper's claim of a stale edit, before any cleaning of its task: one statement that finds
+ * it still unfinished and still stale and stamps it as just started. Of two sweepers that listed
+ * the same edit, the second finds it fresh (or finished) and leaves it, so it never drops what a
+ * newer attempt of the task wrote. A sweeper that dies after the claim leaves the edit stale again
+ * after `olderThanMs`. A queued edit moves to `running`: its lost job, if it ever comes, is not
+ * claimed. null — not ours to sweep.
+ */
+export async function claimStaleQuickEdit(
+  db: Pick<PrismaClient, '$queryRaw'>,
+  input: { id: string; olderThanMs: number },
+): Promise<{ id: string; taskId: string; attempt: number } | null> {
+  const [row] = await db.$queryRaw<{ id: string; taskId: string; attempt: number }[]>`
+    UPDATE artifact_quick_edits SET state = 'running', started_at = now()
+    WHERE id = ${input.id}::uuid AND finished_at IS NULL
+      AND CASE WHEN state = 'running' THEN started_at ELSE created_at END
+        < now() - make_interval(secs => ${input.olderThanMs / 1000})
+    RETURNING id, task_id AS "taskId", attempt`
+  return row ?? null
+}
