@@ -240,8 +240,7 @@
         "WEB_*",
         "WORKSPACE_*",
         "YANDEX_*",
-        "YOOKASSA_*",
-        "ZAI_*"
+        "YOOKASSA_*"
       ]
     }
   },
