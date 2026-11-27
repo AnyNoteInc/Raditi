@@ -24,8 +24,9 @@ import Skeleton from '@mui/material/Skeleton'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
-// «Навыки агента» (owner's request of 26.10.2026: «установи для агента по умолчанию следующие
-// скилы и сделай возможность добавлять — context7, playwright»): the MCP servers the site's agent
+// «Подключения», formerly «Навыки агента» (docs/plan/97-skills.md, Нв21; owner's request of
+// 26.10.2026: «установи для агента по умолчанию следующие скилы и сделай возможность добавлять —
+// context7, playwright»): the MCP servers the site's agent
 // connects to besides Радити's own tools. The platform's two are on until an owner or an admin
 // turns one off; they add a remote server by its full https address. A server may want a key in
 // a header (docs/plan/81-mcp-server-credentials.md): the key is checked against the server, kept in
@@ -33,20 +34,20 @@ import { useTRPC } from '@/trpc/client'
 // The server checks every change again (`agentSkills`).
 
 export const skillsText = Object.freeze({
-  title: 'Навыки агента',
-  note: 'Навыки — внешние серверы MCP, которыми агент пользуется вместе с инструментами Радити: документация библиотек, браузер для страниц в интернете. Ими пользуется агент в каждом чате этого пространства. Агент обращается к ним через интернет, поэтому ничего секретного им не передаётся.',
-  readOnly: 'Включать, выключать и добавлять навыки могут владелец и администраторы.',
-  platform: 'навык Радити',
-  switchLabel: (title: string) => `Навык «${title}»`,
+  title: 'Подключения',
+  note: 'Подключения — внешние серверы MCP, которыми агент пользуется вместе с инструментами Радити: документация библиотек, браузер для страниц в интернете. Ими пользуется агент в каждом чате этого пространства. Агент обращается к ним через интернет, поэтому ничего секретного им не передаётся.',
+  readOnly: 'Включать, выключать и добавлять подключения могут владелец и администраторы.',
+  platform: 'подключение Радити',
+  switchLabel: (title: string) => `Подключение «${title}»`,
   remove: 'Удалить',
-  addTitle: 'Добавить навык',
+  addTitle: 'Добавить подключение',
   name: 'Имя',
   nameHelp: 'Латинские буквы, цифры и дефис, например docs',
   url: 'Адрес сервера MCP',
   urlHelp: 'Полный адрес с путём, например https://mcp.example.com/v1/mcp. Ключ в адрес не пишите',
   /** At the address of a GitLab or GitHub server (docs/plan/84-projects.md, ПР27). */
   gitServer:
-    'Для кода проекта лучше подключить репозиторий в проекте: там агент не примет изменения без вас. Слияние, сборки, настройки, участников и удаление через этот навык Радити не выполняет.',
+    'Для кода проекта лучше подключить репозиторий в проекте: там агент не примет изменения без вас. Слияние, сборки, настройки, участников и удаление через это подключение Радити не выполняет.',
   add: 'Добавить',
   auth: 'Авторизация',
   authNone: 'Нет',
@@ -87,9 +88,9 @@ export const skillsText = Object.freeze({
   nameInvalid: 'Имя — латинские буквы, цифры и дефис, до 32 знаков, начинается с буквы.',
   urlInvalid:
     'Укажите адрес, который начинается с https://, без логина, ключа и параметров после «?».',
-  loadFailed: 'Не удалось загрузить навыки. Обновите страницу.',
-  loading: 'Загружаем навыки',
-  full: 'Добавлено столько навыков, сколько можно. Чтобы добавить новый, удалите ненужный.',
+  loadFailed: 'Не удалось загрузить подключения. Обновите страницу.',
+  loading: 'Загружаем подключения',
+  full: 'Добавлено столько подключений, сколько можно. Чтобы добавить новое, удалите ненужное.',
 })
 
 export interface SkillView {
@@ -140,7 +141,7 @@ function SkillsCard({
   )
 }
 
-/** «Настройки → Навыки агента»: the skills of the user's personal workspace. */
+/** «Настройки → Подключения»: the MCP servers of the user's personal workspace. */
 export function WorkspaceAgentSkills() {
   const trpc = useTRPC()
   const list = useQuery(trpc.agentSkills.list.queryOptions({}))

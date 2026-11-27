@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks'
 import {
   assertTurnInbox,
   assertTurnProjectFiles,
+  assertTurnSkillFiles,
   badRequest,
   conflict,
   isDomainError,
@@ -137,6 +138,7 @@ export class RemoteTurnExecutor implements TurnExecutor {
     // Refused here as the runner's schema refuses it, before a runner is reserved.
     assertTurnInbox(input.inbox ?? [], turnMayHoldInbox(input.sandbox.labels))
     assertTurnProjectFiles(input.projectFiles ?? [], turnMayHoldInbox(input.sandbox.labels))
+    assertTurnSkillFiles(input.skillFiles ?? [], turnMayHoldInbox(input.sandbox.labels))
     const restore = input.restore
       ? { manifest: input.restore.manifest, parts: restoreParts(input.restore) }
       : undefined
@@ -199,6 +201,15 @@ export class RemoteTurnExecutor implements TurnExecutor {
               projectFiles: input.projectFiles.map(({ path, sizeBytes }) => ({ path, sizeBytes })),
             }
           : {}),
+        ...(input.skillFiles?.length
+          ? {
+              skillFiles: input.skillFiles.map(({ path, sizeBytes, executable }) => ({
+                path,
+                sizeBytes,
+                executable,
+              })),
+            }
+          : {}),
         driverId: input.driverId,
         prepared: input.prepared,
         argv: input.argv,
@@ -217,6 +228,8 @@ export class RemoteTurnExecutor implements TurnExecutor {
         ...(input.inbox?.length ? { inbox: input.inbox } : {}),
         // …and those of the project at runnerFilePath(…, 'project', n).
         ...(input.projectFiles?.length ? { projectFiles: input.projectFiles } : {}),
+        // …and those of the skills of the account at runnerFilePath(…, 'skills', n) (plan 97).
+        ...(input.skillFiles?.length ? { skillFiles: input.skillFiles } : {}),
         ...(input.restore ? { dataKey: input.restore.dataKey } : {}),
         // These run even after the supervisor gave up: a late container is removed, and a
         // prepare that left none frees the site.

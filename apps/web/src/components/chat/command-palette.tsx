@@ -24,12 +24,34 @@ import type { CommandVerdict } from './chat-types'
 // cannot is shown with the reason, and choosing it runs nothing. The commands of the page itself
 // need no verdict. The words of a command never go to the agent.
 
-export interface PaletteOption {
+/** A command of the chat in the list. */
+export interface CommandOption {
   id: ChatCommandId
+  skill?: undefined
   available: boolean
   /** Why the command cannot be run now, in the server's words; null when it can. */
   reason: string | null
 }
+
+/** An enabled skill of the account (`accountSkills.slashNames`, docs/plan/97-skills.md, Нв18). */
+export interface SlashSkill {
+  name: string
+  title: string
+  description: string
+}
+
+/**
+ * A skill in the list, under «Навыки» below the commands: choosing it puts `/<name> ` into the
+ * field, and the message goes to the agent as written — it is not a command of the chat.
+ */
+export interface SkillOption {
+  id: `skill:${string}`
+  skill: SlashSkill
+  available: true
+  reason: null
+}
+
+export type PaletteOption = CommandOption | SkillOption
 
 /**
  * The commands for what is typed: every command when the list was opened by its button, otherwise
@@ -45,7 +67,7 @@ export function paletteOptions(
   /** Why a command cannot be run here, where no chat has given a verdict on it. */
   closedReason?: string,
   _plain = false,
-): PaletteOption[] {
+): CommandOption[] {
   const ids = typed === null ? [...chatCommandIds] : matchChatCommands(typed)
   return ids.flatMap((id) => {
     const command = chatCommands[id]
@@ -72,6 +94,28 @@ export function paletteOptions(
   })
 }
 
+/**
+ * The skills for what is typed (Нв18): all of them when the list was opened by its button,
+ * otherwise those whose name starts with the letters after `/` — while nothing but a name is
+ * typed. `/<name> ` with a space is the client's message by then, and the list closes.
+ */
+export function skillOptions(typed: string | null, skills: readonly SlashSkill[]): SkillOption[] {
+  if (typed !== null) {
+    const match = /^\/([a-z0-9-]*)$/u.exec(typed.toLowerCase())
+    if (match === null) return []
+    skills = skills.filter((skill) => skill.name.startsWith(match[1]!))
+  }
+  return skills.map((skill) => ({
+    id: `skill:${skill.name}` as const,
+    skill,
+    available: true as const,
+    reason: null,
+  }))
+}
+
+/** The words the field gets when a skill is chosen: its command and a space for the request. */
+export const skillSlash = (skill: SlashSkill) => `/${skill.name} `
+
 /** What the composer measures: the room above the field, which the list must not leave. */
 export const PALETTE_ROOM = '--raditi-palette-room'
 
@@ -86,7 +130,8 @@ export function movedIndex(index: number, key: string, count: number): number {
 }
 
 /** The id of an option in the document: what `aria-activedescendant` names. */
-export const optionId = (listId: string, id: ChatCommandId) => `${listId}-${id}`
+export const optionId = (listId: string, id: PaletteOption['id']) =>
+  `${listId}-${id.replace(':', '-')}`
 
 /**
  * The keys of the list, wherever the focus stands — in the field, or on the list itself when its
@@ -128,12 +173,15 @@ export function paletteKey(
   }
 }
 
+/** The group of the skills, below every group of commands. */
+const SKILLS_GROUP = 'skills'
+type PaletteGroup = ChatCommandGroup | typeof SKILLS_GROUP
+
 /** The options of the list under the heads of their groups, the order kept. */
 function groupsOf(options: readonly PaletteOption[]) {
-  const groups: { group: ChatCommandGroup; items: { option: PaletteOption; index: number }[] }[] =
-    []
+  const groups: { group: PaletteGroup; items: { option: PaletteOption; index: number }[] }[] = []
   options.forEach((option, index) => {
-    const { group } = chatCommands[option.id]
+    const group = option.skill ? SKILLS_GROUP : chatCommands[option.id].group
     const last = groups.at(-1)
     if (last?.group === group) last.items.push({ option, index })
     else groups.push({ group, items: [{ option, index }] })
@@ -213,10 +261,16 @@ export function CommandList({
               color: 'text.secondary',
             }}
           >
-            {chatCommandGroupLabel[group]}
+            {group === SKILLS_GROUP ? paletteText.skills : chatCommandGroupLabel[group]}
           </Typography>
           {items.map(({ option, index }) => {
-            const command = chatCommands[option.id]
+            const command = option.skill
+              ? {
+                  slash: `/${option.skill.name}`,
+                  label: option.skill.title,
+                  description: option.skill.description,
+                }
+              : chatCommands[option.id]
             const selected = index === active
             const description = command.description
             return (
@@ -251,7 +305,15 @@ export function CommandList({
                 <Typography
                   component="span"
                   aria-hidden="true"
-                  sx={{ fontSize: 14, fontWeight: 500, display: 'flex', gap: 0.5 }}
+                  sx={{
+                    fontSize: 14,
+                    fontWeight: 500,
+                    display: 'flex',
+                    gap: 0.5,
+                    minWidth: 0,
+                    // The name of a skill may be longer than the column.
+                    overflowWrap: 'anywhere',
+                  }}
                 >
                   {command.slash}
                   {option.available ? null : (

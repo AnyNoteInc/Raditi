@@ -106,6 +106,7 @@ interface OpenCommand {
   readonly bundle?: TurnBundleSource
   readonly inbox?: readonly TurnInboxFile[]
   readonly projectFiles?: readonly TurnInboxFile[]
+  readonly skillFiles?: readonly TurnInboxFile[]
   readonly dataKey?: () => Promise<Uint8Array>
   readonly candidates?: CandidateParts
   readonly onCreated?: (containerId: string) => Promise<void>
@@ -144,6 +145,8 @@ export interface SendOptions<T extends RunnerReportType> {
   inbox?: readonly TurnInboxFile[]
   /** Served at runnerFilePath(…, 'project', n) while a prepare is open (docs/plan/84, ПР8). */
   projectFiles?: readonly TurnInboxFile[]
+  /** Served at runnerFilePath(…, 'skills', n) while a prepare is open (docs/plan/97, Нв13). */
+  skillFiles?: readonly TurnInboxFile[]
   /** Served at runnerKeyPath() while a prepare with restore or a seal is open. */
   dataKey?: () => Promise<Uint8Array>
   /** Filled by runnerCandidatePath() uploads while a capture is open. */
@@ -484,6 +487,7 @@ export class RunnerHub implements OnApplicationShutdown {
       ...(options.bundle ? { bundle: options.bundle } : {}),
       ...(options.inbox ? { inbox: options.inbox } : {}),
       ...(options.projectFiles ? { projectFiles: options.projectFiles } : {}),
+      ...(options.skillFiles ? { skillFiles: options.skillFiles } : {}),
       ...(options.dataKey ? { dataKey: options.dataKey } : {}),
       ...(options.candidates ? { candidates: options.candidates } : {}),
       ...(options.onCreated ? { onCreated: options.onCreated } : {}),
@@ -882,7 +886,8 @@ export class RunnerHub implements OnApplicationShutdown {
 
   /**
    * A file of an open prepare, by its place in the command's `inbox` — or, for `root: 'project'`,
-   * its `projectFiles` (docs/plan/84-projects.md, ПР8) — after a strict lease check.
+   * its `projectFiles` (docs/plan/84-projects.md, ПР8), for `root: 'skills'` its `skillFiles`
+   * (docs/plan/97-skills.md, Нв13) — after a strict lease check.
    */
   async inboxFile(
     runnerId: string,
@@ -892,7 +897,12 @@ export class RunnerHub implements OnApplicationShutdown {
     root: TurnFileRoot = 'inbox',
   ): Promise<TurnInboxFile> {
     const { live, open } = await this.#binary(runnerId, assignmentId, headers, 'prepare')
-    const file = (root === 'project' ? open.projectFiles : open.inbox)?.[index]
+    const files: Record<TurnFileRoot, readonly TurnInboxFile[] | undefined> = {
+      inbox: open.inbox,
+      project: open.projectFiles,
+      skills: open.skillFiles,
+    }
+    const file = files[root]?.[index]
     if (!file) throw RunnerApiError.of('COMMAND_CLOSED')
     await this.#assertLease(live)
     return file

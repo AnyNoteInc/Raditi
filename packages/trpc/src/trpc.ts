@@ -6,6 +6,7 @@ import { initTRPC, TRPCError } from '@trpc/server'
 import superjson from 'superjson'
 
 import { CONSENT_REQUIRED, formatError, toTRPCError } from './errors.ts'
+import type { AccountSkillServices } from './services/account-skills.ts'
 import type { ChatContext } from './services/chat/context.ts'
 import type { GitServices } from './services/git/connections.ts'
 import type { McpServerServices } from './services/mcp-server-auth.ts'
@@ -59,6 +60,12 @@ export interface Context {
    */
   git?: GitServices | null
   /**
+   * What the skills of an account are installed through (docs/plan/97-skills.md): the readers of
+   * public repositories and the store of their files. Absent or null — skills are listed and
+   * switched, not installed.
+   */
+  skills?: AccountSkillServices | null
+  /**
    * What one HTTP request has read once for all the procedures of its batch (`requestOnce`):
    * the consents of the user, the personal workspace. Absent — a context made by hand (a test, a
    * server component): every procedure reads for itself.
@@ -81,6 +88,8 @@ export interface CreateContextOptions {
   mcpServers?: McpServerServices | null
   /** Defaults to null: repositories cannot be connected. */
   git?: GitServices | null
+  /** Defaults to null: skills cannot be installed. */
+  skills?: AccountSkillServices | null
 }
 
 export async function createContext({
@@ -91,6 +100,7 @@ export async function createContext({
   chat = null,
   mcpServers = null,
   git = null,
+  skills = null,
 }: CreateContextOptions): Promise<Context> {
   const current = await getSessionFromHeaders(headers, auth)
   return {
@@ -102,6 +112,7 @@ export async function createContext({
     chat,
     mcpServers,
     git,
+    skills,
     memo: new Map(),
   }
 }

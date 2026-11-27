@@ -298,6 +298,8 @@ export const paletteText = Object.freeze({
   opened: (count: number, word: string) =>
     `${count} ${word}. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.`,
   unavailable: 'Недоступна',
+  /** The group of the enabled skills of the account (docs/plan/97-skills.md, Нв18). */
+  skills: 'Навыки',
 })
 
 export const composerText = Object.freeze({

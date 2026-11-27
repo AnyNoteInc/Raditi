@@ -1,5 +1,8 @@
 import { z } from 'zod'
 
+import { turnSkillFileOf } from '../account-skills/files.ts'
+import { accountSkillLimits, turnSkillFilesLimits } from '../account-skills/limits.ts'
+import { skillNameSchema } from '../account-skills/name.ts'
 import { turnSkillsSchema } from '../agent/skills.ts'
 import { attachmentLimits } from '../attachments/rules.ts'
 import { badRequest } from '../errors.ts'
@@ -137,6 +140,13 @@ export interface TurnPrepareInput {
    * They are put again by every turn and never captured. Absent — none.
    */
   projectFiles?: readonly TurnInboxFile[]
+  /**
+   * The files of the skills of the account of the turn (`input.skillFiles`,
+   * docs/plan/97-skills.md, Нв13): written like `projectFiles`, after them, under SANDBOX_SKILLS,
+   * read-only — a program executable (assertTurnSkillFiles). Put again by every turn, never
+   * captured. Absent — none.
+   */
+  skillFiles?: readonly TurnSkillFile[]
   /** Selects the stateless event parser on the executor side. */
   driverId: AgentDriverId
   /** Already checked by core (preparedRunSchema, preparedRunExposesSecret). */
@@ -184,6 +194,11 @@ export interface TurnInboxFile {
   sizeBytes: number
   /** The file's bytes; a body longer or shorter than `sizeBytes` is refused. */
   read(): AsyncIterable<Uint8Array>
+}
+
+/** A file of a skill of the account (docs/plan/97-skills.md, Нв13): its mode follows `executable`. */
+export interface TurnSkillFile extends TurnInboxFile {
+  executable: boolean
 }
 
 export type TurnAdoptInput = {
@@ -455,11 +470,24 @@ export function turnProjectFileName(path: string): string | null {
   return projectFilePath(name) === name ? name : null
 }
 
+/**
+ * A path of the plan's `input.skillFiles` (docs/plan/97-skills.md, Нв13): a clean path of a file of
+ * a skill under SANDBOX_SKILLS/<name>.
+ */
+export const turnSkillPathSchema = z
+  .string()
+  .max(1024)
+  .refine(
+    (path) => turnSkillFileOf(path) !== null,
+    'expected a clean path of a file of a skill under the skills folder',
+  )
+
 export const turnInputSchema = z
   .object({
     prompt: z.string().min(1).max(turnPlanLimits.prompt),
     attachments: z.array(turnInboxPathSchema).max(turnPlanLimits.attachments),
     projectFiles: z.array(turnProjectPathSchema).max(turnProjectFilesLimits.files).optional(),
+    skillFiles: z.array(turnSkillPathSchema).max(turnSkillFilesLimits.files).optional(),
     action: z.enum(turnActions).optional(),
   })
   .strict() satisfies z.ZodType<TurnInput>
@@ -568,27 +596,72 @@ export function assertTurnProjectFiles(
     throw badRequest('Files of the project too large for one turn')
 }
 
+/**
+ * The files of the skills of a prepare (docs/plan/97-skills.md, Нв13), as both executors and the
+ * runner protocol take them: only for the turn of a chat (turnMayHoldInbox — the skills are of its
+ * author), each at a path of turnSkillPath() once, no file also a folder, each within the bound
+ * of a file of a skill, all within turnSkillFilesLimits.
+ */
+export function assertTurnSkillFiles(
+  files: readonly Pick<TurnSkillFile, 'path' | 'sizeBytes' | 'executable'>[],
+  mayHold: boolean,
+): void {
+  if (files.length === 0) return
+  if (!mayHold) throw badRequest('Files of skills go only to the turn of a chat')
+  if (files.length > turnSkillFilesLimits.files)
+    throw badRequest('Too many files of skills for one turn')
+  let bytes = 0
+  const paths = new Set<string>()
+  for (const file of files) {
+    if (turnSkillFileOf(file.path) === null || paths.has(file.path))
+      throw badRequest('Invalid path of a file of a skill')
+    for (const other of paths)
+      if (other.startsWith(`${file.path}/`) || file.path.startsWith(`${other}/`))
+        throw badRequest('Invalid path of a file of a skill')
+    if (
+      !Number.isSafeInteger(file.sizeBytes) ||
+      file.sizeBytes < 0 ||
+      file.sizeBytes > accountSkillLimits.fileBytes ||
+      typeof file.executable !== 'boolean'
+    )
+      throw badRequest('Invalid size of a file of a skill')
+    paths.add(file.path)
+    bytes += file.sizeBytes
+  }
+  if (bytes > turnSkillFilesLimits.bytes) throw badRequest('Files of skills too large for one turn')
+}
+
 const MIB = 1024 * 1024
 
 /**
  * How `/workspace` (SANDBOX_WORKSPACE_TMPFS_BYTES) is shared in a turn (docs/plan/84-projects.md,
  * §4.7): without a repository — the files of the chat up to 200 MiB and of the project up to 100;
  * with one (Э6) — the tree with `.git` up to 192 MiB, the files of the project up to 100, of the
- * chat up to 100. What is left — at least 632 MiB since 19.11.2026 (120 MiB of 512 before) — is
- * the agent's: `/workspace/out`, new files, the dependencies and caches of its checks.
+ * chat up to 100; the skills of the account up to 64 (docs/plan/97-skills.md, Нв3). What is left —
+ * at least 568 MiB since 27.11.2026 (632 before the skills) — is the agent's: `/workspace/out`, new
+ * files, the dependencies and caches of its checks.
  */
 export function turnWorkspaceBudget(requirements: Pick<TaskRequirements, 'repository'>): {
   workspace: number
   repository: number
   inbox: number
   project: number
+  skills: number
   agent: number
 } {
   const workspace = SANDBOX_WORKSPACE_TMPFS_BYTES
   const repository = requirements.repository ? 192 * MIB : 0
   const inbox = requirements.repository ? 100 * MIB : turnInboxLimits.bytes
   const project = turnProjectFilesLimits.bytes
-  return { workspace, repository, inbox, project, agent: workspace - repository - inbox - project }
+  const skills = turnSkillFilesLimits.bytes
+  return {
+    workspace,
+    repository,
+    inbox,
+    project,
+    skills,
+    agent: workspace - repository - inbox - project - skills,
+  }
 }
 
 /**
@@ -622,6 +695,16 @@ export const turnPlanSchema = z
         egressProxy: httpUrl.optional(),
         internet: z.literal(true).optional(),
         skills: turnSkillsSchema.optional(),
+        // The skills of the account (docs/plan/97-skills.md, Нв13, Нв17).
+        accountSkills: z
+          .array(
+            z
+              .object({ name: skillNameSchema, builtin: z.boolean(), userOnly: z.boolean() })
+              .strict(),
+          )
+          .max(accountSkillLimits.enabled)
+          .optional(),
+        calledSkill: skillNameSchema.optional(),
       })
       .strict()
       .refine(

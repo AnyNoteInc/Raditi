@@ -34,6 +34,7 @@
         "$TURBO_ROOT$/infra/sandbox/gateway.mjs",
         "$TURBO_ROOT$/infra/sandbox/client-egress.mjs",
         "$TURBO_ROOT$/infra/sandbox/Dockerfile",
+        "$TURBO_ROOT$/infra/sandbox/skills/**",
         "$TURBO_ROOT$/infra/app/env.example",
         "$TURBO_ROOT$/apps/runner/scripts/runner-token.mjs",
         "$TURBO_ROOT$/apps/runner/src/core-api/core-client.ts",

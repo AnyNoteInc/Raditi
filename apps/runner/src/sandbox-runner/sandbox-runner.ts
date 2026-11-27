@@ -538,6 +538,15 @@ export class SandboxRunner {
           ...(command.projectFiles
             ? { projectFiles: this.#inboxFiles(held, fence, command.projectFiles, 'project') }
             : {}),
+          // The skills of the account, fetched the same way (docs/plan/97-skills.md, Нв13).
+          ...(command.skillFiles
+            ? {
+                skillFiles: command.skillFiles.map((file, index) => ({
+                  ...file,
+                  read: () => this.#inboxFile(held, fence, index, file.sizeBytes, 'skills'),
+                })),
+              }
+            : {}),
           driverId: command.driverId,
           prepared: command.prepared,
           argv: command.argv,

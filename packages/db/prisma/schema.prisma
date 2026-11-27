@@ -77,6 +77,8 @@ model User {
   artifactInvitesSent         ArtifactInvite[]             @relation("ArtifactInviteInviter")
   artifactInvitesAccepted     ArtifactInvite[]             @relation("ArtifactInviteAcceptor")
   chatNotificationsActed      ChatNotification[]           @relation("ChatNotificationActor")
+  accountSkills               AccountSkill[]
+  skillMarketplaces           SkillMarketplace[]
 
   @@map("users")
 }
@@ -3417,4 +3419,86 @@ model OriMessage {
   @@index([userId, at])
   @@index([keepUntil])
   @@map("ori_messages")
+}
+
+/// A skill of an account — a folder with SKILL.md (docs/plan/97-skills.md, Нв1–Нв4): of its user,
+/// in every workspace. A built-in skill (`source` `builtin`) has a row only once its user changed
+/// its default, and no version: its files are the sandbox image's. Any other has its current
+/// version; the files of a version lie in raditi-inbox under `skills/<user>/<version>/<n>`.
+model AccountSkill {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  /// The name of the open standard and of its folder (skillNameSchema; CHECK).
+  name            String    @db.VarChar(64)
+  /// builtin | marketplace | git | upload | created (skillSourceKinds; CHECK).
+  source          String    @db.VarChar(16)
+  /// Where it came from (skillSourceRefSchema): a repository with its path, a marketplace and
+  /// its plugin, the name of an uploaded file, the chat of the agent that made it.
+  sourceRef       Json      @map("source_ref")
+  versionId       String?   @unique @map("version_id") @db.Uuid
+  enabled         Boolean   @default(true)
+  /// A newer commit of its source the daily check found (Нв11); null — none known.
+  updateCommit    String?   @map("update_commit") @db.VarChar(64)
+  updateCheckedAt DateTime? @map("update_checked_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user     User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  version  AccountSkillVersion?  @relation("AccountSkillCurrentVersion", fields: [versionId], references: [id], onDelete: NoAction)
+  versions AccountSkillVersion[] @relation("AccountSkillVersions")
+
+  @@unique([userId, name])
+  @@map("account_skills")
+}
+
+/// A version of a skill of an account (Нв4): never changed once written. The files are in
+/// raditi-inbox in the order of `files`, each under its place.
+model AccountSkillVersion {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  skillId     String   @map("skill_id") @db.Uuid
+  /// The commit of a repository it was read at.
+  commit      String?  @db.VarChar(64)
+  description String   @db.VarChar(1024)
+  license     String?  @db.VarChar(128)
+  /// Only the client starts it (`disable-model-invocation`, Нв17).
+  userOnly    Boolean  @default(false) @map("user_only")
+  /// Every field of the header of SKILL.md, kept and not interpreted.
+  frontmatter Json
+  /// [{ path, sizeBytes, executable }] — the place of a file is its number in the store.
+  files       Json
+  fileCount   Int      @map("file_count")
+  sizeBytes   Int      @map("size_bytes")
+  /// Of the files in order, their paths and bytes: the same skill is the same digest.
+  sha256      String   @db.Char(64)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  skill   AccountSkill  @relation("AccountSkillVersions", fields: [skillId], references: [id], onDelete: Cascade)
+  current AccountSkill? @relation("AccountSkillCurrentVersion")
+
+  @@index([skillId, createdAt])
+  @@map("account_skill_versions")
+}
+
+/// A marketplace a user added (Нв7): a public repository with `.claude-plugin/marketplace.json`.
+/// The platform's own (`user_id` NULL) cache their listing here too.
+model SkillMarketplace {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  host      String    @db.VarChar(16)
+  repo      String    @db.VarChar(256)
+  ref       String?   @db.VarChar(128)
+  /// The `name` of its marketplace.json.
+  name      String?   @db.VarChar(128)
+  /// The plugins and their skills the last read found (SkillSources.marketplace).
+  listing   Json?
+  commit    String?   @db.VarChar(64)
+  fetchedAt DateTime? @map("fetched_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, host, repo])
+  /// The platform's marketplaces: one row each, though NULLs are distinct for the key above.
+  @@unique([host, repo], map: "skill_marketplaces_platform_key", where: raw("user_id IS NULL"))
+  @@map("skill_marketplaces")
 }

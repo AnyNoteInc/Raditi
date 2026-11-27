@@ -187,7 +187,7 @@ export function parseAgentSkillUrl(text: string): string | null {
  * (gitlab.com and a server of the client's own — its MCP lives at `/api/v4/mcp`) and GitHub's
  * (`api.githubcopilot.com`). Their tools can merge, run builds and change the repository's
  * settings past every card of the chat (rule 4), so the relay refuses those tools in every chat,
- * and the form of «Навыки агента» warns at such an address.
+ * and the form of «Подключения» warns at such an address.
  */
 export function isGitMcpServerUrl(url: string): boolean {
   const parsed = URL.parse(url)

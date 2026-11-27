@@ -9,6 +9,7 @@ import { mcpServerServices } from '@/server/mcp-servers'
 import { withOriFactHeader } from '@/server/ori-fact-header'
 import { gitServices } from '@/server/git-services'
 import { paymentShop } from '@/server/payment-shop'
+import { skillServices } from '@/server/skill-services'
 import { refusedCrossOriginPost } from '@/server/trpc-origin'
 import { MAX_BATCH_SIZE } from '@/trpc/batch'
 
@@ -54,6 +55,7 @@ const serve = withOriFactHeader(async (req) => {
         chat: chatServices(),
         mcpServers: mcpServerServices(),
         git: gitServices(),
+        skills: skillServices(),
       }),
     onError: ({ path, error, type }) => {
       const failure = failureToLog(error)

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const stand = vi.hoisted(() => ({
   shop: { name: 'the shop of the process' } as object | null,
   chat: { name: 'the dialog services of the process' },
+  skills: { name: 'the skill services of the process' },
   prisma: { name: 'the database client of the process' },
   headers: new Headers({ cookie: 'a=1' }),
   current: null as { session: object; user: object } | null,
@@ -14,6 +15,7 @@ const stand = vi.hoisted(() => ({
 
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => stand.shop }))
 vi.mock('@/server/chat-services', () => ({ chatServices: () => stand.chat }))
+vi.mock('@/server/skill-services', () => ({ skillServices: () => stand.skills }))
 vi.mock('@/lib/session', () => ({
   getRequestHeaders: () => Promise.resolve(stand.headers),
   getSession: () => Promise.resolve(stand.current),
@@ -42,6 +44,7 @@ describe('the tRPC caller of Server Components', () => {
       user: null,
       billing: stand.shop,
       chat: stand.chat,
+      skills: stand.skills,
     })
     const [context] = stand.createCaller.mock.calls[0] as [{ billing: unknown; chat: unknown }]
     expect(context.billing).toBe(stand.shop)

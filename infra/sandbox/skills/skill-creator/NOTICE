@@ -1,0 +1,16 @@
+skill-creator of Радити
+
+This folder is a modified version of the skill-creator skill of Anthropic, PBC,
+https://github.com/anthropics/skills/tree/main/skills/skill-creator
+Copyright 2026 Anthropic, PBC. Licensed under the Apache License, Version 2.0
+(LICENSE.txt in this folder).
+
+Changes made by Радити (27.11.2026):
+- SKILL.md rewritten for the sandbox of Радити: the evaluation loops, subagents,
+  the eval viewer and the description optimizer (which run `claude -p`) are
+  replaced by a short self-check; packaging hands the skill to the client, who
+  saves it with «Сохранить как навык».
+- scripts/init_skill.py, scripts/quick_validate.py and scripts/package_skill.py
+  are written anew after the scripts of the same names of Anthropic and of
+  OpenAI's skill-creator (https://github.com/openai/skills, Apache-2.0).
+- The references, agents, assets and eval-viewer folders are not included.

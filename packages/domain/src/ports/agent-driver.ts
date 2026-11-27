@@ -42,6 +42,13 @@ export const SANDBOX_INBOX = '/workspace/inbox'
 /** The files of the context of the chat's project (docs/plan/84-projects.md, ПР8): not kept. */
 export const SANDBOX_PROJECT = '/workspace/project'
 export const SANDBOX_OUT = '/workspace/out'
+/**
+ * The skills of the account of the turn (docs/plan/97-skills.md, Нв13): one folder each, by its
+ * name, read-only, put again every turn, never captured.
+ */
+export const SANDBOX_SKILLS = '/workspace/skills'
+/** The built-in skills of the platform, in the sandbox image (Нв5): their version is the image's. */
+export const SANDBOX_BUILTIN_SKILLS = '/usr/local/lib/raditi/skills'
 export const SANDBOX_AGENT_HOME = '/agent-home'
 /**
  * Where every driver points the caches, temporary files and global packages of the agent's
@@ -103,6 +110,23 @@ export interface RunContext {
   internet?: true
   /** The skills of the site's agent (MCP servers besides the platform's), with `internet` only. */
   skills?: readonly TurnSkill[]
+  /**
+   * The skills of the account of the turn — folders with SKILL.md (docs/plan/97-skills.md, Нв13,
+   * Нв14): the built-in ones in the image, the others placed under SANDBOX_SKILLS
+   * (`input.skillFiles`). Absent — the turn has none, and the driver keeps skills off.
+   */
+  accountSkills?: readonly TurnAccountSkill[]
+  /** The skill the client called with `/<name>` in this turn (Нв17, Нв18). */
+  calledSkill?: string
+}
+
+/** One skill of the account of a turn, as the driver gets it (docs/plan/97-skills.md, Нв13). */
+export interface TurnAccountSkill {
+  name: string
+  /** Built-in — under SANDBOX_BUILTIN_SKILLS; else under SANDBOX_SKILLS. */
+  builtin: boolean
+  /** Only the client starts it (Нв17): the driver lets it load only in the turn it was called. */
+  userOnly: boolean
 }
 
 /** The values of the client's variables of a run: what the platform masks and refuses (Р13). */
@@ -266,6 +290,11 @@ export interface TurnInput {
    * (docs/plan/84-projects.md, ПР8): the instructions of the pass list them. Absent — none.
    */
   projectFiles?: string[]
+  /**
+   * The files of the skills of the account already placed under SANDBOX_SKILLS
+   * (docs/plan/97-skills.md, Нв13). Absent — none.
+   */
+  skillFiles?: string[]
   /**
    * What the turn does instead of answering `prompt`: `compact` replaces the history of the
    * session it resumes with a summary. No tool runs and no result of the model is read.

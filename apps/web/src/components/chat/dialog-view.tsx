@@ -145,6 +145,7 @@ import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
 import { requestHistoryOf } from './prompt-history'
 import { QueueCards, useChatQueue } from './queue-cards'
+import { useSlashSkills } from './use-slash-skills'
 import { useWaitingTitle } from './use-waiting-title'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
@@ -437,6 +438,7 @@ export function DialogView({
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
+  const slashSkills = useSlashSkills()
   // Put into the cache before anything here mounts, as a HydrationBoundary does: the list's
   // folders find the chat there and do not read it again.
   useState(() => {
@@ -1302,6 +1304,7 @@ export function DialogView({
     onRun: runCommand,
     onOpen: refresh,
     plain: true,
+    skills: slashSkills,
   }
   // The reminder of the field names «Настройки → Переменные» (docs/plan/83-remove-projects.md,
   // БП4): an ended chat reads it from its closed field too.

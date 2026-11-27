@@ -37,6 +37,12 @@ vi.mock('@/trpc/client', async () => {
   return {
     useTRPC: () => ({
       ...repoTrpc(),
+      // The skills of the window of commands (docs/plan/97-skills.md, Нв18): none here.
+      accountSkills: {
+        slashNames: {
+          queryOptions: () => ({ queryKey: ['accountSkills.slashNames'], queryFn: async () => [] }),
+        },
+      },
       project: {
         pathKey: () => ['project'],
         get: {

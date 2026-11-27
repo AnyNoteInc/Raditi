@@ -60,6 +60,7 @@ vi.mock('@/server/payment-shop', () => ({ paymentShop: () => null }))
 vi.mock('@/server/chat-services', () => ({ chatServices: () => null }))
 vi.mock('@/server/site-connections', () => ({ siteConnections: () => null }))
 vi.mock('@/server/mcp-servers', () => ({ mcpServerServices: () => null }))
+vi.mock('@/server/skill-services', () => ({ skillServices: () => null }))
 
 const { POST } = await import('./route')
 

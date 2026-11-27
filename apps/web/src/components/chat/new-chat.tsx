@@ -31,6 +31,7 @@ import { Composer } from './composer'
 import { EffortMenu, type EffortMenuHandle } from './effort-menu'
 import { readPromptHistory } from './prompt-history'
 import { useAttachments } from './use-attachments'
+import { useSlashSkills } from './use-slash-skills'
 import { useStartChat } from './use-start-chat'
 
 /**
@@ -98,6 +99,7 @@ export function NewChat({
   const field = useRef<HTMLTextAreaElement>(null)
   const effortMenu = useRef<EffortMenuHandle>(null)
   const clientCommands = useClientCommands({ anchor: field })
+  const slashSkills = useSlashSkills()
   // After the first paint: the server draws the field empty, and Strict Mode mounts this twice.
   useEffect(() => {
     if (!shown) return
@@ -176,6 +178,7 @@ export function NewChat({
           closedReason: composerText.commandsInDialog,
           // A chat has no site and no repository: none of their commands (К27).
           plain: true,
+          skills: slashSkills,
         }}
         fieldRef={field}
         restored={draft}

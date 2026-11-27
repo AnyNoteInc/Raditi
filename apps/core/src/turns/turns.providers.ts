@@ -26,6 +26,7 @@ import { LiveTurns } from './live-turns.ts'
 import { TurnExecRecovery } from './turn-exec-recovery.ts'
 import { TaskInboxFiles } from './turn-inbox.ts'
 import { TaskProjectFiles } from './turn-project-files.ts'
+import { TaskSkillFiles } from './turn-skill-files.ts'
 import { TaskEventTurnJournal } from './turn-journal.ts'
 import { TurnReconciler } from './turn-reconciler.ts'
 import { TurnRuntime } from './turn-runtime.ts'
@@ -120,6 +121,7 @@ export const turnEngineProviders: Provider[] = [
         credentials,
         inbox: new TaskInboxFiles(prisma, storage),
         projectFiles: new TaskProjectFiles(prisma, storage),
+        skillFiles: new TaskSkillFiles(prisma, storage),
         // The trusted git of the repositories of projects (docs/plan/84-projects.md, ПР12).
         repository,
       })

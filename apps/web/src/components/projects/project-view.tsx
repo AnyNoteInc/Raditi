@@ -22,6 +22,7 @@ import { EffortMenu, type EffortMenuHandle } from '@/components/chat/effort-menu
 import { readPromptHistory } from '@/components/chat/prompt-history'
 import { useAttachments } from '@/components/chat/use-attachments'
 import { useStartChat } from '@/components/chat/use-start-chat'
+import { useSlashSkills } from '@/components/chat/use-slash-skills'
 import { useTRPC } from '@/trpc/client'
 
 import { ProjectMenuButton, ProjectStarButton, useProjectActions } from './project-actions'
@@ -66,6 +67,7 @@ export function ProjectView({
   const field = useRef<HTMLTextAreaElement>(null)
   const effortMenu = useRef<EffortMenuHandle>(null)
   const clientCommands = useClientCommands({ anchor: field })
+  const slashSkills = useSlashSkills()
   const actions = useProjectActions()
   const chatsId = useId()
   const mentions = useContextMentions(project.id)
@@ -194,6 +196,7 @@ export function ProjectView({
                 },
                 closedReason: composerText.commandsInDialog,
                 plain: true,
+                skills: slashSkills,
               }}
               fieldRef={field}
               history={history}

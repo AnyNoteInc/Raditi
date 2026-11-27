@@ -65,6 +65,27 @@ export function admitProjectFileUpload(
 }
 
 /**
+ * Archives of skills a user may upload in a window (docs/plan/97-skills.md, Нв9): each is read
+ * whole in memory and unpacked, so the bound is small.
+ */
+export const SKILL_UPLOADS_PER_WINDOW = 20
+export const SKILL_UPLOAD_WINDOW_MS = 10 * 60_000
+
+/** One upload of an archive of a skill (`POST /api/skills/upload`). */
+export function admitSkillUpload(
+  db: Pick<PrismaClient, '$queryRaw'>,
+  userId: string,
+  now: number = Date.now(),
+): Promise<boolean> {
+  return admitInWindow(db, {
+    key: `skill-upload:${userId}`,
+    limit: SKILL_UPLOADS_PER_WINDOW,
+    windowMs: SKILL_UPLOAD_WINDOW_MS,
+    now,
+  })
+}
+
+/**
  * Counts one attempt under `key` and tells whether it fits the current window. The counter
  * lives in `rate_limits`, next to the limits of the sign-in routes, so every web replica sees
  * it. For these keys `last_request` is the END of the window: better-auth deletes every row of

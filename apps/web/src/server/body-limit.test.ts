@@ -192,6 +192,9 @@ describe('API routes', () => {
     // speech.ts reads the sound after the session, the origin, the consents and a declared length
     // of at most 30 seconds of PCM (docs/plan/75-chat-input-output.md, ВВ17).
     speech: /recognizeSpeech\(request, speechDependencies\)/,
+    // skill-upload.ts reads an archive of a skill after the session, the origin, the consents and
+    // the rate, 10 MiB at most whatever its Content-Length says (docs/plan/97-skills.md, Нв9).
+    'skills/upload': /uploadSkill\(request, skillUploadDependencies\)/,
     // A site, a name and an address of an MCP server (docs/plan/81-mcp-server-credentials.md).
     'mcp-oauth/start': /withBodyLimit\(MAX_MCP_SIGN_IN_BODY_BYTES,/,
     // The id of a project for a sign-in on gitlab.com (docs/plan/84-projects.md, 84.17).

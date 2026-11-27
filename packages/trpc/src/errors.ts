@@ -1,4 +1,6 @@
 import {
+  accountSkillRefusalTexts,
+  skillInvalidText,
   attachmentRefusalText,
   attachmentRefusals,
   chatCommandRefusals,
@@ -103,6 +105,8 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   ...repoPushRefusalTexts,
   ...repoCiRunTexts,
   ...gitConnectionRefusalTexts,
+  // The skills of an account (docs/plan/97-skills.md).
+  ...accountSkillRefusalTexts,
   // Tariffs and their payment: what the customer can do next. Why a bank declined a payment
   // is told by the order itself (paymentFailureText of @repo/billing), not by these.
   BILLING_PAYMENTS_NOT_CONFIGURED: 'Оплата сейчас недоступна. Попробуйте ещё раз немного позже',
@@ -440,6 +444,8 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
         : null,
     )
   },
+  // Why a skill was refused (docs/plan/97-skills.md, Нв10): the reason, never the skill's text.
+  SKILL_INVALID: (details) => skillInvalidText(detail(details, 'reason')),
   AGENT_SKILL_CHECK_FAILED: (details) =>
     SKILL_CHECK_TEXT[detail(details, 'reason') ?? ''] ??
     MESSAGE_BY_DOMAIN_CODE.AGENT_SKILL_CHECK_FAILED!,

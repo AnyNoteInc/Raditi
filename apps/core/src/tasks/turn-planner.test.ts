@@ -687,6 +687,59 @@ describe('the files of the project in a pass (docs/plan/84-projects.md, ПР8)',
   })
 })
 
+describe('the skills of the account in a pass (docs/plan/97-skills.md, Нв13–Нв18)', () => {
+  const skills = [
+    { name: 'skill-creator', builtin: true, userOnly: false },
+    {
+      name: 'price-offer',
+      builtin: false,
+      userOnly: true,
+      versionId: '01960000-0000-7000-8000-0000000000f1',
+      files: [
+        { path: 'SKILL.md', sizeBytes: 300, executable: false },
+        { path: 'scripts/build.py', sizeBytes: 40, executable: true },
+      ],
+    },
+  ]
+
+  it('names the skills to the driver, places the files of the own ones and tells the agent', async () => {
+    const plan = await planned(facts({ accountSkills: skills }))
+    expect(plan.request.context.accountSkills).toEqual([
+      { name: 'skill-creator', builtin: true, userOnly: false },
+      { name: 'price-offer', builtin: false, userOnly: true },
+    ])
+    expect(plan.request.context.calledSkill).toBeUndefined()
+    expect(plan.request.input.skillFiles).toEqual([
+      '/workspace/skills/price-offer/SKILL.md',
+      '/workspace/skills/price-offer/scripts/build.py',
+    ])
+    expect(plan.request.context.instructions).toContain('## Skills of the client')
+    expect(plan.request.context.instructions).not.toContain('The client called the skill')
+  })
+
+  it('reads the skill the client called with /<name> in the words of this pass', async () => {
+    const plan = await planned(
+      facts({
+        accountSkills: skills,
+        requests: [request(10, 'first', '/price-offer для ООО «Колос»', 0)],
+      }),
+    )
+    expect(plan.request.context.calledSkill).toBe('price-offer')
+    expect(plan.request.context.instructions).toContain('The client called the skill `price-offer`')
+    const unknown = await planned(
+      facts({ accountSkills: skills, requests: [request(10, 'first', '/other сделай', 0)] }),
+    )
+    expect(unknown.request.context.calledSkill).toBeUndefined()
+  })
+
+  it('keeps the plan of a chat without skills byte for byte', async () => {
+    const bare = await planned(facts())
+    expect((await planned(facts({ accountSkills: [] }))).request).toEqual(bare.request)
+    expect(bare.request.context).not.toHaveProperty('accountSkills')
+    expect(bare.request.input).not.toHaveProperty('skillFiles')
+  })
+})
+
 describe('the memory in a pass (docs/plan/84-projects.md, ПР18)', () => {
   const project = { name: 'Пекарня', goal: null, instructions: null }
   const files = [{ name: 'Прайс.xlsx', mediaType: 'application/x', sizeBytes: 2048 }]

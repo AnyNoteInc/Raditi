@@ -986,6 +986,9 @@ async function turn({
   envValues,
   egressProxy,
   skills,
+  accountSkills,
+  calledSkill,
+  markers = {},
   action,
   visionModel,
 }) {
@@ -1009,6 +1012,8 @@ async function turn({
     ...(envValues ? { envValues } : {}),
     ...(egressProxy ? { egressProxy } : {}),
     ...(skills ? { skills, internet: true } : {}),
+    ...(accountSkills ? { accountSkills } : {}),
+    ...(calledSkill ? { calledSkill } : {}),
   }
   const prepared = preparedRunSchema.parse(await driver.prepare(context))
   const argv = driver.command(prepared, { prompt, attachments, ...(action ? { action } : {}) })
@@ -1090,6 +1095,7 @@ async function turn({
           workdir: 'Working directory: /workspace/repo',
           prior: PRIOR,
           ...hostile,
+          ...markers,
         },
         prompt: promptFile?.content,
         pluginMarker: PLUGIN_RAN,
@@ -1172,7 +1178,11 @@ function expectRequests(run, count, tools = TOOLS) {
  * without the credentials, and in the product without a network. The CLI of the turn itself
  * never reaches for anything.
  */
-function expectSuccess(run, expected, { carryOver = [], reasoning = REASONING } = {}) {
+function expectSuccess(
+  run,
+  expected,
+  { carryOver = [], reasoning = REASONING, besideRepo = ['.cache', 'inbox', 'repo'] } = {},
+) {
   const { output, events, describe } = run
   assert.equal(output.code, 0, describe())
   assert.ok(!events.some((event) => event.type === 'failed'), describe())
@@ -1205,8 +1215,8 @@ function expectSuccess(run, expected, { carryOver = [], reasoning = REASONING } 
   assert.deepEqual(output.after.pluginRan, [], `Code of the repository ran: ${describe()}`)
   assert.equal(output.after.preloadRan, false, `A preload of the repository ran: ${describe()}`)
   // The site's own OpenCode files are back in the working copy, and nothing is left beside it
-  // but the tools' home of the agent's commands.
-  assert.deepEqual(output.after.aboveRepo, ['.cache', 'inbox', 'repo'], describe())
+  // but the tools' home of the agent's commands (and the skills the runner placed, plan 97).
+  assert.deepEqual(output.after.aboveRepo, besideRepo, describe())
   assert.deepEqual(output.after.processes, [], `Processes left: ${describe()}`)
   assert.ok(
     Object.values(output.database.tables).every((rows) => rows === 0),
@@ -1295,6 +1305,123 @@ const seconds = (ms) => `${(ms / 1000).toFixed(1)} s`
 const bash = (command) => ({ name: 'bash', arguments: { command, description: 'Synthetic step' } })
 const pass = (line) => process.stdout.write(`PASS: ${line}\n`)
 
+/**
+ * The skills of the account (docs/plan/97-skills.md, Нв13–Нв17): the files of an own skill under
+ * /workspace/skills as the runner places them, the built-in ones of the image, and skills planted
+ * in the repository where OpenCode would look. The model sees the allowed ones in its system
+ * prompt, never one only the client starts nor one of the repository; it loads a skill with the
+ * skill tool and runs its script.
+ */
+async function skillsScenario() {
+  const SKILL_DESCRIPTION = 'RADITI_G3_SKILL_DESCRIPTION'
+  const SKILL_BODY = 'RADITI_G3_SKILL_BODY'
+  const HIDDEN = 'RADITI_G3_SKILL_USER_ONLY'
+  const SCRIPT_OK = 'RADITI_G3_SKILL_SCRIPT_OK'
+  const REPO_SKILL = 'RADITI_G3_REPO_SKILL'
+  const skillMd = (name, description, body = '') =>
+    `---\nname: ${name}\ndescription: ${description} Use when asked.\n---\n# ${name}\n${body}\n`
+  const fixtures = [
+    ...projectFixtures,
+    {
+      path: '/workspace/skills/g3-demo/SKILL.md',
+      content: skillMd('g3-demo', SKILL_DESCRIPTION, SKILL_BODY),
+      mode: 0o444,
+    },
+    {
+      path: '/workspace/skills/g3-demo/scripts/hello.py',
+      content: `print(${JSON.stringify(SCRIPT_OK)})\n`,
+      mode: 0o555,
+    },
+    {
+      path: '/workspace/skills/g3-hidden/SKILL.md',
+      content: skillMd('g3-hidden', HIDDEN),
+      mode: 0o444,
+    },
+    // Where OpenCode looks in a repository and its home: none of them may load.
+    ...['.claude/skills', '.agents/skills', '.opencode/skills'].map((root, index) => ({
+      path: `/workspace/repo/${root}/repo-${index}/SKILL.md`,
+      content: skillMd(`repo-${index}`, REPO_SKILL),
+    })),
+  ]
+  const run = await turn({
+    label: 'skills of the account',
+    fixtures,
+    accountSkills: [
+      { name: 'g3-demo', builtin: false, userOnly: false },
+      { name: 'g3-hidden', builtin: false, userOnly: true },
+      { name: 'skill-creator', builtin: true, userOnly: false },
+    ],
+    markers: {
+      skillDescription: SKILL_DESCRIPTION,
+      skillBody: SKILL_BODY,
+      skillHidden: HIDDEN,
+      repoSkill: REPO_SKILL,
+      skillCreator: 'Create a new skill or improve an existing one',
+      availableSkills: '<available_skills>',
+    },
+    steps: [
+      { calls: [{ name: 'skill', arguments: { name: 'g3-demo' } }] },
+      {
+        calls: [
+          bash(
+            'python3 /workspace/skills/g3-demo/scripts/hello.py && python3 /usr/local/lib/raditi/skills/skill-creator/scripts/quick_validate.py /workspace/skills/g3-demo',
+          ),
+        ],
+      },
+      { calls: [{ name: 'skill', arguments: { name: 'g3-hidden' } }] },
+      { text: JSON.stringify(result(PRIOR)) },
+    ],
+  })
+  const besideRepo = ['.cache', 'inbox', 'repo', 'skills']
+  expectRequests(run, 4, [...TOOLS, 'skill'].sort())
+  expectSuccess(run, result(PRIOR), { besideRepo })
+  const { output, describe } = run
+  for (const record of output.llm) {
+    assert.equal(record.system.availableSkills, true, `No list of skills: ${describe()}`)
+    assert.equal(record.system.skillDescription, true, `The own skill is not listed: ${describe()}`)
+    assert.equal(record.system.skillCreator, true, `skill-creator is not listed: ${describe()}`)
+    assert.equal(record.system.skillHidden, false, `A skill only the client starts: ${describe()}`)
+    assert.equal(record.body.repoSkill, false, `A skill of the repository: ${describe()}`)
+  }
+  assert.ok(
+    output.llm[1].toolOutputs.some((text) => text.includes(SKILL_BODY)),
+    `The skill tool did not load the skill: ${describe()}`,
+  )
+  assert.ok(
+    output.llm[2].toolOutputs.some((text) => text.includes(SCRIPT_OK) && text.includes('ok')),
+    `The script of the skill or quick_validate did not run: ${JSON.stringify(output.llm[2].toolOutputs)}`,
+  )
+  assert.ok(
+    !output.llm[3].toolOutputs.some((text) => text.includes(HIDDEN)),
+    `A skill only the client starts was loaded: ${JSON.stringify(output.llm[3].toolOutputs)}`,
+  )
+  process.stdout.write(
+    `[opencode] the denied skill answered: ${JSON.stringify(output.llm[3].toolOutputs.at(-1)?.slice(0, 160))}\n`,
+  )
+
+  // Called with /g3-hidden: the same skill is listed and loads.
+  const called = await turn({
+    label: 'a skill the client called',
+    fixtures,
+    accountSkills: [{ name: 'g3-hidden', builtin: false, userOnly: true }],
+    calledSkill: 'g3-hidden',
+    markers: { skillHidden: HIDDEN },
+    steps: [
+      { calls: [{ name: 'skill', arguments: { name: 'g3-hidden' } }] },
+      { text: JSON.stringify(result(PRIOR)) },
+    ],
+  })
+  expectRequests(called, 2, [...TOOLS, 'skill'].sort())
+  expectSuccess(called, result(PRIOR), { besideRepo })
+  assert.ok(
+    called.output.llm.every((record) => record.system.skillHidden),
+    called.describe(),
+  )
+  pass(
+    'skills of the account — the CLI lists the own and the built-in skills, never one only the client starts nor one of the repository; the skill tool loads a skill, its script and quick_validate.py of skill-creator run (python3-yaml); a skill the client called with /<name> is listed and loads',
+  )
+}
+
 async function lookScenario() {
   // The helper look (docs/plan/88-artifacts.md, Ар32, slice 88.15в): the main agent calls it by the
   // task tool; it runs on the model of the key that sees images, calls artifact_render, and the
@@ -1380,6 +1507,11 @@ try {
   if (options.only === 'look') {
     // The helper look alone (docs/plan/88-artifacts.md, Ар32): `--only look`.
     await lookScenario()
+    process.exit(0)
+  }
+  if (options.only === 'skills') {
+    // The skills of the account alone (docs/plan/97-skills.md): `--only skills`.
+    await skillsScenario()
     process.exit(0)
   }
 
@@ -2689,6 +2821,7 @@ try {
     )
   }
   await lookScenario()
+  await skillsScenario()
   process.stdout.write(
     `G3 local OpenCode driver verification passed (CLI ${CLI_VERSION}; no account, no plan key, no external network).\n`,
   )

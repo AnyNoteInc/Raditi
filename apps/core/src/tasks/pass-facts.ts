@@ -11,6 +11,7 @@ import {
   markArtifactReadOther,
   readyProjectFiles,
   taskAttachments,
+  turnAccountSkills,
   type PrismaClient,
 } from '@repo/db'
 import {
@@ -140,7 +141,7 @@ export async function readPassFacts(
         },
       },
       // The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2).
-      createdBy: { select: { agentInstructions: { select: { text: true } } } },
+      createdBy: { select: { id: true, agentInstructions: { select: { text: true } } } },
       // The project of the chat (docs/plan/84-projects.md, ПР7): its goal and instructions.
       project: {
         select: {
@@ -257,6 +258,7 @@ export async function readPassFacts(
     memoryEntries,
     chatArtifacts,
     projectArtifacts,
+    accountSkills,
   ] = await Promise.all([
     db.taskTurn.findMany({
       where: { taskId: task.id },
@@ -304,6 +306,9 @@ export async function readPassFacts(
     openProject
       ? listChatArtifacts(deps.db, { taskId: task.id, scope: 'project' }).then(({ rows }) => rows)
       : [],
+    // The skills of the author of the chat (docs/plan/97-skills.md, Нв1, Нв13): the built-in ones
+    // and the enabled own ones with their files, as the account has them now.
+    task.createdBy ? turnAccountSkills(deps.db, task.createdBy.id) : [],
   ])
   const turns = new Map<number, FinishedTurn>(
     turnRows.map((row) => [
@@ -353,6 +358,7 @@ export async function readPassFacts(
     memory: memoryEntries,
     ...(chatArtifacts.length ? { chatArtifacts: chatArtifacts.map(lineOf) } : {}),
     ...(projectArtifacts.length ? { projectArtifacts: projectArtifacts.map(lineOf) } : {}),
+    ...(accountSkills.length ? { accountSkills } : {}),
     ...(dispatch ?? {}),
     ...(unattended ? { unattended } : {}),
     ...(attachments.length ? { attachments } : {}),
