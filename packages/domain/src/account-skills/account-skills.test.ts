@@ -149,6 +149,18 @@ describe('files of a skill', () => {
     ).toBe('secret')
   })
 
+  it('takes the code and docs of a skill that name passwords and keys without holding one', () => {
+    const code = [
+      'api_key = os.environ["API_KEY"]',
+      'password = getpass.getpass()',
+      'DB_PASSWORD=<your password here>',
+      'headers = {"Authorization": f"Bearer {token}"}',
+    ].join('\n')
+    expect(() =>
+      checkSkillFiles([file('SKILL.md', skillMd), file('scripts/a.py', code)]),
+    ).not.toThrow()
+  })
+
   it('places a file under the folder of its skill', () => {
     expect(turnSkillPath('demo', 'scripts/a.py')).toBe('/workspace/skills/demo/scripts/a.py')
     expect(turnSkillPath('Demo', 'a')).toBeNull()

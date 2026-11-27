@@ -1,5 +1,5 @@
 import { SANDBOX_SKILLS } from '../ports/agent-driver.ts'
-import { secretInContent } from '../projects/text.ts'
+import { tokenReasonOf } from '../pages/content-check.ts'
 import { skillInvalid } from './errors.ts'
 import { accountSkillLimits } from './limits.ts'
 import { isSkillName } from './name.ts'
@@ -69,8 +69,11 @@ export function skillFileText(bytes: Uint8Array): string | null {
 
 /**
  * A whole version of a skill before it is kept (Нв10): `SKILL.md` at its root, every path clean
- * and once, no file that is also a folder, within the bounds of a skill, and no text that holds a
- * secret (secretInContent, the check of the files of a project). Returns the text of `SKILL.md`;
+ * and once, no file that is also a folder, within the bounds of a skill, and no text with a key of
+ * a known form or a turn key (tokenReasonOf). Not secretInContent of the files of a project: its
+ * guess at «a word of a secret near a value» refused 5 of 7 skills of anthropics/skills on
+ * 27.11.2026 (`api_key = os.environ[…]`, `password=` in the code and the docs of a skill), while a
+ * skill is code and documentation, not the client's notes. Returns the text of `SKILL.md`;
  * SKILL_INVALID with the reason otherwise.
  */
 export function checkSkillFiles(files: readonly SkillFileEntry[]): string {
@@ -95,7 +98,7 @@ export function checkSkillFiles(files: readonly SkillFileEntry[]): string {
       if (text === null) throw skillInvalid('frontmatter')
       skillMd = text
     }
-    if (text !== null && secretInContent(text)) throw skillInvalid('secret', file.path)
+    if (text !== null && tokenReasonOf(text) !== null) throw skillInvalid('secret', file.path)
   }
   if (bytes > accountSkillLimits.skillBytes) throw skillInvalid('too_large')
   if (skillMd === null) throw skillInvalid('no_skill_md')
