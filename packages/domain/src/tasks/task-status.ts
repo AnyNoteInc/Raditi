@@ -17,6 +17,14 @@ export const taskStatuses = [
 
 export type TaskStatus = (typeof taskStatuses)[number]
 
+/**
+ * What a task is: a chat of turns of the agent, or the service task «Быстрые правки» of a person,
+ * whose attempts are single model calls from core and never a turn (docs/plan/98-quick-edits.md,
+ * БПр2). Must equal the enum TaskKind of the database.
+ */
+export const taskKinds = ['chat', 'quick_edits'] as const
+export type TaskKind = (typeof taskKinds)[number]
+
 export const terminalTaskStatuses: readonly TaskStatus[] = [
   'done',
   'failed',

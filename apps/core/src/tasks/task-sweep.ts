@@ -216,6 +216,8 @@ export class TaskSweep {
    * their turn, or — a pass whose handler was lost before it opened a turn — put back in the
    * queue. Every row on its own: one that throws is logged and the batch goes on.
    */
+  // The quick task is never swept here: its own sweeper settles a lost quick edit, and a turn
+  // put in its queue would start a chain of snapshots there (docs/plan/98-quick-edits.md, БПр3).
   async settleOrphans(): Promise<number> {
     const { db } = this.deps
     const now = this.#now()
@@ -233,7 +235,7 @@ export class TaskSweep {
     >`
       SELECT t.id, t.attempt, t.turn_no, t.status::text AS status, t.updated_at, t.needs_browser
       FROM tasks t
-      WHERE t.status IN ('preparing', 'running')
+      WHERE t.status IN ('preparing', 'running') AND t.kind = 'chat'
         AND NOT (t.id = ANY(${[...this.#paused.keys()]}::uuid[]))
         AND NOT EXISTS (
           SELECT 1 FROM turn_assignments a WHERE a.task_id = t.id AND a.finished_at IS NULL)
@@ -741,7 +743,7 @@ export class TaskSweep {
     const { db } = this.deps
     const rows = await db.$queryRaw<Array<{ id: string; attempt: number; updated_at: Date }>>`
       SELECT t.id, t.attempt, t.updated_at FROM tasks t
-      WHERE t.status = 'queued' AND (
+      WHERE t.status = 'queued' AND t.kind = 'chat' AND (
         (t.waiting IS NOT NULL
           AND t.updated_at < now() - make_interval(secs => ${LOST_RETRY_MS / 1000}))
         OR (t.waiting IS NULL

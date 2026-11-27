@@ -74,7 +74,7 @@ export class QueueDrain {
   async #drain(tx: Tx, taskId: string, now: Date): Promise<DrainAnswer> {
     const locked = await tx.$queryRaw<LockedTask[]>`
       SELECT status::text AS status, attempt, workspace_id AS "workspaceId", billable
-      FROM tasks WHERE id = ${taskId}::uuid AND deleted_at IS NULL FOR UPDATE`
+      FROM tasks WHERE id = ${taskId}::uuid AND deleted_at IS NULL AND kind = 'chat' FOR UPDATE`
     const task = locked[0]
     if (!task || (task.status !== 'awaiting_user' && task.status !== 'awaiting_approval'))
       return 'skipped'

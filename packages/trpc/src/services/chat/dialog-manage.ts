@@ -14,7 +14,7 @@ import { modelClassPriced } from '@repo/billing'
 
 import { accessibleTask, lockTask, taskNotFound } from './access.ts'
 import { dialogFacts } from './dialog-facts.ts'
-import { underDialogLock, WRITE } from './dialog-lock.ts'
+import { quickTaskRefused, underDialogLock, WRITE } from './dialog-lock.ts'
 import {
   releaseInProgress,
   taskBusy,
@@ -162,6 +162,7 @@ export async function setDialogEffort(
   return db.$transaction(async (tx) => {
     const task = await lockTask(tx, visible.id)
     if (task === null) throw taskNotFound()
+    if (task.kind === 'quick_edits') throw quickTaskRefused()
     if (terminalTaskStatuses.includes(task.status)) throw taskFinished()
     if ((RELEASING as readonly string[]).includes(task.status)) throw releaseInProgress()
     if (!(WAITING as readonly string[]).includes(task.status)) throw taskBusy()
