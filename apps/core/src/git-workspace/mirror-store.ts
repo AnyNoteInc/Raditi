@@ -1,8 +1,9 @@
-import { randomBytes } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { chmodSync, createReadStream, createWriteStream, lstatSync, mkdirSync } from 'node:fs'
 import {
   chmod,
   mkdir,
+  open,
   readdir,
   readFile,
   rename,
@@ -12,8 +13,11 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { join } from 'node:path'
+import { Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 
 import { badRequest, mirrorLimits, projectRepositoryIdSchema } from '@repo/domain'
+import { z } from 'zod'
 
 // The volume of trusted git (docs/plan/84-projects.md, ПР12, §4.2): one bare mirror per
 // repository of a project, `repos/<projectRepositoryId>.git`; the base bundles of turns by that
@@ -92,11 +96,44 @@ export class KeyedLock {
 
 const SHA = /^[a-f0-9]{40}$/
 
+/** The first bytes of a bundle a reader needs for its header (bundleHead reads 4 KiB at most). */
+export const BUNDLE_HEADER_BYTES = 4096
+
+/** A bundle of the cache: its file, read as a stream, and what core knows of its bytes. */
+export interface CachedBundle {
+  path: string
+  sha256: string
+  sizeBytes: number
+  /** The first bytes of the file, up to BUNDLE_HEADER_BYTES: its header and refs. */
+  header: Buffer
+}
+
+/**
+ * `<sha>.json` next to `<sha>.bundle`: the hash and size of the bundle, and the inode of the file
+ * they were taken of — a file put again under the same name is a new inode, and its hash is
+ * taken again. Never trusted further than this cache: the importer checks the bytes it read.
+ */
+const bundleMetaSchema = z.object({
+  v: z.literal(1),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  sizeBytes: z.number().int().nonnegative(),
+  ino: z.number().int().nonnegative(),
+})
+
+/** The SHA-256 of a file, read as a stream. */
+async function fileSha256(path: string): Promise<string> {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer)
+  return hash.digest('hex')
+}
+
 /**
  * Base bundles by the repository of a project and the commit their single ref points at. A
  * bundle holds exactly the objects that commit reaches; the reader still checks the ref it
  * carries. Writes are atomic (a temporary name, then rename); the oldest files beyond the limit
- * go. A commit of one project is never served for another: the id is part of the path.
+ * go. A commit of one project is never served for another: the id is part of the path. The hash
+ * and size of each bundle wait in a sidecar file, so a bundle served again is neither read whole
+ * nor hashed again; one without a sidecar gets it at its first read.
  */
 export class BundleCache {
   readonly #dir: string
@@ -111,32 +148,73 @@ export class BundleCache {
     return join(this.#dir, projectRepositoryId, `${sha}.bundle`)
   }
 
-  async get(projectRepositoryId: string, sha: string): Promise<Buffer | null> {
+  async get(projectRepositoryId: string, sha: string): Promise<CachedBundle | null> {
     const path = this.#path(projectRepositoryId, sha)
     if (!path) return null
     try {
-      const bytes = await readFile(path)
+      const { ino, size, header } = await headerOf(path)
+      const meta = bundleMetaSchema.safeParse(
+        JSON.parse(await readFile(metaPath(path), 'utf8').catch(() => 'null')),
+      )
+      let sha256: string
+      if (meta.success && meta.data.ino === ino && meta.data.sizeBytes === size)
+        sha256 = meta.data.sha256
+      else {
+        // A bundle of a cache written before the sidecars, or one whose sidecar is not its own.
+        sha256 = await fileSha256(path)
+        const again = await stat(path)
+        if (again.ino !== ino || again.size !== size) return null
+        await writeMeta(path, { v: 1, sha256, sizeBytes: size, ino }).catch(() => {})
+      }
       const now = new Date()
       await utimes(path, now, now).catch(() => {})
-      return bytes
+      return { path, sha256, sizeBytes: size, header }
     } catch {
       return null
     }
   }
 
-  async put(projectRepositoryId: string, sha: string, bytes: Uint8Array): Promise<void> {
+  /**
+   * Copies the bundle at `source` into the cache, hashing it on the way. null — the cache could
+   * not keep it (the caller reads `source` itself then).
+   */
+  async put(
+    projectRepositoryId: string,
+    sha: string,
+    source: string,
+  ): Promise<CachedBundle | null> {
     const path = this.#path(projectRepositoryId, sha)
-    if (!path) return
+    if (!path) return null
+    const dir = join(this.#dir, projectRepositoryId)
+    const temporary = join(dir, `.${sha}.${randomBytes(6).toString('hex')}.tmp`)
     try {
-      const dir = join(this.#dir, projectRepositoryId)
       await sharedDirectory(this.#dir, true)
       await sharedDirectory(dir, true)
-      const temporary = join(dir, `.${sha}.${randomBytes(6).toString('hex')}.tmp`)
-      await sharedFile(temporary, bytes)
+      const hash = createHash('sha256')
+      const hashing = new Transform({
+        transform(chunk: Buffer, _encoding, done) {
+          hash.update(chunk)
+          done(null, chunk)
+        },
+      })
+      await pipeline(
+        createReadStream(source),
+        hashing,
+        createWriteStream(temporary, { mode: SHARED_FILE_MODE, flags: 'wx' }),
+      )
+      await chmod(temporary, SHARED_FILE_MODE)
+      const sha256 = hash.digest('hex')
+      const { ino, size, header } = await headerOf(temporary)
+      // The sidecar first: a bundle is never in place with the sidecar of another file for long,
+      // and a mismatch only costs a hash.
+      await writeMeta(path, { v: 1, sha256, sizeBytes: size, ino })
       await rename(temporary, path)
       await this.#evict()
+      return { path, sha256, sizeBytes: size, header }
     } catch {
       // A cache: a write that fails costs the next turn a rebuild, nothing else.
+      await rm(temporary, { force: true }).catch(() => {})
+      return null
     }
   }
 
@@ -161,7 +239,39 @@ export class BundleCache {
     await Promise.all(
       files
         .slice(0, files.length - mirrorLimits.bundlesKept)
-        .map(({ path }) => rm(path, { force: true })),
+        .flatMap(({ path }) => [rm(path, { force: true }), rm(metaPath(path), { force: true })]),
     )
+  }
+}
+
+/** The sidecar of a bundle: `<sha>.json` next to `<sha>.bundle`. */
+const metaPath = (bundlePath: string): string => bundlePath.replace(/\.bundle$/, '.json')
+
+/** Written atomically: a temporary name, then rename. */
+async function writeMeta(
+  bundlePath: string,
+  meta: z.infer<typeof bundleMetaSchema>,
+): Promise<void> {
+  const path = metaPath(bundlePath)
+  const temporary = `${path}.${randomBytes(6).toString('hex')}.tmp`
+  try {
+    await sharedFile(temporary, JSON.stringify(meta))
+    await rename(temporary, path)
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {})
+    throw error
+  }
+}
+
+/** The inode, size and first bytes of a file, from one open handle. */
+async function headerOf(path: string): Promise<{ ino: number; size: number; header: Buffer }> {
+  const handle = await open(path, 'r')
+  try {
+    const { ino, size } = await handle.stat()
+    const header = Buffer.alloc(Math.min(size, BUNDLE_HEADER_BYTES))
+    const { bytesRead } = await handle.read(header, 0, header.byteLength, 0)
+    return { ino, size, header: header.subarray(0, bytesRead) }
+  } finally {
+    await handle.close()
   }
 }
