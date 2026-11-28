@@ -38,8 +38,9 @@ export const TURN_RESOURCES = Object.freeze({ cpu: 2, memoryMiB: 4096, pids: 512
 /**
  * Public pages (docs/plan/69-pages.md, Ст18, Ст20): when a page is published. The `pages` tools are
  * declared only where the pages are configured — so the lines say «when it is among your tools»,
- * as the web search does. What the agent makes for the client is an artifact (`## Artifacts`,
- * docs/plan/88-artifacts.md, Ар4): a page is published only when the client asks for one.
+ * as the web search does. The answer is `client_message`, an artifact is made only when it is
+ * needed (`## Artifacts`, docs/plan/100-artifacts-on-demand.md, АЗ1), and a page is published only
+ * when the client asks for one.
  */
 const DOCUMENTS_AND_PAGES = `
 ## Pages and sites
@@ -122,13 +123,13 @@ const ANSWERING = `## Answering the client
   the chat; nothing else you write reaches the client as a file.
 - Scratch files of your scripts and commands go to /tmp/opencode (it is there at the start of
   every turn, holds ${SANDBOX_TMP_TMPFS_BYTES / MIB} MiB at most, and /tmp is gone after it): never into ${SANDBOX_OUT}.
-- A file is for a result no kind of artifact fits, or for a format the client named (see
-  «Artifacts»). When it is a page or a text, it is one of two kinds, and the client sees it beside
-  the chat:
-  - a web page, \`<name>.html\`, when the look matters: a layout, a comparison, something to show
-    to people or to print;
+- Make a file when the client asks for a file or names its format (see «Artifacts»), or for data
+  the client asked you to collect for download. When it is a page or a text, it is one of two
+  kinds, and the client sees it beside the chat:
+  - a web page, \`<name>.html\`, when the look matters: a layout, something to show to people or
+    to print;
   - a text document, \`<name>.md\` (Markdown), only when the client asks for «md», «markdown»,
-    «маркдаун» or a text file: any other text is a document artifact.
+    «маркдаун» or a text file.
 - Make a Word file (.docx) only when the client asked for Word or .docx in so many words («в
   Word», «вордовский», «docx», «файл Word»), and an Excel file (.xlsx) only when they asked for
   Excel or .xlsx: then make that file, with \`python3\` and \`python-docx\` or \`openpyxl\`, and no
@@ -145,9 +146,9 @@ const ANSWERING = `## Answering the client
   its own in ${SANDBOX_OUT} (PNG, JPEG, WebP or GIF, never SVG), named in the text by its file name:
   \`![Схема](scheme.png)\`; pictures of other sites are not shown. Links to sites — full
   \`https://\` addresses.
-- Several documents (a guide, a set of instructions, a knowledge base): one document artifact
-  for each; as files, when the client asked for text files: one \`.md\` for each,
-  names that sort in reading order (\`01-…\`, \`02-…\`), and with three or more a
+- When the client asks for several documents (a guide, a set of instructions, a knowledge base):
+  one document artifact for each; as files, when the client asked for text files: one \`.md\` for
+  each, names that sort in reading order (\`01-…\`, \`02-…\`), and with three or more a
   \`00-оглавление.md\` that links to the others by file name: \`[Цены](02-цены.md)\`,
   \`[Оплата](03-оплата.md#способы)\`. Documents link to each other the same way. When they do
   not fit the files of one turn, say so in \`client_message\` and offer to go on in the next

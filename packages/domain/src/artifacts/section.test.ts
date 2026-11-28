@@ -50,3 +50,29 @@ describe('the kinds in the section of artifacts (docs/plan/93-artifacts-trim.md)
     expect(text.split('The frame is sandboxed')).toHaveLength(2)
   })
 })
+
+describe('an artifact only when it is needed (docs/plan/100-artifacts-on-demand.md)', () => {
+  it('answers in the chat and makes an artifact only when asked or when the chat cannot hold it', async () => {
+    const { artifactsSection } = await import('./section.ts')
+    const text = artifactsSection()
+    expect(text).toContain('Your answer is `client_message`')
+    // The limit of the result's schema: a longer answer would end the turn (АЗ1).
+    expect(text).toContain('within its 2000 characters — shorten it to fit')
+    expect(text).toContain('Make an artifact only when the client asks for what a kind below is for')
+    // A picture of the kind «Изображение» is no file format.
+    expect(text).toContain('(Word, Excel, PDF, PNG or JPEG, Markdown)')
+    expect(text).toContain('When you make a document, create it with `raditi_artifact_create`')
+    expect(text).toContain('When you made or changed an artifact, name it in `client_message`')
+    // The words that made a document of every answer (АЗ2).
+    for (const words of [
+      'Your result for the client is an artifact',
+      'before you research',
+      'not in the chat',
+      'only when no kind above fits',
+      'A long text you wrote as a .md file',
+      'a summary',
+      'notes, a report',
+    ])
+      expect(text, words).not.toContain(words)
+  })
+})
