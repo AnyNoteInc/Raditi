@@ -6,6 +6,9 @@
 #   model-setup.sh search-key <folder id>             the key of Yandex Search API on stdin and the folder
 #                                                     of Yandex Cloud (subs/search/yandex)
 #   model-setup.sh enable <backend>                   that provider, its profiles, rates and accounts
+#   model-setup.sh quick-key                          the key of the Z.ai API on stdin, as the account of
+#                                                     the quick edits (driver quick, docs/plan/98-quick-edits.md)
+#   model-setup.sh quick                              the quick edits: their rate, driver, profile and accounts
 #   model-setup.sh clearance <backend> <countries> <notice22 ref> <notice22 date> <notice12 ref>
 #                            <notice12 date> <transfer allowed from> <documents>
 # The key reaches only `subscriptions:login` on stdin, with a writer token for 15 minutes in a
@@ -25,7 +28,13 @@ vault_post() { # <path> <json>
 psql_c() { docker compose exec -T postgres psql -U postgres -d raditi -v ON_ERROR_STOP=1 -tA "$@"; }
 
 case "${1:-}" in
-key | search-key)
+key | search-key | quick-key)
+  driver=
+  if [ "$1" = quick-key ]; then
+    # The platform's own calls are allowed on the API only (БПр1): the account of the API key
+    set -- key zai-api payg
+    driver=quick
+  fi
   if [ "$1" = search-key ]; then
     folder=${2:?folder: the id of the Yandex Cloud folder of the search (b1g…)}
   fi
@@ -44,8 +53,9 @@ key | search-key)
   if [ "$1" = search-key ]; then
     set -- scripts/subscription-search-key.mjs --vault-token-file /run/writer-token --folder-id "$folder"
   else
-    set -- scripts/subscription-login.mjs --backend "$backend" --label "$backend-1" \
-      --plan "$plan" ${paid:+--paid-until "$paid"} --vault-token-file /run/writer-token
+    set -- scripts/subscription-login.mjs --backend "$backend" --label "$backend${driver:+-$driver}-1" \
+      --plan "$plan" ${paid:+--paid-until "$paid"} ${driver:+--driver "$driver"} \
+      --vault-token-file /run/writer-token
   fi
   docker compose run --rm --no-deps -T -v "$dir/token:/run/writer-token:ro" \
     -e APP_ENV=production -e VAULT_ADDR=https://vault.raditi.internal:8200 \
@@ -80,6 +90,33 @@ UPDATE subscription_accounts SET enabled = true, updated_at = clock_timestamp()
 RETURNING id;
 EOF
   ;;
+quick)
+  # The quick edits run on the API only: its provider and clearance are the agent's, not turned on
+  # here (the operator decides whether the agent's tasks may use the API, П88)
+  [ "$(psql_c -c "SELECT enabled FROM llm_providers WHERE slug = 'zai-api'")" = t ] ||
+    { echo "model-setup: the provider zai-api is off; turn it on first (model-setup.sh enable zai-api)" >&2; exit 1; }
+  # The rate the owner approved on 28.11.2026; the credit rate stays 6.00, so the same exposure
+  # confirmation as for the agent's rates (plan 63)
+  rates=2026-11-28-zai-api-quick.json
+  docker compose cp "/opt/raditi/app/server/rates/$rates" "core:/work/tmp/$rates"
+  docker compose exec -T core node --env-file=/run/raditi/app.env scripts/billing-rates.mjs \
+    --file "/work/tmp/$rates" --reason "quick edits, owner 28.11.2026" \
+    --operator owner --confirm-exposure
+  psql_c <<'EOF'
+-- One key, two accounts: their requests together stay within the 16 of the key (БПр16), 12 for
+-- the agent's turns and 4 for the quick edits
+UPDATE subscription_accounts SET max_concurrent_requests = LEAST(max_concurrent_requests, 12),
+       updated_at = clock_timestamp()
+ WHERE driver_id = 'opencode' AND status <> 'retired'
+   AND provider_id = (SELECT id FROM llm_providers WHERE slug = 'zai-api');
+UPDATE agent_drivers SET enabled = true, updated_at = clock_timestamp() WHERE id = 'quick';
+UPDATE llm_models SET enabled = true, updated_at = clock_timestamp()
+ WHERE quick AND provider_id = (SELECT id FROM llm_providers WHERE slug = 'zai-api');
+UPDATE subscription_accounts SET enabled = true, updated_at = clock_timestamp()
+ WHERE driver_id = 'quick' AND status <> 'retired'
+RETURNING id;
+EOF
+  ;;
 clearance)
   [ $# -eq 9 ] || { echo "usage: clearance <backend> <countries> <notice22 ref> <notice22 date> <notice12 ref> <notice12 date> <transfer allowed from> <documents>" >&2; exit 2; }
   psql_c -v backend="$2" -v countries="$3" -v n22="$4" -v d22="$5" -v n12="$6" -v d12="$7" -v from="$8" -v docs="$9" <<'EOF'
@@ -91,7 +128,7 @@ RETURNING id;
 EOF
   ;;
 *)
-  echo "usage: model-setup.sh key <plan> <paid until> | enable | clearance …" >&2
+  echo "usage: model-setup.sh key <backend> <plan> [paid until] | search-key <folder> | enable <backend> | quick-key | quick | clearance …" >&2
   exit 2
   ;;
 esac
