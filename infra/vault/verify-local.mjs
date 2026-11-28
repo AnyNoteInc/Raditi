@@ -572,7 +572,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     mcp: { name: 'raditi-verify-mcp', policies: ['mcp-content'] },
     core: {
       name: 'raditi-verify-core',
-      policies: ['core-turns', 'core-transit', 'core-workspace-env', 'core-git'],
+      policies: ['core-turns', 'core-transit', 'core-workspace-env', 'core-git', 'core-vk'],
     },
   }
   await expect(rootToken, 'sys/auth/approle', 204, post({ type: 'approle' }))

@@ -31,6 +31,7 @@
     "@repo/service-runtime": "workspace:*",
     "@repo/turn-keys": "workspace:*",
     "@repo/vault": "workspace:*",
+    "@repo/vk": "workspace:*",
     "express": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",

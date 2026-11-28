@@ -30,6 +30,12 @@ import {
   docSectionMoveArgumentsSchema,
   docSectionRemoveArgumentsSchema,
   docSectionWriteShapeSchema,
+  vkCommentsArgumentsSchema,
+  vkCommunitiesArgumentsSchema,
+  vkPostProposeArgumentsSchema,
+  vkPostsArgumentsSchema,
+  vkReplyProposeArgumentsSchema,
+  vkStatsArgumentsSchema,
 } from '@repo/domain'
 import { z } from 'zod'
 
@@ -100,6 +106,17 @@ const webCall = z
       browserToolArgumentSchemas[request.name].safeParse(request.arguments ?? {}).success,
   )
 const searchCall = call('search_web', webSearchArgumentsSchema)
+// The VK community of the workspace (docs/plan/99-vk-community.md, §3.2): its reads and the
+// proposals of posts and replies. A proposal publishes nothing — the client's button on its card
+// does — so a pass without its client may make one too (ВК6).
+const vkCall = z.discriminatedUnion('name', [
+  call('vk_communities', vkCommunitiesArgumentsSchema.optional()),
+  call('vk_posts', vkPostsArgumentsSchema),
+  call('vk_comments', vkCommentsArgumentsSchema),
+  call('vk_stats', vkStatsArgumentsSchema),
+  call('vk_post_propose', vkPostProposeArgumentsSchema),
+  call('vk_reply_propose', vkReplyProposeArgumentsSchema),
+])
 // The artifacts of the workspace (docs/plan/88-artifacts.md, Ар22, §7.5): each tool its own branch.
 const artifactsCall = z.discriminatedUnion('name', [
   call('artifact_list', artifactListArgumentsSchema.optional()),
@@ -247,6 +264,11 @@ export interface McpSecurity {
    * every composition; their changes only where the client watches (Зп32).
    */
   scheduleTools?: boolean
+  /**
+   * The built-in server «ВКонтакте» (docs/plan/99-vk-community.md, ВК15): every composition, a turn
+   * whose workspace has it on.
+   */
+  vkTools?: boolean
 }
 
 /** The security of the role's MCP endpoint, as the profiles of its configuration make it. */
@@ -262,6 +284,7 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
     repoTools: true,
     ...(config.pages ? { pagesTools: true } : {}),
     scheduleTools: true,
+    vkTools: true,
   }
 }
 
@@ -275,7 +298,8 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
  * are live for every visitor once the turn ends (docs/plan/82-scheduled-tasks.md, Зп28, Зп32).
  * `schedule` — the scheduled tasks of the chat's author, read by any turn; `schedule_changes` —
  * their creation, change and deletion, only by a turn the client watches: a pass of a scheduled
- * run without its client sees the lists alone (Зп31, Зп32).
+ * run without its client sees the lists alone (Зп31, Зп32). `vk` — the VK community of the
+ * workspace, while its built-in server is on (docs/plan/99-vk-community.md, ВК15).
  */
 export const mcpToolFamilies = [
   'web',
@@ -291,6 +315,7 @@ export const mcpToolFamilies = [
   'repo',
   'schedule',
   'schedule_changes',
+  'vk',
 ] as const
 export type McpToolFamily = (typeof mcpToolFamilies)[number]
 
@@ -299,17 +324,31 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
   const families: McpToolFamily[] = []
   if (security.webTools && access.requirements.browser) families.push('web')
   if (security.searchTools) families.push('search')
-  if (security.artifactsTools) families.push('artifacts')
-  if (security.artifactsTools && !access.unattended) families.push('artifact_changes')
-  // The renderer of frames lives in the browser worker (docs/plan/88-artifacts.md, Ар32).
-  if (security.artifactsTools && security.webTools) {
-    families.push('artifact_layout')
-    if (access.vision) families.push('artifact_vision')
+  return [...families, ...contentFamiliesOf(access, security), ...chatFamiliesOf(access, security)]
+}
+
+/** The artifacts and the pages of the workspace, and what changes them. */
+function contentFamiliesOf(access: McpTurnAccess, security: McpSecurity): McpToolFamily[] {
+  const families: McpToolFamily[] = []
+  if (security.artifactsTools) {
+    families.push('artifacts')
+    if (!access.unattended) families.push('artifact_changes')
+    // The renderer of frames lives in the browser worker (docs/plan/88-artifacts.md, Ар32).
+    if (security.webTools) {
+      families.push('artifact_layout')
+      if (access.vision) families.push('artifact_vision')
+    }
   }
   if (security.pagesTools) {
     families.push('pages')
     if (!access.unattended) families.push('pages_changes')
   }
+  return families
+}
+
+/** What belongs to the chat: its memory, its repository, its author's tasks, the built-in servers. */
+function chatFamiliesOf(access: McpTurnAccess, security: McpSecurity): McpToolFamily[] {
+  const families: McpToolFamily[] = []
   // The memory of the chat while it is on (docs/plan/84-projects.md, ПР18).
   if (security.memoryTools && access.memory) families.push('memory')
   // The repository of the chat's project, as the plan of the turn names it (§4.4).
@@ -318,6 +357,8 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
     families.push('schedule')
     if (!access.unattended) families.push('schedule_changes')
   }
+  // A built-in server that is off is not in the turn at all (ВК15).
+  if (security.vkTools && access.builtinMcp?.includes('vk')) families.push('vk')
   return families
 }
 
@@ -394,7 +435,8 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       (families.includes('repo') && repoCall.safeParse(request.params).success) ||
       (families.includes('schedule') && scheduleCall.safeParse(request.params).success) ||
       (families.includes('schedule_changes') &&
-        scheduleChangeCall.safeParse(request.params).success)
+        scheduleChangeCall.safeParse(request.params).success) ||
+      (families.includes('vk') && vkCall.safeParse(request.params).success)
     )
   return true
 }

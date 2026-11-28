@@ -33,7 +33,7 @@ test('the AppRoles of vault-setup.sh hold the policies of bootstrap.mjs, each to
   assert.deepEqual(services, {
     web: ['sites-writer', 'workspace-provisioner'],
     // core reads and renews the tokens of git connections (docs/plan/84-projects.md, §4.2)
-    core: ['core-turns', 'core-transit', 'core-workspace-env', 'core-git'],
+    core: ['core-turns', 'core-transit', 'core-workspace-env', 'core-git', 'core-vk'],
     llm: ['llm-subscriptions'],
     mcp: ['mcp-content'],
   })
@@ -122,6 +122,7 @@ const envOf = (text) =>
 test('render: the git apps and REPO_CONFIRM_SECRET go to web and core, the key as a file of core', () => {
   const values = kv()
   values.shared.repo_confirm_secret = 'c'.repeat(64)
+  values.shared.vk_confirm_secret = 'v'.repeat(64)
   values['gitlab-oauth'] = { client_id: 'gl-id', client_secret: 'gl-secret' }
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
   const pem = storedValue(
@@ -142,6 +143,9 @@ test('render: the git apps and REPO_CONFIRM_SECRET go to web and core, the key a
   const core = envOf(files.core.files['app.env'])
   assert.equal(web.REPO_CONFIRM_SECRET, 'c'.repeat(64))
   assert.equal(core.REPO_CONFIRM_SECRET, 'c'.repeat(64))
+  // The cards of VK (docs/plan/99-vk-community.md): the same secret in web and core.
+  assert.equal(web.VK_CONFIRM_SECRET, 'v'.repeat(64))
+  assert.equal(core.VK_CONFIRM_SECRET, 'v'.repeat(64))
   for (const env of [web, core]) {
     assert.equal(env.GITLAB_OAUTH_CLIENT_ID, 'gl-id')
     assert.equal(env.GITLAB_OAUTH_CLIENT_SECRET, 'gl-secret')

@@ -550,4 +550,29 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
       objects: [{ kind: 'page', title: 'Контакты', status: 'missing' }],
     },
   },
+  {
+    name: 'vk_proposal v1 post',
+    type: 'feed.vk_proposal',
+    payload: {
+      v: 1,
+      kind: 'post',
+      reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7e01',
+      communityId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7e02',
+      community: 'Кофейня у дома',
+      text: 'Мы открылись! Ждём вас с 9:00.',
+      publishAt: null,
+    },
+  },
+  {
+    name: 'vk_action v1 done',
+    type: 'feed.vk_action',
+    payload: {
+      v: 1,
+      actionId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7e03',
+      reservedId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7e01',
+      kind: 'post',
+      state: 'done',
+      url: 'https://vk.com/wall-1001_11',
+    },
+  },
 ])

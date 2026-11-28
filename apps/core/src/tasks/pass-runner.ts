@@ -27,6 +27,7 @@ import type { ArtifactChecks } from '../artifacts/artifact-checks.ts'
 import type { MemoryChanges } from './memory-changes.ts'
 import type { PageChanges } from './page-changes.ts'
 import type { RepoChanges, RepoTurnPreparer } from './repo-turns.ts'
+import type { VkChanges } from './vk-turns.ts'
 import type { ScheduleChanges } from './schedule-changes.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
@@ -114,6 +115,8 @@ export interface PassRunnerDependencies {
   repositories?: Pick<RepoTurnPreparer, 'prepare'>
   /** What a turn with a repository left, told in the chat (§4.3, step 8). */
   repoChanges?: Pick<RepoChanges, 'apply' | 'fail'>
+  /** The posts and replies a turn proposed for VK, shown as cards (docs/plan/99-vk-community.md). */
+  vkChanges?: Pick<VkChanges, 'apply' | 'fail'>
   /**
    * What the turn asked of the scheduled tasks of its author (docs/plan/82-scheduled-tasks.md,
    * Зп33): applied after a completed turn, refused at once after one that failed or was cancelled.
@@ -445,6 +448,8 @@ export class PassRunner {
         // merge request shown.
         this.deps.memoryChanges?.fail(job.taskId, ending.turn),
         this.deps.repoChanges?.fail(job.taskId, ending.turn),
+        // And its proposals for VK: no card of a pass that broke off (plan 99, §3.3).
+        this.deps.vkChanges?.fail(job.taskId, ending.turn),
         // And the changes of the scheduled tasks it reserved (Зп33): «ответ агента оборвался».
         this.deps.scheduleChanges?.failTurn(job.taskId, ending.turn),
       ])
@@ -485,6 +490,10 @@ export class PassRunner {
         branch: plan.request.repository.branch,
         mode: plan.request.repository.mode,
       })
+    // Last, the cards of the posts and replies it proposed for VK (docs/plan/99-vk-community.md,
+    // §3.3): they stand below the answer, and publish only by the client's button.
+    if (ending.kind === 'completed' && answer === 'moved')
+      await this.deps.vkChanges?.apply(job.taskId, ending.turn)
     if (ending.kind === 'busy') {
       // Another end of the task came first (a cancel, which wakes nobody): this one ended it.
       if (answer !== 'moved') return 'ended'

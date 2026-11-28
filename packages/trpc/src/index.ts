@@ -42,6 +42,8 @@ export type {
   McpServerServices,
 } from './services/mcp-server-auth.ts'
 export { checkSkillSignIn, connectSignedInServer } from './services/agent-skills.ts'
+// The keys of the built-in MCP servers (docs/plan/99-vk-community.md, ВК15).
+export type { BuiltinMcpServices } from './services/builtin-mcp.ts'
 // The git connections of the user (docs/plan/84-projects.md, 84.17): the return from gitlab.com.
 export {
   connectGithubApp,

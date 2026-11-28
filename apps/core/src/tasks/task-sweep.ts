@@ -5,6 +5,7 @@ import {
   cancelWaitingTask,
   clearStaleUncheckedSections,
   closeStaleRepoProposals,
+  closeStaleVkProposals,
   dropAbandonedPages,
   insertFeedEvent,
   latestPassRequestId,
@@ -38,6 +39,8 @@ import { readBrowserTaskFacts } from '../browser/browser-facts.ts'
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import { recoveredTextRefusal } from '../turns/text-refusal.ts'
 import { readTurnResult } from '../turns/turn-result.ts'
+import { sweepLostVkActions } from '../vk/vk-actions.ts'
+import type { VkChanges } from './vk-turns.ts'
 import {
   replayedTurn,
   type JournaledEvidence,
@@ -164,6 +167,11 @@ export interface TaskSweepDependencies {
     changes: Pick<RepoChanges, 'apply'>
     workspace: Pick<GitWorkspaceService, 'buildSettingsChange'>
   } | null
+  /**
+   * The posts and replies a turn proposed for VK (docs/plan/99-vk-community.md, §3.3): a completed
+   * turn the sweep ends shows their cards as the live end does; one that failed closes them.
+   */
+  vk?: Pick<VkChanges, 'apply' | 'fail'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -326,6 +334,10 @@ export class TaskSweep {
       await this.#applyChanges(assignment, ending.turn, swept, refusesText)
     if (answer === 'moved' && ending.kind === 'completed' && published)
       await this.#tellPublished(task.id, ending.turn, published)
+    // Last, as the live end: the cards of what the turn proposed for VK, or none of a failed one.
+    if (answer === 'moved' && ending.kind === 'completed')
+      await this.deps.vk?.apply(task.id, ending.turn)
+    else if (answer === 'moved') await this.deps.vk?.fail(task.id, assignment.turnNo)
     return answer
   }
 
@@ -690,6 +702,12 @@ export class TaskSweep {
     // And the proposals of a merge request of such turns (ревью C11).
     const proposals = await closeStaleRepoProposals(this.deps.db, before)
     if (proposals > 0) this.#logger.log(`task_sweep_repo_proposals failed=${proposals}`)
+    // And their proposals for VK (docs/plan/99-vk-community.md, §3.3): never shown.
+    const vk = await closeStaleVkProposals(this.deps.db, before)
+    if (vk > 0) this.#logger.log(`task_sweep_vk_proposals failed=${vk}`)
+    // And the presses of VK cards whose process died in the call (ВК9): `lost`, told in the chat.
+    const lost = await sweepLostVkActions(this.deps.db, { now: this.#now })
+    if (lost > 0) this.#logger.log(`task_sweep_vk_actions lost=${lost}`)
     if (!memory) return 0
     const closed = await memory.sweep(before)
     if (closed > 0) this.#logger.log(`task_sweep_memory failed=${closed}`)

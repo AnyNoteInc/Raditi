@@ -15,6 +15,7 @@ vi.mock('@/server/payment-shop', () => ({ paymentShop: () => stand.shop }))
 vi.mock('@/server/chat-services', () => ({ chatServices: () => stand.chat }))
 vi.mock('@/server/mcp-servers', () => ({ mcpServerServices: () => null }))
 vi.mock('@/server/git-services', () => ({ gitServices: () => null }))
+vi.mock('@/server/builtin-mcp-services', () => ({ builtinMcpServices: () => null }))
 vi.mock('@/server/skill-services', () => ({ skillServices: () => null }))
 vi.mock('@repo/trpc', async () => {
   const { initTRPC, TRPCError } = await import('@trpc/server')
@@ -91,6 +92,7 @@ describe('tRPC route', () => {
         mcpServers: null,
         git: null,
         skills: null,
+        builtinMcp: null,
       },
     ])
     const [context] = stand.contexts as [{ billing: unknown; chat: unknown }]
@@ -111,6 +113,7 @@ describe('tRPC route', () => {
         mcpServers: null,
         git: null,
         skills: null,
+        builtinMcp: null,
       },
     ])
   })

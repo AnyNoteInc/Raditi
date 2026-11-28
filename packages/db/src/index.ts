@@ -594,6 +594,22 @@ export {
   type TurnAccountSkillRow,
 } from './account-skills.ts'
 export {
+  closeStaleVkProposals,
+  closeVkProposal,
+  enabledBuiltinMcp,
+  enqueueVkCommentNotices,
+  vkCallbackCommunity,
+  type VkCallbackCommunity,
+  failVkTurn,
+  pendingVkProposals,
+  reserveVkProposal,
+  setBuiltinMcp,
+  workingVkCommunities,
+  workingVkCommunity,
+  type PendingVkProposal,
+  type VkCommunityRow,
+} from './vk.ts'
+export {
   QUICK_TASK_TITLE,
   claimQuickEdit,
   claimStaleQuickEdit,

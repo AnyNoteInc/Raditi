@@ -766,7 +766,7 @@ test('web’s AppRole holds the policies `sites-writer` and `workspace-provision
   assert.equal(role.body.token_no_default_policy, true)
   // The policy itself: write with CAS, read the metadata and keep one version of each key — of
   // the variables of a workspace (БП4), of the keys of its MCP servers (БП11) and of the tokens of
-  // its git connections (plan 84) — nothing else;
+  // its git connections (plan 84) and of its VK communities (plan 99) — nothing else;
   // no key of a site since plan 83, БП13.
   assert.deepEqual(
     [...read('infra/vault/policies/sites-writer.hcl').matchAll(/^path "([^"]+)"/gm)].map(
@@ -780,6 +780,9 @@ test('web’s AppRole holds the policies `sites-writer` and `workspace-provision
       // The tokens of git connections (docs/plan/84-projects.md, ПР10).
       'kv/data/workspaces/+/git/*',
       'kv/metadata/workspaces/+/git/*',
+      // The keys of VK communities (docs/plan/99-vk-community.md, §3.1).
+      'kv/data/workspaces/+/vk/*',
+      'kv/metadata/workspaces/+/vk/*',
     ],
   )
   // And the Transit key of a workspace, made before its first task (docs/plan/57, Б32) — only.

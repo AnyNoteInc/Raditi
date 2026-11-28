@@ -137,6 +137,7 @@ describe('NotificationDelivery', () => {
           scheduledRunId: null,
           artifactId: null,
           actorUserId: null,
+          vkCommunityId: null,
         },
       ],
       skipDuplicates: true,

@@ -35,6 +35,9 @@ export const GENERATED = {
     // REPO_CONFIRM_SECRET of web and core (docs/plan/84-projects.md, ПР13, ПР15): the HMAC of the
     // cards of a repository; core checks a token again before it calls the provider
     repo_confirm_secret: b64url(48),
+    // VK_CONFIRM_SECRET of web and core (docs/plan/99-vk-community.md, §3.3): the HMAC of the
+    // presses of «Опубликовать» on the cards of VK; core checks a press again before it calls VK
+    vk_confirm_secret: b64url(48),
   },
   'app/web': {
     BETTER_AUTH_SECRET: b64url(48),
@@ -269,6 +272,7 @@ export function serviceFiles(kv, roles, { readFile = readFileSync, bcrypt = htpa
           METRICS_TOKEN: web.METRICS_TOKEN,
           PAGES_SIGNING_SECRET: web.PAGES_SIGNING_SECRET,
           REPO_CONFIRM_SECRET: shared.repo_confirm_secret,
+          VK_CONFIRM_SECRET: shared.vk_confirm_secret,
           ...gitlabEnv,
           ...yookassaEnv,
           ...(github
@@ -309,6 +313,7 @@ export function serviceFiles(kv, roles, { readFile = readFileSync, bcrypt = htpa
           SCHEDULE_INTAKE_SECRET: core.SCHEDULE_INTAKE_SECRET,
           BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,
           REPO_CONFIRM_SECRET: shared.repo_confirm_secret,
+          VK_CONFIRM_SECRET: shared.vk_confirm_secret,
           ...gitlabEnv,
           ...yookassaEnv,
           ...(github

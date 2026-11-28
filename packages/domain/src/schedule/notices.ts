@@ -21,12 +21,20 @@ export const artifactNoticeKinds = [
 ] as const
 export type ArtifactNoticeKind = (typeof artifactNoticeKinds)[number]
 
+/**
+ * A notice of a connected VK community (docs/plan/99-vk-community.md, slice 99.6): a new comment
+ * came. Neither its words nor its author go anywhere (spec §11) — only that it came, with the link
+ * to the section of the community.
+ */
+export const VK_COMMENT_NOTICE = 'vk_comment'
+
 export const notificationKinds = [
   ...chatNotifyKinds,
   'not_started',
   'paused',
   'missed',
   ...artifactNoticeKinds,
+  VK_COMMENT_NOTICE,
 ] as const
 export type NotificationKind = (typeof notificationKinds)[number]
 
@@ -84,6 +92,8 @@ export function scheduledNoticeTitle(kind: NotificationKind, cause?: NoticeLimit
       return 'Запланированная задача приостановлена'
     case 'missed':
       return 'Запланированная задача пропустила запуск'
+    case VK_COMMENT_NOTICE:
+      return 'Новый комментарий в группе ВКонтакте'
     default:
       return artifactNoticeTitles[kind]
   }
@@ -144,7 +154,7 @@ export const notificationPushPayloadSchema = z.strictObject({
     .regex(/^\/(?!\/)[A-Za-z0-9/_-]*$/, 'a path of the cabinet'),
   kind: z.enum(notificationKinds),
   scheduled: z.boolean(),
-  tag: z.string().regex(/^(?:schedule|chat|artifact):[0-9a-f-]{36}$/),
+  tag: z.string().regex(/^(?:schedule|chat|artifact|vk):[0-9a-f-]{36}$/),
   at: z.int().positive(),
 })
 export type NotificationPushPayload = z.infer<typeof notificationPushPayloadSchema>

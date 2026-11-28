@@ -181,6 +181,8 @@ export const OPERATOR_SCRIPTS = {
     'subscription-retire.mjs',
     'subscription-search-key.mjs',
     'subscription-token.mjs',
+    // The service key of Raditi's VK app (docs/plan/99-vk-community.md, ВК4).
+    'subscription-vk-key.mjs',
   ],
   mcp: [],
   preview: [],

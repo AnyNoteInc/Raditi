@@ -177,6 +177,9 @@ describe('API routes', () => {
     // MAX_WEBHOOK_BODY_BYTES (256 KiB) before the signature (docs/plan/84-projects.md, ПР17).
     'webhooks/github': /handleGithubWebhook\(request,/,
     'webhooks/gitlab': /handleGitlabWebhook\(request,/,
+    // The Callback API of a VK community: vk-callback.ts reads at most 64 KiB before the secret
+    // (docs/plan/99-vk-community.md, slice 99.6).
+    'webhooks/vk/[communityId]': /handleVkCallback\(request,/,
     // A new Web Push subscription of this browser from its service worker: 4 KiB after the origin
     // (docs/plan/82-scheduled-tasks.md, Зп41).
     'notifications/resubscribe': /handleResubscribe\(request,/,

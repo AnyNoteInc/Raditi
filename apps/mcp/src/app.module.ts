@@ -15,6 +15,7 @@ import { SearchModule } from './search/search.module.ts'
 import { ServerModule } from './server/server.module.ts'
 import { SiteInfoModule } from './site-info/site-info.module.ts'
 import { SkillRelayModule } from './skill-relay/skill-relay.module.ts'
+import { VkModule } from './vk/vk.module.ts'
 import { WebModule } from './web/web.module.ts'
 
 /**
@@ -32,8 +33,9 @@ import { WebModule } from './web/web.module.ts'
  * docs/plan/82-scheduled-tasks.md) — always. The memory of a chat (memory_*, MemoryModule,
  * docs/plan/84-projects.md, ПР18) — always, offered to a turn whose chat has its memory on. The
  * repository of a chat's project (repo_*, RepoModule, §4.4) — always, offered to a turn whose plan
- * names one. The modules come in this order — site_info, web, search, artifacts, pages, memory, repo,
- * schedule — and so do their tools.
+ * names one. The built-in server «ВКонтакте» (vk_*, VkModule, docs/plan/99-vk-community.md) — always,
+ * offered to a turn whose workspace has it on. The modules come in this order — site_info, web,
+ * search, artifacts, pages, memory, repo, schedule, vk — and so do their tools.
  */
 @Module({})
 export class AppModule {
@@ -59,6 +61,7 @@ export class AppModule {
         MemoryModule,
         RepoModule,
         ScheduleModule,
+        VkModule,
       ],
     }
   }

@@ -7,7 +7,7 @@
 
 const TOOLING = '^packages/(eslint-config|typescript-config)/'
 const ADAPTERS =
-  'db|storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram|skill-sources'
+  'db|storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram|skill-sources|vk'
 // A leaf: imports nothing of the repository. The apps import it; no tier rule of a package
 // allows it.
 const LEAVES = 'ip-address'
@@ -466,11 +466,11 @@ module.exports = {
         'The web tools of a chat (docs/plan/57-browser-tasks.md, Б20), the web search (spec §20, «Веб-поиск агента»), the pages of the workspace (docs/plan/69-pages.md, Ст20) and the scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп31) are each its own module of the mcp app: no folder of them imports another (plan 56, §4.3).',
       severity: 'error',
       from: {
-        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule)/',
+        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule|vk)/',
         pathNot: '\\.test\\.ts$',
       },
       to: {
-        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule)/',
+        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule|vk)/',
         pathNot: '^apps/mcp/src/$1/',
       },
     },
@@ -484,7 +484,7 @@ module.exports = {
         pathNot: '\\.test\\.ts$',
       },
       to: {
-        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule)/',
+        path: '^apps/mcp/src/(web|search|pages|memory|repo|schedule|vk)/',
         pathNot:
           '^apps/mcp/src/(search/search-arguments|pages/pages-arguments|memory/memory-arguments|repo/repo-arguments|schedule/schedule-arguments)\\.ts$',
       },
@@ -510,7 +510,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/llm/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|git-providers|sandbox-providers|browser-providers|browser-link|agent-drivers|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|doc-render|doc-bridge)/',
+        path: '^packages/(storage|git-providers|sandbox-providers|browser-providers|browser-link|agent-drivers|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|doc-render|doc-bridge|vk)/',
         reachable: true,
       },
     },
@@ -532,7 +532,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/preview/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|doc-render|doc-bridge|trpc|ui)/',
+        path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|doc-render|doc-bridge|trpc|ui|vk)/',
         reachable: true,
       },
     },
@@ -559,7 +559,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/browser/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(vault|git-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render|doc-bridge|trpc|ui)/',
+        path: '^packages/(vault|git-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render|doc-bridge|trpc|ui|vk)/',
         reachable: true,
       },
     },

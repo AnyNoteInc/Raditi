@@ -22,6 +22,8 @@ export const queueNames = [
   'schedules',
   // The files «Скачать» and the thumbnails of artifacts that core builds (docs/plan/88-artifacts.md).
   'artifacts',
+  // The publications in VK communities the client pressed (docs/plan/99-vk-community.md, §3.3).
+  'vk',
   // Quick edits of artifact notes: one model call of core each (docs/plan/98-quick-edits.md).
   'artifact-edits',
 ] as const

@@ -36,6 +36,8 @@ const SCHEDULED_TITLES = Object.freeze({
   artifact_comment: 'Новый комментарий в артефакте',
   artifact_agent_reply: 'Агент ответил на заметку',
   artifact_changed: 'Ваш артефакт изменили',
+  // A new comment in a VK community (docs/plan/99-vk-community.md, 99.6): no words, no author.
+  vk_comment: 'Новый комментарий в группе ВКонтакте',
 })
 
 const ICON = '/brand-icon.png'
@@ -59,7 +61,7 @@ const CABINET_SECTIONS = Object.freeze([
 ])
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const TAG = /^(?:schedule|chat|artifact):[0-9a-f-]{36}$/
+const TAG = /^(?:schedule|chat|artifact|vk):[0-9a-f-]{36}$/
 // The path of notificationPushPayloadSchema: of this origin, never `//host`.
 const PATH = /^\/(?!\/)[A-Za-z0-9/_-]*$/
 

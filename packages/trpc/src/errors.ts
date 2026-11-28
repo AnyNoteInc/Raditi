@@ -16,6 +16,7 @@ import {
   repoPushRefusalTexts,
   repoReauthText,
   repoRefusalTexts,
+  vkRefusalTexts,
   projectFileRefusals,
   projectFileRefusalText,
   projectRefusalTexts,
@@ -107,6 +108,11 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   ...gitConnectionRefusalTexts,
   // The skills of an account (docs/plan/97-skills.md).
   ...accountSkillRefusalTexts,
+  // The built-in MCP servers and VK communities (docs/plan/99-vk-community.md).
+  ...vkRefusalTexts,
+  BUILTIN_MCP_UNAVAILABLE: 'Сейчас нельзя подключить ключ. Попробуйте немного позже',
+  BUILTIN_MCP_NOT_ALLOWED: 'Менять встроенные MCP могут только владелец и администраторы',
+  BUILTIN_MCP_NEEDS_KEY: 'Чтобы включить ВКонтакте, подключите группу по ключу доступа',
   // Tariffs and their payment: what the customer can do next. Why a bank declined a payment
   // is told by the order itself (paymentFailureText of @repo/billing), not by these.
   BILLING_PAYMENTS_NOT_CONFIGURED: 'Оплата сейчас недоступна. Попробуйте ещё раз немного позже',
