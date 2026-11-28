@@ -324,17 +324,31 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
   const families: McpToolFamily[] = []
   if (security.webTools && access.requirements.browser) families.push('web')
   if (security.searchTools) families.push('search')
-  if (security.artifactsTools) families.push('artifacts')
-  if (security.artifactsTools && !access.unattended) families.push('artifact_changes')
-  // The renderer of frames lives in the browser worker (docs/plan/88-artifacts.md, Ар32).
-  if (security.artifactsTools && security.webTools) {
-    families.push('artifact_layout')
-    if (access.vision) families.push('artifact_vision')
+  return [...families, ...contentFamiliesOf(access, security), ...chatFamiliesOf(access, security)]
+}
+
+/** The artifacts and the pages of the workspace, and what changes them. */
+function contentFamiliesOf(access: McpTurnAccess, security: McpSecurity): McpToolFamily[] {
+  const families: McpToolFamily[] = []
+  if (security.artifactsTools) {
+    families.push('artifacts')
+    if (!access.unattended) families.push('artifact_changes')
+    // The renderer of frames lives in the browser worker (docs/plan/88-artifacts.md, Ар32).
+    if (security.webTools) {
+      families.push('artifact_layout')
+      if (access.vision) families.push('artifact_vision')
+    }
   }
   if (security.pagesTools) {
     families.push('pages')
     if (!access.unattended) families.push('pages_changes')
   }
+  return families
+}
+
+/** What belongs to the chat: its memory, its repository, its author's tasks, the built-in servers. */
+function chatFamiliesOf(access: McpTurnAccess, security: McpSecurity): McpToolFamily[] {
+  const families: McpToolFamily[] = []
   // The memory of the chat while it is on (docs/plan/84-projects.md, ПР18).
   if (security.memoryTools && access.memory) families.push('memory')
   // The repository of the chat's project, as the plan of the turn names it (§4.4).

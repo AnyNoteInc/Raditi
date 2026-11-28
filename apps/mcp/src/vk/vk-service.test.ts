@@ -135,7 +135,7 @@ describe('McpVkService', () => {
       posts: [{ postId: 10, url: 'https://vk.com/wall-123_10', cut: true, views: 100 }],
     })
     const text = (answer as unknown as { posts: { text: string }[] }).posts[0]!.text
-    expect(text.length).toBe(2001)
+    expect(text).toHaveLength(2001)
   })
 
   it('names the client’s own replies among the comments', async () => {

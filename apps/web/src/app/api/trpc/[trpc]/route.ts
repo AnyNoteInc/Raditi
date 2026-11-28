@@ -39,11 +39,13 @@ function appUrl(): string | null {
 // The fetch adapter of tRPC reads a body whole and has no limit of its own. A POST of another
 // origin — a published page is the same site as the cabinet — is refused first (plan 69, Ст3).
 // An action with a fact of the ORI names it to the edge in its answer (88.16а-2).
-const serve = withOriFactHeader(async (req) => {
+const serve = withOriFactHeader((req) => {
   const app = appUrl()
   // Without the settings the origin cannot be checked: a POST is not taken unchecked.
-  if (app === null && req.method === 'POST') return new Response(null, { status: 503 })
-  if (app !== null && refusedCrossOriginPost(req, app)) return new Response(null, { status: 403 })
+  if (app === null && req.method === 'POST')
+    return Promise.resolve(new Response(null, { status: 503 }))
+  if (app !== null && refusedCrossOriginPost(req, app))
+    return Promise.resolve(new Response(null, { status: 403 }))
   return fetchRequestHandler({
     endpoint: '/api/trpc',
     req,

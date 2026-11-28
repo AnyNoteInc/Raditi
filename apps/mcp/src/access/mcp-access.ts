@@ -184,7 +184,9 @@ const UNATTENDED_KEPT = 4096
 /** The deadline of the turn's assignment, as the admission query read it; null — unreadable. */
 function deadlineOf(row: unknown): Date | null {
   const value = (row as { deadlineAt?: unknown } | null)?.deadlineAt
-  const at = value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null
+  let at: Date | null = null
+  if (value instanceof Date) at = value
+  else if (typeof value === 'string') at = new Date(value)
   return at === null || Number.isNaN(at.getTime()) ? null : at
 }
 
