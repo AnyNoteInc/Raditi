@@ -58,7 +58,9 @@ describe('an artifact only when it is needed (docs/plan/100-artifacts-on-demand.
     expect(text).toContain('Your answer is `client_message`')
     // The limit of the result's schema: a longer answer would end the turn (АЗ1).
     expect(text).toContain('within its 2000 characters — shorten it to fit')
-    expect(text).toContain('Make an artifact only when the client asks for what a kind below is for')
+    expect(text).toContain(
+      'Make an artifact only when the client asks for what a kind below is for',
+    )
     // A picture of the kind «Изображение» is no file format.
     expect(text).toContain('(Word, Excel, PDF, PNG or JPEG, Markdown)')
     expect(text).toContain('When you make a document, create it with `raditi_artifact_create`')
