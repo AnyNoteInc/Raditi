@@ -170,20 +170,22 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
     },
   )
   it('imports an account of the quick driver on the API only, four requests at a time', () => {
-    const quick = (backend: string, extra: string[] = []) => () =>
-      parseSubscriptionArguments('login', [
-        '--backend',
-        backend,
-        '--label',
-        `${backend}-quick-1`,
-        '--plan',
-        'payg',
-        '--driver',
-        'quick',
-        ...extra,
-        '--vault-token-file',
-        '/tmp/writer',
-      ])
+    const quick =
+      (backend: string, extra: string[] = []) =>
+      () =>
+        parseSubscriptionArguments('login', [
+          '--backend',
+          backend,
+          '--label',
+          `${backend}-quick-1`,
+          '--plan',
+          'payg',
+          '--driver',
+          'quick',
+          ...extra,
+          '--vault-token-file',
+          '/tmp/writer',
+        ])
     expect(quick('zai-api')()).toMatchObject({ value: { backend: 'zai-api', driver: 'quick' } })
     // The plan's terms refuse the platform's own calls (БПр1).
     expect(quick('zai-coding')).toThrow('Неверные параметры команды подписок')
