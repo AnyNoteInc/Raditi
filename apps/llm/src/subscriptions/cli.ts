@@ -6,6 +6,7 @@ import {
   appEnvSchema,
   isDomainError,
   llmBackendIdSchema,
+  platformDriverIds,
   type Env,
   type LlmBackend,
   type TurnCredentialRef,
@@ -52,11 +53,19 @@ const loginSchema = z
     relogin: account.optional(),
     plan: plan.optional(),
     paidUntil: date.optional(),
+    /**
+     * A driver of the platform's own calls (`quick`, docs/plan/98-quick-edits.md): the account
+     * serves that driver instead of the backend's agent driver. A new account only.
+     */
+    driver: z.enum(platformDriverIds).optional(),
     vaultTokenFile: path,
   })
   .refine((value) =>
     value.relogin
-      ? value.label === undefined && value.plan === undefined && value.paidUntil === undefined
+      ? value.label === undefined &&
+        value.plan === undefined &&
+        value.paidUntil === undefined &&
+        value.driver === undefined
       : value.label !== undefined,
   )
 const retireSchema = z
@@ -106,6 +115,7 @@ export function parseSubscriptionArguments(
     '--relogin': 'relogin',
     '--plan': 'plan',
     '--paid-until': 'paidUntil',
+    '--driver': 'driver',
     '--vault-token-file': 'vaultTokenFile',
     '--account': 'account',
     '--compromised': 'compromised',
@@ -132,6 +142,10 @@ export function parseSubscriptionArguments(
   if (command === 'login') {
     const parsed = loginSchema.safeParse(value)
     if (!parsed.success || !imports.has(parsed.data.backend)) throw invalid()
+    // The platform's own calls only where the provider allows them (БПр1): the gateway would
+    // refuse every key of such an account anyway.
+    if (parsed.data.driver && !imports.get(parsed.data.backend)!.backend.platformUserAgent)
+      throw invalid()
     return { command, help: false, value: parsed.data }
   }
   if (command === 'retire') {
@@ -182,6 +196,18 @@ const imports = new Map<string, SubscriptionImport>([
     { backend: zaiApiBackend, driverId: 'opencode', turns: 8, requests: 16, planExample: 'payg' },
   ],
 ])
+/**
+ * An account of a platform driver (`--driver quick`): four requests at a time, a quarter of the
+ * sixteen of the key it shares with the agent's account (docs/plan/98-quick-edits.md, БПр16).
+ */
+export const platformAccountCapacity = { turns: 4, requests: 4 } as const
+
+/** The driver and the bounds of a new account: the backend's own, or of a platform driver. */
+export const importOf = (entry: SubscriptionImport, driver: string | undefined) =>
+  driver === undefined
+    ? { driverId: entry.driverId, turns: entry.turns, requests: entry.requests }
+    : { driverId: driver, ...platformAccountCapacity }
+
 /** `--backend` accepts exactly these ids: a login never meets an id without settings. */
 export const subscriptionImports: ReadonlyMap<string, SubscriptionImport> = imports
 
@@ -207,7 +233,7 @@ export function subscriptionHelp(command: SubscriptionCommand): string {
     .map((entry) => entry.backend.id)
   const egressNote = direct.length > 0 ? ` (${direct.join(' и ')} он не нужен)` : ''
   const usage = {
-    login: `subscriptions:login -- --backend ${[...imports.keys()].join('|')} --label <имя> [--plan <план>] [--paid-until YYYY-MM-DD] --vault-token-file <абсолютный путь>\nПовторный вход: --backend <оболочка> --relogin <UUID> --vault-token-file <путь>.\n${input}\n--plan — метка тарифа нового аккаунта, например: ${plans}.`,
+    login: `subscriptions:login -- --backend ${[...imports.keys()].join('|')} --label <имя> [--plan <план>] [--paid-until YYYY-MM-DD] [--driver ${platformDriverIds.join('|')}] --vault-token-file <абсолютный путь>\n--driver — аккаунт собственных вызовов платформы (быстрые правки) вместо агента; только у провайдера, который их разрешает.\nПовторный вход: --backend <оболочка> --relogin <UUID> --vault-token-file <путь>.\n${input}\n--plan — метка тарифа нового аккаунта, например: ${plans}.`,
     retire:
       'subscriptions:retire -- --account <UUID> --label <метка> [--compromised --turns-token-file <путь>]\nОкончательное удаление: --account <UUID> --label <метка> --finalize --vault-token-file <путь> [--console-revoked].\n--console-revoked подтверждает ручной отзыв ключа в консоли провайдера.\nОтмена запроса, пока ключ не отозван: --account <UUID> --cancel.',
     'search-key':
@@ -400,17 +426,18 @@ export async function runSubscriptionCommand(
         })
         // A key that was not saved stays with its owner: nothing was issued for the platform.
         if (controller.signal.aborted) throw new OperatorCommandError('Операция прервана.')
+        const chosen = importOf(entry, value.driver)
         const result = value.relogin
           ? await login.relogin({ backend: value.backend, accountId: value.relogin, credential })
           : await login.importAccount({
               backend: value.backend,
-              driverId: entry.driverId,
+              driverId: chosen.driverId,
               credential,
               label: value.label!,
               plan: value.plan,
               paidUntil: value.paidUntil,
-              maxConcurrentTurns: entry.turns,
-              maxConcurrentRequests: entry.requests,
+              maxConcurrentTurns: chosen.turns,
+              maxConcurrentRequests: chosen.requests,
             })
         process.stdout.write(
           JSON.stringify({

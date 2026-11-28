@@ -13,6 +13,7 @@ import { llmBackends } from '@repo/llm-backends'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  importOf,
   loginNeedsEgressNode,
   operatorFailure,
   parseSubscriptionArguments,
@@ -168,6 +169,58 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
       expect(entry.backend.importCredential).toBeTypeOf('function')
     },
   )
+  it('imports an account of the quick driver on the API only, four requests at a time', () => {
+    const quick =
+      (backend: string, extra: string[] = []) =>
+      () =>
+        parseSubscriptionArguments('login', [
+          '--backend',
+          backend,
+          '--label',
+          `${backend}-quick-1`,
+          '--plan',
+          'payg',
+          '--driver',
+          'quick',
+          ...extra,
+          '--vault-token-file',
+          '/tmp/writer',
+        ])
+    expect(quick('zai-api')()).toMatchObject({ value: { backend: 'zai-api', driver: 'quick' } })
+    // The plan's terms refuse the platform's own calls (БПр1).
+    expect(quick('zai-coding')).toThrow('Неверные параметры команды подписок')
+    expect(() =>
+      parseSubscriptionArguments('login', [
+        '--backend',
+        'zai-api',
+        '--label',
+        'x',
+        '--plan',
+        'payg',
+        '--driver',
+        'opencode-but-not',
+        '--vault-token-file',
+        '/tmp/writer',
+      ]),
+    ).toThrow('Неверные параметры команды подписок')
+    // A relogin keeps the account's driver.
+    expect(() =>
+      parseSubscriptionArguments('login', [
+        '--backend',
+        'zai-api',
+        '--relogin',
+        account,
+        '--driver',
+        'quick',
+        '--vault-token-file',
+        '/tmp/writer',
+      ]),
+    ).toThrow('Неверные параметры команды подписок')
+    const entry = subscriptionImports.get('zai-api')!
+    expect(importOf(entry, 'quick')).toEqual({ driverId: 'quick', turns: 4, requests: 4 })
+    expect(importOf(entry, undefined)).toEqual({ driverId: 'opencode', turns: 8, requests: 16 })
+  })
+
   it('takes a relogin of an API account in the same form as any other', () => {
     expect(
       parseSubscriptionArguments('login', [
