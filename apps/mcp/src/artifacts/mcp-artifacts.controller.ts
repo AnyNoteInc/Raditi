@@ -120,7 +120,7 @@ export class McpArtifactsController {
   @Tool({
     name: 'artifact_create',
     description:
-      'Create an artifact for the client: kind document for text, with its skeleton — every section by an id with its intent. Call it before you research. Title and intents in the client’s language, never a secret or data of people.',
+      'Create an artifact only when the client asks for a document, a page, a presentation or a picture, or needs a text longer than client_message holds; an answer, advice or a short text goes into client_message. A document comes with its skeleton — every section by an id with its intent. Title and intents in the client’s language, never a secret or data of people.',
     parameters: artifactCreateArgumentsSchema,
     annotations: { ...writes, idempotentHint: false },
   })
@@ -185,7 +185,7 @@ export class McpArtifactsController {
   @Tool({
     name: 'artifact_import',
     description:
-      'Turn a long .md (a document) or a .html, .htm or .svg (a canvas with one screen) you wrote to the outbox into an artifact, or into the whole content of artifactId. Done at the end of the turn.',
+      'Turn a .md (into a document) or a .html, .htm or .svg (into a canvas with one screen) you wrote to the outbox into a new artifact, or into the whole content of artifactId. Done at the end of the turn.',
     parameters: artifactImportArgumentsSchema,
     annotations: writes,
   })

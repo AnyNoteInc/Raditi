@@ -413,9 +413,11 @@ describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11; docs/p
       expect(text).toContain('write it again under the same file name')
       expect(text).toContain('To change an artifact, edit its blocks.')
       expect(text).toContain('never\n  paste their content into the message')
-      // Any other text is a document artifact (docs/plan/88-artifacts.md, Ар4), not a file.
-      expect(text).toContain('any other text is a document artifact')
-      expect(text).toContain('A file is for a result no kind of artifact fits')
+      // A text is no artifact by default (docs/plan/100-artifacts-on-demand.md, АЗ2, АЗ6).
+      expect(text).toContain('Make a file when the client asks for a file or names its format')
+      expect(text).toContain('When the client asks for several documents')
+      expect(text).not.toContain('any other text is a document artifact')
+      expect(text).not.toContain('no kind of artifact fits')
       // The old rule made every document a Word file.
       expect(text).not.toContain('is there to build .docx and .xlsx files')
     }

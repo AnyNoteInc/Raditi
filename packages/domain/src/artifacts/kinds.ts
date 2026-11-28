@@ -52,8 +52,9 @@ export interface ArtifactKindSpec {
   /** True — its `html` and `script` live inside frames (canvas, slides, image); false — a document. */
   framed: boolean
   /**
-   * What the agent makes of this kind, in English for the instructions of a pass (Ар4): the
-   * result of the client's request that goes into an artifact of it.
+   * What an artifact of this kind is for, in English for the instructions of a pass: the agent
+   * makes one only when the client asks for it or the result does not fit the chat
+   * (docs/plan/100-artifacts-on-demand.md, АЗ1, АЗ3).
    */
   forAgent: string
 }
@@ -78,7 +79,7 @@ export const artifactKindSpecs: Readonly<Record<ArtifactKind, ArtifactKindSpec>>
     notes: 'quote',
     framed: false,
     forAgent:
-      'text to read, check or keep editing: an audit, a plan of work, a summary, an instruction, an article, a post, notes, a report; rows of data are a Markdown table inside a section',
+      'a long text to keep, edit or pass on: an article, an instruction, a report, an audit, a plan of work; rows of data are a Markdown table inside a section',
   },
   canvas: {
     label: 'Холст',

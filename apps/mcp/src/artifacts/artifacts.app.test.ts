@@ -339,6 +339,13 @@ describe('the artifacts of a workspace through the gateway (plan 88, 88.6)', () 
     for (const tool of family) expect(tool.inputSchema.additionalProperties, tool.name).toBe(false)
     // No longer than the descriptions of `docs` it replaces (§7.5).
     expect(family.reduce((sum, tool) => sum + tool.description.length, 0)).toBeLessThanOrEqual(2379)
+    // An artifact only when it is needed (docs/plan/100-artifacts-on-demand.md, АЗ2, АЗ4).
+    const create = family.find((tool) => tool.name === 'artifact_create')!.description
+    expect(create).toContain('Create an artifact only when the client asks for a document')
+    expect(create).toContain('goes into client_message')
+    expect(create).not.toContain('before you research')
+    const descriptions = family.map((tool) => tool.description).join('\n')
+    expect(descriptions).not.toContain('a long .md')
   })
 
   it('creates a document with its skeleton and tells the card of the chat', async () => {
