@@ -20,6 +20,8 @@ export const settingsNav: readonly SettingsNavEntry[] = [
   { href: '/settings/skills', label: 'Навыки', icon: 'bulb', enabled: true },
   // The MCP servers of the agent of every chat of the workspace (plan 81; plan 83, БП11; Нв21).
   { href: '/settings/connections', label: 'Подключения', icon: 'globe', enabled: true },
+  // The built-in servers of Радити with their switches (docs/plan/99-vk-community.md, ВК15).
+  { href: '/settings/builtin-mcp', label: 'Встроенные MCP', icon: 'layers', enabled: true },
 ]
 
 /**

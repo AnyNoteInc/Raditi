@@ -7,6 +7,7 @@ import superjson from 'superjson'
 
 import { CONSENT_REQUIRED, formatError, toTRPCError } from './errors.ts'
 import type { AccountSkillServices } from './services/account-skills.ts'
+import type { BuiltinMcpServices } from './services/builtin-mcp.ts'
 import type { ChatContext } from './services/chat/context.ts'
 import type { GitServices } from './services/git/connections.ts'
 import type { McpServerServices } from './services/mcp-server-auth.ts'
@@ -60,6 +61,12 @@ export interface Context {
    */
   git?: GitServices | null
   /**
+   * What the keys of the built-in MCP servers are checked and written through
+   * (docs/plan/99-vk-community.md, ВК15): a Vault store that can only write and the check of a VK
+   * key. Absent or null — the servers are listed and switched, no key is connected.
+   */
+  builtinMcp?: BuiltinMcpServices | null
+  /**
    * What the skills of an account are installed through (docs/plan/97-skills.md): the readers of
    * public repositories and the store of their files. Absent or null — skills are listed and
    * switched, not installed.
@@ -90,6 +97,8 @@ export interface CreateContextOptions {
   git?: GitServices | null
   /** Defaults to null: skills cannot be installed. */
   skills?: AccountSkillServices | null
+  /** Defaults to null: no key of a built-in server is connected. */
+  builtinMcp?: BuiltinMcpServices | null
 }
 
 export async function createContext({
@@ -101,6 +110,7 @@ export async function createContext({
   mcpServers = null,
   git = null,
   skills = null,
+  builtinMcp = null,
 }: CreateContextOptions): Promise<Context> {
   const current = await getSessionFromHeaders(headers, auth)
   return {
@@ -113,6 +123,7 @@ export async function createContext({
     mcpServers,
     git,
     skills,
+    builtinMcp,
     memo: new Map(),
   }
 }

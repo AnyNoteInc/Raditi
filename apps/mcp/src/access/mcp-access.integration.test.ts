@@ -219,6 +219,8 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
           memory: null,
           repository: null,
           vision: false,
+          // No built-in MCP server is on in the workspace (docs/plan/99-vk-community.md, ВК15).
+          builtinMcp: [],
           // No scheduled run started this chat (docs/plan/82-scheduled-tasks.md, Зп27).
           unattended: false,
         })
@@ -227,6 +229,23 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
       }
     },
   )
+
+  it('admits the built-in MCP servers the workspace has on, read at every call (plan 99, ВК15)', async () => {
+    const turn = await chatTurnOf(false)
+    const key = { workspaceId_server: { workspaceId: fixture.workspaceId, server: 'vk' } }
+    try {
+      await db.workspaceBuiltinMcp.create({
+        data: { workspaceId: fixture.workspaceId, server: 'vk', enabled: true },
+      })
+      expect((await store.authenticate(turn.token))?.builtinMcp).toEqual(['vk'])
+      // Off: the next call of the same turn has it no more.
+      await db.workspaceBuiltinMcp.update({ where: key, data: { enabled: false } })
+      expect((await store.authenticate(turn.token))?.builtinMcp).toEqual([])
+    } finally {
+      await db.workspaceBuiltinMcp.deleteMany({ where: { workspaceId: fixture.workspaceId } })
+      await turn.cleanup()
+    }
+  })
 
   it('admits the memory of the chat of its author while it is on (plan 84, ПР18)', async () => {
     const user = await db.user.create({

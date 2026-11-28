@@ -746,6 +746,9 @@ importers:
       '@repo/vault':
         specifier: workspace:*
         version: link:../../packages/vault
+      '@repo/vk':
+        specifier: workspace:*
+        version: link:../../packages/vk
       '@repo/yookassa':
         specifier: workspace:*
         version: link:../../packages/yookassa
@@ -1012,6 +1015,9 @@ importers:
       '@repo/vault':
         specifier: workspace:*
         version: link:../../packages/vault
+      '@repo/vk':
+        specifier: workspace:*
+        version: link:../../packages/vk
       express:
         specifier: 'catalog:'
         version: 5.2.1(supports-color@7.2.0)
@@ -1297,6 +1303,9 @@ importers:
       '@repo/vault':
         specifier: workspace:*
         version: link:../../packages/vault
+      '@repo/vk':
+        specifier: workspace:*
+        version: link:../../packages/vk
       '@repo/yookassa':
         specifier: workspace:*
         version: link:../../packages/yookassa
@@ -2543,6 +2552,37 @@ importers:
         version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
 
   packages/vault:
+    dependencies:
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
+      '@typescript/native':
+        specifier: 'catalog:'
+        version: typescript@7.0.2
+      eslint:
+        specifier: 'catalog:'
+        version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: '@typescript/typescript6@6.0.2'
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@26.6.2)(jiti@2.7.0))
+
+  packages/vk:
     dependencies:
       '@repo/domain':
         specifier: workspace:*

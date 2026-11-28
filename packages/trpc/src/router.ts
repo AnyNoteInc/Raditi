@@ -18,6 +18,7 @@ import { taskRouter } from './routers/task.ts'
 import { userRouter } from './routers/user.ts'
 import { workspaceEnvRouter } from './routers/workspace-env.ts'
 import { agentSkillsRouter } from './routers/agent-skills.ts'
+import { builtinMcpRouter } from './routers/builtin-mcp.ts'
 import { accountSkillsRouter } from './routers/account-skills.ts'
 import { createCallerFactory, router } from './trpc.ts'
 
@@ -52,6 +53,7 @@ export const appRouter = router({
   workspaceEnv: workspaceEnvRouter,
   // «Настройки → Подключения»: the MCP servers of the workspace's agent (plan 81; plan 83, БП11).
   agentSkills: agentSkillsRouter,
+  builtinMcp: builtinMcpRouter,
   // «Настройки → Навыки»: the skills of the user's account, folders with SKILL.md (plan 97).
   accountSkills: accountSkillsRouter,
   // «Запланированные задачи»: the scheduled tasks of the user (docs/plan/82-scheduled-tasks.md).

@@ -232,6 +232,8 @@ describe('the notices', () => {
       'artifact_comment',
       'artifact_agent_reply',
       'artifact_changed',
+      // A new comment in a VK community (plan 99, slice 99.6).
+      'vk_comment',
     ])
     expect(
       chatNotifyJobSchema.safeParse({ taskId: runId, kind: 'paused', attempt: 1, turnNo: 0 })
@@ -268,6 +270,7 @@ describe('the notices', () => {
       'Новый комментарий в артефакте',
       'Агент ответил на заметку',
       'Ваш артефакт изменили',
+      'Новый комментарий в группе ВКонтакте',
     ])
     expect(scheduledNoticeTitle('limit', 'credits')).toBe(
       'Запланированная задача остановилась: закончились кредиты',

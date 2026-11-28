@@ -38,6 +38,8 @@
     "./account-skills": "./src/account-skills/index.ts",
     "./memory": "./src/memory/index.ts",
     "./repo": "./src/repo/index.ts",
+    "./vk": "./src/vk/index.ts",
+    "./builtin-mcp": "./src/builtin-mcp/index.ts",
     "./artifacts": "./src/artifacts/index.ts"
   },
   "scripts": {

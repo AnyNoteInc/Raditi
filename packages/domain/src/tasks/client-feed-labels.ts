@@ -30,6 +30,10 @@ import {
   type RepoActionKind,
   type RepoActionState,
 } from '../repo/feed.ts'
+import { vkRefusalText } from '../vk/errors.ts'
+import type { VkActionKind, VkActionState } from '../vk/feed.ts'
+
+export type { VkActionKind, VkActionState }
 
 /**
  * What the platform itself says in a dialog — the catalogue the feed design calls
@@ -380,6 +384,50 @@ export function feedRepoProposalText(row: { title: string }): string {
 export function feedRepoActionText(row: { kind: RepoActionKind; state: RepoActionState }): string {
   // The row has no adapter to write the number with (`!37`, `#37`, ПР3): the card links it.
   return `${repoActionText(row, null)}.`
+}
+
+/** The card of a VK proposal (`feed.vk_proposal`, docs/plan/99-vk-community.md, §3.3). */
+export function feedVkProposalText(row: {
+  kind: VkActionKind
+  community: string
+  publishAt?: string | null
+}): string {
+  if (row.kind === 'reply')
+    return `Агент подготовил ответ на комментарий в группе «${row.community}»`
+  return row.publishAt
+    ? `Агент подготовил отложенную запись для группы «${row.community}»`
+    : `Агент подготовил запись для группы «${row.community}»`
+}
+
+const vkActionDone: Readonly<Record<VkActionKind, string>> = Object.freeze({
+  post: 'Запись опубликована во ВКонтакте',
+  reply: 'Ответ опубликован во ВКонтакте',
+})
+
+/** What the button of a VK card did (`feed.vk_action`). */
+export function feedVkActionText(row: {
+  kind: VkActionKind
+  state: VkActionState
+  publishAt?: string | undefined
+  error?: string | undefined
+}): string {
+  switch (row.state) {
+    case 'queued':
+    case 'running':
+      return 'Публикуем во ВКонтакте…'
+    case 'done':
+      return row.publishAt ? 'Запись запланирована во ВКонтакте.' : `${vkActionDone[row.kind]}.`
+    case 'lost':
+      return row.kind === 'reply'
+        ? 'Не знаем, вышел ли ответ: ВКонтакте не ответил. Проверьте комментарии, прежде чем отвечать снова.'
+        : 'Не знаем, вышла ли запись: ВКонтакте не ответил. Проверьте группу, прежде чем публиковать снова.'
+    case 'failed': {
+      const reason = row.error === undefined ? null : vkRefusalText(row.error)
+      return reason === null
+        ? 'Не получилось опубликовать во ВКонтакте.'
+        : `Не опубликовано: ${reason}.`
+    }
+  }
 }
 
 /**

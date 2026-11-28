@@ -67,6 +67,13 @@ import {
   looksLikeSecret,
 } from './client-feed-text.ts'
 import { chatProjectSchema } from '../projects/schemas.ts'
+import {
+  feedVkActionPayloadSchema,
+  feedVkProposalPayloadSchema,
+  vkActionKinds,
+  vkActionStates,
+} from '../vk/feed.ts'
+import { vkLimits } from '../vk/limits.ts'
 import { PLAIN_CHAT, taskRequirementsSchema } from './task-requirements.ts'
 import { taskStatuses } from './task-status.ts'
 
@@ -141,6 +148,10 @@ export const feedEventTypes = [
   // turn, and one it could not (docs/plan/82-scheduled-tasks.md, Зп33, Зп35).
   'feed.schedule_change',
   'feed.schedule_left',
+  // The agent proposes a post or a reply in a VK community, and what the client's button did
+  // (docs/plan/99-vk-community.md, §3.3).
+  'feed.vk_proposal',
+  'feed.vk_action',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -1008,6 +1019,8 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.repo_action': feedRepoActionPayloadSchema,
   'feed.schedule_change': feedScheduleChangePayloadSchema,
   'feed.schedule_left': feedScheduleLeftPayloadSchema,
+  'feed.vk_proposal': feedVkProposalPayloadSchema,
+  'feed.vk_action': feedVkActionPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -1058,6 +1071,8 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.repo_action', feedRepoActionPayloadSchema),
       row('feed.schedule_change', feedScheduleChangePayloadSchema),
       row('feed.schedule_left', feedScheduleLeftPayloadSchema),
+      row('feed.vk_proposal', feedVkProposalPayloadSchema),
+      row('feed.vk_action', feedVkActionPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1513,6 +1528,41 @@ const readScheduleLeft = z.object({
   reason: known(scheduleLeftReasons, 'failed' as const),
 })
 
+// The card of a VK proposal (docs/plan/99-vk-community.md, §3.3): its text and where it goes.
+const readVkProposal = z.object({
+  kind: z.enum(vkActionKinds),
+  reservedId: z.uuid(),
+  communityId: z.uuid(),
+  community: shownText(200),
+  text: z.string().min(1).max(vkLimits.postChars),
+  publishAt: z.iso.datetime({ offset: true }).nullable().optional().catch(null),
+  postId: z.number().int().positive().optional().catch(undefined),
+  commentId: z.number().int().positive().optional().catch(undefined),
+  commentUrl: z
+    .url({ protocol: /^https$/ })
+    .max(500)
+    .optional()
+    .catch(undefined),
+})
+// What the button did: a state this code does not know is not shown as done.
+const readVkAction = z.object({
+  actionId: z.uuid(),
+  reservedId: z.uuid(),
+  kind: z.enum(vkActionKinds),
+  state: known(vkActionStates, 'failed' as const),
+  url: z
+    .url({ protocol: /^https$/ })
+    .max(500)
+    .optional()
+    .catch(undefined),
+  publishAt: z.iso.datetime({ offset: true }).optional().catch(undefined),
+  error: z
+    .string()
+    .regex(/^[A-Z][A-Z0-9_]{0,39}$/)
+    .optional()
+    .catch(undefined),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1585,6 +1635,8 @@ export type FeedEvent =
   | ({ type: 'feed.repo_action' } & z.infer<typeof readRepoAction>)
   | ({ type: 'feed.schedule_change' } & z.infer<typeof readScheduleChange>)
   | ({ type: 'feed.schedule_left' } & z.infer<typeof readScheduleLeft>)
+  | ({ type: 'feed.vk_proposal' } & z.infer<typeof readVkProposal>)
+  | ({ type: 'feed.vk_action' } & z.infer<typeof readVkAction>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1782,6 +1834,14 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   'feed.schedule_left': {
     1: (payload) =>
       readWith(readScheduleLeft, payload, (data) => ({ type: 'feed.schedule_left', ...data })),
+  },
+  'feed.vk_proposal': {
+    1: (payload) =>
+      readWith(readVkProposal, payload, (data) => ({ type: 'feed.vk_proposal', ...data })),
+  },
+  'feed.vk_action': {
+    1: (payload) =>
+      readWith(readVkAction, payload, (data) => ({ type: 'feed.vk_action', ...data })),
   },
 }
 

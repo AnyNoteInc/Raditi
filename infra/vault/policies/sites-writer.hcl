@@ -38,3 +38,17 @@ path "kv/metadata/workspaces/+/git/*" {
     "max_versions" = ["1"]
   }
 }
+
+# The keys of the VK communities of a workspace (docs/plan/99-vk-community.md, §3.1): written by web
+# after its check against VK, never read back; a disconnected community is overwritten by a version
+# without a value.
+path "kv/data/workspaces/+/vk/*" {
+  capabilities = ["create", "update"]
+}
+
+path "kv/metadata/workspaces/+/vk/*" {
+  capabilities = ["create", "update", "read"]
+  allowed_parameters = {
+    "max_versions" = ["1"]
+  }
+}

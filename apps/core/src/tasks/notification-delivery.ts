@@ -5,6 +5,7 @@ import {
   isPushEndpoint,
   notificationPushPayloadSchema,
   urgentNotificationKinds,
+  VK_COMMENT_NOTICE,
   withTimeout,
   type NotificationKind,
 } from '@repo/domain'
@@ -64,6 +65,8 @@ export interface Notice {
   schedule: { id: string; runId: string | null } | null
   /** The artifact it is of (docs/plan/88-artifacts.md, Ар54), and who did it; absent — none. */
   artifact?: { id: string; actorUserId: string | null } | null
+  /** The VK community a new comment came in (docs/plan/99-vk-community.md, 99.6); absent — none. */
+  vk?: { communityId: string } | null
   /** The path of the cabinet it opens: the chat, or the page of the task. */
   path: string
   /** Whether a letter may tell of it at all (Зп39). */
@@ -122,6 +125,7 @@ export class NotificationDelivery {
           scheduledRunId: notice.schedule?.runId ?? null,
           artifactId: notice.artifact?.id ?? null,
           actorUserId: notice.artifact?.actorUserId ?? null,
+          vkCommunityId: notice.vk?.communityId ?? null,
         },
       ],
       skipDuplicates: true,
@@ -180,11 +184,13 @@ export class NotificationDelivery {
         kind: notice.kind,
         scheduled: notice.schedule !== null,
         // A newer run of the task replaces the notice of the one before it (Зп40).
-        tag: notice.artifact
-          ? `artifact:${notice.artifact.id}`
-          : notice.schedule
-            ? `schedule:${notice.schedule.id}`
-            : `chat:${notice.chat?.taskId}`,
+        tag: notice.vk
+          ? `vk:${notice.vk.communityId}`
+          : notice.artifact
+            ? `artifact:${notice.artifact.id}`
+            : notice.schedule
+              ? `schedule:${notice.schedule.id}`
+              : `chat:${notice.chat?.taskId}`,
         // When the row was written: the worker never lets a push that arrives late replace a newer
         // notice under the tag. Within a tick a missed run is told before the start's refusal.
         at: now.getTime(),
@@ -246,6 +252,8 @@ export class NotificationDelivery {
   /** A letter with a link only (ВВ9): at most one in LETTER_PAUSE_MS per chat or scheduled task. */
   async #letter(notice: Notice, id: string, to: string, now: Date): Promise<boolean> {
     const { db, appUrl } = this.deps
+    // A notice of a VK comment goes by push and the bot alone (plan 99, 99.6): no letter of it.
+    if (notice.vk) return false
     const recent = await db.chatNotification.count({
       where: {
         userId: notice.userId,
@@ -273,7 +281,7 @@ export class NotificationDelivery {
       })
       return true
     }
-    if (isArtifactNoticeKind(notice.kind)) return false
+    if (isArtifactNoticeKind(notice.kind) || notice.kind === VK_COMMENT_NOTICE) return false
     const chatKind = notice.kind
     await db.$transaction(async (tx) => {
       await enqueueNotification(

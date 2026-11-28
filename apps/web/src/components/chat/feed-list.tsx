@@ -84,6 +84,7 @@ import { FeedFile } from './feed-file'
 import { legacyRowText, type LegacyRow } from './feed-legacy'
 import { FeedMemoryChange } from './feed-memory'
 import { FeedRepoAction, FeedRepoChanges, FeedRepoProposal } from './feed-repo'
+import { FeedVkAction, FeedVkProposal, VkPressed, vkPressedOf } from './feed-vk'
 import { FeedPage, FeedPageChange, FeedPageWarnings } from './feed-page'
 import { FeedScheduleChange, FeedScheduleLeft } from './feed-schedule'
 import { FeedScreenshot } from './feed-screenshot'
@@ -1081,6 +1082,12 @@ const RowView = memo(function RowView({
       return <FeedRepoAction kind={row.kind} state={row.state} url={row.url} error={row.error} />
     case 'feed.repo_left':
       return <Note text={feedRepoLeftText(row)} />
+    // A post or a reply the agent prepared for VK, and what the press did
+    // (docs/plan/99-vk-community.md, §3.3): it reaches VK only by the button of the card.
+    case 'feed.vk_proposal':
+      return <FeedVkProposal row={row} />
+    case 'feed.vk_action':
+      return <FeedVkAction row={row} />
     case 'feed.rewind':
       return (
         <>
@@ -1150,89 +1157,96 @@ export const FeedList = memo(function FeedList({
   )
   // «Включить в этом браузере» once in the chat, on its newest card of a task that stays (Зп36).
   const pushRowId = useMemo(() => schedulePushRowId(rows), [rows])
+  // The cards of VK a press has reached already (docs/plan/99-vk-community.md, §3.3).
+  const vkPressed = useMemo(
+    () => vkPressedOf(rows as readonly { type: string; reservedId?: unknown }[]),
+    [rows],
+  )
   return (
-    <DocRevisions.Provider value={revisions}>
-      <Box
-        component="ol"
-        aria-label="Сообщения чата"
-        sx={{
-          m: 0,
-          p: 0,
-          listStyle: 'none',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: { xs: 3, md: 4 },
-        }}
-      >
-        {entries.map((entry) => (
-          <Box
-            component="li"
-            key={entry.key}
-            // Where the dialog keeps its place when the area around the rows changes (docs/plan/59,
-            // И19): the row at the top of the screen stays there.
-            data-feed-row=""
-            sx={{
-              display: 'flex',
-              flexDirection: 'column',
-              minWidth: 0,
-              ...(initial.has(entry.key) ? {} : riseIn),
-            }}
-          >
-            {entry.kind === 'documents' ? (
-              <FeedDocuments
-                fileIds={entry.fileIds}
-                documents={documents}
-                {...(actions.onOpenDocument ? { onOpen: actions.onOpenDocument } : {})}
-              />
-            ) : entry.kind === 'agentDocs' ? (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-                {entry.docIds.map((docId) => (
-                  <FeedDoc
-                    key={docId}
-                    docId={docId}
-                    open={actions.shownAgentDocument === docId}
-                    {...(actions.onOpenAgentDocument
-                      ? { onOpen: actions.onOpenAgentDocument }
-                      : {})}
-                  />
-                ))}
-              </Box>
-            ) : entry.kind === 'agentArtifacts' ? (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-                {entry.artifacts.map((artifact) => (
-                  <FeedArtifact
-                    key={artifact.id}
-                    artifactId={artifact.id}
-                    kind={artifact.kind}
-                    open={actions.shownAgentDocument === artifact.id}
-                    {...(actions.taskId ? { taskId: actions.taskId } : {})}
-                    {...(actions.onOpenAgentDocument
-                      ? { onOpen: actions.onOpenAgentDocument }
-                      : {})}
-                  />
-                ))}
-              </Box>
-            ) : entry.kind === 'worked' ? (
-              <Worked
-                seconds={entry.seconds}
-                activity={activityOf ? () => activityOf(entry.turn) : undefined}
-                details={details}
-              />
-            ) : (
-              <RowView
-                row={entry.row}
-                now={now}
-                openQuestionId={openQuestionId}
-                actions={actions}
-                filesOf={filesOf}
-                editable={entry.row.id === editableId}
-                pushHere={entry.row.id === pushRowId}
-              />
-            )}
-          </Box>
-        ))}
-      </Box>
-    </DocRevisions.Provider>
+    <VkPressed.Provider value={vkPressed}>
+      <DocRevisions.Provider value={revisions}>
+        <Box
+          component="ol"
+          aria-label="Сообщения чата"
+          sx={{
+            m: 0,
+            p: 0,
+            listStyle: 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: { xs: 3, md: 4 },
+          }}
+        >
+          {entries.map((entry) => (
+            <Box
+              component="li"
+              key={entry.key}
+              // Where the dialog keeps its place when the area around the rows changes (docs/plan/59,
+              // И19): the row at the top of the screen stays there.
+              data-feed-row=""
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                minWidth: 0,
+                ...(initial.has(entry.key) ? {} : riseIn),
+              }}
+            >
+              {entry.kind === 'documents' ? (
+                <FeedDocuments
+                  fileIds={entry.fileIds}
+                  documents={documents}
+                  {...(actions.onOpenDocument ? { onOpen: actions.onOpenDocument } : {})}
+                />
+              ) : entry.kind === 'agentDocs' ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                  {entry.docIds.map((docId) => (
+                    <FeedDoc
+                      key={docId}
+                      docId={docId}
+                      open={actions.shownAgentDocument === docId}
+                      {...(actions.onOpenAgentDocument
+                        ? { onOpen: actions.onOpenAgentDocument }
+                        : {})}
+                    />
+                  ))}
+                </Box>
+              ) : entry.kind === 'agentArtifacts' ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                  {entry.artifacts.map((artifact) => (
+                    <FeedArtifact
+                      key={artifact.id}
+                      artifactId={artifact.id}
+                      kind={artifact.kind}
+                      open={actions.shownAgentDocument === artifact.id}
+                      {...(actions.taskId ? { taskId: actions.taskId } : {})}
+                      {...(actions.onOpenAgentDocument
+                        ? { onOpen: actions.onOpenAgentDocument }
+                        : {})}
+                    />
+                  ))}
+                </Box>
+              ) : entry.kind === 'worked' ? (
+                <Worked
+                  seconds={entry.seconds}
+                  activity={activityOf ? () => activityOf(entry.turn) : undefined}
+                  details={details}
+                />
+              ) : (
+                <RowView
+                  row={entry.row}
+                  now={now}
+                  openQuestionId={openQuestionId}
+                  actions={actions}
+                  filesOf={filesOf}
+                  editable={entry.row.id === editableId}
+                  pushHere={entry.row.id === pushRowId}
+                />
+              )}
+            </Box>
+          ))}
+        </Box>
+      </DocRevisions.Provider>
+    </VkPressed.Provider>
   )
 })
 

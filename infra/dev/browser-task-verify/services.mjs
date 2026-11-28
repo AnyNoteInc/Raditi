@@ -243,7 +243,7 @@ export async function startOpenbao(rt, names, port) {
   await request('sys/auth/approle', { method: 'POST', body: { type: 'approle' } })
   const roles = {}
   for (const [name, policies] of [
-    ['core', ['core-turns', 'core-transit', 'core-workspace-env', 'core-git']],
+    ['core', ['core-turns', 'core-transit', 'core-workspace-env', 'core-git', 'core-vk']],
     ['mcp', ['mcp-content']],
     ['llm', ['llm-subscriptions']],
     // As in production: web makes the Transit key of a workspace before its first task.

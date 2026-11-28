@@ -20,3 +20,9 @@ path "kv/metadata/content-masks/*" {
 path "subs/data/search/yandex" {
   capabilities = ["read"]
 }
+
+# The service key of Raditi's VK app (docs/plan/99-vk-community.md, ВК4): reads the open walls of
+# the clients' communities; put beside the key of the web search by the operator command alone.
+path "subs/data/vk/service" {
+  capabilities = ["read"]
+}

@@ -39,6 +39,7 @@
     "@repo/trpc": "workspace:*",
     "@repo/ui": "workspace:*",
     "@repo/vault": "workspace:*",
+    "@repo/vk": "workspace:*",
     "@repo/yookassa": "workspace:*",
     "@tanstack/react-query": "catalog:",
     "@tiptap/core": "catalog:",

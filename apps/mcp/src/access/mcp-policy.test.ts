@@ -617,3 +617,63 @@ describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)',
       expect(mcpCallNeedsClient(body), JSON.stringify(body)).toBe(false)
   })
 })
+
+describe('the built-in server «ВКонтакте» (plan 99, ВК6, ВК15)', () => {
+  const access: McpTurnAccess = {
+    keyId: '01960000-0000-7000-8000-000000000001',
+    taskId: '01960000-0000-7000-8000-000000000002',
+    workspaceId: '01960000-0000-7000-8000-000000000003',
+    sessionId: 'synthetic',
+    turn: 1,
+    firstEpoch: 1,
+    epoch: 1,
+    requirements: { repository: false, browser: false },
+  }
+  const base = { allowedHosts: ['mcp'], allowLocalOrigin: false }
+  const security: McpSecurity = { ...base, vkTools: true }
+  const communityId = '01960000-0000-7000-8000-0000000000aa'
+  const call = (name: string, args?: unknown) => ({
+    jsonrpc: '2.0',
+    id: 9,
+    method: 'tools/call',
+    params: { name, ...(args === undefined ? {} : { arguments: args }) },
+  })
+
+  it('is offered only while the workspace has it on, a pass without its client too', () => {
+    expect(mcpSecurityOf(testMcpConfig()).vkTools).toBe(true)
+    expect(mcpToolFamiliesOf(access, security)).toEqual([])
+    expect(mcpToolFamiliesOf({ ...access, builtinMcp: [] }, security)).toEqual([])
+    expect(mcpToolFamiliesOf({ ...access, builtinMcp: ['vk'] }, security)).toEqual(['vk'])
+    // A proposal publishes nothing: the card waits for the client (ВК6).
+    expect(
+      mcpToolFamiliesOf({ ...access, builtinMcp: ['vk'], unattended: true }, security),
+    ).toEqual(['vk'])
+    expect(mcpToolFamiliesOf({ ...access, builtinMcp: ['vk'] }, base)).toEqual([])
+  })
+
+  it('calls its tools only in the family, by the arguments of the domain', () => {
+    const calls = [
+      call('vk_communities'),
+      call('vk_communities', {}),
+      call('vk_posts', { communityId, count: 5 }),
+      call('vk_comments', { communityId, postId: 10 }),
+      call('vk_stats', { communityId, days: 30 }),
+      call('vk_post_propose', { communityId, text: 'Новость' }),
+      call('vk_reply_propose', { communityId, postId: 10, commentId: 3, text: 'Спасибо!' }),
+    ]
+    for (const body of calls) {
+      expect(mcpBodyAllowed(body, ['vk'])).toBe(true)
+      // Off: not even called.
+      expect(mcpBodyAllowed(body, [])).toBe(false)
+    }
+    for (const body of [
+      call('vk_posts', { communityId: '-123' }),
+      call('vk_post_propose', { communityId, text: 'x', groupId: 123 }),
+      call('vk_post_propose', { communityId, text: '' }),
+      call('vk_reply_propose', { communityId, postId: 10, text: 'x' }),
+      call('vk_stats', { communityId, days: 365 }),
+      call('vk_publish', { communityId, text: 'x' }),
+    ])
+      expect(mcpBodyAllowed(body, ['vk'])).toBe(false)
+  })
+})
