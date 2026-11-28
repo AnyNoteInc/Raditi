@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from '@repo/db'
 import {
+  platformDriverIds,
   withTimeout,
   type SecretStore,
   type TurnCredentialRef,
@@ -141,6 +142,9 @@ export class CredentialSweeper {
         k.first_epoch AS "firstEpoch", k.revoke_requested_at AS "revokeRequestedAt",
         k.valid_until <= clock_timestamp() AS "expired"
       FROM llm_keys k WHERE k.revoked_at IS NULL
+        -- A quick edit's key has no Vault record and no turn: its own sweeper closes it
+        -- (docs/plan/98-quick-edits.md, БПр4).
+        AND k.driver_id <> ALL(${[...platformDriverIds]}::text[])
         AND (k.revoke_requested_at IS NOT NULL OR k.valid_until <= clock_timestamp()
           -- The owner's revoke may have failed before its durable marker: a finished turn
           -- leaves nobody else to close the key before valid_until.

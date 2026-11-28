@@ -28,6 +28,8 @@ export async function classProfile<Backend extends string>(
       modelClass,
       // The profile that sees images is the helper's, never the main model (plan 88, Ар32).
       vision: false,
+      // A profile of quick edits is never a turn's (docs/plan/98-quick-edits.md, БПр3).
+      quick: false,
       providerModelId: { not: null },
       provider: { enabled: true, kind: 'subscription', slug: { in: [...backends] } },
     },

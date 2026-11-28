@@ -49,6 +49,8 @@ const ownBillableChats = (userId: string) => ({
   ...accessibleTasks(userId),
   createdById: userId,
   billable: true,
+  // Notes go to a chat of the agent, never to «Быстрые правки» (docs/plan/98-quick-edits.md).
+  kind: 'chat' as const,
 })
 
 /**

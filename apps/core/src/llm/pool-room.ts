@@ -4,6 +4,7 @@ import {
   poolWaitIsLimitsOut,
   type LlmBackend,
   type PoolAccountSnapshot,
+  platformDriverIds,
 } from '@repo/domain'
 import { decodeLimitWindows } from '@repo/turn-keys'
 
@@ -65,7 +66,9 @@ export async function poolHasRoom(
         WHERE k.subscription_account_id = a.id AND k.revoke_requested_at IS NULL
           AND k.revoked_at IS NULL AND k.expires_at > clock_timestamp()) AS "activeTurns"
     FROM subscription_accounts a JOIN llm_providers p ON p.id = a.provider_id
-    WHERE p.slug = ${backend.id} AND p.kind = 'subscription'`
+    WHERE p.slug = ${backend.id} AND p.kind = 'subscription'
+      -- An account of quick edits never serves a turn (docs/plan/98-quick-edits.md, БПр16).
+      AND a.driver_id <> ALL(${[...platformDriverIds]}::text[])`
   if (!accounts.some((account) => account.providerEnabled)) return false
   // No account that could serve a turn at all: the backend is no way out either.
   if (!accounts.some((account) => account.enabled && account.status === 'active')) return false

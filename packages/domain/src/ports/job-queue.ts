@@ -24,6 +24,8 @@ export const queueNames = [
   'artifacts',
   // The publications in VK communities the client pressed (docs/plan/99-vk-community.md, §3.3).
   'vk',
+  // Quick edits of artifact notes: one model call of core each (docs/plan/98-quick-edits.md).
+  'artifact-edits',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

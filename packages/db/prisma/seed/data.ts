@@ -1,6 +1,6 @@
 // Reference data for the idempotent seed (prisma/seed.ts). Pure: no I/O, no Prisma runtime.
 // Money and prices are decimal strings, never JS numbers (spec §16).
-import type { AgentCapabilities, AgentDriverId } from '@repo/domain'
+import { platformDriverIds, type AgentCapabilities, type AgentDriverId } from '@repo/domain'
 
 import type { ModelClass, PlanKind } from '../../src/generated/prisma/enums.ts'
 
@@ -199,6 +199,23 @@ export const agentDriverSeeds: readonly AgentDriverSeed[] = [
   },
 ]
 
+/**
+ * Drivers that are not shells: the keys core issues for its own model calls of a quick edit of an
+ * artifact (docs/plan/98-quick-edits.md, БПр1, БПр4). An account of such a driver exists only on
+ * `zai-api`, and the gateway admits its calls only there. Off until the operator turns it on.
+ */
+export interface PlatformDriverSeed {
+  id: (typeof platformDriverIds)[number]
+  image: 'none'
+  enabled: false
+}
+
+export const platformDriverSeeds: readonly PlatformDriverSeed[] = platformDriverIds.map((id) => ({
+  id,
+  image: 'none',
+  enabled: false,
+}))
+
 // ─── Subscription catalogue (spec §9, §17; p3-design §15, B6) ──────────────────
 
 /** Defaults apply only to missing rows; all existing catalogue settings are operator-owned. */
@@ -228,6 +245,8 @@ export interface LlmModelSeed {
   contextTokens: number
   /** The profile that sees images (plan 88, Ар32): never the main model of its class. */
   vision: boolean
+  /** The profile of quick edits (plan 98, БПр3): never a turn's. */
+  quick?: true
   enabled: false
 }
 
@@ -265,6 +284,24 @@ export const llmModelSeeds: readonly LlmModelSeed[] = (['zai-coding', 'zai-api']
       vision: true,
       enabled: false,
     },
+    // A quick edit of an artifact (docs/plan/98-quick-edits.md, БПр3): one call of core at the level
+    // `low` with a small reserve, only where the terms allow the platform's own calls — the API.
+    ...(providerSlug === 'zai-api'
+      ? [
+          {
+            providerSlug,
+            slug: 'glm-5.3-quick',
+            name: 'GLM-5.3 · быстрая правка',
+            providerModelId: 'glm-5.3',
+            modelClass: 'light',
+            reserveOutputTokens: 2_000,
+            contextTokens: 1_000_000,
+            vision: false,
+            quick: true,
+            enabled: false,
+          } satisfies LlmModelSeed,
+        ]
+      : []),
   ],
 )
 
@@ -276,6 +313,7 @@ export interface ReferenceData {
   plans: readonly PlanSeed[]
   pricingRules: readonly PricingRuleSeed[]
   agentDrivers: readonly AgentDriverSeed[]
+  platformDrivers: readonly PlatformDriverSeed[]
   llmProviders: readonly LlmProviderSeed[]
   llmModels: readonly LlmModelSeed[]
 }
@@ -284,6 +322,7 @@ export const referenceData: ReferenceData = {
   plans: planSeeds,
   pricingRules: pricingRuleSeeds,
   agentDrivers: agentDriverSeeds,
+  platformDrivers: platformDriverSeeds,
   llmProviders: llmProviderSeeds,
   llmModels: llmModelSeeds,
 }

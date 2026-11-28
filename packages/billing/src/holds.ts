@@ -1521,7 +1521,8 @@ async function firstCallReserve(
   now: Date,
 ): Promise<Decimal> {
   const models = await tx.llmModel.findMany({
-    where: { enabled: true, modelClass },
+    // A turn's first call: profiles of quick edits never serve one (plan 98, БПр3).
+    where: { enabled: true, modelClass, quick: false },
     select: {
       reserveOutputTokens: true,
       prices: {

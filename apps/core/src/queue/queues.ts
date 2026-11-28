@@ -17,6 +17,9 @@ const lifecycleJobs: DefaultJobOptions = {
 /** Default job options per queue; `age` is in seconds. */
 export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   'agent-turns': lifecycleJobs,
+  // A quick edit of an artifact note (docs/plan/98-quick-edits.md): one try; a lost one is settled
+  // by the sweeper of quick edits, never tried again behind the client's back.
+  'artifact-edits': lifecycleJobs,
   // The passes of the renewal schedulers (apps/core/src/billing). A failed pass is
   // not retried: the next tick does the same work from the rows of the database.
   billing: lifecycleJobs,

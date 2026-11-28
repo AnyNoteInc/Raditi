@@ -12,6 +12,7 @@ import {
   orderKinds,
   orderStatuses,
   subscriptionStatuses,
+  taskKinds,
   taskStatuses,
   taskWaitingReasons,
   todoTurnStatuses,
@@ -19,8 +20,10 @@ import {
   turnExecutorKinds,
   turnResultSchema,
 } from '@repo/domain'
+import { quickEditStates } from '@repo/domain/artifacts'
 import {
   AgentSkillAuthKind,
+  ArtifactQuickEditState,
   AgentSkillAuthState,
   AttachmentStatus,
   BillingUnit,
@@ -32,6 +35,7 @@ import {
   OrderKind,
   OrderStatus,
   SubscriptionStatus,
+  TaskKind,
   TaskStatus,
   TaskWaiting,
   TurnAssignmentOutcome,
@@ -42,6 +46,11 @@ import {
 describe('database enums match the domain', () => {
   it('TaskStatus has exactly the statuses of spec §7', () => {
     expect(Object.values(TaskStatus)).toEqual([...taskStatuses])
+  })
+
+  it('TaskKind and ArtifactQuickEditState match quick edits (plan 98)', () => {
+    expect(Object.values(TaskKind)).toEqual([...taskKinds])
+    expect(Object.values(ArtifactQuickEditState)).toEqual([...quickEditStates])
   })
 
   it('ConsentDocumentType has exactly the domain consent document types', () => {

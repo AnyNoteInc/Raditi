@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import {
   callSignalSchema,
   isDomainError,
+  llmClientOf,
   llmJsonLimits,
   parseLlmJson,
   refusalForSignal,
@@ -115,6 +116,16 @@ class Rejected extends Error {
     super(code)
   }
 }
+/**
+ * What the body policy reads of a key: a call of core's own (a quick edit) is also capped at the
+ * reserve of its profile, so a small reserve stays honest (docs/plan/98-quick-edits.md, БПр6); the
+ * reserve of a CLI's key is no cap (spec §17).
+ */
+const bodyContext = (key: GatewayKey): Parameters<LlmBackend['normalizeBody']>[2] =>
+  llmClientOf(key.driverId) === 'platform'
+    ? { ...key, maxOutputTokens: key.reserveOutputTokens }
+    : key
+
 const eventBytes = (event: SseEvent): Buffer =>
   Buffer.from(
     `event: ${event.event}\n${event.data
@@ -662,8 +673,10 @@ export class LlmGateway {
       key = await abortable(this.options.store.lookup(keyHash, source), controller.signal)
       if (!key) throw new Rejected(401, 'raditi_key')
       if (key.backendId !== selected.backend.id) throw new Rejected(403, 'raditi_backend')
+      // core's own calls (a quick edit, docs/plan/98-quick-edits.md, БПр6) by the key's driver.
+      const client = llmClientOf(key.driverId)
       try {
-        selected.backend.validateClientHeaders(headers)
+        selected.backend.validateClientHeaders(headers, client)
       } catch {
         throw new Rejected(403, 'raditi_client')
       }
@@ -696,7 +709,7 @@ export class LlmGateway {
         }
       let normalized
       try {
-        normalized = selected.backend.normalizeBody(selected.route, body, key)
+        normalized = selected.backend.normalizeBody(selected.route, body, bodyContext(key))
       } catch (error) {
         // Only a DomainError names a policy violation. Anything else is the gateway's own
         // failure (a crashed rule, an exhausted stack) and must not end the turn as 'policy'.
@@ -749,7 +762,7 @@ export class LlmGateway {
         if (!backend || !route) return false
         let body2
         try {
-          body2 = backend.normalizeBody(route, body, key)
+          body2 = backend.normalizeBody(route, body, bodyContext(key))
         } catch {
           return false
         }
@@ -869,7 +882,13 @@ export class LlmGateway {
         await this.#refuse(key, selected.backend, response, 'transient', 1000)
         return
       }
-      const target = selected.backend.upstream(selected.route, normalized, headers, credential)
+      const target = selected.backend.upstream(
+        selected.route,
+        normalized,
+        headers,
+        credential,
+        llmClientOf(key.driverId),
+      )
       meter = selected.backend.usageMeter()
       providerMayCharge = true
       watchUpstream()

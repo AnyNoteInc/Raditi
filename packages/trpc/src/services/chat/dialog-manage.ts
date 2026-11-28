@@ -14,7 +14,7 @@ import { modelClassPriced } from '@repo/billing'
 
 import { accessibleTask, lockTask, taskNotFound } from './access.ts'
 import { dialogFacts } from './dialog-facts.ts'
-import { underDialogLock, WRITE } from './dialog-lock.ts'
+import { quickTaskRefused, underDialogLock, WRITE } from './dialog-lock.ts'
 import {
   releaseInProgress,
   taskBusy,
@@ -162,6 +162,7 @@ export async function setDialogEffort(
   return db.$transaction(async (tx) => {
     const task = await lockTask(tx, visible.id)
     if (task === null) throw taskNotFound()
+    if (task.kind === 'quick_edits') throw quickTaskRefused()
     if (terminalTaskStatuses.includes(task.status)) throw taskFinished()
     if ((RELEASING as readonly string[]).includes(task.status)) throw releaseInProgress()
     if (!(WAITING as readonly string[]).includes(task.status)) throw taskBusy()
@@ -199,7 +200,10 @@ export async function removeDialog(
     // `lockTask` finds no row deleted meanwhile: a delete at the same time came first.
     const locked = await lockTask(tx, task.id)
     if (locked === null) return { removed: true as const }
-    if (!terminalTaskStatuses.includes(locked.status)) {
+    // «Быстрые правки» are never stopped by the engine of turns: busy with an edit — refused;
+    // waiting — deleted as they are, a charge put off still charged by the sweep (plan 98, БПр3).
+    if (locked.kind === 'quick_edits' && locked.status !== 'awaiting_user') throw quickTaskRefused()
+    if (locked.kind === 'chat' && !terminalTaskStatuses.includes(locked.status)) {
       const facts = await dialogFacts(tx, locked, input.userId)
       await stopDialog(tx, locked, facts, {
         userId: input.userId,

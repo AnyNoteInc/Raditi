@@ -1,6 +1,12 @@
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { insertFeedEvent, type Prisma, type PrismaClient } from '@repo/db'
-import { conflict, type AppEnv, type FeedRequestPayload, type TaskStatus } from '@repo/domain'
+import {
+  conflict,
+  DomainError,
+  type AppEnv,
+  type FeedRequestPayload,
+  type TaskStatus,
+} from '@repo/domain'
 
 import { accessibleTask, lockTask, taskNotFound, type LockedTask } from './access.ts'
 
@@ -46,9 +52,16 @@ export async function underDialogLock<T>(
     await beforeLock?.(tx)
     const task = await lockTask(tx, visible.id)
     if (task === null) throw taskNotFound()
+    // The quick task takes no words, commands or turns: a turn of OpenCode there would start a
+    // chain of snapshots the next quick edit breaks (docs/plan/98-quick-edits.md, БПр3).
+    if (task.kind === 'quick_edits') throw quickTaskRefused()
     return act(tx, task)
   }, WRITE)
 }
+
+/** A dialog procedure on the service task «Быстрые правки». */
+export const quickTaskRefused = (): DomainError =>
+  new DomainError('QUICK_TASK_READ_ONLY', 'The quick edits task takes no messages', 409)
 
 /** Writes a `feed.request` and returns its id, the cursor of the feed. */
 export async function writeRequest(

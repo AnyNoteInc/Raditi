@@ -4,6 +4,7 @@ import { DatabaseModule } from '@repo/service-runtime'
 import { BillingModule } from './billing/billing.module.ts'
 import { GitModule } from './git/git.module.ts'
 import { VkModule } from './vk/vk.module.ts'
+import { QuickEditsModule } from './artifact-edits/quick-edits.module.ts'
 import { ArtifactExportsModule } from './artifact-exports/artifact-exports.module.ts'
 import { LeadsModule } from './leads/leads.module.ts'
 import { TelegramModule } from './telegram/telegram.module.ts'
@@ -70,6 +71,8 @@ export class AppModule {
         ArtifactExportsModule,
         // The publications in VK communities the client pressed (docs/plan/99-vk-community.md).
         VkModule,
+        // Quick edits of artifact notes, one model call each (docs/plan/98-quick-edits.md).
+        ...(background ? [QuickEditsModule] : []),
         // The signals of chats to the pages and the wake of the outbox, from the process that
         // runs the workers (spec §7; docs/plan/86-speedups.md).
         ...(background ? [TaskSignalsModule] : []),

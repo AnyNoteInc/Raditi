@@ -395,6 +395,10 @@ function DialogHead({
   )
 }
 
+/** What the journal «Быстрые правки» says in place of the field (БПр17). */
+const quickJournalText =
+  'Здесь собраны быстрые правки в артефактах. Чтобы поручить агенту новую работу, начните новый чат.'
+
 /**
  * The dialog itself. Its state comes from `task.feed`, read again and again while the page is
  * shown; whatever the client writes or presses is read back at once.
@@ -1311,7 +1315,25 @@ export function DialogView({
   const noSecrets = taskWayText.noSecrets
   let composer
   if (head === null) composer = null
-  else if (terminal) {
+  else if (head.task.quick) {
+    // «Быстрые правки» are a journal (docs/plan/98-quick-edits.md, БПр17): they take no words.
+    composer = (
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
+          {quickJournalText}
+        </Typography>
+        <Button
+          component={Link}
+          href={newChatHref(null)}
+          variant="outlined"
+          startIcon={<AppIcon name="plus" size={18} />}
+          sx={{ borderRadius: '999px' }}
+        >
+          {feedInputText.newDialog}
+        </Button>
+      </Box>
+    )
+  } else if (terminal) {
     // A closed dialog keeps the commands it still has behind the button of the field, which takes
     // no words (R9: commands work with the field closed).
     composer = (

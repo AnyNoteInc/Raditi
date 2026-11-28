@@ -49,6 +49,13 @@ vi.mock('@/trpc/client', () => {
       },
       addComment: mutation(async () => ({ id: 'note' })),
       resolveComment: mutation(resolveNote),
+      // «Исправить» (plan 98): present on a document, not pressed in these tests.
+      quickEdit: mutation(async () => ({ quickEditId: ARTIFACT })),
+      undoTurn: mutation(async () => ({ undone: 1, kept: 0 })),
+      quickEdits: {
+        queryKey: () => ['artifact', 'quickEdits'],
+        queryOptions: () => ({ queryKey: ['artifact', 'quickEdits'], queryFn: async () => [] }),
+      },
     },
   }
   return {

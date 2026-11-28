@@ -667,6 +667,8 @@ describe.skipIf(!databaseUrl)('switch to OpenCode: a database of the earlier she
       ['llm_models/zai-api/glm-5.3-flash-low', false],
       ['llm_models/zai-api/glm-5.3-heavy', false],
       ['llm_models/zai-api/glm-5.3-light', false],
+      // The profile of quick edits (plan 98), on the API only.
+      ['llm_models/zai-api/glm-5.3-quick', false],
       ['llm_models/zai-api/glm-5.3-standard', false],
       ['llm_models/zai-coding/glm-5.3-flash-low', false],
       ['llm_models/zai-coding/glm-5.3-heavy', false],
@@ -766,13 +768,15 @@ describe.skipIf(!databaseUrl)(
       const zero = Object.fromEntries(seededTables.map((table) => [table, 0]))
       const report = await seedReferenceData(db)
       expect(report.updated).toEqual(zero)
-      expect(report.created).toMatchObject({ agent_drivers: 1, llm_providers: 2, llm_models: 8 })
+      // The shell and the driver of quick edits; four profiles a backend and the quick one (plan 98).
+      expect(report.created).toMatchObject({ agent_drivers: 2, llm_providers: 2, llm_models: 9 })
       // The rows of a new database and the three history rows, which no seed run recreates,
       // completes or switches back on.
       const seeded = await flags(schema.db)
       expect(seeded).toEqual({
         'agent_drivers/codex': false,
         'agent_drivers/opencode': true,
+        'agent_drivers/quick': false,
         'llm_providers/openai-chatgpt': false,
         'llm_providers/zai-api': false,
         'llm_providers/zai-coding': false,
@@ -780,6 +784,7 @@ describe.skipIf(!databaseUrl)(
         'llm_models/zai-api/glm-5.3-flash-low': false,
         'llm_models/zai-api/glm-5.3-heavy': false,
         'llm_models/zai-api/glm-5.3-light': false,
+        'llm_models/zai-api/glm-5.3-quick': false,
         'llm_models/zai-api/glm-5.3-standard': false,
         'llm_models/zai-coding/glm-5.3-flash-low': false,
         'llm_models/zai-coding/glm-5.3-heavy': false,
@@ -815,11 +820,14 @@ describe.skipIf(!databaseUrl)('switch to OpenCode: a new database', () => {
     // shell or of its provider, and the catalogue of the new one waits for the operator.
     expect(seeded).toEqual({
       'agent_drivers/opencode': true,
+      // The driver of quick edits (plan 98): off until the operator turns it on.
+      'agent_drivers/quick': false,
       'llm_providers/zai-api': false,
       'llm_providers/zai-coding': false,
       'llm_models/zai-api/glm-5.3-flash-low': false,
       'llm_models/zai-api/glm-5.3-heavy': false,
       'llm_models/zai-api/glm-5.3-light': false,
+      'llm_models/zai-api/glm-5.3-quick': false,
       'llm_models/zai-api/glm-5.3-standard': false,
       'llm_models/zai-coding/glm-5.3-flash-low': false,
       'llm_models/zai-coding/glm-5.3-heavy': false,

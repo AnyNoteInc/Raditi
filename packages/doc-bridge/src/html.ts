@@ -1,4 +1,4 @@
-import { parse, parseFragment } from 'parse5'
+import { defaultTreeAdapter, parse, parseFragment, serialize } from 'parse5'
 import type { DefaultTreeAdapterMap } from 'parse5'
 
 // «Править текст» of a screen of a canvas on the server (docs/plan/88-artifacts.md, Ар9, §7.13; spike 1): the
@@ -366,3 +366,248 @@ export function artifactHtmlParts(html: string, partBytes: number): ArtifactHtml
 /** An SVG file as the one part of a screen of a canvas: centred on its page. */
 export const artifactSvgPart = (svg: string): string =>
   `<main style="display:flex;justify-content:center;padding:24px">${svg.replace(/^\s*<\?xml[^>]*\?>/, '')}</main>`
+
+// ---- A quick edit of an element of a canvas (docs/plan/98-quick-edits.md, stage 4) ----
+
+/** The source of one element of a block as stored: offsets in the source, never in the stamp. */
+export interface ArtifactElementSource {
+  id: string
+  start: number
+  end: number
+  source: string
+  tag: string
+  text: string
+}
+
+/**
+ * The source of the element a note anchors to: from its start tag to its end, cut from the stored
+ * HTML of block `block` (the stamp of ids is never in it). Null — no element by this id, two (a
+ * clone), one the parser implied or one inside raw text.
+ */
+export function artifactElementSource(input: {
+  block: string
+  html: string
+  id: string
+}): ArtifactElementSource | null {
+  if (!input.id.startsWith(`${input.block}.`)) return null
+  const splices = stampSplices(input.block, input.html)
+  const found = byId(applied(input.html, splices)).get(input.id) ?? []
+  if (found.length !== 1) return null
+  const { element, parents } = found[0]!
+  if (NOT_EDITABLE.has(element.tagName) || parents.some((p) => NOT_EDITABLE.has(p.tagName)))
+    return null
+  const at = element.sourceCodeLocation
+  if (!at?.startTag) return null
+  try {
+    const start = sourceOffset(splices, at.startOffset)
+    const end = sourceOffset(splices, at.endOffset)
+    if (end <= start) return null
+    return {
+      id: input.id,
+      start,
+      end,
+      source: input.html.slice(start, end),
+      tag: element.tagName,
+      text: visibleText(element),
+    }
+  } catch {
+    return null
+  }
+}
+
+export type ArtifactElementReplace =
+  | { ok: true; html: string }
+  | { ok: false; refusal: 'NO_ELEMENT' | 'CHANGED' | 'OVERLAP' | 'NOT_ONE_ELEMENT' | 'SPILLS' }
+
+/** The element whose source is exactly [start, end) in a parsed fragment, of this tag; or null. */
+function elementAt(root: Node, start: number, end: number, tag: string): Element | null {
+  let found: Element | null = null
+  walk(root, (node) => {
+    if (found || !isElement(node)) return
+    const at = node.sourceCodeLocation
+    if (at?.startTag && at.startOffset === start && at.endOffset === end && node.tagName === tag)
+      found = node
+  })
+  return found
+}
+
+/** The fragment serialized with each of these elements in place of a marker: the rest of it. */
+function restOf(root: DefaultTreeAdapterMap['documentFragment'], elements: readonly Element[]) {
+  elements.forEach((element, index) => {
+    const parent = element.parentNode
+    if (!parent) return
+    const marker = defaultTreeAdapter.createCommentNode(`quick-edit-${index}`)
+    marker.parentNode = parent
+    parent.childNodes[parent.childNodes.indexOf(element)] = marker
+  })
+  return serialize(root)
+}
+
+/**
+ * New sources of elements of block `block`, each in place of the source it was read as. Refused if
+ * an element is gone or its source is no longer the one read (the block changed meanwhile), two of
+ * them overlap, a new source does not parse back as exactly one element of the same tag in its
+ * place (`NOT_ONE_ELEMENT`), or anything outside the replaced elements reads otherwise than before
+ * (`SPILLS`): a tag left open, a stray end tag or an end tag of an outer element would change the
+ * rest of the block, and the parser would hide it.
+ */
+export function replaceArtifactElements(input: {
+  block: string
+  html: string
+  replacements: readonly { id: string; source: string; to: string }[]
+}): ArtifactElementReplace {
+  const found: { start: number; end: number; tag: string; to: string }[] = []
+  for (const replacement of input.replacements) {
+    const now = artifactElementSource({ block: input.block, html: input.html, id: replacement.id })
+    if (now === null) return { ok: false, refusal: 'NO_ELEMENT' }
+    if (now.source !== replacement.source) return { ok: false, refusal: 'CHANGED' }
+    found.push({ start: now.start, end: now.end, tag: now.tag, to: replacement.to })
+  }
+  const ordered = [...found].sort((a, b) => a.start - b.start)
+  for (let index = 1; index < ordered.length; index++)
+    if (ordered[index]!.start < ordered[index - 1]!.end) return { ok: false, refusal: 'OVERLAP' }
+  let html = ''
+  let read = 0
+  const placed: { start: number; end: number; tag: string }[] = []
+  for (const each of ordered) {
+    html += input.html.slice(read, each.start)
+    placed.push({ start: html.length, end: html.length + each.to.length, tag: each.tag })
+    html += each.to
+    read = each.end
+  }
+  html += input.html.slice(read)
+  const before = parseFragment(input.html, options)
+  const after = parseFragment(html, options)
+  const old = ordered.map((each) => elementAt(before, each.start, each.end, each.tag))
+  const now = placed.map((each) => elementAt(after, each.start, each.end, each.tag))
+  if (old.some((element) => element === null)) return { ok: false, refusal: 'NO_ELEMENT' }
+  if (now.some((element) => element === null)) return { ok: false, refusal: 'NOT_ONE_ELEMENT' }
+  if (restOf(before, old as Element[]) !== restOf(after, now as Element[]))
+    return { ok: false, refusal: 'SPILLS' }
+  return { ok: true, html }
+}
+
+// ---- What an edit of an element may not bring (docs/plan/98-quick-edits.md, stage 4) ----
+
+/** Elements a quick edit never adds: they run, load or send something. */
+const ACTIVE_ELEMENTS = new Set([
+  'script',
+  'style',
+  'iframe',
+  'frame',
+  'frameset',
+  'object',
+  'embed',
+  'applet',
+  'form',
+  'link',
+  'meta',
+  'base',
+  'svg',
+  'math',
+  'template',
+])
+/** Attributes that hold an address. */
+const URL_ATTRIBUTES = new Set([
+  'href',
+  'src',
+  'srcset',
+  'action',
+  'formaction',
+  'poster',
+  'data',
+  'background',
+  'cite',
+  'xlink:href',
+  'ping',
+])
+
+const addressKey = (value: string) =>
+  value
+    // What a browser drops before it reads a scheme: whitespace and control characters.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0020\u007f]+/gu, '')
+    .toLowerCase()
+    .replace(/^https?:/u, '')
+    .replace(/^\/\//u, '')
+    .replace(/^www\./u, '')
+    .replace(/\/+$/u, '')
+
+interface HtmlFacts {
+  active: string[]
+  events: number
+  addresses: Set<string>
+  schemes: string[]
+  styleUrls: number
+  passwords: number
+}
+
+function factsOf(source: string): HtmlFacts {
+  const facts: HtmlFacts = {
+    active: [],
+    events: 0,
+    addresses: new Set(),
+    schemes: [],
+    styleUrls: 0,
+    passwords: 0,
+  }
+  walk(parseFragment(source, { scriptingEnabled: false }), (node) => {
+    if (!isElement(node)) return
+    if (ACTIVE_ELEMENTS.has(node.tagName)) facts.active.push(node.tagName)
+    for (const attr of node.attrs) {
+      const name = (attr.prefix ? `${attr.prefix}:${attr.name}` : attr.name).toLowerCase()
+      if (name.startsWith('on')) facts.events++
+      if (name === 'srcdoc') facts.active.push('srcdoc')
+      if (name === 'style' && /url\s*\(|expression\s*\(/iu.test(attr.value)) facts.styleUrls++
+      if (node.tagName === 'input' && name === 'type' && attr.value.toLowerCase() === 'password')
+        facts.passwords++
+      if (!URL_ATTRIBUTES.has(name)) continue
+      // A candidate of `srcset` is «address width»; any other value is one address whole.
+      const values =
+        name === 'srcset'
+          ? attr.value.split(',').map((each) => each.trim().split(/\s+/u)[0] ?? '')
+          : [attr.value]
+      for (const value of values) {
+        const key = addressKey(value)
+        if (key === '' || key.startsWith('#')) continue
+        const scheme = /^([a-z][a-z0-9+.-]*):/u.exec(key)?.[1]
+        if (scheme && !['mailto', 'tel'].includes(scheme)) facts.schemes.push(scheme)
+        facts.addresses.add(key)
+      }
+    }
+  })
+  return facts
+}
+
+export type ArtifactHtmlEditRisk = { kind: 'active' | 'address'; detail: string } | null
+
+/**
+ * What the new source of an element brings that the old one did not have, read as a browser reads
+ * it (entities decoded, `/` and quotes between attributes, upper case): an element that runs,
+ * loads or sends (`script`, `iframe`, `form`, `svg`…), an event attribute, a scheme other than a
+ * web address, `mailto:` or `tel:` (`javascript:`, `data:`…), a style that loads, a password field
+ * — `active`; an address that is neither in the old source nor in `allowed` (the client's words)
+ * — `address`. Null — nothing new of these.
+ */
+export function artifactHtmlEditRisk(input: {
+  before: string
+  after: string
+  allowed: string
+}): ArtifactHtmlEditRisk {
+  const old = factsOf(input.before)
+  const now = factsOf(input.after)
+  const more = (a: readonly string[], b: readonly string[]) =>
+    a.find((item) => a.filter((x) => x === item).length > b.filter((x) => x === item).length)
+  const element = more(now.active, old.active)
+  if (element) return { kind: 'active', detail: element }
+  if (now.events > old.events) return { kind: 'active', detail: 'event attribute' }
+  const scheme = more(now.schemes, old.schemes)
+  if (scheme) return { kind: 'active', detail: `${scheme}:` }
+  if (now.styleUrls > old.styleUrls) return { kind: 'active', detail: 'style url' }
+  if (now.passwords > old.passwords) return { kind: 'active', detail: 'password field' }
+  const allowed = addressKey(input.allowed)
+  for (const address of now.addresses)
+    if (!old.addresses.has(address) && !allowed.includes(address))
+      return { kind: 'address', detail: address }
+  return null
+}

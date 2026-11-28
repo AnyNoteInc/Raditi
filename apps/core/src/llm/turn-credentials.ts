@@ -678,7 +678,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       FROM llm_models m JOIN llm_providers p ON p.id = m.provider_id
       JOIN agent_drivers d ON d.id = ${grant.driverId} AND d.enabled
       WHERE p.slug = ${grant.backend} AND p.kind = 'subscription'
-        AND m.slug = ${grant.modelSlug} AND m.enabled AND m.provider_model_id IS NOT NULL
+        AND m.slug = ${grant.modelSlug} AND m.enabled AND NOT m.quick AND m.provider_model_id IS NOT NULL
         AND m.model_class::text = ${grant.modelClass}
         AND m.reserve_output_tokens > 0 FOR SHARE OF m, p, d`
     const profile = models[0]

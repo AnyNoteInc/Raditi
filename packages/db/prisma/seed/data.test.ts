@@ -8,6 +8,7 @@ import {
   PAYG_RULES_EFFECTIVE_FROM,
   agentDriverSeeds,
   llmModelSeeds,
+  platformDriverSeeds,
   llmProviderSeeds,
   planSeeds,
   pricingRuleSeeds,
@@ -284,6 +285,7 @@ describe('default reference data', () => {
       'llmModels',
       'llmProviders',
       'plans',
+      'platformDrivers',
       'pricingRules',
     ])
     expect(pricingRuleSeeds.map((rule) => rule.modelClass)).toEqual(['light', 'standard', 'heavy'])
@@ -297,6 +299,9 @@ describe('default reference data', () => {
     for (const amount of amounts) expect(typeof amount).toBe('string')
   })
 })
+
+// The profiles a turn of OpenCode may get; the one of quick edits (plan 98) is apart.
+const turnProfiles = llmModelSeeds.filter((model) => !model.quick)
 
 describe('subscription catalogue defaults', () => {
   it('creates only supported subscription backends, initially switched off', () => {
@@ -314,12 +319,12 @@ describe('subscription catalogue defaults', () => {
     for (const backend of llmBackendIds)
       expect(
         llmModelSeeds
-          .filter((model) => model.providerSlug === backend)
+          .filter((model) => model.providerSlug === backend && !model.quick)
           .map((model) => model.modelClass),
       ).toEqual(['light', 'standard', 'heavy', 'light'])
     const naturalKeys = llmModelSeeds.map((model) => `${model.providerSlug}/${model.slug}`)
     expect(new Set(naturalKeys).size).toBe(llmModelSeeds.length)
-    for (const model of llmModelSeeds) {
+    for (const model of turnProfiles) {
       expect(model.enabled).toBe(false)
       expect(model.reserveOutputTokens).toBe(32_000)
       expect(model.contextTokens).toBe(model.slug === 'glm-5.3-flash-low' ? 200_000 : 1_000_000)
@@ -341,7 +346,7 @@ describe('subscription catalogue defaults', () => {
     ['the Z.ai plan', 'zai-coding', 'Z.ai GLM Coding Plan'],
     ['the Z.ai pay-per-token API', 'zai-api', 'Z.ai API'],
   ])('offers one GLM model in three profiles of %s, all switched off', (_name, slug, name) => {
-    const all = llmModelSeeds.filter((model) => model.providerSlug === slug)
+    const all = turnProfiles.filter((model) => model.providerSlug === slug)
     expect(all.map((model) => model.slug)).toEqual([
       'glm-5.3-light',
       'glm-5.3-standard',
@@ -374,7 +379,7 @@ describe('subscription catalogue defaults', () => {
     // The billing readers name a priced model by its display name (credit-conversion): two
     // profiles of one name are told apart only while one provider's profiles are switched on.
     const profiles = (slug: string) =>
-      llmModelSeeds
+      turnProfiles
         .filter((model) => model.providerSlug === slug)
         .map(({ providerSlug: _provider, ...profile }) => profile)
     expect(profiles('zai-api')).toEqual(profiles('zai-coding'))
@@ -387,11 +392,30 @@ describe('subscription catalogue defaults', () => {
     // reserve below it would let one call outgrow what the gateway held for it.
     // Both offers of the adapter share it (createZaiBodyPolicy).
     const policyMaxOutputTokens = 32_000
-    const profiles = llmModelSeeds.filter((model) =>
+    const profiles = turnProfiles.filter((model) =>
       ['zai-coding', 'zai-api'].includes(model.providerSlug),
     )
     expect(profiles).toHaveLength(8)
     for (const model of profiles)
       expect(model.reserveOutputTokens).toBeGreaterThanOrEqual(policyMaxOutputTokens)
+  })
+
+  it('seeds one profile of quick edits, on the API only, off, with a small reserve (plan 98)', () => {
+    // The gateway caps the output of a quick key at this reserve itself (БПр6).
+    expect(llmModelSeeds.filter((model) => model.quick)).toEqual([
+      {
+        providerSlug: 'zai-api',
+        slug: 'glm-5.3-quick',
+        name: 'GLM-5.3 · быстрая правка',
+        providerModelId: 'glm-5.3',
+        modelClass: 'light',
+        reserveOutputTokens: 2_000,
+        contextTokens: 1_000_000,
+        vision: false,
+        quick: true,
+        enabled: false,
+      },
+    ])
+    expect(platformDriverSeeds).toEqual([{ id: 'quick', image: 'none', enabled: false }])
   })
 })

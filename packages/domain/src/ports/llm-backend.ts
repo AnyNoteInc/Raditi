@@ -329,6 +329,20 @@ export interface EgressHttp {
   request(request: EgressRequest, options: { signal: AbortSignal }): Promise<EgressResponse>
 }
 
+/**
+ * Who calls the gateway with a key: `cli` — the pinned CLI of the sandbox (OpenCode); `platform`
+ * — core itself, for a quick edit of an artifact (docs/plan/98-quick-edits.md, БПр1, БПр6). The
+ * client follows from the driver of the key, never from the request.
+ */
+export const llmClientKinds = ['cli', 'platform'] as const
+export type LlmClientKind = (typeof llmClientKinds)[number]
+
+/** The drivers whose keys core uses itself; every other driver is a CLI of a sandbox. */
+export const platformDriverIds = ['quick'] as const
+
+export const llmClientOf = (driverId: string): LlmClientKind =>
+  (platformDriverIds as readonly string[]).includes(driverId) ? 'platform' : 'cli'
+
 /** Subscription backend port (spec §9; p3-design §11). No provider branches in the core. */
 export interface LlmBackend {
   readonly id: LlmBackendId
@@ -351,10 +365,19 @@ export interface LlmBackend {
    * of one of them may send pictures, `normalizeBody` refuses them to every other. Absent — none.
    */
   readonly imageModels?: readonly string[]
+  /**
+   * The identity of the platform's own calls (a quick edit, docs/plan/98-quick-edits.md, БПр1):
+   * only a backend whose provider allows embedding has one. Absent — core never calls it itself,
+   * and no account of a platform driver is imported on it.
+   */
+  readonly platformUserAgent?: string
   /** Extract facts without making the caller interpret provider-specific token fields. */
   credentialMetadata(credential: SubscriptionCredential): CredentialMetadata
-  /** CLI identity is checked by its adapter before any call is reserved. */
-  validateClientHeaders(headers: Headers): void
+  /**
+   * Client identity is checked by its adapter before any call is reserved. An adapter whose
+   * provider forbids calls of the platform's own (a personal plan) refuses `platform` here.
+   */
+  validateClientHeaders(headers: Headers, client?: LlmClientKind): void
   /**
    * Per-stream policy: provider failure metadata must never reach the sandbox. `end` is asked
    * once when the provider closes the stream cleanly before an event the inspector took for
@@ -374,6 +397,8 @@ export interface LlmBackend {
       reasoningEffort: string | null
       /** The key's profile that sees images is the one of this call (Ар32). */
       images?: boolean
+      /** A cap of the output below the provider's own: the reserve of a quick edit (БПр6). */
+      maxOutputTokens?: number
     },
   ): NormalizedBody
   upstream(
@@ -381,6 +406,7 @@ export interface LlmBackend {
     body: NormalizedBody,
     clientHeaders: Headers,
     credential: SubscriptionCredential,
+    client?: LlmClientKind,
   ): { url: string; method: string; headers: Headers }
   /**
    * The meter of one stream. It reads each event the gateway decoded, in order, with what the
